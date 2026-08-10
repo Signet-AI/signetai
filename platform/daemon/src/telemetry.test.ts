@@ -411,6 +411,45 @@ describe("telemetry collector", () => {
 		).toEqual([]);
 	});
 
+	it("drains events recorded while the shutdown flush is in flight", async () => {
+		let releaseRequest!: () => void;
+		let requestStarted!: () => void;
+		const fetchStarted = new Promise<void>((resolve) => {
+			requestStarted = resolve;
+		});
+		const requestReleased = new Promise<void>((resolve) => {
+			releaseRequest = resolve;
+		});
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			captured.push({
+				url: String(input),
+				body: JSON.parse(String(init?.body ?? "{}")) as CapturedBody,
+			});
+			requestStarted();
+			await requestReleased;
+			return new Response("1", { status: 200 });
+		}) as typeof fetch;
+
+		try {
+			const collector = makeCollector();
+			collector.record("daemon.started", { version: "0.0.0-test" });
+			const stopping = collector.stop();
+			await fetchStarted;
+
+			// This record lands after the first buffer drain but before the
+			// in-flight PostHog request completes. stop() must flush it after
+			// recording is disabled.
+			collector.record("daemon.heartbeat", { uptimeMs: 1 });
+			releaseRequest();
+			await stopping;
+
+			expect(captured).toHaveLength(2);
+			expect(captured[1]?.body.batch.map((event) => event.event)).toEqual(["daemon.heartbeat"]);
+		} finally {
+			installFetchMock();
+		}
+	});
+
 	it("emits one config snapshot alongside install activation", async () => {
 		const snapshot: TelemetryConfigSnapshot = {
 			graphEnabled: true,

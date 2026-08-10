@@ -26,6 +26,8 @@ describe("source lifecycle telemetry contract", () => {
 	it("classifies failures without exposing their message", () => {
 		expect(sourceFailureClass(new Error("401 https://private.example/user-token"))).toBe("authentication");
 		expect(sourceFailureClass({ message: "429 rate limit" })).toBe("rate_limited");
+		expect(sourceFailureClass(new Error("Obsidian root is required"))).toBe("configuration");
+		expect(sourceFailureClass(new Error("Invalid Discord source configuration"))).toBe("configuration");
 		expect(sourceFailureClass(new Error("unexpected implementation detail with /Users/alice/private.md"))).toBe(
 			"unknown",
 		);
