@@ -1135,6 +1135,7 @@ function applySetClaimValue(
 			version: existing.version ?? 1,
 			versionRootId: existing.version_root_id ?? existing.id,
 			deduped: true,
+			contradictionIds: [],
 		};
 	}
 	if (kind === "constraint" && active.length > 0 && !truthy(payload.force)) {
@@ -1209,6 +1210,7 @@ function applySetClaimValue(
 		reviewAfter,
 		proposal,
 	});
+	const contradictionIds = recordOntologyContradictionsForAttributeInTx(db, { agentId, attributeId: id });
 
 	if (active.length > 0) {
 		db.prepare(
@@ -1237,6 +1239,7 @@ function applySetClaimValue(
 		previousAttributeId: previous?.id ?? null,
 		previousWasActive: previous?.status === "active",
 		supersededAttributeIds: active.map((row) => row.id),
+		contradictionIds,
 	};
 }
 

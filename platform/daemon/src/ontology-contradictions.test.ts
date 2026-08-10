@@ -51,6 +51,124 @@ describe("persisted ontology contradictions", () => {
 		});
 	}
 
+	function setClaim(agentId: string, value: string, sourceId: string) {
+		return applyOntologyOperation(getDbAccessor(), {
+			agentId,
+			actor: "contradiction-test",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Runtime",
+				entity_type: "system",
+				aspect: "configuration",
+				group_key: "runtime",
+				claim_key: "default_mode",
+				value,
+			},
+			evidence: [{ quote: value, source_id: sourceId }],
+			sourceKind: "fixture",
+			sourceId,
+			sourcePath: `fixtures/${sourceId}.json`,
+		});
+	}
+
+	function supersedeClaim(agentId: string, oldValue: string, newValue: string, sourceId: string) {
+		return applyOntologyOperation(getDbAccessor(), {
+			agentId,
+			actor: "contradiction-test",
+			operation: "supersede_claim_value",
+			payload: {
+				entity: "Runtime",
+				entity_type: "system",
+				aspect: "configuration",
+				group_key: "runtime",
+				claim_key: "default_mode",
+				old_value: oldValue,
+				new_value: newValue,
+			},
+			evidence: [{ quote: newValue, source_id: sourceId }],
+			sourceKind: "fixture",
+			sourceId,
+			sourcePath: `fixtures/${sourceId}.json`,
+		});
+	}
+
+	it("records set-claim contradiction evidence before governance supersedes the prior value", () => {
+		setClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
+		const result = setClaim("owner", "Runtime mode is disabled by default.", "source-disabled");
+
+		expect(result.result?.contradictionIds).toEqual([expect.any(String)]);
+		const all = listOntologyContradictions(getDbAccessor(), { agentId: "owner", status: "all" });
+		expect(all.items).toHaveLength(1);
+		expect(all.items[0]?.status).toBe("resolved");
+		expect([all.items[0]?.leftSourceId, all.items[0]?.rightSourceId]).toEqual(
+			expect.arrayContaining(["source-enabled", "source-disabled"]),
+		);
+		expect([...(all.items[0]?.leftEvidence ?? []), ...(all.items[0]?.rightEvidence ?? [])]).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ source_id: "source-enabled" }),
+				expect.objectContaining({ source_id: "source-disabled" }),
+			]),
+		);
+		expect(listOntologyContradictions(getDbAccessor(), { agentId: "owner" }).items).toHaveLength(0);
+	});
+
+	it("records supersede-claim contradiction evidence atomically with replacement", () => {
+		addClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
+		const result = supersedeClaim(
+			"owner",
+			"Runtime mode is enabled by default.",
+			"Runtime mode is disabled by default.",
+			"source-disabled",
+		);
+
+		expect(result.result?.replacementCreated).toBe(true);
+		const all = listOntologyContradictions(getDbAccessor(), { agentId: "owner", status: "all" });
+		expect(all.items).toHaveLength(1);
+		expect(all.items[0]?.status).toBe("resolved");
+		expect([all.items[0]?.leftSourceId, all.items[0]?.rightSourceId]).toEqual(
+			expect.arrayContaining(["source-enabled", "source-disabled"]),
+		);
+		expect(listOntologyContradictions(getDbAccessor(), { agentId: "owner" }).items).toHaveLength(0);
+	});
+
+	it("keeps idempotent and non-contradictory set writes out of the ledger", () => {
+		const first = setClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
+		const duplicate = setClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
+
+		expect(first.result?.contradictionIds).toEqual([]);
+		expect(duplicate.result?.deduped).toBe(true);
+		expect(duplicate.result?.contradictionIds).toEqual([]);
+		expect(listOntologyContradictions(getDbAccessor(), { agentId: "owner", status: "all" }).items).toHaveLength(0);
+	});
+
+	it("rolls back set-claim mutation when contradiction ledger insertion fails", () => {
+		addClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(`
+				CREATE TRIGGER fail_ontology_contradiction_insert
+				BEFORE INSERT ON ontology_contradictions
+				BEGIN
+					SELECT RAISE(ABORT, 'ledger write failed');
+				END;
+			`);
+		});
+
+		expect(() => setClaim("owner", "Runtime mode is disabled by default.", "source-disabled")).toThrow(
+			"ledger write failed",
+		);
+		const active = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT content FROM entity_attributes
+						 WHERE agent_id = ? AND status = 'active' AND claim_key = ?`,
+					)
+					.all("owner", "default_mode") as Array<{ content: string }>,
+		);
+		expect(active).toEqual([{ content: "Runtime mode is enabled by default." }]);
+		expect(listOntologyContradictions(getDbAccessor(), { agentId: "owner", status: "all" }).items).toHaveLength(0);
+	});
+
 	it("persists one evidence-linked observation for competing active claims", () => {
 		const left = addClaim("owner", "Runtime mode is enabled by default.", "source-enabled", "authoritative");
 		const leftAttributeId = left.result?.attributeId;
