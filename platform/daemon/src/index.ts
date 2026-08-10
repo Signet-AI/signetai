@@ -13,5 +13,6 @@ export {
 	isServiceInstalled,
 	getDaemonStatus,
 	getDaemonLogs,
+	type ServiceHealthStatus,
 	type ServiceStatus,
 } from "./service";

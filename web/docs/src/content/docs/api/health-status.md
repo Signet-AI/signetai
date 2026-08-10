@@ -77,6 +77,12 @@ subsystem, and always returns 200 while the process is alive.
 
 `status` is `"healthy"`, or `"shutting_down"` once shutdown has begun.
 
+The `@signet/daemon` service-management API uses this liveness endpoint for
+`getDaemonStatus()` with a 1.2-second deadline. Its returned `status` is
+`"healthy"` when the probe succeeds, `"degraded"` when the service manager
+reports a running process but the probe fails or reports shutdown, and
+`"unavailable"` when no service is running.
+
 ### GET /health/ready
 
 No authentication required. Readiness probe: reports whether the daemon can

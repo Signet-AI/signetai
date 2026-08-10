@@ -13,10 +13,15 @@ const AGENTS_DIR = resolveDefaultBasePath();
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
+const DAEMON_PORT = 3850;
+const HEALTH_PROBE_TIMEOUT_MS = 1_200;
+const HEALTH_PROBE_URL = `http://localhost:${DAEMON_PORT}/health/live`;
 
 // Platform-specific paths
 const LAUNCHD_PLIST = join(homedir(), "Library", "LaunchAgents", "ai.signet.daemon.plist");
 const SYSTEMD_UNIT = join(homedir(), ".config", "systemd", "user", "signet.service");
+
+export type ServiceHealthStatus = "healthy" | "degraded" | "unavailable";
 
 export interface ServiceStatus {
 	installed: boolean;
@@ -24,6 +29,53 @@ export interface ServiceStatus {
 	pid: number | null;
 	uptime: number | null;
 	port: number;
+	/** The management probe status; a running process can still be degraded. */
+	status: ServiceHealthStatus;
+}
+
+interface HealthProbeResult {
+	status: ServiceHealthStatus;
+	uptime: number | null;
+	pid: number | null;
+}
+
+/**
+ * Probe only daemon liveness. Service management does not need the database
+ * work performed by the legacy `/health` endpoint, and the deadline prevents
+ * a wedged local daemon from blocking status callers indefinitely.
+ */
+export async function probeDaemonHealth(
+	fetcher?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+): Promise<HealthProbeResult> {
+	try {
+		const request = fetcher ?? globalThis.fetch;
+		if (typeof request !== "function") {
+			return { status: "degraded", uptime: null, pid: null };
+		}
+
+		const response = await request(HEALTH_PROBE_URL, {
+			signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS),
+		});
+		if (!response.ok) {
+			return { status: "degraded", uptime: null, pid: null };
+		}
+
+		const body = await response.json();
+		if (typeof body !== "object" || body === null) {
+			return { status: "degraded", uptime: null, pid: null };
+		}
+
+		const uptime =
+			"uptime" in body && typeof body.uptime === "number" && Number.isFinite(body.uptime) && body.uptime >= 0
+				? body.uptime
+				: null;
+		const pid =
+			"pid" in body && typeof body.pid === "number" && Number.isInteger(body.pid) && body.pid > 0 ? body.pid : null;
+		const status = "status" in body && body.status === "shutting_down" ? "degraded" : "healthy";
+		return { status, uptime, pid };
+	} catch {
+		return { status: "degraded", uptime: null, pid: null };
+	}
 }
 
 /**
@@ -456,6 +508,9 @@ export async function getDaemonStatus(): Promise<ServiceStatus> {
 	const running = isDaemonRunning();
 	let pid: number | null = null;
 	let uptime: number | null = null;
+	const health: HealthProbeResult = running
+		? await probeDaemonHealth()
+		: { status: "unavailable", uptime: null, pid: null };
 
 	if (running && existsSync(PID_FILE)) {
 		try {
@@ -465,23 +520,11 @@ export async function getDaemonStatus(): Promise<ServiceStatus> {
 		}
 	}
 
-	// Try to get uptime from the daemon API
-	if (running) {
-		try {
-			const response = await fetch("http://localhost:3850/health");
-			if (response.ok) {
-				const data = (await response.json()) as {
-					uptime?: number;
-					pid?: number;
-				};
-				uptime = data.uptime ?? null;
-				if (!pid && data.pid) {
-					pid = data.pid;
-				}
-			}
-		} catch {
-			// Daemon might be starting up
-		}
+	if (health.uptime !== null) {
+		uptime = health.uptime;
+	}
+	if (!pid && health.pid !== null) {
+		pid = health.pid;
 	}
 
 	return {
@@ -489,7 +532,8 @@ export async function getDaemonStatus(): Promise<ServiceStatus> {
 		running,
 		pid,
 		uptime,
-		port: 3850,
+		port: DAEMON_PORT,
+		status: health.status,
 	};
 }
 
