@@ -138,7 +138,6 @@ import {
 	setRuntimePressureEnvelope,
 } from "./runtime-pressure";
 import { startSchedulerWorker } from "./scheduler";
-import { getSecret } from "./secrets.js";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
 import { createSessionClaimStore } from "./session-claims";
 import {
@@ -2070,14 +2069,7 @@ async function main() {
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	let telemetryCollector: TelemetryCollector | undefined;
 	if (memoryCfg.pipelineV2.telemetryEnabled && !telemetryDisabledByEnv()) {
-		let posthogApiKey = memoryCfg.pipelineV2.telemetry.posthogApiKey;
-		if (!posthogApiKey) {
-			try {
-				posthogApiKey = await getSecret("POSTHOG_API_KEY");
-			} catch {
-				posthogApiKey = "";
-			}
-		}
+		const posthogApiKey = memoryCfg.pipelineV2.telemetry.posthogApiKey;
 		const resolvedTelemetryCfg = {
 			...memoryCfg.pipelineV2.telemetry,
 			posthogApiKey,

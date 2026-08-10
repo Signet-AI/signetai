@@ -50,6 +50,21 @@ function restoreWarmNativeEnv(value: string | undefined): void {
 }
 
 describe("loadMemoryConfig", () => {
+	it("preserves an explicit empty telemetry API key for local-only delivery (#1290)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    telemetry:
+      posthogApiKey: ""
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2.telemetry.posthogApiKey).toBe("");
+	});
+
 	it("prefers agent.yaml embedding settings over config.yaml fallback", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
