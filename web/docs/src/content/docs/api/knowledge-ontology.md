@@ -573,12 +573,19 @@ episodic source in the credential's agent scope before it writes graph state.
 }
 ```
 
-`operations` must be non-empty. Each entry must use one of the same closed,
+`operations` must contain 1–100 entries. Each entry must use one of the same closed,
 payload-validated ontology operation schemas exposed by `apply_ontology_ops`
 from `GET /api/dream/tools`; a write requires a canonical episodic source and
-an exact supporting quote. The response is `200` for a fully accepted batch or
-`400` with structured rejection details. `agentId` uses scoped-agent
-resolution and cannot cross the credential's agent scope.
+an exact supporting quote. After request-level checks and evidence/target
+resolution, the daemon applies operations in order through bounded, yielding
+write transactions. Each operation's savepoint, provenance, and attention
+resolution are atomic, while an application failure is reported without
+blocking later operations. Request-level validation still rejects the request
+instead of becoming item results; the whole request is not an all-or-nothing
+transaction. The response is `200` for a request with at least one accepted
+item or `400` when no operation is applied.
+`agentId` uses scoped-agent resolution and cannot cross the credential's agent
+scope.
 
 ### GET /api/dream/passes/:passId/tools
 
@@ -633,7 +640,9 @@ For example, `search_entities` accepts `query`, `type`, `limit`, and `offset`;
 `apply_ontology_ops` accepts a cited `operations` batch. Its schema is a
 closed union of the 19 audited ontology operations and each operation's
 payload fields, so clients can validate an operation before attempting a
-write. `check_entity_label`, `find_duplicate_entities`, and
+write. The daemon bounds each write transaction by operation count and
+elapsed processing time, yielding between chunks while preserving request
+order. `check_entity_label`, `find_duplicate_entities`, and
 `check_contradiction` expose the daemon's read-only deterministic guards so a
 reasoner can consult them before proposing a write; cited operation validation
 and semantic writes remain daemon-owned. The request body cannot supply a

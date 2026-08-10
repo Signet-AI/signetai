@@ -7,6 +7,7 @@ import {
 	applyOntologyOperationBatchInTx,
 	createOntologyProposalsInTx,
 } from "../ontology-proposals";
+import { runWriteBatches } from "../yielding-writes";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
 import { DREAMING_OPERATION_IDS } from "./dreaming-operation-contract";
@@ -34,6 +35,19 @@ export interface ApplyDreamingOperationsResult {
 	readonly items: readonly DreamingOperationItem[];
 	readonly error?: string;
 }
+
+export interface ApplyDreamingOperationsParams {
+	readonly accessor: DbAccessor;
+	readonly agentId: string;
+	readonly actor: string;
+	readonly operations: readonly DreamingOperationRequest[];
+	readonly passId?: string;
+	readonly writeCaps?: GraphWriteCaps;
+}
+
+export const DREAMING_MAX_OPERATIONS_PER_REQUEST = 100;
+const DREAMING_WRITE_MAX_OPERATIONS_PER_TX = 10;
+const DREAMING_WRITE_MAX_TX_DURATION_MS = 50;
 
 const FLAG_OP = "flag";
 const DECLINE_ATTENTION_OP = "decline_attention";
@@ -115,6 +129,16 @@ type DreamingOperationProvenance = {
 	readonly sourceRoot: string;
 };
 
+type ValidatedDreamingOperation = {
+	readonly index: number;
+	readonly input: OntologyOperationInput | null;
+	readonly attentionId: string | null;
+	/** Queue-only op that resolves its cited attention record instead of an ontology write. */
+	readonly decline?: boolean;
+	/** Content operation was escalated for an explicit user decision. */
+	readonly reviewOnly?: boolean;
+};
+
 function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalName: string): ReadonlySet<string> {
 	const placeholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
 	return accessor.withReadDb((db) => {
@@ -141,34 +165,47 @@ function asStringRecord(value: unknown): Readonly<Record<string, string>> | unde
 }
 
 /**
- * Mint hygiene attention for every flag op in the batch, in one write tx.
- * Returns operation index -> minted attention id, so later ops in the same
- * batch can cite provenance "attention:$<index>".
+ * Mint hygiene attention for every flag op in the batch. Returns operation
+ * index -> minted attention id, so later ops in the same batch can cite
+ * provenance "attention:$<index>". Attention rows use the same bounded
+ * writer path as ontology operations so a 100-op request cannot monopolize
+ * the SQLite writer before validation even starts.
  */
-function mintFlags(
+async function mintFlags(
 	accessor: DbAccessor,
 	agentId: string,
 	operations: readonly DreamingOperationRequest[],
-): Map<number, string> {
-	const minted = new Map<number, string>();
-	accessor.withWriteTx((db) => {
-		for (let index = 0; index < operations.length; index += 1) {
-			const operation = operations[index]!;
-			if (operation.operation !== FLAG_OP) continue;
-			const subjectRef = typeof operation.payload.subjectRef === "string" ? operation.payload.subjectRef.trim() : "";
-			if (!subjectRef) continue;
-			const priority = typeof operation.payload.priority === "number" ? operation.payload.priority : undefined;
+): Promise<Map<number, string>> {
+	const flagged = operations.flatMap((operation, index) =>
+		operation.operation === FLAG_OP ? [{ index, operation }] : [],
+	);
+	const result = await runWriteBatches(
+		accessor,
+		flagged,
+		(db, entry) => {
+			const subjectRef =
+				typeof entry.operation.payload.subjectRef === "string" ? entry.operation.payload.subjectRef.trim() : "";
+			if (!subjectRef) return { index: entry.index, attentionId: null };
+			const priority =
+				typeof entry.operation.payload.priority === "number" ? entry.operation.payload.priority : undefined;
 			const attentionId = enqueueDreamingAttentionInTx(db, {
 				agentId,
 				kind: "hygiene",
 				subjectRef,
-				details: asStringRecord(operation.payload.details),
+				details: asStringRecord(entry.operation.payload.details),
 				priority,
 			});
-			minted.set(index, attentionId);
-		}
-	});
-	return minted;
+			return { index: entry.index, attentionId };
+		},
+		{
+			label: "dreaming attention flags",
+			maxPerTx: DREAMING_WRITE_MAX_OPERATIONS_PER_TX,
+			maxTxDurationMs: DREAMING_WRITE_MAX_TX_DURATION_MS,
+		},
+	);
+	return new Map(
+		result.items.flatMap((entry) => (entry.attentionId === null ? [] : [[entry.index, entry.attentionId] as const])),
+	);
 }
 
 /**
@@ -190,7 +227,9 @@ function attentionProvenance(
 	let attention: DreamingAttention | null = null;
 	const sameBatch = reference.match(/^attention:\$(\d+)$/);
 	if (sameBatch !== null) {
-		const attentionId = mintedById.get(Number.parseInt(sameBatch[1]!, 10));
+		const indexText = sameBatch[1];
+		if (indexText === undefined) return null;
+		const attentionId = mintedById.get(Number.parseInt(indexText, 10));
 		if (attentionId !== undefined) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
 	} else {
 		const attentionId = reference.slice("attention:".length);
@@ -558,21 +597,161 @@ function existingReviewProposalId(
 	return typeof row?.id === "string" ? row.id : null;
 }
 
+function applyValidatedOperationBody(
+	db: WriteDb,
+	entry: ValidatedDreamingOperation,
+	params: ApplyDreamingOperationsParams,
+): DreamingOperationItem {
+	if (entry.input === null) {
+		if (entry.decline === true && entry.attentionId !== null) {
+			// Decline resolves the cited record in this tx: it must still be
+			// pending in the named agent's scope and is one-use, exactly like a
+			// flag consumed by an archive.
+			const pending = db
+				.prepare(
+					`SELECT 1 FROM dreaming_attention
+					 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
+				)
+				.get(entry.attentionId, params.agentId);
+			if (pending == null) {
+				return {
+					index: entry.index,
+					ok: false,
+					error: "Attention record is not pending in this agent scope",
+				};
+			}
+			db.prepare(
+				`UPDATE dreaming_attention
+				 SET resolved_at = datetime('now'), resolved_by_pass_id = ?
+				 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
+			).run(params.passId ?? null, entry.attentionId, params.agentId);
+			return { index: entry.index, ok: true, result: { attentionId: entry.attentionId } };
+		}
+		// Flag ops are already persisted by mintFlags; this result only
+		// surfaces the id for same-batch provenance and callers.
+		return { index: entry.index, ok: true, result: { attentionId: entry.attentionId } };
+	}
+
+	if (entry.reviewOnly) {
+		const existingId = existingReviewProposalId(db, {
+			agentId: params.agentId,
+			operation: entry.input.operation,
+			payload: entry.input.payload,
+			evidence: entry.input.evidence ?? [],
+		});
+		if (existingId !== null) {
+			return {
+				index: entry.index,
+				ok: true,
+				result: { reviewRequired: true, deduped: true, proposalId: existingId },
+			};
+		}
+		const created = createOntologyProposalsInTx(db, [
+			{
+				agentId: params.agentId,
+				operation: entry.input.operation,
+				payload: entry.input.payload,
+				confidence: entry.input.confidence,
+				rationale: entry.input.reason,
+				evidence: entry.input.evidence,
+				risk: entry.input.risk,
+				sourceKind: entry.input.sourceKind,
+				sourceId: entry.input.sourceId,
+				sourcePath: entry.input.sourcePath,
+				sourceRoot: entry.input.sourceRoot,
+				createdBy: params.actor,
+			},
+		]);
+		return {
+			index: entry.index,
+			ok: true,
+			proposal: created.items[0],
+			result: { reviewRequired: true },
+		};
+	}
+
+	if (entry.attentionId !== null) {
+		// A flag is one-use: an earlier op in this batch may have already
+		// consumed it, so a second op citing the same attention must not apply.
+		// Resolved flags from a prior batch were already rejected by the
+		// provenance pin.
+		const pending = db
+			.prepare(
+				`SELECT 1 FROM dreaming_attention
+				 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
+			)
+			.get(entry.attentionId, params.agentId);
+		if (pending == null) {
+			return {
+				index: entry.index,
+				ok: false,
+				error: "Attention already consumed by an earlier operation in this batch",
+			};
+		}
+	}
+
+	const batch = applyOntologyOperationBatchInTx(db, {
+		agentId: params.agentId,
+		actor: params.actor,
+		operations: [entry.input],
+		writeCaps: params.writeCaps,
+	});
+	if (entry.attentionId !== null) {
+		// The flag was consumed: resolve it in the same tx so the queue does
+		// not re-surface a handled target next pass.
+		db.prepare(
+			`UPDATE dreaming_attention
+			 SET resolved_at = datetime('now'), resolved_by_pass_id = ?
+			 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
+		).run(params.passId ?? null, entry.attentionId, params.agentId);
+	}
+	return {
+		index: entry.index,
+		ok: true,
+		proposal: batch.items[0]?.proposal,
+		result: batch.items[0]?.result,
+	};
+}
+
+function applyValidatedOperationInTx(
+	db: WriteDb,
+	entry: ValidatedDreamingOperation,
+	params: ApplyDreamingOperationsParams,
+): DreamingOperationItem {
+	const savepoint = `signet_dream_op_${entry.index}`;
+	db.exec(`SAVEPOINT ${savepoint}`);
+	try {
+		const result = applyValidatedOperationBody(db, entry, params);
+		db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+		return result;
+	} catch (error) {
+		db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+		db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+		return {
+			index: entry.index,
+			ok: false,
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
 /**
  * The sole daemon-owned apply seam for Dreaming agents. Flag ops mint hygiene
  * attention in-batch; hygiene archives/merges cite attention provenance;
  * content ops cite exact quotes resolved against the episodic store. Payloads
  * are mapped to the shared applicator contracts; every write is audited.
  */
-export function applyDreamingOperations(params: {
-	readonly accessor: DbAccessor;
-	readonly agentId: string;
-	readonly actor: string;
-	readonly operations: readonly DreamingOperationRequest[];
-	readonly passId?: string;
-	readonly writeCaps?: GraphWriteCaps;
-}): ApplyDreamingOperationsResult {
+export async function applyDreamingOperations(
+	params: ApplyDreamingOperationsParams,
+): Promise<ApplyDreamingOperationsResult> {
 	if (params.operations.length === 0) return { ok: false, items: [], error: "operations are required" };
+	if (params.operations.length > DREAMING_MAX_OPERATIONS_PER_REQUEST) {
+		return {
+			ok: false,
+			items: [],
+			error: `operations cannot exceed ${DREAMING_MAX_OPERATIONS_PER_REQUEST} items`,
+		};
+	}
 	const allowedOperations = new Set<string>(DREAMING_OPERATION_IDS);
 	for (const operation of params.operations) {
 		if (!allowedOperations.has(operation.operation)) {
@@ -586,21 +765,13 @@ export function applyDreamingOperations(params: {
 		}
 	}
 
-	const minted = mintFlags(params.accessor, params.agentId, params.operations);
+	const minted = await mintFlags(params.accessor, params.agentId, params.operations);
 
-	const validated: Array<{
-		readonly input: OntologyOperationInput | null;
-		readonly attentionId: string | null;
-		/** Queue-only op that resolves its cited attention record instead of an ontology write. */
-		readonly decline?: boolean;
-		/** Content operation was escalated for an explicit user decision. */
-		readonly reviewOnly?: boolean;
-	}> = [];
-	for (let index = 0; index < params.operations.length; index += 1) {
-		const operation = params.operations[index]!;
+	const validated: ValidatedDreamingOperation[] = [];
+	for (const [index, operation] of params.operations.entries()) {
 		if (operation.operation === FLAG_OP) {
 			const attentionId = minted.get(index) ?? null;
-			validated.push({ input: null, attentionId });
+			validated.push({ index, input: null, attentionId });
 			continue;
 		}
 		if (operation.operation === DECLINE_ATTENTION_OP) {
@@ -608,7 +779,7 @@ export function applyDreamingOperations(params: {
 			if (attentionId === null) {
 				return { ok: false, items: [], error: "decline_attention requires payload.attentionId" };
 			}
-			validated.push({ input: null, attentionId, decline: true });
+			validated.push({ index, input: null, attentionId, decline: true });
 			continue;
 		}
 		let provenance: DreamingOperationProvenance | null = null;
@@ -643,6 +814,7 @@ export function applyDreamingOperations(params: {
 			return { ok: false, items: [], error: `Could not resolve operation target: ${operation.operation}` };
 		}
 		validated.push({
+			index,
 			input: {
 				operation: operation.operation,
 				payload,
@@ -660,123 +832,17 @@ export function applyDreamingOperations(params: {
 		});
 	}
 
-	const items: DreamingOperationItem[] = [];
-	params.accessor.withWriteTx((db) => {
-		for (let index = 0; index < validated.length; index += 1) {
-			const entry = validated[index]!;
-			if (entry.input === null) {
-				if (entry.decline === true && entry.attentionId !== null) {
-					// Decline resolves the cited record in this tx: it must
-					// still be pending in the named agent's scope and is
-					// one-use, exactly like a flag consumed by an archive.
-					const pending = db
-						.prepare(
-							`SELECT 1 FROM dreaming_attention
-							 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
-						)
-						.get(entry.attentionId, params.agentId);
-					if (pending == null) {
-						items.push({
-							index,
-							ok: false,
-							error: "Attention record is not pending in this agent scope",
-						});
-						continue;
-					}
-					db.prepare(
-						`UPDATE dreaming_attention
-						 SET resolved_at = datetime('now'), resolved_by_pass_id = ?
-						 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
-					).run(params.passId ?? null, entry.attentionId, params.agentId);
-					items.push({ index, ok: true, result: { attentionId: entry.attentionId } });
-					continue;
-				}
-				// flag op: nothing to apply; surface the minted attention id
-				items.push({ index, ok: true, result: { attentionId: entry.attentionId } });
-				continue;
-			}
-			if (entry.reviewOnly) {
-				const existingId = existingReviewProposalId(db, {
-					agentId: params.agentId,
-					operation: entry.input.operation,
-					payload: entry.input.payload,
-					evidence: entry.input.evidence ?? [],
-				});
-				if (existingId !== null) {
-					items.push({ index, ok: true, result: { reviewRequired: true, deduped: true, proposalId: existingId } });
-					continue;
-				}
-				const created = createOntologyProposalsInTx(db, [
-					{
-						agentId: params.agentId,
-						operation: entry.input.operation,
-						payload: entry.input.payload,
-						confidence: entry.input.confidence,
-						rationale: entry.input.reason,
-						evidence: entry.input.evidence,
-						risk: entry.input.risk,
-						sourceKind: entry.input.sourceKind,
-						sourceId: entry.input.sourceId,
-						sourcePath: entry.input.sourcePath,
-						sourceRoot: entry.input.sourceRoot,
-						createdBy: params.actor,
-					},
-				]);
-				items.push({
-					index,
-					ok: true,
-					proposal: created.items[0],
-					result: { reviewRequired: true },
-				});
-				continue;
-			}
-			if (entry.attentionId !== null) {
-				// A flag is one-use: an earlier op in this batch may have
-				// already consumed it, so a second op citing the same
-				// attention must not apply. Resolved flags (from a prior
-				// batch) were already rejected by the provenance pin.
-				const pending = db
-					.prepare(
-						`SELECT 1 FROM dreaming_attention
-						 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
-					)
-					.get(entry.attentionId, params.agentId);
-				if (pending == null) {
-					items.push({
-						index,
-						ok: false,
-						error: "Attention already consumed by an earlier operation in this batch",
-					});
-					continue;
-				}
-			}
-			const savepoint = `signet_dream_op_${index}`;
-			db.exec(`SAVEPOINT ${savepoint}`);
-			try {
-				const batch = applyOntologyOperationBatchInTx(db, {
-					agentId: params.agentId,
-					actor: params.actor,
-					operations: [entry.input],
-					writeCaps: params.writeCaps,
-				});
-				db.exec(`RELEASE SAVEPOINT ${savepoint}`);
-				if (entry.attentionId !== null) {
-					// The flag was consumed: resolve it in the same tx so the
-					// queue does not re-surface a handled target next pass.
-					db.prepare(
-						`UPDATE dreaming_attention
-						 SET resolved_at = datetime('now'), resolved_by_pass_id = ?
-						 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
-					).run(params.passId ?? null, entry.attentionId, params.agentId);
-				}
-				items.push({ index, ok: true, proposal: batch.items[0]?.proposal, result: batch.items[0]?.result });
-			} catch (error) {
-				db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-				db.exec(`RELEASE SAVEPOINT ${savepoint}`);
-				items.push({ index, ok: false, error: error instanceof Error ? error.message : String(error) });
-			}
-		}
-	});
+	const result = await runWriteBatches(
+		params.accessor,
+		validated,
+		(db, entry) => applyValidatedOperationInTx(db, entry, params),
+		{
+			label: "dreaming ontology operations",
+			maxPerTx: DREAMING_WRITE_MAX_OPERATIONS_PER_TX,
+			maxTxDurationMs: DREAMING_WRITE_MAX_TX_DURATION_MS,
+		},
+	);
+	const items = result.items;
 	const ok = items.some((item) => item.ok);
 	return { ok, items, ...(ok ? {} : { error: "No ontology operations applied" }) };
 }

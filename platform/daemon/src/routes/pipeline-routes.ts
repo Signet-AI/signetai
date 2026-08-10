@@ -27,7 +27,7 @@ import {
 } from "../pipeline";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
-import { applyDreamingOperations } from "../pipeline/dreaming-operations.js";
+import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
 import { AlreadyRunningError } from "../pipeline/dreaming-worker.js";
 import { getTraversalStatus } from "../pipeline/graph-traversal.js";
 import {
@@ -750,11 +750,14 @@ export function registerPipelineRoutes(app: Hono): void {
 		const body = asRecord(raw);
 		const operations = readArray(body, "operations");
 		if (!operations || operations.length === 0) return c.json({ error: "operations are required" }, 400);
+		if (operations.length > DREAMING_MAX_OPERATIONS_PER_REQUEST) {
+			return c.json({ error: `operations cannot exceed ${DREAMING_MAX_OPERATIONS_PER_REQUEST} items` }, 400);
+		}
 		const scopedAgent = resolveScopedDreamAgent(c, body);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const agentId = scopedAgent.agentId;
 		const actor = readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "dreaming-agent";
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId,
 			actor,

@@ -251,8 +251,16 @@ interface DreamingResult {
 }
 ```
 
-The daemon validates and applies mutations transactionally. Failed
-or invalid mutations are logged but don't block the rest.
+After request-level checks and evidence/target resolution, the daemon applies
+mutations in input order through bounded, yielding SQLite write transactions.
+Each operation is protected by its own savepoint, and any attention
+resolution or provenance update required by that operation commits with it.
+An operation that fails during application is reported without blocking later
+operations in the same request. Request-level validation failures still reject
+the request rather than becoming item results. The request is therefore
+ordered and per-operation atomic, but is not one all-or-nothing transaction;
+the writer hold is bounded by an operation-count and elapsed-processing budget
+so unrelated daemon work can run between chunks.
 
 ### Incremental deltas
 
@@ -422,8 +430,9 @@ The mechanical consolidation engine is complete:
 
 - **Dreaming agent core.** All 8 mutation operations: `create_entity`,
   `merge_entities`, `delete_entity`, `update_aspect`, `delete_aspect`,
-  `supersede_attribute`, `create_attribute`, `delete_attribute`. Atomic
-  application in a single write transaction. Pinned entities and
+  `supersede_attribute`, `create_attribute`, `delete_attribute`. Ordered,
+  per-operation atomic application through bounded write transactions with
+  cooperative event-loop yields between chunks. Pinned entities and
   constraint attributes protected (reported as `skipped`).
 - **Token-budget trigger.** The shared episodic source selector measures
   unreasoned evidence. Background worker polls every 5 minutes and fires

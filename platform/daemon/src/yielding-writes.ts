@@ -53,12 +53,34 @@ export interface DrainResult {
 	readonly stopped: "exhausted" | "capped";
 }
 
-async function writeBatch(accessor: DbAccessor, processBatch: (db: WriteDb) => void): Promise<void> {
+export interface RunWriteOptions {
+	/** Caller-facing label for pressure-pause and cap logging. */
+	readonly label: string;
+	/** Maximum items processed per write transaction. Default 50. */
+	readonly maxPerTx?: number;
+	/** Stop adding items to a transaction after this processing budget. */
+	readonly maxTxDurationMs?: number;
+	/** Yield after every N transactions. Default 1. */
+	readonly yieldEvery?: number;
+	/** Hard cap on total items processed in one run. Default all items. */
+	readonly maxTotal?: number;
+	/** Skip pressure checks entirely. Default false. */
+	readonly skipPressure?: boolean;
+}
+
+export interface RunWriteResult<Result> {
+	readonly items: readonly Result[];
+	readonly processed: number;
+	readonly batches: number;
+	readonly paused: number;
+	readonly stopped: "exhausted" | "capped";
+}
+
+async function writeBatch<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
 	if (accessor.withWriteTxAsync) {
-		await accessor.withWriteTxAsync(processBatch);
-		return;
+		return accessor.withWriteTxAsync(processBatch);
 	}
-	accessor.withWriteTx(processBatch);
+	return accessor.withWriteTx(processBatch);
 }
 
 /**
@@ -119,4 +141,82 @@ export async function drainWriteBatches<Item>(
 
 	logger.debug("yielding-writes", `${options.label}: hit maxTotal cap (${maxTotal})`, { processed, batches });
 	return { processed, batches, paused, stopped: "capped" };
+}
+
+/**
+ * Apply an in-memory sequence through bounded, yielding write transactions.
+ *
+ * Unlike {@link drainWriteBatches}, callers already have the work items and
+ * need to retain one result per item. The callback runs in array order and
+ * may use savepoints to turn an item-level failure into a result. The
+ * transaction is closed after either `maxPerTx` items or `maxTxDurationMs`
+ * of callback processing. A single synchronous SQLite statement cannot be
+ * interrupted, so the duration is a cooperative upper bound between items.
+ */
+export async function runWriteBatches<Item, Result>(
+	accessor: DbAccessor,
+	items: readonly Item[],
+	processItem: (db: WriteDb, item: Item) => Result,
+	options: RunWriteOptions,
+): Promise<RunWriteResult<Result>> {
+	const maxPerTx =
+		typeof options.maxPerTx === "number" && Number.isFinite(options.maxPerTx)
+			? Math.max(1, Math.floor(options.maxPerTx))
+			: 50;
+	const maxTxDurationMs =
+		typeof options.maxTxDurationMs === "number" && Number.isFinite(options.maxTxDurationMs)
+			? Math.max(1, options.maxTxDurationMs)
+			: Number.POSITIVE_INFINITY;
+	const yieldEvery =
+		typeof options.yieldEvery === "number" && Number.isFinite(options.yieldEvery)
+			? Math.max(1, Math.floor(options.yieldEvery))
+			: 1;
+	const maxTotal = Math.min(
+		items.length,
+		typeof options.maxTotal === "number" && Number.isFinite(options.maxTotal)
+			? Math.max(0, Math.floor(options.maxTotal))
+			: items.length,
+	);
+
+	const results: Result[] = [];
+	let processed = 0;
+	let batches = 0;
+	let paused = 0;
+
+	while (processed < maxTotal) {
+		if (!options.skipPressure && isSystemPressureHigh()) {
+			paused++;
+			await awaitPressureClear();
+		}
+
+		const batch = await writeBatch(accessor, (db) => {
+			const startedAt = performance.now();
+			const batchResults: Result[] = [];
+			for (const item of items.slice(processed, maxTotal)) {
+				batchResults.push(processItem(db, item));
+				if (batchResults.length >= maxPerTx) break;
+				if (performance.now() - startedAt >= maxTxDurationMs) break;
+			}
+			return batchResults;
+		});
+
+		if (batch.length === 0) throw new Error(`${options.label}: write batch made no progress`);
+		results.push(...batch);
+		processed += batch.length;
+		batches++;
+
+		if (batches % yieldEvery === 0) await yieldToEventLoop();
+	}
+
+	if (processed < items.length) {
+		logger.debug("yielding-writes", `${options.label}: hit maxTotal cap (${maxTotal})`, { processed, batches });
+	}
+
+	return {
+		items: results,
+		processed,
+		batches,
+		paused,
+		stopped: processed < items.length ? "capped" : "exhausted",
+	};
 }

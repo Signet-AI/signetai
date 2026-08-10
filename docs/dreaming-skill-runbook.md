@@ -4,6 +4,10 @@ Dreaming is the single automatic path from immutable episodic evidence to
 audited semantic memory. It reads selected artifacts, transcripts, summaries,
 compactions, and checkpoints; it does not rewrite them. The worker emits
 provenance-backed ontology operations through the shared daemon-owned writer.
+Apply requests preserve input order and per-operation atomicity, but are split
+into bounded write transactions with event-loop yields; an application failure
+is reported without blocking later operations, while request-level validation
+still rejects the request rather than becoming item results.
 
 ## Worker Path
 

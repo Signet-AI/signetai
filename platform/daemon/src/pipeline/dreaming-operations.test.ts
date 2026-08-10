@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { applyOntologyProposal, getOntologyProposal, rejectOntologyProposal } from "../ontology-proposals";
 import { type DreamingOperationRequest, applyDreamingOperations } from "./dreaming-operations";
 
@@ -76,9 +76,9 @@ describe("dreaming operations", () => {
 		};
 	}
 
-	it("mints hygiene attention for a flag op and returns the id", () => {
+	it("mints hygiene attention for a flag op and returns the id", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -90,7 +90,8 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(true);
-		const item = result.items[0]!;
+		const item = result.items[0];
+		if (item === undefined) throw new Error("flag result is missing");
 		expect(item.ok).toBe(true);
 		const attentionId = (item.result as { attentionId: string | null }).attentionId;
 		expect(attentionId).toBeTypeOf("string");
@@ -101,11 +102,82 @@ describe("dreaming operations", () => {
 		expect(pending.c).toBe(1);
 	});
 
-	it("escalates review-required content operations without mutating the ontology", () => {
+	it("bounds large apply requests across yielding writer transactions (#1337)", async () => {
+		const base = getDbAccessor();
+		const enqueue = base.withWriteTxAsync;
+		if (!enqueue) throw new Error("async write API is unavailable");
+		for (let index = 0; index < 25; index += 1) {
+			insertEpisodicMemory(`m-1337-${index}`, `Evidence for operation ${index}.`);
+		}
+		let transactions = 0;
+		const accessor: DbAccessor = {
+			...base,
+			withWriteTxAsync: (fn) => {
+				transactions++;
+				return enqueue(fn);
+			},
+		};
+		let eventLoopTicks = 0;
+		const timer = setInterval(() => {
+			eventLoopTicks += 1;
+		}, 0);
+		let result: Awaited<ReturnType<typeof applyDreamingOperations>>;
+		try {
+			result = await applyDreamingOperations({
+				accessor,
+				agentId: "agent-a",
+				actor: "dreaming",
+				operations: Array.from({ length: 25 }, (_, index) => ({
+					operation: "create_entity",
+					payload: { name: `Issue 1337 entity ${index}`, type: "project" },
+					evidence: [
+						{
+							source_ref: `memory:m-1337-${index}`,
+							source_kind: "manual",
+							source_id: `m-1337-${index}`,
+							quote: `Evidence for operation ${index}.`,
+						},
+					],
+				})),
+			});
+		} finally {
+			clearInterval(timer);
+		}
+
+		expect(result.ok).toBe(true);
+		expect(result.items).toHaveLength(25);
+		expect(result.items.map((item) => item.index)).toEqual(Array.from({ length: 25 }, (_, index) => index));
+		expect(transactions).toBeGreaterThanOrEqual(3);
+		expect(eventLoopTicks).toBeGreaterThan(0);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT COUNT(*) AS c FROM entities WHERE agent_id = ?").get("agent-a"),
+			),
+		).toEqual({ c: 25 });
+	});
+
+	it("rejects an oversized apply request before minting or writing (#1337)", async () => {
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: Array.from({ length: 101 }, (_, index) => flag({ subjectRef: `entity:e-${index}` })),
+		});
+
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe("operations cannot exceed 100 items");
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT COUNT(*) AS c FROM dreaming_attention WHERE agent_id = ?").get("agent-a"),
+			),
+		).toEqual({ c: 0 });
+	});
+
+	it("escalates review-required content operations without mutating the ontology", async () => {
 		insertEntity("e-source", "Local-first", "local-first");
 		insertEntity("e-target", "Hosted inference", "hosted inference");
 		insertEpisodicMemory("m-review", "Local-first and hosted inference may be two deployment modes.");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -143,20 +215,20 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 1 });
 	});
 
-	it("deduplicates repeated review-required operations and honors a rejection", () => {
+	it("deduplicates repeated review-required operations and honors a rejection", async () => {
 		insertEntity("e-source", "Local-first", "local-first");
 		insertEntity("e-target", "Hosted inference", "hosted inference");
 		insertEpisodicMemory("m-review", "Local-first and hosted inference may be two deployment modes.");
-		const run = () =>
-			applyDreamingOperations({
+		const run = async () =>
+			await applyDreamingOperations({
 				accessor: getDbAccessor(),
 				agentId: "agent-a",
 				actor: "dreaming",
 				operations: [reviewLinkOperation()],
 			});
-		const first = run();
+		const first = await run();
 		const proposalId = (first.items[0]?.proposal as { id: string }).id;
-		const second = run();
+		const second = await run();
 		expect((second.items[0]?.result as { deduped?: boolean }).deduped).toBe(true);
 		expect(
 			getDbAccessor().withReadDb(
@@ -170,14 +242,14 @@ describe("dreaming operations", () => {
 			actor: "dashboard",
 			reason: "Not the same relationship",
 		});
-		const third = run();
+		const third = await run();
 		expect((third.items[0]?.result as { deduped?: boolean }).deduped).toBe(true);
 		expect(getOntologyProposal(getDbAccessor(), proposalId, "agent-a")).toMatchObject({ status: "rejected" });
 	});
 
-	it("archives a flagged entity in the same batch via attention:$<index>", () => {
+	it("archives a flagged entity in the same batch via attention:$<index>", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -193,8 +265,8 @@ describe("dreaming operations", () => {
 		});
 		expect(result.ok).toBe(true);
 		expect(result.items).toHaveLength(2);
-		expect(result.items[0]!.ok).toBe(true);
-		expect(result.items[1]!.ok).toBe(true);
+		expect(result.items[0]?.ok).toBe(true);
+		expect(result.items[1]?.ok).toBe(true);
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-husk")),
 		).toEqual({ status: "archived" });
@@ -207,9 +279,9 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 0 });
 	});
 
-	it("archives an entity flagged without an entityId in details, pinned by subjectRef alone (#1168)", () => {
+	it("archives an entity flagged without an entityId in details, pinned by subjectRef alone (#1168)", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -226,7 +298,7 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(true);
-		expect(result.items[1]!.ok).toBe(true);
+		expect(result.items[1]?.ok).toBe(true);
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-husk")),
 		).toEqual({ status: "archived" });
@@ -238,16 +310,17 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 0 });
 	});
 
-	it("archives an entity flagged without an entityId in a prior batch via attention:<uuid> (#1168)", () => {
+	it("archives an entity flagged without an entityId in a prior batch via attention:<uuid> (#1168)", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk");
-		const minted = applyDreamingOperations({
+		const minted = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
 			operations: [flag({ subjectRef: "entity:e-husk", details: { reason: "zero_active_attributes" } })],
 		});
-		const attentionId = (minted.items[0]!.result as { attentionId: string | null }).attentionId!;
-		const result = applyDreamingOperations({
+		const attentionId = (minted.items[0]?.result as { attentionId?: string | null } | undefined)?.attentionId;
+		if (!attentionId) throw new Error("flag did not mint attention");
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -262,9 +335,9 @@ describe("dreaming operations", () => {
 		).toEqual({ status: "archived" });
 	});
 
-	it("rejects an archive whose details id contradicts the flagged subjectRef", () => {
+	it("rejects an archive whose details id contradicts the flagged subjectRef", async () => {
 		insertEntity("e-flagged", "Flagged", "flagged");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -280,10 +353,10 @@ describe("dreaming operations", () => {
 		).toEqual({ status: "active" });
 	});
 
-	it("merges a flagged duplicate group flagged without a canonicalName in details (#1168)", () => {
+	it("merges a flagged duplicate group flagged without a canonicalName in details (#1168)", async () => {
 		insertEntity("e-target", "Acme", "acme");
 		insertEntity("e-source", "Acme App", "acme");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -307,11 +380,11 @@ describe("dreaming operations", () => {
 		).not.toBeNull();
 	});
 
-	it("rejects a merge_aspects whose details aspectId contradicts the flagged subjectRef", () => {
+	it("rejects a merge_aspects whose details aspectId contradicts the flagged subjectRef", async () => {
 		insertEntity("e-merge3", "MergeThree", "mergethree");
 		insertAspect("a-t3", "e-merge3", "target");
 		insertAspect("a-s3", "e-merge3", "source");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -329,10 +402,10 @@ describe("dreaming operations", () => {
 		expect(result.error).toContain("Hygiene archives require attention provenance");
 	});
 
-	it("rejects a duplicate merge flagged with an empty canonical name", () => {
+	it("rejects a duplicate merge flagged with an empty canonical name", async () => {
 		insertEntity("e-1", "One", "");
 		insertEntity("e-2", "Two", "");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -349,12 +422,12 @@ describe("dreaming operations", () => {
 		expect(result.error).toContain("Hygiene archives require attention provenance");
 	});
 
-	it("consumes a flag after the first hygiene op citing it", () => {
+	it("consumes a flag after the first hygiene op citing it", async () => {
 		insertEntity("e-a", "A", "acme");
 		insertEntity("e-b", "B", "acme");
 		insertEntity("e-c", "C", "acme");
 		insertEntity("e-d", "D", "acme");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -374,15 +447,15 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(true);
-		expect(result.items[1]!.ok).toBe(true);
-		expect(result.items[2]!.ok).toBe(false);
-		expect(result.items[2]!.error).toContain("already consumed");
+		expect(result.items[1]?.ok).toBe(true);
+		expect(result.items[2]?.ok).toBe(false);
+		expect(result.items[2]?.error).toContain("already consumed");
 	});
 
-	it("rejects a same-batch archive whose target is not the flagged entity", () => {
+	it("rejects a same-batch archive whose target is not the flagged entity", async () => {
 		insertEntity("e-flagged", "Flagged", "flagged");
 		insertEntity("e-other", "Other", "other");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -398,9 +471,9 @@ describe("dreaming operations", () => {
 		).toEqual({ status: "active" });
 	});
 
-	it("archives an entity flagged by a prior batch via attention:<uuid>", () => {
+	it("archives an entity flagged by a prior batch via attention:<uuid>", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk");
-		const minted = applyDreamingOperations({
+		const minted = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -408,8 +481,9 @@ describe("dreaming operations", () => {
 				flag({ subjectRef: "entity:e-husk", details: { entityId: "e-husk", reason: "zero_active_attributes" } }),
 			],
 		});
-		const attentionId = (minted.items[0]!.result as { attentionId: string | null }).attentionId!;
-		const result = applyDreamingOperations({
+		const attentionId = (minted.items[0]?.result as { attentionId?: string | null } | undefined)?.attentionId;
+		if (!attentionId) throw new Error("flag did not mint attention");
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -430,9 +504,9 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 0 });
 	});
 
-	it("rejects a hygiene archive without provenance", () => {
+	it("rejects a hygiene archive without provenance", async () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -442,10 +516,10 @@ describe("dreaming operations", () => {
 		expect(result.error).toContain("Hygiene archives require attention provenance");
 	});
 
-	it("merges a flagged duplicate group via targets/survivor", () => {
+	it("merges a flagged duplicate group via targets/survivor", async () => {
 		insertEntity("e-target", "Acme", "acme");
 		insertEntity("e-source", "Acme App", "acme");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -471,9 +545,9 @@ describe("dreaming operations", () => {
 		).not.toBeNull();
 	});
 
-	it("applies a content op with an exact-quote citation resolved against the store", () => {
+	it("applies a content op with an exact-quote citation resolved against the store", async () => {
 		insertEpisodicMemory("mem-1", "Acme switched its deployment target to edge runtime in Q2.");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -500,9 +574,9 @@ describe("dreaming operations", () => {
 		).toEqual({ name: "Acme" });
 	});
 
-	it("rejects a content op whose quote is not an exact substring of the source", () => {
+	it("rejects a content op whose quote is not an exact substring of the source", async () => {
 		insertEpisodicMemory("mem-1", "Acme switched its deployment target to edge runtime in Q2.");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -525,9 +599,9 @@ describe("dreaming operations", () => {
 		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
 	});
 
-	it("rejects evidence cited from another agent scope with a corrective error", () => {
+	it("rejects evidence cited from another agent scope with a corrective error", async () => {
 		insertEpisodicMemory("mem-other", "The source belongs to the default scope.", "default");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "hermes-agent",
 			actor: "dreaming",
@@ -552,8 +626,8 @@ describe("dreaming operations", () => {
 		);
 	});
 
-	it("rejects a content op without evidence", () => {
-		const result = applyDreamingOperations({
+	it("rejects a content op without evidence", async () => {
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -563,11 +637,11 @@ describe("dreaming operations", () => {
 		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
 	});
 
-	it("stores review_after on a semantic memory for a future temporal claim", () => {
+	it("stores review_after on a semantic memory for a future temporal claim", async () => {
 		insertEntity("e-acme", "Acme", "acme");
 		insertAspect("a-main", "e-acme", "general");
 		insertEpisodicMemory("mem-temporal", "Acme plans to travel on 2026-08-03.");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -607,7 +681,7 @@ describe("dreaming operations", () => {
 		expect(row.review_after).toBe("2026-08-03T06:00:00.000Z");
 	});
 
-	it("supersedes the current active claim for a key without an explicit attribute id", () => {
+	it("supersedes the current active claim for a key without an explicit attribute id", async () => {
 		insertEntity("e-acme", "Acme", "acme");
 		insertAspect("a-main", "e-acme", "general");
 		getDbAccessor().withWriteTx((db) => {
@@ -618,7 +692,7 @@ describe("dreaming operations", () => {
 			).run();
 		});
 		insertEpisodicMemory("mem-1", "Acme moved to edge runtime in Q2.");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -648,8 +722,8 @@ describe("dreaming operations", () => {
 		expect(rows.some((row) => row.content === "Old claim value." && row.status === "superseded")).toBe(true);
 	});
 
-	it("rejects an unsupported operation before touching the graph", () => {
-		const result = applyDreamingOperations({
+	it("rejects an unsupported operation before touching the graph", async () => {
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -659,7 +733,7 @@ describe("dreaming operations", () => {
 		expect(result.error).toContain("Unsupported ontology proposal operation");
 	});
 
-	it("merges aspects through the hygiene seam with attention provenance", () => {
+	it("merges aspects through the hygiene seam with attention provenance", async () => {
 		insertEntity("e-merge", "MergeCo", "mergeco");
 		insertAspect("a-target", "e-merge", "status_history");
 		insertAspect("a-source", "e-merge", "changelog");
@@ -678,7 +752,7 @@ describe("dreaming operations", () => {
 			}
 		});
 
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
@@ -699,8 +773,8 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(true);
-		expect(result.items[1]!.ok).toBe(true);
-		expect(result.items[1]!.result).toMatchObject({ targetAspect: "timeline", totalAttributesMoved: 2 });
+		expect(result.items[1]?.ok).toBe(true);
+		expect(result.items[1]?.result).toMatchObject({ targetAspect: "timeline", totalAttributesMoved: 2 });
 		// Source archived, target renamed, all attributes under the target
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entity_aspects WHERE id = ?").get("a-source")),
@@ -714,11 +788,11 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 3 });
 	});
 
-	it("requires attention provenance for merge_aspects like other hygiene ops", () => {
+	it("requires attention provenance for merge_aspects like other hygiene ops", async () => {
 		insertEntity("e-merge2", "MergeTwo", "mergetwo");
 		insertAspect("a-t2", "e-merge2", "target");
 		insertAspect("a-s2", "e-merge2", "source");
-		const result = applyDreamingOperations({
+		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",

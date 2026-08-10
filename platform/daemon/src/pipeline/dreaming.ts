@@ -3,7 +3,7 @@
  *
  * Reads accumulated completed transcript projections and the current entity graph,
  * produces structured graph mutations (create, merge, update, delete,
- * supersede), and applies them transactionally.
+ * supersede), and applies them through bounded, yielding write transactions.
  *
  * See docs/specs/approved/dreaming-memory-consolidation.md
  */

@@ -33,6 +33,7 @@ import { deliveredOffsetForSource, pendingDreamingEvidenceContinuations } from "
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import {
 	type ApplyDreamingOperationsResult,
+	DREAMING_MAX_OPERATIONS_PER_REQUEST,
 	type DreamingOperationRequest,
 	applyDreamingOperations,
 } from "./dreaming-operations";
@@ -737,15 +738,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"apply_ontology_ops",
 			"Apply ontology operations",
-			'Apply every semantic write through the daemon audit seam in one batch, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). Ops are processed in array order. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the same batch, or "attention:<uuid>" from a prior batch. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
+			'Apply every semantic write through the daemon audit seam in one ordered request, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). The daemon validates the request before applying it in bounded, yielding write transactions; each operation and its provenance resolution remains atomic, while an individual operation failure does not block later operations. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the request, or "attention:<uuid>" from a prior request. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
 			false,
 			z.object({
 				agentId: z.string().min(1),
-				operations: z.array(DREAMING_ONTOLOGY_OPERATION_SCHEMA).min(1).max(100),
+				operations: z.array(DREAMING_ONTOLOGY_OPERATION_SCHEMA).min(1).max(DREAMING_MAX_OPERATIONS_PER_REQUEST),
 			}),
 			async ({ agentId: scopeId, operations }) => {
 				params.onOperationsAboutToApply?.(operations, scopeId);
-				const result = applyDreamingOperations({
+				const result = await applyDreamingOperations({
 					accessor,
 					agentId: scopeId,
 					actor,
