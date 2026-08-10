@@ -179,6 +179,11 @@ export function sourceFailureClass(error: unknown): SourceFailureClass {
 	if (/403|permission|forbidden|not authorized|authorization/i.test(text)) return "authorization";
 	if (/token|credential|secret|auth|401/i.test(text)) return "authentication";
 	if (/429|rate limit|too many requests/i.test(text)) return "rate_limited";
+	if (
+		/configuration|root is required|guild id is required|missing .*config|config/i.test(text) ||
+		(/invalid/i.test(text) && /source|root|guild|config|provider/i.test(text))
+	)
+		return "configuration";
 	if (/json|parse|invalid|malformed|schema/i.test(text)) return "parse";
 	if (/network|fetch|socket|timeout|dns|connect|gateway|http 5/i.test(text)) return "network";
 	return "unknown";
