@@ -8,7 +8,8 @@
  * See docs/specs/approved/dreaming-memory-consolidation.md
  */
 
-import { randomUUID } from "node:crypto";
+import type { Database } from "bun:sqlite";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -32,6 +33,7 @@ import { logger } from "../logger";
 import type { GraphWriteCaps } from "../ontology-proposals";
 import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
 import { getActiveTelemetry } from "../telemetry";
+import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import {
 	type DreamingAttention,
@@ -1413,7 +1415,25 @@ export async function runDreamingAgentPass(
 				surfaced === undefined ? previous : nextEvidenceWatermark(surfaced, previous, cutoff),
 			);
 		}
+		// Any pass that surfaces transcript evidence owns its direct temporal
+		// projection. Combined passes can ingest content too; gating this on the
+		// focused-mode name would advance the watermark without writing the
+		// manifest.
+		const transcriptManifestEntries = [...surfacedTranscriptRefsByScope.entries()].flatMap(([scope, refs]) =>
+			accessor.withReadDb((db) =>
+				[...refs].flatMap((sourceRef) => {
+					const source = readEpisodicSource(db, { agentId: scope, from: sourceRef });
+					return source === null || !source.completed
+						? []
+						: [{ scope, source, content: renderDreamingEvidence(source) }];
+				}),
+			),
+		);
 		accessor.withWriteTx((db) => {
+			writeDreamingTranscriptManifestInTx(db, {
+				passId,
+				entries: transcriptManifestEntries,
+			});
 			db.prepare(
 				`UPDATE dreaming_passes SET status = 'completed', completed_at = datetime('now'),
 				 tokens_consumed = ?, tokens_input = ?, tokens_output = ?,
@@ -1497,6 +1517,89 @@ export async function runDreamingAgentPass(
 // Max backoff: 5min * 2^6 = ~5.3 hours.
 const MAX_FAILURE_BACKOFF_MULTIPLIER = 6;
 const FAILURE_BACKOFF_BASE_MS = 5 * 60 * 1000;
+
+function writeDreamingTranscriptManifestInTx(
+	db: WriteDb,
+	params: {
+		readonly passId: string;
+		readonly entries: readonly {
+			readonly scope: string;
+			readonly source: EpisodicSourceRecord;
+			readonly content: string;
+		}[];
+	},
+): void {
+	const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'").get();
+	if (table == null) return;
+	const statement = db.prepare(
+		`INSERT INTO session_summaries (
+			id, project, depth, kind, content, token_count,
+			earliest_at, latest_at, session_key, harness,
+			agent_id, source_type, source_ref, meta_json, created_at
+		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'transcript', ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+			project = excluded.project,
+			content = excluded.content,
+			token_count = excluded.token_count,
+			earliest_at = excluded.earliest_at,
+			latest_at = excluded.latest_at,
+			session_key = excluded.session_key,
+			harness = excluded.harness,
+			agent_id = excluded.agent_id,
+			source_type = excluded.source_type,
+			source_ref = excluded.source_ref,
+			meta_json = excluded.meta_json`,
+	);
+	const now = new Date().toISOString();
+	for (const entry of params.entries) {
+		if (!entry.source.completed || entry.content.trim().length === 0) continue;
+		const content = entry.content.trim();
+		const contentHash = createHash("sha256").update(content).digest("hex");
+		// Reuse an existing depth-0 row for this agent/session. The historical
+		// summary path used a different id, and the partial unique index cannot
+		// be handled by ON CONFLICT(id) alone. Updating it in place preserves
+		// child/memory lineage while replacing the derived content source.
+		const existing = db
+			.prepare(
+				`SELECT id FROM session_summaries
+				 WHERE agent_id = ? AND session_key = ? AND depth = 0
+				   AND COALESCE(source_type, 'summary') IN ('summary', 'checkpoint')
+				 LIMIT 1`,
+			)
+			.get(entry.scope, entry.source.id) as { id: string } | null;
+		const nodeId = existing?.id ?? `transcript:${entry.scope}:${entry.source.id}`;
+		statement.run(
+			nodeId,
+			entry.source.project,
+			content,
+			countTokens(content),
+			entry.source.capturedAt,
+			entry.source.capturedAt,
+			entry.source.id,
+			entry.source.harness,
+			entry.scope,
+			entry.source.id,
+			JSON.stringify({
+				source: "dreaming-content-pass",
+				passId: params.passId,
+				sourceRef: `transcript:${entry.source.id}`,
+				contentHash,
+			}),
+			now,
+		);
+		upsertThreadHead(db as unknown as Database, {
+			agentId: entry.scope,
+			nodeId,
+			content,
+			latestAt: now,
+			project: entry.source.project,
+			sessionKey: entry.source.id,
+			sourceType: "transcript",
+			sourceRef: entry.source.id,
+			harness: entry.source.harness,
+		});
+	}
+}
 
 // A scope that fails this many consecutive passes is halted: automatic
 // scheduling stops for the cooldown below instead of retrying forever on
