@@ -143,10 +143,17 @@ import {
 	clearSourceIndexInFlight,
 	completeSourceIndexJobFromProgress,
 	failSourceIndexJob,
+	getSourceIndexJob,
 	markSourceIndexInFlight,
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "./source-index-progress";
+import {
+	recordSourceFreshness,
+	recordSourceIndexOperation,
+	sourceFailureClass,
+	sourceHasSearchableArtifacts,
+} from "./source-lifecycle-telemetry";
 import { runStartupRecovery } from "./startup-recovery";
 import { reportStartupGrace } from "./system-pressure";
 import {
@@ -2109,6 +2116,11 @@ async function main() {
 						extractionProvider: providerRuntimeResolution.extraction.effective,
 						embeddingProvider: liveCfg.embedding.provider,
 					});
+					for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
+						if (!source.enabled) continue;
+						const job = getSourceIndexJob(source.id);
+						recordSourceFreshness(source, resolveDaemonAgentId(), job?.lastProgressAt);
+					}
 				} catch {}
 			},
 			5 * 60 * 1000,
@@ -2257,12 +2269,14 @@ async function main() {
 
 		if (!nativeMemoryBridge) {
 			const startupSourceJobs = new Map<string, string>();
+			const startupSourceStartedAt = new Map<string, number>();
 			for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
 				if (!source.enabled || source.kind !== "obsidian") continue;
 				const job = beginSourceIndexJob(source.id, "source-startup");
 				startupSourceJobs.set(source.id, job.id);
 				markSourceIndexInFlight(source.id);
 				markSourceIndexJobRunning(source.id, job.id);
+				startupSourceStartedAt.set(source.id, Date.now());
 			}
 			nativeMemoryBridge = startNativeMemoryBridge([], {
 				agentsDir: AGENTS_DIR,
@@ -2289,10 +2303,39 @@ async function main() {
 				.then(() => {
 					for (const [sourceId, jobId] of startupSourceJobs) {
 						completeSourceIndexJobFromProgress(sourceId, jobId);
+						const job = getSourceIndexJob(sourceId);
+						const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
+						if (source) {
+							recordSourceIndexOperation({
+								source,
+								agentId: resolveDaemonAgentId(),
+								discovered: job?.total ?? job?.scanned ?? 0,
+								accepted: job?.indexed ?? 0,
+								durationMs: Date.now() - (startupSourceStartedAt.get(sourceId) ?? Date.now()),
+								outcome: "success",
+								searchable: sourceHasSearchableArtifacts(source, resolveDaemonAgentId()),
+							});
+						}
 					}
 				})
 				.catch((e) => {
-					for (const [sourceId, jobId] of startupSourceJobs) failSourceIndexJob(sourceId, jobId, e);
+					for (const [sourceId, jobId] of startupSourceJobs) {
+						const job = getSourceIndexJob(sourceId);
+						failSourceIndexJob(sourceId, jobId, e);
+						const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
+						if (source) {
+							recordSourceIndexOperation({
+								source,
+								agentId: resolveDaemonAgentId(),
+								discovered: job?.total ?? job?.scanned ?? 0,
+								accepted: job?.indexed ?? 0,
+								durationMs: Date.now() - (startupSourceStartedAt.get(sourceId) ?? Date.now()),
+								outcome: "failed",
+								failureClass: sourceFailureClass(e),
+								searchable: false,
+							});
+						}
+					}
 					const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
 					logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
 				})

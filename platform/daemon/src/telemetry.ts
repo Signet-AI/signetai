@@ -81,6 +81,9 @@ export const TELEMETRY_EVENTS = [
 	"cloud.sync",
 	"cloud.storage",
 	"recall.performed",
+	// Bounded source lifecycle summaries (issue #1276). The source identity
+	// used for local first-use correlation is never included in the event.
+	"source.lifecycle",
 	"config.snapshot",
 ] as const;
 

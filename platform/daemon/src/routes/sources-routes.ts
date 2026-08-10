@@ -42,6 +42,13 @@ import {
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "../source-index-progress";
+import {
+	recordSourceConnected,
+	recordSourceConnectionFailure,
+	recordSourceIndexOperation,
+	sourceFailureClass,
+	sourceHasSearchableArtifacts,
+} from "../source-lifecycle-telemetry";
 import { getSourceProvider } from "../source-providers";
 import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
 
@@ -154,6 +161,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		try {
 			body = (await c.req.json()) as AddObsidianSourceBody;
 		} catch {
+			recordSourceConnectionFailure("obsidian", new Error("invalid configuration"));
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
@@ -162,7 +170,11 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			? body.excludeGlobs.filter((entry) => typeof entry === "string")
 			: undefined;
 		const result = addObsidianSource({ root, name: body.name, excludeGlobs }, agentsDir);
-		if (result.ok === false) return c.json({ error: result.error }, 400);
+		if (result.ok === false) {
+			recordSourceConnectionFailure("obsidian", result.error);
+			return c.json({ error: result.error }, 400);
+		}
+		recordSourceConnected(result.source, resolveDaemonAgentId());
 
 		const job = enqueueSourceIndexJob({
 			source: result.source,
@@ -179,6 +191,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		try {
 			body = (await c.req.json()) as AddDiscordSourceBody;
 		} catch {
+			recordSourceConnectionFailure("discord", new Error("invalid configuration"));
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
@@ -216,7 +229,15 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			},
 			agentsDir,
 		);
-		if (result.ok === false) return c.json({ error: result.error }, 400);
+		if (result.ok === false) {
+			recordSourceConnectionFailure(
+				"discord",
+				result.error,
+				body.syncMode === "gateway-tail" ? "recurring" : "one_shot",
+			);
+			return c.json({ error: result.error }, 400);
+		}
+		recordSourceConnected(result.source, resolveDaemonAgentId());
 
 		const job = enqueueSourceIndexJob({
 			source: result.source,
@@ -284,6 +305,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		try {
 			body = (await c.req.json()) as AddGitHubSourceBody;
 		} catch {
+			recordSourceConnectionFailure("github", new Error("invalid configuration"));
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
@@ -310,7 +332,11 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			},
 			agentsDir,
 		);
-		if (result.ok === false) return c.json({ error: result.error }, 400);
+		if (result.ok === false) {
+			recordSourceConnectionFailure("github", result.error);
+			return c.json({ error: result.error }, 400);
+		}
+		recordSourceConnected(result.source, resolveDaemonAgentId());
 
 		const job = enqueueSourceIndexJob({
 			source: result.source,
@@ -326,6 +352,19 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 404);
+		const canceledJob = getSourceIndexJob(result.source.id);
+		if (canceledJob && (canceledJob.status === "queued" || canceledJob.status === "running")) {
+			recordSourceIndexOperation({
+				source: result.source,
+				agentId: resolveDaemonAgentId(),
+				discovered: canceledJob.total ?? canceledJob.scanned ?? 0,
+				accepted: canceledJob.indexed ?? 0,
+				durationMs: Math.max(0, Date.now() - Date.parse(canceledJob.startedAt ?? canceledJob.queuedAt)),
+				outcome: "cancelled",
+				failureClass: "cancelled",
+				searchable: false,
+			});
+		}
 		cancelSourceIndexJob(result.source.id);
 
 		const sourceAgentId = resolveDaemonAgentId();
@@ -363,6 +402,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		clearSourceIndexInFlight(input.source.id);
 		return;
 	}
+	const startedAt = Date.now();
 
 	let bridge: NativeMemoryBridgeHandle | null = null;
 
@@ -382,14 +422,36 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 			});
 			if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 			if (result.failures.length > 0) {
+				const accepted = Math.max(0, result.indexed - result.failures.length);
+				const outcome = accepted > 0 ? "partial" : "failed";
 				failSourceIndexJob(
 					input.source.id,
 					job.id,
 					`${input.source.kind} source sync completed with ${result.failures.length} failure(s)`,
 				);
+				recordSourceIndexOperation({
+					source: input.source,
+					agentId: resolveDaemonAgentId(),
+					discovered: Math.max(result.total || result.scanned, result.indexed),
+					accepted,
+					failed: result.failures.length,
+					durationMs: Date.now() - startedAt,
+					outcome,
+					failureClass: sourceFailureClass(result.failures[0]?.message),
+					searchable: sourceHasSearchableArtifacts(input.source, resolveDaemonAgentId()),
+				});
 			} else {
 				markSourceIndexed(input.source.id, undefined, input.agentsDir);
 				completeSourceIndexJob(input.source.id, job.id, result.indexed);
+				recordSourceIndexOperation({
+					source: input.source,
+					agentId: resolveDaemonAgentId(),
+					discovered: Math.max(result.total || result.scanned, result.indexed),
+					accepted: result.indexed,
+					durationMs: Date.now() - startedAt,
+					outcome: "success",
+					searchable: sourceHasSearchableArtifacts(input.source, resolveDaemonAgentId()),
+				});
 			}
 			return;
 		}
@@ -417,9 +479,30 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		markSourceIndexed(input.source.id, undefined, input.agentsDir);
 		completeSourceIndexJob(input.source.id, job.id, indexed);
+		const progress = getSourceIndexJob(input.source.id);
+		recordSourceIndexOperation({
+			source: input.source,
+			agentId: resolveDaemonAgentId(),
+			discovered: progress?.total ?? progress?.scanned ?? 0,
+			accepted: indexed,
+			durationMs: Date.now() - startedAt,
+			outcome: "success",
+			searchable: sourceHasSearchableArtifacts(input.source, resolveDaemonAgentId()),
+		});
 	} catch (err) {
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+		const progress = getSourceIndexJob(input.source.id);
 		failSourceIndexJob(input.source.id, job.id, err);
+		recordSourceIndexOperation({
+			source: input.source,
+			agentId: resolveDaemonAgentId(),
+			discovered: progress?.total ?? progress?.scanned ?? 0,
+			accepted: progress?.indexed ?? 0,
+			durationMs: Date.now() - startedAt,
+			outcome: "failed",
+			failureClass: sourceFailureClass(err),
+			searchable: false,
+		});
 	} finally {
 		await bridge?.close().catch(() => undefined);
 		if (consumeCanceledSourceIndexJob(job.id)) {

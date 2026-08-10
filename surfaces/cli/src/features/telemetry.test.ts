@@ -9,6 +9,7 @@ import {
 	cliTelemetryLogPath,
 	flushCliTelemetry,
 	recordCommandInvoked,
+	recordSourceConnected,
 } from "./telemetry";
 
 let dir = "";
@@ -70,6 +71,22 @@ describe("cli telemetry (issue #1206)", () => {
 		};
 		expect(line.event).toBe("command.invoked");
 		expect(line.properties.command).toBe("remember");
+	});
+
+	it("records source lifecycle configuration without source identity", () => {
+		writeAgentYaml(true);
+		recordSourceConnected(dir, "github");
+		const line = JSON.parse(readFileSync(cliTelemetryLogPath(dir), "utf-8").trim()) as {
+			event: string;
+			properties: Record<string, unknown>;
+		};
+		expect(line.event).toBe("source.lifecycle");
+		expect(line.properties).toEqual({
+			phase: "connect",
+			outcome: "success",
+			sourceClass: "repository",
+			mode: "one_shot",
+		});
 	});
 
 	it("tags development command events", () => {

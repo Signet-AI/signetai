@@ -48,6 +48,7 @@ import {
 	scoreStructuredPathEvidence,
 } from "./pipeline/structured-path-evidence";
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
+import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
 import { escapeLike } from "./sql-utils";
 import { getActiveTelemetry } from "./telemetry";
 import { type TemporalTimeOptions, hasFreshnessIntent, resolveTemporalRecall } from "./temporal-recall";
@@ -1284,6 +1285,7 @@ export async function hybridRecall(
 			latencyMs: recallTimings.totalMs,
 			truncated: response.results.length >= limit,
 		});
+		recordFirstSourceRecall(params.agentId ?? "default", response.results);
 		if (recallTimings.totalMs >= RECALL_TIMING_LOG_THRESHOLD_MS) {
 			logger.warn("memory", "Recall stage timings", {
 				agentId: params.agentId ?? "default",

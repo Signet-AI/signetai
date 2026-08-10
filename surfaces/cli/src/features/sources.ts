@@ -10,6 +10,7 @@ import {
 	removeSource,
 } from "@signet/core";
 import chalk from "chalk";
+import { recordSourceConnected, recordSourceConnectionFailure } from "./telemetry";
 
 export interface SourcesDeps {
 	readonly agentsDir: string;
@@ -119,12 +120,14 @@ export async function addObsidianVaultSource(
 	const excludeGlobs = options.exclude && options.exclude.length > 0 ? options.exclude : undefined;
 	const result = addObsidianSource({ root: path, name: options.name, excludeGlobs }, deps.agentsDir);
 	if (result.ok === false) {
+		recordSourceConnectionFailure(deps.agentsDir, "obsidian", result.error);
 		console.error(chalk.red(`✗ ${result.error}`));
 		process.exitCode = 1;
 		return;
 	}
 
 	const verb = result.created ? "Added" : "Updated";
+	recordSourceConnected(deps.agentsDir, result.source.kind, "one_shot", result.created);
 	console.log(chalk.green(`✓ ${verb} Obsidian source: ${result.source.name}`));
 	console.log(chalk.dim(`  ${result.source.root}`));
 	console.log();
@@ -136,6 +139,12 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 	const guildIds = options.guild ?? [];
 	const maxMessagesPerChannel = parseIntegerOption(options.maxMessages, "Discord max-messages");
 	if (isParseError(maxMessagesPerChannel)) {
+		recordSourceConnectionFailure(
+			deps.agentsDir,
+			"discord",
+			maxMessagesPerChannel.error,
+			options.mode === "gateway-tail" ? "recurring" : "one_shot",
+		);
 		console.error(chalk.red(`✗ ${maxMessagesPerChannel.error}`));
 		process.exitCode = 1;
 		return;
@@ -145,6 +154,12 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 		"Discord max-attachment-text-bytes",
 	);
 	if (isParseError(maxAttachmentTextBytes)) {
+		recordSourceConnectionFailure(
+			deps.agentsDir,
+			"discord",
+			maxAttachmentTextBytes.error,
+			options.mode === "gateway-tail" ? "recurring" : "one_shot",
+		);
 		console.error(chalk.red(`✗ ${maxAttachmentTextBytes.error}`));
 		process.exitCode = 1;
 		return;
@@ -178,12 +193,24 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 
 	const result = addDiscordSource(input, deps.agentsDir);
 	if (result.ok === false) {
+		recordSourceConnectionFailure(
+			deps.agentsDir,
+			"discord",
+			result.error,
+			options.mode === "gateway-tail" ? "recurring" : "one_shot",
+		);
 		console.error(chalk.red(`✗ ${result.error}`));
 		process.exitCode = 1;
 		return;
 	}
 
 	const verb = result.created ? "Added" : "Updated";
+	recordSourceConnected(
+		deps.agentsDir,
+		result.source.kind,
+		result.source.providerSettings?.syncMode === "gateway-tail" ? "recurring" : "one_shot",
+		result.created,
+	);
 	console.log(chalk.green(`✓ ${verb} Discord source: ${result.source.name}`));
 	console.log(chalk.dim(`  ${result.source.root}`));
 	if (result.source.providerSettings?.syncMode === "desktop-cache") {
@@ -200,12 +227,14 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 export async function addGitHubSourceFromCli(options: AddGitHubSourceOptions, deps: SourcesDeps): Promise<void> {
 	const maxItemsPerRepo = parseIntegerOption(options.maxItems, "GitHub max-items");
 	if (isParseError(maxItemsPerRepo)) {
+		recordSourceConnectionFailure(deps.agentsDir, "github", maxItemsPerRepo.error);
 		console.error(chalk.red(`✗ ${maxItemsPerRepo.error}`));
 		process.exitCode = 1;
 		return;
 	}
 	const resourceTypes = options.resourceType?.filter(isGitHubResourceType);
 	if (options.resourceType && resourceTypes?.length !== options.resourceType.length) {
+		recordSourceConnectionFailure(deps.agentsDir, "github", "invalid resource type");
 		console.error(chalk.red("✗ GitHub resource types must be one of: issues, pulls, discussions, docs"));
 		process.exitCode = 1;
 		return;
@@ -229,12 +258,14 @@ export async function addGitHubSourceFromCli(options: AddGitHubSourceOptions, de
 
 	const result = addGitHubSource(input, deps.agentsDir);
 	if (result.ok === false) {
+		recordSourceConnectionFailure(deps.agentsDir, "github", result.error);
 		console.error(chalk.red(`✗ ${result.error}`));
 		process.exitCode = 1;
 		return;
 	}
 
 	const verb = result.created ? "Added" : "Updated";
+	recordSourceConnected(deps.agentsDir, result.source.kind, "one_shot", result.created);
 	console.log(chalk.green(`✓ ${verb} GitHub source: ${result.source.name}`));
 	console.log(chalk.dim(`  ${result.source.root}`));
 	if (result.source.providerSettings?.tokenRef) {

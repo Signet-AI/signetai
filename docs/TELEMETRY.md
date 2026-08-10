@@ -60,6 +60,7 @@ PostHog failures, and never throws into the daemon.
 | `llm.generate` | every LLM call | `provider`, `latencyMs`, `success`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreationTokens`, `totalCost` |
 | `pipeline.embedding` | every embedding fetch, at the usage-recording boundary | `tokens`, `provider`, `sourceKind` (`memory-capture` / `artifact-index` / `recall` / `dreaming` / `other`), `cost` (USD) |
 | `recall.performed` | every completed shared recall search | `type` (`semantic` / `keyword` / `temporal` / `graph`), `results`, `latencyMs`, `truncated` |
+| `source.lifecycle` | bounded source connect, index, readiness, first-recall, and recurring freshness milestones | `phase`, fixed `sourceClass`, bounded outcomes/counts/buckets |
 | `pipeline.error` | categorized extraction, decision, or embedding failure | `stage`, `code` only; no message or stack content |
 | `dreaming.pass` | completed agentic dreaming pass (early-exit passes emit nothing) | `mode`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost` |
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
@@ -127,6 +128,19 @@ Notes on individual events:
   search and additional events for decomposed subqueries. Local stats read the
   flushed telemetry table, so they can lag the in-memory event buffer by one
   flush interval.
+- **`source.lifecycle` (#1276)** — emitted at operation boundaries, never once
+  per document, message, chunk, or embedding. `phase` is `connect`, `index`,
+  `readiness`, `first_recall`, or `freshness`; `sourceClass` is one of
+  `transcript`, `document`, `repository`, `note_vault`, `browser`, or `other`,
+  and `mode` is `one_shot` or `recurring`. Index events carry bounded
+  discovered/accepted/skipped/failed counts plus source-size and duration
+  buckets. Counts are bounded observed sync units; adapters may report source
+  units (repositories/guilds) for discovery and indexed artifacts for
+  acceptance, never raw item details. Readiness distinguishes indexed from searchable. Recurring sources
+  report healthy, stale, or unknown freshness with a lag bucket. A per-agent,
+  install-local source digest is used only in SQLite to claim first-use
+  milestones; it is never sent. Names, roots, URLs, titles, identifiers,
+  token references, error text, queries, and content are omitted.
 
 ## Privacy contract
 
@@ -149,6 +163,9 @@ Notes on individual events:
   joinable across installs, not reversible — the raw agent name is never
   sent. (Hashed in `telemetry.anonymizeAgentId`; previous versions sent it
   as-is.)
+- **Source lifecycle correlation is local-only.** Source digests used to join
+  connect, readiness, and first-recall milestones remain in SQLite and never
+  cross the telemetry boundary.
 - **Geo.** PostHog captures `$ip` server-side on every event and derives
   city/country from it. The wrapper cannot suppress this; it is an open
   question whether to send `$ip: null` or soften the no-IP claim (issue
@@ -291,6 +308,7 @@ vault mirrors the key PostHog aggregates for daily review via
 | Unreleased | `recall.performed` with anonymous recall type, result count, latency, and truncation metrics (#1203) |
 | Unreleased | First-run activation funnel: `first.remember` / `first.recall`, exactly once per install (#1202) |
 | Unreleased | `pipeline.embedding` cost rates and collector-derived session token/cost totals (#1201) |
+| Unreleased | Privacy-safe source lifecycle funnels and recurring freshness summaries (#1276) |
 
 Related: #1026 (original rollout), #1200 (IP capture, dev tagging),
 #1201-#1207 (event-scoped follow-ups), #1212 (session.end rename — resolved).

@@ -19,10 +19,13 @@ import {
 import { createDatabase } from "../sqlite.js";
 
 export const TELEMETRY_EVENT = "command.invoked";
+type CliTelemetryEventName = typeof TELEMETRY_EVENT | "source.lifecycle";
 const TELEMETRY_FLUSH_TIMEOUT_MS = 2_000;
 const TELEMETRY_CLAIM_TIMEOUT_MS = 10 * 60 * 1_000;
 const MIN_BATCH_SIZE = 1;
 const MAX_BATCH_SIZE = 500;
+const CLI_SOURCE_FAILURE_SAMPLE_INTERVAL_MS = 15 * 60 * 1_000;
+const cliSourceFailureSamples = new Map<string, number>();
 
 interface CliTelemetrySettings {
 	readonly enabled: boolean;
@@ -165,12 +168,12 @@ function claimEvents(db: ReturnType<typeof createDatabase>, limit: number): Clai
 			 SET claim_token = ?, claimed_at = ?
 			 WHERE id IN (
 				 SELECT id FROM telemetry_events
-				 WHERE event = ? AND source = 'cli' AND sent_to_posthog = 0
+				WHERE source = 'cli' AND sent_to_posthog = 0
 					 AND (claim_token IS NULL OR claimed_at < ?)
 				 ORDER BY timestamp ASC
 				 LIMIT ?
 			 )`,
-		).run(token, claimedAt, TELEMETRY_EVENT, staleBefore, limit);
+		).run(token, claimedAt, staleBefore, limit);
 		const rows = db
 			.prepare(
 				`SELECT id, event, timestamp, properties
@@ -208,9 +211,10 @@ function markClaimedSent(db: ReturnType<typeof createDatabase>, token: string): 
  * Payload is the command name only. This function is synchronous for the
  * local write and never performs a network request.
  */
-export function recordCommandInvoked(
+function recordCliEvent(
 	agentsDir: string,
-	commandName: string,
+	eventName: CliTelemetryEventName,
+	properties: Record<string, string | number | boolean | null>,
 	env: NodeJS.ProcessEnv = process.env,
 ): void {
 	const settings = readTelemetrySettings(agentsDir, env);
@@ -220,9 +224,9 @@ export function recordCommandInvoked(
 		const deployment = cliTelemetryDeployment(env);
 		const event: QueuedEvent = {
 			id: randomUUID(),
-			event: TELEMETRY_EVENT,
+			event: eventName,
 			timestamp: new Date().toISOString(),
-			properties: { command: commandName, ...(deployment ? { deployment } : {}) },
+			properties: { ...properties, ...(deployment ? { deployment } : {}) },
 		};
 		const logPath = cliTelemetryLogPath(agentsDir);
 		mkdirSync(dirname(logPath), { recursive: true });
@@ -233,6 +237,77 @@ export function recordCommandInvoked(
 	} catch {
 		// Never break the command on telemetry write failures.
 	}
+}
+
+export function recordCommandInvoked(
+	agentsDir: string,
+	commandName: string,
+	env: NodeJS.ProcessEnv = process.env,
+): void {
+	recordCliEvent(agentsDir, TELEMETRY_EVENT, { command: commandName }, env);
+}
+
+/** Record a successful local source configuration without source identity. */
+export function recordSourceConnected(
+	agentsDir: string,
+	kind: string,
+	mode: "one_shot" | "recurring" = "one_shot",
+	created = true,
+	env: NodeJS.ProcessEnv = process.env,
+): void {
+	if (!created) return;
+	const sourceClass =
+		kind === "discord" ? "transcript" : kind === "github" ? "repository" : kind === "obsidian" ? "note_vault" : "other";
+	recordCliEvent(agentsDir, "source.lifecycle", { phase: "connect", outcome: "success", sourceClass, mode }, env);
+}
+
+export function recordSourceConnectionFailure(
+	agentsDir: string,
+	kind: string,
+	error: unknown,
+	mode: "one_shot" | "recurring" = "one_shot",
+	env: NodeJS.ProcessEnv = process.env,
+): void {
+	const sourceClass =
+		kind === "discord" ? "transcript" : kind === "github" ? "repository" : kind === "obsidian" ? "note_vault" : "other";
+	const sampleKey = `${agentsDir}:${sourceClass}:${mode}`;
+	const now = Date.now();
+	const previous = cliSourceFailureSamples.get(sampleKey);
+	if (previous !== undefined && now - previous < CLI_SOURCE_FAILURE_SAMPLE_INTERVAL_MS) return;
+	if (existsSync(join(agentsDir, "memory", "memories.db"))) {
+		let db: ReturnType<typeof createTelemetryDatabase> | null = null;
+		try {
+			db = createTelemetryDatabase(join(agentsDir, "memory", "memories.db"));
+			const since = new Date(now - CLI_SOURCE_FAILURE_SAMPLE_INTERVAL_MS).toISOString();
+			const prior = db
+				.prepare(
+					`SELECT id FROM telemetry_events
+					 WHERE source = 'cli' AND event = 'source.lifecycle' AND timestamp >= ?
+					   AND properties LIKE ? AND properties LIKE ? AND properties LIKE ? LIMIT 1`,
+				)
+				.get(since, `%\"sourceClass\":\"${sourceClass}\"%`, `%\"outcome\":\"failed\"%`, `%\"mode\":\"${mode}\"%`);
+			if (prior) return;
+		} catch {
+			// Fall back to the process-local sample when an old schema is present.
+		} finally {
+			db?.close();
+		}
+	}
+	cliSourceFailureSamples.set(sampleKey, now);
+	const message = error instanceof Error ? error.message : String(error);
+	const failureClass = /token|credential|secret|auth|401|403/i.test(message)
+		? "authentication"
+		: /429|rate.?limit/i.test(message)
+			? "rate_limited"
+			: /network|fetch|socket|timeout|dns|connect/i.test(message)
+				? "network"
+				: "configuration";
+	recordCliEvent(
+		agentsDir,
+		"source.lifecycle",
+		{ phase: "connect", outcome: "failed", sourceClass, mode, failureClass },
+		env,
+	);
 }
 
 /**

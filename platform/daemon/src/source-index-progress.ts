@@ -11,6 +11,7 @@ export interface SourceIndexJob {
 	readonly total?: number;
 	readonly indexed?: number;
 	readonly currentPath?: string;
+	readonly lastProgressAt?: string;
 	readonly error?: string;
 }
 
@@ -60,6 +61,10 @@ export function updateSourceIndexJobProgress(sourceId: string, jobId: string, ev
 	const current = sourceIndexJobs.get(sourceId);
 	if (!current) return;
 	if (current.status === "complete" || current.status === "error") return;
+	// Gateway tails report zero counts by design; their dispatch path is the
+	// successful activity signal. The initial gateway handshake uses the
+	// literal gateway path and is intentionally excluded.
+	const hasMeaningfulActivity = event.currentPath !== "discord://gateway";
 	sourceIndexJobs.set(sourceId, {
 		...current,
 		status: "running",
@@ -68,6 +73,7 @@ export function updateSourceIndexJobProgress(sourceId: string, jobId: string, ev
 		total: event.total,
 		indexed: event.indexed,
 		currentPath: event.currentPath,
+		...(hasMeaningfulActivity ? { lastProgressAt: new Date().toISOString() } : {}),
 	});
 }
 

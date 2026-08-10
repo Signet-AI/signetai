@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
+
 import {
 	addObsidianSource,
 	buildAgentMemoryConfig,
@@ -29,10 +30,13 @@ import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import { formatWorkspaceSourceRepoSync, readErr, readRecord } from "./setup-shared.js";
 import type { SetupDeps } from "./setup-types.js";
+import { recordSourceConnected, recordSourceConnectionFailure } from "./telemetry.js";
 
 export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext, deps: SetupDeps): Promise<void> {
 	const spinner = ora("Setting up Signet...").start();
 	let graphiqInstalled = false;
+	const pendingSourceConnections: Array<{ readonly kind: string; readonly created: boolean }> = [];
+	const pendingSourceFailures: Array<{ readonly kind: string; readonly error: string }> = [];
 
 	try {
 		if (context.nonInteractive && !context.allowUnprotectedWorkspace && !context.createLocalBackup) {
@@ -249,8 +253,10 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 				if (src.type === "obsidian") {
 					const result = addObsidianSource({ root: src.path, name: src.name }, context.basePath);
 					if (result.ok) {
+						pendingSourceConnections.push({ kind: result.source.kind, created: result.created });
 						console.log(chalk.dim(`  ✓ Obsidian source: ${result.source.name}`));
 					} else {
+						pendingSourceFailures.push({ kind: "obsidian", error: result.error });
 						console.warn(chalk.yellow(`  ⚠ Could not add Obsidian source ${src.path}: ${result.error}`));
 					}
 				}
@@ -296,6 +302,12 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			runMigrations(db);
 		} finally {
 			db.close();
+		}
+		for (const connection of pendingSourceConnections) {
+			recordSourceConnected(context.basePath, connection.kind, "one_shot", connection.created);
+		}
+		for (const failure of pendingSourceFailures) {
+			recordSourceConnectionFailure(context.basePath, failure.kind, failure.error);
 		}
 
 		let protection = await enforceSetupProtection({

@@ -122,6 +122,7 @@ import { up as sessionClaims } from "./113-session-claims";
 import { up as memoryTraversalHydrationIndex } from "./114-memory-traversal-hydration-index";
 import { up as crossAgentMessageNotifications } from "./115-cross-agent-message-notifications";
 import { up as acpDeliveryReconciliation } from "./116-acp-delivery-reconciliation";
+import { up as sourceLifecycleTelemetry } from "./117-source-lifecycle-telemetry";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1094,6 +1095,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "cross_agent_messages", column: "acp_target_agent_name" },
 			],
 		},
+	},
+	{
+		version: 117,
+		name: "source-lifecycle-telemetry",
+		up: sourceLifecycleTelemetry,
+		artifacts: { tables: ["source_lifecycle_state"] },
 	},
 ];
 

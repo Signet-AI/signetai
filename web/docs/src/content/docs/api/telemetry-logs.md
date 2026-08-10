@@ -144,6 +144,13 @@ intentionally stores query text and result snapshots for manual review, so it
 requires `analytics` permission and is never forwarded to external telemetry
 sinks.
 
+The anonymous `source.lifecycle` event records bounded source lifecycle
+summaries for issue #1276. Its phase is `connect`, `index`, `readiness`,
+`first_recall`, or `freshness`; source classes and modes use fixed taxonomies.
+It contains aggregate counts and buckets only. Source names, paths, URLs,
+titles, identifiers, token references, error text, queries, and content are
+never included. Source correlation keys are local SQLite-only digests.
+
 ### GET /api/telemetry/events
 
 Query raw telemetry events.
