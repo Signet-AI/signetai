@@ -131,6 +131,7 @@ import { up as dreamingEvidenceRetry } from "./122-dreaming-evidence-retry";
 import { up as embeddingIndexFailures } from "./123-embedding-index-failures";
 import { up as importedDerivedLifecycle } from "./124-import-derived-lifecycle";
 import { up as memoryContentSafety } from "./125-memory-content-safety";
+import { up as dreamingSurprisalAttention } from "./126-dreaming-surprisal-attention";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1178,6 +1179,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "memory-content-safety",
 		up: memoryContentSafety,
 		artifacts: { tables: ["memory_content_safety"] },
+	},
+	{
+		version: 126,
+		name: "dreaming-surprisal-attention",
+		up: dreamingSurprisalAttention,
+		artifacts: { tables: ["dreaming_attention"] },
 	},
 ];
 

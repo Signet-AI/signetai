@@ -492,6 +492,23 @@ export interface PipelineReflectionsConfig {
 	readonly maxSummaries: number;
 }
 
+export interface DreamingSurprisalConfig {
+	/** Opt-in only: structural attention remains the default selector. */
+	readonly enabled: boolean;
+	/** Maximum number of recent, already-embedded episodic observations to inspect. */
+	readonly sampleSize: number;
+	/** Maximum number of embedding-surprisal hints to queue for one pass. */
+	readonly maxCandidates: number;
+	/** Minimum number of valid vectors needed before geometry is meaningful. */
+	readonly minObservations: number;
+	/** Number of nearest neighbours used for local-density surprisal. */
+	readonly neighborCount: number;
+	/** Maximum number of points held by a deterministic projection-tree leaf. */
+	readonly treeLeafSize: number;
+	/** Normalized score below which a candidate is not queued. */
+	readonly minScore: number;
+}
+
 export interface DreamingConfig {
 	readonly tokenThreshold: number;
 	/** Maximum time that non-empty episodic evidence may wait below the token threshold. */
@@ -500,6 +517,8 @@ export interface DreamingConfig {
 	readonly maxInputTokens: number;
 	readonly maxOutputTokens: number;
 	readonly backfillOnFirstRun: boolean;
+	/** Optional, fail-open embedding-geometry hints for Dreaming attention. */
+	readonly surprisal?: DreamingSurprisalConfig;
 }
 
 // -- Status/union constants --

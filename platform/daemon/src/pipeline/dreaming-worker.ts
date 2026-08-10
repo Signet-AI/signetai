@@ -18,6 +18,7 @@ import {
 	createDreamingPass,
 	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
+	enqueueDreamingSurprisalAttention,
 	getDreamingEpisodicTokenBacklog,
 	isDreamingHaltActive,
 	recordDreamingFailure,
@@ -25,7 +26,7 @@ import {
 	selectDreamingPassMode,
 	shouldTriggerDreaming,
 } from "./dreaming";
-import { getDreamingAttentionInDb } from "./dreaming-attention";
+import { DREAMING_CONTENT_ATTENTION_KINDS, hasDreamingAttentionKindInDb } from "./dreaming-attention";
 import { type DreamingEvidenceRetryPolicy, autoRequeueRepairedDreamingEvidence } from "./dreaming-evidence-retry";
 
 /** Thrown when a trigger is attempted while a pass is already in-flight. */
@@ -161,11 +162,14 @@ export function selectDreamingCheckMode(
 	scopes: readonly string[],
 	lastScheduled: DreamingPassFocus | null,
 ): DreamingMode {
-	const hasPendingAttention = scopes.some((scope) =>
-		accessor.withReadDb((db) => getDreamingAttentionInDb(db, scope, 1).length > 0),
+	const hasPendingHygieneAttention = scopes.some((scope) =>
+		accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"])),
+	);
+	const hasPendingContentAttention = scopes.some((scope) =>
+		accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS)),
 	);
 	const hasBacklog = scopes.some((scope) => getDreamingEpisodicTokenBacklog(accessor, scope) > 0);
-	return selectDreamingPassMode(lastScheduled, hasPendingAttention, hasBacklog);
+	return selectDreamingPassMode(lastScheduled, hasPendingHygieneAttention, hasBacklog, hasPendingContentAttention);
 }
 
 export function startDreamingWorker(
@@ -327,6 +331,7 @@ export function startDreamingWorker(
 			if (isDreamingHaltActive(accessor, scopeId)) continue;
 			try {
 				enqueueDreamingHygieneAttention(accessor, scopeId, undefined, caps);
+				enqueueDreamingSurprisalAttention(accessor, scopeId, cfg);
 				const episodicTokens = getDreamingEpisodicTokenBacklog(accessor, scopeId);
 				if (!shouldTriggerDreaming(accessor, cfg, scopeId, Date.now(), episodicTokens)) continue;
 				triggered = true;

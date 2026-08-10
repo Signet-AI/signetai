@@ -41,6 +41,7 @@ flowchart TD
   PAF[Predictor Agent Feedback]
   SACC[Sub-Agent Context Continuity]
   DMC[Dreaming Memory Consolidation]
+  DSA[Dreaming Surprisal Attention Evaluation]
 
   subgraph W9[Wave 9 Strategic Stubs]
     DHO[Distributed Harness Orchestration]
@@ -102,6 +103,7 @@ flowchart TD
   MP --> DMC
   KA --> DMC
   SCP -.-> DMC
+  DMC --> DSA
 
   MA --> DHO
   SR --> DHO
@@ -802,6 +804,7 @@ Legend:
 | `docker-self-hosting-stack` | planning | `docs/specs/planning/docker-self-hosting-stack.md` | `signet-runtime` | - | First-party Docker image + Compose + Caddy deployment contract with team-mode bootstrap path and operations runbook |
 | `system-prompt-extraction` | approved | `docs/specs/approved/system-prompt-extraction.md` | - | - | Move Signet system prompt injection to session-start runtime context and keep AGENTS.md as user-owned identity content |
 | `dreaming-memory-consolidation` | approved | `docs/specs/approved/dreaming-memory-consolidation.md` | `memory-pipeline-v2`, `knowledge-architecture-schema` | - | Phase 1 (consolidation engine, trigger, config, API, CLI) delivered in PR #442. Source-backed attribute promotion uses direct audited operations outside Pipeline V2. Phase 2 (dreaming-as-session, incremental deltas, V2 exclusion, chunked compaction, dashboard, identity context) deferred. |
+| `dreaming-surprisal-attention` | planning | `docs/specs/planning/dreaming-surprisal-attention.md` | `dreaming-memory-consolidation` | `model-provider-router` | Optional bounded embedding-surprisal hints for content-pass exploration; rule-only versus assisted evaluation required before rollout. |
 | `ci-changed-files-selective` | planning | `docs/specs/planning/ci-changed-files-selective.md` | `memory-pipeline-v2` | - | Stub: selective PR CI by changed package graph |
 | `ci-contract-invariants-lane` | planning | `docs/specs/planning/ci-contract-invariants-lane.md` | `knowledge-architecture-schema` | - | Stub: mandatory fast invariant contract checks, including frozen lockfile integrity |
 | `ci-flaky-test-quarantine` | planning | `docs/specs/planning/ci-flaky-test-quarantine.md` | `ci-contract-invariants-lane` | - | Stub: flaky detection, quarantine, threshold policy |
@@ -907,6 +910,14 @@ bounded and configurable. Phase 1 (mechanical consolidation engine) is
 delivered. Phase 2 (dreaming as a session, incremental deltas, pipeline mutual
 exclusion, chunked compaction, dashboard observability, identity context
 injection) is required before spec moves to `complete`.
+
+**dreaming-surprisal-attention**: A disabled-by-default, agent-scoped selector
+can sample existing episodic embeddings within fixed bounds and queue only
+operational `surprisal` hints. Hints never advance the evidence cursor, create
+semantic state, or bypass audited operations. A reproducible rule-only versus
+assisted evaluation reports useful-review yield, valid-but-not-useful false
+positives, candidate overlap, graph-quality delta, latency, and embedding
+request/token/cost impact; selector failures fail open to ordinary Dreaming.
 
 **wave-9 strategic stubs**: The strategic backlog items listed in Wave 9
 are intentionally tracked as planning stubs and require dedicated planning

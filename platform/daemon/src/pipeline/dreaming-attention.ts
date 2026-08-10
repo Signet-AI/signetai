@@ -1,8 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 
-export const DREAMING_ATTENTION_KINDS = ["review_due", "hygiene", "contested_claim", "evidence_requeue"] as const;
+export const DREAMING_ATTENTION_KINDS = [
+	"review_due",
+	"hygiene",
+	"contested_claim",
+	"evidence_requeue",
+	"surprisal",
+] as const;
 export type DreamingAttentionKind = (typeof DREAMING_ATTENTION_KINDS)[number];
+export const DREAMING_CONTENT_ATTENTION_KINDS = [
+	"review_due",
+	"contested_claim",
+	"evidence_requeue",
+	"surprisal",
+] as const;
 
 export interface DreamingAttention {
 	readonly id: string;
@@ -89,6 +101,24 @@ function getDreamingAttentionSnapshotsInDb(
 
 export function getDreamingAttentionInDb(db: ReadDb, agentId: string, limit = 20): readonly DreamingAttention[] {
 	return getDreamingAttentionSnapshotsInDb(db, agentId, limit).map(({ generation: _, ...attention }) => attention);
+}
+
+export function hasDreamingAttentionKindInDb(
+	db: ReadDb,
+	agentId: string,
+	kinds: readonly DreamingAttentionKind[],
+): boolean {
+	if (kinds.length === 0) return false;
+	const placeholders = kinds.map(() => "?").join(", ");
+	return (
+		db
+			.prepare(
+				`SELECT 1 FROM dreaming_attention
+				 WHERE agent_id = ? AND resolved_at IS NULL AND kind IN (${placeholders})
+				 LIMIT 1`,
+			)
+			.get(agentId, ...kinds) != null
+	);
 }
 
 export function getDreamingAttention(

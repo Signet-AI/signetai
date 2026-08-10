@@ -1109,6 +1109,9 @@ describe("Dreaming", () => {
 		// Only one kind pending: run that kind directly, no alternation.
 		expect(selectDreamingPassMode("content", true, false)).toBe("incremental-hygiene");
 		expect(selectDreamingPassMode("hygiene", false, true)).toBe("incremental-content");
+		expect(selectDreamingPassMode(null, false, false, true)).toBe("incremental-content");
+		expect(selectDreamingPassMode(null, true, false, true)).toBe("incremental-hygiene");
+		expect(selectDreamingPassMode("hygiene", true, false, true)).toBe("incremental-content");
 	});
 
 	it("early-exits each focused pass mode on its own empty work (#1098)", () => {
@@ -1118,10 +1121,12 @@ describe("Dreaming", () => {
 		expect(dreamingEarlyExitSummary("incremental-hygiene", false, 100)).toBe("No hygiene attention to process");
 		expect(dreamingEarlyExitSummary("incremental-hygiene", true, 0)).toBeNull();
 		expect(dreamingEarlyExitSummary("incremental-content", true, 0)).toBe("No new episodic evidence to process");
+		expect(dreamingEarlyExitSummary("incremental-content", false, 0, true)).toBeNull();
 		expect(dreamingEarlyExitSummary("incremental-content", false, 1)).toBeNull();
 		expect(dreamingEarlyExitSummary("incremental", false, 0)).toBe(
 			"No new episodic evidence or semantic attention to process",
 		);
+		expect(dreamingEarlyExitSummary("incremental", false, 0, true)).toBeNull();
 		expect(dreamingEarlyExitSummary("incremental", true, 0)).toBeNull();
 		expect(dreamingEarlyExitSummary("compact", false, 0)).toBeNull();
 	});
@@ -1170,6 +1175,49 @@ describe("Dreaming", () => {
 		);
 		expect(contentPrompt).toBe(DREAMING_CONTENT_AGENT_PROMPT);
 		expect(contentPrompt).not.toContain("Process ALL pending hygiene records");
+		expect(contentPrompt).toContain("kind=surprisal");
+		expect(contentPrompt).toContain("never cite attention:<id>");
+	});
+
+	it("does not advance the evidence cursor for a surprisal-only content pass", async () => {
+		const cursor = JSON.stringify({
+			capturedAt: "2026-01-01T00:00:00.000Z",
+			kind: "transcript",
+			id: "already-surfaced",
+		});
+		accessor.withWriteTx((tx) => {
+			tx.prepare(
+				`INSERT INTO dreaming_state (agent_id, last_pass_at, evidence_cursor)
+				 VALUES (?, ?, ?)`,
+			).run(AGENT, "2026-01-01T00:00:00.000Z", cursor);
+			enqueueDreamingAttentionInTx(tx, {
+				agentId: AGENT,
+				kind: "surprisal",
+				subjectRef: "memory:semantic-outlier",
+				details: { selector: "embedding-surprisal-v1" },
+			});
+		});
+
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run() {
+					return { summary: "Inspected surprisal hint" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental-content",
+		);
+
+		expect(
+			db.prepare("SELECT last_pass_at, evidence_cursor FROM dreaming_state WHERE agent_id = ?").get(AGENT),
+		).toEqual({
+			last_pass_at: "2026-01-01T00:00:00.000Z",
+			evidence_cursor: cursor,
+		});
 	});
 
 	it("requires bounded Markdown runbook summaries in every pass mode (#1226)", () => {
@@ -1182,6 +1230,8 @@ describe("Dreaming", () => {
 			expect(prompt).toContain("never use generic categories");
 			expect(prompt).toContain("max 2000 chars");
 		}
+		expect(DREAMING_AGENT_PROMPT).toContain("kind=surprisal");
+		expect(DREAMING_HYGIENE_AGENT_PROMPT).toContain("Leave kind=surprisal records pending");
 	});
 
 	it("does not advance the evidence watermark for hygiene-only work (#1098)", async () => {

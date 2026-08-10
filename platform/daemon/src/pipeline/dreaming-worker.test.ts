@@ -271,6 +271,24 @@ describe("dreaming worker agent scope", () => {
 		expect(selectDreamingCheckMode(accessor, ["default"], focus)).toBe("incremental-hygiene");
 	});
 
+	it("routes pending surprisal hints to a content pass without an evidence backlog", () => {
+		db.prepare(
+			`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
+			 VALUES ('surprisal-hint', 'default', 'surprisal', 'memory:outlier', '{}', 90)`,
+		).run();
+
+		expect(selectDreamingCheckMode(accessor, ["default"], null)).toBe("incremental-content");
+	});
+
+	it("routes pending temporal review attention to a content pass", () => {
+		db.prepare(
+			`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
+			 VALUES ('review-hint', 'default', 'review_due', 'memory:temporal', '{}', 90)`,
+		).run();
+
+		expect(selectDreamingCheckMode(accessor, ["default"], null)).toBe("incremental-content");
+	});
+
 	it("seeds deterministic hygiene attention for legacy graph rows", () => {
 		// Hygiene attention is enqueued during regular check() ticks, not at
 		// worker startup (startup scans block the event loop before the HTTP

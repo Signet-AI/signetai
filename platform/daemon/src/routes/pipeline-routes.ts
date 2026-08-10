@@ -643,6 +643,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				maxInputTokens: cfg.dreaming.maxInputTokens,
 				maxOutputTokens: cfg.dreaming.maxOutputTokens,
 				timeout: cfg.dreaming.timeout,
+				surprisal: cfg.dreaming.surprisal,
 			},
 			passes,
 			attention,

@@ -613,7 +613,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"attention_list",
 			"List attention",
-			"List attention records by kind and resolution status. Use kind hygiene for the queue, or review_due for expired and approaching temporal claims. Omit agentId to see the whole install; pass agentId to narrow to one scope.",
+			"List attention records by kind and resolution status. Use kind hygiene for structural queue work, kind surprisal for bounded exploration hints, or review_due for expired and approaching temporal claims. Omit agentId to see the whole install; pass agentId to narrow to one scope.",
 			true,
 			z.object({
 				agentId: z.string().optional(),

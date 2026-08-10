@@ -104,6 +104,7 @@ export type {
 	PipelineSignificanceConfig,
 	PipelineModelRegistryConfig,
 	PipelineHintsConfig,
+	DreamingSurprisalConfig,
 	DreamingConfig,
 	ModelRegistryEntry,
 } from "./types";

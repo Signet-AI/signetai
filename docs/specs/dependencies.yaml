@@ -1355,6 +1355,26 @@ specs:
       - "Dreaming passes run as full sessions with transcript capture and self-improvement loop (Phase 2)"
       - "Pipeline V2 extraction is gated off when dreaming is enabled (Phase 2)"
     decision: null
+
+  - id: dreaming-surprisal-attention
+    status: planning
+    path: docs/specs/planning/dreaming-surprisal-attention.md
+    hard_depends_on:
+      - dreaming-memory-consolidation
+    soft_depends_on:
+      - model-provider-router
+    blocks: []
+    informed_by:
+      - docs/specs/approved/dreaming-memory-consolidation.md
+      - docs/specs/approved/knowledge-architecture-navigation.md
+      - docs/specs/approved/model-provider-router.md
+    success_criteria:
+      - "The optional selector is disabled by default, bounded, agent-scoped, and uses only already-stored embeddings"
+      - "Surprisal hints remain operational attention and never advance the evidence cursor or bypass audited operations"
+      - "Rule-only and rule-plus-surprisal runs can be compared with useful-review, false-positive, overlap, quality, latency, and embedding-cost measurements"
+      - "Selector failures and insufficient samples fail open to ordinary Dreaming behavior"
+    decision: null
+
   - id: native-harness-memory-bridge
     status: approved
     path: docs/specs/approved/native-harness-memory-bridge.md

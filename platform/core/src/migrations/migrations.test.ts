@@ -27,6 +27,7 @@ import { up as retireSummaryWorker } from "./117-retire-summary-worker";
 import { up as telemetryVersionObservation } from "./119-telemetry-version-observation";
 import { up as dreamingEvidenceRetry } from "./122-dreaming-evidence-retry";
 import { up as memoryContentSafety } from "./125-memory-content-safety";
+import { up as dreamingSurprisalAttention } from "./126-dreaming-surprisal-attention";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -2090,6 +2091,49 @@ describe("migration framework", () => {
 		expect(columns.map((column) => column.name)).toEqual(
 			expect.arrayContaining(["evidence_window_json", "runbook_json"]),
 		);
+	});
+
+	test("migration 123 preserves existing attention rows and adds surprisal kind", () => {
+		db = createFreshDb();
+		db.exec(`
+		CREATE TABLE dreaming_attention (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK (kind IN ('review_due', 'hygiene', 'contested_claim', 'evidence_requeue')),
+			subject_ref TEXT NOT NULL,
+			details_json TEXT NOT NULL DEFAULT '{}',
+			priority INTEGER NOT NULL DEFAULT 0 CHECK (priority >= 0 AND priority <= 100),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			generation INTEGER NOT NULL DEFAULT 0,
+			resolved_at TEXT,
+			resolved_by_pass_id TEXT,
+			UNIQUE(agent_id, kind, subject_ref)
+		);
+		CREATE INDEX idx_dreaming_attention_pending
+			ON dreaming_attention (agent_id, resolved_at, priority DESC, created_at ASC);
+		INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
+		VALUES ('legacy-attention', 'default', 'hygiene', 'entity:legacy', '{"reason":"legacy"}', 80);
+	`);
+
+		dreamingSurprisalAttention(db as unknown as Parameters<typeof dreamingSurprisalAttention>[0]);
+		dreamingSurprisalAttention(db as unknown as Parameters<typeof dreamingSurprisalAttention>[0]);
+
+		expect(db.prepare("SELECT agent_id, kind, subject_ref, details_json FROM dreaming_attention").all()).toEqual([
+			{
+				agent_id: "default",
+				kind: "hygiene",
+				subject_ref: "entity:legacy",
+				details_json: '{"reason":"legacy"}',
+			},
+		]);
+		expect(() =>
+			db
+				.prepare(
+					`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref)
+					 VALUES ('surprisal-attention', 'default', 'surprisal', 'memory:outlier')`,
+				)
+				.run(),
+		).not.toThrow();
 	});
 	test("migration 110 adds the memory_entity_mentions entity-side composite index (#1158)", () => {
 		db = createFreshDb();

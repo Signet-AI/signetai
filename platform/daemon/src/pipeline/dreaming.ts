@@ -39,11 +39,13 @@ import { getActiveTelemetry } from "../telemetry";
 import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import {
+	DREAMING_CONTENT_ATTENTION_KINDS,
 	type DreamingAttention,
 	enqueueDreamingAttentionInTx,
 	getDreamingAttention,
 	getDreamingAttentionInDb,
 	getDreamingAttentionSnapshots,
+	hasDreamingAttentionKindInDb,
 	renderDreamingAttentionForPrompt,
 	resolveDreamingAttentionInTx,
 } from "./dreaming-attention";
@@ -67,6 +69,11 @@ import {
 	recordDreamingEvidenceWindowInTx,
 	renderDreamingRunbookForPrompt,
 } from "./dreaming-runbook";
+import {
+	DREAMING_SURPRISAL_SELECTOR_VERSION,
+	type DreamingSurprisalSelection,
+	selectDreamingSurprisalInDb,
+} from "./dreaming-surprisal";
 import { countTokens } from "./tokenizer";
 
 // ---------------------------------------------------------------------------
@@ -77,8 +84,9 @@ export type DreamingMode = "incremental" | "compact" | "incremental-hygiene" | "
 
 /**
  * The focused runbook a scheduled pass follows (#1098): hygiene passes
- * process the attention queue only, content passes ingest new evidence
- * only. Combined modes ("incremental", "compact") keep the full runbook.
+ * process structural attention only, content passes handle evidence-linked
+ * work and bounded exploration hints. Combined modes ("incremental",
+ * "compact") keep the full runbook.
  */
 export type DreamingPassFocus = "hygiene" | "content";
 
@@ -112,6 +120,58 @@ export function enqueueDreamingHygieneAttention(
 		}
 		return candidates.length;
 	});
+}
+
+/**
+ * Queue bounded embedding-geometry hints without touching the evidence cursor
+ * or invoking an embedding provider. The selector is deliberately independent
+ * of the workload resolver: it only reuses vectors already stored for primary
+ * episodic memories, then the normal Dreaming worker decides when and how to
+ * spend an inference pass.
+ */
+export function enqueueDreamingSurprisalAttention(
+	accessor: DbAccessor,
+	agentId: string,
+	cfg: DreamingConfig,
+): DreamingSurprisalSelection | null {
+	const surprisal = cfg.surprisal;
+	if (!surprisal?.enabled) return null;
+	// Do not pass the Dreaming cursor as a write frontier. A surprisal hint is a
+	// bounded exploration sample and must never mark evidence as processed.
+	const selection = accessor.withReadDb((db) => selectDreamingSurprisalInDb(db, agentId, surprisal, null));
+	if (selection.candidates.length > 0) {
+		accessor.withWriteTx((db) => {
+			for (const candidate of selection.candidates) {
+				enqueueDreamingAttentionInTx(db, {
+					agentId,
+					kind: "surprisal",
+					subjectRef: `memory:${candidate.id}`,
+					details: {
+						selector: DREAMING_SURPRISAL_SELECTOR_VERSION,
+						score: candidate.score.toFixed(6),
+						rank: String(candidate.rank),
+						sampleSize: String(candidate.sampleSize),
+						dimensions: String(candidate.dimensions),
+						capturedAt: candidate.capturedAt,
+					},
+					priority: Math.round(60 + candidate.score * 40),
+					reopen: false,
+				});
+			}
+		});
+	}
+	logger.info("dreaming", "Embedding-surprisal attention sweep completed", {
+		agentId,
+		sampled: selection.sampled,
+		valid: selection.valid,
+		candidates: selection.candidates.length,
+		durationMs: selection.durationMs,
+		embeddingRequests: selection.embeddingRequests,
+		embeddingTokens: selection.embeddingTokens,
+		embeddingCostUsd: selection.embeddingCostUsd,
+		skippedReason: selection.skippedReason,
+	});
+	return selection;
 }
 
 function parseEpisodicCursor(value: string | null): EpisodicCursor | null {
@@ -629,11 +689,12 @@ export const DREAMING_AGENT_PROMPT = `You are a bounded Signet maintenance agent
 
 Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. The graph is a derived structure; every write carries provenance (an attention id for hygiene, an exact quote from episodic evidence for content). Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
 
-An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's hygiene queue, with each record carrying its owning agentId.
+An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's attention queue, with each record carrying its owning agentId.
 
 ### State targets
 
 - Hygiene queue: dreaming_attention pending records (kind=hygiene)
+- Exploration hints: bounded embedding-surprisal records (kind=surprisal); these are not evidence
 - Graph: entities, aspects, claims, links (active/archived/pinned)
 - Evidence: episodic store (memories, artifacts, completed transcripts)
 - Pass log: dreaming_passes + runbook notes (what changed, what was viewed)
@@ -647,8 +708,9 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - \`attribute_over_cap\` / \`aspect_over_cap\` flags: the write gate rejects new claims or aspects past the cap, so consolidate the flagged target — merge_aspects to fold over-cap aspects together, supersede_claim_value to collapse duplicate claim keys, archive_claim_value for stale snapshots. Consolidation (merge_aspects) may exceed the attribute cap; it is the remedy the cap forces.
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
    - If you inspect a flagged target and judge it should stay as it is (a deliberate keep — e.g. a live entity with a non-concrete type, or an over-cap aspect you chose not to consolidate), close the record with decline_attention citing its attention id. Declining is an affirmative judgment: only decline records you actually inspected, and never decline records you could not complete this pass — defer those with a named blocker instead.
-3. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
-4. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+3. Query attention_list with kind=surprisal. These are bounded exploration hints, not evidence and not hygiene provenance. For each hint, inspect its memory:<id> subjectRef with search_evidence in the owning scope. Treat the score only as a priority signal: if the source establishes a useful, settled fact, use a normal content operation with an exact quote; if it is valid but not useful or is noise, use decline_attention after inspecting it. Never create a claim or entity from the score alone, and never cite attention:<id> for a content operation. A surprisal hint must not bypass the evidence cursor or audited apply path.
+4. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
+5. Only when the hygiene queue is clear: find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - A claim must be a complete statement: it names the subject and the fact about it. A bare label ("SHIP-WITH-FIXES"), a fragment ("Root cause confirmed."), or an implementation detail without its subject is not a claim — do not file it.
@@ -657,7 +719,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - create_entity only for durable subjects clearly established by the source.
    - When the evidence supports a possible relationship, merge, or other ontology change but the relationship is ambiguous rather than settled, do not apply it immediately. Emit the normal ontology operation with risk: "review_required". Its reason must be a concise, human-readable explanation that names the entities and the proposed relationship; the exact evidence citation remains required. The daemon will place it in the user's review queue for confirmation, not treat the queue as a work-deferral mechanism.
    - Validate before writing (validate_proposal).
-5. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
+6. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
 
@@ -699,7 +761,7 @@ export const DREAMING_HYGIENE_AGENT_PROMPT = `You are a bounded Signet maintenan
 
 Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a HYGIENE pass: process the attention queue — inspect flagged targets and archive or merge them with attention provenance, minting flags for junk the queue missed. Content maintenance (claims, entities) belongs to content passes, which cite exact quotes from episodic evidence. Use the pass log (runbook_read) as the dedup source: the previous pass's changes are the cutoff.
 
-An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's hygiene queue, with each record carrying its owning agentId.
+An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's attention queue, with each record carrying its owning agentId.
 
 ### State targets
 
@@ -715,6 +777,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
    - If you discover junk the queue did not flag, mint a flag op and archive in the same batch.
    - If you inspect a flagged target and judge it should stay as it is (a deliberate keep — e.g. a live entity with a non-concrete type, or an over-cap aspect you chose not to consolidate), close the record with decline_attention citing its attention id. Declining is an affirmative judgment: only decline records you actually inspected, and never decline records you could not complete this pass — defer those with a named blocker instead.
+   - Leave kind=surprisal records pending. They are content-pass exploration hints and must be inspected with exact evidence by a content pass.
 3. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
@@ -744,19 +807,20 @@ The pass is done when:
 /**
  * The fixed prompt for a content-only pass (#1098): the evidence runbook
  * (combined-process steps 1, 3, 4). Hygiene archives are out of scope —
- * hygiene passes own the attention queue, so a content pass spends its
- * whole budget ingesting new evidence instead of being crowded out.
+ * hygiene passes own that queue, while content passes handle review and
+ * bounded surprisal hints alongside new evidence.
  */
 export const DREAMING_CONTENT_AGENT_PROMPT = `You are a bounded Signet maintenance agent. Your task is to maintain durable, evidence-cited semantic understanding as the relevant entities, relationships, and claims change over time. Attach each claim to its entity and aspect rather than allowing it to exist as standalone.
 
 ## Process
 
-Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a CONTENT pass: find new evidence since the cutoff and extract/update claims with exact-quote citations, creating entities for durable subjects. Hygiene archives/merges belong to hygiene passes, which process the attention queue. Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
+Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a CONTENT pass: process review work, inspect bounded surprisal hints, and find new evidence since the cutoff; extract/update claims with exact-quote citations and create entities only for durable subjects. Hygiene archives/merges belong to hygiene passes, which process structural attention. Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
 
-An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's hygiene queue, with each record carrying its owning agentId.
+An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's attention queue, with each record carrying its owning agentId.
 
 ### State targets
 
+- Exploration hints: bounded embedding-surprisal records (kind=surprisal); these are not evidence
 - Graph: entities, aspects, claims, links (active/archived/pinned)
 - Evidence: episodic store (memories, artifacts, completed transcripts)
 - Pass log: dreaming_passes + runbook notes (what changed, what was viewed)
@@ -765,7 +829,8 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 
 1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
 2. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
-3. Find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+3. Query attention_list with kind=surprisal. These are bounded exploration hints, not evidence and not hygiene provenance. Inspect each hint's memory:<id> subjectRef with search_evidence in the owning scope. If the source establishes a useful settled fact, use a normal content operation with an exact quote; otherwise decline_attention after inspection. Never create a claim or entity from the score alone, and never cite attention:<id> for a content operation.
+4. Find new evidence since the cutoff. First LIST unprocessed sources with search_evidence — omit the query and omit since so it lists from the scope's evidence watermark (the frontier the last pass actually surfaced), newest first; only after seeing what is there, narrow with a query if the list is large. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - A claim must be a complete statement: it names the subject and the fact about it. A bare label ("SHIP-WITH-FIXES"), a fragment ("Root cause confirmed."), or an implementation detail without its subject is not a claim — do not file it.
@@ -774,7 +839,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - create_entity only for durable subjects clearly established by the source.
    - When the evidence supports a possible relationship, merge, or other ontology change but the relationship is ambiguous rather than settled, do not apply it immediately. Emit the normal ontology operation with risk: "review_required". Its reason must be a concise, human-readable explanation that names the entities and the proposed relationship; the exact evidence citation remains required. The daemon will place it in the user's review queue for confirmation, not treat the queue as a work-deferral mechanism.
    - Validate before writing (validate_proposal).
-4. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
+5. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
 
@@ -817,12 +882,12 @@ export function dreamingFocusOfMode(mode: DreamingMode): DreamingPassFocus | nul
 }
 
 /**
- * Whether a pass mode consumes episodic evidence. A hygiene pass processes
- * only the attention queue, so it must not advance the evidence watermark;
- * every other mode reads evidence and resets the queue to pass start.
+ * Whether a pass mode is allowed to update episodic state for this pass.
+ * Attention-only content work (for example, a surprisal hint with an empty
+ * backlog) must not advance or clear the evidence watermark.
  */
-function dreamingModeAdvancesEvidence(mode: DreamingMode): boolean {
-	return mode !== "incremental-hygiene";
+function dreamingModeAdvancesEvidence(mode: DreamingMode, hasEpisodicWork: boolean): boolean {
+	return mode !== "incremental-hygiene" && hasEpisodicWork;
 }
 
 /**
@@ -833,13 +898,18 @@ function dreamingModeAdvancesEvidence(mode: DreamingMode): boolean {
  */
 export function dreamingEarlyExitSummary(
 	mode: DreamingMode,
-	hasPendingAttention: boolean,
+	hasPendingHygieneAttention: boolean,
 	totalBacklog: number,
+	hasPendingContentAttention = false,
 ): string | null {
-	if (mode === "incremental-hygiene") return hasPendingAttention ? null : "No hygiene attention to process";
-	if (mode === "incremental-content") return totalBacklog === 0 ? "No new episodic evidence to process" : null;
+	if (mode === "incremental-hygiene") {
+		return hasPendingHygieneAttention ? null : "No hygiene attention to process";
+	}
+	if (mode === "incremental-content") {
+		return totalBacklog === 0 && !hasPendingContentAttention ? "No new episodic evidence to process" : null;
+	}
 	if (mode === "incremental") {
-		return !hasPendingAttention && totalBacklog === 0
+		return !hasPendingHygieneAttention && !hasPendingContentAttention && totalBacklog === 0
 			? "No new episodic evidence or semantic attention to process"
 			: null;
 	}
@@ -855,16 +925,18 @@ export function dreamingEarlyExitSummary(
  */
 export function selectDreamingPassMode(
 	lastScheduled: DreamingPassFocus | null,
-	hasPendingAttention: boolean,
+	hasPendingHygieneAttention: boolean,
 	hasBacklog: boolean,
+	hasPendingContentAttention = false,
 ): DreamingMode {
-	if (hasPendingAttention && hasBacklog) {
+	const hasContentWork = hasBacklog || hasPendingContentAttention;
+	if (hasPendingHygieneAttention && hasContentWork) {
 		// Tie: alternate so content gets a guaranteed turn even while the
 		// hygiene queue stays full, starting the cycle at hygiene.
 		return lastScheduled === "hygiene" ? "incremental-content" : "incremental-hygiene";
 	}
-	if (hasPendingAttention) return "incremental-hygiene";
-	if (hasBacklog) return "incremental-content";
+	if (hasPendingHygieneAttention) return "incremental-hygiene";
+	if (hasContentWork) return "incremental-content";
 	// Unreachable through shouldTriggerDreaming (it fires only when attention
 	// or a backlog exists); the combined mode's early-exit gate is the
 	// defensive fallback.
@@ -1249,11 +1321,25 @@ export async function runDreamingAgentPass(
 		// scope has pending attention or an episodic backlog. Scheduled checks
 		// are already gated by shouldTriggerDreaming; this protects manual
 		// triggers and compact runs from spending tokens on nothing.
+		const hasPendingHygieneAttention = scopes.some((scope) =>
+			accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"])),
+		);
+		const hasPendingContentAttention = scopes.some((scope) =>
+			accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS)),
+		);
 		const hasPendingAttention = scopes.some((scope) =>
 			accessor.withReadDb((db) => getDreamingAttentionInDb(db, scope, 1).length > 0),
 		);
-		const totalBacklog = scopes.reduce((total, scope) => total + getDreamingEpisodicTokenBacklog(accessor, scope), 0);
-		const earlyExitSummary = dreamingEarlyExitSummary(mode, hasPendingAttention, totalBacklog);
+		const backlogByScope = new Map(
+			scopes.map((scope) => [scope, getDreamingEpisodicTokenBacklog(accessor, scope)] as const),
+		);
+		const totalBacklog = [...backlogByScope.values()].reduce((total, backlog) => total + backlog, 0);
+		const earlyExitSummary = dreamingEarlyExitSummary(
+			mode,
+			hasPendingHygieneAttention,
+			totalBacklog,
+			hasPendingContentAttention || (hasPendingAttention && !hasPendingHygieneAttention),
+		);
 		if (earlyExitSummary !== null) {
 			accessor.withWriteTx((db) => {
 				db.prepare(
@@ -1267,8 +1353,10 @@ export async function runDreamingAgentPass(
 				// skip it for the next pass, and a hygiene pass must never
 				// advance the watermark even on an empty backlog (#1098,
 				// #1149).
-				if (totalBacklog === 0 && dreamingModeAdvancesEvidence(mode)) {
-					for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
+				if (dreamingModeAdvancesEvidence(mode, totalBacklog > 0)) {
+					for (const scope of scopes) {
+						if ((backlogByScope.get(scope) ?? 0) > 0) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
+					}
 				}
 			});
 			recordDreamingPassTelemetry({
@@ -1450,8 +1538,9 @@ export async function runDreamingAgentPass(
 			// pass consumes no evidence, so it must not advance the watermark —
 			// advancing it would hide the unprocessed backlog from the next
 			// content pass and starve content again (#1098).
-			if (dreamingModeAdvancesEvidence(mode)) {
+			if (dreamingModeAdvancesEvidence(mode, totalBacklog > 0)) {
 				for (const scope of scopes) {
+					if ((backlogByScope.get(scope) ?? 0) === 0) continue;
 					resetDreamingTokens(db, scope, passId, mode, null, nextWatermarkByScope.get(scope) ?? null);
 				}
 			}

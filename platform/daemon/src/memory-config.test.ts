@@ -33,6 +33,43 @@ describe("loadDreamingConfig", () => {
 			7 * 24 * 60 * 60 * 1_000,
 		);
 	});
+
+	it("keeps surprisal attention opt-in and clamps its resource bounds", () => {
+		expect(loadDreamingConfig({}).surprisal).toEqual({
+			enabled: false,
+			sampleSize: 128,
+			maxCandidates: 5,
+			minObservations: 20,
+			neighborCount: 5,
+			treeLeafSize: 10,
+			minScore: 0.75,
+		});
+
+		const config = loadDreamingConfig({
+			memory: {
+				dreaming: {
+					surprisal: {
+						enabled: true,
+						sampleSize: 10_000,
+						maxCandidates: 0,
+						minObservations: 1,
+						neighborCount: 99,
+						treeLeafSize: 1,
+						minScore: -1,
+					},
+				},
+			},
+		});
+		expect(config.surprisal).toEqual({
+			enabled: true,
+			sampleSize: 500,
+			maxCandidates: 1,
+			minObservations: 8,
+			neighborCount: 32,
+			treeLeafSize: 2,
+			minScore: 0,
+		});
+	});
 });
 
 function makeTempAgentsDir(): string {

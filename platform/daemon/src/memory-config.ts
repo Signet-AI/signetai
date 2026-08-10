@@ -76,6 +76,16 @@ function isValidTimeZone(timeZone: string): boolean {
 	}
 }
 
+const DEFAULT_DREAMING_SURPRISAL = {
+	enabled: false,
+	sampleSize: 128,
+	maxCandidates: 5,
+	minObservations: 20,
+	neighborCount: 5,
+	treeLeafSize: 10,
+	minScore: 0.75,
+} as const;
+
 export const DEFAULT_DREAMING: DreamingConfig = {
 	tokenThreshold: 100_000,
 	maxInterval: 6 * 60 * 60 * 1_000,
@@ -83,6 +93,7 @@ export const DEFAULT_DREAMING: DreamingConfig = {
 	maxInputTokens: 128_000,
 	maxOutputTokens: 16_000,
 	backfillOnFirstRun: true,
+	surprisal: DEFAULT_DREAMING_SURPRISAL,
 };
 
 class PipelineConfigValidationError extends Error {
@@ -877,6 +888,8 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 	const raw = mem?.dreaming as Record<string, unknown> | undefined;
 	if (!raw) return { ...DEFAULT_DREAMING };
 	const dd = DEFAULT_DREAMING;
+	const defaultSurprisal = dd.surprisal ?? DEFAULT_DREAMING_SURPRISAL;
+	const surprisal = raw.surprisal as Record<string, unknown> | undefined;
 	return {
 		tokenThreshold: clampWarn("tokenThreshold", raw.tokenThreshold, 10_000, 1_000_000, dd.tokenThreshold),
 		maxInterval: clampWarn("maxInterval", raw.maxInterval, 5 * 60 * 1_000, 7 * 24 * 60 * 60 * 1_000, dd.maxInterval),
@@ -884,6 +897,33 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 		maxInputTokens: clampWarn("maxInputTokens", raw.maxInputTokens, 8_000, 1_000_000, dd.maxInputTokens),
 		maxOutputTokens: clampWarn("maxOutputTokens", raw.maxOutputTokens, 1_000, 128_000, dd.maxOutputTokens),
 		backfillOnFirstRun: typeof raw.backfillOnFirstRun === "boolean" ? raw.backfillOnFirstRun : dd.backfillOnFirstRun,
+		surprisal: {
+			enabled: typeof surprisal?.enabled === "boolean" ? surprisal.enabled : defaultSurprisal.enabled,
+			sampleSize: clampWarn("surprisal.sampleSize", surprisal?.sampleSize, 20, 500, defaultSurprisal.sampleSize),
+			maxCandidates: clampWarn(
+				"surprisal.maxCandidates",
+				surprisal?.maxCandidates,
+				1,
+				20,
+				defaultSurprisal.maxCandidates,
+			),
+			minObservations: clampWarn(
+				"surprisal.minObservations",
+				surprisal?.minObservations,
+				8,
+				500,
+				defaultSurprisal.minObservations,
+			),
+			neighborCount: clampWarn(
+				"surprisal.neighborCount",
+				surprisal?.neighborCount,
+				1,
+				32,
+				defaultSurprisal.neighborCount,
+			),
+			treeLeafSize: clampWarn("surprisal.treeLeafSize", surprisal?.treeLeafSize, 2, 64, defaultSurprisal.treeLeafSize),
+			minScore: clampWarn("surprisal.minScore", surprisal?.minScore, 0, 1, defaultSurprisal.minScore),
+		},
 	};
 }
 
