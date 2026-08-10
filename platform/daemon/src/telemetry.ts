@@ -12,11 +12,11 @@ import { dirname, join } from "node:path";
 import {
 	type AccountingProvenance,
 	type PipelineTelemetryConfig,
-	summarizeAccountingProvenance,
 	TELEMETRY_DEPLOYMENT_ROLES,
 	TELEMETRY_INSTALL_CHANNELS,
 	type TelemetryDeploymentRole,
 	type TelemetryInstallChannel,
+	summarizeAccountingProvenance,
 } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
