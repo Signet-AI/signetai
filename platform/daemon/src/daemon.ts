@@ -101,6 +101,7 @@ import {
 	startFdPollMonitor,
 	stopResourceMonitors,
 } from "./resource-monitor";
+import { buildResourceUtilizationTelemetry } from "./resource-telemetry";
 import {
 	AGENTS_DIR,
 	BIND_HOST,
@@ -164,7 +165,7 @@ import {
 } from "./source-index-progress";
 import { recordSourceConnected, recordSourceIndexOperation, sourceFailureClass } from "./source-lifecycle-telemetry";
 import { runStartupRecovery } from "./startup-recovery";
-import { getPressureRecoveryOutcome, reportStartupGrace } from "./system-pressure";
+import { getPressureRecoveryOutcome, getSystemPressure, reportStartupGrace } from "./system-pressure";
 import {
 	type TelemetryCollector,
 	type TelemetryConfigSnapshot,
@@ -2166,10 +2167,16 @@ async function main() {
 					});
 					const connectors = listConnectors(getDbAccessor());
 					let runtimePressure: ReturnType<typeof buildRuntimePressureEnvelope> | undefined;
+					let resourceTelemetry: ReturnType<typeof buildResourceUtilizationTelemetry> | undefined;
 					try {
 						const queue = getDbAccessor().withReadDb((db) => getQueuePressureSnapshot(db));
 						const workers = getPipelineWorkerStatus();
 						const resources = getResourceSnapshot();
+						resourceTelemetry = buildResourceUtilizationTelemetry(
+							resources,
+							getSystemPressure(),
+							dreamingWorkerHandle?.running === true,
+						);
 						const recoveryOutcome: PressureRecoveryOutcome = restartedHeartbeatPending
 							? "restarted"
 							: getPressureRecoveryOutcome();
@@ -2201,12 +2208,15 @@ async function main() {
 					}
 					telemetryRef.record("daemon.heartbeat", {
 						uptimeMs: Date.now() - daemonStartTime,
+						version: CURRENT_VERSION,
+						platform: process.platform,
 						memoryCount,
 						connectorsActive: countConnectorsActive(connectors),
 						pipelineMode: readPipelineMode(liveCfg.pipelineV2),
 						extractionProvider: providerRuntimeResolution.extraction.effective,
 						embeddingProvider: liveCfg.embedding.provider,
 						...(runtimePressure ?? {}),
+						...(resourceTelemetry ?? {}),
 					});
 					if (runtimePressure?.recoveryOutcome === "restarted") {
 						restartedHeartbeatPending = false;

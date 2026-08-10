@@ -8,6 +8,7 @@ import { getDbAccessor } from "../db-accessor.js";
 import { getDiagnostics } from "../diagnostics.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { listMemorySearchTelemetry } from "../memory-search-telemetry.js";
+import { addResourceUtilizationSample, emptyResourceUtilizationStats } from "../resource-telemetry.js";
 import { getCheckpointsByProject, getCheckpointsBySession, redactCheckpointRow } from "../session-checkpoints.js";
 import type { TelemetryEventType } from "../telemetry.js";
 import { type TimelineSources, buildTimeline } from "../timeline.js";
@@ -347,9 +348,13 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const embeddingCoverage = emptyAccountingCoverage();
 		const dreamingCoverage = emptyAccountingCoverage();
 		const sessionCoverage = emptyAccountingCoverage();
+		const resourceUtilization = emptyResourceUtilizationStats();
 		const latencies: number[] = [];
 
 		for (const e of events) {
+			if (e.event === "daemon.heartbeat") {
+				addResourceUtilizationSample(resourceUtilization, e.properties);
+			}
 			if (e.event === "llm.generate") {
 				llmCalls++;
 				if (typeof e.properties.inputTokens === "number") totalInputTokens += e.properties.inputTokens;
@@ -642,6 +647,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 			pipelineErrorsByStage: Object.fromEntries(pipelineErrorsByStage),
 			pipelineErrorsByCode: Object.fromEntries(pipelineErrorsByCode),
 			pipelineOperations,
+			resourceUtilization,
 		});
 	});
 

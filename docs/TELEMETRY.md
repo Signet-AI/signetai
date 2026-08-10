@@ -79,7 +79,7 @@ paths, or user identity.
 | `first.remember` / `first.recall` | first successful remember / recall per install, exactly once | `version`, `platform` |
 | `daemon.started` | daemon boot | `version`, `platform`, `uptimeMs` |
 | `daemon.previous_exit` | next successful boot reconciles the prior lifecycle record, exactly once when one exists | `classification` (`clean` / `error` / `unrecorded`), `reasonCategory`, `exitCode`, `previousVersion`, `previousUptimeMs`, `restartDelayMs` |
-| `daemon.heartbeat` | every 5 minutes | `uptimeMs`, `memoryCount`, `connectorsActive`, `pipelineMode`, `extractionProvider`, `embeddingProvider`, bounded runtime-pressure buckets |
+| `daemon.heartbeat` | every 5 minutes | `version`, `platform`, `uptimeMs`, `memoryCount`, `connectorsActive`, `pipelineMode`, `extractionProvider`, `embeddingProvider`, bounded runtime-pressure and process resource-utilization buckets |
 | `telemetry.health` | every scheduled telemetry flush | `status`, `deliveryConfigured`, queue/buffer counts, unsent and delivery age buckets, recent success/failure counts, backoff state, dropped-event count, `flushIntervalMs` |
 | `session.start` | real session start (deduped; stubs and clear/reset paths don't count) | `harness`, `sessionHash` |
 | `session.turn` | every non-boundary `session-end` hook call (per turn, see notes) | `harness`, `promptCount`, `sessionHash` |
@@ -239,6 +239,26 @@ Notes on individual events:
   provider work. `recoveryOutcome` is
   `still_degraded` during an episode, `recovered` after the pressure state
   clears, and `restarted` on the first heartbeat after an abnormal prior exit.
+- **Process resource-utilization buckets (#1424)** — the existing five-minute
+  `daemon.heartbeat` is the only fleet sample boundary. It carries
+  `resourceTelemetryVersion: 1`, `resourceScope: process`, and these fixed
+  buckets: CPU `unavailable`, `zero`, `1-25%`, `26-75%`, `76-100%`,
+  `101-200%`, `201+%`; RSS, heap-used, and macOS physical footprint
+  `unavailable`, `zero`, `1-64MiB`, `65-128MiB`, `129-256MiB`, `257-512MiB`,
+  `513-1024MiB`, `1025+MiB`. CPU is process utilization and may exceed 100%
+  on a multicore machine. These fields never represent host-wide capacity.
+  A missing physical-footprint reading is `unavailable`, not zero. The
+  workload class is `normal`, `dreaming`, or `critical_pressure`, using the
+  active Dreaming pass and existing pressure state at that heartbeat; critical
+  pressure takes precedence. Local resource-monitor logs retain detailed raw
+  measurements. Local `/api/telemetry/stats` reports bounded bucket totals
+  from persisted heartbeat events. Platform, version, and existing provider
+  fields remain available for grouping; no model or new workload classifier is
+  inferred at this boundary.
+- The process CPU bucket is the bounded `process.cpuUsage()` delta since the
+  previous local resource snapshot. Other local health or diagnostics polls
+  can shorten that sampling window; the fleet event still emits only the
+  resulting bucket, never the duration or raw CPU value.
 - **`recall.attempted` / `recall.outcome`** — the bounded retrieval-outcome
   contract (#1277). Attempts are recorded once at each supported recall
   surface. Outcomes separate empty, non-empty, truncated, and error results
@@ -282,6 +302,13 @@ Notes on individual events:
   messages, queue errors, payloads, source names, paths, PIDs, or additional
   stack data. The existing once-per-10-minute `EventLoopLag` rate limit applies
   to the complete event, including its pressure envelope.
+- **Process resource privacy.** Resource utilization telemetry sends only the
+  documented process-level buckets above, plus the existing platform, version,
+  provider, workload, and pressure dimensions. It never sends raw CPU, RSS,
+  heap, physical-footprint values, host capacity, host inventory, usernames,
+  paths, process lists, environment variables, or memory contents. It is
+  emitted only with the existing five-minute heartbeat. Opt-out and the
+  per-install identity path are unchanged.
 - **Agent ids in `inference.*` are hashed.** Inference events carry
   `agentId` as a SHA-256 hash salted with the per-install install id (16 hex
   chars). Stable within an install (per-agent analysis still works), not
@@ -454,6 +481,7 @@ vault mirrors the key PostHog aggregates for daily review via
 | Unreleased | Bounded recall attempt and delivery outcomes by surface, without query or prompt content (#1277) |
 | Unreleased | First-run activation funnel: `first.remember` / `first.recall`, exactly once per install (#1202) |
 | Unreleased | `pipeline.embedding` cost rates and collector-derived session token/cost totals (#1201) |
+| Unreleased | Bounded process CPU and memory utilization buckets on the existing daemon heartbeat, with local stats aggregation (#1424) |
 
 Related: #1026 (original rollout), #1200 (IP capture, dev tagging),
 #1201-#1207 (event-scoped follow-ups), #1212 (session.end rename — resolved).
