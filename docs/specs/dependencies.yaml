@@ -335,7 +335,7 @@ specs:
     informed_by: []
     success_criteria:
       - "TypeScript explicit recall uses one canonical retrieval engine and one canonical response contract across API, CLI, MCP, and harness consumers"
-      - "Prompt-submit recall remains a lightweight injection path and does not absorb explicit recall product concerns"
+      - "Prompt-submit recall remains a lightweight injection path, skips low-signal automatic work conservatively, and does not absorb explicit recall product concerns"
       - "Legacy or duplicate TypeScript recall helpers are either removed or reduced to thin wrappers around the canonical recall path"
       - "Consumer renderers preserve useful recall metadata instead of flattening results into source-less snippet lists"
     decision: null

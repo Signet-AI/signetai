@@ -88,12 +88,15 @@ search; attribute relevance chooses which aspect context to inject.
 are optional.
 
 Prompt-submit does not run generic memory recall and has no fallback injection.
-Low-signal prompts, unknown entities, ambiguous entity mentions, and prompts
+Low-signal prompts are admitted before automatic recall work, so they skip
+embedding and entity-context search while preserving session bookkeeping and
+preserving the stable per-prompt context contract (currently an empty
+`inject`). Explicit recall is still
+available through `/api/memory/recall` and MCP/CLI recall tools, including for
+the same prompt. Unknown entities, ambiguous entity mentions, and prompts
 where no attribute clears `hooks.userPromptSubmit.minScore` return `inject: ""`.
-Explicit recall is still available through `/api/memory/recall` and MCP/CLI
-recall tools. Raw transcript search is not injected on prompt-submit; use the
-dedicated `session_search` MCP/API surface when a caller needs transcript
-evidence.
+Raw transcript search is not injected on prompt-submit; use the dedicated
+`session_search` MCP/API surface when a caller needs transcript evidence.
 
 Under sustained concurrency (many harnesses submitting at once), the daemon
 caps in-flight prompt-submit work: once more than 8 submissions are processing

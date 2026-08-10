@@ -300,11 +300,15 @@ attributes choose which aspects to inject into a compact
 `## Relevant Entity Context` block. `hooks.userPromptSubmit.minScore` gates
 attribute-driven aspect selection; `maxInjectChars` caps the block.
 
-When the prompt is low-signal, mentions no known entity or alias, is ambiguous,
-or no attribute clears the confidence gate, the hook returns an empty `inject`
-string. Literal aspect names alone do not select context. This keeps the active
-agent loop trustable: absence of injected context means Signet chose not to
-inject, not that the broader source substrate has no relevant evidence.
+When the prompt is low-signal, the hook skips automatic recall before embedding
+or entity-context work and preserves the stable per-prompt context contract
+(currently an empty `inject`). Session bookkeeping still runs, and explicit
+memory tools remain unaffected. Prompts that mention no known entity or alias,
+are ambiguous, or have no attribute that clears the confidence gate return an
+empty `inject` string. Literal aspect names alone do not select context. This
+keeps the active agent loop trustable: absence of recalled context means Signet
+chose not to inject, not that the broader source substrate has no relevant
+evidence.
 
 Explicit recall remains available through `/api/memory/recall`, `signet_recall`,
 `memory_search`, and related MCP/CLI surfaces. Raw transcript search is

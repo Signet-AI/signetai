@@ -85,7 +85,12 @@ import {
 	buildEntityContextInject,
 	buildEntityPromptContext,
 } from "./prompt-entity-context";
-import { buildRecallQueryShape, queryAnchorsMissingFromRecall, stripUntrustedMetadata } from "./prompt-text";
+import {
+	buildRecallQueryShape,
+	isLowSignalPrompt,
+	queryAnchorsMissingFromRecall,
+	stripUntrustedMetadata,
+} from "./prompt-text";
 import { recordRecallAttempt, recordRecallOutcome } from "./recall-telemetry";
 import { listSecrets } from "./secrets";
 import {
@@ -1700,6 +1705,30 @@ export async function handleUserPromptSubmit(
 
 	let promptRecallAttempted = false;
 	let promptRecallOutcomeRecorded = false;
+	if (isLowSignalPrompt(userMessage)) {
+		recordRecallAttempt("prompt_injection");
+		promptRecallAttempted = true;
+		recordRecallOutcome({
+			surface: "prompt_injection",
+			delivery: "not_delivered",
+			reason: "skipped_low_signal",
+		});
+		promptRecallOutcomeRecorded = true;
+		return finalizeUserPromptSubmitSuccess(
+			req,
+			userMessage,
+			start,
+			{
+				inject: metadataHeader,
+				memoryCount: 0,
+				queryTerms: keywordTerms.join(" ") || undefined,
+				engine: "low-signal",
+				warnings,
+			},
+			deps.logger,
+		);
+	}
+
 	recordRecallAttempt("prompt_injection");
 	promptRecallAttempted = true;
 	try {

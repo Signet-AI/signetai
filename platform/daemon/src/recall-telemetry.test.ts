@@ -74,4 +74,27 @@ describe("recall outcome telemetry", () => {
 			},
 		});
 	});
+
+	it("records bounded reasons for skipped automatic recall", () => {
+		setActiveTelemetry({
+			record: (event, properties) => events.push({ event, properties: { ...properties } }),
+		} as never);
+
+		recordRecallOutcome({
+			surface: "prompt_injection",
+			delivery: "not_delivered",
+			reason: "skipped_low_signal",
+		});
+
+		expect(events[0]).toEqual({
+			event: "recall.outcome",
+			properties: {
+				surface: "prompt_injection",
+				resultState: "empty",
+				deliveryState: "not_delivered",
+				results: 0,
+				reason: "skipped_low_signal",
+			},
+		});
+	});
 });

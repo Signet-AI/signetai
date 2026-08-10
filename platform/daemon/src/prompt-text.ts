@@ -181,9 +181,62 @@ const RECALL_STOPWORDS = new Set([
 	"your",
 ]);
 
+const LOW_SIGNAL_PROMPTS = new Set([
+	"cool",
+	"got it",
+	"go ahead",
+	"good afternoon",
+	"good evening",
+	"good morning",
+	"great",
+	"greetings",
+	"hello",
+	"hello there",
+	"hi",
+	"hi there",
+	"howdy",
+	"k",
+	"kk",
+	"nice",
+	"ok",
+	"okay",
+	"okay cool",
+	"sounds good",
+	"sure",
+	"thanks",
+	"thanks a lot",
+	"thank you",
+	"thank you so much",
+	"yes",
+	"yes please",
+	"yep",
+]);
+
+// A bare negation is still a meaningful correction. Keep this list tiny so
+// the gate remains conservative for short identifiers and project names.
+const SHORT_CORRECTION_TERMS = new Set(["no"]);
+
 export interface RecallQueryShape {
 	readonly keywordTerms: string[];
 	readonly vectorQuery: string;
+}
+
+/** Return true only when a prompt has no useful automatic-recall signal. */
+export function isLowSignalPrompt(text: string): boolean {
+	const cleaned = stripUntrustedMetadata(text).trim();
+	if (cleaned.length === 0) return true;
+	const normalized = cleaned
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.trim();
+	if (normalized.length === 0) return true;
+	if (LOW_SIGNAL_PROMPTS.has(normalized)) return true;
+	if (extractSubstantiveWords(normalized).length > 0) return false;
+	if (normalized.split(" ").some((term) => SHORT_CORRECTION_TERMS.has(term))) return false;
+	if (normalized.split(" ").some((term) => term.length >= 2 && !RECALL_STOPWORDS.has(term) && !/^\d+$/.test(term))) {
+		return false;
+	}
+	return true;
 }
 
 export function extractSubstantiveWords(text: string): string[] {

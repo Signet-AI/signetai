@@ -6,6 +6,7 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { vectorToBlob } from "./db-helpers";
 import { handleUserPromptSubmit } from "./hooks";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
+import { setActiveTelemetry } from "./telemetry";
 
 type PromptDeps = Required<NonNullable<Parameters<typeof handleUserPromptSubmit>[1]>>;
 
@@ -32,7 +33,7 @@ function resetDb(): void {
 	initDbAccessor(memoryDbPath, { agentsDir });
 }
 
-function makeDeps(): PromptDeps {
+function makeDeps(overrides: Partial<PromptDeps> = {}): PromptDeps {
 	return {
 		logger: {
 			debug() {},
@@ -75,6 +76,7 @@ function makeDeps(): PromptDeps {
 		},
 		recordAgentFeedback() {},
 		trackFtsHits() {},
+		...overrides,
 	} as unknown as PromptDeps;
 }
 
@@ -224,19 +226,92 @@ describe("handleUserPromptSubmit entity context", () => {
 		}
 	});
 
-	it("returns empty inject for low-signal turns without searching", async () => {
+	it("skips low-signal recall while preserving stable prompt context and telemetry reason", async () => {
 		seedEntityContext();
+		const events: Array<{ event: string; properties: Record<string, unknown> }> = [];
+		setActiveTelemetry({
+			record(event, properties) {
+				events.push({ event, properties: { ...properties } });
+			},
+		} as never);
 
-		const result = await handleUserPromptSubmit(
-			{ harness: "codex", userMessage: "okay cool", sessionKey: "session-low-signal" },
-			makeDeps(),
-		);
+		try {
+			for (const [index, userMessage] of ["hi", "thanks", "okay"].entries()) {
+				const result = await handleUserPromptSubmit(
+					{ harness: "codex", userMessage, sessionKey: `session-low-signal-${index}` },
+					makeDeps(),
+				);
 
-		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "low-signal" });
+				expect(result).toMatchObject({ memoryCount: 0, engine: "low-signal" });
+				expect(result.inject).toBe("");
+			}
+		} finally {
+			setActiveTelemetry(undefined);
+		}
+
 		expect(hybridRecallMock).not.toHaveBeenCalled();
 		expect(fetchEmbeddingMock).not.toHaveBeenCalled();
 		expect(searchTemporalFallbackMock).not.toHaveBeenCalled();
 		expect(infoMock.mock.calls.at(-1)?.[2]?.engine).toBe("low-signal");
+		expect(events).toHaveLength(6);
+		expect(events.filter((event) => event.event === "recall.outcome").map((event) => event.properties)).toEqual([
+			{
+				surface: "prompt_injection",
+				resultState: "empty",
+				deliveryState: "not_delivered",
+				results: 0,
+				reason: "skipped_low_signal",
+			},
+			{
+				surface: "prompt_injection",
+				resultState: "empty",
+				deliveryState: "not_delivered",
+				results: 0,
+				reason: "skipped_low_signal",
+			},
+			{
+				surface: "prompt_injection",
+				resultState: "empty",
+				deliveryState: "not_delivered",
+				results: 0,
+				reason: "skipped_low_signal",
+			},
+		]);
+	});
+
+	it("does not classify short substantive identifiers or corrections as low-signal", async () => {
+		seedEntityContext();
+
+		for (const [index, userMessage] of ["k8s", "yolo", "Signet", "No"].entries()) {
+			const result = await handleUserPromptSubmit(
+				{ harness: "codex", userMessage, sessionKey: `session-substantive-${index}` },
+				makeDeps(),
+			);
+
+			expect(result.engine).not.toBe("low-signal");
+		}
+	});
+
+	it("keeps prompt bookkeeping ahead of the low-signal gate", async () => {
+		seedEntityContext();
+		const recordPrompt = mock((_sessionKey: string | undefined, _queryTerms?: string, _snippet?: string) => {});
+		const upsertSessionTranscript = mock(
+			(_sessionKey: string, _transcript: string, _harness: string, _project: string | null, _agentId: string) => {},
+		);
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "hi",
+				sessionKey: "session-bookkeeping",
+				transcript: "User: hi",
+			},
+			makeDeps({ recordPrompt, upsertSessionTranscript }),
+		);
+
+		expect(recordPrompt).toHaveBeenCalledWith("session-bookkeeping", undefined, "hi");
+		expect(upsertSessionTranscript).toHaveBeenCalled();
+		expect(result.inject).toBe("");
 	});
 
 	it("returns empty inject when no known entity or alias is mentioned", async () => {

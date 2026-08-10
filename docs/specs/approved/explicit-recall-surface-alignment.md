@@ -11,7 +11,7 @@ depends_on:
   - "signet-runtime"
 success_criteria:
   - "TypeScript explicit recall uses one canonical retrieval engine and one canonical response contract across API, CLI, MCP, and harness consumers"
-  - "Prompt-submit recall remains a lightweight injection path and does not absorb explicit recall product concerns"
+  - "Prompt-submit recall remains a lightweight injection path, skips low-signal automatic work conservatively, and does not absorb explicit recall product concerns"
   - "Legacy or duplicate TypeScript recall helpers are either removed or reduced to thin wrappers around the canonical recall path"
   - "Consumer renderers preserve useful recall metadata instead of flattening results into source-less snippet lists"
 scope_boundary: "TypeScript recall surfaces only: explicit recall APIs, CLI, MCP, and harness consumers. Excludes Rust parity work and excludes changes to the underlying retrieval model beyond wrapper consolidation and response shaping."
@@ -134,10 +134,17 @@ Prompt-submit recall stays in `handleUserPromptSubmit()` and remains a
 distinct product boundary:
 
 - lightweight injection only,
+- low-signal admission before embedding or retrieval work,
 - confidence-gated,
 - fallback-friendly,
 - deduplicated,
 - budget-limited.
+
+The low-signal admission gate is deliberately conservative: it covers greetings
+and acknowledgements while allowing short identifiers, project names, and terse
+corrections through. It records a bounded `skipped_low_signal` outcome reason,
+preserves session bookkeeping and the stable per-prompt context contract, and
+never applies to explicit recall or remember tools.
 
 Prompt-submit is not the place for the richer "query product" behavior. It
 is allowed to use recall, but it should not become recall's main
@@ -228,8 +235,9 @@ If it does not need its own contract, it should stay visibly thin.
 - `/api/hooks/recall` does not diverge into its own retrieval engine.
 - CLI, MCP, and connector recall displays expose source labels and preserve
   useful metadata from the canonical response.
-- Prompt-submit injection remains lightweight and separate from explicit
-  recall shaping.
+- Prompt-submit injection remains lightweight and separate from explicit recall
+  shaping; low-signal prompts must not enter embedding, vector, graph, or
+  reranking work.
 
 ## Success metrics
 

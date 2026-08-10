@@ -3,6 +3,7 @@ import { getActiveTelemetry } from "./telemetry";
 
 export type RecallResultState = "empty" | "non_empty" | "truncated" | "error";
 export type RecallDeliveryState = "returned" | "injected" | "consumed" | "not_delivered";
+export type RecallSkipReason = "skipped_low_signal";
 
 const RECALL_SURFACES: ReadonlySet<string> = new Set<RecallSurface>([
 	"explicit_api",
@@ -47,6 +48,7 @@ export function recordRecallOutcome(input: {
 	readonly truncated?: boolean;
 	readonly delivery: RecallDeliveryState;
 	readonly error?: boolean;
+	readonly reason?: RecallSkipReason;
 }): void {
 	const resultCount = boundedResultCount(input.resultCount ?? 0);
 	const resultState: RecallResultState = input.error
@@ -58,5 +60,6 @@ export function recordRecallOutcome(input: {
 		resultState,
 		deliveryState,
 		results: resultCount,
+		...(input.reason ? { reason: input.reason } : {}),
 	});
 }

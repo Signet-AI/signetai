@@ -222,8 +222,9 @@ reliable (`semantic`, `keyword`, `temporal`, or `graph`), `results`,
 result-state, delivery-state, and count fields: `explicit_api`, `tool_call`,
 `prompt_injection`, `dashboard`, or `other`; `empty`, `non_empty`,
 `truncated`, or `error`; and `returned`, `injected`, `consumed`, or
-`not_delivered`. They never include query text, prompt text, memory content,
-identifiers, citations, or feedback prose.
+`not_delivered`. A prompt-submit admission skip may also include the fixed
+reason `skipped_low_signal`. They never include query text, prompt text,
+memory content, identifiers, citations, or feedback prose.
 
 Source indexing emits bounded `source.lifecycle` summaries. The `sourceClass`
 taxonomy is fixed (`transcript`, `document`, `repository`, `note_vault`,

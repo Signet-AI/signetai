@@ -7,7 +7,7 @@ import type { EmbeddingRole } from "./embedding-profile";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import { isMemoryContentContextEligible } from "./memory-content-safety";
-import { countPromptTermOverlap, extractSubstantiveWords, stripUntrustedMetadata } from "./prompt-text";
+import { countPromptTermOverlap, extractSubstantiveWords, isLowSignalPrompt } from "./prompt-text";
 
 type FetchEmbedding = (
 	text: string,
@@ -65,26 +65,6 @@ export type PromptEntityContextResult = {
 	readonly memoryCount: number;
 	readonly engine: "entity-context" | "low-signal" | "no-entity" | "no-aspect-hit";
 };
-
-const LOW_SIGNAL_PROMPTS = new Set([
-	"cool",
-	"got it",
-	"go ahead",
-	"great",
-	"k",
-	"kk",
-	"nice",
-	"ok",
-	"okay",
-	"okay cool",
-	"sounds good",
-	"sure",
-	"thanks",
-	"thank you",
-	"yes",
-	"yes please",
-	"yep",
-]);
 
 const ENTITY_CONTEXT_MAX_ENTITIES = 2;
 const ENTITY_CONTEXT_MAX_ASPECTS_PER_ENTITY = 3;
@@ -162,14 +142,6 @@ function spansOverlap(
 	b: { readonly start: number; readonly end: number },
 ): boolean {
 	return a.start < b.end && b.start < a.end;
-}
-
-function isLowSignalPrompt(userMessage: string): boolean {
-	const normalized = normalizePromptEntityText(stripUntrustedMetadata(userMessage));
-	if (normalized.length === 0) return true;
-	if (LOW_SIGNAL_PROMPTS.has(normalized)) return true;
-	const terms = extractSubstantiveWords(normalized);
-	return terms.length === 0;
 }
 
 function entityContextTablesAvailable(db: ReadDb): boolean {

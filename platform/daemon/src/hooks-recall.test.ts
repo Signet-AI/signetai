@@ -159,6 +159,48 @@ memory:
 		}
 	});
 
+	it("keeps explicit recall independent of the prompt-submit low-signal gate", async () => {
+		if (!getDbAccessor) throw new Error("db accessor unavailable");
+		const collector = createTelemetryCollector(
+			getDbAccessor(),
+			{
+				posthogHost: "",
+				posthogApiKey: "",
+				flushIntervalMs: 60000,
+				flushBatchSize: 50,
+				retentionDays: 90,
+				memorySearchQaEnabled: false,
+			},
+			"0.0.0-test",
+		);
+		setActiveTelemetry(collector);
+		try {
+			const resp = await app.request("/api/hooks/recall", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ harness: "openclaw", query: "okay", limit: 5 }),
+			});
+
+			expect(resp.status).toBe(200);
+			const body = await resp.json();
+			expect(body.error).not.toBe("Hook execution failed");
+			expect(body.meta).toBeDefined();
+
+			await collector.flush();
+			const events = collector.query();
+			expect(
+				events.some((event) => event.event === "recall.attempted" && event.properties.surface === "tool_call"),
+			).toBeTrue();
+			const outcome = events.find(
+				(event) => event.event === "recall.outcome" && event.properties.surface === "tool_call",
+			);
+			expect(outcome).toBeDefined();
+			expect(outcome?.properties.reason).toBeUndefined();
+		} finally {
+			setActiveTelemetry(undefined);
+		}
+	});
+
 	it("records session.deleted as one real session.end at the route boundary", async () => {
 		if (!getDbAccessor) throw new Error("db accessor unavailable");
 		const collector = createTelemetryCollector(

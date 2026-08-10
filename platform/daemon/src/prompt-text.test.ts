@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildRecallQueryShape,
 	extractSubstantiveWords,
+	isLowSignalPrompt,
 	queryAnchorsMissingFromRecall,
 	stripUntrustedMetadata,
 } from "./prompt-text";
@@ -34,6 +35,16 @@ describe("prompt text helpers", () => {
 		expect(shape.vectorQuery).toBe("Find ultra-needle-transcript-only-5529931 please");
 		expect(shape.keywordTerms).toContain("ultra-needle-transcript-only-5529931");
 		expect(shape.keywordTerms).not.toContain("discord");
+	});
+
+	test("gates greetings and acknowledgements without dropping substantive short prompts", () => {
+		for (const prompt of ["hi", "Thanks!", "okay", "hello there", "good morning"]) {
+			expect(isLowSignalPrompt(prompt)).toBe(true);
+		}
+
+		for (const prompt of ["k8s", "yolo", "Signet", "AI", "v2", "No", "No, use the other option"]) {
+			expect(isLowSignalPrompt(prompt)).toBe(false);
+		}
 	});
 
 	test("detects missing anchor terms in recall results", () => {

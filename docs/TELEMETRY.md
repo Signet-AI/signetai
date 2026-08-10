@@ -88,7 +88,7 @@ paths, or user identity.
 | `pipeline.embedding` | every embedding fetch, at the usage-recording boundary | `tokens`, `provider`, `sourceKind` (`memory-capture` / `artifact-index` / `recall` / `dreaming` / `other`), `cost` (USD), `accountingProvenance` |
 | `recall.performed` | every completed shared recall search | `surface`, `type` (`semantic` / `keyword` / `temporal` / `graph`), `results`, `latencyMs`, `truncated` |
 | `recall.attempted` | every valid recall request or automatic prompt-context retrieval attempt | `surface` (`explicit_api` / `tool_call` / `prompt_injection` / `dashboard` / `other`) |
-| `recall.outcome` | result and delivery boundary for a recall attempt | `surface`, `resultState` (`empty` / `non_empty` / `truncated` / `error`), `deliveryState` (`returned` / `injected` / `consumed` / `not_delivered`), `results` |
+| `recall.outcome` | result and delivery boundary for a recall attempt | `surface`, `resultState` (`empty` / `non_empty` / `truncated` / `error`), `deliveryState` (`returned` / `injected` / `consumed` / `not_delivered`), `results`, optional `reason` (`skipped_low_signal`) |
 | `source.lifecycle` | bounded source connect, index, readiness, first-recall, and recurring freshness milestones | `phase`, fixed `sourceClass`, bounded outcomes/counts/buckets |
 | `pipeline.error` | categorized extraction, decision, or embedding failure | `stage`, `code` only; no message or stack content |
 | `dreaming.pass` | every terminal agentic dreaming pass, including no-op, failed, and cancelled passes | `mode`, `outcome`, `outcomeCode`, bounded successful-target `provider` and `model` when available, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `tokensTotal`, `cost`, `accountingProvenance`, `artifactsConsidered`, `memoriesCreated`, `memoriesUpdated`, `memoriesSuperseded`, `memoriesRetired`, `claimsChanged`, `relationshipsChanged`, `provenanceLinksChanged`, `toolCalls`, `durationMs` |
@@ -264,12 +264,13 @@ Notes on individual events:
   surface. Outcomes separate empty, non-empty, truncated, and error results
   from the delivery boundary: explicit API and tool results are `returned`,
   automatic session-start and prompt-submit context is `injected`, and failed
-  paths are `not_delivered`. `consumed` is reserved for a deliberate client
-  acknowledgement; no client emits it by default. Surface values are fixed
-  enums. No query, prompt, memory, citation, agent, or harness identifiers
-  are included. Local stats expose attempted, returned, and delivered counts
-  by surface; they read the flushed telemetry table and can lag the in-memory
-  event buffer by one flush interval.
+  paths are `not_delivered`. A prompt-submit admission skip records the bounded
+  reason `skipped_low_signal` without running retrieval. `consumed` is reserved
+  for a deliberate client acknowledgement; no client emits it by default.
+  Surface and reason values are fixed enums. No query, prompt, memory, citation,
+  agent, or harness identifiers are included. Local stats expose attempted,
+  returned, and delivered counts by surface; they read the flushed telemetry
+  table and can lag the in-memory event buffer by one flush interval.
 - **`command.invoked`** — CLI commands send only the bounded top-level command
   name to PostHog. Arguments, paths, user-defined names, and other command
   content are never included. The same event is available in the local JSONL

@@ -46,6 +46,21 @@ run gives a clean per-type breakdown without extra commands. Benchmark reports
 and run artifacts stay under ignored paths and should not be committed until the
 team explicitly decides to publish a score.
 
+## Prompt-submit gate benchmark
+
+The prompt-submit hot-path benchmark compares a substantive entity-context
+recall with a low-signal greeting:
+
+```bash
+bun run build:core
+bun scripts/bench-prompt-submit.ts
+```
+
+It prints prompt-submit latency, recall-stage timing, and synthetic embedding
+call counts for the before-gate substantive path and after-gate low-signal path.
+The benchmark uses a temporary database and synthetic embedding delay; it never
+reads the live workspace.
+
 ## Larger runs
 
 Run the full LongMemEval benchmark:
