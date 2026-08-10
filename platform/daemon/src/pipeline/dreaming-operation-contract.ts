@@ -47,7 +47,7 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 		subjectRef: text.describe(
 			"The flagged target, e.g. entity:<id>, aspect:<id>, attribute:<id>, link:<id>, or duplicate:<canonical name>.",
 		),
-		details: z.record(z.string(), z.string()).describe("Inspection facts about the flagged target.").optional(),
+		details: z.object({}).catchall(z.string()).describe("Inspection facts about the flagged target.").optional(),
 		priority: z.number().finite().min(0).max(100).describe("Priority of the flag (0-100).").optional(),
 	}),
 	decline_attention: payload({
