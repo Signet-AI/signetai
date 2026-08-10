@@ -29,6 +29,10 @@ interface ReviewsSyncConfig {
 
 // Production sync endpoint. Pre-configured so users only need to set enabled: true.
 const REVIEWS_SYNC_URL = "https://reviews.signetai.sh/api/reviews/sync";
+const REVIEW_SYNC_TIMEOUT_MS = 15_000;
+// A daemon normally owns a workspace; keying the queue keeps distinct test or
+// embedded workspaces independent while serializing calls for the same one.
+const reviewSyncFlights = new Map<string, Promise<unknown>>();
 
 const DEFAULT_CONFIG: ReviewsSyncConfig = {
 	enabled: false,
@@ -179,6 +183,29 @@ function summarize(reviews: readonly MarketplaceReview[]): { count: number; avgR
 		count: reviews.length,
 		avgRating: Number((total / reviews.length).toFixed(2)),
 	};
+}
+
+async function withReviewSyncLock<T>(workspacePath: string, run: () => Promise<T>): Promise<T> {
+	const previous = reviewSyncFlights.get(workspacePath) ?? Promise.resolve();
+	const next = previous.then(
+		() => run(),
+		() => run(),
+	);
+	reviewSyncFlights.set(workspacePath, next);
+	try {
+		return await next;
+	} finally {
+		if (reviewSyncFlights.get(workspacePath) === next) {
+			reviewSyncFlights.delete(workspacePath);
+		}
+	}
+}
+
+function isReviewSyncTimeout(error: unknown): boolean {
+	if (error instanceof DOMException) {
+		return error.name === "AbortError" || error.name === "TimeoutError";
+	}
+	return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }
 
 export function mountMarketplaceReviewsRoutes(app: Hono): void {
@@ -339,48 +366,53 @@ export function mountMarketplaceReviewsRoutes(app: Hono): void {
 	});
 
 	app.post("/api/marketplace/reviews/sync", async (c) => {
-		const config = readConfig();
-		if (!config.enabled || config.endpointUrl.length === 0) {
-			return c.json({ success: false, error: "Review sync endpoint is not configured" }, 400);
-		}
+		return withReviewSyncLock(getAgentsDir(), async () => {
+			const config = readConfig();
+			if (!config.enabled || config.endpointUrl.length === 0) {
+				return c.json({ success: false, error: "Review sync endpoint is not configured" }, 400);
+			}
 
-		const reviews = readReviews();
-		const pending = reviews.filter((item) => item.syncedAt === null || item.updatedAt > item.syncedAt);
-		if (pending.length === 0) {
-			return c.json({ success: true, sent: 0, synced: 0, message: "No pending reviews" });
-		}
+			const reviews = readReviews();
+			const pending = reviews.filter((item) => item.syncedAt === null || item.updatedAt > item.syncedAt);
+			if (pending.length === 0) {
+				return c.json({ success: true, sent: 0, synced: 0, message: "No pending reviews" });
+			}
 
-		try {
-			const response = await fetch(config.endpointUrl, {
-				method: "POST",
-				headers: { "Content-Type": "application/json", "X-Signet-Sync": "1" },
-				body: JSON.stringify({
-					source: "signet-marketplace",
-					type: "reviews-sync",
-					sentAt: new Date().toISOString(),
-					reviews: pending,
-				}),
-			});
+			try {
+				const response = await fetch(config.endpointUrl, {
+					method: "POST",
+					headers: { "Content-Type": "application/json", "X-Signet-Sync": "1" },
+					body: JSON.stringify({
+						source: "signet-marketplace",
+						type: "reviews-sync",
+						sentAt: new Date().toISOString(),
+						reviews: pending,
+					}),
+					signal: AbortSignal.timeout(REVIEW_SYNC_TIMEOUT_MS),
+				});
 
-			if (!response.ok) {
-				const errorText = `Sync endpoint returned HTTP ${response.status}`;
+				if (!response.ok) {
+					const errorText = `Sync endpoint returned HTTP ${response.status}; pending reviews were preserved for retry`;
+					writeConfig({ ...config, lastSyncError: errorText });
+					return c.json({ success: false, error: errorText }, 502);
+				}
+
+				const syncedAt = new Date().toISOString();
+				const pendingIds = new Set(pending.map((item) => item.id));
+				const nextReviews = reviews.map((item) =>
+					pendingIds.has(item.id) ? { ...item, syncedAt, source: "synced" as const } : item,
+				);
+				writeReviews(nextReviews);
+
+				writeConfig({ ...config, lastSyncAt: syncedAt, lastSyncError: null });
+				return c.json({ success: true, sent: pending.length, synced: pending.length, syncedAt });
+			} catch (error) {
+				const errorText = isReviewSyncTimeout(error)
+					? `Review sync timed out after ${REVIEW_SYNC_TIMEOUT_MS / 1000} seconds; pending reviews were preserved for retry`
+					: `Review sync failed: ${error instanceof Error ? error.message : String(error)}; pending reviews were preserved for retry`;
 				writeConfig({ ...config, lastSyncError: errorText });
 				return c.json({ success: false, error: errorText }, 502);
 			}
-
-			const syncedAt = new Date().toISOString();
-			const pendingIds = new Set(pending.map((item) => item.id));
-			const nextReviews = reviews.map((item) =>
-				pendingIds.has(item.id) ? { ...item, syncedAt, source: "synced" as const } : item,
-			);
-			writeReviews(nextReviews);
-
-			writeConfig({ ...config, lastSyncAt: syncedAt, lastSyncError: null });
-			return c.json({ success: true, sent: pending.length, synced: pending.length, syncedAt });
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			writeConfig({ ...config, lastSyncError: message });
-			return c.json({ success: false, error: message }, 502);
-		}
+		});
 	});
 }
