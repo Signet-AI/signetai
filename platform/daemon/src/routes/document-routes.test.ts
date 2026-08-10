@@ -224,8 +224,8 @@ describe("document routes", () => {
 		try {
 			await waitFor(() =>
 				getDbAccessor().withReadDb((db) => {
-					const row = db.prepare("SELECT status FROM documents WHERE id = 'doc-empty'").get() as { status: string };
-					return row.status === "failed";
+					const row = db.prepare("SELECT status FROM memory_jobs WHERE id = 'job-empty'").get() as { status: string };
+					return row.status === "dead";
 				}),
 			);
 		} finally {
