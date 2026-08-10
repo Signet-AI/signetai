@@ -82,6 +82,8 @@ export const TELEMETRY_EVENTS = [
 	"cloud.sync",
 	"cloud.storage",
 	"recall.performed",
+	"recall.attempted",
+	"recall.outcome",
 	"config.snapshot",
 ] as const;
 
@@ -200,6 +202,7 @@ function sessionCostProperties(cost: SessionCostAccumulator): TelemetryPropertie
 
 export interface TelemetryCollector {
 	record(event: TelemetryEventType, properties: TelemetryProperties): void;
+	recordDeferred?(event: TelemetryEventType, properties: TelemetryProperties): void;
 	reopenSession(sessionHash: string): void;
 
 	/**
@@ -1063,12 +1066,15 @@ export function createTelemetryCollector(
 			return createHash("sha256").update(`${agentId}:${installId}`).digest("hex").slice(0, 16);
 		},
 
-		record(event, properties): void {
+	record(event, properties): void {
 			appendBufferedEvent(event, properties);
 
 			if (buffer.length >= MAX_BUFFER_SIZE) {
 				void flushInternal(false);
 			}
+		},
+		recordDeferred(event, properties): void {
+			appendBufferedEvent(event, properties);
 		},
 
 		recordFirstUse(kind): void {
