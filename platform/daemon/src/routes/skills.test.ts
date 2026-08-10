@@ -10,6 +10,8 @@ import {
 	listInstalledSkills,
 	mountSkillsRoutes,
 	parseSkillFrontmatter,
+	readCatalogResponseJson,
+	readCatalogResponseText,
 	replaceSkillDirectoryAtomically,
 	validateClawhubZipEntryMetadata,
 	validateExtractedSkillTree,
@@ -587,11 +589,72 @@ This is a test skill.`,
 
 		try {
 			const response = await fetchCatalogUrl("https://skills.example.invalid", 5);
-			await expect(response.text()).rejects.toThrow("aborted");
+			await expect(readCatalogResponseText(response)).rejects.toThrow("aborted");
 			expect(signal?.aborted).toBe(true);
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
+	});
+
+	it("rejects an oversized text response while it is still streaming", async () => {
+		const limit = 1024;
+		let pulls = 0;
+		let cancelled = false;
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				pulls += 1;
+				if (pulls === 1) {
+					controller.enqueue(new Uint8Array(limit));
+					return;
+				}
+				controller.enqueue(new Uint8Array(1));
+			},
+			cancel() {
+				cancelled = true;
+			},
+		});
+
+		await expect(readCatalogResponseText(new Response(body), limit)).rejects.toThrow("catalog response too large");
+		expect(pulls).toBe(2);
+		expect(cancelled).toBe(true);
+	});
+
+	it("rejects an oversized JSON response before parsing", async () => {
+		const limit = 1024;
+		const response = new Response("not valid JSON", {
+			status: 200,
+			headers: { "content-length": String(limit + 1) },
+		});
+
+		await expect(readCatalogResponseJson(response, limit)).rejects.toThrow("catalog response too large");
+	});
+
+	it("preserves normal bounded text and JSON responses", async () => {
+		expect(await readCatalogResponseText(new Response("catalog entry"))).toBe("catalog entry");
+		expect(await readCatalogResponseJson<{ skills: string[] }>(new Response('{"skills":["remote"]}'))).toEqual({
+			skills: ["remote"],
+		});
+	});
+
+	it("preserves downstream body and parse errors", async () => {
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.error(new Error("catalog body failed"));
+			},
+		});
+		await expect(readCatalogResponseText(new Response(body))).rejects.toThrow("catalog body failed");
+		await expect(readCatalogResponseJson(new Response("{"))).rejects.toThrow(SyntaxError);
+	});
+
+	it("routes every external catalog/document body through the shared bounded reader", () => {
+		const source = readFileSync(join(__dirname, "skills.ts"), "utf-8");
+		expect(source).not.toContain("await res.text()");
+		expect(source).not.toContain("await res.json()");
+		expect(source).not.toContain("await treeRes.json()");
+		expect(source).not.toContain("await mdRes.text()");
+		expect(source).toContain("readCatalogResponseText(res)");
+		expect(source).toContain("readCatalogResponseText(mdRes)");
+		expect(source).toContain("readCatalogResponseJson<");
 	});
 
 	it("POST /api/skills/install accepts valid name with source", async () => {

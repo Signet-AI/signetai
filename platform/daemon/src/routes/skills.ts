@@ -135,6 +135,43 @@ export async function fetchCatalogUrl(
 	});
 }
 
+const MAX_CATALOG_RESPONSE_BYTES = 5 * 1024 * 1024;
+
+/** Read an external catalog/document response without materializing an unbounded body. */
+export async function readCatalogResponseText(res: Response, limit = MAX_CATALOG_RESPONSE_BYTES): Promise<string> {
+	const contentLength = res.headers.get("content-length");
+	if (contentLength) {
+		const bytes = Number(contentLength);
+		if (Number.isFinite(bytes) && bytes > limit) {
+			throw new Error(`catalog response too large: ${bytes} bytes`);
+		}
+	}
+	if (!res.body) throw new Error("catalog response did not include a response body");
+
+	const reader = res.body.getReader();
+	const decoder = new TextDecoder();
+	let bytes = 0;
+	let text = "";
+	try {
+		while (true) {
+			const chunk = await reader.read();
+			if (chunk.done) return text + decoder.decode();
+			bytes += chunk.value.byteLength;
+			if (bytes > limit) {
+				await reader.cancel().catch(() => undefined);
+				throw new Error(`catalog response too large: more than ${limit} bytes`);
+			}
+			text += decoder.decode(chunk.value, { stream: true });
+		}
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+export async function readCatalogResponseJson<T>(res: Response, limit = MAX_CATALOG_RESPONSE_BYTES): Promise<T> {
+	return JSON.parse(await readCatalogResponseText(res, limit)) as T;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -256,7 +293,7 @@ async function fetchCatalog(): Promise<CatalogEntry[]> {
 	logger.info("skills", "Fetching skills.sh catalog");
 	try {
 		const res = await fetchCatalogUrl("https://skills.sh", CATALOG_FETCH_TIMEOUT_MS);
-		const html = await res.text();
+		const html = await readCatalogResponseText(res);
 		const entries: CatalogEntry[] = [];
 		const re =
 			/\{\\"source\\":\\"([^\\]+)\\",\\"skillId\\":\\"([^\\]+)\\",\\"name\\":\\"([^\\]+)\\",\\"installs\\":(\d+)\}/g;
@@ -302,10 +339,10 @@ async function fetchClawhubCatalog(): Promise<ClawhubItem[]> {
 
 			const res = await fetchCatalogUrl(url.toString(), Math.max(1, deadline - Date.now()));
 			if (!res.ok) throw new Error(`ClawHub returned ${res.status}`);
-			const data = (await res.json()) as {
+			const data = await readCatalogResponseJson<{
 				items: ClawhubItem[];
 				nextCursor: string | null;
-			};
+			}>(res);
 			items.push(...data.items);
 			if (!data.nextCursor) break;
 			cursor = data.nextCursor;
@@ -934,7 +971,7 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 						CATALOG_FETCH_TIMEOUT_MS,
 					);
 					if (!res.ok) throw new Error(`skills.sh returned ${res.status}`);
-					const data = (await res.json()) as {
+					const data = await readCatalogResponseJson<{
 						skills: Array<{
 							id: string;
 							skillId: string;
@@ -942,7 +979,7 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 							installs: number;
 							source: string;
 						}>;
-					};
+					}>(res);
 					return (data.skills ?? []).map((s) =>
 						createSkillBrowseResult({
 							name: s.name,
@@ -1067,16 +1104,16 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 					{ Accept: "application/vnd.github.v3+json" },
 				);
 				if (treeRes.ok) {
-					const tree = (await treeRes.json()) as {
+					const tree = await readCatalogResponseJson<{
 						tree: { path: string }[];
-					};
+					}>(treeRes);
 					const needle = `${name}/SKILL.md`;
 					const match = tree.tree.find((t) => t.path.endsWith(needle));
 					if (match) {
 						const rawUrl = `https://raw.githubusercontent.com/${repo}/main/${match.path}`;
 						const mdRes = await fetchCatalogUrl(rawUrl, CATALOG_FETCH_TIMEOUT_MS);
 						if (mdRes.ok) {
-							const content = await mdRes.text();
+							const content = await readCatalogResponseText(mdRes);
 							const meta = parseSkillFrontmatter(content);
 							return c.json({ name, ...meta, content });
 						}
