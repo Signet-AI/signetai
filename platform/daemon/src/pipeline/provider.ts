@@ -703,6 +703,8 @@ export interface AcpxProviderConfig {
 const DEFAULT_ACPX_VERSION = "0.12.0";
 const DEFAULT_ACPX_EMPTY_RESPONSE_RETRIES = 1;
 const MAX_ACPX_EMPTY_RESPONSE_RETRIES = 3;
+const DEFAULT_ACPX_EMPTY_RESPONSE_RETRY_DELAY_MS = 100;
+const MAX_ACPX_EMPTY_RESPONSE_RETRY_DELAY_MS = 2_000;
 
 function normalizeAcpxAgent(agent: string): string {
 	return agent === "claude-code" ? "claude" : agent;
@@ -1135,6 +1137,40 @@ function resolveEmptyResponseRetries(config: AcpxProviderConfig): number {
 	return Math.min(MAX_ACPX_EMPTY_RESPONSE_RETRIES, Math.max(0, Math.floor(configured)));
 }
 
+export function calculateAcpxRetryDelayMs(retryIndex: number, random: () => number = Math.random): number {
+	const exponent = Math.min(
+		MAX_ACPX_EMPTY_RESPONSE_RETRY_DELAY_MS,
+		DEFAULT_ACPX_EMPTY_RESPONSE_RETRY_DELAY_MS * 2 ** Math.max(0, Math.floor(retryIndex)),
+	);
+	const jitter = Math.min(1, Math.max(0, random()));
+	return Math.max(1, Math.floor(exponent * (0.5 + jitter * 0.5)));
+}
+
+async function waitForAcpxRetry(
+	agent: string,
+	delayMs: number,
+	deadline: number,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	if (signal?.aborted) throw new Error(`${agent} via ACPX aborted`);
+	const remainingMs = deadline - performance.now();
+	if (remainingMs <= 0) return;
+	const waitMs = Math.min(delayMs, remainingMs);
+	await new Promise<void>((resolve, reject) => {
+		let settled = false;
+		const finish = (fn: () => void): void => {
+			if (settled) return;
+			settled = true;
+			signal?.removeEventListener("abort", onAbort);
+			fn();
+		};
+		const onAbort = (): void => finish(() => reject(new Error(`${agent} via ACPX aborted`)));
+		signal?.addEventListener("abort", onAbort, { once: true });
+		const timer = setTimeout(() => finish(resolve), waitMs);
+		timer.unref?.();
+	});
+}
+
 function quietUsage(stderr: string): string | undefined {
 	return stderr.match(/^\[acpx\] tokens: (.+)$/m)?.[1]?.slice(0, 300);
 }
@@ -1271,50 +1307,51 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 			const timeoutMs = opts?.timeoutMs ?? config.timeoutMs ?? 60_000;
 			const deadline = performance.now() + timeoutMs;
 			const signal = generateSignal(opts);
-			return withLlmConcurrency(
-				async () => {
-					const retries = isSterileAcpxTarget(config) ? resolveEmptyResponseRetries(config) : 0;
-					const startedAt = performance.now();
-					let lastEmpty: AcpxEmptyResponseError | undefined;
-					for (let attempt = 0; attempt <= retries; attempt += 1) {
-						const remainingMs = deadline - performance.now();
-						if (remainingMs <= 0) {
-							if (lastEmpty) {
-								throw formatEmptyResponseError(
-									config.agent,
-									lastEmpty.diagnostics,
-									attempt - 1,
-									performance.now() - startedAt,
-								);
-							}
-							throw new Error(
-								`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
-							);
-						}
-						const attemptConfig = attempt === 0 ? config : { ...config, mode: "exec" as const, session: undefined };
-						try {
-							return await runAcpxAttempt(attemptConfig, prompt, remainingMs, signal);
-						} catch (error) {
-							if (!(error instanceof AcpxEmptyResponseError)) throw error;
-							lastEmpty = error;
-							if (attempt >= retries) {
-								throw formatEmptyResponseError(config.agent, error.diagnostics, attempt, performance.now() - startedAt);
-							}
-							logger.warn("inference", "Retrying sterile ACPX empty response", {
-								agent: config.agent,
-								attempt: attempt + 1,
-								format: error.diagnostics.format,
-								sessionId: error.diagnostics.sessionId ?? "unknown",
-								stopReason: error.diagnostics.stopReason ?? "unknown",
-							});
-						}
+			const retries = isSterileAcpxTarget(config) ? resolveEmptyResponseRetries(config) : 0;
+			const startedAt = performance.now();
+			let lastEmpty: AcpxEmptyResponseError | undefined;
+			for (let attempt = 0; attempt <= retries; attempt += 1) {
+				const remainingMs = deadline - performance.now();
+				if (remainingMs <= 1) {
+					if (lastEmpty) {
+						throw formatEmptyResponseError(
+							config.agent,
+							lastEmpty.diagnostics,
+							attempt - 1,
+							performance.now() - startedAt,
+						);
 					}
-					throw new Error(`${config.agent} via ACPX retry loop exhausted`);
-				},
-				timeoutMs,
-				"acpx",
-				signal,
-			);
+					throw new Error(
+						`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
+					);
+				}
+				const attemptConfig = attempt === 0 ? config : { ...config, mode: "exec" as const, session: undefined };
+				try {
+					return await withLlmConcurrency(
+						() => runAcpxAttempt(attemptConfig, prompt, remainingMs, signal),
+						remainingMs,
+						"acpx",
+						signal,
+					);
+				} catch (error) {
+					if (!(error instanceof AcpxEmptyResponseError)) throw error;
+					lastEmpty = error;
+					if (attempt >= retries) {
+						throw formatEmptyResponseError(config.agent, error.diagnostics, attempt, performance.now() - startedAt);
+					}
+					const delayMs = calculateAcpxRetryDelayMs(attempt);
+					logger.warn("inference", "Retrying sterile ACPX empty response", {
+						agent: config.agent,
+						attempt: attempt + 1,
+						delayMs,
+						format: error.diagnostics.format,
+						sessionId: error.diagnostics.sessionId ?? "unknown",
+						stopReason: error.diagnostics.stopReason ?? "unknown",
+					});
+					await waitForAcpxRetry(config.agent, delayMs, deadline, signal);
+				}
+			}
+			throw new Error(`${config.agent} via ACPX retry loop exhausted`);
 		},
 		async available(): Promise<boolean> {
 			const bin = config.bin ?? "npx";

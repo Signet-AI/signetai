@@ -18,6 +18,8 @@ import {
 	LlmConcurrencySemaphore,
 	SemaphoreTimeoutError,
 	awaitSubprocessWithDeadline,
+	calculateAcpxRetryDelayMs,
+	configureLlmConcurrency,
 	createAcpxProvider,
 } from "./provider";
 
@@ -57,11 +59,26 @@ async function waitForProcessExit(pid: number): Promise<boolean> {
 	return false;
 }
 
+async function waitForPath(path: string): Promise<void> {
+	for (let i = 0; i < 100; i += 1) {
+		if (existsSync(path)) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`path was not created: ${path}`);
+}
+
 // ---------------------------------------------------------------------------
 // ACPX harness-subprocess provider
 // ---------------------------------------------------------------------------
 
 describe("createAcpxProvider", () => {
+	it("calculates bounded exponential sterile-response backoff with deterministic jitter", () => {
+		expect(calculateAcpxRetryDelayMs(0, () => 0)).toBe(50);
+		expect(calculateAcpxRetryDelayMs(0, () => 1)).toBe(100);
+		expect(calculateAcpxRetryDelayMs(1, () => 0.5)).toBe(150);
+		expect(calculateAcpxRetryDelayMs(20, () => 1)).toBe(2_000);
+	});
+
 	it("runs ACPX one-shot exec with pinned version-compatible args and sterile hook env", async () => {
 		const root = join(tmpdir(), `signet-acpx-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(root, { recursive: true });
@@ -201,9 +218,11 @@ printf 'ok\\n'
 		const bin = join(root, "fake-acpx-empty-then-valid.sh");
 		const countPath = join(root, "count.txt");
 		const argsPath = join(root, "args.txt");
+		const timesPath = join(root, "times.txt");
 		writeFileSync(
 			bin,
 			`#!/usr/bin/env bash
+printf '%s\n' "$(date +%s%3N)" >> ${JSON.stringify(timesPath)}
 count=0
 [[ -f ${JSON.stringify(countPath)} ]] && count=$(cat ${JSON.stringify(countPath)})
 count=$((count + 1))
@@ -232,9 +251,127 @@ fi
 
 			await expect(provider.generate("retry me", { timeoutMs: 2000 })).resolves.toBe("recovered answer");
 			expect(readFileSync(countPath, "utf8")).toBe("2");
+			const times = readFileSync(timesPath, "utf8").trim().split("\n").map(Number);
+			expect(times).toHaveLength(2);
+			expect(times[1] - times[0]).toBeGreaterThanOrEqual(40);
 			const args = readFileSync(argsPath, "utf8").trim().split("\n");
 			expect(args.filter((arg) => arg === "persistent-background")).toHaveLength(1);
 		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("caps sterile retries at the caller deadline instead of launching another process", async () => {
+		const root = join(tmpdir(), `signet-acpx-empty-deadline-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-always-empty.sh");
+		const countPath = join(root, "count.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+count=0
+[[ -f ${JSON.stringify(countPath)} ]] && count=$(cat ${JSON.stringify(countPath)})
+printf '%s' "$((count + 1))" > ${JSON.stringify(countPath)}
+sleep 0.08
+cat >/dev/null
+printf '\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		process.env.SIGNET_ACPX_PROC_ROOT = join(root, "missing-proc");
+		try {
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				permissions: "deny-all",
+				hooks: "disabled",
+				allowedTools: [],
+				emptyResponseRetries: 1,
+			});
+			await expect(provider.generate("deadline", { timeoutMs: 120 })).rejects.toThrow(/retryCount=0/);
+			expect(readFileSync(countPath, "utf8")).toBe("1");
+		} finally {
+			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
+			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("cancels a sterile retry while waiting for backoff", async () => {
+		const root = join(tmpdir(), `signet-acpx-empty-cancel-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-empty.sh");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+cat >/dev/null
+printf '\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const controller = new AbortController();
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				permissions: "deny-all",
+				hooks: "disabled",
+				allowedTools: [],
+				emptyResponseRetries: 1,
+			});
+			const result = provider.generate("cancel", { timeoutMs: 1_000, signal: controller.signal });
+			setTimeout(() => controller.abort(), 20).unref?.();
+			await expect(result).rejects.toThrow("codex via ACPX aborted");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("releases the concurrency slot while a sterile caller backs off", async () => {
+		const root = join(tmpdir(), `signet-acpx-empty-concurrent-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-concurrent.sh");
+		const firstCountPath = join(root, "first-count.txt");
+		const firstSeenPath = join(root, "first-seen");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+prompt=$(cat)
+if [[ "$prompt" == "first" ]]; then
+  count=0
+  [[ -f ${JSON.stringify(firstCountPath)} ]] && count=$(cat ${JSON.stringify(firstCountPath)})
+  count=$((count + 1))
+  printf '%s' "$count" > ${JSON.stringify(firstCountPath)}
+  if [[ "$count" -eq 1 ]]; then
+    touch ${JSON.stringify(firstSeenPath)}
+    printf '\\n'
+  else
+    printf 'first recovered\\n'
+  fi
+else
+  printf 'second answer\\n'
+fi
+`,
+		);
+		chmodSync(bin, 0o755);
+		configureLlmConcurrency(1);
+		try {
+			const config = {
+				agent: "codex" as const,
+				bin,
+				permissions: "deny-all" as const,
+				hooks: "disabled" as const,
+				allowedTools: [] as const,
+				emptyResponseRetries: 1,
+			};
+			const first = createAcpxProvider(config).generate("first", { timeoutMs: 1_000 });
+			await waitForPath(firstSeenPath);
+			await expect(createAcpxProvider(config).generate("second", { timeoutMs: 1_000 })).resolves.toBe("second answer");
+			expect(readFileSync(firstCountPath, "utf8")).toBe("1");
+			await expect(first).resolves.toBe("first recovered");
+		} finally {
+			configureLlmConcurrency(2);
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
