@@ -1,0 +1,93 @@
+name: Feature request
+description: Propose a focused, evidence-backed improvement to Signet
+title: "[Feature]: "
+labels:
+  - enhancement
+  - spec: needs-spec
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before proposing a new core surface, check whether the capability belongs in an existing route, connector, plugin, skill, or MCP server. Prefer the smallest surface that solves the problem correctly.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and use case
+      description: Who needs this, what are they trying to do, and what is blocked today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior and user-facing contract, not only an implementation sketch.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include existing Signet surfaces, manual workarounds, connectors, plugins, or MCP approaches.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: route
+    attributes:
+      label: Preferred implementation route
+      description: Maintainers may choose a different route during triage.
+      options:
+        - Extend an existing surface
+        - CLI command or skill
+        - Connector or plugin
+        - MCP server
+        - Daemon or core API
+        - Dashboard, desktop, or browser surface
+        - Documentation or eval
+        - Unsure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Initial scope estimate
+      options:
+        - Small: one focused surface or package
+        - Medium: multiple packages or a new integration
+        - Large: cross-cutting contract or migration
+        - Unsure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: risks
+    attributes:
+      label: Potential risk dimensions
+      description: Select every risk that may apply. Maintainers will confirm these during triage.
+      options:
+        - label: Agent, tenant, workspace, or visibility isolation
+        - label: Data loss, corruption, orphaning, or misassociation
+        - label: Provenance, evidence, or auditability
+        - label: Session, routing, transcript, or context state
+        - label: Configuration compatibility, migration, or upgrade
+        - label: Connector delivery, duplication, or routing
+        - label: Performance, event-loop, memory, or cost regression
+        - label: Privacy, telemetry, or usage attribution
+        - label: Inference provider, model selection, or spend
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence or related work
+      description: Link related issues, user reports, evals, measurements, or prior art. Include numbers when they motivate the request.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would like to work on this and can submit a pull request.

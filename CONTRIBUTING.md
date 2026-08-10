@@ -231,6 +231,56 @@ function foo() {
 }
 ```
 
+Issue Triage
+---
+
+Use the issue forms under `.github/ISSUE_TEMPLATE/` whenever possible. A useful
+issue separates the observed behavior from its explanation and includes enough
+evidence for another maintainer to reproduce it on current `main`.
+
+Triage is multidimensional. Apply one label from each relevant axis rather than
+using labels as a single bucket:
+
+- Type: `bug`, `enhancement`, `documentation`, or another existing type.
+- Priority: `priority: P0` through `priority: P3`, based on user impact and urgency.
+- Component: `component: core`, `component: daemon`, `component: cli`,
+  `component: dashboard`, `component: desktop`, `component: browser-extension`,
+  `component: connector`, `component: dreaming`, `component: inference`, or
+  `component: native`.
+- Risk: use every applicable `risk:` label for the invariant that could be
+  damaged while fixing the issue.
+- Blast radius: `blast: contained`, `blast: subsystem`, `blast: broad`, or
+  `blast: invariant`.
+- Triage state: use one `triage:` label when evidence or a decision is still
+  missing.
+
+Priority and risk are separate. A P2 configuration issue can still be a
+security-boundary risk; a P1 delivery issue can be narrowly contained. Do not
+infer risk from priority.
+
+Before calling an issue a confirmed bug:
+
+1. Search for duplicates and related work.
+2. Reproduce on current `main` or record exactly why reproduction is unavailable.
+3. Trace the relevant code path and distinguish confirmed behavior from a
+   root-cause hypothesis.
+4. Check adjacent callers and sibling paths for the same failure class.
+5. Record the smallest regression proof the eventual fix must add.
+
+Use `triage: needs-repro`, `triage: needs-decision`, or `triage: blocked` when
+that is the honest current state. Automated or batch triage may identify
+`triage: implemented-on-main`, `triage: cannot-reproduce`, or
+`triage: incoherent`, but those labels require evidence in the issue comment.
+Do not close an issue merely because the proposed direction is unpopular or
+out of scope; that remains a maintainer decision. Use `duplicate` only after an
+overlap audit names the canonical issue and explains what is distinct.
+
+For new capabilities, prefer the smallest correct route: extend an existing
+surface, then CLI or skill, connector or plugin, MCP, and only then daemon/core
+API. Label telemetry and usage-attribution work with `telemetry` and the
+relevant privacy risk; it requires an explicit opt-in and privacy contract
+before implementation.
+
 Pull Requests
 ---
 

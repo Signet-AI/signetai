@@ -1,0 +1,132 @@
+name: Bug report
+description: Report a reproducible problem in Signet
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening this issue:
+        - Search existing issues for the same failure or failure family.
+        - Reproduce on current `main` or the latest release when possible.
+        - Include the smallest reproducible case and exact error output.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues for duplicates or related work.
+          required: true
+        - label: I reproduced this on current `main` or the latest release, or explained why I cannot.
+          required: true
+        - label: I removed secrets and personal data from logs and examples.
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: What is failing, and who or what is affected?
+      placeholder: Describe the observable failure and its user impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Give the shortest deterministic sequence that reproduces the issue.
+      placeholder: |
+        1. Start Signet with ...
+        2. Configure ...
+        3. Run ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - Core
+        - Daemon
+        - CLI
+        - Dashboard
+        - Desktop
+        - Browser extension
+        - Connector or integration
+        - Dreaming or ontology
+        - Inference or routing
+        - Rust or native runtime
+        - Unsure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: risks
+    attributes:
+      label: Potential risk dimensions
+      description: Select every risk that may apply. Maintainers will confirm these during triage.
+      options:
+        - label: Agent, tenant, workspace, or visibility isolation
+        - label: Data loss, corruption, orphaning, or misassociation
+        - label: Provenance, evidence, or auditability
+        - label: Session, routing, transcript, or context state
+        - label: Configuration compatibility, migration, or upgrade
+        - label: Connector delivery, duplication, or routing
+        - label: Performance, event-loop, memory, or cost regression
+        - label: Privacy, telemetry, or usage attribution
+        - label: Inference provider, model selection, or spend
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include Signet version or commit, OS, Bun version, deployment mode, and relevant provider or connector.
+      placeholder: |
+        Signet version/commit:
+        OS:
+        Bun version:
+        Deployment mode:
+        Provider/connector:
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, trace, or reproduction artifact
+      description: Paste the relevant output. Redact secrets and personal data.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: root_cause
+    attributes:
+      label: Root-cause hypothesis or proposed fix
+      description: Optional. Distinguish confirmed code evidence from inference.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would like to work on a fix and can submit a pull request.
