@@ -109,6 +109,32 @@ memory:
 		}
 	});
 
+	it("preserves unsupported routing so strict loading reports the required reconfiguration", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`configVersion: 7
+memory:
+  pipelineV2:
+    enabled: true
+    extraction:
+      provider: groq
+      model: llama-3
+      endpoint: https://api.groq.com/openai/v1
+`,
+			);
+
+			migrateRetiredMemoryPipelineRouting(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			expect(after).toMatch(/^configVersion: 8/m);
+			expect(after).toContain("provider: groq");
+			expect(after).toContain("model: llama-3");
+			expect(() => loadMemoryConfig(dir)).toThrow("is retired");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	it("compiles legacy flat extraction routing instead of deleting it", () => {
 		const dir = setupDir();
 		try {

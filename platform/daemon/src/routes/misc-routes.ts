@@ -1,25 +1,12 @@
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { parseSimpleYaml } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
-import {
-	CONFIG_FILE_CANDIDATES,
-	RollbackError,
-	appendProviderTransitions,
-	detectProviderTransitions,
-	executeProviderRollback,
-	isRemotePipelineProviderForEndpoint,
-	parseProviderSafetyRole,
-	preserveLockInYaml,
-	readProviderSafetySnapshot,
-	readProviderTransitions,
-	resolveRollbackFilePath,
-	tryReadProviderSafetySnapshot,
-	validateProviderSafety,
-} from "../provider-safety.js";
+import { loadPipelineConfig } from "../memory-config.js";
 import {
 	CRON_PRESETS,
 	computeNextRun,
@@ -45,12 +32,7 @@ import { loadDashboardIdentity } from "./dashboard-identity.js";
 import { AGENTS_DIR, authConfig } from "./state.js";
 import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRecord } from "./utils.js";
 
-const GUARDED_CONFIG_FILES_CI = new Set(CONFIG_FILE_CANDIDATES.map((f) => f.toLowerCase()));
-
-function actorFrom(c: Context): string | undefined {
-	const sub = c.get("auth")?.claims?.sub;
-	return typeof sub === "string" ? sub : undefined;
-}
+const GUARDED_CONFIG_FILES_CI = new Set(["agent.yaml", "config.yaml"]);
 
 const MAX_CONFIG_BYTES = 1_048_576;
 
@@ -64,8 +46,6 @@ interface AgentRow {
 }
 
 export function registerMiscRoutes(app: Hono): void {
-	let _rollbackInProgress = false;
-
 	app.use("/api/config", async (c, next) => {
 		if (c.req.method === "POST") {
 			const cl = c.req.header("content-length");
@@ -188,7 +168,6 @@ export function registerMiscRoutes(app: Hono): void {
 			}
 
 			const filePath = join(AGENTS_DIR, file);
-			const beforeContent = existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined;
 			const isGuardedConfig = GUARDED_CONFIG_FILES_CI.has(file.toLowerCase());
 			if (isGuardedConfig) {
 				const guardAuth = c.get("auth");
@@ -199,143 +178,19 @@ export function registerMiscRoutes(app: Hono): void {
 						error: `${guardDecision.reason ?? "forbidden"} - guarded config files require admin permission`,
 					});
 				}
-				const safety = validateProviderSafety(content);
-				if (!safety.ok) return c.json({ error: safety.error }, 400);
-				if (beforeContent) {
-					const prior = tryReadProviderSafetySnapshot(beforeContent);
-					if (prior && !prior.allowRemoteProviders) {
-						const incoming = tryReadProviderSafetySnapshot(content);
-						const lockImplicitlyLifted =
-							incoming && !incoming.allowRemoteProvidersExplicit && incoming.allowRemoteProviders;
-						if (lockImplicitlyLifted) {
-							const blocked = [
-								["extraction", incoming.extractionProvider, incoming.extractionEndpoint],
-								["synthesis", incoming.synthesisProvider, incoming.synthesisEndpoint],
-							].filter(([, p, endpoint]) => isRemotePipelineProviderForEndpoint(p, endpoint));
-							if (blocked.length > 0) {
-								return c.json(
-									{
-										error: `memory.pipelineV2.allowRemoteProviders is false on disk; refusing: ${blocked.map(([r, p]) => `${r} provider '${p}'`).join(", ")}. Include allowRemoteProviders: true in the submitted config to lift the lock.`,
-									},
-									400,
-								);
-							}
-						}
-					}
+				try {
+					loadPipelineConfig(parseSimpleYaml(content));
+				} catch (error) {
+					return c.json({ error: error instanceof Error ? error.message : "Invalid memory pipeline config" }, 400);
 				}
 			}
-			const transitions = isGuardedConfig
-				? detectProviderTransitions(beforeContent, content, `api/config:${file}`, actorFrom(c))
-				: [];
 
 			writeFileSync(filePath, content, "utf-8");
-			let auditError: string | undefined;
-			try {
-				await appendProviderTransitions(AGENTS_DIR, transitions);
-			} catch (auditErr) {
-				auditError = String(auditErr);
-				logger.warn("api", "Audit write failed after config save", { file, error: auditError });
-			}
-			if (transitions.some((entry) => entry.risky)) {
-				logger.warn("api", "Remote provider enabled in config", { file, transitions });
-			} else {
-				logger.info("api", "Config file updated", { file });
-			}
-			return c.json({
-				success: true,
-				providerTransitions: transitions.map(({ actor: _, ...rest }) => rest),
-				...(auditError ? { auditError } : {}),
-			});
+			logger.info("api", "Config file updated", { file });
+			return c.json({ success: true });
 		} catch (e) {
 			logger.error("api", "Error saving config file", e as Error);
 			return c.json({ error: "Failed to save file" }, 500);
-		}
-	});
-
-	app.get("/api/config/provider-safety", async (c) => {
-		const auth = c.get("auth");
-		const decision = checkPermission(auth?.claims ?? null, "recall", authConfig.mode);
-		if (!decision.allowed) {
-			c.status(403);
-			return c.json({ error: decision.reason ?? "forbidden" });
-		}
-		const configPath = CONFIG_FILE_CANDIDATES.map((name) => join(AGENTS_DIR, name)).find((path) => existsSync(path));
-		let snapshot = null;
-		let snapshotError: string | undefined;
-		if (configPath) {
-			try {
-				snapshot = readProviderSafetySnapshot(readFileSync(configPath, "utf-8"));
-			} catch {
-				snapshotError = "Invalid YAML config";
-			}
-		}
-		const transitions = readProviderTransitions(AGENTS_DIR);
-		const latestRiskyTransition = [...transitions].reverse().find((entry) => entry.risky) ?? null;
-		const stripActor = (e: (typeof transitions)[number]) => {
-			const { actor: _, ...rest } = e;
-			return rest;
-		};
-		const stripInternal = (s: typeof snapshot) => {
-			if (!s) return null;
-			const { allowRemoteProvidersExplicit: _, ...rest } = s;
-			return rest;
-		};
-		return c.json({
-			snapshot: stripInternal(snapshot),
-			snapshotError,
-			transitions: transitions.map(stripActor),
-			latestRiskyTransition: latestRiskyTransition ? stripActor(latestRiskyTransition) : null,
-		});
-	});
-
-	// Single-flight serialization: reject concurrent rollback requests instead
-	// of queueing them so audit consumption and config writes cannot interleave.
-	app.post("/api/config/provider-safety/rollback", async (c) => {
-		const auth = c.get("auth");
-		const decision = checkPermission(auth?.claims ?? null, "admin", authConfig.mode);
-		if (!decision.allowed) {
-			c.status(403);
-			return c.json({ error: decision.reason ?? "forbidden" });
-		}
-		if (_rollbackInProgress) {
-			return c.json({ error: "Rollback already in progress" }, 409);
-		}
-		_rollbackInProgress = true;
-		try {
-			const rawBody = await c.req.json().catch(() => null);
-			if (rawBody === null) {
-				return c.json({ error: "Invalid JSON body" }, 400);
-			}
-			const body = toRecord(rawBody);
-			if (!body) {
-				return c.json({ error: "Invalid JSON body" }, 400);
-			}
-			const parsedRole = parseProviderSafetyRole(body.role);
-			if (!parsedRole.ok) {
-				return c.json({ error: parsedRole.error }, 400);
-			}
-			const requestedRole = parsedRole.role;
-			const { filePath, transitions: priorTransitions } = resolveRollbackFilePath(AGENTS_DIR, requestedRole);
-			const result = await executeProviderRollback(AGENTS_DIR, filePath, requestedRole, actorFrom(c), priorTransitions);
-			const { actor: _actor, ...strippedRolledBack } = result.rolledBack;
-			logger.warn("api", "Provider configuration rolled back", {
-				file: basename(filePath),
-				transition: strippedRolledBack,
-				rollbackEntries: result.providerTransitions,
-			});
-			return c.json({
-				...result,
-				rolledBack: strippedRolledBack,
-				providerTransitions: result.providerTransitions.map(({ actor: _, ...rest }) => rest),
-			});
-		} catch (e) {
-			if (e instanceof RollbackError) {
-				return c.json({ error: e.message }, e.status);
-			}
-			logger.error("api", "Provider rollback failed", e as Error);
-			return c.json({ error: "Provider rollback failed" }, 500);
-		} finally {
-			_rollbackInProgress = false;
 		}
 	});
 

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RecallParams, RecallResponse } from "./memory-search";
@@ -360,6 +360,32 @@ describe("auth guard co-location", () => {
 				headers: { "content-length": "1048577" },
 			});
 			expect(res.status).toBe(413);
+		});
+
+		it("POST /api/config rejects retired memory routing before writing", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode config test");
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerMiscRoutes(app);
+			const original = readFileSync(join(tmpDir, "agent.yaml"), "utf-8");
+			const token = createToken(secret, { sub: "config-admin", role: "admin", scope: {} }, 60);
+			const response = await app.request("/api/config", {
+				method: "POST",
+				headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+				body: JSON.stringify({
+					file: "agent.yaml",
+					content: "memory:\n  pipelineV2:\n    extractionProvider: ollama\n",
+				}),
+			});
+			expect(response.status).toBe(400);
+			expect((await response.json()) as { error: string }).toMatchObject({
+				error: "memory.pipelineV2.extractionProvider is retired; configure the canonical inference workload instead.",
+			});
+			expect(readFileSync(join(tmpDir, "agent.yaml"), "utf-8")).toBe(original);
 		});
 	});
 

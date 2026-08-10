@@ -265,9 +265,11 @@ describe("setupWizard non-interactive harness hooks", () => {
 		);
 
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
-		expect(agentYaml).toContain("provider: openai-compatible");
+		expect(agentYaml).toContain("executor: openai-compatible");
 		expect(agentYaml).toContain("model: openai/gpt-oss-20b");
 		expect(agentYaml).toContain("endpoint: https://gateway.example.test/v1");
+		expect(agentYaml).toContain("memoryExtraction:");
+		expect(agentYaml).not.toContain("provider: openai-compatible");
 	});
 
 	it("persists disabled signet secrets when existing non-interactive setup opts out", async () => {
@@ -900,7 +902,8 @@ describe("setupWizard headless plan path", () => {
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("aggregateRecall:");
 		expect(agentYaml).toContain("account: openrouter");
-		expect(agentYaml).not.toContain("credentialRef: OPENROUTER_API_KEY");
+		expect(agentYaml).toContain("credentialRef: OPENROUTER_API_KEY");
+		expect(agentYaml).toContain("credentialRef: SIGNET_KEY_OPENROUTER");
 	});
 
 	it("writes a multi-agent roster from a plan file", async () => {

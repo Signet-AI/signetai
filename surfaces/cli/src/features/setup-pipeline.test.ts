@@ -35,9 +35,33 @@ describe("buildSetupPipeline", () => {
 		expect(result).not.toHaveProperty("model");
 	});
 
-	it("keeps setup provider/model inputs in the canonical inference route", () => {
-		expect(buildSetupInference("ollama", "qwen3:4b")).toBeUndefined();
-		expect(buildSetupPipeline("ollama")).toMatchObject({ enabled: true });
+	it("writes local extraction providers to the canonical background workload", () => {
+		const inference = buildSetupInference("ollama", "qwen3:4b");
+		expect(inference).toMatchObject({
+			defaultPolicy: "background",
+			targets: { background: { executor: "ollama", models: { default: { model: "qwen3:4b" } } } },
+			workloads: { memoryExtraction: { target: "background/default", taskClass: "memory_extraction" } },
+		});
+	});
+
+	it("writes an OpenRouter account for remote extraction", () => {
+		const inference = buildSetupInference("openrouter", "anthropic/claude-haiku");
+		expect(inference?.targets.background).toMatchObject({ executor: "openrouter", account: "extraction" });
+		expect(inference?.accounts?.extraction).toMatchObject({
+			kind: "api",
+			providerFamily: "openrouter",
+			credentialRef: "OPENROUTER_API_KEY",
+		});
+	});
+
+	it("preserves the configured endpoint for OpenAI-compatible extraction", () => {
+		expect(
+			buildSetupInference("openai-compatible", "local-model", [], [], undefined, "http://gw:8000/v1")?.targets
+				.background,
+		).toMatchObject({
+			executor: "openai-compatible",
+			endpoint: "http://gw:8000/v1",
+		});
 	});
 });
 
@@ -117,6 +141,39 @@ describe("buildSetupInference", () => {
 		applySetupInferenceRoute(config, undefined);
 
 		expect(config).not.toHaveProperty("inference");
+	});
+
+	it("removes generated direct routing when setup switches extraction off", () => {
+		const config: Record<string, unknown> = {
+			inference: buildSetupInference("ollama", "qwen3:4b"),
+		};
+
+		applySetupInferenceRoute(config, undefined);
+
+		expect(config).not.toHaveProperty("inference");
+	});
+
+	it("preserves aggregate recall when removing generated direct routing", () => {
+		const config: Record<string, unknown> = {
+			inference: {
+				...buildSetupInference("ollama", "qwen3:4b"),
+				targets: {
+					background: { executor: "ollama" },
+					aggregation: { executor: "ollama" },
+				},
+				workloads: {
+					memoryExtraction: { target: "background/default", taskClass: "memory_extraction" },
+					aggregateRecall: { target: "aggregation/default" },
+				},
+			},
+		};
+
+		applySetupInferenceRoute(config, undefined);
+
+		expect(config.inference).toMatchObject({
+			targets: { aggregation: { executor: "ollama" } },
+			workloads: { aggregateRecall: { target: "aggregation/default" } },
+		});
 	});
 
 	it("preserves custom inference routing when removing generated ACPX setup routing", () => {

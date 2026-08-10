@@ -10,16 +10,14 @@ LLM-based fact extraction against incoming conversation text, then decides
 whether to write new memories, update existing ones, or skip. Config lives
 under `memory.pipelineV2` in `agent.yaml`.
 
-Inference selection for extraction can be routed through the top-level
-`inference.workloads` bindings. Session processing follows the
-`memoryExtraction` route and is not independently configurable. When explicit routing is
-enabled for `default`, `memoryExtraction`, `widgetGeneration`, or `repair`, those workloads use the
-shared inference control plane. Legacy extraction and synthesis fields are treated as load-time compatibility input, not separate runtime providers.
+Inference selection for extraction is configured through the top-level
+`inference.workloads.memoryExtraction` binding. Session processing follows that
+route and is not independently configurable. Legacy provider/model/endpoint
+fields under `memory.pipelineV2` are retired and rejected by the strict loader.
 
-The config uses a nested structure with grouped sub-objects. Legacy flat
-keys (e.g. `extractionModel`, `leaseTimeoutMs`) are still supported for
-backward compatibility, but nested keys take precedence when both are
-present.
+The config uses a nested structure with grouped sub-objects. Operation tuning
+such as timeouts, confidence thresholds, and rate limits remains under
+`memory.pipelineV2`; provider selection belongs in `inference`.
 
 Enable the pipeline:
 
@@ -28,9 +26,6 @@ memory:
   pipelineV2:
     enabled: true
     shadowMode: true        # extract without writing — safe first step
-    extraction:
-      provider: llama-cpp
-      model: qwen3:4b
 ```
 
 
@@ -52,140 +47,72 @@ The relationship between `shadowMode` and `mutationsFrozen` matters:
 including repairs and graph updates.
 
 
-### Extraction (`extraction`)
+### Extraction tuning
 
-Controls the LLM-based extraction stage. Supports multiple providers.
+Provider and model selection are no longer configured under
+`memory.pipelineV2.extraction`. Configure the canonical
+`inference.workloads.memoryExtraction` binding instead:
+
+```yaml
+inference:
+  targets:
+    background:
+      executor: ollama
+      models:
+        default:
+          model: qwen3:4b
+  policies:
+    background:
+      mode: automatic
+      defaultTargets: [background/default]
+      fallbackTargets: [background/default]
+  defaultPolicy: background
+  taskClasses:
+    memory_extraction:
+      reasoning: medium
+      toolsRequired: true
+      privacy: restricted_remote
+  workloads:
+    memoryExtraction:
+      target: background/default
+      taskClass: memory_extraction
+```
+
+The remaining `memory.pipelineV2.extraction` fields are operation tuning only:
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `provider` | `"llama-cpp"` | — | `"none"`, `"acpx"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, `"openai-compatible"`, or `"command"` |
-| `fallbackProvider` | `"llama-cpp"` | — | `"llama-cpp"`, `"ollama"`, or `"none"`; legacy extraction configs compile this into an inference fallback target |
-| `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
-| `structuredOutput` | `true` | — | Send JSON schema in the `format` field of LLM requests. Set `false` when the provider rejects structured output (e.g. GitHub Copilot API). The daemon also auto-detects unsupported providers at runtime and disables this transparently. |
-| `command` | — | — | Command provider config (`bin`, `args[]`, optional `cwd`, optional `env`) — required when `provider: "command"` |
-| `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max extraction-provider calls per hour; set `0` to disable rate limiting |
-| `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |
-| `rateLimit.waitTimeoutMs` | `5000` when `rateLimit` is set | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
+| `structuredOutput` | `true` | — | Send JSON schema in the `format` field of inference requests |
+| `rateLimit.maxCallsPerHour` | `200` when configured | 0-10000 | Max extraction calls per hour; set `0` to disable rate limiting |
+| `rateLimit.burstSize` | `20` when configured | 1-1000 | Max burst size before throttling begins |
+| `rateLimit.waitTimeoutMs` | `5000` when configured | 0-60000 ms | How long to wait for a rate-limit token |
 
-For `provider: openai-compatible`, set `endpoint` to the gateway's
-OpenAI-compatible `/v1` base URL. Remote endpoints use `OPENAI_API_KEY` by
-default when this legacy pipeline config is compiled into inference routing;
-explicit top-level `inference.accounts.*.credentialRef` can point at any
-stored secret or environment variable.
+`provider`, `model`, `endpoint`, `baseUrl`, `fallbackProvider`, and `command`
+are retired under this block. The daemon rejects them after migration rather
+than silently choosing a fallback. See [upgrading](/upgrading/) for the
+reconfiguration path.
 
-For safety, the intended extraction setups are:
+`rateLimit` is opt-in and applies only to remote or paid inference targets.
+Ollama and local OpenAI-compatible targets are exempt. Rate-limiter state is
+in-memory and resets after a daemon restart.
 
-- local `llama-cpp` with `qwen3:4b` (default)
-- `claude-code` on a Haiku model
-- `codex` on a gpt-5.4-mini model
-- local `ollama` with `nemotron-3-nano:4b` (preferred) or `qwen3:4b` (deprecated — Nemotron's superior reasoning makes Qwen3 the weaker choice going forward; expect degraded extraction quality in future updates)
-
-Set `provider: none` to disable extraction entirely, which is the
-recommended default for VPS installs that should not make background LLM
-calls.
-
-Remote API extraction can accumulate extreme fees quickly because the
-pipeline runs continuously in the background. Use `anthropic`,
-`openrouter`, `openai-compatible`, or remote OpenCode routes only when you explicitly want
-that billing behavior.
-
-`rateLimit` is opt-in. If the stanza is omitted, Signet preserves the
-provider's existing behavior with no throughput throttling. When
-configured, it applies only to remote or paid providers
-(`acpx`, `claude-code`, `anthropic`, `openrouter`, `openai-compatible`, `codex`, `opencode`).
-Ollama and `command` providers are always exempt. If you set `rateLimit`
-on an exempt provider, Signet logs a warning and passes calls through
-unthrottled.
-
-An empty `rateLimit: {}` block is treated as disabled. Set at least one
-sub-field to opt in, or omit the stanza entirely to leave rate limiting
-off.
-
-When a rate-limited job fails (the bucket is empty and the wait timeout
-expires), it is classified as non-retryable and sent directly to
-dead-letter status. Dead-lettered jobs are not retried when the rate-limit
-window resets. Choose `maxCallsPerHour` high enough to handle sustained
-ingestion bursts, or you will permanently lose extraction for memories
-queued during exhaustion. Dead-letter jobs are purged after 30 days by
-the retention worker.
-
-When configured via YAML, `burstSize` is clamped to a minimum of `1`.
-The lower-level `withRateLimit()` helper is more defensive: passing
-`burstSize: 0` or `maxCallsPerHour: 0` disables the wrapper entirely
-instead of constructing a limiter that can never acquire a token.
-
-Rate-limiter state is in-memory only. After a daemon restart the full
-`burstSize` is available immediately (the token bucket starts full). In
-environments with frequent restarts (crash-loops, rolling deployments),
-this means the limiter cannot protect against a burst of calls right
-after startup. Set `burstSize` conservatively if your daemon restarts
-often under load.
-
-When using `ollama`, the model must be available locally. When using
-`claude-code`, the Claude Code CLI must be on PATH. `codex` uses the
-Codex CLI as the extraction provider. Lower `minConfidence` to capture
-more facts at the cost of noise; raise it to write only high-confidence
-facts.
-
-`acpx` is available as a setup compatibility value for installations that also
-have a top-level `inference:` block. ACPX needs harness/session config, so
-legacy `memory.pipelineV2.extraction.provider: acpx` by itself is not compiled
-into an implicit `legacy-extraction` target; keep the generated
-`inference.targets.*.executor: acpx` block or configure ACPX through top-level
-inference routing.
-
-There are two command paths with different contracts. Top-level
-`inference.targets.*.executor: command` is a normal inference provider: the
-prompt is sent on stdin, exposed as `SIGNET_PROMPT`, and the model response is
-read from stdout.
-
-`memory.pipelineV2.extraction.provider: command` is retired. It is rejected at
-config load time; use the canonical `inference.workloads.memoryExtraction`
-target consumed by Dreaming instead. The retired path let a subprocess write
-memory state outside the daemon-owned audited apply path.
-
+Set `memory.pipelineV2.enabled: false` to disable extraction entirely. Remote
+API extraction can accumulate extreme fees quickly because the pipeline runs
+continuously in the background.
 
 ### MEMORY.md synthesis (`synthesis`)
 
-Controls the provider used by the MEMORY.md synthesis worker. It does not
-create session summaries: completed transcripts are delivered directly to
-Dreaming through the content pass, while this worker renders the operator
-working-memory document.
+Session synthesis provider/model/endpoint routing is retired. Session processing
+follows the `memoryExtraction` inference workload, while the MEMORY.md worker
+uses the daemon's canonical inference route. Do not add a `memory.pipelineV2.synthesis`
+block or provider fields under it; those fields are rejected during config load.
 
-If the `synthesis` block is omitted entirely, Signet falls back to the
-resolved extraction provider, model, endpoint, and timeout. When an explicit
-top-level `inference:` block exists, workload bindings decide which target
-handles synthesis.
+The worker's remaining operational settings, when supported by the installed
+release, are tuning-only. Completed transcripts are delivered directly to
+Dreaming through the content pass.
 
-| Field | Default | Range | Description |
-|-------|---------|-------|-------------|
-| `enabled` | `true` | — | Enable background MEMORY.md synthesis |
-| `provider` | inherited from extraction when omitted | — | `"none"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"codex"`, `"opencode"`, `"anthropic"`, `"openrouter"`, or `"openai-compatible"` |
-| `model` | inherited from extraction when omitted | — | Model name for the configured provider |
-| `endpoint` | inherited from extraction when omitted | — | Optional base URL override for Ollama, OpenCode, OpenRouter, or OpenAI-compatible gateways |
-| `timeout` | inherited from extraction when omitted | 5000-300000 ms | MEMORY.md synthesis timeout |
-| `structuredOutput` | inherited from extraction when omitted | — | Send JSON schema in the `format` field of LLM requests. Set `false` when the synthesis provider rejects structured output (e.g. GitHub Copilot API). Falls back to `extraction.structuredOutput` when omitted. |
-| `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max synthesis-provider calls per hour; set `0` to disable rate limiting |
-| `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |
-| `rateLimit.waitTimeoutMs` | `5000` when `rateLimit` is set | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
-
-Set `provider: none` or `enabled: false` to disable background MEMORY.md
-synthesis entirely. This does not disable direct transcript delivery to
-Dreaming.
-
-`synthesis.provider: command` is invalid and rejected during config load.
-
-Widget HTML generation uses a separate provider instance by default, so
-widget traffic does not consume the synthesis pipeline's `rateLimit`
-bucket.
-
-As with extraction, an empty `rateLimit: {}` block is treated as
-disabled. Set at least one sub-field to opt in.
-
-Rate-limited synthesis jobs that fail are sent to dead-letter without
-retry. See the extraction `rateLimit` docs above for the full warning.
 
 ### Claude Code background environment (`claudeCode`)
 

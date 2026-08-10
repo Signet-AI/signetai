@@ -48,6 +48,22 @@ canonical `inference.workloads.memoryExtraction` target instead; the daemon
 will reject the retired command configuration rather than silently falling
 back to another provider.
 
+## Memory pipeline routing migration
+
+On startup, the config migrator advances eligible `agent.yaml` files through
+`configVersion: 8`. It removes the obsolete `memory.synthesis` and
+`memory.pipelineV2.synthesis` blocks and removes provider/model/endpoint fields
+that can be migrated safely. The migration is atomic and idempotent.
+
+If a legacy provider cannot be mapped to a supported inference executor, its
+routing fields are preserved and the strict loader stops with an actionable
+`is retired` error. Configure an `inference.targets` entry and bind it to
+`inference.workloads.memoryExtraction`; do not delete the fields by hand before
+reading the error, because they identify what needs reconfiguration.
+
+The old provider-safety API and rollback route are removed. Config writes now
+save YAML directly, subject to the normal guarded-file permission checks.
+
 ## Action required after updating
 
 1. **Check the daemon log on first start.** If your `agent.yaml` references a

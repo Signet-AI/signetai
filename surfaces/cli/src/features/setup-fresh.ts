@@ -169,6 +169,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			plan.harnesses,
 			context.availableExtractionProviders,
 			context.acpxBin,
+			plan.extractionEndpoint,
 		);
 		applySetupInferenceRoute(config, inference);
 

@@ -57,6 +57,7 @@ export function buildSetupPipeline(provider: ExtractionProviderChoice): SetupPip
 export interface SetupInferenceConfig {
 	readonly defaultPolicy: string;
 	readonly targets: Record<string, unknown>;
+	readonly accounts?: Record<string, unknown>;
 	readonly policies: Record<string, unknown>;
 	readonly taskClasses: Record<string, unknown>;
 	readonly workloads: Record<string, unknown>;
@@ -105,38 +106,79 @@ export function buildSetupInference(
 	harnesses: readonly string[] = [],
 	availableProviders: readonly ExtractionProviderChoice[] = [],
 	acpxBin?: string,
+	endpoint?: string,
 ): SetupInferenceConfig | undefined {
-	if (provider !== "acpx" || !acpxBin) return undefined;
-	const agent = selectAcpxAgent(harnesses, availableProviders);
-	const resolved = model?.trim() || defaultAcpxModelForAgent(agent);
-	const targetRef = "background-acpx/default";
-	return {
-		defaultPolicy: "background-acpx",
-		targets: {
-			"background-acpx": {
-				executor: "acpx",
-				acpx: {
-					agent,
-					bin: acpxBin,
-					package: "acpx@0.7.0",
-					version: "0.7.0",
-					mode: "exec",
-					permissions: "deny-all",
-					hooks: "disabled",
-					terminal: "inherit",
-				},
-				models: {
-					default: {
-						model: resolved,
-						reasoning: "medium",
-						toolUse: true,
-						costTier: "medium",
+	if (provider === "none") return undefined;
+
+	const harnessProvider = provider === "claude-code" || provider === "codex" || provider === "opencode";
+	if (provider === "acpx" || harnessProvider) {
+		if (!acpxBin) return undefined;
+		const agent = harnessProvider ? toAcpxAgent(provider) : selectAcpxAgent(harnesses, availableProviders);
+		const resolved = model?.trim() || defaultAcpxModelForAgent(agent);
+		const targetRef = "background-acpx/default";
+		return {
+			defaultPolicy: "background-acpx",
+			targets: {
+				"background-acpx": {
+					executor: "acpx",
+					acpx: {
+						agent,
+						bin: acpxBin,
+						package: "acpx@0.7.0",
+						version: "0.7.0",
+						mode: "exec",
+						permissions: "deny-all",
+						hooks: "disabled",
+						terminal: "inherit",
+					},
+					models: {
+						default: {
+							model: resolved,
+							reasoning: "medium",
+							toolUse: true,
+							costTier: "medium",
+						},
 					},
 				},
 			},
-		},
+			policies: {
+				"background-acpx": {
+					mode: "automatic",
+					defaultTargets: [targetRef],
+					fallbackTargets: [targetRef],
+				},
+			},
+			taskClasses: {
+				memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+			},
+			workloads: {
+				memoryExtraction: { target: targetRef, taskClass: "memory_extraction" },
+			},
+		};
+	}
+
+	const resolved = model?.trim() || defaultExtractionModel(provider);
+	const target: Record<string, unknown> = {
+		executor: provider,
+		models: { default: { model: resolved, reasoning: "medium" } },
+	};
+	let accounts: Record<string, unknown> | undefined;
+	if (provider === "openai-compatible") {
+		target.endpoint = endpoint?.trim() || "http://localhost:1234/v1";
+	}
+	if (provider === "openrouter") {
+		target.account = "extraction";
+		accounts = {
+			extraction: { kind: "api", providerFamily: "openrouter", credentialRef: "OPENROUTER_API_KEY" },
+		};
+	}
+	const targetRef = "background/default";
+	return {
+		defaultPolicy: "background",
+		targets: { background: target },
+		...(accounts ? { accounts } : {}),
 		policies: {
-			"background-acpx": {
+			background: {
 				mode: "automatic",
 				defaultTargets: [targetRef],
 				fallbackTargets: [targetRef],
@@ -169,18 +211,21 @@ export function applySetupInferenceRoute(
 		workloads?: Record<string, unknown>;
 		taskClasses?: Record<string, unknown>;
 	};
-	if (route.defaultPolicy !== "background-acpx") return;
-	const generatedTaskClasses = new Set<string>();
-	if (route.targets) Reflect.deleteProperty(route.targets, "background-acpx");
-	if (route.policies) Reflect.deleteProperty(route.policies, "background-acpx");
-	if (route.workloads?.memoryExtraction && isGeneratedAcpxWorkload(route.workloads.memoryExtraction)) {
-		generatedTaskClasses.add(getAcpxWorkloadTaskClass(route.workloads.memoryExtraction, "memory_extraction"));
-		Reflect.deleteProperty(route.workloads, "memoryExtraction");
-	}
-	for (const taskClass of generatedTaskClasses) {
-		if (isGeneratedAcpxTaskClass(taskClass, route.taskClasses?.[taskClass])) {
-			Reflect.deleteProperty(route.taskClasses, taskClass);
-		}
+	const generated =
+		route.defaultPolicy === "background-acpx"
+			? { target: "background-acpx", policy: "background-acpx", workloadTarget: "background-acpx/default" }
+			: route.defaultPolicy === "background"
+				? { target: "background", policy: "background", workloadTarget: "background/default" }
+				: null;
+	if (!generated) return;
+
+	const workload = route.workloads?.memoryExtraction;
+	if (!isGeneratedSetupWorkload(workload, generated.workloadTarget)) return;
+	if (route.targets) Reflect.deleteProperty(route.targets, generated.target);
+	if (route.policies) Reflect.deleteProperty(route.policies, generated.policy);
+	if (route.workloads) Reflect.deleteProperty(route.workloads, "memoryExtraction");
+	if (route.taskClasses && isGeneratedSetupTaskClass(route.taskClasses.memory_extraction)) {
+		Reflect.deleteProperty(route.taskClasses, "memory_extraction");
 	}
 	if (route.targets && Object.keys(route.targets).length === 0) Reflect.deleteProperty(route, "targets");
 	if (route.policies && Object.keys(route.policies).length === 0) Reflect.deleteProperty(route, "policies");
@@ -190,25 +235,18 @@ export function applySetupInferenceRoute(
 	if (Object.keys(route).length === 0) Reflect.deleteProperty(config, "inference");
 }
 
-function getAcpxWorkloadTaskClass(value: unknown, fallback: string): string {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return fallback;
-	const taskClass = (value as { taskClass?: unknown }).taskClass;
-	return typeof taskClass === "string" && taskClass.length > 0 ? taskClass : fallback;
-}
-
-function isGeneratedAcpxTaskClass(taskClass: string, value: unknown): boolean {
-	if (taskClass !== "memory_extraction") return false;
+function isGeneratedSetupTaskClass(value: unknown): boolean {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const record = value as { reasoning?: unknown; toolsRequired?: unknown; privacy?: unknown };
 	return record.reasoning === "medium" && record.toolsRequired === true && record.privacy === "restricted_remote";
 }
 
-function isGeneratedAcpxWorkload(value: unknown): boolean {
+function isGeneratedSetupWorkload(value: unknown, target: string): boolean {
 	return (
 		typeof value === "object" &&
 		value !== null &&
 		!Array.isArray(value) &&
-		(value as { target?: unknown }).target === "background-acpx/default"
+		(value as { target?: unknown }).target === target
 	);
 }
 

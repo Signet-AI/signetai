@@ -91,7 +91,6 @@ import { stopModelRegistry } from "./pipeline/model-registry";
 import { configureLlmConcurrency } from "./pipeline/provider";
 import { type ReflectionWorkerHandle, startReflectionWorker } from "./pipeline/reflection-worker";
 import { startReconciler } from "./pipeline/skill-reconciler";
-import { isRemotePipelineProviderForEndpoint } from "./provider-safety";
 import {
 	getResourceSnapshot,
 	logFdSnapshot,

@@ -234,6 +234,7 @@ export async function runExistingSetupWizard(
 				detectedHarnesses,
 				options.availableExtractionProviders,
 				options.acpxBin,
+				options.extractionEndpoint,
 			);
 			applySetupInferenceRoute(config, inference);
 		}

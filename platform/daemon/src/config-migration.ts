@@ -664,13 +664,20 @@ function migrateV8(agentsDir: string): void {
 			pipeline.delete("synthesis");
 			mutations.push("removed memory.pipelineV2.synthesis");
 		}
+		const flatProvider = String(pipeline.get("extractionProvider", true) ?? "").trim();
+		const preserveFlatRouting =
+			flatProvider !== "" && flatProvider !== "none" && legacyExecutorFor(flatProvider) === null;
 		for (const key of RETIRED_MEMORY_ROUTING_KEYS) {
 			if (!pipeline.has(key)) continue;
+			if (preserveFlatRouting && key !== "allowRemoteProviders") continue;
 			pipeline.delete(key);
 			mutations.push(`removed memory.pipelineV2.${key}`);
 		}
 		const extraction = pipeline.get("extraction", true);
 		if (isMap(extraction)) {
+			const nestedProvider = String(extraction.get("provider", true) ?? "").trim();
+			const preserveNestedRouting =
+				nestedProvider !== "" && nestedProvider !== "none" && legacyExecutorFor(nestedProvider) === null;
 			for (const key of [
 				"provider",
 				"model",
@@ -682,6 +689,7 @@ function migrateV8(agentsDir: string): void {
 				"command",
 			]) {
 				if (!extraction.has(key)) continue;
+				if (preserveNestedRouting && key !== "allowRemoteProviders") continue;
 				extraction.delete(key);
 				mutations.push(`removed memory.pipelineV2.extraction.${key}`);
 			}
