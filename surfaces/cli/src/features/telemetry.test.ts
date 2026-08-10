@@ -222,6 +222,8 @@ describe("cli telemetry (issue #1280)", () => {
 		expect(request.current?.batch[0]?.distinct_id).toBe("install-from-daemon");
 		expect(request.current?.batch[0]?.properties).toEqual({
 			command: "remember",
+			deploymentRole: "unknown",
+			installChannel: "unknown",
 			$lib: "signet-cli",
 			$lib_version: "0.176.8",
 		});
