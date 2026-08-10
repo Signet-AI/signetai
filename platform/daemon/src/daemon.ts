@@ -40,6 +40,7 @@ import { createToken, requirePermission } from "./auth";
 import { bindWithRetry } from "./bind-with-retry";
 import {
 	migrateConfig,
+	migrateEmbeddingBaseUrl,
 	migrateInferenceProviders,
 	migrateLegacyRoutingToRegistry,
 	migrateRetiredExtractionWriterConfig,
@@ -1938,6 +1939,7 @@ async function main() {
 		migrateLegacyRoutingToRegistry(AGENTS_DIR);
 		migrateSessionSynthesisRoute(AGENTS_DIR);
 		migrateRetiredExtractionWriterConfig(AGENTS_DIR);
+		migrateEmbeddingBaseUrl(AGENTS_DIR);
 	} catch (err) {
 		logger.warn("config-migration", "Config migration failed; continuing startup", {
 			error: err instanceof Error ? err.message : String(err),
