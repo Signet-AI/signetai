@@ -1,348 +1,200 @@
 ---
 title: "Dashboard"
-description: "Web dashboard for monitoring and management."
+description: "Use the Signet Dashboard to inspect memory, sources, knowledge, secrets, and daemon state."
 ---
 
-The Signet dashboard is a Svelte 5 + Vite static app served by the [Daemon](/daemon/) at
-`http://localhost:3850`. It is a supplementary visual interface — useful
-for browsing [Memory](/memory/), editing config files, and inspecting daemon state,
-but not the primary way to interact with Signet. The [CLI](/cli/) and
-[harness](/harnesses/) integrations are the primary interfaces.
+The Signet Dashboard is the daemon's browser-based operator interface. It gives you a visual way to inspect the installation and perform a small set of supported actions without replacing the CLI, harness integrations, or daemon configuration.
 
+Use the [CLI](/cli/) for memory capture and recall, daemon lifecycle, diagnostics, scheduled tasks, source automation, and scripting. Use the [harness](/harnesses/) integrations for agent workflows. The Dashboard is a view over the running daemon and its current workspace, not a separate memory store.
 
-## Accessing the Dashboard
+## Start and open the Dashboard
 
-The daemon must be running first:
-
-```bash
-signet daemon start
-```
-
-Then visit `http://localhost:3850` in your browser, or run:
+The daemon must be running. The simplest path is:
 
 ```bash
 signet dashboard
 ```
 
-The `signet dashboard` command opens your default browser. If the daemon
-is not already running, it starts it first.
-
-
-## Layout
-
-The dashboard is a single-page app with a collapsible left navigation rail and
-a main workspace.
-
-- **Left navigation rail** — Overview, Ontology, Tasks, Audit, Secrets,
-  Skills, Sources, Settings, theme toggle, and project/release access.
-- **Main workspace** — lazy-loaded dashboard surfaces for the selected area.
-
-The sidebar footer shows the daemon version and pending restart state when
-available.
-
-
-## Left Sidebar
-
-The sidebar is intentionally navigation-only. Identity, harness, config,
-pipeline, connector, and log details live inside Overview, Ontology, Settings,
-and Audit surfaces rather than as separate sidebar panels.
-
-
-## Tabs
-
-**Overview** — Home surface for daemon status, memory health, harness state,
-marketplace spotlights, pinned entity clusters, and upgrade/restart signals.
-
-**Ontology** — Unified memory workspace. It combines memory search, timeline,
-knowledge/entity inspection, and constellation/embedding exploration behind
-the `cortex-memory` route. Legacy hashes such as `#memory`, `#embeddings`,
-and `#knowledge` redirect here.
-
-**Settings** — Form-driven configuration editor for identity, embedding,
-memory, pipeline, connector, and review settings. Changes are saved to the
-resolved config files under `$SIGNET_WORKSPACE/`.
-
-**Memory search** — Browse and search your memory database from the ontology
-workspace. Search runs hybrid (semantic + keyword) lookup. You can filter by
-type, tags, source harness, pinned status, importance score, and date. Each
-memory card has a "Find Similar" action that runs vector similarity search.
-The count shown reflects your current filter state.
-
-**Embeddings / Constellation** — A 3D force-directed graph of your memory space
-(powered by `3d-force-graph` / Three.js). Memories with vector
-embeddings appear as nodes; edges connect k-nearest neighbors.
-
-Coordinates are computed server-side via UMAP dimensionality reduction
-(`GET /api/embeddings/projection`) and cached until the embedding count
-changes. The server returns both 2D and 3D projections; the dashboard
-uses the 3D variant. Node positions are scaled by a factor of 52 and
-seeded from the UMAP coordinates; the force simulation refines layout
-from there.
-
-Nodes are colored by source (the `who` field). Node size scales with
-importance (base 0.6, up to 2.0). Click a node to inspect the memory
-and view its nearest neighbors in a side panel. Hovering a node shows
-a tooltip with the source and a truncated content label.
-
-Filter presets let you slice the graph by source, memory type, or
-importance range. Preset selections are persisted to `localStorage`.
-
-**Cluster lens mode** highlights a selected node's neighborhood:
-when active, only nodes in the `lensIds` set are rendered at full
-opacity while the rest are dimmed. Edges are similarly filtered.
-Pinned memories are visually distinguished.
-
-The `EmbeddingCanvas3D` component exposes `focusNode(id)` to animate
-the camera toward a specific node, and `refreshAppearance()` to
-re-apply color/opacity changes without rebuilding the graph.
-
-**Constellation View — Entity Overlay**
-
-The Embeddings tab's constellation view renders a 4-tier D3 force
-simulation that layers the knowledge graph on top of the memory space:
-
-- **Entities** (hexagons, 10–22px) — gravitational centers, sized by
-  mention density
-- **Aspects** (circles, 5–8px) — orbit their parent entity
-- **Attributes** (small circles, 3–4px) — orbit their parent aspect
-- **Memories** (dots, 2px) — leaf nodes, orbit their parent attribute
-
-Performance caps keep the simulation responsive:
-- Zero-mention entities are excluded unless pinned by the user
-- Maximum 500 entities, ordered by pinned status then mention count
-- Memory leaf nodes are dropped entirely if total node count exceeds 3,000
-
-Clicking an entity node opens an inspector panel showing the entity type,
-aspects list, dependency edges, and memory count. Clicking a memory node
-opens the existing memory detail panel.
-
-**Predictor Placeholders**
-
-The dashboard does not currently ship a standalone Predictor tab. Legacy
-`#predictor` hashes resolve to Settings, and the Knowledge view includes
-placeholder predictor slices that stay empty until scorer comparison rows exist
-in the daemon database.
-
-
-**Pipeline — Active Sessions**
-
-The Settings pipeline section includes active-session controls with per-session
-bypass toggles. Each row shows the session key, harness name, runtime path, and
-a Switch control to enable or disable bypass. Toggling the switch calls
-`POST /api/sessions/:key/bypass` (see [Sessions and hooks API](/api/sessions-hooks/#sessions)). When bypass
-is on, all hooks for that session return empty no-op responses — MCP
-tools still work normally.
-
-The session list auto-refreshes every 30 seconds and is only visible
-when at least one session is active.
-
-**Audit** — Diagnostics and logs. The log view streams daemon events via Server-Sent Events
-(`/api/logs/stream`). A Live/Stop toggle controls the stream.
-Entries are color-coded by level (`debug`, `info`, `warn`, `error`)
-and labeled by category: `daemon`, `api`, `memory`, `sync`, `git`,
-`watcher`, `embedding`, `harness`, `system`, `hooks`, `pipeline`,
-`skills`, `secrets`, `auth`, and `session-tracker`,
-`document-worker`, `maintenance`, `retention`, `llm`. Click an
-entry to open a split detail panel with the full JSON payload,
-duration display, and a copy-to-clipboard button.
-
-**Secrets**: Shows stored secret names. Values are always masked. This
-surface is owned by the `signet.secrets` core plugin, backed by the local
-encrypted provider and 1Password compatibility flow. You can add new
-secrets (via a password input) or delete existing ones. For CLI use,
-prefer `signet secret put <NAME>`.
-
-**Skills** — Lists installed skills and marketplace catalog entries from
-Signet, skills.sh, and ClawHub sources. Click a skill name to read details
-before installing. Already-installed skills are marked.
-
-The Skills tab also includes **Plugins**, a registry view for core and
-installed Signet extensions. It shows plugin state, health, capability
-grants, declared surfaces, prompt contribution diagnostics, and recent
-plugin audit events. Core plugins such as `signet.secrets` can be
-enabled or disabled there; disabling Signet Secrets blocks secret-owned
-surfaces but does not delete encrypted secrets from disk.
-
-
-## API-Only Fallback
-
-If the dashboard build is missing (e.g., running the daemon from source
-without building the frontend), visiting `http://localhost:3850` shows
-a minimal HTML page listing available API endpoints instead.
-
-Build the dashboard to restore the full UI:
+`signet dashboard` also has the `signet ui` alias. It starts the daemon when necessary, prints the local URL, and opens that URL in your default browser. To start the daemon yourself:
 
 ```bash
-cd surfaces/dashboard
-bun run build
+signet daemon start
+signet status
 ```
 
+The default address is:
 
-## Development
+```text
+http://localhost:3850
+```
 
-To run the dashboard in dev mode with hot reload:
+You can pass a workspace path to the Dashboard command:
 
 ```bash
-cd surfaces/dashboard
-bun install
-bun run dev
+signet dashboard --path /path/to/workspace
 ```
 
-This starts a Vite dev server at `http://localhost:5173`. The daemon
-must still be running at port 3850 for API calls to work.
+For non-default daemon deployments, the address is determined by `SIGNET_PORT` and the binding settings in the daemon's launch environment. Open the URL reported by `signet dashboard` or daemon startup rather than assuming the default port. `SIGNET_HOST`, `SIGNET_BIND`, and `SIGNET_PATH` also affect where the daemon listens and which workspace it uses. See [CLI environment variables](/cli/environment/) and [Daemon](/daemon/) before binding the daemon beyond localhost. Do not expose a local or hybrid daemon directly to the public internet.
 
+The Network section in Dashboard Settings reports the active port, bind address, and network mode. Those values are status information. Change daemon launch or configuration through the supported daemon configuration path, then restart the daemon if required.
 
-## Tasks Tab
+## What you see
 
-The Tasks tab shows a kanban board for scheduled agent prompts. Four
-columns display task state:
+The current Dashboard sidebar is grouped into four areas. Counts and health indicators are loaded from the daemon and can be blank while a request is loading.
 
-- **Scheduled** — Enabled tasks waiting for their next run
-- **Running** — Currently executing tasks with elapsed timer
-- **Completed** — Recent successful runs
-- **Failed** — Recent failed runs with error summary
+| Sidebar item | Purpose |
+| --- | --- |
+| **Home** | Installation overview: memory and ontology counts, configured agent state, connected sources, activity, and pending ontology review suggestions. This is the current overview surface. |
+| **Memory** | Browse memories, search with keyword and semantic ranking, filter by memory type or recurring topics, inspect embedding-index coverage, pin a memory, or delete one. |
+| **Sources** | View source health and indexing counts, connect or import sources, re-index a source, download a source snapshot, copy its root path, or remove it. Source removal is destructive to Signet-owned indexed data. Start with [Sources](/sources/) for connector and import behavior. |
+| **Graph** | Explore the knowledge constellation built from entities, aspects, attributes, dependencies, and sources. The graph supports bounded density, node-category inspection, entity search, and a detail panel. |
+| **Dreams** | Inspect dreaming worker state, the active or latest pass, tool-call trace, attention items, failures, and the last successful summary. When idle, **Trigger pass** starts an incremental pass; while a pass runs, the control is a status indicator. |
+| **Secrets** | List secret names without revealing values, add or delete secrets, and use the available 1Password integration. Secret values are write-only from the Dashboard. |
+| **Skills** | Present in the navigation as a disabled **Coming soon** item in the current build. It is not a skill or plugin management surface yet. Use the [Skills](/skills/) documentation and CLI instead. |
+| **Agents** | Present as a disabled **Coming soon** item. The current Dashboard does not provide an agent-roster or multi-workspace editor. |
 
-Each card shows the task name, harness badge, cron schedule, and
-next/last run time. Click a card to open the detail sheet with full
-run history and stdout/stderr logs.
+The sidebar footer includes the daemon version when it is available. The theme toggle changes the Dashboard's light or dark appearance. The Settings button opens a modal rather than a separate sidebar route.
 
-Use the **+ New Task** button to create tasks. The form includes
-cron presets, harness selection, and a security warning for Claude
-Code's `--dangerously-skip-permissions` flag.
+### Names from older Dashboard versions
 
-Tasks can be enabled/disabled via the toggle switch on each card,
-or triggered for an immediate manual run.
+The current app does not have separate **Overview**, **Ontology**, **Tasks**, or **Audit** sidebar routes:
 
+- **Overview** is now **Home**.
+- **Ontology** is split between **Memory** and **Graph**.
+- **Tasks** is not exposed by the current Dashboard. Use [Scheduled tasks](/scheduling/) and the CLI/API instead.
+- **Audit** is not exposed as a Dashboard route. Use Settings → **Logs** for recent daemon logs, or `signet daemon logs` for CLI filtering and follow mode.
 
-## Port Configuration
+Do not use old URL hashes or screenshots as a guide to the current navigation. The supported deep links are the current view hashes such as `#home`, `#memory`, `#sources`, `#graph`, `#dreaming`, and `#secrets`.
 
-The default port is 3850. To change it:
+## Safe operator actions
+
+### Inspect status and health
+
+Home, the sidebar, and Settings → Network poll daemon status. The Dashboard also uses `/health` as a liveness check. A loading state means the request has not completed; an empty value is not proof that the installation has no data.
+
+For an independent CLI check:
 
 ```bash
-SIGNET_PORT=4000 signet daemon start
+signet status
+signet doctor
+curl http://localhost:3850/health
 ```
 
-The dashboard URL changes accordingly.
+Use `signet doctor` for local health checks and suggested fixes. Use `signet status --json` when a script needs machine-readable status.
 
+### Search and inspect memory
 
-## Development Conventions
+Memory starts with the current memory list. Enter a query to search memories, or use the memory-type and recurring-topic filters. Search results show their source and harness metadata where available. The index indicator reports embedding health and coverage.
 
-These conventions apply to all dashboard UI work.
+The available memory actions are mutations:
 
-### Stack
+- **Pin** changes the memory's pinned state.
+- **Delete** soft-deletes the memory after confirmation.
 
-- **Framework**: Svelte 5 (runes: `$props`, `$state`, `$derived`, `$effect`)
-- **Styling**: Tailwind CSS v4 (via `@tailwindcss/vite` plugin, no `tailwind.config`)
-- **UI primitives**: shadcn-svelte (https://www.shadcn-svelte.com)
-- **Icons**: Lucide (`@lucide/svelte/icons/<name>`)
-- **Visualization**: 3d-force-graph, D3, CodeMirror 6
-- **Build**: Vite + SvelteKit static adapter
+Use the CLI for explicit capture and recall workflows:
 
-### Component Organization
-
-```
-surfaces/dashboard/src/lib/
-  components/
-    ui/           # shadcn-svelte primitives (button, card, tabs, etc.)
-    memory/       # Memory feature components
-    embeddings/   # Constellation / canvas views
-    config/       # Config editor components (FormField, FormSection)
-    sessions/     # Session management and bypass toggle
-    skills/       # Skills marketplace components
-    tasks/        # Task scheduler components
-    app-sidebar.svelte   # Main navigation sidebar
-    CodeEditor.svelte    # CodeMirror wrapper
-    ToastContainer.svelte
-  stores/         # Svelte 5 rune stores (*.svelte.ts)
-  api.ts          # Daemon API client
+```bash
+signet remember "A durable fact to store"
+signet recall "A question to search"
 ```
 
-- Always use existing shadcn-svelte components from
-  `$lib/components/ui/` when possible. Do not recreate primitives.
-- Feature components go in their domain subdirectory (e.g. `memory/`,
-  `skills/`, `tasks/`).
-- Component naming: PascalCase for feature components (`SkillCard.svelte`),
-  kebab-case for shadcn primitives (`button.svelte`).
-- Props use Svelte 5 `$props()` with explicit TypeScript interfaces.
-- Import shadcn components via barrel: `$lib/components/ui/card/index.js`
+### Inspect knowledge and dreaming
 
-### Design Tokens
+Graph is an exploration surface. It loads a bounded constellation from the daemon, lets you adjust density, search for an entity, and inspect relationships and citations. It does not turn the graph visualization into a separate source of truth.
 
-Tokens are CSS custom properties defined in
-`surfaces/dashboard/src/app.css`. Dark theme is the default;
-light activates via `data-theme="light"` on `<html>`.
+Dreams is an operational view of the dreaming worker. It refreshes frequently while a pass runs and shows status, timing, tokens, cost, attention, backlog, failures, and tool traces. Triggering a pass is an active operation. Do not start another pass while one is already running.
 
-**Never hardcode hex colors.** Always use token variables:
+### Inspect and manage sources
 
-| Purpose | Token |
-|---------|-------|
-| Page background | `var(--sig-bg)` / `bg-background` |
-| Card surface | `var(--sig-surface)` / `bg-card` |
-| Raised surface | `var(--sig-surface-raised)` / `bg-secondary` |
-| Primary text | `var(--sig-text)` / `text-foreground` |
-| Bright text | `var(--sig-text-bright)` / `text-primary` |
-| Muted text | `var(--sig-text-muted)` / `text-muted-foreground` |
-| Border | `var(--sig-border)` / `border-border` |
-| Strong border | `var(--sig-border-strong)` / `border-input` |
-| Accent | `var(--sig-accent)` |
-| Danger | `var(--sig-danger)` / `bg-destructive` |
-| Success | `var(--sig-success)` |
+Sources displays each connected source's kind, mode, root, health, artifacts, chunks, indexed count, and current indexing job. The page supports these actions:
 
-**Spacing scale**: `--space-xs` (4px), `--space-sm` (8px),
-`--space-md` (16px), `--space-lg` (24px), `--space-xl` (48px),
-`--space-2xl` (80px).
+- **Import files** through the file-upload flow. Supported file labels in the current UI include JSON, CSV, Markdown, and documents.
+- **Connect a source** through the connector flow. The current choices include Obsidian, GitHub, and Discord.
+- **Re-index** a connected source.
+- **Snapshot** a source into a JSON download.
+- **Remove** a source after confirmation. Removal purges Signet-owned indexed artifacts for that source; it does not edit the original source.
 
-**Typography**: Display font `var(--font-display)` (Diamond Grotesk /
-Chakra Petch) for headings. Monospace `var(--font-mono)` (Geist Mono /
-IBM Plex Mono) for body text and UI. Base font size is 13px.
+For path picking, the desktop app can use a native picker. In a plain browser, the daemon may report that the picker is unavailable and the flow will ask for a path instead. Read [Sources](/sources/) before connecting a vault, repository, or Discord source. It covers source ownership, tokens, read-only behavior, indexing, snapshots, and purge semantics.
 
-**Font sizes**: `--font-size-xs` (10px), `--font-size-sm` (11px),
-`--font-size-base` (13px), `--font-size-lg` (15px).
+### Inspect secrets without exposing them
 
-**Utility classes**: `sig-label` (11px muted), `sig-eyebrow` (10px
-uppercase), `sig-heading` (11px bold uppercase), `sig-meta` (9px),
-`sig-badge` (9px rounded), `sig-micro` (8px uppercase).
+Secrets shows names and the configured provider, never stored values. Add or delete a secret from the Dashboard when that is convenient. The 1Password panel can connect, list vaults, and import selected secret names when configured.
 
-### Styling Rules
+Never paste a secret into a log, issue, screenshot, support request, or public configuration. For CLI-managed secrets, use the commands in [Secrets](/secrets/), for example:
 
-- Use Tailwind utility classes mapped through the `@theme inline`
-  block in `app.css` (e.g. `bg-card`, `text-muted-foreground`,
-  `border-border`).
-- For Signet-specific tokens not in the Tailwind theme, use
-  `style="color: var(--sig-accent)"` or arbitrary values
-  `text-[var(--sig-accent)]`.
-- Transitions use `var(--dur)` (0.2s) and `var(--ease)`
-  (cubic-bezier). The grain overlay and scrollbar styles are global.
-- Headings are uppercase with letter-spacing. Use `sig-heading` class
-  or match the pattern: `font-display font-bold uppercase tracking-wider`.
-- Respect `prefers-reduced-motion` — the global CSS disables
-  animations when active.
+```bash
+signet secret put SECRET_NAME
+```
 
-### Icon System
+The value is sent to the secret store and is not read back by the Dashboard.
 
-- All icons come from `@lucide/svelte/icons/<icon-name>`.
-  Import individually, not from the barrel.
-  ```svelte
-  import Brain from "@lucide/svelte/icons/brain";
-  ```
-- Do not import or add new icon packages. If a design requires an
-  icon not in Lucide, flag it.
-- Icon color backgrounds use `--sig-icon-bg-1` through `--sig-icon-bg-6`
-  with `--sig-icon-fg` foreground and `--sig-icon-border` stroke.
+### Configure supported settings
 
-### State Management
+Open Settings from the gear in the sidebar footer. The modal currently contains:
 
-- Stores are Svelte 5 rune-based files at `$lib/stores/*.svelte.ts`.
-- Navigation uses `$lib/stores/navigation.svelte.ts` (hash-based tabs).
-- API calls go through `$lib/api.ts` which talks to the daemon at
-  `localhost:3850`.
-- Use `$state()`, `$derived()`, `$effect()` — not legacy stores.
+- **Network**: read-only daemon port, bind address, and network mode; editable sync toggles for cloud sync and automatic commits.
+- **Inference**: backend inference, aggregation, embedding endpoint/model assignment, connected provider status, provider search, API-key or OAuth connection flows where supported, and route health.
+- **Logs**: recent daemon logs with text filtering, level filters, expandable raw entries, JSON export, and privacy-safe telemetry delivery health when available.
+- **Advanced**: privacy telemetry, pipeline and mutation safety switches, maintenance mode, extraction and recall tuning, dreaming, embedding extras, and related runtime settings.
 
-### Svelte 5 Conventions
+Settings writes configuration through the daemon. Treat changes to pipeline, mutation, maintenance, inference, and embedding settings as operational changes. Read the relevant [configuration](/configuration/) and [pipeline](/pipeline/) references first, and verify the resulting state with `signet status` or the Dashboard's health indicators.
 
-- Use `$props()` with destructured interface, not `export let`.
-- Use `{@render children()}` for slot content, not `<slot>`.
-- Event handlers: `onclick`, `onkeydown` (lowercase), not `on:click`.
-- Use `$effect()` for side effects, not `afterUpdate`.
-- Wrap mutable external references in `$state.raw()` or
-  `untrack()` where needed to prevent infinite reactivity loops.
+## Loading, errors, and recovery
+
+The Dashboard reads from the daemon on the same origin. If a request fails, views show a loading or error state rather than fabricating counts. Use the following sequence when the page is unavailable or stale:
+
+1. Check the daemon and workspace:
+
+   ```bash
+   signet status
+   signet doctor
+   ```
+
+2. Check the health endpoint:
+
+   ```bash
+   curl http://localhost:3850/health
+   ```
+
+3. Restart the daemon if it is down or stale:
+
+   ```bash
+   signet daemon restart
+   ```
+
+4. Inspect recent errors:
+
+   ```bash
+   signet daemon logs --level warn
+   signet daemon logs --follow
+   ```
+
+5. If the daemon is healthy but the page says the Dashboard is not installed, the frontend build is absent. In a source checkout, build it and restart or relaunch the daemon:
+
+   ```bash
+   cd surfaces/dashboard
+   bun install
+   bun run build
+   ```
+
+   The daemon serves the generated `surfaces/dashboard/build/index.html` in a monorepo checkout. Published packages may serve bundled dashboard assets instead.
+
+If no dashboard assets are available, the daemon intentionally serves a minimal API-only page at `/`. That page links to the health check and a small set of inspection endpoints, including `/api/status`, `/api/config`, `/api/memories`, `/api/harnesses`, and `/api/skills`. This confirms that the daemon is alive but does not restore the Dashboard UI.
+
+## CLI and daemon boundaries
+
+Use the CLI when you need repeatable or scriptable operations:
+
+```bash
+signet status
+signet doctor
+signet recall "query"
+signet remember "fact"
+signet daemon logs --follow
+```
+
+Use the daemon and its documentation for lifecycle, network binding, authentication, configuration, and API behavior. Use the Dashboard for visual inspection and the supported actions described above. When a public page, CLI command, or API contract disagrees with the UI, verify the running daemon and consult the owning reference rather than assuming that an old Dashboard label is still valid.
+
+## Development note
+
+The public operator contract is the built Dashboard served by the daemon. For contributor setup and the Dashboard build contract, see the repository's [contributor documentation](https://github.com/Signet-AI/signetai/blob/main/surfaces/dashboard/README.md).
