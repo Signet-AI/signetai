@@ -155,7 +155,7 @@ Query raw telemetry events.
 | `event`   | string  | Filter by event type (e.g., `llm.generate`)    |
 | `since`   | string  | ISO timestamp lower bound                      |
 | `until`   | string  | ISO timestamp upper bound                      |
-| `limit`   | integer | Max events (default: 100)                      |
+| `limit`   | integer | Max events (default: 100, clamped to 1-10000)  |
 
 **Response**
 
@@ -312,7 +312,7 @@ Export raw telemetry events as newline-delimited JSON (NDJSON).
 | Parameter | Type    | Description                           |
 |-----------|---------|---------------------------------------|
 | `since`   | string  | ISO timestamp lower bound (optional)  |
-| `limit`   | integer | Max events (default: 10000)           |
+| `limit`   | integer | Max events (default: 10000, clamped to 1-100000) |
 
 **Response** — `Content-Type: application/x-ndjson`. Each line is a
 JSON-serialized telemetry event. Returns `404` if telemetry is not enabled.

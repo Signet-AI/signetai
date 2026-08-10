@@ -501,6 +501,7 @@ export function createTelemetryCollector(
 	let consecutiveFailures = 0;
 	let flushCount = 0;
 	let effectiveIntervalMs = config.flushIntervalMs;
+	let nextAllowedFlushAt = 0;
 	let droppedEventCount = 0;
 	let pendingDroppedEventCount = 0;
 	let flushPromise: Promise<void> | null = null;
@@ -562,6 +563,10 @@ export function createTelemetryCollector(
 	const initialDeliveryState = readDeliveryState();
 	consecutiveFailures = initialDeliveryState.consecutiveFailures;
 	effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
+	const lastAttemptMs = initialDeliveryState.lastAttemptAt
+		? Date.parse(initialDeliveryState.lastAttemptAt)
+		: Number.NaN;
+	if (Number.isFinite(lastAttemptMs)) nextAllowedFlushAt = lastAttemptMs + effectiveIntervalMs;
 
 	/**
 	 * Atomically claim a first-use milestone for this install. Only the
@@ -697,6 +702,7 @@ export function createTelemetryCollector(
 		deliveryStatePersistenceFailed = !stateUpdated;
 		consecutiveFailures = 0;
 		effectiveIntervalMs = config.flushIntervalMs;
+		nextAllowedFlushAt = 0;
 	}
 
 	function releaseClaim(token: string, failureCode?: string): void {
@@ -744,6 +750,7 @@ export function createTelemetryCollector(
 		deliveryStatePersistenceFailed = !stateUpdated;
 		consecutiveFailures++;
 		effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
+		nextAllowedFlushAt = Date.now() + effectiveIntervalMs;
 	}
 
 	function claimUnsent(limit: number): ClaimedTelemetryEvents | null {
@@ -911,7 +918,7 @@ export function createTelemetryCollector(
 		}
 	}
 
-	async function doFlush(emitHealth: boolean): Promise<void> {
+	async function doFlush(emitHealth: boolean, allowRemote = true): Promise<void> {
 		flushCount++;
 		// Drain buffer to SQLite
 		drainBuffer();
@@ -923,7 +930,7 @@ export function createTelemetryCollector(
 		}
 
 		// Send to PostHog if configured
-		if (posthogConfigured) {
+		if (allowRemote && posthogConfigured) {
 			const claimed = claimUnsent(config.flushBatchSize);
 			if (claimed) {
 				const result = await sendToPostHog(
@@ -952,8 +959,19 @@ export function createTelemetryCollector(
 		}
 	}
 
-	function flushInternal(emitHealth: boolean): Promise<void> {
+	function flushInternal(emitHealth: boolean, force = false): Promise<void> {
 		if (flushPromise) return flushPromise;
+		if (!force && Date.now() < nextAllowedFlushAt) {
+			// Backoff suppresses network claims, not local durability. Persist the
+			// in-memory buffer so an outage cannot exhaust RAM or lose events;
+			// retain local health/pruning maintenance while skipping PostHog.
+			flushPromise = doFlush(emitHealth, false)
+				.catch(() => {})
+				.finally(() => {
+					flushPromise = null;
+				});
+			return flushPromise;
+		}
 		flushPromise = doFlush(emitHealth)
 			.catch(() => {
 				// Telemetry must never surface a flush failure to the daemon.
@@ -1065,7 +1083,7 @@ export function createTelemetryCollector(
 		},
 
 		async flush(): Promise<void> {
-			await flushInternal(false);
+			await flushInternal(false, true);
 		},
 
 		start(): void {
@@ -1074,10 +1092,11 @@ export function createTelemetryCollector(
 
 			function scheduleFlush(): void {
 				if (!running) return;
+				const delayMs = nextAllowedFlushAt > Date.now() ? nextAllowedFlushAt - Date.now() : effectiveIntervalMs;
 				flushTimer = setTimeout(() => {
 					flushTimer = null;
 					flushInternal(true).finally(() => scheduleFlush());
-				}, effectiveIntervalMs);
+				}, delayMs);
 			}
 
 			scheduleFlush();
@@ -1093,7 +1112,7 @@ export function createTelemetryCollector(
 				clearTimeout(flushTimer);
 				flushTimer = null;
 			}
-			await flushInternal(true);
+			await flushInternal(true, true);
 			logger.info("telemetry", "Telemetry collector stopped");
 		},
 
