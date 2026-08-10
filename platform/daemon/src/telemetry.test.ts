@@ -772,10 +772,10 @@ describe("session economics (issue #1201)", () => {
 		await collector.flush();
 
 		const ends = collector.query({ event: "session.end" });
-		expect(ends[0]?.properties.tokensInput).toBe(100);
-		expect(ends[0]?.properties.cost).toBe(0.5);
-		expect(ends[1]?.properties.tokensInput).toBe(200);
-		expect(ends[1]?.properties.cost).toBe(1);
+		const sessionA = ends.find((event) => event.properties.tokensInput === 100);
+		const sessionC = ends.find((event) => event.properties.tokensInput === 200);
+		expect(sessionA?.properties.cost).toBe(0.5);
+		expect(sessionC?.properties.cost).toBe(1);
 	});
 
 	it("reopens the accumulator for a resumed session", async () => {
