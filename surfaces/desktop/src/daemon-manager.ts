@@ -224,11 +224,19 @@ export class DaemonManager {
 
 	#closeFds(): void {
 		if (this.#stdoutFd !== null) {
-			try { closeSync(this.#stdoutFd); } catch { /* ignore */ }
+			try {
+				closeSync(this.#stdoutFd);
+			} catch {
+				/* ignore */
+			}
 			this.#stdoutFd = null;
 		}
 		if (this.#stderrFd !== null) {
-			try { closeSync(this.#stderrFd); } catch { /* ignore */ }
+			try {
+				closeSync(this.#stderrFd);
+			} catch {
+				/* ignore */
+			}
 			this.#stderrFd = null;
 		}
 	}
@@ -282,7 +290,7 @@ export class DaemonManager {
 				SIGNET_PATH: this.#workspacePath,
 				SIGNET_WORKSPACE: this.#workspacePath,
 				SIGNET_DESKTOP: "1",
-			SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "desktop",
+				SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "desktop",
 			},
 		});
 		this.#owned = true;

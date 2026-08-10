@@ -8,7 +8,7 @@ function hasColumn(db: MigrationDb, table: string, column: string): boolean {
 }
 
 /**
- * Migration 117: retain the last daemon version observed for an install.
+ * Migration 119: retain the last daemon version observed for an install.
  *
  * This is deliberately a nullable operational value. It lets the daemon
  * report a version transition on the next start without treating a manual

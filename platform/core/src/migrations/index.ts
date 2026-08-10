@@ -124,7 +124,7 @@ import { up as crossAgentMessageNotifications } from "./115-cross-agent-message-
 import { up as acpDeliveryReconciliation } from "./116-acp-delivery-reconciliation";
 import { up as retireSummaryWorker } from "./117-retire-summary-worker";
 import { up as queuePressureIndices } from "./118-queue-pressure-indices";
-import { up as telemetryVersionObservation } from "./117-telemetry-version-observation";
+import { up as telemetryVersionObservation } from "./119-telemetry-version-observation";
 
 // -- Public interface consumed by Database.init() --
 
