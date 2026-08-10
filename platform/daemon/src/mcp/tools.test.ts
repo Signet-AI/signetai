@@ -380,6 +380,12 @@ describe("createMcpServer", () => {
 			projectPath: projectDir,
 			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
 		});
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, "#!/bin/sh\necho graphiq status\n");
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
 
 		const graphServer = await createMcpServer({
 			daemonUrl: "http://localhost:3850",
