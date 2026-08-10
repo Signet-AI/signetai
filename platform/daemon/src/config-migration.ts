@@ -587,3 +587,58 @@ export function migrateRetiredExtractionWriterConfig(agentsDir: string): void {
 		logger.info("config-migration", "Removed retired extraction writer configuration", { mutations, file: path });
 	}
 }
+
+// ---------------------------------------------------------------------------
+// v8: canonicalize dashboard embedding endpoint spelling (#1264)
+// ---------------------------------------------------------------------------
+// The dashboard briefly wrote `baseUrl`, while the daemon's canonical embedding
+// schema uses `base_url`. Rewrite both current and legacy embedding blocks once
+// at startup so existing files do not keep an endpoint the runtime ignores.
+export function migrateEmbeddingBaseUrl(agentsDir: string): void {
+	const path = findConfigPath(agentsDir);
+	if (!path) return;
+
+	let text: string;
+	try {
+		text = readFileSync(path, "utf-8");
+	} catch {
+		return;
+	}
+
+	const vMatch = /^configVersion:\s*(\d+)/m.exec(text);
+	if (vMatch && Number(vMatch[1]) >= 8) return;
+
+	const doc = parseDocument(text);
+	if (doc.errors.length > 0) {
+		logger.warn("config-migration", "Skipping embedding migration: agent.yaml has parse errors", {
+			file: path,
+			errors: doc.errors.map((error) => error.message).slice(0, 3),
+		});
+		return;
+	}
+
+	const mutations: string[] = [];
+	for (const pathParts of [["embedding"], ["memory", "embeddings"]] as const) {
+		const block = doc.getIn(pathParts, true);
+		if (!isMap(block) || !block.has("baseUrl")) continue;
+
+		const alias = block.get("baseUrl", true);
+		if (!block.has("base_url")) {
+			block.set("base_url", alias);
+			mutations.push(`${pathParts.join(".")}.baseUrl → base_url`);
+		} else if (String(block.get("base_url")) !== String(alias)) {
+			logger.warn("config-migration", "Embedding config contains conflicting endpoint keys; keeping base_url", {
+				file: path,
+				path: pathParts.join("."),
+			});
+		}
+		block.delete("baseUrl");
+		block.delete("endpoint");
+	}
+
+	stampConfigVersion(doc, 8);
+	writeAtomic(path, doc.toString());
+	if (mutations.length > 0) {
+		logger.info("config-migration", "Canonicalized embedding endpoint configuration", { mutations, file: path });
+	}
+}

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrateInferenceProviders } from "./config-migration";
+import { migrateEmbeddingBaseUrl, migrateInferenceProviders } from "./config-migration";
 
 function setupDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "signet-config-migration-"));
@@ -164,6 +164,85 @@ inference:
 		try {
 			writeFileSync(join(dir, "agent.yaml"), "inference:\n  [unterminated");
 			expect(() => migrateInferenceProviders(dir)).not.toThrow();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("migrateEmbeddingBaseUrl (#1264)", () => {
+	it("rewrites dashboard baseUrl to the daemon's canonical base_url", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`# preserve operator context
+embedding:
+  provider: ollama
+  baseUrl: http://192.168.1.10:11434
+  endpoint: http://127.0.0.1:11434
+`,
+			);
+			migrateEmbeddingBaseUrl(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			expect(after).toContain("base_url: http://192.168.1.10:11434");
+			expect(after).not.toContain("baseUrl:");
+			expect(after).not.toContain("endpoint:");
+			expect(after).toContain("# preserve operator context");
+			expect(after).toMatch(/^configVersion: 8/m);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the canonical value when both endpoint spellings conflict", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`embedding:
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  baseUrl: http://192.168.1.10:11434
+`,
+			);
+			migrateEmbeddingBaseUrl(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			expect(after).toContain("base_url: http://127.0.0.1:11434");
+			expect(after).not.toContain("baseUrl:");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("canonicalizes the legacy memory.embeddings block", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`memory:
+  embeddings:
+    provider: ollama
+    baseUrl: http://192.168.1.10:11434
+`,
+			);
+			migrateEmbeddingBaseUrl(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			expect(after).toContain("base_url: http://192.168.1.10:11434");
+			expect(after).not.toContain("baseUrl:");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("is idempotent after stamping config version 8", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(join(dir, "agent.yaml"), "embedding:\n  baseUrl: http://192.168.1.10:11434\n");
+			migrateEmbeddingBaseUrl(dir);
+			const after1 = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			migrateEmbeddingBaseUrl(dir);
+			expect(readFileSync(join(dir, "agent.yaml"), "utf-8")).toBe(after1);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

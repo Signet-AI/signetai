@@ -4,6 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { type AgentConfigStore, isDreamingEnabled, useAgentConfig } from "@/lib/agent-config";
 import { type InferenceCatalog, type LogEntry, api } from "@/lib/api";
+import { readEmbeddingEndpoint, writeEmbeddingEndpoint } from "@/lib/embedding-config";
 import { allowRemoteMemoryExtraction, ensureInferenceRoute, requiresRemoteMemoryConsent } from "@/lib/inference-route-config";
 import {
 	ACPX_AGENTS,
@@ -798,7 +799,7 @@ function EmbeddingEditor({ store }: { store: AgentConfigStore }) {
 
 	const provider = store.aStr([...embPath, "provider"]) || "native";
 	const model = store.aStr([...embPath, "model"]);
-	const endpoint = store.aStr([...embPath, "baseUrl"]) || store.aStr([...embPath, "endpoint"]);
+	const endpoint = readEmbeddingEndpoint(store, embPath);
 	const nonNative = provider !== "native" && provider !== "";
 
 	const apply = (path: readonly string[], value: string) => {
@@ -829,7 +830,14 @@ function EmbeddingEditor({ store }: { store: AgentConfigStore }) {
 			</Row>
 			{nonNative && (
 				<Row title="Endpoint" desc="Base URL of the embedding server.">
-					<CtrlInput value={endpoint} placeholder="http://localhost:11434" onChange={(v) => apply([...embPath, "baseUrl"], v)} />
+					<CtrlInput
+						value={endpoint}
+						placeholder="http://localhost:11434"
+						onChange={(v) => {
+							writeEmbeddingEndpoint(store, embPath, v);
+							void store.save();
+						}}
+					/>
 				</Row>
 			)}
 		</>

@@ -16,6 +16,7 @@ import { act } from "react";
 import { useEffect, useRef } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { type AgentConfigStore, isDreamingEnabled, useAgentConfig } from "./agent-config";
+import { writeEmbeddingEndpoint } from "./embedding-config";
 
 const INITIAL_CONFIG = `inference:
   defaultPolicy: background
@@ -31,6 +32,9 @@ const INITIAL_CONFIG = `inference:
     background:
       executor: openai-compatible
       endpoint: http://127.0.0.1:1234/v1
+embedding:
+  provider: ollama
+  baseUrl: http://127.0.0.1:11434
 memory:
   pipelineV2:
     mutationsFrozen: true
@@ -188,6 +192,22 @@ describe("agent config store", () => {
 		expect(body).toContain("executor: openai-compatible");
 		expect(body).toContain("x-custom-operator-key:");
 		expect(body).toContain("nested: keep-me");
+		await harness.unmount();
+	});
+
+	test("saves embedding endpoints as base_url and removes the dashboard alias (#1264)", async () => {
+		capturedSaveBody = null;
+		const harness = await mountHarness();
+
+		await act(async () => {
+			writeEmbeddingEndpoint(harness.store, ["embedding"], "http://192.168.1.10:11434");
+			await harness.store.save();
+		});
+
+		const body = requireSaveBody(capturedSaveBody);
+		expect(body).toContain("base_url: http://192.168.1.10:11434");
+		expect(body).not.toContain("baseUrl:");
+		expect(body).not.toContain("127.0.0.1:11434");
 		await harness.unmount();
 	});
 });
