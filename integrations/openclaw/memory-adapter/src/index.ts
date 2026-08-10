@@ -21,6 +21,8 @@ import {
 	parseRecallPayload,
 	readStaticIdentity,
 	resolveSessionStartTimeoutMs,
+	stripInternalMemoryContext,
+	wrapMemoryContext,
 } from "@signet/core";
 import type { RecallPayload, RecallRow } from "@signet/core";
 import { SignetClient } from "@signet/sdk";
@@ -84,21 +86,12 @@ const METADATA_LINE_PREFIXES = [
 	"END_EXTERNAL_UNTRUSTED_CONTENT",
 ] as const;
 
-const SIGNET_MEMORY_CLOSE = "</signet-memory>";
-
 function stripSignetMemory(content: string): string {
-	const clean = (text: string): string => text.replace(/<\/signet-memory>/gi, "").trim();
-	let text = content;
-	while (true) {
-		const start = text.search(/<signet-memory(?=[\s/>])/i);
-		if (start === -1) return clean(text);
-		const closeOffset = text.slice(start).search(/<\/signet-memory>/i);
-		if (closeOffset === -1) return clean(text.slice(0, start));
-		const end = start + closeOffset;
-		// Closing tag length is case-invariant for ASCII `</signet-memory>`.
-		const stop = end + SIGNET_MEMORY_CLOSE.length;
-		text = text.slice(0, start) + text.slice(stop);
-	}
+	return stripInternalMemoryContext(content).trim();
+}
+
+function readContextString(value: unknown): string {
+	return typeof value === "string" ? value.trim() : "";
 }
 
 /**
@@ -176,7 +169,11 @@ export interface SessionStartResult {
 		created_at: string;
 	}>;
 	recentContext?: string;
+	stableSystemPrompt?: string;
+	dynamicContext?: string;
 	inject: string;
+	contextHash?: string;
+	contextVersion?: number;
 }
 
 export interface PreCompactionResult {
@@ -186,6 +183,9 @@ export interface PreCompactionResult {
 
 export interface UserPromptSubmitResult {
 	inject: string;
+	dynamicContext?: string;
+	contextHash?: string;
+	contextVersion?: number;
 	memoryCount: number;
 	queryTerms?: string;
 	engine?: string;
@@ -1211,13 +1211,18 @@ function installSdkSanitizer(): () => void {
 }
 
 function buildInjectionResult(result: UserPromptSubmitResult): { prependContext: string } | undefined {
-	if (!result.inject) {
+	const dynamicContext = readContextString(result.dynamicContext) || readContextString(result.inject);
+	if (!dynamicContext) {
 		return undefined;
 	}
 	const queryAttr = result.queryTerms ? ` query="${result.queryTerms.replace(/"/g, "'").slice(0, 100)}"` : "";
 	const attrs = `source="auto-recall"${queryAttr} results="${result.memoryCount}" engine="${result.engine ?? "fts+decay"}"`;
+	const context = wrapMemoryContext(dynamicContext, "auto-recall").replace(
+		'<signet-memory source="auto-recall">',
+		`<signet-memory ${attrs}>`,
+	);
 	return {
-		prependContext: `<signet-memory ${attrs}>\n${result.inject}\n</signet-memory>`,
+		prependContext: context,
 	};
 }
 
@@ -2019,6 +2024,13 @@ const signetPlugin = {
 			// ==================================================================
 
 			const claimedSessions = new Set<string>();
+			type SessionStartContext = {
+				stableSystemPrompt: string;
+				dynamicContext: string;
+				delivered: boolean;
+			};
+			const sessionStartContexts = new Map<string, SessionStartContext>();
+			const sessionlessSessionStartContexts = new Map<string, SessionStartContext>();
 			const sessionlessSessionStarts = new Map<string, number>();
 			// Maps scoped agent/session keys → {count, at} for per-turn idempotency. Entries are
 			// evicted on agent_end or lazily after SESSION_TURN_TTL_MS so crash/
@@ -2068,6 +2080,12 @@ const signetPlugin = {
 				// Lazy TTL: evict stale entries for sessions that ended without agent_end.
 				if (state && now - state.at > SESSION_TURN_TTL_MS) {
 					checkpointTurns.delete(scopedKey);
+				} else {
+					// Without a session key there is no safe way to associate a
+					// compaction with one pending session-start block. Drop all
+					// sessionless blocks rather than replaying stale context.
+					sessionlessSessionStartContexts.clear();
+					sessionlessSessionStarts.clear();
 				}
 
 				// Dedup: before_agent_start and before_prompt_build both fire on the
@@ -2205,6 +2223,11 @@ const signetPlugin = {
 				const scopedKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
 				if (scopedKey) {
 					injectedTurns.delete(scopedKey);
+					const sessionStartContext = sessionStartContexts.get(scopedKey);
+					if (sessionStartContext) {
+						sessionStartContext.dynamicContext = "";
+						sessionStartContext.delivered = false;
+					}
 					// Compaction resets the message count, so the checkpoint turn-dedup
 					// (keyed on lastMsgCount) would falsely skip the first post-compaction
 					// turn if it happens to share the same count as a pre-compaction turn.
@@ -2241,14 +2264,17 @@ const signetPlugin = {
 				event: Record<string, unknown>,
 				sessionKey: string | undefined,
 				agentId: string | undefined,
-			): Promise<void> => {
+			): Promise<SessionStartContext | undefined> => {
 				if (!sessionKey) {
 					const now = Date.now();
 					cleanupTimedMap(sessionlessSessionStarts, now);
+					for (const key of sessionlessSessionStartContexts.keys()) {
+						if (!sessionlessSessionStarts.has(key)) sessionlessSessionStartContexts.delete(key);
+					}
 					const sessionlessKey = buildSessionlessTurnKey(event, agentId);
 					const recentStartAt = sessionlessSessionStarts.get(sessionlessKey);
 					if (typeof recentStartAt === "number" && now - recentStartAt <= SESSIONLESS_DEDUPE_MS) {
-						return;
+						return sessionlessSessionStartContexts.get(sessionlessKey);
 					}
 
 					const startResult = await onSessionStart("openclaw", {
@@ -2256,15 +2282,20 @@ const signetPlugin = {
 						sessionKey,
 						agentId,
 					});
-					if (startResult) {
-						sessionlessSessionStarts.set(sessionlessKey, Date.now());
-					}
-					return;
+					if (!startResult) return undefined;
+					const context: SessionStartContext = {
+						stableSystemPrompt: readContextString(startResult.stableSystemPrompt),
+						dynamicContext: readContextString(startResult.dynamicContext) || readContextString(startResult.inject),
+						delivered: false,
+					};
+					sessionlessSessionStarts.set(sessionlessKey, Date.now());
+					sessionlessSessionStartContexts.set(sessionlessKey, context);
+					return context;
 				}
 
 				const scopedKey = buildScopedSessionKey(sessionKey, agentId);
 				if (scopedKey && claimedSessions.has(scopedKey)) {
-					return;
+					return sessionStartContexts.get(scopedKey);
 				}
 
 				const startResult = await onSessionStart("openclaw", {
@@ -2272,9 +2303,17 @@ const signetPlugin = {
 					sessionKey,
 					agentId,
 				});
-				if (startResult && scopedKey) {
+				if (!startResult) return undefined;
+				const context: SessionStartContext = {
+					stableSystemPrompt: readContextString(startResult.stableSystemPrompt),
+					dynamicContext: readContextString(startResult.dynamicContext) || readContextString(startResult.inject),
+					delivered: false,
+				};
+				if (scopedKey) {
 					claimedSessions.add(scopedKey);
+					sessionStartContexts.set(scopedKey, context);
 				}
+				return context;
 			};
 
 			const runPromptInjection = async (
@@ -2287,7 +2326,22 @@ const signetPlugin = {
 				if (!daemonReachable) return undefined;
 
 				const scopedKey = buildScopedSessionKey(sessionKey, agentId);
+				const sessionlessKey = scopedKey ? undefined : buildSessionlessTurnKey(event, agentId);
 				const pendingNotification = scopedKey ? pendingNotifications.get(scopedKey)?.inject : undefined;
+				const takeSessionStartInjection = (): string | undefined => {
+					const context = scopedKey
+						? sessionStartContexts.get(scopedKey)
+						: sessionlessKey
+							? sessionlessSessionStartContexts.get(sessionlessKey)
+							: undefined;
+					if (!context || context.delivered) return undefined;
+					context.delivered = true;
+					if (sessionlessKey) sessionlessSessionStartContexts.delete(sessionlessKey);
+					return wrapMemoryContext(
+						[context.stableSystemPrompt, context.dynamicContext].filter((part) => part.length > 0).join("\n\n"),
+						"session-start",
+					);
+				};
 
 				// Prefer the clean last user message from the structured messages
 				// array. The prompt field carries platform metadata wrappers
@@ -2354,7 +2408,10 @@ const signetPlugin = {
 				if (scopedKey && typeof count === "number") {
 					injectedTurns.set(scopedKey, { count, at: Date.now() });
 				}
-				return buildInjectionResult(result);
+				const sessionStartInjection = takeSessionStartInjection();
+				const promptInjection = buildInjectionResult(result)?.prependContext;
+				const parts = [sessionStartInjection, promptInjection].filter((value): value is string => Boolean(value));
+				return parts.length > 0 ? { prependContext: parts.join("\n\n") } : undefined;
 			};
 
 			// Preferred lifecycle hook in modern OpenClaw versions.
@@ -2469,6 +2526,7 @@ const signetPlugin = {
 				});
 				if (scopedKey) {
 					claimedSessions.delete(scopedKey);
+					sessionStartContexts.delete(scopedKey);
 					injectedTurns.delete(scopedKey);
 					pendingNotifications.delete(scopedKey);
 					checkpointTurns.delete(scopedKey);
@@ -2524,6 +2582,12 @@ const signetPlugin = {
 						if (ok && knownPid !== null && pid !== knownPid) {
 							api.logger.info(`signet-memory: daemon restarted (pid ${knownPid} -> ${pid}), re-initializing sessions`);
 							claimedSessions.clear();
+							sessionStartContexts.clear();
+							sessionlessSessionStartContexts.clear();
+							injectedTurns.clear();
+							inFlightTurns.clear();
+							pendingNotifications.clear();
+							sessionlessSessionStarts.clear();
 						}
 						knownPid = pid;
 					}, HEARTBEAT_INTERVAL_MS);

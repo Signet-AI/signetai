@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createPromptContext } from "@signet/core";
 
 const TEST_DIR = join(tmpdir(), `signet-hooks-test-${Date.now()}`);
 const PREV_SIGNET_AGENT_ID_FOR_HOOKS = process.env.SIGNET_AGENT_ID;
@@ -763,6 +764,19 @@ describe("handleSessionStart", () => {
 		expect(result.inject.endsWith("\n</signet-memory-context>\n")).toBe(true);
 		expect(result.contextVersion).toBe(1);
 		expect(result.contextHash).toMatch(/^[0-9a-f]{64}$/);
+	});
+
+	test.serial("separates stable system instructions from dynamic session context", async () => {
+		const first = await handleSessionStart({ harness: "test", sessionKey: "cache-stable-contract" });
+		const second = await handleSessionStart({ harness: "test", sessionKey: "cache-stable-contract-2" });
+
+		expect(first.stableSystemPrompt).toBe(second.stableSystemPrompt);
+		expect(first.stableSystemPrompt).not.toContain("Current Date & Time");
+		expect(first.dynamicContext).toContain("[memory active");
+		expect(first.dynamicContext).not.toContain("Current Date & Time");
+		expect(first.inject).toBe(
+			createPromptContext([first.stableSystemPrompt, first.dynamicContext].join("\n"))?.serialized,
+		);
 	});
 
 	test.serial("keeps tokenizer encodes off the event loop for a populated recall pool (#1114)", async () => {

@@ -157,7 +157,11 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const res = await deps.fetchDaemonResult<{
 				identity?: { name: string; description?: string };
 				memories?: Array<{ content: string }>;
+				stableSystemPrompt?: string;
+				dynamicContext?: string;
 				inject?: string;
+				contextHash?: string;
+				contextVersion?: number;
 				error?: string;
 			}>("/api/hooks/session-start", {
 				method: "POST",
@@ -204,12 +208,16 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				console.error(chalk.red(`Error: ${data.error}`));
 				process.exit(1);
 			}
+			const sessionContext = [data.stableSystemPrompt, data.dynamicContext]
+				.filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+				.join("\n");
+			const legacySessionContext = sessionContext || data.inject;
 			if (options.codexJson) {
-				printCodexHookOutput("SessionStart", data.inject);
+				printCodexHookOutput("SessionStart", legacySessionContext);
 			} else if (options.json) {
 				console.log(JSON.stringify(data, null, 2));
-			} else if (data.inject) {
-				console.log(data.inject);
+			} else if (legacySessionContext) {
+				console.log(legacySessionContext);
 			}
 		});
 
@@ -223,27 +231,28 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const input = await readJson();
 			const stdinProject = pickString(input?.cwd);
-			const data = await fetchHookData<{ inject?: string }>(
-				deps,
-				"user-prompt-submit",
-				"/api/hooks/user-prompt-submit",
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject)),
-					timeout: PROMPT_SUBMIT_TIMEOUT_MS,
-				},
-			);
+			const data = await fetchHookData<{
+				inject?: string;
+				dynamicContext?: string;
+				contextHash?: string;
+				contextVersion?: number;
+			}>(deps, "user-prompt-submit", "/api/hooks/user-prompt-submit", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject)),
+				timeout: PROMPT_SUBMIT_TIMEOUT_MS,
+			});
 			if (!data) {
 				if (options.codexJson) printCodexHookOutput("UserPromptSubmit");
 				process.exit(0);
 			}
+			const dynamicContext = data.dynamicContext ?? data.inject;
 			if (options.codexJson) {
-				printCodexHookOutput("UserPromptSubmit", data.inject);
+				printCodexHookOutput("UserPromptSubmit", dynamicContext);
 			} else if (options.json) {
 				console.log(JSON.stringify(data, null, 2));
-			} else if (data.inject) {
-				console.log(data.inject);
+			} else if (dynamicContext) {
+				console.log(dynamicContext);
 			}
 		});
 

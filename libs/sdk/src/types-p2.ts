@@ -6,12 +6,44 @@
 // ============================================================================
 
 export interface SessionStartResponse {
-	readonly context: string;
-	readonly sessionId: string;
+	/** Deprecated compatibility field from the pre-hook response shape. */
+	readonly context?: string;
+	readonly sessionId?: string;
+	readonly identity?: {
+		readonly name: string;
+		readonly description?: string;
+	};
+	readonly memories?: readonly {
+		readonly id: string;
+		readonly content: string;
+		readonly type: string;
+		readonly importance: number;
+		readonly created_at: string;
+	}[];
+	readonly stableSystemPrompt?: string;
+	readonly dynamicContext?: string;
+	/** Compatibility aggregate for clients predating the split contract. */
+	readonly inject?: string;
+	readonly contextHash?: string;
+	readonly contextVersion?: number;
+	readonly recentContext?: string;
+	readonly warnings?: readonly string[];
+	readonly sessionKnown?: boolean;
 }
 
 export interface UserPromptSubmitResponse {
-	readonly context: string;
+	/** Deprecated compatibility field from the pre-hook response shape. */
+	readonly context?: string;
+	readonly dynamicContext?: string;
+	/** Compatibility aggregate for clients predating the split contract. */
+	readonly inject?: string;
+	readonly contextHash?: string;
+	readonly contextVersion?: number;
+	readonly memoryCount?: number;
+	readonly queryTerms?: string;
+	readonly engine?: string;
+	readonly sessionKnown?: boolean;
+	readonly warnings?: readonly string[];
 }
 
 export interface SessionEndResponse {

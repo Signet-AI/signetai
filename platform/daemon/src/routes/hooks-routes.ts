@@ -291,14 +291,32 @@ interface HookNotificationContext {
 }
 
 function withCrossAgentNotifications<T extends object>(
-	result: T & { readonly inject?: string; readonly contextHash?: string },
+	result: T & { readonly inject?: string; readonly dynamicContext?: string; readonly contextHash?: string },
 	context: HookNotificationContext,
-): T & { readonly inject: string; readonly notifications?: HookNotificationsBlock } {
+): T & {
+	readonly inject: string;
+	readonly dynamicContext?: string;
+	readonly contextHash?: string;
+	readonly notifications?: HookNotificationsBlock;
+} {
 	const notifications = collectCrossAgentNotifications(context);
-	const inject = appendNotificationInject(result.inject, notifications);
-	if (!notifications) return { ...result, inject };
-	if (typeof result.contextHash !== "string") return { ...result, inject, notifications };
-	return { ...result, inject, contextHash: hashPromptContext(inject), notifications };
+	const inject = notifications ? appendNotificationInject(result.inject, notifications) : (result.inject ?? "");
+	const dynamicContext =
+		result.dynamicContext === undefined
+			? undefined
+			: notifications
+				? appendNotificationInject(result.dynamicContext, notifications)
+				: result.dynamicContext;
+	const dynamicFields = dynamicContext === undefined ? {} : { dynamicContext };
+	if (!notifications) return { ...result, inject, ...dynamicFields };
+	if (typeof result.contextHash !== "string") return { ...result, inject, ...dynamicFields, notifications };
+	return {
+		...result,
+		inject,
+		...dynamicFields,
+		contextHash: hashPromptContext(inject),
+		notifications,
+	};
 }
 
 export function listLiveSessions(agentId: string): Array<{
@@ -341,7 +359,7 @@ export function listLiveSessions(agentId: string): Array<{
 function registerSessionStart(app: Hono): void {
 	app.post("/api/hooks/session-start", async (c) => {
 		if (isInternalCall(c)) {
-			return c.json({ inject: "", memories: [] });
+			return c.json({ inject: "", stableSystemPrompt: "", dynamicContext: "", memories: [] });
 		}
 		let recallAttempted = false;
 		let recallOutcomeRecorded = false;
@@ -396,7 +414,7 @@ function registerSessionStart(app: Hono): void {
 			}
 
 			if (checkBypass(body)) {
-				return c.json({ inject: "", memories: [], bypassed: true });
+				return c.json({ inject: "", stableSystemPrompt: "", dynamicContext: "", memories: [], bypassed: true });
 			}
 
 			if (body.claimOnly === true) {
@@ -453,7 +471,7 @@ export function __setPromptSubmitAdmissionForTests(admission: PromptSubmitAdmiss
 function registerUserPromptSubmit(app: Hono): void {
 	app.post("/api/hooks/user-prompt-submit", async (c) => {
 		if (isInternalCall(c)) {
-			return c.json({ inject: "", memoryCount: 0 });
+			return c.json({ inject: "", dynamicContext: "", memoryCount: 0 });
 		}
 		try {
 			const body = (await c.req.json()) as UserPromptSubmitRequest;
@@ -483,6 +501,7 @@ function registerUserPromptSubmit(app: Hono): void {
 				"user-prompt-submit",
 				{
 					inject: "",
+					dynamicContext: "",
 					memoryCount: 0,
 					sessionKnown: known,
 				},
@@ -515,7 +534,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			stampHarness(body.harness);
 
 			if (checkBypass(body)) {
-				return c.json({ inject: "", memoryCount: 0, bypassed: true });
+				return c.json({ inject: "", dynamicContext: "", memoryCount: 0, bypassed: true });
 			}
 
 			if (!promptSubmitAdmission.acquire()) {

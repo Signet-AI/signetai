@@ -513,6 +513,7 @@ describe("buildUserPromptSubmitBody", () => {
 					ok: true,
 					data: {
 						inject: "recalled context",
+						dynamicContext: "recalled context",
 					},
 				};
 			},
@@ -528,6 +529,27 @@ describe("buildUserPromptSubmitBody", () => {
 		expect(seen[0]?.runtimePath).toBe("legacy");
 		expect(seen[0]?.timeout).toBe(5000);
 		expect(lines).toContain("recalled context");
+	});
+
+	test("combines split session-start context for Codex hook output", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({
+				ok: true,
+				data: { stableSystemPrompt: "stable prefix", dynamicContext: "initial context" },
+			}),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "session-start", "-H", "codex", "--codex-json"]);
+
+		expect(JSON.parse(lines[0] ?? "{}").hookSpecificOutput.additionalContext).toBe("stable prefix\ninitial context");
 	});
 
 	test("notification hook emits native PreToolUse context", async () => {

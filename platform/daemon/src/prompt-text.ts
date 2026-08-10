@@ -1,3 +1,4 @@
+import { stripInternalMemoryContext } from "@signet/core";
 import { extractAnchorTerms } from "./anchor-terms";
 
 const UNTRUSTED_METADATA_HEADER =
@@ -71,7 +72,7 @@ export function stripUntrustedMetadata(text: string): string {
 		remaining = [before, after].filter((part) => part.length > 0).join("\n\n");
 	}
 
-	return remaining.trim();
+	return stripInternalMemoryContext(remaining.trim());
 }
 
 const RECALL_STOPWORDS = new Set([

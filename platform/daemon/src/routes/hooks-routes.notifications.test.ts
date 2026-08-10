@@ -132,6 +132,19 @@ describe("cross-agent notification routes", () => {
 		expect(body.notifications?.items.some((item) => item.id === message.id)).toBe(true);
 		expect(body.contextHash).toBe(createHash("sha256").update(body.inject).digest("hex"));
 	});
+
+	it("preserves the exact prompt envelope and hash when no notification is pending", async () => {
+		const response = await post("/api/hooks/session-start", {
+			harness: "opencode",
+			sessionKey: "session-without-notifications",
+			project: dir,
+		});
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { inject: string; contextHash: string };
+
+		expect(body.inject.endsWith("\n</signet-memory-context>\n")).toBe(true);
+		expect(body.contextHash).toBe(createHash("sha256").update(body.inject).digest("hex"));
+	});
 	it("returns 429 instead of dropping unread messages when the durable inbox is full", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.exec(`

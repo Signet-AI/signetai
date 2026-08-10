@@ -1,3 +1,5 @@
+import { stripInternalMemoryContext } from "@signet/core";
+
 export interface EmptyJsonConversationWarning {
 	readonly harness: string;
 	readonly rawChars: number;
@@ -12,21 +14,21 @@ export function normalizeSessionTranscript(
 ): string {
 	if (harness.trim().toLowerCase() === "codex") {
 		const codex = normalizeCodexTranscript(raw);
-		if (codex) return codex;
+		if (codex) return stripInternalMemoryContext(codex);
 		const generic = normalizeJsonConversationTranscript(raw);
-		if (generic !== null) return generic;
-		return raw;
+		if (generic !== null) return stripInternalMemoryContext(generic);
+		return stripInternalMemoryContext(raw);
 	}
 
 	const result = normalizeJsonConversationTranscript(raw);
 	// null = not a JSON-line transcript, safe to return raw.
-	if (result === null) return raw;
+	if (result === null) return stripInternalMemoryContext(raw);
 	// Empty string from a non-trivial transcript means all lines were
 	// non-conversational — notify caller so operators can add support for this schema.
 	if (result === "" && raw.length > 500) {
 		onEmptyJsonConversation?.({ harness, rawChars: raw.length });
 	}
-	return result;
+	return stripInternalMemoryContext(result);
 }
 
 // Returns null when input is not JSON-line format (below 60% threshold).
@@ -69,7 +71,7 @@ export function normalizeJsonConversationTranscript(raw: string): string | null 
 		}
 	}
 
-	return conversationLines.join("\n");
+	return stripInternalMemoryContext(conversationLines.join("\n"));
 }
 
 function normalizeJsonConversationRecord(record: Record<string, unknown>): string {
@@ -199,5 +201,5 @@ export function normalizeCodexTranscript(raw: string): string {
 		// response_item events (tool calls/outputs) are intentionally omitted.
 	}
 
-	return lines.join("\n");
+	return stripInternalMemoryContext(lines.join("\n"));
 }

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { stripInternalMemoryContext } from "@signet/core";
 import { isRecord, readTrimmedString } from "./helpers.js";
 import type { BaseSessionEntry, BaseSessionHeader } from "./types.js";
 
@@ -26,7 +27,7 @@ function roleLabel(role: string | undefined): string | undefined {
 
 function extractTextContent(value: unknown): string | undefined {
 	if (typeof value === "string") {
-		const normalized = normalizeWhitespace(value);
+		const normalized = normalizeWhitespace(stripInternalMemoryContext(value));
 		return normalized.length > 0 ? normalized : undefined;
 	}
 
@@ -38,7 +39,7 @@ function extractTextContent(value: unknown): string | undefined {
 		const candidate =
 			readTrimmedString(part.text) ?? readTrimmedString(part.input_text) ?? readTrimmedString(part.content);
 		if (!candidate) continue;
-		parts.push(normalizeWhitespace(candidate));
+		parts.push(normalizeWhitespace(stripInternalMemoryContext(candidate)));
 	}
 
 	if (parts.length === 0) return undefined;

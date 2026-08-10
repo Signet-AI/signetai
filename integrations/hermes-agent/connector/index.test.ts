@@ -1015,6 +1015,23 @@ for vector in contract["vectors"]:
 		expect(generationIncrement).toBeLessThan(queuePrefetchFn.indexOf("def _run"));
 	});
 
+	it("keeps stable and dynamic session context on separate Hermes paths", () => {
+		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
+		const initialization = plugin.slice(plugin.indexOf("def initialize"), plugin.indexOf("def system_prompt_block"));
+		const promptBlock = plugin.slice(plugin.indexOf("def system_prompt_block"), plugin.indexOf("def prefetch"));
+		const prefetch = plugin.slice(plugin.indexOf("def prefetch"), plugin.indexOf("def queue_prefetch"));
+
+		expect(initialization).toContain('result.get("stableSystemPrompt")');
+		expect(initialization).toContain('result.get("dynamicContext", "")');
+		expect(initialization).toContain("self._session_prefetch_result =");
+		expect(promptBlock).toContain("deterministic");
+		expect(prefetch).toContain(
+			"parts = [self._session_prefetch_result, self._prefetch_result, self._notification_result]",
+		);
+		expect(prefetch).toContain('self._session_prefetch_result = ""');
+		expect(plugin).toContain("def _strip_internal_memory_context");
+	});
+
 	it("serializes claim-only session recovery for the daemon (#1243)", () => {
 		const clientPath = join(import.meta.dir, "hermes-plugin", "client.py");
 		const script = String.raw`

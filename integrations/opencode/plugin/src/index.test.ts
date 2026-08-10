@@ -21,6 +21,15 @@ interface OpenCodeHooks {
 		input: { readonly sessionID: string },
 		output: { readonly parts: ReadonlyArray<{ readonly type: "text"; readonly text: string }> },
 	) => Promise<void>;
+	readonly "experimental.chat.messages.transform": (
+		input: Record<string, never>,
+		output: {
+			messages: Array<{
+				info: { id: string; sessionID: string; role: "user" | "assistant" };
+				parts: Array<{ type: "text"; text: string }>;
+			}>;
+		},
+	) => Promise<void>;
 	readonly "experimental.chat.system.transform": (
 		input: { readonly sessionID: string },
 		output: { readonly system: string[] },
@@ -45,11 +54,14 @@ function installFetch(): RequestRecord[] {
 
 			if (url.pathname === "/api/hooks/session-start") {
 				const sessionKey = typeof body.sessionKey === "string" ? body.sessionKey : "";
-				return Response.json({ inject: sessionKey ? `session-start:${sessionKey}` : "workspace-start" });
+				return Response.json({
+					stableSystemPrompt: sessionKey ? `session-start:${sessionKey}` : "workspace-start",
+					dynamicContext: sessionKey ? `session-start-dynamic:${sessionKey}` : "workspace-dynamic",
+				});
 			}
 
 			if (url.pathname === "/api/hooks/user-prompt-submit") {
-				return Response.json({ inject: "prompt-submit-context" });
+				return Response.json({ dynamicContext: "prompt-submit-context" });
 			}
 
 			return Response.json({});
@@ -136,6 +148,27 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 		});
 	});
 
+	test("retains initial dynamic context when system transform precedes chat.message", async () => {
+		installFetch();
+		const hooks = await createHooks();
+		await hooks["experimental.chat.system.transform"]({ sessionID: "dynamic-before-chat" }, { system: [] });
+		await hooks["chat.message"](
+			{ sessionID: "dynamic-before-chat" },
+			{ parts: [{ type: "text", text: "continue the task" }] },
+		);
+
+		const apiOutput = {
+			messages: [
+				{
+					info: { id: "dynamic-message", sessionID: "dynamic-before-chat", role: "user" as const },
+					parts: [{ type: "text" as const, text: "continue the task" }],
+				},
+			],
+		};
+		await hooks["experimental.chat.messages.transform"]({}, apiOutput);
+		expect(apiOutput.messages[0]?.parts[0]?.text).toContain("session-start-dynamic:dynamic-before-chat");
+	});
+
 	test("keeps turn context available for title and primary transforms", async () => {
 		process.env.SIGNET_AGENT_ID = undefined;
 		installFetch();
@@ -155,9 +188,24 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 
 		for (const output of [titleOutput, primaryOutput]) {
 			expect(output.system.join("\n")).toContain("session-start:child-chat-first");
-			expect(output.system.join("\n")).toContain("prompt-submit-context");
+			expect(output.system.join("\n")).not.toContain("prompt-submit-context");
 		}
 		expect(titleOutput.system).toEqual(primaryOutput.system);
+
+		const apiOutput = {
+			messages: [
+				{
+					info: { id: "prompt-1", sessionID: "child-chat-first", role: "user" as const },
+					parts: [{ type: "text" as const, text: "start the delegated task" }],
+				},
+			],
+		};
+		await hooks["experimental.chat.messages.transform"]({}, apiOutput);
+		expect(apiOutput.messages[0]?.parts[0]?.text).toContain("prompt-submit-context");
+		expect(apiOutput.messages[0]?.parts[0]?.text).toContain('<signet-memory source="api-context">');
+		const replayedContent = apiOutput.messages[0]?.parts[0]?.text;
+		await hooks["experimental.chat.messages.transform"]({}, apiOutput);
+		expect(apiOutput.messages[0]?.parts[0]?.text).toBe(replayedContent);
 	});
 
 	test("scrubs a memory fence before completed assistant text is exposed", async () => {
@@ -252,8 +300,18 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 		const output = { system: [] };
 		await hooks["experimental.chat.system.transform"]({ sessionID: "overlapping-turns" }, output);
 		expect(output.system.join("\n")).toContain("session-start-context");
-		expect(output.system.join("\n")).toContain("newer-prompt-context");
-		expect(output.system.join("\n")).not.toContain("older-prompt-context");
+		expect(output.system.join("\n")).not.toContain("newer-prompt-context");
+		const apiOutput = {
+			messages: [
+				{
+					info: { id: "newer-prompt", sessionID: "overlapping-turns", role: "user" as const },
+					parts: [{ type: "text" as const, text: "newer prompt" }],
+				},
+			],
+		};
+		await hooks["experimental.chat.messages.transform"]({}, apiOutput);
+		expect(apiOutput.messages[0]?.parts[0]?.text).toContain("newer-prompt-context");
+		expect(apiOutput.messages[0]?.parts[0]?.text).not.toContain("older-prompt-context");
 	});
 
 	test("does not restore turn context after session end", async () => {

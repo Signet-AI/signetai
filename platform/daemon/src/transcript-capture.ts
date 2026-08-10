@@ -1,3 +1,4 @@
+import { stripInternalMemoryContext } from "@signet/core";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
 import {
 	appendCanonicalTranscriptTurns,
@@ -28,7 +29,7 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 		capturedAt: params.capturedAt,
 		sourceFormat: params.rawTranscript ? inferTranscriptSourceFormat(params.rawTranscript) : "normalized",
 		sourcePath: params.transcriptPath,
-		transcript: params.transcript,
+		transcript: stripInternalMemoryContext(params.transcript),
 	});
 }
 
@@ -50,14 +51,18 @@ export async function appendCanonicalLiveTranscriptTurns(params: {
 		project: params.project ?? null,
 		sourceFormat: "live",
 		turns: [
-			...(params.lastAssistantMessage ? [{ role: "assistant" as const, content: params.lastAssistantMessage }] : []),
-			{ role: "user" as const, content: params.userMessage },
+			...(params.lastAssistantMessage
+				? [{ role: "assistant" as const, content: stripInternalMemoryContext(params.lastAssistantMessage) }]
+				: []),
+			{ role: "user" as const, content: stripInternalMemoryContext(params.userMessage) },
 		],
 	});
 }
 
 export function formatLivePromptTranscript(userMessage: string, lastAssistantMessage?: string): string {
-	return [lastAssistantMessage ? `Assistant: ${lastAssistantMessage}` : "", `User: ${userMessage}`]
+	const cleanUserMessage = stripInternalMemoryContext(userMessage);
+	const cleanAssistantMessage = lastAssistantMessage ? stripInternalMemoryContext(lastAssistantMessage) : "";
+	return [cleanAssistantMessage ? `Assistant: ${cleanAssistantMessage}` : "", `User: ${cleanUserMessage}`]
 		.filter((turn) => turn.trim().length > 0)
 		.join("\n");
 }

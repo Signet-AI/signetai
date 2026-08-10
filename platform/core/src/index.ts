@@ -154,6 +154,13 @@ export { loadConfiguredHarnesses, parseHarnessList } from "./harness-config";
 export { resolveSignetDaemonUrl } from "./daemon-url";
 export type { SignetDaemonUrlOptions } from "./daemon-url";
 export {
+	composeApiUserContent,
+	escapeMemoryContextForFence,
+	StreamingMemoryContextScrubber,
+	stripInternalMemoryContext,
+	wrapMemoryContext,
+} from "./memory-context";
+export {
 	type WorkspaceSource,
 	type WorkspaceResolution,
 	type ResolveWorkspacePathOptions,

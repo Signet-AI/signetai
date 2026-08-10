@@ -16,10 +16,12 @@ import { join } from "node:path";
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+	composeApiUserContent,
 	readStaticIdentity,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
 	scrubPromptContext,
+	stripInternalMemoryContext,
 } from "@signet/core";
 import { createDaemonClient } from "./daemon-client.js";
 import { createTools } from "./tools.js";
@@ -41,6 +43,10 @@ import {
 interface SessionStartResult {
 	readonly inject?: string;
 	readonly recentContext?: string;
+	readonly stableSystemPrompt?: string;
+	readonly dynamicContext?: string;
+	readonly contextHash?: string;
+	readonly contextVersion?: number;
 }
 
 interface PreCompactionResult {
@@ -50,13 +56,21 @@ interface PreCompactionResult {
 
 interface HookNotificationResult {
 	readonly inject?: string;
+	readonly dynamicContext?: string;
 	readonly notifications?: {
 		readonly inject?: string;
+		readonly dynamicContext?: string;
 	};
 }
 
 interface UserPromptSubmitResult extends HookNotificationResult {
 	readonly memoryCount?: number;
+	readonly contextHash?: string;
+	readonly contextVersion?: number;
+}
+
+function readContextString(value: unknown): string {
+	return typeof value === "string" ? value.trim() : "";
 }
 
 // Per-turn inject cache: every LLM transform for a prompt receives the same context.
@@ -64,30 +78,32 @@ interface UserPromptSubmitResult extends HookNotificationResult {
 // unbounded growth if OpenCode never emits either lifecycle hook for a session.
 const MAX_ACTIVE_TURNS = 64;
 interface ActiveTurn {
-	inject: string;
+	messageID?: string;
+	userText: string;
+	dynamicContext: string;
 	notificationInject: string;
 }
 const activeTurns = new Map<string, ActiveTurn>();
 
-function beginTurn(sessionID: string): ActiveTurn {
+function beginTurn(sessionID: string, messageID: string | undefined, userText: string): ActiveTurn {
 	if (activeTurns.size >= MAX_ACTIVE_TURNS) {
 		const oldest = activeTurns.keys().next().value;
 		if (oldest !== undefined) activeTurns.delete(oldest);
 	}
-	const turn = { inject: "", notificationInject: "" };
+	const turn = { messageID, userText, dynamicContext: "", notificationInject: "" };
 	activeTurns.set(sessionID, turn);
 	return turn;
 }
 
-function appendTurnInject(sessionID: string, turn: ActiveTurn, inject: string): void {
+function appendTurnContext(sessionID: string, turn: ActiveTurn, context: string): void {
 	const active = activeTurns.get(sessionID);
 	if (active !== turn) return;
-	active.inject = active.inject ? `${active.inject}\n${inject}` : inject;
+	active.dynamicContext = active.dynamicContext ? `${active.dynamicContext}\n${context}` : context;
 }
 
 function recallOnlyInject(result: HookNotificationResult): string {
-	const inject = result.inject?.trim() ?? "";
-	const notificationInject = result.notifications?.inject?.trim() ?? "";
+	const inject = readContextString(result.dynamicContext) || readContextString(result.inject);
+	const notificationInject = readContextString(result.notifications?.inject);
 	if (!notificationInject || !inject.endsWith(notificationInject)) return inject;
 	return inject.slice(0, -notificationInject.length).trim();
 }
@@ -186,7 +202,9 @@ async function buildTranscript(oc: PluginInput["client"], sid: string): Promise<
 		const role = msg.info.role === "user" ? "User" : "Assistant";
 		for (const part of msg.parts) {
 			if (part.type !== "text") continue;
-			const text = part.text?.trim().replace(/\s*\r?\n\s*/g, " ");
+			const text = stripInternalMemoryContext(part.text ?? "")
+				.trim()
+				.replace(/\s*\r?\n\s*/g, " ");
 			if (text) lines.push(`${role}: ${text}`);
 		}
 	}
@@ -215,6 +233,8 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 	const client = createDaemonClient(daemonUrl);
 
 	let sessionContext = "";
+	const sessionSystemPrompts = new Map<string, string>();
+	const sessionStartDynamicContexts = new Map<string, string>();
 	const startedSessions = new Set<string>();
 	const startingSessions = new Map<string, Promise<string>>();
 	const parentBySession = new Map<string, string>();
@@ -229,7 +249,10 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		sessionStartTimeout(),
 	);
 	if (start.ok) {
-		sessionContext = start.data.inject ?? start.data.recentContext ?? "";
+		sessionContext =
+			readContextString(start.data.stableSystemPrompt) ||
+			readContextString(start.data.inject) ||
+			readContextString(start.data.recentContext);
 	} else if (start.reason === "timeout") {
 		sessionContext = sessionStartFallback("timeout");
 	} else {
@@ -238,7 +261,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 	}
 
 	async function ensureSessionStarted(sessionID: string): Promise<string> {
-		if (startedSessions.has(sessionID)) return "";
+		if (startedSessions.has(sessionID)) return sessionStartDynamicContexts.get(sessionID) ?? "";
 		const existing = startingSessions.get(sessionID);
 		if (existing) return await existing;
 
@@ -257,7 +280,17 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			)
 			.then((result) => {
 				startedSessions.add(sessionID);
-				return result?.inject ?? "";
+				const dynamicContext = readContextString(result?.dynamicContext);
+				if (result) {
+					sessionSystemPrompts.set(
+						sessionID,
+						readContextString(result.stableSystemPrompt) ||
+							readContextString(result.inject) ||
+							readContextString(result.recentContext),
+					);
+					if (dynamicContext) sessionStartDynamicContexts.set(sessionID, dynamicContext);
+				}
+				return dynamicContext;
 			});
 		startingSessions.set(sessionID, startSession);
 		try {
@@ -268,7 +301,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 	}
 
 	async function refreshNotifications(sessionID: string, hook: string): Promise<void> {
-		const turn = activeTurns.get(sessionID) ?? beginTurn(sessionID);
+		const turn = activeTurns.get(sessionID) ?? beginTurn(sessionID, undefined, "");
 		try {
 			const result = await client.post<HookNotificationResult>(
 				"/api/hooks/notifications",
@@ -282,7 +315,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				READ_TIMEOUT,
 			);
 			if (activeTurns.get(sessionID) === turn) {
-				turn.notificationInject = result?.inject?.trim() ?? "";
+				turn.notificationInject = readContextString(result?.inject);
 			}
 		} catch {
 			// Peer notifications are best-effort and never block OpenCode.
@@ -337,13 +370,14 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				.filter((text): text is string => text !== null)
 				.join("\n")
 				.trim();
+			const turn = beginTurn(input.sessionID, input.messageID ?? output.message?.id, userText);
 			if (!userText) return;
-			const turn = beginTurn(input.sessionID);
 
 			try {
 				try {
-					const startInject = await ensureSessionStarted(input.sessionID);
-					if (startInject) appendTurnInject(input.sessionID, turn, startInject);
+					const startContext = await ensureSessionStarted(input.sessionID);
+					if (startContext) appendTurnContext(input.sessionID, turn, startContext);
+					sessionStartDynamicContexts.delete(input.sessionID);
 				} catch {
 					// Session-start context is optional; still run prompt-submit so
 					// recall and transcript capture stay fail-open independently.
@@ -363,8 +397,9 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				);
 				if (result) {
 					const recallInject = recallOnlyInject(result);
-					if (recallInject) appendTurnInject(input.sessionID, turn, recallInject);
-					turn.notificationInject = result.notifications?.inject?.trim() ?? "";
+					if (recallInject) appendTurnContext(input.sessionID, turn, recallInject);
+					turn.notificationInject =
+						readContextString(result.notifications?.dynamicContext) || readContextString(result.notifications?.inject);
 				}
 			} catch {
 				// never block the user's message
@@ -376,22 +411,54 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		// ------------------------------------------------------------------
 		"experimental.chat.system.transform": async (input, output): Promise<void> => {
 			if (!input.sessionID) return;
-			let startInject = "";
+			let startContext = "";
 			try {
-				startInject = await ensureSessionStarted(input.sessionID);
+				startContext = await ensureSessionStarted(input.sessionID);
 			} catch {
 				// Signet context is optional; never break OpenCode prompt rendering.
 			}
 			await refreshNotifications(input.sessionID, "experimental.chat.system.transform");
+			const systemPrompt = sessionSystemPrompts.get(input.sessionID) ?? sessionContext;
 			const turn = activeTurns.get(input.sessionID);
-			const startPart = startInject && !turn?.inject.includes(startInject) ? startInject : "";
-			const parts = [...new Set([startPart, turn?.inject, turn?.notificationInject].filter((part) => part?.trim()))];
+			const notification = turn?.notificationInject ?? "";
+			if (!startContext && !turn?.userText && !notification) return;
+			const parts = [systemPrompt, notification].filter((part) => part.trim().length > 0);
 			if (parts.length > 0) {
 				output.system.push(parts.join("\n"));
 			}
 		},
 		"experimental.text.complete": async (_input, output): Promise<void> => {
-			output.text = scrubPromptContext(output.text);
+			output.text = stripInternalMemoryContext(scrubPromptContext(output.text));
+		},
+
+		// ------------------------------------------------------------------
+		// Inject dynamic context into the provider-bound message copy. OpenCode
+		// persists the message before this transform, so the session transcript
+		// remains the clean user message while replay receives the same bytes.
+		// ------------------------------------------------------------------
+		"experimental.chat.messages.transform": async (_input, output): Promise<void> => {
+			for (let index = output.messages.length - 1; index >= 0; index--) {
+				const message = output.messages[index];
+				if (message.info.role !== "user") continue;
+				const turn = activeTurns.get(message.info.sessionID);
+				if (!turn || !turn.dynamicContext.trim()) continue;
+				if (turn.messageID && message.info.id !== turn.messageID) continue;
+				if (!turn.messageID && turn.userText) {
+					const messageText = message.parts
+						.filter((part) => part.type === "text")
+						.map((part) => part.text)
+						.join("\n")
+						.trim();
+					if (stripInternalMemoryContext(messageText) !== stripInternalMemoryContext(turn.userText)) continue;
+				}
+
+				const dynamicContext = turn.dynamicContext.trim();
+				if (!dynamicContext) return;
+				const textPart = [...message.parts].reverse().find((part) => part.type === "text");
+				if (!textPart || textPart.type !== "text") return;
+				textPart.text = composeApiUserContent(textPart.text, dynamicContext);
+				return;
+			}
 		},
 
 		// ------------------------------------------------------------------
@@ -469,6 +536,8 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 						});
 					if (sid) {
 						startedSessions.delete(sid);
+						sessionSystemPrompts.delete(sid);
+						sessionStartDynamicContexts.delete(sid);
 						parentBySession.delete(sid);
 						activeTurns.delete(sid);
 					}
@@ -476,6 +545,10 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 
 				if (event.type === "session.compacted" && event.summary) {
 					const sid = extractSessionId(event.properties);
+					if (sid) {
+						activeTurns.delete(sid);
+						sessionStartDynamicContexts.delete(sid);
+					}
 					await client.post(
 						"/api/hooks/compaction-complete",
 						{

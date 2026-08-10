@@ -282,6 +282,11 @@ export interface SessionStartResponse {
 		created_at: string;
 	}>;
 	recentContext?: string;
+	/** Deterministic prompt prefix. Harnesses should cache this separately. */
+	stableSystemPrompt: string;
+	/** State-dependent context delivered through the harness API-only channel. */
+	dynamicContext: string;
+	/** Compatibility aggregate for clients that do not understand the split. */
 	inject: string;
 	contextHash?: string;
 	contextVersion?: typeof PROMPT_CONTEXT_VERSION;
@@ -319,6 +324,9 @@ export interface UserPromptSubmitRequest {
 }
 
 export interface UserPromptSubmitResponse {
+	/** State-dependent context delivered through the harness API-only channel. */
+	dynamicContext: string;
+	/** Compatibility alias for clients that still consume the aggregate field. */
 	inject: string;
 	contextHash?: string;
 	contextVersion?: typeof PROMPT_CONTEXT_VERSION;
@@ -617,6 +625,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const identityMode = loadIdentityMode(getAgentsDir());
 	const managesIdentity = identityModeManagesFiles(identityMode);
 	const includeIdentity = identityModeReadsFiles(identityMode) && config.includeIdentity !== false;
+	const stableSystemPrompt = buildSignetSystemPrompt({ includeIdentityStewardship: managesIdentity });
 
 	logger.info("hooks", "Session start hook", {
 		harness: req.harness,
@@ -669,7 +678,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		return attachPromptContext({
 			identity: { name: "Agent" },
 			memories: [],
-			inject: "[memory active | /remember | /recall]",
+			stableSystemPrompt,
+			dynamicContext: "[memory active | /remember | /recall]",
+			inject: `${stableSystemPrompt}\n[memory active | /remember | /recall]`,
 			warnings: warnings?.length ? warnings : undefined,
 		});
 	}
@@ -1034,21 +1045,21 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	];
 	recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet, agentId);
 
-	// Format inject text
-	const injectParts: string[] = [];
+	// Format the dynamic context separately from the deterministic system
+	// prefix. The aggregate `inject` field below remains for legacy clients.
+	const dynamicParts: string[] = [];
 	let recoverySection = "";
 
-	injectParts.push(buildSignetSystemPrompt({ includeIdentityStewardship: managesIdentity }));
 	const systemPluginContext = buildPluginPromptContributionSection("system", logger);
 	if (systemPluginContext) {
-		injectParts.push(systemPluginContext);
+		dynamicParts.push(systemPluginContext);
 	}
-	injectParts.push("[memory active | /remember | /recall]");
+	dynamicParts.push("[memory active | /remember | /recall]");
 
 	// Inject session gap summary for temporal awareness
 	const gapSummary = getSessionGapSummary();
 	if (gapSummary) {
-		injectParts.push(gapSummary);
+		dynamicParts.push(gapSummary);
 	}
 
 	if (req.project) {
@@ -1060,8 +1071,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			limit: 6,
 		});
 		if (peerSessions.length > 0) {
-			injectParts.push("\n## Active Peer Sessions\n");
-			injectParts.push("Other Signet agent sessions are active right now:");
+			dynamicParts.push("\n## Active Peer Sessions\n");
+			dynamicParts.push("Other Signet agent sessions are active right now:");
 			for (const peer of peerSessions) {
 				const safeAgentId = sanitizePeerPromptField(peer.agentId) || "unknown-agent";
 				const safeHarness = sanitizePeerPromptField(peer.harness) || "unknown-harness";
@@ -1069,54 +1080,54 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 				const safeProject = sanitizePeerPromptField(peer.project);
 				const sessionLabel = safeSessionKey ? ` session=${safeSessionKey}` : "";
 				const projectLabel = safeProject ? ` project=${safeProject}` : "";
-				injectParts.push(
+				dynamicParts.push(
 					`- ${safeAgentId} (${safeHarness})${projectLabel}${sessionLabel} [seen ${formatLastSeenShort(peer.lastSeenAt)}]`,
 				);
 			}
 			if (harnessSupportsNamedCrossAgentTools(req.harness)) {
-				injectParts.push("Use `agent_message_send` to ask for help and `agent_message_inbox` to read replies.");
+				dynamicParts.push("Use `agent_message_send` to ask for help and `agent_message_inbox` to read replies.");
 			}
 		}
 	}
 
 	if (agentsMdContent) {
-		injectParts.push("\n## Agent Instructions\n");
-		injectParts.push(agentsMdContent);
+		dynamicParts.push("\n## Agent Instructions\n");
+		dynamicParts.push(agentsMdContent);
 	}
 
 	if (safeProfileIdentitySections !== null && safeProfileIdentitySections !== undefined) {
 		for (const section of safeProfileIdentitySections) {
-			injectParts.push(`\n## ${section.header}\n`);
-			injectParts.push(section.content);
+			dynamicParts.push(`\n## ${section.header}\n`);
+			dynamicParts.push(section.content);
 		}
 		if (memoryMdContent && !safeProfileIdentitySections.some((section) => section.path === "MEMORY.md")) {
-			injectParts.push("\n## Working Memory\n");
-			injectParts.push(memoryMdContent);
+			dynamicParts.push("\n## Working Memory\n");
+			dynamicParts.push(memoryMdContent);
 		}
 	} else {
 		if (startupIdentitySections.length > 0) {
 			for (const section of startupIdentitySections) {
-				injectParts.push(`\n## ${section.header}\n`);
-				injectParts.push(section.content);
+				dynamicParts.push(`\n## ${section.header}\n`);
+				dynamicParts.push(section.content);
 			}
 		} else if (!agentsMdContent && managesIdentity && (identity.name !== "Agent" || identity.description)) {
-			injectParts.push(`You are ${identity.name}${identity.description ? `, ${identity.description}` : ""}.`);
+			dynamicParts.push(`You are ${identity.name}${identity.description ? `, ${identity.description}` : ""}.`);
 		}
 
 		if (memoryMdContent) {
-			injectParts.push("\n## Working Memory\n");
-			injectParts.push(memoryMdContent);
+			dynamicParts.push("\n## Working Memory\n");
+			dynamicParts.push(memoryMdContent);
 		}
 	}
 
 	if (memories.length > 0) {
-		injectParts.push(
+		dynamicParts.push(
 			`\n## Relevant Memories (auto-loaded | scored by importance x recency | ${memories.length} results)\n`,
 		);
 		for (const mem of memories) {
 			const tagStr = mem.tags ? ` [${mem.tags}]` : "";
 			const dateStr = formatMemoryDate(mem.created_at);
-			injectParts.push(`- ${mem.content}${tagStr} (${dateStr})`);
+			dynamicParts.push(`- ${mem.content}${tagStr} (${dateStr})`);
 		}
 	}
 
@@ -1162,23 +1173,23 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	const updateStatus = getUpdateSummary();
 	if (updateStatus) {
-		injectParts.push("\n## Signet Status\n");
-		injectParts.push(updateStatus);
+		dynamicParts.push("\n## Signet Status\n");
+		dynamicParts.push(updateStatus);
 	}
 
 	const sessionPluginContext = buildPluginPromptContributionSection("session-start", logger);
 	if (sessionPluginContext) {
-		injectParts.push(sessionPluginContext);
+		dynamicParts.push(sessionPluginContext);
 	}
 
 	// Surface available secrets so agents know what's available
 	try {
 		const secretNames = await listSecrets();
 		if (secretNames.length > 0) {
-			injectParts.push("\n## Available Secrets\n");
-			injectParts.push("Use the `secret_exec` MCP tool to run commands with these secrets injected as env vars.\n");
+			dynamicParts.push("\n## Available Secrets\n");
+			dynamicParts.push("Use the `secret_exec` MCP tool to run commands with these secrets injected as env vars.\n");
 			for (const name of secretNames) {
-				injectParts.push(`- ${name}`);
+				dynamicParts.push(`- ${name}`);
 			}
 		}
 	} catch {
@@ -1194,23 +1205,25 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const reservedTokens =
 		estimateTokens(recoverySection) + estimateTokens(constraintsSection) + estimateTokens(inheritedSection);
 	const mainBudget = Math.max(0, maxTokens - reservedTokens);
-	let inject = injectParts.join("\n");
+	const dynamicBudget = Math.max(0, mainBudget - estimateTokens(stableSystemPrompt));
+	let dynamicContext = dynamicParts.join("\n");
 	if (mainBudget === 0) {
 		logger.warn("hooks", "Session-start reserved sections exhaust token budget — main inject cleared", {
 			maxTokens,
 			reservedTokens,
 		});
 	}
-	inject = applyTokenBudget(inject, mainBudget);
+	dynamicContext = applyTokenBudget(dynamicContext, dynamicBudget);
 	if (constraintsSection) {
-		inject += constraintsSection;
+		dynamicContext += constraintsSection;
 	}
 	if (inheritedSection) {
-		inject += inheritedSection;
+		dynamicContext += inheritedSection;
 	}
 	if (recoverySection) {
-		inject += recoverySection;
+		dynamicContext += recoverySection;
 	}
+	const inject = [stableSystemPrompt, dynamicContext].filter((part) => part.trim().length > 0).join("\n");
 	logger.info("hooks", "Session start completed", {
 		harness: req.harness,
 		project: req.project,
@@ -1223,6 +1236,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		traversalTimedOut,
 		injectTokens: estimateTokens(inject),
 		injectChars: inject.length,
+		stableSystemPromptChars: stableSystemPrompt.length,
+		dynamicContextChars: dynamicContext.length,
 		durationMs: duration,
 		phaseMs: {
 			candidates: candidatesMs,
@@ -1244,6 +1259,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			created_at: m.created_at,
 		})),
 		recentContext: memoryMdContent,
+		stableSystemPrompt,
+		dynamicContext,
 		inject,
 		warnings: (() => {
 			if (!req.sessionKey) return undefined;
@@ -1361,6 +1378,7 @@ function finalizeUserPromptSubmitSuccess(
 ): UserPromptSubmitResponse {
 	const contextualResult = attachPromptContext(result);
 	const inject = contextualResult.inject;
+	const dynamicContext = typeof result.dynamicContext === "string" ? result.dynamicContext : inject;
 	const rawMemoryCount = typeof result.memoryCount === "number" ? result.memoryCount : 0;
 	const memoryCount = Number.isFinite(rawMemoryCount) && rawMemoryCount >= 0 ? rawMemoryCount : 0;
 	const engine =
@@ -1378,6 +1396,7 @@ function finalizeUserPromptSubmitSuccess(
 		memoryCount,
 		prompt: userMessage,
 		injectChars: inject.length,
+		dynamicContextChars: dynamicContext.length,
 		inject,
 		engine,
 		durationMs: duration,
@@ -1666,6 +1685,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
+				dynamicContext: "",
 				inject: "",
 				memoryCount: 0,
 				warnings,
@@ -1714,6 +1734,7 @@ export async function handleUserPromptSubmit(
 				userMessage,
 				start,
 				{
+					dynamicContext: "",
 					inject: "",
 					memoryCount: 0,
 					queryTerms: keywordTerms.join(" ") || undefined,
@@ -1748,6 +1769,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
+				dynamicContext: inject,
 				inject,
 				memoryCount: entityContext.memoryCount,
 				queryTerms: keywordTerms.join(" ") || undefined,
@@ -1762,6 +1784,7 @@ export async function handleUserPromptSubmit(
 		}
 		deps.logger.error("hooks", "User prompt submit failed", e as Error);
 		return {
+			dynamicContext: "",
 			inject: "",
 			memoryCount: 0,
 			warnings,

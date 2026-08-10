@@ -901,10 +901,13 @@ describe("SignetPiExtension", () => {
 			async fetch(req) {
 				const path = new URL(req.url).pathname;
 				if (path === "/api/hooks/session-start") {
-					return Response.json({ inject: "session-context-content" });
+					return Response.json({
+						stableSystemPrompt: "stable-session-context",
+						dynamicContext: "session-context-content",
+					});
 				}
 				if (path === "/api/hooks/user-prompt-submit") {
-					return Response.json({ inject: "[signet:recall]\n- Preferred language is TypeScript" });
+					return Response.json({ dynamicContext: "[signet:recall]\n- Preferred language is TypeScript" });
 				}
 				if (path === "/api/hooks/notifications") {
 					return Response.json({ inject: "peer-notification-content" });

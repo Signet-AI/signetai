@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -38,6 +39,20 @@ except ImportError:  # pragma: no cover — only missing during Hermes bootstrap
         SignetClient = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
+
+_INTERNAL_MEMORY_BLOCK_RE = re.compile(
+    r"<\\?\s*(?:signet-memory-context|signet-memory|memory-context)(?=[\s/>])(?:[^>\"']|\"[^\"]*\"|'[^']*')*>.*?(?:<\\?\s*/\s*(?:signet-memory-context|signet-memory|memory-context)\s*>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_INTERNAL_MEMORY_CLOSE_RE = re.compile(
+    r"<\\?\s*/\s*(?:signet-memory-context|signet-memory|memory-context)\s*>",
+    re.IGNORECASE,
+)
+
+
+def _strip_internal_memory_context(value: str) -> str:
+    """Keep provider-only memory wrappers out of Hermes transcript state."""
+    return _INTERNAL_MEMORY_CLOSE_RE.sub("", _INTERNAL_MEMORY_BLOCK_RE.sub("", value))
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +341,10 @@ class SignetMemoryProvider(MemoryProvider):
         self._project = ""
         self._inject_cache = ""
         self._inject_lock = threading.Lock()
+        # Session-start dynamic context is kept separate from the ordinary
+        # per-turn result. queue_prefetch() clears the latter before starting
+        # a new recall, but must not erase the first API-only context block.
+        self._session_prefetch_result = ""
         self._prefetch_result = ""
         self._notification_result = ""
         self._prefetch_lock = threading.Lock()
@@ -390,8 +409,9 @@ class SignetMemoryProvider(MemoryProvider):
     def initialize(self, session_id: str, **kwargs) -> None:
         """Connect to the Signet daemon and call session-start hook.
 
-        Retrieves identity, memories, and system prompt injection from
-        the daemon. Caches the inject text for system_prompt_block().
+        Retrieves identity, memories, and the cache-stable prompt contract
+        from the daemon. The stable prefix is cached for system_prompt_block;
+        dynamic session context is staged for Hermes' API-only prefetch path.
         """
         if SignetClient is None:
             logger.warning("Signet plugin: SignetClient not importable — skipping initialization")
@@ -429,23 +449,30 @@ class SignetMemoryProvider(MemoryProvider):
         self._session_key = session_id or "hermes-default"
         self._project = _resolve_agent_workspace(agent_id, kwargs)
 
-        # Call session-start hook — get identity + memories + inject
+        # Call session-start hook — get identity + memories + split context
         result = self._client.session_start(
             self._session_key,
             project=self._project,
         )
         if result:
-            inject = result.get("inject", "")
-            if inject:
+            raw_stable_prompt = result.get("stableSystemPrompt") or result.get("inject", "")
+            stable_prompt = raw_stable_prompt if isinstance(raw_stable_prompt, str) else ""
+            dynamic_context = result.get("dynamicContext", "")
+            if stable_prompt:
                 with self._inject_lock:
-                    self._inject_cache = inject
+                    self._inject_cache = stable_prompt
+            with self._prefetch_lock:
+                self._prefetch_generation += 1
+                self._session_prefetch_result = dynamic_context if isinstance(dynamic_context, str) else ""
+                self._prefetch_result = ""
+                self._notification_result = ""
             # Capture identity and warnings for downstream consumers
             self._identity = result.get("identity")
             self._warnings = result.get("warnings", [])
             self._session_initialized = True
             logger.debug(
                 "Signet session-start: %d chars inject, %d memories",
-                len(inject),
+                len(stable_prompt) + (len(dynamic_context) if isinstance(dynamic_context, str) else 0),
                 len(result.get("memories", [])),
             )
         else:
@@ -454,16 +481,17 @@ class SignetMemoryProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         """Return the Signet system prompt injection.
 
-        On the first call, returns the full session-start inject
-        (identity, memories, context). Subsequent calls return a
-        minimal header since per-turn recall is handled by prefetch().
+        On the first call, returns only the deterministic session-start
+        prefix. Dynamic context is returned by prefetch(), where Hermes can
+        attach it to its API-only copy of the user message. Subsequent calls
+        return a minimal header.
         """
         if not self._client:
             return ""
 
         with self._inject_lock:
             if self._inject_cache:
-                # First call — return full inject and clear cache
+                # First call — return the stable prefix and clear the cache.
                 block = self._inject_cache
                 self._inject_cache = ""
                 return block
@@ -502,7 +530,8 @@ class SignetMemoryProvider(MemoryProvider):
                 logger.debug("Signet notification prefetch failed: %s", e)
 
         with self._prefetch_lock:
-            parts = [self._prefetch_result, self._notification_result]
+            parts = [self._session_prefetch_result, self._prefetch_result, self._notification_result]
+            self._session_prefetch_result = ""
             self._prefetch_result = ""
             self._notification_result = ""
 
@@ -520,7 +549,7 @@ class SignetMemoryProvider(MemoryProvider):
 
         # Accumulate transcript for checkpoint/session-end
         with self._transcript_lock:
-            self._transcript_lines.append(f"user: {query}")
+            self._transcript_lines.append(f"user: {_strip_internal_memory_context(query)}")
 
         # Capture mutable state before spawning the thread to avoid
         # data races: sync_turn() can update _last_assistant_message
@@ -550,6 +579,10 @@ class SignetMemoryProvider(MemoryProvider):
                     # the cached prefix mid-conversation.
                     if not result.get("sessionKnown", True) and self._session_initialized:
                         logger.debug("Signet daemon restarted mid-session, restoring session claim")
+                        with self._prefetch_lock:
+                            # Do not replay a pre-restart session-start block
+                            # into an already-running Hermes conversation.
+                            self._session_prefetch_result = ""
                         reinit = client.session_start(
                             session_key, project=project, claim_only=True,
                         )
@@ -559,7 +592,7 @@ class SignetMemoryProvider(MemoryProvider):
                                 "the next prompt may be treated as a new session"
                             )
                         return
-                    inject = result.get("inject", "")
+                    inject = result.get("dynamicContext") or result.get("inject", "")
                     notification = result.get("notifications")
                     notification_inject = notification.get("inject", "") if isinstance(notification, dict) else ""
                     recall_inject = inject
@@ -607,7 +640,7 @@ class SignetMemoryProvider(MemoryProvider):
         # Accumulate assistant side of transcript
         if assistant_content:
             with self._transcript_lock:
-                self._transcript_lines.append(f"assistant: {assistant_content}")
+                self._transcript_lines.append(f"assistant: {_strip_internal_memory_context(assistant_content)}")
         self._queue_notification_refresh("sync_turn")
 
     def _queue_notification_refresh(self, hook: str) -> None:
@@ -661,6 +694,7 @@ class SignetMemoryProvider(MemoryProvider):
             self._inject_cache = ""
         with self._prefetch_lock:
             self._prefetch_generation += 1
+            self._session_prefetch_result = ""
             self._prefetch_result = ""
             self._notification_result = ""
 
@@ -676,10 +710,13 @@ class SignetMemoryProvider(MemoryProvider):
                 project=self._project,
             )
             if result:
-                inject = result.get("inject", "")
-                if inject and inject.strip():
+                stable_prompt = result.get("stableSystemPrompt") or result.get("inject", "")
+                dynamic_context = result.get("dynamicContext", "")
+                if stable_prompt and isinstance(stable_prompt, str) and stable_prompt.strip():
                     with self._inject_lock:
-                        self._inject_cache = inject
+                        self._inject_cache = stable_prompt
+                with self._prefetch_lock:
+                    self._session_prefetch_result = dynamic_context if isinstance(dynamic_context, str) else ""
                 self._identity = result.get("identity")
                 self._warnings = result.get("warnings", [])
                 self._session_initialized = True
@@ -732,6 +769,10 @@ class SignetMemoryProvider(MemoryProvider):
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Call session-end hook to trigger memory extraction from transcript."""
+        with self._prefetch_lock:
+            self._session_prefetch_result = ""
+            self._prefetch_result = ""
+            self._notification_result = ""
         if not self._client:
             return
 
@@ -746,7 +787,7 @@ class SignetMemoryProvider(MemoryProvider):
                 role = msg.get("role", "unknown")
                 content = msg.get("content", "")
                 if content:
-                    transcript_lines.append(f"{role}: {content}")
+                    transcript_lines.append(f"{role}: {_strip_internal_memory_context(str(content))}")
             transcript = "\n\n".join(transcript_lines)
 
         if not transcript:

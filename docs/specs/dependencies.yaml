@@ -1362,3 +1362,23 @@ specs:
       - "Blocked and tainted rows remain agent-scoped and inspectable through user-facing memory and diagnostics surfaces"
       - "False-positive coverage protects ordinary technical prose, shell examples, security discussions, non-English text, and emoji"
     decision: null
+  - id: cache-stable-memory-injection
+    status: approved
+    path: docs/specs/approved/cache-stable-memory-injection.md
+    hard_depends_on:
+      - prompt-context-contract
+      - lossless-working-memory-closure
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/specs/approved/lossless-working-memory-closure.md
+      - docs/specs/approved/jsonl-transcript-source-of-truth.md
+    success_criteria:
+      - "Session-start responses expose a deterministic stableSystemPrompt separately from state-dependent dynamicContext"
+      - "Identical harness state produces byte-identical provider-bound dynamic context while canonical user and assistant transcripts remain free of injected memory blocks"
+      - "Supported prompt-submit integrations deliver dynamic context through an API-only, hidden, or harness-native context channel rather than appending it to canonical user content"
+      - "Internal memory delimiters are escaped at injection boundaries and removed from visible streaming output when the harness exposes a stream boundary"
+      - "Compression, resume, branch, rewind, and session-end boundaries do not replay stale dynamic context"
+      - "Contract evaluation reports deterministic replay, transcript separation, and measured latency results"
+    decision: null

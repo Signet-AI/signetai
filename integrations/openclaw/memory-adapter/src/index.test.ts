@@ -181,7 +181,11 @@ beforeEach(() => {
 						failSessionStartCount -= 1;
 						return jsonResponse({ error: "temporarily unavailable" }, 503);
 					}
-					return jsonResponse({ ok: true });
+					return jsonResponse({
+						stableSystemPrompt: "stable-session-context",
+						dynamicContext: "initial-session-context",
+						inject: "legacy-session-context",
+					});
 				case "/api/hooks/user-prompt-submit":
 					lastPromptSubmitBody = init?.body ? JSON.parse(String(init.body)) : null;
 					if (delayPromptSubmitMs > 0) {
@@ -192,6 +196,7 @@ beforeEach(() => {
 						return jsonResponse({ error: "temporarily unavailable" }, 503);
 					}
 					return jsonResponse({
+						dynamicContext: "turn-memory",
 						inject: "turn-memory",
 						memoryCount: 2,
 						engine: "fts+decay",
@@ -427,6 +432,9 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		const second = await beforeAgentStart?.(event, ctx);
 
 		expect(getPrependContext(first)).toContain("turn-memory");
+		expect(getPrependContext(first)).toContain("stable-session-context");
+		expect(getPrependContext(first)).toContain("initial-session-context");
+		expect(getPrependContext(first)).toContain('<signet-memory source="session-start">');
 		expect(second).toBeUndefined();
 		expect(getHits("/api/hooks/user-prompt-submit")).toBe(1);
 		expect(getHits("/api/hooks/session-start")).toBe(1);
@@ -448,6 +456,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		const second = await beforePromptBuild?.(event, { sessionKey: "shared-session", agentId: "agent-b" });
 
 		expect(getPrependContext(first)).toContain("turn-memory");
+		expect(getPrependContext(first)).toContain("stable-session-context");
+		expect(getPrependContext(first)).toContain("initial-session-context");
 		expect(getPrependContext(second)).toContain("turn-memory");
 		expect(getHits("/api/hooks/session-start")).toBe(2);
 		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
@@ -507,6 +517,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		const second = await beforeAgentStart?.(event, ctx);
 
 		expect(getPrependContext(first)).toContain("turn-memory");
+		expect(getPrependContext(first)).toContain("stable-session-context");
+		expect(getPrependContext(first)).toContain("initial-session-context");
 		expect(getPrependContext(second)).toContain("turn-memory");
 		expect(getHits("/api/hooks/session-start")).toBe(1);
 		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);

@@ -1,3 +1,4 @@
+import { escapeMemoryContextForFence } from "@signet/core";
 import { readTrimmedString } from "./helpers.js";
 
 export const MAX_PENDING_SESSIONS = 64;
@@ -5,7 +6,7 @@ export const MAX_PENDING_PER_SESSION = 4;
 export const MAX_ENDED_SESSIONS = 128;
 
 export function sanitizeInject(inject: string): string {
-	return inject.replace(/<\/signet-memory>/gi, "<\\/signet-memory>");
+	return escapeMemoryContextForFence(inject);
 }
 
 export function evictOldestKey<V>(map: Map<string, V>, maxSize: number): void {

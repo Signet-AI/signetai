@@ -10,10 +10,17 @@ import type { BaseExtensionContext, BaseSessionEntry } from "./types.js";
 export interface SessionStartResult {
 	readonly inject?: string;
 	readonly recentContext?: string;
+	readonly stableSystemPrompt?: string;
+	readonly dynamicContext?: string;
+	readonly contextHash?: string;
+	readonly contextVersion?: number;
 }
 
 export interface UserPromptSubmitResult {
 	readonly inject?: string;
+	readonly dynamicContext?: string;
+	readonly contextHash?: string;
+	readonly contextVersion?: number;
 	readonly memoryCount?: number;
 	readonly sessionKnown?: boolean;
 }
@@ -148,11 +155,20 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: BaseExtensio
 		deps.config.sessionStartTimeout(),
 	);
 
-	const sessionContext = result.ok
-		? (result.data.inject ?? result.data.recentContext ?? "")
+	const fallbackContext = result.ok
+		? ""
 		: deps.config.staticFallback(result.reason === "timeout" ? "timeout" : "offline");
-	deps.state.setSessionContext(sessionContext);
-	deps.state.setPendingSessionContext(session.sessionId, sessionContext);
+	const stableSystemPrompt = result.ok ? readTrimmedString(result.data.stableSystemPrompt) : undefined;
+	const dynamicContext = result.ok
+		? (readTrimmedString(result.data.dynamicContext) ??
+			readTrimmedString(result.data.inject) ??
+			readTrimmedString(result.data.recentContext))
+		: fallbackContext;
+	const firstTurnContext = [stableSystemPrompt, dynamicContext]
+		.filter((value): value is string => typeof value === "string" && value.length > 0)
+		.join("\n");
+	deps.state.setSessionContext(stableSystemPrompt ?? dynamicContext ?? "");
+	deps.state.setPendingSessionContext(session.sessionId, firstTurnContext);
 }
 
 export async function ensureSessionContext(deps: LifecycleDeps, ctx: BaseExtensionContext): Promise<void> {
@@ -293,7 +309,7 @@ export async function requestRecallForPrompt(
 		await refreshSessionStart(deps, ctx);
 	}
 
-	const inject = readTrimmedString(result.inject);
+	const inject = readTrimmedString(result.dynamicContext) ?? readTrimmedString(result.inject);
 	if (inject) {
 		deps.state.queuePendingRecall(session.sessionId, inject);
 	}

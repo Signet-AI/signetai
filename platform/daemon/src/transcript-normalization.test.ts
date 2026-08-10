@@ -43,6 +43,18 @@ describe("transcript normalization", () => {
 		expect(normalizeJsonConversationTranscript(raw)).toBe("User: question\nAssistant: answer");
 	});
 
+	it("removes provider-only memory context from canonical transcript output", () => {
+		const raw = [
+			JSON.stringify({ role: "user", content: 'deploy <signet-memory source="api">hidden</signet-memory> now' }),
+			JSON.stringify({ role: "assistant", content: "done <memory-context>hidden</memory-context>" }),
+		].join("\n");
+
+		const transcript = normalizeSessionTranscript("test", raw);
+		expect(transcript).toBe("User: deploy  now\nAssistant: done ");
+		expect(transcript).not.toContain("signet-memory");
+		expect(transcript).not.toContain("memory-context");
+	});
+
 	it("normalizes Pi-style role aliases without turning unknown roles into users", () => {
 		const raw = [
 			JSON.stringify({ type: "message", message: { role: "human", parts: [{ text: "hello" }] } }),

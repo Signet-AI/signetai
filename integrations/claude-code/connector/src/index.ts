@@ -60,7 +60,11 @@ export interface SessionStartResult {
 		created_at: string;
 	}>;
 	recentContext?: string;
+	stableSystemPrompt?: string;
+	dynamicContext?: string;
 	inject: string;
+	contextHash?: string;
+	contextVersion?: number;
 }
 
 export interface SessionEndResult {

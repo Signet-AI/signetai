@@ -24,6 +24,28 @@ Hooks are HTTP endpoints exposed by the Signet [Daemon](/daemon/). Harnesses cal
 
 ---
 
+## Cache-stable prompt context
+
+The session-start response separates prompt context into two fields:
+
+- `stableSystemPrompt` is the deterministic Signet instruction prefix. It
+  excludes clocks, peer presence, session summaries, and recalled memory rows,
+  so a compatible harness can cache it.
+- `dynamicContext` is state-dependent session/turn context. Adapters deliver
+  it through a provider-bound, hidden, or native hook channel rather than
+  appending it to the canonical user message.
+- `inject` remains a compatibility aggregate for older connectors. New
+  integrations should prefer the split fields. The aggregate is returned in
+  the versioned `<signet-memory-context>` envelope with `contextHash` and
+  `contextVersion` so legacy clients can verify the exact bytes they received.
+
+Canonical transcript surfaces remove internal `<signet-memory>` and
+`<memory-context>` blocks (including `<signet-memory-context>` envelopes).
+Where a harness exposes a stream boundary, the
+adapter also scrubs split delimiters from visible provider output. The full
+contract and measured evaluation are documented in [Cache-Stable Memory
+Injection](https://github.com/Signet-AI/signetai/blob/main/docs/specs/approved/cache-stable-memory-injection.md).
+
 ## Cross-Agent Notifications
 
 Cross-agent messages are stored in SQLite and survive daemon restarts. A message remains unread for its recipient until the recipient explicitly acknowledges it or the seven-day retention window expires. Acknowledgements are agent-scoped, so acknowledging a broadcast does not dismiss it for other agents.
@@ -50,7 +72,7 @@ If no messages are unread, the endpoint returns `{ "inject": "" }`. Unsupported 
 |---------|---------------------------|
 | Claude Code | `SessionStart`, `UserPromptSubmit`, `PreToolUse` |
 | Codex | `SessionStart`, `UserPromptSubmit`, `PreToolUse` |
-| OpenCode | `chat.message`, `tool.execute.before`, `experimental.chat.system.transform` |
+| OpenCode | `chat.message`, `tool.execute.before`, `experimental.chat.system.transform`, `experimental.chat.messages.transform` |
 | OpenClaw | `message_received`, `before_tool_call`, `before_prompt_build`, `before_agent_start` |
 | pi | `context` |
 | Oh My Pi | `before_agent_start` |
@@ -196,11 +218,19 @@ context.
     }
   ],
   "recentContext": "<!-- MEMORY.md contents -->",
-  "inject": "You are Mr. Claude...\n\n## Relevant Memories\n- ..."
+  "stableSystemPrompt": "[signet active]\n\n# Memory Check Loop\n...",
+  "dynamicContext": "[memory active | /remember | /recall]\n\n## Relevant Memories\n- ...",
+  "inject": "<signet-memory-context>\n[signet active]\n...\n[memory active | /remember | /recall]\n...\n</signet-memory-context>\n",
+  "contextHash": "sha256-of-the-exact-inject-bytes",
+  "contextVersion": 1
 }
 ```
 
-The `inject` field is ready-to-use text for prepending to the system prompt. It includes memories, recent context, the Memory Check Loop, and identity only when Signet-managed identity is enabled.
+`stableSystemPrompt` is the cacheable instruction prefix. `dynamicContext` is
+state-dependent context for the provider-bound or hidden harness channel. The
+`inject` field remains the versioned, ready-to-use aggregate for legacy clients
+and includes both fields in order; `contextHash` covers the exact serialized
+`inject` bytes.
 
 The Memory Check Loop tells agents when prior context may matter, how to run
 1-3 targeted recalls, what pitfalls to avoid, and how to verify they are

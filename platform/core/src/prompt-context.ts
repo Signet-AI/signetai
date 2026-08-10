@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { escapeMemoryContextForFence } from "./memory-context";
 
 export const PROMPT_CONTEXT_VERSION = 1 as const;
 export const PROMPT_CONTEXT_OPEN = "<signet-memory-context>";
@@ -26,9 +27,7 @@ export function hashPromptContext(serialized: string): string {
 }
 
 function escapeNestedMarkers(content: string): string {
-	return content
-		.replaceAll(PROMPT_CONTEXT_OPEN, "&lt;signet-memory-context&gt;")
-		.replaceAll(PROMPT_CONTEXT_CLOSE, "&lt;/signet-memory-context&gt;");
+	return escapeMemoryContextForFence(content);
 }
 
 export function createPromptContext(content: string): PromptContextEnvelope | null {

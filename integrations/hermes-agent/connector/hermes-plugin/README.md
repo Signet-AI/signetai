@@ -56,10 +56,10 @@ Environment variables:
 
 The plugin bridges Hermes Agent's memory lifecycle to the Signet daemon:
 
-1. **Session start** — Calls Signet's session-start hook, which returns identity files (AGENTS.md, SOUL.md, USER.md, MEMORY.md), scored memories, and knowledge graph constraints. Injected into the system prompt.
+1. **Session start** — Calls Signet's session-start hook, which returns identity files (AGENTS.md, SOUL.md, USER.md, MEMORY.md), scored memories, and knowledge graph constraints. The deterministic `stableSystemPrompt` is returned by `system_prompt_block()`; state-dependent `dynamicContext` is staged for Hermes' API-only prefetch path rather than being added to the canonical transcript.
 
 2. **Per-turn recall** — On each user message, calls the user-prompt-submit hook. Signet runs hybrid search (BM25 + vector similarity + knowledge graph traversal + predictive scoring) and returns the most relevant memories.
 
-3. **Session end** — Sends the conversation transcript to Signet's session-end hook, which queues it for the memory pipeline: extraction, knowledge graph updates, retention decay, and MEMORY.md synthesis.
+3. **Session end** — Sends a transcript with internal Signet memory delimiters removed to Signet's session-end hook, which queues it for the memory pipeline: extraction, knowledge graph updates, retention decay, and MEMORY.md synthesis.
 
 4. **Explicit tools** — The agent can call canonical Signet tools such as `memory_search` and `memory_store` directly during conversation for on-demand memory operations. Legacy `signet_*` names are handled for compatibility but are not advertised to the model.
