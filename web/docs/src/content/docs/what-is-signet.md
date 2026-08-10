@@ -1,201 +1,126 @@
 ---
 title: "What Is Signet"
-description: "A plain-language explanation of what Signet is, how it works, and what it's building toward."
+description: "A plain-language explanation of what Signet does, where it runs, and why you might use it."
 ---
 
-Signet holds an AI agent's identity, memory, secrets, and skills outside
-any single model or harness. The agent survives vendor changes, model
-upgrades, tool switches, and new sessions because its state lives in a
-place the user controls.
+Signet is a local-first daemon and workspace that gives AI agents persistent memory, source-aware context, and controlled access to tools and secrets.
 
-Models provide inference. Harnesses provide an interface. Signet provides
-the local services that let an agent remain the same entity over time.
+It sits between an AI harness and the data an agent needs over time. The harness provides the interaction surface. A model provides reasoning. Signet keeps the workspace, serves memory and source recall, connects lifecycle hooks, and runs the background services that make the state usable across sessions.
 
-That distinction matters because the most valuable thing an agent builds
-with a user is behavioral context: the accumulated understanding of how
-the user works, what they care about, what projects exist, which
-constraints matter, and what has already been tried. Losing that context
-means starting over with a brilliant stranger.
+## What Signet provides today
 
-Signet is built so that context travels with the agent.
+### A daemon and workspace
 
+The Signet daemon is a background service. It provides the HTTP API, MCP server, dashboard, file watchers, harness synchronization, and memory and source workers. It runs locally by default at `http://localhost:3850` and can also run on a trusted server for remote harness connectors.
 
-## Why This Matters
+The workspace is the directory Signet operates on. It contains configuration and identity files, the SQLite memory database, daemon logs, skills, and other runtime data. Signet resolves it in this order:
 
-AI platforms are moving toward always-on agents with built-in memory,
-tools, and automation. That is useful, but it creates a new kind of
-lock-in. Older lock-in was about files, messages, customer records, or
-source code. Agent lock-in is about the learned model of how you work.
+1. `SIGNET_PATH`
+2. `SIGNET_WORKSPACE`
+3. the saved workspace selection in `$XDG_CONFIG_HOME/signet/workspace.json`
+4. `~/.agents`
 
-If six months of agent memory lives inside one company's product, you do
-not merely lose chat history when you switch. You lose the relationship
-the agent built with you. You lose the project map, the operating
-patterns, the small preferences, the hard-earned context, and the
-continuity that made the agent useful.
+Read [Set up Signet](/getting-started/setup/) for the workspace created by the setup wizard.
 
-Signet moves that state to a local-first workspace. Your agent's
-identity and knowledge live in files and SQLite you can inspect, back up,
-edit, sync, and move. A platform can provide the interface. A model can
-provide the reasoning. The agent's accumulated context remains yours.
+### Persistent memory and recall
 
+Signet can save memories through the CLI, a connected harness, or the daemon API. A saved memory is immediately written as episodic evidence. Keyword search is available from the synchronous full-text index; semantic search uses embeddings when an embedding provider is configured and available.
 
-## The Four-Layer Model
+Recall combines keyword, vector, structured, and optional knowledge-graph search, then applies the caller's agent and project scope before returning content. The result is a bounded set of context for the current task, not an unfiltered dump of the workspace.
 
-Signet uses a simple model for the agent stack:
+Signet keeps the exact saved record separate from derived search and knowledge state:
+
+- Episodic evidence includes saved memories, transcripts, summaries, notes, imported documents, and source artifacts.
+- Derived state includes embeddings, full-text indexes, entities, aspects, claims, and relationships used to search and organize that evidence.
+- Dreaming can read the evidence and apply audited semantic changes. It does not rewrite the original evidence.
+
+Read [Memory System](/memory/) for the write, recall, and lifecycle details.
+
+### Read-only sources and document indexing
+
+Sources let Signet recall from knowledge that already has a canonical home. Current source paths include Obsidian vaults, Discord, GitHub repositories, and durable file imports.
+
+Signet stores source-owned artifacts and retrieval chunks, but does not write back to an Obsidian vault, Discord, or GitHub source. Source results remain marked as source-backed, retain provenance, and can be removed by source without deleting the original files or remote records.
+
+This distinction matters: connecting a source does not turn the source into an ordinary Signet memory, and a recall snippet is not a replacement for inspecting the canonical source.
+
+Read [Sources](/sources/) for supported connectors, imports, provenance, and removal behavior.
+
+### Harness integrations
+
+Signet connects to AI harnesses through plugins, hooks, MCP tools, and connector packages. Current public integrations include Claude Code, Codex, OpenCode, OpenClaw, Hermes Agent, Pi, and Oh My Pi.
+
+A harness can use Signet for session lifecycle events, prompt-time context, memory tools, source recall, and synchronization of managed identity files. A remote connector can run on another machine and send authenticated requests to the daemon that owns the workspace.
+
+Read [Harnesses](/harnesses/) for the integration list and [Remote Harness Connectors](/remote-connectors/) for cross-machine setup.
+
+### Secrets and policy boundaries
+
+The bundled `signet.secrets` plugin stores secret values in an encrypted local store. Signet exposes names and references rather than raw values. When a command needs a secret, the daemon can resolve the reference, inject the value into the subprocess environment, and redact it from returned output.
+
+Authentication and agent scope are separate controls. Local mode is convenient for a single user. Team and hybrid modes require bearer authentication for shared or remote access, and API keys can be scoped to an agent or connector.
+
+Read [Secrets](/secrets/) and [Authentication](/auth/) before exposing a daemon beyond localhost.
+
+### CLI, dashboard, and operations
+
+The `signet` CLI covers setup, daemon lifecycle, memory, sources, secrets, connectors, status, logs, and synchronization. The dashboard is a supplementary visual interface for browsing memory and ontology state, managing sources and secrets, editing configuration, and inspecting daemon activity.
+
+The daemon also runs optional background work, including source indexing, retention, maintenance, and Dreaming. These workers use the same workspace and obey the configured scope, provider, and mutation controls.
+
+Read [Install](/getting-started/install/), [Dashboard](/dashboard/), and [Operate your installation](/getting-started/operate/) for the practical paths.
+
+## How the pieces relate
+
+An ordinary session looks like this:
 
 ```text
-Harness = shell       where the user interacts
-Agent   = kernel      the persistent entity with identity and memory
-Signet  = OS services memory, identity, secrets, IPC, skills, policies
-LLM     = compute     stateless reasoning invoked by the agent
+AI harness or CLI
+        │  hooks, recall, memory writes, source requests
+        ▼
+Signet daemon
+        │  scope checks, API/MCP, workers, provider calls
+        ▼
+Signet workspace
+        ├─ configuration and identity files
+        ├─ SQLite evidence and audit history
+        ├─ source-owned artifacts and retrieval indexes
+        └─ derived search and knowledge state
 ```
 
-The harness might be Claude Code, OpenCode, OpenClaw, Codex, Hermes
-Agent, or another tool. The model might be Claude, GPT, GLM, Gemma, or a
-local model. Those choices can change.
+The daemon is the boundary between a harness and the workspace. It accepts a memory write, source request, or recall query; checks the applicable agent and permission boundary; reads or writes the relevant state; and returns the result to the caller.
 
-The agent is the persistent thing. Signet provides the services that let
-that persistence work in practice.
+During background processing, Signet can use a configured inference provider to turn selected evidence into derived semantic state. That processing is optional and configurable. The evidence remains available so derived state can be inspected, rebuilt, or corrected.
 
-This framing keeps Signet focused on the boring, durable infrastructure
-every agent needs: memory, identity, secret handling, policy, provenance,
-and eventually stronger verification and coordination.
+## What Signet is not
 
+- Signet is not an LLM. It does not replace the model that reasons or writes responses. It coordinates memory, context, sources, tools, and configured provider calls around that model.
+- Signet is not an AI harness. Claude Code, Codex, OpenCode, OpenClaw, Hermes Agent, Pi, and Oh My Pi remain the interaction surfaces. Signet integrates with them.
+- Signet is not a hosted chat product. Its primary deployment is a daemon and workspace you run and operate. A daemon may be placed on another machine for trusted remote connectors, but that is still your deployment.
+- Signet is not the canonical home of every document it can recall. Connected sources remain authoritative in their own systems. Signet stores an indexed, provenance-preserving view for recall.
+- Signet is not a guarantee that derived memory is always correct. Its value is that the evidence, provenance, scope, and audit paths remain available when the derived view needs review.
 
-## What Lives in Signet
+## Ownership and deployment
 
-A Signet workspace contains the pieces that make an agent portable:
+A default installation is local-first:
 
-- **Identity files**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-  and working summaries that tell the agent who it is and who it serves.
-- **Memory**: structured facts, decisions, preferences, constraints,
-  relationships, and session-derived knowledge.
-- **Episodic records**: transcripts, summaries, markdown files, and
-  source artifacts that preserve what actually happened.
-- **Semantic indexes**: SQLite, FTS, embeddings, entities, aspects, and
-  graph links that make the record searchable and useful.
-- **Secrets**: encrypted credentials that can be injected into execution
-  environments without exposing raw values to the model.
-- **Skills and tools**: portable capabilities and MCP integrations that
-  travel with the agent instead of being trapped in one harness.
-- **Policies**: agent scoping, visibility rules, token policy, and other
-  controls that decide what can be seen or used.
+- the daemon binds to localhost and does not require authentication in `local` mode;
+- the workspace and its SQLite state are on the machine running Signet;
+- the workspace can be inspected and backed up, and `signet git` can synchronize the workspace with a remote repository;
+- `$SIGNET_WORKSPACE/.secrets/` contains encrypted secrets and should not be committed or shared casually.
 
-The workspace is deliberately inspectable. The user should be able to see
-what the agent knows, why something was recalled, where it came from,
-and how to repair it when it is wrong.
+For a remote or shared deployment, bind the daemon deliberately and use `hybrid` or `team` authentication with scoped API keys. Remote harness connectors send requests to the daemon over the configured network path. The daemon may also send selected content to remote inference or embedding providers when those providers are configured. Use local or built-in providers when that data should stay on the daemon machine, and review provider configuration before enabling background processing.
 
+Signet does not make a canonical source file portable by copying ownership of it into the database. Back up both the workspace state and the source systems you depend on. Treat the database, indexes, and ontology as Signet-managed state that can be rebuilt or repaired from retained evidence where the relevant source is still available.
 
-## Memory Architecture
+Read [Self-hosting](/self-hosting/) for service and network deployment details.
 
-Signet treats memory as two layers working together.
+## Start here
 
-The first layer is the exact record: transcripts, notes, summaries, and
-workspace files. This is the episodic source of truth. It gives the
-system something to audit when extracted memory is wrong or incomplete.
-
-The second layer is semantic: entities, relationships, embeddings,
-keywords, procedural knowledge, and retrieval indexes. This layer makes
-the record useful at the moment of work.
-
-Semantic memory alone will drift. Raw transcripts alone are too heavy to
-use directly. The combination matters: preserve the exact record, build a
-semantic layer from it, and keep enough provenance to repair mistakes.
-
-That is why Signet emphasizes write-side intelligence. The extraction
-pipeline turns messy session output into durable memory structure,
-deduplicates repeated facts, links entities, records constraints, and
-keeps provenance attached. Better extraction makes retrieval simpler and
-more reliable over time.
-
-
-## Context Selection
-
-Useful memory requires more than storage. The right context has to appear
-at the right time, in the right amount, with enough provenance to trust
-it.
-
-Signet builds context from several signals:
-
-- graph traversal across projects, people, tools, constraints, and
-  dependencies
-- keyword and semantic search over memories and documents
-- session transcripts and summaries when exact history matters
-- scoped visibility rules for multi-agent deployments
-- feedback, recency, importance, and dampening to reduce repeated noise
-
-The goal is practical precision. An agent should wake up with the context
-it needs for the current task, without flooding the model window with
-everything it has ever learned.
-
-Learned ranking remains an experimental direction, but the product does
-not depend on a black-box scorer being right. The baseline path must stay
-inspectable, bounded, and useful on its own.
-
-
-## Secrets and Safety
-
-Agents need access to real tools. Real tools need credentials. Raw
-credentials should not be placed in the model context.
-
-Signet stores secrets encrypted at rest and injects them into subprocess
-environments at runtime. Outputs are redacted so secret values do not
-leak back into transcripts or tool logs. This gives the agent practical
-access to infrastructure while keeping a boundary between the model and
-the credential itself.
-
-That same principle extends to agent policy. Multi-agent deployments need
-clear scoping: which agent can see which memory, which tools are
-available, which actions require approval, and which operations should be
-logged for later review.
-
-
-## Cross-Harness Continuity
-
-A useful agent may run in more than one place. It might code in Claude
-Code, respond in Discord through OpenClaw, run a Hermes gateway, and use
-Codex for a focused implementation task.
-
-Those should not become separate half-agents with separate memories.
-Signet provides one shared state layer underneath the harnesses. Sessions
-can start, branch, end, and consolidate while the agent remains one
-continuous entity.
-
-This is especially important for teams. Multiple named agents can share
-one daemon and database while retaining isolated, shared, or group memory
-visibility. The point is controlled continuity, not a global pile of
-context everyone can read.
-
-
-## Local-First and Open
-
-Signet runs local-first. The default workspace lives on the user's
-machine. SQLite and markdown are inspectable. Git sync can version the
-workspace to a remote the user controls. Docker and self-hosted
-deployments keep the same ownership model.
-
-Local-first means the user owns the root of trust. Sync, backup,
-sharing, and team deployment can be added while the agent's identity and
-behavioral context remain portable.
-
-The longer-term standardization goal is behavioral context portability:
-an agent should be exportable from one compliant platform and importable
-into another without losing identity, memory, or provenance. Signet is
-the reference implementation path toward that goal.
-
-
-## Where This Is Going
-
-The near-term job is reliability: better extraction, better provenance,
-better scoping, better connector support, better inspection, and less
-noise in the context window.
-
-The larger goal is a portable agent state layer that works across models,
-harnesses, machines, and teams. Identity, memory, secrets, skills,
-policies, and verification should belong to the agent and its owner.
-
-When the model changes, the agent should remain itself.
-When the harness changes, the agent should remain itself.
-When a platform disappears, the agent should not disappear with it.
-
-That is the core promise of Signet: your agent is yours.
+- [Quickstart](/quickstart/): understand the main memory, source, and recall concepts.
+- [Install](/getting-started/install/): install the CLI and native daemon.
+- [Set up Signet](/getting-started/setup/): create a workspace and connect a harness.
+- [Your first session](/getting-started/first-session/): save, recall, and inspect memory.
+- [Sources](/sources/): connect Obsidian, Discord, GitHub, or imported files.
+- [Dashboard](/dashboard/): browse and operate a running daemon visually.
+- [Operate your installation](/getting-started/operate/): manage services, auth, backups, and troubleshooting.
