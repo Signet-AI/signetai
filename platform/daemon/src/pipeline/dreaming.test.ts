@@ -220,6 +220,16 @@ describe("Dreaming", () => {
 			content: "compaction evidence",
 		});
 		expect(nodes).toHaveLength(2);
+		const threadHead = db
+			.prepare(
+				"SELECT node_id, source_type, source_ref FROM memory_thread_heads WHERE agent_id = ? AND session_key = ?",
+			)
+			.get(AGENT, "legacy-session") as { node_id: string; source_type: string; source_ref: string } | null;
+		expect(threadHead).toEqual({
+			node_id: "legacy-summary-node",
+			source_type: "transcript",
+			source_ref: "legacy-session",
+		});
 	});
 
 	it("uses wall-clock backoff independently of later evidence volume", () => {
