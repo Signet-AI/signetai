@@ -151,6 +151,11 @@ silently disappear from the API reference.
 | GET | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
 | DELETE | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
 
+`GET /api/marketplace/mcp` and the marketplace tools/search responses include a
+`runtime` object with `activeClients`, `activeProcesses`, `pending`, and
+`limit`. The counts cover marketplace discovery, probes, and user operations;
+the limit is the daemon-wide client/process budget.
+
 
 ## Dashboard
 

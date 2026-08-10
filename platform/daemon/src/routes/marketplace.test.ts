@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -111,12 +111,20 @@ describe("marketplace routes", () => {
 			tools: unknown[];
 			servers: unknown[];
 			error?: string;
+			runtime: {
+				activeClients: number;
+				activeProcesses: number;
+				pending: number;
+				limit: number;
+			};
 		};
 
 		expect(body.error).toBeUndefined();
 		expect(body.count).toBe(0);
 		expect(body.tools).toEqual([]);
 		expect(body.servers).toEqual([]);
+		expect(body.runtime).toMatchObject({ activeClients: 0, activeProcesses: 0, pending: 0 });
+		expect(body.runtime.limit).toBeGreaterThan(0);
 	});
 
 	it("GET /api/marketplace/mcp/search resolves to search handler", async () => {
@@ -134,5 +142,95 @@ describe("marketplace routes", () => {
 		expect(body.query).toBe("time");
 		expect(body.count).toBe(0);
 		expect(body.results).toEqual([]);
+	});
+
+	it("bounds concurrent discovery and coalesces simultaneous cache misses", async () => {
+		const markerDir = join(tmpAgentsDir, "markers");
+		const scriptPath = join(tmpAgentsDir, "mcp-server.js");
+		mkdirSync(join(tmpAgentsDir, "marketplace"), { recursive: true });
+		mkdirSync(markerDir, { recursive: true });
+		writeFileSync(
+			scriptPath,
+			`const { appendFileSync, unlinkSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const markerDir = process.argv[2];
+const delayMs = Number(process.argv[3]);
+const marker = join(markerDir, String(process.pid));
+const starts = join(markerDir, "starts.log");
+writeFileSync(marker, "active");
+appendFileSync(starts, String(process.pid) + "\\n");
+const cleanup = () => { try { unlinkSync(marker); } catch {} };
+process.on("exit", cleanup);
+process.stdin.setEncoding("utf8");
+let pending = "";
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+process.stdin.on("data", (chunk) => {
+  pending += chunk;
+  const lines = pending.split("\\n");
+  pending = lines.pop() ?? "";
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({ jsonrpc: "2.0", id: message.id, result: {
+        protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "budget-test", version: "1" }
+      }});
+    } else if (message.method === "tools/list") {
+      setTimeout(() => send({ jsonrpc: "2.0", id: message.id, result: {
+        tools: [{ name: "budget_tool", description: "budget test", inputSchema: { type: "object" } }]
+      }}), delayMs);
+    }
+  }
+});
+`,
+		);
+
+		const servers = Array.from({ length: 6 }, (_, index) => ({
+			id: `budget-server-${index}`,
+			source: "manual",
+			name: `Budget Server ${index}`,
+			description: "Budget test server",
+			category: "Test",
+			official: false,
+			enabled: true,
+			scope: { harnesses: [], workspaces: [], channels: [] },
+			config: {
+				transport: "stdio",
+				command: process.execPath,
+				args: [scriptPath, markerDir, "80"],
+				env: {},
+				timeoutMs: 2_000,
+			},
+			installedAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		}));
+		writeFileSync(join(tmpAgentsDir, "marketplace", "mcp-servers.json"), JSON.stringify(servers));
+
+		const samples: number[] = [];
+		const sample = (): void => {
+			const active = readdirSync(markerDir).filter((name) => name !== "starts.log").length;
+			samples.push(active);
+		};
+		const sampler = setInterval(sample, 2);
+		try {
+			const [first, second] = await Promise.all([
+				app.request("/api/marketplace/mcp/tools?refresh=1"),
+				app.request("/api/marketplace/mcp/tools?refresh=1"),
+			]);
+
+			expect(first.status).toBe(200);
+			expect(second.status).toBe(200);
+			const body = (await first.json()) as {
+				count: number;
+				runtime: { activeClients: number; activeProcesses: number; pending: number; limit: number };
+			};
+			expect(body.count).toBe(6);
+			expect(Math.max(...samples)).toBeLessThanOrEqual(body.runtime.limit);
+			expect(body.runtime).toMatchObject({ activeClients: 0, activeProcesses: 0, pending: 0 });
+			expect(readFileSync(join(markerDir, "starts.log"), "utf8").trim().split("\n")).toHaveLength(6);
+		} finally {
+			clearInterval(sampler);
+			sample();
+		}
 	});
 });

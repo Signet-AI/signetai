@@ -13,6 +13,11 @@ import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
+import {
+	getMarketplaceMcpRuntimeStatus,
+	withMarketplaceMcpPermit,
+	withMarketplaceMcpTimeout,
+} from "../marketplace-client-budget.js";
 import { probeServer, removeProbeResult, storeProbeResult } from "../mcp-probe.js";
 import { resolveScopedAgent } from "../request-scope.js";
 import { getSecret } from "../secrets.js";
@@ -148,6 +153,7 @@ let referenceCatalogCache: {
 	readonly entries: readonly MarketplaceMcpCatalogEntry[];
 } | null = null;
 const toolsCache = new Map<string, MarketplaceToolsCache>();
+const toolsLoadInFlight = new Map<string, Promise<MarketplaceToolsCache>>();
 
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -378,24 +384,6 @@ async function resolveSecretReferences(values: Readonly<Record<string, string>>)
 		resolved[key] = await getSecret(secretName);
 	}
 	return resolved;
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-	let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-	try {
-		return await Promise.race([
-			promise,
-			new Promise<T>((_resolve, reject) => {
-				timeoutHandle = setTimeout(() => {
-					reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-				}, timeoutMs);
-			}),
-		]);
-	} finally {
-		if (timeoutHandle) {
-			clearTimeout(timeoutHandle);
-		}
-	}
 }
 
 function sanitizeServerId(value: string): string {
@@ -928,48 +916,54 @@ async function withConnectedClient<T>(
 	server: InstalledMarketplaceMcpServer,
 	fn: (client: Client) => Promise<T>,
 ): Promise<T> {
-	const run = async (): Promise<T> => {
+	return withMarketplaceMcpPermit(server.config.timeoutMs, async (permit, timeoutMs) => {
 		const client = new Client({
 			name: "signet-marketplace-router",
 			version: "0.1.0",
 		});
-
-		if (server.config.transport === "stdio") {
-			const runtimeEnv: Record<string, string> = {};
-			for (const [k, v] of Object.entries(process.env)) {
-				if (typeof v === "string") runtimeEnv[k] = v;
+		let closePromise: Promise<void> | null = null;
+		const close = (): Promise<void> => {
+			if (!closePromise) {
+				closePromise = client.close().catch(() => undefined);
 			}
-			const resolvedEnv = await resolveSecretReferences(server.config.env);
-			const transport = new StdioClientTransport({
-				command: server.config.command,
-				args: [...server.config.args],
-				env: { ...runtimeEnv, ...resolvedEnv },
-				cwd: server.config.cwd,
+			return closePromise;
+		};
+
+		const run = async (): Promise<T> => {
+			if (server.config.transport === "stdio") {
+				const runtimeEnv: Record<string, string> = {};
+				for (const [k, v] of Object.entries(process.env)) {
+					if (typeof v === "string") runtimeEnv[k] = v;
+				}
+				const resolvedEnv = await resolveSecretReferences(server.config.env);
+				const transport = new StdioClientTransport({
+					command: server.config.command,
+					args: [...server.config.args],
+					env: { ...runtimeEnv, ...resolvedEnv },
+					cwd: server.config.cwd,
+				});
+
+				permit.markProcessStarted();
+				await client.connect(transport);
+				return fn(client);
+			}
+
+			const resolvedHeaders = await resolveSecretReferences(server.config.headers);
+			const transport = new StreamableHTTPClientTransport(new URL(server.config.url), {
+				requestInit: {
+					headers: resolvedHeaders,
+				},
 			});
-
 			await client.connect(transport);
-			try {
-				return await fn(client);
-			} finally {
-				await client.close().catch(() => undefined);
-			}
-		}
+			return fn(client);
+		};
 
-		const resolvedHeaders = await resolveSecretReferences(server.config.headers);
-		const transport = new StreamableHTTPClientTransport(new URL(server.config.url), {
-			requestInit: {
-				headers: resolvedHeaders,
-			},
-		});
-		await client.connect(transport);
 		try {
-			return await fn(client);
+			return await withMarketplaceMcpTimeout(run(), timeoutMs, `MCP server ${server.id}`, close);
 		} finally {
-			await client.close().catch(() => undefined);
+			await close();
 		}
-	};
-
-	return withTimeout(run(), server.config.timeoutMs, `MCP server ${server.id}`);
+	});
 }
 
 function sanitizeToolName(name: string): string {
@@ -991,74 +985,86 @@ async function loadMarketplaceTools(
 		return cached;
 	}
 
-	const enabled = installed.filter((s) => s.enabled);
-	const toolBuckets = await Promise.all(
-		enabled.map(
-			async (
-				server,
-			): Promise<{
-				tools: MarketplaceMcpTool[];
-				health: MarketplaceMcpServerHealth;
-			}> => {
-				try {
-					const listResult = await withConnectedClient(server, async (client) => {
-						const result = (await client.listTools()) as {
-							tools?: Array<{
-								name: string;
-								description?: string;
-								inputSchema?: unknown;
-								annotations?: { readOnlyHint?: boolean };
-							}>;
+	const existingLoad = toolsLoadInFlight.get(cacheKey);
+	if (existingLoad) return existingLoad;
+
+	const load = (async (): Promise<MarketplaceToolsCache> => {
+		const enabled = installed.filter((s) => s.enabled);
+		const toolBuckets = await Promise.all(
+			enabled.map(
+				async (
+					server,
+				): Promise<{
+					tools: MarketplaceMcpTool[];
+					health: MarketplaceMcpServerHealth;
+				}> => {
+					try {
+						const listResult = await withConnectedClient(server, async (client) => {
+							const result = (await client.listTools()) as {
+								tools?: Array<{
+									name: string;
+									description?: string;
+									inputSchema?: unknown;
+									annotations?: { readOnlyHint?: boolean };
+								}>;
+							};
+							return result.tools ?? [];
+						});
+
+						const tools = listResult
+							.filter((tool) => typeof tool.name === "string" && tool.name.length > 0)
+							.map((tool) => ({
+								id: `${server.id}:${sanitizeToolName(tool.name)}`,
+								serverId: server.id,
+								serverName: server.name,
+								toolName: tool.name,
+								description: tool.description ?? "",
+								readOnly: tool.annotations?.readOnlyHint === true,
+								inputSchema: tool.inputSchema ?? {},
+							}));
+
+						return {
+							tools,
+							health: {
+								serverId: server.id,
+								serverName: server.name,
+								ok: true,
+								toolCount: tools.length,
+							},
 						};
-						return result.tools ?? [];
-					});
+					} catch (error) {
+						const msg = error instanceof Error ? error.message : String(error);
+						return {
+							tools: [],
+							health: {
+								serverId: server.id,
+								serverName: server.name,
+								ok: false,
+								toolCount: 0,
+								error: msg,
+							},
+						};
+					}
+				},
+			),
+		);
 
-					const tools = listResult
-						.filter((tool) => typeof tool.name === "string" && tool.name.length > 0)
-						.map((tool) => ({
-							id: `${server.id}:${sanitizeToolName(tool.name)}`,
-							serverId: server.id,
-							serverName: server.name,
-							toolName: tool.name,
-							description: tool.description ?? "",
-							readOnly: tool.annotations?.readOnlyHint === true,
-							inputSchema: tool.inputSchema ?? {},
-						}));
+		const nextCache: MarketplaceToolsCache = {
+			fetchedAt: now,
+			tools: toolBuckets.flatMap((b) => b.tools),
+			serverHealth: toolBuckets.map((b) => b.health),
+		};
 
-					return {
-						tools,
-						health: {
-							serverId: server.id,
-							serverName: server.name,
-							ok: true,
-							toolCount: tools.length,
-						},
-					};
-				} catch (error) {
-					const msg = error instanceof Error ? error.message : String(error);
-					return {
-						tools: [],
-						health: {
-							serverId: server.id,
-							serverName: server.name,
-							ok: false,
-							toolCount: 0,
-							error: msg,
-						},
-					};
-				}
-			},
-		),
-	);
+		toolsCache.set(cacheKey, nextCache);
+		return nextCache;
+	})();
 
-	const nextCache: MarketplaceToolsCache = {
-		fetchedAt: now,
-		tools: toolBuckets.flatMap((b) => b.tools),
-		serverHealth: toolBuckets.map((b) => b.health),
-	};
-
-	toolsCache.set(cacheKey, nextCache);
-	return nextCache;
+	toolsLoadInFlight.set(cacheKey, load);
+	try {
+		return await load;
+	} finally {
+		if (toolsLoadInFlight.get(cacheKey) === load) toolsLoadInFlight.delete(cacheKey);
+	}
 }
 
 function invalidateMarketplaceToolsCache(): void {
@@ -1150,6 +1156,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			count: visible.length,
 			scoped,
 			context,
+			runtime: getMarketplaceMcpRuntimeStatus(),
 		});
 	});
 
@@ -1494,10 +1501,21 @@ export function mountMarketplaceRoutes(app: Hono): void {
 				count: cached.tools.length,
 				context,
 				policy: readExposurePolicy(),
+				runtime: getMarketplaceMcpRuntimeStatus(),
 			});
 		} catch (error) {
 			logger.error("skills", "Failed to load marketplace MCP tools", error as Error);
-			return c.json({ tools: [], servers: [], count: 0, error: "Failed to load tools", context }, 500);
+			return c.json(
+				{
+					tools: [],
+					servers: [],
+					count: 0,
+					error: "Failed to load tools",
+					context,
+					runtime: getMarketplaceMcpRuntimeStatus(),
+				},
+				500,
+			);
 		}
 	});
 
@@ -1526,10 +1544,14 @@ export function mountMarketplaceRoutes(app: Hono): void {
 				count: ranked.length,
 				results: ranked,
 				context,
+				runtime: getMarketplaceMcpRuntimeStatus(),
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			return c.json({ query, count: 0, results: [], error: message, context }, 500);
+			return c.json(
+				{ query, count: 0, results: [], error: message, context, runtime: getMarketplaceMcpRuntimeStatus() },
+				500,
+			);
 		}
 	});
 

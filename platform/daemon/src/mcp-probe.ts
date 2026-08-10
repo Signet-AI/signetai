@@ -16,14 +16,11 @@ import type {
 import { DEFAULT_APP_SIZE, resolveDefaultBasePath } from "@signet/core";
 import { createEvent, eventBus } from "./event-bus.js";
 import { logger } from "./logger.js";
+import { withMarketplaceMcpPermit, withMarketplaceMcpTimeout } from "./marketplace-client-budget.js";
 // Note: validatePublicHttpUrl from url-validation.ts is used by the install
 // endpoint (server-side fetch = real SSRF risk). Manifest ui/icon fields are
 // client-side (iframe/img) so they only need scheme validation, not address blocking.
-import type {
-	InstalledMarketplaceMcpServer,
-	MarketplaceMcpConfigHttp,
-	MarketplaceMcpConfigStdio,
-} from "./routes/marketplace.js";
+import type { InstalledMarketplaceMcpServer } from "./routes/marketplace.js";
 import { getSecret } from "./secrets.js";
 import { deleteCachedWidget, loadCachedWidget } from "./widget-gen.js";
 
@@ -84,65 +81,54 @@ async function withProbeClient<T>(
 	fn: (client: Client) => Promise<T>,
 ): Promise<T> {
 	const timeoutMs = Math.min(server.config.timeoutMs, 30_000);
-
-	const run = async (): Promise<T> => {
+	return withMarketplaceMcpPermit(timeoutMs, async (permit, remainingTimeoutMs) => {
 		const client = new Client({
 			name: "signet-os-probe",
 			version: "0.1.0",
 		});
-
-		if (server.config.transport === "stdio") {
-			const runtimeEnv: Record<string, string> = {};
-			for (const [k, v] of Object.entries(process.env)) {
-				if (typeof v === "string") runtimeEnv[k] = v;
+		let closePromise: Promise<void> | null = null;
+		const close = (): Promise<void> => {
+			if (!closePromise) {
+				closePromise = client.close().catch(() => undefined);
 			}
-			const resolvedEnv = await resolveSecretReferences((server.config as MarketplaceMcpConfigStdio).env);
-			const stdioConfig = server.config as MarketplaceMcpConfigStdio;
-			const transport = new StdioClientTransport({
-				command: stdioConfig.command,
-				args: [...stdioConfig.args],
-				env: { ...runtimeEnv, ...resolvedEnv },
-				cwd: stdioConfig.cwd,
+			return closePromise;
+		};
+
+		const run = async (): Promise<T> => {
+			if (server.config.transport === "stdio") {
+				const runtimeEnv: Record<string, string> = {};
+				for (const [k, v] of Object.entries(process.env)) {
+					if (typeof v === "string") runtimeEnv[k] = v;
+				}
+				const resolvedEnv = await resolveSecretReferences(server.config.env);
+				const transport = new StdioClientTransport({
+					command: server.config.command,
+					args: [...server.config.args],
+					env: { ...runtimeEnv, ...resolvedEnv },
+					cwd: server.config.cwd,
+				});
+
+				permit.markProcessStarted();
+				await client.connect(transport);
+				return fn(client);
+			}
+
+			const resolvedHeaders = await resolveSecretReferences(server.config.headers);
+			const transport = new StreamableHTTPClientTransport(new URL(server.config.url), {
+				requestInit: {
+					headers: resolvedHeaders,
+				},
 			});
-
 			await client.connect(transport);
-			try {
-				return await fn(client);
-			} finally {
-				await client.close().catch(() => undefined);
-			}
-		}
+			return fn(client);
+		};
 
-		// HTTP transport
-		const httpConfig = server.config as MarketplaceMcpConfigHttp;
-		const resolvedHeaders = await resolveSecretReferences(httpConfig.headers);
-		const transport = new StreamableHTTPClientTransport(new URL(httpConfig.url), {
-			requestInit: {
-				headers: resolvedHeaders,
-			},
-		});
-		await client.connect(transport);
 		try {
-			return await fn(client);
+			return await withMarketplaceMcpTimeout(run(), remainingTimeoutMs, `Probe ${server.id}`, close);
 		} finally {
-			await client.close().catch(() => undefined);
+			await close();
 		}
-	};
-
-	// Timeout wrapper
-	let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-	try {
-		return await Promise.race([
-			run(),
-			new Promise<T>((_resolve, reject) => {
-				timeoutHandle = setTimeout(() => {
-					reject(new Error(`Probe timed out after ${timeoutMs}ms`));
-				}, timeoutMs);
-			}),
-		]);
-	} finally {
-		if (timeoutHandle) clearTimeout(timeoutHandle);
-	}
+	});
 }
 
 // ---------------------------------------------------------------------------
