@@ -495,7 +495,7 @@ describe("auth guard co-location", () => {
 			const scopedToolRes = await app.request("/api/dream/tools/search_entities", {
 				method: "POST",
 				headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-				body: JSON.stringify({ input: { query: "Atlas" } }),
+				body: JSON.stringify({ input: { agentId: "agent-a", query: "Atlas" } }),
 			});
 			expect(scopedToolRes.status).toBe(200);
 			expect(await scopedToolRes.json()).toMatchObject({ tool: "search_entities", ok: true, agentId: "agent-a" });
