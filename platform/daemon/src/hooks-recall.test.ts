@@ -119,6 +119,46 @@ memory:
 		expect(body.message).toBe("No matching memories found.");
 	});
 
+	it("records recall attempt and outcome telemetry at the hook boundary", async () => {
+		if (!getDbAccessor) throw new Error("db accessor unavailable");
+		const collector = createTelemetryCollector(
+			getDbAccessor(),
+			{
+				posthogHost: "",
+				posthogApiKey: "",
+				flushIntervalMs: 60000,
+				flushBatchSize: 50,
+				retentionDays: 90,
+				memorySearchQaEnabled: false,
+			},
+			"0.0.0-test",
+		);
+		setActiveTelemetry(collector);
+		try {
+			const resp = await app.request("/api/hooks/recall", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					harness: "openclaw",
+					query: "telemetry boundary",
+					limit: 5,
+				}),
+			});
+			expect(resp.status).toBe(200);
+
+			await collector.flush();
+			const events = collector.query();
+			expect(
+				events.some((event) => event.event === "recall.attempted" && event.properties.surface === "tool_call"),
+			).toBeTrue();
+			expect(
+				events.some((event) => event.event === "recall.outcome" && event.properties.surface === "tool_call"),
+			).toBeTrue();
+		} finally {
+			setActiveTelemetry(undefined);
+		}
+	});
+
 	it("records session.deleted as one real session.end at the route boundary", async () => {
 		if (!getDbAccessor) throw new Error("db accessor unavailable");
 		const collector = createTelemetryCollector(
@@ -160,9 +200,16 @@ memory:
 			expect(duplicate.status).toBe(200);
 
 			await collector.flush();
-			const ends = collector.query().filter((event) => event.event === "session.end");
+			const events = collector.query();
+			const ends = events.filter((event) => event.event === "session.end");
 			expect(ends).toHaveLength(1);
 			expect(ends[0]?.properties.reason).toBe("session.deleted");
+			expect(
+				events.some((event) => event.event === "recall.attempted" && event.properties.surface === "prompt_injection"),
+			).toBeTrue();
+			expect(
+				events.some((event) => event.event === "recall.outcome" && event.properties.surface === "prompt_injection"),
+			).toBeTrue();
 		} finally {
 			setActiveTelemetry(undefined);
 			resetSessionEndTelemetry();

@@ -120,10 +120,11 @@ async function recordHookRecallOperation(handler: () => Promise<Response>): Prom
 		response.headers.delete("x-signet-operation-skipped");
 		response.headers.delete("x-signet-operation-degraded");
 		response.headers.delete("x-signet-operation-cause");
-		const failed = status >= 400 ? 1 : degraded ? 1 : 0;
+		const failed = status >= 400 ? 1 : 0;
+		const partial = degraded ? 1 : 0;
 		recordPipelineOperation({
 			operationClass: "recall",
-			outcome: failed > 0 ? "failed" : skipped ? "skipped" : degraded ? "partial" : "completed",
+			outcome: failed > 0 ? "failed" : skipped ? "skipped" : partial > 0 ? "partial" : "completed",
 			accepted: failed > 0 || skipped ? 0 : 1,
 			skipped: skipped ? 1 : 0,
 			retried: 0,
@@ -133,7 +134,7 @@ async function recordHookRecallOperation(handler: () => Promise<Response>): Prom
 			causeFamily:
 				failed > 0
 					? (cause ?? normalizePipelineCause({ status }))
-					: degraded
+					: partial > 0
 						? (cause ?? "provider_unavailable")
 						: undefined,
 		});
@@ -881,8 +882,9 @@ function registerRecall(app: Hono): void {
 		if (isInternalCall(c)) {
 			return c.json(emptyHookRecallResponse("", { internal: true }));
 		}
+		let recallAttempted = false;
+		const recallSurface = "tool_call" as const;
 		return recordHookRecallOperation(async () => {
-			let recallAttempted = false;
 			try {
 				const body = (await c.req.json()) as RecallRequest;
 
@@ -1023,7 +1025,7 @@ function registerRecall(app: Hono): void {
 				});
 				return c.json(withHookRecallCompat(result));
 			} catch (e) {
-				if (recallAttempted) recordRecallOutcome({ surface: "tool_call", error: true, delivery: "not_delivered" });
+				if (recallAttempted) recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 				logger.error("hooks", "Recall hook failed", e as Error);
 				c.header("x-signet-operation-cause", normalizePipelineCause(e));
 				return c.json({ error: "Hook execution failed" }, 500);

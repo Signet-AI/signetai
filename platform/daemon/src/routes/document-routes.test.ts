@@ -239,6 +239,15 @@ describe("document routes", () => {
 				properties: { stage: "extraction", code: "EXTRACTION_PARSE_FAIL" },
 			}),
 		);
+		expect(telemetry.events).toContainEqual(
+			expect.objectContaining({
+				event: "pipeline.operation",
+				properties: expect.objectContaining({
+					operationClass: "extraction",
+					outcome: "failed",
+				}),
+			}),
+		);
 	});
 
 	it("does not label job validation failures as extraction errors", async () => {

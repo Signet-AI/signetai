@@ -67,6 +67,7 @@ interface MutableDocumentOperation {
 	skipped: number;
 	failed: number;
 	cancelled: boolean;
+	operationClass: "indexing" | "extraction";
 	causeFamily?: PipelineCauseFamily;
 }
 
@@ -238,6 +239,7 @@ async function processDocument(
 	operation: MutableDocumentOperation,
 ): Promise<DocumentProcessResult> {
 	const { accessor, embeddingCfg, fetchEmbedding, pipelineCfg } = deps;
+	operation.operationClass = "indexing";
 	const docId = job.document_id;
 	if (!docId) {
 		throw new Error("document_ingest job missing document_id");
@@ -275,6 +277,7 @@ async function processDocument(
 			content = doc.raw_content ?? "";
 		}
 	} catch (err) {
+		operation.operationClass = "extraction";
 		recordPipelineError("extraction", isPipelineTimeout(err) ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL");
 		throw err;
 	}
@@ -293,6 +296,7 @@ async function processDocument(
 	}
 
 	if (content.length === 0) {
+		operation.operationClass = "extraction";
 		recordPipelineError("extraction", "EXTRACTION_PARSE_FAIL");
 		let deletedWhileEmpty = false;
 		accessor.withWriteTx((db) => {
@@ -605,7 +609,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 					? "skipped"
 					: "completed";
 		recordPipelineOperation({
-			operationClass: "indexing",
+			operationClass: state.operationClass,
 			outcome,
 			accepted: state.accepted,
 			skipped: state.skipped,
@@ -628,7 +632,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 		const operation = operations.get(job.id) ?? {
 			startedAtMs: leasedAt,
 			firstLeaseAtMs: leasedAt,
-			state: { accepted: 0, skipped: 0, failed: 0, cancelled: false },
+			state: { accepted: 0, skipped: 0, failed: 0, cancelled: false, operationClass: "indexing" },
 		};
 		operations.set(job.id, operation);
 
