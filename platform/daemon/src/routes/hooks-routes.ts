@@ -59,6 +59,7 @@ import {
 	isNotificationCompatibleHook,
 } from "../notifications/cross-agent-notifications";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
+import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpoch } from "../session-recall-dedupe";
@@ -105,6 +106,51 @@ import {
 export function stampHarness(harness: string | undefined): void {
 	if (harness) {
 		harnessLastSeen.set(harness, new Date().toISOString());
+	}
+}
+
+async function recordHookRecallOperation(handler: () => Promise<Response>): Promise<Response> {
+	const startedAt = Date.now();
+	try {
+		const response = await handler();
+		const status = response.status;
+		const skipped = response.headers.get("x-signet-operation-skipped") === "1";
+		const degraded = response.headers.get("x-signet-operation-degraded") === "1";
+		const cause = response.headers.get("x-signet-operation-cause") as PipelineCauseFamily | null;
+		response.headers.delete("x-signet-operation-skipped");
+		response.headers.delete("x-signet-operation-degraded");
+		response.headers.delete("x-signet-operation-cause");
+		const failed = status >= 400 ? 1 : degraded ? 1 : 0;
+		recordPipelineOperation({
+			operationClass: "recall",
+			outcome: failed > 0 ? "failed" : skipped ? "skipped" : degraded ? "partial" : "completed",
+			accepted: failed > 0 || skipped ? 0 : 1,
+			skipped: skipped ? 1 : 0,
+			retried: 0,
+			failed,
+			durationMs: Date.now() - startedAt,
+			queueAgeMs: 0,
+			causeFamily:
+				failed > 0
+					? (cause ?? normalizePipelineCause({ status }))
+					: degraded
+						? (cause ?? "provider_unavailable")
+						: undefined,
+		});
+		return response;
+	} catch (error) {
+		recordPipelineOperation({
+			operationClass: "recall",
+			outcome: "failed",
+			accepted: 0,
+			skipped: 0,
+			retried: 0,
+			failed: 1,
+			durationMs: Date.now() - startedAt,
+			queueAgeMs: 0,
+			causeFamily: normalizePipelineCause(error),
+		});
+		throw error;
 	}
 }
 
@@ -835,130 +881,154 @@ function registerRecall(app: Hono): void {
 		if (isInternalCall(c)) {
 			return c.json(emptyHookRecallResponse("", { internal: true }));
 		}
-		let recallAttempted = false;
-		try {
-			const body = (await c.req.json()) as RecallRequest;
+		return recordHookRecallOperation(async () => {
+			let recallAttempted = false;
+			try {
+				const body = (await c.req.json()) as RecallRequest;
 
-			if (!body.harness || !body.query) {
-				return c.json({ error: "harness and query are required" }, 400);
-			}
-			const aggregateBudgetInput = readAggregateRecallBudgetInput(body);
-			const aggregateBudget = parseAggregateRecallBudget(aggregateBudgetInput);
-			if (aggregateBudgetInput !== undefined && aggregateBudget === null) {
-				return c.json({ error: "Invalid aggregateBudget. Expected one of: small, medium, large." }, 400);
-			}
-			const temporalTimeError = validateTemporalTimeOptions(body.time);
-			if (temporalTimeError) return c.json({ error: temporalTimeError }, 400);
+				if (!body.harness || !body.query) {
+					return c.json({ error: "harness and query are required" }, 400);
+				}
+				const aggregateBudgetInput = readAggregateRecallBudgetInput(body);
+				const aggregateBudget = parseAggregateRecallBudget(aggregateBudgetInput);
+				if (aggregateBudgetInput !== undefined && aggregateBudget === null) {
+					return c.json({ error: "Invalid aggregateBudget. Expected one of: small, medium, large." }, 400);
+				}
+				const temporalTimeError = validateTemporalTimeOptions(body.time);
+				if (temporalTimeError) return c.json({ error: temporalTimeError }, 400);
 
-			const runtimePath = resolveRuntimePath(c, body);
-			if (runtimePath) body.runtimePath = runtimePath;
+				const runtimePath = resolveRuntimePath(c, body);
+				if (runtimePath) body.runtimePath = runtimePath;
 
-			const conflict = checkSessionClaim(
-				c,
-				body.sessionKey,
-				runtimePath,
-				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
-			);
-			if (conflict) return conflict;
+				const conflict = checkSessionClaim(
+					c,
+					body.sessionKey,
+					runtimePath,
+					resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+				);
+				if (conflict) return conflict;
 
-			if (checkBypass(body)) {
-				return c.json(emptyHookRecallResponse(body.query, { bypassed: true }));
-			}
+				if (checkBypass(body)) {
+					c.header("x-signet-operation-skipped", "1");
+					return c.json(emptyHookRecallResponse(body.query, { bypassed: true }));
+				}
 
-			const aggregateSaveRequested =
-				body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
-			if (aggregateSaveRequested) {
-				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
-				if (denied) return denied;
-			}
+				const aggregateSaveRequested =
+					body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
+				if (aggregateSaveRequested) {
+					const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+					if (denied) return denied;
+				}
 
-			const agentId = resolveAgentId({
-				agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
-				sessionKey: body.sessionKey,
-			});
+				const agentId = resolveAgentId({
+					agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
+					sessionKey: body.sessionKey,
+				});
 
-			// When aggregate save is requested, enforce scope for non-admin tokens.
-			if (aggregateSaveRequested) {
-				const aggAuth = c.get("auth");
-				if (aggAuth?.claims && aggAuth.claims.role !== "admin") {
-					const tokenProject = aggAuth.claims.scope?.project;
-					if (tokenProject && (!body.project || body.project !== tokenProject)) {
-						return c.json({ error: `scope restricted to project '${tokenProject}'` }, 403);
-					}
-					const scopeDecision = checkScope(
-						aggAuth.claims,
-						{ agent: agentId, project: body.project ?? undefined },
-						authConfig.mode,
-					);
-					if (!scopeDecision.allowed) {
-						return c.json({ error: scopeDecision.reason ?? "scope violation" }, 403);
+				// When aggregate save is requested, enforce scope for non-admin tokens.
+				if (aggregateSaveRequested) {
+					const aggAuth = c.get("auth");
+					if (aggAuth?.claims && aggAuth.claims.role !== "admin") {
+						const tokenProject = aggAuth.claims.scope?.project;
+						if (tokenProject && (!body.project || body.project !== tokenProject)) {
+							return c.json({ error: `scope restricted to project '${tokenProject}'` }, 403);
+						}
+						const scopeDecision = checkScope(
+							aggAuth.claims,
+							{ agent: agentId, project: body.project ?? undefined },
+							authConfig.mode,
+						);
+						if (!scopeDecision.allowed) {
+							return c.json({ error: scopeDecision.reason ?? "scope violation" }, 403);
+						}
 					}
 				}
-			}
 
-			const agentScope = getAgentScope(agentId);
-			const cfg = loadMemoryConfig(AGENTS_DIR);
-			const recallSurface = "tool_call" as const;
-			if (body.aggregate === true && authConfig.mode !== "local") {
-				const actor = c.get("auth")?.claims?.sub ?? "anonymous";
-				const check = authRecallLlmLimiter.check(actor);
-				if (!check.allowed) {
-					c.header("Retry-After", String(Math.ceil((check.resetAt - Date.now()) / 1000)));
-					return c.json({ error: "rate limit exceeded", retryAfter: check.resetAt }, 429);
+				const agentScope = getAgentScope(agentId);
+				const cfg = loadMemoryConfig(AGENTS_DIR);
+				const recallSurface = "tool_call" as const;
+				if (body.aggregate === true && authConfig.mode !== "local") {
+					const actor = c.get("auth")?.claims?.sub ?? "anonymous";
+					const check = authRecallLlmLimiter.check(actor);
+					if (!check.allowed) {
+						c.header("Retry-After", String(Math.ceil((check.resetAt - Date.now()) / 1000)));
+						return c.json({ error: "rate limit exceeded", retryAfter: check.resetAt }, 429);
+					}
+					authRecallLlmLimiter.record(actor);
 				}
-				authRecallLlmLimiter.record(actor);
+				const requestedProject = parseOptionalString(body.project);
+				const scopedP = resolveScopedProject(c, requestedProject);
+				if (scopedP.error) return c.json({ error: scopedP.error }, 403);
+				recordRecallAttempt(recallSurface);
+				recallAttempted = true;
+				const project = scopedP.project ?? requestedProject;
+				const params: RecallParams = {
+					query: body.query,
+					keywordQuery: body.keywordQuery,
+					limit: body.limit,
+					project,
+					aggregate: body.aggregate,
+					aggregateBudget: aggregateBudget ?? undefined,
+					aggregate_budget: aggregateBudget ?? undefined,
+					saveAggregate: body.saveAggregate ?? body.save_aggregate,
+					save_aggregate: body.save_aggregate ?? body.saveAggregate,
+					type: body.type,
+					tags: body.tags,
+					who: body.who,
+					since: body.since,
+					until: body.until,
+					time: body.time as RecallParams["time"],
+					expand: body.expand,
+					agentId,
+					readPolicy: agentScope.readPolicy,
+					policyGroup: agentScope.policyGroup,
+					sessionKey: body.sessionKey,
+					includeRecalled: body.includeRecalled === true,
+					recallSurface: "api.hooks.recall",
+					recallMode: "hook",
+					telemetrySurface: recallSurface,
+				};
+				let embeddingDegraded = false;
+				let embeddingCause: PipelineCauseFamily | undefined;
+				const embedFn = async (text: string, embeddingConfig: EmbeddingConfig, role?: EmbeddingRole) => {
+					const embedding = await recallAttributedEmbedFn(fetchEmbedding, agentId, (causeFamily) => {
+						embeddingDegraded = true;
+						embeddingCause ??= causeFamily;
+					})(text, embeddingConfig, role);
+					if (embedding === null && embeddingConfig.provider !== "none") embeddingDegraded = true;
+					return embedding;
+				};
+				const result =
+					body.aggregate === true
+						? await aggregateRecall(params, cfg, {
+								router: getInferenceRouterOrNull(),
+								embedFn,
+							})
+						: await hybridRecall(params, cfg, embedFn);
+				if (result.aggregate?.partial === true || embeddingDegraded) {
+					c.header("x-signet-operation-degraded", "1");
+					if (!embeddingCause && result.aggregate?.stoppedReason === "router_unavailable") {
+						embeddingCause = "provider_unavailable";
+					}
+					if (!embeddingCause && result.aggregate?.stoppedReason === "synthesis_failed") {
+						embeddingCause = "internal_error";
+					}
+					if (embeddingCause) c.header("x-signet-operation-cause", embeddingCause);
+				}
+				recordRecallOutcome({
+					surface: recallSurface,
+					resultCount: result.results.length,
+					truncated: result.results.length >= effectiveRecallLimit(params.limit),
+					delivery: "returned",
+				});
+				return c.json(withHookRecallCompat(result));
+			} catch (e) {
+				if (recallAttempted) recordRecallOutcome({ surface: "tool_call", error: true, delivery: "not_delivered" });
+				logger.error("hooks", "Recall hook failed", e as Error);
+				c.header("x-signet-operation-cause", normalizePipelineCause(e));
+				return c.json({ error: "Hook execution failed" }, 500);
 			}
-			const requestedProject = parseOptionalString(body.project);
-			const scopedP = resolveScopedProject(c, requestedProject);
-			if (scopedP.error) return c.json({ error: scopedP.error }, 403);
-			recordRecallAttempt(recallSurface);
-			recallAttempted = true;
-			const project = scopedP.project ?? requestedProject;
-			const params: RecallParams = {
-				query: body.query,
-				keywordQuery: body.keywordQuery,
-				limit: body.limit,
-				project,
-				aggregate: body.aggregate,
-				aggregateBudget: aggregateBudget ?? undefined,
-				aggregate_budget: aggregateBudget ?? undefined,
-				saveAggregate: body.saveAggregate ?? body.save_aggregate,
-				save_aggregate: body.save_aggregate ?? body.saveAggregate,
-				type: body.type,
-				tags: body.tags,
-				who: body.who,
-				since: body.since,
-				until: body.until,
-				time: body.time as RecallParams["time"],
-				expand: body.expand,
-				agentId,
-				readPolicy: agentScope.readPolicy,
-				policyGroup: agentScope.policyGroup,
-				sessionKey: body.sessionKey,
-				includeRecalled: body.includeRecalled === true,
-				recallSurface: "api.hooks.recall",
-				recallMode: "hook",
-				telemetrySurface: recallSurface,
-			};
-			const result =
-				body.aggregate === true
-					? await aggregateRecall(params, cfg, {
-							router: getInferenceRouterOrNull(),
-							embedFn: recallAttributedEmbedFn(fetchEmbedding, agentId),
-						})
-					: await hybridRecall(params, cfg, recallAttributedEmbedFn(fetchEmbedding, agentId));
-			recordRecallOutcome({
-				surface: recallSurface,
-				resultCount: result.results.length,
-				truncated: result.results.length >= effectiveRecallLimit(params.limit),
-				delivery: "returned",
-			});
-			return c.json(withHookRecallCompat(result));
-		} catch (e) {
-			if (recallAttempted) recordRecallOutcome({ surface: "tool_call", error: true, delivery: "not_delivered" });
-			logger.error("hooks", "Recall hook failed", e as Error);
-			return c.json({ error: "Hook execution failed" }, 500);
-		}
+		});
 	});
 }
 
@@ -1865,10 +1935,12 @@ function registerSynthesis(app: Hono): void {
 function recallAttributedEmbedFn(
 	embedFn: typeof fetchEmbedding,
 	agentId: string,
+	onFailure?: (causeFamily: PipelineCauseFamily) => void,
 ): (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null> {
 	return (text, cfg, role) =>
 		embedFn(text, cfg, role, {
 			usage: { source: role === "query" ? "recall" : "memory-capture", agentId },
+			onFailure,
 		});
 }
 

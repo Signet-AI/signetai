@@ -791,10 +791,24 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		return requirePermission("recall", authConfig)(c, next);
 	});
 	app.use("/api/memory/timeline", async (c, next) => {
-		return requirePermission("recall", authConfig)(c, next);
+		return recordRequestOperation(
+			c,
+			async () => {
+				const denied = await requirePermission("recall", authConfig)(c, next);
+				if (denied) c.res = denied;
+			},
+			"recall",
+		);
 	});
 	app.use("/api/memories/curator-slices", async (c, next) => {
-		return requirePermission("recall", authConfig)(c, next);
+		return recordRequestOperation(
+			c,
+			async () => {
+				const denied = await requirePermission("recall", authConfig)(c, next);
+				if (denied) c.res = denied;
+			},
+			"recall",
+		);
 	});
 
 	// Modify — with rate limiting
