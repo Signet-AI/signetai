@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { applyOntologyProposal, getOntologyProposal, rejectOntologyProposal } from "../ontology-proposals";
 import { type DreamingOperationRequest, applyDreamingOperations } from "./dreaming-operations";
 
 describe("dreaming operations", () => {
@@ -58,6 +59,23 @@ describe("dreaming operations", () => {
 		return { operation: "flag", payload: operation };
 	}
 
+	function reviewLinkOperation(): DreamingOperationRequest {
+		return {
+			operation: "create_link",
+			payload: { fromEntityId: "e-source", toEntityId: "e-target", linkType: "supports_claim" },
+			reason: "Local-first and hosted inference may be two deployment modes. Link them?",
+			risk: "review_required",
+			evidence: [
+				{
+					source_ref: "memory:m-review",
+					source_kind: "manual",
+					source_id: "m-review",
+					quote: "Local-first and hosted inference may be two deployment modes.",
+				},
+			],
+		};
+	}
+
 	it("mints hygiene attention for a flag op and returns the id", () => {
 		insertEntity("e-husk", "Legacy Husk", "legacy husk");
 		const result = applyDreamingOperations({
@@ -81,6 +99,80 @@ describe("dreaming operations", () => {
 				db.prepare("SELECT COUNT(*) AS c FROM dreaming_attention WHERE resolved_at IS NULL").get() as { c: number },
 		);
 		expect(pending.c).toBe(1);
+	});
+
+	it("escalates review-required content operations without mutating the ontology", () => {
+		insertEntity("e-source", "Local-first", "local-first");
+		insertEntity("e-target", "Hosted inference", "hosted inference");
+		insertEpisodicMemory("m-review", "Local-first and hosted inference may be two deployment modes.");
+		const result = applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [reviewLinkOperation()],
+		});
+		expect(result.ok).toBe(true);
+		expect((result.items[0]?.result as { reviewRequired?: boolean }).reviewRequired).toBe(true);
+		const proposalId = (result.items[0]?.proposal as { id: string }).id;
+		expect(getOntologyProposal(getDbAccessor(), proposalId, "agent-a")).toMatchObject({
+			operation: "create_link",
+			status: "pending",
+			risk: "review_required",
+		});
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS c FROM entity_dependencies WHERE agent_id = ?").get("agent-a") as {
+						c: number;
+					},
+			),
+		).toEqual({ c: 0 });
+		const applied = applyOntologyProposal(getDbAccessor(), {
+			agentId: "agent-a",
+			id: proposalId,
+			actor: "dashboard",
+		});
+		expect(applied.status).toBe("applied");
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS c FROM entity_dependencies WHERE agent_id = ?").get("agent-a") as {
+						c: number;
+					},
+			),
+		).toEqual({ c: 1 });
+	});
+
+	it("deduplicates repeated review-required operations and honors a rejection", () => {
+		insertEntity("e-source", "Local-first", "local-first");
+		insertEntity("e-target", "Hosted inference", "hosted inference");
+		insertEpisodicMemory("m-review", "Local-first and hosted inference may be two deployment modes.");
+		const run = () =>
+			applyDreamingOperations({
+				accessor: getDbAccessor(),
+				agentId: "agent-a",
+				actor: "dreaming",
+				operations: [reviewLinkOperation()],
+			});
+		const first = run();
+		const proposalId = (first.items[0]?.proposal as { id: string }).id;
+		const second = run();
+		expect((second.items[0]?.result as { deduped?: boolean }).deduped).toBe(true);
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS c FROM ontology_proposals WHERE agent_id = ?").get("agent-a") as { c: number },
+			),
+		).toEqual({ c: 1 });
+		rejectOntologyProposal(getDbAccessor(), {
+			agentId: "agent-a",
+			id: proposalId,
+			actor: "dashboard",
+			reason: "Not the same relationship",
+		});
+		const third = run();
+		expect((third.items[0]?.result as { deduped?: boolean }).deduped).toBe(true);
+		expect(getOntologyProposal(getDbAccessor(), proposalId, "agent-a")).toMatchObject({ status: "rejected" });
 	});
 
 	it("archives a flagged entity in the same batch via attention:$<index>", () => {
@@ -214,7 +306,6 @@ describe("dreaming operations", () => {
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT id FROM entities WHERE id = ?").get("e-target")),
 		).not.toBeNull();
 	});
-
 
 	it("rejects a merge_aspects whose details aspectId contradicts the flagged subjectRef", () => {
 		insertEntity("e-merge3", "MergeThree", "mergethree");

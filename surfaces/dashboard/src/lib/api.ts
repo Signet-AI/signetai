@@ -297,6 +297,25 @@ export interface KnowledgeConstellation {
 	metadata: { proposals: { pending: number } };
 }
 
+export interface OntologyProposal {
+	id: string;
+	agentId: string;
+	operation: string;
+	status: "pending" | "applied" | "rejected" | "failed";
+	payload: Record<string, unknown>;
+	confidence: number;
+	rationale: string;
+	evidence: readonly unknown[];
+	risk: string | null;
+	sourceKind: string | null;
+	sourceId: string | null;
+	sourcePath: string | null;
+	sourceRoot: string | null;
+	createdBy: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
 export interface MemoryStats {
 	total: number;
 	withEmbeddings: number;
@@ -656,6 +675,25 @@ export const api = {
 		getJSON<KnowledgeConstellation>(
 			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=4&dependency_limit=${dependencyLimit}`,
 		),
+	getOntologyProposals: (status: "pending" | "applied" | "rejected" | "failed" = "pending", limit = 20) =>
+		getJSON<{ items: OntologyProposal[]; limit: number; offset: number }>(
+			`/api/ontology/proposals?status=${status}&limit=${limit}`,
+		),
+	applyOntologyProposal: async (id: string): Promise<{ ok: boolean; error?: string }> => {
+		const { ok, data } = await mutateJSON<{ error?: string }>(
+			`/api/ontology/proposals/${encodeURIComponent(id)}/apply`,
+			"POST",
+		);
+		return { ok, error: ok ? undefined : (data?.error ?? "Failed to apply proposal") };
+	},
+	rejectOntologyProposal: async (id: string, reason?: string): Promise<{ ok: boolean; error?: string }> => {
+		const { ok, data } = await mutateJSON<{ error?: string }>(
+			`/api/ontology/proposals/${encodeURIComponent(id)}/reject`,
+			"POST",
+			reason ? { reason } : undefined,
+		);
+		return { ok, error: ok ? undefined : (data?.error ?? "Failed to reject proposal") };
+	},
 
 	// Sources
 	getSources: () => getJSON<SourcesResponse>("/api/sources"),

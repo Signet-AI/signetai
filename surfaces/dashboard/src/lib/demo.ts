@@ -31,6 +31,7 @@ import type {
 	MemoryStats,
 	MemoryTimeline,
 	OnePasswordStatus,
+	OntologyProposal,
 	SourcesResponse,
 	TelemetryHealth,
 	TodayReflectionResponse,
@@ -88,7 +89,27 @@ const demoStatus: DaemonStatus = {
 	},
 };
 
-/** Internally consistent graph stats: entityCount drives the sidebar badge. */
+const demoOntologyProposal: OntologyProposal = {
+	id: "demo-proposal-review",
+	agentId: DEMO_AGENT,
+	operation: "create_link",
+	status: "pending",
+	payload: { source_entity_id: "demo-entity-1", target_entity_id: "demo-entity-2", link_type: "supports_claim" },
+	confidence: 0.74,
+	rationale:
+		"local-first and hosted inference may describe two deployment modes of the same Signet inference system. Link them?",
+	evidence: [{ source_ref: "memory:demo-memory-1", quote: "Source-backed claims keep provenance chains intact" }],
+	risk: "review_required",
+	sourceKind: "memory",
+	sourceId: "demo-memory-1",
+	sourcePath: null,
+	sourceRoot: "demo",
+	createdBy: "dreaming",
+	createdAt: new Date().toISOString(),
+	updatedAt: new Date().toISOString(),
+};
+
+let demoOntologyProposals: OntologyProposal[] = [demoOntologyProposal];
 const demoStats: KnowledgeStats = {
 	entityCount: 1247,
 	aspectCount: 1893,
@@ -604,6 +625,17 @@ export function installDemoApi(target: ApiClient): void {
 	target.getSources = async () => demoSources;
 	target.getMemoryTimeline = async () => demoTimeline;
 	target.getKnowledgeConstellation = async () => demoConstellation();
+	target.getOntologyProposals = async () => ({ items: demoOntologyProposals, limit: 20, offset: 0 });
+	target.applyOntologyProposal = async (id) => {
+		const exists = demoOntologyProposals.some((proposal) => proposal.id === id);
+		if (exists) demoOntologyProposals = demoOntologyProposals.filter((proposal) => proposal.id !== id);
+		return exists ? { ok: true } : { ok: false, error: "Proposal not found" };
+	};
+	target.rejectOntologyProposal = async (id) => {
+		const exists = demoOntologyProposals.some((proposal) => proposal.id === id);
+		if (exists) demoOntologyProposals = demoOntologyProposals.filter((proposal) => proposal.id !== id);
+		return exists ? { ok: true } : { ok: false, error: "Proposal not found" };
+	};
 	target.getTodayReflections = async () => demoReflectionsResponse;
 	target.generateReflections = async () => demoReflectionsResponse;
 	target.answerReflection = async () => ({ success: true, memoryId: "demo-memory-answer" });

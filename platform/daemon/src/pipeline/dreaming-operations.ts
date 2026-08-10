@@ -1,10 +1,11 @@
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
-import type { DbAccessor, ReadDb } from "../db-accessor";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { findEpisodicSourceAgentIds, readEpisodicSource } from "../episodic-sources";
 import {
 	type GraphWriteCaps,
 	type OntologyOperationInput,
 	applyOntologyOperationBatchInTx,
+	createOntologyProposalsInTx,
 } from "../ontology-proposals";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
@@ -535,6 +536,28 @@ function toApplicatorPayload(
 	}
 }
 
+function existingReviewProposalId(
+	db: WriteDb,
+	params: {
+		readonly agentId: string;
+		readonly operation: string;
+		readonly payload: Readonly<Record<string, unknown>>;
+		readonly evidence: readonly unknown[];
+	},
+): string | null {
+	const row = db
+		.prepare(
+			`SELECT id FROM ontology_proposals
+			 WHERE agent_id = ? AND operation = ? AND status IN ('pending', 'applied', 'rejected')
+			   AND payload = ? AND evidence = ?
+			 ORDER BY updated_at DESC LIMIT 1`,
+		)
+		.get(params.agentId, params.operation, JSON.stringify(params.payload), JSON.stringify(params.evidence)) as
+		| { id?: unknown }
+		| undefined;
+	return typeof row?.id === "string" ? row.id : null;
+}
+
 /**
  * The sole daemon-owned apply seam for Dreaming agents. Flag ops mint hygiene
  * attention in-batch; hygiene archives/merges cite attention provenance;
@@ -570,6 +593,8 @@ export function applyDreamingOperations(params: {
 		readonly attentionId: string | null;
 		/** Queue-only op that resolves its cited attention record instead of an ontology write. */
 		readonly decline?: boolean;
+		/** Content operation was escalated for an explicit user decision. */
+		readonly reviewOnly?: boolean;
 	}> = [];
 	for (let index = 0; index < params.operations.length; index += 1) {
 		const operation = params.operations[index]!;
@@ -631,6 +656,7 @@ export function applyDreamingOperations(params: {
 				sourceRoot: provenance.sourceRoot,
 			},
 			attentionId,
+			reviewOnly: operation.risk === "review_required" && !HYGIENE_ARCHIVE_OPS.has(operation.operation),
 		});
 	}
 
@@ -667,6 +693,41 @@ export function applyDreamingOperations(params: {
 				}
 				// flag op: nothing to apply; surface the minted attention id
 				items.push({ index, ok: true, result: { attentionId: entry.attentionId } });
+				continue;
+			}
+			if (entry.reviewOnly) {
+				const existingId = existingReviewProposalId(db, {
+					agentId: params.agentId,
+					operation: entry.input.operation,
+					payload: entry.input.payload,
+					evidence: entry.input.evidence ?? [],
+				});
+				if (existingId !== null) {
+					items.push({ index, ok: true, result: { reviewRequired: true, deduped: true, proposalId: existingId } });
+					continue;
+				}
+				const created = createOntologyProposalsInTx(db, [
+					{
+						agentId: params.agentId,
+						operation: entry.input.operation,
+						payload: entry.input.payload,
+						confidence: entry.input.confidence,
+						rationale: entry.input.reason,
+						evidence: entry.input.evidence,
+						risk: entry.input.risk,
+						sourceKind: entry.input.sourceKind,
+						sourceId: entry.input.sourceId,
+						sourcePath: entry.input.sourcePath,
+						sourceRoot: entry.input.sourceRoot,
+						createdBy: params.actor,
+					},
+				]);
+				items.push({
+					index,
+					ok: true,
+					proposal: created.items[0],
+					result: { reviewRequired: true },
+				});
 				continue;
 			}
 			if (entry.attentionId !== null) {
