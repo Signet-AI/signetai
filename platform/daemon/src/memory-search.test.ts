@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
@@ -1644,6 +1645,108 @@ describe("hybridRecall", () => {
 
 		expect(result.results.map((row) => row.source_id).filter((id) => id === sourceId)).toHaveLength(1);
 		expect(result.results.some((row) => row.source === "native_memory" && row.source_id === sourceId)).toBe(false);
+	});
+
+	it("dedupes identical Hermes native artifact hashes across profiles", async () => {
+		const content = "# Hermes memory\n\nShared Hermes profile duplicate hash marker.\n";
+		for (const [profile, kind] of [
+			["alpha", "native_hermes_memory"],
+			["beta", "native_hermes_user"],
+		] as const) {
+			const path = join(dir, "hermes", "profiles", profile, "memories", `${kind}.md`);
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, content);
+			indexExternalMemoryArtifact({
+				agentId: "default",
+				sourcePath: path,
+				sourceKind: kind,
+				harness: "hermes-agent",
+				content,
+				sourceMtimeMs: Date.now(),
+			});
+		}
+
+		const result = await hybridRecall(
+			{
+				query: "Shared Hermes profile duplicate hash marker",
+				keywordQuery: "Shared Hermes profile duplicate hash marker",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.filter((row) => row.source === "native_memory")).toHaveLength(1);
+		const artifacts = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE harness = 'hermes-agent'").get() as {
+					count: number;
+				},
+		);
+		expect(artifacts.count).toBe(2);
+	});
+
+	it("does not return a Hermes native artifact twice when a live mirror has the same content", async () => {
+		const content = "# Hermes memory\n\nExact Hermes live mirror duplicate marker.\n";
+		const path = join(dir, "hermes", "memories", "MEMORY.md");
+		mkdirSync(join(dir, "hermes", "memories"), { recursive: true });
+		writeFileSync(path, content);
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			sourcePath: path,
+			sourceKind: "native_hermes_memory",
+			harness: "hermes-agent",
+			content,
+			sourceMtimeMs: Date.now(),
+		});
+
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, content_hash, type, source_type, source_id, agent_id,
+					visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, ?, 'fact', 'hermes-memory-write', ?, 'default', 'global', ?, ?, 'test', 0)`,
+			).run(
+				"hermes-live-mirror",
+				content,
+				normalizeAndHashContent(content).contentHash,
+				"hermes-memory-write:mirror",
+				now,
+				now,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "Exact Hermes live mirror duplicate marker",
+				keywordQuery: "Exact Hermes live mirror duplicate marker",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toContain("hermes-live-mirror");
+		expect(result.results.some((row) => row.source === "native_memory")).toBe(false);
+
+		const sourceOnly = await hybridRecall(
+			{
+				query: "Exact Hermes live mirror duplicate marker",
+				keywordQuery: "Exact Hermes live mirror duplicate marker",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				sourceOnly: true,
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+		expect(sourceOnly.results.some((row) => row.source === "native_memory")).toBe(true);
 	});
 
 	it("returns more than five native artifacts when they are the primary recall source", async () => {

@@ -1409,7 +1409,7 @@ specs:
       - docs/research/technical/RESEARCH-NATIVE-HARNESS-MEMORY-BRIDGE.md
     success_criteria:
       - "Memories written by a native-memory harness are recallable through Signet from other harnesses without becoming Signet-authored memory rows"
-      - "Codex native memory artifacts are indexed with harness/source provenance"
+      - "Codex, Claude Code, and Hermes Agent native memory artifacts are indexed with harness/source provenance"
       - "Codex MCP registration avoids exposing duplicate Signet memory tools by default"
   - id: memory-content-safety
     status: approved

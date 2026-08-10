@@ -8,6 +8,7 @@ import {
 	SOURCE_CHUNK_SOURCE_TYPE,
 	loadSourcesConfig,
 	markSourceIndexed,
+	resolveHermesHomePath,
 } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
@@ -36,6 +37,8 @@ export interface NativeMemorySource {
 	readonly harness: string;
 	readonly displayName: string;
 	readonly root: string;
+	/** Root used for stable provenance paths when the scan root is a subdirectory. */
+	readonly sourceRoot?: string;
 	readonly sourceId?: string;
 	readonly files: readonly NativeMemoryFilePattern[];
 }
@@ -65,6 +68,7 @@ export interface NativeMemoryBridgeOptions {
 	readonly yieldEveryFiles?: number;
 	readonly sourceFileDelayMs?: number;
 	readonly sourceCleanupEnabled?: boolean;
+	readonly shouldCleanupSource?: (source: NativeMemorySource) => boolean;
 	readonly sourceGraphEnabled?: boolean;
 	readonly shouldContinue?: (source: NativeMemorySource) => boolean;
 	readonly onFileIndexed?: (event: NativeMemoryFileIndexEvent) => void;
@@ -156,6 +160,26 @@ function sourceIdForCodexRoot(root: string): string {
 	return `codex_native_memory:${createHash("sha256").update(normalizedRoot(root)).digest("hex").slice(0, 16)}`;
 }
 
+function hermesProfileRoot(root: string): string {
+	const normalized = normalizedRoot(root);
+	return basename(normalized) === "memories" ? dirname(normalized) : normalized;
+}
+
+function hermesProfileId(root: string): string {
+	const normalized = normalizedRoot(root);
+	const profilesMarker = "/profiles/";
+	const markerIndex = normalized.lastIndexOf(profilesMarker);
+	if (markerIndex >= 0) {
+		const profile = normalized.slice(markerIndex + profilesMarker.length);
+		if (profile.length > 0 && !profile.includes("/")) return profile;
+	}
+	return basename(normalized) === ".hermes" ? "default" : basename(normalized);
+}
+
+function sourceIdForHermesRoot(root: string): string {
+	return `hermes_native_memory:${createHash("sha256").update(normalizedRoot(root)).digest("hex").slice(0, 16)}`;
+}
+
 export function codexNativeMemorySource(root = codexRoot()): NativeMemorySource {
 	return {
 		harness: "codex",
@@ -194,6 +218,26 @@ export function claudeCodeNativeMemorySource(root = claudeCodeRoot()): NativeMem
 	};
 }
 
+/**
+ * Hermes keeps curated, profile-local memory in two files under HERMES_HOME.
+ * Scan only that declared memory directory; the profile root remains the
+ * provenance boundary for source IDs and relative paths.
+ */
+export function hermesNativeMemorySource(root = resolveHermesHomePath()): NativeMemorySource {
+	const profileRoot = hermesProfileRoot(root);
+	return {
+		harness: "hermes-agent",
+		displayName: "Hermes Agent",
+		root: join(profileRoot, "memories"),
+		sourceRoot: profileRoot,
+		sourceId: sourceIdForHermesRoot(profileRoot),
+		files: [
+			{ glob: "MEMORY.md", kind: "native_hermes_memory" },
+			{ glob: "USER.md", kind: "native_hermes_user" },
+		],
+	};
+}
+
 export function obsidianNativeMemorySource(
 	root: string,
 	displayName = "Obsidian",
@@ -219,7 +263,7 @@ export function configuredNativeMemorySources(agentsDir?: string): NativeMemoryS
 	const configured = loadSourcesConfig(agentsDir)
 		.sources.filter((source) => source.enabled && source.kind === "obsidian")
 		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs));
-	return [codexNativeMemorySource(), claudeCodeNativeMemorySource(), ...configured];
+	return [codexNativeMemorySource(), claudeCodeNativeMemorySource(), hermesNativeMemorySource(), ...configured];
 }
 
 async function* walkNativeMemoryFiles(dir: string): AsyncGenerator<string> {
@@ -346,6 +390,33 @@ function codexSourceMeta(
 		lineStart: lineCount > 0 ? 1 : 0,
 		lineEnd: lineCount,
 		...(rolloutId ? { rolloutId } : {}),
+	};
+}
+
+function hermesSourceMeta(
+	source: NativeMemorySource,
+	filePath: string,
+	content: string,
+): Record<string, unknown> | undefined {
+	if (source.harness !== "hermes-agent") return undefined;
+	const profileRoot = normalizedRoot(source.sourceRoot ?? hermesProfileRoot(source.root));
+	const rel = safeRelativePath(source.root, filePath) ?? sourceRelativePath(profileRoot, filePath);
+	const profileRelativePath = sourceRelativePath(profileRoot, filePath);
+	const normalized = content.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+	const lineCount = normalized.length === 0 ? 0 : normalized.split("\n").length;
+	return {
+		sourceType: "hermes_native_memory",
+		provider: "hermes-agent",
+		displayName: source.displayName,
+		profileId: hermesProfileId(profileRoot),
+		profileRoot,
+		relativePath: profileRelativePath,
+		memoryFile: rel,
+		lineStart: lineCount > 0 ? 1 : 0,
+		lineEnd: lineCount,
+		contentHash: contentFingerprint(content),
+		visibility: "private",
+		project: null,
 	};
 }
 
@@ -592,6 +663,7 @@ export async function indexNativeMemoryFile(
 	const hash = contentFingerprint(content);
 	const persistedHash = nativeArtifactContentHash(filePath, agentId);
 	const obsidian = source.harness === "obsidian" && pattern.kind === "source_obsidian_markdown";
+	const hermes = source.harness === "hermes-agent";
 	const sourceId = obsidian ? (source.sourceId ?? sourceIdForObsidianRoot(source.root)) : (source.sourceId ?? null);
 	const graphRequested = obsidian && (options.sourceGraphEnabled ?? true);
 	const embeddingRequested =
@@ -630,9 +702,9 @@ export async function indexNativeMemoryFile(
 	try {
 		const artifactChanged = persistedHash !== hash;
 		if (artifactChanged) {
-			const sourceExternalId = obsidian ? sourceRelativePath(source.root, filePath) : null;
+			const provenanceRoot = source.sourceRoot ?? source.root;
 			const externalId =
-				sourceExternalId ?? (source.harness === "codex" ? sourceRelativePath(source.root, filePath) : null);
+				obsidian || source.harness === "codex" || hermes ? sourceRelativePath(provenanceRoot, filePath) : null;
 			indexExternalMemoryArtifact({
 				agentId,
 				sourcePath: filePath,
@@ -641,7 +713,7 @@ export async function indexNativeMemoryFile(
 				content,
 				sourceMtimeMs: mtimeMs,
 				sourceId,
-				sourceRoot: obsidian || source.harness === "codex" ? normalizedRoot(source.root) : null,
+				sourceRoot: obsidian || source.harness === "codex" || hermes ? normalizedRoot(provenanceRoot) : null,
 				sourceExternalId: externalId,
 				sourceParentPath: externalId ? dirname(externalId).replace(/^\.$/, "") : null,
 				sourceMeta: obsidian
@@ -649,7 +721,7 @@ export async function indexNativeMemoryFile(
 							provider: "obsidian",
 							displayName: source.displayName,
 						}
-					: codexSourceMeta(source, filePath, content),
+					: (codexSourceMeta(source, filePath, content) ?? hermesSourceMeta(source, filePath, content)),
 			});
 		}
 		let semanticIndexed = false;
@@ -789,8 +861,16 @@ function prefixUpperBound(prefix: string): string {
 	return `${prefix}\uffff`;
 }
 
+function sourceCleanupEnabledFor(source: NativeMemorySource, options: NativeMemoryBridgeOptions): boolean {
+	return (options.sourceCleanupEnabled ?? true) && (options.shouldCleanupSource?.(source) ?? true);
+}
+
 export function startNativeMemoryBridge(
-	sources: readonly NativeMemorySource[] = [codexNativeMemorySource(), claudeCodeNativeMemorySource()],
+	sources: readonly NativeMemorySource[] = [
+		codexNativeMemorySource(),
+		claudeCodeNativeMemorySource(),
+		hermesNativeMemorySource(),
+	],
 	options: NativeMemoryBridgeOptions = {},
 ): NativeMemoryBridgeHandle {
 	const agentId = resolveBridgeAgentId(options.agentId);
@@ -835,7 +915,7 @@ export function startNativeMemoryBridge(
 					await yielder();
 					await sleep(fileDelayMs);
 				}
-				if (options.sourceCleanupEnabled ?? true) {
+				if (sourceCleanupEnabledFor(source, options)) {
 					const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
 					for (const file of activeNativeArtifactPaths(source, agentId)) {
 						if (!currentPaths.has(file.replace(/\\/g, "/"))) removeNativeMemoryFile(source, file, agentId);
@@ -843,7 +923,7 @@ export function startNativeMemoryBridge(
 				}
 			}
 			const previous = known.get(key);
-			if (previous && (options.sourceCleanupEnabled ?? true)) {
+			if (previous && sourceCleanupEnabledFor(source, options)) {
 				for (const file of previous) {
 					if (!current.has(file)) removeNativeMemoryFile(source, file, agentId);
 				}

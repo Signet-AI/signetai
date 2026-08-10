@@ -8,6 +8,7 @@ import { indexExternalMemoryArtifact } from "./memory-lineage";
 import {
 	claudeCodeNativeMemorySource,
 	codexNativeMemorySource,
+	hermesNativeMemorySource,
 	indexNativeMemoryFile,
 	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
@@ -259,6 +260,164 @@ describe("native memory sources", () => {
 				}[],
 		);
 		expect(rows.map((row) => row.source_kind)).toEqual(["native_claude_agent_memory", "native_claude_memory_index"]);
+	});
+
+	it("indexes Hermes MEMORY.md and USER.md with profile provenance", async () => {
+		const profileRoot = join(dir, "hermes", "profiles", "research");
+		const memoriesRoot = join(profileRoot, "memories");
+		const memoryFile = join(memoriesRoot, "MEMORY.md");
+		const userFile = join(memoriesRoot, "USER.md");
+		const stamp = new Date("2026-04-22T12:00:00Z");
+		mkdirSync(memoriesRoot, { recursive: true });
+		writeFileSync(memoryFile, "# Hermes Memory\n\nHermes keeps curated profile context here.\n");
+		writeFileSync(userFile, "# Hermes User\n\nThe user prefers portable memory.\n");
+		utimesSync(memoryFile, stamp, stamp);
+		utimesSync(userFile, stamp, stamp);
+
+		const source = hermesNativeMemorySource(profileRoot);
+		const handle = startNativeMemoryBridge([source], { agentId: "agent-hermes", pollIntervalMs: 0 });
+		try {
+			expect(await handle.syncExisting()).toBe(2);
+			expect(await handle.syncExisting()).toBe(0);
+
+			const rows = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_kind, source_id, source_root, source_external_id,
+							        source_parent_path, source_meta_json, source_mtime_ms
+							 FROM memory_artifacts
+							 WHERE agent_id = ? ORDER BY source_kind`,
+						)
+						.all("agent-hermes") as Array<{
+						source_kind: string;
+						source_id: string;
+						source_root: string;
+						source_external_id: string;
+						source_parent_path: string;
+						source_meta_json: string;
+						source_mtime_ms: number;
+					}>,
+			);
+			expect(rows.map((row) => row.source_kind)).toEqual(["native_hermes_memory", "native_hermes_user"]);
+			expect(rows.every((row) => row.source_id.startsWith("hermes_native_memory:"))).toBe(true);
+			expect(rows.every((row) => row.source_root === profileRoot)).toBe(true);
+			expect(rows.map((row) => row.source_external_id)).toEqual(["memories/MEMORY.md", "memories/USER.md"]);
+			expect(rows.every((row) => row.source_parent_path === "memories")).toBe(true);
+			expect(rows.every((row) => row.source_mtime_ms === stamp.getTime())).toBe(true);
+			expect(JSON.parse(rows[0]?.source_meta_json ?? "{}")).toMatchObject({
+				sourceType: "hermes_native_memory",
+				provider: "hermes-agent",
+				profileId: "research",
+				profileRoot,
+				relativePath: "memories/MEMORY.md",
+				visibility: "private",
+				project: null,
+			});
+		} finally {
+			await handle.close();
+		}
+	});
+
+	it("resolves the configured Hermes profile memory directory", () => {
+		const profileRoot = join(dir, "hermes", "profiles", "configured");
+		const previousHermesHome = process.env.HERMES_HOME;
+		process.env.HERMES_HOME = profileRoot;
+		try {
+			expect(hermesNativeMemorySource()).toMatchObject({
+				root: join(profileRoot, "memories"),
+				sourceRoot: profileRoot,
+			});
+		} finally {
+			if (previousHermesHome === undefined) {
+				Reflect.deleteProperty(process.env, "HERMES_HOME");
+			} else {
+				process.env.HERMES_HOME = previousHermesHome;
+			}
+		}
+	});
+
+	it("reconciles changed and deleted Hermes profile artifacts idempotently", async () => {
+		const profileRoot = join(dir, "hermes-profile");
+		const memoriesRoot = join(profileRoot, "memories");
+		const memoryFile = join(memoriesRoot, "MEMORY.md");
+		const userFile = join(memoriesRoot, "USER.md");
+		mkdirSync(memoriesRoot, { recursive: true });
+		writeFileSync(memoryFile, "# Hermes Memory\n\nOriginal curated profile context.\n");
+		writeFileSync(userFile, "# Hermes User\n\nOriginal user context.\n");
+
+		const source = hermesNativeMemorySource(profileRoot);
+		const handle = startNativeMemoryBridge([source], { agentId: "agent-hermes", pollIntervalMs: 0 });
+		try {
+			expect(await handle.syncExisting()).toBe(2);
+			const before = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT source_sha256 FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+						.get("agent-hermes", memoryFile) as { source_sha256: string },
+			);
+			expect(await handle.syncExisting()).toBe(0);
+
+			writeFileSync(memoryFile, "# Hermes Memory\n\nUpdated curated profile context.\n");
+			expect(await handle.syncExisting()).toBe(1);
+			const after = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT source_sha256, content FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+						.get("agent-hermes", memoryFile) as { source_sha256: string; content: string },
+			);
+			expect(after.source_sha256).not.toBe(before.source_sha256);
+			expect(after.content).toContain("Updated curated profile context");
+
+			rmSync(userFile);
+			expect(await handle.syncExisting()).toBe(0);
+			const deleted = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT is_deleted, deleted_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+						.get("agent-hermes", userFile) as { is_deleted: number; deleted_at: string | null },
+			);
+			expect(deleted).toMatchObject({ is_deleted: 1 });
+			expect(deleted.deleted_at).toBeTruthy();
+		} finally {
+			await handle.close();
+		}
+	});
+
+	it("keeps Hermes profile and Signet agent boundaries separate", async () => {
+		const profileA = join(dir, "hermes", "profiles", "alpha");
+		const profileB = join(dir, "hermes", "profiles", "beta");
+		const fileA = join(profileA, "memories", "MEMORY.md");
+		const fileB = join(profileB, "memories", "MEMORY.md");
+		mkdirSync(join(profileA, "memories"), { recursive: true });
+		mkdirSync(join(profileB, "memories"), { recursive: true });
+		writeFileSync(fileA, "# Shared preference\n\nProfile alpha memory boundary marker.\n");
+		writeFileSync(fileB, "# Shared preference\n\nProfile beta memory boundary marker.\n");
+
+		const sourceA = hermesNativeMemorySource(profileA);
+		const sourceB = hermesNativeMemorySource(profileB);
+		const handle = startNativeMemoryBridge([sourceA, sourceB], { agentId: "agent-a", pollIntervalMs: 0 });
+		try {
+			expect(await handle.syncExisting()).toBe(2);
+			expect(await indexNativeMemoryFile(sourceA, fileA, "agent-b")).toBe(true);
+
+			const rows = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT agent_id, source_root, source_meta_json FROM memory_artifacts ORDER BY agent_id, source_root",
+						)
+						.all() as Array<{ agent_id: string; source_root: string; source_meta_json: string }>,
+			);
+			expect(rows.map((row) => row.agent_id)).toEqual(["agent-a", "agent-a", "agent-b"]);
+			expect(rows.filter((row) => row.agent_id === "agent-a").map((row) => row.source_root)).toEqual([
+				profileA,
+				profileB,
+			]);
+			expect(JSON.parse(rows[2]?.source_meta_json ?? "{}").profileId).toBe("alpha");
+		} finally {
+			await handle.close();
+		}
 	});
 
 	it("uses the daemon agent id when no explicit agent id is provided", async () => {

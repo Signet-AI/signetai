@@ -10,7 +10,7 @@ depends_on:
   - "signet-runtime"
 success_criteria:
   - "Memories written by a native-memory harness are recallable through Signet from other harnesses without becoming Signet-authored memory rows"
-  - "Codex and Claude Code native memory artifacts are indexed with harness/source provenance"
+  - "Codex, Claude Code, and Hermes Agent native memory artifacts are indexed with harness/source provenance"
   - "Removed native artifact files are soft-deleted and excluded from active recall without losing provenance"
   - "Codex MCP registration avoids exposing duplicate Signet memory tools by default"
 scope_boundary: "Indexes harness-native memory artifacts and bridges them into recall; does not replace native memory systems, write their internal databases, or add a second extraction pipeline"
@@ -31,6 +31,12 @@ Signet's artifact search layer and surfaced through recall as
 `~/.claude/projects/*/memory/`, `~/.claude/session-memory/`, and
 `~/.claude/agent-memory/` use the same bridge path instead of the previous
 Claude-only watcher that rechunked `MEMORY.md` into Signet-authored rows.
+Hermes Agent's configured profile memory files under
+`<HERMES_HOME>/memories/MEMORY.md` and `<HERMES_HOME>/memories/USER.md` use
+the same read-only artifact path. Signet records the profile identity, source
+path, content hash, and source timestamp, and keeps the rows scoped to the
+requesting Signet agent. Exact live `hermes-memory-write` mirrors are
+deduplicated at recall without replacing either source of evidence.
 When native memory files disappear, Signet marks their artifact rows deleted and
 excludes them from active recall rather than hard-deleting provenance.
 Normal Signet hooks remain the write path for Signet memories created from

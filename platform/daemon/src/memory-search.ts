@@ -25,6 +25,7 @@ import {
 	scanMemoryContent,
 	vectorSearch,
 } from "@signet/core";
+import { normalizeAndHashContent } from "./content-normalization";
 import { type ReadDb, getDbAccessor, prepareTypedStatement } from "./db-accessor";
 import type { EmbeddingRole } from "./embedding-profile";
 import { getLlmProvider } from "./llm";
@@ -1145,7 +1146,7 @@ function buildNativeArtifactRecallHits(
 			if (!table) return [];
 
 			const parts = [
-				"SELECT ma.rowid, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project,",
+				"SELECT ma.rowid, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project, ma.source_sha256,",
 				"COALESCE(ma.updated_at, ma.captured_at) AS updated_at, ma.content,",
 				"bm25(memory_artifacts_fts) AS rank",
 				"FROM memory_artifacts_fts",
@@ -1172,6 +1173,7 @@ function buildNativeArtifactRecallHits(
 				source_kind: string;
 				harness: string | null;
 				project: string | null;
+				source_sha256: string | null;
 				updated_at: string;
 				content: string;
 				rank: number;
@@ -1185,8 +1187,64 @@ function buildNativeArtifactRecallHits(
 				}),
 			);
 
-			const maxRank = safeRows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
-			return safeRows
+			const mirroredHashes = new Set<string>();
+			if (params.sourceOnly !== true) {
+				const mirrorParts = [
+					"SELECT m.id, m.content, m.content_hash",
+					"FROM memories m",
+					"WHERE m.agent_id = ?",
+					"AND COALESCE(m.is_deleted, 0) = 0",
+					"AND COALESCE(m.visibility, 'global') != 'archived'",
+					"AND m.source_type = 'hermes-memory-write'",
+				];
+				const mirrorArgs: unknown[] = [params.agentId ?? "default"];
+				if (params.project) {
+					mirrorParts.push("AND m.project = ?");
+					mirrorArgs.push(params.project);
+				} else {
+					mirrorParts.push("AND m.project IS NULL");
+				}
+				if (params.scope !== undefined) {
+					if (params.scope === null) {
+						mirrorParts.push("AND m.scope IS NULL");
+					} else {
+						mirrorParts.push("AND m.scope = ?");
+						mirrorArgs.push(params.scope);
+					}
+				} else {
+					mirrorParts.push("AND m.scope IS NULL");
+				}
+				const mirrorRows = db.prepare(mirrorParts.join("\n")).all(...mirrorArgs) as Array<{
+					id: string;
+					content: string;
+					content_hash: string | null;
+				}>;
+				for (const mirror of mirrorRows) {
+					if (
+						isMemoryContentContextEligible(db, {
+							agentId: params.agentId ?? "default",
+							sourceKind: "memory",
+							sourceId: mirror.id,
+							content: mirror.content,
+						}) &&
+						mirror.content_hash
+					) {
+						mirroredHashes.add(mirror.content_hash);
+					}
+				}
+			}
+
+			const seenHermesHashes = new Set<string>();
+			const dedupedRows = safeRows.filter((row) => {
+				if (row.harness !== "hermes-agent") return true;
+				if (mirroredHashes.has(normalizeAndHashContent(row.content).contentHash)) return false;
+				if (!row.source_sha256) return true;
+				if (seenHermesHashes.has(row.source_sha256)) return false;
+				seenHermesHashes.add(row.source_sha256);
+				return true;
+			});
+			const maxRank = dedupedRows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
+			return dedupedRows
 				.map((row) => ({
 					rowid: row.rowid,
 					sourceId: row.source_id,

@@ -78,6 +78,7 @@ import { type ResolvedMemoryConfig, graphWriteCaps, loadMemoryConfig } from "./m
 import { registerGlobalMiddleware } from "./middleware";
 import {
 	type NativeMemoryBridgeHandle,
+	configuredNativeMemorySources,
 	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
 } from "./native-memory-sources";
@@ -2384,11 +2385,12 @@ async function main() {
 				markSourceIndexInFlight(source.id);
 				markSourceIndexJobRunning(source.id, job.id);
 			}
-			nativeMemoryBridge = startNativeMemoryBridge([], {
+			nativeMemoryBridge = startNativeMemoryBridge(configuredNativeMemorySources(AGENTS_DIR), {
 				agentsDir: AGENTS_DIR,
 				includeConfiguredSources: true,
-				pollIntervalMs: 0,
-				sourceCleanupEnabled: false,
+				pollIntervalMs: 10_000,
+				sourceCleanupEnabled: true,
+				shouldCleanupSource: (source) => source.harness !== "obsidian",
 				sourceGraphEnabled: false,
 				...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
 				onFileIndexed: (event) => {

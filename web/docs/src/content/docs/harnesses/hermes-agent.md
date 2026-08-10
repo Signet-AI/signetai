@@ -62,6 +62,22 @@ source, and a deterministic idempotency key. Retrying a callback is therefore
 safe, and a missing or ambiguous mirrored match is never treated as permission
 to mutate an unrelated Signet memory.
 
+### Native memory bridge
+
+Hermes keeps its curated profile memory in `<HERMES_HOME>/memories/`, using
+`MEMORY.md` for durable profile context and `USER.md` for user context. Signet
+resolves the configured `HERMES_HOME` (defaulting to `~/.hermes`) and reads
+only those two files; a named Hermes profile should set `HERMES_HOME` to its
+profile directory before starting the daemon.
+
+The daemon stores each file as a provenance-bearing native artifact with the
+Hermes profile identity, profile-relative path, content hash, and source
+timestamp. It never writes to Hermes memory files or creates a second semantic
+extraction pipeline. Edits update the artifact row, while missing files are
+soft-deleted and excluded from active recall. Artifacts remain scoped to the
+current Signet agent, and an exact current `hermes-memory-write` mirror is not
+returned a second time during recall.
+
 ### Tools exposed to the agent
 
 | Tool | Description |
