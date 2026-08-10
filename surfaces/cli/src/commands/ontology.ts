@@ -625,6 +625,98 @@ function printClaimEvidence(data: unknown): void {
 	console.log();
 }
 
+function printClaimTrace(data: unknown): void {
+	const record = asRecord(data);
+	const path = asRecord(record.path);
+	const current = asRecord(record.current);
+	const competing = asRecord(record.competing);
+	const integrity = asRecord(record.integrity);
+	const traversal = asRecord(record.traversal);
+	const currentItems = readArray(current, "items") ?? [];
+	const versions = readArray(asRecord(record.versions), "items") ?? [];
+	const premises = readArray(asRecord(record.premises), "items") ?? [];
+	const reverse = readArray(asRecord(record.reverse), "items") ?? [];
+	const competingItems = readArray(competing, "items") ?? [];
+	const assertions = readArray(record, "assertions") ?? [];
+	console.log(chalk.bold("\n  Authorized Claim Trace\n"));
+	console.log(
+		chalk.dim(
+			`  ${String(path.groupKey ?? "general")} / ${String(path.claimKey ?? "unknown")} · ${String(
+				current.status ?? "unknown",
+			)}`,
+		),
+	);
+	for (const raw of currentItems) {
+		const item = asRecord(raw);
+		const attribute = asRecord(item.attribute);
+		console.log(`  ${chalk.cyan(String(attribute.status ?? "unknown"))} ${attribute.content ?? ""}`);
+	}
+	const historical = versions.filter((raw) => {
+		const attribute = asRecord(asRecord(raw).attribute);
+		return attribute.status !== "active";
+	});
+	if (historical.length > 0) {
+		console.log(chalk.dim("  history:"));
+		for (const raw of historical) {
+			const item = asRecord(raw);
+			const attribute = asRecord(item.attribute);
+			console.log(`    ${chalk.yellow(String(attribute.status ?? "unknown"))} ${attribute.content ?? ""}`);
+		}
+	}
+	if (competingItems.length > 0) {
+		console.log(chalk.dim("  competing values:"));
+		for (const raw of competingItems) {
+			const attribute = asRecord(asRecord(raw).attribute);
+			console.log(`    ${chalk.magenta(String(attribute.content ?? ""))}`);
+		}
+	}
+	if (assertions.length > 0) {
+		console.log(chalk.dim("  linked assertions:"));
+		for (const raw of assertions) {
+			const assertion = asRecord(raw);
+			console.log(`    ${chalk.magenta(String(assertion.predicate ?? "asserts"))} ${assertion.content ?? ""}`);
+		}
+	}
+	if (premises.length > 0) {
+		console.log(chalk.dim("  premises:"));
+		for (const raw of premises) {
+			const premise = asRecord(raw);
+			const evidence = asRecord(premise.evidence);
+			const source = `${String(evidence.sourceKind ?? "source")}:${String(evidence.sourceId ?? "unknown")}`;
+			const quote = String(evidence.exactQuote ?? evidence.excerpt ?? "unverified").slice(0, 1200);
+			console.log(`    ${chalk.cyan(String(evidence.state ?? "unknown"))} ${source} — ${quote}`);
+		}
+	}
+	if (reverse.length > 0) {
+		console.log(chalk.dim("  reverse lineage:"));
+		for (const raw of reverse) {
+			const item = asRecord(raw);
+			console.log(`    depth ${String(item.depth ?? "?")} ${item.content ?? ""}`);
+		}
+	}
+	console.log(
+		chalk.dim(
+			`  ${versions.length} version(s) · ${premises.length} premise(s) · ${reverse.length} reverse dependent(s)`,
+		),
+	);
+	console.log(
+		chalk.dim(
+			`  integrity ${String(integrity.status ?? "unknown")} · ${String(
+				integrity.verifiedPremises ?? 0,
+			)} verified · ${String(integrity.invalidatedPremises ?? 0)} invalidated`,
+		),
+	);
+	if (integrity.reason) console.log(chalk.yellow(`  ${String(integrity.reason)}`));
+	console.log(
+		chalk.dim(
+			`  bounded traversal: ${String(traversal.versionsVisited ?? versions.length)} versions, ${String(
+				traversal.premisesVisited ?? premises.length,
+			)} premises, ${String(traversal.reverseVisited ?? reverse.length)} reverse`,
+		),
+	);
+	console.log();
+}
+
 function printAssertions(data: unknown, title = "Epistemic Assertions"): void {
 	const record = asRecord(data);
 	const items = (((record as EpistemicAssertionsResponse).items as readonly EpistemicAssertionItem[] | undefined) ??
@@ -939,6 +1031,39 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		const data = await apiGet(deps, "/api/ontology/claims/evidence", params);
 		if (options.json) console.log(JSON.stringify(data, null, 2));
 		else printClaimEvidence(data);
+	});
+
+	addCommonOptions(
+		ontology
+			.command("explain-claim")
+			.description("Explain an authorized, bounded claim trace")
+			.argument("<entity>", "Entity/object name")
+			.argument("<aspect>", "Aspect name")
+			.argument("<group>", "Group key")
+			.argument("<claim>", "Claim key")
+			.option("--kind <kind>", "attribute or constraint")
+			.option("--version-limit <n>", "Max claim versions", Number.parseInt)
+			.option("--premise-limit <n>", "Max source premises", Number.parseInt)
+			.option("--reverse-limit <n>", "Max reverse dependents", Number.parseInt)
+			.option("--max-depth <n>", "Max lineage depth (0-3)", Number.parseInt)
+			.option("--session-key <key>", "Fail closed when provenance leaves this session"),
+	).action(async (entity: string, aspect: string, group: string, claim: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams({ entity, aspect, group, claim });
+		appendAgent(params, options.agent);
+		for (const [key, value] of [
+			["kind", options.kind],
+			["version_limit", options.versionLimit],
+			["premise_limit", options.premiseLimit],
+			["reverse_limit", options.reverseLimit],
+			["max_depth", options.maxDepth],
+			["session_key", options.sessionKey],
+		] as const) {
+			if (value !== undefined && value !== "") params.set(key, String(value));
+		}
+		const data = await apiGet(deps, "/api/ontology/claims/explain", params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printClaimTrace(data);
 	});
 
 	addCommonOptions(

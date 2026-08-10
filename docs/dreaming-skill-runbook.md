@@ -49,7 +49,15 @@ Inspect versioned claim evidence:
 signet ontology claim versions <entity> <aspect> <group> <claim> --json
 signet ontology claim show <entity> <aspect> <group> <claim> --version 1 --json
 signet ontology claim-evidence <entity> <aspect> <group> <claim> --status all --json
+signet ontology explain-claim <entity> <aspect> <group> <claim> --json
 ```
+
+`explain-claim` is a read-only, bounded audit view over the same applied claim
+versions and derived-memory source links Dreaming already writes. Check
+`integrity.status` before treating a value as verified: deleted, stale, or
+incomplete premises are reported as invalidated/unverified, and a fabricated
+or cross-agent source reference fails closed. Use `--session-key` when a
+Dreaming review must remain within one session's evidence boundary.
 
 ## Entity Merge Path
 

@@ -25,7 +25,16 @@ describe("registerOntologyCommands", () => {
 		expect(ontology).toBeDefined();
 		if (!ontology) throw new Error("ontology command was not registered");
 		expect(ontology?.commands.map((cmd) => cmd.name())).toEqual(
-			expect.arrayContaining(["entity", "claim", "aspect", "link", "stream", "assertions", "assertion"]),
+			expect.arrayContaining([
+				"entity",
+				"claim",
+				"aspect",
+				"link",
+				"stream",
+				"assertions",
+				"assertion",
+				"explain-claim",
+			]),
 		);
 
 		const names = (parent: Command, name: string): readonly string[] =>
@@ -296,6 +305,66 @@ describe("registerOntologyCommands", () => {
 		);
 		expect(lines.join("\n")).toContain("Claim Evidence");
 		expect(lines.join("\n")).toContain("Applied claims retain evidence.");
+	});
+
+	test("explain-claim calls the bounded authorized trace endpoint", async () => {
+		let capturedPath = "";
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, path) => {
+				capturedPath = path;
+				return {
+					ok: true,
+					data: {
+						path: { groupKey: "ontology", claimKey: "proposal_loop" },
+						current: {
+							status: "active",
+							items: [{ attribute: { content: "Traceable claim", status: "active" } }],
+						},
+						integrity: { status: "verified", verifiedPremises: 1, invalidatedPremises: 0 },
+						traversal: { versionsVisited: 1, premisesVisited: 1, reverseVisited: 0 },
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"explain-claim",
+			"Signet",
+			"architecture",
+			"ontology",
+			"proposal_loop",
+			"--kind",
+			"attribute",
+			"--version-limit",
+			"5",
+			"--premise-limit",
+			"7",
+			"--reverse-limit",
+			"9",
+			"--max-depth",
+			"2",
+			"--session-key",
+			"session-1",
+			"--agent",
+			"ant",
+		]);
+
+		expect(capturedPath).toBe(
+			"/api/ontology/claims/explain?entity=Signet&aspect=architecture&group=ontology&claim=proposal_loop&agent_id=ant&kind=attribute&version_limit=5&premise_limit=7&reverse_limit=9&max_depth=2&session_key=session-1",
+		);
+		expect(lines.join("\n")).toContain("Authorized Claim Trace");
+		expect(lines.join("\n")).toContain("Traceable claim");
+		expect(lines.join("\n")).toContain("verified");
 	});
 
 	test("link-evidence calls the applied link evidence endpoint", async () => {

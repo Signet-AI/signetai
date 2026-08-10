@@ -45,6 +45,7 @@ unsafe shell syntax into generated lifecycle hooks.
 | Automatic memory extraction after each prompt | Hooks |
 | Agent wants to search memories mid-conversation | MCP (`signet_recall`, compatibility `memory_search`) |
 | Agent wants to search source-backed docs/artifacts | MCP (`signet_source_search`) |
+| Agent needs to audit a claim's versions and authorized evidence | MCP (`signet_explain_claim`) |
 | Sub-agent needs to inspect its parent session | MCP (`signet_session_search`, compatibility `session_search`) |
 | Codex agent wants to save a durable native-memory note | MCP (`signet_save_note`) |
 | Agent wants to store a specific Signet memory row | MCP (`memory_store`) |
@@ -306,6 +307,38 @@ whose memory IDs were actually recorded for the given session and agent.
 **Note:** Prefer this tool over embedding feedback as raw JSON text. Both
 are supported for backward compatibility, but the MCP tool is recorded
 immediately on the current turn.
+
+### signet_explain_claim
+
+Return an authorized, bounded explanation of one ontology claim. The tool
+joins current and historical claim versions, competing values, contradictory
+epistemic assertions, exact source spans, premise integrity, authorization
+decisions, and reverse derived-memory lineage through the daemon's canonical
+HTTP operation.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `entity` | string | yes | Entity/object name |
+| `aspect` | string | yes | Aspect/room name |
+| `group` | string | yes | Group/dresser key |
+| `claim` | string | yes | Claim/drawer key |
+| `kind` | `attribute \| constraint` | no | Restrict the claim kind |
+| `version_limit` | integer | no | 1–50, default 20 |
+| `premise_limit` | integer | no | 1–100, default 50 |
+| `reverse_limit` | integer | no | 1–100, default 50 |
+| `max_depth` | integer | no | 0–3, default 3 |
+| `session_key` | string | no | Fail closed if a premise crosses this session |
+| `agent_id` | string | no | Agent scope, default `default` |
+
+Fabricated or mismatched source references return an error instead of
+presenting a quote as evidence. Cross-agent, project, and session violations
+fail closed. Deleted or stale evidence is reported as invalidated, and the
+response's `integrity.status` must be checked before treating a claim as
+verified current truth.
+
+**Daemon endpoint:** `GET /api/ontology/claims/explain`
 
 ### session_search
 

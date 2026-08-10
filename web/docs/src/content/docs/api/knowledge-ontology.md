@@ -221,6 +221,50 @@ parameters: `entity`, `aspect`, `group`, `claim`, `status`, `kind`, `limit`,
 /api/ontology/claims/evidence?entity=Signet&aspect=architecture&group=ontology&claim=proposal_loop
 ```
 
+### GET /api/ontology/claims/explain
+
+Return one bounded, authorized claim trace over the existing ontology
+versions, linked epistemic assertions, proposal evidence, episodic sources,
+and `derived_memory_sources` reverse lineage. This endpoint is read-only and
+does not create a second provenance store or widen cross-agent recall.
+
+Required query parameters are `entity`, `aspect`, `group`, and `claim`.
+Optional parameters are `kind` (`attribute` or `constraint`),
+`version_limit` (1–50, default 20), `premise_limit` (1–100, default 50),
+`reverse_limit` (1–100, default 50), `max_depth` (0–3, default 3),
+`agent_id`, and `session_key`.
+
+The resolved agent follows the normal scoped-agent/recall permission path.
+Project-scoped tokens can only inspect linked claim memories, premises, and
+reverse dependents in their project. A supplied session key may also be sent
+as `x-signet-session-key`; conflicting values are rejected, and remote calls
+must bind the session to the resolved agent.
+
+Premises must resolve to an existing same-agent canonical episodic source
+(`memory`, `artifact`, `transcript`, or `summary`). When a premise includes an
+exact `quote`, the quote must occur in the immutable source content. Fabricated
+or mismatched references return `409`; cross-agent, cross-project, or
+cross-session references return `403`. Session-scoped traces fail closed when
+the source session cannot be proven. Deleted, superseded, stale, and
+incomplete source records are reported as invalidated or unverified and are
+never returned as verified evidence.
+
+The response includes `current`, `versions`, `competing`, `assertions`,
+`premises`, `reverse`, `authorization`, `integrity`, `traversal`, and
+`latencyMs`. `versions`, `premises`, and `reverse` each expose their bounded
+items and truncation state. `integrity.status` is `verified`, `unverified`, or
+`invalidated` so consumers cannot silently treat an old explanation as current
+truth.
+
+CLI and MCP equivalents:
+
+```bash
+signet ontology explain-claim Signet architecture ontology proposal_loop
+signet ontology explain-claim Signet architecture ontology proposal_loop --session-key session-123 --json
+```
+
+MCP clients call `signet_explain_claim` with the same selectors and bounds.
+
 ### GET /api/ontology/links/:id/evidence
 
 Resolve evidence for an already-applied ontology link from stored dependency

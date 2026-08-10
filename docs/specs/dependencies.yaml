@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-05-06"
+updated_at: "2026-08-10"
 
 specs:
   - id: memory-pipeline-v2
@@ -338,6 +338,30 @@ specs:
       - "Prompt-submit recall remains a lightweight injection path and does not absorb explicit recall product concerns"
       - "Legacy or duplicate TypeScript recall helpers are either removed or reduced to thin wrappers around the canonical recall path"
       - "Consumer renderers preserve useful recall metadata instead of flattening results into source-less snippet lists"
+    decision: null
+
+  - id: authorized-claim-trace
+    status: approved
+    path: docs/specs/approved/authorized-claim-trace.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+      - knowledge-architecture-navigation
+      - multi-agent-support
+      - signet-runtime
+    soft_depends_on:
+      - dreaming-memory-consolidation
+      - explicit-recall-surface-alignment
+    blocks: []
+    informed_by:
+      - docs/specs/complete/knowledge-architecture-schema.md
+      - docs/specs/approved/knowledge-architecture-navigation.md
+      - docs/specs/approved/multi-agent-support.md
+      - docs/specs/approved/dreaming-memory-consolidation.md
+    success_criteria:
+      - "An authorized caller can inspect bounded current/history/competing claim state and existing source lineage without a second provenance store"
+      - "Fabricated, cross-agent, cross-project, and cross-session premise references fail closed"
+      - "Deleted, superseded, stale, and incomplete evidence is marked invalidated or unverified instead of presented as verified current truth"
+      - "HTTP, CLI, and MCP expose one parity operation with explicit limits and truncation"
     decision: null
 
   - id: semantic-prospective-hints

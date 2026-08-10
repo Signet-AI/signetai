@@ -252,6 +252,7 @@ describe("createMcpServer", () => {
 		expect(names).toContain("knowledge_list_groups");
 		expect(names).toContain("knowledge_list_claims");
 		expect(names).toContain("knowledge_list_attributes");
+		expect(names).toContain("signet_explain_claim");
 		expect(names).toContain("knowledge_hygiene_report");
 		expect(names).toContain("apply_ontology_ops");
 		expect(names).toContain("entity_list");
@@ -287,7 +288,30 @@ describe("createMcpServer", () => {
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(64);
+		expect(names.length).toBe(65);
+	});
+
+	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {
+		const capture: { url?: string; method?: string } = {};
+		mockFetch(200, { integrity: { status: "verified" } }, capture);
+
+		await callTool(server, "signet_explain_claim", {
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "proposal_loop",
+			version_limit: 5,
+			premise_limit: 7,
+			reverse_limit: 9,
+			max_depth: 2,
+			session_key: "session-1",
+			agent_id: "ant",
+		});
+
+		expect(capture.method).toBe("GET");
+		expect(capture.url).toBe(
+			"http://localhost:3850/api/ontology/claims/explain?entity=Signet&aspect=architecture&group=ontology&claim=proposal_loop&version_limit=5&premise_limit=7&reverse_limit=9&max_depth=2&session_key=session-1&agent_id=ant",
+		);
 	});
 
 	it("registers generic code tools when GraphIQ has an active project", async () => {

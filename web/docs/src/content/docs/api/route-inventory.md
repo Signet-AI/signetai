@@ -75,6 +75,7 @@ silently disappear from the API reference.
 | POST | `/api/knowledge/expand/session` | platform/daemon/src/routes/knowledge-routes.ts |
 | POST | `/api/graph/impact` | platform/daemon/src/routes/knowledge-routes.ts |
 | GET | `/api/ontology/claims/versions` | platform/daemon/src/routes/ontology-routes.ts |
+| GET | `/api/ontology/claims/explain` | platform/daemon/src/routes/ontology-routes.ts |
 | GET | `/api/ontology/claims/version` | platform/daemon/src/routes/ontology-routes.ts |
 | POST | `/api/ontology/operations/apply` | platform/daemon/src/routes/ontology-routes.ts |
 | POST | `/api/ontology/operations/batch` | platform/daemon/src/routes/ontology-routes.ts |

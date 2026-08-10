@@ -45,6 +45,7 @@ graph control plane. It is not a speculative product spec.
 | `POST /api/ontology/operations/apply` | CLI/API | dry-run, pending refactor proposal, or applied operation + graph mutation | Direct operation endpoint. Requires `modify`. Covered through operation engine and CLI tests. |
 | `POST /api/ontology/operations/batch` | CLI/API | atomic batch dry-run/propose/apply | Requires `modify`; rolls back on invalid operation. Covered by operation batch tests. |
 | `GET /api/ontology/claims/evidence` | CLI/API | read-only | Covered by claim evidence tests. |
+| `GET /api/ontology/claims/explain` | CLI/API/MCP | read-only | Bounded authorized trace over current/history/competing claims, exact source premises, invalidation state, and reverse lineage. Fabricated or cross-scope premises fail closed. |
 | `GET /api/ontology/claims/versions` | CLI/API | read-only | Covered by version chain tests. |
 | `GET /api/ontology/claims/version` | CLI/API | read-only | Covered by version show tests. |
 | `GET /api/ontology/links/:id/evidence` | CLI/API | read-only | Covered by link evidence tests. |
@@ -66,6 +67,7 @@ graph control plane. It is not a speculative product spec.
 | `signet ontology assertion show/create/link-claim/archive/supersede/import` | CLI | assertion ledger writes | Creates and maintains attributed assertion rows. `supersede` preserves the old predicate when `--predicate` is omitted. `import` accepts a JSON array or `{ "assertions": [...] }`. |
 | `signet ontology entity create/rename/merge/archive` | CLI | direct operation endpoint | Applies by default with audit/provenance. Supports `--dry-run`, `--propose`, `--json`, `--agent`, `--actor`, `--reason`, `--evidence-file`; reserve `--propose` for broad refactors or explicit review. |
 | `signet ontology claim set/versions/show/archive/restore` | CLI | operation endpoint for writes, read endpoints for versions | `set` creates version chains; `restore` only required for claim versions in this slice. |
+| `signet ontology explain-claim <entity> <aspect> <group> <claim>` | CLI | read-only | Uses the canonical HTTP trace; accepts bounded version/premise/reverse limits and optional `--session-key`. |
 | `signet ontology aspect create/rename/archive` | CLI | direct operation endpoint | Uses same audited operation path. |
 | `signet ontology link create/update/archive` | CLI | direct operation endpoint | Uses `entity_dependencies`. |
 | `signet ontology stream apply <path|- >` | CLI | atomic JSONL operation batch | Supports file and stdin, `--dry-run`, `--propose`, `--json`, `--agent`, `--actor`. |

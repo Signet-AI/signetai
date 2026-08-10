@@ -175,6 +175,7 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"knowledge_list_groups",
 	"knowledge_list_claims",
 	"knowledge_list_attributes",
+	"signet_explain_claim",
 	"knowledge_hygiene_report",
 	"apply_ontology_ops",
 	"entity_list",
@@ -2244,6 +2245,19 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		offset: z.number().optional().describe("Pagination offset, default 0"),
 		agent_id: z.string().optional().describe("Agent scope, default default"),
 	});
+	const explainClaimInput = z.object({
+		entity: z.string().min(1).describe("Entity name"),
+		aspect: z.string().min(1).describe("Aspect/room name"),
+		group: z.string().min(1).describe("Group/dresser key"),
+		claim: z.string().min(1).describe("Claim/drawer key"),
+		kind: z.enum(["attribute", "constraint"]).optional(),
+		version_limit: z.number().int().min(1).max(50).optional().describe("Max claim versions"),
+		premise_limit: z.number().int().min(1).max(100).optional().describe("Max source premises"),
+		reverse_limit: z.number().int().min(1).max(100).optional().describe("Max reverse dependents"),
+		max_depth: z.number().int().min(0).max(3).optional().describe("Max bounded lineage depth"),
+		session_key: z.string().optional().describe("Optional session boundary for fail-closed provenance"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
 	const hygieneReportInput = z.object({
 		limit: z.number().optional().describe("Max rows per report section, default 50"),
 		memory_limit: z.number().optional().describe("Recent memories to scan for safe mention candidates, default 200"),
@@ -2325,6 +2339,29 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		if (offset !== undefined) params.set("offset", String(offset));
 		if (agent_id) params.set("agent_id", agent_id);
 		return fetchNavigation("/api/knowledge/navigation/attributes", params, "Entity attributes");
+	};
+	const explainClaim = async ({
+		entity,
+		aspect,
+		group,
+		claim,
+		kind,
+		version_limit,
+		premise_limit,
+		reverse_limit,
+		max_depth,
+		session_key,
+		agent_id,
+	}: z.infer<typeof explainClaimInput>) => {
+		const params = new URLSearchParams({ entity, aspect, group, claim });
+		if (kind) params.set("kind", kind);
+		if (version_limit !== undefined) params.set("version_limit", String(version_limit));
+		if (premise_limit !== undefined) params.set("premise_limit", String(premise_limit));
+		if (reverse_limit !== undefined) params.set("reverse_limit", String(reverse_limit));
+		if (max_depth !== undefined) params.set("max_depth", String(max_depth));
+		if (session_key) params.set("session_key", session_key);
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/ontology/claims/explain", params, "Claim trace");
 	};
 	const hygieneReport = async ({ limit, memory_limit, agent_id }: z.infer<typeof hygieneReportInput>) => {
 		const params = new URLSearchParams();
@@ -2432,6 +2469,20 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: true },
 		},
 		listAttributes,
+	);
+
+	registerMcpTool(
+		server,
+		"signet_explain_claim",
+		{
+			title: "Explain Claim",
+			description:
+				"Return an authorized, bounded claim trace with current and historical versions, competing assertions, " +
+				"exact source spans, premise integrity, scope decisions, and reverse lineage. Missing or cross-agent source IDs fail closed.",
+			inputSchema: explainClaimInput,
+			annotations: { readOnlyHint: true },
+		},
+		explainClaim,
 	);
 
 	registerMcpTool(

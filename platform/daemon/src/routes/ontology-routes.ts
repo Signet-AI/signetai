@@ -21,6 +21,7 @@ import {
 	parseOntologyClaimAttributeKind,
 	parseOntologyClaimAttributeStatus,
 } from "../ontology-claim-evidence";
+import { OntologyClaimTraceError, explainOntologyClaim } from "../ontology-claim-trace";
 import { OntologyConsolidationError, consolidateOntologyProposals } from "../ontology-consolidation";
 import { OntologyExtractionError, extractOntologyProposals } from "../ontology-extraction";
 import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
@@ -43,7 +44,7 @@ import {
 	rejectOntologyProposal,
 } from "../ontology-proposals";
 import { AGENTS_DIR, authConfig } from "./state";
-import { parseBoundedInt, resolveScopedAgentId } from "./utils";
+import { parseBoundedInt, resolveScopedAgentId, validateSessionAgentBinding } from "./utils";
 
 function asRecord(value: unknown): Record<string, unknown> {
 	if (typeof value === "object" && value !== null && !Array.isArray(value)) {
@@ -94,9 +95,10 @@ async function readJsonRecord(c: Context): Promise<Record<string, unknown>> {
 	}
 }
 
-function statusForError(err: unknown): 400 | 404 | 409 | 500 {
+function statusForError(err: unknown): 400 | 403 | 404 | 409 | 500 {
 	if (err instanceof OntologyProposalError) return err.status;
 	if (err instanceof OntologyClaimEvidenceError) return err.status;
+	if (err instanceof OntologyClaimTraceError) return err.status;
 	if (err instanceof OntologyLinkEvidenceError) return err.status;
 	if (err instanceof OntologyExtractionError) return err.status;
 	if (err instanceof OntologyConsolidationError) return err.status;
@@ -415,6 +417,54 @@ export function registerOntologyRoutes(app: Hono): void {
 		try {
 			return c.json(
 				listClaimVersions(getDbAccessor(), { agentId: scoped.agentId, entity, aspect, group, claim, kind }),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.get("/api/ontology/claims/explain", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		const claim = c.req.query("claim")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		if (!claim) return c.json({ error: "claim is required" }, 400);
+		const kind = parseOntologyClaimAttributeKind(c.req.query("kind"));
+		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
+		const querySessionKey = c.req.query("session_key")?.trim() || undefined;
+		const headerSessionKey = c.req.header("x-signet-session-key")?.trim() || undefined;
+		if (querySessionKey && headerSessionKey && querySessionKey !== headerSessionKey) {
+			return c.json({ error: "session_key conflicts with x-signet-session-key" }, 400);
+		}
+		const sessionKey = querySessionKey ?? headerSessionKey;
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scoped.agentId, {
+			requireExisting: true,
+			context: "session_key",
+		});
+		if (sessionError) return c.json({ error: sessionError }, 403);
+		const claims = c.get("auth")?.claims;
+		const project = claims?.role === "admin" ? null : (claims?.scope?.project ?? null);
+		try {
+			return c.json(
+				explainOntologyClaim(getDbAccessor(), {
+					agentId: scoped.agentId,
+					entity,
+					aspect,
+					group,
+					claim,
+					kind,
+					versionLimit: parseBoundedInt(c.req.query("version_limit"), 20, 1, 50),
+					premiseLimit: parseBoundedInt(c.req.query("premise_limit"), 50, 1, 100),
+					reverseLimit: parseBoundedInt(c.req.query("reverse_limit"), 50, 1, 100),
+					maxDepth: parseBoundedInt(c.req.query("max_depth"), 3, 0, 3),
+					sessionKey,
+					project,
+				}),
 			);
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));

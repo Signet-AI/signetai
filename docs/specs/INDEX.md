@@ -33,6 +33,7 @@ flowchart TD
   OEC[Ontology Evolution Core]
   OGW[Ontology Governance Workflow]
   OPL[Ontology Proposal Loop]
+  ACT[Authorized Claim Trace]
   SSF[SSM Foundation Eval]
   EIPT[Engram-Informed Predictor Track]
   SST[SSM Temporal Backbone]
@@ -73,6 +74,9 @@ flowchart TD
   DP --> OEC
   OEC --> OGW
   KA --> OPL
+  KA --> ACT
+  MA --> ACT
+  SR --> ACT
   DMC -.-> OPL
   PMS --> SSF
   DP --> SSF
@@ -630,6 +634,11 @@ Phase ordering based on hard dependencies and integration contracts.
   - proposal/review gates for ontology-impacting schema changes
   - compatibility + rollback requirements
   - CI checks for INDEX/dependencies contract drift
+- **Authorized Claim Trace**: approved (`authorized-claim-trace`)
+  - expose current/history/competing claim state and existing source lineage
+  - preserve agent, project, and session authorization while failing closed on
+    fabricated or cross-scope premises
+  - keep reverse traversal bounded and report invalidated evidence explicitly
 
 ### Wave 8 (SSM translation and shadow deployment)
 
@@ -732,6 +741,7 @@ Legend:
 | `procedural-memory-plan` | approved | `docs/specs/approved/procedural-memory-plan.md` | `memory-pipeline-v2` | `knowledge-architecture-schema` | P1 complete; P2 usage ledger + `skill_meta` usage updates shipped, with decay and broader retrieval follow-ups still remaining |
 | `knowledge-architecture-schema` | complete | `docs/specs/complete/knowledge-architecture-schema.md` | `memory-pipeline-v2`, `session-continuity-protocol`, `procedural-memory-plan` | `predictive-memory-scorer` | KA-1 through KA-6 fully implemented. Audit contract: `entity_dependency_history` captures all dependency mutations via DB-level triggers (`changed_by='db-trigger'`); `related_to` edges require a non-empty reason enforced at both app layer and DB BEFORE INSERT/UPDATE triggers. |
 | `knowledge-architecture-navigation` | approved | `docs/specs/approved/knowledge-architecture-navigation.md` | `knowledge-architecture-schema` | - | Entity/aspect/group/claim/attribute navigation surface for MCP and daemon API. |
+| `authorized-claim-trace` | approved | `docs/specs/approved/authorized-claim-trace.md` | `knowledge-architecture-schema`, `knowledge-architecture-navigation`, `multi-agent-support`, `signet-runtime` | - | Read-only bounded claim reasoning trace over existing versions, assertions, episodic evidence, and derived-memory provenance; fail-closed agent/project/session authorization. |
 | `predictive-memory-scorer` | approved | `docs/specs/approved/predictive-memory-scorer.md` | `memory-pipeline-v2`, `knowledge-architecture-schema`, `session-continuity-protocol` | - | |
 | `multi-agent-support` | approved | `docs/specs/approved/multi-agent-support.md` | `memory-pipeline-v2` | - | |
 | `cross-agent-notification-delivery` | approved | `docs/specs/approved/cross-agent-notification-delivery.md` | `multi-agent-support`, `signet-runtime` | - | Durable agent-scoped peer inbox, explicit acknowledgement, and next-compatible-hook delivery for issue #944 |
