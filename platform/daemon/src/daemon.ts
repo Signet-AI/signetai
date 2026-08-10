@@ -77,8 +77,6 @@ import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./nati
 import {
 	DEFAULT_RETENTION,
 	ensureRetentionWorker,
-	ensureSummaryRecovery,
-	ensureSummaryWorker,
 	setDreamingWorker,
 	startPipeline,
 	stopPipeline,
@@ -1538,28 +1536,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		default: await router.hasWorkload("default"),
 	});
 
-	// Summary worker — shared infrastructure, owned here not by startPipeline.
-	// The summary worker produces session summaries for DAG/continuity.
-	// Dreaming consumes these summaries for consolidation. Requires an
-	// effective session_synthesis route.
-	const isSummarySynthesisAvailable = async (): Promise<boolean> =>
-		(await router.explain({ agentId: defaultAgentId, operation: "session_synthesis" }, true)).ok;
-	const summarySynthesisAvailable = await isSummarySynthesisAvailable();
-	if (!pipelinePaused && summarySynthesisAvailable) {
-		ensureSummaryWorker(getDbAccessor(), {
-			isSynthesisAvailable: isSummarySynthesisAvailable,
-		});
-	} else {
-		ensureSummaryRecovery(getDbAccessor(), {
-			workerOptions: { isSynthesisAvailable: isSummarySynthesisAvailable },
-			shouldStartWorker: async () => {
-				const liveCfg = loadMemoryConfig(AGENTS_DIR);
-				if (liveCfg.pipelineV2.paused) return false;
-				return await isSummarySynthesisAvailable();
-			},
-		});
-	}
-
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
 		startPipeline(
 			getDbAccessor(),
@@ -1952,10 +1928,6 @@ async function main() {
 		createTtlEvictionHandler({
 			accessor: getDbAccessor(),
 			maxCheckpointsPerSession: loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity.maxCheckpointsPerSession,
-			isSummarySynthesisAvailable: () => {
-				const liveCfg = loadMemoryConfig(AGENTS_DIR);
-				return !liveCfg.pipelineV2.paused && providerRuntimeResolution.synthesis.effective !== null;
-			},
 		}),
 	);
 	const restoredSessions = restorePersistedSessions();
@@ -2129,9 +2101,6 @@ async function main() {
 						if (!source.enabled) continue;
 						const job = getSourceIndexJob(source.id);
 						recordSourceFreshness(source, resolveDaemonAgentId(), job?.lastProgressAt);
-					}
-					if (runtimePressure?.recoveryOutcome === "restarted") {
-						restartedHeartbeatPending = false;
 					}
 				} catch {}
 			},

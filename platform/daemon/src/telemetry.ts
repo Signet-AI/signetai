@@ -186,6 +186,7 @@ function sessionCostProperties(cost: SessionCostAccumulator): TelemetryPropertie
 
 export interface TelemetryCollector {
 	record(event: TelemetryEventType, properties: TelemetryProperties): void;
+	recordDeferred?(event: TelemetryEventType, properties: TelemetryProperties): void;
 	reopenSession(sessionHash: string): void;
 
 	/**
@@ -728,7 +729,7 @@ export function createTelemetryCollector(
 			return createHash("sha256").update(`${agentId}:${installId}`).digest("hex").slice(0, 16);
 		},
 
-		record(event, properties): void {
+	record(event, properties): void {
 			if (buffer.length >= MAX_BUFFER_EVENTS) {
 				const dropCount = buffer.length - MAX_BUFFER_EVENTS + 1;
 				buffer.splice(0, dropCount);
@@ -759,6 +760,9 @@ export function createTelemetryCollector(
 			if (buffer.length >= MAX_BUFFER_SIZE) {
 				doFlush().catch(() => {});
 			}
+		},
+		recordDeferred(event, properties): void {
+			this.record(event, properties);
 		},
 
 		recordFirstUse(kind): void {
