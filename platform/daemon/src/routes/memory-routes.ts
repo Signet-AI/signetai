@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { applyRecallScoreThreshold, vectorSearch } from "@signet/core";
+import { vectorSearch } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
@@ -34,12 +34,7 @@ import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-
 import { buildMemoryTimeline } from "../memory-timeline";
 import { recordPathFeedback } from "../path-feedback";
 import { enqueueDocumentIngestJob } from "../pipeline";
-import {
-	effectiveRecallLimit,
-	normalizeRecallSurface,
-	recordRecallAttempt,
-	recordRecallOutcome,
-} from "../recall-telemetry";
+import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { getActiveTelemetry } from "../telemetry";
@@ -551,10 +546,12 @@ function recordRecallQaTelemetry(input: {
 function recallAttributedEmbedFn(
 	embedFn: typeof fetchEmbedding,
 	agentId: string,
+	onFailure?: (causeFamily: PipelineCauseFamily) => void,
 ): (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null> {
 	return (text, cfg, role) =>
 		embedFn(text, cfg, role, {
 			usage: { source: role === "query" ? "recall" : "memory-capture", agentId },
+			onFailure,
 		});
 }
 
@@ -640,6 +637,55 @@ function recordFirstUseTelemetry(kind: "remember" | "recall"): void {
 	getActiveTelemetry()?.recordFirstUse(kind);
 }
 
+const routeOperationFailures = new WeakMap<object, PipelineCauseFamily[]>();
+
+function recordRouteOperationFailure(c: Context): (causeFamily: PipelineCauseFamily) => void {
+	const failures = routeOperationFailures.get(c);
+	return (causeFamily) => failures?.push(causeFamily);
+}
+
+function normalizeRouteFailure(status: number): PipelineCauseFamily {
+	return status === 500 ? "internal_error" : normalizePipelineCause({ status });
+}
+
+async function responseOperationSummary(
+	response: Response,
+): Promise<{ readonly deduped: boolean; readonly accepted?: number }> {
+	const reader = response.clone().body?.getReader();
+	if (!reader) return { deduped: false };
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		while (total < 64 * 1024) {
+			const next = await reader.read();
+			if (next.done || !next.value) break;
+			const remaining = 64 * 1024 - total;
+			const chunk = next.value.byteLength > remaining ? next.value.slice(0, remaining) : next.value;
+			chunks.push(chunk);
+			total += chunk.byteLength;
+			if (chunk.byteLength < next.value.byteLength) break;
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	const bytes = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	try {
+		const parsed = JSON.parse(new TextDecoder().decode(bytes)) as { deduped?: unknown; chunk_count?: unknown };
+		const chunkCount =
+			typeof parsed.chunk_count === "number" && Number.isSafeInteger(parsed.chunk_count) && parsed.chunk_count >= 0
+				? Math.min(parsed.chunk_count, 10_000)
+				: undefined;
+		return { deduped: parsed.deduped === true, ...(chunkCount === undefined ? {} : { accepted: chunkCount }) };
+	} catch {
+		return { deduped: false };
+	}
+}
+
 export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
 	const aggregateRecallFn = deps.aggregateRecall ?? aggregateRecall;
 	const hybridRecallFn = deps.hybridRecall ?? hybridRecall;
@@ -666,6 +712,75 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.use("/api/memory/recall", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
+
+	async function recordRequestOperation(
+		c: Context,
+		next: () => Promise<void>,
+		operationClass: "memory_capture" | "recall",
+	): Promise<Response> {
+		const startedAt = Date.now();
+		const failures: PipelineCauseFamily[] = [];
+		routeOperationFailures.set(c, failures);
+		try {
+			await next();
+		} catch (error) {
+			recordPipelineOperation({
+				operationClass,
+				outcome: "failed",
+				accepted: 0,
+				skipped: 0,
+				retried: 0,
+				failed: 1,
+				durationMs: Date.now() - startedAt,
+				queueAgeMs: 0,
+				causeFamily: normalizePipelineCause(error),
+			});
+			routeOperationFailures.delete(c);
+			throw error;
+		}
+		const status = c.res.status;
+		if (c.res.headers.get("x-signet-operation-recorded") === "1") {
+			c.res.headers.delete("x-signet-operation-recorded");
+			routeOperationFailures.delete(c);
+			return c.res;
+		}
+		const responseSummary = operationClass === "memory_capture" ? await responseOperationSummary(c.res) : undefined;
+		const skipped =
+			operationClass === "memory_capture" &&
+			(c.res.headers.get("x-signet-operation-skipped") === "1" || responseSummary?.deduped === true)
+				? 1
+				: 0;
+		const failed = failures.length > 0 ? failures.length : status >= 400 && skipped === 0 ? 1 : 0;
+		const outcome = skipped > 0 ? "skipped" : failed > 0 ? (status >= 400 ? "failed" : "partial") : "completed";
+		const accepted = outcome === "completed" || outcome === "partial" ? (responseSummary?.accepted ?? 1) : 0;
+		recordPipelineOperation({
+			operationClass,
+			outcome,
+			accepted,
+			skipped,
+			retried: 0,
+			failed,
+			durationMs: Date.now() - startedAt,
+			queueAgeMs: 0,
+			causeFamily: failed > 0 ? (failures[0] ?? normalizeRouteFailure(status)) : undefined,
+		});
+		c.res.headers.delete("x-signet-operation-skipped");
+		if (c.req.header("x-signet-operation-forwarded") === "1") {
+			c.header("x-signet-operation-recorded", "1");
+		} else {
+			c.res.headers.delete("x-signet-operation-recorded");
+		}
+		routeOperationFailures.delete(c);
+		return c.res;
+	}
+
+	app.use("/api/memory/remember", async (c, next) => recordRequestOperation(c, next, "memory_capture"));
+	app.use("/api/memory/save", async (c, next) => recordRequestOperation(c, next, "memory_capture"));
+	app.use("/api/hook/remember", async (c, next) => recordRequestOperation(c, next, "memory_capture"));
+	app.use("/api/memory/recall", async (c, next) => recordRequestOperation(c, next, "recall"));
+	app.use("/api/memory/search", async (c, next) => recordRequestOperation(c, next, "recall"));
+	app.use("/memory/search", async (c, next) => recordRequestOperation(c, next, "recall"));
+	app.use("/memory/similar", async (c, next) => recordRequestOperation(c, next, "recall"));
 	app.use("/api/memory/search", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
@@ -1029,7 +1144,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const query = c.req.query("q") ?? "";
 		const distinct = c.req.query("distinct");
 		const limitParam = c.req.query("limit");
-		const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
+		const limit = limitParam ? Number.parseInt(limitParam, 10) : null;
 
 		// Shortcut: return distinct values for a column
 		if (distinct === "who") {
@@ -1056,10 +1171,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		};
 
 		const hasFilters = Object.values(filterParams).some((v) => v !== "" && v !== false && v !== null);
-		if (!query.trim() && !hasFilters) return c.json({ results: [] });
-		const limit = effectiveRecallLimit(parsedLimit ?? (query.trim() ? 20 : 50));
-		const recallSurface = normalizeRecallSurface(c.req.header("x-signet-recall-surface"), "dashboard");
-		recordRecallAttempt(recallSurface);
 
 		try {
 			const results = getDbAccessor().withReadDb((db) => {
@@ -1078,7 +1189,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
             JOIN memories m ON memories_fts.rowid = m.rowid
             WHERE memories_fts MATCH ?${clause}
             ORDER BY score
-							LIMIT ${limit}
+            LIMIT ${limit ?? 20}
           `,
 						).all(query, ...args);
 					} catch {
@@ -1091,7 +1202,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
             FROM memories
             WHERE (content LIKE ? OR tags LIKE ?)${rc}
             ORDER BY created_at DESC
-							LIMIT ${limit}
+            LIMIT ${limit ?? 20}
           `,
 						).all(`%${query}%`, `%${query}%`, ...rargs);
 					}
@@ -1109,7 +1220,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
           FROM memories
           WHERE 1=1${clause}
           ORDER BY score DESC
-						LIMIT ${limit}
+          LIMIT ${limit ?? 50}
         `,
 					).all(...args);
 				}
@@ -1117,17 +1228,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				return rows;
 			});
 
-			recordRecallOutcome({
-				surface: recallSurface,
-				resultCount: results.length,
-				truncated: results.length >= limit,
-				delivery: "returned",
-			});
 			return c.json({ results });
 		} catch (e) {
-			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 			logger.error("memory", "Error searching memories", e as Error);
-			return c.json({ results: [], error: "Search failed" });
+			return c.json({ results: [], error: "Search failed" }, 500);
 		}
 	});
 
@@ -1368,6 +1472,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					return c.json({ error: "idempotencyKey already used for different chunked content" }, 409);
 				}
 
+				c.header("x-signet-operation-skipped", "1");
 				recordFirstUseTelemetry("remember");
 				return c.json({
 					chunked: true,
@@ -1477,6 +1582,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
 				}
 				if (result.status === "deduped") {
+					c.header("x-signet-operation-skipped", "1");
 					recordFirstUseTelemetry("remember");
 					return c.json({
 						chunked: true,
@@ -1496,6 +1602,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					try {
 						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding, "document", {
 							usage: { source: "memory-capture", agentId },
+							onFailure: recordRouteOperationFailure(c),
 						});
 						if (vec) {
 							if (vec.length !== fullCfg.embedding.dimensions) {
@@ -1681,6 +1788,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			supersededStatus = result.deduped ? null : (result as { superseded: SupersedeMemoryTxStatus | null }).superseded;
 
 			if (result.deduped) {
+				c.header("x-signet-operation-skipped", "1");
 				getDbAccessor().withWriteTx((db) =>
 					txInsertExplicitTemporalEdges({
 						db,
@@ -1711,6 +1819,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 				});
 				if (existing) {
+					c.header("x-signet-operation-skipped", "1");
 					getDbAccessor().withWriteTx((db) =>
 						txInsertExplicitTemporalEdges({
 							db,
@@ -1754,6 +1863,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const cfg = withActiveEmbeddingConfig(baseCfg);
 			const vec = await fetchEmbedding(normalizedContent.storageContent, cfg.embedding, "document", {
 				usage: { source: "memory-capture", agentId },
+				onFailure: recordRouteOperationFailure(c),
 			});
 			if (vec) {
 				if (vec.length !== cfg.embedding.dimensions) {
@@ -1868,6 +1978,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.post("/api/memory/save", async (c) => {
 		const body = await c.req.json().catch(() => ({}));
 		const headers: Record<string, string> = { "Content-Type": "application/json" };
+		headers["x-signet-operation-forwarded"] = "1";
 		const authHdr = c.req.header("authorization");
 		if (authHdr) headers.authorization = authHdr;
 		const sessionKey = c.req.header("x-signet-session-key");
@@ -1885,6 +1996,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.post("/api/hook/remember", async (c) => {
 		const body = await c.req.json().catch(() => ({}));
 		const headers: Record<string, string> = { "Content-Type": "application/json" };
+		headers["x-signet-operation-forwarded"] = "1";
 		const authHdr = c.req.header("authorization");
 		if (authHdr) headers.authorization = authHdr;
 		const sessionKey = c.req.header("x-signet-session-key");
@@ -3030,7 +3142,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const aggregateSaveRequested =
 			body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
-		const recallLimit = effectiveRecallLimit(body.limit);
 		if (aggregateSaveRequested) {
 			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 			if (denied) return denied;
@@ -3049,12 +3160,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			}
 			authRecallLlmLimiter.record(actor);
 		}
-		let recallAttempted = false;
 		try {
 			const sessionKeyRaw = body.sessionKey ?? c.req.header("x-signet-session-key");
 			const sessionKey = sessionKeyRaw ?? null;
 			const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: sessionKeyRaw });
-			const recallSurface = normalizeRecallSurface(body.recallSurface, "explicit_api");
 
 			// When aggregate save is requested, enforce scope for non-admin tokens.
 			if (aggregateSaveRequested) {
@@ -3075,14 +3184,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				}
 			}
 
-			recordRecallAttempt(recallSurface);
-			recallAttempted = true;
 			const agentScope = getAgentScope(agentId);
 			const scopeProject = c.get("auth")?.claims?.scope?.project;
 			const params = {
 				...body,
 				query,
-				limit: recallLimit,
 				aggregate: body.aggregate,
 				aggregateBudget: aggregateBudget ?? undefined,
 				aggregate_budget: aggregateBudget ?? undefined,
@@ -3093,7 +3199,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				policyGroup: agentScope.policyGroup ?? undefined,
 				sessionKey: sessionKeyRaw,
 				includeRecalled: body.includeRecalled === true,
-				telemetrySurface: recallSurface,
 				recallSurface: "api.memory.recall",
 				recallMode: "direct",
 				...(scopeProject ? { project: scopeProject } : {}),
@@ -3102,34 +3207,25 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				body.aggregate === true
 					? await aggregateRecallFn(params, cfg, {
 							router: getInferenceRouterOrNullFn(),
-							embedFn: recallAttributedEmbedFn(fetchEmbeddingFn, agentId),
+							embedFn: recallAttributedEmbedFn(fetchEmbeddingFn, agentId, recordRouteOperationFailure(c)),
 						})
-					: await hybridRecallFn(params, cfg, recallAttributedEmbedFn(fetchEmbeddingFn, agentId));
-			const requestedMinScore = (body as { readonly minScore?: unknown }).minScore;
-			const returnedResult = applyRecallScoreThreshold(
-				result,
-				typeof requestedMinScore === "number" ? requestedMinScore : undefined,
-			) as typeof result;
+					: await hybridRecallFn(
+							params,
+							cfg,
+							recallAttributedEmbedFn(fetchEmbeddingFn, agentId, recordRouteOperationFailure(c)),
+						);
 			recordRecallQaTelemetry({
 				route: "POST /api/memory/recall",
 				agentId,
 				sessionKey,
 				project: resolveMemorySearchTelemetryProject(params),
 				params,
-				result: returnedResult,
+				result,
 				cfg,
 			});
-			recordRecallOutcome({
-				surface: recallSurface,
-				resultCount: returnedResult.results.length,
-				truncated: returnedResult.results.length >= recallLimit,
-				delivery: "returned",
-			});
 			recordFirstUseTelemetry("recall");
-			return c.json(returnedResult);
+			return c.json(result);
 		} catch (e) {
-			const recallSurface = normalizeRecallSurface(body.recallSurface, "explicit_api");
-			if (recallAttempted) recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 			logger.error("memory", "Recall failed", e as Error);
 			return c.json({ error: "Recall failed", results: [] }, 500);
 		}
@@ -3142,7 +3238,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const q = (c.req.query("q") ?? "").trim();
 		if (!q) return c.json({ error: "query is required" }, 400);
 
-		const limit = effectiveRecallLimit(Number.parseInt(c.req.query("limit") ?? "10", 10));
+		const limit = Number.parseInt(c.req.query("limit") ?? "10", 10);
 		const type = c.req.query("type");
 		const tags = c.req.query("tags");
 		const who = c.req.query("who");
@@ -3164,8 +3260,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
 				sessionKey: sessionKeyRaw,
 			});
-			const recallSurface = "explicit_api" as const;
-			recordRecallAttempt(recallSurface);
 			const agentScope = getAgentScope(agentId);
 			const params = {
 				query: q,
@@ -3184,12 +3278,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				policyGroup: agentScope.policyGroup ?? undefined,
 				sessionKey: sessionKeyRaw,
 				includeRecalled: includeRecalled === "1" || includeRecalled === "true",
-				telemetrySurface: recallSurface,
 				recallSurface: "api.memory.search",
 				recallMode: "direct",
 				...(scopeProject ? { project: scopeProject } : {}),
 			};
-			const result = await hybridRecall(params, cfg, recallAttributedEmbedFn(fetchEmbedding, agentId));
+			const result = await hybridRecall(
+				params,
+				cfg,
+				recallAttributedEmbedFn(fetchEmbedding, agentId, recordRouteOperationFailure(c)),
+			);
 			recordRecallQaTelemetry({
 				route: "GET /api/memory/search",
 				agentId,
@@ -3199,15 +3296,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				result,
 				cfg,
 			});
-			recordRecallOutcome({
-				surface: recallSurface,
-				resultCount: result.results.length,
-				truncated: result.results.length >= limit,
-				delivery: "returned",
-			});
 			return c.json(result);
 		} catch (e) {
-			recordRecallOutcome({ surface: "explicit_api", error: true, delivery: "not_delivered" });
 			logger.error("memory", "Search (recall alias) failed", e as Error);
 			return c.json({ error: "Recall failed", results: [] }, 500);
 		}

@@ -262,6 +262,23 @@ export function registerTelemetryRoutes(app: Hono): void {
 		let pipelineErrors = 0;
 		const pipelineErrorsByStage = new Map<string, number>();
 		const pipelineErrorsByCode = new Map<string, number>();
+		const pipelineOperationsByClass = new Map<
+			string,
+			{
+				operations: number;
+				accepted: number;
+				skipped: number;
+				retried: number;
+				failed: number;
+				durationMs: number;
+				queueAgeMs: number;
+				outcomes: Map<string, number>;
+				causes: Map<string, number>;
+				durationBuckets: Map<string, number>;
+				queueAgeBuckets: Map<string, number>;
+			}
+		>();
+		let pipelineOperationIncidents = 0;
 		let embeddingCalls = 0;
 		let embeddingTokens = 0;
 		let embeddingCost = 0;
@@ -427,6 +444,43 @@ export function registerTelemetryRoutes(app: Hono): void {
 					pipelineErrorsByCode.set(e.properties.code, (pipelineErrorsByCode.get(e.properties.code) ?? 0) + 1);
 				}
 			}
+			if (e.event === "pipeline.operation") {
+				const operationClass = typeof e.properties.operationClass === "string" ? e.properties.operationClass : "other";
+				const stats = pipelineOperationsByClass.get(operationClass) ?? {
+					operations: 0,
+					accepted: 0,
+					skipped: 0,
+					retried: 0,
+					failed: 0,
+					durationMs: 0,
+					queueAgeMs: 0,
+					outcomes: new Map<string, number>(),
+					causes: new Map<string, number>(),
+					durationBuckets: new Map<string, number>(),
+					queueAgeBuckets: new Map<string, number>(),
+				};
+				stats.operations++;
+				for (const key of ["accepted", "skipped", "retried", "failed"] as const) {
+					const value = e.properties[key];
+					if (typeof value === "number" && Number.isFinite(value)) stats[key] += value;
+				}
+				const durationMs = typeof e.properties.durationMs === "number" ? e.properties.durationMs : 0;
+				const queueAgeMs = typeof e.properties.queueAgeMs === "number" ? e.properties.queueAgeMs : 0;
+				stats.durationMs += durationMs;
+				stats.queueAgeMs += queueAgeMs;
+				const outcome = typeof e.properties.outcome === "string" ? e.properties.outcome : "other";
+				stats.outcomes.set(outcome, (stats.outcomes.get(outcome) ?? 0) + 1);
+				const cause = typeof e.properties.causeFamily === "string" ? e.properties.causeFamily : null;
+				if (cause) stats.causes.set(cause, (stats.causes.get(cause) ?? 0) + 1);
+				const durationBucket =
+					typeof e.properties.durationBucket === "string" ? e.properties.durationBucket : "unknown";
+				const queueAgeBucket =
+					typeof e.properties.queueAgeBucket === "string" ? e.properties.queueAgeBucket : "unknown";
+				stats.durationBuckets.set(durationBucket, (stats.durationBuckets.get(durationBucket) ?? 0) + 1);
+				stats.queueAgeBuckets.set(queueAgeBucket, (stats.queueAgeBuckets.get(queueAgeBucket) ?? 0) + 1);
+				if (outcome === "failed" || outcome === "partial") pipelineOperationIncidents++;
+				pipelineOperationsByClass.set(operationClass, stats);
+			}
 			if (e.event === "session.end") {
 				sessionEnds++;
 				if (typeof e.properties.tokensInput === "number") sessionInput += e.properties.tokensInput;
@@ -475,6 +529,29 @@ export function registerTelemetryRoutes(app: Hono): void {
 		recallLatencies.sort((a, b) => a - b);
 		const recallP50 = recallLatencies[Math.floor(recallLatencies.length * 0.5)] ?? 0;
 		const recallP95 = recallLatencies[Math.floor(recallLatencies.length * 0.95)] ?? 0;
+
+		const pipelineOperations = {
+			total: [...pipelineOperationsByClass.values()].reduce((total, stats) => total + stats.operations, 0),
+			incidents: pipelineOperationIncidents,
+			classes: Object.fromEntries(
+				[...pipelineOperationsByClass.entries()].map(([operationClass, stats]) => [
+					operationClass,
+					{
+						operations: stats.operations,
+						accepted: stats.accepted,
+						skipped: stats.skipped,
+						retried: stats.retried,
+						failed: stats.failed,
+						durationMs: stats.durationMs,
+						queueAgeMs: stats.queueAgeMs,
+						outcomes: Object.fromEntries(stats.outcomes),
+						causes: Object.fromEntries(stats.causes),
+						durationBuckets: Object.fromEntries(stats.durationBuckets),
+						queueAgeBuckets: Object.fromEntries(stats.queueAgeBuckets),
+					},
+				]),
+			),
+		};
 
 		return c.json({
 			enabled: true,
@@ -554,6 +631,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 			pipelineErrors,
 			pipelineErrorsByStage: Object.fromEntries(pipelineErrorsByStage),
 			pipelineErrorsByCode: Object.fromEntries(pipelineErrorsByCode),
+			pipelineOperations,
 		});
 	});
 

@@ -207,9 +207,10 @@ telemetry reference. Telemetry carries no memory content, user identity,
 agent ids, or file paths; each install uses a random persisted anonymous id
 and every event is mirrored to the auditable JSONL log. `pipeline.error` is
 emitted for categorized extraction, decision, and embedding failures with
-stage/code-only properties. The remaining `pipeline.extraction` and
-`pipeline.decision` event types are declared for future use but not yet
-emitted.
+stage/code-only properties. `pipeline.operation` adds one bounded summary per
+logical indexing, memory-capture, recall, or dreaming operation, so dashboards
+can distinguish raw failed attempts from completed/failed operations without
+counting every source chunk as a separate incident.
 
 Source lifecycle telemetry uses fixed source classes and bounded lifecycle
 summaries. Local-only hashed state correlates first indexed, searchable, and

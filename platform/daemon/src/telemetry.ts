@@ -54,6 +54,7 @@ export const TELEMETRY_EVENTS = [
 	"pipeline.decision",
 	"pipeline.embedding",
 	"pipeline.error",
+	"pipeline.operation",
 	"inference.route",
 	"inference.execute",
 	"inference.stream",

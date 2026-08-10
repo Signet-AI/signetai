@@ -11,8 +11,8 @@ import {
 	DEFAULT_OPENAI_BASE_URL,
 } from "./memory-config";
 import { isPipelineTimeout, recordPipelineError } from "./pipeline-error";
+import { type PipelineCauseFamily, normalizePipelineCause, pipelineCauseFromHttpFailure } from "./pipeline-operation";
 import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
-import { observeEmbeddingLatency } from "./runtime-pressure";
 import { getSecret } from "./secrets.js";
 
 export function resolveOllamaUrl(): string {
@@ -56,6 +56,7 @@ type NativeFallbackProbeResult = {
 	readonly model: LlamaCppEmbeddingModel | null;
 	readonly embedding: number[] | null;
 	readonly tokenCount: number;
+	readonly failureCause?: PipelineCauseFamily;
 };
 type NativeFallbackProbe = {
 	readonly promise: Promise<NativeFallbackProbeResult>;
@@ -80,6 +81,8 @@ export type EmbeddingFetchOptions = {
 	readonly timeoutMs?: number;
 	/** Optional usage attribution recorded with the fetch (source_kind, agent). */
 	readonly usage?: EmbeddingUsageAttribution;
+	/** Internal operation accounting hook; never serialized into telemetry. */
+	readonly onFailure?: (causeFamily: PipelineCauseFamily) => void;
 };
 
 function resolveEmbeddingTimeoutMs(opts: EmbeddingFetchOptions, fallback: number): number {
@@ -90,12 +93,17 @@ function resolveEmbeddingTimeoutMs(opts: EmbeddingFetchOptions, fallback: number
 
 type EmbeddingFetchSignal = {
 	readonly signal: AbortSignal;
+	readonly timedOut: boolean;
 	readonly cleanup: () => void;
 };
 
 function createEmbeddingFetchSignal(opts: EmbeddingFetchOptions, timeoutMs: number): EmbeddingFetchSignal {
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, timeoutMs);
 	let abortCaller: (() => void) | null = null;
 	if (opts.signal) {
 		if (opts.signal.aborted) {
@@ -107,6 +115,9 @@ function createEmbeddingFetchSignal(opts: EmbeddingFetchOptions, timeoutMs: numb
 	}
 	return {
 		signal: controller.signal,
+		get timedOut() {
+			return timedOut;
+		},
 		cleanup: () => {
 			clearTimeout(timer);
 			if (abortCaller) opts.signal?.removeEventListener("abort", abortCaller);
@@ -123,9 +134,56 @@ async function fetchWithEmbeddingTimeout(
 	const state = createEmbeddingFetchSignal(opts, timeoutMs);
 	try {
 		return await fetch(input, { ...init, signal: state.signal });
+	} catch (error) {
+		if (state.timedOut) throw new Error("Embedding request timed out");
+		throw error;
 	} finally {
 		state.cleanup();
 	}
+}
+
+async function readResponsePrefix(response: Response, maxBytes = 4096, timeoutMs = 5000): Promise<string> {
+	const reader = response.clone().body?.getReader();
+	if (!reader) return "";
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			(async () => {
+				const chunks: Uint8Array[] = [];
+				let total = 0;
+				while (total < maxBytes) {
+					const next = await reader.read();
+					if (next.done || !next.value) break;
+					const remaining = maxBytes - total;
+					const chunk = next.value.byteLength > remaining ? next.value.slice(0, remaining) : next.value;
+					chunks.push(chunk);
+					total += chunk.byteLength;
+					if (chunk.byteLength < next.value.byteLength) break;
+				}
+				const bytes = new Uint8Array(total);
+				let offset = 0;
+				for (const chunk of chunks) {
+					bytes.set(chunk, offset);
+					offset += chunk.byteLength;
+				}
+				return new TextDecoder().decode(bytes);
+			})(),
+			new Promise<string>((_, reject) => {
+				timer = setTimeout(() => reject(new Error("Embedding response body timed out")), timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+		await reader.cancel().catch(() => {});
+	}
+}
+
+function isEmbeddingVector(value: unknown): value is number[] {
+	return (
+		Array.isArray(value) &&
+		value.length > 0 &&
+		value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+	);
 }
 
 async function fetchOllamaEmbedding(
@@ -133,7 +191,11 @@ async function fetchOllamaEmbedding(
 	baseUrl: string,
 	model: string,
 	opts: EmbeddingFetchOptions = {},
-): Promise<{ readonly embedding: number[] | null; readonly tokenCount: number }> {
+): Promise<{
+	readonly embedding: number[] | null;
+	readonly tokenCount: number;
+	readonly failureCause?: PipelineCauseFamily;
+}> {
 	const res = await fetchWithEmbeddingTimeout(
 		`${baseUrl.replace(/\/$/, "")}/api/embeddings`,
 		{
@@ -149,10 +211,20 @@ async function fetchOllamaEmbedding(
 			status: res.status,
 			model,
 		});
-		return { embedding: null, tokenCount: countTokens(text) };
+		const responseText = await readResponsePrefix(res, 4096, resolveEmbeddingTimeoutMs(opts, 30000)).catch(() => "");
+		return {
+			embedding: null,
+			tokenCount: countTokens(text),
+			failureCause: pipelineCauseFromHttpFailure(res.status, responseText),
+		};
 	}
-	const data = (await res.json()) as { embedding: number[] };
-	return { embedding: data.embedding ?? null, tokenCount: countTokens(text) };
+	const data = (await res.json()) as { embedding?: unknown };
+	const embedding = isEmbeddingVector(data.embedding) ? data.embedding : null;
+	return {
+		embedding,
+		tokenCount: countTokens(text),
+		...(embedding === null ? { failureCause: "parse_failure" as const } : {}),
+	};
 }
 
 function boundLlamaCppEmbeddingInput(text: string, maxInputTokens: number): { text: string; tokenCount: number } {
@@ -173,7 +245,11 @@ async function fetchLlamaCppEmbedding(
 	opts: EmbeddingFetchOptions,
 	timeoutMs: number,
 	maxInputTokens = DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
-): Promise<{ readonly embedding: number[] | null; readonly tokenCount: number }> {
+): Promise<{
+	readonly embedding: number[] | null;
+	readonly tokenCount: number;
+	readonly failureCause?: PipelineCauseFamily;
+}> {
 	const bounded = boundLlamaCppEmbeddingInput(text, maxInputTokens);
 	const res = await fetchWithEmbeddingTimeout(
 		`${baseUrl.replace(/\/$/, "")}/v1/embeddings`,
@@ -190,16 +266,29 @@ async function fetchLlamaCppEmbedding(
 			status: res.status,
 			model,
 		});
-		return { embedding: null, tokenCount: bounded.tokenCount };
+		const responseText = await readResponsePrefix(res, 4096, resolveEmbeddingTimeoutMs(opts, timeoutMs)).catch(
+			() => "",
+		);
+		return {
+			embedding: null,
+			tokenCount: bounded.tokenCount,
+			failureCause: pipelineCauseFromHttpFailure(res.status, responseText),
+		};
 	}
-	const data = (await res.json()) as { data?: Array<{ embedding: number[] }> };
-	return { embedding: data.data?.[0]?.embedding ?? null, tokenCount: bounded.tokenCount };
+	const data = (await res.json()) as { data?: Array<{ embedding?: unknown }> };
+	const embedding = data.data?.[0]?.embedding;
+	return {
+		embedding: isEmbeddingVector(embedding) ? embedding : null,
+		tokenCount: bounded.tokenCount,
+		...(isEmbeddingVector(embedding) ? {} : { failureCause: "parse_failure" as const }),
+	};
 }
 
 type EmbeddingServeResult = {
 	readonly embedding: number[] | null;
 	readonly provider: string | null;
 	readonly tokenCount: number;
+	readonly failureCause?: PipelineCauseFamily;
 };
 
 async function fetchNativeFallback(
@@ -211,7 +300,7 @@ async function fetchNativeFallback(
 ): Promise<EmbeddingServeResult> {
 	if (provider === "ollama") {
 		const r = await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text", opts);
-		return { embedding: r.embedding, provider: "ollama", tokenCount: r.tokenCount };
+		return { embedding: r.embedding, provider: "ollama", tokenCount: r.tokenCount, failureCause: r.failureCause };
 	}
 	const r = await fetchLlamaCppEmbedding(
 		text,
@@ -221,7 +310,7 @@ async function fetchNativeFallback(
 		5000,
 		cfg.llamaCppMaxInputTokens,
 	);
-	return { embedding: r.embedding, provider: "llama-cpp", tokenCount: r.tokenCount };
+	return { embedding: r.embedding, provider: "llama-cpp", tokenCount: r.tokenCount, failureCause: r.failureCause };
 }
 
 async function probeNativeFallback(
@@ -229,6 +318,7 @@ async function probeNativeFallback(
 	cfg: EmbeddingConfig,
 	opts: EmbeddingFetchOptions,
 ): Promise<NativeFallbackProbeResult> {
+	let observedCause: PipelineCauseFamily | undefined;
 	const baseUrl = resolveLlamaCppFallbackBaseUrl(cfg);
 	const discoveredModel = await findLlamaCppEmbeddingModel(baseUrl);
 	if (discoveredModel) {
@@ -236,6 +326,7 @@ async function probeNativeFallback(
 		if (r.embedding) {
 			return { provider: "llama-cpp", model: discoveredModel, embedding: r.embedding, tokenCount: r.tokenCount };
 		}
+		observedCause = preferFallbackCause(observedCause, r.failureCause);
 	}
 
 	try {
@@ -243,11 +334,41 @@ async function probeNativeFallback(
 		if (r.embedding) {
 			return { provider: "ollama", model: null, embedding: r.embedding, tokenCount: r.tokenCount };
 		}
-	} catch {
-		// The aggregate warning below is the single actionable diagnostic.
+		observedCause = preferFallbackCause(observedCause, r.failureCause);
+	} catch (error) {
+		// The aggregate warning below is the single actionable diagnostic, while
+		// retaining the most specific observed cause for operation telemetry.
+		observedCause = preferFallbackCause(observedCause, normalizePipelineCause(error));
 	}
 
-	return { provider: "unavailable", model: null, embedding: null, tokenCount: 0 };
+	return {
+		provider: "unavailable",
+		model: null,
+		embedding: null,
+		tokenCount: 0,
+		failureCause: observedCause ?? "provider_unavailable",
+	};
+}
+
+function preferFallbackCause(
+	current: PipelineCauseFamily | undefined,
+	candidate: PipelineCauseFamily | undefined,
+): PipelineCauseFamily | undefined {
+	if (!candidate) return current;
+	if (!current) return candidate;
+	const priority: Record<PipelineCauseFamily, number> = {
+		context_limit: 100,
+		auth: 90,
+		quota: 80,
+		rate_limit: 70,
+		timeout: 60,
+		parse_failure: 50,
+		invalid_input: 40,
+		provider_unavailable: 30,
+		cancellation: 20,
+		internal_error: 10,
+	};
+	return priority[candidate] > priority[current] ? candidate : current;
 }
 
 async function resolveNativeFallback(
@@ -256,14 +377,16 @@ async function resolveNativeFallback(
 	opts: EmbeddingFetchOptions,
 	nativeError: string,
 ): Promise<EmbeddingServeResult> {
-	if (nativeFallbackProvider === "unavailable") return { embedding: null, provider: null, tokenCount: 0 };
+	if (nativeFallbackProvider === "unavailable") {
+		return { embedding: null, provider: null, tokenCount: 0, failureCause: "provider_unavailable" };
+	}
 	if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, text, cfg, opts);
 
 	if (nativeFallbackProbe) {
 		const result = await nativeFallbackProbe.promise;
 		return result.provider !== "unavailable"
 			? fetchNativeFallback(result.provider, text, cfg, opts, result.model)
-			: { embedding: null, provider: null, tokenCount: 0 };
+			: { embedding: null, provider: null, tokenCount: 0, failureCause: result.failureCause };
 	}
 
 	logger.warn("embedding", `Native embedding failed, probing local fallbacks: ${nativeError}`);
@@ -293,6 +416,7 @@ async function resolveNativeFallback(
 			embedding: result.embedding,
 			provider: result.provider === "unavailable" ? null : result.provider,
 			tokenCount: result.tokenCount,
+			failureCause: result.failureCause,
 		};
 	} finally {
 		if (nativeFallbackProbe === probe) nativeFallbackProbe = null;
@@ -372,15 +496,11 @@ export async function fetchEmbedding(
 	const opts = typeof roleOrOpts === "string" ? (typeof optsOrRole === "string" ? {} : optsOrRole) : roleOrOpts;
 	const formattedText = formatEmbeddingInput(text, effectiveCfg, role);
 	try {
-		let serve: EmbeddingServeResult;
-		const providerStartedAt = performance.now();
-		try {
-			serve = await serveEmbedding(formattedText, effectiveCfg, opts);
-		} finally {
-			observeEmbeddingLatency(performance.now() - providerStartedAt);
-		}
-		if (serve.embedding === null && serve.provider !== null) {
-			recordPipelineError("embedding", "EMBEDDING_PROVIDER_DOWN");
+		const serve = await serveEmbedding(formattedText, effectiveCfg, opts);
+		if (serve.embedding === null) {
+			const causeFamily = serve.failureCause ?? "provider_unavailable";
+			if (serve.provider !== null) recordPipelineError("embedding", "EMBEDDING_PROVIDER_DOWN");
+			opts.onFailure?.(causeFamily);
 		}
 		if (serve.embedding !== null && serve.provider !== null) {
 			recordEmbeddingUsage({
@@ -395,7 +515,9 @@ export async function fetchEmbedding(
 		}
 		return serve.embedding;
 	} catch (e) {
+		const causeFamily = normalizePipelineCause(e);
 		recordPipelineError("embedding", isPipelineTimeout(e) ? "EMBEDDING_TIMEOUT" : "EMBEDDING_PROVIDER_DOWN");
+		opts.onFailure?.(causeFamily);
 		logger.warn("embedding", "Embedding fetch error", {
 			provider: effectiveCfg.provider,
 			model: effectiveCfg.model,
@@ -429,7 +551,9 @@ async function serveEmbedding(
 				"native embedding disabled (embedding.warmNative: false)",
 			);
 		}
-		if (nativeFallbackProvider === "unavailable") return { embedding: null, provider: null, tokenCount: 0 };
+		if (nativeFallbackProvider === "unavailable") {
+			return { embedding: null, provider: null, tokenCount: 0, failureCause: "provider_unavailable" };
+		}
 		if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, formattedText, effectiveCfg, opts);
 		try {
 			if (!cachedNativeEmbed) {
@@ -437,7 +561,12 @@ async function serveEmbedding(
 				cachedNativeEmbed = mod.nativeEmbed;
 			}
 			const embedding = await cachedNativeEmbed(formattedText);
-			return { embedding, provider: "native", tokenCount: countTokens(formattedText) };
+			return {
+				embedding: isEmbeddingVector(embedding) ? embedding : null,
+				provider: "native",
+				tokenCount: countTokens(formattedText),
+				...(isEmbeddingVector(embedding) ? {} : { failureCause: "parse_failure" as const }),
+			};
 		} catch (nativeErr) {
 			const fallback = await resolveNativeFallback(
 				formattedText,
@@ -450,7 +579,7 @@ async function serveEmbedding(
 	}
 	if (effectiveCfg.provider === "ollama") {
 		const r = await fetchOllamaEmbedding(formattedText, effectiveCfg.base_url, effectiveCfg.model, opts);
-		return { embedding: r.embedding, provider: "ollama", tokenCount: r.tokenCount };
+		return { embedding: r.embedding, provider: "ollama", tokenCount: r.tokenCount, failureCause: r.failureCause };
 	}
 
 	if (effectiveCfg.provider === "llama-cpp") {
@@ -463,14 +592,14 @@ async function serveEmbedding(
 			30000,
 			effectiveCfg.llamaCppMaxInputTokens,
 		);
-		return { embedding: r.embedding, provider: "llama-cpp", tokenCount: r.tokenCount };
+		return { embedding: r.embedding, provider: "llama-cpp", tokenCount: r.tokenCount, failureCause: r.failureCause };
 	}
 
 	const apiKey = await resolveEmbeddingApiKey(effectiveCfg.api_key);
 	const baseUrl = resolveEmbeddingBaseUrl(effectiveCfg);
 	if (!apiKey && requiresOpenAiApiKey(baseUrl)) {
 		logger.warn("embedding", "No API key configured for OpenAI embeddings, skipping request to api.openai.com");
-		return { embedding: null, provider: null, tokenCount: countTokens(formattedText) };
+		return { embedding: null, provider: null, tokenCount: countTokens(formattedText), failureCause: "auth" };
 	}
 	const res = await fetchWithEmbeddingTimeout(
 		`${baseUrl.replace(/\/$/, "")}/embeddings`,
@@ -491,14 +620,20 @@ async function serveEmbedding(
 			provider: effectiveCfg.provider,
 			model: effectiveCfg.model,
 		});
-		return { embedding: null, provider: effectiveCfg.provider, tokenCount: countTokens(formattedText) };
+		const responseText = await readResponsePrefix(res, 4096, resolveEmbeddingTimeoutMs(opts, 30000)).catch(() => "");
+		return {
+			embedding: null,
+			provider: effectiveCfg.provider,
+			tokenCount: countTokens(formattedText),
+			failureCause: pipelineCauseFromHttpFailure(res.status, responseText),
+		};
 	}
-	const data = (await res.json()) as {
-		data: Array<{ embedding: number[] }>;
-	};
+	const data = (await res.json()) as { data?: Array<{ embedding?: unknown }> };
+	const embedding = data.data?.[0]?.embedding;
 	return {
-		embedding: data.data?.[0]?.embedding ?? null,
+		embedding: isEmbeddingVector(embedding) ? embedding : null,
 		provider: effectiveCfg.provider,
 		tokenCount: countTokens(formattedText),
+		...(isEmbeddingVector(embedding) ? {} : { failureCause: "parse_failure" as const }),
 	};
 }

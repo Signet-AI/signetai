@@ -75,6 +75,7 @@ PostHog failures, and never throws into the daemon.
 | `source.lifecycle` | bounded source connect, index, readiness, first-recall, and recurring freshness milestones | `phase`, fixed `sourceClass`, bounded outcomes/counts/buckets |
 | `pipeline.error` | categorized extraction, decision, or embedding failure | `stage`, `code` only; no message or stack content |
 | `dreaming.pass` | every terminal agentic dreaming pass, including no-op, failed, and cancelled passes | `mode`, `outcome`, `outcomeCode`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `tokensTotal`, `cost`, `accountingProvenance`, `artifactsConsidered`, `memoriesCreated`, `memoriesUpdated`, `memoriesSuperseded`, `memoriesRetired`, `claimsChanged`, `relationshipsChanged`, `provenanceLinksChanged`, `toolCalls`, `durationMs` |
+| `pipeline.operation` | one bounded summary for a logical indexing, capture, recall, dreaming, extraction, or other operation | `operationClass`, `outcome`, `accepted`, `skipped`, `retried`, `failed`, duration/queue-age buckets, optional `causeFamily` |
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
 | `inference.execute` / `inference.stream` | per-execution outcome | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `finalTarget`, `attemptPath`, `failedTargets`, `attemptCount`, `failedCount`, `fallbackCount`, `privacy`, `durationMs`, `inputTokens`, `outputTokens`, `success`, `cancelled`, `errorCode` |
 | `inference.fallback` | emitted alongside execute/stream when a target failed and routing fell back | same fields as execute/stream |
@@ -107,6 +108,15 @@ and send destination categories rather than raw URLs.
 
 Declared but **not yet emitted**: `pipeline.extraction` and
 `pipeline.decision`.
+
+`pipeline.error` remains the backward-compatible raw attempt stream. Product
+reliability dashboards should use `pipeline.operation` for the primary
+incident count: a source indexing job emits one summary regardless of how
+many chunks or retries it contains. The local `/api/telemetry/stats` response
+exposes both `pipelineErrors` (raw attempts) and `pipelineOperations.incidents`
+(failed or partial logical operations), grouped by operation class and
+normalized cause family. Operation events intentionally carry no operation id,
+source id, content hash, path, provider message, stack, or input details.
 
 Notes on individual events:
 
@@ -191,6 +201,11 @@ Notes on individual events:
   search and additional events for decomposed subqueries. It measures search
   execution, not delivery. Local stats read the flushed telemetry table, so
   they can lag the in-memory event buffer by one flush interval.
+- **Normalized causes** are a bounded taxonomy: `context_limit`,
+  `invalid_input`, `auth`, `quota`, `rate_limit`, `provider_unavailable`,
+  `timeout`, `parse_failure`, `cancellation`, and `internal_error`. HTTP
+  context-limit responses are classified locally from status and response
+  shape, but the response body is never recorded or sent.
 - **Runtime-pressure buckets (#1282)** — heartbeats and rate-limited
   `EventLoopLag` reports carry `runtimePressureVersion`, queue-depth and
   oldest-job-age buckets, active-worker and configured batch-size buckets,

@@ -33,6 +33,7 @@ import { type GraphHygieneCaps, getDreamingHygieneCandidatesInDb } from "../know
 import { logger } from "../logger";
 import type { GraphWriteCaps } from "../ontology-proposals";
 import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
+import { normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { getActiveTelemetry } from "../telemetry";
 import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
@@ -1268,6 +1269,8 @@ export async function runDreamingAgentPass(
 	const passStartedAtMs = Date.now();
 	const effects = createDreamingPassEffectState();
 	let toolCallSequence = 0;
+	let applied = 0;
+	let failed = 0;
 	try {
 		const prompt =
 			scopes.length > 1
@@ -1314,11 +1317,19 @@ export async function runDreamingAgentPass(
 				effects: dreamingPassEffects(effects, 0, passStartedAtMs),
 				usage: null,
 			});
+			recordPipelineOperation({
+				operationClass: "dreaming",
+				outcome: "skipped",
+				accepted: 0,
+				skipped: 1,
+				retried: 0,
+				failed: 0,
+				durationMs: Date.now() - passStartedAtMs,
+				queueAgeMs: 0,
+			});
 			return { passId, applied: 0, skipped: 0, failed: 0, summary: earlyExitSummary };
 		}
 
-		let applied = 0;
-		let failed = 0;
 		let applyCallbackReported = false;
 		let retirementCandidates: DreamingRetirementCandidates = new Map();
 		const rejectedEvidence: EpisodicSourceRecord[] = [];
@@ -1490,6 +1501,16 @@ export async function runDreamingAgentPass(
 			effects: dreamingPassEffects(effects, toolCallSequence, passStartedAtMs),
 			usage,
 		});
+		recordPipelineOperation({
+			operationClass: "dreaming",
+			outcome: failed > 0 ? (applied > 0 ? "partial" : "failed") : "completed",
+			accepted: applied,
+			skipped: 0,
+			retried: 0,
+			failed,
+			durationMs: Date.now() - passStartedAtMs,
+			queueAgeMs: 0,
+		});
 
 		return { passId, applied, skipped: 0, failed, summary };
 	} catch (error) {
@@ -1507,6 +1528,17 @@ export async function runDreamingAgentPass(
 				usage: null,
 			});
 		}
+		recordPipelineOperation({
+			operationClass: "dreaming",
+			outcome: applied > 0 ? "partial" : "failed",
+			accepted: applied,
+			skipped: 0,
+			retried: 0,
+			failed: Math.max(1, failed),
+			durationMs: Date.now() - passStartedAtMs,
+			queueAgeMs: 0,
+			causeFamily: normalizePipelineCause(error),
+		});
 		throw error;
 	}
 }

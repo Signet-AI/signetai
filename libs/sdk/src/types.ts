@@ -588,6 +588,29 @@ export interface TelemetryStatsEnabledResponse {
 	readonly pipelineErrors: number;
 	readonly pipelineErrorsByStage: Readonly<Record<string, number>>;
 	readonly pipelineErrorsByCode: Readonly<Record<string, number>>;
+	readonly pipelineOperations: {
+		readonly total: number;
+		/** Failed or partial operations, bounded independently from raw attempt errors. */
+		readonly incidents: number;
+		readonly classes: Readonly<
+			Record<
+				string,
+				{
+					readonly operations: number;
+					readonly accepted: number;
+					readonly skipped: number;
+					readonly retried: number;
+					readonly failed: number;
+					readonly durationMs: number;
+					readonly queueAgeMs: number;
+					readonly outcomes: Readonly<Record<string, number>>;
+					readonly causes: Readonly<Record<string, number>>;
+					readonly durationBuckets: Readonly<Record<string, number>>;
+					readonly queueAgeBuckets: Readonly<Record<string, number>>;
+				}
+			>
+		>;
+	};
 }
 
 export type TelemetryStatsResponse = TelemetryStatsDisabledResponse | TelemetryStatsEnabledResponse;

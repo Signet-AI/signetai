@@ -199,6 +199,28 @@ describe("fetchEmbedding", () => {
 		expect(capturedUrl).toContain("/api/embeddings");
 	});
 
+	it("classifies an embedding context-limit rejection without exposing its response body", async () => {
+		const causes: string[] = [];
+		globalThis.fetch = mock(() =>
+			Promise.resolve(Response.json({ error: { message: "maximum context length exceeded" } }, { status: 400 })),
+		) as unknown as typeof fetch;
+
+		await expect(
+			fetchEmbedding(
+				"oversized input",
+				{
+					provider: "openai",
+					model: "text-embedding-3-small",
+					dimensions: 3,
+					base_url: "http://localhost:1234/v1",
+				},
+				{ onFailure: (cause) => causes.push(cause) },
+			),
+		).resolves.toBeNull();
+
+		expect(causes).toEqual(["context_limit"]);
+	});
+
 	it("never touches native when warmNative is false and routes to the fallback chain (#1073)", async () => {
 		let capturedUrl: string | undefined;
 		globalThis.fetch = mock((url: string | URL | Request) => {

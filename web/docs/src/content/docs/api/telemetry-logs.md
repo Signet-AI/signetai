@@ -318,11 +318,30 @@ Aggregated telemetry statistics since daemon start or since a given timestamp.
   },
   "pipelineErrors": 3,
   "pipelineErrorsByStage": { "extraction": 1, "decision": 1, "embedding": 1 },
-  "pipelineErrorsByCode": {
-    "EXTRACTION_PARSE_FAIL": 1,
-    "DECISION_TIMEOUT": 1,
-    "EMBEDDING_PROVIDER_DOWN": 1
-  }
+	"pipelineErrorsByCode": {
+	  "EXTRACTION_PARSE_FAIL": 1,
+	  "DECISION_TIMEOUT": 1,
+	  "EMBEDDING_PROVIDER_DOWN": 1
+	},
+	"pipelineOperations": {
+	  "total": 12,
+	  "incidents": 2,
+	  "classes": {
+	    "indexing": {
+	      "operations": 8,
+	      "accepted": 42,
+	      "skipped": 3,
+	      "retried": 5,
+	      "failed": 2,
+	      "durationMs": 18400,
+	      "queueAgeMs": 3200,
+	      "outcomes": { "completed": 6, "partial": 2 },
+	      "causes": { "context_limit": 1, "provider_unavailable": 1 },
+	      "durationBuckets": { "1-9s": 8 },
+	      "queueAgeBuckets": { "1-9s": 8 }
+	    }
+	  }
+	}
 }
 ```
 
@@ -337,6 +356,16 @@ Embedding `cost` values are USD. The `sessions` block is a derived view over
 matching usage events and should not be added to event-level cost totals. The
 `session.end` event carries the same collector-derived totals, keyed by a
 truncated hash of the session key rather than the raw key.
+
+`pipelineErrors` and its stage/code maps count raw failed attempts and remain
+backward-compatible. `pipelineOperations` is the bounded primary reliability
+view: it reports one logical operation summary per class (`indexing`,
+`memory_capture`, `recall`, `dreaming`, `extraction`, or `other`), including
+accepted, skipped, retried, and failed counts, duration and queue-age buckets,
+outcomes, and normalized cause families. Its `incidents` count includes failed
+or partial operations, so a large source cannot inflate the primary incident
+count by chunk count or retry count. Operation summaries contain no source
+identifiers, hashes, paths, provider messages, stacks, or raw input.
 
 ### GET /api/telemetry/export
 
