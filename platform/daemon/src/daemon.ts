@@ -84,6 +84,7 @@ import {
 	startPipeline,
 	stopPipeline,
 } from "./pipeline";
+import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobs } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
@@ -1971,7 +1972,7 @@ async function main() {
 	// the event loop — because pending boot operations (plugin init, route
 	// registration) would interfere with the DB write connection if allowed
 	// to run between recovery batches (#1059).
-	runStartupRecovery(getDbAccessor());
+	const startupRecovery = runStartupRecovery(getDbAccessor());
 
 	// Purge artifacts of sources deleted while the daemon was down (e.g.
 	// crash-loop-disabled sources). This needs the DB accessor, so it runs
@@ -2093,6 +2094,29 @@ async function main() {
 			platform: process.platform,
 			uptimeMs: 0,
 		});
+		// A daemon restart turns any still-running pass into a failed pass. Emit
+		// a bounded, content-free outcome once telemetry is initialized so those
+		// failures are not silently lost at the recovery boundary.
+		for (let index = 0; index < Math.min(startupRecovery.orphanedPassesSwept, 100); index++) {
+			recordDreamingPassTelemetry({
+				mode: "startup-recovery",
+				outcome: "failed",
+				outcomeCode: "error",
+				effects: {
+					artifactsConsidered: 0,
+					memoriesCreated: 0,
+					memoriesUpdated: 0,
+					memoriesSuperseded: 0,
+					memoriesRetired: 0,
+					claimsChanged: 0,
+					relationshipsChanged: 0,
+					provenanceLinksChanged: 0,
+					toolCalls: 0,
+					durationMs: startupRecovery.durationMs,
+				},
+				usage: null,
+			});
+		}
 
 		const daemonStartTime = Date.now();
 		heartbeatTimer = setInterval(
