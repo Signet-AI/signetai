@@ -8,6 +8,7 @@ import {
 	getTranscriptCaptureJobStatus,
 	getTranscriptCaptureStatus,
 	runTranscriptCaptureOnce,
+	startTranscriptCaptureWorker,
 } from "./transcript-capture-worker";
 
 let dir = "";
@@ -172,5 +173,117 @@ describe("transcript capture worker", () => {
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM transcript_capture_jobs").get()),
 		).toEqual({ count: 1 });
+	});
+
+	it("leases same-session evidence in created order", async () => {
+		const base = {
+			agentId: "agent-a",
+			harness: "claude-code",
+			sessionKey: "session-ordered",
+			project: "/repo",
+			rawTranscript: "snapshot",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		} as const;
+		const first = enqueueTranscriptCaptureJob(getDbAccessor(), {
+			...base,
+			sessionId: "snapshot-ordered-first",
+			transcript: "User: first turn",
+			capturedAt: "2026-06-20T10:00:00.000Z",
+		});
+		const second = enqueueTranscriptCaptureJob(getDbAccessor(), {
+			...base,
+			sessionId: "snapshot-ordered-second",
+			transcript: "User: second turn",
+			capturedAt: "2026-06-20T10:01:00.000Z",
+		});
+		if (!first || !second) throw new Error("expected ordered capture jobs");
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE transcript_capture_jobs SET created_at = ? WHERE id = ?").run(
+				"2026-06-20T10:00:00.000Z",
+				first,
+			);
+			db.prepare("UPDATE transcript_capture_jobs SET created_at = ? WHERE id = ?").run(
+				"2026-06-20T10:01:00.000Z",
+				second,
+			);
+		});
+
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT id, status, attempts FROM transcript_capture_jobs ORDER BY created_at").all(),
+			),
+		).toEqual([
+			{ id: first, status: "completed", attempts: 1 },
+			{ id: second, status: "pending", attempts: 0 },
+		]);
+
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 2, pending: 0 });
+	});
+
+	it("concurrent workers claim one snapshot once", async () => {
+		const id = enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "session-concurrent",
+			sessionId: "snapshot-concurrent",
+			project: "/repo",
+			transcript: "User: one durable turn",
+			rawTranscript: "one durable turn",
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		});
+		if (!id) throw new Error("expected concurrent capture job");
+
+		const results = await Promise.all([
+			runTranscriptCaptureOnce(getDbAccessor(), dir),
+			runTranscriptCaptureOnce(getDbAccessor(), dir),
+		]);
+		expect(results.sort()).toEqual([false, true]);
+		expect(getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 1, pending: 0 });
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT attempts FROM transcript_capture_jobs WHERE id = ?").get(id),
+			),
+		).toEqual({ attempts: 1 });
+	});
+
+	it("recovers an interrupted lease without duplicating the capture", async () => {
+		const id = enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "session-restart",
+			sessionId: "snapshot-restart",
+			project: "/repo",
+			transcript: "User: survives restart",
+			rawTranscript: "survives restart",
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		});
+		if (!id) throw new Error("expected restart capture job");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE transcript_capture_jobs SET status = 'processing', attempts = 1 WHERE id = ?").run(id);
+		});
+
+		const worker = startTranscriptCaptureWorker(getDbAccessor(), dir);
+		try {
+			const deadline = Date.now() + 2_000;
+			while (Date.now() < deadline) {
+				const status = getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id);
+				if (status?.status === "completed") break;
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+		} finally {
+			worker.stop();
+		}
+
+		expect(getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id)).toEqual({
+			id,
+			status: "completed",
+			error: null,
+		});
+		expect(getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 1, processing: 0 });
 	});
 });

@@ -106,6 +106,15 @@ function getJob(
 		| undefined;
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`Condition not met within ${timeoutMs}ms`);
+}
+
 /** Shared pipeline config with hints enabled. */
 function pipelineCfg(hints = HINTS_CFG) {
 	return {
@@ -422,6 +431,89 @@ describe("prospective-index", () => {
 	// -----------------------------------------------------------------------
 
 	describe("startHintsWorker", () => {
+		it("leases prospective jobs in created order", async () => {
+			const firstId = crypto.randomUUID();
+			const secondId = crypto.randomUUID();
+			insertMemory(db, firstId, "first queued memory content");
+			insertMemory(db, secondId, "second queued memory content");
+
+			accessor.withWriteTx((wdb) => {
+				enqueueHintsJob(wdb, firstId, "first queued memory content");
+				enqueueHintsJob(wdb, secondId, "second queued memory content");
+			});
+			accessor.withWriteTx((wdb) => {
+				wdb
+					.prepare("UPDATE memory_jobs SET created_at = ? WHERE memory_id = ? AND job_type = 'prospective_index'")
+					.run("2026-06-20T10:00:00.000Z", firstId);
+				wdb
+					.prepare("UPDATE memory_jobs SET created_at = ? WHERE memory_id = ? AND job_type = 'prospective_index'")
+					.run("2026-06-20T10:01:00.000Z", secondId);
+			});
+
+			const prompts: string[] = [];
+			const provider: LlmProvider = {
+				name: "mock-order",
+				async generate(prompt) {
+					prompts.push(prompt);
+					return "";
+				},
+				async available() {
+					return true;
+				},
+			};
+			const handle = startHintsWorker({ accessor, provider, pipelineCfg: pipelineCfg() });
+			try {
+				await waitFor(
+					() => getJob(db, firstId)?.status === "completed" && getJob(db, secondId)?.status === "completed",
+					2_000,
+				);
+			} finally {
+				await handle.stop();
+			}
+
+			expect(prompts).toHaveLength(2);
+			expect(prompts[0]).toContain("first queued memory content");
+			expect(prompts[1]).toContain("second queued memory content");
+		});
+
+		it("does not lease one prospective job to concurrent workers twice", async () => {
+			const memoryId = crypto.randomUUID();
+			insertMemory(db, memoryId, "one concurrently leased memory");
+			accessor.withWriteTx((wdb) => {
+				enqueueHintsJob(wdb, memoryId, "one concurrently leased memory");
+			});
+
+			let calls = 0;
+			let release: () => void = () => undefined;
+			const gate = new Promise<void>((resolve) => {
+				release = () => resolve();
+			});
+			const provider: LlmProvider = {
+				name: "mock-concurrent",
+				async generate() {
+					calls += 1;
+					await gate;
+					return "";
+				},
+				async available() {
+					return true;
+				},
+			};
+			const first = startHintsWorker({ accessor, provider, pipelineCfg: pipelineCfg() });
+			const second = startHintsWorker({ accessor, provider, pipelineCfg: pipelineCfg() });
+			try {
+				await waitFor(() => calls === 1 && getJob(db, memoryId)?.status === "leased", 2_000);
+				release();
+				await waitFor(() => getJob(db, memoryId)?.status === "completed", 2_000);
+			} finally {
+				release();
+				await Promise.all([first.stop(), second.stop()]);
+			}
+
+			expect(calls).toBe(1);
+			expect(getJob(db, memoryId)?.attempts).toBe(1);
+		});
+
 		it("processes a job and writes hints to memory_hints", async () => {
 			const mid = crypto.randomUUID();
 			insertMemory(db, mid, "Caroline moved from Portland to Seattle in 2019");

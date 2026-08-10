@@ -8,11 +8,13 @@ import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
 import {
 	DREAMING_AGENT_PROMPT,
+	type DreamingAgentExecutor,
 	type DreamingPassFocus,
 	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
 } from "./dreaming";
 import {
+	AlreadyRunningError,
 	createAgentScopeSnapshot,
 	getDreamingWorkerAgentIds,
 	selectDreamingCheckMode,
@@ -175,6 +177,46 @@ describe("dreaming worker agent scope", () => {
 			).toEqual({ count: 0 });
 		} finally {
 			worker.stop();
+		}
+	});
+
+	it("rejects an overlapping manual pass without skipping the active pass", async () => {
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES ('overlap-evidence', 'default', 'Evidence for one in-flight pass.', 'pi',
+			         datetime('now'), datetime('now'), datetime('now'))`,
+		).run();
+
+		let started = false;
+		let release: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = () => resolve();
+		});
+		const executorFactory = (): DreamingAgentExecutor => ({
+			async run(_input: Parameters<DreamingAgentExecutor["run"]>[0]) {
+				started = true;
+				await gate;
+				return { summary: "Completed one active pass" };
+			},
+		});
+
+		const worker = startDreamingWorker(accessor, defaultCfg({ tokenThreshold: 1 }), agentsDir, "default", {
+			executorFactory,
+		});
+		try {
+			const first = worker.trigger("incremental", "default");
+			await waitFor(() => started, 2_000);
+			await expect(worker.trigger("incremental", "default")).rejects.toBeInstanceOf(AlreadyRunningError);
+			release();
+			await first;
+
+			expect(db.prepare("SELECT status, COUNT(*) AS count FROM dreaming_passes GROUP BY status").all()).toEqual([
+				{ status: "completed", count: 1 },
+			]);
+		} finally {
+			worker.stop();
+			release();
 		}
 	});
 
