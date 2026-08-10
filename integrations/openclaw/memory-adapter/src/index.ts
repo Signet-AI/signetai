@@ -663,6 +663,8 @@ export async function memoryRecall(
 			sessionKey: options.sessionKey,
 			agentId: options.agentId,
 			includeRecalled: options.includeRecalled,
+			minScore: options.minScore,
+			recallSurface: "tool_call",
 		}),
 		timeout: READ_TIMEOUT,
 	});

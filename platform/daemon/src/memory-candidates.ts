@@ -270,23 +270,23 @@ export function getPredictedContextMemories(
 	if (!project || project.trim().length === 0) return [];
 
 	try {
-		// Get recent session summaries for this project only. Global predictive
+		// Get recent completed transcripts for this project only. Global predictive
 		// FTS is too broad for session-start latency on large memory stores.
-		const summaryRows = getDbAccessor().withReadDb((db) => {
+		const transcriptRows = getDbAccessor().withReadDb((db) => {
 			return db
 				.prepare(
-					`SELECT transcript FROM summary_jobs
-					 WHERE project = ? AND status = 'completed' AND agent_id = ?
-					 ORDER BY created_at DESC LIMIT 5`,
+					`SELECT content AS transcript FROM session_transcripts
+					 WHERE project = ? AND completed_at IS NOT NULL AND agent_id = ?
+					 ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 5`,
 				)
 				.all(project, agentId) as Array<{ transcript: string }>;
 		});
 
-		if (summaryRows.length === 0) return [];
+		if (transcriptRows.length === 0) return [];
 
 		// Extract recurring terms from recent sessions.
 		const termFreq = new Map<string, number>();
-		for (const row of summaryRows) {
+		for (const row of transcriptRows) {
 			const text = row.transcript.slice(0, 3000);
 			const words = text
 				.toLowerCase()

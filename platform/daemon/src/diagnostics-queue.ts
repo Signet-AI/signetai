@@ -1,9 +1,9 @@
 /**
  * Per-queue counters and thresholds for the diagnostics surface.
  *
- * Issue #901 lifts `summary_jobs` into the health envelope. The previous
- * `getQueueHealth` helper only read `memory_jobs`; this module splits
- * the per-queue reads into their own type and exposes a single
+ * The retired summary queue remains represented as an empty compatibility
+ * field in the health envelope. The previous `getQueueHealth` helper only
+ * read `memory_jobs`; this module splits the per-queue reads into their own type and exposes a single
  * threshold scorer that all surfaces (diagnostics, /api/status,
  * signet status, PR #932's /health/ready) can share.
  */
@@ -138,14 +138,89 @@ function rowToCounts(row: QueueCountsQueryResult | undefined): QueueCounts {
  * Per-table counts for one queue source.
  *
  * `memory` reads live `memory_jobs` (excluding terminal legacy `extract`
- * jobs); `summary` reads `summary_jobs`.
+ * jobs); the retired `summary` source is always empty.
  */
 export function getQueueCounts(db: ReadDb, source: QueueSource): QueueCounts {
 	if (source === "memory") return rowToCounts(safeQueueRows(db, "memory_jobs", "job_type <> 'extract'"));
-	if (source === "summary") return rowToCounts(safeQueueRows(db, "summary_jobs"));
+	if (source === "summary") return EMPTY_QUEUE_COUNTS;
 	// Defensive — TS narrowing treats any unrecognized value as `never`
 	// through exhaustive union discrimination.
 	return EMPTY_QUEUE_COUNTS;
+}
+
+const QUEUE_PRESSURE_DEPTH_LIMIT = 1_001;
+
+interface QueuePressureQueryResult {
+	readonly depth: number;
+	readonly oldestAt: string | null;
+}
+
+/**
+ * Read only the bounded data needed by heartbeat pressure telemetry.
+ *
+ * The full diagnostics snapshot intentionally remains exact for operator
+ * routes. Heartbeats use this separate path so a large terminal queue cannot
+ * turn a liveness callback into an unbounded synchronous scan.
+ */
+function getQueuePressureQueryResult(db: ReadDb, source: QueueSource): QueuePressureQueryResult | undefined {
+	const table = source === "memory" ? "memory_jobs" : "summary_jobs";
+	const statusIndex = source === "memory" ? "idx_memory_jobs_pressure_status" : "idx_summary_jobs_pressure_status";
+	const createdIndex =
+		source === "memory" ? "idx_memory_jobs_pressure_created_at" : "idx_summary_jobs_pressure_created_at";
+	const predicate = source === "memory" ? " AND job_type <> 'extract'" : "";
+	if (!tableExists(db, table)) return undefined;
+
+	try {
+		const rows = db
+			.prepare(
+				`SELECT 1
+				 FROM ${table} INDEXED BY ${statusIndex}
+				 WHERE status IN ('pending', 'leased')${predicate}
+				 LIMIT ${QUEUE_PRESSURE_DEPTH_LIMIT}`,
+			)
+			.all();
+		const oldest = db
+			.prepare(
+				`SELECT created_at AS oldestAt
+				 FROM ${table} INDEXED BY ${createdIndex}
+				 WHERE status IN ('pending', 'leased')${predicate}
+				 ORDER BY created_at ASC
+				 LIMIT 1`,
+			)
+			.get() as { readonly oldestAt?: string | null } | undefined;
+		return { depth: rows.length, oldestAt: oldest?.oldestAt ?? null };
+	} catch {
+		// A partially repaired legacy schema must not break the heartbeat.
+		return undefined;
+	}
+}
+
+export interface QueuePressureSnapshot {
+	/** Capped at 1,001 because the next bucket is already `1001+`. */
+	readonly memoryQueueDepth: number | undefined;
+	/** Capped at 1,001 because the next bucket is already `1001+`. */
+	readonly summaryQueueDepth: number | undefined;
+	/** Undefined when neither queue has an active row or age is unavailable. */
+	readonly oldestJobAgeSec: number | undefined;
+}
+
+/**
+ * Bounded queue observation for the daemon heartbeat and wedge context.
+ *
+ * This function is deliberately not used by the exact diagnostics routes.
+ */
+export function getQueuePressureSnapshot(db: ReadDb): QueuePressureSnapshot {
+	const memory = getQueuePressureQueryResult(db, "memory");
+	const summary = getQueuePressureQueryResult(db, "summary");
+	const oldestAt = [memory?.oldestAt, summary?.oldestAt].filter(
+		(value): value is string => value !== undefined && value !== null,
+	);
+	const ages = oldestAt.map((value) => ageSec(value));
+	return {
+		memoryQueueDepth: memory?.depth,
+		summaryQueueDepth: summary?.depth,
+		oldestJobAgeSec: ages.length === 0 ? undefined : Math.max(...ages),
+	};
 }
 
 /**
@@ -153,27 +228,7 @@ export function getQueueCounts(db: ReadDb, source: QueueSource): QueueCounts {
  * when the queue table is missing.
  */
 export function getOldestDeadJob(db: ReadDb, source: QueueSource): OldestDeadJob | null {
-	if (source === "summary") {
-		if (!tableExists(db, "summary_jobs")) return null;
-		const row = db
-			.prepare(
-				`SELECT id, harness, session_key AS sessionKey, created_at AS createdAt,
-				        attempts, error
-				 FROM summary_jobs
-					 WHERE status = 'dead'
-				 ORDER BY created_at ASC LIMIT 1`,
-			)
-			.get() as OldestDeadRow | undefined;
-		if (!row) return null;
-		return {
-			id: row.id,
-			harness: row.harness,
-			sessionKey: row.sessionKey,
-			createdAt: row.createdAt,
-			attempts: row.attempts,
-			error: row.error,
-		};
-	}
+	if (source === "summary") return null;
 	if (source === "memory") {
 		if (!tableExists(db, "memory_jobs")) return null;
 		const row = db
@@ -227,7 +282,7 @@ export function getQueueDiagnosticsSnapshot(
 	const value: QueueDiagnosticsSnapshot = {
 		memory: getQueueCounts(db, "memory"),
 		summary: getQueueCounts(db, "summary"),
-		oldestDeadSummaryJob: getOldestDeadJob(db, "summary"),
+		oldestDeadSummaryJob: null,
 		oldestDeadMemoryJob: getOldestDeadJob(db, "memory"),
 	};
 	queueSnapshotCache.set(db, { expiresAt: now + QUEUE_SNAPSHOT_CACHE_TTL_MS, value });

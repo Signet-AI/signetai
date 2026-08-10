@@ -1487,6 +1487,8 @@ export async function writeTranscriptArtifact(params: {
 			transcript_path: relativePath(fullPath),
 			transcript_status: "completed",
 			canonical_transcript_path: params.harness ? canonicalTranscriptRelativePath(params.harness) : null,
+			// New direct captures do not request a summary. Preserve terminal
+			// historical status values so provenance is not rewritten.
 			summary_status: frontmatter.summary_path
 				? "completed"
 				: terminalSummaryStatus
@@ -1749,9 +1751,12 @@ function readTemporalNodes(agentId: string): ReadonlyArray<{
 function chooseSentence(rows: ReadonlyArray<ArtifactRow>): ArtifactRow | null {
 	const ranked = [...rows].sort((a, b) => {
 		const rank = (row: ArtifactRow): number => {
-			if (row.source_kind === "summary") return 3;
+			// Direct completed transcripts are the canonical session projection.
+			// Keep historical summaries as lower-priority provenance so an old
+			// artifact cannot override a newly sanitized transcript view.
+			if (row.source_kind === "transcript") return 3;
 			if (row.source_kind === "compaction") return 2;
-			if (row.source_kind === "transcript") return 1;
+			if (row.source_kind === "summary") return 1;
 			return 0;
 		};
 		return rank(b) - rank(a) || (b.ended_at ?? b.captured_at).localeCompare(a.ended_at ?? a.captured_at);

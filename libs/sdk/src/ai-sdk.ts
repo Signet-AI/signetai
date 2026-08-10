@@ -61,6 +61,7 @@ export async function memoryTools(client: SignetClient) {
 					sessionKey,
 					agentId,
 					includeRecalled,
+					recallSurface: "tool_call",
 				});
 			},
 		},

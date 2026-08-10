@@ -13,7 +13,6 @@ import { getFreePageRatio } from "../db-vacuum";
 import type { DiagnosticsReport, ProviderTracker } from "../diagnostics";
 import { getDiagnostics } from "../diagnostics";
 import { propagateMemoryStatus } from "../knowledge-graph";
-import { getLlmProvider } from "../llm";
 import { logger } from "../logger";
 import type { PipelineV2Config } from "../memory-config";
 import {
@@ -32,7 +31,6 @@ import {
 import { isSystemPressureHigh } from "../system-pressure";
 import { decayAspectWeights, recordFeedbackTelemetry } from "./aspect-feedback";
 import { invalidateTraversalCache } from "./graph-traversal";
-import { checkAndCondense } from "./summary-condensation";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -327,35 +325,8 @@ export function startMaintenanceWorker(
 			});
 		}
 
-		// Check for summary condensation opportunities (session -> arc -> epoch)
-		try {
-			const tableRow = accessor.withReadDb((db) =>
-				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			);
-
-			if (tableRow) {
-				const projects = accessor.withReadDb(
-					(db) =>
-						db
-							.prepare(
-								`SELECT DISTINCT project FROM session_summaries
-							 WHERE kind = 'session' AND project IS NOT NULL`,
-							)
-							.all() as Array<{ project: string }>,
-				);
-
-				// Limit to 1 condensation per maintenance tick to avoid
-				// blocking the maintenance loop with O(n) LLM calls.
-				const provider = getLlmProvider();
-				for (const { project } of projects.slice(0, 1)) {
-					await checkAndCondense(accessor, provider, project, "default");
-				}
-			}
-		} catch (e) {
-			logger.warn("maintenance", "Summary condensation check failed (non-fatal)", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		}
+		// Temporal manifest and MEMORY projection are owned by the direct
+		// transcript-to-Dreaming path. No summary condensation worker runs here.
 
 		if (feedbackDecayedAspects > 0 || feedbackPropagatedAttributes > 0) {
 			invalidateTraversalCache();

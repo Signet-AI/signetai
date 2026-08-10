@@ -17,6 +17,7 @@ import {
 	type AgentRosterReadPolicy,
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	type LlmUsage,
+	type RecallSurface,
 	type RecallTemporalMeta,
 	SOURCE_CHUNK_SOURCE_TYPE,
 	vectorSearch,
@@ -98,6 +99,8 @@ export interface RecallParams {
 	excludeAggregateRecallMemories?: boolean;
 	/** Internal escape hatch for hooks that must track only injected rows elsewhere. */
 	trackRecallAccess?: boolean;
+	/** Anonymous retrieval-outcome attribution; never carries caller text. */
+	telemetrySurface?: RecallSurface;
 }
 
 export interface RecallResult {
@@ -1281,6 +1284,7 @@ export async function hybridRecall(
 		const telemetryType = classifyRecallTelemetry(response);
 		getActiveTelemetry()?.record("recall.performed", {
 			...(telemetryType ? { type: telemetryType } : {}),
+			surface: params.telemetrySurface ?? "other",
 			results: response.results.length,
 			latencyMs: recallTimings.totalMs,
 			truncated: response.results.length >= limit,

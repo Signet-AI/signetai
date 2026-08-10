@@ -2130,6 +2130,9 @@ async function main() {
 						const job = getSourceIndexJob(source.id);
 						recordSourceFreshness(source, resolveDaemonAgentId(), job?.lastProgressAt);
 					}
+					if (runtimePressure?.recoveryOutcome === "restarted") {
+						restartedHeartbeatPending = false;
+					}
 				} catch {}
 			},
 			5 * 60 * 1000,

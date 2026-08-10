@@ -95,6 +95,7 @@ describe("executeMemoryTool", () => {
 		expect(calls[0].method).toBe("recall");
 		expect(calls[0].args[0]).toBe("preferences");
 		expect(calls[0].args[1]).toEqual({
+			recallSurface: "tool_call",
 			limit: 5,
 			type: "preference",
 			aggregate: true,

@@ -177,6 +177,7 @@ export type {
 	RecallPayload,
 	RecallRequestOptions,
 	RecallRow,
+	RecallSurface,
 	RecallScoreFilterRow,
 	RecallTemporalMeta,
 	RecallTimeOptions,

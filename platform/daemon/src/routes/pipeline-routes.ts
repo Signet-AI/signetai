@@ -447,10 +447,6 @@ export function registerPipelineRoutes(app: Hono): void {
 				status: string;
 				count: number;
 			}>;
-			const summaryRows = db
-				.prepare("SELECT status, COUNT(*) as count FROM summary_jobs GROUP BY status")
-				.all() as Array<{ status: string; count: number }>;
-
 			const toCountMap = (rows: Array<{ status: string; count: number }>): Record<string, number> => {
 				const out: Record<string, number> = {
 					pending: 0,
@@ -466,7 +462,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			return {
 				queues: {
 					memory: toCountMap(memoryRows),
-					summary: toCountMap(summaryRows),
+					summary: toCountMap([]),
 				},
 			};
 		});
@@ -630,12 +626,10 @@ export function registerPipelineRoutes(app: Hono): void {
 		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
 		const body = asRecord(raw);
 		const sourceKind = readString(body, "sourceKind");
-		if (
-			sourceKind !== "memory" &&
-			sourceKind !== "artifact" &&
-			sourceKind !== "transcript" &&
-			sourceKind !== "summary"
-		) {
+		if (sourceKind === "summary") {
+			return c.json({ error: "Summary evidence requeue is retired; requeue the completed transcript instead" }, 410);
+		}
+		if (sourceKind !== "memory" && sourceKind !== "artifact" && sourceKind !== "transcript") {
 			return c.json({ error: "Invalid episodic source kind" }, 400);
 		}
 		const sourceId = readString(body, "sourceId");
@@ -702,7 +696,12 @@ export function registerPipelineRoutes(app: Hono): void {
 			c.req.param("capability"),
 		);
 		if (!capability) return c.json({ error: "Unknown Dreaming capability" }, 404);
-		const result = await capability.invoke(body.input);
+		const input = asRecord(body.input);
+		const requestedInputAgent = readString(input, "agentId");
+		if (requestedInputAgent !== undefined && requestedInputAgent !== scopedAgent.agentId) {
+			return c.json({ error: "Dreaming capability agent scope does not match the credential" }, 403);
+		}
+		const result = await capability.invoke({ ...input, agentId: scopedAgent.agentId });
 		return c.json({ ...result, agentId: scopedAgent.agentId }, result.ok ? 200 : 400);
 	});
 

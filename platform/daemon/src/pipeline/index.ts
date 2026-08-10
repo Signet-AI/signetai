@@ -28,12 +28,6 @@ import {
 	type RetentionHandle,
 	startRetentionWorker,
 } from "./retention-worker";
-import {
-	type SummaryWorkerHandle,
-	type SummaryWorkerOptions,
-	startSummaryRecovery,
-	startSummaryWorker,
-} from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 
 export { enqueueDocumentIngestJob } from "./document-worker";
@@ -46,8 +40,6 @@ export type { LlmProvider } from "./provider";
 export { getLlmProvider } from "../llm";
 export type { RetentionHandle, RetentionConfig } from "./retention-worker";
 export type { MaintenanceHandle } from "./maintenance-worker";
-export { startSummaryWorker, enqueueSummaryJob } from "./summary-worker";
-export type { SummaryWorkerHandle } from "./summary-worker";
 export { startSynthesisWorker, readLastSynthesisTime } from "./synthesis-worker";
 export type { SynthesisWorkerHandle } from "./synthesis-worker";
 export {
@@ -78,57 +70,6 @@ export function setDreamingWorker(handle: DreamingWorkerHandle | null): void {
 	dreamingWorkerHandle = handle;
 }
 
-/** Start the summary worker if not already running (used when dreaming
- *  is enabled but pipelineV2 is disabled — dreaming needs summaries). */
-export function ensureSummaryWorker(accessor: DbAccessor, options: SummaryWorkerOptions = {}): void {
-	if (!summaryWorkerHandle) {
-		summaryRecoveryStop?.();
-		summaryRecoveryStop = null;
-		summaryWorkerHandle = startSummaryWorker(accessor, options);
-	}
-}
-
-/** Recover stale summary leases without starting the polling worker. */
-export function ensureSummaryRecovery(
-	accessor: DbAccessor,
-	options: {
-		readonly workerOptions?: SummaryWorkerOptions;
-		readonly shouldStartWorker?: () => Promise<boolean>;
-	} = {},
-): void {
-	if (summaryWorkerHandle || summaryRecoveryStop) return;
-
-	const stopRecovery = startSummaryRecovery(accessor);
-	let stopped = false;
-	let monitorTimer: ReturnType<typeof setTimeout> | null = null;
-	const stop = (): void => {
-		stopped = true;
-		stopRecovery();
-		if (monitorTimer) clearTimeout(monitorTimer);
-	};
-	summaryRecoveryStop = stop;
-
-	const shouldStartWorker = options.shouldStartWorker;
-	if (!shouldStartWorker) return;
-	const monitor = async (): Promise<void> => {
-		if (stopped) return;
-		try {
-			const promoted = await promoteSummaryWorkerIfAvailable(
-				shouldStartWorker,
-				() => stopped,
-				() => ensureSummaryWorker(accessor, options.workerOptions),
-			);
-			if (promoted || stopped) return;
-		} catch (error) {
-			logger.warn("pipeline", "Summary workload monitor failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-		if (!stopped) monitorTimer = setTimeout(() => void monitor(), 5_000);
-	};
-	monitorTimer = setTimeout(() => void monitor(), 5_000);
-}
-
 // ---------------------------------------------------------------------------
 // Singleton state
 // ---------------------------------------------------------------------------
@@ -136,23 +77,7 @@ export function ensureSummaryRecovery(
 let retentionHandle: RetentionHandle | null = null;
 let maintenanceHandle: MaintenanceHandle | null = null;
 let documentWorkerHandle: DocumentWorkerHandle | null = null;
-let summaryWorkerHandle: SummaryWorkerHandle | null = null;
-let summaryRecoveryStop: (() => void) | null = null;
 
-/**
- * Promote recovery-only mode after an asynchronous availability check, unless
- * shutdown occurred while the check was in flight.
- */
-export async function promoteSummaryWorkerIfAvailable(
-	shouldStartWorker: () => Promise<boolean>,
-	isStopped: () => boolean,
-	promote: () => void,
-): Promise<boolean> {
-	const shouldStart = await shouldStartWorker();
-	if (isStopped() || !shouldStart) return false;
-	promote();
-	return true;
-}
 let synthesisWorkerHandle: SynthesisWorkerHandle | null = null;
 let hintsWorkerHandle: HintsWorkerHandle | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
@@ -188,7 +113,7 @@ export function getPipelineWorkerStatus(): PipelineWorkerStatus {
 			concurrency: llmConcurrency,
 			stats: llmConcurrency,
 		},
-		summary: { running: summaryWorkerHandle !== null },
+		summary: { running: false },
 		document: { running: documentWorkerHandle !== null },
 		retention: { running: retentionHandle !== null },
 		maintenance: { running: maintenanceHandle !== null },
@@ -290,14 +215,6 @@ export async function stopPipeline(): Promise<void> {
 			logger.warn("pipeline", "Synthesis worker drain timed out during shutdown");
 		}
 		synthesisWorkerHandle = null;
-	}
-	if (summaryWorkerHandle) {
-		await summaryWorkerHandle.stop();
-		summaryWorkerHandle = null;
-	}
-	if (summaryRecoveryStop) {
-		summaryRecoveryStop();
-		summaryRecoveryStop = null;
 	}
 	if (documentWorkerHandle) {
 		await documentWorkerHandle.stop();

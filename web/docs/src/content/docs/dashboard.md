@@ -141,7 +141,7 @@ when at least one session is active.
 Entries are color-coded by level (`debug`, `info`, `warn`, `error`)
 and labeled by category: `daemon`, `api`, `memory`, `sync`, `git`,
 `watcher`, `embedding`, `harness`, `system`, `hooks`, `pipeline`,
-`skills`, `secrets`, `auth`, `session-tracker`, `summary-worker`,
+`skills`, `secrets`, `auth`, and `session-tracker`,
 `document-worker`, `maintenance`, `retention`, `llm`. Click an
 entry to open a split detail panel with the full JSON payload,
 duration display, and a copy-to-clipboard button.

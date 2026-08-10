@@ -28,9 +28,10 @@ All domain functions are read-only. They accept a `ReadDb` handle or a
 
 ### queue
 
-Reflects the state of `memory_jobs` and `summary_jobs`, the live durable
-work queues for document/index maintenance and session summaries. Retired
-`extract` jobs are excluded from queue counts and readiness checks.
+Reflects the state of `memory_jobs`, the live durable work queue for
+document/index maintenance. Historical `summary_jobs` rows are retired and are
+excluded from queue counts and readiness checks; the API may expose an empty
+summary compatibility object for older clients.
 
 Signals measured:
 

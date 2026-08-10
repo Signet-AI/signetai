@@ -61,7 +61,9 @@ def _build_recall_request_body(
     aggregate: bool = False,
     aggregate_budget: str = "",
     save_aggregate: Optional[bool] = None,
+    min_score: Optional[float] = None,
     agent_id: str = "",
+    recall_surface: str = "",
 ) -> Dict[str, Any]:
     """Build canonical daemon JSON for the options exposed by Hermes."""
     body: Dict[str, Any] = {"query": query, "limit": _normalize_recall_limit(limit)}
@@ -86,6 +88,10 @@ def _build_recall_request_body(
         body["aggregateBudget"] = aggregate_budget
     if isinstance(save_aggregate, bool):
         body["saveAggregate"] = save_aggregate
+    if isinstance(min_score, (int, float)) and not isinstance(min_score, bool) and math.isfinite(min_score):
+        body["minScore"] = min_score
+    if recall_surface in ("explicit_api", "tool_call", "prompt_injection", "dashboard", "other"):
+        body["recallSurface"] = recall_surface
     return body
 
 
@@ -510,7 +516,9 @@ class SignetClient:
             aggregate=aggregate,
             aggregate_budget=aggregate_budget,
             save_aggregate=save_aggregate,
+            min_score=score_min,
             agent_id=self._agent_id if agent_scoped else "",
+            recall_surface="tool_call",
         )
 
         result = self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)

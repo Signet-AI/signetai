@@ -81,6 +81,10 @@ export const TELEMETRY_EVENTS = [
 	"cloud.sync",
 	"cloud.storage",
 	"recall.performed",
+	// Retrieval-outcome contract (#1277): attempt and delivery are separate
+	// boundaries so search execution cannot be mistaken for delivered context.
+	"recall.attempted",
+	"recall.outcome",
 	// Bounded source lifecycle summaries (issue #1276). The source identity
 	// used for local first-use correlation is never included in the event.
 	"source.lifecycle",

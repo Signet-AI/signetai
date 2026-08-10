@@ -119,7 +119,7 @@ interface DaemonInstance {
 		readonly score: number | null;
 		readonly status: string | null;
 	} | null;
-	/** Pipeline queue counts from `/api/status` (memory/summary). */
+	/** Pipeline queue counts from `/api/status` (memory plus legacy summary compatibility). */
 	readonly queue: {
 		readonly memory: QueueCountsFromStatus | null;
 		readonly summary: QueueCountsFromStatus | null;

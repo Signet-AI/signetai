@@ -145,7 +145,17 @@ export interface RecallRequestOptions {
 	readonly aggregate_budget?: AggregateRecallBudget;
 	readonly saveAggregate?: boolean;
 	readonly save_aggregate?: boolean;
+	/** Optional score threshold applied at the daemon response boundary. */
+	readonly minScore?: number;
+	/** Internal bounded attribution for first-party recall surfaces. */
+	readonly recallSurface?: RecallSurface;
 }
+
+/**
+ * Coarse recall origin used by anonymous retrieval-outcome telemetry.
+ * Keep this an enum: it must never carry a harness, agent, or client name.
+ */
+export type RecallSurface = "explicit_api" | "tool_call" | "prompt_injection" | "dashboard" | "other";
 
 export interface RememberRequestOptions {
 	readonly type?: string;
@@ -413,6 +423,8 @@ export function buildRecallRequestBody(query: string, options: RecallRequestOpti
 				: options.saveAggregate === true || options.save_aggregate === true
 					? true
 					: undefined,
+		minScore: typeof options.minScore === "number" && Number.isFinite(options.minScore) ? options.minScore : undefined,
+		recallSurface: options.recallSurface,
 	});
 }
 
