@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { vectorSearch } from "@signet/core";
+import { applyRecallScoreThreshold, vectorSearch } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
@@ -35,6 +35,12 @@ import { buildMemoryTimeline } from "../memory-timeline";
 import { recordPathFeedback } from "../path-feedback";
 import { enqueueDocumentIngestJob } from "../pipeline";
 import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
+import {
+	effectiveRecallLimit,
+	normalizeRecallSurface,
+	recordRecallAttempt,
+	recordRecallOutcome,
+} from "../recall-telemetry";
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { getActiveTelemetry } from "../telemetry";
@@ -1158,7 +1164,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const query = c.req.query("q") ?? "";
 		const distinct = c.req.query("distinct");
 		const limitParam = c.req.query("limit");
-		const limit = limitParam ? Number.parseInt(limitParam, 10) : null;
 
 		// Shortcut: return distinct values for a column
 		if (distinct === "who") {
@@ -1185,6 +1190,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		};
 
 		const hasFilters = Object.values(filterParams).some((v) => v !== "" && v !== false && v !== null);
+		if (!query.trim() && !hasFilters) return c.json({ results: [] });
+		const limit = effectiveRecallLimit(limitParam ? Number.parseInt(limitParam, 10) : query.trim() ? 20 : 50);
+		const recallSurface = normalizeRecallSurface(c.req.header("x-signet-recall-surface"), "dashboard");
+		recordRecallAttempt(recallSurface);
 
 		try {
 			const results = getDbAccessor().withReadDb((db) => {
@@ -1242,8 +1251,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				return rows;
 			});
 
+			recordRecallOutcome({
+				surface: recallSurface,
+				resultCount: results.length,
+				truncated: results.length >= limit,
+				delivery: "returned",
+			});
 			return c.json({ results });
 		} catch (e) {
+			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 			logger.error("memory", "Error searching memories", e as Error);
 			return c.json({ results: [], error: "Search failed" }, 500);
 		}
@@ -3156,6 +3172,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const aggregateSaveRequested =
 			body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
+		const recallLimit = effectiveRecallLimit(body.limit);
 		if (aggregateSaveRequested) {
 			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 			if (denied) return denied;
@@ -3174,10 +3191,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			}
 			authRecallLlmLimiter.record(actor);
 		}
+		let recallAttempted = false;
 		try {
 			const sessionKeyRaw = body.sessionKey ?? c.req.header("x-signet-session-key");
 			const sessionKey = sessionKeyRaw ?? null;
 			const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: sessionKeyRaw });
+			const recallSurface = normalizeRecallSurface(body.recallSurface, "explicit_api");
 
 			// When aggregate save is requested, enforce scope for non-admin tokens.
 			if (aggregateSaveRequested) {
@@ -3198,11 +3217,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				}
 			}
 
+			recordRecallAttempt(recallSurface);
+			recallAttempted = true;
 			const agentScope = getAgentScope(agentId);
 			const scopeProject = c.get("auth")?.claims?.scope?.project;
 			const params = {
 				...body,
 				query,
+				limit: recallLimit,
 				aggregate: body.aggregate,
 				aggregateBudget: aggregateBudget ?? undefined,
 				aggregate_budget: aggregateBudget ?? undefined,
@@ -3213,6 +3235,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				policyGroup: agentScope.policyGroup ?? undefined,
 				sessionKey: sessionKeyRaw,
 				includeRecalled: body.includeRecalled === true,
+				telemetrySurface: recallSurface,
 				recallSurface: "api.memory.recall",
 				recallMode: "direct",
 				...(scopeProject ? { project: scopeProject } : {}),
@@ -3228,18 +3251,31 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							cfg,
 							recallAttributedEmbedFn(fetchEmbeddingFn, agentId, recordRouteOperationFailure(c)),
 						);
+			const requestedMinScore = (body as { readonly minScore?: unknown }).minScore;
+			const returnedResult = applyRecallScoreThreshold(
+				result,
+				typeof requestedMinScore === "number" ? requestedMinScore : undefined,
+			) as typeof result;
 			recordRecallQaTelemetry({
 				route: "POST /api/memory/recall",
 				agentId,
 				sessionKey,
 				project: resolveMemorySearchTelemetryProject(params),
 				params,
-				result,
+				result: returnedResult,
 				cfg,
 			});
+			recordRecallOutcome({
+				surface: recallSurface,
+				resultCount: returnedResult.results.length,
+				truncated: returnedResult.results.length >= recallLimit,
+				delivery: "returned",
+			});
 			recordFirstUseTelemetry("recall");
-			return c.json(result);
+			return c.json(returnedResult);
 		} catch (e) {
+			const recallSurface = normalizeRecallSurface(body.recallSurface, "explicit_api");
+			if (recallAttempted) recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 			logger.error("memory", "Recall failed", e as Error);
 			return c.json({ error: "Recall failed", results: [] }, 500);
 		}
@@ -3252,7 +3288,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const q = (c.req.query("q") ?? "").trim();
 		if (!q) return c.json({ error: "query is required" }, 400);
 
-		const limit = Number.parseInt(c.req.query("limit") ?? "10", 10);
+		const limit = effectiveRecallLimit(Number.parseInt(c.req.query("limit") ?? "10", 10));
 		const type = c.req.query("type");
 		const tags = c.req.query("tags");
 		const who = c.req.query("who");
@@ -3266,6 +3302,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const cfg = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
+		const recallSurface = "explicit_api" as const;
 		try {
 			const sessionKeyRaw =
 				c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key");
@@ -3274,6 +3311,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
 				sessionKey: sessionKeyRaw,
 			});
+			recordRecallAttempt(recallSurface);
 			const agentScope = getAgentScope(agentId);
 			const params = {
 				query: q,
@@ -3292,6 +3330,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				policyGroup: agentScope.policyGroup ?? undefined,
 				sessionKey: sessionKeyRaw,
 				includeRecalled: includeRecalled === "1" || includeRecalled === "true",
+				telemetrySurface: recallSurface,
 				recallSurface: "api.memory.search",
 				recallMode: "direct",
 				...(scopeProject ? { project: scopeProject } : {}),
@@ -3310,8 +3349,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				result,
 				cfg,
 			});
+			recordRecallOutcome({
+				surface: recallSurface,
+				resultCount: result.results.length,
+				truncated: result.results.length >= limit,
+				delivery: "returned",
+			});
 			return c.json(result);
 		} catch (e) {
+			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 			logger.error("memory", "Search (recall alias) failed", e as Error);
 			return c.json({ error: "Recall failed", results: [] }, 500);
 		}
