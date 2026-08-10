@@ -34,6 +34,14 @@ export function defaultTelemetryLogPath(agentsDir: string): string {
 	return join(agentsDir, ".daemon", "telemetry", "events.jsonl");
 }
 
+/** Parse both ISO timestamps and SQLite's UTC `CURRENT_TIMESTAMP` format. */
+export function parseTelemetryTimestamp(timestamp: string): number {
+	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(timestamp)
+		? `${timestamp.replace(" ", "T")}Z`
+		: timestamp;
+	return Date.parse(normalized);
+}
+
 function appendToTelemetryLog(logPath: string | null, line: string): void {
 	if (!logPath) return;
 	try {
@@ -679,7 +687,7 @@ export function createTelemetryCollector(
 	consecutiveFailures = initialDeliveryState.consecutiveFailures;
 	effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
 	const lastAttemptMs = initialDeliveryState.lastAttemptAt
-		? Date.parse(initialDeliveryState.lastAttemptAt)
+		? parseTelemetryTimestamp(initialDeliveryState.lastAttemptAt)
 		: Number.NaN;
 	if (Number.isFinite(lastAttemptMs)) nextAllowedFlushAt = lastAttemptMs + effectiveIntervalMs;
 
@@ -966,7 +974,7 @@ export function createTelemetryCollector(
 
 	function ageSec(timestamp: string | null): number | null {
 		if (!timestamp) return null;
-		const parsed = new Date(timestamp).getTime();
+		const parsed = parseTelemetryTimestamp(timestamp);
 		return Number.isFinite(parsed) ? Math.max(0, (Date.now() - parsed) / 1000) : null;
 	}
 
@@ -1006,7 +1014,7 @@ export function createTelemetryCollector(
 		) {
 			lastDaemonEventTimestamp = bufferedLatest;
 		}
-		const windowExpired = Date.now() - new Date(state.windowStartedAt).getTime() >= DELIVERY_HEALTH_WINDOW_MS;
+		const windowExpired = Date.now() - parseTelemetryTimestamp(state.windowStartedAt) >= DELIVERY_HEALTH_WINDOW_MS;
 		const recentSuccesses = windowExpired ? 0 : state.successCount;
 		const recentFailures = windowExpired ? 0 : state.failureCount;
 		const oldestAge = ageSec(oldestUnsentTimestamp);

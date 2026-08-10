@@ -21,6 +21,7 @@ import {
 	createTelemetryCollector,
 	defaultTelemetryLogPath,
 	nextFlushIntervalMs,
+	parseTelemetryTimestamp,
 	sanitizeCrashError,
 	telemetryDeployment,
 	telemetryDeploymentRole,
@@ -77,7 +78,7 @@ function resetWorkspace(): void {
 	rmSync(join(dir, "memory"), { recursive: true, force: true });
 	rmSync(join(dir, ".daemon"), { recursive: true, force: true });
 	mkdirSync(join(dir, "memory"), { recursive: true });
-	initDbAccessor(join(dir, "memory", "memories.db"));
+	initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 }
 
 function makeCollector(configSnapshot?: TelemetryConfigSnapshot): TelemetryCollector {
@@ -153,7 +154,7 @@ describe("telemetry collector", () => {
 		const dirB = createTestTempDir("signet-telemetry-b-");
 		try {
 			closeDbAccessor();
-			initDbAccessor(join(dirB, "memory", "memories.db"));
+			initDbAccessor(join(dirB, "memory", "memories.db"), { agentsDir: dirB });
 			const collectorB = makeCollector();
 			collectorB.record("daemon.heartbeat", { uptimeMs: 1 });
 			await collectorB.flush();
@@ -258,7 +259,7 @@ describe("telemetry collector", () => {
 		const dir = createTestTempDir("signet-anon-");
 		try {
 			closeDbAccessor();
-			initDbAccessor(join(dir, "memory", "memories.db"));
+			initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 			const collector = createTelemetryCollector(
 				getDbAccessor(),
 				{
@@ -289,7 +290,7 @@ describe("telemetry collector", () => {
 		const dirB = createTestTempDir("signet-anon-b-");
 		try {
 			closeDbAccessor();
-			initDbAccessor(join(dirA, "memory", "memories.db"));
+			initDbAccessor(join(dirA, "memory", "memories.db"), { agentsDir: dirA });
 			const ca = createTelemetryCollector(
 				getDbAccessor(),
 				{
@@ -304,7 +305,7 @@ describe("telemetry collector", () => {
 			);
 			const ha = ca.anonymizeAgentId("default");
 			closeDbAccessor();
-			initDbAccessor(join(dirB, "memory", "memories.db"));
+			initDbAccessor(join(dirB, "memory", "memories.db"), { agentsDir: dirB });
 			const cb = createTelemetryCollector(
 				getDbAccessor(),
 				{
@@ -404,7 +405,7 @@ describe("telemetry collector", () => {
 		// activation event) disappears, but the atomically persisted
 		// first-use rows survive and are recoverable by the next daemon.
 		closeDbAccessor();
-		initDbAccessor(join(dir, "memory", "memories.db"));
+		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 		const restarted = makeCollector();
 		restarted.recordFirstUse("remember");
 		restarted.recordFirstUse("recall");
@@ -655,6 +656,10 @@ describe("telemetry collector", () => {
 		expect(nextFlushIntervalMs(60000, 9)).toBe(300000);
 	});
 
+	it("parses SQLite CURRENT_TIMESTAMP as UTC regardless of host timezone", () => {
+		expect(parseTelemetryTimestamp("2026-08-10 12:34:56")).toBe(Date.parse("2026-08-10T12:34:56.000Z"));
+	});
+
 	it("persists delivery health and retries failed events with stable insert ids", async () => {
 		fetchStatus = 503;
 		const collector = makeCollector();
@@ -703,6 +708,34 @@ describe("telemetry collector", () => {
 		expect(health?.properties).not.toHaveProperty("posthogHost");
 		expect(health?.properties).not.toHaveProperty("installId");
 		expect(readFileSync(logPath, "utf-8")).toContain('"event":"telemetry.health"');
+	});
+
+	it("drains events recorded during an in-flight flush before stopping", async () => {
+		let releaseFetch: (() => void) | undefined;
+		const fetchBlocked = new Promise<void>((resolve) => {
+			releaseFetch = resolve;
+		});
+		globalThis.fetch = (async () => {
+			await fetchBlocked;
+			return new Response("1", { status: 200 });
+		}) as unknown as typeof fetch;
+
+		const collector = makeCollector();
+		collector.record("daemon.heartbeat", { uptimeMs: 1 });
+		const firstFlush = collector.flush();
+		collector.record("daemon.heartbeat", { uptimeMs: 2 });
+		releaseFetch?.();
+		await firstFlush;
+		await collector.stop();
+
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS count FROM telemetry_events WHERE event = 'daemon.heartbeat'").get() as {
+						readonly count: number;
+					},
+			).count,
+		).toBe(2);
 	});
 
 	it("retains old unsent events during retention pruning", async () => {
@@ -911,8 +944,10 @@ describe("session economics (issue #1201)", () => {
 		await collector.flush();
 
 		const ends = collector.query({ event: "session.end" });
-		expect(ends[0]?.properties.tokensInput).toBe(100);
-		expect(ends[1]?.properties.tokensInput).toBe(300);
-		expect(ends[1]?.properties.cost).toBe(1.5);
+		const first = ends.find((event) => event.properties.tokensInput === 100);
+		const resumed = ends.find((event) => event.properties.tokensInput === 300);
+		expect(first?.properties.tokensInput).toBe(100);
+		expect(resumed?.properties.tokensInput).toBe(300);
+		expect(resumed?.properties.cost).toBe(1.5);
 	});
 });
