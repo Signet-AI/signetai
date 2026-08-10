@@ -5,6 +5,13 @@ audited semantic memory. It reads selected artifacts, transcripts, summaries,
 compactions, and checkpoints; it does not rewrite them. The worker emits
 provenance-backed ontology operations through the shared daemon-owned writer.
 
+Each automatic pass gives every eligible agent scope one sequential bounded
+turn. Attention priority chooses turn order, while evidence and model-output
+budgets are divided across scopes so a large backlog cannot starve a smaller
+scope. A failed scope turn leaves that scope's cursor pending and does not
+block healthy scopes in the same persisted pass. Automatic sweeps honor that
+scope's failure backoff; explicit operator triggers can retry it immediately.
+
 ## Worker Path
 
 Inspect the current graph write gates and worker state:

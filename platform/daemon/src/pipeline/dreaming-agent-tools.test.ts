@@ -114,6 +114,35 @@ describe("dreaming-agent-tools", () => {
 		expect(items.some((i) => i.id === "e-other")).toBe(false);
 	});
 
+	it("rejects a cross-scope call from a bounded Dreaming turn", async () => {
+		const tools = createDreamingAgentTools({
+			accessor: getDbAccessor(),
+			agentId: "owner",
+			actor: "owner",
+			scopeId: "owner",
+		});
+		const result = readResult(
+			await findTool(tools, "search_entities").execute(
+				"call",
+				{ agentId: "intruder", query: "anything" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(result).toMatchObject({ ok: false, error: "Dreaming scope turn is bound to agent 'owner'" });
+		const writeResult = readResult(
+			await findTool(tools, "apply_ontology_ops").execute(
+				"call",
+				{ agentId: "intruder", operations: [] },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(writeResult).toMatchObject({ ok: false, error: "Dreaming scope turn is bound to agent 'owner'" });
+	});
+
 	it("get_entity surfaces pinned status and hydrates aspects on demand", async () => {
 		insertEntity("e-atlas", "Atlas", "atlas", "owner");
 		insertActiveAttribute("e-atlas", "a-config", "Feature is enabled by default.", "owner");

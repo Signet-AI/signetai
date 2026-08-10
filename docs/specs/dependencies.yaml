@@ -1316,6 +1316,26 @@ specs:
       - "Dreaming passes run as full sessions with transcript capture and self-improvement loop (Phase 2)"
       - "Pipeline V2 extraction is gated off when dreaming is enabled (Phase 2)"
     decision: null
+  - id: dreaming-scope-fairness
+    status: approved
+    path: docs/specs/approved/dreaming-scope-fairness.md
+    hard_depends_on:
+      - dreaming-memory-consolidation
+      - multi-agent-support
+    soft_depends_on:
+      - ontology-proposal-loop
+    blocks: []
+    informed_by:
+      - docs/specs/approved/dreaming-memory-consolidation.md
+      - docs/specs/approved/multi-agent-support.md
+    success_criteria:
+      - "Every eligible agent scope receives one sequential Dreaming turn in a pass, regardless of another scope's backlog size"
+      - "Evidence and output budgets are divided deterministically across eligible scopes"
+      - "Higher-priority pending attention is handled first without removing another eligible scope's turn"
+      - "Scope-bound Dreaming tools reject cross-scope reads and writes"
+      - "A failed scope turn does not prevent remaining scopes from making progress"
+      - "One dreaming_passes row, one audited operation seam, and one evidence cursor remain authoritative"
+    decision: null
   - id: native-harness-memory-bridge
     status: approved
     path: docs/specs/approved/native-harness-memory-bridge.md

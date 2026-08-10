@@ -20,7 +20,7 @@ import {
 	enqueueDreamingHygieneAttention,
 	getDreamingEpisodicTokenBacklog,
 	isDreamingHaltActive,
-	recordDreamingFailure,
+	isDreamingScopeRetryBlockedForAgent,
 	runDreamingAgentPass,
 	selectDreamingPassMode,
 	shouldTriggerDreaming,
@@ -192,9 +192,10 @@ export function startDreamingWorker(
 		const router = getOrCreateInferenceRouter(agentsDir);
 		return {
 			async run(input) {
+				const scopeId = input.agentId ?? agentId;
 				const result = await router.runAgent(
 					{
-						agentId,
+						agentId: scopeId,
 						operation: "memory_extraction",
 						promptPreview: input.prompt.slice(0, 8000),
 					},
@@ -206,10 +207,10 @@ export function startDreamingWorker(
 						...(options.acpxMcp
 							? {
 									acpxMcp: {
-										agentId,
+										agentId: scopeId,
 										passId: input.passId,
 										daemonUrl: options.acpxMcp.daemonUrl,
-										authorizationToken: options.acpxMcp.authorizationTokenForAgent?.(agentId),
+										authorizationToken: options.acpxMcp.authorizationTokenForAgent?.(scopeId),
 									},
 								}
 							: {}),
@@ -279,9 +280,6 @@ export function startDreamingWorker(
 		activePassPromise = p;
 		try {
 			return await p;
-		} catch (e) {
-			recordDreamingFailure(accessor, runAgentId);
-			throw e;
 		} finally {
 			active = false;
 			activeAgent = null;
@@ -297,9 +295,9 @@ export function startDreamingWorker(
 			return;
 		}
 
-		// One Dreaming universe: a single pass covers every agent scope. The
-		// sweep runs one pass when any scope has attention or a backlog; the
-		// pass itself addresses scopes via the per-call agentId on its tools.
+		// One Dreaming universe: a single pass covers every eligible agent scope.
+		// The sweep runs one pass when any scope has attention or a backlog; the
+		// pass itself gives each eligible scope one sequential bounded turn.
 		const scopes = getAgentScopes();
 		let triggered = false;
 		for (const scopeId of scopes) {
@@ -327,24 +325,25 @@ export function startDreamingWorker(
 			}
 		}
 		if (!triggered) return;
+		const passScopes = scopes.filter((scope) => !isDreamingScopeRetryBlockedForAgent(accessor, scope));
+		if (passScopes.length === 0) return;
 		// #1098: with the hygiene queue perpetually full, every pass used to
 		// drain flags first and run out of budget before content work. Give
 		// content a guaranteed turn: alternate the runbook per check cycle
 		// when both kinds of work are pending; run the only-pending kind
 		// directly otherwise.
-		const mode = selectDreamingCheckMode(accessor, scopes, nextScheduledFocus);
+		const mode = selectDreamingCheckMode(accessor, passScopes, nextScheduledFocus);
 		nextScheduledFocus = dreamingFocusOfMode(mode) ?? nextScheduledFocus;
 		try {
-			await runPass(defaultAgentId, mode, undefined, scopes);
+			await runPass(defaultAgentId, mode, undefined, passScopes);
 		} catch (e) {
-			// runPass already recorded the failure (recordDreamingFailure)
+			// runDreamingAgentPass already recorded the per-scope failure
 			// and failDreamingPass marked the pass row failed. A pass error
 			// (provider 429, timeout, any executor rejection) must never
 			// escape the check loop: as an unhandled rejection it hits the
 			// daemon's unhandledRejection exit path and kills the whole
-			// process (#1198). Log and keep the loop running; the per-scope
-			// failure backoff (keyed on the run agent's state) paces the
-			// retries.
+			// process (#1198). Log and keep the loop running; per-scope
+			// failure backoff paces each scope's retries.
 			logger.error(
 				"dreaming-worker",
 				"Scheduled dreaming pass failed; check loop continues",
@@ -443,7 +442,6 @@ export function startDreamingWorker(
 			);
 			activePassPromise = p;
 			p.catch((e) => {
-				recordDreamingFailure(accessor, runAgentId);
 				logger.error("dreaming-worker", "Async trigger failed", undefined, {
 					agentId: runAgentId,
 					passId,

@@ -35,6 +35,7 @@ import {
 } from "./dreaming-operations";
 import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
+import { countTokens } from "./tokenizer";
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
@@ -47,6 +48,32 @@ const MAX_ENTITY_TEXT_CHARS = 2_000;
 function boundedText(value: string | undefined, maxChars: number): string | undefined {
 	if (value === undefined || value.length <= maxChars) return value;
 	return value.slice(0, maxChars);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function scopeMismatch(input: unknown, scopeId: string): string | null {
+	if (!isRecord(input)) return null;
+	const requested = input.agentId;
+	return typeof requested === "string" && requested !== scopeId
+		? `Dreaming scope turn is bound to agent '${scopeId}'`
+		: null;
+}
+
+function budgetEvidenceItems(
+	items: readonly Record<string, unknown>[],
+	budget: DreamingScopeBudget,
+): { readonly items: readonly Record<string, unknown>[]; readonly truncated: boolean } {
+	const selected: Record<string, unknown>[] = [];
+	for (const item of items) {
+		if (!budget.reserveEvidence(countTokens(JSON.stringify(item)))) {
+			return { items: selected, truncated: true };
+		}
+		selected.push(item);
+	}
+	return { items: selected, truncated: false };
 }
 
 /**
@@ -203,6 +230,15 @@ export interface DreamingToolCallTrace {
 	readonly latencyMs: number;
 }
 
+/** Mutable per-turn budget owned by the Dreaming pass orchestrator. */
+export interface DreamingScopeBudget {
+	readonly scopeId: string;
+	readonly maxEvidenceTokens: number;
+	readonly evidenceTokensUsed: number;
+	readonly evidenceTokensRemaining: number;
+	reserveEvidence(tokens: number): boolean;
+}
+
 export interface DreamingCapability {
 	readonly id: DreamingCapabilityId;
 	readonly title: string;
@@ -218,6 +254,12 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly actor: string;
 	/** Present only for a live Dreaming pass; protects runbook writes. */
 	readonly passId?: string;
+	/** Pass owner used for the shared runbook when tools are scope-bound. */
+	readonly runbookAgentId?: string;
+	/** When set, every scope-bearing tool call is restricted to this scope. */
+	readonly scopeId?: string;
+	/** Optional evidence budget for one scope turn. */
+	readonly scopeBudget?: DreamingScopeBudget;
 	/** Write-path caps forwarded to applyDreamingOperations. */
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
@@ -275,7 +317,8 @@ function capability<T extends z.ZodType>(
 /** The one scope-bound handler registry used by Pi, daemon HTTP, MCP, and CLI. */
 export function createDreamingCapabilities(params: CreateDreamingCapabilitiesParams): readonly DreamingCapability[] {
 	const { accessor, agentId, actor } = params;
-	return [
+	const runbookAgentId = params.runbookAgentId ?? agentId;
+	const capabilities: DreamingCapability[] = [
 		capability(
 			"search_entities",
 			"Search entities",
@@ -476,9 +519,17 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 							Math.max(0, Math.floor(offset ?? 0)),
 							Math.min(Math.max(Math.floor(chunkSize ?? MAX_EVIDENCE_EXCERPT_CHARS), 1), MAX_EVIDENCE_EXCERPT_CHARS),
 						);
-						return fragment === null
-							? { ok: false, error: "Evidence fragment offset is outside the source" }
-							: { ok: true, items: [fragment] };
+						if (fragment === null) return { ok: false, error: "Evidence fragment offset is outside the source" };
+						if (
+							params.scopeBudget !== undefined &&
+							!params.scopeBudget.reserveEvidence(countTokens(JSON.stringify(fragment)))
+						) {
+							return {
+								ok: false,
+								error: "This scope's evidence budget is exhausted; continue with the next scope",
+							};
+						}
+						return { ok: true, items: [fragment] };
 					}
 					// The scan-first listing omits `since`; anchor it to the
 					// scope's evidence watermark instead of pass-start so the
@@ -494,7 +545,14 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						kind,
 						limit,
 					});
-					return { ok: true, items: projectEvidence(sources, query ?? "") };
+					const projected = projectEvidence(sources, query ?? "");
+					if (params.scopeBudget === undefined) return { ok: true, items: projected };
+					const budgeted = budgetEvidenceItems(projected, params.scopeBudget);
+					return {
+						ok: true,
+						items: budgeted.items,
+						...(budgeted.truncated ? { truncatedByScopeBudget: true } : {}),
+					};
 				}),
 		),
 		capability(
@@ -540,7 +598,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			"Read recent scoped pass outcomes, evidence windows, quarantines, and structured runbook notes.",
 			true,
 			z.object({ limit: z.number().finite().optional() }),
-			async ({ limit }) => ({ ok: true, items: readDreamingRunbook(accessor, agentId, bounded(limit, 5, 20)) }),
+			async ({ limit }) => ({ ok: true, items: readDreamingRunbook(accessor, runbookAgentId, bounded(limit, 5, 20)) }),
 		),
 		capability(
 			"runbook_write",
@@ -554,7 +612,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 			async (entry) => {
 				if (!params.passId) return { ok: false, error: "Runbook writes require a live Dreaming pass" };
-				if (!writeDreamingRunbook(accessor, { agentId, passId: params.passId, entry })) {
+				if (!writeDreamingRunbook(accessor, { agentId: runbookAgentId, passId: params.passId, entry })) {
 					return { ok: false, error: "Dreaming pass is not running in this agent scope" };
 				}
 				return { ok: true, passId: params.passId };
@@ -563,7 +621,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"attention_list",
 			"List attention",
-			"List attention records by kind and resolution status. Use kind hygiene for the queue, or review_due for expired and approaching temporal claims. Omit agentId to see the whole install; pass agentId to narrow to one scope.",
+			"List attention records by kind and resolution status. Use kind hygiene for the queue, or review_due for expired and approaching temporal claims. In a scope-bound Dreaming turn, omitting agentId means the active scope; in an unbound registry, omission lists the whole install. Pass agentId to narrow to one scope.",
 			true,
 			z.object({
 				agentId: z.string().optional(),
@@ -571,7 +629,8 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				status: z.enum(["pending", "resolved"]).optional(),
 				limit: z.number().finite().optional(),
 			}),
-			async ({ agentId: scopeId, kind, status, limit }) => {
+			async ({ agentId: requestedAgentId, kind, status, limit }) => {
+				const scopeId = requestedAgentId ?? params.scopeId;
 				if (kind === "review_due") {
 					if (status === "resolved") return { ok: true, items: [] };
 					const due = accessor.withReadDb((db) =>
@@ -648,6 +707,14 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 	];
+	if (params.scopeId === undefined) return capabilities;
+	return capabilities.map((candidate) => ({
+		...candidate,
+		async invoke(input: unknown): Promise<DreamingCapabilityResult> {
+			const error = scopeMismatch(input, params.scopeId ?? "");
+			return error === null ? candidate.invoke(input) : { tool: candidate.id, ok: false, error };
+		},
+	}));
 }
 
 export function getDreamingCapability(

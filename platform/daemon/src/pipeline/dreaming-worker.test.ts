@@ -206,23 +206,36 @@ describe("dreaming worker agent scope", () => {
 			checkIntervalMs: 20,
 		});
 		try {
-			// Failures accumulate on the run agent ("default") while the
-			// per-scope backoff reads each scope's own state, so "alpha"'s
-			// fresh backlog re-triggers on the next tick. Two recorded
-			// failures prove the loop survived the first one and kept
-			// checking instead of dying with it.
+			// Failures accumulate on the scope that failed, so "alpha" is paced
+			// by its own retry state instead of immediately consuming every sweep.
+			// Once the first pass is recorded, add work to the already-discovered
+			// default scope to prove the timer re-armed and the next pass can run.
 			await waitFor(() => {
 				const state = db
-					.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'default'")
+					.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'alpha'")
 					.get() as { n: number } | null;
-				return state != null && state.n >= 2;
+				return state != null && state.n >= 1;
+			}, 2_000);
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+				 VALUES ('sweep-failure-default', 'default', 'A second scope pass must remain scheduled.', 'pi',
+				         datetime('now'), datetime('now'), datetime('now'))`,
+			).run();
+			await waitFor(() => {
+				const row = db.prepare("SELECT COUNT(*) AS n FROM dreaming_passes").get() as { n: number };
+				return row.n >= 2;
 			}, 2_000);
 			expect(unhandled).toEqual([]);
 
-			const state = db
+			const alphaState = db
+				.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'alpha'")
+				.get() as { n: number };
+			expect(alphaState.n).toBe(1);
+			const defaultState = db
 				.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'default'")
 				.get() as { n: number };
-			expect(state.n).toBeGreaterThanOrEqual(2);
+			expect(defaultState.n).toBe(1);
 
 			const passes = db.prepare("SELECT status, error FROM dreaming_passes ORDER BY created_at").all() as Array<{
 				status: string;
@@ -283,9 +296,9 @@ describe("dreaming worker agent scope", () => {
 
 	it("runs one universe pass over every agent scope and keeps semantic rows agent-isolated (#946)", async () => {
 		// Behavioral regression: one Dreaming pass covers the whole install.
-		// The pass addresses each agent scope via the per-call agentId on its
-		// tools; every write is attributed to the agent named on the call, and
-		// no cross-agent evidence leaks into another scope's derived graph.
+		// The pass addresses each agent scope through its own bounded turn; every
+		// write is attributed to the agent named on the turn, and no cross-agent
+		// evidence leaks into another scope's derived graph.
 		const ALPHA = "alpha";
 		const BETA = "beta";
 		const alphaEvidence = "Alpha is building the Apex platform.";
@@ -303,57 +316,43 @@ describe("dreaming worker agent scope", () => {
 			 VALUES ('summary-beta', ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
 		).run(BETA, betaEvidence);
 
-		// Deterministic provider: one universe pass consolidates BOTH scopes
-		// in a single invocation, each apply batch carrying the agentId whose
+		// Deterministic provider: one universe pass consolidates BOTH scopes in
+		// sequential invocations, each apply batch carrying the agentId whose
 		// graph it maintains and citing that scope's own evidence.
 		const seenPrompts: string[] = [];
 		const executorFactory = (agentId: string) => ({
 			async run(input: {
+				agentId?: string;
 				prompt: string;
 				tools: ReadonlyArray<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }>;
 			}) {
 				seenPrompts.push(input.prompt);
 				const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
 				if (!apply) throw new Error("Missing apply_ontology_ops");
+				const scope = input.agentId ?? agentId;
+				const isAlpha = scope === ALPHA;
+				const sourceId = isAlpha ? "summary-alpha" : "summary-beta";
+				const evidence = isAlpha ? alphaEvidence : betaEvidence;
 				await apply.execute("call", {
-					agentId: ALPHA,
+					agentId: scope,
 					operations: [
 						{
 							operation: "create_entity",
-							payload: { name: "Apex", type: "project" },
+							payload: { name: isAlpha ? "Apex" : "Zenith", type: "project" },
 							reason: "The evidence identifies the project.",
 							confidence: 0.9,
 							evidence: [
 								{
-									source_ref: "transcript:summary-alpha",
+									source_ref: `transcript:${sourceId}`,
 									source_kind: "transcript",
-									source_id: "summary-alpha",
-									quote: alphaEvidence,
+									source_id: sourceId,
+									quote: evidence,
 								},
 							],
 						},
 					],
 				});
-				await apply.execute("call", {
-					agentId: BETA,
-					operations: [
-						{
-							operation: "create_entity",
-							payload: { name: "Zenith", type: "project" },
-							reason: "The evidence identifies the project.",
-							confidence: 0.9,
-							evidence: [
-								{
-									source_ref: "transcript:summary-beta",
-									source_kind: "transcript",
-									source_id: "summary-beta",
-									quote: betaEvidence,
-								},
-							],
-						},
-					],
-				});
-				return { summary: "Consolidated both scopes" };
+				return { summary: `Consolidated ${scope}` };
 			},
 		});
 
@@ -365,7 +364,8 @@ describe("dreaming worker agent scope", () => {
 			{ executorFactory },
 		);
 		try {
-			// One trigger = one pass covering every discovered scope.
+			// One trigger = one persisted pass with one bounded sequential turn per
+			// discovered scope.
 			await worker.trigger("incremental", "default");
 
 			// A single pass row on the primary agent.
@@ -374,12 +374,17 @@ describe("dreaming worker agent scope", () => {
 				.all() as Array<{ agent_id: string; status: string; mode: string }>;
 			expect(passes).toEqual([{ agent_id: "default", status: "completed", mode: "incremental" }]);
 
-			// One invocation, and the prompt names every scope in the install.
-			expect(seenPrompts).toHaveLength(1);
-			expect(seenPrompts[0]).toContain(DREAMING_AGENT_PROMPT);
-			expect(seenPrompts[0]).toContain("<agent_scopes>");
-			expect(seenPrompts[0]).toContain(ALPHA);
-			expect(seenPrompts[0]).toContain(BETA);
+			// One persisted pass, and one bounded invocation per scope. Every
+			// turn still receives the install scope list for auditability, while
+			// its tool registry rejects cross-scope reads and writes.
+			expect(seenPrompts).toHaveLength(2);
+			expect(seenPrompts.every((prompt) => prompt.includes(DREAMING_AGENT_PROMPT))).toBe(true);
+			expect(seenPrompts.every((prompt) => prompt.includes("<agent_scopes>"))).toBe(true);
+			expect(seenPrompts.every((prompt) => prompt.includes(ALPHA) && prompt.includes(BETA))).toBe(true);
+			const traceScopes = (
+				db.prepare("SELECT agent_id FROM dreaming_tool_calls ORDER BY sequence").all() as Array<{ agent_id: string }>
+			).map((row) => row.agent_id);
+			expect(traceScopes).toEqual([ALPHA, BETA]);
 
 			// Semantic rows are agent-isolated: each agent only owns its entity.
 			const alphaEntities = (

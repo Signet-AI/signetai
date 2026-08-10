@@ -40,6 +40,7 @@ flowchart TD
   PAF[Predictor Agent Feedback]
   SACC[Sub-Agent Context Continuity]
   DMC[Dreaming Memory Consolidation]
+  DSF[Dreaming Scope Fair Progress]
 
   subgraph W9[Wave 9 Strategic Stubs]
     DHO[Distributed Harness Orchestration]
@@ -98,6 +99,8 @@ flowchart TD
   MP --> DMC
   KA --> DMC
   SCP -.-> DMC
+  DMC --> DSF
+  MA --> DSF
 
   MA --> DHO
   SR --> DHO
@@ -150,6 +153,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `marketplace-official-skills` | RESEARCH-MARKETPLACE-OFFICIAL-SKILLS | How should the dashboard marketplace spotlight Signet official skills without hiding the broader community catalog? |
 | `markdown-embedding-normalization-hardening` | RESEARCH-MARKDOWN-EMBEDDING-NORMALIZATION | How should Signet preserve structured markdown for embeddings while preventing repeated poison-pill retries from malformed or provider-sensitive payloads? |
 | `dreaming-memory-consolidation` | LCM-PATTERNS, memory-pipeline-plan, knowledge-architecture-schema | How should Signet consolidate accumulated session knowledge into a cleaner entity graph during idle periods? |
+| `dreaming-scope-fairness` | dreaming-memory-consolidation, multi-agent-support | How should one-universe Dreaming guarantee bounded progress for independent agent scopes without adding a parallel semantic writer? |
 | `native-harness-memory-bridge` | RESEARCH-NATIVE-HARNESS-MEMORY-BRIDGE | How should Signet make harness-native memories portable without duplicating each harness's memory pipeline? |
 | `model-provider-router` | RESEARCH-INFERENCE-CONTROL-PLANE, RESEARCH-COMPETITIVE-SYSTEMS | How should Signet centralize inference across harnesses, daemon workloads, and heterogeneous provider backends under one policy surface? |
 
@@ -486,6 +490,17 @@ cannot suppress them. This is a hard retrieval invariant.
 - The executor is selected through the daemon inference router and only reasons
   over daemon-owned tool capabilities; it does not receive direct SQLite access.
 
+### Dreaming Scope Fair Progress <-> Multi-Agent Dreaming
+
+- One persisted `dreaming_passes` row contains sequential, scope-bound turns;
+  fairness does not create a second semantic pipeline or a parallel writer.
+- Every eligible scope receives a deterministic share of the pass budget.
+  Attention priority controls turn order, not eligibility.
+- Evidence watermarks, attention provenance, operation audit rows, and derived
+  graph writes remain owned by the scope named on the turn.
+- A failed scope turn leaves only that scope's backlog pending and does not
+  prevent healthy scopes from completing their turns.
+
 ### Multi-Agent <-> All Specs
 
 - `agent_id` column appears on every data table (see invariant 1).
@@ -789,6 +804,7 @@ Legend:
 | `docker-self-hosting-stack` | planning | `docs/specs/planning/docker-self-hosting-stack.md` | `signet-runtime` | - | First-party Docker image + Compose + Caddy deployment contract with team-mode bootstrap path and operations runbook |
 | `system-prompt-extraction` | approved | `docs/specs/approved/system-prompt-extraction.md` | - | - | Move Signet system prompt injection to session-start runtime context and keep AGENTS.md as user-owned identity content |
 | `dreaming-memory-consolidation` | approved | `docs/specs/approved/dreaming-memory-consolidation.md` | `memory-pipeline-v2`, `knowledge-architecture-schema` | - | Phase 1 (consolidation engine, trigger, config, API, CLI) delivered in PR #442. Source-backed attribute promotion uses direct audited operations outside Pipeline V2. Phase 2 (dreaming-as-session, incremental deltas, V2 exclusion, chunked compaction, dashboard, identity context) deferred. |
+| `dreaming-scope-fairness` | approved | `docs/specs/approved/dreaming-scope-fairness.md` | `dreaming-memory-consolidation`, `multi-agent-support` | - | Issue #1344: one sequential, scope-bound turn per eligible scope with deterministic evidence/output budgets, priority ordering, and failure isolation inside one persisted pass. |
 | `ci-changed-files-selective` | planning | `docs/specs/planning/ci-changed-files-selective.md` | `memory-pipeline-v2` | - | Stub: selective PR CI by changed package graph |
 | `ci-contract-invariants-lane` | planning | `docs/specs/planning/ci-contract-invariants-lane.md` | `knowledge-architecture-schema` | - | Stub: mandatory fast invariant contract checks, including frozen lockfile integrity |
 | `ci-flaky-test-quarantine` | planning | `docs/specs/planning/ci-flaky-test-quarantine.md` | `ci-contract-invariants-lane` | - | Stub: flaky detection, quarantine, threshold policy |
@@ -894,6 +910,12 @@ bounded and configurable. Phase 1 (mechanical consolidation engine) is
 delivered. Phase 2 (dreaming as a session, incremental deltas, pipeline mutual
 exclusion, chunked compaction, dashboard observability, identity context
 injection) is required before spec moves to `complete`.
+
+**dreaming-scope-fairness**: Every eligible agent scope receives one
+sequential, scope-bound Dreaming turn in a persisted one-universe pass.
+Evidence/output budgets are divided deterministically, attention priority
+changes order without causing starvation, cross-scope tool calls fail closed,
+and a failed scope does not block healthy scopes or advance its watermark.
 
 **wave-9 strategic stubs**: The strategic backlog items listed in Wave 9
 are intentionally tracked as planning stubs and require dedicated planning

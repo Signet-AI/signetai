@@ -202,9 +202,11 @@ export function readDreamingRunbook(accessor: DbAccessor, agentId: string, limit
 			 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
 		);
 		const operationCalls = db.prepare(
-			`SELECT input_json AS inputJson, output_json AS outputJson
-			 FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ? AND tool_name = 'apply_ontology_ops'
-			 ORDER BY sequence ASC`,
+			`SELECT calls.input_json AS inputJson, calls.output_json AS outputJson
+			 FROM dreaming_tool_calls calls
+			 JOIN dreaming_passes pass ON pass.id = calls.pass_id AND pass.agent_id = ?
+			 WHERE calls.pass_id = ? AND calls.tool_name = 'apply_ontology_ops'
+			 ORDER BY calls.sequence ASC`,
 		);
 		return rows.map((row) => ({
 			passId: row.id as string,

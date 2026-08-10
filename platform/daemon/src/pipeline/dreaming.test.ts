@@ -12,9 +12,11 @@ import {
 	DREAMING_HYGIENE_AGENT_PROMPT,
 	type DreamingState,
 	_testParseEpisodicCursor,
+	allocateDreamingScopeBudgets,
 	dreamingEarlyExitSummary,
 	enqueueDreamingHygieneAttention,
 	getDreamingEpisodicTokenBacklog,
+	getDreamingEvidenceExclusions,
 	getDreamingPasses,
 	getDreamingState,
 	getDreamingToolCalls,
@@ -24,6 +26,7 @@ import {
 	requestDreamingEvidenceRequeue,
 	runDreamingAgentPass,
 	selectDreamingPassMode,
+	selectDreamingScopeTurns,
 	shouldTriggerDreaming,
 } from "./dreaming";
 import {
@@ -93,6 +96,15 @@ function seedTranscript(db: Database, id: string, content: string, capturedAt?: 
 	).run(id, content, AGENT, timestamp, timestamp, timestamp);
 }
 
+function seedScopedTranscript(db: Database, id: string, agentId: string, content: string): void {
+	const timestamp = (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now;
+	db.prepare(
+		`INSERT INTO session_transcripts
+		 (session_key, content, agent_id, created_at, updated_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+	).run(id, content, agentId, timestamp, timestamp, timestamp);
+}
+
 function seedSummary(db: Database, id: string, content: string, tokens: number): void {
 	// Keep a legacy row for explicit provenance-compatibility assertions, but
 	// seed the canonical direct transcript path used by Dreaming's default
@@ -136,6 +148,172 @@ describe("Dreaming", () => {
 				JSON.stringify({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment", fragmentOffset: -1 }),
 			),
 		).toEqual({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment" });
+	});
+
+	it("gives every eligible scope a bounded turn while prioritizing attention", () => {
+		const turns = selectDreamingScopeTurns("incremental", [
+			{
+				agentId: "busy",
+				hasPendingAttention: false,
+				attentionPriority: -1,
+				oldestAttentionAt: null,
+				episodicTokens: 100_000,
+				lastPassAt: "2026-08-10 12:00:00",
+			},
+			{
+				agentId: "maintenance",
+				hasPendingAttention: true,
+				attentionPriority: 90,
+				oldestAttentionAt: "2026-08-10 11:00:00",
+				episodicTokens: 1,
+				lastPassAt: null,
+			},
+		]);
+
+		expect(turns.map((turn) => turn.agentId)).toEqual(["maintenance", "busy"]);
+		expect(allocateDreamingScopeBudgets(101, 2)).toEqual([51, 50]);
+	});
+
+	it("does not let a 100:1 evidence scope consume its neighbor's turn budget (#1344)", async () => {
+		seedScopedTranscript(db, "alpha-heavy", "alpha", `${"Alpha evidence ".repeat(8_000)}settled alpha outcome.`);
+		seedScopedTranscript(db, "beta-light", "beta", "Beta has one settled outcome.");
+
+		const turns: Array<{ readonly agentId: string; readonly maxTokens: number; readonly truncated: boolean }> = [];
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					const scope = input.agentId ?? "";
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					const read = async (): Promise<boolean> => {
+						const output = (await search.execute("call", { agentId: scope }, undefined, undefined, {} as never)) as {
+							readonly content?: ReadonlyArray<{ readonly text?: string }>;
+						};
+						const payload = JSON.parse(output.content?.[0]?.text ?? "{}") as { truncatedByScopeBudget?: boolean };
+						return payload.truncatedByScopeBudget === true;
+					};
+					let truncated = false;
+					for (let attempt = 0; attempt < (scope === "alpha" ? 8 : 1); attempt += 1) {
+						truncated = (await read()) || truncated;
+					}
+					turns.push({ agentId: scope, maxTokens: input.maxTokens, truncated });
+					return { summary: `Inspected ${scope}` };
+				},
+			},
+			defaultCfg({ maxInputTokens: 4_000, maxOutputTokens: 100 }),
+			"/tmp",
+			"alpha",
+			["alpha", "beta"],
+			"incremental",
+		);
+
+		expect(result.failed).toBe(0);
+		expect(turns.map((turn) => turn.agentId)).toEqual(["alpha", "beta"]);
+		expect(turns.map((turn) => turn.maxTokens)).toEqual([50, 50]);
+		expect(turns[0]?.truncated).toBe(true);
+		expect(turns[1]?.truncated).toBe(false);
+	});
+
+	it("continues healthy scope turns after one provider failure (#1344)", async () => {
+		seedScopedTranscript(db, "alpha-failure", "alpha", "Alpha provider failure must not block beta.");
+		seedScopedTranscript(db, "beta-progress", "beta", "Beta remains independently processable.");
+		const seen: string[] = [];
+
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					const scope = input.agentId ?? "";
+					seen.push(scope);
+					if (scope === "alpha") {
+						const search = input.tools.find((tool) => tool.name === "search_evidence");
+						if (!search) throw new Error("Missing search_evidence");
+						await search.execute("call", { agentId: scope }, undefined, undefined, {} as never);
+						throw new Error("alpha provider unavailable");
+					}
+					return { summary: "Beta turn completed" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			"alpha",
+			["alpha", "beta"],
+			"incremental",
+		);
+
+		expect(seen).toEqual(["alpha", "beta"]);
+		expect(result.failed).toBe(1);
+		expect(result.summary).toContain("alpha: scope turn failed");
+		expect(db.prepare("SELECT status FROM dreaming_passes WHERE id = ?").get(result.passId)).toEqual({
+			status: "completed",
+		});
+		expect(getDreamingState(accessor, "alpha").consecutiveFailures).toBe(1);
+		expect(getDreamingEpisodicTokenBacklog(accessor, "alpha")).toBeGreaterThan(0);
+	});
+
+	it("identifies a sole scope when it differs from the persisted pass owner", async () => {
+		seedScopedTranscript(db, "alpha-single", "alpha", "The alpha scope has independent evidence.");
+		let prompt = "";
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					prompt = input.prompt;
+					return { summary: "Inspected alpha" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			"default",
+			["alpha"],
+			"incremental",
+		);
+		expect(prompt).toContain("<dreaming_scope_turn>");
+		expect(prompt).toContain('"agentId":"alpha"');
+	});
+
+	it("records rejected evidence exclusions under the turn scope", async () => {
+		const evidence = "The rejected alpha operation cites this exact source.";
+		seedScopedTranscript(db, "alpha-rejected", "alpha", evidence);
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
+					if (!apply) throw new Error("Missing apply_ontology_ops");
+					await apply.execute("call", {
+						agentId: "alpha",
+						operations: [
+							{
+								operation: "not-supported",
+								payload: {},
+								evidence: [
+									{
+										source_ref: "transcript:alpha-rejected",
+										source_kind: "transcript",
+										source_id: "alpha-rejected",
+										quote: evidence,
+									},
+								],
+							},
+						],
+					});
+					return { summary: "Rejected alpha operation" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			"default",
+			["alpha"],
+			"incremental",
+		);
+
+		expect(result.failed).toBe(1);
+		expect(getDreamingEvidenceExclusions(accessor, "alpha")).toMatchObject([
+			{ sourceKind: "transcript", sourceId: "alpha-rejected", passId: result.passId },
+		]);
+		expect(getDreamingEvidenceExclusions(accessor, "default")).toEqual([]);
 	});
 
 	it("uses the fixed agent prompt and resets the evidence backlog to the surfaced frontier", async () => {

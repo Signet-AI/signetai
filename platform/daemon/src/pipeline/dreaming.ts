@@ -46,7 +46,7 @@ import {
 	renderDreamingAttentionForPrompt,
 	resolveDreamingAttentionInTx,
 } from "./dreaming-attention";
-import type { DreamingToolCallTrace } from "./dreaming-capabilities";
+import type { DreamingScopeBudget, DreamingToolCallTrace } from "./dreaming-capabilities";
 import {
 	type DreamingEvidenceFragment,
 	createDreamingAgentEvidence,
@@ -195,6 +195,8 @@ export type { DreamingAttention } from "./dreaming-attention";
 export interface DreamingAgentExecutor {
 	run(input: {
 		readonly passId: string;
+		/** Scope receiving this sequential turn; omitted by legacy test seams. */
+		readonly agentId?: string;
 		readonly prompt: string;
 		readonly tools: ReturnType<typeof createDreamingAgentTools>;
 		readonly timeoutMs: number;
@@ -245,6 +247,28 @@ function operationEvidenceFromToolInput(input: unknown): readonly Pick<DreamingO
 		if (!isRecord(operation) || !Array.isArray(operation.evidence)) return [];
 		return [{ evidence: operation.evidence }];
 	});
+}
+
+function readCitedDreamingSources(
+	accessor: DbAccessor,
+	agentId: string,
+	operations: readonly Pick<DreamingOperationRequest, "evidence">[],
+): readonly EpisodicSourceRecord[] {
+	const references = new Set<string>();
+	for (const operation of operations) {
+		for (const evidence of operation.evidence ?? []) {
+			if (!isRecord(evidence)) continue;
+			const sourceRef = readNonEmptyString(evidence.source_ref);
+			if (sourceRef !== null) references.add(sourceRef);
+		}
+	}
+	if (references.size === 0) return [];
+	return accessor.withReadDb((db) =>
+		[...references].flatMap((sourceRef) => {
+			const source = readEpisodicSource(db, { agentId, from: sourceRef });
+			return source === null ? [] : [source];
+		}),
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -678,7 +702,7 @@ export const DREAMING_AGENT_PROMPT = `You are a bounded Signet maintenance agent
 
 Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. The graph is a derived structure; every write carries provenance (an attention id for hygiene, an exact quote from episodic evidence for content). Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
 
-An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's hygiene queue, with each record carrying its owning agentId.
+The runtime gives every eligible agent scope one sequential, bounded turn in this pass. When multiple scopes are eligible, the active scope is listed in <dreaming_scope_turn>; use only that agentId until the turn ends. A busy scope cannot consume another scope's evidence or output budget. Do not try to work another scope from the current turn. attention_list without an agentId is limited to the active scope.
 
 ### State targets
 
@@ -747,7 +771,7 @@ export const DREAMING_HYGIENE_AGENT_PROMPT = `You are a bounded Signet maintenan
 
 Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a HYGIENE pass: process the attention queue — inspect flagged targets and archive or merge them with attention provenance, minting flags for junk the queue missed. Content maintenance (claims, entities) belongs to content passes, which cite exact quotes from episodic evidence. Use the pass log (runbook_read) as the dedup source: the previous pass's changes are the cutoff.
 
-An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's hygiene queue, with each record carrying its owning agentId.
+The runtime gives every eligible agent scope one sequential, bounded turn in this pass. When multiple scopes are eligible, the active scope is listed in <dreaming_scope_turn>; use only that agentId until the turn ends. A busy scope cannot consume another scope's evidence or output budget. Do not try to work another scope from the current turn. attention_list without an agentId is limited to the active scope.
 
 ### State targets
 
@@ -801,7 +825,7 @@ export const DREAMING_CONTENT_AGENT_PROMPT = `You are a bounded Signet maintenan
 
 Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a CONTENT pass: find new evidence since the cutoff and extract/update claims with exact-quote citations, creating entities for durable subjects. Hygiene archives/merges belong to hygiene passes, which process the attention queue. Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
 
-An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's hygiene queue, with each record carrying its owning agentId.
+The runtime gives every eligible agent scope one sequential, bounded turn in this pass. When multiple scopes are eligible, the active scope is listed in <dreaming_scope_turn>; use only that agentId until the turn ends. A busy scope cannot consume another scope's evidence or output budget. Do not try to work another scope from the current turn. attention_list without an agentId is limited to the active scope.
 
 ### State targets
 
@@ -870,6 +894,124 @@ export function dreamingFocusOfMode(mode: DreamingMode): DreamingPassFocus | nul
  */
 function dreamingModeAdvancesEvidence(mode: DreamingMode): boolean {
 	return mode !== "incremental-hygiene";
+}
+
+export interface DreamingScopeWork {
+	readonly agentId: string;
+	readonly hasPendingAttention: boolean;
+	readonly attentionPriority: number;
+	readonly oldestAttentionAt: string | null;
+	readonly episodicTokens: number;
+	readonly lastPassAt: string | null;
+}
+
+/**
+ * Select one bounded turn for every eligible scope. Attention priority only
+ * controls order; it never removes another scope's turn from the pass.
+ */
+export function selectDreamingScopeTurns(
+	mode: DreamingMode,
+	work: readonly DreamingScopeWork[],
+): readonly DreamingScopeWork[] {
+	const unique = new Map<string, DreamingScopeWork>();
+	for (const item of work) {
+		if (!unique.has(item.agentId)) unique.set(item.agentId, item);
+	}
+	const eligible = [...unique.values()].filter((item) => {
+		if (mode === "compact") return true;
+		if (mode === "incremental-hygiene") return item.hasPendingAttention;
+		if (mode === "incremental-content") return item.episodicTokens > 0;
+		return item.hasPendingAttention || item.episodicTokens > 0;
+	});
+	return eligible.sort((left, right) => {
+		if (left.attentionPriority !== right.attentionPriority) return right.attentionPriority - left.attentionPriority;
+		if (left.oldestAttentionAt !== right.oldestAttentionAt) {
+			if (left.oldestAttentionAt === null) return 1;
+			if (right.oldestAttentionAt === null) return -1;
+			const byAttentionAge = timestampMillis(left.oldestAttentionAt) - timestampMillis(right.oldestAttentionAt);
+			if (byAttentionAge !== 0) return byAttentionAge;
+		}
+		if (left.lastPassAt !== right.lastPassAt) {
+			if (left.lastPassAt === null) return -1;
+			if (right.lastPassAt === null) return 1;
+			const byPassAge = timestampMillis(left.lastPassAt) - timestampMillis(right.lastPassAt);
+			if (byPassAge !== 0) return byPassAge;
+		}
+		return left.agentId.localeCompare(right.agentId);
+	});
+}
+
+/** Divide one pass budget deterministically, giving the remainder to older turns. */
+export function allocateDreamingScopeBudgets(total: number, scopeCount: number): readonly number[] {
+	if (!Number.isFinite(total) || !Number.isFinite(scopeCount) || scopeCount <= 0) return [];
+	const count = Math.floor(scopeCount);
+	if (count <= 0) return [];
+	const boundedTotal = Math.max(0, Math.floor(total));
+	const base = Math.floor(boundedTotal / count);
+	const remainder = boundedTotal % count;
+	return Array.from({ length: count }, (_, index) => base + (index < remainder ? 1 : 0));
+}
+
+function createDreamingScopeBudget(scopeId: string, maxEvidenceTokens: number): DreamingScopeBudget {
+	let evidenceTokensUsed = 0;
+	const maximum = Math.max(0, Math.floor(maxEvidenceTokens));
+	return {
+		scopeId,
+		maxEvidenceTokens: maximum,
+		get evidenceTokensUsed() {
+			return evidenceTokensUsed;
+		},
+		get evidenceTokensRemaining() {
+			return Math.max(0, maximum - evidenceTokensUsed);
+		},
+		reserveEvidence(tokens: number): boolean {
+			const bounded = Math.max(0, Math.floor(tokens));
+			if (evidenceTokensUsed + bounded > maximum) return false;
+			evidenceTokensUsed += bounded;
+			return true;
+		},
+	};
+}
+
+function scopeTurnPrompt(
+	basePrompt: string,
+	turn: DreamingScopeWork,
+	allTurns: readonly DreamingScopeWork[],
+	passOwnerId: string,
+	evidenceTokenBudget: number,
+	outputTokenBudget: number,
+): string {
+	if (allTurns.length === 1 && turn.agentId === passOwnerId) return basePrompt;
+	return `${basePrompt}
+
+<agent_scopes>
+${allTurns.map((scope) => JSON.stringify(scope.agentId)).join("\n")}
+</agent_scopes>
+<dreaming_scope_turn>
+${JSON.stringify({
+	agentId: turn.agentId,
+	evidenceTokenBudget,
+	outputTokenBudget,
+})}
+</dreaming_scope_turn>`;
+}
+
+function sumDreamingUsage(usages: readonly (LlmUsage | null)[]): LlmUsage | null {
+	const present = usages.filter((usage): usage is LlmUsage => usage !== null);
+	if (present.length === 0) return null;
+	const sum = (read: (usage: LlmUsage) => number | null): number | null => {
+		const values = present.map(read).filter((value): value is number => value !== null && Number.isFinite(value));
+		return values.length > 0 ? values.reduce((total, value) => total + value, 0) : null;
+	};
+	return {
+		inputTokens: sum((usage) => usage.inputTokens),
+		outputTokens: sum((usage) => usage.outputTokens),
+		cacheReadTokens: sum((usage) => usage.cacheReadTokens),
+		cacheCreationTokens: sum((usage) => usage.cacheCreationTokens),
+		totalTokens: sum((usage) => usage.totalTokens),
+		totalCost: sum((usage) => usage.totalCost),
+		totalDurationMs: sum((usage) => usage.totalDurationMs),
+	};
 }
 
 /**
@@ -1271,12 +1413,8 @@ export async function runDreamingAgentPass(
 	let toolCallSequence = 0;
 	let applied = 0;
 	let failed = 0;
+	const failureRecordedFor = new Set<string>();
 	try {
-		const prompt =
-			scopes.length > 1
-				? `${dreamingPromptForMode(mode)}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`
-				: dreamingPromptForMode(mode);
-
 		// Pass-start cutoff, SQLite format. The stored watermark may also be
 		// the raw surfaced captured_at (ISO); every comparison goes through
 		// julianday(), so the mixed formats stay ordered (#1149).
@@ -1288,10 +1426,20 @@ export async function runDreamingAgentPass(
 		// scope has pending attention or an episodic backlog. Scheduled checks
 		// are already gated by shouldTriggerDreaming; this protects manual
 		// triggers and compact runs from spending tokens on nothing.
-		const hasPendingAttention = scopes.some((scope) =>
-			accessor.withReadDb((db) => getDreamingAttentionInDb(db, scope, 1).length > 0),
-		);
-		const totalBacklog = scopes.reduce((total, scope) => total + getDreamingEpisodicTokenBacklog(accessor, scope), 0);
+		const uniqueScopes = [...new Set(scopes.filter((scope) => scope.trim().length > 0))];
+		const scopeWork = uniqueScopes.map((scope): DreamingScopeWork => {
+			const attention = accessor.withReadDb((db) => getDreamingAttentionInDb(db, scope, 1)[0]);
+			return {
+				agentId: scope,
+				hasPendingAttention: attention !== undefined,
+				attentionPriority: attention?.priority ?? -1,
+				oldestAttentionAt: attention?.createdAt ?? null,
+				episodicTokens: getDreamingEpisodicTokenBacklog(accessor, scope),
+				lastPassAt: accessor.withReadDb((db) => readDreamingState(db, scope).lastPassAt),
+			};
+		});
+		const hasPendingAttention = scopeWork.some((scope) => scope.hasPendingAttention);
+		const totalBacklog = scopeWork.reduce((total, scope) => total + scope.episodicTokens, 0);
 		const earlyExitSummary = dreamingEarlyExitSummary(mode, hasPendingAttention, totalBacklog);
 		if (earlyExitSummary !== null) {
 			accessor.withWriteTx((db) => {
@@ -1307,7 +1455,7 @@ export async function runDreamingAgentPass(
 				// advance the watermark even on an empty backlog (#1098,
 				// #1149).
 				if (totalBacklog === 0 && dreamingModeAdvancesEvidence(mode)) {
-					for (const scope of scopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
+					for (const scope of uniqueScopes) resetDreamingTokens(db, scope, passId, mode, null, cutoff);
 				}
 			});
 			recordDreamingPassTelemetry({
@@ -1329,97 +1477,172 @@ export async function runDreamingAgentPass(
 			});
 			return { passId, applied: 0, skipped: 0, failed: 0, summary: earlyExitSummary };
 		}
-
+		const turns = selectDreamingScopeTurns(mode, scopeWork);
+		if (turns.length === 0) {
+			throw new Error("Dreaming pass has no eligible agent scope");
+		}
+		const outputBudgets = allocateDreamingScopeBudgets(cfg.maxOutputTokens, turns.length);
+		const evidenceBudgets = allocateDreamingScopeBudgets(cfg.maxInputTokens, turns.length);
+		const timeoutBudgets = allocateDreamingScopeBudgets(cfg.timeout, turns.length);
 		let applyCallbackReported = false;
 		let retirementCandidates: DreamingRetirementCandidates = new Map();
-		const rejectedEvidence: EpisodicSourceRecord[] = [];
+		const rejectedEvidenceByScope = new Map<string, Map<string, EpisodicSourceRecord>>();
+		const successfulScopes = new Set<string>();
+		const scopeSummaries: string[] = [];
+		const scopeErrors: Array<{ readonly agentId: string; readonly error: unknown }> = [];
+		const usages: Array<LlmUsage | null> = [];
+		let promptTokenEstimate = 0;
+		const recordScopeFailure = (scopeId: string): void => {
+			if (failureRecordedFor.has(scopeId)) return;
+			recordDreamingFailure(accessor, scopeId);
+			failureRecordedFor.add(scopeId);
+		};
+		const recordRejectedEvidence = (
+			scopeId: string,
+			result: ApplyDreamingOperationsResult,
+			operations: readonly Pick<DreamingOperationRequest, "evidence">[],
+		): void => {
+			const sources = rejectedAgentEvidence(
+				result,
+				operations,
+				readCitedDreamingSources(accessor, scopeId, operations),
+			);
+			if (sources.length === 0) return;
+			const scopeSources = rejectedEvidenceByScope.get(scopeId) ?? new Map<string, EpisodicSourceRecord>();
+			for (const source of sources) scopeSources.set(`${source.kind}:${source.id}`, source);
+			rejectedEvidenceByScope.set(scopeId, scopeSources);
+		};
 		// The newest captured_at each scope's search_evidence surfaced this
 		// pass; the pass-end watermark may advance only to it (#1149).
 		const surfacedWatermarkByScope = new Map<string, string>();
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
-		const tools = createDreamingAgentTools({
-			accessor,
-			agentId,
-			actor: "dreaming",
-			passId,
-			writeCaps,
-			onOperationsAboutToApply(operations, scopeId) {
-				retirementCandidates = collectDreamingRetirementCandidates(accessor, scopeId, operations);
-			},
-			onOperationsApplied(result, operations, scopeId) {
-				applyCallbackReported = true;
-				applied += result.items.filter((item) => item.ok).length;
-				failed += result.items.filter((item) => !item.ok).length;
-				if (!result.ok && result.items.length === 0) failed++;
-				recordDreamingOperationEffects(accessor, scopeId, effects, result, operations, retirementCandidates);
-				retirementCandidates = new Map();
-				rejectedEvidence.push(...rejectedAgentEvidence(result, operations, []));
-			},
-			onToolCall(trace) {
-				recordDreamingToolCall(accessor, agentId, passId, ++toolCallSequence, trace);
-				if (trace.tool === "search_evidence" && trace.output.ok === true && Array.isArray(trace.output.items)) {
-					const input = isRecord(trace.input) ? trace.input : null;
-					const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
-					const transcriptRefs = surfacedTranscriptRefsByScope.get(scope) ?? new Set<string>();
-					for (const item of trace.output.items) {
-						const record = isRecord(item) ? item : null;
-						const sourceRef = typeof record?.sourceRef === "string" ? record.sourceRef : null;
-						const kind = typeof record?.kind === "string" ? record.kind : null;
-						const id = typeof record?.id === "string" ? record.id : null;
-						if (sourceRef !== null) effects.consideredArtifacts.add(sourceRef);
-						else if (kind !== null && id !== null) effects.consideredArtifacts.add(`${kind}:${id}`);
-						else effects.consideredArtifacts.add(`anonymous:${effects.consideredArtifacts.size}`);
-						if (sourceRef?.startsWith("transcript:")) transcriptRefs.add(sourceRef);
-					}
-					if (transcriptRefs.size > 0) surfacedTranscriptRefsByScope.set(scope, transcriptRefs);
-					// A sourceRef call reads a fragment of a source the
-					// listing already surfaced: it adds no new frontier (the
-					// listing's max covers it) and must not advance the
-					// watermark past the unread remainder (#1149).
-					if (input === null || typeof input.sourceRef !== "string") {
-						const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
-						const surfaced = surfacedEvidenceWatermark(trace.output.items);
-						if (surfaced !== null) {
-							const current = surfacedWatermarkByScope.get(scope);
-							if (current === undefined || timestampMillis(surfaced) > timestampMillis(current)) {
-								surfacedWatermarkByScope.set(scope, surfaced);
+
+		for (const [index, turn] of turns.entries()) {
+			const outputTokenBudget = Math.max(1, outputBudgets[index] ?? 1);
+			const evidenceTokenBudget = Math.max(1, evidenceBudgets[index] ?? 1);
+			const timeoutMs = Math.max(1_000, timeoutBudgets[index] ?? 1_000);
+			const scopeBudget = createDreamingScopeBudget(turn.agentId, evidenceTokenBudget);
+			const prompt = scopeTurnPrompt(
+				dreamingPromptForMode(mode),
+				turn,
+				turns,
+				agentId,
+				evidenceTokenBudget,
+				outputTokenBudget,
+			);
+			promptTokenEstimate += countTokens(prompt);
+			const tools = createDreamingAgentTools({
+				accessor,
+				agentId: turn.agentId,
+				scopeId: turn.agentId,
+				runbookAgentId: agentId,
+				actor: "dreaming",
+				passId,
+				scopeBudget,
+				writeCaps,
+				onOperationsAboutToApply(operations, scopeId) {
+					retirementCandidates = collectDreamingRetirementCandidates(accessor, scopeId, operations);
+				},
+				onOperationsApplied(result, operations, scopeId) {
+					applyCallbackReported = true;
+					applied += result.items.filter((item) => item.ok).length;
+					failed += result.items.filter((item) => !item.ok).length;
+					if (!result.ok && result.items.length === 0) failed++;
+					recordDreamingOperationEffects(accessor, scopeId, effects, result, operations, retirementCandidates);
+					retirementCandidates = new Map();
+					recordRejectedEvidence(scopeId, result, operations);
+				},
+				onToolCall(trace) {
+					recordDreamingToolCall(accessor, turn.agentId, passId, ++toolCallSequence, trace);
+					if (trace.tool === "search_evidence" && trace.output.ok === true && Array.isArray(trace.output.items)) {
+						const input = isRecord(trace.input) ? trace.input : null;
+						const scope = turn.agentId;
+						const transcriptRefs = surfacedTranscriptRefsByScope.get(scope) ?? new Set<string>();
+						for (const item of trace.output.items) {
+							const record = isRecord(item) ? item : null;
+							const sourceRef = typeof record?.sourceRef === "string" ? record.sourceRef : null;
+							const kind = typeof record?.kind === "string" ? record.kind : null;
+							const id = typeof record?.id === "string" ? record.id : null;
+							if (sourceRef !== null) effects.consideredArtifacts.add(sourceRef);
+							else if (kind !== null && id !== null) effects.consideredArtifacts.add(`${kind}:${id}`);
+							else effects.consideredArtifacts.add(`anonymous:${effects.consideredArtifacts.size}`);
+							if (sourceRef?.startsWith("transcript:")) transcriptRefs.add(sourceRef);
+						}
+						if (transcriptRefs.size > 0) surfacedTranscriptRefsByScope.set(scope, transcriptRefs);
+						// A sourceRef call reads a fragment of a source the
+						// listing already surfaced: it adds no new frontier (the
+						// listing's max covers it) and must not advance the
+						// watermark past the unread remainder (#1149).
+						if (input === null || typeof input.sourceRef !== "string") {
+							const surfaced = surfacedEvidenceWatermark(trace.output.items);
+							if (surfaced !== null) {
+								const current = surfacedWatermarkByScope.get(scope);
+								if (current === undefined || timestampMillis(surfaced) > timestampMillis(current)) {
+									surfacedWatermarkByScope.set(scope, surfaced);
+								}
 							}
 						}
 					}
-				}
-				if (trace.tool === "apply_ontology_ops") {
-					if (!trace.output.ok && !applyCallbackReported) {
-						rejectedEvidence.push(
-							...rejectedAgentEvidence({ ok: false, items: [] }, operationEvidenceFromToolInput(trace.input), []),
-						);
-						failed++;
+					if (trace.tool === "apply_ontology_ops") {
+						if (!trace.output.ok && !applyCallbackReported) {
+							recordRejectedEvidence(
+								turn.agentId,
+								{ ok: false, items: [] },
+								operationEvidenceFromToolInput(trace.input),
+							);
+							failed++;
+						}
+						applyCallbackReported = false;
 					}
-					applyCallbackReported = false;
-				}
-			},
-		});
-		logger.info("dreaming", "Starting agentic dreaming pass", {
-			mode,
-			promptChars: prompt.length,
-		});
-		const executorResult = await executor.run({
-			passId,
-			prompt,
-			tools,
-			timeoutMs: cfg.timeout,
-			maxTokens: cfg.maxOutputTokens,
-		});
-		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}`;
+				},
+			});
+			logger.info("dreaming", "Starting agentic dreaming scope turn", {
+				mode,
+				agentId: turn.agentId,
+				evidenceTokenBudget,
+				outputTokenBudget,
+			});
+			try {
+				const executorResult = await executor.run({
+					passId,
+					agentId: turn.agentId,
+					prompt,
+					tools,
+					timeoutMs,
+					maxTokens: outputTokenBudget,
+				});
+				successfulScopes.add(turn.agentId);
+				usages.push(executorResult.usage ?? null);
+				const turnSummary = executorResult.summary?.trim() || "Agentic Dreaming scope turn completed";
+				scopeSummaries.push(turns.length === 1 ? turnSummary : `${turn.agentId}: ${turnSummary}`);
+			} catch (error) {
+				if (isDreamingPassCancellation(error)) throw error;
+				recordScopeFailure(turn.agentId);
+				if (turns.length === 1) throw error;
+				scopeErrors.push({ agentId: turn.agentId, error });
+				recordPipelineError("decision", isPipelineTimeout(error) ? "DECISION_TIMEOUT" : "DECISION_INVALID");
+				logger.error("dreaming", "Dreaming scope turn failed; continuing with remaining scopes", undefined, {
+					agentId: turn.agentId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				scopeSummaries.push(
+					`${turn.agentId}: scope turn failed (${error instanceof Error ? error.message : String(error)})`,
+				);
+			}
+		}
+		if (successfulScopes.size === 0 && scopeErrors.length > 0)
+			throw scopeErrors[0]?.error ?? new Error("Dreaming scope turns failed");
+		const summary = `${scopeSummaries.join("\n") || "Agentic Dreaming pass completed"}`.slice(0, 8_000);
 		// Provider-reported aggregate when the executor surfaced it (pi-backed
 		// agent sessions); otherwise fall back to the local prompt estimate so
 		// acpx-backed passes keep a meaningful total.
-		const usage = executorResult.usage ?? null;
-		const tokensConsumed = usage?.totalTokens ?? countTokens(prompt);
+		const usage = sumDreamingUsage(usages);
+		const tokensConsumed = usage?.totalTokens ?? promptTokenEstimate;
 		// The watermark advances only to what this pass actually surfaced: a
 		// pass that completes without surfacing (or deferring) pending
 		// evidence must not skip it for the next scan-first search (#1149).
 		const nextWatermarkByScope = new Map<string, string | null>();
-		for (const scope of scopes) {
+		for (const scope of turns.map((turn) => turn.agentId)) {
 			const previous = accessor.withReadDb((db) => readDreamingState(db, scope).lastPassAt);
 			const surfaced = surfacedWatermarkByScope.get(scope);
 			nextWatermarkByScope.set(
@@ -1431,16 +1654,18 @@ export async function runDreamingAgentPass(
 		// projection. Combined passes can ingest content too; gating this on the
 		// focused-mode name would advance the watermark without writing the
 		// manifest.
-		const transcriptManifestEntries = [...surfacedTranscriptRefsByScope.entries()].flatMap(([scope, refs]) =>
-			accessor.withReadDb((db) =>
-				[...refs].flatMap((sourceRef) => {
-					const source = readEpisodicSource(db, { agentId: scope, from: sourceRef });
-					return source === null || !source.completed
-						? []
-						: [{ scope, source, content: renderDreamingEvidence(source) }];
-				}),
-			),
-		);
+		const transcriptManifestEntries = [...surfacedTranscriptRefsByScope.entries()]
+			.filter(([scope]) => successfulScopes.has(scope))
+			.flatMap(([scope, refs]) =>
+				accessor.withReadDb((db) =>
+					[...refs].flatMap((sourceRef) => {
+						const source = readEpisodicSource(db, { agentId: scope, from: sourceRef });
+						return source === null || !source.completed
+							? []
+							: [{ scope, source, content: renderDreamingEvidence(source) }];
+					}),
+				),
+			);
 		accessor.withWriteTx((db) => {
 			writeDreamingTranscriptManifestInTx(db, {
 				passId,
@@ -1451,7 +1676,7 @@ export async function runDreamingAgentPass(
 				 tokens_consumed = ?, tokens_input = ?, tokens_output = ?,
 				 tokens_cache_read = ?, tokens_cache_write = ?, tokens_cost = ?,
 				 mutations_applied = ?, mutations_skipped = ?,
-				 mutations_failed = ?, summary = ? WHERE id = ?`,
+					mutations_failed = ?, summary = ? WHERE id = ?`,
 			).run(
 				tokensConsumed,
 				usage?.inputTokens ?? null,
@@ -1461,11 +1686,13 @@ export async function runDreamingAgentPass(
 				usage?.totalCost ?? null,
 				applied,
 				0,
-				failed,
+				failed + scopeErrors.length,
 				summary,
 				passId,
 			);
-			recordDreamingEvidenceExclusionsInTx(db, agentId, passId, rejectedEvidence, "semantic_operation_rejected");
+			for (const [scopeId, sources] of rejectedEvidenceByScope) {
+				recordDreamingEvidenceExclusionsInTx(db, scopeId, passId, [...sources.values()], "semantic_operation_rejected");
+			}
 			// The evidence queue resets to the pass watermark for EVERY scope
 			// the pass consumed evidence for: the next pass's backlog counts
 			// only sources captured after the surfaced frontier. A hygiene
@@ -1473,13 +1700,14 @@ export async function runDreamingAgentPass(
 			// advancing it would hide the unprocessed backlog from the next
 			// content pass and starve content again (#1098).
 			if (dreamingModeAdvancesEvidence(mode)) {
-				for (const scope of scopes) {
+				for (const scope of successfulScopes) {
 					resetDreamingTokens(db, scope, passId, mode, null, nextWatermarkByScope.get(scope) ?? null);
 				}
 			}
 		});
+		const totalFailures = failed + scopeErrors.length;
 		const outcome: DreamingPassOutcome =
-			failed > 0
+			totalFailures > 0
 				? effects.usefulEffects === 0
 					? "failed"
 					: "completed"
@@ -1488,10 +1716,10 @@ export async function runDreamingAgentPass(
 					: "completed";
 		const outcomeCode: DreamingPassOutcomeCode =
 			effects.usefulEffects === 0
-				? failed > 0
+				? totalFailures > 0
 					? "mutation_failure"
 					: "no_effects"
-				: failed > 0
+				: totalFailures > 0
 					? "partial_failure"
 					: "completed";
 		recordDreamingPassTelemetry({
@@ -1503,19 +1731,20 @@ export async function runDreamingAgentPass(
 		});
 		recordPipelineOperation({
 			operationClass: "dreaming",
-			outcome: failed > 0 ? (applied > 0 ? "partial" : "failed") : "completed",
+			outcome: totalFailures > 0 ? (applied > 0 ? "partial" : "failed") : "completed",
 			accepted: applied,
 			skipped: 0,
 			retried: 0,
-			failed,
+			failed: totalFailures,
 			durationMs: Date.now() - passStartedAtMs,
 			queueAgeMs: 0,
 		});
 
-		return { passId, applied, skipped: 0, failed, summary };
+		return { passId, applied, skipped: 0, failed: totalFailures, summary };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		recordPipelineError("decision", isPipelineTimeout(error) ? "DECISION_TIMEOUT" : "DECISION_INVALID");
+		if (failureRecordedFor.size === 0) recordDreamingFailure(accessor, agentId);
 		logger.error("dreaming", "Agentic dreaming pass failed", undefined, { error: message });
 		try {
 			failDreamingPass(accessor, passId, message);
@@ -1649,6 +1878,23 @@ export function isDreamingScopeHalted(state: DreamingState, nowMs = Date.now()):
 	return Number.isFinite(failedAt) && nowMs - failedAt < DREAMING_HALT_COOLDOWN_MS;
 }
 
+/** Whether automatic scheduling must leave this scope for a later retry. */
+export function isDreamingScopeRetryBlocked(state: DreamingState, nowMs = Date.now()): boolean {
+	if (isDreamingScopeHalted(state, nowMs)) return true;
+	if (state.consecutiveFailures <= 0) return false;
+	const exp = Math.min(state.consecutiveFailures, MAX_FAILURE_BACKOFF_MULTIPLIER);
+	const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
+	return !Number.isFinite(failedAt) || nowMs - failedAt < FAILURE_BACKOFF_BASE_MS * 2 ** exp;
+}
+
+export function isDreamingScopeRetryBlockedForAgent(
+	accessor: DbAccessor,
+	agentId: string,
+	nowMs = Date.now(),
+): boolean {
+	return isDreamingScopeRetryBlocked(getDreamingState(accessor, agentId), nowMs);
+}
+
 /** Cheap sweep pre-check: one indexed dreaming_state row, no attention scan. */
 export function isDreamingHaltActive(accessor: DbAccessor, agentId: string, nowMs = Date.now()): boolean {
 	return isDreamingScopeHalted(getDreamingState(accessor, agentId), nowMs);
@@ -1694,17 +1940,10 @@ export function shouldTriggerDreaming(
 	const state = getDreamingState(accessor, agentId);
 	const hasAttention = accessor.withReadDb((db) => getDreamingAttentionInDb(db, agentId, 1).length > 0);
 
-	// Hard halt after repeated consecutive failures: no automatic scheduling
-	// for the cooldown window. Explicit operator triggers bypass this gate.
-	if (isDreamingScopeHalted(state, nowMs)) return false;
-
 	// Back off by wall clock, not by evidence volume. A transient provider outage
 	// must not require exponentially more incoming evidence before recovery.
-	if (state.consecutiveFailures > 0) {
-		const exp = Math.min(state.consecutiveFailures, MAX_FAILURE_BACKOFF_MULTIPLIER);
-		const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
-		if (!Number.isFinite(failedAt) || nowMs - failedAt < FAILURE_BACKOFF_BASE_MS * 2 ** exp) return false;
-	}
+	// Explicit operator triggers bypass this gate.
+	if (isDreamingScopeRetryBlocked(state, nowMs)) return false;
 
 	// First run only backfills actual episodic evidence, except for explicit
 	// scoped attention that has been queued for a Dreaming review.
