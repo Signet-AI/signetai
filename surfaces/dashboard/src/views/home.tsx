@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { Filter, Maximize2 } from "lucide-react";
-import { Surface } from "@/components/ui/surface";
-import { ActivityHeatmap, KpiRow, useDateString, type DayBucket, type KpiData } from "@/components/home/kpi";
 import { DailyBrief } from "@/components/home/daily-brief";
+import { ActivityHeatmap, type DayBucket, type KpiData, KpiRow, useDateString } from "@/components/home/kpi";
 import { Panel } from "@/components/home/panel";
 import { sourceLogo } from "@/components/icons";
+import { Surface } from "@/components/ui/surface";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
+import { Filter, Maximize2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 export function HomeView() {
 	const today = useDateString("");
@@ -341,6 +341,7 @@ function HomeControls() {
 				className="inline-flex h-7.5 items-center justify-center gap-1.5 rounded-[var(--radius)] border border-[oklch(1_0_0/0.1)] px-2.25 font-mono text-[11px] text-muted-foreground [html:not(.dark)_&]:border-border"
 			>
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 24 24"
 					width="13"
 					height="13"
@@ -361,6 +362,7 @@ function HomeControls() {
 				className="grid size-7.5 place-items-center rounded-[var(--radius)] border border-[oklch(1_0_0/0.1)] text-muted-foreground hover:text-foreground [html:not(.dark)_&]:border-border"
 			>
 				<svg
+					aria-hidden="true"
 					viewBox="0 0 24 24"
 					width="14"
 					height="14"
