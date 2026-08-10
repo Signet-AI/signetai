@@ -20,6 +20,10 @@ export const DEFAULT_EMBEDDING_COST_RATES: Readonly<Record<EmbeddingCostProvider
 	openrouter: 0.004,
 };
 
+function isLocalBaseUrl(url: string): boolean {
+	return /^https?:\/\/(127\.0\.0\.1|localhost|\[?::1\]?)/i.test(url);
+}
+
 export function resolveEmbeddingCostProvider(provider: string, baseUrl?: string): EmbeddingCostProvider | null {
 	if (provider === "native" || provider === "llama-cpp" || provider === "ollama") return provider;
 	if (provider === "openai") {
@@ -46,6 +50,9 @@ export function resolveEmbeddingAccounting(
 	if (!Number.isFinite(tokens) || tokens < 0) return { cost: null, accountingProvenance: "unavailable" };
 	const rateProvider = resolveEmbeddingCostProvider(provider, opts.baseUrl);
 	if (!rateProvider) return { cost: null, accountingProvenance: "unavailable" };
+	if (rateProvider === "openai" && opts.baseUrl !== undefined && isLocalBaseUrl(opts.baseUrl)) {
+		return { cost: 0, accountingProvenance: "local_zero_cost" };
+	}
 	if (rateProvider === "native" || rateProvider === "llama-cpp" || rateProvider === "ollama") {
 		return { cost: 0, accountingProvenance: "local_zero_cost" };
 	}

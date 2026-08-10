@@ -33,5 +33,9 @@ describe("embedding cost attribution", () => {
 			cost: null,
 			accountingProvenance: "unavailable",
 		});
+		expect(resolveEmbeddingAccounting("openai", 1_000_000, { baseUrl: "http://127.0.0.1:1234/v1" })).toEqual({
+			cost: 0,
+			accountingProvenance: "local_zero_cost",
+		});
 	});
 });

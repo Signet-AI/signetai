@@ -143,6 +143,13 @@ function localAccountingForConfig(config: PiModelProviderConfig): AccountingProv
 	return isLocalBaseUrl(config.baseUrl ?? DEFAULT_OPENAI_COMPATIBLE_BASE_URL) ? "local_zero_cost" : undefined;
 }
 
+function accountingProvenanceForConfig(config: PiModelProviderConfig, piModel: Model<Api>): AccountingProvenance {
+	const local = localAccountingForConfig(config);
+	if (local) return local;
+	const hasModelRates = Object.values(piModel.cost).some((rate) => Number.isFinite(rate) && rate > 0);
+	return hasModelRates ? "locally_estimated" : "unavailable";
+}
+
 function withVersionPath(baseUrl: string): string {
 	const trimmed = baseUrl.trim().replace(/\/+$/, "");
 	// Routing targets conventionally store an OpenAI *base* URL, while users
@@ -267,7 +274,7 @@ function mapUsage(usage: Usage, accountingProvenance: AccountingProvenance): Llm
 		cacheReadTokens: usage.cacheRead ?? null,
 		cacheCreationTokens: usage.cacheWrite ?? null,
 		totalTokens: usage.totalTokens ?? null,
-		totalCost: usage.cost?.total ?? null,
+		totalCost: accountingProvenance === "unavailable" ? null : (usage.cost?.total ?? null),
 		totalDurationMs: null,
 		accountingProvenance,
 	};
@@ -275,8 +282,8 @@ function mapUsage(usage: Usage, accountingProvenance: AccountingProvenance): Llm
 
 /**
  * Map a pi-coding-agent SessionStats aggregate to the shared LlmUsage shape.
- * The stats object aggregates provider-reported usage across every assistant
- * turn and tool result in the session; a session that reported nothing
+ * The stats object aggregates usage across every assistant turn and tool
+ * result in the session; a session that reported nothing
  * yields an all-null usage so callers can distinguish "no usage reported"
  * from a real zero-token pass.
  */
@@ -303,7 +310,7 @@ export function mapSessionStatsToUsage(
 		cacheReadTokens: stats.tokens.cacheRead,
 		cacheCreationTokens: stats.tokens.cacheWrite,
 		totalTokens: stats.tokens.total,
-		totalCost: stats.cost,
+		totalCost: accountingProvenance === "unavailable" ? null : stats.cost,
 		totalDurationMs,
 		accountingProvenance,
 	};
@@ -369,7 +376,7 @@ export function createPiModelProvider(
 ): StreamCapableLlmProvider & PiAgentSessionProvider {
 	const { piModel, apiKey, label } = resolvePiModel(config);
 	const name = config.name ?? label;
-	const accountingProvenance = localAccountingForConfig(config);
+	const accountingProvenance = accountingProvenanceForConfig(config, piModel);
 	const defaultTimeoutMs = config.defaultTimeoutMs ?? 60_000;
 	const reasoning = config.reasoning;
 	const modelRuntime = ModelRuntime.create({
@@ -441,7 +448,7 @@ export function createPiModelProvider(
 
 	const provider: LlmProvider = {
 		name,
-		...(accountingProvenance ? { accountingProvenance } : {}),
+		accountingProvenance,
 		async generate(prompt, opts) {
 			const { text } = await callOnce(prompt, opts);
 			return text;

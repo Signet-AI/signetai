@@ -1,7 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
-import { createPiModelProvider, isPiAgentSessionProvider, resolvePiModel } from "./pi-provider";
+import type { SessionStats } from "@earendil-works/pi-coding-agent";
+import { createPiModelProvider, isPiAgentSessionProvider, mapSessionStatsToUsage, resolvePiModel } from "./pi-provider";
 
 describe("pi provider catalog models", () => {
 	test("preserves the Codex responses API and registry metadata", () => {
@@ -33,6 +34,32 @@ describe("pi provider catalog models", () => {
 		});
 
 		expect(resolved.piModel.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+	});
+
+	test("does not label a remote zero-rate model as provider-reported cost", () => {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "gateway-model",
+			baseUrl: "https://gateway.example.test/v1",
+		});
+		const stats: SessionStats = {
+			sessionFile: undefined,
+			sessionId: "session",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 2,
+			tokens: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0, total: 4 },
+			cost: 0,
+		};
+
+		expect(provider.accountingProvenance).toBe("unavailable");
+		expect(mapSessionStatsToUsage(stats, 10, provider.accountingProvenance)).toMatchObject({
+			totalTokens: 4,
+			totalCost: null,
+			accountingProvenance: "unavailable",
+		});
 	});
 
 	test("creates an isolated AgentSession with no ambient tools", async () => {

@@ -351,6 +351,7 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
 	const genWithUsage = provider.generateWithUsage;
 	return {
 		name: provider.name,
+		...(provider.accountingProvenance ? { accountingProvenance: provider.accountingProvenance } : {}),
 
 		async generate(prompt, opts): Promise<string> {
 			if (!(await bucket.acquire(waitTimeoutMs))) {
