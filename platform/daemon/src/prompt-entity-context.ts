@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
-import { cosineSimilarity } from "@signet/core";
+import { cosineSimilarity, scanMemoryContent } from "@signet/core";
 import { selectWithBudgetSkippingOversized } from "./context-budget";
 import { type ReadDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
 import type { EmbeddingFetchOptions } from "./embedding-fetch";
 import type { EmbeddingRole } from "./embedding-profile";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
+import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { countPromptTermOverlap, extractSubstantiveWords, stripUntrustedMetadata } from "./prompt-text";
 
 type FetchEmbedding = (
@@ -516,16 +517,26 @@ function loadEntityContextLines(
 		memory_id: string | null;
 		version: number;
 	}>;
+	const safeCandidateRows = candidateRows.filter((row) =>
+		row.memory_id
+			? isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "memory",
+					sourceId: row.memory_id,
+					content: row.content,
+				})
+			: scanMemoryContent(row.content).contextEligible,
+	);
 	const semanticScores = loadAttributeSemanticScores(
 		db,
 		agentId,
-		candidateRows
+		safeCandidateRows
 			.filter((row) => !isPromptBroadUncategorizedAttribute(row))
 			.map((row) => ({ attributeId: row.attribute_id, memoryId: row.memory_id })),
 		queryVector,
 	);
 	const genericContextQuery = isPromptGenericContextQuery(promptTerms);
-	const candidates: PromptAttributeCandidate[] = candidateRows
+	const candidates: PromptAttributeCandidate[] = safeCandidateRows
 		.filter((row) => !isPromptBroadUncategorizedAttribute(row))
 		.map((row) => {
 			const lexicalScore = scoreAttributeLexically(row, promptTerms);
@@ -616,7 +627,18 @@ function loadEntityContextLines(
 		version: number;
 	}>;
 	return rows
-		.filter((row) => !isPromptBroadUncategorizedAttribute(row))
+		.filter(
+			(row) =>
+				!isPromptBroadUncategorizedAttribute(row) &&
+				(row.memory_id
+					? isMemoryContentContextEligible(db, {
+							agentId,
+							sourceKind: "memory",
+							sourceId: row.memory_id,
+							content: row.content,
+						})
+					: scanMemoryContent(row.content).contextEligible),
+		)
 		.map((row) => ({
 			entityName: entity.entityName,
 			aspectName: row.aspect_name,

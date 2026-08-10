@@ -9,7 +9,9 @@
  * No LLM calls — pure template synthesis.
  */
 
+import { scanMemoryContent } from "@signet/core";
 import type { ReadDb } from "../db-accessor";
+import { isMemoryContentContextEligible } from "../memory-content-safety";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -52,11 +54,13 @@ interface AspectRow {
 interface AttributeRow {
 	readonly content: string;
 	readonly importance: number;
+	readonly memory_id: string | null;
 }
 
 interface ConstraintRow {
 	readonly content: string;
 	readonly importance: number;
+	readonly memory_id: string | null;
 }
 
 interface DependencyRow {
@@ -146,14 +150,26 @@ export function constructContextBlocks(
 		for (const asp of aspects) {
 			const attrs = db
 				.prepare(
-					`SELECT content, importance FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
+					`SELECT content, importance, memory_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
 					 WHERE aspect_id = ? AND agent_id = ?
 					   AND status = 'active' AND kind != 'constraint'
 					 ORDER BY importance DESC LIMIT 5`,
 				)
 				.all(asp.id, agentId) as AttributeRow[];
 
-			const values = attrs.map((a) => cleanValue(a.content)).filter((value) => !isNoise(value));
+			const values = attrs
+				.filter((a) =>
+					a.memory_id
+						? isMemoryContentContextEligible(db, {
+								agentId,
+								sourceKind: "memory",
+								sourceId: a.memory_id,
+								content: a.content,
+							})
+						: scanMemoryContent(a.content).contextEligible,
+				)
+				.map((a) => cleanValue(a.content))
+				.filter((value) => !isNoise(value));
 			if (values.length === 0) continue;
 
 			aspectIds.push(asp.id);
@@ -167,7 +183,7 @@ export function constructContextBlocks(
 		// Constraints: always surface (invariant 5)
 		const constraints = db
 			.prepare(
-				`SELECT DISTINCT ea.content, ea.importance
+				`SELECT DISTINCT ea.content, ea.importance, ea.memory_id
 				 FROM entity_aspects asp INDEXED BY idx_entity_aspects_entity
 				 CROSS JOIN entity_attributes ea INDEXED BY idx_entity_attributes_aspect
 				   ON ea.aspect_id = asp.id
@@ -177,7 +193,19 @@ export function constructContextBlocks(
 			)
 			.all(ent.id, agentId) as ConstraintRow[];
 
-		const cleanConstraints = constraints.map((c) => cleanValue(c.content)).filter((value) => !isNoise(value));
+		const cleanConstraints = constraints
+			.filter((c) =>
+				c.memory_id
+					? isMemoryContentContextEligible(db, {
+							agentId,
+							sourceKind: "memory",
+							sourceId: c.memory_id,
+							content: c.content,
+						})
+					: scanMemoryContent(c.content).contextEligible,
+			)
+			.map((c) => cleanValue(c.content))
+			.filter((value) => !isNoise(value));
 		if (cleanConstraints.length > 0) {
 			const vals = cleanConstraints.join("; ");
 			lines.push(`- Constraints: ${vals}`);

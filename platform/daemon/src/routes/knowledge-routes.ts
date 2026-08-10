@@ -1,3 +1,4 @@
+import { MEMORY_CONTENT_WITHHELD_NOTICE, scanMemoryContent } from "@signet/core";
 import type { Hono } from "hono";
 
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
@@ -24,6 +25,7 @@ import {
 } from "../knowledge-graph";
 import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { isMemoryContentContextEligible } from "../memory-content-safety";
 import { OntologyProposalError, applyOntologyOperation } from "../ontology-proposals";
 import { getTraversalStatus, resolveFocalEntities, traverseKnowledgeGraph } from "../pipeline/graph-traversal";
 import { AGENTS_DIR, authConfig } from "./state";
@@ -447,7 +449,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			const aspectsWithAttributes = aspects.map((aspect) => {
 				const attrs = db
 					.prepare(
-						`SELECT content, kind, importance, confidence
+						`SELECT content, kind, importance, confidence, memory_id
 						 FROM entity_attributes
 						 WHERE aspect_id = ? AND agent_id = ?
 						   AND status = 'active'
@@ -459,11 +461,23 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					kind: string;
 					importance: number;
 					confidence: number;
+					memory_id: string | null;
 				}>;
 				return {
 					name: aspect.canonical_name,
 					weight: aspect.weight,
-					attributes: attrs,
+					attributes: attrs
+						.filter((attribute) =>
+							attribute.memory_id
+								? isMemoryContentContextEligible(db, {
+										agentId,
+										sourceKind: "memory",
+										sourceId: attribute.memory_id,
+										content: attribute.content,
+									})
+								: scanMemoryContent(attribute.content).contextEligible,
+						)
+						.map(({ memory_id: _memoryId, ...attribute }) => attribute),
 				};
 			});
 
@@ -494,29 +508,44 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				if (tokenBudget <= 0) break;
 				const mem = db
 					.prepare(
-						`SELECT id, content FROM memories
+						`SELECT id, content, agent_id FROM memories
 						 WHERE id = ? AND is_deleted = 0`,
 					)
-					.get(memId) as { id: string; content: string } | undefined;
-				if (mem) {
+					.get(memId) as { id: string; content: string; agent_id: string | null } | undefined;
+				if (
+					mem &&
+					isMemoryContentContextEligible(db, {
+						agentId: mem.agent_id?.trim() || "default",
+						sourceKind: "memory",
+						sourceId: mem.id,
+						content: mem.content,
+					})
+				) {
 					const approxTokens = Math.ceil(mem.content.length / 4);
 					if (approxTokens <= tokenBudget) {
-						hydratedMemories.push(mem);
+						hydratedMemories.push({ id: mem.id, content: mem.content });
 						tokenBudget -= approxTokens;
 					}
 				}
 			}
 
+			const entityDescription = entityRow?.description
+				? scanMemoryContent(entityRow.description).contextEligible
+					? entityRow.description
+					: MEMORY_CONTENT_WITHHELD_NOTICE
+				: null;
 			return c.json({
 				entity: entityRow
 					? {
 							id: entityRow.id,
 							name: entityRow.name,
 							type: entityRow.entity_type,
-							description: entityRow.description,
+							description: entityDescription,
 						}
 					: null,
-				constraints: traversal.constraints,
+				constraints: traversal.constraints.filter(
+					(constraint) => scanMemoryContent(constraint.content).contextEligible,
+				),
 				aspects: aspectsWithAttributes,
 				dependencies: deps,
 				memoryCount: traversal.memoryIds.size,
@@ -631,10 +660,18 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				earliest_at: string;
 				latest_at: string;
 			}>;
+			const safeRows = rows.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "summary",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
 
 			return c.json({
 				entityName: entity.name,
-				summaries: rows.map((row) => ({
+				summaries: safeRows.map((row) => ({
 					id: row.id,
 					sessionKey: row.session_key,
 					harness: row.harness,
@@ -642,7 +679,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					latestAt: row.latest_at,
 					content: row.content,
 				})),
-				total: rows.length,
+				total: safeRows.length,
 			});
 		});
 	});

@@ -1,5 +1,6 @@
 import type { ReadDb } from "./db-accessor";
 import { tableExists } from "./db-helpers";
+import { isMemoryContentContextEligible } from "./memory-content-safety";
 
 export interface OntologyEvidenceRef {
 	readonly sourceKind: string | null;
@@ -173,7 +174,15 @@ function readSessionTranscriptEvidence(
 			 LIMIT 1`,
 		)
 		.get(agentId, ...ids) as SessionTranscriptEvidenceRow | undefined;
-	return row ?? null;
+	return row &&
+		isMemoryContentContextEligible(db, {
+			agentId,
+			sourceKind: "transcript",
+			sourceId: row.session_key,
+			content: row.content,
+		})
+		? row
+		: null;
 }
 
 function readOntologyProposalEvidence(
@@ -192,7 +201,16 @@ function readOntologyProposalEvidence(
 			 LIMIT 1`,
 		)
 		.get(proposalId, agentId) as OntologyProposalEvidenceRow | undefined;
-	return row ?? null;
+	const content = row === undefined ? "" : [row.operation, row.rationale, row.evidence].join("\n");
+	return row &&
+		isMemoryContentContextEligible(db, {
+			agentId,
+			sourceKind: "artifact",
+			sourceId: row.id,
+			content,
+		})
+		? row
+		: null;
 }
 
 function readMemoryArtifactEvidence(
@@ -229,7 +247,15 @@ function readMemoryArtifactEvidence(
 			 LIMIT 1`,
 		)
 		.get(...args) as MemoryArtifactEvidenceRow | undefined;
-	return row ?? null;
+	return row &&
+		isMemoryContentContextEligible(db, {
+			agentId,
+			sourceKind: "artifact",
+			sourceId: row.source_path,
+			content: row.content,
+		})
+		? row
+		: null;
 }
 
 function readMemoryEvidence(db: ReadDb, agentId: string, ref: OntologyEvidenceRef): MemoryEvidenceRow | null {
@@ -242,7 +268,15 @@ function readMemoryEvidence(db: ReadDb, agentId: string, ref: OntologyEvidenceRe
 			 LIMIT 1`,
 		)
 		.get(ref.memoryId, agentId) as MemoryEvidenceRow | undefined;
-	return row ?? null;
+	return row &&
+		isMemoryContentContextEligible(db, {
+			agentId,
+			sourceKind: "memory",
+			sourceId: row.id,
+			content: row.content,
+		})
+		? row
+		: null;
 }
 
 function sourceLooksLikeTranscript(ref: OntologyEvidenceRef): boolean {

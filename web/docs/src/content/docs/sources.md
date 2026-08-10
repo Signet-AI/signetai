@@ -132,6 +132,12 @@ artifact residue, or orphan chunks. If diagnostics cannot read the backing
 tables, the source health reports `unhealthy` with error context rather than
 pretending the source is healthy.
 
+Source artifacts are also scanned by the memory-content-safety policy before
+native recall, source-chunk fallback, Dreaming, or other prompt-facing
+projections use them. The raw artifact and provenance remain unchanged when a
+record is `tainted` or `blocked`; inspect the record and the bounded
+`/api/diagnostics/memory-content-safety` ledger for the decision.
+
 ## Obsidian v1
 
 Obsidian Sources v1 indexes Markdown files below a vault root:

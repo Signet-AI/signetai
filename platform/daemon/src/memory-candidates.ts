@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
-import type { AgentRosterReadPolicy } from "@signet/core";
+import { type AgentRosterReadPolicy, scanMemoryContent } from "@signet/core";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { effectiveScore } from "./memory-classification";
+import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { buildAgentScopeClause } from "./memory-search";
 
 export interface ScoredMemory {
@@ -87,17 +88,18 @@ export function buildActiveConstraintsSection(
 	}>,
 	charBudget: number,
 ): string {
-	if (constraints.length === 0) return "";
+	const safeConstraints = constraints.filter((item) => scanMemoryContent(item.content).contextEligible);
+	if (safeConstraints.length === 0) return "";
 
 	const header = "\n## Active Constraints\n\nConstraints for entities in scope. These always apply.\n";
-	const fullLines = constraints.map((item) => `- [${item.entityName}] ${item.content}\n`);
+	const fullLines = safeConstraints.map((item) => `- [${item.entityName}] ${item.content}\n`);
 	const fullSection = `${header}${fullLines.join("")}`.trimEnd();
 	if (charBudget <= 0 || fullSection.length <= charBudget) return fullSection;
 
-	const fixedOverhead = constraints.reduce((acc, item) => acc + `- [${item.entityName}] \n`.length, header.length);
+	const fixedOverhead = safeConstraints.reduce((acc, item) => acc + `- [${item.entityName}] \n`.length, header.length);
 	const availableForContent = Math.max(0, charBudget - fixedOverhead);
-	const perConstraintBudget = Math.max(24, Math.floor(availableForContent / constraints.length));
-	const compressedLines = constraints.map((item) => {
+	const perConstraintBudget = Math.max(24, Math.floor(availableForContent / safeConstraints.length));
+	const compressedLines = safeConstraints.map((item) => {
 		const content =
 			item.content.length <= perConstraintBudget
 				? item.content
@@ -108,7 +110,7 @@ export function buildActiveConstraintsSection(
 
 	logger.warn("hooks", "Constraint section exceeded budget; preserving all constraints", {
 		constraintBudgetChars: charBudget,
-		constraintCount: constraints.length,
+		constraintCount: safeConstraints.length,
 		fullChars: fullSection.length,
 		injectChars: compressedSection.length,
 	});
@@ -171,7 +173,16 @@ export async function fetchTraversalCandidates(
 					   AND m.is_deleted = 0`,
 					)
 					.all(agentId, ...batch) as unknown as ScoredMemory[];
-				rows.push(...batchRows);
+				rows.push(
+					...batchRows.filter((row) =>
+						isMemoryContentContextEligible(db, {
+							agentId,
+							sourceKind: "memory",
+							sourceId: row.id,
+							content: row.content,
+						}),
+					),
+				);
 				await yieldBetweenBatches();
 			}
 
@@ -203,28 +214,35 @@ export function getAllScoredCandidates(
 
 	try {
 		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
-		const rows = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
+		const rows = getDbAccessor().withReadDb((db) => {
+			const queried = db
+				.prepare(
+					`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
 						        COALESCE(access_count, 0) AS access_count
 					 FROM memories m
 					 WHERE m.is_deleted = 0${scope.sql}
 					 ORDER BY created_at DESC LIMIT ?`,
-					)
-					.all(...scope.args, limit * 3) as Array<{
-					id: string;
-					content: string;
-					type: string;
-					importance: number;
-					tags: string | null;
-					pinned: number;
-					project: string | null;
-					created_at: string;
-					access_count: number;
-				}>,
-		);
+				)
+				.all(...scope.args, limit * 3) as Array<{
+				id: string;
+				content: string;
+				type: string;
+				importance: number;
+				tags: string | null;
+				pinned: number;
+				project: string | null;
+				created_at: string;
+				access_count: number;
+			}>;
+			return queried.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "memory",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
+		});
 
 		const scored: ScoredMemory[] = rows
 			.map((r) => ({
@@ -273,13 +291,22 @@ export function getPredictedContextMemories(
 		// Get recent completed transcripts for this project only. Global predictive
 		// FTS is too broad for session-start latency on large memory stores.
 		const transcriptRows = getDbAccessor().withReadDb((db) => {
-			return db
-				.prepare(
-					`SELECT content AS transcript FROM session_transcripts
+			return (
+				db
+					.prepare(
+						`SELECT session_key, content AS transcript FROM session_transcripts
 					 WHERE project = ? AND completed_at IS NOT NULL AND agent_id = ?
 					 ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 5`,
-				)
-				.all(project, agentId) as Array<{ transcript: string }>;
+					)
+					.all(project, agentId) as Array<{ session_key: string; transcript: string }>
+			).filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "transcript",
+					sourceId: row.session_key,
+					content: row.transcript,
+				}),
+			);
 		});
 
 		if (transcriptRows.length === 0) return [];
@@ -313,8 +340,8 @@ export function getPredictedContextMemories(
 		// Use recurring terms as FTS query.
 		const ftsQuery = recurring.join(" OR ");
 		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
-		const rows = getDbAccessor().withReadDb(
-			(db) =>
+		const rows = getDbAccessor().withReadDb((db) =>
+			(
 				db
 					.prepare(
 						`SELECT m.id, m.content, m.type, m.importance, m.tags,
@@ -339,7 +366,15 @@ export function getPredictedContextMemories(
 					project: string | null;
 					created_at: string;
 					access_count: number;
-				}>,
+				}>
+			).filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "memory",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			),
 		);
 
 		const selected: ScoredMemory[] = [];
@@ -382,7 +417,9 @@ export function getRecentMemories(memoryDbPath: string, limit: number, recencyBi
         LIMIT ?
       `;
 
-			return db.prepare(query).all(limit) as unknown as Array<SimpleMemory>;
+			return (db.prepare(query).all(limit) as unknown as Array<SimpleMemory>).filter(
+				(row) => scanMemoryContent(row.content).contextEligible,
+			);
 		});
 
 		return rows.map((r) => ({
@@ -407,7 +444,7 @@ export function getMemoriesSince(memoryDbPath: string, sinceMs: number, limit: n
 	try {
 		const sinceIso = new Date(sinceMs).toISOString();
 		const rows = getDbAccessor().withReadDb((db) => {
-			return db
+			const rows = db
 				.prepare(`
 				SELECT id, content, type, importance, created_at
 				FROM memories
@@ -416,6 +453,7 @@ export function getMemoriesSince(memoryDbPath: string, sinceMs: number, limit: n
 				LIMIT ?
 			`)
 				.all(sinceIso, limit) as unknown as Array<SimpleMemory>;
+			return rows.filter((row) => scanMemoryContent(row.content).contextEligible);
 		});
 
 		return rows.map((r) => ({

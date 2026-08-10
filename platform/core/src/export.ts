@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { MEMORY_CONTENT_SAFETY_POLICY_VERSION, scanMemoryContent } from "./memory-content-safety";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -73,6 +74,33 @@ interface ImportDb {
 		get(...args: unknown[]): Record<string, unknown> | undefined;
 	};
 	exec(sql: string): void;
+}
+
+function recordImportedMemoryContentSafety(db: ImportDb, memoryId: string, content: string): void {
+	if (
+		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get("memory_content_safety") == null
+	) {
+		return;
+	}
+	const assessment = scanMemoryContent(content);
+	db.prepare(
+		`INSERT INTO memory_content_safety
+			 (agent_id, source_kind, source_id, status, context_eligible, reasons_json, policy_version, scanned_at)
+			 VALUES ('default', 'memory', ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(agent_id, source_kind, source_id) DO UPDATE SET
+			   status = excluded.status,
+			   context_eligible = excluded.context_eligible,
+			   reasons_json = excluded.reasons_json,
+			   policy_version = excluded.policy_version,
+			   scanned_at = excluded.scanned_at`,
+	).run(
+		memoryId,
+		assessment.status,
+		assessment.contextEligible ? 1 : 0,
+		JSON.stringify(assessment.reasons),
+		MEMORY_CONTENT_SAFETY_POLICY_VERSION,
+		new Date().toISOString(),
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +319,7 @@ export function importMemories(
 						new Date().toISOString(),
 						id,
 					);
+					recordImportedMemoryContentSafety(db, id, String(mem.content ?? ""));
 					imported++;
 					continue;
 				}
@@ -317,6 +346,8 @@ export function importMemories(
 				mem.created_at ?? new Date().toISOString(),
 				mem.updated_at ?? new Date().toISOString(),
 			);
+			const stored = db.prepare("SELECT content FROM memories WHERE id = ?").get(id);
+			recordImportedMemoryContentSafety(db, id, String(stored?.content ?? ""));
 			imported++;
 		}
 		db.exec("COMMIT");

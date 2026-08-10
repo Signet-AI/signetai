@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { extractAnchorTerms } from "./anchor-terms";
 import { type DbAccessor, type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
+import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { sanitizeFtsQuery } from "./memory-search";
 import {
 	type TranscriptIdentity,
@@ -495,9 +496,15 @@ export function upsertSessionTranscript(
 			}
 			db.prepare(
 				`INSERT INTO session_transcripts (${insertColumns.join(", ")})
-				 VALUES (${insertColumns.map(() => "?").join(", ")})
-				 ON CONFLICT(agent_id, session_key) DO UPDATE SET ${updates.join(", ")}`,
+					 VALUES (${insertColumns.map(() => "?").join(", ")})
+					 ON CONFLICT(agent_id, session_key) DO UPDATE SET ${updates.join(", ")}`,
 			).run(...values);
+			upsertMemoryContentSafetyInTx(db, {
+				agentId,
+				sourceKind: "transcript",
+				sourceId: sessionKey,
+				content: retainedTranscript,
+			});
 			return true;
 		});
 	} catch (error) {

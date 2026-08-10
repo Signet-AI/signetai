@@ -31,6 +31,7 @@ import {
 } from "../episodic-sources";
 import { type GraphHygieneCaps, getDreamingHygieneCandidatesInDb } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
+import { upsertMemoryContentSafetyInTx } from "../memory-content-safety";
 import type { GraphWriteCaps } from "../ontology-proposals";
 import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
 import { normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
@@ -1599,6 +1600,12 @@ function writeDreamingTranscriptManifestInTx(
 			}),
 			now,
 		);
+		upsertMemoryContentSafetyInTx(db, {
+			agentId: entry.scope,
+			sourceKind: "summary",
+			sourceId: nodeId,
+			content,
+		});
 		upsertThreadHead(db as unknown as Database, {
 			agentId: entry.scope,
 			nodeId,

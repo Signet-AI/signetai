@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { arch, platform } from "node:process";
 import { fileURLToPath } from "node:url";
+import { MEMORY_CONTENT_SAFETY_POLICY_VERSION, scanMemoryContent } from "./memory-content-safety";
 import { isDaemonDerivedMemorySourceType } from "./memory-provenance";
 import { runMigrations } from "./migrations/index";
 import type { Conversation, Embedding, Memory } from "./types";
@@ -67,7 +68,16 @@ function findSqliteVecExtension(): string | null {
 		join(dirname(dirname(process.execPath)), "node_modules", platformPkg, extFile),
 		// Bun default global install: ~/.bun/install/global/node_modules/<pkg>/vec0.so
 		join(process.env.BUN_INSTALL || join(homedir(), ".bun"), "install", "global", "node_modules", platformPkg, extFile),
-		join(process.env.BUN_INSTALL || join(homedir(), ".bun"), "install", "global", "node_modules", "signetai", "node_modules", platformPkg, extFile),
+		join(
+			process.env.BUN_INSTALL || join(homedir(), ".bun"),
+			"install",
+			"global",
+			"node_modules",
+			"signetai",
+			"node_modules",
+			platformPkg,
+			extFile,
+		),
 		// Standard npm/yarn layout: __dirname is node_modules/@signet/core/dist/
 		join(__dirname, "..", "..", platformPkg, extFile),
 		// Installed package: __dirname is signetai/dist/, deps in own node_modules/
@@ -292,6 +302,7 @@ export class Database {
 				memory.manualOverride ? 1 : 0,
 				isDaemonDerivedMemorySourceType(memory.sourceType) ? null : "episodic",
 			);
+		this.recordMemoryContentSafety(id, memory.content, "default");
 
 		return id;
 	}
@@ -354,6 +365,9 @@ export class Database {
 		}
 
 		if (sets.length === 0) return;
+		const owner = this.getDb().prepare("SELECT agent_id FROM memories WHERE id = ?").get(id) as
+			| { agent_id: string | null }
+			| undefined;
 
 		sets.push("updated_at = ?");
 		values.push(new Date().toISOString());
@@ -365,6 +379,37 @@ export class Database {
 		this.getDb()
 			.prepare(`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`)
 			.run(...values);
+		if (typeof updates.content === "string") {
+			this.recordMemoryContentSafety(id, updates.content, owner?.agent_id?.trim() || "default");
+		}
+	}
+
+	private recordMemoryContentSafety(id: string, content: string, agentId: string): void {
+		const db = this.getDb();
+		const table = db
+			.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+			.get("memory_content_safety");
+		if (table == null) return;
+		const assessment = scanMemoryContent(content);
+		db.prepare(
+			`INSERT INTO memory_content_safety
+			 (agent_id, source_kind, source_id, status, context_eligible, reasons_json, policy_version, scanned_at)
+			 VALUES (?, 'memory', ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(agent_id, source_kind, source_id) DO UPDATE SET
+			   status = excluded.status,
+			   context_eligible = excluded.context_eligible,
+			   reasons_json = excluded.reasons_json,
+			   policy_version = excluded.policy_version,
+			   scanned_at = excluded.scanned_at`,
+		).run(
+			agentId,
+			id,
+			assessment.status,
+			assessment.contextEligible ? 1 : 0,
+			JSON.stringify(assessment.reasons),
+			MEMORY_CONTENT_SAFETY_POLICY_VERSION,
+			new Date().toISOString(),
+		);
 	}
 
 	softDeleteMemory(id: string, deletedBy: string, reason?: string): void {

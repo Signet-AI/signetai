@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { scanMemoryContent } from "@signet/core";
 import { writeFileIfChangedAsync } from "./file-sync";
 
 export interface SyncAgentWorkspacesOptions {
@@ -69,7 +70,12 @@ export async function syncAgentWorkspaces({
 		return;
 	}
 
-	const sharedIdentity = await composeIdentitySections([join(agentsDir, "USER.md"), join(agentsDir, "MEMORY.md")]);
+	const memoryPath = join(agentsDir, "MEMORY.md");
+	const memoryContent = await readFileIfExists(memoryPath);
+	const sharedIdentity = await composeIdentitySections([
+		join(agentsDir, "USER.md"),
+		...(memoryContent && scanMemoryContent(memoryContent).contextEligible ? [memoryPath] : []),
+	]);
 
 	await forEachInBatches(entries, batchSize, async (name) => {
 		const agentDir = join(agentsRoot, name);

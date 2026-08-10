@@ -9,6 +9,7 @@ import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-qu
 import { readEmbeddingUsageSummary } from "../embedding-usage";
 import { getLlmProvider } from "../llm.js";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config.js";
+import { listMemoryContentSafety, parseMemorySafetyReasons } from "../memory-content-safety.js";
 import {
 	getDreamingAttention,
 	getDreamingEpisodicTokenBacklog,
@@ -366,6 +367,57 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.get("/api/diagnostics", (c) => {
 		const report = getCachedDiagnosticsReport();
 		return c.json(report);
+	});
+
+	app.get("/api/diagnostics/memory-content-safety", (c) => {
+		const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
+		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const limitRaw = c.req.query("limit");
+		const offsetRaw = c.req.query("offset");
+		const limit = limitRaw === undefined ? 100 : Number(limitRaw);
+		const offset = offsetRaw === undefined ? 0 : Number(offsetRaw);
+		if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+			return c.json({ error: "limit must be an integer between 1 and 200" }, 400);
+		}
+		if (!Number.isInteger(offset) || offset < 0 || offset > 100_000) {
+			return c.json({ error: "offset must be a non-negative integer at most 100000" }, 400);
+		}
+		const status = c.req.query("status")?.trim() || undefined;
+		if (status !== undefined && !["clean", "tainted", "blocked"].includes(status)) {
+			return c.json({ error: "status must be clean, tainted, or blocked" }, 400);
+		}
+		const sourceKind = c.req.query("sourceKind")?.trim() || undefined;
+		if (
+			sourceKind !== undefined &&
+			!["memory", "artifact", "transcript", "summary", "source_chunk"].includes(sourceKind)
+		) {
+			return c.json({ error: "sourceKind is invalid" }, 400);
+		}
+		const report = getDbAccessor().withReadDb((db) =>
+			listMemoryContentSafety(db, {
+				agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
+				status,
+				sourceKind,
+				limit,
+				offset,
+			}),
+		);
+		return c.json({
+			agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
+			policyVersion: report.policyVersion,
+			counts: report.counts,
+			items: report.items.map((item) => ({
+				agentId: item.agent_id,
+				sourceKind: item.source_kind,
+				sourceId: item.source_id,
+				status: item.status,
+				contextEligible: item.context_eligible === 1,
+				reasons: parseMemorySafetyReasons(item.reasons_json),
+				policyVersion: item.policy_version,
+				scannedAt: item.scanned_at,
+			})),
+		});
 	});
 
 	app.get("/api/diagnostics/:domain", async (c, next) => {

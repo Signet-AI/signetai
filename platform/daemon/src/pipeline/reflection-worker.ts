@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PipelineReflectionsConfig } from "@signet/core";
-import { resolveDefaultBasePath } from "@signet/core";
+import { type PipelineReflectionsConfig, resolveDefaultBasePath, scanMemoryContent } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
+import { isMemoryContentContextEligible } from "../memory-content-safety";
 
 type ReflectionDeps = {
 	readonly getDbAccessor: typeof getDbAccessor;
@@ -227,6 +227,12 @@ function isQuestionLedInsight(text: string): boolean {
 }
 
 export function buildReflectionPrompt(context: ReflectionSourceContext, count = 1): string {
+	const safeMemories = context.memories.filter((memory) => scanMemoryContent(memory.content).contextEligible);
+	const safeExistingReflections = context.existingReflections.filter(
+		(reflection) =>
+			scanMemoryContent(reflection.summary).contextEligible &&
+			(reflection.question === null || scanMemoryContent(reflection.question).contextEligible),
+	);
 	const plural = count === 1 ? "brief" : "briefs";
 	const lines: string[] = [
 		"You write the daily brief for a local memory tool. Below is a raw bundle of the user's recent saved memories, picked mechanically, not curated for a topic. Treat it as evidence, not a theme.",
@@ -254,9 +260,9 @@ export function buildReflectionPrompt(context: ReflectionSourceContext, count = 
 		"",
 	];
 
-	if (context.existingReflections.length > 0) {
+	if (safeExistingReflections.length > 0) {
 		lines.push("Existing brief items to avoid repeating:");
-		for (const r of context.existingReflections.slice(0, 12)) {
+		for (const r of safeExistingReflections.slice(0, 12)) {
 			lines.push(`  [${r.createdAt.slice(0, 10)}] ${trimLine(r.summary, 220)}`);
 			if (r.question && normalizeInsight(r.question) !== normalizeInsight(r.summary)) {
 				lines.push(`  [${r.createdAt.slice(0, 10)}] ${trimLine(r.question, 220)}`);
@@ -266,9 +272,10 @@ export function buildReflectionPrompt(context: ReflectionSourceContext, count = 
 	}
 
 	lines.push("Recent saved memories:");
-	for (const m of context.memories) {
+	for (const m of safeMemories) {
 		const date = m.createdAt.slice(0, 10);
-		lines.push(`  [${date}] (${m.type}) ${m.tags ? `[${m.tags}] ` : ""}${trimLine(m.content, 500)}`);
+		const tags = m.tags && scanMemoryContent(m.tags).contextEligible ? `[${m.tags}] ` : "";
+		lines.push(`  [${date}] (${m.type}) ${tags}${trimLine(m.content, 500)}`);
 	}
 
 	return lines.join("\n");
@@ -369,13 +376,22 @@ export function collectReflectionContext(
 			tags: string | null;
 			created_at: string;
 		}[];
-		return rows.map((r) => ({
-			id: r.id,
-			content: r.content,
-			type: r.type,
-			tags: r.tags ?? "",
-			createdAt: r.created_at,
-		}));
+		return rows
+			.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "memory",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			)
+			.map((r) => ({
+				id: r.id,
+				content: r.content,
+				type: r.type,
+				tags: r.tags ?? "",
+				createdAt: r.created_at,
+			}));
 	});
 
 	const existingReflections = dbAccessor.withReadDb((db) => {
@@ -386,7 +402,13 @@ export function collectReflectionContext(
              ORDER BY created_at DESC LIMIT 24`,
 			)
 			.all(agentId) as { id: string; question: string | null; summary: string; created_at: string }[];
-		return rows.map((r) => ({ id: r.id, question: r.question, summary: r.summary, createdAt: r.created_at }));
+		return rows
+			.filter(
+				(row) =>
+					scanMemoryContent(row.summary).contextEligible &&
+					(row.question === null || scanMemoryContent(row.question).contextEligible),
+			)
+			.map((r) => ({ id: r.id, question: r.question, summary: r.summary, createdAt: r.created_at }));
 	});
 
 	return { memories, summaries: [], transcripts: [], graphFacts: [], existingReflections };
@@ -411,6 +433,12 @@ export async function generateDailyBriefInsights(
 			.filter(Boolean),
 	);
 	const insights = parseDailyBriefInsights(raw, Math.max(count * 2, count))
+		.filter(
+			(insight) =>
+				scanMemoryContent(insight.summary).contextEligible &&
+				(insight.question === undefined || scanMemoryContent(insight.question).contextEligible) &&
+				insight.patterns.every((pattern) => scanMemoryContent(pattern).contextEligible),
+		)
 		.filter((insight) => {
 			const key = normalizeInsight(insight.summary);
 			if (!key || existing.has(key)) return false;

@@ -130,6 +130,7 @@ import { up as telemetryDeliveryHealth } from "./121-telemetry-delivery-health";
 import { up as dreamingEvidenceRetry } from "./122-dreaming-evidence-retry";
 import { up as embeddingIndexFailures } from "./123-embedding-index-failures";
 import { up as importedDerivedLifecycle } from "./124-import-derived-lifecycle";
+import { up as memoryContentSafety } from "./125-memory-content-safety";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1171,6 +1172,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		artifacts: {
 			tables: ["imported_source_lifecycle"],
 		},
+	},
+	{
+		version: 125,
+		name: "memory-content-safety",
+		up: memoryContentSafety,
+		artifacts: { tables: ["memory_content_safety"] },
 	},
 ];
 

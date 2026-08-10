@@ -1,5 +1,7 @@
+import { scanMemoryContent } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import { tableExists } from "./db-helpers";
+import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { sanitizeFtsQuery } from "./memory-search";
 import { redactSecrets } from "./session-checkpoints";
 
@@ -9,7 +11,6 @@ function canonicalizeTranscriptLookup(value: string): string {
 	const trimmed = value.trim();
 	return OMP_UUID_LIKE_SESSION_ID.test(trimmed) ? trimmed.replace(/:/g, "-") : trimmed;
 }
-
 
 export interface SubagentContextRequest {
 	readonly harness: string;
@@ -158,6 +159,16 @@ function transcriptTail(db: ReadDb, parent: ParentSessionRef, tailChars: number)
 		.get(parent.agentId, parent.sessionKey) as { readonly content: string } | undefined;
 	const content = row?.content?.trim();
 	if (!content) return "";
+	if (
+		!isMemoryContentContextEligible(db, {
+			agentId: parent.agentId,
+			sourceKind: "transcript",
+			sourceId: parent.sessionKey,
+			content,
+		})
+	) {
+		return "";
+	}
 	return content.length <= tailChars ? content : content.slice(content.length - tailChars);
 }
 
@@ -184,9 +195,9 @@ function activeConstraints(
 		args.push(...entityNames, ...entityNames);
 	}
 
-	return db
+	const rows = db
 		.prepare(
-			`SELECT e.name AS entityName, ea.content
+			`SELECT e.name AS entityName, ea.content, ea.memory_id
 			 FROM entities e
 			 JOIN entity_aspects asp ON asp.entity_id = e.id AND asp.agent_id = e.agent_id
 			 JOIN entity_attributes ea ON ea.aspect_id = asp.id AND ea.agent_id = e.agent_id
@@ -197,7 +208,21 @@ function activeConstraints(
 			 ORDER BY COALESCE(ea.importance, 0) DESC, ea.updated_at DESC
 			 LIMIT 8`,
 		)
-		.all(...args) as Array<{ readonly entityName: string; readonly content: string }>;
+		.all(...args) as Array<{
+		readonly entityName: string;
+		readonly content: string;
+		readonly memory_id: string | null;
+	}>;
+	return rows.filter((row) =>
+		row.memory_id
+			? isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "memory",
+					sourceId: row.memory_id,
+					content: row.content,
+				})
+			: scanMemoryContent(row.content).contextEligible,
+	);
 }
 
 export function assembleInheritedContextBlock(
@@ -295,21 +320,30 @@ export function searchSessionTranscripts(params: {
 			].join("\n"),
 		)
 		.all(params.agentId, ...exactAliases, ...(hasSessionId ? exactAliases : []), params.project ?? "", limit) as Array<{
-			readonly session_key: string;
-			readonly project: string | null;
-			readonly updated_at: string;
-			readonly content: string;
-			readonly excerpt: string;
-			readonly rank: number;
-		}>;
+		readonly session_key: string;
+		readonly project: string | null;
+		readonly updated_at: string;
+		readonly content: string;
+		readonly excerpt: string;
+		readonly rank: number;
+	}>;
 	if (exactRows.length > 0) {
-		return exactRows.map((row) => ({
-			sessionKey: row.session_key,
-			project: row.project,
-			updatedAt: row.updated_at,
-			excerpt: excerptFor(row.content, query),
-			rank: 0,
-		}));
+		return exactRows
+			.filter((row) =>
+				isMemoryContentContextEligible(params.db, {
+					agentId: params.agentId,
+					sourceKind: "transcript",
+					sourceId: row.session_key,
+					content: row.content,
+				}),
+			)
+			.map((row) => ({
+				sessionKey: row.session_key,
+				project: row.project,
+				updatedAt: row.updated_at,
+				excerpt: excerptFor(row.content, query),
+				rank: 0,
+			}));
 	}
 
 	if (tableExists(params.db, "session_transcripts_fts")) {
@@ -347,13 +381,22 @@ export function searchSessionTranscripts(params: {
 				readonly rank: number;
 			}>;
 			if (rows.length > 0) {
-				return rows.map((row) => ({
-					sessionKey: row.session_key,
-					project: row.project,
-					updatedAt: row.updated_at,
-					excerpt: excerptFor(row.content || row.excerpt || "", query),
-					rank: row.rank,
-				}));
+				return rows
+					.filter((row) =>
+						isMemoryContentContextEligible(params.db, {
+							agentId: params.agentId,
+							sourceKind: "transcript",
+							sourceId: row.session_key,
+							content: row.content,
+						}),
+					)
+					.map((row) => ({
+						sessionKey: row.session_key,
+						project: row.project,
+						updatedAt: row.updated_at,
+						excerpt: excerptFor(row.content || row.excerpt || "", query),
+						rank: row.rank,
+					}));
 			}
 		}
 	}
@@ -397,11 +440,20 @@ export function searchSessionTranscripts(params: {
 			readonly content: string;
 			readonly rank: number;
 		}>
-	).map((row) => ({
-		sessionKey: row.session_key,
-		project: row.project,
-		updatedAt: row.updated_at,
-		excerpt: excerptFor(row.content, query),
-		rank: row.rank,
-	}));
+	)
+		.filter((row) =>
+			isMemoryContentContextEligible(params.db, {
+				agentId: params.agentId,
+				sourceKind: "transcript",
+				sourceId: row.session_key,
+				content: row.content,
+			}),
+		)
+		.map((row) => ({
+			sessionKey: row.session_key,
+			project: row.project,
+			updatedAt: row.updated_at,
+			excerpt: excerptFor(row.content, query),
+			rank: row.rank,
+		}));
 }

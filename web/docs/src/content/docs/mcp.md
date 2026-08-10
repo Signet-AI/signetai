@@ -125,12 +125,13 @@ context, and no-hit handling. The tool still reads from
 
 ### memory_store
 
-Save a new memory as immutable episodic evidence. The memory is immediately
-retrievable via recall/search/list/get but is not written directly into the
-knowledge graph — Dreaming derives semantic state from episodic evidence. A
-`structured` payload, if supplied, is retained alongside the content as evidence
-but is not applied to the graph from this tool. Tags, hints, and transcripts are
-forwarded as request metadata.
+Save a new memory as immutable episodic evidence. Raw content remains
+inspectable through authorized list/get surfaces, while only clean content is
+eligible for ordinary recall/search and Dreaming. It is not written directly
+into the knowledge graph — Dreaming derives semantic state from episodic
+evidence. A `structured` payload, if supplied, is retained alongside the
+content as evidence but is not applied to the graph from this tool. Tags,
+hints, and transcripts are forwarded as request metadata.
 
 **Parameters:**
 

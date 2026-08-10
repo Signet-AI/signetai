@@ -7,7 +7,7 @@
  * deliberately bounded: the agent can only do what these methods define
  * (search, validate, apply, log) — no open-ended escape hatches.
  */
-import type { Entity } from "@signet/core";
+import { type Entity, type EntityAttribute, MEMORY_CONTENT_WITHHELD_NOTICE, scanMemoryContent } from "@signet/core";
 import { z } from "zod";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { classifyEntityQuality } from "../entity-quality";
@@ -20,6 +20,7 @@ import {
 	getKnowledgeEntityDetail,
 	listKnowledgeEntities,
 } from "../knowledge-graph";
+import { isMemoryContentContextEligible } from "../memory-content-safety";
 import { getOntologyClaimEvidence } from "../ontology-claim-evidence";
 import { getOntologyLinkEvidence } from "../ontology-link-evidence";
 import { type GraphWriteCaps, findDuplicateEntityMerges } from "../ontology-proposals";
@@ -47,6 +48,40 @@ const MAX_ENTITY_TEXT_CHARS = 2_000;
 function boundedText(value: string | undefined, maxChars: number): string | undefined {
 	if (value === undefined || value.length <= maxChars) return value;
 	return value.slice(0, maxChars);
+}
+
+function filterDreamingAttributes(
+	accessor: DbAccessor,
+	agentId: string,
+	attributes: readonly EntityAttribute[],
+): readonly EntityAttribute[] {
+	return accessor.withReadDb((db) =>
+		attributes.filter((attribute) => {
+			if (attribute.memoryId) {
+				return isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "memory",
+					sourceId: attribute.memoryId,
+					content: attribute.content,
+				});
+			}
+			if (attribute.sourcePath || attribute.sourceId) {
+				const sourceKind = attribute.sourceKind?.toLowerCase() ?? "";
+				const kind = sourceKind.includes("transcript")
+					? "transcript"
+					: sourceKind.includes("summary")
+						? "summary"
+						: "artifact";
+				return isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: kind,
+					sourceId: attribute.sourcePath ?? attribute.sourceId ?? attribute.id,
+					content: attribute.content,
+				});
+			}
+			return scanMemoryContent(attribute.content).contextEligible;
+		}),
+	);
 }
 
 /**
@@ -111,13 +146,14 @@ function projectEvidenceItem(
 
 function projectEvidence(sources: readonly EpisodicSourceRecord[], query: string): readonly Record<string, unknown>[] {
 	let remaining = MAX_EVIDENCE_RESULT_CHARS;
-	return sources.map((source) => {
+	return sources.flatMap((source) => {
 		const rendered = renderDreamingEvidence(source);
+		if (rendered === MEMORY_CONTENT_WITHHELD_NOTICE) return [];
 		const offset = evidenceExcerptStart(rendered, query, MAX_EVIDENCE_EXCERPT_CHARS);
 		const excerptLength = Math.min(MAX_EVIDENCE_EXCERPT_CHARS, remaining, rendered.length - offset);
 		const content = excerptLength > 0 ? rendered.slice(offset, offset + excerptLength) : "";
 		remaining = Math.max(0, remaining - content.length);
-		return projectEvidenceItem(source, content, content.length > 0 ? offset : 0, rendered.length);
+		return [projectEvidenceItem(source, content, content.length > 0 ? offset : 0, rendered.length)];
 	});
 }
 
@@ -127,7 +163,7 @@ function projectEvidenceFragment(
 	chunkSize: number,
 ): Record<string, unknown> | null {
 	const fragment = nextDreamingEvidenceFragment(source, offset, chunkSize);
-	return fragment === null
+	return fragment === null || fragment.content === MEMORY_CONTENT_WITHHELD_NOTICE
 		? null
 		: projectEvidenceItem(source, fragment.content, fragment.start, fragment.sourceLength);
 }
@@ -371,15 +407,19 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			z.object({ agentId: z.string().min(1), entityId: z.string().min(1), aspectId: z.string().min(1), ...pagination }),
 			async ({ agentId: scopeId, entityId, aspectId, limit, offset }) => ({
 				ok: true,
-				items: getAttributesForAspectFiltered(accessor, {
-					entityId,
-					aspectId,
-					agentId: scopeId,
-					kind: "attribute",
-					status: "active",
-					limit: bounded(limit, 50, 200),
-					offset: Math.max(0, Math.floor(offset ?? 0)),
-				}),
+				items: filterDreamingAttributes(
+					accessor,
+					scopeId,
+					getAttributesForAspectFiltered(accessor, {
+						entityId,
+						aspectId,
+						agentId: scopeId,
+						kind: "attribute",
+						status: "active",
+						limit: bounded(limit, 50, 200),
+						offset: Math.max(0, Math.floor(offset ?? 0)),
+					}),
+				),
 			}),
 		),
 		capability(
@@ -431,18 +471,24 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						);
 						if (aspect) aspectName = aspect.aspect.name;
 					}
-					return {
-						ok: true,
-						result: getOntologyClaimEvidence(accessor, {
-							agentId: scopeId,
-							entity: entityName,
-							aspect: aspectName,
-							group: ref.group,
-							claim: ref.claim,
-							limit,
-							offset,
-						}),
-					};
+					const result = getOntologyClaimEvidence(accessor, {
+						agentId: scopeId,
+						entity: entityName,
+						aspect: aspectName,
+						group: ref.group,
+						claim: ref.claim,
+						limit,
+						offset,
+					});
+					const safeIds = new Set(
+						filterDreamingAttributes(
+							accessor,
+							scopeId,
+							result.items.map((item) => item.attribute),
+						).map((attribute) => attribute.id),
+					);
+					const items = result.items.filter((item) => safeIds.has(item.attribute.id));
+					return { ok: true, result: { ...result, items, count: items.length } };
 				}
 				return { ok: true, result: getOntologyLinkEvidence(accessor, { agentId: scopeId, id: ref.id }) };
 			},
@@ -517,15 +563,19 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					result.duplicates = findDuplicateEntityMerges(accessor, { agentId: scopeId, name });
 				}
 				if (entityId !== undefined && aspectId !== undefined && value !== undefined) {
-					result.contradiction = getAttributesForAspectFiltered(accessor, {
-						entityId,
-						aspectId,
-						agentId: scopeId,
-						kind: "attribute",
-						status: "active",
-						limit: 200,
-						offset: 0,
-					}).map((attribute) => ({
+					result.contradiction = filterDreamingAttributes(
+						accessor,
+						scopeId,
+						getAttributesForAspectFiltered(accessor, {
+							entityId,
+							aspectId,
+							agentId: scopeId,
+							kind: "attribute",
+							status: "active",
+							limit: 200,
+							offset: 0,
+						}),
+					).map((attribute) => ({
 						attributeId: attribute.id,
 						content: attribute.content,
 						...detectProspectiveContradictionRisk(value, attribute.content),

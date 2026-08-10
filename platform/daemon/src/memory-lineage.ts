@@ -3,8 +3,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import type { LlmProvider } from "@signet/core";
-import { resolveDefaultBasePath } from "@signet/core";
+import {
+	type LlmProvider,
+	MEMORY_CONTENT_WITHHELD_NOTICE,
+	resolveDefaultBasePath,
+	scanMemoryContent,
+} from "@signet/core";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { getAgentScope } from "./agent-id";
@@ -13,6 +17,7 @@ import type { WriteDb } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
+import { isMemoryContentContextEligible, upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
@@ -395,6 +400,13 @@ export async function resolveMemorySentence(
 	provider?: LlmProvider | null,
 ): Promise<MemorySentence> {
 	const generatedAt = new Date().toISOString();
+	if (!scanMemoryContent(body).contextEligible) {
+		return {
+			text: MEMORY_CONTENT_WITHHELD_NOTICE,
+			quality: "fallback",
+			generatedAt,
+		};
+	}
 	if (provider) {
 		try {
 			const raw = await provider.generate(sentencePrompt(body, project, sourceKind), {
@@ -626,6 +638,12 @@ export function upsertMemoryArtifactInTx(
 		fields.sourceParentPath,
 		fields.sourceMetaJson,
 	);
+	upsertMemoryContentSafetyInTx(db as unknown as WriteDb, {
+		agentId: fields.agentId,
+		sourceKind: "artifact",
+		sourceId: fields.sourcePath,
+		content: fields.content,
+	});
 }
 
 function upsertArtifactRowInTx(
@@ -1633,27 +1651,34 @@ function readThreadHeads(agentId: string): ReadonlyArray<{
 	readonly harness: string | null;
 }> {
 	try {
-		const rows = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
-					 FROM memory_thread_heads
-					 WHERE agent_id = ?
-					 ORDER BY latest_at DESC
-					 LIMIT 12`,
-					)
-					.all(agentId) as Array<{
-					label: string;
-					source_type: string;
-					latest_at: string;
-					sample: string;
-					node_id: string;
-					project: string | null;
-					session_key: string | null;
-					harness: string | null;
-				}>,
-		);
+		const rows = getDbAccessor().withReadDb((db) => {
+			const queried = db
+				.prepare(
+					`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
+				 FROM memory_thread_heads
+				 WHERE agent_id = ?
+				 ORDER BY latest_at DESC
+				 LIMIT 12`,
+				)
+				.all(agentId) as Array<{
+				label: string;
+				source_type: string;
+				latest_at: string;
+				sample: string;
+				node_id: string;
+				project: string | null;
+				session_key: string | null;
+				harness: string | null;
+			}>;
+			return queried.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "summary",
+					sourceId: row.node_id,
+					content: row.sample,
+				}),
+			);
+		});
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1677,24 +1702,32 @@ function readTopMemories(agentId: string): ReadonlyArray<{
 	try {
 		const scope = getAgentScope(agentId);
 		const clause = buildAgentScopeClause(agentId, scope.readPolicy, scope.policyGroup);
-		const rows = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT m.content, m.type, m.importance, m.project
-					 FROM memories m
-					 WHERE m.is_deleted = 0${clause.sql}
-					 ORDER BY m.pinned DESC, m.importance DESC, m.created_at DESC
-					 LIMIT 8`,
-					)
-					.all(...clause.args) as Array<{
-					content: string;
-					type: string;
-					importance: number;
-					project: string | null;
-				}>,
-		);
-		return rows.filter((row) => !isNoiseSession({ project: row.project }));
+		const rows = getDbAccessor().withReadDb((db) => {
+			const queried = db
+				.prepare(
+					`SELECT m.id, m.content, m.type, m.importance, m.project
+				 FROM memories m
+				 WHERE m.is_deleted = 0${clause.sql}
+				 ORDER BY m.pinned DESC, m.importance DESC, m.created_at DESC
+				 LIMIT 32`,
+				)
+				.all(...clause.args) as Array<{
+				id: string;
+				content: string;
+				type: string;
+				importance: number;
+				project: string | null;
+			}>;
+			return queried.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "memory",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
+		});
+		return rows.filter((row) => !isNoiseSession({ project: row.project })).slice(0, 8);
 	} catch {
 		return [];
 	}
@@ -1712,29 +1745,36 @@ function readTemporalNodes(agentId: string): ReadonlyArray<{
 	readonly content: string;
 }> {
 	try {
-		const rows = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT id, kind, COALESCE(source_type, kind) AS source_type, depth, latest_at,
-					        project, session_key, source_ref, content
-					 FROM session_summaries
-					 WHERE agent_id = ?
-					 ORDER BY latest_at DESC
-					 LIMIT 20`,
-					)
-					.all(agentId) as Array<{
-					id: string;
-					kind: string;
-					source_type: string;
-					depth: number;
-					latest_at: string;
-					project: string | null;
-					session_key: string | null;
-					source_ref: string | null;
-					content: string;
-				}>,
-		);
+		const rows = getDbAccessor().withReadDb((db) => {
+			const queried = db
+				.prepare(
+					`SELECT id, kind, COALESCE(source_type, kind) AS source_type, depth, latest_at,
+				        project, session_key, source_ref, content
+				 FROM session_summaries
+				 WHERE agent_id = ?
+				 ORDER BY latest_at DESC
+				 LIMIT 20`,
+				)
+				.all(agentId) as Array<{
+				id: string;
+				kind: string;
+				source_type: string;
+				depth: number;
+				latest_at: string;
+				project: string | null;
+				session_key: string | null;
+				source_ref: string | null;
+				content: string;
+			}>;
+			return queried.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "summary",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
+		});
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1793,8 +1833,8 @@ function buildLedger(agentId: string): ReadonlyArray<LedgerSession> {
 	const floor = now - 30 * 24 * 60 * 60 * 1000;
 	let rows: ArtifactRow[] = [];
 	try {
-		rows = getDbAccessor().withReadDb(
-			(db) =>
+		rows = getDbAccessor().withReadDb((db) =>
+			(
 				db
 					.prepare(
 						`SELECT agent_id, source_path, source_sha256, source_kind, session_id, session_key,
@@ -1805,7 +1845,15 @@ function buildLedger(agentId: string): ReadonlyArray<LedgerSession> {
 					   AND source_kind IN ('summary', 'transcript', 'compaction')
 					 ORDER BY COALESCE(ended_at, captured_at) DESC, captured_at DESC`,
 					)
-					.all(agentId) as ArtifactRow[],
+					.all(agentId) as ArtifactRow[]
+			).filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "artifact",
+					sourceId: row.source_path,
+					content: row.content,
+				}),
+			),
 		);
 	} catch {
 		rows = [];
@@ -2106,10 +2154,15 @@ export async function renderMemoryProjection(agentId = "default"): Promise<{
 		parts.push(trimmedIndex);
 	}
 
+	const content = joinParts(parts);
+	const safeIndexBlock = scanMemoryContent(trimmedIndex).contextEligible ? trimmedIndex : "";
+	const safeContent = scanMemoryContent(content).contextEligible
+		? content
+		: joinParts(["# Working Memory Summary", `- ${MEMORY_CONTENT_WITHHELD_NOTICE}`]);
 	return {
-		content: joinParts(parts),
+		content: safeContent,
 		fileCount: memories.length + threadHeads.length + ledgerBlock.count + nodes.length,
-		indexBlock: trimmedIndex,
+		indexBlock: safeIndexBlock,
 	};
 }
 

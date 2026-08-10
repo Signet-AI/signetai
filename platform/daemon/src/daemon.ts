@@ -29,6 +29,7 @@ import {
 	parseRoutingTargetRef,
 	parseSimpleYaml,
 	resolveDefaultBasePath,
+	scanMemoryContent,
 	stripSignetBlock,
 } from "@signet/core";
 import { watch } from "chokidar";
@@ -412,6 +413,7 @@ ${fileList}
 				try {
 					const fileContent = (await readFileAsync(identityPath, "utf8")).trim();
 					if (!fileContent) return "";
+					if (name === "MEMORY.md" && !scanMemoryContent(fileContent).contextEligible) return "";
 					const header = name.replace(".md", "");
 					return `\n## ${header}\n\n${fileContent}`;
 				} catch {

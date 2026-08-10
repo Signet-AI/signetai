@@ -21,6 +21,7 @@ import {
 	loadIdentityMode,
 	resolveDefaultBasePath,
 	resolveStartupIdentityFiles,
+	scanMemoryContent,
 } from "@signet/core";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
 import { applyTokenBudget, selectWithEstimatedTokenBudget } from "./context-budget";
@@ -58,6 +59,7 @@ import * as memoryCandidates from "./memory-candidates";
 import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candidates";
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { type RecallResponse, type RecallResult, hybridRecall } from "./memory-search";
 import { recordMemorySearchTelemetry } from "./memory-search-telemetry";
 import {
@@ -555,13 +557,21 @@ function getRecentMemories(
         LIMIT ?
       `;
 
-			return db.prepare(query).all(...scope.args, limit) as Array<{
+			const rows = db.prepare(query).all(...scope.args, limit) as Array<{
 				id: string;
 				content: string;
 				type: string;
 				importance: number;
 				created_at: string;
 			}>;
+			return rows.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId: agentScope?.agentId ?? "default",
+					sourceKind: "memory",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
 		});
 
 		return rows.map((r) => ({
@@ -716,11 +726,16 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			: [];
 
 	// Read MEMORY.md with 10k char budget unless a context profile supplies the identity/context file list.
-	const memoryMdContent =
+	const memoryMdCandidate =
 		profileIdentitySections?.find((section) => section.path === "MEMORY.md")?.content ??
 		(!profileHasExplicitIdentityFiles && config.includeRecentContext !== false
 			? readMemoryMd(agentsDir, 10000, identityFiles)
 			: undefined);
+	const memoryMdContent =
+		memoryMdCandidate && scanMemoryContent(memoryMdCandidate).contextEligible ? memoryMdCandidate : undefined;
+	const safeProfileIdentitySections = profileIdentitySections?.filter(
+		(section) => section.path !== "MEMORY.md" || scanMemoryContent(section.content).contextEligible,
+	);
 
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
@@ -1069,12 +1084,12 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		injectParts.push(agentsMdContent);
 	}
 
-	if (profileIdentitySections !== null) {
-		for (const section of profileIdentitySections) {
+	if (safeProfileIdentitySections !== null && safeProfileIdentitySections !== undefined) {
+		for (const section of safeProfileIdentitySections) {
 			injectParts.push(`\n## ${section.header}\n`);
 			injectParts.push(section.content);
 		}
-		if (memoryMdContent && !profileIdentitySections.some((section) => section.path === "MEMORY.md")) {
+		if (memoryMdContent && !safeProfileIdentitySections.some((section) => section.path === "MEMORY.md")) {
 			injectParts.push("\n## Working Memory\n");
 			injectParts.push(memoryMdContent);
 		}

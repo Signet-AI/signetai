@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { resolveDefaultBasePath } from "@signet/core";
+import { resolveDefaultBasePath, scanMemoryContent } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { loadMemoryConfig } from "./memory-config";
@@ -185,6 +185,14 @@ export function writeMemoryHead(
 		} catch {
 			// markdown can start with [ or {
 		}
+	}
+	const safety = scanMemoryContent(trimmed);
+	if (!safety.contextEligible) {
+		return {
+			ok: false,
+			error: `Refusing to write ${safety.status} content to MEMORY.md (${safety.reasons.join(", ")})`,
+			code: "invalid",
+		};
 	}
 
 	const projected = projectMemoryMd(trimmed);

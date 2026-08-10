@@ -123,6 +123,7 @@ silently disappear from the API reference.
 | POST | `/api/diagnostics/openclaw/heartbeat` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/diagnostics/openclaw` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/diagnostics/transcripts` | platform/daemon/src/routes/pipeline-routes.ts |
+| GET | `/api/diagnostics/memory-content-safety` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/pipeline/models` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/pipeline/models/by-provider` | platform/daemon/src/routes/pipeline-routes.ts |
 | POST | `/api/pipeline/models/refresh` | platform/daemon/src/routes/pipeline-routes.ts |

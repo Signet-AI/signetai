@@ -6,11 +6,13 @@
  * external provider calls.
  */
 
+import type { MemoryContentSafetyAssessment } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
+import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,6 +50,8 @@ export interface IngestEnvelope {
 	/** ISO timestamp; when set, this memory is due for temporal review after
 	 *  this instant (issue #945). The dreaming pass queries it directly. */
 	reviewAfter?: string | null;
+	/** Assessment of the complete source before an oversized memory was chunked. */
+	contentSafety?: MemoryContentSafetyAssessment;
 	createdAt: string;
 }
 
@@ -302,6 +306,13 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.evidenceMeta ?? null,
 		mem.reviewAfter ?? null,
 	);
+	upsertMemoryContentSafetyInTx(db, {
+		agentId: mem.agentId ?? "default",
+		sourceKind: "memory",
+		sourceId: mem.id,
+		content: mem.content,
+		assessment: mem.contentSafety,
+	});
 
 	// FTS sync handled by memories_ai AFTER INSERT trigger (migration 001)
 
@@ -494,6 +505,14 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 	args.push(input.memoryId);
 
 	db.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE id = ?`).run(...args);
+	if (contentChanged) {
+		upsertMemoryContentSafetyInTx(db, {
+			agentId: existing.agent_id ?? "default",
+			sourceKind: "memory",
+			sourceId: input.memoryId,
+			content: finalContent,
+		});
+	}
 
 	if (contentChanged) {
 		invalidateDerivedMemoriesForMemoryInTx(db, input.memoryId, existing.agent_id ?? "default", input.changedAt);

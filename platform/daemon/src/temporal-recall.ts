@@ -2,6 +2,7 @@ import type { AgentRosterReadPolicy, RecallTemporalMeta, TemporalFacet } from "@
 import { getDbAccessor } from "./db-accessor";
 import { tableExists } from "./db-helpers";
 import { buildAgentScopeClause } from "./memory-access-scope";
+import { isMemoryContentContextEligible } from "./memory-content-safety";
 
 const DEFAULT_TEMPORAL_FACETS: readonly TemporalFacet[] = [
 	"session",
@@ -443,7 +444,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 			const project = projectSql(params.project, "project");
 			const sessionRows = db
 				.prepare(
-					`SELECT id, content, project, session_key, harness, earliest_at, latest_at, created_at
+					`SELECT id, content, project, session_key, harness, agent_id, earliest_at, latest_at, created_at
 					 FROM session_summaries
 					 WHERE 1 = 1${owner.sql}
 					   AND COALESCE(source_type, kind) != 'chunk'
@@ -457,11 +458,21 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				project: string | null;
 				session_key: string | null;
 				harness: string | null;
+				agent_id: string | null;
 				earliest_at: string;
 				latest_at: string;
 				created_at: string;
 			}>;
 			for (const row of sessionRows) {
+				if (
+					!isMemoryContentContextEligible(db, {
+						agentId: row.agent_id?.trim() || "default",
+						sourceKind: "summary",
+						sourceId: row.id,
+						content: row.content,
+					})
+				)
+					continue;
 				rows.push({
 					id: row.id,
 					content: row.content,
@@ -489,7 +500,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 			const memoryRows = db
 				.prepare(
 					`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project,
-					        m.created_at, m.visibility, m.scope
+						        m.created_at, m.visibility, m.scope, m.agent_id
 					 FROM memories m
 					 WHERE m.is_deleted = 0
 					   AND m.scope IS NULL
@@ -511,8 +522,18 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				created_at: string;
 				visibility: string | null;
 				scope: string | null;
+				agent_id: string | null;
 			}>;
 			for (const row of memoryRows) {
+				if (
+					!isMemoryContentContextEligible(db, {
+						agentId: row.agent_id?.trim() || "default",
+						sourceKind: "memory",
+						sourceId: row.id,
+						content: row.content,
+					})
+				)
+					continue;
 				rows.push({
 					id: row.id,
 					content: row.content,
@@ -542,7 +563,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 			if (temporalFacetAllowed(intent.facets, "captured")) {
 				const artifactRows = db
 					.prepare(
-						`SELECT rowid, source_path, source_kind, source_id, harness, project, content, captured_at, updated_at
+						`SELECT rowid, source_path, source_kind, source_id, harness, project, content, captured_at, updated_at, agent_id
 						 FROM memory_artifacts
 						 WHERE 1 = 1${owner.sql}
 						   AND COALESCE(is_deleted, 0) = 0
@@ -557,12 +578,22 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 					source_kind: string;
 					source_id: string | null;
 					harness: string | null;
+					agent_id: string | null;
 					project: string | null;
 					content: string;
 					captured_at: string;
 					updated_at: string;
 				}>;
 				for (const row of artifactRows) {
+					if (
+						!isMemoryContentContextEligible(db, {
+							agentId: row.agent_id?.trim() || "default",
+							sourceKind: "artifact",
+							sourceId: row.source_path,
+							content: `${row.source_path}\n${row.content}`,
+						})
+					)
+						continue;
 					rows.push({
 						id: String(row.rowid),
 						content: `[Source artifact: ${row.source_path}]\n${row.content}`,
@@ -590,7 +621,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				const sourceRows = db
 					.prepare(
 						`SELECT rowid, source_path, source_kind, source_id, harness, project, content,
-						        ${sourceAtExpr} AS source_at
+							        agent_id, ${sourceAtExpr} AS source_at
 						 FROM memory_artifacts
 						 WHERE 1 = 1${owner.sql}
 						   AND COALESCE(is_deleted, 0) = 0
@@ -608,9 +639,19 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 					harness: string | null;
 					project: string | null;
 					content: string;
+					agent_id: string | null;
 					source_at: string;
 				}>;
 				for (const row of sourceRows) {
+					if (
+						!isMemoryContentContextEligible(db, {
+							agentId: row.agent_id?.trim() || "default",
+							sourceKind: "artifact",
+							sourceId: row.source_path,
+							content: `${row.source_path}\n${row.content}`,
+						})
+					)
+						continue;
 					rows.push({
 						id: String(row.rowid),
 						content: `[Source artifact: ${row.source_path}]\n${row.content}`,
@@ -641,7 +682,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				.prepare(
 					`SELECT te.id, te.subject_type, te.subject_id, te.facet, te.start_at, te.end_at, te.confidence,
 					        m.content AS memory_content, m.source_id, m.type AS memory_type, m.tags, m.pinned,
-					        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
+						        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
 					 FROM temporal_edges te
 					 LEFT JOIN memories m
 					   ON te.subject_type = 'memory'
@@ -682,9 +723,21 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				created_at: string | null;
 				visibility: string | null;
 				scope: string | null;
+				agent_id: string | null;
 			}>;
 			for (const row of edgeRows) {
 				if (params.project && row.project !== params.project) continue;
+				if (
+					row.subject_type === "memory" &&
+					row.memory_content !== null &&
+					!isMemoryContentContextEligible(db, {
+						agentId: row.agent_id?.trim() || "default",
+						sourceKind: "memory",
+						sourceId: row.subject_id,
+						content: row.memory_content,
+					})
+				)
+					continue;
 				rows.push({
 					id: row.id,
 					content: row.memory_content ?? `[Temporal ${row.facet}: ${row.subject_type} ${row.subject_id}]`,

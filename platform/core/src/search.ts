@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { DEFAULT_HYBRID_ALPHA } from "./constants";
+import { scanMemoryContent } from "./memory-content-safety";
 import type { Memory } from "./types";
 
 // Try to load native Rust implementation, fall back to pure TS
@@ -297,44 +298,56 @@ export function hybridSearch(
 		scored.sort((a, b) => b.score - a.score);
 	}
 
-	// Fetch full memory rows for top results
-	const topIds = scored.slice(0, limit).map((s) => s.id);
+	// Fetch full memory rows for candidates, then apply content eligibility before
+	// selecting the final page so an unsafe top hit cannot suppress a safe one.
+	const candidateIds = scored.map((s) => s.id);
 
-	if (topIds.length === 0) {
+	if (candidateIds.length === 0) {
 		return [];
 	}
 
-	// Build query with placeholders
-	const placeholders = topIds.map(() => "?").join(", ");
-	let typeFilter = "";
-	const params: unknown[] = [...topIds];
-
-	if (options?.type) {
-		typeFilter = " AND type = ?";
-		params.push(options.type);
-	}
-
-	const rows = db
-		.prepare(`
+	// Keep each lookup below SQLite's host-parameter limit. Unsafe candidates are
+	// filtered after hydration, so the final page can still be filled by a safe
+	// lower-ranked row without constructing an unbounded SQL statement.
+	const rowMap = new Map<
+		string,
+		{
+			id: string;
+			content: string;
+			type: string;
+			tags: string | null;
+			confidence: number;
+		}
+	>();
+	for (let offset = 0; offset < candidateIds.length; offset += 400) {
+		const batch = candidateIds.slice(offset, offset + 400);
+		const placeholders = batch.map(() => "?").join(", ");
+		const params: unknown[] = [...batch];
+		const typeFilter = options?.type ? " AND type = ?" : "";
+		if (options?.type) params.push(options.type);
+		const rows = db
+			.prepare(`
     SELECT id, content, type, tags, confidence
     FROM memories
     WHERE id IN (${placeholders})${typeFilter}
   `)
-		.all(...params) as Array<{
-		id: string;
-		content: string;
-		type: string;
-		tags: string | null;
-		confidence: number;
-	}>;
-
-	// Map rows by ID for quick lookup
-	const rowMap = new Map(rows.map((r) => [r.id, r]));
+			.all(...params) as Array<{
+			id: string;
+			content: string;
+			type: string;
+			tags: string | null;
+			confidence: number;
+		}>;
+		for (const row of rows) rowMap.set(row.id, row);
+	}
 
 	// Build final results preserving score order
 	return scored
+		.filter((s) => {
+			const row = rowMap.get(s.id);
+			return row !== undefined && scanMemoryContent(row.content).contextEligible;
+		})
 		.slice(0, limit)
-		.filter((s) => rowMap.has(s.id))
 		.map((s) => {
 			const r = rowMap.get(s.id);
 			if (!r) return null;
@@ -410,7 +423,10 @@ export async function search(db: SQLiteDatabase | DatabaseWrapper, options: Sear
 		const memories = typeof wrapper.getMemories === "function" ? wrapper.getMemories(options.type) : [];
 
 		return memories
-			.filter((m: Memory) => m.content.toLowerCase().includes(query.toLowerCase()))
+			.filter(
+				(m: Memory) =>
+					scanMemoryContent(m.content).contextEligible && m.content.toLowerCase().includes(query.toLowerCase()),
+			)
 			.slice(0, limit)
 			.map((m: Memory) => ({
 				id: m.id,

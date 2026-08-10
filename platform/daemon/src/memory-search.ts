@@ -22,6 +22,7 @@ import {
 	type RecallSurface,
 	type RecallTemporalMeta,
 	SOURCE_CHUNK_SOURCE_TYPE,
+	scanMemoryContent,
 	vectorSearch,
 } from "@signet/core";
 import { getDbAccessor, prepareTypedStatement } from "./db-accessor";
@@ -30,6 +31,7 @@ import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
 import { buildAgentScopeClause } from "./memory-access-scope";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
+import { isMemoryContentContextEligible, memoryContentSafetyTableExists } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { constructContextBlocks } from "./pipeline/context-construction";
 import { DEFAULT_DAMPENING, type ScoredRow, applyDampening } from "./pipeline/dampening";
@@ -708,18 +710,44 @@ function authorizeScoredCandidates(
 	// are safe to use in stages that read content or mutate access metadata.
 	const ids = [...new Set(scored.map((row) => row.id))];
 	if (ids.length === 0) return [];
-	const placeholders = ids.map(() => "?").join(", ");
 	const allowed = getDbAccessor().withReadDb((db) => {
-		const rows = db
-			.prepare(
-				`SELECT m.id
-				 FROM memories m
-				 WHERE m.id IN (${placeholders})
-				   AND m.is_deleted = 0
-				   ${memorySupersessionSql(db)}${filter.sql}`,
-			)
-			.all(...ids, ...filter.args) as Array<{ id: string }>;
-		return new Set(rows.map((row) => row.id));
+		const hasSafetyLedger = memoryContentSafetyTableExists(db);
+		const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
+		const safetyJoin = hasSafetyLedger
+			? `LEFT JOIN memory_content_safety AS mcs
+					 ON mcs.agent_id = COALESCE(NULLIF(m.agent_id, ''), 'default')
+				AND mcs.source_kind = 'memory'
+				AND mcs.source_id = m.id`
+			: "";
+		const allowed = new Set<string>();
+		for (let offset = 0; offset < ids.length; offset += 400) {
+			const batch = ids.slice(offset, offset + 400);
+			const placeholders = batch.map(() => "?").join(", ");
+			const rows = db
+				.prepare(
+					`SELECT m.id, m.content${safetySelect}
+					 FROM memories m
+					 ${safetyJoin}
+					 WHERE m.id IN (${placeholders})
+					   AND m.is_deleted = 0
+					   ${memorySupersessionSql(db)}${filter.sql}
+					   ${hasSafetyLedger ? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))" : ""}`,
+				)
+				.all(...batch, ...filter.args) as Array<{
+				id: string;
+				content: string;
+				safety_status?: string;
+				context_eligible?: number;
+			}>;
+			for (const row of rows) {
+				if (
+					scanMemoryContent(row.content).contextEligible &&
+					(row.safety_status == null || (row.safety_status === "clean" && row.context_eligible === 1))
+				)
+					allowed.add(row.id);
+			}
+		}
+		return allowed;
 	});
 	return scored.filter((row) => allowed.has(row.id));
 }
@@ -758,11 +786,10 @@ function shortenCurrentnessContent(content: string): string {
 function loadCurrentnessInfo(ids: readonly string[], agentId: string): Map<string, CurrentnessInfo> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
-	const rows = getDbAccessor().withReadDb(
-		(db) =>
-			db
-				.prepare(
-					`SELECT
+	const rows = getDbAccessor().withReadDb((db) => {
+		const queried = db
+			.prepare(
+				`SELECT
 						 ea.memory_id,
 						 ea.content,
 						 ea.status,
@@ -775,14 +802,19 @@ function loadCurrentnessInfo(ids: readonly string[], agentId: string): Map<strin
 					   AND ea.agent_id = ?
 					   AND ea.status IN ('active', 'superseded')
 					 ORDER BY ea.importance DESC, ea.created_at DESC`,
-				)
-				.all(...ids, agentId) as Array<{
-				memory_id: string;
-				content: string;
-				status: string;
-				replacement_content: string | null;
-			}>,
-	);
+			)
+			.all(...ids, agentId) as Array<{
+			memory_id: string;
+			content: string;
+			status: string;
+			replacement_content: string | null;
+		}>;
+		return queried.filter(
+			(row) =>
+				scanMemoryContent(row.content).contextEligible &&
+				(row.replacement_content === null || scanMemoryContent(row.replacement_content).contextEligible),
+		);
+	});
 
 	const mutable = new Map<
 		string,
@@ -936,15 +968,20 @@ function buildSourceChunkVectorHits(
 	if (project) return [];
 	try {
 		return getDbAccessor().withReadDb((db) => {
+			const hasAgentId = hasColumn(db, "embeddings", "agent_id");
 			const rows = db
 				.prepare(
-					`SELECT id, source_type, source_id, vector, chunk_text, created_at
+					`SELECT id, source_type, source_id, vector, chunk_text, created_at${hasAgentId ? ", agent_id" : ""}
 					 FROM embeddings
 					 WHERE source_type IN (?, ?)
 					   AND vector IS NOT NULL
-					   AND agent_id = ?`,
+					   ${hasAgentId ? "AND agent_id = ?" : ""}`,
 				)
-				.all(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, agentId) as Array<{
+				.all(
+					...(hasAgentId
+						? [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, agentId]
+						: [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE]),
+				) as Array<{
 				id: string;
 				source_type: string;
 				source_id: string;
@@ -953,6 +990,14 @@ function buildSourceChunkVectorHits(
 				created_at: string;
 			}>;
 			return rows
+				.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: "source_chunk",
+						sourceId: row.id,
+						content: row.chunk_text,
+					}),
+				)
 				.flatMap((row) => {
 					const sourcePath = sourcePathFromChunkText(row.chunk_text);
 					return [
@@ -1131,9 +1176,17 @@ function buildNativeArtifactRecallHits(
 				content: string;
 				rank: number;
 			}>;
+			const safeRows = rows.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId: params.agentId ?? "default",
+					sourceKind: "artifact",
+					sourceId: row.source_path,
+					content: `${row.source_path}\n${row.content}`,
+				}),
+			);
 
-			const maxRank = rows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
-			return rows
+			const maxRank = safeRows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
+			return safeRows
 				.map((row) => ({
 					rowid: row.rowid,
 					sourceId: row.source_id,
@@ -2252,8 +2305,10 @@ export async function hybridRecall(
 			: limit;
 	const topIds = params.sourceOnly === true ? [] : scored.slice(0, preHydrate).map((s) => s.id);
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
-	const ontologyClaimResults = ontologyClaimCandidates.map((candidate) =>
-		ontologyClaimToRecallResult(candidate, recallTruncate),
+	const ontologyClaimResults = ontologyClaimCandidates.flatMap((candidate) =>
+		scanMemoryContent(ontologyClaimContent(candidate)).contextEligible
+			? [ontologyClaimToRecallResult(candidate, recallTruncate)]
+			: [],
 	);
 	const allowSourceFallbacks = temporalCandidateSet.size === 0 && !hasMemoryMetadataFilters(params);
 
@@ -2365,7 +2420,7 @@ export async function hybridRecall(
 			(db) =>
 				db
 					.prepare(
-						`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
+						`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
         FROM memories m
         WHERE m.id IN (${placeholders}) AND m.is_deleted = 0${memorySupersessionSql(db)}${filter.sql}`,
 					)
@@ -2382,11 +2437,22 @@ export async function hybridRecall(
 					created_at: string;
 					visibility: string | null;
 					scope: string | null;
+					agent_id: string | null;
 				}>,
 		),
 	);
 
-	const rowMap = new Map(rows.map((r) => [r.id, r]));
+	const safeRows = getDbAccessor().withReadDb((db) =>
+		rows.filter((row) =>
+			isMemoryContentContextEligible(db, {
+				agentId: row.agent_id?.trim() || "default",
+				sourceKind: "memory",
+				sourceId: row.id,
+				content: row.content,
+			}),
+		),
+	);
+	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
 	// injected after assembly and the array is capped to `limit` at that point.
 	let results: RecallResult[] = timings.time("assemble_results", () =>
@@ -2525,7 +2591,7 @@ export async function hybridRecall(
 		try {
 			const summCandidates = results.slice(0, 12).map((r) => ({ id: r.id, content: r.content, score: r.score }));
 			const s = await summarizeRecallWithLlm(getLlmProvider(), query, summCandidates, summarizeLeft);
-			if (s) recallSummary = s;
+			if (s && scanMemoryContent(s).contextEligible) recallSummary = s;
 		} catch (e) {
 			logger.warn("memory", "LLM summary failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
@@ -2586,10 +2652,10 @@ export async function hybridRecall(
 				const ePlaceholders = entityIds.map(() => "?").join(", ");
 				const eIds = entityIds.map((r) => r.entity_id);
 
-				return db
+				const queried = db
 					.prepare(
 						`SELECT DISTINCT m.id, m.content, m.type, m.tags, m.pinned,
-							        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
+						        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
 							 FROM memory_entity_mentions mem
 							 JOIN memories m ON m.id = mem.memory_id
 							 WHERE mem.entity_id IN (${ePlaceholders})
@@ -2611,7 +2677,16 @@ export async function hybridRecall(
 					created_at: string;
 					visibility?: string | null;
 					scope?: string | null;
+					agent_id: string | null;
 				}>;
+				return queried.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId: row.agent_id?.trim() || "default",
+						sourceKind: "memory",
+						sourceId: row.id,
+						content: row.content,
+					}),
+				);
 			});
 
 			for (const r of supplementary) {
@@ -2708,16 +2783,29 @@ export async function hybridRecall(
 									.map((asp) => {
 										const attrs = db
 											.prepare(
-												`SELECT content, status, importance FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
-										 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
+												`SELECT content, status, importance, memory_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
+									 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
 										 ORDER BY importance DESC LIMIT 5`,
 											)
 											.all(asp.id, agentId) as Array<{
 											content: string;
 											status: string;
 											importance: number;
+											memory_id: string | null;
 										}>;
-										return { name: asp.name, attributes: attrs };
+										return {
+											name: asp.name,
+											attributes: attrs.filter((attr) =>
+												attr.memory_id
+													? isMemoryContentContextEligible(db, {
+															agentId,
+															sourceKind: "memory",
+															sourceId: attr.memory_id,
+															content: attr.content,
+														})
+													: scanMemoryContent(attr.content).contextEligible,
+											),
+										};
 									})
 									.filter((a) => a.attributes.length > 0),
 							};
@@ -2758,6 +2846,7 @@ export async function hybridRecall(
 			let added = 0;
 			for (const block of blocks) {
 				if (added >= cap || results.length >= limit) break;
+				if (!scanMemoryContent(block.content).contextEligible) continue;
 				const syntheticId = `constructed:${block.provenance.entityName}`;
 				if (existingIds.has(syntheticId)) continue;
 				existingIds.add(syntheticId);

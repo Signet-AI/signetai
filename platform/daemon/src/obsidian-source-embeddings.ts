@@ -8,6 +8,7 @@ import type { EmbeddingFetchOptions } from "./embedding-fetch";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingRole } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
+import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 
 export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
 const OBSIDIAN_SOURCE_CHUNK_DELAY_MS = 100;
@@ -248,8 +249,18 @@ export async function indexObsidianSourceEmbeddings(
 
 	for (const chunk of chunks) {
 		const contentHash = hash(`${input.agentId}\n${chunk.id}\n${chunk.chunkText}`);
+		const embId = hash(`${OBSIDIAN_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
 		currentHashes.add(contentHash);
-		if (existingChunkEmbeddingContentHash(input.agentId, chunk.id) === contentHash) {
+		const existingChunk = existingChunkEmbedding(input.agentId, chunk.id);
+		if (existingChunk?.content_hash === contentHash) {
+			getDbAccessor().withWriteTx((db) =>
+				upsertMemoryContentSafetyInTx(db, {
+					agentId: input.agentId,
+					sourceKind: "source_chunk",
+					sourceId: existingChunk.id,
+					content: chunk.chunkText,
+				}),
+			);
 			skipped++;
 			await yielder();
 			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
@@ -266,7 +277,6 @@ export async function indexObsidianSourceEmbeddings(
 				// Recheck after the asynchronous provider call: promotion may have
 				// committed a new active space while this chunk was encoding.
 				if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
-				const embId = hash(`${OBSIDIAN_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
 				const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
 					| { content_hash: string }
 					| undefined;
@@ -297,6 +307,12 @@ export async function indexObsidianSourceEmbeddings(
 					now,
 					input.agentId,
 				);
+				upsertMemoryContentSafetyInTx(db, {
+					agentId: input.agentId,
+					sourceKind: "source_chunk",
+					sourceId: embId,
+					content: chunk.chunkText,
+				});
 				const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 					| { id: string }
 					| undefined;
@@ -346,13 +362,15 @@ function sleep(ms: number): Promise<void> {
 	return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
-function existingChunkEmbeddingContentHash(agentId: string, chunkId: string): string | null {
+function existingChunkEmbedding(agentId: string, chunkId: string): { id: string; content_hash: string } | null {
 	const row = getDbAccessor().withReadDb((db) =>
 		db
-			.prepare("SELECT content_hash FROM embeddings WHERE source_type = ? AND source_id = ? AND agent_id = ? LIMIT 1")
-			.get(SOURCE_CHUNK_SOURCE_TYPE, chunkId, agentId),
-	) as { content_hash: string } | undefined;
-	return row?.content_hash ?? null;
+			.prepare(
+				"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
+			)
+			.get(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
+	) as { id: string; content_hash: string } | undefined;
+	return row ?? null;
 }
 
 export function purgeObsidianSourceFileEmbeddings(input: PurgeObsidianSourceFileEmbeddingsInput): number {

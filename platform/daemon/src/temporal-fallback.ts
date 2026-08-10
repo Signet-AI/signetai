@@ -2,6 +2,7 @@ import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
 import { tableExists as tableExistsIn } from "./db-helpers";
 import { logger } from "./logger";
+import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { escapeLike } from "./sql-utils";
 import { deriveThreadKey, deriveThreadLabel } from "./thread-heads";
 
@@ -165,7 +166,14 @@ function searchFromThreadHeads(params: {
 			}
 			parts.push("ORDER BY rank DESC, latest_at DESC LIMIT ?");
 			args.push(params.limit * 4);
-			return db.prepare(parts.join("\n")).all(...args) as TemporalRow[];
+			return (db.prepare(parts.join("\n")).all(...args) as TemporalRow[]).filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId: params.agentId,
+					sourceKind: "summary",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
 		});
 
 		return toHits(rows, params.query, params.project, params.termCount, params.anchorCount, params.limit);
@@ -214,7 +222,14 @@ function searchFromSessionSummaries(params: {
 			}
 			parts.push("ORDER BY rank DESC, latest_at DESC LIMIT ?");
 			args.push(params.limit * 4);
-			return db.prepare(parts.join("\n")).all(...args) as TemporalRow[];
+			return (db.prepare(parts.join("\n")).all(...args) as TemporalRow[]).filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId: params.agentId,
+					sourceKind: "summary",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
 		});
 
 		return toHits(rows, params.query, params.project, params.termCount, params.anchorCount, params.limit);

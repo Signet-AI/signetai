@@ -1345,4 +1345,20 @@ specs:
       - "Memories written by a native-memory harness are recallable through Signet from other harnesses without becoming Signet-authored memory rows"
       - "Codex native memory artifacts are indexed with harness/source provenance"
       - "Codex MCP registration avoids exposing duplicate Signet memory tools by default"
+  - id: memory-content-safety
+    status: approved
+    path: docs/specs/approved/memory-content-safety.md
+    hard_depends_on:
+      - memory-pipeline-v2
+      - explicit-recall-surface-alignment
+      - native-harness-memory-bridge
+      - dreaming-memory-consolidation
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "A versioned deterministic policy classifies hostile stored content without rewriting immutable evidence"
+      - "Remembered memories, native artifacts, source chunks, transcripts, summaries, reranking, recall, Dreaming, and MEMORY.md use one context-eligibility decision"
+      - "Blocked and tainted rows remain agent-scoped and inspectable through user-facing memory and diagnostics surfaces"
+      - "False-positive coverage protects ordinary technical prose, shell examples, security discussions, non-English text, and emoji"
     decision: null

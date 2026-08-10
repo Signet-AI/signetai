@@ -10,6 +10,13 @@ authorizes candidate IDs before any content-bearing rerank, summary,
 dampening, expansion, or access-tracking stage runs. Requires `recall`
 permission. For the full execution model, see [Hybrid Recall](/memory/#hybrid-recall).
 
+Recall applies the memory content-safety policy at that authorization boundary.
+Only `clean` content is hydrated for reranking, summaries, dampening, or the
+final response. Tainted or blocked memories are retained as source evidence
+and remain inspectable through the memory APIs, but they are not ordinary
+prompt context. Native artifact and source-chunk fallback results use the same
+policy.
+
 **Request body**
 
 ```json

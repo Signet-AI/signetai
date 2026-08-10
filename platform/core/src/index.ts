@@ -129,6 +129,20 @@ export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory, type ParsedMemory } from "./memory";
 export {
+	MEMORY_CONTENT_SAFETY_POLICY_VERSION,
+	MEMORY_CONTENT_SAFETY_REASONS,
+	MEMORY_CONTENT_SAFETY_STATUSES,
+	MEMORY_CONTENT_WITHHELD_NOTICE,
+	assessMemoryContent,
+	isMemoryContentContextEligible,
+	scanMemoryContent,
+} from "./memory-content-safety";
+export type {
+	MemoryContentSafetyAssessment,
+	MemoryContentSafetyReason,
+	MemoryContentSafetyStatus,
+} from "./memory-content-safety";
+export {
 	NETWORK_MODES,
 	normalizeNetworkMode,
 	networkModeFromBindHost,

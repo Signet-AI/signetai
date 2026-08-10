@@ -266,7 +266,7 @@ error message. The job follows standard retry logic — up to
 SQLite with WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`. Each migration is idempotent — safe
 to re-run against an existing database. Schema version is tracked in
-`schema_migrations`. The latest migration is `119-telemetry-version-observation.ts`.
+`schema_migrations`. The latest migration is `125-memory-content-safety.ts`.
 
 **schema_migrations**
 
@@ -301,6 +301,14 @@ CREATE UNIQUE INDEX idx_memories_content_hash_unique
     ON memories(content_hash)
     WHERE content_hash IS NOT NULL AND is_deleted = 0
 ```
+
+**memory_content_safety**
+
+An agent-scoped derived ledger records the versioned content-safety decision
+for memories, artifacts, transcripts, summaries, and source chunks. It stores
+`status`, `context_eligible`, `reasons_json`, `policy_version`, and
+`scanned_at`; it never replaces the raw evidence rows. Prompt-facing readers
+must re-scan the exact projection and require a clean ledger decision.
 
 **embeddings**
 

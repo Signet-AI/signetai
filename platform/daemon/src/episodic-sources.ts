@@ -1,4 +1,5 @@
 import type { ReadDb } from "./db-accessor";
+import { isMemoryContentContextEligible } from "./memory-content-safety";
 
 /** Immutable evidence available to Dreaming and ontology extraction. */
 export type EpisodicSourceKind = "memory" | "artifact" | "transcript" | "summary";
@@ -136,6 +137,18 @@ function tableHasColumn(db: ReadDb, table: string, column: string): boolean {
 	}
 }
 
+function episodicContentIsEligible(
+	db: ReadDb,
+	input: {
+		readonly sourceKind: "memory" | "artifact" | "transcript" | "summary";
+		readonly sourceId: string;
+		readonly content: string;
+		readonly agentId: string;
+	},
+): boolean {
+	return isMemoryContentContextEligible(db, input);
+}
+
 export function sourceIdCandidates(value: string): string[] {
 	const trimmed = value.trim();
 	const stripped = trimmed.replace(/^(memory|artifact|source|transcript|session|summary):/, "");
@@ -185,6 +198,9 @@ export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): Epi
 		  }
 		| undefined;
 	if (!row) return null;
+	if (!episodicContentIsEligible(db, { agentId, sourceKind: "memory", sourceId: row.id, content: row.content })) {
+		return null;
+	}
 	return {
 		kind: "memory",
 		id: row.id,
@@ -242,6 +258,11 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 		  }
 		| undefined;
 	if (!row) return null;
+	if (
+		!episodicContentIsEligible(db, { agentId, sourceKind: "artifact", sourceId: row.source_path, content: row.content })
+	) {
+		return null;
+	}
 	return {
 		kind: "artifact",
 		id: row.source_path,
@@ -291,6 +312,16 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 		  }
 		| undefined;
 	if (!row) return null;
+	if (
+		!episodicContentIsEligible(db, {
+			agentId,
+			sourceKind: "transcript",
+			sourceId: row.session_key,
+			content: row.content,
+		})
+	) {
+		return null;
+	}
 	return {
 		kind: "transcript",
 		id: row.session_key,
@@ -340,6 +371,9 @@ export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): Ep
 		  }
 		| undefined;
 	if (!row) return null;
+	if (!episodicContentIsEligible(db, { agentId, sourceKind: "summary", sourceId: row.id, content: row.content })) {
+		return null;
+	}
 	return {
 		kind: "summary",
 		id: row.id,
@@ -616,6 +650,14 @@ export function readRecentEpisodicSources(
 				})
 		: [];
 	return [...memories, ...artifacts, ...transcripts, ...summaries]
+		.filter((source) =>
+			episodicContentIsEligible(db, {
+				agentId,
+				sourceKind: source.kind,
+				sourceId: source.id,
+				content: source.content,
+			}),
+		)
 		.sort((a, b) => compareEpisodicSources(a, b, order))
 		.slice(0, boundedLimit);
 }

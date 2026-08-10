@@ -7,7 +7,7 @@
  * Inspired by Kumiho (arXiv:2603.17244).
  */
 
-import type { LlmProvider, PipelineHintsConfig } from "@signet/core";
+import { type LlmProvider, type PipelineHintsConfig, scanMemoryContent } from "@signet/core";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { logger } from "../logger";
 import type { PipelineV2Config } from "../memory-config";
@@ -41,16 +41,16 @@ interface HintPayload {
 
 function buildPrompt(content: string, max: number): string {
 	return [
-		`Given this fact stored in a personal memory system:`,
+		"Given this fact stored in a personal memory system:",
 		`"${content}"`,
-		``,
+		"",
 		`Generate ${max} diverse questions or cues a user might use in the future when this fact would be helpful. Include:`,
 		`- Direct questions ("Where does X live?")`,
 		`- Temporal questions ("When did X happen?")`,
 		`- Relational questions ("Who is X's partner?")`,
 		`- Indirect/conversational cues ("Tell me about X's move")`,
-		``,
-		`Return ONLY the questions, one per line. No numbering, no bullets.`,
+		"",
+		"Return ONLY the questions, one per line. No numbering, no bullets.",
 	].join("\n");
 }
 
@@ -96,6 +96,7 @@ export async function generateHints(
 	content: string,
 	cfg: PipelineHintsConfig,
 ): Promise<readonly string[]> {
+	if (!scanMemoryContent(content).contextEligible) return [];
 	const prompt = buildPrompt(content, cfg.max);
 	// Use higher token budget to accommodate thinking model overhead
 	const raw = await provider.generate(prompt, {

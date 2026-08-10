@@ -26,6 +26,25 @@ Requires `recall` permission.
 | `limit`   | integer | 100     | Max records to return        |
 | `offset`  | integer | 0       | Pagination offset            |
 
+Each listed memory includes `contentSafety` from the persisted ledger or a
+read-time assessment for legacy rows. This metadata is informational for
+inspection; a `blocked` or `tainted` row remains retained and auditable rather
+than being deleted.
+
+### Memory content safety
+
+Remembered content is scanned before it can become prompt-facing context. The
+versioned policy reports `clean`, `tainted`, or `blocked`, with stable reason
+codes such as `prompt_injection`, `exfiltration`, `credential_harvesting`,
+`malicious_shell`, `tool_directive`, and `invisible_unicode`. Only `clean`
+content is context eligible. The original content and provenance are preserved
+unchanged, and `GET /api/memory/:id` returns the same assessment for inspection.
+
+The scan is not a truth judgment and is not a replacement for permissions or
+agent scoping. A blocked memory can still be inspected by an authorized caller;
+it is excluded from ordinary recall, reranking, native-source fallback, and
+Dreaming projections.
+
 **Response**
 
 ```json
@@ -142,13 +161,13 @@ derives semantic state (entities, aspects, attributes, links) from episodic
 evidence through the audited ontology control plane.
 
 All remember saves (plain, chunked, or structured) are immutable **episodic
-evidence** (`memory_kind = 'episodic'`). They are immediately retrievable via
-recall, search, list, and `GET /api/memory/:id`, and are selectable by Dreaming
-as evidence through the shared episodic-sources selector. The remember endpoint
-no longer performs any direct semantic side effects: it does not persist
-structured graph state, does not inline-link entities, and does not enqueue
-legacy extraction jobs. Extraction status is `none` — Dreaming owns semantic
-processing.
+evidence** (`memory_kind = 'episodic'`). They remain inspectable through list
+and `GET /api/memory/:id`; only `clean` rows are eligible for ordinary recall
+or Dreaming evidence through the shared episodic-sources selector.
+The remember endpoint no longer performs any direct semantic side effects: it
+does not persist structured graph state, does not inline-link entities, and
+does not enqueue legacy extraction jobs. Extraction status is `none` —
+Dreaming owns semantic processing.
 
 **Response**
 
@@ -165,7 +184,14 @@ processing.
   "hints_written": 0,
   "structured": false,
   "structured_applied": false,
-  "deduped": false
+  "deduped": false,
+  "contentSafety": {
+    "status": "clean",
+    "contextEligible": true,
+    "reasons": [],
+    "policyVersion": "memory-content-safety-v1",
+    "scannedAt": "2026-02-21T10:00:00.000Z"
+  }
 }
 ```
 

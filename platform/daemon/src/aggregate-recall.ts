@@ -1,5 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { type LlmUsage, type RouteRequest, type RouterResult, summarizeAccountingProvenance } from "@signet/core";
+import {
+	type LlmUsage,
+	type RouteRequest,
+	type RouterResult,
+	scanMemoryContent,
+	summarizeAccountingProvenance,
+} from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
@@ -7,6 +13,7 @@ import { linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
+import { isMemoryContentContextEligible, upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import {
 	type AggregateRecallUsage,
 	type AggregateRecallUsageStage,
@@ -64,6 +71,7 @@ interface AggregateRecallLogger {
 
 interface AggregateMemoryRow {
 	readonly id: string;
+	readonly agent_id?: string | null;
 	readonly content: string;
 	readonly source_type?: string | null;
 	readonly source_id: string | null;
@@ -475,15 +483,24 @@ function rowToRecallResult(row: AggregateMemoryRow): RecallResult {
 	};
 }
 
+function aggregateRowIsContextEligible(db: WriteDb, row: AggregateMemoryRow): boolean {
+	return isMemoryContentContextEligible(db, {
+		agentId: row.agent_id?.trim() || "default",
+		sourceKind: "memory",
+		sourceId: row.id,
+		content: row.content,
+	});
+}
+
 function loadAggregateMemory(db: WriteDb, id: string): RecallResult | null {
 	const row = db
 		.prepare(
-			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at
+			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at, agent_id
 			 FROM memories
 			 WHERE id = ? AND is_deleted = 0`,
 		)
 		.get(id) as AggregateMemoryRow | undefined;
-	return row ? rowToRecallResult(row) : null;
+	return row && aggregateRowIsContextEligible(db, row) ? rowToRecallResult(row) : null;
 }
 
 function loadAggregateByKey(
@@ -493,7 +510,7 @@ function loadAggregateByKey(
 ): RecallResult | null {
 	const row = db
 		.prepare(
-			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at, stale_at
+			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at, stale_at, agent_id
 			 FROM memories
 			 WHERE idempotency_key = ?
 			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
@@ -504,7 +521,7 @@ function loadAggregateByKey(
 			 LIMIT 1`,
 		)
 		.get(key, input.agentId, input.visibility) as AggregateMemoryRow | undefined;
-	if (!row || row.stale_at !== null) return null;
+	if (!row || row.stale_at !== null || !aggregateRowIsContextEligible(db, row)) return null;
 	if (input.project !== null && row.project !== input.project) return null;
 	return rowToRecallResult(row);
 }
@@ -540,7 +557,7 @@ function loadMemoryByContentHash(
 ): ContentHashMatch | null {
 	const row = db
 		.prepare(
-			`SELECT id, content, source_type, source_id, type, tags, pinned, importance, who, project, visibility, created_at
+			`SELECT id, content, source_type, source_id, type, tags, pinned, importance, who, project, visibility, created_at, agent_id
 			 FROM memories
 			 WHERE content_hash = ?
 			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
@@ -549,7 +566,7 @@ function loadMemoryByContentHash(
 			 LIMIT 1`,
 		)
 		.get(contentHash, input.agentId) as AggregateMemoryRow | undefined;
-	if (!row) return null;
+	if (!row || !aggregateRowIsContextEligible(db, row)) return null;
 	return {
 		row: rowToRecallResult(row),
 		projectMatches: input.project === null || row.project === input.project,
@@ -599,6 +616,12 @@ function refreshStaleAggregateMemory(
 		     update_count = COALESCE(update_count, 0) + 1, version = version + 1
 		 WHERE id = ? AND agent_id = ? AND stale_at IS NOT NULL`,
 	).run(input.content, input.normalizedContent, input.contentHash, input.now, input.existing.id, input.agentId);
+	upsertMemoryContentSafetyInTx(db, {
+		agentId: input.agentId,
+		sourceKind: "memory",
+		sourceId: input.existing.id,
+		content: input.content,
+	});
 	// The relation is an audit trail, not a cache: retain historical evidence
 	// pointers when this aggregate is re-derived. A future mutation of either
 	// the old or current evidence conservatively makes the snapshot stale again.
@@ -948,7 +971,8 @@ export async function aggregateRecall(
 
 	const synthesized = await timings.timeAsync("aggregate_synthesis", () => synthesize({ router, params, evidence }));
 	if (synthesized.usage) usageStages.push(synthesized.usage);
-	const answer = synthesized.answer;
+	const answer =
+		synthesized.answer && scanMemoryContent(synthesized.answer).contextEligible ? synthesized.answer : null;
 	if (!answer) {
 		return finish(degradedAggregateResponse(params, budget, queries, evidence, sourceMemoryIds, "synthesis_failed"));
 	}
