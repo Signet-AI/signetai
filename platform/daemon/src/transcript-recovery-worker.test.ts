@@ -222,13 +222,38 @@ describe("transcript recovery worker", () => {
 		const result = await scan();
 		expect(result.enqueued).toBe(0);
 		expect(result.deduplicated).toBe(1);
-		expect(
-			getDbAccessor().withReadDb((db) =>
+		const row = getDbAccessor().withReadDb(
+			(db) =>
 				db
 					.prepare("SELECT content, completed_at FROM session_transcripts WHERE agent_id = ? AND session_key = ?")
-					.get("agent-a", "completed-session"),
+					.get("agent-a", "completed-session") as { content: string; completed_at: string | null } | null,
+		);
+		expect(row).toEqual({ content: "canonical complete transcript", completed_at: "2099-01-01T00:00:00.000Z" });
+	});
+
+	it("merges later settled growth into a completed recovery snapshot", async () => {
+		const path = join(claudeRoot, "-repo", "growing-session.jsonl");
+		const firstLine = JSON.stringify({
+			sessionId: "growing-session",
+			message: { role: "user", content: "first settled line" },
+		});
+		const secondLine = JSON.stringify({ message: { role: "assistant", content: "later settled line" } });
+		writeSettled(path, firstLine);
+
+		expect((await scan()).enqueued).toBe(1);
+		writeSettled(path, `${firstLine}\n${secondLine}`);
+
+		const result = await scan();
+		expect(result.enqueued).toBe(1);
+		expect(result.deduplicated).toBe(0);
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT content FROM session_transcripts WHERE agent_id = ? AND session_key = ?")
+						.get("agent-a", "growing-session") as { content: string },
 			),
-		).toEqual({ content: "canonical complete transcript", completed_at: "2099-01-01T00:00:00.000Z" });
+		).toEqual({ content: "User: first settled line\nAssistant: later settled line" });
 	});
 
 	it("preserves an incomplete canonical transcript when recovery is partial", async () => {

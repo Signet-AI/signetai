@@ -47,6 +47,7 @@ export function canonicalizeTranscriptLookup(value: string): string {
 export interface StoredTranscriptInfo {
 	readonly sessionKey: string;
 	readonly agentId: string;
+	readonly content: string;
 	readonly harness: string | null;
 	readonly project: string | null;
 	readonly createdAt: string;
@@ -580,7 +581,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 		return getDbAccessor().withReadDb((db) => {
 			const row = db
 				.prepare(
-					`SELECT session_key, agent_id, harness, project, created_at, ${updatedAtExpr}, ${completedAtExpr}, ${contentHashExpr}
+					`SELECT session_key, agent_id, content, harness, project, created_at, ${updatedAtExpr}, ${completedAtExpr}, ${contentHashExpr}
 					 FROM session_transcripts
 					 WHERE agent_id = ? AND session_key IN (${placeholders})
 					 ORDER BY CASE WHEN session_key = ? THEN 0 ELSE 1 END, ${seenExpr} DESC
@@ -590,6 +591,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				| {
 						session_key: string;
 						agent_id: string;
+						content: string;
 						harness: string | null;
 						project: string | null;
 						created_at: string;
@@ -602,6 +604,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 			return {
 				sessionKey: row.session_key,
 				agentId: row.agent_id,
+				content: row.content,
 				harness: row.harness,
 				project: row.project,
 				createdAt: row.created_at,

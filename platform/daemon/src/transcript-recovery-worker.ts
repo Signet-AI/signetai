@@ -311,9 +311,16 @@ export async function runTranscriptRecoveryScan(
 
 		const existingTranscript = getStoredSessionTranscriptInfo(metadata.sessionKey, agentId);
 		// A completed canonical row is authoritative. Recovery files are legacy
-		// snapshots and may be older or partial; allowing one to reset the row
-		// would clobber lossless content and regress the Dreaming watermark.
-		if (existingTranscript?.completedAt) {
+		// snapshots and may be older or partial. A later settled snapshot is
+		// allowed through only when it strictly extends the retained content;
+		// otherwise it would clobber lossless content and regress the Dreaming
+		// watermark.
+		const completedSnapshotExtendsCanonical =
+			existingTranscript?.completedAt !== null &&
+			existingTranscript?.completedAt !== undefined &&
+			transcript.length > existingTranscript.content.length &&
+			transcript.includes(existingTranscript.content);
+		if (existingTranscript?.completedAt && !completedSnapshotExtendsCanonical) {
 			dbAccessor.withWriteTx((db) =>
 				markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
 			);

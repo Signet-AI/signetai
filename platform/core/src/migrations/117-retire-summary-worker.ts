@@ -68,6 +68,17 @@ function summaryJobTimestamp(job: RetiredSummaryJob): string {
 	return job.completed_at ?? job.ended_at ?? job.captured_at ?? job.created_at ?? new Date(0).toISOString();
 }
 
+function laterTimestamp(current: string | null, candidate: string | null): string | null {
+	if (current === null) return candidate;
+	if (candidate === null) return current;
+	const currentMillis = Date.parse(current);
+	const candidateMillis = Date.parse(candidate);
+	if (Number.isFinite(currentMillis) && Number.isFinite(candidateMillis)) {
+		return candidateMillis > currentMillis ? candidate : current;
+	}
+	return candidate > current ? candidate : current;
+}
+
 function isCompletionBoundary(job: RetiredSummaryJob, columns: Set<string>): boolean {
 	return (
 		(columns.has("trigger") && job.trigger === "session_end") ||
@@ -147,7 +158,7 @@ function backfillTranscriptsFromSummaryJobs(db: MigrationDb): void {
 			job: preferred,
 			content: mergeTranscriptContent(current.content, job.transcript),
 			createdAt: current.createdAt < createdAt ? current.createdAt : createdAt,
-			completedAt: current.completedAt ?? (boundary ? timestamp : null),
+			completedAt: laterTimestamp(current.completedAt, boundary ? timestamp : null),
 		});
 	}
 
