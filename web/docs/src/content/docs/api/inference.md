@@ -15,6 +15,29 @@ for first-party harnesses and CLI tooling. The OpenAI-compatible gateway is for
 harnesses that can point at a model endpoint but cannot yet send the richer
 Signet routing metadata.
 
+### POST /api/os/chat
+
+Runs the dashboard's interactive OS Chat flow through the `interactive`
+workload, with a legacy provider fallback when routed inference is unavailable.
+The request body accepts `message` and optional `agentId`, `taskClass`, and
+`privacy` routing hints.
+
+OS Chat has a 30-second end-to-end deadline. The deadline and its abort signal
+cover routed inference, the legacy provider fallback, and internal MCP tool
+calls, so a stalled provider cannot keep the HTTP request or its inference
+admission permit open indefinitely.
+
+On deadline expiry, the route aborts the active work and returns HTTP `504`:
+
+```json
+{
+  "error": "OS Chat inference timed out after 30000ms",
+  "code": "TIMEOUT",
+  "timeoutMs": 30000,
+  "toolCalls": []
+}
+```
+
 ### GET /api/inference/status
 
 Requires `diagnostics` permission in authenticated modes.

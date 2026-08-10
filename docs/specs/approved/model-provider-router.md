@@ -192,6 +192,9 @@ the spec stays useful as both contract and progress tracker.
 - Signet-owned OS surfaces now try the router first and fall back cleanly:
   - `os-chat`
   - `os-agent`
+- OS Chat interactive calls carry an explicit route deadline and abort signal
+  through routed and legacy provider paths; timed-out requests return a
+  terminal error and release provider admission permits.
 - CLI route tooling exists:
   - `signet route list`
   - `signet route status`

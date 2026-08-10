@@ -13,6 +13,79 @@ import { getInteractiveLlmProviderOrNull } from "../llm.js";
 import { logger } from "../logger.js";
 import { loadProbeResult } from "../mcp-probe.js";
 
+const DEFAULT_OS_CHAT_TIMEOUT_MS = 30_000;
+const MAX_OS_CHAT_TIMEOUT_MS = 10 * 60_000;
+
+export interface OsChatRouteOptions {
+	/** Optional bounded override for embedders; production uses the default. */
+	readonly timeoutMs?: number;
+	/** Optional tool fixture for isolated route consumers and tests. */
+	readonly tools?: readonly ToolSpec[];
+}
+
+class OsChatTimeoutError extends Error {
+	readonly timeoutMs: number;
+
+	constructor(timeoutMs: number) {
+		super(`OS Chat inference timed out after ${timeoutMs}ms`);
+		this.name = "OsChatTimeoutError";
+		this.timeoutMs = timeoutMs;
+	}
+}
+
+interface LlmCallOptions {
+	readonly timeoutMs: number;
+	readonly signal: AbortSignal;
+}
+
+function resolveTimeoutMs(value: number | undefined): number {
+	if (value === undefined || !Number.isFinite(value) || value <= 0) return DEFAULT_OS_CHAT_TIMEOUT_MS;
+	return Math.max(1, Math.min(Math.floor(value), MAX_OS_CHAT_TIMEOUT_MS));
+}
+
+function abortReason(signal: AbortSignal, timeoutMs: number): Error {
+	return signal.reason instanceof Error ? signal.reason : new OsChatTimeoutError(timeoutMs);
+}
+
+/**
+ * Bound the whole interactive request, not only the provider's implementation.
+ * The abort signal lets current providers release their admission permit while
+ * the race keeps a non-cooperative legacy provider from holding the HTTP route.
+ */
+async function withOsChatDeadline<T>(
+	timeoutMs: number,
+	requestSignal: AbortSignal,
+	work: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+	const controller = new AbortController();
+	const onRequestAbort = (): void => controller.abort(requestSignal.reason);
+	if (requestSignal.aborted) onRequestAbort();
+	else requestSignal.addEventListener("abort", onRequestAbort, { once: true });
+
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	let deadlineExpired = false;
+	const deadlineError = new OsChatTimeoutError(timeoutMs);
+	const deadline = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => {
+			deadlineExpired = true;
+			controller.abort(deadlineError);
+			reject(deadlineError);
+		}, timeoutMs);
+	});
+
+	try {
+		const result = await Promise.race([work(controller.signal), deadline]);
+		if (deadlineExpired) throw deadlineError;
+		return result;
+	} catch (error) {
+		if (deadlineExpired) throw deadlineError;
+		throw error;
+	} finally {
+		if (timer !== null) clearTimeout(timer);
+		requestSignal.removeEventListener("abort", onRequestAbort);
+	}
+}
+
 function buildPrompt(systemPrompt: string, userMessage: string): string {
 	return `${systemPrompt}\n\nUser message:\n${userMessage}`;
 }
@@ -20,40 +93,56 @@ function buildPrompt(systemPrompt: string, userMessage: string): string {
 async function callLlm(
 	systemPrompt: string,
 	userMessage: string,
-	maxTokens = 2048,
+	maxTokens: number,
+	options: LlmCallOptions,
 	route?: {
 		readonly agentId?: string;
 		readonly taskClass?: string;
 		readonly privacy?: RoutingPrivacyTier;
 	},
 ): Promise<string> {
+	const prompt = buildPrompt(systemPrompt, userMessage);
 	const router = getInferenceRouterOrNull();
-	if (router && (await router.hasWorkload("interactive"))) {
-		const routed = await router.execute(
-			{
-				agentId: route?.agentId,
-				operation: "tool_planning",
-				taskClass: route?.taskClass,
-				privacy: route?.privacy,
-				promptPreview: userMessage,
-				requireTools: true,
-			},
-			buildPrompt(systemPrompt, userMessage),
-			{ maxTokens },
-		);
-		if (routed.ok) {
-			return routed.value.text;
+	if (router) {
+		const hasInteractiveWorkload = await router.hasWorkload("interactive");
+		if (options.signal.aborted) throw abortReason(options.signal, options.timeoutMs);
+		if (hasInteractiveWorkload) {
+			const routed = await router.execute(
+				{
+					agentId: route?.agentId,
+					operation: "tool_planning",
+					taskClass: route?.taskClass,
+					privacy: route?.privacy,
+					promptPreview: userMessage,
+					requireTools: true,
+				},
+				prompt,
+				{
+					maxTokens,
+					timeoutMs: options.timeoutMs,
+					signal: options.signal,
+				},
+			);
+			if (routed.ok) {
+				return routed.value.text;
+			}
+			if (options.signal.aborted) throw abortReason(options.signal, options.timeoutMs);
+			logger.warn("os-chat", "Inference router failed, falling back to legacy interactive provider", {
+				error: routed.error.message,
+			});
 		}
-		logger.warn("os-chat", "Inference router failed, falling back to legacy interactive provider", {
-			error: routed.error.message,
-		});
 	}
 
+	if (options.signal.aborted) throw abortReason(options.signal, options.timeoutMs);
 	const provider = getInteractiveLlmProviderOrNull();
 	if (!provider) {
 		throw new Error("Interactive inference provider is not configured");
 	}
-	return provider.generate(buildPrompt(systemPrompt, userMessage), { maxTokens });
+	return provider.generate(prompt, {
+		maxTokens,
+		timeoutMs: options.timeoutMs,
+		signal: options.signal,
+	});
 }
 
 interface ChatRequest {
@@ -212,7 +301,9 @@ function parseLlmResponse(raw: string): {
 /**
  * Mount OS chat routes on the Hono app.
  */
-export function mountOsChatRoutes(app: Hono): void {
+export function mountOsChatRoutes(app: Hono, options: OsChatRouteOptions = {}): void {
+	const timeoutMs = resolveTimeoutMs(options.timeoutMs);
+
 	app.post("/api/os/chat", async (c) => {
 		let body: ChatRequest;
 		try {
@@ -226,141 +317,166 @@ export function mountOsChatRoutes(app: Hono): void {
 		}
 
 		try {
-			// Gather available tools from all MCP servers
-			const tools = gatherAvailableTools();
+			return await withOsChatDeadline(timeoutMs, c.req.raw.signal, async (signal) => {
+				// Gather available tools from all MCP servers
+				const tools = options.tools ? [...options.tools] : gatherAvailableTools();
 
-			if (tools.length === 0) {
-				return c.json({
-					response: "No MCP servers are installed yet. Add some from the dock to get started.",
-					toolCalls: [],
-				});
-			}
-
-			// Build prompt and call the shared interactive LLM provider
-			const systemPrompt = buildSystemPrompt(tools);
-
-			logger.info("os-chat", "Processing chat message", {
-				message: body.message.slice(0, 100),
-				availableTools: tools.length,
-			});
-
-			const rawResponse = await callLlm(systemPrompt, body.message, 2048, {
-				agentId: body.agentId,
-				taskClass: body.taskClass,
-				privacy: body.privacy,
-			});
-
-			const parsed = parseLlmResponse(rawResponse);
-
-			// If LLM decided this needs the visual agent, return immediately
-			// (no tool execution — the dashboard will handle it via agent executor)
-			if (parsed.useAgent && parsed.agentServerId) {
-				logger.info("os-chat", "Routing to visual agent", {
-					serverId: parsed.agentServerId,
-					task: body.message.slice(0, 100),
-				});
-				return c.json({
-					response: parsed.response,
-					toolCalls: [],
-					useAgent: true,
-					agentServerId: parsed.agentServerId,
-					agentTask: body.message,
-				});
-			}
-
-			// Execute tool calls if any
-			const toolCallResults: ToolCallResult[] = [];
-
-			if (parsed.toolCalls.length > 0) {
-				for (const call of parsed.toolCalls.slice(0, 5)) {
-					// Max 5 tool calls
-					try {
-						logger.info("os-chat", `Calling tool ${call.serverId}/${call.toolName}`, {
-							args: JSON.stringify(call.args || {}).slice(0, 500),
-						});
-
-						// Call the tool via the marketplace /mcp/call endpoint internally
-						const callRes = await fetch(
-							`http://127.0.0.1:${process.env.SIGNET_PORT || 3850}/api/marketplace/mcp/call`,
-							{
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify({
-									serverId: call.serverId,
-									toolName: call.toolName,
-									args: call.args || {},
-								}),
-							},
-						);
-
-						const callData = (await callRes.json()) as { success?: boolean; result?: unknown; error?: string };
-
-						if (callData.success) {
-							toolCallResults.push({
-								tool: call.toolName,
-								server: call.serverId,
-								result: callData.result,
-							});
-						} else {
-							toolCallResults.push({
-								tool: call.toolName,
-								server: call.serverId,
-								error: callData.error || "Tool call failed",
-							});
-						}
-					} catch (err) {
-						const msg = err instanceof Error ? err.message : String(err);
-						toolCallResults.push({
-							tool: call.toolName,
-							server: call.serverId,
-							error: msg,
-						});
-					}
+				if (tools.length === 0) {
+					return c.json({
+						response: "No MCP servers are installed yet. Add some from the dock to get started.",
+						toolCalls: [],
+					});
 				}
 
-				// If we got results, send them back to the LLM for a natural response
-				if (toolCallResults.some((r) => r.result)) {
-					const resultsText = toolCallResults
-						.map((r) => {
-							if (r.error) return `${r.tool}: ERROR — ${r.error}`;
-							const resultStr =
-								typeof r.result === "string" ? r.result.slice(0, 2000) : JSON.stringify(r.result).slice(0, 2000);
-							return `${r.tool}: ${resultStr}`;
-						})
-						.join("\n\n");
+				// Build prompt and call the shared interactive LLM provider
+				const systemPrompt = buildSystemPrompt(tools);
 
-					const followUp = `The user asked: "${body.message}"
+				logger.info("os-chat", "Processing chat message", {
+					message: body.message.slice(0, 100),
+					availableTools: tools.length,
+				});
+
+				const llmOptions = { timeoutMs, signal };
+				const rawResponse = await callLlm(systemPrompt, body.message, 2048, llmOptions, {
+					agentId: body.agentId,
+					taskClass: body.taskClass,
+					privacy: body.privacy,
+				});
+				if (signal.aborted) throw abortReason(signal, timeoutMs);
+
+				const parsed = parseLlmResponse(rawResponse);
+
+				// If LLM decided this needs the visual agent, return immediately
+				// (no tool execution — the dashboard will handle it via agent executor)
+				if (parsed.useAgent && parsed.agentServerId) {
+					logger.info("os-chat", "Routing to visual agent", {
+						serverId: parsed.agentServerId,
+						task: body.message.slice(0, 100),
+					});
+					return c.json({
+						response: parsed.response,
+						toolCalls: [],
+						useAgent: true,
+						agentServerId: parsed.agentServerId,
+						agentTask: body.message,
+					});
+				}
+
+				// Execute tool calls if any
+				const toolCallResults: ToolCallResult[] = [];
+
+				if (parsed.toolCalls.length > 0) {
+					for (const call of parsed.toolCalls.slice(0, 5)) {
+						if (signal.aborted) throw abortReason(signal, timeoutMs);
+						// Max 5 tool calls
+						try {
+							logger.info("os-chat", `Calling tool ${call.serverId}/${call.toolName}`, {
+								args: JSON.stringify(call.args || {}).slice(0, 500),
+							});
+
+							// Call the tool via the marketplace /mcp/call endpoint internally
+							const callRes = await fetch(
+								`http://127.0.0.1:${process.env.SIGNET_PORT || 3850}/api/marketplace/mcp/call`,
+								{
+									method: "POST",
+									headers: { "Content-Type": "application/json" },
+									body: JSON.stringify({
+										serverId: call.serverId,
+										toolName: call.toolName,
+										args: call.args || {},
+									}),
+									signal,
+								},
+							);
+
+							const callData = (await callRes.json()) as { success?: boolean; result?: unknown; error?: string };
+							if (signal.aborted) throw abortReason(signal, timeoutMs);
+
+							if (callData.success) {
+								toolCallResults.push({
+									tool: call.toolName,
+									server: call.serverId,
+									result: callData.result,
+								});
+							} else {
+								toolCallResults.push({
+									tool: call.toolName,
+									server: call.serverId,
+									error: callData.error || "Tool call failed",
+								});
+							}
+						} catch (err) {
+							if (signal.aborted) throw abortReason(signal, timeoutMs);
+							const msg = err instanceof Error ? err.message : String(err);
+							toolCallResults.push({
+								tool: call.toolName,
+								server: call.serverId,
+								error: msg,
+							});
+						}
+					}
+
+					// If we got results, send them back to the LLM for a natural response
+					if (toolCallResults.some((r) => r.result)) {
+						if (signal.aborted) throw abortReason(signal, timeoutMs);
+						const resultsText = toolCallResults
+							.map((r) => {
+								if (r.error) return `${r.tool}: ERROR — ${r.error}`;
+								const resultStr =
+									typeof r.result === "string" ? r.result.slice(0, 2000) : JSON.stringify(r.result).slice(0, 2000);
+								return `${r.tool}: ${resultStr}`;
+							})
+							.join("\n\n");
+
+						const followUp = `The user asked: "${body.message}"
 
 You called these tools and got these results:
 ${resultsText}
 
 Now give a concise, natural language summary of the results for the user. Be specific — mention names, numbers, and key details. No JSON, just a friendly response.`;
 
-					try {
-						const summary = await callLlm(
-							"You are Oogie, Jake's AI assistant. Summarize tool results in a casual, direct way. Mention specific names, numbers, and details. No JSON, no corporate speak. Sound like a real person chatting. Use keyboard emojis occasionally like ᕕ( ᐛ )ᕗ or (╯°□°)╯ but don't overdo it.",
-							followUp,
-							1024,
-						);
-						return c.json({
-							response: summary.trim(),
-							toolCalls: toolCallResults,
-						});
-					} catch {
-						// If summary fails, return raw response + results
-						return c.json({
-							response: parsed.response,
-							toolCalls: toolCallResults,
-						});
+						try {
+							const summary = await callLlm(
+								"You are Oogie, Jake's AI assistant. Summarize tool results in a casual, direct way. Mention specific names, numbers, and details. No JSON, no corporate speak. Sound like a real person chatting. Use keyboard emojis occasionally like ᕕ( ᐛ )ᕗ or (╯°□°)╯ but don't overdo it.",
+								followUp,
+								1024,
+								llmOptions,
+								undefined,
+							);
+							if (signal.aborted) throw abortReason(signal, timeoutMs);
+							return c.json({
+								response: summary.trim(),
+								toolCalls: toolCallResults,
+							});
+						} catch {
+							if (signal.aborted) throw abortReason(signal, timeoutMs);
+							// If summary fails, return raw response + results
+							return c.json({
+								response: parsed.response,
+								toolCalls: toolCallResults,
+							});
+						}
 					}
 				}
-			}
 
-			return c.json({
-				response: parsed.response,
-				toolCalls: toolCallResults,
+				return c.json({
+					response: parsed.response,
+					toolCalls: toolCallResults,
+				});
 			});
 		} catch (error) {
+			if (error instanceof OsChatTimeoutError) {
+				logger.warn("os-chat", "Chat request exceeded its deadline", { timeoutMs: error.timeoutMs });
+				return c.json(
+					{
+						error: error.message,
+						code: "TIMEOUT",
+						timeoutMs: error.timeoutMs,
+						toolCalls: [],
+					},
+					504,
+				);
+			}
 			const msg = error instanceof Error ? error.message : String(error);
 			logger.warn("os-chat", `Chat error: ${msg}`);
 			return c.json({
