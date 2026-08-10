@@ -99,6 +99,8 @@ const imageUrl = new URL(image, Astro.site ?? "https://signetai.sh");
   <body>
     <slot />
 
+    <script src="../scripts/analytics.ts"></script>
+
     <!-- Reddit Pixel Conversion Events -->
     <script>
     document.addEventListener('astro:page-load', function() {

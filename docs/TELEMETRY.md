@@ -82,6 +82,28 @@ PostHog failures, and never throws into the daemon.
 | `version.observed` | daemon start sees a different persisted version (any update mechanism) | `from`, `to` |
 | `command.invoked` | CLI command (name only, never arguments) | `command`, `deploymentRole`, `installChannel` |
 
+### Marketing site events
+
+The marketing site uses the same PostHog project with `surface: "marketing"`
+and `$lib: "signet-web"` on every event. Automatic capture, automatic page
+views, pageleave events, performance capture, heatmaps, console-log recording,
+feature-flag/remote-config requests, session recording, surveys, and form capture
+are disabled. Search telemetry sends only state and bounded result-count/query-length
+buckets; it never sends query text. Guide, harness, and CTA links are classified
+by their dedicated events; outbound events cover other external HTTP(S) links
+and send destination categories rather than raw URLs.
+
+| Event | When | Key payload fields |
+|---|---|---|
+| `marketing.page_view` | site route loads | `pageCategory`, `pagePath` |
+| `marketing.cta_clicked` | marked CTA is clicked | `cta`, `placement`, page context |
+| `marketing.harness_selected` | harness link is clicked | `harness`, page context |
+| `marketing.install_surface_opened` | install method/surface tab is selected | `surfaceName`, `option`, page context |
+| `marketing.command_copied` | install or setup command is copied | `commandKind`, `placement`, page context |
+| `marketing.guide_opened` | marked guide or docs link is opened | `guide`, `destination`, page context |
+| `marketing.docs_search_state` | docs search reaches a new state | `state`, `resultCountBucket`, `queryLengthBucket` |
+| `marketing.outbound_clicked` | external HTTP(S) link is clicked | `destination`, page context |
+
 Declared but **not yet emitted**: `pipeline.extraction` and
 `pipeline.decision`.
 

@@ -6,6 +6,18 @@ let ticking = false;
 let hasBoundScroll = false;
 let lastScrollY = -1;
 
+function commandKind(command: string): string {
+	if (command.startsWith("curl ")) return "native_install";
+	if (command.startsWith("npm install")) return "npm_install";
+	if (command.startsWith("bun add")) return "bun_install";
+	if (command.startsWith("git clone")) return "source_install";
+	if (command.startsWith("signet setup")) return "setup";
+	if (command.startsWith("signet status")) return "status";
+	if (command.startsWith("signet remember")) return "remember";
+	if (command.startsWith("signet recall")) return "recall";
+	return "other";
+}
+
 function initCopyButtons() {
 	document.querySelectorAll(".copy-btn").forEach((button) => {
 		const el = button as HTMLElement;
@@ -21,6 +33,14 @@ function initCopyButtons() {
 
 			try {
 				await navigator.clipboard.writeText(installCmd);
+				window.dispatchEvent(
+					new CustomEvent("signet:command-copied", {
+						detail: {
+							commandKind: el.dataset.analyticsCommand ?? commandKind(installCmd),
+							placement: button.closest(".hero-install") ? "hero" : "quickstart",
+						},
+					}),
+				);
 				button.classList.add("is-copied");
 				setTimeout(() => button.classList.remove("is-copied"), 1200);
 			} catch {

@@ -17,6 +17,30 @@ interface SearchResult {
 	score?: number;
 }
 
+function resultCountBucket(count: number): "0" | "1-3" | "4-8" {
+	if (count === 0) return "0";
+	if (count <= 3) return "1-3";
+	return "4-8";
+}
+
+function queryLengthBucket(length: number): "0-1" | "2-5" | "6+" {
+	if (length < 2) return "0-1";
+	if (length <= 5) return "2-5";
+	return "6+";
+}
+
+function emitSearchState(state: "results" | "empty" | "unavailable", resultCount: number, queryLength: number): void {
+	window.dispatchEvent(
+		new CustomEvent("signet:docs-search-state", {
+			detail: {
+				state,
+				resultCountBucket: resultCountBucket(resultCount),
+				queryLengthBucket: queryLengthBucket(queryLength),
+			},
+		}),
+	);
+}
+
 export default function NavSearch() {
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
@@ -45,7 +69,7 @@ export default function NavSearch() {
 				}),
 			);
 		} catch {
-			// search unavailable
+			emitSearchState("unavailable", 0, 0);
 		}
 	}, [fuse]);
 
@@ -90,12 +114,20 @@ export default function NavSearch() {
 
 	// Search on query change
 	useEffect(() => {
-		if (!fuse || query.length < 2) {
+		if (!fuse) {
 			setResults([]);
 			return;
 		}
-		setResults(fuse.search(query).slice(0, 8));
+		if (query.length < 2) {
+			setResults([]);
+			setSelected(0);
+			emitSearchState("empty", 0, query.length);
+			return;
+		}
+		const nextResults = fuse.search(query).slice(0, 8);
+		setResults(nextResults);
 		setSelected(0);
+		emitSearchState(nextResults.length > 0 ? "results" : "empty", nextResults.length, query.length);
 	}, [query, fuse]);
 
 	function onKeyDown(e: React.KeyboardEvent) {
@@ -159,7 +191,9 @@ export default function NavSearch() {
 									>
 										<a href={r.item.url} onClick={() => setOpen(false)}>
 											<span className="nav-search-result-title">{r.item.title}</span>
-											<span className="nav-search-result-section">{r.item.sectionTitle || r.item.section || "Site"}</span>
+											<span className="nav-search-result-section">
+												{r.item.sectionTitle || r.item.section || "Site"}
+											</span>
 										</a>
 									</div>
 								);

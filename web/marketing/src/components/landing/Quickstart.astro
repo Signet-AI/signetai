@@ -53,6 +53,8 @@ const methods = [
           role="tab"
           aria-selected={i === 0 ? 'true' : 'false'}
           data-quickstart-target={m.key}
+          data-analytics-install-surface="quickstart"
+          data-analytics-install-option={m.key}
         >
           {m.label}
         </button>
@@ -79,7 +81,7 @@ const methods = [
           ))}
           <div class="quickstart-meta">
             <span class="quickstart-hint">{m.comment}</span>
-            <a href={m.docs} class="quickstart-docs-link">{m.docsLabel} &#8594;</a>
+            <a href={m.docs} class="quickstart-docs-link" data-analytics-guide="install">{m.docsLabel} &#8594;</a>
           </div>
         </div>
       ))}

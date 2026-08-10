@@ -32,7 +32,7 @@ const links = [
 
   <div class="arch-cta-grid reveal">
     {links.map((link) => (
-      <a href={link.href} class="arch-cta-card">
+      <a href={link.href} class="arch-cta-card" data-analytics-guide="architecture">
         <h3>{link.label}</h3>
         <p>{link.blurb}</p>
         <span class="arch-cta-arrow">Read more &#8594;</span>

@@ -53,6 +53,8 @@ const tabs = [
             role="tab"
             aria-selected={i === 0 ? "true" : "false"}
             data-tab={tab.id}
+            data-analytics-install-surface="install_cta"
+            data-analytics-install-option={tab.id}
           >
             {tab.label}
           </button>
@@ -84,8 +86,8 @@ const tabs = [
         <span>Local-first</span>
       </div>
       <div class="install-final-links">
-        <a href="/join" class="btn btn-primary">Join Community</a>
-        <a href="https://docs.signetai.sh/quickstart/" class="btn btn-ghost">Quickstart docs</a>
+        <a href="/join" class="btn btn-primary" data-analytics-cta="join_community" data-analytics-placement="install_cta">Join Community</a>
+        <a href="https://docs.signetai.sh/quickstart/" class="btn btn-ghost" data-analytics-guide="quickstart">Quickstart docs</a>
         <a href="https://github.com/Signet-AI/signetai" class="btn btn-ghost">GitHub</a>
       </div>
     </div>

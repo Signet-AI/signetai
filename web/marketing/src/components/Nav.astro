@@ -30,7 +30,7 @@ const { variant = "floating" } = Astro.props;
 
     <NavSearch client:idle />
 
-    <a href="/join" class="nav-join">Join</a>
+    <a href="/join" class="nav-join" data-analytics-cta="join_community" data-analytics-placement="nav">Join</a>
 
     <a href="https://github.com/Signet-AI/signetai" class="nav-github">
       GitHub
@@ -47,7 +47,7 @@ const { variant = "floating" } = Astro.props;
     <div class="nav-mobile-links">
       <a href="https://docs.signetai.sh/" class="nav-mobile-link">Docs</a>
       <a href="/blog" class="nav-mobile-link">Blog</a>
-      <a href="/join" class="nav-mobile-link">Join Community</a>
+      <a href="/join" class="nav-mobile-link" data-analytics-cta="join_community" data-analytics-placement="nav_mobile">Join Community</a>
       <a href="https://github.com/Signet-AI/signetai" class="nav-mobile-link">
         GitHub
         <svg class="nav-mobile-link-arrow" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
