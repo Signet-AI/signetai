@@ -55,18 +55,18 @@ Configuration lives under `continuity` in the pipeline config:
 
 ## Lossless Session Transcripts
 
-As hooks run, Signet stores the canonical cleaned conversation transcript as
-JSONL at `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl`.
-The `session_transcripts` table (migration 040) remains a compatibility and
-indexing surface. Tool calls, tool outputs, and thinking traces are removed from
-these memory surfaces so retrieval and summarization stay focused on the actual
-conversation. Raw auditable traces may still be written to daemon logs outside
-the memory lineage.
+As hooks run, Signet stores the canonical retained conversation transcript as
+JSONL at `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl` and
+keeps the session row lossless for later projection. The `session_transcripts`
+table (migration 040) is the canonical transcript index. Dreaming sanitizes a
+read-time projection: tool calls become markers, tool outputs are omitted, and
+the retained row is not rewritten. Raw auditable traces may still be written
+to daemon logs outside the memory lineage.
 
-The table schema (`session_key TEXT PRIMARY KEY, content TEXT NOT NULL,
-harness TEXT, project TEXT, agent_id TEXT, created_at TEXT`) is indexed
-on `project` and `created_at`. The summary worker writes one row per
-session via `INSERT OR IGNORE`, keyed on `session_key`.
+The table schema includes `session_key`, `content`, `harness`, `project`,
+`agent_id`, `created_at`, `completed_at`, and `content_hash`, with indexes for
+agent/completion and agent/hash lookups. The session-end, recovery, and TTL
+paths mark the row complete directly; no summary worker writes it.
 
 The `/api/memory/remember` endpoint accepts an optional `transcript`
 field. When present and a `sourceId` (session key) is available, the
@@ -113,9 +113,11 @@ projection always includes:
 - `## Durable Notes & Constraints`
 - `## Temporal Index`
 
-Session-end jobs write canonical transcript artifacts immediately, then the
-summary worker writes the matching canonical summary artifact for normal
-`session_end` jobs. `compaction-complete` writes a canonical compaction
-artifact and backfills the session manifest. Mid-session
-`session-checkpoint-extract` jobs remain DB-native and only write checkpoint
-nodes into `session_summaries`.
+Session-end capture writes the canonical transcript artifact, and the
+completed transcript row is the single Dreaming input for the content pass.
+Dreaming owns the temporal manifest/MEMORY/DAG projection for that input.
+Historical summary and compaction artifacts remain readable for provenance;
+`compaction-complete` may still write a canonical compaction artifact. The
+mid-session `session-checkpoint-extract` endpoint retains continuity checkpoint
+nodes but does not create a summary job or deliver an intermediate transcript
+to Dreaming.

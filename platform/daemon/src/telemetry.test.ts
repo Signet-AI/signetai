@@ -347,6 +347,63 @@ describe("telemetry collector", () => {
 		expect(lastBatch.map((e) => e.event)).toEqual(["daemon.heartbeat"]);
 	});
 
+	it("recovers first-use events after termination before the normal flush", async () => {
+		// Regression (issue #1275): claiming first use in one transaction and
+		// buffering its event for a later transaction let a crash permanently
+		// consume the milestone. The event must already be in the durable queue
+		// before the process can terminate.
+		const first = makeCollector();
+		first.recordFirstUse("remember");
+		first.recordFirstUse("remember");
+		first.recordFirstUse("recall");
+		first.recordFirstUse("recall");
+
+		const beforeRestart = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT first_remember_at, first_recall_at FROM telemetry_install").get() as {
+					first_remember_at: string | null;
+					first_recall_at: string | null;
+				},
+		);
+		const pendingEvents = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT event, sent_to_posthog FROM telemetry_events WHERE event IN ('first.remember', 'first.recall') ORDER BY event",
+					)
+					.all() as Array<{ readonly event: string; readonly sent_to_posthog: number }>,
+		);
+		expect(beforeRestart.first_remember_at).not.toBeNull();
+		expect(beforeRestart.first_recall_at).not.toBeNull();
+		expect(pendingEvents).toEqual([
+			{ event: "first.recall", sent_to_posthog: 0 },
+			{ event: "first.remember", sent_to_posthog: 0 },
+		]);
+
+		// Simulate a process crash: the in-memory buffer (including the
+		// activation event) disappears, but the atomically persisted
+		// first-use rows survive and are recoverable by the next daemon.
+		closeDbAccessor();
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		const restarted = makeCollector();
+		restarted.recordFirstUse("remember");
+		restarted.recordFirstUse("recall");
+		await restarted.flush();
+		await restarted.flush();
+
+		const delivered = captured.flatMap((request) => request.body.batch.map((event) => event.event));
+		expect(delivered).toEqual(["first.remember", "first.recall"]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT event FROM telemetry_events WHERE event IN ('first.remember', 'first.recall') AND sent_to_posthog = 0",
+					)
+					.all(),
+			),
+		).toEqual([]);
+	});
+
 	it("emits one config snapshot alongside install activation", async () => {
 		const snapshot: TelemetryConfigSnapshot = {
 			graphEnabled: true,
@@ -547,7 +604,7 @@ describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 		expect(third.properties.command).toBe("status");
 	});
 
-	it("defers wedge persistence until the normal flush", async () => {
+	it("persists wedge events to the local audit log before normal flush", async () => {
 		const collector = createTelemetryCollector(
 			fakeDbAccessor(),
 			{
@@ -564,7 +621,9 @@ describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 
 		const before = readFileSync(logPath, "utf-8");
 		collector.recordDeferred?.("error.occurred", { type: "EventLoopLag", lagMs: 900 });
-		expect(readFileSync(logPath, "utf-8")).toBe(before);
+		const afterRecord = readFileSync(logPath, "utf-8");
+		expect(afterRecord).not.toBe(before);
+		expect(afterRecord).toContain('"event":"error.occurred"');
 		await collector.flush();
 		expect(readFileSync(logPath, "utf-8")).toContain('"event":"error.occurred"');
 	});
@@ -643,10 +702,10 @@ describe("session economics (issue #1201)", () => {
 		await collector.flush();
 
 		const ends = collector.query({ event: "session.end" });
-		const sessionA = ends.find((event) => event.properties.tokensInput === 100);
-		const sessionC = ends.find((event) => event.properties.tokensInput === 200);
-		expect(sessionA?.properties.cost).toBe(0.5);
-		expect(sessionC?.properties.cost).toBe(1);
+		expect(ends[0]?.properties.tokensInput).toBe(100);
+		expect(ends[0]?.properties.cost).toBe(0.5);
+		expect(ends[1]?.properties.tokensInput).toBe(200);
+		expect(ends[1]?.properties.cost).toBe(1);
 	});
 
 	it("reopens the accumulator for a resumed session", async () => {

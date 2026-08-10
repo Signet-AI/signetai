@@ -23,6 +23,7 @@ import {
 	DEFAULT_QUEUE_THRESHOLDS,
 	EMPTY_QUEUE_COUNTS,
 	getQueueDiagnosticsSnapshot,
+	getQueuePressureSnapshot,
 	scoreCountsWithThresholds,
 } from "./diagnostics-queue";
 
@@ -201,6 +202,25 @@ describe("expanded queue diagnostics", () => {
 
 		expect(getQueueDiagnosticsSnapshot(readDb).memory.dead).toBe(0);
 		expect(getQueueDiagnosticsSnapshot(readDb, { fresh: true }).memory.dead).toBe(1);
+	});
+
+	test("bounds heartbeat queue observation and distinguishes empty queue age", () => {
+		const readDb = asReadDb(db);
+		const empty = getQueuePressureSnapshot(readDb);
+		expect(empty.memoryQueueDepth).toBe(0);
+		expect(empty.summaryQueueDepth).toBe(0);
+		expect(empty.oldestJobAgeSec).toBeUndefined();
+
+		for (let i = 0; i < 1_100; i++) {
+			const memoryId = `mem-pressure-${i}`;
+			insertMemory(db, memoryId);
+			insertJob(db, `job-pressure-${i}`, memoryId, "pending");
+		}
+
+		const pressure = getQueuePressureSnapshot(readDb);
+		expect(pressure.memoryQueueDepth).toBe(1_001);
+		expect(pressure.summaryQueueDepth).toBe(0);
+		expect(pressure.oldestJobAgeSec).toBeGreaterThanOrEqual(0);
 	});
 });
 

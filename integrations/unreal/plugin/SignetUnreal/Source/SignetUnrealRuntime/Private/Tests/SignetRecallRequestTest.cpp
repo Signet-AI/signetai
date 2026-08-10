@@ -57,6 +57,7 @@ bool FSignetRecallRequestContractTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Custom world scope is preserved"), Body->GetStringField(TEXT("scope")), FString(TEXT("world:alpha")));
 	TestEqual(TEXT("NPC limit is clamped"), static_cast<int32>(Body->GetNumberField(TEXT("limit"))), SignetRecallRequest::MaximumNpcLimit);
 	TestTrue(TEXT("includeRecalled is serialized"), Body->GetBoolField(TEXT("includeRecalled")));
+	TestEqual(TEXT("tool recall surface is serialized"), Body->GetStringField(TEXT("recallSurface")), FString(TEXT("tool_call")));
 	return true;
 }
 

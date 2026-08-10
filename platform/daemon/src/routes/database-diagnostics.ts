@@ -112,7 +112,8 @@ const KNOWN_GROUPS: Readonly<Record<string, DatabaseSchemaGroup>> = {
 	schema_migrations: "runtime",
 	schema_migrations_audit: "runtime",
 	memory_jobs: "runtime",
-	summary_jobs: "runtime",
+	// Historical queue table retained only for migration/provenance inspection.
+	summary_jobs: "other",
 	telemetry_events: "runtime",
 	connectors: "runtime",
 	connector_documents: "runtime",

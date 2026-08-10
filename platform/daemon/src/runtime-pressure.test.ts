@@ -97,4 +97,13 @@ describe("runtime pressure envelope", () => {
 		expect(getRuntimePressureEnvelope(2_000).snapshotAgeBucket).toBe("fresh");
 		expect(getRuntimePressureEnvelope(16 * 60 * 1000).snapshotAgeBucket).toBe("old");
 	});
+
+	it("does not label an empty queue as a fresh job", () => {
+		const envelope = buildRuntimePressureEnvelope({
+			memoryQueueDepth: 0,
+			summaryQueueDepth: 0,
+			oldestJobAgeSec: 0,
+		});
+		expect(envelope.oldestJobAgeBucket).toBe("none");
+	});
 });

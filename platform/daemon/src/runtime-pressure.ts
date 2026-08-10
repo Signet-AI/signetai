@@ -2,8 +2,9 @@
  * Bounded runtime context for daemon liveness telemetry.
  *
  * This module deliberately stores only the latest coarse observations. The
- * event-loop wedge path must be able to report context without doing database,
- * filesystem, or provider work while the event loop is recovering.
+ * event-loop wedge path reads this context without doing database or provider
+ * work while the event loop is recovering; the telemetry layer separately
+ * handles its bounded local audit append.
  */
 
 export type PressureBucket =
@@ -185,7 +186,8 @@ export function buildRuntimePressureEnvelope(input: RuntimePressureInputs = {}):
 		runtimePressureVersion: 1,
 		memoryQueueDepthBucket: bucketQueueDepth(input.memoryQueueDepth),
 		summaryQueueDepthBucket: bucketQueueDepth(input.summaryQueueDepth),
-		oldestJobAgeBucket: bucketAgeSec(input.oldestJobAgeSec),
+		oldestJobAgeBucket:
+			input.memoryQueueDepth === 0 && input.summaryQueueDepth === 0 ? "none" : bucketAgeSec(input.oldestJobAgeSec),
 		activeWorkersBucket: bucketWorkerCount(input.activeWorkers),
 		batchSizeBucket: bucketBatchSize(input.batchSize),
 		dbLatencyBucket: bucketLatencyMs(input.dbLatencyMs ?? latencies.dbLatencyMs),

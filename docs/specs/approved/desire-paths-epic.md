@@ -38,8 +38,8 @@ running. They are not stories — they are the floor this epic stands on.
 | Three-Level Extraction Escalation | COMPLETE | `pipeline/extraction-escalation.ts` — all 3 levels, thresholds, prompts, orchestrator |
 | Lossless Retention (Cold Tier) | COMPLETE | Migration 028, `archiveToCold()` in retention-worker, `/api/repair/cold-stats` endpoint |
 | On-Demand Expansion (HTTP) | COMPLETE | `/api/knowledge/expand` endpoint with auth, aspect filtering, scoped traversal |
-| Session Summary DAG (schema) | COMPLETE | Migration 029 (`session_summaries`, junction tables), `summary-condensation.ts` (arc/epoch with depth-aware prompts) |
-| Backfill Skipped Sessions | COMPLETE | `/api/repair/backfill-skipped` endpoint |
+| Session Summary DAG (schema) | COMPLETE / HISTORICAL | Migration 029 (`session_summaries`, junction tables); historical summary rows remain readable, while active temporal projection is owned by Dreaming's direct transcript content pass |
+| Backfill Skipped Sessions | RETIRED | The former summary-worker/backfill route is retired by #1271; migration 117 preserves historical transcript payloads before draining jobs |
 | Graph Traversal | COMPLETE | `graph-traversal.ts` — focal entity resolution, walk algorithm, timeout, constraint surfacing |
 | Behavioral Feedback Loop | COMPLETE | `aspect-feedback.ts` — FTS overlap feedback, aspect weight decay, telemetry |
 | Entity Pinning | COMPLETE | Migration 022, pin/unpin, always-focal during traversal |
@@ -81,9 +81,15 @@ graph accumulates benchmark entities alongside real ones.
 *Finish the partially-built pieces and close remaining gaps in the
 signal-cleaning pipeline.*
 
-### DP-1: Significance Gate
+### DP-1: Significance Gate (superseded by #1271)
 
-**Goal:** Skip extraction entirely for sessions that have nothing worth
+**Status:** Superseded by #1271. Direct transcript delivery intentionally
+removed the summary-worker significance boundary; completed transcripts now
+reach Dreaming through one canonical read-time projection. The original
+proposal is retained below as historical rationale, not as an active module
+contract.
+
+**Original goal:** Skip extraction entirely for sessions that have nothing worth
 remembering. Zero-cost continuity.
 
 **What exists:** The `/api/repair/backfill-skipped` endpoint exists for

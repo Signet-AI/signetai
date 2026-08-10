@@ -48,7 +48,7 @@ import {
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
-import { getQueueDiagnosticsSnapshot } from "./diagnostics-queue";
+import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
 import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
@@ -78,8 +78,6 @@ import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./nati
 import {
 	DEFAULT_RETENTION,
 	ensureRetentionWorker,
-	ensureSummaryRecovery,
-	ensureSummaryWorker,
 	getPipelineWorkerStatus,
 	setDreamingWorker,
 	startPipeline,
@@ -173,6 +171,7 @@ import {
 	telemetryDisabledByEnv,
 } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
+import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 
 import {
 	getSynthesisWorker as getSynthesisRenderWorker,
@@ -240,6 +239,7 @@ let embeddingPromotionRestart: Promise<void> | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let schedulerHandle: { stop(): Promise<void> } | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
+let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 // These are mirrored into state.ts via setters for read access by
 // route modules. Only daemon.ts should assign or clear them.
 let telemetryRef: TelemetryCollector | undefined;
@@ -1282,6 +1282,12 @@ async function stopPipelineRuntime(): Promise<void> {
 		schedulerHandle = null;
 	}
 
+	if (transcriptRecoveryWorkerHandle) {
+		try {
+			await transcriptRecoveryWorkerHandle.stop();
+		} catch {}
+		transcriptRecoveryWorkerHandle = null;
+	}
 	if (transcriptCaptureWorkerHandle) {
 		try {
 			transcriptCaptureWorkerHandle.stop();
@@ -1539,28 +1545,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		interactive: await router.hasWorkload("interactive"),
 		default: await router.hasWorkload("default"),
 	});
-
-	// Summary worker — shared infrastructure, owned here not by startPipeline.
-	// The summary worker produces session summaries for DAG/continuity.
-	// Dreaming consumes these summaries for consolidation. Requires an
-	// effective session_synthesis route.
-	const isSummarySynthesisAvailable = async (): Promise<boolean> =>
-		(await router.explain({ agentId: defaultAgentId, operation: "session_synthesis" }, true)).ok;
-	const summarySynthesisAvailable = await isSummarySynthesisAvailable();
-	if (!pipelinePaused && summarySynthesisAvailable) {
-		ensureSummaryWorker(getDbAccessor(), {
-			isSynthesisAvailable: isSummarySynthesisAvailable,
-		});
-	} else {
-		ensureSummaryRecovery(getDbAccessor(), {
-			workerOptions: { isSynthesisAvailable: isSummarySynthesisAvailable },
-			shouldStartWorker: async () => {
-				const liveCfg = loadMemoryConfig(AGENTS_DIR);
-				if (liveCfg.pipelineV2.paused) return false;
-				return await isSummarySynthesisAvailable();
-			},
-		});
-	}
 
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
 		startPipeline(
@@ -1965,16 +1949,12 @@ async function main() {
 	startSessionCleanup();
 	// Formal TTL lifecycle (#902): when stale-session cleanup evicts a claim
 	// whose harness never sent session-end, checkpoint the residual continuity
-	// state and enqueue idempotent summary finalization instead of silently
+	// state and mark the retained transcript complete instead of silently
 	// dropping the in-memory lifecycle state.
 	setSessionEvictionHandler(
 		createTtlEvictionHandler({
 			accessor: getDbAccessor(),
 			maxCheckpointsPerSession: loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity.maxCheckpointsPerSession,
-			isSummarySynthesisAvailable: () => {
-				const liveCfg = loadMemoryConfig(AGENTS_DIR);
-				return !liveCfg.pipelineV2.paused && providerRuntimeResolution.synthesis.effective !== null;
-			},
 		}),
 	);
 	const restoredSessions = restorePersistedSessions();
@@ -2135,16 +2115,16 @@ async function main() {
 					const connectors = listConnectors(getDbAccessor());
 					let runtimePressure: ReturnType<typeof buildRuntimePressureEnvelope> | undefined;
 					try {
-						const queue = getDbAccessor().withReadDb((db) => getQueueDiagnosticsSnapshot(db, { fresh: true }));
+						const queue = getDbAccessor().withReadDb((db) => getQueuePressureSnapshot(db));
 						const workers = getPipelineWorkerStatus();
 						const resources = getResourceSnapshot();
 						const recoveryOutcome: PressureRecoveryOutcome = restartedHeartbeatPending
 							? "restarted"
 							: getPressureRecoveryOutcome();
 						runtimePressure = buildRuntimePressureEnvelope({
-							memoryQueueDepth: queue.memory.pending + queue.memory.leased,
-							summaryQueueDepth: queue.summary.pending + queue.summary.leased,
-							oldestJobAgeSec: Math.max(queue.memory.oldestAgeSec, queue.summary.oldestAgeSec),
+							memoryQueueDepth: queue.memoryQueueDepth,
+							summaryQueueDepth: queue.summaryQueueDepth,
+							oldestJobAgeSec: queue.oldestJobAgeSec,
 							activeWorkers: countActiveWorkers(
 								[
 									workers.summary.running,
@@ -2198,6 +2178,9 @@ async function main() {
 	schedulerHandle = startSchedulerWorker(getDbAccessor());
 	if (!transcriptCaptureWorkerHandle) {
 		transcriptCaptureWorkerHandle = startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
+	}
+	if (!transcriptRecoveryWorkerHandle) {
+		transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(getDbAccessor(), AGENTS_DIR, resolveDaemonAgentId());
 	}
 
 	checkpointPruneTimer = setInterval(() => {

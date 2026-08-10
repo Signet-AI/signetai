@@ -186,17 +186,11 @@ includes `content`, `contentType`, optional `title`, and `byteLength`.
 
 ## Continuity Scoring
 
-At session end, the summary worker scores how effectively injected
-memories were used during the session. The scoring flow:
-
-1. **Load injected memories** — queries `session_memories` joined with
-   `memories` for the session, filtered to `was_injected = 1`, ordered
-   by `rank ASC`.
-
-2. **LLM evaluation** — the injected memories and session transcript are
-   sent to the LLM, which returns a JSON object with `score` (0–1),
-   `confidence` (0–1), `memories_used` (count), `novel_context_count`,
-   `reasoning`, and `per_memory` (array of `{ id, relevance }`).
+At session end, the daemon retains the completed transcript and the
+session-memory injection metadata. The retired summary worker is not part of
+this path. Continuity feedback remains available through the session-memory
+rows and their existing feedback APIs; Dreaming consumes the completed
+transcript through its sanitized read-time projection.
 
 3. **Per-memory relevance** — each entry in `per_memory` uses an 8-char
    prefix of the memory ID. The prefix is resolved to the full UUID via

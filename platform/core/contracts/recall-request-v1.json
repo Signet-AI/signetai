@@ -13,6 +13,21 @@
 			}
 		},
 		{
+			"name": "bounded-score-and-surface",
+			"clients": ["core", "sdk"],
+			"query": "graph",
+			"options": {
+				"minScore": 0.8,
+				"recallSurface": "tool_call"
+			},
+			"expected": {
+				"query": "graph",
+				"limit": 10,
+				"minScore": 0.8,
+				"recallSurface": "tool_call"
+			}
+		},
+		{
 			"name": "lower-limit-bound",
 			"clients": ["core", "openclaw", "opencode", "sdk", "hermes"],
 			"query": "graph",
@@ -174,7 +189,8 @@
 			"minimumLimit": 1,
 			"maximumLimit": 20,
 			"includeRecalled": true,
-			"scope": "world-or-player"
+			"scope": "world-or-player",
+			"recallSurface": "tool_call"
 		}
 	}
 }

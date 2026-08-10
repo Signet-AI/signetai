@@ -135,12 +135,13 @@ lineage through the session manifest. Existing markdown transcript artifacts
 remain readable for backward compatibility and are backfilled into the JSONL
 history.
 
-The manifest is mutable and may later gain a `compaction_path`; the JSONL
-transcript is the forward source of truth. The async summary worker later writes
-the matching immutable `--summary.md` artifact for normal `session-end` jobs.
-The response includes `transcriptCaptureJobId` when transcript capture was
-queued. Poll `GET /api/hooks/transcript-capture/:jobId?agentId=<agent>` until
-the status is `completed`; the receipt never exposes transcript content.
+The session-end marker completes the canonical transcript row. Dreaming reads
+that completed row through a sanitized, read-time projection: tool calls remain
+as markers, tool outputs are excluded, and the retained transcript is not
+rewritten. There is no summary-worker job or generated session-summary artifact
+in this path. The response includes `transcriptCaptureJobId` when transcript
+capture was queued. Poll `GET /api/hooks/transcript-capture/:jobId?agentId=<agent>`
+until the status is `completed`; the receipt never exposes transcript content.
 
 ### POST /api/hooks/remember
 
@@ -296,10 +297,11 @@ scope until transcript storage catches up.
 
 ### POST /api/hooks/session-checkpoint-extract
 
-Trigger a mid-session memory extraction for long-lived sessions (Discord bots,
+Record a mid-session checkpoint for long-lived sessions (Discord bots,
 persistent agents) that never call `session-end`. Computes a delta since the
-last extraction cursor and enqueues a summary job without releasing the session
-claim.
+last extraction cursor, retains it in the canonical transcript/checkpoint
+records, and does not release the session claim. Checkpoints are not delivered
+to Dreaming until the transcript receives its completion marker.
 
 **Request body**
 
@@ -326,27 +328,13 @@ The endpoint skips silently when:
 - No transcript is available
 - The session is bypassed
 
-On success the extraction cursor advances so the next call only processes
-new content.
-
-**Response**
-
-```json
-{ "queued": true, "jobId": "uuid" }
-```
-
-`queued: true` means a summary job was enqueued; `jobId` identifies the
-async job. The job extracts the delta and writes a temporal node scored
-at 0.85 (below compaction summaries at 0.95, above chunks at 0.55). Checkpoint
-jobs stay DB-native, they do not create canonical `--summary.md` session
-artifacts.
-
-```json
-{ "skipped": true }
-```
-
-Returned when delta < 500 chars, no transcript is available, or the
-session is bypassed.
+On a checkpoint with transcript content, the daemon retains a full snapshot
+when it is at least as complete as the stored canonical row, writes the
+continuity checkpoint, and resets the live continuity window. The endpoint
+intentionally returns `{ "skipped": true }` for every request after this
+bookkeeping: the retired summary worker is no longer a production path and no
+`jobId` is created. It also returns that response when no transcript is
+available, the pipeline is disabled, or the session is bypassed.
 
 ### GET /api/hooks/synthesis/config
 
@@ -607,8 +595,9 @@ in the requested agent and project scope while excluding `currentSessionKey`.
 
 ### GET /api/sessions/summaries
 
-List temporal summary nodes used for drill-down and `MEMORY.md` synthesis.
-Results are agent-scoped.
+List temporal manifest nodes used for drill-down and `MEMORY.md` synthesis.
+Completed transcript nodes are written by Dreaming's content pass; historical
+summary nodes remain readable for provenance. Results are agent-scoped.
 
 **Response**
 
@@ -619,9 +608,9 @@ Results are agent-scoped.
       "id": "sess-1",
       "kind": "session",
       "depth": 0,
-      "source_type": "summary",
+      "source_type": "transcript",
       "source_ref": "session-uuid",
-      "meta_json": "{\"source\":\"summary-worker\"}"
+      "meta_json": "{\"source\":\"dreaming-content-pass\"}"
     }
   ]
 }

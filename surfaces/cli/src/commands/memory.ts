@@ -112,7 +112,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("--keyword-query <query>", "Override the keyword/FTS query used for recall")
 		.option("--pinned", "Only return pinned memories", false)
 		.option("--importance-min <n>", "Only return memories at or above this importance", Number.parseFloat)
-		.option("--min-score <n>", "Minimum recall score threshold (client-side)", Number.parseFloat)
+		.option("--min-score <n>", "Minimum recall score threshold", Number.parseFloat)
 		.option("--agent <name>", "Filter by agent ID")
 		.option("--aggregate", "Synthesize an aggregate answer from bounded recall evidence", false)
 		.option("--aggregate-budget <budget>", "Aggregate recall budget: small, medium, or large", "small")
@@ -157,6 +157,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					saveAggregate: aggregateRequested ? options.saveAggregate : undefined,
 					sessionKey: options.sessionKey,
 					includeRecalled: options.includeRecalled,
+					minScore: options.minScore,
 				}),
 				timeoutMs,
 			);

@@ -51,21 +51,14 @@ a turn.
 The OpenClaw adapter tracks turns per session; after 20 turns it
 fire-and-forgets a checkpoint extract without releasing the session claim.
 
-Delta tracking via `session_extract_cursors` table (migration 049 in TS
-daemon, 033 in Rust daemon). The cursor is advanced AFTER
-`enqueueSummaryJob` succeeds so a crash causes redundant re-extraction
-rather than a silent data-loss window.
-
-Rust daemon reads cursor and transcript, checks the delta threshold,
-enqueues a `checkpoint_extract` summary job for the delta, then advances
-the cursor. Summary job queueing and cursor advancement now match the TS
-daemon contract: if enqueue fails, the cursor is not advanced and the
-delta is retried on the next checkpoint attempt.
-
-For file-backed checkpoint transcripts, the Rust daemon applies the same
-guardrail used by its session-end path: `transcriptPath` must canonicalize
-under `/tmp/signet`, point to a regular file, and fit within the transcript
-size cap before the daemon reads it.
+The endpoint remains as a continuity bookkeeping surface, but the retired
+summary-worker delivery boundary is no longer used. The daemon retains a full
+checkpoint transcript snapshot when it is not shorter than the canonical row,
+writes the continuity checkpoint, and resets the live continuity window. It
+returns `{ "skipped": true }` and creates no summary job; the transcript is
+sent to Dreaming only after a session-end, recovery, or TTL completion marker.
+The historical `session_extract_cursors` table remains readable for migration
+compatibility but is not advanced by this retired path.
 
 ## Delivered
 

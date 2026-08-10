@@ -43,14 +43,12 @@ export type LogCategory =
 	| "pipeline" // Extraction/decision pipeline
 	| "inference" // Inference router and provider execution
 	| "embedding-tracker" // Incremental embedding refresh tracker
-	| "summary-worker" // Session summary worker
 	| "synthesis" // MEMORY.md synthesis worker
 	| "session-memories" // Session memory tracking
 	| "predictor" // Predictive memory scorer
 	| "maintenance" // Autonomous maintenance worker
 	| "retention" // Retention worker (decay + cold archival)
 	| "reflections" // Daily reflection generation and writeback
-	| "summary-condensation" // Session summary DAG condensation
 	| "session-tracker" // Runtime-path session ownership + bypass TTL tracking
 	| "system" // System events
 	| "update" // Auto-update cycle

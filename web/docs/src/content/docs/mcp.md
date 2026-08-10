@@ -98,7 +98,7 @@ Advanced controls:
 | `pinned` | boolean | no | Only return pinned memories |
 | `importance_min` | number | no | Minimum memory importance threshold |
 | `min_score` | number | no | Deprecated compatibility alias for `importance_min` |
-| `score_min` | number | no | Minimum recall score threshold, applied client-side to returned rows |
+| `score_min` | number | no | Minimum recall score threshold, applied at the daemon response boundary and checked defensively by the MCP adapter |
 | `aggregate` | boolean | no | Synthesize one aggregate answer from bounded recall evidence |
 | `aggregate_budget` | `"small" \| "medium" \| "large"` | no | Aggregate recall budget; defaults to `small` |
 | `save_aggregate` | boolean | no | Save the aggregate answer as a normal memory; defaults to true when aggregate mode is enabled and requires `remember` permission |

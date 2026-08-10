@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import ipaddress
 import urllib.error
@@ -447,6 +448,9 @@ class SignetClient:
                 body["saveAggregate"] = save_aggregate
         if agent_scoped and self._agent_id:
             body["agentId"] = self._agent_id
+        if score_min is not None and isinstance(score_min, (int, float)) and not isinstance(score_min, bool) and math.isfinite(score_min):
+            body["minScore"] = score_min
+        body["recallSurface"] = "tool_call"
 
         result = self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)
         if (
