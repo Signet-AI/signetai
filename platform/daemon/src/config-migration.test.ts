@@ -180,12 +180,14 @@ describe("migrateEmbeddingBaseUrl (#1264)", () => {
 embedding:
   provider: ollama
   baseUrl: http://192.168.1.10:11434
+  endpoint: http://127.0.0.1:11434
 `,
 			);
 			migrateEmbeddingBaseUrl(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
 			expect(after).toContain("base_url: http://192.168.1.10:11434");
 			expect(after).not.toContain("baseUrl:");
+			expect(after).not.toContain("endpoint:");
 			expect(after).toContain("# preserve operator context");
 			expect(after).toMatch(/^configVersion: 8/m);
 		} finally {

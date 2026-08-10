@@ -633,6 +633,7 @@ export function migrateEmbeddingBaseUrl(agentsDir: string): void {
 			});
 		}
 		block.delete("baseUrl");
+		block.delete("endpoint");
 	}
 
 	stampConfigVersion(doc, 8);
