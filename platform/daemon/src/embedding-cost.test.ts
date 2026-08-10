@@ -37,5 +37,9 @@ describe("embedding cost attribution", () => {
 			cost: 0,
 			accountingProvenance: "local_zero_cost",
 		});
+		expect(resolveEmbeddingAccounting("ollama", 1_000_000, { rates: { ollama: 5 } })).toEqual({
+			cost: 5,
+			accountingProvenance: "configured_rate",
+		});
 	});
 });

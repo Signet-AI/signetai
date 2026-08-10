@@ -1,8 +1,14 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
 import type { SessionStats } from "@earendil-works/pi-coding-agent";
-import { createPiModelProvider, isPiAgentSessionProvider, mapSessionStatsToUsage, resolvePiModel } from "./pi-provider";
+import {
+	createPiModelProvider,
+	isPiAgentSessionProvider,
+	mapSessionStatsToUsage,
+	mapUsage,
+	resolvePiModel,
+} from "./pi-provider";
 
 describe("pi provider catalog models", () => {
 	test("preserves the Codex responses API and registry metadata", () => {
@@ -57,6 +63,14 @@ describe("pi provider catalog models", () => {
 		expect(provider.accountingProvenance).toBe("unavailable");
 		expect(mapSessionStatsToUsage(stats, 10, provider.accountingProvenance)).toMatchObject({
 			totalTokens: 4,
+			totalCost: null,
+			accountingProvenance: "unavailable",
+		});
+	});
+
+	test("does not label missing remote usage as provider-reported zero tokens", () => {
+		expect(mapUsage({} as Usage, "provider_reported")).toMatchObject({
+			totalTokens: null,
 			totalCost: null,
 			accountingProvenance: "unavailable",
 		});

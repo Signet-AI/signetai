@@ -267,16 +267,39 @@ export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 	}
 }
 
-function mapUsage(usage: Usage, accountingProvenance: AccountingProvenance): LlmUsage {
+function hasUsageValues(values: readonly (number | null | undefined)[]): boolean {
+	return values.some((value) => typeof value === "number" && Number.isFinite(value) && value > 0);
+}
+
+function usageHasAccounting(usage: Usage): boolean {
+	return hasUsageValues([
+		usage.input,
+		usage.output,
+		usage.cacheRead,
+		usage.cacheWrite,
+		usage.totalTokens,
+		usage.cost?.total,
+	]);
+}
+
+function effectiveAccountingProvenance(
+	hasUsage: boolean,
+	accountingProvenance: AccountingProvenance,
+): AccountingProvenance {
+	return hasUsage || accountingProvenance === "local_zero_cost" ? accountingProvenance : "unavailable";
+}
+
+export function mapUsage(usage: Usage, accountingProvenance: AccountingProvenance): LlmUsage {
+	const effectiveProvenance = effectiveAccountingProvenance(usageHasAccounting(usage), accountingProvenance);
 	return {
 		inputTokens: usage.input ?? null,
 		outputTokens: usage.output ?? null,
 		cacheReadTokens: usage.cacheRead ?? null,
 		cacheCreationTokens: usage.cacheWrite ?? null,
 		totalTokens: usage.totalTokens ?? null,
-		totalCost: accountingProvenance === "unavailable" ? null : (usage.cost?.total ?? null),
+		totalCost: effectiveProvenance === "unavailable" ? null : (usage.cost?.total ?? null),
 		totalDurationMs: null,
-		accountingProvenance,
+		accountingProvenance: effectiveProvenance,
 	};
 }
 
@@ -304,15 +327,26 @@ export function mapSessionStatsToUsage(
 			accountingProvenance,
 		};
 	}
+	const effectiveProvenance = effectiveAccountingProvenance(
+		hasUsageValues([
+			stats.tokens.input,
+			stats.tokens.output,
+			stats.tokens.cacheRead,
+			stats.tokens.cacheWrite,
+			stats.tokens.total,
+			stats.cost,
+		]),
+		accountingProvenance,
+	);
 	return {
 		inputTokens: stats.tokens.input,
 		outputTokens: stats.tokens.output,
 		cacheReadTokens: stats.tokens.cacheRead,
 		cacheCreationTokens: stats.tokens.cacheWrite,
 		totalTokens: stats.tokens.total,
-		totalCost: accountingProvenance === "unavailable" ? null : stats.cost,
+		totalCost: effectiveProvenance === "unavailable" ? null : stats.cost,
 		totalDurationMs,
-		accountingProvenance,
+		accountingProvenance: effectiveProvenance,
 	};
 }
 

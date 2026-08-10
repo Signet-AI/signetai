@@ -507,7 +507,12 @@ function recordLlmGenerate(provider: LlmProvider, usage: LlmUsage | null, latenc
 		totalTokens: usage?.totalTokens ?? null,
 		totalCost: usage?.totalCost ?? null,
 		accountingProvenance:
-			provider.accountingProvenance ?? usage?.accountingProvenance ?? (usage ? "provider_reported" : "unavailable"),
+			usage?.accountingProvenance ??
+			(usage === null && provider.accountingProvenance === "local_zero_cost"
+				? "local_zero_cost"
+				: provider.accountingProvenance && usage !== null
+					? provider.accountingProvenance
+					: "unavailable"),
 	});
 }
 

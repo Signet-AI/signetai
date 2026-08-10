@@ -326,6 +326,13 @@ Aggregated telemetry statistics since daemon start or since a given timestamp.
 }
 ```
 
+Each `llm`, `embedding`, `dreaming`, and `sessions` object also contains a
+`coverage` object keyed by `provider_reported`, `locally_estimated`,
+`configured_rate`, `local_zero_cost`, `unavailable`, and `mixed`. Each bucket
+contains `calls`, `tokens`, and `cost` totals. The `mixed` bucket is used for
+session summaries that combine more than one accounting provenance; it is not
+missing accounting.
+
 Embedding `cost` values are USD. The `sessions` block is a derived view over
 matching usage events and should not be added to event-level cost totals. The
 `session.end` event carries the same collector-derived totals, keyed by a

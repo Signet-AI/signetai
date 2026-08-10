@@ -50,14 +50,23 @@ export function resolveEmbeddingAccounting(
 	if (!Number.isFinite(tokens) || tokens < 0) return { cost: null, accountingProvenance: "unavailable" };
 	const rateProvider = resolveEmbeddingCostProvider(provider, opts.baseUrl);
 	if (!rateProvider) return { cost: null, accountingProvenance: "unavailable" };
+	const configuredRate = opts.rates?.[rateProvider];
+	if (configuredRate !== undefined) {
+		if (!Number.isFinite(configuredRate) || configuredRate < 0) {
+			return { cost: null, accountingProvenance: "unavailable" };
+		}
+		return { cost: (tokens * configuredRate) / 1_000_000, accountingProvenance: "configured_rate" };
+	}
 	if (rateProvider === "openai" && opts.baseUrl !== undefined && isLocalBaseUrl(opts.baseUrl)) {
 		return { cost: 0, accountingProvenance: "local_zero_cost" };
 	}
-	if (rateProvider === "native" || rateProvider === "llama-cpp" || rateProvider === "ollama") {
+	if (
+		(rateProvider === "native" || rateProvider === "llama-cpp" || rateProvider === "ollama") &&
+		(opts.baseUrl === undefined || isLocalBaseUrl(opts.baseUrl))
+	) {
 		return { cost: 0, accountingProvenance: "local_zero_cost" };
 	}
-	const configuredRate = opts.rates?.[rateProvider];
-	const rate = configuredRate ?? DEFAULT_EMBEDDING_COST_RATES[rateProvider];
+	const rate = DEFAULT_EMBEDDING_COST_RATES[rateProvider];
 	if (!Number.isFinite(rate) || rate < 0) return { cost: null, accountingProvenance: "unavailable" };
 	return { cost: (tokens * rate) / 1_000_000, accountingProvenance: "configured_rate" };
 }

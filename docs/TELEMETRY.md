@@ -170,7 +170,8 @@ Notes on individual events:
   response exposes `coverage` per usage family with calls, tokens, and cost
   totals by provenance. Aggregate recall usage and session summaries use the
   same values, with `mixed` for combined totals. Session coverage includes a
-  `mixed` bucket so combined totals are not misclassified as `unavailable`.
+  `mixed` bucket so those combined totals are not misclassified as
+  `unavailable`.
 - **`dreaming.pass`** — dreaming is the largest token consumer (millions of
   input tokens per heavy install), so always include it in token/cost
   aggregates. `outcome` is one of `completed`, `no-op`, `failed`, or
