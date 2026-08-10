@@ -114,6 +114,7 @@ class StaticRouter implements AggregateInferenceRouter {
 					totalTokens: callNumber * 10 + callNumber + callNumber,
 					totalCost: callNumber / 1000,
 					totalDurationMs: callNumber * 100,
+					accountingProvenance: "provider_reported",
 				},
 				attempts: [
 					{
@@ -128,6 +129,7 @@ class StaticRouter implements AggregateInferenceRouter {
 							totalTokens: callNumber * 10 + callNumber + callNumber,
 							totalCost: callNumber / 1000,
 							totalDurationMs: callNumber * 100,
+							accountingProvenance: "provider_reported",
 						},
 					},
 				],
@@ -262,6 +264,7 @@ describe("aggregateRecall", () => {
 				cacheReadTokens: 3,
 				totalCost: 0.003,
 				totalDurationMs: 300,
+				accountingProvenance: "provider_reported",
 				stages: [
 					{
 						name: "planning",
@@ -269,6 +272,7 @@ describe("aggregateRecall", () => {
 						attemptCount: 1,
 						fallbackCount: 0,
 						inputTokens: 10,
+						accountingProvenance: "provider_reported",
 					},
 					{
 						name: "synthesis",
@@ -276,6 +280,7 @@ describe("aggregateRecall", () => {
 						attemptCount: 1,
 						fallbackCount: 0,
 						inputTokens: 20,
+						accountingProvenance: "provider_reported",
 					},
 				],
 			},

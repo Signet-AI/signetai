@@ -879,7 +879,11 @@ export class InferenceRouter {
 						// Read the session aggregate before dispose() tears the
 						// in-memory entries down. getStats is the only way to
 						// capture provider-reported tokens for the agentic loop.
-						sessionUsage = mapSessionStatsToUsage(session.getStats(), Date.now() - startedAt);
+						sessionUsage = mapSessionStatsToUsage(
+							session.getStats(),
+							Date.now() - startedAt,
+							provider.accountingProvenance ?? "unavailable",
+						);
 					} finally {
 						if (timer) clearTimeout(timer);
 						session.dispose();

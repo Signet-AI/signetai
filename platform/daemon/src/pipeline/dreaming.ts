@@ -13,6 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	type AccountingProvenance,
 	type DreamingConfig,
 	type IdentityContextFileEntry,
 	type LlmUsage,
@@ -940,7 +941,9 @@ export function recordDreamingPassTelemetry(input: {
 		readonly outputTokens: number | null;
 		readonly cacheReadTokens: number | null;
 		readonly cacheCreationTokens: number | null;
+		readonly totalTokens?: number | null;
 		readonly totalCost: number | null;
+		readonly accountingProvenance?: AccountingProvenance;
 	} | null;
 }): void {
 	try {
@@ -952,7 +955,9 @@ export function recordDreamingPassTelemetry(input: {
 			tokensOutput: input.usage?.outputTokens ?? null,
 			tokensCacheRead: input.usage?.cacheReadTokens ?? null,
 			tokensCacheWrite: input.usage?.cacheCreationTokens ?? null,
+			tokensTotal: input.usage?.totalTokens ?? null,
 			cost: input.usage?.totalCost ?? null,
+			accountingProvenance: input.usage?.accountingProvenance ?? "unavailable",
 			artifactsConsidered: input.effects.artifactsConsidered,
 			memoriesCreated: input.effects.memoriesCreated,
 			memoriesUpdated: input.effects.memoriesUpdated,

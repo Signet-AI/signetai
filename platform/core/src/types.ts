@@ -6,6 +6,33 @@
 // LLM Provider interface (used by ingest extractors, daemon pipeline, etc.)
 // ---------------------------------------------------------------------------
 
+export const ACCOUNTING_PROVENANCES = [
+	"provider_reported",
+	"locally_estimated",
+	"configured_rate",
+	"local_zero_cost",
+	"unavailable",
+] as const;
+
+export type AccountingProvenance = (typeof ACCOUNTING_PROVENANCES)[number];
+export type AccountingSummaryProvenance = AccountingProvenance | "mixed";
+
+/**
+ * Summarize the provenance of one or more accounting values without treating
+ * a missing value as a zero. The result is intentionally bounded so API
+ * consumers can render it without knowing provider-specific names.
+ */
+export function summarizeAccountingProvenance(
+	values: readonly (AccountingProvenance | null | undefined)[],
+): AccountingSummaryProvenance {
+	const present = new Set<AccountingProvenance>(
+		values.filter((value): value is AccountingProvenance => value !== null && value !== undefined),
+	);
+	if (present.size === 0) return "unavailable";
+	if (present.size === 1) return present.values().next().value ?? "unavailable";
+	return "mixed";
+}
+
 export interface LlmUsage {
 	readonly inputTokens: number | null;
 	readonly outputTokens: number | null;
@@ -14,6 +41,8 @@ export interface LlmUsage {
 	readonly totalTokens: number | null;
 	readonly totalCost: number | null;
 	readonly totalDurationMs: number | null;
+	/** Cost/token accounting source. Omitted by legacy providers means unavailable. */
+	readonly accountingProvenance?: AccountingProvenance;
 }
 
 export interface LlmGenerateResult {
@@ -32,6 +61,8 @@ export interface LlmGenerateOptions {
 
 export interface LlmProvider {
 	readonly name: string;
+	/** Known cost accounting mode for local providers; remote providers may report it per result. */
+	readonly accountingProvenance?: AccountingProvenance;
 	generate(prompt: string, opts?: LlmGenerateOptions): Promise<string>;
 	generateWithUsage?(prompt: string, opts?: LlmGenerateOptions): Promise<LlmGenerateResult>;
 	available(): Promise<boolean>;

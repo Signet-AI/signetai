@@ -1,5 +1,6 @@
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
+import type { AccountingSummaryProvenance } from "@signet/core";
 import type { Hono } from "hono";
 import type { ErrorStage } from "../analytics.js";
 import { requirePermission } from "../auth";
@@ -20,6 +21,63 @@ import {
 	telemetryRef,
 } from "./state.js";
 import { resolveScopedAgentId, resolveScopedProject } from "./utils.js";
+
+interface AccountingCoverageTotals {
+	calls: number;
+	tokens: number;
+	cost: number;
+}
+
+type AccountingCoverage = Record<AccountingSummaryProvenance, AccountingCoverageTotals>;
+
+export function emptyAccountingCoverage(): AccountingCoverage {
+	return {
+		provider_reported: { calls: 0, tokens: 0, cost: 0 },
+		locally_estimated: { calls: 0, tokens: 0, cost: 0 },
+		configured_rate: { calls: 0, tokens: 0, cost: 0 },
+		local_zero_cost: { calls: 0, tokens: 0, cost: 0 },
+		unavailable: { calls: 0, tokens: 0, cost: 0 },
+		mixed: { calls: 0, tokens: 0, cost: 0 },
+	};
+}
+
+export function addAccountingCoverage(
+	coverage: AccountingCoverage,
+	value: unknown,
+	tokens: number | null,
+	cost: number | null,
+): void {
+	const provenance: AccountingSummaryProvenance =
+		value === "provider_reported" ||
+		value === "locally_estimated" ||
+		value === "configured_rate" ||
+		value === "local_zero_cost" ||
+		value === "mixed"
+			? value
+			: "unavailable";
+	const totals = coverage[provenance];
+	totals.calls++;
+	if (typeof tokens === "number" && Number.isFinite(tokens)) totals.tokens += tokens;
+	if (typeof cost === "number" && Number.isFinite(cost)) totals.cost += cost;
+}
+
+function numberProperty(properties: Readonly<Record<string, unknown>>, key: string): number | null {
+	const value = properties[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function totalTokens(
+	properties: Readonly<Record<string, unknown>>,
+	totalKey: string,
+	inputKey: string,
+	outputKey: string,
+): number | null {
+	const total = numberProperty(properties, totalKey);
+	if (total !== null) return total;
+	const input = numberProperty(properties, inputKey);
+	const output = numberProperty(properties, outputKey);
+	return input === null && output === null ? null : (input ?? 0) + (output ?? 0);
+}
 
 export function registerTelemetryRoutes(app: Hono): void {
 	app.use("/api/analytics", async (c, next) => {
@@ -258,6 +316,10 @@ export function registerTelemetryRoutes(app: Hono): void {
 		let sessionCacheRead = 0;
 		let sessionCacheWrite = 0;
 		let sessionCost = 0;
+		const llmCoverage = emptyAccountingCoverage();
+		const embeddingCoverage = emptyAccountingCoverage();
+		const dreamingCoverage = emptyAccountingCoverage();
+		const sessionCoverage = emptyAccountingCoverage();
 		const latencies: number[] = [];
 
 		for (const e of events) {
@@ -266,6 +328,12 @@ export function registerTelemetryRoutes(app: Hono): void {
 				if (typeof e.properties.inputTokens === "number") totalInputTokens += e.properties.inputTokens;
 				if (typeof e.properties.outputTokens === "number") totalOutputTokens += e.properties.outputTokens;
 				if (typeof e.properties.totalCost === "number") totalCost += e.properties.totalCost;
+				addAccountingCoverage(
+					llmCoverage,
+					e.properties.accountingProvenance,
+					totalTokens(e.properties, "totalTokens", "inputTokens", "outputTokens"),
+					numberProperty(e.properties, "totalCost"),
+				);
 				if (e.properties.success === false) llmErrors++;
 				if (typeof e.properties.latencyMs === "number") latencies.push(e.properties.latencyMs);
 			}
@@ -275,6 +343,12 @@ export function registerTelemetryRoutes(app: Hono): void {
 				const cost = typeof e.properties.cost === "number" ? e.properties.cost : 0;
 				embeddingTokens += tokens;
 				embeddingCost += cost;
+				addAccountingCoverage(
+					embeddingCoverage,
+					e.properties.accountingProvenance,
+					tokens,
+					numberProperty(e.properties, "cost"),
+				);
 				const sourceKind = typeof e.properties.sourceKind === "string" ? e.properties.sourceKind : "other";
 				const source = embeddingBySource.get(sourceKind) ?? { tokens: 0, cost: 0 };
 				source.tokens += tokens;
@@ -288,22 +362,28 @@ export function registerTelemetryRoutes(app: Hono): void {
 				if (typeof e.properties.tokensCacheRead === "number") dreamingCacheRead += e.properties.tokensCacheRead;
 				if (typeof e.properties.tokensCacheWrite === "number") dreamingCacheWrite += e.properties.tokensCacheWrite;
 				if (typeof e.properties.cost === "number") dreamingCost += e.properties.cost;
-				const numberProperty = (name: string): number =>
+				addAccountingCoverage(
+					dreamingCoverage,
+					e.properties.accountingProvenance,
+					totalTokens(e.properties, "tokensTotal", "tokensInput", "tokensOutput"),
+					numberProperty(e.properties, "cost"),
+				);
+				const effectNumberProperty = (name: string): number =>
 					typeof e.properties[name] === "number" && Number.isFinite(e.properties[name]) ? e.properties[name] : 0;
 				const outcome = typeof e.properties.outcome === "string" ? e.properties.outcome : "unknown";
 				const outcomeCode = typeof e.properties.outcomeCode === "string" ? e.properties.outcomeCode : "unknown";
 				dreamingOutcomes.set(outcome, (dreamingOutcomes.get(outcome) ?? 0) + 1);
 				dreamingOutcomeCodes.set(outcomeCode, (dreamingOutcomeCodes.get(outcomeCode) ?? 0) + 1);
-				dreamingArtifacts += numberProperty("artifactsConsidered");
-				dreamingMemoriesCreated += numberProperty("memoriesCreated");
-				dreamingMemoriesUpdated += numberProperty("memoriesUpdated");
-				dreamingMemoriesSuperseded += numberProperty("memoriesSuperseded");
-				dreamingMemoriesRetired += numberProperty("memoriesRetired");
-				dreamingClaimsChanged += numberProperty("claimsChanged");
-				dreamingRelationshipsChanged += numberProperty("relationshipsChanged");
-				dreamingProvenanceLinksChanged += numberProperty("provenanceLinksChanged");
-				dreamingToolCalls += numberProperty("toolCalls");
-				dreamingDurationMs += numberProperty("durationMs");
+				dreamingArtifacts += effectNumberProperty("artifactsConsidered");
+				dreamingMemoriesCreated += effectNumberProperty("memoriesCreated");
+				dreamingMemoriesUpdated += effectNumberProperty("memoriesUpdated");
+				dreamingMemoriesSuperseded += effectNumberProperty("memoriesSuperseded");
+				dreamingMemoriesRetired += effectNumberProperty("memoriesRetired");
+				dreamingClaimsChanged += effectNumberProperty("claimsChanged");
+				dreamingRelationshipsChanged += effectNumberProperty("relationshipsChanged");
+				dreamingProvenanceLinksChanged += effectNumberProperty("provenanceLinksChanged");
+				dreamingToolCalls += effectNumberProperty("toolCalls");
+				dreamingDurationMs += effectNumberProperty("durationMs");
 
 				const mode = typeof e.properties.mode === "string" ? e.properties.mode : "unknown";
 				const byMode = dreamingByMode.get(mode) ?? {
@@ -323,19 +403,19 @@ export function registerTelemetryRoutes(app: Hono): void {
 					durationMs: 0,
 				};
 				byMode.calls++;
-				byMode.tokensInput += numberProperty("tokensInput");
-				byMode.tokensOutput += numberProperty("tokensOutput");
-				byMode.cost += numberProperty("cost");
-				byMode.artifactsConsidered += numberProperty("artifactsConsidered");
-				byMode.memoriesCreated += numberProperty("memoriesCreated");
-				byMode.memoriesUpdated += numberProperty("memoriesUpdated");
-				byMode.memoriesSuperseded += numberProperty("memoriesSuperseded");
-				byMode.memoriesRetired += numberProperty("memoriesRetired");
-				byMode.claimsChanged += numberProperty("claimsChanged");
-				byMode.relationshipsChanged += numberProperty("relationshipsChanged");
-				byMode.provenanceLinksChanged += numberProperty("provenanceLinksChanged");
-				byMode.toolCalls += numberProperty("toolCalls");
-				byMode.durationMs += numberProperty("durationMs");
+				byMode.tokensInput += effectNumberProperty("tokensInput");
+				byMode.tokensOutput += effectNumberProperty("tokensOutput");
+				byMode.cost += effectNumberProperty("cost");
+				byMode.artifactsConsidered += effectNumberProperty("artifactsConsidered");
+				byMode.memoriesCreated += effectNumberProperty("memoriesCreated");
+				byMode.memoriesUpdated += effectNumberProperty("memoriesUpdated");
+				byMode.memoriesSuperseded += effectNumberProperty("memoriesSuperseded");
+				byMode.memoriesRetired += effectNumberProperty("memoriesRetired");
+				byMode.claimsChanged += effectNumberProperty("claimsChanged");
+				byMode.relationshipsChanged += effectNumberProperty("relationshipsChanged");
+				byMode.provenanceLinksChanged += effectNumberProperty("provenanceLinksChanged");
+				byMode.toolCalls += effectNumberProperty("toolCalls");
+				byMode.durationMs += effectNumberProperty("durationMs");
 				dreamingByMode.set(mode, byMode);
 			}
 			if (e.event === "pipeline.error") {
@@ -354,6 +434,12 @@ export function registerTelemetryRoutes(app: Hono): void {
 				if (typeof e.properties.tokensCacheRead === "number") sessionCacheRead += e.properties.tokensCacheRead;
 				if (typeof e.properties.tokensCacheWrite === "number") sessionCacheWrite += e.properties.tokensCacheWrite;
 				if (typeof e.properties.cost === "number") sessionCost += e.properties.cost;
+				addAccountingCoverage(
+					sessionCoverage,
+					e.properties.accountingProvenance,
+					totalTokens(e.properties, "tokensTotal", "tokensInput", "tokensOutput"),
+					numberProperty(e.properties, "cost"),
+				);
 			}
 			if (e.event === "recall.performed") {
 				recallCalls++;
@@ -393,7 +479,16 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({
 			enabled: true,
 			totalEvents: events.length,
-			llm: { calls: llmCalls, errors: llmErrors, totalInputTokens, totalOutputTokens, totalCost, p50, p95 },
+			llm: {
+				calls: llmCalls,
+				errors: llmErrors,
+				totalInputTokens,
+				totalOutputTokens,
+				totalCost,
+				p50,
+				p95,
+				coverage: llmCoverage,
+			},
 			embedding: {
 				calls: embeddingCalls,
 				totalTokens: embeddingTokens,
@@ -401,6 +496,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 				bySource: [...embeddingBySource.entries()]
 					.map(([source, totals]) => ({ source, tokens: totals.tokens, cost: totals.cost }))
 					.sort((a, b) => b.tokens - a.tokens),
+				coverage: embeddingCoverage,
 			},
 			dreaming: {
 				calls: dreamingCalls,
@@ -409,6 +505,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 				tokensCacheRead: dreamingCacheRead,
 				tokensCacheWrite: dreamingCacheWrite,
 				cost: dreamingCost,
+				coverage: dreamingCoverage,
 				artifactsConsidered: dreamingArtifacts,
 				memoriesCreated: dreamingMemoriesCreated,
 				memoriesUpdated: dreamingMemoriesUpdated,
@@ -452,6 +549,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 				tokensCacheRead: sessionCacheRead,
 				tokensCacheWrite: sessionCacheWrite,
 				cost: sessionCost,
+				coverage: sessionCoverage,
 			},
 			pipelineErrors,
 			pipelineErrorsByStage: Object.fromEntries(pipelineErrorsByStage),

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { DEFAULT_EMBEDDING_COST_RATES, calculateEmbeddingCost, resolveEmbeddingCostProvider } from "./embedding-cost";
+import {
+	DEFAULT_EMBEDDING_COST_RATES,
+	calculateEmbeddingCost,
+	resolveEmbeddingAccounting,
+	resolveEmbeddingCostProvider,
+} from "./embedding-cost";
 
 describe("embedding cost attribution", () => {
 	it("uses configured rates and identifies OpenRouter by endpoint", () => {
@@ -16,5 +21,17 @@ describe("embedding cost attribution", () => {
 		expect(calculateEmbeddingCost("ollama", 100_000)).toBe(0);
 		expect(calculateEmbeddingCost("openai", 1_000_000)).toBe(DEFAULT_EMBEDDING_COST_RATES.openai);
 		expect(calculateEmbeddingCost("unknown", 1_000_000)).toBeNull();
+	});
+
+	it("labels the accounting source separately from the numeric cost", () => {
+		expect(resolveEmbeddingAccounting("ollama", 100_000)).toEqual({
+			cost: 0,
+			accountingProvenance: "local_zero_cost",
+		});
+		expect(resolveEmbeddingAccounting("openai", 1_000_000).accountingProvenance).toBe("configured_rate");
+		expect(resolveEmbeddingAccounting("unknown", 1_000_000)).toEqual({
+			cost: null,
+			accountingProvenance: "unavailable",
+		});
 	});
 });

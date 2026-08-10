@@ -786,11 +786,13 @@ describe("session economics (issue #1201)", () => {
 			cacheReadTokens: 10,
 			cacheCreationTokens: 5,
 			totalCost: 0.5,
+			accountingProvenance: "provider_reported",
 		});
 		collector.record("pipeline.embedding", {
 			sessionHash: "session-1",
 			tokens: 2_000_000,
 			cost: 0.04,
+			accountingProvenance: "configured_rate",
 		});
 		collector.record("session.end", { sessionHash: "session-1" });
 		await collector.flush();
@@ -801,6 +803,7 @@ describe("session economics (issue #1201)", () => {
 		expect(end?.properties.tokensCacheRead).toBe(10);
 		expect(end?.properties.tokensCacheWrite).toBe(5);
 		expect(end?.properties.cost).toBe(0.54);
+		expect(end?.properties.accountingProvenance).toBe("mixed");
 	});
 
 	it("recovers from a missing session-end key without poisoning later sessions", async () => {

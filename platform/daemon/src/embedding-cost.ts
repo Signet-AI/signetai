@@ -6,6 +6,8 @@
  * model pricing changes independently of the daemon release.
  */
 
+import type { AccountingProvenance } from "@signet/core";
+
 export type EmbeddingCostProvider = "native" | "llama-cpp" | "ollama" | "openai" | "openrouter";
 
 export type EmbeddingCostRates = Readonly<Partial<Record<EmbeddingCostProvider, number>>>;
@@ -33,11 +35,22 @@ export function calculateEmbeddingCost(
 	tokens: number,
 	opts: { readonly baseUrl?: string; readonly rates?: EmbeddingCostRates } = {},
 ): number | null {
-	if (!Number.isFinite(tokens) || tokens < 0) return null;
+	return resolveEmbeddingAccounting(provider, tokens, opts).cost;
+}
+
+export function resolveEmbeddingAccounting(
+	provider: string,
+	tokens: number,
+	opts: { readonly baseUrl?: string; readonly rates?: EmbeddingCostRates } = {},
+): { readonly cost: number | null; readonly accountingProvenance: AccountingProvenance } {
+	if (!Number.isFinite(tokens) || tokens < 0) return { cost: null, accountingProvenance: "unavailable" };
 	const rateProvider = resolveEmbeddingCostProvider(provider, opts.baseUrl);
-	if (!rateProvider) return null;
+	if (!rateProvider) return { cost: null, accountingProvenance: "unavailable" };
+	if (rateProvider === "native" || rateProvider === "llama-cpp" || rateProvider === "ollama") {
+		return { cost: 0, accountingProvenance: "local_zero_cost" };
+	}
 	const configuredRate = opts.rates?.[rateProvider];
 	const rate = configuredRate ?? DEFAULT_EMBEDDING_COST_RATES[rateProvider];
-	if (!Number.isFinite(rate) || rate < 0) return null;
-	return (tokens * rate) / 1_000_000;
+	if (!Number.isFinite(rate) || rate < 0) return { cost: null, accountingProvenance: "unavailable" };
+	return { cost: (tokens * rate) / 1_000_000, accountingProvenance: "configured_rate" };
 }

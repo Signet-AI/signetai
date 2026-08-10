@@ -1,3 +1,5 @@
+import type { AccountingProvenance, AccountingSummaryProvenance } from "./types";
+
 export interface RecallScoreFilterRow {
 	readonly score?: number;
 	readonly supplementary?: boolean;
@@ -81,8 +83,10 @@ export interface AggregateRecallUsage {
 	readonly outputTokens: number | null;
 	readonly cacheReadTokens: number | null;
 	readonly cacheCreationTokens: number | null;
+	readonly totalTokens: number | null;
 	readonly totalCost: number | null;
 	readonly totalDurationMs: number | null;
+	readonly accountingProvenance: AccountingSummaryProvenance;
 	readonly stages: readonly AggregateRecallUsageStage[];
 }
 
@@ -95,8 +99,10 @@ export interface AggregateRecallUsageStage {
 	readonly outputTokens: number | null;
 	readonly cacheReadTokens: number | null;
 	readonly cacheCreationTokens: number | null;
+	readonly totalTokens: number | null;
 	readonly totalCost: number | null;
 	readonly totalDurationMs: number | null;
+	readonly accountingProvenance: AccountingProvenance;
 }
 
 export interface RecallPayload {

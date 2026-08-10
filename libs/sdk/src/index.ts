@@ -1310,6 +1310,10 @@ export {
 	SignetTimeoutError,
 } from "./errors.js";
 export type {
+	AccountingCoverage,
+	AccountingCoverageTotals,
+	AccountingProvenance,
+	AccountingSummaryProvenance,
 	BatchModifyItemResult,
 	BatchModifyResponse,
 	CheckpointListResponse,

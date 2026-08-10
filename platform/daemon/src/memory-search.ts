@@ -14,6 +14,8 @@
 
 import { createHash } from "node:crypto";
 import {
+	type AccountingProvenance,
+	type AccountingSummaryProvenance,
 	type AgentRosterReadPolicy,
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	type LlmUsage,
@@ -175,11 +177,13 @@ export function classifyRecallTelemetry(
 	return undefined;
 }
 
-export interface AggregateRecallUsage extends LlmUsage {
+export interface AggregateRecallUsage extends Omit<LlmUsage, "accountingProvenance"> {
+	readonly accountingProvenance: AccountingSummaryProvenance;
 	readonly stages: readonly AggregateRecallUsageStage[];
 }
 
-export interface AggregateRecallUsageStage extends LlmUsage {
+export interface AggregateRecallUsageStage extends Omit<LlmUsage, "accountingProvenance"> {
+	readonly accountingProvenance: AccountingProvenance;
 	readonly name: "planning" | "synthesis";
 	readonly targetRef: string | null;
 	readonly attemptCount: number;

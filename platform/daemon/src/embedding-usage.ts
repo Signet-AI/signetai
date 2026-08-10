@@ -19,7 +19,7 @@
 
 import type { DbAccessor } from "./db-accessor";
 import { getDbAccessor, hasDbAccessor } from "./db-accessor";
-import { type EmbeddingCostRates, calculateEmbeddingCost } from "./embedding-cost";
+import { type EmbeddingCostRates, resolveEmbeddingAccounting } from "./embedding-cost";
 import { logger } from "./logger";
 import { getActiveTelemetry } from "./telemetry";
 
@@ -72,15 +72,17 @@ export function recordEmbeddingUsage(input: {
 	// Anonymous telemetry: emit the pipeline.embedding event at the same fetch
 	// boundary so embedding token spend shows up in PostHog alongside
 	// llm.generate (issue #1181). Best-effort, like the DB accounting below.
+	const accounting = resolveEmbeddingAccounting(input.provider, input.tokens, {
+		baseUrl: input.baseUrl,
+		rates: input.costRates,
+	});
 	getActiveTelemetry()?.record("pipeline.embedding", {
 		tokens: input.tokens,
 		provider: input.provider,
 		sourceKind: input.source,
 		...(input.sessionHash ? { sessionHash: input.sessionHash } : {}),
-		cost: calculateEmbeddingCost(input.provider, input.tokens, {
-			baseUrl: input.baseUrl,
-			rates: input.costRates,
-		}),
+		cost: accounting.cost,
+		accountingProvenance: accounting.accountingProvenance,
 	});
 	if (!hasDbAccessor()) return;
 	try {

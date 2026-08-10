@@ -503,7 +503,10 @@ function recordLlmGenerate(provider: LlmProvider, usage: LlmUsage | null, latenc
 		outputTokens: usage?.outputTokens ?? null,
 		cacheReadTokens: usage?.cacheReadTokens ?? null,
 		cacheCreationTokens: usage?.cacheCreationTokens ?? null,
+		totalTokens: usage?.totalTokens ?? null,
 		totalCost: usage?.totalCost ?? null,
+		accountingProvenance:
+			provider.accountingProvenance ?? usage?.accountingProvenance ?? (usage ? "provider_reported" : "unavailable"),
 	});
 }
 

@@ -63,7 +63,9 @@ describe("dreaming telemetry", () => {
 				outputTokens: 18227,
 				cacheReadTokens: 100000,
 				cacheCreationTokens: 5000,
+				totalTokens: 502788,
 				totalCost: 0.14574042,
+				accountingProvenance: "provider_reported",
 			},
 		});
 		recordDreamingPassTelemetry({
@@ -93,7 +95,9 @@ describe("dreaming telemetry", () => {
 		expect(full?.properties.tokensOutput).toBe(18227);
 		expect(full?.properties.tokensCacheRead).toBe(100000);
 		expect(full?.properties.tokensCacheWrite).toBe(5000);
+		expect(full?.properties.tokensTotal).toBe(502788);
 		expect(full?.properties.cost).toBe(0.14574042);
+		expect(full?.properties.accountingProvenance).toBe("provider_reported");
 		expect(full?.properties.outcome).toBe("completed");
 		expect(full?.properties.outcomeCode).toBe("completed");
 		expect(full?.properties.artifactsConsidered).toBe(12);

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { LlmUsage, RouteRequest, RouterResult } from "@signet/core";
+import { type LlmUsage, type RouteRequest, type RouterResult, summarizeAccountingProvenance } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
@@ -106,8 +106,8 @@ function addNullableNumbers(left: number | null, right: number | null): number |
 	return (left ?? 0) + (right ?? 0);
 }
 
-function sumUsage(stages: readonly AggregateRecallUsageStage[]): LlmUsage {
-	return stages.reduce<LlmUsage>(
+function sumUsage(stages: readonly AggregateRecallUsageStage[]): Omit<AggregateRecallUsage, "stages"> {
+	return stages.reduce<Omit<AggregateRecallUsage, "stages">>(
 		(total, stage) => ({
 			inputTokens: addNullableNumbers(total.inputTokens, stage.inputTokens),
 			outputTokens: addNullableNumbers(total.outputTokens, stage.outputTokens),
@@ -116,6 +116,7 @@ function sumUsage(stages: readonly AggregateRecallUsageStage[]): LlmUsage {
 			totalTokens: addNullableNumbers(total.totalTokens, stage.totalTokens),
 			totalCost: addNullableNumbers(total.totalCost, stage.totalCost),
 			totalDurationMs: addNullableNumbers(total.totalDurationMs, stage.totalDurationMs),
+			accountingProvenance: summarizeAccountingProvenance(stages.map((item) => item.accountingProvenance)),
 		}),
 		{
 			inputTokens: null,
@@ -125,6 +126,7 @@ function sumUsage(stages: readonly AggregateRecallUsageStage[]): LlmUsage {
 			totalTokens: null,
 			totalCost: null,
 			totalDurationMs: null,
+			accountingProvenance: "unavailable" as const,
 		},
 	);
 }
@@ -147,6 +149,7 @@ function usageStage(
 		totalTokens: usage?.totalTokens ?? null,
 		totalCost: usage?.totalCost ?? null,
 		totalDurationMs: usage?.totalDurationMs ?? okAttempt?.durationMs ?? null,
+		accountingProvenance: usage?.accountingProvenance ?? "unavailable",
 	};
 }
 

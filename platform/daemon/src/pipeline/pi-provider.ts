@@ -27,7 +27,7 @@ import {
 	type ToolDefinition,
 	createAgentSession,
 } from "@earendil-works/pi-coding-agent";
-import type { LlmGenerateResult, LlmProvider, LlmUsage } from "@signet/core";
+import type { AccountingProvenance, LlmGenerateResult, LlmProvider, LlmUsage } from "@signet/core";
 import { logger } from "../logger";
 import type {
 	LlmProviderCallOptions,
@@ -135,6 +135,12 @@ interface ResolvedModel {
 
 function isLocalBaseUrl(url: string): boolean {
 	return /^https?:\/\/(127\.0\.0\.1|localhost|\[?::1\]?)/i.test(url);
+}
+
+function localAccountingForConfig(config: PiModelProviderConfig): AccountingProvenance | undefined {
+	if (config.executor === "ollama" || config.executor === "llama-cpp") return "local_zero_cost";
+	if (config.executor !== "openai-compatible") return undefined;
+	return isLocalBaseUrl(config.baseUrl ?? DEFAULT_OPENAI_COMPATIBLE_BASE_URL) ? "local_zero_cost" : undefined;
 }
 
 function withVersionPath(baseUrl: string): string {
@@ -254,7 +260,7 @@ export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 	}
 }
 
-function mapUsage(usage: Usage): LlmUsage {
+function mapUsage(usage: Usage, accountingProvenance: AccountingProvenance): LlmUsage {
 	return {
 		inputTokens: usage.input ?? null,
 		outputTokens: usage.output ?? null,
@@ -263,6 +269,7 @@ function mapUsage(usage: Usage): LlmUsage {
 		totalTokens: usage.totalTokens ?? null,
 		totalCost: usage.cost?.total ?? null,
 		totalDurationMs: null,
+		accountingProvenance,
 	};
 }
 
@@ -273,7 +280,11 @@ function mapUsage(usage: Usage): LlmUsage {
  * yields an all-null usage so callers can distinguish "no usage reported"
  * from a real zero-token pass.
  */
-export function mapSessionStatsToUsage(stats: SessionStats | undefined, totalDurationMs: number): LlmUsage {
+export function mapSessionStatsToUsage(
+	stats: SessionStats | undefined,
+	totalDurationMs: number,
+	accountingProvenance: AccountingProvenance = "unavailable",
+): LlmUsage {
 	if (stats === undefined) {
 		return {
 			inputTokens: null,
@@ -283,6 +294,7 @@ export function mapSessionStatsToUsage(stats: SessionStats | undefined, totalDur
 			totalTokens: null,
 			totalCost: null,
 			totalDurationMs,
+			accountingProvenance,
 		};
 	}
 	return {
@@ -293,6 +305,7 @@ export function mapSessionStatsToUsage(stats: SessionStats | undefined, totalDur
 		totalTokens: stats.tokens.total,
 		totalCost: stats.cost,
 		totalDurationMs,
+		accountingProvenance,
 	};
 }
 
@@ -356,6 +369,7 @@ export function createPiModelProvider(
 ): StreamCapableLlmProvider & PiAgentSessionProvider {
 	const { piModel, apiKey, label } = resolvePiModel(config);
 	const name = config.name ?? label;
+	const accountingProvenance = localAccountingForConfig(config);
 	const defaultTimeoutMs = config.defaultTimeoutMs ?? 60_000;
 	const reasoning = config.reasoning;
 	const modelRuntime = ModelRuntime.create({
@@ -416,7 +430,7 @@ export function createPiModelProvider(
 			return {
 				text,
 				usage: {
-					...mapUsage(msg.usage),
+					...mapUsage(msg.usage, accountingProvenance ?? "provider_reported"),
 					totalDurationMs: durationMs,
 				},
 			};
@@ -427,6 +441,7 @@ export function createPiModelProvider(
 
 	const provider: LlmProvider = {
 		name,
+		...(accountingProvenance ? { accountingProvenance } : {}),
 		async generate(prompt, opts) {
 			const { text } = await callOnce(prompt, opts);
 			return text;
@@ -477,10 +492,16 @@ export function createPiModelProvider(
 								fullText += ev.delta;
 								controller.enqueue({ type: "text-delta", text: ev.delta });
 							} else if (ev.type === "done") {
-								finalUsage = { ...mapUsage(ev.message.usage), totalDurationMs: Date.now() - t0 };
+								finalUsage = {
+									...mapUsage(ev.message.usage, accountingProvenance ?? "provider_reported"),
+									totalDurationMs: Date.now() - t0,
+								};
 								controller.enqueue({ type: "done", text: fullText, usage: finalUsage });
 							} else if (ev.type === "error") {
-								finalUsage = { ...mapUsage(ev.error.usage), totalDurationMs: Date.now() - t0 };
+								finalUsage = {
+									...mapUsage(ev.error.usage, accountingProvenance ?? "provider_reported"),
+									totalDurationMs: Date.now() - t0,
+								};
 								controller.error(toError(name, { stopReason: ev.reason, errorMessage: ev.error.errorMessage }));
 								return;
 							}
@@ -513,6 +534,7 @@ export function createPiModelProvider(
 
 	return {
 		...streamCapable,
+		...(accountingProvenance ? { accountingProvenance } : {}),
 		isPiAgentSessionProvider: true,
 		agentSessionTimeoutMs: defaultTimeoutMs,
 		async createAgentSession(tools: readonly ToolDefinition[], options: { readonly maxTokens?: number } = {}) {

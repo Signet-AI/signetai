@@ -32,6 +32,8 @@ export {
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	TELEMETRY_DEPLOYMENT_ROLES,
 	TELEMETRY_INSTALL_CHANNELS,
+	ACCOUNTING_PROVENANCES,
+	summarizeAccountingProvenance,
 } from "./types";
 export type {
 	Agent,
@@ -40,6 +42,8 @@ export type {
 	LlmProvider,
 	LlmUsage,
 	LlmGenerateResult,
+	AccountingProvenance,
+	AccountingSummaryProvenance,
 	ReadPolicy,
 	AgentDefinition,
 	Memory,

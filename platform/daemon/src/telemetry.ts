@@ -10,7 +10,9 @@ import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+	type AccountingProvenance,
 	type PipelineTelemetryConfig,
+	summarizeAccountingProvenance,
 	TELEMETRY_DEPLOYMENT_ROLES,
 	TELEMETRY_INSTALL_CHANNELS,
 	type TelemetryDeploymentRole,
@@ -132,6 +134,7 @@ interface SessionCostAccumulator {
 	tokensCacheRead: number;
 	tokensCacheWrite: number;
 	cost: number;
+	provenances: AccountingProvenance[];
 }
 
 const MAX_ACTIVE_SESSIONS = 1024;
@@ -143,6 +146,7 @@ function emptySessionCost(): SessionCostAccumulator {
 		tokensCacheRead: 0,
 		tokensCacheWrite: 0,
 		cost: 0,
+		provenances: [],
 	};
 }
 
@@ -150,11 +154,21 @@ function addNumber(target: number, value: string | number | boolean | null | und
 	return typeof value === "number" && Number.isFinite(value) ? target + value : target;
 }
 
+function accountingProvenance(value: unknown): AccountingProvenance {
+	return value === "provider_reported" ||
+		value === "locally_estimated" ||
+		value === "configured_rate" ||
+		value === "local_zero_cost"
+		? value
+		: "unavailable";
+}
+
 function addEventCost(
 	accumulator: SessionCostAccumulator,
 	event: TelemetryEventType,
 	properties: TelemetryProperties,
 ): void {
+	accumulator.provenances.push(accountingProvenance(properties.accountingProvenance));
 	if (event === "llm.generate") {
 		accumulator.tokensInput = addNumber(accumulator.tokensInput, properties.inputTokens);
 		accumulator.tokensOutput = addNumber(accumulator.tokensOutput, properties.outputTokens);
@@ -184,6 +198,7 @@ function sessionCostProperties(cost: SessionCostAccumulator): TelemetryPropertie
 		tokensCacheRead: cost.tokensCacheRead,
 		tokensCacheWrite: cost.tokensCacheWrite,
 		cost: cost.cost,
+		accountingProvenance: summarizeAccountingProvenance(cost.provenances),
 	};
 }
 

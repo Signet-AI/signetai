@@ -76,13 +76,32 @@ export interface AggregateRecallMeta {
 	readonly usage?: AggregateRecallUsage;
 }
 
+export type AccountingProvenance =
+	| "provider_reported"
+	| "locally_estimated"
+	| "configured_rate"
+	| "local_zero_cost"
+	| "unavailable";
+
+export type AccountingSummaryProvenance = AccountingProvenance | "mixed";
+
+export interface AccountingCoverageTotals {
+	readonly calls: number;
+	readonly tokens: number;
+	readonly cost: number;
+}
+
+export type AccountingCoverage = Readonly<Record<AccountingSummaryProvenance, AccountingCoverageTotals>>;
+
 export interface AggregateRecallUsage {
 	readonly inputTokens: number | null;
 	readonly outputTokens: number | null;
 	readonly cacheReadTokens: number | null;
 	readonly cacheCreationTokens: number | null;
+	readonly totalTokens: number | null;
 	readonly totalCost: number | null;
 	readonly totalDurationMs: number | null;
+	readonly accountingProvenance: AccountingSummaryProvenance;
 	readonly stages: readonly AggregateRecallUsageStage[];
 }
 
@@ -95,8 +114,10 @@ export interface AggregateRecallUsageStage {
 	readonly outputTokens: number | null;
 	readonly cacheReadTokens: number | null;
 	readonly cacheCreationTokens: number | null;
+	readonly totalTokens: number | null;
 	readonly totalCost: number | null;
 	readonly totalDurationMs: number | null;
+	readonly accountingProvenance: AccountingProvenance;
 }
 
 export interface RecallEntityAttribute {
@@ -484,6 +505,7 @@ export interface TelemetryStatsEnabledResponse {
 		readonly totalCost: number;
 		readonly p50: number;
 		readonly p95: number;
+		readonly coverage: AccountingCoverage;
 	};
 	readonly embedding: {
 		readonly calls: number;
@@ -494,6 +516,7 @@ export interface TelemetryStatsEnabledResponse {
 			readonly tokens: number;
 			readonly cost: number;
 		}[];
+		readonly coverage: AccountingCoverage;
 	};
 	readonly dreaming: {
 		readonly calls: number;
@@ -502,6 +525,7 @@ export interface TelemetryStatsEnabledResponse {
 		readonly tokensCacheRead: number;
 		readonly tokensCacheWrite: number;
 		readonly cost: number;
+		readonly coverage: AccountingCoverage;
 		readonly artifactsConsidered: number;
 		readonly memoriesCreated: number;
 		readonly memoriesUpdated: number;
@@ -559,6 +583,7 @@ export interface TelemetryStatsEnabledResponse {
 		readonly tokensCacheRead: number;
 		readonly tokensCacheWrite: number;
 		readonly cost: number;
+		readonly coverage: AccountingCoverage;
 	};
 	readonly pipelineErrors: number;
 	readonly pipelineErrorsByStage: Readonly<Record<string, number>>;
