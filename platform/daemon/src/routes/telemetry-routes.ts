@@ -79,6 +79,11 @@ function totalTokens(
 	return input === null && output === null ? null : (input ?? 0) + (output ?? 0);
 }
 
+function boundedTelemetryLimit(raw: string | undefined, fallback: number, maximum: number): number {
+	const parsed = Number.parseInt(raw ?? "", 10);
+	return Number.isSafeInteger(parsed) ? Math.min(Math.max(parsed, 1), maximum) : fallback;
+}
+
 export function registerTelemetryRoutes(app: Hono): void {
 	app.use("/api/analytics", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
@@ -214,7 +219,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const event = c.req.query("event") as TelemetryEventType | undefined;
 		const since = c.req.query("since");
 		const until = c.req.query("until");
-		const limit = Number.parseInt(c.req.query("limit") ?? "100", 10);
+		const limit = boundedTelemetryLimit(c.req.query("limit"), 100, 10_000);
 		const events = telemetryRef.query({ event, since, until, limit });
 		return c.json({ events, enabled: true });
 	});
@@ -645,7 +650,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 			return c.text("telemetry not enabled", 404);
 		}
 		const since = c.req.query("since");
-		const limit = Number.parseInt(c.req.query("limit") ?? "10000", 10);
+		const limit = boundedTelemetryLimit(c.req.query("limit"), 10_000, 100_000);
 		const events = telemetryRef.query({ since, limit });
 
 		const lines = events.map((e) => JSON.stringify(e)).join("\n");
