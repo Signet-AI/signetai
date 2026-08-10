@@ -222,7 +222,7 @@ import { registerSecretRoutes } from "./routes/secrets-routes.js";
 import { registerSessionRoutes } from "./routes/session-routes.js";
 import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
-import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./routes/sources-routes.js";
+import { cleanupSourceDeletionTombstones, registerSourcesRoutes, stopSourceIndexJobs } from "./routes/sources-routes.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
 import { checkEmbeddingProvider } from "./routes/utils.js";
 import { mountWidgetRoutes } from "./routes/widget.js";
@@ -1698,6 +1698,7 @@ async function cleanup() {
 	stopMemoryImportPoller();
 	stopStaleSessionSweeper();
 	stopAcpDeliveryReconciliation();
+	await stopSourceIndexJobs();
 	if (nativeMemoryBridge) {
 		await nativeMemoryBridge.close();
 		nativeMemoryBridge = null;
@@ -2118,6 +2119,9 @@ async function main() {
 				},
 				usage: null,
 			});
+		}
+		for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
+			if (source.enabled) recordSourceConnected(source, resolveDaemonAgentId());
 		}
 
 		const daemonStartTime = Date.now();
