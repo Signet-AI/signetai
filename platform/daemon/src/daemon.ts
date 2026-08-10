@@ -75,7 +75,14 @@ import {
 	startNativeMemoryBridge,
 } from "./native-memory-sources";
 import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./native-runtime-assets";
-import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
+import {
+	DEFAULT_RETENTION,
+	ensureRetentionWorker,
+	getPipelineWorkerStatus,
+	setDreamingWorker,
+	startPipeline,
+	stopPipeline,
+} from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobs } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
