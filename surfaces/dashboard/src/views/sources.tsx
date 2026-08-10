@@ -1,12 +1,11 @@
 import { sourceLogo } from "@/components/icons";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
-import { ImportSourcesDialog } from "@/components/sources/import-sources-dialog";
 import { Surface } from "@/components/ui/surface";
 import { type SignetSource, type SourceIndexJob, api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { useView } from "@/lib/view-context";
-import { Check, Copy, Download, Folder, GitBranch, Globe, Plus, RotateCw, Trash2, Upload, X } from "lucide-react";
+import { Check, Copy, Download, Folder, GitBranch, Globe, Plus, RotateCw, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 const HEALTH_STYLES: Record<string, string> = {
@@ -28,7 +27,6 @@ export function SourcesView() {
 	const { data, refresh } = useAsync(() => api.getSources(), { intervalMs: 30000 });
 	const sources = data?.sources;
 	const [connectOpen, setConnectOpen] = useState(false);
-	const [importOpen, setImportOpen] = useState(false);
 	const { connectSourceRequested, clearConnectSource } = useView();
 
 	// Cross-view handoff: the memory view's "Ingest source" button sets this
@@ -68,17 +66,6 @@ export function SourcesView() {
 			<div className="grid flex-1 grid-cols-1 content-start gap-3 overflow-y-auto py-3 md:grid-cols-2 [mask-image:linear-gradient(180deg,#000_0,#000_calc(100%-24px),transparent_100%)]">
 				<button
 					type="button"
-					onClick={() => setImportOpen(true)}
-					className="flex min-h-[180px] flex-col items-center justify-center gap-2.5 rounded-[var(--radius)] border-[1.5px] border-dashed border-[oklch(1_0_0/0.12)] bg-[color-mix(in_oklch,var(--card)_86%,transparent)] p-6 transition-all hover:border-[color-mix(in_oklch,var(--success)_45%,transparent)] hover:bg-[color-mix(in_oklch,var(--success)_5%,transparent)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.12)]"
-				>
-					<span className="grid size-10 place-items-center rounded-full border border-[oklch(1_0_0/0.08)] bg-[color-mix(in_oklch,var(--foreground)_4%,transparent)] text-muted-foreground transition-all group-hover:text-[oklch(0.82_0.16_150)]">
-						<Upload className="size-[18px]" />
-					</span>
-					<span className="text-[12.5px] font-medium">Import files</span>
-					<span className="font-mono text-[9.5px] text-muted-foreground">JSON · CSV · Markdown · documents</span>
-				</button>
-				<button
-					type="button"
 					onClick={() => setConnectOpen(true)}
 					className="flex min-h-[180px] flex-col items-center justify-center gap-2.5 rounded-[var(--radius)] border-[1.5px] border-dashed border-[oklch(1_0_0/0.12)] bg-[color-mix(in_oklch,var(--card)_86%,transparent)] p-6 transition-all hover:border-[color-mix(in_oklch,var(--success)_45%,transparent)] hover:bg-[color-mix(in_oklch,var(--success)_5%,transparent)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.12)]"
 				>
@@ -93,7 +80,6 @@ export function SourcesView() {
 				))}
 			</div>
 			<ConnectSourceDialog open={connectOpen} onClose={() => setConnectOpen(false)} onConnected={refresh} />
-			<ImportSourcesDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={refresh} />
 		</div>
 	);
 }
