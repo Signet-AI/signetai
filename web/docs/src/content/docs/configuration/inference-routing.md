@@ -292,6 +292,45 @@ Each workload can define:
 | `taskClass` | string | Default task class for this workload |
 | `target` | string | Explicit `target/model` pin |
 
+### Live provider contract matrix
+
+Provider-level inference coverage is opt-in so ordinary tests never spend
+credentials or provider quota. The matrix runs every call through the shared
+router and workload resolver; it does not use vendor-specific clients.
+
+Set the following variables before running it:
+
+```bash
+export SIGNET_INFERENCE_LIVE_CONFIG="$HOME/.agents"
+export SIGNET_INFERENCE_LIVE_TARGETS="anthropic/default,openai/default,ollama/default"
+export SIGNET_INFERENCE_LIVE_FAILURE_TARGET="provider-failure/default"
+export SIGNET_INFERENCE_LIVE_FALLBACK_TARGET="openai/default"
+
+bun test platform/daemon/src/inference-provider-matrix.live.test.ts
+```
+
+The configured matrix must include healthy Anthropic, OpenAI, and one
+additional provider family or ACPX target. `SIGNET_INFERENCE_LIVE_CONFIG`
+points at the directory containing `agent.yaml`; account `credentialRef`
+values continue to resolve through the normal environment/secret-store path.
+The failure target must pass the router's availability probe and then fail a
+completion with a retryable error (for example, a controlled 429/5xx or
+provider timeout). The fallback target must be healthy and use a different
+provider identity. This pair makes bounded retry, normalized error, and
+fallback-state isolation checks deterministic without embedding a vendor
+client in the test.
+
+Optional bounds for slower providers:
+
+```bash
+export SIGNET_INFERENCE_LIVE_TIMEOUT_MS=250
+export SIGNET_INFERENCE_LIVE_FALLBACK_TIMEOUT_MS=30000
+```
+
+These tests are not part of `bun test` unless the required live configuration
+is present. Never put API keys in `agent.yaml` or command history; use the
+account credential references described above.
+
 ### inference.agents
 
 Per-agent routing overrides.
