@@ -134,6 +134,27 @@
   active-row default unless they are explicitly history/audit surfaces.
 - Next checkpoint: final validation.
 
+## Contradiction State Checkpoint (#1322)
+
+- Changed: added migration 123 and the agent-scoped
+  `ontology_contradictions` observation ledger. It links both competing claim
+  ids, snapshots their content and provenance/evidence, and records only the
+  existing deterministic lexical contradiction detector.
+- Changed: `add_claim_value` records competing active non-constraint values in
+  the audited apply transaction. Existing set/supersede/archive/restore
+  governance and source purge paths reconcile observations to `resolved`
+  without deleting their evidence snapshots.
+- Changed: added recall-authorized list/detail routes and
+  `signet ontology contradictions` with bounded filters and pagination.
+- Changed: added the same bounded `list_contradictions` read to the canonical
+  Dreaming capability registry so Pi/MCP/Dreaming callers can inspect conflict
+  evidence without introducing a second mutation path.
+- Verified: migration, operation, source-removal, agent-isolation, route, and
+  CLI regression fixtures cover the issue evaluation contract.
+- Remaining risk: contradiction observations are advisory and intentionally do
+  not yet alter answer ranking; a future evaluation can measure whether callers
+  should surface the read result alongside competing claim evidence.
+
 ## Final Validation Checkpoint
 
 - Verified: in-process end-to-end fixture covers dry-run, apply, propose,

@@ -203,6 +203,40 @@ review contradictory pending proposals before consolidation or apply.
 /api/ontology/proposals/conflicts?agent_id=ant&limit=100
 ```
 
+### GET /api/ontology/contradictions
+
+List persisted contradiction observations between competing applied claim
+values. The route is recall-authorized and always scoped to the resolved
+`agent_id`. It defaults to `status=active`; pass `status=resolved` or
+`status=all` to inspect resolved history. Optional filters are `entity`,
+`entity_id`, `aspect_id`, `group`, `claim`, `source_id`, `limit`, and `offset`.
+The response contains both claim ids and content, each side's confidence,
+scope/visibility, source provenance, evidence references, detector, and
+resolution metadata.
+
+```text
+/api/ontology/contradictions?agent_id=ant&entity=Signet&status=all
+```
+
+The initial persisted detector is deterministic and lexical only. An active
+row means both claim rows are still active in the same slot and continue to
+match the guard; it is not a third truth value and does not choose between
+sources. Source removal retains the contradiction snapshot and marks it
+resolved so callers can answer that evidence conflicted without reading a
+deleted claim row.
+
+### GET /api/ontology/contradictions/:id
+
+Read one contradiction observation by id in the resolved agent scope. Returns
+`404` when the id belongs to another agent or does not exist.
+
+CLI equivalent:
+
+```bash
+signet ontology contradictions --agent ant --status all
+signet ontology contradictions --entity Signet --group architecture --claim current_value
+```
+
 ### GET /api/ontology/proposals/:id/evidence
 
 Resolve a proposal's evidence references against session transcripts and
@@ -571,6 +605,12 @@ List the canonical Dreaming capability registry, including each capability's
 JSON Schema. Pi sessions, restricted Dreaming MCP, and `signet dream` bind
 this same registry; clients must not reproduce a separate tool list. Requires
 `modify` permission.
+
+The registry includes `list_contradictions`, a read-only, bounded
+agent-scoped view of persisted competing-claim observations. It exposes both
+claim snapshots and their source/evidence metadata without selecting a winner;
+correction still goes through `apply_ontology_ops` and the normal proposal
+governance path.
 
 ### POST /api/dream/tools/:capability
 

@@ -34,6 +34,7 @@ flowchart TD
   OGW[Ontology Governance Workflow]
   OPL[Ontology Proposal Loop]
   ACT[Authorized Claim Trace]
+  OCS[Ontology Contradiction State]
   SSF[SSM Foundation Eval]
   EIPT[Engram-Informed Predictor Track]
   SST[SSM Temporal Backbone]
@@ -78,6 +79,8 @@ flowchart TD
   KA --> ACT
   MA --> ACT
   SR --> ACT
+  OPL --> OCS
+  DMC -.-> OCS
   DMC -.-> OPL
   PMS --> SSF
   DP --> SSF
@@ -147,6 +150,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `desire-paths-epic`, `retroactive-supersession` | RESEARCH-COMPETITIVE-SYSTEMS | What retrieval, lifecycle, and integration patterns from competing systems should be adopted? |
 | `ontology-evolution-core`, `ontology-governance-workflow` | RESEARCH-ONTOLOGY-EVOLUTION | How should ontology schema and governance evolve without losing local-first simplicity? |
 | `ontology-proposal-loop` | RESEARCH-ONTOLOGY-EVOLUTION, memory-md-rolling-window-lineage, dreaming-memory-consolidation, model-provider-router | How should extraction and consolidation expose reviewable ontology changes while direct maintenance paths use the same audited operation handlers? |
+| `ontology-contradiction-state` | knowledge-architecture-schema, ontology-proposal-loop, issue #1322 | How should Signet persist evidence-linked contradiction observations without turning them into a competing truth value or weakening source deletion and agent isolation? |
 | `ssm-foundation-evaluation`, `ssm-temporal-backbone`, `ssm-graph-traversal-model` | RESEARCH-SSM-INTEGRATION, SSM-GRAPH-INTERSECTION, SSM-LITERATURE-REVIEW, SYNTHETIC-DATA-GENERATION | How should SSM research translate into benchmarked, staged deployment without violating retrieval invariants? |
 | `engram-informed-predictor-track` | arxiv:2601.07372, RESEARCH-SSM-INTEGRATION, ssm-foundation-evaluation | How should Engram design patterns be translated into Signet scorer and SSM architecture decisions? |
 | `macos-sqlite-runtime-discovery` | RESEARCH-MACOS-SQLITE-RUNTIME-DISCOVERY | How should Signet select a compatible SQLite runtime on macOS so Bun can load sqlite-vec? |
@@ -436,6 +440,27 @@ cannot suppress them. This is a hard retrieval invariant.
   dependencies metadata.
 - Medium/high-risk ontology changes require explicit compatibility and rollback
   notes before promotion from planning to approved.
+
+### Ontology Contradiction State <-> Ontology Proposal Loop
+
+- The contradiction ledger is written only from the audited ontology apply
+  transaction when competing active, non-constraint claim values are present.
+- Claim ids are soft links and each side stores content, provenance, and
+  evidence snapshots. Source purge may remove a claim row, but the resolved
+  observation remains available for explanation and audit.
+- Existing `set_claim_value`, supersession, archive, restore, and proposal
+  review rules remain authoritative. Contradiction state is advisory evidence,
+  never a third truth value, source-ranking rule, or `contradicts` graph edge.
+- Reads are bounded, recall-authorized, and agent-scoped through the ontology
+  API and CLI; the initial detector is deterministic lexical risk only.
+
+### Ontology Contradiction State <-> Dreaming Memory Consolidation
+
+- Dreaming may inspect contradiction observations alongside claim evidence when
+  evaluating competing values, but it must continue to emit governed ontology
+  operations for any change.
+- Contradiction persistence does not add provider calls, hidden mutation paths,
+  or autonomous truth selection to the dreaming loop.
 
 ### SSM Track <-> Retrieval and Ontology Contracts
 
@@ -777,6 +802,7 @@ Legend:
 | `ontology-evolution-core` | planning | `docs/specs/planning/ontology-evolution-core.md` | `knowledge-architecture-schema`, `desire-paths-epic` | `ontology-governance-workflow` | Confidence/provenance edges, co-occurrence signals, typed relationships, temporal lineage |
 | `ontology-governance-workflow` | planning | `docs/specs/planning/ontology-governance-workflow.md` | `ontology-evolution-core`, `knowledge-architecture-schema` | - | Proposal/review workflow for ontology-impacting schema changes |
 | `ontology-proposal-loop` | approved | `docs/specs/approved/ontology-proposal-loop.md` | `knowledge-architecture-schema`, `memory-md-rolling-window-lineage` | - | Agent-scoped proposal storage plus shared audited operation handlers for reviewable and direct ontology maintenance |
+| `ontology-contradiction-state` | approved | `docs/specs/approved/ontology-contradiction-state.md` | `knowledge-architecture-schema`, `ontology-proposal-loop` | - | Agent-scoped, evidence-linked lexical contradiction observations with active/resolved lifecycle; never a competing truth value or graph edge |
 | `ssm-foundation-evaluation` | planning | `docs/specs/planning/ssm-foundation-evaluation.md` | `predictive-memory-scorer`, `desire-paths-epic` | `ssm-temporal-backbone` | Benchmark harness and canary gates for SSM adoption |
 | `engram-informed-predictor-track` | planning | `docs/specs/planning/engram-informed-predictor-track.md` | `predictive-memory-scorer` | `ssm-temporal-backbone` | Engram-pattern translation lane for scorer ablations and SSM handoff contracts |
 | `ssm-temporal-backbone` | planning | `docs/specs/planning/ssm-temporal-backbone.md` | `ssm-foundation-evaluation`, `ontology-evolution-core`, `session-continuity-protocol` | `ssm-graph-traversal-model` | Shadow-mode temporal state model with fallback |
@@ -884,6 +910,13 @@ INDEX/dependency consistency checks in CI.
 agent-scoped proposal objects before ontology mutation. Direct maintenance
 paths such as dreaming promotion use the same audited operation handlers,
 with evidence and audit metadata preserved.
+
+**ontology-contradiction-state**: High-signal competing active claim values
+persist one agent-scoped observation with both claim ids, content snapshots,
+provenance, and evidence references. Bounded reads expose conflicts without
+selecting a winner; supersession, archival, restoration, and source deletion
+reconcile the state while retaining resolved snapshots, and deterministic
+regression fixtures cover negation, source removal, and agent isolation.
 
 **ssm-foundation-evaluation**: SSM benchmarks and canary suites produce
 reproducible, decision-grade comparisons against current scorer behavior.

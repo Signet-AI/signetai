@@ -31,6 +31,8 @@ describe("registerOntologyCommands", () => {
 				"aspect",
 				"link",
 				"stream",
+				"conflicts",
+				"contradictions",
 				"assertions",
 				"assertion",
 				"explain-claim",
@@ -365,6 +367,67 @@ describe("registerOntologyCommands", () => {
 		expect(lines.join("\n")).toContain("Authorized Claim Trace");
 		expect(lines.join("\n")).toContain("Traceable claim");
 		expect(lines.join("\n")).toContain("verified");
+	});
+
+	test("contradictions calls the persisted contradiction endpoint", async () => {
+		let capturedPath = "";
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, path) => {
+				capturedPath = path;
+				return {
+					ok: true,
+					data: {
+						count: 1,
+						items: [
+							{
+								id: "contradiction-1",
+								entityName: "Runtime",
+								aspectName: "configuration",
+								groupKey: "runtime",
+								claimKey: "default_mode",
+								leftContent: "Runtime mode is enabled by default.",
+								rightContent: "Runtime mode is disabled by default.",
+								leftSourceId: "source-enabled",
+								rightSourceId: "source-disabled",
+								detector: "lexical",
+								reason: "antonym_conflict",
+								status: "active",
+							},
+						],
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"contradictions",
+			"--entity",
+			"Runtime",
+			"--group",
+			"runtime",
+			"--status",
+			"all",
+			"--limit",
+			"2",
+			"--agent",
+			"owner",
+		]);
+
+		expect(capturedPath).toBe(
+			"/api/ontology/contradictions?entity=Runtime&group=runtime&status=all&limit=2&agent_id=owner",
+		);
+		expect(lines.join("\n")).toContain("Persisted Claim Contradictions");
+		expect(lines.join("\n")).toContain("Runtime mode is disabled by default.");
 	});
 
 	test("link-evidence calls the applied link evidence endpoint", async () => {

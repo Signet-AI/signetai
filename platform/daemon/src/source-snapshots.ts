@@ -4,6 +4,7 @@ import { getDbAccessor } from "./db-accessor";
 import type { WriteDb } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds } from "./db-helpers";
 import { hashNormalizedBody, upsertMemoryArtifactInTx } from "./memory-lineage";
+import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { indexSourceArtifactStructureInTx } from "./source-artifact-graph";
 
 export const SOURCE_SNAPSHOT_VERSION = 1;
@@ -361,6 +362,7 @@ function purgeImportScopeGraph(
 
 	const deleteEntity = db.prepare("DELETE FROM entities WHERE agent_id = ? AND id = ?");
 	for (const entityId of entityIds) deleteEntity.run(agentId, entityId);
+	reconcileOntologyContradictionsInTx(db as WriteDb, { agentId, sourceId });
 }
 
 function shouldPurgeImportedSourcePath(

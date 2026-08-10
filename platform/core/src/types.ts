@@ -897,6 +897,9 @@ export type EpistemicAssertionPredicate = (typeof EPISTEMIC_ASSERTION_PREDICATES
 export const EPISTEMIC_ASSERTION_STATUSES = ["active", "archived", "superseded"] as const;
 export type EpistemicAssertionStatus = (typeof EPISTEMIC_ASSERTION_STATUSES)[number];
 
+export const ONTOLOGY_CONTRADICTION_STATUSES = ["active", "resolved"] as const;
+export type OntologyContradictionStatus = (typeof ONTOLOGY_CONTRADICTION_STATUSES)[number];
+
 export const ONTOLOGY_PROPOSAL_OPERATIONS = [
 	"create_entity",
 	"add_claim_value",
@@ -1039,6 +1042,46 @@ export interface EpistemicAssertion {
 	readonly archivedBy: string | null;
 	readonly archiveReason: string | null;
 	readonly createdBy: string;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface OntologyContradiction {
+	readonly id: string;
+	readonly agentId: string;
+	readonly entityId: string | null;
+	readonly entityName: string;
+	readonly aspectId: string | null;
+	readonly aspectName: string;
+	readonly groupKey: string;
+	readonly claimKey: string;
+	readonly leftAttributeId: string | null;
+	readonly rightAttributeId: string | null;
+	readonly leftContent: string;
+	readonly rightContent: string;
+	readonly leftConfidence: number;
+	readonly rightConfidence: number;
+	readonly leftScope: string | null;
+	readonly rightScope: string | null;
+	readonly leftVisibility: string | null;
+	readonly rightVisibility: string | null;
+	readonly leftSourceKind: string | null;
+	readonly leftSourceId: string | null;
+	readonly leftSourcePath: string | null;
+	readonly leftSourceRoot: string | null;
+	readonly rightSourceKind: string | null;
+	readonly rightSourceId: string | null;
+	readonly rightSourcePath: string | null;
+	readonly rightSourceRoot: string | null;
+	readonly leftEvidence: readonly unknown[];
+	readonly rightEvidence: readonly unknown[];
+	readonly detector: "lexical" | "semantic" | "manual";
+	readonly reason: string;
+	readonly confidence: number;
+	readonly status: OntologyContradictionStatus;
+	readonly detectedAt: string;
+	readonly resolvedAt: string | null;
+	readonly resolutionReason: string | null;
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }

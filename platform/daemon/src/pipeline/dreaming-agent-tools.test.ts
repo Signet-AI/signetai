@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
@@ -8,15 +8,21 @@ import { DREAMING_CAPABILITY_IDS } from "./dreaming-capabilities";
 
 describe("dreaming-agent-tools", () => {
 	let dir = "";
+	let previousSignetPath: string | undefined;
 
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "signet-dreaming-agent-tools-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
-		initDbAccessor(join(dir, "memory", "memories.db"));
+		writeFileSync(join(dir, "agent.yaml"), "name: DreamingAgentToolsTest\n");
+		previousSignetPath = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = dir;
+		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 	});
 
 	afterEach(() => {
 		closeDbAccessor();
+		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+		else process.env.SIGNET_PATH = previousSignetPath;
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -96,7 +102,7 @@ describe("dreaming-agent-tools", () => {
 	it("derives Pi tools and public metadata from the same capability registry", () => {
 		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
 		expect(tools.map((tool) => tool.name)).toEqual([...DREAMING_CAPABILITY_IDS]);
-		expect(tools).toHaveLength(11);
+		expect(tools).toHaveLength(12);
 	});
 
 	it("isolates reads by agentId: search_entities only returns the caller's entities", async () => {

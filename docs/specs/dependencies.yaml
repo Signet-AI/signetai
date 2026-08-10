@@ -731,6 +731,28 @@ specs:
       - "All proposal reads and writes are agent-scoped and preserve evidence references for later lineage inspection"
     decision: null
 
+  - id: ontology-contradiction-state
+    status: approved
+    path: docs/specs/approved/ontology-contradiction-state.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+      - ontology-proposal-loop
+    soft_depends_on:
+      - dreaming-memory-consolidation
+    blocks: []
+    informed_by:
+      - docs/specs/complete/knowledge-architecture-schema.md
+      - docs/specs/approved/ontology-proposal-loop.md
+      - docs/specs/approved/dreaming-memory-consolidation.md
+      - https://github.com/Signet-AI/signetai/issues/1322
+    success_criteria:
+      - "High-signal competing claim values persist one agent-scoped contradiction observation with both claim ids, content snapshots, provenance, and evidence references"
+      - "Contradiction reads expose active conflicts without selecting a competing truth value or changing current-claim governance"
+      - "Supersession, archival, restoration, and source deletion reconcile active contradiction state while retaining the resolved observation"
+      - "Different source provenance remains visible and contradictory observations cannot cross agent scope"
+      - "A bounded deterministic evaluation covers a claim followed by its negation, source removal, and agent isolation"
+    decision: null
+
 
   - id: ssm-foundation-evaluation
     status: planning

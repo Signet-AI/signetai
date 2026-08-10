@@ -3,6 +3,10 @@ import type { WriteDb } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { requireDependencyReason } from "./dependency-history";
+import {
+	reconcileOntologyContradictionsInTx,
+	recordOntologyContradictionsForAttributeInTx,
+} from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
 
 interface HeadingSection {
@@ -283,6 +287,10 @@ export function purgeSourceArtifactStructureInTx(
 			)
 			.run(input.agentId, input.sourceId, input.sourcePath),
 	);
+	reconcileOntologyContradictionsInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+	});
 
 	return { entities, aspects, attributes, dependencies };
 }
@@ -424,6 +432,7 @@ export function indexSourceArtifactStructureInTx(
 				input.sourcePath,
 				input.sourceRoot,
 			);
+			recordOntologyContradictionsForAttributeInTx(db, { agentId: input.agentId, attributeId: attrId });
 			attributesTouched++;
 			claimIndex++;
 		}

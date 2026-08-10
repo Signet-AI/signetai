@@ -23,6 +23,11 @@ import {
 } from "../ontology-claim-evidence";
 import { OntologyClaimTraceError, explainOntologyClaim } from "../ontology-claim-trace";
 import { OntologyConsolidationError, consolidateOntologyProposals } from "../ontology-consolidation";
+import {
+	getOntologyContradiction,
+	listOntologyContradictions,
+	parseOntologyContradictionStatus,
+} from "../ontology-contradictions";
 import { OntologyExtractionError, extractOntologyProposals } from "../ontology-extraction";
 import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
 import {
@@ -161,6 +166,12 @@ export function registerOntologyRoutes(app: Hono): void {
 	app.use("/api/ontology/assertions/*", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
+	});
+	app.use("/api/ontology/contradictions", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/ontology/contradictions/*", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
 	});
 
 	app.get("/api/ontology/proposals", (c) => {
@@ -535,6 +546,38 @@ export function registerOntologyRoutes(app: Hono): void {
 				offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
 			}),
 		);
+	});
+
+	app.get("/api/ontology/contradictions", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const status = parseOntologyContradictionStatus(c.req.query("status"));
+		if (c.req.query("status") && !status) return c.json({ error: "status is invalid" }, 400);
+		return c.json(
+			listOntologyContradictions(getDbAccessor(), {
+				agentId: scoped.agentId,
+				entity: c.req.query("entity"),
+				entityId: c.req.query("entity_id"),
+				aspectId: c.req.query("aspect_id"),
+				groupKey: c.req.query("group"),
+				claimKey: c.req.query("claim"),
+				sourceId: c.req.query("source_id"),
+				status,
+				limit: parseBoundedInt(c.req.query("limit"), 50, 1, 200),
+				offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
+			}),
+		);
+	});
+
+	app.get("/api/ontology/contradictions/:id", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const contradiction = getOntologyContradiction(getDbAccessor(), {
+			agentId: scoped.agentId,
+			id: c.req.param("id"),
+		});
+		if (contradiction === null) return c.json({ error: "Contradiction not found" }, 404);
+		return c.json(contradiction);
 	});
 
 	app.get("/api/ontology/assertions/:id", (c) => {

@@ -28,6 +28,7 @@ import { up as telemetryVersionObservation } from "./119-telemetry-version-obser
 import { up as dreamingEvidenceRetry } from "./122-dreaming-evidence-retry";
 import { up as memoryContentSafety } from "./125-memory-content-safety";
 import { up as dreamingSurprisalAttention } from "./126-dreaming-surprisal-attention";
+import { up as ontologyContradictions } from "./127-ontology-contradictions";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -150,6 +151,35 @@ describe("migration framework", () => {
 			)
 			.get("agent-a", "legacy-hostile") as { status: string; context_eligible: number; reasons_json: string };
 		expect(rerun).toEqual(row);
+	});
+
+	test("migration 127 creates the contradiction ledger idempotently", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		runMigrations(db);
+
+		const columns = db.query("PRAGMA table_info(ontology_contradictions)").all() as Array<{ name: string }>;
+		expect(columns.map((column) => column.name)).toEqual(
+			expect.arrayContaining([
+				"agent_id",
+				"left_attribute_id",
+				"right_attribute_id",
+				"left_evidence",
+				"right_evidence",
+				"status",
+				"resolution_reason",
+			]),
+		);
+
+		const indexes = db.query("PRAGMA index_list(ontology_contradictions)").all() as Array<{ name: string }>;
+		expect(indexes.map((index) => index.name)).toEqual(
+			expect.arrayContaining([
+				"idx_ontology_contradictions_agent_status",
+				"idx_ontology_contradictions_agent_slot",
+				"idx_ontology_contradictions_attributes",
+				"idx_ontology_contradictions_sources",
+			]),
+		);
 	});
 
 	test("document scope columns backfill from metadata and linked memories", () => {

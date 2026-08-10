@@ -187,6 +187,22 @@ ontology truth. Fields include:
 Assertions can be linked to current claim attributes, but they remain a
 separate evidence/attribution layer.
 
+### `ontology_contradictions`
+
+Persisted contradiction observations are a derived audit ledger, not a graph
+truth layer. Each row is agent-scoped and links two active, non-constraint
+claim attributes in the same entity/aspect/group/claim slot. It snapshots both
+claim values, confidence, source provenance, and proposal evidence so a source
+purge can resolve the observation without erasing the evidence needed to
+explain what conflicted.
+
+The initial detector is the existing bounded lexical guard (`negation_mismatch`
+and the supported antonym pairs). Rows are `active` while both claims remain
+active and continue to match the detector; supersession, archival, replacement,
+or source deletion marks them `resolved`. Contradiction state never ranks
+sources, selects a winner, bypasses proposal governance, or creates a
+`contradicts` edge in the navigable graph.
+
 ## Write Paths
 
 Semantic graph authorship (entities, aspects, attributes, dependencies) flows
@@ -362,6 +378,8 @@ Ontology-control endpoints live in `platform/daemon/src/routes/ontology-routes.t
 | `/api/ontology/claims/*` | Claim evidence, versions, and version reads |
 | `/api/ontology/links/*` | Link evidence |
 | `/api/ontology/assertions/*` | Epistemic assertion CRUD and lifecycle |
+| `/api/ontology/contradictions` | List agent-scoped active/resolved claim contradiction observations |
+| `/api/ontology/contradictions/:id` | Read one contradiction observation and its evidence/provenance snapshots |
 | `/api/ontology/extract` | Extract proposals/assertions from a source |
 | `/api/ontology/consolidate` | Consolidate proposals with optional provider support |
 
@@ -400,6 +418,8 @@ signet ontology link ...
 signet ontology stream apply ...
 signet ontology assertion ...
 signet ontology proposals ...
+signet ontology conflicts
+signet ontology contradictions
 signet ontology extract ...
 signet ontology consolidate ...
 ```

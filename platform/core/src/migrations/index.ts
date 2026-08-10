@@ -132,6 +132,7 @@ import { up as embeddingIndexFailures } from "./123-embedding-index-failures";
 import { up as importedDerivedLifecycle } from "./124-import-derived-lifecycle";
 import { up as memoryContentSafety } from "./125-memory-content-safety";
 import { up as dreamingSurprisalAttention } from "./126-dreaming-surprisal-attention";
+import { up as ontologyContradictions } from "./127-ontology-contradictions";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1185,6 +1186,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "dreaming-surprisal-attention",
 		up: dreamingSurprisalAttention,
 		artifacts: { tables: ["dreaming_attention"] },
+	},
+	{
+		version: 127,
+		name: "ontology-contradictions",
+		up: ontologyContradictions,
+		artifacts: { tables: ["ontology_contradictions"] },
 	},
 ];
 

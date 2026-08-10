@@ -22,6 +22,7 @@ import {
 } from "../knowledge-graph";
 import { isMemoryContentContextEligible } from "../memory-content-safety";
 import { getOntologyClaimEvidence } from "../ontology-claim-evidence";
+import { listOntologyContradictions } from "../ontology-contradictions";
 import { getOntologyLinkEvidence } from "../ontology-link-evidence";
 import { type GraphWriteCaps, findDuplicateEntityMerges } from "../ontology-proposals";
 import { detectProspectiveContradictionRisk } from "./antonyms";
@@ -203,6 +204,7 @@ export const DREAMING_CAPABILITY_IDS = [
 	"get_evidence",
 	"search_evidence",
 	"validate_proposal",
+	"list_contradictions",
 	"runbook_read",
 	"runbook_write",
 	"attention_list",
@@ -583,6 +585,36 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				}
 				return result;
 			},
+		),
+		capability(
+			"list_contradictions",
+			"List contradiction observations",
+			"Read persisted, agent-scoped contradiction observations alongside competing claim evidence. Contradictions are advisory state, not a truth choice; use governed ontology operations for any correction.",
+			true,
+			z.object({
+				agentId: z.string().min(1),
+				entityId: z.string().min(1).optional(),
+				aspectId: z.string().min(1).optional(),
+				groupKey: z.string().min(1).optional(),
+				claimKey: z.string().min(1).optional(),
+				sourceId: z.string().min(1).optional(),
+				status: z.enum(["active", "resolved", "all"]).optional(),
+				...pagination,
+			}),
+			async ({ agentId: scopeId, entityId, aspectId, groupKey, claimKey, sourceId, status, limit, offset }) => ({
+				ok: true,
+				...listOntologyContradictions(accessor, {
+					agentId: scopeId,
+					entityId,
+					aspectId,
+					groupKey,
+					claimKey,
+					sourceId,
+					status,
+					limit,
+					offset,
+				}),
+			}),
 		),
 		capability(
 			"runbook_read",

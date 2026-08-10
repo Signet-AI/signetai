@@ -3,7 +3,12 @@ import { existsSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import type { WriteDb } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
+import { tableExists } from "./db-helpers";
 import { requireDependencyReason } from "./dependency-history";
+import {
+	reconcileOntologyContradictionsInTx,
+	recordOntologyContradictionsForAttributeInTx,
+} from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
 
 const OBSIDIAN_SOURCE_KIND = "source_obsidian_markdown";
@@ -447,6 +452,10 @@ function purgeObsidianSourceFileStructureInTx(
 			)
 			.run(input.agentId, input.sourceId, root, filePath).changes +
 		purgeOrphanedDocumentReferences(db, input.agentId, input.sourceId, root);
+	reconcileOntologyContradictionsInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+	});
 	return { entities, attributes: attributes + derivedAttributes, dependencies, communities: aspects };
 }
 
@@ -647,6 +656,7 @@ export function indexObsidianSourceStructure(
 					filePath,
 					root,
 				);
+				recordOntologyContradictionsForAttributeInTx(db, { agentId: input.agentId, attributeId: attrId });
 				attributesTouched++;
 				claimIndex++;
 			}
@@ -730,6 +740,20 @@ export function purgeObsidianSourceStructure(
 		const derivedEntities = db
 			.prepare(`DELETE FROM entities WHERE ${agentWhere}source_id = ? AND source_root = 'dreaming'`)
 			.run(...derivedParams).changes;
+		if (tableExists(db, "ontology_contradictions")) {
+			if (input.agentId) {
+				reconcileOntologyContradictionsInTx(db, { agentId: input.agentId, sourceId: input.sourceId });
+			} else {
+				const agents = db
+					.prepare(
+						"SELECT DISTINCT agent_id FROM ontology_contradictions WHERE left_source_id = ? OR right_source_id = ?",
+					)
+					.all(input.sourceId, input.sourceId) as Array<{ agent_id: string }>;
+				for (const agent of agents) {
+					reconcileOntologyContradictionsInTx(db, { agentId: agent.agent_id, sourceId: input.sourceId });
+				}
+			}
+		}
 		return {
 			entities: entities + derivedEntities,
 			attributes: attrs + derivedAttrs,

@@ -1,6 +1,7 @@
 import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
-import { countChanges, syncVecDeleteByEmbeddingIds } from "./db-helpers";
+import { countChanges, syncVecDeleteByEmbeddingIds, tableExists } from "./db-helpers";
+import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
 
 interface PurgeSourceOwnedRowsInput {
@@ -68,6 +69,20 @@ export function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): number {
 					.prepare(`DELETE FROM ${table} WHERE ${agentWhere}source_id = ?`)
 					.run(...(input.agentId ? [input.agentId] : []), sourceId),
 			);
+		}
+		if (tableExists(db, "ontology_contradictions")) {
+			if (input.agentId) {
+				reconcileOntologyContradictionsInTx(db, { agentId: input.agentId, sourceId });
+			} else {
+				const agents = db
+					.prepare(
+						"SELECT DISTINCT agent_id FROM ontology_contradictions WHERE left_source_id = ? OR right_source_id = ?",
+					)
+					.all(sourceId, sourceId) as Array<{ agent_id: string }>;
+				for (const agent of agents) {
+					reconcileOntologyContradictionsInTx(db, { agentId: agent.agent_id, sourceId });
+				}
+			}
 		}
 		return purged;
 	});

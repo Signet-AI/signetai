@@ -17,6 +17,7 @@ graph control plane. It is not a speculative product spec.
 | `task_meta` | 019, 054 | hidden/internal | task/procedural helpers | Agent-scoped task metadata, not part of this control-plane CLI slice. |
 | `ontology_proposals` | 067 | CLI/API | refactor proposal queue and applied operation ledger | Pending proposals are for broad graph refactors or explicit review. Direct operations create applied rows inside the same transaction as graph mutation so provenance remains queryable. |
 | `epistemic_assertions` | 071 | CLI/API | source-attributed assertion ledger | Records who claimed, believed, observed, decided, preferred, denied, or questioned something, with confidence, evidence, source provenance, status, and optional link to an applied claim attribute. Assertions do not by themselves make the statement current ontology truth. |
+| `ontology_contradictions` | 123 | CLI/API | derived contradiction observation ledger | Agent-scoped, evidence-linked observations between active non-constraint claims in one slot. Lexical `active`/`resolved` state is reconciled by governance and source purge; snapshots are retained and never replace current-claim truth. |
 | `dreaming_state`, `dreaming_passes` | 055 | CLI/API via dream status/trigger | dreaming worker | Existing dreaming pass records/status. Dream promotion is apply-first with provenance; generated or ambiguous candidates remain preview/questions until explicitly applied. |
 | `memory_artifacts` | 051, 061, 062 | API/internal | immutable source artifact records | Source-backed evidence for proposals and applied graph rows. Ontology updates must not rewrite these rows. |
 | `session_transcripts` | 040, 045, 047 | API/internal | immutable transcript/index records | Proposal extraction can cite transcripts; graph mutation must preserve transcript provenance. |
@@ -36,6 +37,8 @@ graph control plane. It is not a speculative product spec.
 | `POST /api/ontology/proposals/repair/duplicates` | CLI/API | dry-run candidates or large-refactor proposals | Covered by duplicate repair tests. Clear single merges should use direct `entity merge`. |
 | `GET /api/ontology/assertions` | CLI/API | read-only | Lists source-attributed assertions by entity, predicate, speaker, source, status, or text query. Covered by assertion tests. |
 | `GET /api/ontology/assertions/:id` | CLI/API | read-only | Reads one same-agent assertion. Covered by assertion tests. |
+| `GET /api/ontology/contradictions` | CLI/API | read-only | Lists active/resolved competing-claim observations with both claim snapshots, evidence, and source provenance. Covered by contradiction tests. |
+| `GET /api/ontology/contradictions/:id` | CLI/API | read-only | Reads one same-agent contradiction observation; cross-agent ids return 404. Covered by contradiction route tests. |
 | `POST /api/ontology/assertions` | CLI/API | creates source-attributed assertion | Requires evidence or source provenance. Covered by assertion tests. |
 | `POST /api/ontology/assertions/:id/link-claim` | CLI/API | links assertion to applied claim value | Rejects cross-agent and cross-entity links. Covered by assertion tests. |
 | `POST /api/ontology/assertions/:id/archive` | CLI/API | archives assertion | Preserves assertion evidence. Covered by assertion tests. |
@@ -63,6 +66,7 @@ graph control plane. It is not a speculative product spec.
 | `signet ontology apply <id>` | CLI | applies pending proposal | Preserves proposal history and agent scope. |
 | `signet ontology reject <id>` | CLI | rejects pending proposal | Preserves rejected proposal history. |
 | `signet ontology conflicts` | CLI | read-only | Lists pending claim conflicts. |
+| `signet ontology contradictions` | CLI | read-only | Lists persisted active/resolved contradictions with entity, claim-slot, source, status, and pagination filters. |
 | `signet ontology assertions` | CLI | read-only | Lists source-attributed assertions with filters for entity, predicate, speaker, source, status, query, and agent. |
 | `signet ontology assertion show/create/link-claim/archive/supersede/import` | CLI | assertion ledger writes | Creates and maintains attributed assertion rows. `supersede` preserves the old predicate when `--predicate` is omitted. `import` accepts a JSON array or `{ "assertions": [...] }`. |
 | `signet ontology entity create/rename/merge/archive` | CLI | direct operation endpoint | Applies by default with audit/provenance. Supports `--dry-run`, `--propose`, `--json`, `--agent`, `--actor`, `--reason`, `--evidence-file`; reserve `--propose` for broad refactors or explicit review. |
@@ -115,12 +119,14 @@ Existing and new coverage:
 
 - `platform/core/src/migrations/migrations.test.ts`
 - `platform/daemon/src/ontology-proposals.test.ts`
+- `platform/daemon/src/ontology-contradictions.test.ts`
 - `platform/daemon/src/knowledge-navigation.test.ts`
 - `platform/daemon/src/knowledge-graph-list.test.ts`
 - `platform/daemon/src/knowledge-expand-api.test.ts`
 - `platform/daemon/src/knowledge-graph-hygiene.test.ts`
 - `platform/daemon/src/pipeline/graph-transactions.test.ts`
 - `platform/daemon/src/pipeline/dreaming.test.ts`
+- `platform/daemon/src/pipeline/dreaming-agent-tools.test.ts`
 - `platform/daemon/src/dreaming-skill.test.ts`
 - `surfaces/cli/src/commands/ontology.test.ts`
 - `surfaces/cli/src/commands/knowledge.test.ts`

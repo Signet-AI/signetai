@@ -14,6 +14,10 @@ import { requireDependencyReason } from "./dependency-history";
 import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { classifyEntityQuality } from "./entity-quality";
 import {
+	reconcileOntologyContradictionsInTx,
+	recordOntologyContradictionsForAttributeInTx,
+} from "./ontology-contradictions";
+import {
 	type OntologyEvidenceItem,
 	type OntologyEvidenceRef,
 	readOntologyEvidenceRef,
@@ -998,7 +1002,13 @@ function applyAddClaimValue(
 		)
 		.get(aspectId, agentId, kind, normalized, groupKey, claimKey) as { id: string } | undefined;
 	if (existing) {
-		return { entityId, aspectId, attributeId: existing.id, deduped: true };
+		return {
+			entityId,
+			aspectId,
+			attributeId: existing.id,
+			deduped: true,
+			contradictionIds: recordOntologyContradictionsForAttributeInTx(db, { agentId, attributeId: existing.id }),
+		};
 	}
 
 	if (writeCaps !== undefined) {
@@ -1063,7 +1073,14 @@ function applyAddClaimValue(
 		reviewAfter,
 		proposal,
 	});
-	return { entityId, aspectId, attributeId: id, memoryId, deduped: false };
+	return {
+		entityId,
+		aspectId,
+		attributeId: id,
+		memoryId,
+		deduped: false,
+		contradictionIds: recordOntologyContradictionsForAttributeInTx(db, { agentId, attributeId: id }),
+	};
 }
 
 function applySetClaimValue(
@@ -1630,6 +1647,7 @@ function applyRestoreClaimVersion(
 		     archive_reason = NULL, proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
 		 WHERE id = ? AND agent_id = ?`,
 	).run(proposal.id, JSON.stringify(proposalAuditEvidence(proposal)), attributeId, agentId);
+	recordOntologyContradictionsForAttributeInTx(db, { agentId, attributeId });
 	return { attributeId, versionRootId: row.version_root_id ?? attributeId, restored: true };
 }
 
@@ -2161,45 +2179,51 @@ function applyOperation(
 	actor: string,
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
-	const payload = parseJsonRecord(proposal.payload);
-	if (proposal.operation === "create_entity") return applyCreateEntity(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "rename_entity") return applyRenameEntity(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "archive_entity")
-		return applyArchiveEntity(db, proposal.agent_id, proposal, payload, actor);
-	if (proposal.operation === "create_aspect")
-		return applyCreateAspect(db, proposal.agent_id, proposal, payload, writeCaps);
-	if (proposal.operation === "rename_aspect") return applyRenameAspect(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "archive_aspect")
-		return applyArchiveAspect(db, proposal.agent_id, proposal, payload, actor);
-	if (proposal.operation === "add_claim_value")
-		return applyAddClaimValue(db, proposal.agent_id, proposal, payload, writeCaps);
-	if (proposal.operation === "set_claim_value")
-		return applySetClaimValue(db, proposal.agent_id, proposal, payload, writeCaps);
-	if (proposal.operation === "merge_entities") return applyMergeEntities(db, proposal.agent_id, payload);
-	if (proposal.operation === "merge_aspects") return applyMergeAspects(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "supersede_claim_value") {
-		return applySupersedeClaimValue(db, proposal.agent_id, proposal, payload);
+	try {
+		const payload = parseJsonRecord(proposal.payload);
+		if (proposal.operation === "create_entity") return applyCreateEntity(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "rename_entity") return applyRenameEntity(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "archive_entity")
+			return applyArchiveEntity(db, proposal.agent_id, proposal, payload, actor);
+		if (proposal.operation === "create_aspect")
+			return applyCreateAspect(db, proposal.agent_id, proposal, payload, writeCaps);
+		if (proposal.operation === "rename_aspect") return applyRenameAspect(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "archive_aspect")
+			return applyArchiveAspect(db, proposal.agent_id, proposal, payload, actor);
+		if (proposal.operation === "add_claim_value")
+			return applyAddClaimValue(db, proposal.agent_id, proposal, payload, writeCaps);
+		if (proposal.operation === "set_claim_value")
+			return applySetClaimValue(db, proposal.agent_id, proposal, payload, writeCaps);
+		if (proposal.operation === "merge_entities") return applyMergeEntities(db, proposal.agent_id, payload);
+		if (proposal.operation === "merge_aspects") return applyMergeAspects(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "supersede_claim_value") {
+			return applySupersedeClaimValue(db, proposal.agent_id, proposal, payload);
+		}
+		if (proposal.operation === "archive_claim_value")
+			return applyArchiveClaimValue(db, proposal.agent_id, proposal, payload, actor);
+		if (proposal.operation === "restore_claim_version") {
+			return applyRestoreClaimVersion(db, proposal.agent_id, proposal, payload);
+		}
+		if (proposal.operation === "create_link") return applyCreateLink(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "update_link") return applyUpdateLink(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "archive_link") return applyArchiveLink(db, proposal.agent_id, proposal, payload, actor);
+		if (proposal.operation === "create_policy") return applyCreatePolicy(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "create_action_type")
+			return applyCreateActionType(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "create_interface")
+			return applyCreateInterface(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "attach_interface")
+			return applyAttachInterface(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "pin_entity") return applyPinEntity(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "unpin_entity") return applyUnpinEntity(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "create_entity_alias")
+			return applyCreateEntityAlias(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "archive_entity_alias")
+			return applyArchiveEntityAlias(db, proposal.agent_id, proposal, payload);
+		throw new OntologyProposalError(`Unsupported ontology proposal operation: ${proposal.operation}`, 400);
+	} finally {
+		reconcileOntologyContradictionsInTx(db, { agentId: proposal.agent_id });
 	}
-	if (proposal.operation === "archive_claim_value")
-		return applyArchiveClaimValue(db, proposal.agent_id, proposal, payload, actor);
-	if (proposal.operation === "restore_claim_version") {
-		return applyRestoreClaimVersion(db, proposal.agent_id, proposal, payload);
-	}
-	if (proposal.operation === "create_link") return applyCreateLink(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "update_link") return applyUpdateLink(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "archive_link") return applyArchiveLink(db, proposal.agent_id, proposal, payload, actor);
-	if (proposal.operation === "create_policy") return applyCreatePolicy(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "create_action_type")
-		return applyCreateActionType(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "create_interface") return applyCreateInterface(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "attach_interface") return applyAttachInterface(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "pin_entity") return applyPinEntity(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "unpin_entity") return applyUnpinEntity(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "create_entity_alias")
-		return applyCreateEntityAlias(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "archive_entity_alias")
-		return applyArchiveEntityAlias(db, proposal.agent_id, proposal, payload);
-	throw new OntologyProposalError(`Unsupported ontology proposal operation: ${proposal.operation}`, 400);
 }
 
 function markFailed(accessor: DbAccessor, id: string, agentId: string, err: unknown): void {

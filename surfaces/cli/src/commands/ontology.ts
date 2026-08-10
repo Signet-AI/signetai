@@ -150,6 +150,34 @@ interface ConflictsResponse {
 	readonly items?: readonly ConflictItem[];
 }
 
+interface OntologyContradictionItem {
+	readonly id?: string;
+	readonly entityName?: string;
+	readonly aspectName?: string;
+	readonly groupKey?: string;
+	readonly claimKey?: string;
+	readonly leftContent?: string;
+	readonly rightContent?: string;
+	readonly leftSourceKind?: string | null;
+	readonly leftSourceId?: string | null;
+	readonly leftScope?: string | null;
+	readonly leftVisibility?: string | null;
+	readonly rightSourceKind?: string | null;
+	readonly rightSourceId?: string | null;
+	readonly rightScope?: string | null;
+	readonly rightVisibility?: string | null;
+	readonly detector?: string;
+	readonly reason?: string;
+	readonly status?: string;
+	readonly resolvedAt?: string | null;
+	readonly resolutionReason?: string | null;
+}
+
+interface OntologyContradictionsResponse {
+	readonly items?: readonly OntologyContradictionItem[];
+	readonly count?: number;
+}
+
 interface RepairDuplicateEntity {
 	readonly name?: string;
 	readonly id?: string;
@@ -761,6 +789,37 @@ function printConflicts(data: unknown): void {
 	console.log();
 }
 
+function printContradictions(data: unknown): void {
+	const response = asRecord(data) as OntologyContradictionsResponse;
+	const items = response.items ?? [];
+	if (items.length === 0) {
+		console.log(chalk.dim("  No persisted claim contradictions found"));
+		return;
+	}
+	console.log(chalk.bold("\n  Persisted Claim Contradictions\n"));
+	for (const item of items) {
+		const location = [item.entityName, item.aspectName, item.groupKey, item.claimKey].filter(Boolean).join("/");
+		console.log(
+			`  ${chalk.cyan(item.id ?? "unknown")} ${chalk.yellow(item.status ?? "unknown")} ${chalk.dim(location)}`,
+		);
+		if (item.leftContent) console.log(`    ${chalk.red("A:")} ${item.leftContent}`);
+		if (item.rightContent) console.log(`    ${chalk.red("B:")} ${item.rightContent}`);
+		if (item.reason) console.log(chalk.dim(`    ${item.detector ?? "detector"}: ${item.reason}`));
+		const sources = [
+			[item.leftSourceKind, item.leftSourceId].filter(Boolean).join(":"),
+			[item.rightSourceKind, item.rightSourceId].filter(Boolean).join(":"),
+		].filter(Boolean);
+		if (sources.length > 0) console.log(chalk.dim(`    sources ${sources.join(" vs ")}`));
+		const scopes = [
+			[item.leftScope, item.leftVisibility].filter(Boolean).join("/"),
+			[item.rightScope, item.rightVisibility].filter(Boolean).join("/"),
+		].filter(Boolean);
+		if (scopes.length > 0) console.log(chalk.dim(`    scopes ${scopes.join(" vs ")}`));
+		if (item.resolutionReason) console.log(chalk.dim(`    resolved: ${item.resolutionReason}`));
+	}
+	console.log();
+}
+
 function printDuplicateRepairs(data: unknown): void {
 	const record = asRecord(data) as RepairDuplicatesResponse;
 	const items = record.items ?? [];
@@ -1079,6 +1138,41 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		const data = await apiGet(deps, "/api/ontology/proposals/conflicts", params);
 		if (options.json) console.log(JSON.stringify(data, null, 2));
 		else printConflicts(data);
+	});
+
+	addCommonOptions(
+		ontology
+			.command("contradictions")
+			.description("Show persisted contradictions between competing claim values")
+			.option("--entity <name>", "Filter by entity name")
+			.option("--entity-id <id>", "Filter by entity id")
+			.option("--aspect-id <id>", "Filter by aspect id")
+			.option("--group <key>", "Filter by claim group")
+			.option("--claim <key>", "Filter by claim key")
+			.option("--source-id <id>", "Filter by source id")
+			.option("--status <status>", "active, resolved, or all", "active")
+			.option("-l, --limit <n>", "Max contradictions to return", Number.parseInt)
+			.option("--offset <n>", "Pagination offset", Number.parseInt),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		for (const [key, value] of [
+			["entity", options.entity],
+			["entity_id", options.entityId],
+			["aspect_id", options.aspectId],
+			["group", options.group],
+			["claim", options.claim],
+			["source_id", options.sourceId],
+			["status", options.status],
+		] as const) {
+			if (typeof value === "string" && value.length > 0) params.set(key, value);
+		}
+		if (typeof options.limit === "number") params.set("limit", String(options.limit));
+		if (typeof options.offset === "number") params.set("offset", String(options.offset));
+		appendAgent(params, options.agent);
+		const data = await apiGet(deps, "/api/ontology/contradictions", params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printContradictions(data);
 	});
 
 	addCommonOptions(
