@@ -28,6 +28,7 @@ describe("source lifecycle telemetry contract", () => {
 		expect(sourceFailureClass({ message: "429 rate limit" })).toBe("rate_limited");
 		expect(sourceFailureClass(new Error("Obsidian root is required"))).toBe("configuration");
 		expect(sourceFailureClass(new Error("Invalid Discord source configuration"))).toBe("configuration");
+		expect(sourceFailureClass(new Error("invalid configuration"))).toBe("configuration");
 		expect(sourceFailureClass(new Error("unexpected implementation detail with /Users/alice/private.md"))).toBe(
 			"unknown",
 		);

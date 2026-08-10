@@ -175,15 +175,15 @@ export function sourceFailureClass(error: unknown): SourceFailureClass {
 			: "";
 	if (/cancel|abort/i.test(text)) return "cancelled";
 	if (/unsupported|unknown provider|no sync/i.test(text)) return "unsupported";
+	if (
+		/configuration|config(?:uration)?|required|must be provided|at least one .* (?:id|guild|repo|source)/i.test(text)
+	) {
+		return "configuration";
+	}
 	if (/EACCES|ENOENT|EISDIR/i.test(code) || /enoent|eacces|file|directory|path|vault/i.test(text)) return "filesystem";
 	if (/403|permission|forbidden|not authorized|authorization/i.test(text)) return "authorization";
 	if (/token|credential|secret|auth|401/i.test(text)) return "authentication";
 	if (/429|rate limit|too many requests/i.test(text)) return "rate_limited";
-	if (
-		/configuration|root is required|guild id is required|missing .*config|config/i.test(text) ||
-		(/invalid/i.test(text) && /source|root|guild|config|provider/i.test(text))
-	)
-		return "configuration";
 	if (/json|parse|invalid|malformed|schema/i.test(text)) return "parse";
 	if (/network|fetch|socket|timeout|dns|connect|gateway|http 5/i.test(text)) return "network";
 	return "unknown";
