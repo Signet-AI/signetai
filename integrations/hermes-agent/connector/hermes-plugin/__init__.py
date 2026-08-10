@@ -75,7 +75,7 @@ MEMORY_SEARCH_SCHEMA = {
                 "type": "number",
                 "description": "Deprecated compatibility alias for importance_min; ignored when importance_min is set.",
             },
-            "score_min": {"type": "number", "description": "Minimum recall score threshold, applied client-side."},
+            "score_min": {"type": "number", "description": "Minimum recall score threshold."},
             "aggregate": {
                 "type": "boolean",
                 "description": "Synthesize an aggregate answer from bounded recall evidence.",

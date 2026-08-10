@@ -12,6 +12,7 @@ import {
 } from "./memory-config";
 import { isPipelineTimeout, recordPipelineError } from "./pipeline-error";
 import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
+import { observeEmbeddingLatency } from "./runtime-pressure";
 import { getSecret } from "./secrets.js";
 
 export function resolveOllamaUrl(): string {
@@ -371,7 +372,13 @@ export async function fetchEmbedding(
 	const opts = typeof roleOrOpts === "string" ? (typeof optsOrRole === "string" ? {} : optsOrRole) : roleOrOpts;
 	const formattedText = formatEmbeddingInput(text, effectiveCfg, role);
 	try {
-		const serve = await serveEmbedding(formattedText, effectiveCfg, opts);
+		let serve: EmbeddingServeResult;
+		const providerStartedAt = performance.now();
+		try {
+			serve = await serveEmbedding(formattedText, effectiveCfg, opts);
+		} finally {
+			observeEmbeddingLatency(performance.now() - providerStartedAt);
+		}
 		if (serve.embedding === null && serve.provider !== null) {
 			recordPipelineError("embedding", "EMBEDDING_PROVIDER_DOWN");
 		}

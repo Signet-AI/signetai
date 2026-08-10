@@ -327,7 +327,8 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 		}
 	}
 
-	// Queue diagnostics include the live memory and summary workers.
+	// Queue diagnostics include the live memory queue; legacy summary fields
+	// are retained as empty compatibility data for older daemon responses.
 	if (report.daemon.running) {
 		await renderPipelineQueuesBlock(deps, report.daemon.queue ?? undefined);
 		const daemonHealth = report.daemon.health;

@@ -29,7 +29,6 @@ describe("TTL eviction finalizer (#902)", () => {
 		const handler = createTtlEvictionHandler({
 			accessor: getDbAccessor(),
 			maxCheckpointsPerSession: 50,
-			isSummarySynthesisAvailable: () => true,
 		});
 		expect(getState(sessionKey)).toBeDefined();
 
@@ -40,7 +39,6 @@ describe("TTL eviction finalizer (#902)", () => {
 			claimedAt: new Date().toISOString(),
 		});
 
-		// The checkpoint survives, but there is no summary to finalize without a transcript.
 		expect(outcome).toBe("skipped");
 		const row = getDbAccessor().withReadDb(
 			(db) =>
@@ -55,32 +53,13 @@ describe("TTL eviction finalizer (#902)", () => {
 		clearContinuity(sessionKey);
 	});
 
-	it("returns skipped when there is no continuity state and no transcript", () => {
-		setup();
-		const handler = createTtlEvictionHandler({
-			accessor: getDbAccessor(),
-			maxCheckpointsPerSession: 50,
-			isSummarySynthesisAvailable: () => true,
-		});
-
-		const outcome = handler({
-			sessionKey: "ttl-empty-sess",
-			agentId: "default",
-			runtimePath: "plugin",
-			claimedAt: new Date().toISOString(),
-		});
-
-		expect(outcome).toBe("skipped");
-	});
-
-	it("stores the content hash and deduplicates repeated TTL finalization", () => {
+	it("marks a retained transcript complete and deduplicates repeated TTL finalization", () => {
 		setup();
 		const transcript = `User: ${"x".repeat(600)}`;
 		upsertSessionTranscript("ttl-transcript", transcript, "plugin", null, "agent-a");
 		const handler = createTtlEvictionHandler({
 			accessor: getDbAccessor(),
 			maxCheckpointsPerSession: 50,
-			isSummarySynthesisAvailable: () => true,
 		});
 		const info = {
 			sessionKey: "ttl-transcript",
@@ -91,36 +70,30 @@ describe("TTL eviction finalizer (#902)", () => {
 
 		expect(handler(info)).toBe("finalized");
 		expect(handler(info)).toBe("finalized");
-		const jobs = getDbAccessor().withReadDb(
+		const row = getDbAccessor().withReadDb(
 			(db) =>
 				db
-					.prepare("SELECT content_hash FROM summary_jobs WHERE session_key = ? AND agent_id = ?")
-					.all("ttl-transcript", "agent-a") as Array<{ content_hash: string | null }>,
+					.prepare("SELECT completed_at, content_hash FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+					.get("ttl-transcript", "agent-a") as { completed_at: string | null; content_hash: string | null } | undefined,
 		);
-		expect(jobs).toHaveLength(1);
-		expect(jobs[0]?.content_hash).toBeTruthy();
+		expect(row?.completed_at).toBeTruthy();
+		expect(row?.content_hash).toBeTruthy();
 	});
 
-	it("skips finalization when synthesis is unavailable", () => {
+	it("skips when there is no retained transcript", () => {
 		setup();
-		upsertSessionTranscript("ttl-disabled", `User: ${"x".repeat(600)}`, "plugin", null, "agent-a");
 		const handler = createTtlEvictionHandler({
 			accessor: getDbAccessor(),
 			maxCheckpointsPerSession: 50,
-			isSummarySynthesisAvailable: () => false,
 		});
 
 		expect(
 			handler({
-				sessionKey: "ttl-disabled",
-				agentId: "agent-a",
+				sessionKey: "ttl-empty-sess",
+				agentId: "default",
 				runtimePath: "plugin",
 				claimedAt: new Date().toISOString(),
 			}),
 		).toBe("skipped");
-		const count = getDbAccessor().withReadDb(
-			(db) => (db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get() as { count: number }).count,
-		);
-		expect(count).toBe(0);
 	});
 });

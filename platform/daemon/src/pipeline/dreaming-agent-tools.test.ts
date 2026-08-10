@@ -306,12 +306,18 @@ describe("dreaming-agent-tools", () => {
 				 VALUES ('run-done', 'settled outcome', 'pi', null, 'owner',
 				  '2026-08-07T05:00:00.000Z', '2026-08-07T05:20:00.000Z')`,
 			).run();
+			db.prepare("UPDATE session_transcripts SET completed_at = ? WHERE session_key = 'run-done'").run(
+				"2026-08-07T05:20:00.000Z",
+			);
 			db.prepare(
 				`INSERT INTO session_transcripts
 				 (session_key, content, harness, project, agent_id, created_at, updated_at)
 				 VALUES ('run-failed-summary', 'outcome despite summary timeout', 'pi', null, 'owner',
 				  '2026-08-07T04:00:00.000Z', '2026-08-07T04:30:00.000Z')`,
 			).run();
+			db.prepare("UPDATE session_transcripts SET completed_at = ? WHERE session_key = 'run-failed-summary'").run(
+				"2026-08-07T04:30:00.000Z",
+			);
 			db.prepare(
 				`INSERT INTO session_transcripts
 				 (session_key, content, harness, project, agent_id, created_at, updated_at)
@@ -366,12 +372,12 @@ describe("dreaming-agent-tools", () => {
 		const byRef = new Map(items.map((item) => [item.sourceRef, item]));
 		// A session-end job was triggered: settled, even while pending.
 		expect(byRef.get("transcript:run-done")?.completed).toBe(true);
-		// A still-running transcript is not settled.
-		expect(byRef.get("transcript:run-live")?.completed).toBe(false);
+		// A still-running transcript is not delivered at all.
+		expect(byRef.has("transcript:run-live")).toBe(false);
 		// A failed/timed-out summary job still proves the session ended.
 		expect(byRef.get("transcript:run-failed-summary")?.completed).toBe(true);
-		// A mid-session checkpoint extract does not settle the session.
-		expect(byRef.get("transcript:run-checkpoint")?.completed).toBe(false);
+		// A mid-session checkpoint transcript is not delivered either.
+		expect(byRef.has("transcript:run-checkpoint")).toBe(false);
 		// Memories are settled captures by construction.
 		expect(byRef.get("memory:mem-settled")?.completed).toBe(true);
 
@@ -385,11 +391,8 @@ describe("dreaming-agent-tools", () => {
 				{} as never,
 			),
 		);
-		expect(fragment.ok).toBe(true);
-		expect((fragment.items as Array<{ sourceRef: string; completed: boolean }>)[0]).toMatchObject({
-			sourceRef: "transcript:run-live",
-			completed: false,
-		});
+		expect(fragment.ok).toBe(false);
+		expect(fragment.error).toContain("still in progress");
 	});
 
 	it("get_evidence resolves claim provenance and link provenance through one tool", async () => {

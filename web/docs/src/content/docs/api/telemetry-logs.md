@@ -183,9 +183,15 @@ These events intentionally exclude raw prompts, response text, secrets,
 credentials, and session references.
 
 Recall emits `recall.performed` at the shared search boundary. Its properties
-are counts and metadata only: `type` when classification is reliable
-(`semantic`, `keyword`, `temporal`, or `graph`), `results`, `latencyMs`, and
-`truncated`. It never includes query text, memory content, or result snippets.
+are counts and metadata only: `surface`, `type` when classification is
+reliable (`semantic`, `keyword`, `temporal`, or `graph`), `results`,
+`latencyMs`, and `truncated`. Retrieval-outcome telemetry separately emits
+`recall.attempted` and `recall.outcome`. Those events use only bounded surface,
+result-state, delivery-state, and count fields: `explicit_api`, `tool_call`,
+`prompt_injection`, `dashboard`, or `other`; `empty`, `non_empty`,
+`truncated`, or `error`; and `returned`, `injected`, `consumed`, or
+`not_delivered`. They never include query text, prompt text, memory content,
+identifiers, citations, or feedback prose.
 
 ### GET /api/telemetry/stats
 
@@ -249,6 +255,15 @@ Aggregated telemetry statistics since daemon start or since a given timestamp.
   },
   "recall": {
     "calls": 80,
+    "outcomes": {
+      "attempted": 100,
+      "returned": 70,
+      "delivered": 20,
+      "bySurface": [
+        { "surface": "explicit_api", "attempted": 70, "returned": 50, "delivered": 0 },
+        { "surface": "prompt_injection", "attempted": 30, "returned": 0, "delivered": 20 }
+      ]
+    },
     "p50": 42,
     "p95": 310,
     "byType": [

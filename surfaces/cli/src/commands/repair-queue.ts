@@ -38,13 +38,13 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 		.command("repair")
 		.description("Operator repair commands")
 		.command("queue")
-		.description("Repair the memory/summary job queues (issue #901)");
+		.description("Repair the memory job queue; the historical summary target is retired (issue #901)");
 
 	queue
 		.command("requeue")
 		.description("Reset dead jobs to pending (default: dry-run)")
 		.option("--ids <list>", "comma-separated ids to requeue")
-		.option("--tables <list>", "memory|summary (default: both)")
+		.option("--tables <list>", "memory|summary (summary is retired; default: both)")
 		.option("--older-than <duration>", "e.g. 7d, 12h, 30m, 60000ms")
 		.option("--error-pattern <pattern>", "LIKE %pattern% over error column")
 		.option("--max-batch <n>", "cap on rows touched (default: 50)")
@@ -78,7 +78,7 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 		.command("cancel")
 		.description("Cancel obsolete dead/completed jobs (audit-preserving). Default: dry-run.")
 		.option("--ids <list>", "comma-separated ids")
-		.option("--tables <list>", "memory|summary (default: both)")
+		.option("--tables <list>", "memory|summary (summary is retired; default: both)")
 		.option("--older-than <duration>", "default: 30d")
 		.option("--error-pattern <pattern>", "LIKE %pattern% over error column")
 		.option("--apply", "mutate; without this the command only previews")
@@ -110,7 +110,7 @@ export function registerRepairQueueCommands(program: Command, deps: RepairQueueD
 		.command("prune")
 		.description("Prune cancelled/dead/completed jobs (archive-preserving). Default: dry-run.")
 		.option("--ids <list>", "comma-separated ids")
-		.option("--tables <list>", "memory|summary (default: both)")
+		.option("--tables <list>", "memory|summary (summary is retired; default: both)")
 		.option("--older-than <duration>", "retention window (default: 90d). All matched rows must be older than this.")
 		.option("--max-batch <n>", "cap on rows touched (default: 1000, hard cap)")
 		.option("--apply", "mutate; without this the command only previews")

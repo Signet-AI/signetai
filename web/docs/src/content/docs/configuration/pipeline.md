@@ -147,10 +147,12 @@ target consumed by Dreaming instead. The retired path let a subprocess write
 memory state outside the daemon-owned audited apply path.
 
 
-### Session synthesis (`synthesis`)
+### MEMORY.md synthesis (`synthesis`)
 
-Controls the provider used by the `summary-worker` for session summaries.
-This is separate from fact extraction once explicitly configured.
+Controls the provider used by the MEMORY.md synthesis worker. It does not
+create session summaries: completed transcripts are delivered directly to
+Dreaming through the content pass, while this worker renders the operator
+working-memory document.
 
 If the `synthesis` block is omitted entirely, Signet falls back to the
 resolved extraction provider, model, endpoint, and timeout. When an explicit
@@ -159,18 +161,19 @@ handles synthesis.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `enabled` | `true` | — | Enable background session summary generation |
+| `enabled` | `true` | — | Enable background MEMORY.md synthesis |
 | `provider` | inherited from extraction when omitted | — | `"none"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"codex"`, `"opencode"`, `"anthropic"`, `"openrouter"`, or `"openai-compatible"` |
 | `model` | inherited from extraction when omitted | — | Model name for the configured provider |
 | `endpoint` | inherited from extraction when omitted | — | Optional base URL override for Ollama, OpenCode, OpenRouter, or OpenAI-compatible gateways |
-| `timeout` | inherited from extraction when omitted | 5000-300000 ms | Summary generation timeout |
+| `timeout` | inherited from extraction when omitted | 5000-300000 ms | MEMORY.md synthesis timeout |
 | `structuredOutput` | inherited from extraction when omitted | — | Send JSON schema in the `format` field of LLM requests. Set `false` when the synthesis provider rejects structured output (e.g. GitHub Copilot API). Falls back to `extraction.structuredOutput` when omitted. |
 | `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max synthesis-provider calls per hour; set `0` to disable rate limiting |
 | `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |
 | `rateLimit.waitTimeoutMs` | `5000` when `rateLimit` is set | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
 
-Set `provider: none` or `enabled: false` to disable background session
-summary synthesis entirely.
+Set `provider: none` or `enabled: false` to disable background MEMORY.md
+synthesis entirely. This does not disable direct transcript delivery to
+Dreaming.
 
 `synthesis.provider: command` is invalid and rejected during config load.
 

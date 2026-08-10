@@ -314,24 +314,25 @@ Admin permission required.
 {
   "timestamp": "2026-07-19T00:00:00.000Z",
   "queues": {
-    "memory":     { "pending": 0, "leased": 0, "completed": 1, "failed": 0, "dead": 1667, "oldestAgeSec": 0, "oldestDeadAgeSec": 5.4e6, "lastError": null },
-    "summary":    { "pending": 0, "leased": 0, "completed": 92,  "failed": 0, "dead": 1667, "oldestAgeSec": 0, "oldestDeadAgeSec": 5.4e6, "lastError": "boom" }
+    "memory": { "pending": 0, "leased": 0, "completed": 1, "failed": 0, "dead": 0, "oldestAgeSec": 0, "oldestDeadAgeSec": 0, "lastError": null },
+    "summary": { "pending": 0, "leased": 0, "completed": 0, "failed": 0, "dead": 0, "oldestAgeSec": 0, "oldestDeadAgeSec": 0, "lastError": null }
   },
-  "oldestDeadSummaryJob":    { "id": "...", "harness": "codex", "sessionKey": "...", "createdAt": "...", "attempts": 3, "error": "boom" },
-  "oldestDeadMemoryJob":     { "...": "..." },
+  "oldestDeadSummaryJob": null,
+  "oldestDeadMemoryJob": { "...": "..." },
   "thresholds": {
+    "memoryDeadWarn": 50, "memoryDeadFail": 500,
+    "memoryOldestPendingWarnSec": 300, "memoryOldestPendingFailSec": 1800,
     "summaryDeadWarn": 50, "summaryDeadFail": 500,
     "summaryOldestPendingWarnSec": 300, "summaryOldestPendingFailSec": 1800,
-    "summaryOldestDeadWarnSec": 86400,
-    "memoryDeadWarn": 50, "memoryDeadFail": 500,
-    "memoryOldestPendingWarnSec": 300, "memoryOldestPendingFailSec": 1800
+    "summaryOldestDeadWarnSec": 86400
   }
 }
 ```
 
 Counts default to `0` and `null` if a table does not exist on the running
-database (older installs before the
-`summary_jobs` migration landed).
+database. Historical `summary_jobs` rows are retired by migration 117 and are
+not reported as live work. The `summary` queue and summary thresholds remain
+zero/compatibility fields for older clients.
 
 
 ### POST /api/diagnostics/queue/repair
@@ -347,7 +348,7 @@ shape covers `requeue` (extending `requeueDeadJobs`), `cancel`
 {
   "action": "cancel",
   "dryRun": true,
-  "tables": ["summary"],
+  "tables": ["memory"],
   "olderThanMs": 2592000000,
   "errorPattern": "timeout"
 }
@@ -356,7 +357,8 @@ shape covers `requeue` (extending `requeueDeadJobs`), `cancel`
 - `action` — one of `requeue`, `cancel`, `prune`.
 - `dryRun` — boolean; defaults to `true` (safe preview).
 - `ids` — optional array of row ids; bypasses filter for max precision.
-- `tables` — optional array of `memory` and/or `summary` (default: both).
+- `tables` — optional array containing `memory` (default: `memory`). The
+  historical `summary` target is retired and returns HTTP `410`.
 - `olderThanMs` — only match rows whose `created_at` is older than `now - olderThanMs`.
 - `errorPattern` — optional `LIKE %pattern%` over the `error` column.
 - `retentionMs` — optional override for `prune`'s default 90-day window.
@@ -371,7 +373,7 @@ shape covers `requeue` (extending `requeueDeadJobs`), `cancel`
   "success": true,
   "affected": 0,
   "message": "dry-run: 1667 job(s) match cancel filter; preview shows 100",
-  "preview": ["summary_jobs:abc", "summary_jobs:def"],
+  "preview": ["memory_jobs:abc", "memory_jobs:def"],
   "totalMatching": 1667
 }
 ```

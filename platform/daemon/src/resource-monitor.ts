@@ -4,6 +4,7 @@
 import { dlopen, ptr } from "bun:ffi";
 import { readdirSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { logger } from "./logger";
 import { reportEventLoopLag, tickPressureState } from "./system-pressure";
 
@@ -77,6 +78,28 @@ export interface ResourceSnapshot {
 	heapUsed: number;
 	physicalFootprint: number | null;
 	peakPhysicalFootprint: number | null;
+	cpuPercent: number | null;
+}
+
+let lastCpuUsage: NodeJS.CpuUsage | null = null;
+let lastCpuSampleAt: number | null = null;
+
+function readCpuPercent(): number | null {
+	try {
+		const now = performance.now();
+		const usage = process.cpuUsage();
+		const previous = lastCpuUsage;
+		const previousAt = lastCpuSampleAt;
+		lastCpuUsage = usage;
+		lastCpuSampleAt = now;
+		if (!previous || previousAt === null) return null;
+		const elapsedMs = now - previousAt;
+		if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return null;
+		const cpuMicros = Math.max(0, usage.user - previous.user) + Math.max(0, usage.system - previous.system);
+		return Math.max(0, Math.min(1000, (cpuMicros / (elapsedMs * 1000)) * 100));
+	} catch {
+		return null;
+	}
 }
 
 function snapshotResources(readPhysicalMemory: PhysicalMemoryReader = readMacOsPhysicalMemory): ResourceSnapshot {
@@ -92,6 +115,7 @@ function snapshotResources(readPhysicalMemory: PhysicalMemoryReader = readMacOsP
 		heapUsed: 0,
 		physicalFootprint: null,
 		peakPhysicalFootprint: null,
+		cpuPercent: null,
 	};
 
 	try {
@@ -123,6 +147,7 @@ function snapshotResources(readPhysicalMemory: PhysicalMemoryReader = readMacOsP
 		snap.physicalFootprint = physicalMemory.current;
 		snap.peakPhysicalFootprint = physicalMemory.peak;
 	}
+	snap.cpuPercent = readCpuPercent();
 
 	return snap;
 }
@@ -144,6 +169,7 @@ export function logFdSnapshot(stage: string): ResourceSnapshot {
 		rss: `${snap.rss}MB`,
 		heap: `${snap.heapUsed}MB`,
 		...(snap.physicalFootprint !== null ? { physicalFootprint: `${snap.physicalFootprint}MB` } : {}),
+		...(snap.cpuPercent !== null ? { cpuPercent: `${Math.round(snap.cpuPercent)}%` } : {}),
 	});
 	return snap;
 }
@@ -164,13 +190,6 @@ export function startEventLoopMonitor(intervalMs = 2000): void {
 	eventLoopTimer = setInterval(() => {
 		const now = Date.now();
 		const lag = now - lastTick - intervalMs;
-		if (lag > 100) {
-			logger.warn("resources", "Event loop blocked", {
-				lagMs: lag,
-				expectedMs: intervalMs,
-				actualMs: now - lastTick,
-			});
-		}
 		// Feed the pressure signal so background write loops can yield/pause.
 		reportEventLoopLag(lag);
 		// Advance the pressure state machine on the monitor's own cadence so

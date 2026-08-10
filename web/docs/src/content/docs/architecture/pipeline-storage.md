@@ -266,7 +266,7 @@ error message. The job follows standard retry logic — up to
 SQLite with WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`. Each migration is idempotent — safe
 to re-run against an existing database. Schema version is tracked in
-`schema_migrations`. The latest migration is `106-memory-review-after.ts`.
+`schema_migrations`. The latest migration is `117-retire-summary-worker.ts`.
 
 **schema_migrations**
 
@@ -379,11 +379,13 @@ state), `status` (`idle`, `syncing`, `error`), `last_sync_at`,
 
 **summary_jobs**
 
-Session summary queue. Fields include `session_key`, `session_id`,
-`trigger`, `captured_at`, `started_at`, `ended_at`, `harness`,
-`status`, `error`, and `created_at`. The summary worker polls this
-table, writes canonical immutable `--summary.md` artifacts for normal
-session-end jobs, and keeps checkpoint extracts DB-native.
+Historical session-summary queue retained for migration and provenance
+compatibility. Fields include `session_key`, `session_id`, `trigger`,
+`captured_at`, `started_at`, `ended_at`, `harness`, `status`, `error`, and
+`created_at`. Migration 117 promotes non-empty legacy transcript payloads into
+`session_transcripts` before draining this table. New session-end delivery does
+not create summary jobs; completed canonical transcripts are projected directly
+into Dreaming.
 
 **memory_artifacts**
 

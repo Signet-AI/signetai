@@ -908,7 +908,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.number()
 					.optional()
 					.describe("Deprecated compatibility alias for importance_min; ignored when importance_min is also set"),
-				score_min: z.number().optional().describe("Minimum recall score threshold (client-side)"),
+				score_min: z
+					.number()
+					.optional()
+					.describe("Minimum recall score threshold; applied by the daemon and checked defensively by the adapter"),
 				aggregate: z.boolean().optional().describe("Synthesize an aggregate answer from bounded recall evidence"),
 				aggregate_budget: z.enum(["small", "medium", "large"]).optional().describe("Aggregate recall budget"),
 				save_aggregate: z.boolean().optional().describe("Save the aggregate answer as a memory"),
@@ -962,6 +965,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					agentId: agent_id,
 					includeRecalled: include_recalled,
 					scope,
+					minScore: score_min,
+					recallSurface: "tool_call",
 				}),
 			});
 
@@ -1000,7 +1005,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.optional()
 					.describe("Temporal recall range/facet options for date and timeline queries"),
 				keyword_query: z.string().optional().describe("Override the keyword/FTS query used for recall"),
-				score_min: z.number().optional().describe("Minimum recall score threshold (client-side)"),
+				score_min: z
+					.number()
+					.optional()
+					.describe("Minimum recall score threshold; applied by the daemon and checked defensively by the adapter"),
 				aggregate: z.boolean().optional().describe("Synthesize an aggregate answer from bounded recall evidence"),
 				aggregate_budget: z.enum(["small", "medium", "large"]).optional().describe("Aggregate recall budget"),
 				save_aggregate: z.boolean().optional().describe("Save the aggregate answer as a memory"),
@@ -1049,6 +1057,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					agentId: agent_id,
 					includeRecalled: include_recalled,
 					scope,
+					minScore: score_min,
+					recallSurface: "tool_call",
 				}),
 			});
 
@@ -1083,6 +1093,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 						sessionKey: session_key,
 						agentId: agent_id,
 						includeRecalled: include_recalled,
+						recallSurface: "tool_call",
 					}),
 					sourceOnly: true,
 				},

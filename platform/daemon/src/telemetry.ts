@@ -81,6 +81,10 @@ export const TELEMETRY_EVENTS = [
 	"cloud.sync",
 	"cloud.storage",
 	"recall.performed",
+	// Retrieval-outcome contract (#1277): attempt and delivery are separate
+	// boundaries so search execution cannot be mistaken for delivered context.
+	"recall.attempted",
+	"recall.outcome",
 	"config.snapshot",
 ] as const;
 
@@ -179,6 +183,12 @@ function sessionCostProperties(cost: SessionCostAccumulator): TelemetryPropertie
 
 export interface TelemetryCollector {
 	record(event: TelemetryEventType, properties: TelemetryProperties): void;
+	/**
+	 * Record with a bounded synchronous JSONL audit append while deferring
+	 * SQLite persistence. The local line survives a hard process kill; the
+	 * wedge path does not enter SQLite or provider work.
+	 */
+	recordDeferred?(event: TelemetryEventType, properties: TelemetryProperties): void;
 	reopenSession(sessionHash: string): void;
 
 	/**
@@ -453,6 +463,8 @@ export function createTelemetryCollector(
 	const reportedVersion = telemetryReportedVersion(daemonVersion, deployment);
 	let flushTimer: ReturnType<typeof setTimeout> | null = null;
 	let running = false;
+	let flushInFlight: Promise<void> | null = null;
+	let recordingStopped = false;
 	let consecutiveFailures = 0;
 	let flushCount = 0;
 	let effectiveIntervalMs = config.flushIntervalMs;
@@ -663,6 +675,15 @@ export function createTelemetryCollector(
 		}
 	}
 
+	/** Serialize timer, threshold, explicit, and shutdown flushes. */
+	function flush(): Promise<void> {
+		if (flushInFlight) return flushInFlight;
+		flushInFlight = doFlush().finally(() => {
+			flushInFlight = null;
+		});
+		return flushInFlight;
+	}
+
 	function sessionKeyFor(properties: TelemetryProperties): string | null {
 		const hashed = properties.sessionHash;
 		if (typeof hashed === "string" && hashed.length > 0) return hashed;
@@ -736,6 +757,44 @@ export function createTelemetryCollector(
 		return cost ? { ...properties, ...sessionCostProperties(cost) } : properties;
 	}
 
+	function recordEvent(
+		event: TelemetryEventType,
+		properties: TelemetryProperties,
+		options: { readonly persistAuditLog: boolean; readonly flushWhenFull: boolean },
+	): void {
+		if (recordingStopped) return;
+		if (buffer.length >= MAX_BUFFER_EVENTS) {
+			const dropCount = buffer.length - MAX_BUFFER_EVENTS + 1;
+			buffer.splice(0, dropCount);
+			if (options.persistAuditLog) {
+				logger.warn("telemetry", "Buffer exceeded max capacity, dropping oldest events", {
+					dropped: dropCount,
+					maxBufferEvents: MAX_BUFFER_EVENTS,
+				});
+			}
+		}
+
+		buffer.push({
+			id: crypto.randomUUID(),
+			event,
+			timestamp: new Date().toISOString(),
+			properties: addContext(enrichSessionEvent(event, properties)),
+		});
+		if (options.persistAuditLog && logPath) {
+			const last = buffer[buffer.length - 1];
+			if (last) {
+				appendToTelemetryLog(logPath, JSON.stringify(last));
+			}
+		}
+
+		// Deferred records skip the eager flush. Calling doFlush here would
+		// synchronously enter SQLite before its first await, defeating the wedge
+		// path's non-blocking guarantee.
+		if (options.flushWhenFull && buffer.length >= MAX_BUFFER_SIZE) {
+			flush().catch(() => {});
+		}
+	}
+
 	const collector: TelemetryCollector = {
 		enabled: true,
 		reopenSession,
@@ -744,36 +803,11 @@ export function createTelemetryCollector(
 		},
 
 		record(event, properties): void {
-			if (buffer.length >= MAX_BUFFER_EVENTS) {
-				const dropCount = buffer.length - MAX_BUFFER_EVENTS + 1;
-				buffer.splice(0, dropCount);
-				logger.warn("telemetry", "Buffer exceeded max capacity, dropping oldest events", {
-					dropped: dropCount,
-					maxBufferEvents: MAX_BUFFER_EVENTS,
-				});
-			}
+			recordEvent(event, properties, { persistAuditLog: true, flushWhenFull: true });
+		},
 
-			buffer.push({
-				id: crypto.randomUUID(),
-				event,
-				timestamp: new Date().toISOString(),
-				properties: addContext(enrichSessionEvent(event, properties)),
-			});
-
-			// Open telemetry log (issue #1026 Phase 2): mirror every event to
-			// the inspectable JSONL file so users can audit exactly what was
-			// sent. Best-effort — a full disk or unwritable path must never
-			// break recording.
-			if (logPath) {
-				const last = buffer[buffer.length - 1];
-				if (last) {
-					appendToTelemetryLog(logPath, JSON.stringify(last));
-				}
-			}
-
-			if (buffer.length >= MAX_BUFFER_SIZE) {
-				doFlush().catch(() => {});
-			}
+		recordDeferred(event, properties): void {
+			recordEvent(event, properties, { persistAuditLog: true, flushWhenFull: false });
 		},
 
 		recordFirstUse(kind): void {
@@ -785,7 +819,7 @@ export function createTelemetryCollector(
 		},
 
 		async flush(): Promise<void> {
-			await doFlush();
+			await flush();
 		},
 
 		start(): void {
@@ -796,7 +830,7 @@ export function createTelemetryCollector(
 				if (!running) return;
 				flushTimer = setTimeout(() => {
 					flushTimer = null;
-					doFlush()
+					flush()
 						.catch(() => {})
 						.finally(() => scheduleFlush());
 				}, effectiveIntervalMs);
@@ -815,7 +849,16 @@ export function createTelemetryCollector(
 				clearTimeout(flushTimer);
 				flushTimer = null;
 			}
-			await doFlush();
+			try {
+				await flush();
+			} catch {}
+			// Stop accepting new events only after the first flush has completed,
+			// so events produced while an outbound request was awaiting are
+			// drained by this final serialized flush.
+			recordingStopped = true;
+			try {
+				await flush();
+			} catch {}
 			logger.info("telemetry", "Telemetry collector stopped");
 		},
 

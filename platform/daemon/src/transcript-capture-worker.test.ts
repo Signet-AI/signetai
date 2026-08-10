@@ -47,7 +47,7 @@ describe("transcript capture worker", () => {
 			transcriptPath: "/tmp/session.jsonl",
 			capturedAt: "2026-06-20T10:00:00.000Z",
 			endedAt: "2026-06-20T10:00:00.000Z",
-			summaryStatus: "pending",
+			summaryStatus: "not_requested",
 		});
 		expect(id).toBeTruthy();
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
@@ -71,7 +71,7 @@ describe("transcript capture worker", () => {
 		expect(existsSync(join(dir, transcriptPath ?? ""))).toBe(true);
 		expect(manifestValue(manifestPath, "canonical_transcript_path")).toBe("memory/pi/transcripts/transcript.jsonl");
 		expect(manifestValue(manifestPath, "summary_path")).toBeNull();
-		expect(manifestValue(manifestPath, "summary_status")).toBe("pending");
+		expect(manifestValue(manifestPath, "summary_status")).toBe("not_requested");
 	});
 
 	it("keeps raw audit logs when normalized transcript has no conversation turns", async () => {

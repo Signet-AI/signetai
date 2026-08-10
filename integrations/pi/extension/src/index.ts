@@ -147,6 +147,7 @@ export async function recallMemories(
 		body: JSON.stringify(
 			buildRecallRequestBody(query, {
 				...options,
+				recallSurface: "tool_call",
 			}),
 		),
 		signal: AbortSignal.timeout(options.aggregate ? Math.max(READ_TIMEOUT * 6, 30_000) : READ_TIMEOUT),
@@ -216,6 +217,7 @@ export async function searchSourceArtifacts(
 				sessionKey,
 				includeRecalled,
 				project,
+				recallSurface: "tool_call",
 			}),
 			sourceOnly: true,
 		}),
