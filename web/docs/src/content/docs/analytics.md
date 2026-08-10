@@ -222,9 +222,10 @@ Privacy contract:
 - Every recorded event is mirrored to an open, inspectable JSONL log at
   `<agentsDir>/.daemon/telemetry/events.jsonl`, so users can audit
   exactly what was sent. CLI `command.invoked` events are also queued in the
-  workspace database and flushed to PostHog in bounded, best-effort batches
-  without awaiting the command; the CLI reads the same persisted install id
-  as the daemon.
+  workspace database when remote delivery is configured and a telemetry SQLite
+  database is available, then flushed to PostHog in bounded, best-effort
+  batches without awaiting the command. Fresh workspaces without that database
+  remain local-only; the CLI reads the same persisted install id as the daemon.
 
 Events recorded: `daemon.heartbeat` (every 5 minutes), the `inference.*`
 lifecycle (`route`, `execute`, `stream`, `fallback`), `llm.generate`

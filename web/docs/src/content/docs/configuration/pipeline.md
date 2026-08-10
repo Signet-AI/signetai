@@ -498,9 +498,10 @@ not count as installs or usage.
 to `<agentsDir>/.daemon/telemetry/events.jsonl` — the single inspectable
 audit surface for exactly what was recorded (daemon events and CLI
 `command.invoked` lines). CLI command events are also queued in the workspace
-database when remote delivery is configured and flushed to PostHog in bounded,
-best-effort batches without awaiting the command. The CLI and daemon use the
-same persisted install id.
+database when remote delivery is configured and a telemetry SQLite database is
+available, then flushed to PostHog in bounded, best-effort batches without
+awaiting the command. Fresh workspaces without that database remain local-only.
+The CLI and daemon use the same persisted install id.
 No memory content, code, file paths, or personal
 data are ever included.
 

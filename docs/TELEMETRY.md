@@ -33,16 +33,19 @@ break the daemon.
   stable across restarts. The daemon attaches `$lib: "signet-daemon"` and
   `$lib_version` to every batch; the install ping uses
   `$lib: "signet-install"`.
-- **Local SQLite** — every event is also written to `telemetry_events` (90-day
+- **Local SQLite** — daemon events are written to `telemetry_events` (90-day
   retention, pruned every 10th flush) with a `sent_to_posthog` flag marking
-  successful batch delivery.
+  successful batch delivery. CLI command events are written there when remote
+  delivery is configured and a telemetry SQLite database with its tables is
+  available.
 - **Open JSONL log** — every recorded event is mirrored as one JSON line to
   `<agentsDir>/.daemon/telemetry/events.jsonl`, the inspectable audit surface
   (see [below](#the-open-audit-log)).
 
 CLI `command.invoked` events follow the same contract as daemon events: they
-are written to the local JSONL log and, when PostHog delivery is configured,
-the SQLite queue, then best-effort flushed to PostHog using the persisted
+are written to the local JSONL log and, when PostHog delivery is configured
+and a telemetry SQLite database with its tables is available, queued in the
+SQLite database, then best-effort flushed to PostHog using the persisted
 per-install id. CLI delivery is bounded by the configured batch size and a
 two-second request timeout; a failed request leaves the event queued for a
 later attempt.
@@ -168,7 +171,8 @@ Notes on individual events:
 - **`command.invoked`** — CLI commands send only the bounded top-level command
   name to PostHog. Arguments, paths, user-defined names, and other command
   content are never included. The same event is available in the local JSONL
-  audit log and SQLite queue.
+  audit log and, when a telemetry SQLite database with its tables is present,
+  the SQLite queue.
 
 ## Privacy contract
 
@@ -243,11 +247,11 @@ migration.
 setup disclosure wrote top-level and the opt-out silently did nothing until
 fixed (1d014075). Setup/CLI writers must write into `memory.pipelineV2`.
 
-**Runtime opt-out:** `SIGNET_TELEMETRY_OPTOUT=1` (or `true`) in the daemon's
-environment disables both the daemon collector and the install ping — one
-knob for the whole product. CI runners, containers, and scripted
-environments should set it so automated daemon boots don't count as
-installs.
+**Runtime opt-out:** `SIGNET_TELEMETRY_OPTOUT=1` (or `true`) in the daemon or
+CLI process environment disables telemetry for that process, including the
+daemon collector, CLI command events, and install ping. CI runners,
+containers, and scripted environments should set it in every process so
+automated daemon boots and CLI invocations don't count as installs or usage.
 
 **Development fleet marker:** `SIGNET_TELEMETRY_ENV=dev` adds
 `deployment: dev` to daemon events sent to PostHog and the local audit log,
@@ -276,10 +280,12 @@ Every recorded event is appended as one JSON line to
 `<agentsDir>/.daemon/telemetry/events.jsonl` — daemon events and CLI
 `command.invoked` lines alike. It is the single inspectable surface for
 exactly what was recorded: users can audit the file without trusting the
-sink. The CLI always appends `command.invoked` (command name only) locally and
-queues it for best-effort PostHog delivery when a PostHog host and key are
-configured, with no daemon round-trip or auth. Both local recording and remote
-delivery are gated on the same
+sink. The CLI always appends `command.invoked` (command name only) locally. When a
+PostHog host and key are configured and the workspace has a telemetry SQLite
+database with its tables, it also queues the event for best-effort PostHog
+delivery, with no daemon round-trip or auth. Fresh workspaces without that
+database remain local-only; the JSONL audit log is not replayed into SQLite.
+Both local recording and remote delivery are gated on the same
 `memory.pipelineV2.telemetryEnabled` flag and
 `SIGNET_TELEMETRY_OPTOUT` runtime opt-out.
 
@@ -292,6 +298,14 @@ delivery are gated on the same
   default and remote rates come from `embedding.costRates` (#1201).
 - `install.ping` and `install.activated` measure different populations —
   report them as complementary, never summed.
+- CLI delivery is best-effort at-least-once within the ten-minute claim
+  recovery window. A process crash after a successful PostHog response but
+  before the SQLite sent marker is written can resend the batch; a crash
+  before the request leaves the claim recoverable after the same window.
+- A successful HTTP response marks the claimed batch sent. PostHog can still
+  drop individual invalid events while returning `200 OK`, so the local sent
+  marker means the batch was accepted by the endpoint, not that every event
+  was ingested.
 - CI and dev fleets can inflate "user" counts: every automated daemon boot
   with default config is a phantom install. Identify CI as
   `daemon.started` without a matching `install.ping`, set

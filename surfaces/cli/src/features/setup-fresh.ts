@@ -229,7 +229,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			telemetryEnabled = await import("@inquirer/prompts").then(({ confirm }) =>
 				confirm({
 					message:
-						"Help improve Signet by sharing anonymous usage statistics (version, platform, command names) with PostHog? No memory content, code, arguments, paths, or personal data. Events are logged to ~/.agents/.daemon/telemetry/events.jsonl and, when remote delivery is configured, queued locally before best-effort delivery; disable anytime with telemetryEnabled: false.",
+						"Help improve Signet by sharing anonymous usage statistics (version and command names) with PostHog? No memory content, code, arguments, paths, or personal data. Events are logged to ~/.agents/.daemon/telemetry/events.jsonl and, when remote delivery is configured and the workspace database is available, queued locally before best-effort delivery; disable anytime with telemetryEnabled: false.",
 					default: true,
 				}),
 			);

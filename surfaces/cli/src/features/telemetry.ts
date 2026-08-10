@@ -285,7 +285,9 @@ export function recordCommandInvoked(
 /**
  * Flush queued CLI command events to PostHog. Callers should deliberately not
  * await this function from command hooks. The batch size and request timeout
- * bound the work, while SQLite preserves events when the request fails.
+ * bound the work, while a telemetry SQLite database preserves queued events
+ * when the request fails. Workspaces without that database remain local-only
+ * until it exists.
  */
 export async function flushCliTelemetry(
 	agentsDir: string,
