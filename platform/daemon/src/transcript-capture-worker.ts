@@ -155,7 +155,9 @@ export function enqueueTranscriptCaptureJob(dbAccessor: DbAccessor, input: Trans
 			input.transcriptPath ?? null,
 			input.capturedAt,
 			input.endedAt,
-			input.summaryStatus ?? "not_requested",
+			// Session summaries are retired. Keep the legacy column explicit so
+			// old manifests cannot enqueue a second derived delivery path.
+			"not_requested",
 			maxAttempts,
 			createdAt,
 			createdAt,
@@ -205,8 +207,7 @@ function leaseJob(dbAccessor: DbAccessor): TranscriptCaptureJobRow | null {
 			transcriptPath: scalarString(row.transcript_path),
 			capturedAt: scalarString(row.captured_at) ?? nowIso(),
 			endedAt: scalarString(row.ended_at),
-			summaryStatus:
-				(scalarString(row.summary_status) as TranscriptCaptureJobInput["summaryStatus"]) ?? "not_requested",
+			summaryStatus: "not_requested",
 			status: "processing",
 			attempts: scalarNumber(row.attempts) + 1,
 			maxAttempts: scalarNumber(row.max_attempts),

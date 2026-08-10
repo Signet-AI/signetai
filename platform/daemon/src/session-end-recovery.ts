@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type ReadDb, type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
-import type { ResolvedMemoryConfig } from "./memory-config";
-import { isNoiseSession } from "./session-noise";
+import { markSessionTranscriptCompletedInTx } from "./session-transcripts";
 
 export interface ClearSessionStartRequest {
 	readonly harness: string;
@@ -53,31 +52,6 @@ function tableColumns(db: ReadDb | WriteDb, table: string): Set<string> {
 	);
 }
 
-function summaryJobExistsForRecoveredSession(
-	db: ReadDb | WriteDb,
-	sessionKey: string,
-	sessionId: string,
-	agentId: string,
-): boolean {
-	const columns = tableColumns(db, "summary_jobs");
-	if (columns.has("session_id")) {
-		const agentClause = columns.has("agent_id") ? " AND agent_id = ?" : "";
-		const args = columns.has("agent_id") ? [sessionId, agentId] : [sessionId];
-		const row = db
-			.prepare(`SELECT id FROM summary_jobs WHERE session_id = ?${agentClause} AND status <> 'dead' LIMIT 1`)
-			.get(...args);
-		return row != null;
-	}
-	const row = db
-		.prepare("SELECT id FROM summary_jobs WHERE session_key = ? AND status <> 'dead' LIMIT 1")
-		.get(sessionKey);
-	return row != null;
-}
-
-function clearStoredSessionTranscript(db: WriteDb, sessionKey: string, agentId: string): void {
-	db.prepare("DELETE FROM session_transcripts WHERE session_key = ? AND agent_id = ?").run(sessionKey, agentId);
-}
-
 function getClearRecoveryTranscriptTarget(
 	db: ReadDb | WriteDb,
 	req: ClearSessionStartRequest,
@@ -89,12 +63,15 @@ function getClearRecoveryTranscriptTarget(
 			readonly transcript: string;
 	  }
 	| undefined {
+	const columns = tableColumns(db, "session_transcripts");
+	const incompletePredicate = columns.has("completed_at") ? " AND completed_at IS NULL" : "";
 	const direct = db
-		.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ? LIMIT 1")
+		.prepare(
+			`SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?${incompletePredicate} LIMIT 1`,
+		)
 		.get(sessionKey, agentId) as { content: string } | undefined;
 	if (direct?.content.trim()) return { sessionKey, transcript: direct.content };
 
-	const columns = tableColumns(db, "session_transcripts");
 	const timestampExpr = columns.has("updated_at") ? "COALESCE(updated_at, created_at)" : "created_at";
 	const row = db
 		.prepare(
@@ -103,6 +80,7 @@ function getClearRecoveryTranscriptTarget(
 			 WHERE agent_id = ?
 			   AND (? = '' OR harness = ?)
 			   AND (? = '' OR project = ?)
+			   ${incompletePredicate}
 			 ORDER BY ${timestampExpr} DESC
 			 LIMIT 1`,
 		)
@@ -116,123 +94,46 @@ function getClearRecoveryTranscriptTarget(
 export function recoverMissingSessionEndOnClearStart(
 	req: ClearSessionStartRequest,
 	agentId: string,
-	memoryCfg: ResolvedMemoryConfig,
-	startedAt: string,
+	completedAt: string,
 ): string | undefined {
 	const sessionKey = req.sessionKey?.trim();
 	if (!sessionKey) return undefined;
 
-	// TS memory config has a separate dreaming summary path; the Rust manifest
-	// config currently exposes only pipelineV2, so Rust follows that runtime gate.
-	const pipelineEnabled = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
-
 	try {
-		// Keep target selection, duplicate detection, enqueue, and cleanup in one
-		// write transaction so parallel clear hooks cannot double-enqueue.
+		// Keep target selection and completion in one write transaction so
+		// parallel clear hooks cannot race a transcript back into the live set.
 		const result = getDbAccessor().withWriteTx((db) => {
 			const target = getClearRecoveryTranscriptTarget(db, req, sessionKey, agentId);
 			if (!target) return { skipped: "no-stored-transcript" as const };
-
-			const transcript = target.transcript;
-			const recoveredSessionKey = target.sessionKey;
-			const sessionId = deriveSessionEndFallbackId(recoveredSessionKey, undefined, transcript);
-			const noiseSession = isNoiseSession({
-				project: req.project ?? null,
-				sessionKey: recoveredSessionKey,
-				sessionId,
-				harness: req.harness,
-			});
-			const skipReason = !pipelineEnabled
-				? "pipeline-disabled"
-				: transcript.length < 500
-					? "transcript-too-short"
-					: noiseSession
-						? "noise-session"
-						: null;
-			if (skipReason) {
-				clearStoredSessionTranscript(db, recoveredSessionKey, agentId);
-				return { skipped: skipReason, recoveredSessionKey, transcriptChars: transcript.length };
+			const completed = markSessionTranscriptCompletedInTx(db, target.sessionKey, agentId, completedAt);
+			if (!completed) {
+				return { skipped: "already-completed" as const, recoveredSessionKey: target.sessionKey };
 			}
-
-			if (summaryJobExistsForRecoveredSession(db, recoveredSessionKey, sessionId, agentId)) {
-				clearStoredSessionTranscript(db, recoveredSessionKey, agentId);
-				return { skipped: "duplicate-job" as const, recoveredSessionKey, transcriptChars: transcript.length };
-			}
-
-			const jobId = randomUUID();
-			const columns = tableColumns(db, "summary_jobs");
-			if (columns.has("session_id")) {
-				db.prepare(
-					`INSERT INTO summary_jobs
-					 (id, session_key, session_id, harness, project, agent_id, transcript,
-					  trigger, captured_at, started_at, ended_at, status, created_at)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-				).run(
-					jobId,
-					recoveredSessionKey,
-					sessionId,
-					req.harness,
-					req.project ?? null,
-					agentId,
-					transcript,
-					"session_end",
-					startedAt,
-					null,
-					startedAt,
-					startedAt,
-				);
-			} else {
-				db.prepare(
-					`INSERT INTO summary_jobs
-					 (id, session_key, harness, project, transcript, status, created_at)
-					 VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
-				).run(jobId, recoveredSessionKey, req.harness, req.project ?? null, transcript, startedAt);
-			}
-			clearStoredSessionTranscript(db, recoveredSessionKey, agentId);
-			return { jobId, recoveredSessionKey, transcriptChars: transcript.length };
+			return { recoveredSessionKey: target.sessionKey, transcriptChars: target.transcript.length };
 		});
 
-		if ("jobId" in result) {
-			logger.info("summary-worker", "Enqueued session summary job", {
-				jobId: result.jobId,
-				harness: req.harness,
-				sessionKey: result.recoveredSessionKey,
-				project: req.project,
-				transcriptChars: result.transcriptChars,
-			});
-			logger.info("hooks", "Recovered missing session-end summary from clear session-start", {
+		if ("transcriptChars" in result) {
+			logger.info("hooks", "Recovered missing session-end completion from clear session-start", {
 				harness: req.harness,
 				project: req.project,
 				sessionKey: result.recoveredSessionKey,
 				clearSessionKey: sessionKey,
 				agentId,
-				jobId: result.jobId,
 				transcriptChars: result.transcriptChars,
 			});
-			return result.jobId;
+			return result.recoveredSessionKey;
 		}
 
-		if (result.skipped !== "no-stored-transcript" && result.skipped !== "duplicate-job") {
-			logger.info("hooks", "Skipped reset summary recovery", {
-				harness: req.harness,
-				project: req.project,
-				sessionKey: result.recoveredSessionKey,
-				agentId,
-				reason: result.skipped,
-				transcriptChars: result.transcriptChars,
-			});
-		} else if (result.skipped === "no-stored-transcript") {
-			logger.debug("hooks", "Skipped reset summary recovery", {
-				harness: req.harness,
-				project: req.project,
-				sessionKey,
-				agentId,
-				reason: result.skipped,
-			});
-		}
+		logger.debug("hooks", "Clear session-start completion recovery skipped", {
+			harness: req.harness,
+			project: req.project,
+			sessionKey,
+			agentId,
+			reason: result.skipped,
+		});
 		return undefined;
 	} catch (error) {
-		logger.warn("hooks", "Reset summary recovery failed", {
+		logger.warn("hooks", "Clear session-start completion recovery failed", {
 			error: error instanceof Error ? error.message : String(error),
 			harness: req.harness,
 			project: req.project,

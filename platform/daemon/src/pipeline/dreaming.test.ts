@@ -84,7 +84,20 @@ function captureTelemetry(): { readonly collector: TelemetryCollector; readonly 
 	return { collector, events };
 }
 
+function seedTranscript(db: Database, id: string, content: string, capturedAt?: string): void {
+	const timestamp = capturedAt ?? (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now;
+	db.prepare(
+		`INSERT INTO session_transcripts
+		 (session_key, content, agent_id, created_at, updated_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+	).run(id, content, AGENT, timestamp, timestamp, timestamp);
+}
+
 function seedSummary(db: Database, id: string, content: string, tokens: number): void {
+	// Keep a legacy row for explicit provenance-compatibility assertions, but
+	// seed the canonical direct transcript path used by Dreaming's default
+	// evidence selector.
+	seedTranscript(db, id, content);
 	db.prepare(
 		`INSERT INTO session_summaries
 		 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
@@ -154,6 +167,59 @@ describe("Dreaming", () => {
 		// The evidence queue resets to the surfaced frontier: the same
 		// evidence must not re-trigger the next pass.
 		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
+	});
+
+	it("replaces a historical summary DAG row with the direct transcript projection", async () => {
+		const capturedAt = "2026-08-06T12:00:00.000Z";
+		seedTranscript(
+			db,
+			"legacy-session",
+			"User: inspect it\nAssistant: [tool call: git]\nTool output: secret",
+			capturedAt,
+		);
+		db.prepare(
+			`INSERT INTO session_summaries
+			 (id, agent_id, content, token_count, depth, kind, session_key, source_type, earliest_at, latest_at, created_at)
+			 VALUES (?, ?, ?, ?, 0, 'session', ?, 'summary', ?, ?, ?)`,
+		).run("legacy-summary-node", AGENT, "old derived summary", 3, "legacy-session", capturedAt, capturedAt, capturedAt);
+		db.prepare(
+			`INSERT INTO session_summaries
+			 (id, agent_id, content, token_count, depth, kind, session_key, source_type, earliest_at, latest_at, created_at)
+			 VALUES (?, ?, ?, ?, 0, 'session', ?, 'compaction', ?, ?, ?)`,
+		).run("compaction-node", AGENT, "compaction evidence", 2, "legacy-session", capturedAt, capturedAt, capturedAt);
+
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					await search.execute("call", { agentId: AGENT }, undefined, undefined, {} as never);
+					return { summary: "Projected transcript" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+
+		const nodes = db
+			.prepare(
+				"SELECT id, source_type, content, meta_json FROM session_summaries WHERE agent_id = ? AND session_key = ? AND depth = 0 ORDER BY id",
+			)
+			.all(AGENT, "legacy-session") as Array<{ id: string; source_type: string; content: string; meta_json: string }>;
+		const node = nodes.find((candidate) => candidate.id === "legacy-summary-node");
+		expect(node).toMatchObject({ id: "legacy-summary-node", source_type: "transcript" });
+		expect(node?.content).toContain("[tool call: git]");
+		expect(node?.content).not.toContain("secret");
+		expect(JSON.parse(node?.meta_json ?? "{}")).toMatchObject({ source: "dreaming-content-pass" });
+		expect(nodes.find((candidate) => candidate.id === "compaction-node")).toMatchObject({
+			source_type: "compaction",
+			content: "compaction evidence",
+		});
+		expect(nodes).toHaveLength(2);
 	});
 
 	it("uses wall-clock backoff independently of later evidence volume", () => {
@@ -762,12 +828,7 @@ describe("Dreaming", () => {
 
 		// Seed evidence with a future watermark so it is unambiguously newer
 		// than the previous pass's cutoff (same-second seeds are racy).
-		db.prepare(
-			`INSERT INTO session_summaries
-			 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
-			 VALUES ('failure', ?, 'Evidence that reaches the agent.', 5, 0, 'session', 'summary',
-			         datetime('now', '+1 minute'), datetime('now', '+1 minute'), datetime('now'))`,
-		).run(AGENT);
+		seedTranscript(db, "failure", "Evidence that reaches the agent.", new Date(Date.now() + 60_000).toISOString());
 		await expect(
 			runDreamingAgentPass(
 				accessor,
@@ -960,11 +1021,7 @@ describe("Dreaming", () => {
 		// pass actually surfaced, never to pass-start. Evidence captured after
 		// the surfaced frontier stays pending for the next scan-first search.
 		const seed = (id: string, latestAt: string): void => {
-			db.prepare(
-				`INSERT INTO session_summaries
-				 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
-				 VALUES (?, ?, ?, 8, 0, 'session', 'summary', ?, ?, datetime('now'))`,
-			).run(id, AGENT, `Summarized evidence for ${id}.`, latestAt, latestAt);
+			seedTranscript(db, id, `Transcript evidence for ${id}.`, latestAt);
 		};
 		accessor.withWriteTx((tx) => {
 			tx.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
@@ -983,7 +1040,7 @@ describe("Dreaming", () => {
 					const search = input.tools.find((tool) => tool.name === "search_evidence");
 					if (!search) throw new Error("Missing search_evidence");
 					// The listing is bounded below the gap evidence: only the two
-					// surfaced summaries are returned to the pass.
+					// surfaced transcript projections are returned to the pass.
 					await search.execute(
 						"call",
 						{ agentId: AGENT, since: "2026-08-05T00:00:00.000Z", before: "2026-08-06T12:00:00.000Z" },
@@ -1005,18 +1062,25 @@ describe("Dreaming", () => {
 		// The gap evidence (captured after the surfaced frontier, before pass
 		// start) remains pending for the next scan-first search.
 		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		const manifestNodes = accessor.withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT id, source_type FROM session_summaries WHERE agent_id = ? AND source_type = 'transcript' ORDER BY id",
+					)
+					.all(AGENT) as Array<{ id: string; source_type: string }>,
+		);
+		expect(manifestNodes).toEqual([
+			{ id: "transcript:default:surfaced-new", source_type: "transcript" },
+			{ id: "transcript:default:surfaced-old", source_type: "transcript" },
+		]);
 	});
 
 	it("does not advance the watermark on a fragment read of an already-listed source (#1149)", async () => {
 		// Regression for #1149 (adversarial review F4): paging a sourceRef
 		// fragment is a content read of a source the listing already surfaced;
 		// it must not advance the frontier past the unread remainder.
-		db.prepare(
-			`INSERT INTO session_summaries
-			 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
-			 VALUES ('frag-source', ?, 'Fragment evidence for frontier checks.', 8, 0, 'session', 'summary',
-			  '2026-08-06T12:00:00.000Z', '2026-08-06T12:00:00.000Z', datetime('now'))`,
-		).run(AGENT);
+		seedTranscript(db, "frag-source", "Fragment evidence for frontier checks.", "2026-08-06T12:00:00.000Z");
 		accessor.withWriteTx((tx) => {
 			tx.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
 				AGENT,
@@ -1032,7 +1096,7 @@ describe("Dreaming", () => {
 					if (!search) throw new Error("Missing search_evidence");
 					await search.execute(
 						"call",
-						{ agentId: AGENT, sourceRef: "summary:frag-source", offset: 0, chunkSize: 10 },
+						{ agentId: AGENT, sourceRef: "transcript:frag-source", offset: 0, chunkSize: 10 },
 						undefined,
 						undefined,
 						{} as never,

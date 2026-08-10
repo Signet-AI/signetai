@@ -155,6 +155,7 @@ export async function executeMemoryTool(
 	switch (toolName) {
 		case "memory_search":
 			return client.recall(requireString(args, "query"), {
+				recallSurface: "tool_call",
 				limit: optionalNumber(args, "limit"),
 				type: optionalString(args, "type"),
 				aggregate: optionalBoolean(args, "aggregate"),

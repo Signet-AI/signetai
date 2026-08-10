@@ -448,7 +448,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Full-text search immutable episodic memories, artifacts, transcripts, and summaries in one agent scope. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true once a session-end summary job has been triggered for its session (the session ended), whether or not the summary itself landed, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit the query AND since to list the unprocessed window: the listing starts at the scope's evidence watermark (the last pass's surfaced frontier), so the newest unseen sources come first. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Full-text search immutable episodic memories, artifacts, and transcripts in one agent scope. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit the query AND since to list the unprocessed window: the listing starts at the scope's evidence watermark (the last pass's surfaced frontier), so the newest unseen sources come first. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
@@ -466,6 +466,9 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					if (sourceRef !== undefined) {
 						const source = readEpisodicSource(db, { agentId: scopeId, from: sourceRef });
 						if (source === null) return { ok: false, error: "Evidence source not found" };
+						if (source.kind === "transcript" && !source.completed) {
+							return { ok: false, error: "Transcript is still in progress" };
+						}
 						const fragment = projectEvidenceFragment(
 							source,
 							Math.max(0, Math.floor(offset ?? 0)),

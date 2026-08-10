@@ -64,16 +64,15 @@ const result = await signet.recall("language preferences", {
 // result.results[n].supplementary — true for supporting context like summary cards
 // result.query — normalized query used by the daemon
 // result.method — "hybrid" | "keyword"
-// result.meta.totalReturned — result count after client-side minScore filtering
+// result.meta.totalReturned — result count after the daemon threshold (also re-applied defensively by the SDK)
 // result.meta.timings — present when the daemon returns recall stage timings
 ```
 
 `recall()` and `recallOrThrow()` use the canonical Signet request builder, so
 they share default, bound, alias, omission, session, agent, scope, and aggregate
-semantics with runtime integrations. `minScore` is applied client-side by the
-SDK after the daemon returns recall results and is never included in daemon
-JSON. This keeps the API contract honest while preserving compatibility for
-existing SDK callers that already rely on score thresholding.
+semantics with runtime integrations. `minScore` is applied at the daemon
+response boundary and re-applied defensively by the SDK, preserving compatibility
+for existing SDK callers that already rely on score thresholding.
 
 Explicit aggregate recall is available through the same method:
 

@@ -121,7 +121,7 @@ describe("SignetClient", () => {
 		});
 	});
 
-	test("recall() returns the daemon recall shape and applies minScore client-side", async () => {
+	test("recall() returns the daemon recall shape and reapplies minScore defensively", async () => {
 		const { client } = mockDaemon((req) => {
 			if (req.path === "/api/memory/recall") {
 				return {
@@ -200,6 +200,7 @@ describe("SignetClient", () => {
 		expect(req.body).toEqual({
 			query: "confidence",
 			limit: 5,
+			minScore: 0.8,
 			until: "2026-04-03T00:00:00Z",
 			project: "proj-a",
 			keywordQuery: "confidence",

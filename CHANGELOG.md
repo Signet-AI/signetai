@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-08-10
+- Bug fixes: bound wedge pressure probes; merge growing recovery snapshots; retain worker status telemetry; harden retired transcript recovery; retire summary-worker delivery; measure recall delivery outcomes; add bounded wedge pressure telemetry; persist first-use milestones atomically.
+
 ### 2026-08-09
 - Features: reconcile indeterminate ACP deliveries (#1263); launch Starlight documentation; deliver cross-agent notifications.
 - Bug fixes: forward Bun inspector setting; cover remote executor consent; gate remote memory extraction; make manifest locking async; bound stale session sweep work; report previous exit telemetry; bound traversal hydration; preserve Python interpreter fallback; use python3 probe fallback; classify skipped embeddings; open Codex OAuth externally; pair pipeline error types; preserve explicit route pins; make generated routes routable; recover claims without reinjection.
@@ -37,11 +40,47 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: slim prompt and enrich contract; navigate semantic state through tools; unify capability bindings; remove static prompt contract; remove static generation path; centralize cited operation application; require canonical citation references; derive agent citations from canonical evidence; share canonical evidence rendering; add daemon-owned agent tools; add shared episodic evidence search; add isolated Pi agent sessions; remove implicit legacy routing; remove legacy semantic decision path; remove legacy graph mutation helpers; retire legacy entity reclassification; audit feedback graph updates; remove structural backfill surface; retire unscoped legacy ingestion; remove retired extraction surfaces; complete legacy semantic write cutover; remove orphan extraction/graph transaction code; retire skill-graph direct semantic extraction; retire dependency-synthesis direct writer; retire direct retroactive supersession sweep; surface harness provenance and add multi-agent isolation tests; complete episodic-remember cutover with evidence citation; delete legacy extraction runtime and realign config/CLI/docs; remove retired structural classify/dependency producers; retire structural worker under Dreaming; drop unused reflection-worker wiring and worker re-exports; remove dead remember handler and pendingRemembers plumbing; consolidate memory_artifacts upsert into shared helper; route interactive pin/alias mutations through audited apply path; complete semantic writer cutover; apply audited semantic operations; expose transactional operation apply; consolidate episodic source selection; complete legacy dreaming schema cutover; remove legacy dreaming execution; stop shipping legacy dreaming worker; retire legacy dream routes; retire legacy dream CLI.
 - Docs: reflect Dreaming cutover; clarify inline linking boundary; align pipeline with Dreaming cutover; describe summary lineage cutover.
 
-### 2026-08-03
-- Bug fixes: prefer native install over wrapper; close hook stdin after read timeout.
-- Docs: refresh roadmap and vision for August 2026; add tests, regression tests, and evals policy.
-
 ## Release Ledger
+
+## [0.185.6] - 2026-08-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.185.5..v0.185.6`.
+
+### Bug Fixes
+
+- **daemon**: bound wedge pressure probes
+
+## [0.185.5] - 2026-08-10
+
+Release summary: 4 bug fixes.
+Tag range: `v0.185.4..v0.185.5`.
+
+### Bug Fixes
+
+- **daemon**: merge growing recovery snapshots
+- **daemon**: retain worker status telemetry
+- **daemon**: harden retired transcript recovery
+- **daemon**: retire summary-worker delivery
+
+## [0.185.4] - 2026-08-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.185.3..v0.185.4`.
+
+### Bug Fixes
+
+- **telemetry**: measure recall delivery outcomes (#1289)
+
+## [0.185.3] - 2026-08-10
+
+Release summary: 2 bug fixes.
+Tag range: `v0.185.2..v0.185.3`.
+
+### Bug Fixes
+
+- **daemon**: add bounded wedge pressure telemetry
+- **telemetry**: persist first-use milestones atomically
 
 ## [0.185.2] - 2026-08-09
 

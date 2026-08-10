@@ -69,19 +69,21 @@ paths, or user identity.
 | `first.remember` / `first.recall` | first successful remember / recall per install, exactly once | `version`, `platform` |
 | `daemon.started` | daemon boot | `version`, `platform`, `uptimeMs` |
 | `daemon.previous_exit` | next successful boot reconciles the prior lifecycle record, exactly once when one exists | `classification` (`clean` / `error` / `unrecorded`), `reasonCategory`, `exitCode`, `previousVersion`, `previousUptimeMs`, `restartDelayMs` |
-| `daemon.heartbeat` | every 5 minutes | `uptimeMs`, `memoryCount`, `connectorsActive`, `pipelineMode`, `extractionProvider`, `embeddingProvider` |
+| `daemon.heartbeat` | every 5 minutes | `uptimeMs`, `memoryCount`, `connectorsActive`, `pipelineMode`, `extractionProvider`, `embeddingProvider`, bounded runtime-pressure buckets |
 | `session.start` | real session start (deduped; stubs and clear/reset paths don't count) | `harness`, `sessionHash` |
 | `session.turn` | every non-boundary `session-end` hook call (per turn, see notes) | `harness`, `promptCount`, `sessionHash` |
 | `session.end` | real session termination: an explicit boundary reason or a TTL-evicted (abandoned) session claim | `harness`, `reason` (`clear` / `session.deleted` / `session_branch` / `session_fork` / `session_shutdown` / `session_switch` / `stale-session-sweep` / `expired`), `sessionHash`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost` |
 | `llm.generate` | every LLM call | `provider`, `latencyMs`, `success`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreationTokens`, `totalCost` |
 | `pipeline.embedding` | every embedding fetch, at the usage-recording boundary | `tokens`, `provider`, `sourceKind` (`memory-capture` / `artifact-index` / `recall` / `dreaming` / `other`), `cost` (USD) |
-| `recall.performed` | every completed shared recall search | `type` (`semantic` / `keyword` / `temporal` / `graph`), `results`, `latencyMs`, `truncated` |
+| `recall.performed` | every completed shared recall search | `surface`, `type` (`semantic` / `keyword` / `temporal` / `graph`), `results`, `latencyMs`, `truncated` |
+| `recall.attempted` | every valid recall request or automatic prompt-context retrieval attempt | `surface` (`explicit_api` / `tool_call` / `prompt_injection` / `dashboard` / `other`) |
+| `recall.outcome` | result and delivery boundary for a recall attempt | `surface`, `resultState` (`empty` / `non_empty` / `truncated` / `error`), `deliveryState` (`returned` / `injected` / `consumed` / `not_delivered`), `results` |
 | `pipeline.error` | categorized extraction, decision, or embedding failure | `stage`, `code` only; no message or stack content |
 | `dreaming.pass` | completed agentic dreaming pass (early-exit passes emit nothing) | `mode`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost` |
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
 | `inference.execute` / `inference.stream` | per-execution outcome | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `finalTarget`, `attemptPath`, `failedTargets`, `attemptCount`, `failedCount`, `fallbackCount`, `privacy`, `durationMs`, `inputTokens`, `outputTokens`, `success`, `cancelled`, `errorCode` |
 | `inference.fallback` | emitted alongside execute/stream when a target failed and routing fell back | same fields as execute/stream |
-| `error.occurred` | process-level crash, unhandled rejection, or event-loop wedge | `type`, `message`, `stack`, `uptimeMs`; `EventLoopLag` reports add `lagMs` |
+| `error.occurred` | process-level crash, unhandled rejection, or event-loop wedge | `type`, `message`, `stack`, `uptimeMs`; `EventLoopLag` reports add `lagMs` and the latest bounded runtime-pressure buckets |
 | `version.upgraded` | daemon auto-update path only | `from`, `to` |
 | `command.invoked` | CLI command (name only, never arguments) | `command` |
 
@@ -140,9 +142,31 @@ Notes on individual events:
   aggregates.
 - **`recall.performed`** — emitted at the shared `hybridRecall` boundary with
   counts and timing only. Aggregate recall can emit one event for the main
-  search and additional events for decomposed subqueries. Local stats read the
-  flushed telemetry table, so they can lag the in-memory event buffer by one
-  flush interval.
+  search and additional events for decomposed subqueries. It measures search
+  execution, not delivery. Local stats read the flushed telemetry table, so
+  they can lag the in-memory event buffer by one flush interval.
+- **Runtime-pressure buckets (#1282)** — heartbeats and rate-limited
+  `EventLoopLag` reports carry `runtimePressureVersion`, queue-depth and
+  oldest-job-age buckets, active-worker and configured batch-size buckets,
+  database and embedding latency buckets, process memory/CPU pressure buckets,
+  `recoveryOutcome`, and a coarse `snapshotAgeBucket`. Heartbeat queue
+  observations use capped, indexed probes and never scan the full queue. The
+  wedge path reads only the latest observations, appends one bounded sanitized
+  JSONL audit line for hard-kill survivability, and never enters SQLite or
+  provider work. `recoveryOutcome` is
+  `still_degraded` during an episode, `recovered` after the pressure state
+  clears, and `restarted` on the first heartbeat after an abnormal prior exit.
+- **`recall.attempted` / `recall.outcome`** — the bounded retrieval-outcome
+  contract (#1277). Attempts are recorded once at each supported recall
+  surface. Outcomes separate empty, non-empty, truncated, and error results
+  from the delivery boundary: explicit API and tool results are `returned`,
+  automatic session-start and prompt-submit context is `injected`, and failed
+  paths are `not_delivered`. `consumed` is reserved for a deliberate client
+  acknowledgement; no client emits it by default. Surface values are fixed
+  enums. No query, prompt, memory, citation, agent, or harness identifiers
+  are included. Local stats expose attempted, returned, and delivered counts
+  by surface; they read the flushed telemetry table and can lag the in-memory
+  event buffer by one flush interval.
 
 ## Privacy contract
 
@@ -159,6 +183,11 @@ Notes on individual events:
   reports (the event-loop-wedge class) are rate-limited to once per 10
   minutes per process so a stuck loop can't flood the project. No memory
   content is ever captured anywhere, so errors cannot carry it by design.
+- **Bounded wedge context.** Runtime pressure contains fixed bucket labels,
+  never raw queue counts, ages, latencies, RSS, CPU percentages, provider
+  messages, queue errors, payloads, source names, paths, PIDs, or additional
+  stack data. The existing once-per-10-minute `EventLoopLag` rate limit applies
+  to the complete event, including its pressure envelope.
 - **Agent ids in `inference.*` are hashed.** Inference events carry
   `agentId` as a SHA-256 hash salted with the per-install install id (16 hex
   chars). Stable within an install (per-agent analysis still works), not
@@ -305,6 +334,7 @@ vault mirrors the key PostHog aggregates for daily review via
 | next | `session.turn` + real `session.end` split (#1212): the per-turn event renamed from the old `session.end`; `session.end` now fires only at real terminations, deduped per lifetime; `sessionHash` added to all three session events |
 | Unreleased | Previous daemon-exit reconciliation: `daemon.previous_exit` reports bounded `clean`, `error`, or `unrecorded` classification on the next boot (#1255) |
 | Unreleased | `recall.performed` with anonymous recall type, result count, latency, and truncation metrics (#1203) |
+| Unreleased | Bounded recall attempt and delivery outcomes by surface, without query or prompt content (#1277) |
 | Unreleased | First-run activation funnel: `first.remember` / `first.recall`, exactly once per install (#1202) |
 | Unreleased | `pipeline.embedding` cost rates and collector-derived session token/cost totals (#1201) |
 

@@ -170,7 +170,7 @@ function extractParentSessionId(props: Record<string, unknown> | undefined): str
 
 // ============================================================================
 // Transcript builder — fetches messages via OpenCode SDK and formats
-// a plain-text transcript for the daemon summary worker.
+// a plain-text transcript for the daemon's direct session-transcript path.
 // ============================================================================
 
 async function buildTranscript(oc: PluginInput["client"], sid: string): Promise<string> {

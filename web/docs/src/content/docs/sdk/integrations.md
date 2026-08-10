@@ -94,7 +94,7 @@ const context = await getMemoryContext(signet, userMessage, {
   limit: 5,
   minScore: 0.3,
 });
-// Returns "" if no results survive client-side filtering,
+// Returns "" if no results survive score filtering,
 // or "## Relevant Memories\n- ..." otherwise
 ```
 

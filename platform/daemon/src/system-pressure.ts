@@ -16,6 +16,7 @@
  */
 
 import { logger } from "./logger";
+import { type PressureRecoveryOutcome, getRuntimePressureEnvelope } from "./runtime-pressure";
 import { getActiveTelemetry } from "./telemetry";
 
 export type PressureLevel = "normal" | "elevated" | "critical";
@@ -28,6 +29,7 @@ const CLEAR_COOLDOWN_MS = 5_000;
 let currentLevel: PressureLevel = "normal";
 let lastLagAt = 0;
 let startupGraceUntil = 0;
+let recoveryOutcome: PressureRecoveryOutcome = "not_observed";
 
 /**
  * Set a startup grace period during which background workers skip their ticks.
@@ -61,28 +63,46 @@ let lastWedgeEmitAt = 0;
 function reportEventLoopWedge(lagMs: number, now: number): void {
 	// lastWedgeEmitAt === 0 means never emitted — always report the first wedge.
 	if (lastWedgeEmitAt !== 0 && now - lastWedgeEmitAt < EVENT_LOOP_WEDGE_COOLDOWN_MS) return;
-	lastWedgeEmitAt = now;
-	getActiveTelemetry()?.record("error.occurred", {
+	const telemetry = getActiveTelemetry();
+	if (!telemetry) return;
+	const properties = {
 		type: "EventLoopLag",
 		message: `event loop critically blocked for ${Math.round(lagMs)}ms`,
 		lagMs: Math.round(lagMs),
-	});
+		...getRuntimePressureEnvelope(now),
+		recoveryOutcome,
+	};
+	if (telemetry.recordDeferred) {
+		telemetry.recordDeferred("error.occurred", properties);
+	} else {
+		telemetry.record("error.occurred", properties);
+	}
+	// Do not consume the cooldown until telemetry accepted the event. The
+	// monitor can run before telemetry initialization during daemon startup.
+	lastWedgeEmitAt = now;
+}
+
+/** Keep synchronous logger I/O off the event-loop wedge callback. */
+function schedulePressureWarning(message: string): void {
+	setImmediate(() => logger.warn("system-pressure", message));
 }
 
 export function reportEventLoopLag(lagMs: number, now: number = Date.now()): void {
 	if (lagMs >= CRITICAL_THRESHOLD_MS) {
+		recoveryOutcome = "still_degraded";
 		reportEventLoopWedge(lagMs, now);
 		if (currentLevel !== "critical") {
-			logger.warn("system-pressure", `Event loop critically blocked (${lagMs}ms) — background work should pause`);
+			schedulePressureWarning(`Event loop critically blocked (${lagMs}ms) — background work should pause`);
 		}
 		currentLevel = "critical";
-		lastLagAt = Date.now();
+		lastLagAt = now;
 	} else if (lagMs >= ELEVATED_THRESHOLD_MS) {
+		recoveryOutcome = "still_degraded";
 		if (currentLevel === "normal") {
-			logger.warn("system-pressure", `Event loop degraded (${lagMs}ms) — background work yielding`);
+			schedulePressureWarning(`Event loop degraded (${lagMs}ms) — background work yielding`);
 		}
 		if (currentLevel !== "critical") currentLevel = "elevated";
-		lastLagAt = Date.now();
+		lastLagAt = now;
 	}
 }
 
@@ -99,6 +119,7 @@ export function tickPressureState(): void {
 	}
 	if (currentLevel !== "normal" && now >= startupGraceUntil && now - lastLagAt > CLEAR_COOLDOWN_MS) {
 		currentLevel = "normal";
+		recoveryOutcome = "recovered";
 	}
 }
 
@@ -110,6 +131,20 @@ export function getSystemPressure(): PressureLevel {
 /** True when background work should pause to let the event loop recover. */
 export function isSystemPressureHigh(): boolean {
 	return currentLevel !== "normal";
+}
+
+/** Latest bounded outcome for the current pressure episode. */
+export function getPressureRecoveryOutcome(): PressureRecoveryOutcome {
+	return recoveryOutcome;
+}
+
+/** Reset process-local pressure state between daemon runs and isolated tests. */
+export function resetPressureState(): void {
+	currentLevel = "normal";
+	lastLagAt = 0;
+	startupGraceUntil = 0;
+	recoveryOutcome = "not_observed";
+	lastWedgeEmitAt = 0;
 }
 
 /**
@@ -125,6 +160,7 @@ export async function awaitPressureClear(timeoutMs = 30_000): Promise<boolean> {
 		tickPressureState();
 		if (getSystemPressure() === "normal") return true;
 	}
+	recoveryOutcome = "still_degraded";
 	logger.warn("system-pressure", `Pressure did not clear within ${timeoutMs}ms — proceeding`);
 	return false;
 }

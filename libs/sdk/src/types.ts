@@ -150,7 +150,9 @@ export interface SdkRecallOptions {
 	readonly aggregate_budget?: "small" | "medium" | "large";
 	readonly saveAggregate?: boolean;
 	readonly save_aggregate?: boolean;
-	/** Applied to returned rows by the SDK; never sent to the daemon. */
+	/** Internal bounded attribution for first-party tool integrations. */
+	readonly recallSurface?: "explicit_api" | "tool_call" | "prompt_injection" | "dashboard" | "other";
+	/** Applied at the daemon response boundary; the SDK also re-applies it defensively. */
 	readonly minScore?: number;
 }
 
@@ -503,6 +505,17 @@ export interface TelemetryStatsEnabledResponse {
 	};
 	readonly recall: {
 		readonly calls: number;
+		readonly outcomes: {
+			readonly attempted: number;
+			readonly returned: number;
+			readonly delivered: number;
+			readonly bySurface: readonly {
+				readonly surface: string;
+				readonly attempted: number;
+				readonly returned: number;
+				readonly delivered: number;
+			}[];
+		};
 		readonly p50: number;
 		readonly p95: number;
 		readonly byType: readonly {
