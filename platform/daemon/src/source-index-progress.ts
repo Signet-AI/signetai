@@ -121,6 +121,11 @@ export function cancelSourceIndexJob(sourceId: string): void {
 	sourceIndexJobs.delete(sourceId);
 }
 
+/** Invalidate work because the daemon is stopping, without purging source data. */
+export function invalidateSourceIndexJob(sourceId: string): void {
+	sourceIndexJobs.delete(sourceId);
+}
+
 export function consumeCanceledSourceIndexJob(jobId: string): boolean {
 	return canceledSourceIndexJobs.delete(jobId);
 }
