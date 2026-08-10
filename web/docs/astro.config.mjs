@@ -50,6 +50,7 @@ export default defineConfig({
 					items: [
 						{ label: "Install", slug: "getting-started/install" },
 						{ label: "Set up Signet", slug: "getting-started/setup" },
+						{ label: "Connect sources and import documents", slug: "getting-started/connect-sources" },
 						{ label: "Connect a harness", slug: "harnesses" },
 						{ label: "Your first session", slug: "getting-started/first-session" },
 						{ label: "Operate your installation", slug: "getting-started/operate" },

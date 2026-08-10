@@ -40,11 +40,13 @@ signet sources remove discord:...
 
 The daemon rejects raw Discord tokens in source config. Store the bot token in Signet Secrets or an external secret reference, then pass the secret name with `--token-ref`.
 
-The dashboard Sources tab exposes all Discord modes. Open Discord, choose
-Connect, then select Bot REST for bounded guild indexing, Gateway tail for live
-incremental events, or Desktop cache for local cache import. Desktop cache mode
-can use the platform default Discord Desktop data folder or a picked folder
-path, and Signet queues the shared source index job in the background.
+The Dashboard Sources tab currently exposes the basic Discord guild connection:
+guild ID, display name, and a secret reference. That path queues the default
+REST source index job. Gateway tail, Desktop cache, channel filters, and other
+advanced options are available through the CLI/API source configuration rather
+than the current Dashboard dialog. Desktop cache mode can use the platform
+default Discord Desktop data folder or a picked folder path, and Signet queues
+the shared source index job in the background.
 
 The REST sync path indexes:
 
@@ -149,7 +151,7 @@ signet sources list
 signet sources remove obsidian:...
 ```
 
-By default, Obsidian sources ignore Obsidian internals, trash, Hermes metadata, hidden dot-folders, and hidden files. Add more ignore globs from the dashboard connect form or repeat `--exclude` in the CLI when a vault contains tool folders or file types that should stay outside source recall.
+By default, Obsidian sources ignore Obsidian internals, trash, Hermes metadata, hidden dot-folders, and hidden files. Repeat `--exclude` in the CLI or use the API when a vault contains tool folders or file types that should stay outside source recall. The current Dashboard connect form does not expose additional ignore-glob fields.
 
 The dashboard also includes a Sources browser for connecting and removing knowledge bases. In the desktop app, **Browse** opens the native folder picker. In browser/dev mode, Signet tries a daemon-backed OS picker and falls back to asking you to paste the path if no picker is available.
 
