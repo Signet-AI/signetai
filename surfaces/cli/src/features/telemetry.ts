@@ -123,11 +123,11 @@ function readTelemetrySettings(agentsDir: string, env: NodeJS.ProcessEnv = proce
 		const telemetry = pipeline?.telemetry as Record<string, unknown> | undefined;
 		const posthogHost =
 			typeof telemetry?.posthogHost === "string" ? telemetry.posthogHost : DEFAULT_TELEMETRY_POSTHOG_HOST;
-		const configuredKey = typeof telemetry?.posthogApiKey === "string" ? telemetry.posthogApiKey : "";
-		const posthogApiKey = configuredKey || DEFAULT_TELEMETRY_POSTHOG_API_KEY;
+		const posthogApiKey =
+			typeof telemetry?.posthogApiKey === "string" ? telemetry.posthogApiKey : DEFAULT_TELEMETRY_POSTHOG_API_KEY;
 		const configuredBatchSize = telemetry?.flushBatchSize;
 		const flushBatchSize =
-			typeof configuredBatchSize === "number"
+			typeof configuredBatchSize === "number" && Number.isFinite(configuredBatchSize)
 				? Math.min(MAX_BATCH_SIZE, Math.max(MIN_BATCH_SIZE, Math.floor(configuredBatchSize)))
 				: DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE;
 

@@ -25,6 +25,29 @@ function writeAgentYaml(telemetryEnabled?: boolean): void {
 	);
 }
 
+function createTelemetryQueue(): string {
+	const memoryDir = join(dir, "memory");
+	mkdirSync(memoryDir, { recursive: true });
+	const db = createDatabase(join(memoryDir, "memories.db"));
+	db.exec(`
+		CREATE TABLE telemetry_install (id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+		CREATE TABLE telemetry_events (
+			id TEXT PRIMARY KEY,
+			event TEXT NOT NULL,
+			timestamp TEXT NOT NULL,
+			properties TEXT NOT NULL,
+			sent_to_posthog INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'daemon',
+			claim_token TEXT,
+			claimed_at TEXT
+		);
+		INSERT INTO telemetry_install (id, created_at) VALUES ('install-from-daemon', '2026-01-01T00:00:00.000Z');
+	`);
+	db.close();
+	return memoryDir;
+}
+
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "signet-cli-telemetry-"));
 });
@@ -107,6 +130,41 @@ describe("cli telemetry (issue #1280)", () => {
 		writeAgentYaml(false);
 		recordCommandInvoked(dir, "remember");
 		expect(existsSync(cliTelemetryLogPath(dir))).toBe(false);
+	});
+
+	it("preserves an explicitly empty API key as local-only telemetry", async () => {
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			"version: 1\nschema: signet/v1\nmemory:\n  pipelineV2:\n    telemetryEnabled: true\n    telemetry:\n      posthogApiKey: ''\n",
+		);
+		let calls = 0;
+		const fetchMock = async (): Promise<Response> => {
+			calls++;
+			return new Response("unexpected", { status: 500 });
+		};
+		globalThis.fetch = fetchMock as typeof fetch;
+		createTelemetryQueue();
+		recordCommandInvoked(dir, "remember");
+		await flushCliTelemetry(dir, "0.176.8");
+		expect(existsSync(cliTelemetryLogPath(dir))).toBe(true);
+		expect(calls).toBe(0);
+	});
+
+	it("falls back to the default batch size for non-finite configuration", async () => {
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			"version: 1\nschema: signet/v1\nmemory:\n  pipelineV2:\n    telemetryEnabled: true\n    telemetry:\n      flushBatchSize: .nan\n",
+		);
+		createTelemetryQueue();
+		const request: { current: { batch: unknown[] } | null } = { current: null };
+		globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+			const body = JSON.parse(String(init?.body ?? "{}")) as { batch?: unknown[] };
+			request.current = { batch: body.batch ?? [] };
+			return new Response("1", { status: 200 });
+		}) as typeof fetch;
+		recordCommandInvoked(dir, "remember");
+		await flushCliTelemetry(dir, "0.176.8");
+		expect(request.current?.batch).toHaveLength(1);
 	});
 
 	it("flushes bounded command names with the daemon's persisted install id", async () => {
