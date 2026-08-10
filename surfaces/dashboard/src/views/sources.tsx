@@ -37,7 +37,10 @@ export function SourcesView() {
 		clearConnectSource();
 	}, [connectSourceRequested, clearConnectSource]);
 
-	const totals = (sources ?? []).reduce(
+	const allSources = sources ?? [];
+	const importedSources = allSources.filter((source) => source.kind === "import");
+	const connectedSources = allSources.filter((source) => source.kind !== "import");
+	const totals = allSources.reduce(
 		(acc, s) => ({
 			artifacts: acc.artifacts + (s.stats?.artifacts ?? 0),
 			chunks: acc.chunks + (s.stats?.chunks ?? 0),
@@ -45,7 +48,7 @@ export function SourcesView() {
 		}),
 		{ artifacts: 0, chunks: 0, indexed: 0 },
 	);
-	const connected = sources?.filter((s) => s.enabled).length ?? 0;
+	const connected = connectedSources.filter((s) => s.enabled).length;
 
 	return (
 		<div className="flex flex-1 flex-col gap-3 min-h-0">
@@ -75,8 +78,9 @@ export function SourcesView() {
 					<span className="text-[12.5px] font-medium">Connect a source</span>
 					<span className="font-mono text-[9.5px] text-muted-foreground">Obsidian · GitHub · Discord</span>
 				</button>
-				{(sources ?? []).map((s) => (
-					<SourceCard key={s.id} source={s} onMutate={refresh} />
+				{importedSources.length > 0 && <ImportedDocumentsCard documents={importedSources} onMutate={refresh} />}
+				{connectedSources.map((source) => (
+					<SourceCard key={source.id} source={source} onMutate={refresh} />
 				))}
 			</div>
 			<ConnectSourceDialog open={connectOpen} onClose={() => setConnectOpen(false)} onConnected={refresh} />
@@ -84,9 +88,151 @@ export function SourcesView() {
 	);
 }
 
-function SourceCard({ source, onMutate }: { source: SignetSource; onMutate: () => void }) {
+function ImportedDocumentsCard({
+	documents,
+	onMutate,
+}: {
+	documents: readonly SignetSource[];
+	onMutate: () => void;
+}) {
+	const totals = documents.reduce(
+		(acc, source) => ({
+			artifacts: acc.artifacts + (source.stats?.artifacts ?? 0),
+			chunks: acc.chunks + (source.stats?.chunks ?? 0),
+			indexed: acc.indexed + (source.stats?.indexed ?? 0),
+		}),
+		{ artifacts: 0, chunks: 0, indexed: 0 },
+	);
+
+	return (
+		<Surface
+			data-testid="imported-documents-card"
+			aria-label="Imported documents"
+			className="sig-src-card sig-keylight-src flex flex-col gap-2.5 p-4"
+		>
+			<div className="flex items-center gap-3">
+				<span className="grid size-9.5 shrink-0 place-items-center rounded-[9px] border border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] text-foreground">
+					<Folder className="size-5" />
+				</span>
+				<div className="min-w-0 flex-1">
+					<div className="text-[14px] font-semibold leading-tight tracking-tight">Documents</div>
+					<div className="mt-0.5 font-mono text-[9.5px] tracking-[0.06em] text-muted-foreground">IMPORTED FILES</div>
+				</div>
+				<span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+					{documents.length} {documents.length === 1 ? "document" : "documents"}
+				</span>
+			</div>
+
+			<div
+				className="flex max-h-[360px] flex-col gap-1.5 overflow-y-auto scrollbar-none"
+				data-testid="imported-document-list"
+			>
+				{documents.map((source) => (
+					<ImportedDocumentRow key={source.id} source={source} onMutate={onMutate} />
+				))}
+			</div>
+
+			<div className="grid grid-cols-3 gap-2 border-t border-[oklch(1_0_0/0.06)] pt-2 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
+				<MiniStat value={totals.artifacts.toLocaleString()} label="artifacts" />
+				<MiniStat value={totals.chunks.toLocaleString()} label="chunks" />
+				<MiniStat value={totals.indexed.toLocaleString()} label="indexed" />
+			</div>
+		</Surface>
+	);
+}
+
+function ImportedDocumentRow({ source, onMutate }: { source: SignetSource; onMutate: () => void }) {
 	const health = source.health?.status ?? "empty";
 	const failures = source.health?.failures?.total ?? 0;
+	const { copied, confirming, busy, error, copyRoot, snapshot, remove, setConfirming } = useSourceActions(
+		source,
+		onMutate,
+	);
+	const format = typeof source.providerSettings?.format === "string" ? source.providerSettings.format : "document";
+
+	return (
+		<div className="flex min-w-0 flex-col gap-2 rounded-lg border border-[oklch(1_0_0/0.07)] bg-[color-mix(in_oklch,var(--foreground)_2.5%,transparent)] p-2.5 [html:not(.dark)_&]:border-[oklch(0_0_0/0.08)]">
+			<div className="flex min-w-0 items-center gap-2">
+				<span className="grid size-7 shrink-0 place-items-center rounded-md bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] text-muted-foreground">
+					<Folder className="size-3.5" />
+				</span>
+				<div className="min-w-0 flex-1">
+					<div className="truncate text-[12px] font-medium" title={source.name}>
+						{source.name}
+					</div>
+					<div className="mt-0.5 flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.05em] text-muted-foreground">
+						<span>{format}</span>
+						<span>·</span>
+						<span>{source.mode}</span>
+					</div>
+				</div>
+				<span className={cn("flex shrink-0 items-center gap-1 font-mono text-[9px]", HEALTH_STYLES[health])}>
+					<span className="size-1.5 rounded-full bg-current" />
+					{health}
+					{failures > 0 && ` · ${failures} fail`}
+				</span>
+			</div>
+
+			<div className="flex min-w-0 items-center gap-1.5">
+				<div className="group/root flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] pl-2 pr-1">
+					<Folder className="size-3 shrink-0 text-muted-foreground" />
+					<span className="flex-1 truncate font-mono text-[9.5px] text-muted-foreground" title={source.root}>
+						{source.root}
+					</span>
+					<button
+						type="button"
+						onClick={copyRoot}
+						title="Copy path"
+						aria-label="Copy source root path"
+						className="grid size-[22px] shrink-0 place-items-center rounded-[5px] text-muted-foreground hover:bg-[oklch(1_0_0/0.08)] hover:text-foreground"
+					>
+						{copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+					</button>
+				</div>
+				<div className="flex shrink-0 gap-0.5">
+					{confirming ? (
+						<>
+							<ActionButton label="Confirm remove" danger onClick={remove} disabled={busy}>
+								<Check className="size-[13px]" />
+							</ActionButton>
+							<ActionButton label="Cancel" onClick={() => setConfirming(false)} disabled={busy}>
+								<X className="size-[13px]" />
+							</ActionButton>
+						</>
+					) : (
+						<>
+							<ActionButton label="Snapshot" onClick={snapshot} disabled={busy}>
+								<Download className="size-[13px]" />
+							</ActionButton>
+							<ActionButton label="Remove" danger onClick={() => setConfirming(true)} disabled={busy}>
+								<Trash2 className="size-[13px]" />
+							</ActionButton>
+						</>
+					)}
+				</div>
+			</div>
+
+			<PipeStrip job={source.indexJob} health={health} />
+			<div className="flex min-w-0 items-center justify-between gap-2 font-mono text-[9px] text-muted-foreground">
+				<span
+					className="truncate"
+					title={`${source.stats?.artifacts ?? 0} artifacts · ${source.stats?.chunks ?? 0} chunks · ${source.stats?.indexed ?? 0} indexed`}
+				>
+					{source.stats?.artifacts ?? 0} artifacts · {source.stats?.chunks ?? 0} chunks · {source.stats?.indexed ?? 0}{" "}
+					indexed
+				</span>
+				<span className="shrink-0">{relTime(source.lastIndexedAt)}</span>
+			</div>
+			{error && (
+				<span className="truncate font-mono text-[9px] text-destructive" title={error}>
+					{error}
+				</span>
+			)}
+		</div>
+	);
+}
+
+function useSourceActions(source: SignetSource, onMutate: () => void) {
 	const [copied, setCopied] = useState(false);
 	const [confirming, setConfirming] = useState(false);
 	const [busy, setBusy] = useState(false);
@@ -155,6 +301,17 @@ function SourceCard({ source, onMutate }: { source: SignetSource; onMutate: () =
 		}
 		onMutate();
 	};
+
+	return { copied, confirming, busy, error, copyRoot, reindex, snapshot, remove, setConfirming };
+}
+
+function SourceCard({ source, onMutate }: { source: SignetSource; onMutate: () => void }) {
+	const health = source.health?.status ?? "empty";
+	const failures = source.health?.failures?.total ?? 0;
+	const { copied, confirming, busy, error, copyRoot, reindex, snapshot, remove, setConfirming } = useSourceActions(
+		source,
+		onMutate,
+	);
 
 	return (
 		<Surface className="sig-src-card sig-keylight-src group flex flex-col gap-2.5 p-4">

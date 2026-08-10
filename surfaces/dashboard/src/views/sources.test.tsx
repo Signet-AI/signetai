@@ -1,7 +1,7 @@
 /** Regression coverage for the unified Sources entry point and modal state paths. */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
-import { api } from "@/lib/api";
+import { type SignetSource, api } from "@/lib/api";
 import { ViewProvider } from "@/lib/view-context";
 import { Window } from "happy-dom";
 import { act } from "react";
@@ -10,8 +10,11 @@ import { SourcesView } from "./sources";
 
 const originalImportSources = api.importSources;
 const originalPickFiles = api.pickFiles;
+const originalGetSourceSnapshot = api.getSourceSnapshot;
+const originalRemoveSource = api.removeSource;
 
 let importCall: { files: readonly File[]; duplicateMode: string; paths: readonly string[] } | null = null;
+let sourcesResponse: { version: number; sources: SignetSource[] } = { version: 1, sources: [] };
 
 function flush(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
@@ -51,7 +54,7 @@ beforeAll(() => {
 	}
 	globalThis.fetch = (async (input: RequestInfo | URL) => {
 		if (String(input).endsWith("/api/sources")) {
-			return new Response(JSON.stringify({ version: 1, sources: [] }), { status: 200 });
+			return new Response(JSON.stringify(sourcesResponse), { status: 200 });
 		}
 		return new Response("not found", { status: 404 });
 	}) as typeof fetch;
@@ -59,6 +62,7 @@ beforeAll(() => {
 
 beforeEach(() => {
 	importCall = null;
+	sourcesResponse = { version: 1, sources: [] };
 	api.importSources = async (files, duplicateMode, paths) => {
 		importCall = { files, duplicateMode, paths };
 		return {
@@ -73,15 +77,54 @@ beforeEach(() => {
 		};
 	};
 	api.pickFiles = async () => ({ ok: true, paths: ["/tmp/notes.md"] });
+	api.getSourceSnapshot = async () => ({});
+	api.removeSource = async () => ({ ok: true });
 });
 
 afterAll(() => {
 	api.importSources = originalImportSources;
 	api.pickFiles = originalPickFiles;
+	api.getSourceSnapshot = originalGetSourceSnapshot;
+	api.removeSource = originalRemoveSource;
 	globalThis.fetch = undefined as unknown as typeof fetch;
 });
 
-describe("unified sources dialog", () => {
+function sourceFixture(
+	id: string,
+	kind: string,
+	name: string,
+	health: SignetSource["health"]["status"] = "healthy",
+	indexJob?: SignetSource["indexJob"],
+): SignetSource {
+	return {
+		id,
+		kind,
+		name,
+		root: kind === "import" ? name : `/vault/${name}`,
+		enabled: true,
+		mode: "read-only",
+		createdAt: "2026-08-10T00:00:00.000Z",
+		updatedAt: "2026-08-10T00:00:00.000Z",
+		stats: { artifacts: 3, chunks: 4, indexed: 5 },
+		health: {
+			status: health,
+			failures: health === "degraded" ? { total: 1, recoverable: 1 } : { total: 0, recoverable: 0 },
+		},
+		indexJob,
+		...(kind === "import"
+			? {
+					providerSettings: {
+						fileName: name,
+						format: name.endsWith(".pdf") ? "pdf" : "markdown",
+						contentHash: id,
+						agentId: "sources-test-agent",
+					},
+				}
+			: {}),
+	};
+}
+
+describe("sources grouping", () => {
 	test("Sources has one Connect a source entry point that opens the centered dialog with file import reachable", async () => {
 		const mounted = await mount(
 			<ViewProvider>
@@ -147,6 +190,81 @@ describe("unified sources dialog", () => {
 			await flush();
 		});
 		expect(closed).toBe(3);
+
+		await act(async () => mounted.root.unmount());
+		mounted.container.remove();
+	});
+
+	test("groups one or many imported documents without merging connected collections", async () => {
+		sourcesResponse = {
+			version: 1,
+			sources: [
+				sourceFixture("import:hash-a", "import", "notes.pdf"),
+				sourceFixture("import:hash-b", "import", "table.csv", "degraded", {
+					id: "job-b",
+					sourceId: "import:hash-b",
+					status: "running",
+					queuedAt: "2026-08-10T00:00:00.000Z",
+					scanned: 2,
+					total: 5,
+					currentPath: "table.csv",
+				}),
+				sourceFixture("obsidian:vault", "obsidian", "Vault"),
+			],
+		};
+		const mounted = await mount(
+			<ViewProvider>
+				<SourcesView />
+			</ViewProvider>,
+		);
+		const documents = mounted.container.querySelector('[data-testid="imported-documents-card"]');
+		if (!(documents instanceof HTMLElement)) throw new Error("Documents card not found");
+
+		expect(mounted.container.querySelectorAll('[data-testid="imported-documents-card"]')).toHaveLength(1);
+		expect(documents.textContent).toContain("2 documents");
+		expect(documents.textContent).toContain("notes.pdf");
+		expect(documents.textContent).toContain("table.csv");
+		expect(documents.textContent).toContain("40% · table.csv");
+		expect(documents.querySelectorAll('[aria-label="Re-index"]')).toHaveLength(0);
+		expect(documents.querySelectorAll('[aria-label="Snapshot"]')).toHaveLength(2);
+		expect(documents.querySelectorAll('[aria-label="Remove"]')).toHaveLength(2);
+		expect(documents.textContent).toContain("3 artifacts · 4 chunks · 5 indexed");
+		expect(mounted.container.querySelectorAll(".sig-src-card")).toHaveLength(2);
+		expect(mounted.container.textContent).toContain("Vault");
+
+		await act(async () => mounted.root.unmount());
+		mounted.container.remove();
+	});
+
+	test("keeps the aggregate stable across refresh when document names change", async () => {
+		sourcesResponse = {
+			version: 1,
+			sources: [sourceFixture("import:stable", "import", "before.pdf")],
+		};
+		const mounted = await mount(
+			<ViewProvider>
+				<SourcesView />
+			</ViewProvider>,
+		);
+		expect(mounted.container.querySelector('[data-testid="imported-documents-card"]')?.textContent).toContain(
+			"before.pdf",
+		);
+
+		sourcesResponse = {
+			version: 1,
+			sources: [sourceFixture("import:stable", "import", "after.pdf")],
+		};
+		const remove = mounted.container.querySelector('[aria-label="Remove"]');
+		if (!(remove instanceof HTMLElement)) throw new Error("Remove action not found");
+		await click(remove);
+		const confirm = mounted.container.querySelector('[aria-label="Confirm remove"]');
+		if (!(confirm instanceof HTMLElement)) throw new Error("Confirm remove action not found");
+		await click(confirm);
+
+		expect(mounted.container.querySelectorAll('[data-testid="imported-documents-card"]')).toHaveLength(1);
+		expect(mounted.container.querySelector('[data-testid="imported-documents-card"]')?.textContent).toContain(
+			"after.pdf",
+		);
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();
