@@ -124,17 +124,15 @@ const MAX_CLAWHUB_ZIP_ENTRIES = 500;
 const MAX_CLAWHUB_ENTRY_BYTES = 25 * 1024 * 1024;
 const MAX_CLAWHUB_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
 
-async function fetchCatalogUrl(url: string, timeoutMs: number): Promise<Response> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
-	try {
-		return await fetch(url, {
-			headers: { "User-Agent": "signet-daemon" },
-			signal: controller.signal,
-		});
-	} finally {
-		clearTimeout(timer);
-	}
+export async function fetchCatalogUrl(
+	url: string,
+	timeoutMs: number,
+	extraHeaders: Record<string, string> = {},
+): Promise<Response> {
+	return fetch(url, {
+		headers: { "User-Agent": "signet-daemon", ...extraHeaders },
+		signal: AbortSignal.timeout(timeoutMs),
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -715,7 +713,7 @@ async function installClawhubSkill(
 	try {
 		const url = new URL(CLAWHUB_DOWNLOAD_BASE);
 		url.searchParams.set("slug", slug);
-		const res = await fetch(url, { headers: { "User-Agent": "signet-daemon" } });
+		const res = await fetchCatalogUrl(url.toString(), CATALOG_FETCH_TIMEOUT_MS);
 		if (!res.ok) {
 			return { success: false, error: `ClawHub download failed with HTTP ${res.status}` };
 		}
@@ -931,9 +929,10 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 		const [skillsShResults, clawhubFiltered] = await Promise.all([
 			(async (): Promise<SkillBrowseResult[]> => {
 				try {
-					const res = await fetch(`https://skills.sh/api/search?q=${encodeURIComponent(query)}`, {
-						headers: { "User-Agent": "signet-daemon" },
-					});
+					const res = await fetchCatalogUrl(
+						`https://skills.sh/api/search?q=${encodeURIComponent(query)}`,
+						CATALOG_FETCH_TIMEOUT_MS,
+					);
 					if (!res.ok) throw new Error(`skills.sh returned ${res.status}`);
 					const data = (await res.json()) as {
 						skills: Array<{
@@ -1062,9 +1061,11 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 
 		if (repo) {
 			try {
-				const treeRes = await fetch(`https://api.github.com/repos/${repo}/git/trees/main?recursive=1`, {
-					headers: { Accept: "application/vnd.github.v3+json" },
-				});
+				const treeRes = await fetchCatalogUrl(
+					`https://api.github.com/repos/${repo}/git/trees/main?recursive=1`,
+					CATALOG_FETCH_TIMEOUT_MS,
+					{ Accept: "application/vnd.github.v3+json" },
+				);
 				if (treeRes.ok) {
 					const tree = (await treeRes.json()) as {
 						tree: { path: string }[];
@@ -1073,7 +1074,7 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 					const match = tree.tree.find((t) => t.path.endsWith(needle));
 					if (match) {
 						const rawUrl = `https://raw.githubusercontent.com/${repo}/main/${match.path}`;
-						const mdRes = await fetch(rawUrl);
+						const mdRes = await fetchCatalogUrl(rawUrl, CATALOG_FETCH_TIMEOUT_MS);
 						if (mdRes.ok) {
 							const content = await mdRes.text();
 							const meta = parseSkillFrontmatter(content);

@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import {
 	buildSkillInstallPlan,
+	fetchCatalogUrl,
 	formatInstalls,
 	listInstalledSkills,
 	mountSkillsRoutes,
@@ -503,6 +504,94 @@ This is a test skill.`,
 		expect(res.status).toBe(400);
 		const body = await res.json();
 		expect(body.error).toContain("Query parameter q is required");
+	});
+
+	it("bounds external skill fetches with abort signals", async () => {
+		const originalFetch = globalThis.fetch;
+		const calls: Array<{ url: string; signal: AbortSignal | undefined }> = [];
+		globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			calls.push({ url, signal: init?.signal as AbortSignal | undefined });
+
+			if (url.startsWith("https://skills.sh/api/search")) {
+				return new Response(JSON.stringify({ skills: [] }), { status: 200 });
+			}
+			if (url.startsWith("https://clawhub.ai/api/v1/skills")) {
+				return new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 });
+			}
+			if (url.startsWith("https://api.github.com/")) {
+				return new Response(JSON.stringify({ tree: [{ path: "remote-skill/SKILL.md" }] }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/")) {
+				return new Response("---\ndescription: Remote skill\n---\n", { status: 200 });
+			}
+			return new Response("not a zip", { status: 200 });
+		}) as unknown as typeof fetch;
+
+		try {
+			await app.request("/api/skills/search?q=remote");
+			await app.request("/api/skills/remote-skill?source=owner/repo");
+			await app.request("/api/skills/install", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: "remote-skill", source: "clawhub@remote-skill" }),
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+
+		const externalUrls = [
+			"https://clawhub.ai/api/v1/download?slug=remote-skill",
+			"https://skills.sh/api/search?q=remote",
+			"https://api.github.com/repos/owner/repo/git/trees/main?recursive=1",
+			"https://raw.githubusercontent.com/owner/repo/main/remote-skill/SKILL.md",
+		];
+		for (const url of externalUrls) {
+			const call = calls.find((entry) => entry.url === url);
+			expect(call, `expected bounded fetch for ${url}`).toBeDefined();
+			expect(call?.signal, `expected abort signal for ${url}`).toBeDefined();
+		}
+	});
+
+	it("aborts a stalled catalog fetch at its deadline", async () => {
+		const originalFetch = globalThis.fetch;
+		let signal: AbortSignal | undefined;
+		globalThis.fetch = mock((_input: string | URL | Request, init?: RequestInit) => {
+			signal = init?.signal as AbortSignal | undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+			});
+		}) as unknown as typeof fetch;
+
+		try {
+			await expect(fetchCatalogUrl("https://skills.example.invalid", 5)).rejects.toThrow("aborted");
+			expect(signal?.aborted).toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("keeps the deadline active while consuming a catalog response body", async () => {
+		const originalFetch = globalThis.fetch;
+		let signal: AbortSignal | undefined;
+		globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+			signal = init?.signal as AbortSignal | undefined;
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode("partial"));
+					signal?.addEventListener("abort", () => controller.error(new Error("aborted")), { once: true });
+				},
+			});
+			return new Response(body, { status: 200 });
+		}) as unknown as typeof fetch;
+
+		try {
+			const response = await fetchCatalogUrl("https://skills.example.invalid", 5);
+			await expect(response.text()).rejects.toThrow("aborted");
+			expect(signal?.aborted).toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
 	});
 
 	it("POST /api/skills/install accepts valid name with source", async () => {
