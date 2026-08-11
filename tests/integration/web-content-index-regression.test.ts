@@ -11,9 +11,7 @@ function readCommittedContentIndex(): unknown {
 }
 
 describe("web content graph regression guard", () => {
-	it("keeps the committed content index aligned with docs and blog sources", () => {
-		expect(readCommittedContentIndex()).toEqual(
-			buildContentIndex(join(rootDir, "docs"), join(rootDir, "web/marketing/src/content/blog")),
-		);
+	it("keeps the committed content index aligned with blog sources", () => {
+		expect(readCommittedContentIndex()).toEqual(buildContentIndex(join(rootDir, "web/marketing/src/content/blog")));
 	});
 });

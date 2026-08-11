@@ -439,7 +439,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		"experimental.chat.messages.transform": async (_input, output): Promise<void> => {
 			for (let index = output.messages.length - 1; index >= 0; index--) {
 				const message = output.messages[index];
-				if (message.info.role !== "user") continue;
+				if (message == null || message.info.role !== "user") continue;
 				const turn = activeTurns.get(message.info.sessionID);
 				if (!turn || !turn.dynamicContext.trim()) continue;
 				if (turn.messageID && message.info.id !== turn.messageID) continue;
