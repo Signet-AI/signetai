@@ -20,7 +20,6 @@ import {
 	buildArchitectureDoc,
 	configuredRoutingTargetRefs,
 	identityModeManagesFiles,
-	isLocalInferenceEndpoint,
 	loadConfiguredHarnesses,
 	loadIdentityMode,
 	loadSourcesConfig,
@@ -29,6 +28,7 @@ import {
 	parseRoutingTargetRef,
 	parseSimpleYaml,
 	resolveDefaultBasePath,
+	routingTargetLocality,
 	scanMemoryContent,
 	stripSignetBlock,
 } from "@signet/core";
@@ -1421,20 +1421,9 @@ function syncAgentRoster(agentsDir: string): void {
 	logger.info("daemon", "Agent roster synced", { count: roster.length });
 }
 
-const LOCAL_INFERENCE_EXECUTORS = new Set(["none", "llama-cpp", "ollama"]);
 const INFERENCE_CONFIG_FILES = ["agent.yaml", "AGENT.yaml"] as const;
 
-function targetIsRemote(target: {
-	readonly executor: string;
-	readonly endpoint?: string;
-	readonly privacy?: string;
-}): boolean {
-	if (target.privacy === "local_only") return false;
-	if (target.executor === "openai-compatible") return !isLocalInferenceEndpoint(target.endpoint);
-	return !LOCAL_INFERENCE_EXECUTORS.has(target.executor);
-}
-
-function configuredInferenceMode(agentsDir: string): "local" | "remote" {
+function configuredInferenceMode(agentsDir: string): "local" | "remote" | "unknown" {
 	for (const name of INFERENCE_CONFIG_FILES) {
 		const path = join(agentsDir, name);
 		if (!existsSync(path)) continue;
@@ -1446,7 +1435,10 @@ function configuredInferenceMode(agentsDir: string): "local" | "remote" {
 					const target = routing.value.targets[targetId];
 					return target ? [target] : [];
 				});
-				return targets.some((target) => targetIsRemote(target)) ? "remote" : "local";
+				const localities = targets.map(routingTargetLocality);
+				if (localities.includes("remote")) return "remote";
+				if (localities.includes("unknown")) return "unknown";
+				return "local";
 			}
 		} catch {
 			// An invalid router config is reported by the router itself. Do not
@@ -1455,7 +1447,7 @@ function configuredInferenceMode(agentsDir: string): "local" | "remote" {
 		break;
 	}
 
-	return "local";
+	return "unknown";
 }
 
 function buildTelemetryConfigSnapshot(agentsDir: string, memoryCfg: ResolvedMemoryConfig): TelemetryConfigSnapshot {

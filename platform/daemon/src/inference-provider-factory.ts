@@ -6,7 +6,12 @@ import {
 	getSupportedThinkingLevels,
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
-import type { PipelineClaudeCodeConfig, RoutingAccountConfig, RoutingConfig } from "@signet/core";
+import {
+	type PipelineClaudeCodeConfig,
+	type RoutingAccountConfig,
+	type RoutingConfig,
+	routingTelemetryAttribution,
+} from "@signet/core";
 import { type PiExecutorKind, createPiModelProvider } from "./pipeline/pi-provider";
 import type { AcpxHooksMode, StreamCapableLlmProvider } from "./pipeline/provider";
 import { createAcpxProvider } from "./pipeline/provider";
@@ -66,12 +71,15 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 
 	if (target.executor === "acpx") {
 		if (!target.acpx) throw new Error(`Missing ACPX config for target ${opts.targetId}`);
-		return createAcpxProvider({
-			...target.acpx,
-			...(opts.acpxHooks ? { hooks: opts.acpxHooks } : {}),
-			extraArgs: [...(target.acpx.extraArgs ?? []), ...(opts.acpxExtraArgs ?? [])],
-			model: model.model,
-		});
+		return {
+			...createAcpxProvider({
+				...target.acpx,
+				...(opts.acpxHooks ? { hooks: opts.acpxHooks } : {}),
+				extraArgs: [...(target.acpx.extraArgs ?? []), ...(opts.acpxExtraArgs ?? [])],
+				model: model.model,
+			}),
+			telemetryAttribution: routingTelemetryAttribution(target, model),
+		};
 	}
 
 	if (FOLDED_EXECUTORS.has(target.executor)) {
@@ -98,27 +106,30 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 		throw new Error(`Unknown pi-ai model "${model.model}" for provider "${providerFamily}"`);
 	}
 
-	return createPiModelProvider({
-		executor: target.executor as PiExecutorKind,
-		providerFamily,
-		model: model.model,
-		piModel,
-		// Catalog targets use their provider's known endpoint. A custom endpoint
-		// still needs a reachability probe even when its model has catalog metadata.
-		skipAvailabilityProbe: piModel !== undefined && !target.endpoint,
-		baseUrl: target.endpoint,
-		apiKey: credential?.apiKey,
-		// Map routing intent to a pi-ai ThinkingLevel (forwarded per-call as
-		// options.reasoning). model.reasoning (RoutingReasoningDepth) defaults to
-		// "medium" for every parsed model, so it cannot alone signal "enable
-		// thinking" without flipping a costly default on for all routed calls.
-		// Treat only explicit non-default signals as intent to emit thinking:
-		// the documented OpenRouter reasoning block, or a deliberately-set
-		// "high" depth. Previously this compared to a nonexistent "deep"
-		// value (TS2367) and never produced a usable level.
-		reasoning: resolveProviderReasoning(target, model, piModel),
-		contextWindow: model.contextWindow,
-		name: `${target.executor}:${model.model}`,
-		defaultTimeoutMs: 60_000,
-	});
+	return {
+		...createPiModelProvider({
+			executor: target.executor as PiExecutorKind,
+			providerFamily,
+			model: model.model,
+			piModel,
+			// Catalog targets use their provider's known endpoint. A custom endpoint
+			// still needs a reachability probe even when its model has catalog metadata.
+			skipAvailabilityProbe: piModel !== undefined && !target.endpoint,
+			baseUrl: target.endpoint,
+			apiKey: credential?.apiKey,
+			// Map routing intent to a pi-ai ThinkingLevel (forwarded per-call as
+			// options.reasoning). model.reasoning (RoutingReasoningDepth) defaults to
+			// "medium" for every parsed model, so it cannot alone signal "enable
+			// thinking" without flipping a costly default on for all routed calls.
+			// Treat only explicit non-default signals as intent to emit thinking:
+			// the documented OpenRouter reasoning block, or a deliberately-set
+			// "high" depth. Previously this compared to a nonexistent "deep"
+			// value (TS2367) and never produced a usable level.
+			reasoning: resolveProviderReasoning(target, model, piModel),
+			contextWindow: model.contextWindow,
+			name: `${target.executor}:${model.model}`,
+			defaultTimeoutMs: 60_000,
+		}),
+		telemetryAttribution: routingTelemetryAttribution(target, model, account),
+	};
 }

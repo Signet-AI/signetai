@@ -511,6 +511,8 @@ export {
 	makeRoutingTargetRef,
 	parseRoutingTargetRef,
 	isLocalInferenceEndpoint,
+	routingTargetLocality,
+	routingTelemetryAttribution,
 	parseRoutingConfig,
 	validateRoutingReferences,
 	allTargetRefs,

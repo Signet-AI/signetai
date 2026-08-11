@@ -1,4 +1,4 @@
-import type { PipelineCommandConfig } from "./types";
+import type { InferenceLocality, LlmTelemetryAttribution, PipelineCommandConfig } from "./types";
 
 export const ROUTING_ACCOUNT_KINDS = ["subscription_session", "api"] as const;
 export const ROUTING_TARGET_KINDS = ["subscription_session", "api", "local", "gateway"] as const;
@@ -153,6 +153,47 @@ export interface RoutingTargetConfig {
 	readonly openrouter?: RoutingOpenRouterConfig;
 	readonly privacy?: RoutingPrivacyTier;
 	readonly models: Readonly<Record<string, RoutingModelConfig>>;
+}
+
+const REMOTE_ACPX_AGENTS = new Set(["claude", "codex", "gemini"]);
+
+/**
+ * Classify configuration, not a process name. ACPX is a harness: an
+ * unrecognized ACPX-compatible agent stays unknown instead of being guessed
+ * local, while an explicitly local target remains local.
+ */
+export function routingTargetLocality(
+	target: Pick<RoutingTargetConfig, "executor" | "endpoint" | "privacy" | "acpx">,
+): InferenceLocality {
+	if (target.privacy === "local_only") return "local";
+	if (target.executor === "ollama" || target.executor === "llama-cpp") return "local";
+	if (target.executor === "openai-compatible") {
+		return isLocalInferenceEndpoint(target.endpoint) ? "local" : "remote";
+	}
+	if (target.executor === "acpx") {
+		return REMOTE_ACPX_AGENTS.has(target.acpx?.agent.trim().toLowerCase() ?? "") ? "remote" : "unknown";
+	}
+	if (target.executor === "anthropic" || target.executor === "openrouter") return "remote";
+	return "unknown";
+}
+
+/** Return bounded telemetry attribution for one exact configured route. */
+export function routingTelemetryAttribution(
+	target: Pick<RoutingTargetConfig, "executor" | "endpoint" | "privacy" | "acpx">,
+	model: Pick<RoutingModelConfig, "model">,
+	account?: Pick<RoutingAccountConfig, "providerFamily">,
+): LlmTelemetryAttribution {
+	const executor = target.executor.trim().toLowerCase();
+	const provider =
+		executor === "acpx"
+			? target.acpx?.agent.trim().toLowerCase()
+			: (account?.providerFamily ?? target.executor).trim().toLowerCase();
+	return {
+		executor,
+		...(provider ? { provider } : {}),
+		model: model.model,
+		locality: routingTargetLocality(target),
+	};
 }
 
 export interface RoutingPolicyConfig {

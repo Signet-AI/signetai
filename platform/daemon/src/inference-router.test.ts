@@ -273,7 +273,12 @@ describe("InferenceRouter legacy API credentials", () => {
 			if (!result.ok) return;
 			expect(result.value.decision.targetRef).toBe("dreaming/default");
 			expect(result.value.attempts).toEqual([expect.objectContaining({ targetRef: "dreaming/default", ok: true })]);
-			expect(result.value.attribution).toEqual({ provider: "acpx", model: "gpt-5.4-mini" });
+			expect(result.value.attribution).toEqual({
+				executor: "acpx",
+			provider: "codex",
+			model: "gpt-5.4-mini",
+			locality: "remote",
+		});
 
 			const args = readFileSync(fixture.argsPath, "utf8").trim().split("\n");
 			expect(args).toContain("--mcp-config");
@@ -363,7 +368,12 @@ describe("InferenceRouter legacy API credentials", () => {
 				["primary/default", false],
 				["fallback/default", true],
 			]);
-			expect(result.value.attribution).toEqual({ provider: "acpx", model: "gpt-fallback" });
+			expect(result.value.attribution).toEqual({
+				executor: "acpx",
+			provider: "codex",
+			model: "gpt-fallback",
+			locality: "remote",
+		});
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

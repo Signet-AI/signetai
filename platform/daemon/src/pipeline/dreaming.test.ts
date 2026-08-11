@@ -1049,7 +1049,7 @@ describe("Dreaming", () => {
 				async run() {
 					return {
 						summary: "Attributed pass",
-						attribution: { provider: "ollama", model: "gemma4" },
+						attribution: { executor: "ollama", provider: "ollama", model: "gemma4", locality: "local" },
 					};
 				},
 			},

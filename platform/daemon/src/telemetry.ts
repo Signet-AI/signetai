@@ -127,7 +127,8 @@ export interface TelemetryConfigSnapshot {
 	readonly semanticContradictionEnabled: boolean;
 	readonly embeddingProvider: string;
 	readonly embeddingModel: string;
-	readonly inferenceMode: "local" | "remote";
+	/** Configuration-derived execution locality. Unknown is never coerced to local. */
+	readonly inferenceMode: "local" | "remote" | "unknown";
 	readonly harnesses: string;
 }
 

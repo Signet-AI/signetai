@@ -24,6 +24,7 @@ import {
 	parseYamlDocument,
 	resolveAcpxModelSelection,
 	resolveRoutingDecision,
+	routingTelemetryAttribution,
 	validateRoutingReferences,
 } from "@signet/core";
 import { isOAuthProvider, resolveOAuthCredential } from "./inference-oauth";
@@ -93,8 +94,10 @@ export interface InferenceAgentExecutionResult {
 }
 
 export interface InferenceExecutionAttribution {
+	readonly executor: string;
 	readonly provider: string;
 	readonly model: string;
+	readonly locality: "local" | "remote" | "unknown";
 }
 
 export type InferenceStreamEvent =
@@ -238,10 +241,16 @@ function attributionForTarget(
 	const model = target?.models[modelId];
 	if (!target || !model) return null;
 	const account = target.account ? loaded.config.accounts[target.account] : undefined;
-	const provider = normalizeAttributionValue(account?.providerFamily ?? target.executor);
-	const configuredModel = normalizeAttributionValue(model.model);
+	const attribution = routingTelemetryAttribution(target, model, account);
+	const provider = normalizeAttributionValue(attribution.provider);
+	const configuredModel = normalizeAttributionValue(attribution.model);
 	if (!provider || !configuredModel) return null;
-	return { provider: provider.toLowerCase(), model: configuredModel };
+	return {
+		executor: attribution.executor,
+		provider,
+		model: configuredModel,
+		locality: attribution.locality,
+	};
 }
 
 interface SnapshotCacheEntry {

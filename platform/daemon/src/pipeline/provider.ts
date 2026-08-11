@@ -353,6 +353,7 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
 	return {
 		name: provider.name,
 		...(provider.accountingProvenance ? { accountingProvenance: provider.accountingProvenance } : {}),
+		...(provider.telemetryAttribution ? { telemetryAttribution: provider.telemetryAttribution } : {}),
 
 		async generate(prompt, opts): Promise<string> {
 			if (!(await bucket.acquire(waitTimeoutMs))) {
@@ -499,6 +500,14 @@ function recordLlmGenerate(provider: LlmProvider, usage: LlmUsage | null, latenc
 	if (!telemetry) return;
 	telemetry.record("llm.generate", {
 		provider: provider.name,
+		...(provider.telemetryAttribution
+			? {
+					executor: provider.telemetryAttribution.executor,
+					underlyingProvider: provider.telemetryAttribution.provider ?? null,
+					model: provider.telemetryAttribution.model ?? null,
+					locality: provider.telemetryAttribution.locality,
+				}
+			: {}),
 		latencyMs: Math.round(latencyMs),
 		success,
 		inputTokens: usage?.inputTokens ?? null,

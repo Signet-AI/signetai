@@ -84,14 +84,14 @@ paths, or user identity.
 | `session.start` | real session start (deduped; stubs and clear/reset paths don't count) | `harness`, `sessionHash` |
 | `session.turn` | every non-boundary `session-end` hook call (per turn, see notes) | `harness`, `promptCount`, `sessionHash` |
 | `session.end` | real session termination: an explicit boundary reason or a TTL-evicted (abandoned) session claim | `harness`, `reason` (`clear` / `session.deleted` / `session_branch` / `session_fork` / `session_shutdown` / `session_switch` / `stale-session-sweep` / `expired`), `sessionHash`, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `cost`, `accountingProvenance` |
-| `llm.generate` | every LLM call | `provider`, `latencyMs`, `success`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreationTokens`, `totalTokens`, `totalCost`, `accountingProvenance` |
+| `llm.generate` | every LLM call | legacy executor label `provider`; bounded `executor`, underlying provider, model, and `locality` (`local` / `remote` / `unknown`) for routed calls; `latencyMs`, `success`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreationTokens`, `totalTokens`, `totalCost`, `accountingProvenance` |
 | `pipeline.embedding` | every embedding fetch, at the usage-recording boundary | `tokens`, `provider`, `sourceKind` (`memory-capture` / `artifact-index` / `recall` / `dreaming` / `other`), `cost` (USD), `accountingProvenance` |
 | `recall.performed` | every completed shared recall search | `surface`, `type` (`semantic` / `keyword` / `temporal` / `graph`), `results`, `latencyMs`, `truncated` |
 | `recall.attempted` | every valid recall request or automatic prompt-context retrieval attempt | `surface` (`explicit_api` / `tool_call` / `prompt_injection` / `dashboard` / `other`) |
 | `recall.outcome` | result and delivery boundary for a recall attempt | `surface`, `resultState` (`empty` / `non_empty` / `truncated` / `error`), `deliveryState` (`returned` / `injected` / `consumed` / `not_delivered`), `results`, optional `reason` (`skipped_low_signal`) |
 | `source.lifecycle` | bounded source connect, index, readiness, first-recall, and recurring freshness milestones | `phase`, fixed `sourceClass`, bounded outcomes/counts/buckets |
 | `pipeline.error` | categorized extraction, decision, or embedding failure | `stage`, `code` only; no message or stack content |
-| `dreaming.pass` | every terminal agentic dreaming pass, including no-op, failed, and cancelled passes | `mode`, `outcome`, `outcomeCode`, bounded successful-target `provider` and `model` when available, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `tokensTotal`, `cost`, `accountingProvenance`, `artifactsConsidered`, `memoriesCreated`, `memoriesUpdated`, `memoriesSuperseded`, `memoriesRetired`, `claimsChanged`, `relationshipsChanged`, `provenanceLinksChanged`, `toolCalls`, `durationMs` |
+| `dreaming.pass` | every terminal agentic dreaming pass, including no-op, failed, and cancelled passes | `mode`, `outcome`, `outcomeCode`, bounded successful-target `executor`, underlying `provider`, `model`, and `locality` when available, `tokensInput`, `tokensOutput`, `tokensCacheRead`, `tokensCacheWrite`, `tokensTotal`, `cost`, `accountingProvenance`, `artifactsConsidered`, `memoriesCreated`, `memoriesUpdated`, `memoriesSuperseded`, `memoriesRetired`, `claimsChanged`, `relationshipsChanged`, `provenanceLinksChanged`, `toolCalls`, `durationMs` |
 | `pipeline.operation` | one bounded summary for a logical indexing, capture, recall, dreaming, extraction, or other operation | `operationClass`, `outcome`, `accepted`, `skipped`, `retried`, `failed`, duration/queue-age buckets, optional `causeFamily` |
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
 | `inference.execute` / `inference.stream` | per-execution outcome | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `finalTarget`, `attemptPath`, `failedTargets`, `attemptCount`, `failedCount`, `fallbackCount`, `privacy`, `durationMs`, `inputTokens`, `outputTokens`, `success`, `cancelled`, `errorCode` |
@@ -290,7 +290,7 @@ Notes on individual events:
   sent; PostHog persons show up as the UUID.
 - **No content.** Events carry no memory content, no recall query text, no
   prompt text, and no file paths. `llm.generate` records token/cost counts,
-  latency, provider, and success — never the prompt or response.
+  latency, bounded route attribution, and success — never the prompt or response.
 - **Sanitized crash reports.** `error.occurred` captures the error type, a
   message truncated to 400 characters with control characters replaced and
   `/home/<user>` / `/Users/<user>` paths stripped to `~`, the top 8 stack

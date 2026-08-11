@@ -279,8 +279,10 @@ export interface DreamingAgentExecutor {
 }
 
 export interface DreamingPassAttribution {
+	readonly executor: string;
 	readonly provider: string;
 	readonly model: string;
+	readonly locality: "local" | "remote" | "unknown";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -980,8 +982,10 @@ export function recordDreamingPassTelemetry(input: {
 			outcomeCode: input.outcomeCode,
 			...(input.attribution
 				? {
+						executor: input.attribution.executor,
 						provider: input.attribution.provider,
 						model: input.attribution.model,
+						locality: input.attribution.locality,
 					}
 				: {}),
 			tokensInput: input.usage?.inputTokens ?? null,

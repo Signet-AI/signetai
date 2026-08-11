@@ -17,6 +17,17 @@ export const ACCOUNTING_PROVENANCES = [
 export type AccountingProvenance = (typeof ACCOUNTING_PROVENANCES)[number];
 export type AccountingSummaryProvenance = AccountingProvenance | "mixed";
 
+/** Where a configured inference route executes. Unknown is intentional. */
+export type InferenceLocality = "local" | "remote" | "unknown";
+
+/** Bounded routing attribution kept separate from the executor or harness. */
+export interface LlmTelemetryAttribution {
+	readonly executor: string;
+	readonly provider?: string;
+	readonly model?: string;
+	readonly locality: InferenceLocality;
+}
+
 /**
  * Summarize the provenance of one or more accounting values without treating
  * a missing value as a zero. The result is intentionally bounded so API
@@ -63,6 +74,8 @@ export interface LlmProvider {
 	readonly name: string;
 	/** Known cost accounting mode for local providers; remote providers may report it per result. */
 	readonly accountingProvenance?: AccountingProvenance;
+	/** Privacy-safe routing metadata when this provider came from a configured target. */
+	readonly telemetryAttribution?: LlmTelemetryAttribution;
 	generate(prompt: string, opts?: LlmGenerateOptions): Promise<string>;
 	generateWithUsage?(prompt: string, opts?: LlmGenerateOptions): Promise<LlmGenerateResult>;
 	available(): Promise<boolean>;

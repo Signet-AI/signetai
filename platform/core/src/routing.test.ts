@@ -5,6 +5,8 @@ import {
 	makeRoutingTargetRef,
 	parseRoutingConfig,
 	resolveRoutingDecision,
+	routingTargetLocality,
+	routingTelemetryAttribution,
 	validateRoutingReferences,
 } from "./routing";
 
@@ -54,6 +56,22 @@ describe("inference config + decision engine", () => {
 		expect(isLocalInferenceEndpoint("http://localhost:1234/v1")).toBe(true);
 		expect(isLocalInferenceEndpoint("http://[::1]:1234/v1")).toBe(true);
 		expect(isLocalInferenceEndpoint("https://gateway.example.test/v1")).toBe(false);
+	});
+
+	it("separates ACPX harness execution from provider and locality", () => {
+		const remoteAcpx = {
+			executor: "acpx" as const,
+			acpx: { agent: "codex" },
+		};
+		expect(routingTargetLocality(remoteAcpx)).toBe("remote");
+		expect(routingTelemetryAttribution(remoteAcpx, { model: "gpt-5.4" })).toEqual({
+			executor: "acpx",
+			provider: "codex",
+			model: "gpt-5.4",
+			locality: "remote",
+		});
+		expect(routingTargetLocality({ ...remoteAcpx, privacy: "local_only" as const })).toBe("local");
+		expect(routingTargetLocality({ executor: "acpx" as const, acpx: { agent: "opencode" } })).toBe("unknown");
 	});
 
 	it("resolves configured target refs through policies instead of unused target blocks", () => {

@@ -85,6 +85,12 @@ describe("inference provider factory", () => {
 					return { apiKey: "test-key" };
 				},
 			});
+			expect(provider.telemetryAttribution).toEqual({
+				executor: "openai-compatible",
+				provider: "opencode-go",
+				model: "deepseek-v4-flash",
+				locality: "remote",
+			});
 			await expect(provider.generate("test")).resolves.toBe("done");
 			expect(requestBody?.thinking).toEqual({ type: "disabled" });
 			expect(requestBody?.reasoning_effort).toBeUndefined();
