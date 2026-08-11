@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eu
+if (set -o pipefail) 2>/dev/null; then
+	set -o pipefail
+fi
 
 REPO="${SIGNET_RELEASE_REPO:-Signet-AI/signetai}"
 DOWNLOAD_DIR="${SIGNET_DOWNLOAD_DIR:-$HOME/.signet/downloads}"
@@ -18,9 +21,9 @@ case "$SIGNET_CHANNEL" in
 esac
 
 if command -v curl >/dev/null 2>&1; then
-	DOWNLOAD=(curl -fsSL)
+	DOWNLOAD_COMMAND="curl"
 elif command -v wget >/dev/null 2>&1; then
-	DOWNLOAD=(wget -q -O -)
+	DOWNLOAD_COMMAND="wget"
 else
 	echo "curl or wget is required" >&2
 	exit 1
@@ -29,7 +32,7 @@ fi
 download_to() {
 	local url="$1"
 	local out="$2"
-	if [ "${DOWNLOAD[0]}" = "curl" ]; then
+	if [ "$DOWNLOAD_COMMAND" = "curl" ]; then
 		curl -fsSL -o "$out" "$url"
 	else
 		wget -q -O "$out" "$url"
@@ -38,7 +41,11 @@ download_to() {
 
 download_text() {
 	local url="$1"
-	"${DOWNLOAD[@]}" "$url"
+	if [ "$DOWNLOAD_COMMAND" = "curl" ]; then
+		curl -fsSL "$url"
+	else
+		wget -q -O - "$url"
+	fi
 }
 
 json_string() {
@@ -124,15 +131,19 @@ if command -v jq >/dev/null 2>&1; then
 	checksum="$(jq -r --arg platform "$platform" '.assets[] | select(.platform == $platform) | .sha256' "$manifest_path")"
 else
 	manifest="$(tr -d '\n\r	' < "$manifest_path" | sed 's/ \+/ /g')"
-	if [[ $manifest =~ \"platform\"[[:space:]]*:[[:space:]]*\"$platform\"[^}]*\"sha256\"[[:space:]]*:[[:space:]]*\"([a-f0-9]{64})\" ]]; then
-		checksum="${BASH_REMATCH[1]}"
-	fi
+	checksum="$(printf '%s\n' "$manifest" | sed -n "s/.*\"platform\"[[:space:]]*:[[:space:]]*\"$platform\"[^}]*\"sha256\"[[:space:]]*:[[:space:]]*\"\([a-f0-9]\{64\}\)\".*/\1/p")"
 fi
 
-if [ -z "$checksum" ] || [[ ! "$checksum" =~ ^[a-f0-9]{64}$ ]]; then
+if [ -z "$checksum" ] || [ "${#checksum}" -ne 64 ]; then
 	echo "No Signet native binary found for $platform in manifest" >&2
 	exit 1
 fi
+case "$checksum" in
+	*[!a-f0-9]*)
+		echo "No Signet native binary found for $platform in manifest" >&2
+		exit 1
+		;;
+esac
 
 download_to "$DOWNLOAD_BASE/$asset" "$binary_path"
 

@@ -1,0 +1,31 @@
+name: Install Shell Compatibility
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/install-shell-compat.yml"
+      - "scripts/install-shell-compat.test.ts"
+      - "web/marketing/public/install.sh"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/install-shell-compat.yml"
+      - "scripts/install-shell-compat.test.ts"
+      - "web/marketing/public/install.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  installer-shells:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install zsh for the compatibility check
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y zsh
+
+      - name: Run installer through bash and zsh
+        run: bun test scripts/install-shell-compat.test.ts
