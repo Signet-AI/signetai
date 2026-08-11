@@ -244,6 +244,7 @@ describe("handleUserPromptSubmit entity context", () => {
 
 				expect(result).toMatchObject({ memoryCount: 0, engine: "low-signal" });
 				expect(result.inject).toBe("");
+				expect(result.dynamicContext).toBe("");
 			}
 		} finally {
 			setActiveTelemetry(undefined);

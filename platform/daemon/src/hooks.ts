@@ -1719,6 +1719,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
+				dynamicContext: "",
 				inject: metadataHeader,
 				memoryCount: 0,
 				queryTerms: keywordTerms.join(" ") || undefined,
