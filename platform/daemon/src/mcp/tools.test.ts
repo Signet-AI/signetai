@@ -19,7 +19,9 @@ import {
 	SIGNET_SECRETS_PLUGIN_ID,
 	updateGraphiqActiveProject,
 } from "@signet/core";
+import { Hono } from "hono";
 import { resetDefaultPluginHostForTests } from "../plugins/index.js";
+import { mountMarketplaceRoutes } from "../routes/marketplace.js";
 import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
 
 // ---------------------------------------------------------------------------
@@ -1628,6 +1630,106 @@ describe("createMcpServer", () => {
 			const refresh = await refreshMarketplaceProxyTools(dynamicServer, { notify: false });
 			expect(refresh.changed).toBe(true);
 			expect(getToolNames(dynamicServer)).toContain("signet_dogfood_everything_get_sum");
+		});
+
+		it("registers proxy tools after capped delayed marketplace discovery", async () => {
+			const scriptPath = join(tempAgentsDir, "delayed-marketplace-server.js");
+			mkdirSync(join(tempAgentsDir, "marketplace"), { recursive: true });
+			writeFileSync(
+				scriptPath,
+				`const delayMs = Number(process.argv[2]);
+process.stdin.setEncoding("utf8");
+let pending = "";
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+process.stdin.on("data", (chunk) => {
+  pending += chunk;
+  const lines = pending.split("\\n");
+  pending = lines.pop() ?? "";
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({ jsonrpc: "2.0", id: message.id, result: {
+        protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "delayed", version: "1" }
+      }});
+    } else if (message.method === "tools/list") {
+      setTimeout(() => send({ jsonrpc: "2.0", id: message.id, result: {
+        tools: [{ name: "delayed_tool", description: "delayed test tool", inputSchema: { type: "object" } }]
+      }}), delayMs);
+    }
+  }
+});
+`,
+			);
+
+			const now = new Date().toISOString();
+			const servers = Array.from({ length: 6 }, (_, index) => ({
+				id: `delayed-server-${index}`,
+				source: "manual",
+				name: `Delayed Server ${index}`,
+				description: "Delayed marketplace server",
+				category: "Test",
+				official: false,
+				enabled: true,
+				scope: { harnesses: [], workspaces: [], channels: [] },
+				config: {
+					transport: "stdio",
+					command: process.execPath,
+					args: [scriptPath, "2000"],
+					env: {},
+					timeoutMs: 5_000,
+				},
+				installedAt: now,
+				updatedAt: now,
+			}));
+			writeFileSync(join(tempAgentsDir, "marketplace", "mcp-servers.json"), JSON.stringify(servers));
+
+			const app = new Hono();
+			mountMarketplaceRoutes(app);
+			globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = new URL(typeof input === "string" ? input : input.toString());
+				if (url.pathname === "/api/marketplace/mcp/policy") {
+					return new Response(
+						JSON.stringify({ policy: { mode: "expanded", maxExpandedTools: 12, maxSearchResults: 8 } }),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				if (url.pathname === "/api/marketplace/mcp/tools") {
+					const request = app.request(`${url.pathname}${url.search}`);
+					const signal = init?.signal;
+					if (!signal) return request;
+					return new Promise<Response>((resolve, reject) => {
+						const abort = (): void => reject(signal.reason);
+						if (signal.aborted) {
+							abort();
+							return;
+						}
+						signal.addEventListener("abort", abort, { once: true });
+						void request.then(
+							(response) => {
+								signal.removeEventListener("abort", abort);
+								resolve(response);
+							},
+							(error: unknown) => {
+								signal.removeEventListener("abort", abort);
+								reject(error);
+							},
+						);
+					});
+				}
+				return new Response(JSON.stringify({ error: "unexpected" }), { status: 404 });
+			}) as unknown as typeof fetch;
+
+			await server.close();
+			server = await createMcpServer({
+				daemonUrl: "http://localhost:3850",
+				version: "0.0.1-test",
+				enableMarketplaceProxyTools: true,
+			});
+
+			for (const index of Array.from({ length: 6 }, (_, value) => value)) {
+				expect(getToolNames(server)).toContain(`signet_delayed_server_${index}_delayed_tool`);
+			}
 		});
 	});
 

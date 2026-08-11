@@ -256,6 +256,11 @@ const GRAPHIQ_COMPAT_ALIASES: ReadonlyMap<string, string> = new Map([
 // Internal HTTP helper
 // ---------------------------------------------------------------------------
 
+// Initial proxy registration waits for marketplace discovery. The shared
+// four-client budget can require two normal two-second discovery batches, so
+// its deadline must exceed the old 3s request timeout while remaining bounded.
+const MARKETPLACE_PROXY_REFRESH_TIMEOUT_MS = 5_000;
+
 // Standalone `signet-mcp` uses process env auth. Hosted `/mcp` requests pass
 // a per-request Authorization header through createMcpServer(), which takes
 // precedence in daemonFetch().
@@ -596,7 +601,7 @@ export async function refreshMarketplaceProxyTools(
 		state.baseUrl,
 		appendMarketplaceContext("/api/marketplace/mcp/tools?refresh=1", state.context),
 		{
-			timeout: 3_000,
+			timeout: MARKETPLACE_PROXY_REFRESH_TIMEOUT_MS,
 			authorizationHeader: state.authorizationHeader,
 		},
 	);
