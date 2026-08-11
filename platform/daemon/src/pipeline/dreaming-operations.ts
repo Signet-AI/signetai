@@ -225,6 +225,8 @@ function attentionProvenance(
 	agentId: string,
 	operation: DreamingOperationRequest,
 	mintedById: ReadonlyMap<number, string>,
+	operations: readonly DreamingOperationRequest[],
+	operationIndex: number,
 ): { readonly provenance: DreamingOperationProvenance; readonly attentionId: string } | null {
 	const reference = operation.provenance?.trim();
 	if (!reference?.startsWith("attention:")) return null;
@@ -234,9 +236,9 @@ function attentionProvenance(
 	let attention: DreamingAttention | null = null;
 	const sameBatch = reference.match(/^attention:\$(\d+)$/);
 	if (sameBatch !== null) {
-		const indexText = sameBatch[1];
-		if (indexText === undefined) return null;
-		const attentionId = mintedById.get(Number.parseInt(indexText, 10));
+		const flagIndex = sameBatchFlagIndex(accessor, agentId, operations, operationIndex, operation);
+		if (flagIndex === null) return null;
+		const attentionId = mintedById.get(flagIndex);
 		if (attentionId !== undefined) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
 	} else {
 		const attentionId = reference.slice("attention:".length);
@@ -336,6 +338,61 @@ function hasExpectedAttentionTarget(
 		);
 	}
 	return false;
+}
+
+/**
+ * Resolve a same-request flag reference. A retry keeps the source request's
+ * `attention:$<index>` coordinate even though `operations.slice(retryFrom)`
+ * rebases the local array. In that continuation form, only a preceding flag
+ * that pins this exact hygiene target can stand in for the original index.
+ */
+function sameBatchFlagIndex(
+	accessor: DbAccessor,
+	agentId: string,
+	operations: readonly DreamingOperationRequest[],
+	operationIndex: number,
+	operation: DreamingOperationRequest,
+): number | null {
+	const reference = operation.provenance?.trim();
+	const sameBatch = reference?.match(/^attention:\$(\d+)$/);
+	if (sameBatch === undefined || sameBatch === null) return null;
+	const indexText = sameBatch[1];
+	if (indexText === undefined) return null;
+	const referencedIndex = Number.parseInt(indexText, 10);
+	const referenced = operations[referencedIndex];
+	if (referencedIndex < operations.length) {
+		if (referencedIndex >= operationIndex || referenced?.operation !== FLAG_OP) return null;
+		const subjectRef = stringField(referenced.payload, "subjectRef");
+		if (subjectRef === null) return null;
+		const attention: DreamingAttention = {
+			id: `preflight:${referencedIndex}`,
+			kind: "hygiene",
+			subjectRef,
+			details: asStringRecord(referenced.payload.details) ?? {},
+			priority: 0,
+			createdAt: "",
+		};
+		return hasExpectedAttentionTarget(accessor, agentId, operation, attention) ? referencedIndex : null;
+	}
+
+	// An out-of-range coordinate can be a source-batch coordinate retained by
+	// a suffix continuation. It still needs a preceding flag for this target.
+	for (let index = operationIndex - 1; index >= 0; index -= 1) {
+		const candidate = operations[index];
+		if (candidate?.operation !== FLAG_OP) continue;
+		const subjectRef = stringField(candidate.payload, "subjectRef");
+		if (subjectRef === null) continue;
+		const attention: DreamingAttention = {
+			id: `continuation:${index}`,
+			kind: "hygiene",
+			subjectRef,
+			details: asStringRecord(candidate.payload.details) ?? {},
+			priority: 0,
+			createdAt: "",
+		};
+		if (hasExpectedAttentionTarget(accessor, agentId, operation, attention)) return index;
+	}
+	return null;
 }
 
 /**
@@ -632,29 +689,14 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			const reference = operation.provenance?.trim();
 			const sameBatch = reference?.match(/^attention:\$(\d+)$/);
 			if (sameBatch) {
-				const flagIndex = Number.parseInt(sameBatch[1] ?? "", 10);
-				const flag = params.operations[flagIndex];
-				if (flagIndex >= index || flag?.operation !== FLAG_OP) {
-					return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
-				}
-				const subjectRef = stringField(flag.payload, "subjectRef");
-				if (subjectRef === null) {
-					return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
-				}
-				const provisionalAttention: DreamingAttention = {
-					id: `preflight:${flagIndex}`,
-					kind: "hygiene",
-					subjectRef,
-					details: asStringRecord(flag.payload.details) ?? {},
-					priority: 0,
-					createdAt: "",
-				};
-				if (!hasExpectedAttentionTarget(params.accessor, params.agentId, operation, provisionalAttention)) {
+				if (sameBatchFlagIndex(params.accessor, params.agentId, params.operations, index, operation) === null) {
 					return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
 				}
 				continue;
 			}
-			if (attentionProvenance(params.accessor, params.agentId, operation, new Map()) === null) {
+			if (
+				attentionProvenance(params.accessor, params.agentId, operation, new Map(), params.operations, index) === null
+			) {
 				return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
 			}
 			continue;
@@ -881,7 +923,14 @@ export async function applyDreamingOperations(
 		let provenance: DreamingOperationProvenance | null = null;
 		let attentionId: string | null = null;
 		if (HYGIENE_ARCHIVE_OPS.has(operation.operation)) {
-			const resolved = attentionProvenance(params.accessor, params.agentId, operation, minted);
+			const resolved = attentionProvenance(
+				params.accessor,
+				params.agentId,
+				operation,
+				minted,
+				params.operations,
+				index,
+			);
 			if (resolved !== null) {
 				provenance = resolved.provenance;
 				attentionId = resolved.attentionId;
