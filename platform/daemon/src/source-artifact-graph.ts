@@ -32,6 +32,8 @@ export interface IndexSourceArtifactStructureResult {
 	readonly dependenciesTouched: number;
 	readonly aspectsTouched: number;
 	readonly attributesTouched: number;
+	readonly aspectsCreated: number;
+	readonly attributesCreated: number;
 }
 
 export interface PurgeSourceArtifactStructureInput {
@@ -319,6 +321,8 @@ export function indexSourceArtifactStructureInTx(
 	let dependenciesTouched = 0;
 	let aspectsTouched = 0;
 	let attributesTouched = 0;
+	let aspectsCreated = 0;
+	let attributesCreated = 0;
 
 	const source = upsertSourceEntity(db, {
 		id: idFor(input.agentId, input.sourceId, "source", input.sourceRoot),
@@ -386,6 +390,9 @@ export function indexSourceArtifactStructureInTx(
 	for (const section of parseSections(input.content)) {
 		const aspectId = idFor(input.agentId, input.sourceId, "aspect", input.sourcePath, section.heading);
 		const aspectCanon = slug(section.heading);
+		const existingAspect = db
+			.prepare("SELECT id FROM entity_aspects WHERE agent_id = ? AND entity_id = ? AND canonical_name = ? LIMIT 1")
+			.get(input.agentId, doc.id, aspectCanon) as { id: string } | null | undefined;
 		db.prepare(
 			`INSERT INTO entity_aspects
 				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
@@ -393,6 +400,7 @@ export function indexSourceArtifactStructureInTx(
 				 ON CONFLICT(entity_id, canonical_name) DO UPDATE SET updated_at = excluded.updated_at, name = excluded.name`,
 		).run(aspectId, doc.id, input.agentId, section.heading, aspectCanon, section.level === 1 ? 0.9 : 0.7, now, now);
 		aspectsTouched++;
+		if (existingAspect == null) aspectsCreated++;
 
 		let claimIndex = 0;
 		for (const claim of bodyClaims(section.body)) {
@@ -404,6 +412,9 @@ export function indexSourceArtifactStructureInTx(
 				section.heading,
 				claimIndex.toString(),
 			);
+			const existingAttribute = db
+				.prepare("SELECT id FROM entity_attributes WHERE agent_id = ? AND id = ? LIMIT 1")
+				.get(input.agentId, attrId) as { id: string } | null | undefined;
 			db.prepare(
 				`INSERT INTO entity_attributes
 					 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, group_key, claim_key,
@@ -434,6 +445,7 @@ export function indexSourceArtifactStructureInTx(
 			);
 			recordOntologyContradictionsForAttributeInTx(db, { agentId: input.agentId, attributeId: attrId });
 			attributesTouched++;
+			if (existingAttribute == null) attributesCreated++;
 			claimIndex++;
 		}
 	}
@@ -444,5 +456,7 @@ export function indexSourceArtifactStructureInTx(
 		dependenciesTouched,
 		aspectsTouched,
 		attributesTouched,
+		aspectsCreated,
+		attributesCreated,
 	};
 }

@@ -58,11 +58,22 @@ describe("import routes", () => {
 		const body = (await response.json()) as {
 			imported: number;
 			failed: number;
-			files: Array<{ status: string; sourceId?: string }>;
+			files: Array<{
+				status: string;
+				sourceId?: string;
+				extraction?: { documentEntityId: string | null; aspectsCreated: number; attributesCreated: number };
+			}>;
 		};
 		expect(body.imported).toBe(1);
 		expect(body.failed).toBe(0);
 		expect(body.files[0]?.status).toBe("imported");
+		expect(body.files[0]?.extraction).toEqual({
+			documentEntityId: expect.any(String),
+			aspectsCreated: expect.any(Number),
+			attributesCreated: expect.any(Number),
+		});
+		expect(body.files[0]?.extraction?.aspectsCreated).toBeGreaterThan(0);
+		expect(body.files[0]?.extraction?.attributesCreated).toBeGreaterThan(0);
 		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("import");
 		expect(loadSourcesConfig(dir).sources[0]?.providerSettings?.format).toBe("json");
 		const artifacts = getDbAccessor().withReadDb(
@@ -143,10 +154,21 @@ describe("import routes", () => {
 			failed: number;
 			files: Array<{ fileName: string; status: string; sourceId: string }>;
 		};
-		expect(body).toEqual({
+		expect(body).toMatchObject({
 			imported: 0,
 			failed: 0,
-			files: [{ fileName: "contacts.csv", status: "duplicate", sourceId: expect.any(String) }],
+			files: [
+				{
+					fileName: "contacts.csv",
+					status: "duplicate",
+					sourceId: expect.any(String),
+					extraction: {
+						documentEntityId: expect.any(String),
+						aspectsCreated: expect.any(Number),
+						attributesCreated: expect.any(Number),
+					},
+				},
+			],
 		});
 		expect(loadSourcesConfig(dir).sources).toHaveLength(1);
 	});

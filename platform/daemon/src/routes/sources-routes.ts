@@ -759,10 +759,12 @@ interface SourceHealth {
 	};
 	readonly semantic: {
 		readonly entities: number;
+		readonly aspects: number;
 		readonly attributes: number;
 		readonly dependencies: number;
 		readonly communities: number;
 		readonly total: number;
+		readonly documentEntityId: string | null;
 	};
 }
 
@@ -864,7 +866,15 @@ function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceS
 			failures: { total: 0, recoverable: 0 },
 			checkpoints: { total: 0, partial: 0, stale: 0 },
 			purge: { deletedArtifacts: 0, orphanChunks: stats.artifacts === 0 ? stats.chunks : 0 },
-			semantic: { entities: 0, attributes: 0, dependencies: 0, communities: 0, total: 0 },
+			semantic: {
+				entities: 0,
+				aspects: 0,
+				attributes: 0,
+				dependencies: 0,
+				communities: 0,
+				total: 0,
+				documentEntityId: null,
+			},
 		};
 	}
 }
@@ -1084,15 +1094,36 @@ function discordHealthSummary(source: SignetSourceEntry, agentId: string): Disco
 function semanticHealthSummary(source: SignetSourceEntry, agentId: string): SourceHealth["semantic"] {
 	return getDbAccessor().withReadDb((db) => {
 		const entities = countSourceRows(db, "entities", agentId, source.id);
+		const documentEntity = db
+			.prepare(
+				`SELECT id
+				   FROM entities
+				  WHERE agent_id = ? AND source_id = ? AND entity_type = 'source_document'
+				  ORDER BY updated_at DESC
+				  LIMIT 1`,
+			)
+			.get(agentId, source.id) as { id: string } | null | undefined;
+		const aspects = countRow(
+			db
+				.prepare(
+					`SELECT COUNT(*) AS n
+					   FROM entity_aspects AS a
+					   JOIN entities AS e ON e.id = a.entity_id AND e.agent_id = a.agent_id
+					  WHERE a.agent_id = ? AND e.source_id = ?`,
+				)
+				.get(agentId, source.id),
+		);
 		const attributes = countSourceRows(db, "entity_attributes", agentId, source.id);
 		const dependencies = countSourceRows(db, "entity_dependencies", agentId, source.id);
 		const communities = countSourceRows(db, "entity_communities", agentId, source.id);
 		return {
 			entities,
+			aspects,
 			attributes,
 			dependencies,
 			communities,
-			total: entities + attributes + dependencies + communities,
+			total: entities + aspects + attributes + dependencies + communities,
+			documentEntityId: documentEntity?.id ?? null,
 		};
 	});
 }

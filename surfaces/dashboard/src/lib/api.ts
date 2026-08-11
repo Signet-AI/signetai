@@ -366,6 +366,15 @@ export interface SourceHealth {
 	status: "healthy" | "degraded" | "unhealthy" | "empty";
 	latestArtifactAt?: string | null;
 	failures?: { total: number; recoverable: number };
+	semantic?: {
+		entities: number;
+		aspects: number;
+		attributes: number;
+		dependencies: number;
+		communities: number;
+		total: number;
+		documentEntityId: string | null;
+	};
 }
 
 export interface SignetSource {
@@ -413,8 +422,28 @@ export interface ImportSourcesResponse {
 	imported: number;
 	failed: number;
 	files: ReadonlyArray<
-		| { fileName: string; status: "imported"; sourceId: string; format: string; duplicate: boolean }
-		| { fileName: string; status: "duplicate"; sourceId: string }
+		| {
+				fileName: string;
+				status: "imported";
+				sourceId: string;
+				format: string;
+				duplicate: boolean;
+				extraction?: {
+					documentEntityId: string | null;
+					aspectsCreated: number;
+					attributesCreated: number;
+				};
+		  }
+		| {
+				fileName: string;
+				status: "duplicate";
+				sourceId: string;
+				extraction?: {
+					documentEntityId: string | null;
+					aspectsCreated: number;
+					attributesCreated: number;
+				};
+		  }
 		| { fileName: string; status: "failed"; error: string }
 	>;
 }

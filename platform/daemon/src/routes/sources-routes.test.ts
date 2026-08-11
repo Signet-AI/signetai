@@ -1054,6 +1054,57 @@ describe("Sources routes", () => {
 		expect(completed.sources[0]?.indexJob).toMatchObject({ status: "complete", scanned: 3, indexed: 2 });
 	});
 
+	it("reports persisted imported extraction counts and linked entity after refresh", async () => {
+		const agentId = "import-health-agent";
+		process.env.SIGNET_AGENT_ID = agentId;
+		const added = addImportedSource(
+			{
+				fileName: "outcome.md",
+				contentHash: "d".repeat(64),
+				format: "markdown",
+				agentId,
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const indexed = indexSourceArtifactStructure({
+			agentId,
+			sourceId: added.source.id,
+			sourceKind: "source_import_markdown",
+			sourceRoot: added.source.root,
+			sourcePath: `imports/${added.source.id}/outcome.md`,
+			displayName: "outcome.md",
+			content: "# Imported outcome\n\n## Result\n\nThe import produced a durable result.",
+		});
+		expect(indexed.aspectsCreated).toBeGreaterThan(0);
+		expect(indexed.attributesCreated).toBeGreaterThan(0);
+
+		const readSemantic = async () => {
+			const response = await makeApp().request("/api/sources");
+			expect(response.status).toBe(200);
+			const body = (await response.json()) as {
+				sources: Array<{
+					id: string;
+					health?: { semantic?: { aspects: number; attributes: number; documentEntityId: string | null } };
+				}>;
+			};
+			return body.sources.find((source) => source.id === added.source.id)?.health?.semantic;
+		};
+
+		const first = await readSemantic();
+		expect(first).toMatchObject({
+			aspects: indexed.aspectsCreated,
+			attributes: indexed.attributesCreated,
+			documentEntityId: indexed.documentEntityId,
+		});
+
+		closeDbAccessor();
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		expect(await readSemantic()).toEqual(first);
+	});
+
 	it("reports source health diagnostics from artifacts, chunks, failures, and checkpoints", async () => {
 		const added = addDiscordSource(
 			{

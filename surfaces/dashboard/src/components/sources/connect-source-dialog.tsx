@@ -303,8 +303,8 @@ export function ConnectSourceDialog({
 													{file.status === "failed"
 														? file.error
 														: file.status === "duplicate"
-															? "duplicate"
-															: "indexed"}
+															? extractionLabel(file.extraction, "duplicate, existing result")
+															: extractionLabel(file.extraction, "indexed")}
 												</span>
 											</div>
 										))}
@@ -384,4 +384,19 @@ export function ConnectSourceDialog({
 			</dialog>
 		</div>
 	);
+}
+
+function extractionLabel(
+	extraction:
+		| {
+				readonly documentEntityId: string | null;
+				readonly aspectsCreated: number;
+				readonly attributesCreated: number;
+		  }
+		| undefined,
+	base: string,
+): string {
+	if (!extraction) return `${base}; extraction result unavailable`;
+	const entity = extraction.documentEntityId ? "entity linked" : "no entity linked";
+	return `${base}; ${extraction.aspectsCreated} aspects · ${extraction.attributesCreated} attributes · ${entity}`;
 }

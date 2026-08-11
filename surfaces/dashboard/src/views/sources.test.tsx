@@ -71,7 +71,14 @@ beforeEach(() => {
 				imported: 1,
 				failed: 0,
 				files: [
-					{ fileName: "notes.md", status: "imported", sourceId: "source-1", format: "markdown", duplicate: false },
+					{
+						fileName: "notes.md",
+						status: "imported",
+						sourceId: "source-1",
+						format: "markdown",
+						duplicate: false,
+						extraction: { documentEntityId: "entity-1", aspectsCreated: 2, attributesCreated: 3 },
+					},
 				],
 			},
 		};
@@ -109,6 +116,19 @@ function sourceFixture(
 		health: {
 			status: health,
 			failures: health === "degraded" ? { total: 1, recoverable: 1 } : { total: 0, recoverable: 0 },
+			...(kind === "import"
+				? {
+						semantic: {
+							entities: 1,
+							aspects: 2,
+							attributes: 3,
+							dependencies: 0,
+							communities: 0,
+							total: 6,
+							documentEntityId: "entity-1",
+						},
+					}
+				: {}),
 		},
 		indexJob,
 		...(kind === "import"
@@ -125,6 +145,33 @@ function sourceFixture(
 }
 
 describe("sources grouping", () => {
+	test("does not render blank extraction counts from an older daemon payload", async () => {
+		const source = sourceFixture("import:legacy", "import", "legacy.md");
+		source.health = {
+			status: "healthy",
+			semantic: {
+				entities: 1,
+				attributes: 42,
+				dependencies: 0,
+				communities: 0,
+				total: 43,
+				documentEntityId: null,
+			} as SignetSource["health"]["semantic"],
+		};
+		sourcesResponse = { version: 1, sources: [source] };
+		const mounted = await mount(
+			<ViewProvider>
+				<SourcesView />
+			</ViewProvider>,
+		);
+
+		expect(mounted.container.textContent).toContain("extraction result unavailable");
+		expect(mounted.container.textContent).not.toContain("undefined aspects");
+
+		await act(async () => mounted.root.unmount());
+		mounted.container.remove();
+	});
+
 	test("Sources has one Connect a source entry point that opens the centered dialog with file import reachable", async () => {
 		const mounted = await mount(
 			<ViewProvider>
@@ -166,6 +213,7 @@ describe("sources grouping", () => {
 		expect(mounted.container.textContent).toContain("notes.md · desktop path");
 		await click(button(mounted.container, "Import & index"));
 		expect(importCall).toEqual({ files: [], duplicateMode: "skip", paths: ["/tmp/notes.md"] });
+		expect(mounted.container.textContent).toContain("2 aspects · 3 attributes · entity linked");
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();
@@ -223,6 +271,7 @@ describe("sources grouping", () => {
 		expect(mounted.container.querySelectorAll('[data-testid="imported-documents-card"]')).toHaveLength(1);
 		expect(documents.textContent).toContain("2 documents");
 		expect(documents.textContent).toContain("notes.pdf");
+		expect(documents.textContent).toContain("2 aspects · 3 attributes · entity linked");
 		expect(documents.textContent).toContain("table.csv");
 		expect(documents.textContent).toContain("40% · table.csv");
 		expect(documents.querySelectorAll('[aria-label="Re-index"]')).toHaveLength(0);

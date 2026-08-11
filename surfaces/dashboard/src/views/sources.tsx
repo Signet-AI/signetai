@@ -1,7 +1,7 @@
 import { sourceLogo } from "@/components/icons";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
 import { Surface } from "@/components/ui/surface";
-import { type SignetSource, type SourceIndexJob, api } from "@/lib/api";
+import { type SignetSource, type SourceHealth, type SourceIndexJob, api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { useView } from "@/lib/view-context";
@@ -227,12 +227,31 @@ function ImportedDocumentRow({ source, onMutate }: { source: SignetSource; onMut
 				</span>
 				<span className="shrink-0">{relTime(source.lastIndexedAt)}</span>
 			</div>
+			<ImportExtractionSummary semantic={source.health?.semantic} />
 			{error && (
 				<span className="truncate font-mono text-[9px] text-destructive" title={error}>
 					{error}
 				</span>
 			)}
 		</li>
+	);
+}
+
+function ImportExtractionSummary({ semantic }: { semantic: SourceHealth["semantic"] | undefined }) {
+	if (!semantic || typeof semantic.aspects !== "number" || typeof semantic.attributes !== "number") {
+		return <span className="truncate font-mono text-[9px] text-muted-foreground">extraction result unavailable</span>;
+	}
+	if (semantic.entities === 0 && semantic.aspects === 0 && semantic.attributes === 0) {
+		return <span className="truncate font-mono text-[9px] text-muted-foreground">no structured graph result</span>;
+	}
+	const entity = semantic.documentEntityId ? "entity linked" : "no entity linked";
+	return (
+		<span
+			className="truncate font-mono text-[9px] text-muted-foreground"
+			title={semantic.documentEntityId ? `Document entity ${semantic.documentEntityId}` : undefined}
+		>
+			{semantic.aspects} aspects · {semantic.attributes} attributes · {entity}
+		</span>
 	);
 }
 

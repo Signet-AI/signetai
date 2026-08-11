@@ -31,9 +31,21 @@ type ImportFileStatus =
 			readonly sourceId: string;
 			readonly format: string;
 			readonly duplicate: boolean;
+			readonly extraction: ImportExtractionOutcome;
 	  }
-	| { readonly fileName: string; readonly status: "duplicate"; readonly sourceId: string }
+	| {
+			readonly fileName: string;
+			readonly status: "duplicate";
+			readonly sourceId: string;
+			readonly extraction?: ImportExtractionOutcome;
+	  }
 	| { readonly fileName: string; readonly status: "failed"; readonly error: string };
+
+interface ImportExtractionOutcome {
+	readonly documentEntityId: string | null;
+	readonly aspectsCreated: number;
+	readonly attributesCreated: number;
+}
 
 export function registerImportRoutes(app: Hono): void {
 	app.post("/api/sources/import", async (c) => {
@@ -150,7 +162,12 @@ export function registerImportRoutes(app: Hono): void {
 				continue;
 			}
 			if (added.duplicate && duplicateMode === "skip" && hasIndexedSource(added.source.id, resolveDaemonAgentId())) {
-				statuses.push({ fileName: file.name, status: "duplicate", sourceId: added.source.id });
+				statuses.push({
+					fileName: file.name,
+					status: "duplicate",
+					sourceId: added.source.id,
+					extraction: getImportedSourceOutcome(added.source.id, agentId),
+				});
 				continue;
 			}
 
@@ -187,7 +204,7 @@ export function registerImportRoutes(app: Hono): void {
 						sourceMeta: { ...normalized.value.sourceMeta, representation: "structured-json-canonical" },
 					});
 				}
-				indexSourceArtifactStructure({
+				const extraction = indexSourceArtifactStructure({
 					agentId,
 					sourceId: added.source.id,
 					sourceKind,
@@ -250,6 +267,11 @@ export function registerImportRoutes(app: Hono): void {
 					sourceId: added.source.id,
 					format: normalized.value.format,
 					duplicate: added.duplicate,
+					extraction: {
+						documentEntityId: extraction.documentEntityId,
+						aspectsCreated: extraction.aspectsCreated,
+						attributesCreated: extraction.attributesCreated,
+					},
 				});
 			} catch (error) {
 				if (added.created) {
@@ -302,6 +324,32 @@ function hasIndexedSource(sourceId: string, agentId: string): boolean {
 			)
 			.get(agentId, sourceId) as { present: number } | null | undefined;
 		return row != null;
+	});
+}
+
+function getImportedSourceOutcome(sourceId: string, agentId: string): ImportExtractionOutcome | undefined {
+	return getDbAccessor().withReadDb((db) => {
+		const document = db
+			.prepare(
+				`SELECT id
+				   FROM entities
+				  WHERE agent_id = ? AND source_id = ? AND entity_type = 'source_document'
+				  ORDER BY updated_at DESC
+				  LIMIT 1`,
+			)
+			.get(agentId, sourceId) as { id: string } | null | undefined;
+		if (document == null) return undefined;
+		const aspects = db
+			.prepare("SELECT COUNT(*) AS count FROM entity_aspects WHERE agent_id = ? AND entity_id = ?")
+			.get(agentId, document.id) as { count: number };
+		const attributes = db
+			.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE agent_id = ? AND source_id = ?")
+			.get(agentId, sourceId) as { count: number };
+		return {
+			documentEntityId: document.id,
+			aspectsCreated: Number(aspects.count ?? 0),
+			attributesCreated: Number(attributes.count ?? 0),
+		};
 	});
 }
 
