@@ -160,7 +160,12 @@ export function registerImportRoutes(app: Hono): void {
 				statuses.push({ fileName: file.name, status: "failed", error: added.error });
 				continue;
 			}
-			if (added.duplicate && duplicateMode === "skip" && hasIndexedSource(added.source.id, resolveDaemonAgentId())) {
+			if (
+				added.duplicate &&
+				duplicateMode === "skip" &&
+				added.source.lastIndexedAt !== undefined &&
+				hasIndexedSource(added.source.id, agentId)
+			) {
 				statuses.push({
 					fileName: file.name,
 					status: "duplicate",

@@ -6,6 +6,7 @@ import { loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { IMPORT_MAX_BATCH_BYTES } from "../import-normalizer";
+import { purgeSourceArtifactStructureInTx } from "../source-artifact-graph";
 import { registerImportRoutes } from "./import-routes";
 
 function formWithFile(file: File, duplicateMode = "skip"): FormData {
@@ -175,6 +176,78 @@ describe("import routes", () => {
 			],
 		});
 		expect(loadSourcesConfig(dir).sources).toHaveLength(1);
+	});
+
+	it("retries a default-skip duplicate after a crash leaves its artifact without a completion marker across restart", async () => {
+		const content = "name,email\nAda,ada@example.com\n";
+		const fileName = "contacts.csv";
+		const first = await app().request("/api/sources/import", {
+			method: "POST",
+			body: formWithFile(new File([content], fileName, { type: "text/csv" })),
+		});
+		const firstBody = (await first.json()) as { files: Array<{ sourceId: string }> };
+		const sourceId = firstBody.files[0]?.sourceId;
+		const sourcePath = `imports/${sourceId}/${fileName}`;
+		expect(first.status).toBe(201);
+		expect(sourceId).toEqual(expect.any(String));
+
+		getDbAccessor().withWriteTx((db) => {
+			purgeSourceArtifactStructureInTx(db, {
+				agentId: "import-test-agent",
+				sourceId: sourceId ?? "",
+				sourcePath,
+			});
+			const artifact = db
+				.prepare(
+					"SELECT source_meta_json FROM memory_artifacts WHERE agent_id = ? AND source_id = ? AND source_path = ?",
+				)
+				.get("import-test-agent", sourceId, sourcePath) as { source_meta_json: string | null };
+			const { importExtraction: _, ...sourceMeta } = JSON.parse(artifact.source_meta_json ?? "{}") as Record<
+				string,
+				unknown
+			>;
+			db.prepare(
+				"UPDATE memory_artifacts SET source_meta_json = ? WHERE agent_id = ? AND source_id = ? AND source_path = ?",
+			).run(JSON.stringify(sourceMeta), "import-test-agent", sourceId, sourcePath);
+		});
+		const config = loadSourcesConfig(dir);
+		writeFileSync(
+			join(dir, "sources.json"),
+			`${JSON.stringify({
+				...config,
+				sources: config.sources.map((source) => {
+					const { lastIndexedAt: _, ...incomplete } = source;
+					return incomplete;
+				}),
+			})}\n`,
+		);
+		closeDbAccessor();
+		initDbAccessor(join(dir, "memory", "memories.db"));
+
+		const retry = await app().request("/api/sources/import", {
+			method: "POST",
+			body: formWithFile(new File([content], fileName, { type: "text/csv" })),
+		});
+
+		expect(retry.status).toBe(201);
+		expect(await retry.json()).toMatchObject({
+			imported: 1,
+			failed: 0,
+			files: [{ fileName, status: "imported", sourceId, duplicate: true }],
+		});
+		expect(loadSourcesConfig(dir).sources).toEqual([
+			expect.objectContaining({ id: sourceId, lastIndexedAt: expect.any(String) }),
+		]);
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					(
+						db
+							.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ? AND source_id = ?")
+							.get("import-test-agent", sourceId) as { count: number }
+					).count,
+			),
+		).toBe(2);
 	});
 
 	it("indexes an existing duplicate for a different agent scope", async () => {
