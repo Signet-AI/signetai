@@ -46,6 +46,42 @@ describe("desktop update packaging", () => {
 		expect(workflow).toContain("surfaces/desktop/release/latest*.yml");
 	});
 
+	test("fails closed for stable macOS artifacts without notarization", () => {
+		const packageJson = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
+		const mac = packageJson.build.mac;
+		expect(mac.hardenedRuntime).toBe(true);
+		expect(mac.gatekeeperAssess).toBe(false);
+		expect(mac.strictVerify).toBe(true);
+		expect(mac.notarize).toBe(true);
+		expect(mac.entitlements).toBe("build/entitlements.mac.plist");
+		expect(mac.entitlementsInherit).toBe("build/entitlements.mac.inherit.plist");
+
+		for (const name of ["entitlements.mac.plist", "entitlements.mac.inherit.plist"]) {
+			const entitlements = readFileSync(join(desktopRoot, "build", name), "utf8");
+			expect(entitlements).toContain("com.apple.security.cs.allow-jit");
+			expect(entitlements).toContain("com.apple.security.cs.disable-library-validation");
+		}
+
+		const workflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "desktop-build.yml"), "utf8");
+		for (const secret of [
+			"APPLE_ID",
+			"APPLE_APP_SPECIFIC_PASSWORD",
+			"APPLE_TEAM_ID",
+			"APPLE_API_KEY",
+			"APPLE_API_KEY_ID",
+			"APPLE_API_ISSUER",
+			"APPLE_KEYCHAIN_PROFILE",
+		]) {
+			expect(workflow).toContain(`secrets.${secret}`);
+		}
+		expect(workflow).toContain("macOS tag releases require Developer ID signing and notarization");
+		expect(workflow).toContain("Stable macOS releases cannot use unsigned or self-signed artifacts");
+		expect(workflow).toContain("bun run verify:macos");
+		const verifier = readFileSync(join(desktopRoot, "scripts", "verify-macos-release.mjs"), "utf8");
+		expect(verifier).toContain('run("xcrun", ["stapler", "validate"');
+		expect(verifier).toContain('run("spctl", ["--assess", "--type", "execute"');
+	});
+
 	test("uses a Linux-safe Electron executable name", () => {
 		const packageJson = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
 		expect(packageJson.build.executableName).toBe("signet");

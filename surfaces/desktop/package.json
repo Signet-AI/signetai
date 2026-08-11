@@ -13,6 +13,7 @@
 		"build:daemon": "cd ../../platform/daemon && bun run build",
 		"build:main": "tsc -p tsconfig.json",
 		"stage:runtime": "node scripts/stage-runtime.mjs",
+		"verify:macos": "node scripts/verify-macos-release.mjs release",
 		"build": "bun run build:main",
 		"build:desktop": "bun run build:core && bun run build:tray && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder --publish never",
 		"dev": "bun run build:tray && bun run build:dashboard && bun run build:main && electron .",
@@ -57,7 +58,13 @@
 			"target": [
 				"dmg",
 				"zip"
-			]
+			],
+			"hardenedRuntime": true,
+			"gatekeeperAssess": false,
+			"strictVerify": true,
+			"entitlements": "build/entitlements.mac.plist",
+			"entitlementsInherit": "build/entitlements.mac.inherit.plist",
+			"notarize": true
 		},
 		"win": {
 			"icon": "icons/icon.ico",

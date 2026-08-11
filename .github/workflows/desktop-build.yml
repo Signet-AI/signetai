@@ -56,15 +56,28 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_KEYCHAIN: ${{ secrets.APPLE_KEYCHAIN }}
+          APPLE_KEYCHAIN_PROFILE: ${{ secrets.APPLE_KEYCHAIN_PROFILE }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
           mode="${SIGNING_MODE_INPUT}"
           runner="${{ matrix.runner }}"
+          is_release=0
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            is_release=1
+          fi
           has_official=0
           requires_signing=0
           missing=()
+          notarization_missing=()
 
           require_secret() {
             name="$1"
@@ -79,13 +92,27 @@ jobs:
             require_secret APPLE_CERTIFICATE "${APPLE_CERTIFICATE:-}"
             require_secret APPLE_CERTIFICATE_PASSWORD "${APPLE_CERTIFICATE_PASSWORD:-}"
             require_secret APPLE_SIGNING_IDENTITY "${APPLE_SIGNING_IDENTITY:-}"
+
+            if [ -n "${APPLE_ID:-}" ] || [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
+              [ -n "${APPLE_ID:-}" ] || notarization_missing+=("APPLE_ID")
+              [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] || notarization_missing+=("APPLE_APP_SPECIFIC_PASSWORD")
+              [ -n "${APPLE_TEAM_ID:-}" ] || notarization_missing+=("APPLE_TEAM_ID")
+            elif [ -n "${APPLE_API_KEY:-}" ] || [ -n "${APPLE_API_KEY_ID:-}" ] || [ -n "${APPLE_API_ISSUER:-}" ]; then
+              [ -n "${APPLE_API_KEY:-}" ] || notarization_missing+=("APPLE_API_KEY")
+              [ -n "${APPLE_API_KEY_ID:-}" ] || notarization_missing+=("APPLE_API_KEY_ID")
+              [ -n "${APPLE_API_ISSUER:-}" ] || notarization_missing+=("APPLE_API_ISSUER")
+            elif [ -n "${APPLE_KEYCHAIN_PROFILE:-}" ]; then
+              :
+            else
+              notarization_missing+=("APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER (or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID)")
+            fi
           elif [ "${runner}" = "windows-latest" ]; then
             requires_signing=1
             require_secret WINDOWS_CERTIFICATE "${WINDOWS_CERTIFICATE:-}"
             require_secret WINDOWS_CERTIFICATE_PASSWORD "${WINDOWS_CERTIFICATE_PASSWORD:-}"
           fi
 
-          if [ "${requires_signing}" -eq 1 ] && [ "${#missing[@]}" -eq 0 ]; then
+          if [ "${requires_signing}" -eq 1 ] && [ "${#missing[@]}" -eq 0 ] && [ "${#notarization_missing[@]}" -eq 0 ]; then
             has_official=1
           fi
 
@@ -95,17 +122,25 @@ jobs:
           fi
 
           if [ "${mode}" = "official" ] && [ "${requires_signing}" -eq 1 ] && [ "${has_official}" -ne 1 ]; then
-            printf '::error::signing_mode=official but required signing secrets are missing: %s\n' "${missing[*]}"
+            printf '::error::signing_mode=official but required signing/notarization secrets are missing: %s %s\n' "${missing[*]}" "${notarization_missing[*]}"
             exit 1
           fi
 
           if [ "${mode}" = "auto" ]; then
             if [ "${has_official}" -eq 1 ]; then
               mode="official"
+            elif [[ "${runner}" == macos-* && "${is_release}" -eq 1 ]]; then
+              printf '::error::macOS tag releases require Developer ID signing and notarization; missing: %s %s\n' "${missing[*]}" "${notarization_missing[*]}"
+              exit 1
             else
               mode="self-signed"
-              printf '::warning::Official signing secrets missing, falling back to self-signed mode: %s\n' "${missing[*]}"
+              printf '::warning::Official signing secrets missing; using self-signed mode for this non-release build: %s %s\n' "${missing[*]}" "${notarization_missing[*]}"
             fi
+          fi
+
+          if [[ "${runner}" == macos-* && "${is_release}" -eq 1 && "${mode}" != "official" ]]; then
+            echo "::error::Stable macOS releases cannot use unsigned or self-signed artifacts"
+            exit 1
           fi
           if [ "${mode}" != "official" ] && [ "${mode}" != "self-signed" ]; then
             echo "::error::Invalid signing mode: ${mode}"
@@ -121,6 +156,14 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_KEYCHAIN: ${{ secrets.APPLE_KEYCHAIN }}
+          APPLE_KEYCHAIN_PROFILE: ${{ secrets.APPLE_KEYCHAIN_PROFILE }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
@@ -140,6 +183,14 @@ jobs:
             write_env CSC_LINK "${APPLE_CERTIFICATE}"
             write_env CSC_KEY_PASSWORD "${APPLE_CERTIFICATE_PASSWORD}"
             write_env CSC_NAME "${APPLE_SIGNING_IDENTITY}"
+            write_env APPLE_ID "${APPLE_ID:-}"
+            write_env APPLE_APP_SPECIFIC_PASSWORD "${APPLE_APP_SPECIFIC_PASSWORD:-}"
+            write_env APPLE_TEAM_ID "${APPLE_TEAM_ID:-}"
+            write_env APPLE_API_KEY "${APPLE_API_KEY:-}"
+            write_env APPLE_API_KEY_ID "${APPLE_API_KEY_ID:-}"
+            write_env APPLE_API_ISSUER "${APPLE_API_ISSUER:-}"
+            write_env APPLE_KEYCHAIN "${APPLE_KEYCHAIN:-}"
+            write_env APPLE_KEYCHAIN_PROFILE "${APPLE_KEYCHAIN_PROFILE:-}"
           elif [ "${{ matrix.runner }}" = "windows-latest" ]; then
             write_env CSC_LINK "${WINDOWS_CERTIFICATE}"
             write_env CSC_KEY_PASSWORD "${WINDOWS_CERTIFICATE_PASSWORD}"
@@ -170,6 +221,13 @@ jobs:
 
           echo "::error::Electron desktop build failed after 3 attempts"
           exit 1
+
+      - name: Verify macOS signing, notarization, and Gatekeeper state
+        if: startsWith(matrix.runner, 'macos-') && steps.signing.outputs.mode == 'official'
+        run: |
+          set -euo pipefail
+          cd surfaces/desktop
+          bun run verify:macos
 
       - name: Generate AUR metadata
         if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/')

@@ -42,8 +42,14 @@ Arch.
 2. Electron desktop runtime startup must support a bundled Bun daemon
    fallback path when system runtimes are unavailable.
 3. Release workflows must resolve signing mode before publish:
-   - official signing when certificate secrets are present
-   - self-signed fallback when official signing is unavailable
+   - macOS tag releases require Developer ID signing and notarization credentials
+     and fail closed when either is unavailable
+   - macOS non-release manual builds may use self-signed mode for local testing,
+     but self-signed macOS artifacts must never be published as stable releases
+   - Windows may use official signing when certificate secrets are present and
+     self-signed fallback otherwise
+   - macOS official builds must pass codesign, stapler, and quarantined
+     Gatekeeper assessment before artifacts are uploaded or published
 4. AUR metadata generation must be deterministic from version, AppImage
    URL, and checksum.
 5. Arch packaging must be validated in CI by building from the generated
@@ -67,7 +73,21 @@ Arch.
 - Desktop packaging remains independent of npm release train mechanics.
 - The CLI source-build path uses the already-pulled Signet checkout. It must
   not clone over local work or silently switch branches.
-- Generated AUR metadata is emitted as CI artifacts and can be pushed by
-  a separate credentialed job.
+- Generated AUR metadata is emitted as CI artifacts and can be pushed by a
+  separate credentialed job.
+- macOS stable releases require repository secrets for the Developer ID
+  certificate (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, and
+  `APPLE_SIGNING_IDENTITY`) plus one supported notarytool credential set:
+  App Store Connect API key (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, and
+  `APPLE_API_ISSUER`), Apple ID/app-specific password/team ID, or a notarytool
+  keychain profile. Without these credentials, the macOS tag job fails before
+  build or publish. Local Linux verification cannot prove the Apple signing,
+  notarization, or Gatekeeper steps; the macOS CI runner is the verification
+  environment.
+- The desktop packaging verifier checks the signed app bundle with
+  `codesign`, validates the stapled ticket with `xcrun stapler`, and runs a
+  quarantined copy through `spctl` before upload. Electron-builder's
+  pre-notarization Gatekeeper assessment stays disabled so the post-notarization
+  verifier is the authoritative Gatekeeper check.
 - `platform/daemon-rs` remains the shadow daemon rewrite. Desktop sidecar usage is intentionally bound to the current Bun daemon.
   `daemon-rs` remains separate parity work until cutover is approved.
