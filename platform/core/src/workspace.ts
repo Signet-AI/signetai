@@ -16,7 +16,19 @@
  * performs the resolution.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+	closeSync,
+	existsSync,
+	fsyncSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	statSync,
+	writeSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expandHome } from "./constants";
@@ -39,9 +51,8 @@ export interface ResolveWorkspacePathOptions {
 	readonly home?: string;
 	/**
 	 * Throw on a malformed persisted workspace.json instead of falling back to
-	 * the default. Default `false` (graceful), which is required for surfaces
-	 * that resolve at import time and must never crash on a corrupt config.
-	 * Explicit install operations pass `true` to fail loud.
+	 * the default. Existing malformed files now always throw; this option is
+	 * retained for source compatibility with explicit install operations.
 	 */
 	readonly strict?: boolean;
 	/**
@@ -60,6 +71,24 @@ interface WorkspaceConfigFile {
 	readonly workspace: string;
 	readonly updatedAt: string;
 }
+
+export interface WorkspaceFileSystem {
+	readonly closeSync: typeof closeSync;
+	readonly fsyncSync: typeof fsyncSync;
+	readonly openSync: typeof openSync;
+	readonly renameSync: typeof renameSync;
+	readonly rmSync: typeof rmSync;
+	readonly writeSync: typeof writeSync;
+}
+
+const defaultWorkspaceFileSystem: WorkspaceFileSystem = {
+	closeSync,
+	fsyncSync,
+	openSync,
+	renameSync,
+	rmSync,
+	writeSync,
+};
 
 // ============================================================================
 // Constants
@@ -115,16 +144,14 @@ export function getWorkspaceConfigPath(env: NodeJS.ProcessEnv = process.env, hom
 /**
  * Read the persisted `workspace` value from `workspace.json`.
  *
- * Returns `null` when the file is absent or (in non-strict mode) malformed.
- * In strict mode a malformed file throws, preserving the historical contract
- * of explicit install operations.
+ * Returns `null` only when the file is absent. An existing malformed file
+ * throws instead of silently selecting the default workspace.
  */
 export function readConfiguredWorkspacePath(
 	env: NodeJS.ProcessEnv = process.env,
 	home = homedir(),
-	options: { readonly strict?: boolean } = {},
+	_options: { readonly strict?: boolean } = {},
 ): string | null {
-	const strict = options.strict ?? false;
 	const configPath = getWorkspaceConfigPath(env, home);
 	if (!existsSync(configPath)) return null;
 
@@ -132,23 +159,17 @@ export function readConfiguredWorkspacePath(
 	try {
 		raw = JSON.parse(readFileSync(configPath, "utf-8"));
 	} catch (err) {
-		if (strict) {
-			const detail = err instanceof Error ? err.message : String(err);
-			throw new Error(`Invalid Signet workspace config at ${configPath}: ${detail}`);
-		}
-		return null;
+		const detail = err instanceof Error ? err.message : String(err);
+		throw new Error(`Invalid Signet workspace config at ${configPath}: ${detail}`);
 	}
 
 	if (!isRecord(raw) || !("workspace" in raw)) {
-		if (strict) throw new Error(`Invalid Signet workspace config at ${configPath}: missing workspace`);
-		return null;
+		throw new Error(`Invalid Signet workspace config at ${configPath}: missing workspace`);
 	}
 
 	const workspace = raw.workspace;
 	if (typeof workspace !== "string" || workspace.trim().length === 0) {
-		if (strict)
-			throw new Error(`Invalid Signet workspace config at ${configPath}: workspace must be a non-empty string`);
-		return null;
+		throw new Error(`Invalid Signet workspace config at ${configPath}: workspace must be a non-empty string`);
 	}
 
 	return normalizeWorkspacePath(workspace, home);
@@ -158,6 +179,7 @@ export function writeConfiguredWorkspacePath(
 	pathValue: string,
 	env: NodeJS.ProcessEnv = process.env,
 	home = homedir(),
+	fileSystem: WorkspaceFileSystem = defaultWorkspaceFileSystem,
 ): string {
 	const path = normalizeWorkspacePath(pathValue, home);
 	const configPath = getWorkspaceConfigPath(env, home);
@@ -169,7 +191,27 @@ export function writeConfiguredWorkspacePath(
 		workspace: path,
 		updatedAt: new Date().toISOString(),
 	};
-	writeFileSync(configPath, `${JSON.stringify(payload, null, 2)}\n`);
+	const temporaryPath = `${configPath}.tmp-${process.pid}-${randomUUID()}`;
+	const content = Buffer.from(`${JSON.stringify(payload, null, 2)}\n`, "utf8");
+	let descriptor: number | undefined;
+	let committed = false;
+	try {
+		descriptor = fileSystem.openSync(temporaryPath, "w");
+		let offset = 0;
+		while (offset < content.length) {
+			const written = fileSystem.writeSync(descriptor, content, offset, content.length - offset);
+			if (written <= 0) throw new Error(`Unable to write workspace config at ${temporaryPath}`);
+			offset += written;
+		}
+		fileSystem.fsyncSync(descriptor);
+		fileSystem.closeSync(descriptor);
+		descriptor = undefined;
+		fileSystem.renameSync(temporaryPath, configPath);
+		committed = true;
+	} finally {
+		if (descriptor !== undefined) fileSystem.closeSync(descriptor);
+		if (!committed) fileSystem.rmSync(temporaryPath, { force: true });
+	}
 	return configPath;
 }
 
@@ -190,17 +232,14 @@ export function clearConfiguredWorkspacePath(env: NodeJS.ProcessEnv = process.en
 export function resolveWorkspacePath(options: ResolveWorkspacePathOptions = {}): WorkspaceResolution {
 	const env = options.env ?? process.env;
 	const home = options.home ?? homedir();
-	const strict = options.strict ?? false;
 	const requireExistingEnvPath = options.requireExistingEnvPath ?? false;
 
 	const configPath = getWorkspaceConfigPath(env, home);
-	// Resolve the env override first: if it wins, a malformed persisted config is
-	// irrelevant (only the `configuredPath` report field needs it, so read it
-	// leniently). Only propagate `strict` to the config read when the env override
-	// did not win, preserving the historical contract that a valid env override
-	// short-circuits a corrupt workspace.json rather than throwing.
+	// Resolve the env override first. The persisted config is still read so the
+	// structured result reports it, but an existing malformed config is always an
+	// error rather than a reason to silently select the default workspace.
 	const envPath = resolveEnvWorkspace(env, home, requireExistingEnvPath);
-	const configValue = readConfiguredWorkspacePath(env, home, { strict: envPath ? false : strict });
+	const configValue = readConfiguredWorkspacePath(env, home);
 
 	if (envPath) {
 		return {

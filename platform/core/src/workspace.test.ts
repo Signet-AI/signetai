@@ -1,8 +1,20 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	fsyncSync,
+	mkdirSync,
+	mkdtempSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+	writeSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	type WorkspaceFileSystem,
 	type WorkspaceResolution,
 	clearConfiguredWorkspacePath,
 	getWorkspaceConfigPath,
@@ -112,30 +124,14 @@ describe("resolveWorkspacePath precedence", () => {
 });
 
 describe("resolveWorkspacePath malformed config", () => {
-	it("falls back gracefully by default", () => {
-		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-lenient-"));
+	it("throws instead of falling back when an existing config is malformed", () => {
+		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-malformed-"));
 		try {
 			const configHome = join(home, "config");
 			mkdirSync(join(configHome, "signet"), { recursive: true });
 			writeFileSync(join(configHome, "signet", "workspace.json"), "{not json");
 
-			const resolved = resolveWorkspacePath({ env: makeEnv({ XDG_CONFIG_HOME: configHome }), home });
-
-			expect(resolved.source).toBe("default");
-			expect(resolved.path).toBe(join(home, ".agents"));
-		} finally {
-			rmSync(home, { recursive: true, force: true });
-		}
-	});
-
-	it("throws in strict mode on malformed JSON", () => {
-		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-strict-"));
-		try {
-			const configHome = join(home, "config");
-			mkdirSync(join(configHome, "signet"), { recursive: true });
-			writeFileSync(join(configHome, "signet", "workspace.json"), "{not json");
-
-			expect(() => resolveWorkspacePath({ env: makeEnv({ XDG_CONFIG_HOME: configHome }), home, strict: true })).toThrow(
+			expect(() => resolveWorkspacePath({ env: makeEnv({ XDG_CONFIG_HOME: configHome }), home })).toThrow(
 				"Invalid Signet workspace config",
 			);
 		} finally {
@@ -143,41 +139,36 @@ describe("resolveWorkspacePath malformed config", () => {
 		}
 	});
 
-	it("throws in strict mode when workspace is missing or blank", () => {
-		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-strict-missing-"));
+	it("throws when an existing config is missing a workspace", () => {
+		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-missing-workspace-"));
 		try {
 			const configHome = join(home, "config");
 			mkdirSync(join(configHome, "signet"), { recursive: true });
-			writeFileSync(join(configHome, "signet", "workspace.json"), JSON.stringify({ version: 1, workspace: "  " }));
+			writeFileSync(join(configHome, "signet", "workspace.json"), JSON.stringify({ version: 1 }));
 
-			expect(() => resolveWorkspacePath({ env: makeEnv({ XDG_CONFIG_HOME: configHome }), home, strict: true })).toThrow(
-				"workspace must be a non-empty string",
+			expect(() => resolveWorkspacePath({ env: makeEnv({ XDG_CONFIG_HOME: configHome }), home })).toThrow(
+				"workspace config at",
 			);
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}
 	});
 
-	it("a valid env override masks a malformed config even in strict mode", () => {
-		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-strict-masked-"));
+	it("does not let an env override hide an existing malformed config", () => {
+		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-malformed-env-"));
 		try {
 			const configHome = join(home, "config");
 			const envWorkspace = join(home, "env-wins");
 			mkdirSync(envWorkspace, { recursive: true });
 			mkdirSync(join(configHome, "signet"), { recursive: true });
-			// Corrupt config that WOULD throw in strict mode if reached.
 			writeFileSync(join(configHome, "signet", "workspace.json"), "{not json");
 
-			// A valid env override short-circuits the malformed config instead of
-			// throwing — preserving the historical contract that a connector install
-			// with a valid SIGNET_PATH succeeds even when workspace.json is corrupt.
-			const resolved = resolveWorkspacePath({
-				env: makeEnv({ SIGNET_PATH: envWorkspace, XDG_CONFIG_HOME: configHome }),
-				home,
-				strict: true,
-			});
-			expect(resolved.source).toBe("env");
-			expect(resolved.path).toBe(envWorkspace);
+			expect(() =>
+				resolveWorkspacePath({
+					env: makeEnv({ SIGNET_PATH: envWorkspace, XDG_CONFIG_HOME: configHome }),
+					home,
+				}),
+			).toThrow("Invalid Signet workspace config");
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}
@@ -254,6 +245,45 @@ describe("workspace config read/write/clear", () => {
 
 			clearConfiguredWorkspacePath(env);
 			expect(readConfiguredWorkspacePath(env, home)).toBeNull();
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the existing pointer when an injected temp write is partial (#1472)", () => {
+		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-atomic-"));
+		try {
+			const env = makeEnv({ XDG_CONFIG_HOME: join(home, "config") });
+			const existingWorkspace = join(home, "existing-workspace");
+			const replacementWorkspace = join(home, "replacement-workspace");
+			const configPath = writeConfiguredWorkspacePath(existingWorkspace, env, home);
+			const realFileSystem: WorkspaceFileSystem = {
+				closeSync,
+				fsyncSync,
+				openSync,
+				renameSync,
+				rmSync,
+				writeSync,
+			};
+			let injected = false;
+			const failingFileSystem: WorkspaceFileSystem = {
+				...realFileSystem,
+				writeSync: (descriptor, buffer, offset, length) => {
+					if (!injected) {
+						injected = true;
+						realFileSystem.writeSync(descriptor, buffer, offset, Math.max(1, Math.floor(length / 2)));
+						throw new Error("injected partial workspace write");
+					}
+					return realFileSystem.writeSync(descriptor, buffer, offset, length);
+				},
+			};
+
+			expect(() => writeConfiguredWorkspacePath(replacementWorkspace, env, home, failingFileSystem)).toThrow(
+				"injected partial workspace write",
+			);
+			expect(readConfiguredWorkspacePath(env, home)).toBe(existingWorkspace);
+			expect(resolveWorkspacePath({ env, home }).path).toBe(existingWorkspace);
+			expect(readFileSync(configPath, "utf8")).toContain(existingWorkspace);
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}

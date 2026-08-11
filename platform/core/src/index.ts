@@ -169,6 +169,7 @@ export {
 	type WorkspaceSource,
 	type WorkspaceResolution,
 	type ResolveWorkspacePathOptions,
+	type WorkspaceFileSystem,
 	WORKSPACE_ENV_KEYS,
 	normalizeWorkspacePath,
 	getWorkspaceConfigPath,
