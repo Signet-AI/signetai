@@ -118,6 +118,26 @@ function seedSession(db: Database, session: GateSession, agentId: string): void 
 	).run(session.id, agentId, content, Math.max(1, content.length));
 }
 
+function readWorkflowTriggerPaths(trigger: "pull_request" | "push"): readonly string[] {
+	const workflow = readFileSync(
+		new URL("../../../../.github/workflows/memorybench-dreaming-gate.yml", import.meta.url),
+		"utf8",
+	);
+	const paths: string[] = [];
+	let collecting = false;
+	for (const line of workflow.split("\n")) {
+		if (line === `  ${trigger}:`) {
+			collecting = true;
+			continue;
+		}
+		if (collecting && /^ {2}\S/.test(line)) break;
+		if (!collecting) continue;
+		const match = line.match(/^\s+- "([^"]+)"$/);
+		if (match?.[1]) paths.push(match[1]);
+	}
+	return paths;
+}
+
 describe("MemoryBench Dreaming gate", () => {
 	let db: Database;
 	let accessor: DbAccessor;
@@ -130,6 +150,23 @@ describe("MemoryBench Dreaming gate", () => {
 
 	afterEach(() => {
 		db.close();
+	});
+
+	it("triggers for every direct gate dependency on pull requests and main pushes", () => {
+		const requiredPaths = [
+			".github/workflows/memorybench-dreaming-gate.yml",
+			"platform/daemon/src/db-accessor.ts",
+			"platform/daemon/src/episodic-sources.ts",
+			"platform/daemon/src/pipeline/memorybench-dreaming-gate.test.ts",
+			"platform/core/src/index.ts",
+			"platform/core/src/migration.ts",
+			"platform/core/src/migrations/**",
+			"platform/core/src/source-*.ts",
+			"platform/core/src/sources-*.ts",
+		];
+		for (const trigger of ["pull_request", "push"] as const) {
+			expect(readWorkflowTriggerPaths(trigger)).toEqual(expect.arrayContaining(requiredPaths));
+		}
 	});
 
 	it("derives each committed semantic outcome from the declared transcript sources", async () => {
