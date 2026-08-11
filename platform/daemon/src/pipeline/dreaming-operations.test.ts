@@ -263,11 +263,26 @@ describe("dreaming operations", () => {
 
 		const retryFrom = partial.retryFrom;
 		if (retryFrom === undefined) throw new Error("partial response has no retry boundary");
+		const attentionId = getDbAccessor().withReadDb(
+			(db) =>
+				(
+					db
+						.prepare(
+							"SELECT id FROM dreaming_attention WHERE agent_id = ? AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 1",
+						)
+						.get("agent-a") as { id?: unknown } | null
+				)?.id,
+		);
+		if (typeof attentionId !== "string") throw new Error("suffix retry attention is missing");
+		const resumedOperations = operations.slice(retryFrom);
+		const archive = resumedOperations[1];
+		if (archive === undefined) throw new Error("suffix retry archive is missing");
+		resumedOperations[1] = { ...archive, provenance: `attention:${attentionId}` };
 		const resumed = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
 			actor: "dreaming",
-			operations: operations.slice(retryFrom),
+			operations: resumedOperations,
 		});
 		expect(resumed.ok).toBe(true);
 		expect(resumed.items).toHaveLength(2);
@@ -478,6 +493,40 @@ describe("dreaming operations", () => {
 			getDbAccessor().withReadDb(
 				(db) =>
 					db.prepare("SELECT COUNT(*) AS c FROM dreaming_attention WHERE resolved_at IS NULL").get() as { c: number },
+			),
+		).toEqual({ c: 0 });
+	});
+
+	it("rejects an out-of-range suffix attention coordinate without archiving or orphaning state (#1414)", async () => {
+		insertEntity("e-out-of-range-husk", "Out-of-range Husk", "out-of-range husk");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				flag({
+					subjectRef: "entity:e-out-of-range-husk",
+					details: { entityId: "e-out-of-range-husk", reason: "zero_active_attributes" },
+				}),
+				{
+					operation: "archive_entity",
+					payload: { target: "e-out-of-range-husk", reason: "non-concrete" },
+					provenance: "attention:$999",
+				},
+			],
+		});
+
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe("Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)");
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT status FROM entities WHERE id = ?").get("e-out-of-range-husk"),
+			),
+		).toEqual({ status: "active" });
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS c FROM dreaming_attention WHERE agent_id = ?").get("agent-a") as { c: number },
 			),
 		).toEqual({ c: 0 });
 	});

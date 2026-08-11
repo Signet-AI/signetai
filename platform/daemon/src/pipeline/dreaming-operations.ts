@@ -360,6 +360,10 @@ function sameBatchFlagIndex(
 	const indexText = sameBatch[1];
 	if (indexText === undefined) return null;
 	const referencedIndex = Number.parseInt(indexText, 10);
+	// A suffix retry may retain the original coordinate while rebasing the
+	// operation array. Do not let an arbitrary out-of-range coordinate turn into
+	// an alias for the nearest preceding flag.
+	if (referencedIndex < 0 || referencedIndex >= operations.length) return null;
 	const referenced = operations[referencedIndex];
 	if (referencedIndex < operationIndex && referenced?.operation === FLAG_OP) {
 		const subjectRef = stringField(referenced.payload, "subjectRef");
