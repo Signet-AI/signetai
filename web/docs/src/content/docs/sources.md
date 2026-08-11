@@ -275,9 +275,13 @@ imports in the same request.
 
 Duplicate content is selected in the import dialog: skip the existing source,
 replace and re-index it, or re-import it as a separate source. The normalized
-content hash, format, original file name, and converter metadata are retained as
-provenance. Semantic graph refinement remains asynchronous; source-backed recall
-is available as soon as indexing completes.
+content hash, format, original file name, and converter metadata are retained
+as provenance. The import result reports the linked source-document entity and
+the aspects and attributes created by extraction. The Sources page keeps the
+same source-scoped counts after refresh or daemon restart, and shows an
+unavailable state when connected to an older daemon that does not provide the
+new fields. Semantic graph refinement remains asynchronous; source-backed
+recall is available as soon as indexing completes.
 
 ## API surface
 

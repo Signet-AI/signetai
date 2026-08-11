@@ -165,7 +165,15 @@ agent.
         "failures": { "total": 0, "recoverable": 0 },
         "checkpoints": { "total": 0, "partial": 0, "stale": 0 },
         "purge": { "deletedArtifacts": 0, "orphanChunks": 0 },
-        "semantic": { "entities": 8, "attributes": 0, "dependencies": 12, "communities": 3, "total": 23 }
+        "semantic": {
+          "entities": 8,
+          "aspects": 3,
+          "attributes": 0,
+          "dependencies": 12,
+          "communities": 3,
+          "total": 26,
+          "documentEntityId": null
+        }
       }
     }
   ]
@@ -216,11 +224,23 @@ partially succeed.
       "status": "imported",
       "sourceId": "import:abc123",
       "format": "json",
-      "duplicate": false
+      "duplicate": false,
+      "extraction": {
+        "documentEntityId": "entity-abc123",
+        "aspectsCreated": 2,
+        "attributesCreated": 3
+      }
     }
   ]
 }
 ```
+
+For an imported result, `extraction` reports the graph rows created by the
+source-artifact extraction transaction. A duplicate result also includes the
+current persisted extraction counts when the existing source has a linked
+document entity. Failed results omit `extraction` and retain their structured
+error. Older daemons may omit this object; clients should show an unavailable
+state rather than infer zero counts.
 
 ### POST /api/sources/pick-files
 
