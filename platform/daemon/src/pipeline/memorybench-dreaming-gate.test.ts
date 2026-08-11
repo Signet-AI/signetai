@@ -1,9 +1,13 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
-import type { DbAccessor } from "../db-accessor";
+import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { searchEpisodicSources } from "../episodic-sources";
+import { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } from "../transcript-capture-worker";
 import { getDreamingToolCalls, runDreamingAgentPass } from "./dreaming";
 
 interface GateSession {
@@ -224,6 +228,67 @@ describe("MemoryBench Dreaming gate", () => {
 					)
 					.get(scenario.agentId, outcome.entity, outcome.aspect, outcome.claimKey),
 			).toMatchObject({ content: outcome.value, proposal_evidence: expect.stringContaining("transcript:") });
+		}
+	});
+
+	it("indexes committed fixture sources through the transcript-capture boundary in their declared scopes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-memorybench-dreaming-gate-"));
+		const previousSignetPath = process.env.SIGNET_PATH;
+		try {
+			process.env.SIGNET_PATH = dir;
+			initDbAccessor(join(dir, "memory", "memories.db"));
+			const corpus = readCorpus();
+			const capturedSessions = corpus.scenarios.flatMap((scenario) =>
+				scenario.sessions.map((session) => ({ scenario, session, agentId: session.agentId ?? scenario.agentId })),
+			);
+			for (const { scenario, session, agentId } of capturedSessions) {
+				const transcript = session.messages.map((message) => message.content).join("\n");
+				expect(
+					enqueueTranscriptCaptureJob(getDbAccessor(), {
+						agentId,
+						harness: "memorybench",
+						sessionKey: session.id,
+						sessionId: session.id,
+						project: `memorybench:${scenario.id}`,
+						transcript,
+						rawTranscript: transcript,
+						capturedAt: "2026-01-01T00:00:00.000Z",
+						endedAt: "2026-01-01T00:00:00.000Z",
+					}),
+				).toBeTruthy();
+			}
+
+			let completed = 0;
+			while (await runTranscriptCaptureOnce(getDbAccessor(), dir)) completed++;
+			expect(completed).toBe(capturedSessions.length);
+
+			for (const scenario of corpus.scenarios) {
+				for (const [index, quote] of scenario.expected.sourceQuotes.entries()) {
+					const sourceSessionId = scenario.expected.sourceSessionIds[index];
+					const session = scenario.sessions.find((candidate) => candidate.id === sourceSessionId);
+					if (!session) throw new Error(`Missing declared source session ${sourceSessionId}`);
+					const sources = getDbAccessor().withReadDb((database) =>
+						searchEpisodicSources(database, {
+							agentId: session.agentId ?? scenario.agentId,
+							query: quote,
+							kind: "artifact",
+							limit: 10,
+						}),
+					);
+					const source = sources.find((candidate) => candidate.sourceId === sourceSessionId);
+					expect(source).toMatchObject({
+						kind: "artifact",
+						sourceId: sourceSessionId,
+						content: expect.stringContaining(quote),
+						completed: true,
+					});
+				}
+			}
+		} finally {
+			closeDbAccessor();
+			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+			else process.env.SIGNET_PATH = previousSignetPath;
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

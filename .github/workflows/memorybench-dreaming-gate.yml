@@ -13,6 +13,10 @@ on:
       - "memorybench/src/types/provider.ts"
       - "platform/daemon/src/pipeline/dreaming*.ts"
       - "platform/daemon/src/ontology-proposals.ts"
+      - "platform/daemon/src/transcript-capture*.ts"
+      - "platform/daemon/src/transcript-jsonl.ts"
+      - "platform/daemon/src/memory-lineage.ts"
+      - "platform/daemon/src/session-noise.ts"
       - ".github/workflows/memorybench-dreaming-gate.yml"
   push:
     branches: [main]
@@ -27,6 +31,10 @@ on:
       - "memorybench/src/types/provider.ts"
       - "platform/daemon/src/pipeline/dreaming*.ts"
       - "platform/daemon/src/ontology-proposals.ts"
+      - "platform/daemon/src/transcript-capture*.ts"
+      - "platform/daemon/src/transcript-jsonl.ts"
+      - "platform/daemon/src/memory-lineage.ts"
+      - "platform/daemon/src/session-noise.ts"
 
 permissions:
   contents: read
@@ -40,6 +48,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Build @signet/core for daemon source imports
+        run: bun run --filter '@signet/core' build
       - name: Validate deterministic Dreaming scenarios
         run: >-
           bun test
