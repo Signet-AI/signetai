@@ -163,6 +163,20 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 			if (!result.ok) {
 				if (result.reason === "http" && result.error) {
 					console.error(chalk.red(`Dreaming capability failed: ${result.error}`));
+					if (
+						result.status === 503 &&
+						typeof result.body === "object" &&
+						result.body !== null &&
+						(result.body as { retryable?: unknown }).retryable === true &&
+						typeof (result.body as { retryFrom?: unknown }).retryFrom === "number"
+					) {
+						console.error(
+							chalk.yellow(
+								`Retry only operations.slice(${(result.body as { retryFrom: number }).retryFrom}); the returned prefix already committed.`,
+							),
+						);
+						console.error(JSON.stringify(result.body, null, 2));
+					}
 				} else {
 					reportDaemonUnavailable(result.reason, result.status, "Dreaming capability failed");
 				}

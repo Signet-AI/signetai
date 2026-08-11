@@ -698,6 +698,50 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 0 });
 	});
 
+	it("rejects a mixed flag and cross-scope decline before minting (#1414)", async () => {
+		insertEntity("e-owner", "Owner entity", "owner entity");
+		const existing = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-b",
+			actor: "dreaming",
+			operations: [flag({ subjectRef: "entity:e-owner" })],
+		});
+		const foreignAttentionId = (existing.items[0]?.result as { attentionId?: string } | undefined)?.attentionId;
+		if (!foreignAttentionId) throw new Error("foreign flag did not mint attention");
+
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				flag({ subjectRef: "entity:e-owner" }),
+				{ operation: "decline_attention", payload: { attentionId: foreignAttentionId } },
+			],
+		});
+
+		expect(result).toMatchObject({
+			ok: false,
+			items: [],
+			error: "Attention record is not pending in this agent scope",
+		});
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS c FROM dreaming_attention WHERE agent_id = ?").get("agent-a") as { c: number },
+			),
+		).toEqual({ c: 0 });
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT COUNT(*) AS c FROM dreaming_attention WHERE agent_id = ? AND resolved_at IS NULL")
+						.get("agent-b") as {
+						c: number;
+					},
+			),
+		).toEqual({ c: 1 });
+	});
+
 	it("rejects evidence cited from another agent scope with a corrective error", async () => {
 		insertEpisodicMemory("mem-other", "The source belongs to the default scope.", "default");
 		const result = await applyDreamingOperations({

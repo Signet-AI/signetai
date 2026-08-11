@@ -15,8 +15,14 @@ function okResult<T>(data: T): DaemonFetchResult<T> {
 	return { ok: true, data };
 }
 
-function httpError<T>(status: number, error?: string): DaemonFetchResult<T> {
-	return error ? { ok: false, reason: "http", status, error } : { ok: false, reason: "http", status };
+function httpError<T>(status: number, error?: string, body?: unknown): DaemonFetchResult<T> {
+	return {
+		ok: false,
+		reason: "http",
+		status,
+		...(error ? { error } : {}),
+		...(body === undefined ? {} : { body }),
+	};
 }
 
 /**
@@ -179,6 +185,35 @@ describe("Dreaming capability CLI binding", () => {
 				program.parseAsync(["node", "test", "dream", "tool", "runbook_write", "--input", "{}"]),
 			).rejects.toThrow("EXIT_1");
 			expect(capture.errorLines.join("\n")).toContain("evidence must include an exact quote");
+		} finally {
+			exitSpy.mockRestore();
+			capture.restore();
+		}
+	});
+
+	it("prints the structured suffix-only retry boundary for a retryable capability failure", async () => {
+		const fetchDaemonResult = mockFetch(async () =>
+			httpError(503, "injected writer rejection", {
+				tool: "apply_ontology_ops",
+				ok: false,
+				retryable: true,
+				retryFrom: 20,
+				items: Array.from({ length: 20 }, (_, index) => ({ index, ok: true })),
+			}),
+		);
+		const program = new Command();
+		registerDreamCommands(program, { ...makeDeps(), fetchDaemonResult });
+		const capture = captureOutput();
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+		try {
+			await expect(
+				program.parseAsync(["node", "test", "dream", "tool", "apply_ontology_ops", "--input", "{}"]),
+			).rejects.toThrow("EXIT_1");
+			const output = capture.errorLines.join("\n");
+			expect(output).toContain("operations.slice(20)");
+			expect(output).toContain('"retryFrom": 20');
 		} finally {
 			exitSpy.mockRestore();
 			capture.restore();

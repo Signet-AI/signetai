@@ -212,4 +212,23 @@ describe("createDaemonClient", () => {
 
 		expect(result).toEqual({ ok: false, reason: "http", status: 502 });
 	});
+
+	test("fetchDaemonResult preserves structured retry metadata from an HTTP failure", async () => {
+		globalThis.fetch = async () =>
+			new Response(JSON.stringify({ error: "writer failed", retryable: true, retryFrom: 20 }), {
+				status: 503,
+				headers: { "Content-Type": "application/json" },
+			});
+
+		const client = createDaemonClient(3850);
+		const result = await client.fetchDaemonResult("/api/dream/tools/apply_ontology_ops");
+
+		expect(result).toEqual({
+			ok: false,
+			reason: "http",
+			status: 503,
+			error: "writer failed",
+			body: { error: "writer failed", retryable: true, retryFrom: 20 },
+		});
+	});
 });

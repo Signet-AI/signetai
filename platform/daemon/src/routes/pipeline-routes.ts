@@ -802,7 +802,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			return c.json({ error: "Dreaming capability agent scope does not match the credential" }, 403);
 		}
 		const result = await capability.invoke({ ...input, agentId: scopedAgent.agentId });
-		return c.json({ ...result, agentId: scopedAgent.agentId }, result.ok ? 200 : 400);
+		return c.json({ ...result, agentId: scopedAgent.agentId }, result.ok ? 200 : result.retryable === true ? 503 : 400);
 	});
 
 	app.post("/api/dream/trigger", async (c) => {

@@ -755,7 +755,13 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					writeCaps: params.writeCaps,
 				});
 				params.onOperationsApplied?.(result, operations, scopeId);
-				return { ok: result.ok, ...(result.error ? { error: result.error } : {}), items: result.items };
+				return {
+					ok: result.ok,
+					...(result.error ? { error: result.error } : {}),
+					...(result.retryable === true ? { retryable: true } : {}),
+					...(result.retryFrom !== undefined ? { retryFrom: result.retryFrom } : {}),
+					items: result.items,
+				};
 			},
 		),
 	];

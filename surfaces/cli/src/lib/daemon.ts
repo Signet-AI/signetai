@@ -15,6 +15,8 @@ export type DaemonFetchResult<T> =
 			readonly status?: number;
 			/** Daemon-provided error message, when the HTTP error body carries one. */
 			readonly error?: string;
+			/** Parsed daemon error payload for callers that need structured retry data. */
+			readonly body?: unknown;
 	  };
 
 export type DaemonApiCall = (
@@ -37,15 +39,16 @@ function isTimeoutError(err: unknown): boolean {
 	return code === "ABORT_ERR";
 }
 
-/** Extract a daemon-provided `{ error: string }` message from an HTTP error body. */
-async function readHttpErrorBody(res: Response): Promise<string | undefined> {
+/** Preserve a daemon error payload while exposing its concise message to ordinary CLI callers. */
+async function readHttpErrorBody(res: Response): Promise<{ readonly error?: string; readonly body?: unknown }> {
 	const text = await res.text().catch(() => "");
-	if (!text.trim()) return undefined;
+	if (!text.trim()) return {};
 	try {
 		const parsed = JSON.parse(text) as { error?: unknown };
-		return typeof parsed?.error === "string" && parsed.error.trim() ? parsed.error : undefined;
+		const error = typeof parsed?.error === "string" && parsed.error.trim() ? parsed.error : undefined;
+		return { ...(error ? { error } : {}), body: parsed };
 	} catch {
-		return undefined;
+		return {};
 	}
 }
 
@@ -95,8 +98,8 @@ export function createDaemonClient(
 				// is already running", "No routing policy is configured.") so
 				// callers can name the real cause instead of a generic
 				// connectivity failure (#1074).
-				const error = await readHttpErrorBody(res);
-				return { ok: false, reason: "http", status: res.status, ...(error ? { error } : {}) };
+				const response = await readHttpErrorBody(res);
+				return { ok: false, reason: "http", status: res.status, ...response };
 			}
 			try {
 				const data: T = await res.json();

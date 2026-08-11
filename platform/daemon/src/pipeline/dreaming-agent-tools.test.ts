@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { DREAMING_CAPABILITY_IDS } from "./dreaming-capabilities";
 
@@ -103,6 +103,58 @@ describe("dreaming-agent-tools", () => {
 		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
 		expect(tools.map((tool) => tool.name)).toEqual([...DREAMING_CAPABILITY_IDS]);
 		expect(tools).toHaveLength(12);
+	});
+
+	it("preserves a retry boundary through the Pi capability after a writer failure (#1414)", async () => {
+		const base = getDbAccessor();
+		const enqueue = base.withWriteTxAsync;
+		if (!enqueue) throw new Error("async write API is unavailable");
+		for (let index = 0; index < 25; index += 1) {
+			insertEpisodicMemory(`m-capability-1414-${index}`, `Capability retry evidence ${index}.`);
+		}
+		let transactions = 0;
+		const accessor: DbAccessor = {
+			...base,
+			withWriteTxAsync: (fn) => {
+				transactions += 1;
+				if (transactions === 3) return Promise.reject(new Error("injected capability writer rejection"));
+				return enqueue(fn);
+			},
+		};
+		const tools = createDreamingAgentTools({ accessor, agentId: "owner", actor: "owner" });
+		const result = readResult(
+			await findTool(tools, "apply_ontology_ops").execute(
+				"call",
+				{
+					agentId: "owner",
+					operations: Array.from({ length: 25 }, (_, index) => ({
+						operation: "create_entity",
+						payload: { name: `Capability retry entity ${index}`, type: "project" },
+						evidence: [
+							{
+								source_ref: `memory:m-capability-1414-${index}`,
+								source_kind: "manual",
+								source_id: `m-capability-1414-${index}`,
+								quote: `Capability retry evidence ${index}.`,
+							},
+						],
+					})),
+				},
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+
+		expect(result).toMatchObject({
+			ok: false,
+			retryable: true,
+			retryFrom: 20,
+			error: "injected capability writer rejection",
+		});
+		expect((result.items as Array<{ index: number }>).map((item) => item.index)).toEqual(
+			Array.from({ length: 20 }, (_, index) => index),
+		);
 	});
 
 	it("isolates reads by agentId: search_entities only returns the caller's entities", async () => {
@@ -575,7 +627,11 @@ describe("dreaming-agent-tools", () => {
 				{} as never,
 			),
 		);
-		expect((crossScope.items as Array<{ ok: boolean }>)[0]?.ok).toBe(false);
+		expect(crossScope).toMatchObject({
+			ok: false,
+			items: [],
+			error: "Attention record is not pending in this agent scope",
+		});
 		const stillPending = readResult(
 			await findTool(tools, "attention_list").execute(
 				"call",
@@ -616,7 +672,11 @@ describe("dreaming-agent-tools", () => {
 				{} as never,
 			),
 		);
-		expect((twice.items as Array<{ ok: boolean }>)[0]?.ok).toBe(false);
+		expect(twice).toMatchObject({
+			ok: false,
+			items: [],
+			error: "Attention record is not pending in this agent scope",
+		});
 
 		const resolved = readResult(
 			await findTool(tools, "attention_list").execute(

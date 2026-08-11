@@ -611,8 +611,17 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			continue;
 		}
 		if (operation.operation === DECLINE_ATTENTION_OP) {
-			if (stringField(operation.payload, "attentionId") === null)
-				return "decline_attention requires payload.attentionId";
+			const attentionId = stringField(operation.payload, "attentionId");
+			if (attentionId === null) return "decline_attention requires payload.attentionId";
+			const pending = params.accessor.withReadDb((db) =>
+				db
+					.prepare(
+						`SELECT 1 FROM dreaming_attention
+						 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
+					)
+					.get(attentionId, params.agentId),
+			);
+			if (pending == null) return "Attention record is not pending in this agent scope";
 			continue;
 		}
 
