@@ -80,10 +80,14 @@ Arch.
   `APPLE_SIGNING_IDENTITY`) plus one supported notarytool credential set:
   App Store Connect API key (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, and
   `APPLE_API_ISSUER`), Apple ID/app-specific password/team ID, or a notarytool
-  keychain profile. Without these credentials, the macOS tag job fails before
-  build or publish. Local Linux verification cannot prove the Apple signing,
-  notarization, or Gatekeeper steps; the macOS CI runner is the verification
-  environment.
+  keychain profile. `APPLE_API_KEY` contains the `.p8` key contents and CI
+  writes it to an absolute temporary path before invoking electron-builder.
+  Keychain-profile mode also requires one complete Apple ID or App Store
+  Connect API-key set so CI can provision the profile with
+  `xcrun notarytool store-credentials` on the fresh hosted runner. Without
+  these credentials, the macOS tag job fails before build or publish. Local
+  Linux verification cannot prove the Apple signing, notarization, or
+  Gatekeeper steps; the macOS CI runner is the verification environment.
 - The desktop packaging verifier checks the signed app bundle with
   `codesign`, validates the stapled ticket with `xcrun stapler`, and runs a
   quarantined copy through `spctl` before upload. Electron-builder's

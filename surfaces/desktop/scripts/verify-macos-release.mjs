@@ -63,4 +63,6 @@ try {
 	rmSync(quarantineDirectory, { recursive: true, force: true });
 }
 
-console.log("macOS release verification passed: Developer ID signature, stapled notarization ticket, and quarantined Gatekeeper assessment are valid.");
+console.log(
+	"macOS release verification passed: Developer ID signature, stapled notarization ticket, and quarantined Gatekeeper assessment are valid.",
+);

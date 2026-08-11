@@ -93,16 +93,48 @@ jobs:
             require_secret APPLE_CERTIFICATE_PASSWORD "${APPLE_CERTIFICATE_PASSWORD:-}"
             require_secret APPLE_SIGNING_IDENTITY "${APPLE_SIGNING_IDENTITY:-}"
 
-            if [ -n "${APPLE_ID:-}" ] || [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]; then
-              [ -n "${APPLE_ID:-}" ] || notarization_missing+=("APPLE_ID")
-              [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] || notarization_missing+=("APPLE_APP_SPECIFIC_PASSWORD")
-              [ -n "${APPLE_TEAM_ID:-}" ] || notarization_missing+=("APPLE_TEAM_ID")
-            elif [ -n "${APPLE_API_KEY:-}" ] || [ -n "${APPLE_API_KEY_ID:-}" ] || [ -n "${APPLE_API_ISSUER:-}" ]; then
-              [ -n "${APPLE_API_KEY:-}" ] || notarization_missing+=("APPLE_API_KEY")
-              [ -n "${APPLE_API_KEY_ID:-}" ] || notarization_missing+=("APPLE_API_KEY_ID")
-              [ -n "${APPLE_API_ISSUER:-}" ] || notarization_missing+=("APPLE_API_ISSUER")
-            elif [ -n "${APPLE_KEYCHAIN_PROFILE:-}" ]; then
-              :
+            apple_id_present=0
+            apple_id_complete=0
+            api_key_present=0
+            api_key_complete=0
+            if [ -n "${APPLE_ID:-}" ] || [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] || [ -n "${APPLE_TEAM_ID:-}" ]; then
+              apple_id_present=1
+              if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+                apple_id_complete=1
+              fi
+            fi
+            if [ -n "${APPLE_API_KEY:-}" ] || [ -n "${APPLE_API_KEY_ID:-}" ] || [ -n "${APPLE_API_ISSUER:-}" ]; then
+              api_key_present=1
+              if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
+                api_key_complete=1
+              fi
+            fi
+            if [ -n "${APPLE_KEYCHAIN_PROFILE:-}" ]; then
+              if [ "${apple_id_complete}" -eq 0 ] && [ "${api_key_complete}" -eq 0 ]; then
+                if [ "${apple_id_present}" -eq 1 ]; then
+                  [ -n "${APPLE_ID:-}" ] || notarization_missing+=("APPLE_ID")
+                  [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] || notarization_missing+=("APPLE_APP_SPECIFIC_PASSWORD")
+                  [ -n "${APPLE_TEAM_ID:-}" ] || notarization_missing+=("APPLE_TEAM_ID")
+                elif [ "${api_key_present}" -eq 1 ]; then
+                  [ -n "${APPLE_API_KEY:-}" ] || notarization_missing+=("APPLE_API_KEY")
+                  [ -n "${APPLE_API_KEY_ID:-}" ] || notarization_missing+=("APPLE_API_KEY_ID")
+                  [ -n "${APPLE_API_ISSUER:-}" ] || notarization_missing+=("APPLE_API_ISSUER")
+                else
+                  notarization_missing+=("APPLE_KEYCHAIN_PROFILE requires a complete Apple ID or App Store Connect API key set for provisioning")
+                fi
+              fi
+            elif [ "${apple_id_present}" -eq 1 ]; then
+              [ "${apple_id_complete}" -eq 1 ] || {
+                [ -n "${APPLE_ID:-}" ] || notarization_missing+=("APPLE_ID")
+                [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] || notarization_missing+=("APPLE_APP_SPECIFIC_PASSWORD")
+                [ -n "${APPLE_TEAM_ID:-}" ] || notarization_missing+=("APPLE_TEAM_ID")
+              }
+            elif [ "${api_key_present}" -eq 1 ]; then
+              [ "${api_key_complete}" -eq 1 ] || {
+                [ -n "${APPLE_API_KEY:-}" ] || notarization_missing+=("APPLE_API_KEY")
+                [ -n "${APPLE_API_KEY_ID:-}" ] || notarization_missing+=("APPLE_API_KEY_ID")
+                [ -n "${APPLE_API_ISSUER:-}" ] || notarization_missing+=("APPLE_API_ISSUER")
+              }
             else
               notarization_missing+=("APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER (or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID)")
             fi
@@ -183,14 +215,41 @@ jobs:
             write_env CSC_LINK "${APPLE_CERTIFICATE}"
             write_env CSC_KEY_PASSWORD "${APPLE_CERTIFICATE_PASSWORD}"
             write_env CSC_NAME "${APPLE_SIGNING_IDENTITY}"
-            write_env APPLE_ID "${APPLE_ID:-}"
-            write_env APPLE_APP_SPECIFIC_PASSWORD "${APPLE_APP_SPECIFIC_PASSWORD:-}"
-            write_env APPLE_TEAM_ID "${APPLE_TEAM_ID:-}"
-            write_env APPLE_API_KEY "${APPLE_API_KEY:-}"
-            write_env APPLE_API_KEY_ID "${APPLE_API_KEY_ID:-}"
-            write_env APPLE_API_ISSUER "${APPLE_API_ISSUER:-}"
-            write_env APPLE_KEYCHAIN "${APPLE_KEYCHAIN:-}"
-            write_env APPLE_KEYCHAIN_PROFILE "${APPLE_KEYCHAIN_PROFILE:-}"
+            api_key_path=""
+            if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
+              api_key_path="${RUNNER_TEMP}/signet-apple-api-key.p8"
+              printf '%s\n' "${APPLE_API_KEY}" > "${api_key_path}"
+              chmod 600 "${api_key_path}"
+            fi
+            if [ -n "${APPLE_KEYCHAIN_PROFILE:-}" ]; then
+              store_credentials=(notarytool store-credentials "${APPLE_KEYCHAIN_PROFILE}")
+              if [ -n "${api_key_path}" ]; then
+                store_credentials+=(--key "${api_key_path}" --key-id "${APPLE_API_KEY_ID}" --issuer "${APPLE_API_ISSUER}")
+              else
+                store_credentials+=(--apple-id "${APPLE_ID}" --password "${APPLE_APP_SPECIFIC_PASSWORD}" --team-id "${APPLE_TEAM_ID}")
+              fi
+              if [ -n "${APPLE_KEYCHAIN:-}" ]; then
+                store_credentials+=(--keychain "${APPLE_KEYCHAIN}")
+              fi
+              xcrun "${store_credentials[@]}"
+              write_env APPLE_ID ""
+              write_env APPLE_APP_SPECIFIC_PASSWORD ""
+              write_env APPLE_TEAM_ID ""
+              write_env APPLE_API_KEY ""
+              write_env APPLE_API_KEY_ID ""
+              write_env APPLE_API_ISSUER ""
+              write_env APPLE_KEYCHAIN "${APPLE_KEYCHAIN:-}"
+              write_env APPLE_KEYCHAIN_PROFILE "${APPLE_KEYCHAIN_PROFILE}"
+            else
+              write_env APPLE_ID "${APPLE_ID:-}"
+              write_env APPLE_APP_SPECIFIC_PASSWORD "${APPLE_APP_SPECIFIC_PASSWORD:-}"
+              write_env APPLE_TEAM_ID "${APPLE_TEAM_ID:-}"
+              write_env APPLE_API_KEY "${api_key_path}"
+              write_env APPLE_API_KEY_ID "${APPLE_API_KEY_ID:-}"
+              write_env APPLE_API_ISSUER "${APPLE_API_ISSUER:-}"
+              write_env APPLE_KEYCHAIN "${APPLE_KEYCHAIN:-}"
+              write_env APPLE_KEYCHAIN_PROFILE ""
+            fi
           elif [ "${{ matrix.runner }}" = "windows-latest" ]; then
             write_env CSC_LINK "${WINDOWS_CERTIFICATE}"
             write_env CSC_KEY_PASSWORD "${WINDOWS_CERTIFICATE_PASSWORD}"
@@ -230,7 +289,7 @@ jobs:
           bun run verify:macos
 
       - name: Generate AUR metadata
-        if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/')
+        if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail
           APPIMAGE="$(find surfaces/desktop/release -name '*.AppImage' | head -n 1)"
@@ -258,7 +317,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload AUR metadata
-        if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/')
+        if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: aur-metadata
@@ -268,7 +327,7 @@ jobs:
           include-hidden-files: true
 
       - name: Publish release assets
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -282,7 +341,7 @@ jobs:
 
   validate-aur:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

@@ -82,6 +82,26 @@ describe("desktop update packaging", () => {
 		expect(verifier).toContain('run("spctl", ["--assess", "--type", "execute"');
 	});
 
+	test("materializes API keys, provisions keychain profiles, and publishes only stable v tags", () => {
+		const workflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "desktop-build.yml"), "utf8");
+		const configureStart = workflow.indexOf("      - name: Configure Electron signing");
+		const installStart = workflow.indexOf("      - name: Install dependencies", configureStart);
+		const configure = workflow.slice(configureStart, installStart);
+
+		expect(configure).toContain('api_key_path="${RUNNER_TEMP}/signet-apple-api-key.p8"');
+		expect(configure).toContain('printf \'%s\\n\' "${APPLE_API_KEY}" > "${api_key_path}"');
+		expect(configure).toContain('write_env APPLE_API_KEY "${api_key_path}"');
+		expect(configure).toContain("notarytool store-credentials");
+		expect(configure).toContain('xcrun "${store_credentials[@]}"');
+		expect(configure).toContain('write_env APPLE_API_KEY ""');
+
+		const publishStart = workflow.indexOf("      - name: Publish release assets");
+		const validateStart = workflow.indexOf("\n\n  validate-aur:", publishStart);
+		const publish = workflow.slice(publishStart, validateStart);
+		expect(publish).toContain("if: startsWith(github.ref, 'refs/tags/v')");
+		expect(publish).not.toContain("if: startsWith(github.ref, 'refs/tags/')");
+	});
+
 	test("uses a Linux-safe Electron executable name", () => {
 		const packageJson = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
 		expect(packageJson.build.executableName).toBe("signet");
