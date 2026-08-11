@@ -19,6 +19,7 @@ import {
 	mkdirSync,
 	openSync,
 	readFileSync,
+	readdirSync,
 	renameSync,
 	unlinkSync,
 	writeFileSync,
@@ -109,6 +110,7 @@ const MAX_SECRET_EXEC_QUEUED_JOBS = 64;
 const MAX_SECRET_EXEC_RETAINED_JOBS = MAX_SECRET_EXEC_RUNNING_JOBS + MAX_SECRET_EXEC_QUEUED_JOBS + 64;
 
 const BITWARDEN_DELETED_NAMES_SECRET = "BITWARDEN_DELETED_SECRET_NAMES";
+const SECRET_STORE_TEMP_PREFIX = "secrets.enc.tmp-";
 
 const secretExecJobs = new Map<string, SecretExecJob>();
 const pendingSecretExecJobs: string[] = [];
@@ -283,7 +285,39 @@ async function decrypt(ciphertext: string): Promise<string> {
 // Store I/O
 // ---------------------------------------------------------------------------
 
+function isSecretStoreTempProcessLive(name: string): boolean {
+	const pid = name.slice(SECRET_STORE_TEMP_PREFIX.length).split("-", 1)[0];
+	if (!/^\d+$/.test(pid)) return false;
+
+	try {
+		process.kill(Number(pid), 0);
+		return true;
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "EPERM";
+	}
+}
+
+function cleanupStaleSecretStoreTemps(): void {
+	const dir = getSecretsDir();
+	let names: string[];
+	try {
+		names = readdirSync(dir);
+	} catch {
+		return;
+	}
+
+	for (const name of names) {
+		if (!name.startsWith(SECRET_STORE_TEMP_PREFIX) || isSecretStoreTempProcessLive(name)) continue;
+		try {
+			unlinkSync(join(dir, name));
+		} catch {
+			// Best effort. Another process may have finished or removed the file.
+		}
+	}
+}
+
 function loadStore(): SecretsStore {
+	cleanupStaleSecretStoreTemps();
 	const file = getSecretsFile();
 	if (!existsSync(file)) {
 		return { version: 1, secrets: {} };
@@ -296,8 +330,8 @@ function loadStore(): SecretsStore {
 	}
 }
 
-type SecretStoreWriteStage = "after-write";
-type SecretStoreWriteHookForTests = (stage: SecretStoreWriteStage) => void;
+type SecretStoreWriteStage = "after-write" | "before-close";
+type SecretStoreWriteHookForTests = (stage: SecretStoreWriteStage, fd?: number) => void;
 let secretStoreWriteHookForTests: SecretStoreWriteHookForTests | null = null;
 
 /** @internal Inject a failure or process kill while testing atomic store replacement. */
@@ -316,11 +350,18 @@ function saveStore(store: SecretsStore): void {
 		writeFileSync(fd, JSON.stringify(store, null, 2), "utf-8");
 		secretStoreWriteHookForTests?.("after-write");
 		fsyncSync(fd);
+		secretStoreWriteHookForTests?.("before-close", fd);
 		closeSync(fd);
 		fd = null;
 		renameSync(tmp, file);
 	} catch (error) {
-		if (fd !== null) closeSync(fd);
+		if (fd !== null) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Continue cleanup and preserve the original write error.
+			}
+		}
 		try {
 			unlinkSync(tmp);
 		} catch {

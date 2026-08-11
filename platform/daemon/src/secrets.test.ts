@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
 } from "./bitwarden.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index.js";
 import {
+	__setSecretStoreWriteHookForTests,
 	deleteSecret,
 	execWithSecrets,
 	getSecret,
@@ -31,6 +32,12 @@ function secretsFile(): string {
 	return join(agentsDir, ".secrets", "secrets.enc");
 }
 
+function secretStoreTempFiles(): string[] {
+	const dir = join(agentsDir, ".secrets");
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir).filter((name) => name.startsWith("secrets.enc.tmp-"));
+}
+
 describe("local secrets provider", () => {
 	beforeEach(() => {
 		agentsDir = join(tmpdir(), `signet-secrets-provider-${process.pid}-${Date.now()}`);
@@ -42,6 +49,7 @@ describe("local secrets provider", () => {
 		resetDefaultPluginHostForTests();
 		resetSecretExecJobsForTests();
 		setBitwardenClientFactoryForTests(null);
+		__setSecretStoreWriteHookForTests(null);
 		invalidateSecretsCache();
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -96,7 +104,7 @@ describe("local secrets provider", () => {
 		expect(Date.parse(store.secrets.OPENAI_API_KEY?.updated ?? "")).toBeGreaterThan(0);
 	});
 
-	test("a kill during store replacement leaves the previous secrets.enc intact", async () => {
+	test("a kill during store replacement leaves the previous store and load removes the orphan temp", async () => {
 		await putSecret("OPENAI_API_KEY", "before-kill");
 		const script = join(agentsDir, "kill-during-secrets-write.ts");
 		writeFileSync(
@@ -119,7 +127,22 @@ describe("local secrets provider", () => {
 		});
 
 		expect(result).toEqual({ code: null, signal: "SIGKILL" });
+		expect(secretStoreTempFiles()).toHaveLength(1);
 		expect(await getSecret("OPENAI_API_KEY")).toBe("before-kill");
+		expect(secretStoreTempFiles()).toEqual([]);
+	});
+
+	test("store replacement removes its temp file when closing the fd fails", async () => {
+		await putSecret("OPENAI_API_KEY", "before-close-failure");
+		__setSecretStoreWriteHookForTests((stage, fd) => {
+			if (stage === "before-close" && fd !== undefined) closeSync(fd);
+		});
+
+		await expect(putSecret("OPENAI_API_KEY", "after-close-failure")).rejects.toThrow();
+
+		expect(secretStoreTempFiles()).toEqual([]);
+		__setSecretStoreWriteHookForTests(null);
+		expect(await getSecret("OPENAI_API_KEY")).toBe("before-close-failure");
 	});
 
 	test("execWithSecrets injects secrets and redacts stdout and stderr", async () => {
