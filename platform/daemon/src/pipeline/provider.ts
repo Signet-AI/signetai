@@ -1328,7 +1328,23 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 				const attemptConfig = attempt === 0 ? config : { ...config, mode: "exec" as const, session: undefined };
 				try {
 					return await withLlmConcurrency(
-						() => runAcpxAttempt(attemptConfig, prompt, remainingMs, signal),
+						() => {
+							const acquiredRemainingMs = deadline - performance.now();
+							if (acquiredRemainingMs <= 1) {
+								if (lastEmpty) {
+									throw formatEmptyResponseError(
+										config.agent,
+										lastEmpty.diagnostics,
+										attempt - 1,
+										performance.now() - startedAt,
+									);
+								}
+								throw new Error(
+									`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
+								);
+							}
+							return runAcpxAttempt(attemptConfig, prompt, acquiredRemainingMs, signal);
+						},
 						remainingMs,
 						"acpx",
 						signal,

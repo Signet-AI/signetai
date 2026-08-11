@@ -21,6 +21,7 @@ import {
 	calculateAcpxRetryDelayMs,
 	configureLlmConcurrency,
 	createAcpxProvider,
+	getLlmConcurrencyStatus,
 } from "./provider";
 
 // ---------------------------------------------------------------------------
@@ -372,6 +373,55 @@ fi
 			await expect(first).resolves.toBe("first recovered");
 		} finally {
 			configureLlmConcurrency(2);
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not let a queued ACPX attempt succeed after its caller deadline", async () => {
+		const root = join(tmpdir(), `signet-acpx-queued-deadline-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-queued-deadline.sh");
+		const holderSeenPath = join(root, "holder-seen");
+		const queuedPidPath = join(root, "queued.pid");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+prompt=$(cat)
+if [[ "$prompt" == "holder" ]]; then
+  touch ${JSON.stringify(holderSeenPath)}
+  sleep 0.12
+  printf 'holder answer\\n'
+else
+  printf '%s' "$$" > ${JSON.stringify(queuedPidPath)}
+  sleep 0.12
+  printf 'queued answer\\n'
+fi
+`,
+		);
+		chmodSync(bin, 0o755);
+		const originalLimit = getLlmConcurrencyStatus().limit;
+		configureLlmConcurrency(1);
+		try {
+			const config = {
+				agent: "codex" as const,
+				bin,
+				permissions: "deny-all" as const,
+				hooks: "disabled" as const,
+				allowedTools: [] as const,
+				emptyResponseRetries: 0,
+			};
+			const holder = createAcpxProvider(config).generate("holder", { timeoutMs: 1_000 });
+			await waitForPath(holderSeenPath);
+			const queued = createAcpxProvider(config).generate("queued", { timeoutMs: 180 });
+
+			await expect(queued).rejects.toThrow(/codex via ACPX timeout after/);
+			await expect(holder).resolves.toBe("holder answer");
+			if (existsSync(queuedPidPath)) {
+				expect(await waitForProcessExit(Number(readFileSync(queuedPidPath, "utf8")))).toBe(true);
+			}
+			expect(getLlmConcurrencyStatus()).toEqual({ limit: 1, pending: 0, running: 0 });
+		} finally {
+			configureLlmConcurrency(originalLimit);
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
