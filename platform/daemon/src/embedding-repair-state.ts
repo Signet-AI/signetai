@@ -219,6 +219,10 @@ export function finishEmbeddingRepairLease(
 		const windowStartedAt = validWindowStart(current.window_started_at, now);
 		const inWindow = windowStartedAt !== null && now - windowStartedAt < HOUR_MS;
 		const batchesStarted = inWindow ? current.batches_started : 0;
+		// A lease serializes attempted work, but the hourly budget represents
+		// completed repair work. A pressure abort can still persist failure
+		// backoff while releasing its lease without spending a batch slot.
+		const charged = outcome.successful.length > 0;
 		const error = outcome.error ?? (outcome.failed.length > 0 ? "embedding provider returned no vector" : null);
 		db.prepare(
 			`UPDATE embedding_repair_budget
@@ -227,7 +231,7 @@ export function finishEmbeddingRepairLease(
 			 WHERE id = 1 AND lease_id = ?`,
 		).run(
 			inWindow ? current.window_started_at : iso(now),
-			batchesStarted + 1,
+			batchesStarted + (charged ? 1 : 0),
 			iso(now),
 			outcome.successful.length,
 			error,

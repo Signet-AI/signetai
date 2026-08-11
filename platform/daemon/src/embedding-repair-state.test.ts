@@ -73,11 +73,87 @@ describe("embedding repair state", () => {
 			finishEmbeddingRepairLease(
 				accessor,
 				resumed.lease,
-				{ successful: [], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
+				{
+					successful: [{ id: "memory-1", contentHash: "hash-1" }],
+					failed: [],
+					model: "test-model",
+					pollMs: 1_000,
+					eligibility: true,
+				},
 				now + 60 * 60_000 + 2,
 			),
 		).toBe(true);
-		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 1 });
+		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 1, lastAffected: 1 });
+		db.close();
+	});
+
+	it("does not charge durable budget when pressure aborts a batch before any embedding persists", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = Date.parse("2026-08-11T12:00:00.000Z");
+		const failedKey = { id: "memory-1", contentHash: "hash-1" };
+		const lease = acquireEmbeddingRepairLease(accessor, 0, 1, now).lease;
+		if (lease === undefined) throw new Error("expected repair lease");
+
+		expect(
+			finishEmbeddingRepairLease(
+				accessor,
+				lease,
+				{
+					successful: [],
+					failed: [failedKey],
+					model: "test-model",
+					pollMs: 1_000,
+					eligibility: true,
+					error: "system pressure became high before embedding persistence",
+				},
+				now + 1,
+			),
+		).toBe(true);
+		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 0, lastAffected: 0 });
+		expect(loadEmbeddingRepairFailures(accessor, [failedKey], "test-model")).toHaveLength(1);
+		expect(acquireEmbeddingRepairLease(accessor, 0, 1, now + 2).allowed).toBe(true);
+		db.close();
+	});
+
+	it("removes backoff rows after a memory is deleted or receives a new content hash", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = Date.parse("2026-08-11T12:00:00.000Z");
+		const original = { id: "memory-1", contentHash: "hash-1" };
+		const replacement = { id: "memory-1", contentHash: "hash-2" };
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
+		).run(original.id, "original", original.contentHash, new Date(now).toISOString(), new Date(now).toISOString());
+
+		const firstLease = acquireEmbeddingRepairLease(accessor, 0, 5, now).lease;
+		if (firstLease === undefined) throw new Error("expected first repair lease");
+		finishEmbeddingRepairLease(
+			accessor,
+			firstLease,
+			{ successful: [], failed: [original], model: "test-model", pollMs: 1_000, eligibility: true },
+			now + 1,
+		);
+		expect(loadEmbeddingRepairFailures(accessor, [original], "test-model")).toHaveLength(1);
+
+		db.prepare("UPDATE memories SET content_hash = ? WHERE id = ?").run(replacement.contentHash, replacement.id);
+		expect(loadEmbeddingRepairFailures(accessor, [original], "test-model")).toHaveLength(0);
+
+		const secondLease = acquireEmbeddingRepairLease(accessor, 0, 5, now + 2).lease;
+		if (secondLease === undefined) throw new Error("expected second repair lease");
+		finishEmbeddingRepairLease(
+			accessor,
+			secondLease,
+			{ successful: [], failed: [replacement], model: "test-model", pollMs: 1_000, eligibility: true },
+			now + 3,
+		);
+		expect(loadEmbeddingRepairFailures(accessor, [replacement], "test-model")).toHaveLength(1);
+
+		db.prepare("DELETE FROM memories WHERE id = ?").run(replacement.id);
+		expect(loadEmbeddingRepairFailures(accessor, [replacement], "test-model")).toHaveLength(0);
 		db.close();
 	});
 
@@ -91,7 +167,13 @@ describe("embedding repair state", () => {
 		finishEmbeddingRepairLease(
 			accessor,
 			initialLease,
-			{ successful: [], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
+			{
+				successful: [{ id: "memory-1", contentHash: "hash-1" }],
+				failed: [],
+				model: "test-model",
+				pollMs: 1_000,
+				eligibility: true,
+			},
 			now,
 		);
 		db.prepare("UPDATE embedding_repair_budget SET window_started_at = ?, batches_started = 5 WHERE id = 1").run(
@@ -104,7 +186,13 @@ describe("embedding repair state", () => {
 		finishEmbeddingRepairLease(
 			accessor,
 			admission.lease,
-			{ successful: [], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
+			{
+				successful: [{ id: "memory-1", contentHash: "hash-1" }],
+				failed: [],
+				model: "test-model",
+				pollMs: 1_000,
+				eligibility: true,
+			},
 			now + 1,
 		);
 		expect(readEmbeddingRepairState(accessor)).toMatchObject({
@@ -200,7 +288,7 @@ describe("embedding repair state", () => {
 					accessor,
 					lease,
 					{
-						successful: [],
+						successful: [key],
 						failed: [],
 						model: activeConfig.model,
 						pollMs: 1_000,

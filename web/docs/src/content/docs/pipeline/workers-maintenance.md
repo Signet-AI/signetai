@@ -285,10 +285,10 @@ Each cycle:
    by `updated_at DESC` and capped at `batchSize`.
 
 3. **Durable admission** — before provider work, the tracker claims a singleton
-   SQLite lease. When the batch has an outcome eligible to persist for the
-   active embedding profile, the finishing transaction atomically charges the
-   shared hourly batch budget and writes any failure backoff. A superseded
-   profile releases its lease without consuming the promoted profile's budget.
+   SQLite lease. When at least one embedding persists for the active profile,
+   the finishing transaction atomically charges the shared hourly batch budget
+   and writes any failure backoff. A superseded profile or pressure-aborted
+   batch releases its lease without consuming the promoted profile's budget.
    The lease spans the accounting window, so a slow batch cannot run twice;
    the existing repair cooldown and hourly budget control admission.
 

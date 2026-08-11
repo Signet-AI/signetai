@@ -30,5 +30,18 @@ export function up(db: MigrationDb): void {
 		);
 		CREATE INDEX IF NOT EXISTS idx_embedding_repair_backoff_retry
 			ON embedding_repair_backoff(model, retry_at);
+
+		-- Backoff is derived state. Retire it when the source memory disappears
+		-- or moves to a new hash so stale retry keys cannot accumulate forever.
+		CREATE TRIGGER IF NOT EXISTS embedding_repair_backoff_memory_deleted
+		AFTER DELETE ON memories BEGIN
+			DELETE FROM embedding_repair_backoff WHERE memory_id = OLD.id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS embedding_repair_backoff_content_hash_changed
+		AFTER UPDATE OF content_hash ON memories
+		WHEN OLD.content_hash IS NOT NEW.content_hash BEGIN
+			DELETE FROM embedding_repair_backoff
+			 WHERE memory_id = OLD.id AND content_hash IS NOT NEW.content_hash;
+		END;
 	`);
 }

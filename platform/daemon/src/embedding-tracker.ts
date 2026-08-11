@@ -214,9 +214,9 @@ export function startEmbeddingTracker(
 			lastCycleAt = new Date(now).toISOString();
 			if (readyRows.length === 0) return;
 
-			// The durable lease counts a batch before provider calls. A crash or a
-			// second daemon therefore consumes the same budget instead of replaying
-			// work indefinitely after each restart.
+			// The durable lease serializes provider calls before they begin. The
+			// hourly budget is charged only after at least one active-profile
+			// embedding persists, so an abort cannot spend a repair slot.
 			const admission = acquireEmbeddingRepairLease(
 				accessor,
 				repairCfg.reembedCooldownMs,
