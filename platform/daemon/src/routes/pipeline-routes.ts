@@ -774,7 +774,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				};
 			}),
 		});
-		return c.json({ ...result, agentId }, result.ok ? 200 : 400);
+		return c.json({ ...result, agentId }, result.ok ? 200 : result.retryable ? 503 : 400);
 	});
 
 	// Pi invokes this registry in-process; MCP and CLI use this transport

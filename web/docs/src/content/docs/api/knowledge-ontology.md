@@ -576,14 +576,16 @@ episodic source in the credential's agent scope before it writes graph state.
 `operations` must contain 1–100 entries. Each entry must use one of the same closed,
 payload-validated ontology operation schemas exposed by `apply_ontology_ops`
 from `GET /api/dream/tools`; a write requires a canonical episodic source and
-an exact supporting quote. After request-level checks and evidence/target
-resolution, the daemon applies operations in order through bounded, yielding
-write transactions. Each operation's savepoint, provenance, and attention
-resolution are atomic, while an application failure is reported without
-blocking later operations. Request-level validation still rejects the request
-instead of becoming item results; the whole request is not an all-or-nothing
-transaction. The response is `200` for a request with at least one accepted
-item or `400` when no operation is applied.
+an exact supporting quote. The daemon validates every input, citation, and
+resolvable target before it mints hygiene attention or writes graph state. It
+then applies operations in order through bounded, yielding write transactions.
+Each operation's savepoint, provenance, and attention resolution are atomic,
+while an application failure is reported without blocking later operations.
+The whole request is not an all-or-nothing transaction. If writer admission
+fails after earlier chunks committed, the response is `503` with the committed
+`items`, `retryable: true`, and `retryFrom`. Retry only the uncommitted suffix,
+never the returned prefix; replace any earlier `attention:$<index>` reference with `attention:<uuid>` built from the flag item’s returned `result.attentionId`. Other validation failures
+return `400`; a fully handled request returns `200`.
 `agentId` uses scoped-agent resolution and cannot cross the credential's agent
 scope.
 

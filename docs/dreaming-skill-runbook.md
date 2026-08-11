@@ -5,9 +5,11 @@ audited semantic memory. It reads selected artifacts, transcripts, summaries,
 compactions, and checkpoints; it does not rewrite them. The worker emits
 provenance-backed ontology operations through the shared daemon-owned writer.
 Apply requests preserve input order and per-operation atomicity, but are split
-into bounded write transactions with event-loop yields; an application failure
-is reported without blocking later operations, while request-level validation
-still rejects the request rather than becoming item results.
+into bounded write transactions with event-loop yields; every input, citation,
+and resolvable target is validated before flags or graph state are written. An
+application failure is reported without blocking later operations. If writer
+admission fails after a committed prefix, the response carries `retryable` and
+`retryFrom`: resume only the uncommitted suffix, never replay returned items.
 
 ## Worker Path
 

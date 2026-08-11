@@ -156,6 +156,64 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 25 });
 	});
 
+	it("reports a committed prefix and retries only its suffix after a writer-batch rejection (#1414)", async () => {
+		const base = getDbAccessor();
+		const enqueue = base.withWriteTxAsync;
+		if (!enqueue) throw new Error("async write API is unavailable");
+		for (let index = 0; index < 25; index += 1) {
+			insertEpisodicMemory(`m-1414-${index}`, `Evidence for retry operation ${index}.`);
+		}
+		let transactions = 0;
+		const accessor: DbAccessor = {
+			...base,
+			withWriteTxAsync: (fn) => {
+				transactions += 1;
+				if (transactions === 3) return Promise.reject(new Error("injected writer rejection"));
+				return enqueue(fn);
+			},
+		};
+		const operations: DreamingOperationRequest[] = Array.from({ length: 25 }, (_, index) => ({
+			operation: "create_entity",
+			payload: { name: `Issue 1414 entity ${index}`, type: "project" },
+			evidence: [
+				{
+					source_ref: `memory:m-1414-${index}`,
+					source_kind: "manual",
+					source_id: `m-1414-${index}`,
+					quote: `Evidence for retry operation ${index}.`,
+				},
+			],
+		}));
+
+		const partial = await applyDreamingOperations({ accessor, agentId: "agent-a", actor: "dreaming", operations });
+		expect(partial.ok).toBe(false);
+		expect(partial.retryable).toBe(true);
+		expect(partial.retryFrom).toBe(20);
+		expect(partial.error).toBe("injected writer rejection");
+		expect(partial.items.map((item) => item.index)).toEqual(Array.from({ length: 20 }, (_, index) => index));
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT COUNT(*) AS c FROM ontology_proposals WHERE agent_id = ?").get("agent-a"),
+			),
+		).toEqual({ c: 20 });
+
+		const retryFrom = partial.retryFrom;
+		if (retryFrom === undefined) throw new Error("partial response has no retry boundary");
+		const resumed = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: operations.slice(retryFrom),
+		});
+		expect(resumed.ok).toBe(true);
+		expect(resumed.items).toHaveLength(5);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT COUNT(*) AS c FROM ontology_proposals WHERE agent_id = ?").get("agent-a"),
+			),
+		).toEqual({ c: 25 });
+	});
+
 	it("rejects an oversized apply request before minting or writing (#1337)", async () => {
 		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
@@ -351,6 +409,12 @@ describe("dreaming operations", () => {
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-flagged")),
 		).toEqual({ status: "active" });
+		// Preflight rejects the contradictory target before minting the flag.
+		expect(
+			getDbAccessor().withReadDb(
+				(db) => db.prepare("SELECT COUNT(*) AS c FROM dreaming_attention").get() as { c: number },
+			),
+		).toEqual({ c: 0 });
 	});
 
 	it("merges a flagged duplicate group flagged without a canonicalName in details (#1168)", async () => {
@@ -597,6 +661,41 @@ describe("dreaming operations", () => {
 		});
 		expect(result.ok).toBe(false);
 		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
+	});
+
+	it("validates later evidence before minting an earlier flag (#1414)", async () => {
+		insertEntity("e-husk", "Legacy Husk", "legacy husk");
+		insertEpisodicMemory("mem-1414-invalid", "The only supported evidence sentence.");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				flag({ subjectRef: "entity:e-husk", details: { entityId: "e-husk" } }),
+				{
+					operation: "create_entity",
+					payload: { name: "Invalid after flag", type: "project" },
+					evidence: [
+						{
+							source_ref: "memory:mem-1414-invalid",
+							source_kind: "manual",
+							source_id: "mem-1414-invalid",
+							quote: "This quote is not present.",
+						},
+					],
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS c FROM dreaming_attention WHERE agent_id = ?").get("agent-a") as {
+						c: number;
+					},
+			),
+		).toEqual({ c: 0 });
 	});
 
 	it("rejects evidence cited from another agent scope with a corrective error", async () => {

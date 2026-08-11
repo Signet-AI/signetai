@@ -251,16 +251,20 @@ interface DreamingResult {
 }
 ```
 
-After request-level checks and evidence/target resolution, the daemon applies
+The daemon validates every request input, evidence citation, and resolvable
+target before it mints hygiene attention or writes graph state. It then applies
 mutations in input order through bounded, yielding SQLite write transactions.
-Each operation is protected by its own savepoint, and any attention
-resolution or provenance update required by that operation commits with it.
-An operation that fails during application is reported without blocking later
-operations in the same request. Request-level validation failures still reject
-the request rather than becoming item results. The request is therefore
-ordered and per-operation atomic, but is not one all-or-nothing transaction;
-the writer hold is bounded by an operation-count and elapsed-processing budget
-so unrelated daemon work can run between chunks.
+Each operation is protected by its own savepoint, and any attention resolution
+or provenance update required by that operation commits with it. An operation
+that fails during application is reported without blocking later operations in
+the same request. Request-level validation failures reject the request before
+any durable write. If a later writer transaction is rejected after earlier
+chunks committed, the response carries the committed items plus `retryable` and
+`retryFrom`; callers resume only the uncommitted suffix and must not replay the
+committed prefix. The request is therefore ordered and per-operation atomic,
+but is not one all-or-nothing transaction; the writer hold is bounded by an
+operation-count and elapsed-processing budget so unrelated daemon work can run
+between chunks.
 
 ### Incremental deltas
 

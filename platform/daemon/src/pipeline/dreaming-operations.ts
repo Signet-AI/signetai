@@ -34,6 +34,10 @@ export interface ApplyDreamingOperationsResult {
 	readonly ok: boolean;
 	readonly items: readonly DreamingOperationItem[];
 	readonly error?: string;
+	/** First original request index that did not commit after a retriable batch failure. */
+	readonly retryFrom?: number;
+	/** Retry only the uncommitted suffix. Replaying returned items duplicates audit/provenance. */
+	readonly retryable?: boolean;
 }
 
 export interface ApplyDreamingOperationsParams {
@@ -167,9 +171,10 @@ function asStringRecord(value: unknown): Readonly<Record<string, string>> | unde
 /**
  * Mint hygiene attention for every flag op in the batch. Returns operation
  * index -> minted attention id, so later ops in the same batch can cite
- * provenance "attention:$<index>". Attention rows use the same bounded
- * writer path as ontology operations so a 100-op request cannot monopolize
- * the SQLite writer before validation even starts.
+ * provenance "attention:$<index>". All flags are minted in one bounded
+ * request-level transaction: a flag prefix is unusable without the later
+ * operations it authorizes, so this prelude must commit atomically or not at
+ * all before the yielding ontology writer begins.
  */
 async function mintFlags(
 	accessor: DbAccessor,
@@ -199,10 +204,12 @@ async function mintFlags(
 		},
 		{
 			label: "dreaming attention flags",
-			maxPerTx: DREAMING_WRITE_MAX_OPERATIONS_PER_TX,
-			maxTxDurationMs: DREAMING_WRITE_MAX_TX_DURATION_MS,
+			// A request has at most 100 operations. Keep the flag prelude atomic
+			// so an admission failure cannot leave a prefix that a retry re-mints.
+			maxPerTx: DREAMING_MAX_OPERATIONS_PER_REQUEST,
 		},
 	);
+	if (result.stopped === "failed") throw new Error(result.error ?? "Dreaming attention flag write failed");
 	return new Map(
 		result.items.flatMap((entry) => (entry.attentionId === null ? [] : [[entry.index, entry.attentionId] as const])),
 	);
@@ -237,55 +244,7 @@ function attentionProvenance(
 	}
 	if (attention === null || attention.kind !== "hygiene") return null;
 
-	let expectedTarget = false;
-	if (operation.operation === "archive_entity") {
-		expectedTarget = pinnedTarget(payload, attention, "entity:", "entityId");
-	} else if (operation.operation === "archive_aspect") {
-		expectedTarget = pinnedTarget(payload, attention, "aspect:", "aspectId");
-	} else if (operation.operation === "archive_claim_value") {
-		expectedTarget = pinnedTarget(payload, attention, "attribute:", "attributeId");
-	} else if (operation.operation === "archive_link") {
-		expectedTarget = pinnedTarget(payload, attention, "link:", "linkId");
-	} else if (operation.operation === "merge_entities") {
-		const targets = Array.isArray(payload.targets)
-			? payload.targets.filter((value): value is string => typeof value === "string")
-			: [];
-		const survivor = typeof payload.survivor === "string" ? payload.survivor : "";
-		// The subjectRef is the canonical pin: agent-minted flags carry the
-		// canonical name in `duplicate:<name>` and may omit details, while
-		// daemon-enqueued flags repeat it in details.canonicalName (#1168).
-		const canonicalName =
-			attention.details.canonicalName ?? pinnedBySubjectRef(attention.subjectRef, "duplicate:") ?? "";
-		const groupIds = semanticDuplicateIds(accessor, agentId, canonicalName);
-		expectedTarget =
-			canonicalName.length > 0 &&
-			attention.subjectRef === `duplicate:${canonicalName}` &&
-			groupIds.size > 1 &&
-			groupIds.has(survivor) &&
-			targets.length >= 2 &&
-			targets.every((id) => groupIds.has(id)) &&
-			targets.includes(survivor) &&
-			targets.some((id) => id !== survivor);
-	} else if (operation.operation === "merge_aspects") {
-		// The flag names the over-cap aspect; the merge must fold it into a
-		// target. The subjectRef is the pin; details.aspectId is an optional
-		// cross-check — a contradictory details id must reject, not redirect
-		// the merge to a different aspect (#1168).
-		const sources = Array.isArray(payload.sources)
-			? payload.sources.filter((value): value is string => typeof value === "string")
-			: [];
-		const pinnedAspect = pinnedBySubjectRef(attention.subjectRef, "aspect:");
-		const detailAgrees =
-			pinnedAspect !== null &&
-			(attention.details.aspectId === undefined || attention.details.aspectId === pinnedAspect);
-		expectedTarget =
-			detailAgrees &&
-			typeof payload.target === "string" &&
-			sources.length >= 1 &&
-			pinnedAspect !== null &&
-			sources.includes(pinnedAspect);
-	}
-	if (!expectedTarget) return null;
+	if (!hasExpectedAttentionTarget(accessor, agentId, operation, attention)) return null;
 
 	return {
 		provenance: {
@@ -312,6 +271,71 @@ function pinnedBySubjectRef(subjectRef: string, prefix: string): string | null {
 	if (!subjectRef.startsWith(prefix)) return null;
 	const id = subjectRef.slice(prefix.length);
 	return id.length > 0 ? id : null;
+}
+
+/** Validate the exact target named by a hygiene attention record. */
+function hasExpectedAttentionTarget(
+	accessor: DbAccessor,
+	agentId: string,
+	operation: DreamingOperationRequest,
+	attention: DreamingAttention,
+): boolean {
+	const payload = operation.payload;
+	if (operation.operation === "archive_entity") {
+		return pinnedTarget(payload, attention, "entity:", "entityId");
+	}
+	if (operation.operation === "archive_aspect") {
+		return pinnedTarget(payload, attention, "aspect:", "aspectId");
+	}
+	if (operation.operation === "archive_claim_value") {
+		return pinnedTarget(payload, attention, "attribute:", "attributeId");
+	}
+	if (operation.operation === "archive_link") {
+		return pinnedTarget(payload, attention, "link:", "linkId");
+	}
+	if (operation.operation === "merge_entities") {
+		const targets = Array.isArray(payload.targets)
+			? payload.targets.filter((value): value is string => typeof value === "string")
+			: [];
+		const survivor = typeof payload.survivor === "string" ? payload.survivor : "";
+		// The subjectRef is the canonical pin: agent-minted flags carry the
+		// canonical name in `duplicate:<name>` and may omit details, while
+		// daemon-enqueued flags repeat it in details.canonicalName (#1168).
+		const canonicalName =
+			attention.details.canonicalName ?? pinnedBySubjectRef(attention.subjectRef, "duplicate:") ?? "";
+		const groupIds = semanticDuplicateIds(accessor, agentId, canonicalName);
+		return (
+			canonicalName.length > 0 &&
+			attention.subjectRef === `duplicate:${canonicalName}` &&
+			groupIds.size > 1 &&
+			groupIds.has(survivor) &&
+			targets.length >= 2 &&
+			targets.every((id) => groupIds.has(id)) &&
+			targets.includes(survivor) &&
+			targets.some((id) => id !== survivor)
+		);
+	}
+	if (operation.operation === "merge_aspects") {
+		// The flag names the over-cap aspect; the merge must fold it into a
+		// target. The subjectRef is the pin; details.aspectId is an optional
+		// cross-check — a contradictory details id must reject, not redirect
+		// the merge to a different aspect (#1168).
+		const sources = Array.isArray(payload.sources)
+			? payload.sources.filter((value): value is string => typeof value === "string")
+			: [];
+		const pinnedAspect = pinnedBySubjectRef(attention.subjectRef, "aspect:");
+		const detailAgrees =
+			pinnedAspect !== null &&
+			(attention.details.aspectId === undefined || attention.details.aspectId === pinnedAspect);
+		return (
+			detailAgrees &&
+			typeof payload.target === "string" &&
+			sources.length >= 1 &&
+			pinnedAspect !== null &&
+			sources.includes(pinnedAspect)
+		);
+	}
+	return false;
 }
 
 /**
@@ -575,6 +599,66 @@ function toApplicatorPayload(
 	}
 }
 
+/**
+ * Validate every request-level input that can be resolved without creating
+ * attention rows. This must run before mintFlags: otherwise a bad citation or
+ * target leaves durable flag records behind even though the request is refused.
+ */
+function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): string | null {
+	for (const [index, operation] of params.operations.entries()) {
+		if (operation.operation === FLAG_OP) {
+			if (stringField(operation.payload, "subjectRef") === null) return "flag requires payload.subjectRef";
+			continue;
+		}
+		if (operation.operation === DECLINE_ATTENTION_OP) {
+			if (stringField(operation.payload, "attentionId") === null)
+				return "decline_attention requires payload.attentionId";
+			continue;
+		}
+
+		if (toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload) === null) {
+			return `Could not resolve operation target: ${operation.operation}`;
+		}
+		if (HYGIENE_ARCHIVE_OPS.has(operation.operation)) {
+			const reference = operation.provenance?.trim();
+			const sameBatch = reference?.match(/^attention:\$(\d+)$/);
+			if (sameBatch) {
+				const flagIndex = Number.parseInt(sameBatch[1] ?? "", 10);
+				const flag = params.operations[flagIndex];
+				if (flagIndex >= index || flag?.operation !== FLAG_OP) {
+					return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
+				}
+				const subjectRef = stringField(flag.payload, "subjectRef");
+				if (subjectRef === null) {
+					return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
+				}
+				const provisionalAttention: DreamingAttention = {
+					id: `preflight:${flagIndex}`,
+					kind: "hygiene",
+					subjectRef,
+					details: asStringRecord(flag.payload.details) ?? {},
+					priority: 0,
+					createdAt: "",
+				};
+				if (!hasExpectedAttentionTarget(params.accessor, params.agentId, operation, provisionalAttention)) {
+					return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
+				}
+				continue;
+			}
+			if (attentionProvenance(params.accessor, params.agentId, operation, new Map()) === null) {
+				return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
+			}
+			continue;
+		}
+
+		const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation);
+		if (evidenceResult.provenance === null) {
+			return evidenceResult.scopeMismatch ?? "Every operation must cite an exact quote from scoped episodic evidence";
+		}
+	}
+	return null;
+}
+
 function existingReviewProposalId(
 	db: WriteDb,
 	params: {
@@ -765,6 +849,9 @@ export async function applyDreamingOperations(
 		}
 	}
 
+	const validationError = validateRequestBeforeWrites(params);
+	if (validationError !== null) return { ok: false, items: [], error: validationError };
+
 	const minted = await mintFlags(params.accessor, params.agentId, params.operations);
 
 	const validated: ValidatedDreamingOperation[] = [];
@@ -843,6 +930,15 @@ export async function applyDreamingOperations(
 		},
 	);
 	const items = result.items;
+	if (result.stopped === "failed") {
+		return {
+			ok: false,
+			items,
+			error: result.error ?? "Dreaming ontology write batch failed",
+			retryFrom: result.processed,
+			retryable: true,
+		};
+	}
 	const ok = items.some((item) => item.ok);
 	return { ok, items, ...(ok ? {} : { error: "No ontology operations applied" }) };
 }

@@ -73,7 +73,9 @@ export interface RunWriteResult<Result> {
 	readonly processed: number;
 	readonly batches: number;
 	readonly paused: number;
-	readonly stopped: "exhausted" | "capped";
+	readonly stopped: "exhausted" | "capped" | "failed";
+	/** The batch transaction failed after earlier batches had committed. */
+	readonly error?: string;
 }
 
 async function writeBatch<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
@@ -189,16 +191,27 @@ export async function runWriteBatches<Item, Result>(
 			await awaitPressureClear();
 		}
 
-		const batch = await writeBatch(accessor, (db) => {
-			const startedAt = performance.now();
-			const batchResults: Result[] = [];
-			for (const item of items.slice(processed, maxTotal)) {
-				batchResults.push(processItem(db, item));
-				if (batchResults.length >= maxPerTx) break;
-				if (performance.now() - startedAt >= maxTxDurationMs) break;
-			}
-			return batchResults;
-		});
+		let batch: readonly Result[];
+		try {
+			batch = await writeBatch(accessor, (db) => {
+				const startedAt = performance.now();
+				const batchResults: Result[] = [];
+				for (const item of items.slice(processed, maxTotal)) {
+					batchResults.push(processItem(db, item));
+					if (batchResults.length >= maxPerTx) break;
+					if (performance.now() - startedAt >= maxTxDurationMs) break;
+				}
+				return batchResults;
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logger.warn("yielding-writes", `${options.label}: write batch failed after ${processed} committed items`, {
+				processed,
+				batches,
+				error: message,
+			});
+			return { items: results, processed, batches, paused, stopped: "failed", error: message };
+		}
 
 		if (batch.length === 0) throw new Error(`${options.label}: write batch made no progress`);
 		results.push(...batch);
