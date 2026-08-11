@@ -237,9 +237,6 @@ export async function installPyenv(): Promise<InstallResult> {
 		};
 	}
 
-	const result = await runCommand("curl", ["https://pyenv.run", "|", "bash"]);
-
-	// curl | bash needs shell
 	const shellResult = await runCommand("bash", ["-c", "curl https://pyenv.run | bash"]);
 
 	if (shellResult.code !== 0) {
