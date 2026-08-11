@@ -3,6 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { indexCanonicalTranscriptJsonl, writeTranscriptArtifact } from "./memory-lineage";
+import { writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
 import {
 	enqueueTranscriptCaptureJob,
 	getTranscriptCaptureJobStatus,
@@ -175,7 +177,7 @@ describe("transcript capture worker", () => {
 		).toEqual({ count: 1 });
 	});
 
-	it("leases same-session evidence in created order", async () => {
+	it("leases same-session evidence by enqueue time, not capture time", async () => {
 		const base = {
 			agentId: "agent-a",
 			harness: "claude-code",
@@ -184,28 +186,28 @@ describe("transcript capture worker", () => {
 			rawTranscript: "snapshot",
 			endedAt: "2026-06-20T10:00:00.000Z",
 		} as const;
-		const first = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const newerCapture = enqueueTranscriptCaptureJob(getDbAccessor(), {
 			...base,
-			sessionId: "snapshot-ordered-first",
-			transcript: "User: first turn",
-			capturedAt: "2026-06-20T10:00:00.000Z",
-		});
-		const second = enqueueTranscriptCaptureJob(getDbAccessor(), {
-			...base,
-			sessionId: "snapshot-ordered-second",
-			transcript: "User: second turn",
+			sessionId: "snapshot-ordered-newer",
+			transcript: "User: later turn arrived first",
 			capturedAt: "2026-06-20T10:01:00.000Z",
 		});
-		if (!first || !second) throw new Error("expected ordered capture jobs");
+		const olderCapture = enqueueTranscriptCaptureJob(getDbAccessor(), {
+			...base,
+			sessionId: "snapshot-ordered-older",
+			transcript: "User: earlier turn arrived later",
+			capturedAt: "2026-06-20T10:00:00.000Z",
+		});
+		if (!newerCapture || !olderCapture) throw new Error("expected ordered capture jobs");
 
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE transcript_capture_jobs SET created_at = ? WHERE id = ?").run(
 				"2026-06-20T10:00:00.000Z",
-				first,
+				newerCapture,
 			);
 			db.prepare("UPDATE transcript_capture_jobs SET created_at = ? WHERE id = ?").run(
 				"2026-06-20T10:01:00.000Z",
-				second,
+				olderCapture,
 			);
 		});
 
@@ -215,8 +217,8 @@ describe("transcript capture worker", () => {
 				db.prepare("SELECT id, status, attempts FROM transcript_capture_jobs ORDER BY created_at").all(),
 			),
 		).toEqual([
-			{ id: first, status: "completed", attempts: 1 },
-			{ id: second, status: "pending", attempts: 0 },
+			{ id: newerCapture, status: "completed", attempts: 1 },
+			{ id: olderCapture, status: "pending", attempts: 0 },
 		]);
 
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
@@ -250,8 +252,8 @@ describe("transcript capture worker", () => {
 		).toEqual({ attempts: 1 });
 	});
 
-	it("recovers an interrupted lease without duplicating the capture", async () => {
-		const id = enqueueTranscriptCaptureJob(getDbAccessor(), {
+	it("recovery preserves durable outputs and provenance after a lease crashes before completion", async () => {
+		const capture = {
 			agentId: "agent-a",
 			harness: "pi",
 			sessionKey: "session-restart",
@@ -261,8 +263,25 @@ describe("transcript capture worker", () => {
 			rawTranscript: "survives restart",
 			capturedAt: "2026-06-20T10:00:00.000Z",
 			endedAt: "2026-06-20T10:00:00.000Z",
-		});
+		} as const;
+		const id = enqueueTranscriptCaptureJob(getDbAccessor(), capture);
 		if (!id) throw new Error("expected restart capture job");
+
+		// Model the real crash window after the canonical file, immutable artifact,
+		// and indexed provenance have committed but before markDone updates the job.
+		await writeCanonicalTranscriptFromSnapshot({ basePath: dir, ...capture });
+		const artifact = await writeTranscriptArtifact({ ...capture, startedAt: null, summaryStatus: "not_requested" });
+		indexCanonicalTranscriptJsonl({ ...capture, startedAt: null, manifestPath: artifact.manifestPath });
+		const beforeRecovery = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(
+					`SELECT agent_id, source_kind, source_path, session_id, session_key
+					 FROM memory_artifacts WHERE agent_id = ? ORDER BY source_kind, source_path`,
+				)
+				.all("agent-a"),
+		);
+		expect(beforeRecovery).not.toEqual([]);
+
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE transcript_capture_jobs SET status = 'processing', attempts = 1 WHERE id = ?").run(id);
 		});
@@ -285,5 +304,15 @@ describe("transcript capture worker", () => {
 			error: null,
 		});
 		expect(getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 1, processing: 0 });
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						`SELECT agent_id, source_kind, source_path, session_id, session_key
+						 FROM memory_artifacts WHERE agent_id = ? ORDER BY source_kind, source_path`,
+					)
+					.all("agent-a"),
+			),
+		).toEqual(beforeRecovery);
 	});
 });

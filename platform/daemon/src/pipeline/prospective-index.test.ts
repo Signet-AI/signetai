@@ -41,14 +41,14 @@ function makeAccessor(db: Database): DbAccessor {
 	};
 }
 
-function insertMemory(db: Database, id: string, content: string): void {
+function insertMemory(db: Database, id: string, content: string, agentId = "default"): void {
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO memories
-		 (id, type, content, confidence, importance, created_at, updated_at,
+		 (id, type, content, agent_id, confidence, importance, created_at, updated_at,
 		  updated_by, vector_clock, is_deleted, extraction_status)
-		 VALUES (?, 'fact', ?, 1.0, 0.5, ?, ?, 'test', '{}', 0, 'none')`,
-	).run(id, content, now, now);
+		 VALUES (?, 'fact', ?, ?, 1.0, 0.5, ?, ?, 'test', '{}', 0, 'none')`,
+	).run(id, content, agentId, now, now);
 }
 
 const HINTS_CFG: PipelineHintsConfig = {
@@ -561,6 +561,30 @@ describe("prospective-index", () => {
 			const ftsMatches = getHintsFts(db, '"Caroline" "live"');
 			expect(ftsMatches.length).toBeGreaterThan(0);
 			expect(ftsMatches[0]).toBe(mid);
+		});
+
+		it("preserves the memory agent on generated hints", async () => {
+			const mid = crypto.randomUUID();
+			insertMemory(db, mid, "Caroline moved to Seattle", "agent-b");
+			accessor.withWriteTx((wdb) => {
+				enqueueHintsJob(wdb, mid, "Caroline moved to Seattle");
+			});
+
+			const handle = startHintsWorker({
+				accessor,
+				provider: cleanProvider(),
+				pipelineCfg: pipelineCfg(),
+			});
+			try {
+				await waitFor(() => getJob(db, mid)?.status === "completed", 2_000);
+			} finally {
+				await handle.stop();
+			}
+
+			const agentIds = db.prepare("SELECT DISTINCT agent_id FROM memory_hints WHERE memory_id = ?").all(mid) as Array<{
+				agent_id: string;
+			}>;
+			expect(agentIds).toEqual([{ agent_id: "agent-b" }]);
 		});
 
 		it("completes job with zero hints on empty LLM response", async () => {

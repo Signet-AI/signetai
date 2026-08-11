@@ -179,7 +179,11 @@ function failJob(db: WriteDb, jobId: string, error: string): void {
 // Persist hints
 // ---------------------------------------------------------------------------
 
-function writeHints(db: WriteDb, memoryId: string, agentId: string, hints: readonly string[]): number {
+function writeHints(db: WriteDb, memoryId: string, hints: readonly string[]): number {
+	const memory = db.prepare("SELECT agent_id FROM memories WHERE id = ? AND is_deleted = 0").get(memoryId) as {
+		agent_id?: unknown;
+	} | null;
+	if (typeof memory?.agent_id !== "string" || memory.agent_id.length === 0) return 0;
 	const stmt = db.prepare(
 		`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -188,7 +192,7 @@ function writeHints(db: WriteDb, memoryId: string, agentId: string, hints: reado
 	let inserted = 0;
 	for (const hint of hints) {
 		const id = crypto.randomUUID();
-		stmt.run(id, memoryId, agentId, hint, now);
+		stmt.run(id, memoryId, memory.agent_id, hint, now);
 		inserted++;
 	}
 	return inserted;
@@ -243,7 +247,7 @@ export function startHintsWorker(deps: {
 
 			if (hints.length > 0) {
 				accessor.withWriteTx((db) => {
-					writeHints(db, payload.memoryId, "default", hints);
+					writeHints(db, payload.memoryId, hints);
 					completeJob(db, j.id);
 				});
 				logger.info("pipeline", "Prospective hints generated", {
