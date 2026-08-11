@@ -2,8 +2,9 @@
  * Secrets management - encrypted storage for sensitive values.
  *
  * Secrets are encrypted at rest using libsodium secretbox (XSalsa20-Poly1305).
- * The master key is derived from machine-specific identifiers so the encrypted
- * file is bound to the machine without requiring a user passphrase.
+ * The master key is derived from a persisted machine identity so the encrypted
+ * file is bound to the machine without requiring a user passphrase. The identity
+ * is anchored on first use so transient platform lookup failures cannot rotate it.
  *
  * Agents never receive secret values directly. They can only request actions
  * that use secrets (e.g. exec_with_secrets), which injects values into a
@@ -13,6 +14,7 @@
 import { execSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+	chmodSync,
 	closeSync,
 	existsSync,
 	fsyncSync,
@@ -58,6 +60,10 @@ function getSecretsDir(): string {
 
 function getSecretsFile(): string {
 	return join(getSecretsDir(), "secrets.enc");
+}
+
+function getMachineIdFile(): string {
+	return join(getSecretsDir(), ".machine-id");
 }
 
 // ---------------------------------------------------------------------------
@@ -164,11 +170,10 @@ export interface SecretProviderV1 {
 // Key derivation
 // ---------------------------------------------------------------------------
 
-/**
- * Read a machine-specific identifier to bind the key to this host.
- * Falls back to hostname + username if no machine-id is available.
- */
-function getMachineId(): string {
+type MachineIdResolver = () => string | undefined;
+
+/** Read a machine-specific identifier to bind the key to this host. */
+function resolveMachineId(): string | undefined {
 	const isWindows = process.platform === "win32";
 
 	if (!isWindows) {
@@ -210,13 +215,75 @@ function getMachineId(): string {
 		}
 	}
 
-	// Last resort: hostname + username
-	return `${hostname()}-${process.env.USER || process.env.USERNAME || "user"}`;
+	return undefined;
 }
 
 let _masterKey: Uint8Array | null = null;
+let machineIdResolverForTests: MachineIdResolver | null = null;
 type SodiumModule = typeof import("libsodium-wrappers").default;
 let sodiumPromise: Promise<SodiumModule> | null = null;
+
+function readPersistedMachineId(): string | undefined {
+	try {
+		const persisted = readFileSync(getMachineIdFile(), "utf-8").trim();
+		if (!persisted) throw new Error("persisted machine identity is empty");
+		return persisted;
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Failed to read persisted secrets machine identity: ${message}`);
+	}
+}
+
+function persistMachineId(machineId: string): string {
+	const file = getMachineIdFile();
+	try {
+		mkdirSync(getSecretsDir(), { recursive: true, mode: 0o700 });
+		chmodSync(getSecretsDir(), 0o700);
+		writeFileSync(file, `${machineId}\n`, { encoding: "utf-8", mode: 0o600, flag: "wx" });
+		chmodSync(file, 0o600);
+		return machineId;
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "EEXIST") {
+			const persisted = readPersistedMachineId();
+			if (persisted) return persisted;
+		}
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Failed to persist secrets machine identity: ${message}`);
+	}
+}
+
+/**
+ * Resolve the durable identity used by the secrets key.
+ *
+ * Once written, the anchor is authoritative. This prevents a transient
+ * platform resolver failure from changing the key on the next process start.
+ */
+function getMachineId(): string {
+	const persisted = readPersistedMachineId();
+	if (persisted) return persisted;
+
+	const resolved = (machineIdResolverForTests ?? resolveMachineId)()?.trim();
+	if (resolved) {
+		return persistMachineId(resolved);
+	}
+
+	const username = process.env.USER?.trim() || process.env.USERNAME?.trim();
+	if (!username) {
+		throw new Error("Unable to derive stable secrets machine identity: USER and USERNAME are unset");
+	}
+
+	const fallback = `${hostname()}-${username}`;
+	logger.warn("secrets", "Machine identifier unavailable; using a stable persisted fallback for secrets encryption", {
+		fallback: "hostname-and-user",
+	});
+	return persistMachineId(fallback);
+}
+
+export function setMachineIdResolverForTests(resolver: MachineIdResolver | null): void {
+	machineIdResolverForTests = resolver;
+	_masterKey = null;
+}
 
 async function getSodium(): Promise<SodiumModule> {
 	sodiumPromise ??= import("libsodium-wrappers").then(async (mod) => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -22,10 +22,12 @@ import {
 	localSecretProvider,
 	putSecret,
 	resetSecretExecJobsForTests,
+	setMachineIdResolverForTests,
 	startSecretExecJob,
 } from "./secrets.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
+const originalUser = process.env.USER;
 let agentsDir = "";
 
 function secretsFile(): string {
@@ -36,6 +38,10 @@ function secretStoreTempFiles(): string[] {
 	const dir = join(agentsDir, ".secrets");
 	if (!existsSync(dir)) return [];
 	return readdirSync(dir).filter((name) => name.startsWith("secrets.enc.tmp-"));
+}
+
+function machineIdFile(): string {
+	return join(agentsDir, ".secrets", ".machine-id");
 }
 
 describe("local secrets provider", () => {
@@ -50,11 +56,17 @@ describe("local secrets provider", () => {
 		resetSecretExecJobsForTests();
 		setBitwardenClientFactoryForTests(null);
 		__setSecretStoreWriteHookForTests(null);
+		setMachineIdResolverForTests(null);
 		invalidateSecretsCache();
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
 			process.env.SIGNET_PATH = originalSignetPath;
+		}
+		if (originalUser === undefined) {
+			Reflect.deleteProperty(process.env, "USER");
+		} else {
+			process.env.USER = originalUser;
 		}
 		if (agentsDir && existsSync(agentsDir)) {
 			rmSync(agentsDir, { recursive: true, force: true });
@@ -143,6 +155,22 @@ describe("local secrets provider", () => {
 		expect(secretStoreTempFiles()).toEqual([]);
 		__setSecretStoreWriteHookForTests(null);
 		expect(await getSecret("OPENAI_API_KEY")).toBe("before-close-failure");
+	});
+
+	test("transient machine-id failure keeps the secrets key stable across restarts", async () => {
+		process.env.USER = "signet-secrets-test-user";
+		setMachineIdResolverForTests(() => undefined);
+
+		await putSecret("OPENAI_API_KEY", "«redacted:sk-…»");
+		const persistedMachineId = readFileSync(machineIdFile(), "utf-8");
+
+		expect(persistedMachineId.trim()).not.toBe("");
+		expect(statSync(machineIdFile()).mode & 0o777).toBe(0o600);
+
+		// Re-derive the key as a fresh process would, after the platform resolver recovers.
+		setMachineIdResolverForTests(() => "ioreg-id-after-transient-failure");
+		expect(await getSecret("OPENAI_API_KEY")).toBe("«redacted:sk-…»");
+		expect(readFileSync(machineIdFile(), "utf-8")).toBe(persistedMachineId);
 	});
 
 	test("execWithSecrets injects secrets and redacts stdout and stderr", async () => {
