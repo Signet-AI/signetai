@@ -255,6 +255,7 @@ function attentionProvenance(
 					source_ref: reference,
 					source_kind: "attention",
 					source_id: attention.id,
+					source_root: "dreaming_attention",
 					subject_ref: attention.subjectRef,
 					details: attention.details,
 				},

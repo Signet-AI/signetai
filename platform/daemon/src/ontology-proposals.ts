@@ -501,10 +501,32 @@ function requireStrictEpisodicSourceRefInTx(db: WriteDb, agentId: string, source
 	throw new OntologyProposalError(`Evidence source_ref was not found: ${resolved.sourceRef}`, 409);
 }
 
+function isDreamingAttentionEvidenceInTx(
+	db: WriteDb,
+	agentId: string,
+	value: Readonly<Record<string, unknown>>,
+): boolean {
+	const sourceRef = typeof value.source_ref === "string" ? value.source_ref.trim() : "";
+	const sourceId = typeof value.source_id === "string" ? value.source_id.trim() : "";
+	if (
+		value.source_kind !== "attention" ||
+		value.source_root !== "dreaming_attention" ||
+		!/^attention:(?:\$\d+|[^:]+)$/.test(sourceRef) ||
+		sourceId.length === 0
+	) {
+		return false;
+	}
+	const row = db.prepare("SELECT id FROM dreaming_attention WHERE id = ? AND agent_id = ?").get(sourceId, agentId) as
+		| { id: string }
+		| undefined;
+	return row !== undefined;
+}
+
 function validateProposalEvidenceSourcesInTx(db: WriteDb, agentId: string, evidence: readonly unknown[]): void {
 	for (const value of evidence) {
 		const ref = readOntologyEvidenceRef(value);
 		if (ref === null || !isRecord(ref.reference) || !("source_ref" in ref.reference)) continue;
+		if (isDreamingAttentionEvidenceInTx(db, agentId, ref.reference)) continue;
 		requireStrictEpisodicSourceRefInTx(db, agentId, ref.reference.source_ref);
 	}
 }
@@ -584,6 +606,7 @@ function derivedMemorySourcesForProposalInTx(
 		if (typeof ref.reference !== "object" || ref.reference === null || Array.isArray(ref.reference)) continue;
 		const evidence = ref.reference as Readonly<Record<string, unknown>>;
 		if (!("source_ref" in evidence)) continue;
+		if (isDreamingAttentionEvidenceInTx(db, proposal.agent_id, evidence)) continue;
 		const source = requireStrictEpisodicSourceRefInTx(db, proposal.agent_id, evidence.source_ref);
 		sources.push({
 			sourceKind: source.kind,
