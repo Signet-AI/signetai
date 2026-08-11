@@ -283,6 +283,82 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 0 });
 	});
 
+	it("accepts an in-range retained attention coordinate after suffix retry without orphaning the flag (#1414)", async () => {
+		const base = getDbAccessor();
+		const enqueue = base.withWriteTxAsync;
+		if (!enqueue) throw new Error("async write API is unavailable");
+		insertEntity("e-1414-in-range-husk", "In-range Retry Husk", "in-range retry husk");
+		for (let index = 0; index < 100; index += 1) {
+			insertEpisodicMemory(`m-1414-in-range-${index}`, `Evidence for in-range retry ${index}.`);
+		}
+		let transactions = 0;
+		const accessor: DbAccessor = {
+			...base,
+			withWriteTxAsync: (fn) => {
+				transactions += 1;
+				if (transactions === 3) return Promise.reject(new Error("injected in-range writer rejection"));
+				return enqueue(fn);
+			},
+		};
+		const operations: DreamingOperationRequest[] = Array.from({ length: 100 }, (_, index) => {
+			if (index === 20) {
+				return flag({
+					subjectRef: "entity:e-1414-in-range-husk",
+					details: { entityId: "e-1414-in-range-husk", reason: "zero_active_attributes" },
+				});
+			}
+			if (index === 21) {
+				return {
+					operation: "archive_entity",
+					payload: { target: "e-1414-in-range-husk", reason: "non-concrete" },
+					provenance: "attention:$20",
+				};
+			}
+			return {
+				operation: "create_entity",
+				payload: { name: `Issue 1414 in-range entity ${index}`, type: "project" },
+				evidence: [
+					{
+						source_ref: `memory:m-1414-in-range-${index}`,
+						source_kind: "manual",
+						source_id: `m-1414-in-range-${index}`,
+						quote: `Evidence for in-range retry ${index}.`,
+					},
+				],
+			};
+		});
+
+		const partial = await applyDreamingOperations({ accessor, agentId: "agent-a", actor: "dreaming", operations });
+		expect(partial.ok).toBe(false);
+		expect(partial.retryable).toBe(true);
+		expect(partial.retryFrom).toBe(10);
+		expect(partial.items.map((item) => item.index)).toEqual(Array.from({ length: 10 }, (_, index) => index));
+
+		const retryFrom = partial.retryFrom;
+		if (retryFrom === undefined) throw new Error("partial response has no retry boundary");
+		const resumed = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: operations.slice(retryFrom),
+		});
+		expect(resumed.ok).toBe(true);
+		expect(resumed.items[10]?.result).toMatchObject({ attentionId: expect.any(String) });
+		expect(resumed.items[11]?.ok).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT status FROM entities WHERE id = ?").get("e-1414-in-range-husk"),
+			),
+		).toEqual({ status: "archived" });
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare("SELECT COUNT(*) AS c FROM dreaming_attention WHERE agent_id = ? AND resolved_at IS NULL")
+					.get("agent-a"),
+			),
+		).toEqual({ c: 0 });
+	});
+
 	it("rejects an oversized apply request before minting or writing (#1337)", async () => {
 		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),

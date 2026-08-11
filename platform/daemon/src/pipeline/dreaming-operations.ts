@@ -360,8 +360,7 @@ function sameBatchFlagIndex(
 	if (indexText === undefined) return null;
 	const referencedIndex = Number.parseInt(indexText, 10);
 	const referenced = operations[referencedIndex];
-	if (referencedIndex < operations.length) {
-		if (referencedIndex >= operationIndex || referenced?.operation !== FLAG_OP) return null;
+	if (referencedIndex < operationIndex && referenced?.operation === FLAG_OP) {
 		const subjectRef = stringField(referenced.payload, "subjectRef");
 		if (subjectRef === null) return null;
 		const attention: DreamingAttention = {
@@ -372,11 +371,15 @@ function sameBatchFlagIndex(
 			priority: 0,
 			createdAt: "",
 		};
+		// A valid local coordinate is authoritative. If it names a flag for a
+		// different target, do not let suffix recovery redirect the archive.
 		return hasExpectedAttentionTarget(accessor, agentId, operation, attention) ? referencedIndex : null;
 	}
 
-	// An out-of-range coordinate can be a source-batch coordinate retained by
-	// a suffix continuation. It still needs a preceding flag for this target.
+	// A retry keeps the source request's coordinate even after slicing the
+	// committed prefix away. The coordinate can still be in bounds in the
+	// retained suffix, but it no longer identifies the original flag. Search
+	// only preceding flags and keep the target-pinning check above intact.
 	for (let index = operationIndex - 1; index >= 0; index -= 1) {
 		const candidate = operations[index];
 		if (candidate?.operation !== FLAG_OP) continue;
