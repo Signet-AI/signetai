@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { persistNativeInstallPath } from "./native-install.js";
+import { persistNativeInstallPath, printNativeInstallResult } from "./native-install.js";
 
 function makeHome(): string {
 	return mkdtempSync(join(tmpdir(), "signet-native-install-"));
@@ -79,5 +79,26 @@ describe("persistNativeInstallPath", () => {
 
 		expect(result).toEqual({ profilePath: null, persisted: false });
 		expect(existsSync(join(home, ".bash_profile"))).toBe(false);
+	});
+
+	test("prints the shell reload step after configuring PATH", () => {
+		const lines: string[] = [];
+		const originalLog = console.log;
+		console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+		try {
+			printNativeInstallResult({
+				source: "/tmp/signet",
+				target: "/home/test/.local/bin/signet",
+				installed: true,
+				pathHint: null,
+				pathProfile: "/home/test/.zprofile",
+				pathPersisted: true,
+				connectorAssetsDir: null,
+			});
+		} finally {
+			console.log = originalLog;
+		}
+
+		expect(lines.join("\n")).toContain("Open a new shell or run `source /home/test/.zprofile`");
 	});
 });
