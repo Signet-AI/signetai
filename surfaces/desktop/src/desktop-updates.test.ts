@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DESKTOP_UPDATE_FEED, desktopUpdateSupport } from "./desktop-update-policy";
+import { DESKTOP_UPDATE_FEED, desktopUpdateSupport, desktopUpdateVersion } from "./desktop-update-policy";
 
 const desktopRoot = join(import.meta.dir, "..");
 
@@ -49,6 +49,15 @@ describe("desktop update packaging", () => {
 			reason: "Desktop auto-updates on Linux require the AppImage build.",
 		});
 		expect(DESKTOP_UPDATE_FEED).toEqual({ provider: "github", owner: "Signet-AI", repo: "signetai" });
+	});
+
+	test("does not treat an ineligible electron-updater result as available", () => {
+		expect(
+			desktopUpdateVersion({ isUpdateAvailable: false, updateInfo: { version: "0.199.4" } }, "0.199.3"),
+		).toBeNull();
+		expect(desktopUpdateVersion({ isUpdateAvailable: true, updateInfo: { version: "0.199.4" } }, "0.199.3")).toBe(
+			"0.199.4",
+		);
 	});
 
 	test("publishes metadata and mac zip artifacts required by electron-updater", () => {

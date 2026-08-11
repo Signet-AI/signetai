@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { app, dialog } from "electron";
-import type { AppUpdater, UpdateCheckResult } from "electron-updater";
-import { DESKTOP_UPDATE_FEED, desktopUpdateSupport } from "./desktop-update-policy.js";
+import type { AppUpdater } from "electron-updater";
+import { DESKTOP_UPDATE_FEED, desktopUpdateSupport, desktopUpdateVersion } from "./desktop-update-policy.js";
 
 const require = createRequire(import.meta.url);
 const { autoUpdater } = require("electron-updater") as { readonly autoUpdater: AppUpdater };
@@ -68,9 +68,8 @@ async function doCheckForDesktopUpdate(options: CheckDesktopUpdateOptions): Prom
 
 	try {
 		const check = await autoUpdater.checkForUpdates();
-		const info = updateInfo(check);
-		const latestVersion = info?.version;
-		if (!check?.updateInfo || !latestVersion || latestVersion === currentVersion) {
+		const latestVersion = desktopUpdateVersion(check, currentVersion);
+		if (!latestVersion) {
 			const result = { status: "not-available", currentVersion, message: "Signet is up to date." } as const;
 			if (options.showNoUpdateDialog) await showMessage("Signet updates", result.message);
 			return result;
@@ -109,10 +108,6 @@ async function doCheckForDesktopUpdate(options: CheckDesktopUpdateOptions): Prom
 		if (options.showNoUpdateDialog) await showMessage("Signet updates", message, "error");
 		return { status: "error", currentVersion, message };
 	}
-}
-
-function updateInfo(check: UpdateCheckResult | null | undefined): { readonly version?: string } | null {
-	return check?.updateInfo ?? null;
 }
 
 async function confirmUpdate(version: string, currentVersion: string): Promise<boolean> {
