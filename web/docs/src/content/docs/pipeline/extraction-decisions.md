@@ -1,237 +1,258 @@
 ---
-title: "Extraction and decisions"
-description: "How the memory pipeline extracts, classifies, decides, and applies controlled writes."
+title: "Dreaming, extraction, and semantic decisions"
+description: "How Signet preserves evidence, selects it for Dreaming, and applies audited semantic operations."
 ---
 
-## Overview and Philosophy
+## Overview
 
-Pipeline v2 exists because the original [Memory](/memory/) system was purely reactive:
-callers wrote whatever they wanted, the database accepted it, and recall
-quality depended entirely on how well the caller chose what to store. That
-model worked for bootstrapping but doesn't scale — memories accumulate
-noise, contradict each other, and fragment across overlapping phrasings of
-the same fact.
+Signet separates source evidence from the semantic knowledge derived from it.
+A memory, transcript, document, or other source artifact is stored as
+agent-scoped episodic evidence first. That evidence remains available for
+recall, provenance, repair, and later processing.
 
-The pipeline introduces a background extraction layer. When a memory
-arrives, it is persisted immediately (raw-first safety), and a job is
-enqueued to analyze it asynchronously. The job runs extraction and
-decision passes using a local LLM, then optionally writes derived facts
-back into the memory store. This means the caller's raw content is never
-lost — it is always durably committed before any LLM call runs — and
-derived facts are layered on top rather than replacing the original.
+Dreaming is the current semantic processing path. It selects evidence from the
+agent-scoped episodic surface, reasons over that evidence with bounded daemon
+capabilities, and submits audited ontology operations. It may derive entities,
+aspects, claims, and links, but it does not rewrite the evidence it used.
 
-This is substrate work. The pipeline's job is to turn raw interaction
-data into cleaner, more structured material the rest of the system can
-use for retrieval, repair, and eventually learned context selection.
+A `POST /api/memory/remember` call does not create a per-memory extraction job.
+The memory row is immediately available for keyword search, and embedding work
+may continue asynchronously. Pipeline V2 runs the workers that are currently
+active for the installation: document ingest, retention, maintenance,
+synthesis, prospective indexing, and Dreaming.
 
-The central constraint governing every design decision here is: **no LLM
-calls inside write-locked transactions.** SQLite write locks are exclusive,
-and a blocking HTTP call to Ollama inside one would stall the entire [Daemon](/daemon/).
-The pipeline enforces a strict two-phase discipline: fetch and embed outside
-the lock, then commit atomically inside `withWriteTx`. Any violation of this
-rule introduces unbounded latency into every other writer.
+This is the important architectural boundary:
 
-## Pipeline Modes
+- Episodic evidence records what was received.
+- Dreaming derives semantic state from selected evidence.
+- The daemon owns validation, scope, mutation, and audit behavior.
+- No LLM call runs inside a write-locked transaction.
 
-Three operational modes are composed from five boolean flags.
+For the storage lifecycle and search path, see [Memory System](/memory/). For
+worker startup and retired workers, see [Workers and maintenance](/pipeline/workers-maintenance/).
 
-**Shadow mode** is active when `enabled` is true but `shadowMode` is also
-true, or when `mutationsFrozen` is true. In this mode the pipeline runs the
-full extraction and decision sequence, records all proposals to
-`memory_history` for audit, but makes no writes to the memories table.
-Shadow mode is useful for validating extraction quality without affecting
-production data.
+## The old extraction and decision worker is retired
 
-**Controlled-write mode** is active when `enabled` is true, `shadowMode` is
-false, and `mutationsFrozen` is false. In this mode, ADD and NONE decisions
-are applied. ADD creates new memory rows and embeddings; NONE is recorded
-for audit only. UPDATE and DELETE proposals are blocked unless
-`autonomous.allowUpdateDelete` is true.
+The former Pipeline V2 design ran a background extraction worker for each raw
+memory. That worker produced fact and relationship candidates, retrieved
+similar memories, asked an LLM to choose `ADD`, `UPDATE`, `DELETE`, or `NONE`,
+and applied the permitted results through a controlled-write path.
 
-**Full mode** is controlled-write mode with `allowUpdateDelete` set to true.
-In this mode UPDATE proposals modify the referenced memory through the mutation
-API path, and DELETE proposals soft-delete the referenced memory through the
-forget path. The previous target state is archived to the cold tier first, and
-pinned memories are skipped rather than deleted.
+That runtime no longer exists. The daemon does not create or lease new
+`extract` jobs, and startup terminalizes unfinished historical extraction jobs
+with their existing provenance intact. The old per-fact decision loop,
+`runShadowDecisions`, and `applyPhaseCWrites` are not current runtime surfaces.
 
-The five config flags in detail:
+The `memory_extraction` name may still appear in inference-router status. It is
+the workload binding Dreaming uses for inference calls; it does not mean that
+the retired extraction worker is enabled.
 
-- `enabled` — Master switch. When false, no extraction jobs are processed.
-- `shadowMode` — Run extraction and decisions without writing any facts.
-- `allowUpdateDelete` — Permit UPDATE/DELETE decisions to mutate existing
-  memories through guarded modify/forget paths.
-- `mutationsFrozen` — Emergency brake. Disables all writes even if
-  `shadowMode` is false.
-- `autonomous.frozen` — Disables the maintenance worker's scheduled interval
-  even if `autonomous.enabled` is true.
+Likewise, the old structural classification, structural dependency, and
+cross-entity dependency-synthesis workers are retired. Dreaming's audited
+operation path is the automatic semantic graph writer.
 
-## Extraction Stage
+## Dreaming passes
 
-Extraction is the first LLM pass. Its job is to decompose a raw memory
-string into a list of discrete, reusable facts and a list of entity
-relationship triples.
+A Dreaming pass operates over one or more agent scopes. The pass avoids spending
+inference work when there is no pending attention or episodic backlog. When
+there is work, it follows this general sequence.
 
-The extraction prompt instructs the model to return a JSON object with two
-arrays. Each fact carries a `content` string, a `type` discriminant
-(`fact`, `preference`, `decision`, `procedural`, or `semantic`), and a
-floating-point `confidence` in [0, 1]. Each entity triple carries `source`,
-`relationship`, `target`, and `confidence`. The prompt includes worked
-examples and explicitly tells the model to skip ephemeral details and return
-only the JSON object — no surrounding text.
+### 1. Select evidence
 
-The model's output is post-processed before validation. `<think>` blocks
-emitted by chain-of-thought models like qwen3 are stripped first. Then
-Markdown code fences are removed if present. The resulting string is
-parsed as JSON.
+Dreaming searches the agent-scoped episodic aggregation surface. This can
+include explicit memories, source artifacts, completed transcripts, and
+temporal summaries. The search path preserves source references and returns
+bounded excerpts rather than handing the model an unbounded database view.
 
-Validation is strict and partial-failure safe. Facts are capped at 20 per
-input. Any fact shorter than 10 characters is rejected. Any fact longer
-than 2000 characters is truncated. An unknown type string is coerced to
-`fact` with a warning recorded. Entities are capped at 50 per input; each
-must have non-empty `source` and `target` strings and a non-empty
-`relationship`. Input longer than 12,000 characters is truncated before the
-prompt is built.
+A completed transcript and its related lineage remain one source of evidence,
+not several independent facts to merge blindly. Read-time content-safety rules
+can exclude tainted or blocked content from Dreaming context without deleting
+or rewriting the original source row.
 
-Validation failures produce warnings that are accumulated in the
-`ExtractionResult` and surfaced in the job's result payload. They never
-throw — partial results are always returned.
+The evidence search capability is `search_evidence`. Other read capabilities
+allow Dreaming to inspect entities, aspects, claims, links, contradictions,
+and attention state within the relevant agent scope.
 
-## Decision Stage
+### 2. Reason with bounded capabilities
 
-The decision stage evaluates each extracted fact independently against the
-existing memory store. For each fact, the engine retrieves the top-5
-candidate memories via hybrid search, then asks the LLM which of four
-actions to take: ADD, UPDATE, DELETE, or NONE.
+Dreaming is an agentic pass, not a fixed per-fact classifier. Its capability
+registry defines the operations available to the agent, including:
 
-This stage is intentionally conservative. It is better understood as a
-proposal and curation layer than as autonomous semantic rewriting. Its
-output improves memory quality and auditability; it does not eliminate
-the need for downstream relevance learning.
+- `search_evidence` for immutable episodic memories, artifacts, and transcripts
+- `search_entities` and `get_entity` for scoped graph reads
+- `list_aspect_claims`, `get_evidence`, and `walk_links` for claim and lineage reads
+- `attention_list` for queued review and maintenance attention
+- `list_contradictions` and `validate_proposal` for deterministic checks
+- `runbook_read` and `runbook_write` for Dreaming's bounded operational notes
+- `apply_ontology_ops` for daemon-owned semantic mutations
 
-Candidate retrieval uses the same BM25 + vector hybrid search that powers
-recall. The BM25 leg queries `memories_fts` with the fact's content as the
-full-text query; scores are normalized to [0, 1] via `1 / (1 + |score|)`.
-The vector leg embeds the fact content and calls `vectorSearch` against the
-embeddings table. Results from both legs are merged by ID, then combined
-with a weighted sum: `alpha × vector + (1 - alpha) × bm25` when both legs
-returned a score, or the single available score otherwise. Candidates below
-`min_score` are dropped. The top 5 are fetched from the memories table.
+The same scope-bound registry is used across the in-process agent path and the
+MCP, HTTP, and CLI surfaces. Capability input is validated before execution,
+and graph reads and writes remain bound to the requested agent scope.
 
-When no candidates are found, the engine immediately proposes ADD without an
-LLM call, using the fact's own confidence as the proposal confidence and a
-fixed reason string.
+### 3. Propose and validate ontology operations
 
-When candidates exist, the decision prompt presents the fact and a numbered
-list of candidates with their IDs, types, and content. The model is asked
-to return a JSON object with `action`, `targetId` (required for UPDATE and
-DELETE), `confidence`, and `reason`. The response is parsed with the same
-`<think>`-strip and fence-removal logic as extraction.
+Dreaming expresses semantic changes as structured ontology operations rather
+than direct SQL or free-form memory-row edits. The daemon validates the
+operation contract and runs deterministic pre-write guards before applying it.
 
-Validation on the decision output ensures that UPDATE and DELETE decisions
-reference an ID that actually appears in the candidate set. Proposals with
-missing or hallucinated IDs are dropped with a warning. An empty `reason`
-string is also rejected.
+Validation can include entity-label quality, duplicate-entity checks, and
+contradiction checks against active aspect values. Write caps and other graph
+invariants are enforced by the daemon-owned apply path, not by trusting the
+model to stay within bounds.
 
-The function is named `runShadowDecisions` regardless of mode — "shadow"
-here means the function itself makes no writes. Whether the proposals are
-applied or merely recorded is a concern of the worker that calls this
-function.
+### 4. Apply audited operations
 
-## Controlled Writes
+`apply_ontology_ops` is the only semantic-mutating Dreaming capability. The
+separate runbook capability may update Dreaming's bounded operational notes,
+but it does not author graph state. The daemon applies accepted ontology
+operations through the audited mutation path, records operation effects and
+failures, and preserves evidence and version history.
 
-When controlled-write mode is active, the worker applies ADD decisions
-inside a single `withWriteTx` call after all LLM and embedding work has
-completed. The write path is implemented in `applyPhaseCWrites`.
+Dreaming can create or update semantic graph state, but it does not silently
+rewrite the episodic source that justified the operation. Claims and links keep
+their available evidence and provenance so later review can distinguish source
+truth from the current semantic view.
 
-Before entering the transaction, the worker pre-fetches embeddings for all
-ADD proposals in parallel. Each fact content is passed through
-`normalizeAndHashContent` to compute a `contentHash`, and the storage
-content (original casing) and hash are used as the key for caching the
-vector. The embedding fetch is intentionally outside the transaction lock.
+Inference and embedding work happen before the short database mutation phase.
+The write path must remain deterministic and bounded; a slow provider call must
+not hold a SQLite write lock.
 
-Inside the transaction, each ADD proposal passes through a sequence of
-safety gates. First, the fact's confidence is compared to
-`minFactConfidenceForWrite` (default 0.7); facts below this threshold are
-skipped with reason `low_fact_confidence`. Second, the normalized content
-is checked for zero length; empty facts are skipped with reason
-`empty_fact_content`. Third, the `content_hash` is checked against the
-memories table to detect exact duplicates — both at the pre-insert check
-and defensively on UNIQUE constraint collision. Duplicates are recorded with
-the existing memory's ID and counted as `deduped`.
+### 5. Record pass state
 
-For facts that clear all gates, `txIngestEnvelope` creates the memory row
-in a single insert, with `who` set to `pipeline-v2`, `why` to
-`extracted-fact`, and the pipeline's extraction model name in
-`extractionModel`. If a pre-fetched embedding vector is available for this
-content hash, it is upserted into the embeddings table in the same
-transaction.
+Dreaming records pass status, tool calls, applied/skipped/failed mutation
+counts, evidence progress, and summary information. The evidence watermark
+advances only when the pass actually consumes the relevant episodic backlog.
+A hygiene-only pass must not hide unprocessed content from a later content
+pass.
 
-Audit records are written for every proposal in every outcome: ADD
-(created), ADD (deduped), ADD (skipped), NONE (recorded), and destructive
-(blocked). Each record lands in `memory_history` with enough metadata to
-reconstruct the decision context: proposal action, fact content, confidence,
-the source memory ID, the extraction model, and fact and entity counts.
+Dreaming has focused modes for incremental work, compact runs, content work,
+and hygiene work. These are pass modes, not the retired per-fact
+`ADD`/`UPDATE`/`DELETE` decision modes.
 
-The contradiction detector runs on UPDATE and DELETE proposals before they
-are blocked. It tokenizes both the fact content and the target memory's
-content, checks for lexical overlap of at least two tokens, and then looks
-for either a negation-polarity difference (one has a negation token, the
-other doesn't) or an antonym pair conflict (enabled/disabled, allow/deny,
-etc.). Proposals that trigger the detector are flagged `reviewNeeded: true`
-in their audit record.
+## Operational controls
 
-## Content Normalization
+The daemon reports a Pipeline V2 mode derived from these controls:
 
-All content passes through `normalizeAndHashContent` before storage or
-hashing. The function is deterministic and produces three derived values.
+| Control | Current meaning |
+| --- | --- |
+| `enabled` | Enables Pipeline V2 runtime processing. |
+| `paused` | Prevents the normal pipeline runtime from starting; retention can still run as a standalone safeguard. |
+| `mutationsFrozen` | Prevents mutation-producing pipeline workers, including Dreaming, from starting. |
+| `shadowMode` | Causes the daemon to report `shadow` pipeline status and keeps checkpoint extraction available when the main pipeline switch is off. It does not restore the old extraction worker or its simulated decision pass. |
+| `autonomous.enabled` | Enables the scheduled maintenance interval. |
+| `autonomous.frozen` | Prevents the scheduled maintenance interval while leaving on-demand inspection available. |
+| `autonomous.maintenanceMode` | Selects whether maintenance recommendations are observed or executed. |
 
-`storageContent` is the text after trimming and whitespace collapsing
-(`/\s+/g → " "`). This is what gets written to the database. Original
-casing is preserved.
+`autonomous.allowUpdateDelete` is not the old extraction decision gate. The
+retired extraction, write-gate, and legacy provider-routing configuration keys
+are rejected as retired; inference provider selection belongs to the canonical
+inference workload configuration.
 
-`normalizedContent` takes `storageContent`, lowercases it, and strips
-trailing punctuation (`[.,!?;:]+$`). This is used for FTS indexing and as
-the hash basis when non-empty.
+The default pipeline workers are deliberately divided by responsibility:
 
-`contentHash` is a SHA-256 digest of the hash basis (normalized content if
-non-empty, otherwise lowercased storage content). This 64-character hex
-string is the deduplication key. Upserts on the embeddings table use it as
-the unique key, and memory inserts check it to avoid exact-content
-duplicates.
+- Document ingest turns source documents into indexed chunks.
+- Retention removes expired rows while preserving referential safety.
+- Maintenance diagnoses queue, index, storage, and graph health and can run bounded repair actions.
+- Synthesis maintains session-derived projection artifacts.
+- Prospective indexing generates search hints.
+- Dreaming is the automatic semantic writer.
 
-## Inline Entity Linker
+See [Workers and maintenance](/pipeline/workers-maintenance/) for the
+non-semantic workers and their repair behavior.
 
-Before any async pipeline job runs, the inline entity linker
-(`platform/daemon/src/inline-entity-linker.ts`) performs a fast,
-synchronous mention-linking pass at memory write time. This is a
-mechanical helper, not a semantic author.
+## Explicit ontology extraction
 
-The linker runs without an LLM call. It scans the memory's content text
-for candidate proper nouns and links only entities that already exist
-for the same `agent_id`. It writes `memory_entity_mentions` rows so a
-new memory can be discovered from known entity pages immediately, but it
-does not create entities, aspects, attributes, or dependencies.
+The daemon also exposes an explicit operator-facing path at
+`POST /api/ontology/extract`. This is separate from the scheduled Dreaming
+worker.
 
-Structured graph writes come from `POST /api/memory/remember` with a
-`structured` payload, explicit user/agent actions, or reviewed
-normalization passes. This keeps the default background path cheap,
-predictable, and hard to poison: incidental capitalization can attach a
-memory to an existing known entity, but it cannot invent graph structure.
+The endpoint reads selected episodic material and can use an inference provider
+to propose ontology candidates such as:
 
-Because the linker runs inside the write transaction, it must stay fast
-and deterministic. There are no network calls, no LLM inference, and no
-blocking I/O, only candidate matching and SQLite writes against existing
-graph rows.
+- entities
+- claim values
+- links
+- actions and policies
+- assertions
+- questions
 
-## Structural Classification
+The default behavior is a dry run. `write_proposals` and `write_assertions`
+explicitly opt into persisting those results. The provider is instructed not to
+write memory or invent unsupported facts. This path produces ontology proposals
+and assertions; it is not the retired per-memory fact extractor.
 
-The per-fact structural classify and structural dependency workers are retired.
-Dreaming owns all automatic semantic writes, so no runtime creates or leases
-`structural_classify`/`structural_dependency` jobs. The obsolete `structural`
-configuration block is ignored.
+## Content normalization and deduplication
 
-The default pipeline does not use a background LLM to author graph structure;
-Dreaming emits audited operations from episodic evidence.
+All memory content passes through `normalizeAndHashContent` before storage or
+hashing. The result has three useful text values and a hash basis.
 
-For details on the knowledge graph persistence stage, see
-[KNOWLEDGE-GRAPH.md](/knowledge-graph/).
+`storageContent` normalizes CRLF line endings and trims the outer whitespace.
+It preserves internal whitespace and newlines. This is the content stored in the
+memory row, with original casing preserved.
+
+`normalizedContent` lowercases `storageContent`, collapses whitespace to single
+spaces, removes trailing punctuation from `[.,!?;:]+`, and trims the result.
+This is the normal form used for matching and hashing when it is non-empty.
+
+`contentHash` is the SHA-256 digest of `normalizedContent`, or of lowercased
+`storageContent` when the normalized value is empty. The resulting 64-character
+hex digest is used for exact-content deduplication and embedding-key lookup.
+
+## Inline entity linking
+
+Before asynchronous workers run, the remember path performs a fast,
+synchronous mention-linking pass. This is a mechanical helper, not a semantic
+author.
+
+The linker scans content for candidate proper nouns and attaches mentions only
+to entities that already exist in the same `agent_id` scope. It can create
+`memory_entity_mentions` rows so a new memory is discoverable from an existing
+entity page, but it does not create entities, aspects, attributes, or
+dependencies.
+
+Structured graph writes come from an explicit `structured` remember payload,
+user or agent actions, reviewed repair and normalization passes, or Dreaming's
+audited ontology operations. The inline linker makes the default write path
+cheap and predictable without allowing incidental capitalization to invent graph
+structure.
+
+Because the linker runs inside the memory write transaction, it must remain
+fast and deterministic. It performs no network calls, LLM inference, or
+blocking provider work.
+
+## Source truth and semantic truth
+
+The source record and the semantic graph serve different purposes:
+
+- Source evidence is retained for provenance and recovery.
+- Semantic claims and links are the current operational view derived from that evidence.
+- Dreaming may revise semantic state as new evidence arrives.
+- A semantic revision does not rewrite the evidence that led to an earlier state.
+- Agent scope and visibility are enforced on both reads and writes.
+
+This separation is what makes the graph repairable. When a source is removed or
+new evidence contradicts a claim, the system can review derived state without
+pretending that the original source never existed.
+
+For the broader graph model, see [Knowledge architecture](/knowledge-architecture/)
+and [Knowledge graph persistence](/knowledge-graph/). For recall's evidence
+and authorization boundary, see [Knowledge and search](/pipeline/knowledge-search/).
+
+## Retired concepts
+
+The following names may still appear in historical migrations, logs, tests, or
+old configuration examples, but they do not describe the current semantic write
+path:
+
+- per-memory `extract` jobs
+- the extraction fact/entity JSON contract
+- `runShadowDecisions`
+- `ADD`, `UPDATE`, `DELETE`, and `NONE` fact decisions
+- `applyPhaseCWrites`
+- the old `memory_history` decision record for every extracted fact
+- background structural classification and dependency writers
+- `memory.pipelineV2.writeGate` and legacy extraction provider routing
+
+When diagnosing current behavior, start with the Dreaming pass, its scoped
+capabilities, the ontology operation contract, and the daemon's audit records.
