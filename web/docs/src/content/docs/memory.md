@@ -5,9 +5,11 @@ description: "The core persistence layer — storage, search, and retrieval."
 
 The memory system is the core persistence layer of Signet. Memories are
 stored in a SQLite database at `$SIGNET_WORKSPACE/memory/memories.db`. Every
-memory has a full-text search index (FTS5), a vector embedding, a
-SHA-256 content hash for deduplication, and a versioned audit trail.
-The [Daemon](/daemon/) owns all writes. Direct database modification is unsupported.
+memory is synchronized with the full-text search index (FTS5), carries a
+SHA-256 content hash for deduplication, and participates in a versioned audit
+trail. A vector embedding is written when an embedding provider succeeds, but
+memories can exist without one. The [Daemon](/daemon/) owns all writes. Direct
+database modification is unsupported.
 
 
 ## Memory Lifecycle
@@ -17,14 +19,17 @@ pipeline processing, indexing, and search.
 
 When a client POSTs to `POST /api/memory/remember`, the daemon
 immediately writes the memory row to SQLite. The FTS5 index is
-updated synchronously. An embedding is generated asynchronously. The
-write succeeds even if the embedding provider is unavailable — those
-memories remain searchable by keyword only.
+updated synchronously. The request then makes a best-effort embedding
+attempt and persists the vector if the provider succeeds. The write
+succeeds even if the embedding provider is unavailable — those memories
+remain searchable by keyword only.
 
-The saved row is immutable episodic evidence. Dreaming later selects it with
-related artifacts, transcripts, and summaries, then may derive audited semantic
-claims or links without rewriting the original evidence. No extraction job is
-created by the write path.
+The saved row is episodic evidence. Its content and type are immutable once
+written as episodic evidence, while metadata can still be curated through the
+mutation API. Dreaming later selects it with related artifacts, transcripts,
+and summaries, then may derive audited semantic claims or links without
+rewriting the original evidence. No extraction job is created by the write
+path.
 
 Search (`POST /api/memory/recall`) runs hybrid BM25 + vector search,
 optionally augmented by the knowledge graph, and returns a scored,
@@ -348,8 +353,8 @@ writes occur. For batches exceeding the confirmation threshold, the
 
 In execute mode, each candidate is soft-deleted: `is_deleted = 1`
 and `deleted_at` are set. The `reason` field is required. Passing
-`force: true` hard-deletes the row immediately instead of
-soft-deleting. Batch `if_version` is not supported — use
+`force: true` permits soft-deleting pinned memories; it does not hard-delete
+the row immediately. Batch `if_version` is not supported — use
 `DELETE /api/memory/:id` for version-guarded single deletes.
 
 ```bash
@@ -395,9 +400,9 @@ Recovery fails with a 409 if the memory is not deleted
 (`retention_expired`), or if an `if_version` check fails
 (`version_conflict`). It returns 503 if `mutationsFrozen` is active.
 
-After the retention window elapses, the retention worker hard-deletes
-the tombstone and all associated embeddings and graph links. Recovery
-is no longer possible after that point.
+After the retention window elapses, the retention worker archives the memory
+to `memories_cold`, removes its graph links and embeddings, and hard-deletes
+the tombstone. Recovery is no longer possible after that point.
 
 
 ## Memory History
@@ -433,32 +438,27 @@ the retention worker.
 
 ### Importance Decay
 
-Every memory has an `importance` score between 0.0 and 1.0. Over
-time, non-pinned memories decay based on days since last access:
+Every memory has an `importance` score between 0.0 and 1.0. Recall applies
+an age-based score to non-pinned memories using days since creation:
 
 ```
-importance(t) = base_importance × decay_rate ^ days_since_access
+effective_score = importance × 0.95 ^ age_days
 ```
 
-The default `decay_rate` is 0.95 (5% per day). Accessing a memory
-via recall resets its decay timer by updating `last_accessed`. Pinned
-memories (`pinned = 1`, set via `critical:` prefix or API) have
-`importance = 1.0` and never decay.
-
-Configure in `agent.yaml`:
-
-```yaml
-memory:
-  decay_rate: 0.99   # slow decay
-  decay_rate: 0.95   # default
-  decay_rate: 0.90   # fast decay
-```
+The 0.95 factor is currently built into the recall/classification code and is
+not loaded from `memory.decay_rate` in `agent.yaml`. `last_accessed` and
+`access_count` are used separately for rehearsal and access-frequency boosts.
+Pinned memories always receive a non-decaying score of 1.0. The `critical:`
+prefix also sets their stored importance to 1.0; an API `pinned: true` request
+pins the memory but does not itself rewrite the importance field.
 
 ### Retention Worker
 
 The retention worker (`platform/daemon/src/pipeline/retention-worker.ts`)
-runs every 6 hours and purges expired data in a strict sequence. Each
-step runs in its own short write transaction to avoid holding locks.
+runs every 6 hours and purges expired data in a strict sequence. The dependent
+graph-link, embedding, and tombstone steps run in one write transaction so a
+vector cleanup failure cannot commit only part of the purge. History and job
+cleanup run in separate transactions.
 
 The purge order is mandatory — later steps depend on earlier ones
 having removed their referencing rows first:
@@ -468,8 +468,9 @@ having removed their referencing rows first:
    entities with zero mentions are orphaned (removed).
 2. **Embeddings** for the same tombstoned memories (from the
    `embeddings` table).
-3. **Tombstones** — the `memories` rows themselves are hard-deleted.
-   The `memories_ad` trigger handles FTS5 cleanup automatically.
+3. **Tombstones** — the memories are copied to `memories_cold`, then the
+   `memories` rows themselves are hard-deleted. The `memories_ad` trigger
+   handles FTS5 cleanup automatically.
 4. **History events** older than the history retention window.
 5. **Completed jobs** older than the completed job retention window.
 6. **Dead-letter jobs** older than the dead job retention window.
@@ -486,7 +487,7 @@ Default retention windows:
 | Completed pipeline jobs | 14 days |
 | Dead-letter pipeline jobs | 30 days |
 
-These are configurable in `agent.yaml` under `retention.*`.
+These are currently built-in worker defaults rather than `agent.yaml` settings.
 
 
 ## Job Queue
@@ -548,6 +549,9 @@ immutable and provenance-bearing.
 | `fact` | Objective, verifiable information | "Signet stores data in SQLite" |
 | `preference` | User or agent preferences and inclinations | "User prefers dark mode" |
 | `decision` | Choices made, options selected or rejected | "Decided to use PostgreSQL" |
+| `rule` | Constraints or standing instructions | "Never expose tokens" |
+| `learning` | Newly learned information or patterns | "Discovered a faster workflow" |
+| `issue` | A known problem or failure | "The auth flow is broken" |
 | `procedural` | How-to knowledge, steps, workflows | "Run bun install before building" |
 | `semantic` | Concepts, definitions, and relationships | "BM25 is a term-frequency ranking function" |
 
@@ -566,9 +570,10 @@ Type inference for explicit saves uses keyword matching:
 pipeline uses `fact.confidence` as the importance for autonomously
 created memories. Explicit saves default to 0.8.
 
-`tags` is a JSON array of strings. Tags support filtering at recall
-time. The `critical:` prefix sets `pinned = 1` and `importance = 1.0`.
-The `[tag1,tag2]:` prefix sets tags directly.
+`tags` are stored as comma-separated text and support filtering at recall time.
+The API accepts either a comma-separated string or a string array. The
+`critical:` prefix sets `pinned = 1` and `importance = 1.0`. The
+`[tag1,tag2]:` prefix sets tags directly.
 
 Both can be combined: `critical: [project,auth]: never expose tokens`.
 
@@ -586,7 +591,11 @@ Both can be combined: `critical: [project,auth]: never expose tokens`.
 | `/api/memory/:id/recover` | POST | Recover a soft-deleted memory |
 | `/api/memory/modify` | POST | Batch patch memories |
 | `/api/memory/forget` | POST | Batch soft-delete with preview/execute mode |
-| `/memory/search` | GET | Legacy keyword-only search |
+| `/api/memory/search` | GET | Hybrid recall alias |
+| `/api/memories/:id/tombstone` | POST | Force-soft-delete one memory |
+| `/api/memories/:id/supersede` | POST | Mark one memory superseded by another |
+| `/memory/search` | GET | FTS and filter search |
+| `/memory/similar` | GET | Vector similarity search |
 | `/api/embeddings` | GET | Export embeddings |
 
 See [Api](/api/) for full request/response schemas.
