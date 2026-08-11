@@ -498,14 +498,17 @@ export async function generateWithTracking(
 function recordLlmGenerate(provider: LlmProvider, usage: LlmUsage | null, latencyMs: number, success: boolean): void {
 	const telemetry = getActiveTelemetry();
 	if (!telemetry) return;
+	const attribution = provider.telemetryAttribution;
 	telemetry.record("llm.generate", {
-		provider: provider.name,
-		...(provider.telemetryAttribution
+		// Provider names are diagnostic identifiers and ACPX includes its configured
+		// agent in one. Routed telemetry must emit the bounded executor instead.
+		provider: attribution?.executor ?? provider.name,
+		...(attribution
 			? {
-					executor: provider.telemetryAttribution.executor,
-					underlyingProvider: provider.telemetryAttribution.provider ?? null,
-					model: provider.telemetryAttribution.model ?? null,
-					locality: provider.telemetryAttribution.locality,
+					executor: attribution.executor,
+					underlyingProvider: attribution.provider ?? null,
+					model: attribution.model ?? null,
+					locality: attribution.locality,
 				}
 			: {}),
 		latencyMs: Math.round(latencyMs),

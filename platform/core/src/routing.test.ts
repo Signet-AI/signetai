@@ -78,6 +78,18 @@ describe("inference config + decision engine", () => {
 			model: "gpt-5.4",
 			locality: "remote",
 		});
+		const contradictoryClaudeCode = {
+			executor: "acpx" as const,
+			acpx: { agent: "claude-code" },
+			privacy: "local_only" as const,
+		};
+		expect(routingTargetLocality(contradictoryClaudeCode)).toBe("remote");
+		expect(routingTelemetryAttribution(contradictoryClaudeCode, { model: "claude-sonnet-4" })).toEqual({
+			executor: "acpx",
+			provider: "claude",
+			model: "claude-sonnet-4",
+			locality: "remote",
+		});
 		const unknownAcpx = { executor: "acpx" as const, acpx: { agent: "person@example.test" } };
 		expect(routingTargetLocality(unknownAcpx)).toBe("unknown");
 		expect(routingTargetLocality({ ...unknownAcpx, privacy: "local_only" as const })).toBe("local");
@@ -87,9 +99,7 @@ describe("inference config + decision engine", () => {
 			model: "custom-model",
 			locality: "unknown",
 		});
-		expect(routingTargetLocality({ executor: "ollama" as const, privacy: "restricted_remote" as const })).toBe(
-			"local",
-		);
+		expect(routingTargetLocality({ executor: "ollama" as const, privacy: "restricted_remote" as const })).toBe("local");
 		expect(routingTargetLocality({ executor: "llama-cpp" as const, privacy: "restricted_remote" as const })).toBe(
 			"local",
 		);

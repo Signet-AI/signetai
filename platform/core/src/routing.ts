@@ -155,12 +155,19 @@ export interface RoutingTargetConfig {
 	readonly models: Readonly<Record<string, RoutingModelConfig>>;
 }
 
-const REMOTE_ACPX_AGENTS = new Set(["claude", "codex", "gemini"]);
 const UNKNOWN_ACPX_PROVIDER = "unknown";
+const REMOTE_ACPX_PROVIDERS = {
+	claude: "claude",
+	"claude-code": "claude",
+	codex: "codex",
+	gemini: "gemini",
+} as const;
 
 function acpxTelemetryProvider(agent?: string): string {
 	const normalized = agent?.trim().toLowerCase();
-	return normalized && REMOTE_ACPX_AGENTS.has(normalized) ? normalized : UNKNOWN_ACPX_PROVIDER;
+	return (
+		(normalized && REMOTE_ACPX_PROVIDERS[normalized as keyof typeof REMOTE_ACPX_PROVIDERS]) ?? UNKNOWN_ACPX_PROVIDER
+	);
 }
 
 /**
@@ -176,7 +183,7 @@ export function routingTargetLocality(
 		return isLocalInferenceEndpoint(target.endpoint) ? "local" : "remote";
 	}
 	if (target.executor === "acpx") {
-		if (REMOTE_ACPX_AGENTS.has(target.acpx?.agent.trim().toLowerCase() ?? "")) return "remote";
+		if (acpxTelemetryProvider(target.acpx?.agent) !== UNKNOWN_ACPX_PROVIDER) return "remote";
 	}
 	if (target.executor === "anthropic" || target.executor === "openrouter") return "remote";
 	if (target.privacy === "local_only") return "local";

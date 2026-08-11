@@ -11,9 +11,12 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseRoutingConfig } from "@signet/core";
 import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { createRoutingProvider } from "./inference-provider-factory";
+import { generateWithTracking } from "./pipeline/provider";
 import {
 	TELEMETRY_EVENTS,
 	type TelemetryCollector,
@@ -23,6 +26,7 @@ import {
 	nextFlushIntervalMs,
 	parseTelemetryTimestamp,
 	sanitizeCrashError,
+	setActiveTelemetry,
 	telemetryDeployment,
 	telemetryDeploymentRole,
 	telemetryDisabledByEnv,
@@ -196,6 +200,55 @@ describe("telemetry collector", () => {
 		expect(body?.batch[0]?.distinct_id).toBe(lastBatchDistinctId());
 		expect(body?.batch[1]?.properties.$lib).toBe("signet-daemon");
 		expect(unsentCount()).toBe(0);
+	});
+
+	it("does not leak arbitrary ACPX labels through routed llm.generate telemetry (#1442)", async () => {
+		const agent = "person@example.test";
+		const bin = join(dir, `fake-acpx-${crypto.randomUUID()}.sh`);
+		writeFileSync(bin, "#!/usr/bin/env bash\ncat >/dev/null\nprintf 'ok\\n'\n");
+		chmodSync(bin, 0o755);
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					harness: {
+						executor: "acpx",
+						acpx: { agent, bin },
+						models: { default: { model: "gpt-5.4-mini" } },
+					},
+				},
+			},
+		});
+		if (!parsed.ok) throw new Error(parsed.error.message);
+		const provider = await createRoutingProvider({
+			config: parsed.value,
+			targetId: "harness",
+			modelId: "default",
+			async resolveCredential() {
+				return undefined;
+			},
+		});
+		expect(provider.name).toContain(agent);
+		const collector = makeCollector();
+		setActiveTelemetry(collector);
+		try {
+			await expect(generateWithTracking(provider, "telemetry regression prompt")).resolves.toMatchObject({
+				text: "ok",
+			});
+			await collector.flush();
+			const local = collector.query().find((event) => event.event === "llm.generate");
+			const outbound = captured
+				.flatMap((request) => request.body.batch)
+				.find((event) => event.event === "llm.generate");
+			expect(local?.properties.provider).toBe("acpx");
+			expect(local?.properties.underlyingProvider).toBe("unknown");
+			expect(outbound?.properties.provider).toBe("acpx");
+			expect(outbound?.properties.underlyingProvider).toBe("unknown");
+			expect(JSON.stringify(local?.properties)).not.toContain(agent);
+			expect(JSON.stringify(outbound?.properties)).not.toContain(agent);
+		} finally {
+			setActiveTelemetry(undefined);
+			rmSync(bin, { force: true });
+		}
 	});
 
 	it("does not resend events already marked sent", async () => {
