@@ -472,7 +472,15 @@ synthesizing a healthy source.
     "failures": { "total": 1, "recoverable": 1 },
     "checkpoints": { "total": 20, "partial": 1, "stale": 0 },
     "purge": { "deletedArtifacts": 0, "orphanChunks": 0 },
-    "semantic": { "entities": 12, "attributes": 4, "dependencies": 6, "communities": 2, "total": 24 }
+    "semantic": {
+      "entities": 12,
+      "aspects": 3,
+      "attributes": 4,
+      "dependencies": 6,
+      "communities": 2,
+      "total": 27,
+      "documentEntityId": "entity-abc123"
+    }
   }
 }
 ```

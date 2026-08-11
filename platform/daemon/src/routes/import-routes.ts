@@ -15,13 +15,13 @@ import {
 import { markImportedSourceUnsupported } from "../imported-source-lifecycle";
 import {
 	type ImportExtractionOutcome,
-	persistImportedSourceOutcome,
+	persistImportedSourceOutcomeInTx,
 	readImportedSourceOutcome,
 } from "../imported-source-outcome";
 import { logger } from "../logger";
 import { indexExternalMemoryArtifact } from "../memory-lineage";
 import { enqueueDreamingAttentionInTx } from "../pipeline/dreaming-attention";
-import { indexSourceArtifactStructure } from "../source-artifact-graph";
+import { indexSourceArtifactStructureInTx } from "../source-artifact-graph";
 import { purgeSourceOwnedRows } from "../source-purge";
 
 const MAX_MULTIPART_OVERHEAD = 1 * 1024 * 1024;
@@ -203,24 +203,27 @@ export function registerImportRoutes(app: Hono): void {
 						sourceMeta: { ...normalized.value.sourceMeta, representation: "structured-json-canonical" },
 					});
 				}
-				const extraction = indexSourceArtifactStructure({
-					agentId,
-					sourceId: added.source.id,
-					sourceKind,
-					sourceRoot: normalized.value.fileName,
-					sourcePath,
-					displayName: normalized.value.fileName,
-					content: normalized.value.content,
-				});
-				persistImportedSourceOutcome({
-					agentId,
-					sourceId: added.source.id,
-					sourcePath,
-					outcome: {
-						documentEntityId: extraction.documentEntityId,
-						aspectsCreated: extraction.aspectsCreated,
-						attributesCreated: extraction.attributesCreated,
-					},
+				const extraction = getDbAccessor().withWriteTx((db) => {
+					const result = indexSourceArtifactStructureInTx(db, {
+						agentId,
+						sourceId: added.source.id,
+						sourceKind,
+						sourceRoot: normalized.value.fileName,
+						sourcePath,
+						displayName: normalized.value.fileName,
+						content: normalized.value.content,
+					});
+					persistImportedSourceOutcomeInTx(db, {
+						agentId,
+						sourceId: added.source.id,
+						sourcePath,
+						outcome: {
+							documentEntityId: result.documentEntityId,
+							aspectsCreated: result.aspectsCreated,
+							attributesCreated: result.attributesCreated,
+						},
+					});
+					return result;
 				});
 				for (const chunk of normalized.value.searchChunks) {
 					const rowStart = typeof chunk.sourceMeta.rowStart === "number" ? chunk.sourceMeta.rowStart : 0;

@@ -1,4 +1,4 @@
-import { getDbAccessor } from "./db-accessor";
+import { type WriteDb, getDbAccessor } from "./db-accessor";
 
 export interface ImportExtractionOutcome {
 	readonly documentEntityId: string | null;
@@ -12,35 +12,45 @@ export function persistImportedSourceOutcome(input: {
 	readonly sourcePath: string;
 	readonly outcome: ImportExtractionOutcome;
 }): void {
-	getDbAccessor().withWriteTx((db) => {
-		const row = db
-			.prepare(
-				`SELECT source_meta_json
-				   FROM memory_artifacts
-				  WHERE agent_id = ?
-				    AND source_id = ?
-				    AND source_path = ?
-				    AND COALESCE(is_deleted, 0) = 0
-				  LIMIT 1`,
-			)
-			.get(input.agentId, input.sourceId, input.sourcePath) as { source_meta_json: string | null } | null | undefined;
-		if (row == null) throw new Error("Imported source artifact is unavailable for extraction outcome persistence");
-		const sourceMeta = parseJsonObject(row.source_meta_json) ?? {};
-		db.prepare(
-			`UPDATE memory_artifacts
-			    SET source_meta_json = ?, updated_at = ?
+	getDbAccessor().withWriteTx((db) => persistImportedSourceOutcomeInTx(db, input));
+}
+
+export function persistImportedSourceOutcomeInTx(
+	db: WriteDb,
+	input: {
+		readonly agentId: string;
+		readonly sourceId: string;
+		readonly sourcePath: string;
+		readonly outcome: ImportExtractionOutcome;
+	},
+): void {
+	const row = db
+		.prepare(
+			`SELECT source_meta_json
+			   FROM memory_artifacts
 			  WHERE agent_id = ?
 			    AND source_id = ?
 			    AND source_path = ?
-			    AND COALESCE(is_deleted, 0) = 0`,
-		).run(
-			JSON.stringify({ ...sourceMeta, importExtraction: input.outcome }),
-			new Date().toISOString(),
-			input.agentId,
-			input.sourceId,
-			input.sourcePath,
-		);
-	});
+			    AND COALESCE(is_deleted, 0) = 0
+			  LIMIT 1`,
+		)
+		.get(input.agentId, input.sourceId, input.sourcePath) as { source_meta_json: string | null } | null | undefined;
+	if (row == null) throw new Error("Imported source artifact is unavailable for extraction outcome persistence");
+	const sourceMeta = parseJsonObject(row.source_meta_json) ?? {};
+	db.prepare(
+		`UPDATE memory_artifacts
+		    SET source_meta_json = ?, updated_at = ?
+		  WHERE agent_id = ?
+		    AND source_id = ?
+		    AND source_path = ?
+		    AND COALESCE(is_deleted, 0) = 0`,
+	).run(
+		JSON.stringify({ ...sourceMeta, importExtraction: input.outcome }),
+		new Date().toISOString(),
+		input.agentId,
+		input.sourceId,
+		input.sourcePath,
+	);
 }
 
 export function readImportedSourceOutcome(sourceId: string, agentId: string): ImportExtractionOutcome | undefined {
