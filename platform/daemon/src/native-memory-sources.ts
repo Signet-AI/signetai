@@ -658,7 +658,10 @@ export async function indexNativeMemoryFile(
 		return false;
 	}
 	readFailureBackoffUntil.delete(key);
-	if (!content.trim()) return false;
+	if (!content.trim()) {
+		removeNativeMemoryFile(source, filePath, agentId);
+		return false;
+	}
 
 	const hash = contentFingerprint(content);
 	const persistedHash = nativeArtifactContentHash(filePath, agentId);
@@ -915,11 +918,11 @@ export function startNativeMemoryBridge(
 					await yielder();
 					await sleep(fileDelayMs);
 				}
-				if (sourceCleanupEnabledFor(source, options)) {
-					const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
-					for (const file of activeNativeArtifactPaths(source, agentId)) {
-						if (!currentPaths.has(file.replace(/\\/g, "/"))) removeNativeMemoryFile(source, file, agentId);
-					}
+			}
+			if (sourceCleanupEnabledFor(source, options)) {
+				const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
+				for (const file of activeNativeArtifactPaths(source, agentId)) {
+					if (!currentPaths.has(file.replace(/\\/g, "/"))) removeNativeMemoryFile(source, file, agentId);
 				}
 			}
 			const previous = known.get(key);

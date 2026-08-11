@@ -384,6 +384,66 @@ describe("native memory sources", () => {
 		}
 	});
 
+	it("soft-deletes a Hermes artifact when its curated file is cleared", async () => {
+		const profileRoot = join(dir, "hermes-profile-empty");
+		const memoriesRoot = join(profileRoot, "memories");
+		const memoryFile = join(memoriesRoot, "MEMORY.md");
+		mkdirSync(memoriesRoot, { recursive: true });
+		writeFileSync(memoryFile, "# Hermes Memory\n\nCurated context that will be cleared.\n");
+
+		const source = hermesNativeMemorySource(profileRoot);
+		const handle = startNativeMemoryBridge([source], { agentId: "agent-hermes", pollIntervalMs: 0 });
+		try {
+			expect(await handle.syncExisting()).toBe(1);
+			writeFileSync(memoryFile, "\n");
+			expect(await handle.syncExisting()).toBe(0);
+
+			const row = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT is_deleted, deleted_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+						.get("agent-hermes", memoryFile) as { is_deleted: number; deleted_at: string | null },
+			);
+			expect(row).toMatchObject({ is_deleted: 1 });
+			expect(row.deleted_at).toBeTruthy();
+		} finally {
+			await handle.close();
+		}
+	});
+
+	it("reconciles Hermes artifacts when the memories directory is absent after restart", async () => {
+		const profileRoot = join(dir, "hermes-profile-removed");
+		const memoriesRoot = join(profileRoot, "memories");
+		const userFile = join(memoriesRoot, "USER.md");
+		mkdirSync(memoriesRoot, { recursive: true });
+		writeFileSync(userFile, "# Hermes User\n\nContext from a directory that will be removed.\n");
+
+		const source = hermesNativeMemorySource(profileRoot);
+		const initialBridge = startNativeMemoryBridge([source], { agentId: "agent-hermes", pollIntervalMs: 0 });
+		try {
+			expect(await initialBridge.syncExisting()).toBe(1);
+		} finally {
+			await initialBridge.close();
+		}
+
+		rmSync(memoriesRoot, { recursive: true, force: true });
+		resetNativeMemoryIndexCache();
+		const restartedBridge = startNativeMemoryBridge([source], { agentId: "agent-hermes", pollIntervalMs: 0 });
+		try {
+			expect(await restartedBridge.syncExisting()).toBe(0);
+			const row = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT is_deleted, deleted_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+						.get("agent-hermes", userFile) as { is_deleted: number; deleted_at: string | null },
+			);
+			expect(row).toMatchObject({ is_deleted: 1 });
+			expect(row.deleted_at).toBeTruthy();
+		} finally {
+			await restartedBridge.close();
+		}
+	});
+
 	it("keeps Hermes profile and Signet agent boundaries separate", async () => {
 		const profileA = join(dir, "hermes", "profiles", "alpha");
 		const profileB = join(dir, "hermes", "profiles", "beta");
