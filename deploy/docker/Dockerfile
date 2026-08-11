@@ -38,7 +38,9 @@ RUN set -eux; \
 RUN bun run build:core
 RUN bun run build:connector-base
 RUN bun run build:opencode-plugin
-RUN bun run build:native
+# The Docker image intentionally does not install Rust. The image uses the
+# bundled Bun native build below, so skip the optional N-API addon build.
+RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native
 RUN bun run build:oh-my-pi-extension
 RUN bun run build:connector-oh-my-pi
 RUN bun run build:pi-extension

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const buildScript = join(import.meta.dir, "build-native.ts");
+const dockerfile = join(root, "deploy", "docker", "Dockerfile");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -20,16 +21,24 @@ interface BuildOptions {
 	readonly nativeBuildFails?: boolean;
 }
 
+function writeCommand(path: string, exitCode: 0 | 1): void {
+	if (process.platform === "win32") {
+		writeFileSync(path, `@echo off\r\nexit /b ${exitCode}\r\n`);
+		return;
+	}
+
+	writeFileSync(path, `#!/bin/sh\nexit ${exitCode}\n`);
+	chmodSync(path, 0o755);
+}
+
 function runBuild(options: BuildOptions = {}): ReturnType<typeof spawnSync> {
 	const binDir = mkdtempSync(join(tmpdir(), "signet-build-native-test-"));
 	tempDirs.push(binDir);
-	const which = join(binDir, "which");
-	writeFileSync(which, `#!/bin/sh\nexit ${options.cargoAvailable ? 0 : 1}\n`);
-	chmodSync(which, 0o755);
+	const locator = process.platform === "win32" ? "where.cmd" : "which";
+	writeCommand(join(binDir, locator), options.cargoAvailable ? 0 : 1);
 	if (options.nativeBuildFails) {
-		const bun = join(binDir, "bun");
-		writeFileSync(bun, "#!/bin/sh\nexit 1\n");
-		chmodSync(bun, 0o755);
+		const bun = process.platform === "win32" ? "bun.cmd" : "bun";
+		writeCommand(join(binDir, bun), 1);
 	}
 
 	const env: NodeJS.ProcessEnv = {
@@ -67,5 +76,11 @@ describe("build-native", () => {
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain("native build failed");
 		expect(result.stderr).toContain("SIGNET_SKIP_NATIVE_BUILD=1");
+	});
+
+	test("keeps Docker builds on the explicit native-build opt-out path", () => {
+		const source = readFileSync(dockerfile, "utf8");
+
+		expect(source).toContain("RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native");
 	});
 });
