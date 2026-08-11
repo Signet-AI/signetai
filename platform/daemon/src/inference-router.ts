@@ -32,7 +32,12 @@ import { type ResolvedInferenceCredential, createRoutingProvider } from "./infer
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import { createDreamingAcpxMcpConfig } from "./pipeline/acpx-dreaming-mcp";
-import { type PiAgentSession, isPiAgentSessionProvider, mapSessionStatsToUsage } from "./pipeline/pi-provider";
+import {
+	type PiAgentSession,
+	PiProviderDeadlineError,
+	isPiAgentSessionProvider,
+	mapSessionStatsToUsage,
+} from "./pipeline/pi-provider";
 import {
 	type AcpxHooksMode,
 	type LlmProviderStreamEvent,
@@ -333,14 +338,12 @@ function sanitizeUpstreamDetail(detail: string): string {
 
 function isAbortLikeError(error: unknown): boolean {
 	return (
+		error instanceof PiProviderDeadlineError ||
 		error instanceof DOMException ||
 		(error instanceof Error &&
 			(error.name === "AbortError" ||
 				error.message.toLowerCase().includes("aborted") ||
-				error.message.toLowerCase().includes("cancelled") ||
-				error.message.toLowerCase().includes("timeout") ||
-				error.message.toLowerCase().includes("timed out") ||
-				error.message.toLowerCase().includes("deadline")))
+				error.message.toLowerCase().includes("cancelled")))
 	);
 }
 
@@ -1241,7 +1244,7 @@ export class InferenceRouter {
 					durationMs: Date.now() - startedAt,
 					error: message,
 				});
-				if (opts?.signal?.aborted || /\b(?:aborted|cancelled|deadline|timeout|timed out)\b/i.test(message)) break;
+				if (opts?.signal?.aborted || error instanceof PiProviderDeadlineError) break;
 			}
 		}
 		return {

@@ -85,6 +85,17 @@ export interface PiModelProviderConfig {
 	readonly name?: string;
 }
 
+/** A deadline created by this provider, distinct from an upstream timeout response. */
+export class PiProviderDeadlineError extends Error {
+	readonly timeoutMs: number;
+
+	constructor(name: string, timeoutMs: number) {
+		super(`Pi provider ${name} timed out after ${timeoutMs}ms`);
+		this.name = "PiProviderDeadlineError";
+		this.timeoutMs = timeoutMs;
+	}
+}
+
 /**
  * A deliberately isolated Pi AgentSession for daemon-owned agentic work.
  *
@@ -489,7 +500,7 @@ export function createPiModelProvider(
 			}
 		} catch (error) {
 			if (abort.timedOut()) {
-				throw new Error(`Pi provider ${name} timed out after ${opts?.timeoutMs ?? defaultTimeoutMs}ms`);
+				throw new PiProviderDeadlineError(name, opts?.timeoutMs ?? defaultTimeoutMs);
 			}
 			throw error;
 		} finally {
