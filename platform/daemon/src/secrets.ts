@@ -12,7 +12,17 @@
 
 import { execSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	fsyncSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
@@ -286,9 +296,38 @@ function loadStore(): SecretsStore {
 	}
 }
 
+type SecretStoreWriteStage = "after-write";
+type SecretStoreWriteHookForTests = (stage: SecretStoreWriteStage) => void;
+let secretStoreWriteHookForTests: SecretStoreWriteHookForTests | null = null;
+
+/** @internal Inject a failure or process kill while testing atomic store replacement. */
+export function __setSecretStoreWriteHookForTests(hook: SecretStoreWriteHookForTests | null): void {
+	secretStoreWriteHookForTests = hook;
+}
+
 function saveStore(store: SecretsStore): void {
+	const file = getSecretsFile();
+	const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
 	mkdirSync(getSecretsDir(), { recursive: true });
-	writeFileSync(getSecretsFile(), JSON.stringify(store, null, 2), { mode: 0o600 });
+
+	let fd: number | null = null;
+	try {
+		fd = openSync(tmp, "w", 0o600);
+		writeFileSync(fd, JSON.stringify(store, null, 2), "utf-8");
+		secretStoreWriteHookForTests?.("after-write");
+		fsyncSync(fd);
+		closeSync(fd);
+		fd = null;
+		renameSync(tmp, file);
+	} catch (error) {
+		if (fd !== null) closeSync(fd);
+		try {
+			unlinkSync(tmp);
+		} catch {
+			// Best effort cleanup. The existing store remains untouched if replacement did not happen.
+		}
+		throw error;
+	}
 }
 
 // ---------------------------------------------------------------------------

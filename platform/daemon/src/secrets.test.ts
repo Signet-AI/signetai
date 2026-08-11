@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,12 +16,12 @@ import {
 	getSecret,
 	getSecretExecJob,
 	hasSecret,
+	invalidateSecretsCache,
 	listSecrets,
 	localSecretProvider,
 	putSecret,
 	resetSecretExecJobsForTests,
 	startSecretExecJob,
-	invalidateSecretsCache,
 } from "./secrets.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -93,6 +94,32 @@ describe("local secrets provider", () => {
 		expect(store.secrets.OPENAI_API_KEY?.ciphertext).not.toContain("sk-test-local");
 		expect(Date.parse(store.secrets.OPENAI_API_KEY?.created ?? "")).toBeGreaterThan(0);
 		expect(Date.parse(store.secrets.OPENAI_API_KEY?.updated ?? "")).toBeGreaterThan(0);
+	});
+
+	test("a kill during store replacement leaves the previous secrets.enc intact", async () => {
+		await putSecret("OPENAI_API_KEY", "before-kill");
+		const script = join(agentsDir, "kill-during-secrets-write.ts");
+		writeFileSync(
+			script,
+			[
+				`import { __setSecretStoreWriteHookForTests, putSecret } from ${JSON.stringify(join(import.meta.dir, "secrets.ts"))};`,
+				'__setSecretStoreWriteHookForTests((stage) => { if (stage === "after-write") process.kill(process.pid, "SIGKILL"); });',
+				'await putSecret("OPENAI_API_KEY", "after-kill");',
+			].join("\n"),
+			"utf-8",
+		);
+
+		const child = spawn(process.execPath, [script], {
+			env: { ...process.env, SIGNET_PATH: agentsDir },
+			stdio: "ignore",
+		});
+		const result = await new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+			child.once("error", reject);
+			child.once("close", (code, signal) => resolve({ code, signal }));
+		});
+
+		expect(result).toEqual({ code: null, signal: "SIGKILL" });
+		expect(await getSecret("OPENAI_API_KEY")).toBe("before-kill");
 	});
 
 	test("execWithSecrets injects secrets and redacts stdout and stderr", async () => {
