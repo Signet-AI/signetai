@@ -26,6 +26,8 @@ export interface EmbeddingRepairFailure {
 	readonly retryAt: number;
 }
 
+export type EmbeddingRepairEligibility = boolean | ((db: WriteDb) => boolean);
+
 export interface EmbeddingRepairState {
 	readonly windowStartedAt: string;
 	readonly batchesStarted: number;
@@ -117,6 +119,8 @@ export function acquireEmbeddingRepairLease(
 			return { allowed: false, reason: `embedding repair hourly budget exhausted (${hourlyBudget} batches/hr)` };
 		}
 
+		// A lease serializes provider work. The hourly slot is charged only when
+		// finishEmbeddingRepairLease can persist an outcome for the active profile.
 		const lease: EmbeddingRepairLease = { id: crypto.randomUUID() };
 		const windowStart = inWindow ? row.window_started_at : iso(now);
 		const leaseMs = Math.max(MIN_LEASE_MS, cooldownMs);
@@ -124,7 +128,7 @@ export function acquireEmbeddingRepairLease(
 			`UPDATE embedding_repair_budget
 			 SET window_started_at = ?, batches_started = ?, lease_id = ?, lease_expires_at = ?, last_error = NULL, updated_at = ?
 			 WHERE id = 1`,
-		).run(windowStart, batchesStarted + 1, lease.id, iso(now + leaseMs), iso(now));
+		).run(windowStart, batchesStarted, lease.id, iso(now + leaseMs), iso(now));
 		return { allowed: true, lease };
 	});
 }
@@ -173,13 +177,23 @@ export function finishEmbeddingRepairLease(
 		readonly failed: readonly EmbeddingRepairKey[];
 		readonly model: string;
 		readonly pollMs: number;
+		readonly eligibility: EmbeddingRepairEligibility;
 		readonly error?: string;
 	},
 	now = Date.now(),
-): void {
-	accessor.withWriteTx((db) => {
+): boolean {
+	return accessor.withWriteTx((db) => {
 		const current = readBudget(db);
-		if (current == null || current.lease_id !== lease.id) return;
+		if (current == null || current.lease_id !== lease.id) return false;
+		const eligible = typeof outcome.eligibility === "function" ? outcome.eligibility(db) : outcome.eligibility;
+		if (!eligible) {
+			db.prepare(
+				`UPDATE embedding_repair_budget
+				 SET lease_id = NULL, lease_expires_at = NULL, updated_at = ?
+				 WHERE id = 1 AND lease_id = ?`,
+			).run(iso(now), lease.id);
+			return false;
+		}
 
 		const deleteFailure = db.prepare(
 			"DELETE FROM embedding_repair_backoff WHERE memory_id = ? AND content_hash = ? AND model = ?",
@@ -202,12 +216,25 @@ export function finishEmbeddingRepairLease(
 			writeFailure.run(key.id, key.contentHash, outcome.model, attempts, iso(now + retryMs), iso(now));
 		}
 
+		const windowStartedAt = validWindowStart(current.window_started_at, now);
+		const inWindow = windowStartedAt !== null && now - windowStartedAt < HOUR_MS;
+		const batchesStarted = inWindow ? current.batches_started : 0;
 		const error = outcome.error ?? (outcome.failed.length > 0 ? "embedding provider returned no vector" : null);
 		db.prepare(
 			`UPDATE embedding_repair_budget
-			 SET last_completed_at = ?, last_affected = ?, lease_id = NULL, lease_expires_at = NULL, last_error = ?, updated_at = ?
+			 SET window_started_at = ?, batches_started = ?, last_completed_at = ?, last_affected = ?,
+			     lease_id = NULL, lease_expires_at = NULL, last_error = ?, updated_at = ?
 			 WHERE id = 1 AND lease_id = ?`,
-		).run(iso(now), outcome.successful.length, error, iso(now), lease.id);
+		).run(
+			inWindow ? current.window_started_at : iso(now),
+			batchesStarted + 1,
+			iso(now),
+			outcome.successful.length,
+			error,
+			iso(now),
+			lease.id,
+		);
+		return true;
 	});
 }
 

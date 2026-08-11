@@ -249,6 +249,7 @@ export function startEmbeddingTracker(
 						failed: cycle.failedRows,
 						model: embeddingCfg.model,
 						pollMs: trackerCfg.pollMs,
+						eligibility: (db) => isActiveEmbeddingConfig(db, embeddingCfg),
 						error: "system pressure became high before embedding persistence",
 					});
 					return;
@@ -290,6 +291,7 @@ export function startEmbeddingTracker(
 					failed: cycle.failedRows.map((row) => ({ id: row.id, contentHash: row.contentHash })),
 					model: embeddingCfg.model,
 					pollMs: trackerCfg.pollMs,
+					eligibility: applied || ((db) => isActiveEmbeddingConfig(db, embeddingCfg)),
 					...(applied || cycle.results.length === 0 ? {} : { error: "embedding profile changed before persistence" }),
 				});
 				logger.debug("embedding-tracker", `Refreshed ${applied ? cycle.results.length : 0} embeddings`);
@@ -299,6 +301,7 @@ export function startEmbeddingTracker(
 					failed: [],
 					model: embeddingCfg.model,
 					pollMs: trackerCfg.pollMs,
+					eligibility: (db) => isActiveEmbeddingConfig(db, embeddingCfg),
 					error: error instanceof Error ? error.message : String(error),
 				});
 				throw error;

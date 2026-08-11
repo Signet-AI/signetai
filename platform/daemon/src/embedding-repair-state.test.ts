@@ -4,11 +4,18 @@ import { runMigrations } from "../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { listStaleEmbeddingRows } from "./embedding-coverage";
 import {
+	beginEmbeddingIndexBuild,
+	ensureEmbeddingIndexState,
+	isActiveEmbeddingConfig,
+	resolveActiveEmbeddingConfig,
+} from "./embedding-index-state";
+import {
 	acquireEmbeddingRepairLease,
 	finishEmbeddingRepairLease,
 	loadEmbeddingRepairFailures,
 	readEmbeddingRepairState,
 } from "./embedding-repair-state";
+import type { EmbeddingConfig } from "./memory-config";
 
 function asAccessor(db: Database): DbAccessor {
 	return {
@@ -33,7 +40,7 @@ function asAccessor(db: Database): DbAccessor {
 }
 
 describe("embedding repair state", () => {
-	it("consumes a durable budget slot before work so restart recovery cannot replay unlimited batches", () => {
+	it("holds a durable lease before work and charges its slot only after an eligible completion", () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
@@ -48,7 +55,8 @@ describe("embedding repair state", () => {
 		});
 
 		// A restart remains blocked for the full hourly accounting window. Once
-		// it expires, a fresh process can begin the next hourly window.
+		// it expires, a fresh process can begin the next hourly window without
+		// charging the crashed work as a completed repair.
 		expect(acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 30 * 60_000)).toMatchObject({
 			allowed: false,
 			reason: "embedding repair already in progress",
@@ -59,6 +67,16 @@ describe("embedding repair state", () => {
 			allowed: false,
 			reason: "embedding repair already in progress",
 		});
+		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 0 });
+		if (resumed.lease === undefined) throw new Error("expected resumed lease");
+		expect(
+			finishEmbeddingRepairLease(
+				accessor,
+				resumed.lease,
+				{ successful: [], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
+				now + 60 * 60_000 + 2,
+			),
+		).toBe(true);
 		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 1 });
 		db.close();
 	});
@@ -73,7 +91,7 @@ describe("embedding repair state", () => {
 		finishEmbeddingRepairLease(
 			accessor,
 			initialLease,
-			{ successful: [], failed: [], model: "test-model", pollMs: 1_000 },
+			{ successful: [], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
 			now,
 		);
 		db.prepare("UPDATE embedding_repair_budget SET window_started_at = ?, batches_started = 5 WHERE id = 1").run(
@@ -82,6 +100,13 @@ describe("embedding repair state", () => {
 
 		const admission = acquireEmbeddingRepairLease(accessor, 0, 5, now + 1);
 		expect(admission.allowed).toBe(true);
+		if (admission.lease === undefined) throw new Error("expected repaired-window lease");
+		finishEmbeddingRepairLease(
+			accessor,
+			admission.lease,
+			{ successful: [], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
+			now + 1,
+		);
 		expect(readEmbeddingRepairState(accessor)).toMatchObject({
 			windowStartedAt: new Date(now + 1).toISOString(),
 			batchesStarted: 1,
@@ -102,7 +127,7 @@ describe("embedding repair state", () => {
 		finishEmbeddingRepairLease(
 			accessor,
 			lease,
-			{ successful: [], failed: [key], model: "test-model", pollMs: 1_000 },
+			{ successful: [], failed: [key], model: "test-model", pollMs: 1_000, eligibility: true },
 			now + 1,
 		);
 		const persisted = loadEmbeddingRepairFailures(accessor, [key], "test-model");
@@ -114,11 +139,82 @@ describe("embedding repair state", () => {
 		finishEmbeddingRepairLease(
 			accessor,
 			resumedLease,
-			{ successful: [key], failed: [], model: "test-model", pollMs: 1_000 },
+			{ successful: [key], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
 			now + 60_002,
 		);
 		const remaining = loadEmbeddingRepairFailures(accessor, [key], "test-model");
 		expect(remaining).toEqual(new Map());
+		db.close();
+	});
+
+	it("does not let ten superseded-profile batches consume the promoted profile's ten-slot budget", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = Date.parse("2026-08-11T12:00:00.000Z");
+		const oldConfig: EmbeddingConfig = {
+			provider: "ollama",
+			model: "custom-old",
+			dimensions: 3,
+			base_url: "http://127.0.0.1:11434",
+		};
+		const promotedConfig: EmbeddingConfig = { ...oldConfig, model: "custom-new" };
+		accessor.withWriteTx((db) => {
+			ensureEmbeddingIndexState(db, oldConfig);
+			beginEmbeddingIndexBuild(db, promotedConfig);
+			db.prepare(
+				"UPDATE embedding_index_state SET active_profile_json = staging_profile_json, staging_profile_json = NULL, state = 'ready' WHERE id = 1",
+			).run();
+		});
+		const activeConfig = accessor.withReadDb((db) => resolveActiveEmbeddingConfig(db, promotedConfig));
+		const key = { id: "old-memory", contentHash: "old-hash" };
+
+		for (let index = 0; index < 10; index++) {
+			const at = now + index;
+			const lease = acquireEmbeddingRepairLease(accessor, 0, 10, at).lease;
+			if (lease === undefined) throw new Error("expected superseded-profile lease");
+			expect(
+				finishEmbeddingRepairLease(
+					accessor,
+					lease,
+					{
+						successful: [],
+						failed: [key],
+						model: oldConfig.model,
+						pollMs: 1_000,
+						eligibility: (db) => isActiveEmbeddingConfig(db, oldConfig),
+					},
+					at,
+				),
+			).toBe(false);
+		}
+		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 0 });
+		expect(db.prepare("SELECT COUNT(*) AS n FROM embedding_repair_backoff").get() as { n: number }).toEqual({ n: 0 });
+
+		for (let index = 0; index < 10; index++) {
+			const at = now + 100 + index;
+			const lease = acquireEmbeddingRepairLease(accessor, 0, 10, at).lease;
+			if (lease === undefined) throw new Error("expected promoted-profile lease");
+			expect(
+				finishEmbeddingRepairLease(
+					accessor,
+					lease,
+					{
+						successful: [],
+						failed: [],
+						model: activeConfig.model,
+						pollMs: 1_000,
+						eligibility: (db) => isActiveEmbeddingConfig(db, activeConfig),
+					},
+					at,
+				),
+			).toBe(true);
+		}
+		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 10 });
+		expect(acquireEmbeddingRepairLease(accessor, 0, 10, now + 200)).toMatchObject({
+			allowed: false,
+			reason: "embedding repair hourly budget exhausted (10 batches/hr)",
+		});
 		db.close();
 	});
 
@@ -148,6 +244,7 @@ describe("embedding repair state", () => {
 				failed: [{ id: "deferred", contentHash: "hash-deferred" }],
 				model: "test-model",
 				pollMs: 1_000,
+				eligibility: true,
 			},
 			now + 1,
 		);
