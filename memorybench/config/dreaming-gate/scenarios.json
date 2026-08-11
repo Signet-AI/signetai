@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "name": "dreaming-scenarios",
+  "description": "Source-controlled synthetic corpus for the canonical Signet Dreaming MemoryBench gate. These fixtures never download data or encode judge outcomes.",
+  "scenarios": [
+    {
+      "id": "joined-source-promotion",
+      "agentId": "dreaming-gate-alpha",
+      "question": "Which runtime owns the Atlas deployment?",
+      "groundTruth": "The Atlas deployment runs on the edge runtime.",
+      "sessions": [
+        {
+          "id": "atlas-decision",
+          "date": "2026-01-10T09:00:00.000Z",
+          "messages": [
+            { "role": "user", "content": "Atlas is moving away from the legacy deployment host." }
+          ]
+        },
+        {
+          "id": "atlas-confirmation",
+          "date": "2026-01-11T09:00:00.000Z",
+          "messages": [
+            { "role": "assistant", "content": "The Atlas deployment now runs on the edge runtime." }
+          ]
+        }
+      ],
+      "expected": {
+        "relevantSessionIds": ["atlas-decision", "atlas-confirmation"],
+        "sourceQuotes": ["The Atlas deployment now runs on the edge runtime."],
+        "requiresExactSourceRefs": true
+      }
+    },
+    {
+      "id": "correction-and-contradiction",
+      "agentId": "dreaming-gate-alpha",
+      "question": "Which database is the Meridian service using now?",
+      "groundTruth": "Meridian now uses PostgreSQL.",
+      "sessions": [
+        {
+          "id": "meridian-original",
+          "date": "2026-02-01T09:00:00.000Z",
+          "messages": [
+            { "role": "user", "content": "Meridian currently uses SQLite." }
+          ]
+        },
+        {
+          "id": "meridian-correction",
+          "date": "2026-02-05T09:00:00.000Z",
+          "messages": [
+            { "role": "user", "content": "Correction: Meridian now uses PostgreSQL instead of SQLite." }
+          ]
+        }
+      ],
+      "expected": {
+        "relevantSessionIds": ["meridian-correction"],
+        "sourceQuotes": ["Correction: Meridian now uses PostgreSQL instead of SQLite."],
+        "requiresExactSourceRefs": true
+      }
+    },
+    {
+      "id": "cross-scope-isolation",
+      "agentId": "dreaming-gate-alpha",
+      "question": "What color is the Harbor release in the alpha scope?",
+      "groundTruth": "The alpha Harbor release is blue.",
+      "sessions": [
+        {
+          "id": "harbor-alpha",
+          "date": "2026-03-01T09:00:00.000Z",
+          "messages": [
+            { "role": "user", "content": "The Harbor release is blue." }
+          ]
+        },
+        {
+          "id": "harbor-beta",
+          "agentId": "dreaming-gate-beta",
+          "date": "2026-03-01T09:01:00.000Z",
+          "messages": [
+            { "role": "user", "content": "The Harbor release is green." }
+          ]
+        }
+      ],
+      "expected": {
+        "relevantSessionIds": ["harbor-alpha"],
+        "sourceQuotes": ["The Harbor release is blue."],
+        "requiresExactSourceRefs": true
+      }
+    },
+    {
+      "id": "rejected-evidence-repair",
+      "agentId": "dreaming-gate-beta",
+      "question": "What deployment region was confirmed for Cedar?",
+      "groundTruth": "Cedar was confirmed for eu-west-1.",
+      "sessions": [
+        {
+          "id": "cedar-unusable",
+          "date": "2026-04-01T09:00:00.000Z",
+          "messages": [
+            { "role": "user", "content": "Cedar region: [unverified]." }
+          ]
+        },
+        {
+          "id": "cedar-repaired",
+          "date": "2026-04-02T09:00:00.000Z",
+          "messages": [
+            { "role": "user", "content": "The Cedar deployment region was confirmed as eu-west-1." }
+          ]
+        }
+      ],
+      "expected": {
+        "relevantSessionIds": ["cedar-repaired"],
+        "sourceQuotes": ["The Cedar deployment region was confirmed as eu-west-1."],
+        "requiresExactSourceRefs": true
+      }
+    }
+  ]
+}

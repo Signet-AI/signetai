@@ -255,6 +255,7 @@ export class SignetProvider implements Provider {
   private project = process.env.SIGNET_BENCH_PROJECT || DEFAULT_PROJECT
   private timeoutMs = readPositiveInt("SIGNET_BENCH_REQUEST_TIMEOUT_MS", DEFAULT_TIMEOUT_MS)
   private profile: SignetBenchmarkProfile
+  private readonly dreamingAgentIds = new Set<string>()
 
   constructor(profile: SignetBenchmarkProfile = "structured") {
     this.profile = profile
@@ -306,10 +307,12 @@ export class SignetProvider implements Provider {
 
     const ids: string[] = []
     const pending: string[] = []
+    const taskAgentIds: Record<string, string> = {}
 
     for (const session of sessions) {
       if (this.profile === "dreaming") {
-        const capture = await this.captureDreamingSession(session, options)
+        const agentId = this.agentIdForSession(session)
+        const capture = await this.captureDreamingSession(session, options, agentId)
         if (!capture.transcriptCaptureJobId) {
           throw new Error(
             `Canonical transcript capture was not queued for session ${session.sessionId}`
@@ -317,6 +320,8 @@ export class SignetProvider implements Provider {
         }
         ids.push(this.benchmarkSessionId(session, options.containerTag))
         pending.push(capture.transcriptCaptureJobId)
+        taskAgentIds[capture.transcriptCaptureJobId] = agentId
+        this.dreamingAgentIds.add(agentId)
         continue
       }
       if (this.profile === "supermemory-parity") {
@@ -359,7 +364,11 @@ export class SignetProvider implements Provider {
     logger.debug(
       `Ingested ${sessions.length} session(s) as ${ids.length} ${this.profile} Signet inputs for ${options.containerTag}`
     )
-    return { documentIds: ids, taskIds: pending.length > 0 ? pending : undefined }
+    return {
+      documentIds: ids,
+      taskIds: pending.length > 0 ? pending : undefined,
+      taskAgentIds: pending.length > 0 ? taskAgentIds : undefined,
+    }
   }
 
   async awaitIndexing(
@@ -414,6 +423,7 @@ export class SignetProvider implements Provider {
 
   async search(query: string, options: SearchOptions): Promise<unknown[]> {
     const recallQuery = buildSignetRecallQuery(query, options.questionDate)
+    const agentId = options.agentId ?? this.agentId
     const response = await this.request<SignetRecallResponse>("/api/memory/recall", {
       method: "POST",
       body: JSON.stringify({
@@ -421,7 +431,7 @@ export class SignetProvider implements Provider {
         limit: resolveSignetSearchLimit(this.profile, options.limit),
         threshold: options.threshold || 0.3,
         scope: options.containerTag,
-        agentId: this.agentId,
+        agentId,
         project: this.project,
         // Use Signet's lossless expansion surface during benchmarks.
         // The daemon still ranks ordinary recall results first, but expanded
@@ -450,29 +460,34 @@ export class SignetProvider implements Provider {
    */
   async finalizeIngest(_options: FinalizeIngestOptions): Promise<void> {
     if (this.profile !== "dreaming") return
-    const dreamStatusPath = `/api/dream/status?agentId=${encodeURIComponent(this.agentId)}`
+    const scopes = this.dreamingAgentIds.size > 0 ? [...this.dreamingAgentIds] : [this.agentId]
+    const dreamStatusPath = (agentId: string): string =>
+      `/api/dream/status?agentId=${encodeURIComponent(agentId)}`
 
     // A daemon may be restarting its pipeline after embedding initialization
-    // while ingest finishes. Wait for the configured worker instead of turning
+    // while ingest finishes. Wait for every fixture scope instead of turning
     // that short lifecycle transition into a misleading benchmark result.
     const readyDeadline = Date.now() + 60_000
     let workerReady = false
     while (Date.now() < readyDeadline) {
-      const status = await this.request<DreamingStatusResponse>(dreamStatusPath, {
-        method: "GET",
-      })
-      if (status.worker?.running) {
+      const statuses = await Promise.all(
+        scopes.map((agentId) => this.request<DreamingStatusResponse>(dreamStatusPath(agentId), { method: "GET" }))
+      )
+      if (statuses.every((status) => status.worker?.running)) {
         workerReady = true
         break
       }
       await new Promise((resolve) => setTimeout(resolve, 1_000))
     }
     if (!workerReady) throw new Error("Dreaming worker did not become ready after ingestion")
+
     const deadline = Date.now() + readPositiveInt("SIGNET_BENCH_DREAMING_WAIT_SECS", 720) * 1000
     const pollMs = Math.min(readPositiveInt("SIGNET_BENCH_DREAMING_POLL_SECS", 1), 5) * 1000
     while (Date.now() < deadline) {
       let accepted: DreamingTriggerResponse
       try {
+        // Explicitly trigger the canonical worker once. The worker owns the
+        // install-wide universe pass and discovers every fixture scope itself.
         accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
           method: "POST",
           body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
@@ -482,30 +497,34 @@ export class SignetProvider implements Provider {
         // our completed-pass poll and this trigger. Join that pass instead of
         // treating an already-running error as a benchmark failure.
         if (!(error instanceof Error) || !error.message.includes("/api/dream/trigger failed (409)")) throw error
-        const status = await this.request<DreamingStatusResponse>(dreamStatusPath, { method: "GET" })
+        const status = await this.request<DreamingStatusResponse>(dreamStatusPath(this.agentId), { method: "GET" })
         const running = status.passes?.find((pass) => pass.status === "running" && pass.id)
         if (!running?.id) throw error
         accepted = { passId: running.id }
       }
-      if (!accepted.passId)
+      if (!accepted.passId) {
         throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
+      }
 
       let completed = false
       while (Date.now() < deadline) {
-        const status = await this.request<DreamingStatusResponse>(dreamStatusPath, {
-          method: "GET",
-        })
-        const pass = status.passes?.find((candidate) => candidate.id === accepted.passId)
+        const primary = await this.request<DreamingStatusResponse>(dreamStatusPath(this.agentId), { method: "GET" })
+        const pass = primary.passes?.find((candidate) => candidate.id === accepted.passId)
         if (pass && pass.status !== "running") {
           if (pass.status !== "completed") {
-            throw new Error(
-              `Dreaming pass ${accepted.passId} ${pass.status || "failed"}: ${pass.error || "no detail"}`
+            throw new Error(`Dreaming pass ${accepted.passId} ${pass.status || "failed"}: ${pass.error || "no detail"}`)
+          }
+          const statuses = await Promise.all(
+            scopes.map((agentId) =>
+              agentId === this.agentId
+                ? Promise.resolve(primary)
+                : this.request<DreamingStatusResponse>(dreamStatusPath(agentId), { method: "GET" })
             )
+          )
+          if (statuses.some((status) => typeof status.episodicTokensPending !== "number")) {
+            throw new Error("Dreaming status did not report the episodic backlog for every scenario scope")
           }
-          if (typeof status.episodicTokensPending !== "number") {
-            throw new Error("Dreaming status did not report the episodic backlog")
-          }
-          if (status.episodicTokensPending === 0) return
+          if (statuses.every((status) => status.episodicTokensPending === 0)) return
           completed = true
           break
         }
@@ -516,13 +535,23 @@ export class SignetProvider implements Provider {
     throw new Error("Timed out draining the Dreaming episodic backlog")
   }
 
+  private agentIdForSession(session: UnifiedSession): string {
+    const declared = session.metadata?.agentId
+    if (declared === undefined) return this.agentId
+    if (typeof declared !== "string" || !/^[A-Za-z0-9._:-]+$/.test(declared)) {
+      throw new Error(`Dreaming benchmark session ${session.sessionId} has an invalid agentId`)
+    }
+    return declared
+  }
+
   private benchmarkSessionId(session: UnifiedSession, containerTag: string): string {
     return `memorybench:${containerTag}:${session.sessionId}`
   }
 
   private async captureDreamingSession(
     session: UnifiedSession,
-    options: IngestOptions
+    options: IngestOptions,
+    agentId: string
   ): Promise<SignetSessionEndResponse> {
     const transcript = formatTranscript(session)
     if (!hasUsableMemoryContent(transcript)) {
@@ -537,7 +566,7 @@ export class SignetProvider implements Provider {
         harness: "memorybench",
         sessionId,
         sessionKey: sessionId,
-        agentId: this.agentId,
+        agentId,
         cwd: this.project,
         transcript,
         capturedAt: parseSessionDate(session),
@@ -563,8 +592,9 @@ export class SignetProvider implements Provider {
 
     while (pending.size > 0 && Date.now() < deadline) {
       for (const id of [...pending]) {
+        const agentId = result.taskAgentIds?.[id] ?? this.agentId
         const job = await this.request<TranscriptCaptureJobResponse>(
-          `/api/hooks/transcript-capture/${encodeURIComponent(id)}?agentId=${encodeURIComponent(this.agentId)}`,
+          `/api/hooks/transcript-capture/${encodeURIComponent(id)}?agentId=${encodeURIComponent(agentId)}`,
           { method: "GET" }
         )
         if (job.status === "completed") {

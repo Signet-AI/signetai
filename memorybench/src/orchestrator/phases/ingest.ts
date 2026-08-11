@@ -28,6 +28,7 @@ function cloneIngestResult(result?: IngestResult): IngestResult {
   return {
     documentIds: [...(result?.documentIds || [])],
     taskIds: [...(result?.taskIds || [])],
+    taskAgentIds: result?.taskAgentIds ? { ...result.taskAgentIds } : undefined,
   }
 }
 
@@ -36,10 +37,14 @@ function appendIngestResult(target: IngestResult, source: IngestResult): void {
   if (source.taskIds && source.taskIds.length > 0) {
     target.taskIds = [...(target.taskIds || []), ...source.taskIds]
   }
+  if (source.taskAgentIds) {
+    target.taskAgentIds = { ...(target.taskAgentIds || {}), ...source.taskAgentIds }
+  }
 }
 
 function finalizeIngestResult(result: IngestResult): IngestResult {
-  return result.taskIds && result.taskIds.length > 0 ? result : { documentIds: result.documentIds }
+  if (result.taskIds && result.taskIds.length > 0) return result
+  return { documentIds: result.documentIds }
 }
 
 export async function runIngestPhase(

@@ -60,6 +60,7 @@ export async function runSearchPhase(
           limit: 10,
           threshold: 0.3,
           questionDate: checkpoint.questions[question.questionId]?.questionDate,
+          agentId: typeof question.metadata?.agentId === "string" ? question.metadata.agentId : undefined,
         })
 
         const durationMs = Date.now() - startTime

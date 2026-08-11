@@ -1,0 +1,45 @@
+name: MemoryBench Dreaming Gate
+
+on:
+  pull_request:
+    paths:
+      - "memorybench/config/dreaming-gate/**"
+      - "memorybench/src/benchmarks/dreaming-scenarios/**"
+      - "memorybench/src/benchmarks/index.ts"
+      - "memorybench/src/cli/index.ts"
+      - "memorybench/src/providers/signet/**"
+      - "memorybench/src/orchestrator/phases/ingest.ts"
+      - "memorybench/src/orchestrator/phases/search.ts"
+      - "memorybench/src/types/benchmark.ts"
+      - "memorybench/src/types/provider.ts"
+      - ".github/workflows/memorybench-dreaming-gate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "memorybench/config/dreaming-gate/**"
+      - "memorybench/src/benchmarks/dreaming-scenarios/**"
+      - "memorybench/src/benchmarks/index.ts"
+      - "memorybench/src/cli/index.ts"
+      - "memorybench/src/providers/signet/**"
+      - "memorybench/src/orchestrator/phases/ingest.ts"
+      - "memorybench/src/orchestrator/phases/search.ts"
+      - "memorybench/src/types/benchmark.ts"
+      - "memorybench/src/types/provider.ts"
+
+permissions:
+  contents: read
+
+jobs:
+  dreaming-gate:
+    name: Deterministic Dreaming fixture and scope gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Validate deterministic Dreaming scenarios
+        run: >-
+          bun test
+          memorybench/src/benchmarks/dreaming-scenarios/index.test.ts
+          memorybench/src/providers/signet/index.test.ts

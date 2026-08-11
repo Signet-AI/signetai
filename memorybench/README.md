@@ -159,6 +159,27 @@ The `report.json` includes both a display string and structured `memscoreCompone
 
 > **[Full MemScore documentation →](https://supermemory.ai/docs/memorybench/memscore)**
 
+## Dreaming contract scenarios
+
+`dreaming-scenarios` is a committed synthetic corpus for the canonical Signet
+Dreaming path. It is deliberately separate from LongMemEval: it does not
+download data and does not treat a mocked judge verdict as quality evidence.
+
+Each scenario has fixed source text, scopes, relevant sessions, and exact
+supporting quotes. The deterministic CI gate validates that the corpus is
+well-formed and that the Signet Dreaming provider preserves per-session
+transcript-capture and recall scopes. A live run still uses the ordinary
+`signet-dreaming` provider and the standard MemoryBench evaluation/report
+phases:
+
+```bash
+bun run src/index.ts run -p signet-dreaming -b dreaming-scenarios -r dreaming-contract
+```
+
+The gate has no production endpoint, model, or judge dependency. A scheduled
+quality lane must pin its model and judge configuration and record a baseline
+before it can make a pass/fail quality claim.
+
 ## Checkpointing
 
 Runs persist to `data/runs/{runId}/`:

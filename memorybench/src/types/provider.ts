@@ -15,6 +15,7 @@ export interface IngestOptions {
 
 export interface SearchOptions {
   containerTag: string
+  agentId?: string
   limit?: number
   threshold?: number
   questionDate?: string
@@ -23,6 +24,8 @@ export interface SearchOptions {
 export interface IngestResult {
   documentIds: string[]
   taskIds?: string[]
+  /** Scoped transcript-capture ownership for providers that ingest multiple agent scopes. */
+  taskAgentIds?: Record<string, string>
 }
 
 export interface IndexingProgress {

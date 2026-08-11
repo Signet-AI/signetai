@@ -157,10 +157,15 @@ Available benchmark datasets for evaluation:
                  Tests: user facts, assistant facts, preferences, implicit connections
                  Source: HuggingFace Salesforce/ConvoMem (downloaded on first use)
 
+  dreaming-scenarios  Synthetic Dreaming contract corpus
+                 Tests: source provenance, corrections, and agent isolation
+                 Source: committed fixture. No network download.
+
 Usage:
   -b locomo        Run LoCoMo benchmark
   -b longmemeval   Run LongMemEval benchmark
   -b convomem      Run ConvoMem benchmark
+  -b dreaming-scenarios  Run the synthetic Dreaming contract corpus
 `)
 }
 
