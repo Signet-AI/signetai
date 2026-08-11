@@ -142,6 +142,8 @@ interface DoctorFinding {
 	readonly fix?: string;
 }
 
+type DoctorStatus = "healthy" | "degraded" | "unavailable";
+
 const HIGH_PHYSICAL_MEMORY_MIB = 1024;
 
 interface StatusDeps {
@@ -539,10 +541,13 @@ export async function showDoctor(
 	const report = await getStatusReport(basePath, deps);
 	const installations = (deps.detectInstallations ?? detectSignetInstallations)();
 	const findings = getDoctorFindings(report, installations);
-	const ok = findings.every((finding) => finding.level !== "error");
+	const status = getDoctorStatus(report, findings);
+	const ok = status === "healthy";
+	const exitCode = status === "healthy" ? 0 : status === "degraded" ? 2 : 1;
+	process.exitCode = exitCode;
 
 	if (options.json) {
-		console.log(JSON.stringify({ ok, report, installations, findings }, null, 2));
+		console.log(JSON.stringify({ ok, status, exitCode, report, installations, findings }, null, 2));
 		return;
 	}
 
@@ -566,8 +571,10 @@ export async function showDoctor(
 	}
 
 	console.log();
-	if (ok) {
+	if (status === "healthy") {
 		console.log(chalk.yellow("  Signet can run, but there's a bit of duct tape showing."));
+	} else if (status === "degraded") {
+		console.log(chalk.yellow("  The daemon is reachable, but it is not ready for all automatic work."));
 	} else {
 		console.log(chalk.red("  Fix the errors above before trusting the CLI to behave."));
 	}
@@ -645,6 +652,34 @@ function addDaemonProbeFindings(report: StatusReport, findings: DoctorFinding[])
 	}
 
 	addDaemonLifecycleExitFindings(probe, findings);
+}
+
+function addReadinessFindings(report: StatusReport, findings: DoctorFinding[]): void {
+	const probe = report.daemon.probe;
+	if (!report.daemon.running || probe?.status !== "degraded") return;
+	const reasons = probe.readinessReasons ?? [];
+	const reasonText = reasons.length > 0 ? reasons.join("; ") : "the readiness probe returned not_ready";
+	findings.push({
+		level: "warn",
+		code: "daemon_readiness_degraded",
+		message: `Daemon readiness is degraded: ${reasonText}.`,
+		fix: "Inspect `signet status` and the failing readiness check before relying on automatic maintenance.",
+	});
+
+	// This mirrors the worker's actual scheduling gate: `getQueueHealth` is
+	// the only readiness source that makes Dreaming defer a sweep. Do not
+	// infer a Dreaming deferral from migration, database, embedding, or
+	// inference reasons that merely share the readiness envelope.
+	if (!reasons.some((reason) => reason.startsWith("queue "))) return;
+	const memory = report.daemon.queue?.memory;
+	if (!memory) return;
+	const lastError = memory.lastError ? ` Last error: ${memory.lastError.slice(0, 160)}` : "";
+	findings.push({
+		level: "warn",
+		code: "dreaming_deferred_queue_pressure",
+		message: `Automatic Dreaming is deferred by queue pressure: memory queue has ${memory.pending} pending job(s), oldest age ${formatAge(memory.oldestAgeSec)}.${lastError}`,
+		fix: "Inspect the queue in `signet status`; repair only identified jobs with `signet repair queue requeue --apply` or retire obsolete jobs with `signet repair queue cancel --apply`.",
+	});
 }
 
 /**
@@ -827,6 +862,23 @@ function addQueueBacklogFindings(report: StatusReport, findings: DoctorFinding[]
 	}
 }
 
+function getDoctorStatus(report: StatusReport, findings: readonly DoctorFinding[]): DoctorStatus {
+	const hasAgentYaml = report.files.find((file) => file.name === "agent.yaml")?.exists ?? false;
+	const daemon = report.daemon;
+	const probe = daemon.probe;
+	const requiredDaemonUnavailable =
+		!daemon.running ||
+		probe === undefined ||
+		probe.status === "listener-unhealthy" ||
+		probe.status === "process-unhealthy" ||
+		probe.status === "stale-artifact" ||
+		probe.status === "absent";
+	const configurationInvalid = !report.installed || !report.validIdentity || !hasAgentYaml || !report.db.exists;
+	if (requiredDaemonUnavailable || configurationInvalid) return "unavailable";
+	if (probe.status === "degraded" || findings.some((finding) => finding.level === "error")) return "degraded";
+	return "healthy";
+}
+
 function getDoctorFindings(report: StatusReport, installations: SignetInstallationReport): DoctorFinding[] {
 	const findings: DoctorFinding[] = [];
 	addConcurrentInstallationFindings(installations, findings);
@@ -898,6 +950,7 @@ function getDoctorFindings(report: StatusReport, installations: SignetInstallati
 	addOpenClawRuntimeFindings(report, findings);
 	addOpenClawHeartbeatFindings(report, findings);
 	addPhysicalMemoryFinding(report, findings);
+	addReadinessFindings(report, findings);
 	addQueueBacklogFindings(report, findings);
 
 	if (report.openclawWorkspaceUnprotected) {

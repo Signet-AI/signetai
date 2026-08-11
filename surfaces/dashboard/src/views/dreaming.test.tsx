@@ -7,6 +7,7 @@ import { DreamsView } from "./dreaming";
 
 const DREAM_STATUS = {
 	worker: { running: true, active: false, activeAgentId: null },
+	scheduler: { status: "deferred", reason: "queue_pressure", checkedAt: "2026-08-10T14:14:11.000Z" },
 	state: {
 		consecutiveFailures: 0,
 		lastFailureAt: null,
@@ -92,6 +93,7 @@ describe("dreaming summary layout", () => {
 		expect(summary).not.toBeNull();
 		expect(summary?.className).toContain("min-h-0");
 		expect(summary?.className).toContain("overflow-y-auto");
+		expect(container.textContent).toContain("automatic Dreaming deferred: queue pressure");
 
 		await act(async () => {
 			root.unmount();

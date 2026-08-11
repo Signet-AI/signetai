@@ -164,6 +164,15 @@ and one entry per failing gate in `reasons`:
 }
 ```
 
+`signet doctor` consumes this probe as its runtime contract: `healthy` means
+`/health/ready` returned `ready` and local installation checks passed (`ok: true`,
+exit 0); `degraded` means the daemon is reachable but returned `not_ready`
+(`ok: false`, exit 2); `unavailable` means the required daemon or local
+installation is unavailable or invalid (`ok: false`, exit 1). A queue-caused
+readiness failure includes an explicit Automatic Dreaming deferral finding with
+the queue age and last error. Other readiness failures do not claim that
+Dreaming was deferred by the queue.
+
 ### GET /api/status
 
 Full daemon status including pipeline config, embedding provider, and a
@@ -305,8 +314,12 @@ extraction provider is unavailable or routed to a fallback target.
 When extraction is blocked, `providerResolution.extraction.blockedBy` contains
 the first routing candidate's policy and runtime gate reasons in evaluation
 order. The array is empty for non-blocked states.
-`pipeline.queue` exposes per-queue counts (memory / summary);
-the retired worker's load/overload telemetry is no longer reported.
+`pipeline.queue` exposes per-queue counts (memory / summary).
+`pipeline.dreaming` records the latest periodic Dreaming scheduler decision.
+It is `null` before the worker starts. A `deferred` result with
+`reason: "queue_pressure"` means the scheduler itself yielded that sweep to
+queue health. It does not infer a queue deferral from another readiness gate.
+The retired worker's load/overload telemetry is no longer reported.
 `transcripts.capture` exposes compact durable transcript-capture queue counts;
 use `GET /api/diagnostics/transcripts` for detailed artifact/audit diagnostics.
 Use `GET /api/inference/status` for the shared inference control plane status.

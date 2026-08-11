@@ -511,6 +511,11 @@ export interface DreamQuality {
 
 export interface DreamStatus {
 	worker: { running: boolean; active: boolean; activeAgentId: string | null };
+	scheduler: {
+		status: "idle" | "deferred";
+		reason: "queue_pressure" | "system_pressure" | null;
+		checkedAt: string | null;
+	} | null;
 	state: {
 		consecutiveFailures: number;
 		lastFailureAt: string | null;

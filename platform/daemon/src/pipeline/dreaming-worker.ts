@@ -58,6 +58,19 @@ export interface DreamingWorkerHandle {
 	 * Await this (with a timeout) during shutdown before closing the DB.
 	 */
 	readonly activePass: Promise<unknown> | null;
+	/** Latest periodic-sweep decision. This is intentionally separate from a manual pass. */
+	readonly scheduler: DreamingSchedulerStatus;
+}
+
+/**
+ * The periodic scheduler's last decision. Queue pressure is reported only
+ * when the scheduler itself yielded to queue pressure, not when another
+ * readiness gate happened to be degraded.
+ */
+export interface DreamingSchedulerStatus {
+	readonly status: "idle" | "deferred";
+	readonly reason: "queue_pressure" | "system_pressure" | null;
+	readonly checkedAt: string | null;
 }
 
 export interface DreamingWorkerOptions {
@@ -185,6 +198,7 @@ export function startDreamingWorker(
 	let activeAgent: string | null = null;
 	let stopped = false;
 	let activePassPromise: Promise<unknown> | null = null;
+	let scheduler: DreamingSchedulerStatus = { status: "idle", reason: null, checkedAt: null };
 	// The last focused runbook the periodic sweep scheduled, used to
 	// alternate hygiene → content → hygiene → … when both kinds of work are
 	// pending (#1098). Explicit triggers do not touch it.
@@ -306,11 +320,17 @@ export function startDreamingWorker(
 
 	async function check(): Promise<void> {
 		if (stopped || active) return;
-		if (isSystemPressureHigh()) return;
+		const checkedAt = new Date().toISOString();
+		if (isSystemPressureHigh()) {
+			scheduler = { status: "deferred", reason: "system_pressure", checkedAt };
+			return;
+		}
 		if (shouldDeferDreamingSweep(accessor)) {
+			scheduler = { status: "deferred", reason: "queue_pressure", checkedAt };
 			logger.info("dreaming-worker", "Deferring dreaming sweep while queues are under pressure");
 			return;
 		}
+		scheduler = { status: "idle", reason: null, checkedAt };
 
 		// One Dreaming universe: a single pass covers every agent scope. The
 		// sweep runs one pass when any scope has attention or a backlog; the
@@ -490,6 +510,9 @@ export function startDreamingWorker(
 
 		get activePass() {
 			return activePassPromise;
+		},
+		get scheduler() {
+			return scheduler;
 		},
 	};
 }

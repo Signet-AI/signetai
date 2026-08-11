@@ -158,6 +158,27 @@ describe("dreaming worker agent scope", () => {
 		expect(shouldDeferDreamingSweep(accessor)).toBe(true);
 	});
 
+	it("reports queue pressure only after the scheduler defers a sweep (#1393)", async () => {
+		const now = new Date().toISOString();
+		for (let index = 0; index <= 50; index += 1) {
+			db.prepare(
+				`INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at)
+				 VALUES (?, ?, 'index', 'pending', ?, ?)`,
+			).run(`scheduler-pressure-${index}`, `scheduler-memory-${index}`, now, now);
+		}
+		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", { checkIntervalMs: 10 });
+		try {
+			await waitFor(() => worker.scheduler.reason === "queue_pressure", 2_000);
+			expect(worker.scheduler).toEqual({
+				status: "deferred",
+				reason: "queue_pressure",
+				checkedAt: expect.any(String),
+			});
+		} finally {
+			worker.stop();
+		}
+	});
+
 	it("writes manual async trigger passes to the requested agent", async () => {
 		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default");
 		try {

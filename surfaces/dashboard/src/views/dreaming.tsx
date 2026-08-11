@@ -217,6 +217,8 @@ export function DreamsView() {
 	const pendingAttention = status.data?.attention ?? [];
 	const failures = status.data?.state.consecutiveFailures ?? 0;
 	const running = Boolean(activePass);
+	const scheduler = status.data?.scheduler ?? null;
+	const queueDeferred = scheduler?.status === "deferred" && scheduler.reason === "queue_pressure";
 	const elapsedMs = activePass ? Math.max(0, now - (parseDate(activePass.startedAt ?? "")?.getTime() ?? now)) : 0;
 	const passDurationMs = lastPass
 		? Math.max(
@@ -246,9 +248,19 @@ export function DreamsView() {
 				<Stat label="backlog" value={fmtTokens(status.data?.episodicTokensPending ?? null)} />
 				<Stat label="failures" value={failures > 0 ? String(failures) : "0"} tone={failures > 0 ? "warn" : "ok"} />
 				<span className="ml-auto flex shrink-0 items-center gap-3">
-					<span className="flex items-center gap-1.5 font-mono text-[10px] text-slate-500 dark:text-slate-400">
-						<span className="size-1.5 rounded-full bg-success shadow-[0_0_6px_color-mix(in_oklch,var(--success)_70%,transparent)]" />
-						daemon healthy
+					<span
+						className={cn(
+							"flex items-center gap-1.5 font-mono text-[10px] text-slate-500 dark:text-slate-400",
+							queueDeferred && "text-[oklch(0.8_0.14_80)]",
+						)}
+					>
+						<span
+							className={cn(
+								"size-1.5 rounded-full bg-success shadow-[0_0_6px_color-mix(in_oklch,var(--success)_70%,transparent)]",
+								queueDeferred && "bg-[oklch(0.8_0.14_80)] shadow-none",
+							)}
+						/>
+						{queueDeferred ? "automatic Dreaming deferred: queue pressure" : "daemon reachable"}
 					</span>
 					<TriggerControl running={running} refresh={status.refresh} />
 				</span>

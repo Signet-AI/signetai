@@ -481,6 +481,7 @@ const demoSecrets: { secrets: string[]; provider: string } = {
 
 const demoDreamStatus: DreamStatus = {
 	worker: { running: false, active: false, activeAgentId: null },
+	scheduler: null,
 	state: {
 		consecutiveFailures: 0,
 		lastFailureAt: null,

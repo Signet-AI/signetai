@@ -328,6 +328,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			pipelineV2: config.pipelineV2,
 			pipeline: {
 				queue: pipelineQueueBlock(),
+				dreaming: getDreamingWorker()?.scheduler ?? null,
 			},
 			providerResolution: { ...providerRuntimeResolution, extraction: extractionWorkload },
 			logging: {
@@ -677,6 +678,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				active: worker?.activeAgentId === agentId,
 				activeAgentId: worker?.activeAgentId ?? null,
 			},
+			scheduler: worker?.scheduler ?? null,
 			state,
 			episodicTokensPending,
 			config: {

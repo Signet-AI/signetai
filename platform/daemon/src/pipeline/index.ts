@@ -53,7 +53,7 @@ export {
 } from "./dreaming";
 export { getDreamingAttention } from "./dreaming-attention";
 export { getDreamingQualityReport } from "./dreaming-quality";
-export type { DreamingWorkerHandle } from "./dreaming-worker";
+export type { DreamingSchedulerStatus, DreamingWorkerHandle } from "./dreaming-worker";
 
 /** Get the active synthesis worker handle (for API routes). */
 export function getSynthesisWorker(): SynthesisWorkerHandle | null {

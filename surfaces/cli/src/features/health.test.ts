@@ -22,6 +22,7 @@ afterEach(() => {
 	} else {
 		process.env.OPENCLAW_CONFIG_PATH = originalOpenClawConfig;
 	}
+	process.exitCode = 0;
 });
 
 function depsFor(basePath: string) {
@@ -1022,19 +1023,54 @@ describe("dead-job backlog surfacing (#1048)", () => {
 		}
 	});
 
+	it("doctor reports degraded readiness as non-success and names a queue-caused Dreaming deferral (#1393)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "doctor-readiness-"));
+		try {
+			const workspace = createDoctorWorkspace(root);
+			const jsonOut = await captureDoctorJson(
+				async () => ({
+					...(await deadBacklogDeps(root, false).getDaemonStatus()),
+					health: { score: 0.91, status: "degraded" },
+					queue: {
+						memory: {
+							...queueFixture.memory,
+							pending: 4,
+							dead: 0,
+							oldestAgeSec: 11_698_968,
+							lastError: "Unable to connect to the configured inference endpoint.",
+						},
+						summary: { ...queueFixture.summary, dead: 0, lastError: null },
+					},
+					probe: {
+						status: "degraded" as const,
+						detail: "/health responded; readiness degraded",
+						url: "http://127.0.0.1:3850",
+						listenerPresent: true,
+						processPid: 42,
+						stalePid: null,
+						readinessReasons: ["queue oldest pending job age 11698968s exceeds 300s"],
+					},
+				}),
+				workspace,
+			);
+			expect(jsonOut.ok).toBe(false);
+			expect(jsonOut.status).toBe("degraded");
+			expect(jsonOut.exitCode).toBe(2);
+			expect(jsonOut.findings).toContainEqual(
+				expect.objectContaining({
+					code: "dreaming_deferred_queue_pressure",
+					message: expect.stringContaining("Automatic Dreaming is deferred by queue pressure"),
+				}),
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("doctor stays ok for a running daemon with clean queues", async () => {
 		const root = mkdtempSync(join(tmpdir(), "doctor-clean-"));
 		try {
-			const workspace = join(root, "agents");
-			mkdirSync(workspace, { recursive: true });
-			writeFileSync(join(workspace, "agent.yaml"), "version: 1\n");
-			writeFileSync(join(workspace, "SOUL.md"), "soul\n");
-			writeFileSync(join(workspace, "IDENTITY.md"), "identity\n");
-			writeFileSync(join(workspace, "USER.md"), "user\n");
-			writeFileSync(join(workspace, "MEMORY.md"), "memory\n");
-			writeFileSync(join(workspace, "AGENTS.md"), "# agents\n");
-			mkdirSync(join(workspace, "memory"), { recursive: true });
-			writeFileSync(join(workspace, "memory", "memories.db"), "sqlite");
+			const workspace = createDoctorWorkspace(root);
 			process.env.HOME = root;
 
 			const base = deadBacklogDeps(workspace);
@@ -1046,7 +1082,10 @@ describe("dead-job backlog surfacing (#1048)", () => {
 					summary: { ...queueFixture.summary, dead: 0, lastError: null },
 				},
 			});
-			const jsonOut = await captureDoctorJson(base.getDaemonStatus);
+			const jsonOut = await captureDoctorJson(base.getDaemonStatus, workspace);
+			expect(jsonOut.ok).toBe(true);
+			expect(jsonOut.status).toBe("healthy");
+			expect(jsonOut.exitCode).toBe(0);
 			expect(jsonOut.findings.some((f) => f.code === "dead_jobs_backlog")).toBe(false);
 			expect(jsonOut.findings.some((f) => f.code === "daemon_unhealthy")).toBe(false);
 		} finally {
@@ -1056,9 +1095,29 @@ describe("dead-job backlog surfacing (#1048)", () => {
 	});
 });
 
+function createDoctorWorkspace(root: string): string {
+	const workspace = join(root, "agents");
+	mkdirSync(workspace, { recursive: true });
+	writeFileSync(join(workspace, "agent.yaml"), "version: 1\n");
+	writeFileSync(join(workspace, "SOUL.md"), "soul\n");
+	writeFileSync(join(workspace, "IDENTITY.md"), "identity\n");
+	writeFileSync(join(workspace, "USER.md"), "user\n");
+	writeFileSync(join(workspace, "MEMORY.md"), "memory\n");
+	writeFileSync(join(workspace, "AGENTS.md"), "# agents\n");
+	mkdirSync(join(workspace, "memory"), { recursive: true });
+	writeFileSync(join(workspace, "memory", "memories.db"), "sqlite");
+	return workspace;
+}
+
 async function captureDoctorJson(
 	getDaemonStatus: () => Promise<Record<string, unknown>>,
-): Promise<{ ok: boolean; findings: Array<{ code?: string; level: string; message: string; fix?: string }> }> {
+	agentsDir = "/tmp/agents",
+): Promise<{
+	ok: boolean;
+	status: "healthy" | "degraded" | "unavailable";
+	exitCode: number;
+	findings: Array<{ code?: string; level: string; message: string; fix?: string }>;
+}> {
 	const lines: string[] = [];
 	const oldLog = console.log;
 	console.log = (...args: unknown[]) => {
@@ -1068,7 +1127,7 @@ async function captureDoctorJson(
 		await showDoctor(
 			{ json: true },
 			{
-				agentsDir: "/tmp/agents",
+				agentsDir,
 				defaultPort: 3850,
 				detectExistingSetup: () => ({
 					agentsDir: true,
@@ -1078,7 +1137,7 @@ async function captureDoctorJson(
 				}),
 				extractPathOption: () => null,
 				formatUptime: () => "0s",
-				getDaemonStatus,
+				getDaemonStatus: getDaemonStatus as never,
 				normalizeAgentPath: (pathValue: string) => pathValue,
 				parseIntegerValue: (value: unknown) => (typeof value === "number" ? value : null),
 				signetLogo: () => "signet",
@@ -1089,6 +1148,8 @@ async function captureDoctorJson(
 	}
 	return JSON.parse(lines.join("")) as {
 		ok: boolean;
+		status: "healthy" | "degraded" | "unavailable";
+		exitCode: number;
 		findings: Array<{ code?: string; level: string; message: string; fix?: string }>;
 	};
 }
