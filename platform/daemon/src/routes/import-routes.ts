@@ -13,6 +13,11 @@ import {
 	normalizeImportedFile,
 } from "../import-normalizer";
 import { markImportedSourceUnsupported } from "../imported-source-lifecycle";
+import {
+	type ImportExtractionOutcome,
+	persistImportedSourceOutcome,
+	readImportedSourceOutcome,
+} from "../imported-source-outcome";
 import { logger } from "../logger";
 import { indexExternalMemoryArtifact } from "../memory-lineage";
 import { enqueueDreamingAttentionInTx } from "../pipeline/dreaming-attention";
@@ -40,12 +45,6 @@ type ImportFileStatus =
 			readonly extraction?: ImportExtractionOutcome;
 	  }
 	| { readonly fileName: string; readonly status: "failed"; readonly error: string };
-
-interface ImportExtractionOutcome {
-	readonly documentEntityId: string | null;
-	readonly aspectsCreated: number;
-	readonly attributesCreated: number;
-}
 
 export function registerImportRoutes(app: Hono): void {
 	app.post("/api/sources/import", async (c) => {
@@ -166,7 +165,7 @@ export function registerImportRoutes(app: Hono): void {
 					fileName: file.name,
 					status: "duplicate",
 					sourceId: added.source.id,
-					extraction: getImportedSourceOutcome(added.source.id, agentId),
+					extraction: readImportedSourceOutcome(added.source.id, agentId),
 				});
 				continue;
 			}
@@ -212,6 +211,16 @@ export function registerImportRoutes(app: Hono): void {
 					sourcePath,
 					displayName: normalized.value.fileName,
 					content: normalized.value.content,
+				});
+				persistImportedSourceOutcome({
+					agentId,
+					sourceId: added.source.id,
+					sourcePath,
+					outcome: {
+						documentEntityId: extraction.documentEntityId,
+						aspectsCreated: extraction.aspectsCreated,
+						attributesCreated: extraction.attributesCreated,
+					},
 				});
 				for (const chunk of normalized.value.searchChunks) {
 					const rowStart = typeof chunk.sourceMeta.rowStart === "number" ? chunk.sourceMeta.rowStart : 0;
@@ -324,32 +333,6 @@ function hasIndexedSource(sourceId: string, agentId: string): boolean {
 			)
 			.get(agentId, sourceId) as { present: number } | null | undefined;
 		return row != null;
-	});
-}
-
-function getImportedSourceOutcome(sourceId: string, agentId: string): ImportExtractionOutcome | undefined {
-	return getDbAccessor().withReadDb((db) => {
-		const document = db
-			.prepare(
-				`SELECT id
-				   FROM entities
-				  WHERE agent_id = ? AND source_id = ? AND entity_type = 'source_document'
-				  ORDER BY updated_at DESC
-				  LIMIT 1`,
-			)
-			.get(agentId, sourceId) as { id: string } | null | undefined;
-		if (document == null) return undefined;
-		const aspects = db
-			.prepare("SELECT COUNT(*) AS count FROM entity_aspects WHERE agent_id = ? AND entity_id = ?")
-			.get(agentId, document.id) as { count: number };
-		const attributes = db
-			.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE agent_id = ? AND source_id = ?")
-			.get(agentId, sourceId) as { count: number };
-		return {
-			documentEntityId: document.id,
-			aspectsCreated: Number(aspects.count ?? 0),
-			attributesCreated: Number(attributes.count ?? 0),
-		};
 	});
 }
 

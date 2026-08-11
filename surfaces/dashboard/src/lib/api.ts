@@ -375,6 +375,11 @@ export interface SourceHealth {
 		total: number;
 		documentEntityId: string | null;
 	};
+	importExtraction?: {
+		documentEntityId: string | null;
+		aspectsCreated: number;
+		attributesCreated: number;
+	};
 }
 
 export interface SignetSource {

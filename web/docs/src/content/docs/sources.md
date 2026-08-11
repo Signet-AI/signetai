@@ -277,11 +277,12 @@ Duplicate content is selected in the import dialog: skip the existing source,
 replace and re-index it, or re-import it as a separate source. The normalized
 content hash, format, original file name, and converter metadata are retained
 as provenance. The import result reports the linked source-document entity and
-the aspects and attributes created by extraction. The Sources page keeps the
-same source-scoped counts after refresh or daemon restart, and shows an
-unavailable state when connected to an older daemon that does not provide the
-new fields. Semantic graph refinement remains asynchronous; source-backed
-recall is available as soon as indexing completes.
+the aspects and attributes created by extraction. That extraction outcome is
+stored with the import's primary source artifact, so refresh and restart retain
+the result without relabeling later Dreaming-attributed source work as import
+output. The Sources page shows an unavailable state when connected to an older
+daemon that does not provide the outcome. Semantic graph refinement remains
+asynchronous; source-backed recall is available as soon as indexing completes.
 
 ## API surface
 

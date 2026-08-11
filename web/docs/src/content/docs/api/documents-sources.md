@@ -180,6 +180,12 @@ agent.
 }
 ```
 
+For `import` sources, `health.importExtraction` is present when the daemon has
+the durable extraction outcome. It reports the source-document entity id plus
+the aspects and attributes created by the import pipeline. This is distinct
+from `health.semantic`, which remains the current source-attributed graph
+diagnostic and can include later Dreaming-derived work.
+
 ### POST /api/sources/import
 
 Import one or more files as durable, read-only source artifacts. The request is

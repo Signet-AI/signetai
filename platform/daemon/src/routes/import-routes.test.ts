@@ -89,6 +89,10 @@ describe("import routes", () => {
 		expect(JSON.parse(canonical?.source_meta_json ?? "{}")).toMatchObject({
 			representation: "structured-json-canonical",
 		});
+		const projection = artifacts.find((row) => row.source_kind === "source_import_json_projection");
+		expect(JSON.parse(projection?.source_meta_json ?? "{}")).toMatchObject({
+			importExtraction: body.files[0]?.extraction,
+		});
 		const attention = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT subject_ref, kind FROM dreaming_attention").all() as Array<{

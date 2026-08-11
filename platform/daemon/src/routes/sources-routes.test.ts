@@ -18,6 +18,7 @@ import {
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "../source-index-progress";
+import { registerImportRoutes } from "./import-routes";
 import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./sources-routes";
 
 const originalFetch = globalThis.fetch;
@@ -1054,55 +1055,90 @@ describe("Sources routes", () => {
 		expect(completed.sources[0]?.indexJob).toMatchObject({ status: "complete", scanned: 3, indexed: 2 });
 	});
 
-	it("reports persisted imported extraction counts and linked entity after refresh", async () => {
+	it("keeps persisted import extraction outcomes separate from later Dreaming source attribution", async () => {
 		const agentId = "import-health-agent";
 		process.env.SIGNET_AGENT_ID = agentId;
-		const added = addImportedSource(
-			{
-				fileName: "outcome.md",
-				contentHash: "d".repeat(64),
-				format: "markdown",
-				agentId,
-			},
-			dir,
-		);
-		expect(added.ok).toBe(true);
-		if (added.ok === false) throw new Error(added.error);
-
-		const indexed = indexSourceArtifactStructure({
-			agentId,
-			sourceId: added.source.id,
-			sourceKind: "source_import_markdown",
-			sourceRoot: added.source.root,
-			sourcePath: `imports/${added.source.id}/outcome.md`,
-			displayName: "outcome.md",
-			content: "# Imported outcome\n\n## Result\n\nThe import produced a durable result.",
+		const app = makeApp();
+		registerImportRoutes(app);
+		const file = new File(["# Imported outcome\n\n## Result\n\nThe import produced a durable result."], "outcome.md", {
+			type: "text/markdown",
 		});
-		expect(indexed.aspectsCreated).toBeGreaterThan(0);
-		expect(indexed.attributesCreated).toBeGreaterThan(0);
+		const form = new FormData();
+		form.append("files", file);
+		const imported = await app.request("/api/sources/import", { method: "POST", body: form });
+		expect(imported.status).toBe(201);
+		const importedBody = (await imported.json()) as {
+			files: Array<{
+				sourceId: string;
+				extraction: { documentEntityId: string | null; aspectsCreated: number; attributesCreated: number };
+			}>;
+		};
+		const importedFile = importedBody.files[0];
+		if (!importedFile) throw new Error("Expected imported file outcome");
 
-		const readSemantic = async () => {
-			const response = await makeApp().request("/api/sources");
+		const readHealth = async () => {
+			const response = await app.request("/api/sources");
 			expect(response.status).toBe(200);
 			const body = (await response.json()) as {
 				sources: Array<{
 					id: string;
-					health?: { semantic?: { aspects: number; attributes: number; documentEntityId: string | null } };
+					health?: {
+						semantic?: { attributes: number };
+						importExtraction?: { documentEntityId: string | null; aspectsCreated: number; attributesCreated: number };
+					};
 				}>;
 			};
-			return body.sources.find((source) => source.id === added.source.id)?.health?.semantic;
+			return body.sources.find((source) => source.id === importedFile.sourceId)?.health;
 		};
 
-		const first = await readSemantic();
-		expect(first).toMatchObject({
-			aspects: indexed.aspectsCreated,
-			attributes: indexed.attributesCreated,
-			documentEntityId: indexed.documentEntityId,
+		const first = (await readHealth())?.importExtraction;
+		if (!first) throw new Error("Expected durable import extraction outcome");
+		expect(first).toEqual(importedFile.extraction);
+		getDbAccessor().withWriteTx((db) => {
+			const now = new Date().toISOString();
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, 'Dreaming result', 'dreaming-result', 'project', ?, 0, ?, ?)`,
+			).run("later-dreaming-entity", agentId, now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('later-dreaming-aspect', 'later-dreaming-entity', ?, 'facts', 'facts', 0.5, ?, ?)`,
+			).run(agentId, now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status,
+				  group_key, claim_key, version, created_at, updated_at, source_id, source_kind, source_root)
+				 VALUES ('later-dreaming-attribute', 'later-dreaming-aspect', ?, 'attribute', 'later Dreaming value',
+				  'later dreaming value', 0.8, 0.5, 'active', 'general', 'value', 1, ?, ?, ?, 'dreaming', 'dreaming')`,
+			).run(agentId, now, now, importedFile.sourceId);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at, source_id)
+				 VALUES ('other-agent-attribute', 'other-agent', 'attribute', 'other agent value', 'other agent value',
+				  0.8, 0.5, 'active', ?, ?, ?)`,
+			).run(now, now, importedFile.sourceId);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at, source_id)
+				 VALUES ('other-source-attribute', ?, 'attribute', 'other source value', 'other source value',
+				  0.8, 0.5, 'active', ?, ?, 'import:other')`,
+			).run(agentId, now, now);
+		});
+
+		const afterDreaming = await readHealth();
+		expect(afterDreaming?.semantic?.attributes).toBeGreaterThan(first.attributesCreated);
+		expect(afterDreaming?.importExtraction).toEqual(first);
+		const duplicateForm = new FormData();
+		duplicateForm.append("files", file);
+		const duplicate = await app.request("/api/sources/import", { method: "POST", body: duplicateForm });
+		expect(duplicate.status).toBe(201);
+		expect((await duplicate.json()) as { files: Array<{ extraction?: unknown }> }).toMatchObject({
+			files: [{ extraction: first }],
 		});
 
 		closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"));
-		expect(await readSemantic()).toEqual(first);
+		expect((await readHealth())?.importExtraction).toEqual(first);
 	});
 
 	it("reports source health diagnostics from artifacts, chunks, failures, and checkpoints", async () => {

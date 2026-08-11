@@ -127,6 +127,11 @@ function sourceFixture(
 							total: 6,
 							documentEntityId: "entity-1",
 						},
+						importExtraction: {
+							documentEntityId: "entity-1",
+							aspectsCreated: 2,
+							attributesCreated: 3,
+						},
 					}
 				: {}),
 		},
@@ -167,6 +172,35 @@ describe("sources grouping", () => {
 
 		expect(mounted.container.textContent).toContain("extraction result unavailable");
 		expect(mounted.container.textContent).not.toContain("undefined aspects");
+
+		await act(async () => mounted.root.unmount());
+		mounted.container.remove();
+	});
+
+	test("uses the durable import outcome instead of broader source-attributed semantic rows", async () => {
+		const source = sourceFixture("import:outcome", "import", "outcome.md");
+		source.health = {
+			status: "healthy",
+			semantic: {
+				entities: 2,
+				aspects: 7,
+				attributes: 42,
+				dependencies: 0,
+				communities: 0,
+				total: 51,
+				documentEntityId: "later-dreaming-entity",
+			},
+			importExtraction: { documentEntityId: "entity-1", aspectsCreated: 2, attributesCreated: 3 },
+		};
+		sourcesResponse = { version: 1, sources: [source] };
+		const mounted = await mount(
+			<ViewProvider>
+				<SourcesView />
+			</ViewProvider>,
+		);
+
+		expect(mounted.container.textContent).toContain("2 aspects · 3 attributes · entity linked");
+		expect(mounted.container.textContent).not.toContain("7 aspects · 42 attributes");
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();

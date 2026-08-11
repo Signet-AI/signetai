@@ -20,6 +20,7 @@ import { resolveDaemonAgentId } from "../agent-id";
 import { getPeerAddress } from "../auth/middleware";
 import { type ReadDb, getDbAccessor } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";
+import { type ImportExtractionOutcome, readImportedSourceOutcome } from "../imported-source-outcome";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import {
@@ -766,6 +767,7 @@ interface SourceHealth {
 		readonly total: number;
 		readonly documentEntityId: string | null;
 	};
+	readonly importExtraction?: ImportExtractionOutcome;
 }
 
 function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
@@ -833,6 +835,7 @@ function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceS
 		const artifactSummary = artifactHealthSummary(source, agentId);
 		const discordSummary = discordHealthSummary(source, agentId);
 		const semantic = semanticHealthSummary(source, agentId);
+		const importExtraction = source.kind === "import" ? readImportedSourceOutcome(source.id, agentId) : undefined;
 		const orphanChunks = sourceOrphanChunks(source, agentId);
 		const hasDegradation =
 			discordSummary.failures.total > 0 ||
@@ -854,6 +857,7 @@ function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceS
 				orphanChunks,
 			},
 			semantic,
+			...(importExtraction ? { importExtraction } : {}),
 		};
 	} catch (err) {
 		return {

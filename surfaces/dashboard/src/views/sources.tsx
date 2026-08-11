@@ -227,7 +227,7 @@ function ImportedDocumentRow({ source, onMutate }: { source: SignetSource; onMut
 				</span>
 				<span className="shrink-0">{relTime(source.lastIndexedAt)}</span>
 			</div>
-			<ImportExtractionSummary semantic={source.health?.semantic} />
+			<ImportExtractionSummary extraction={source.health?.importExtraction} />
 			{error && (
 				<span className="truncate font-mono text-[9px] text-destructive" title={error}>
 					{error}
@@ -237,20 +237,24 @@ function ImportedDocumentRow({ source, onMutate }: { source: SignetSource; onMut
 	);
 }
 
-function ImportExtractionSummary({ semantic }: { semantic: SourceHealth["semantic"] | undefined }) {
-	if (!semantic || typeof semantic.aspects !== "number" || typeof semantic.attributes !== "number") {
+function ImportExtractionSummary({ extraction }: { extraction: SourceHealth["importExtraction"] | undefined }) {
+	if (
+		!extraction ||
+		typeof extraction.aspectsCreated !== "number" ||
+		typeof extraction.attributesCreated !== "number"
+	) {
 		return <span className="truncate font-mono text-[9px] text-muted-foreground">extraction result unavailable</span>;
 	}
-	if (semantic.entities === 0 && semantic.aspects === 0 && semantic.attributes === 0) {
+	if (extraction.aspectsCreated === 0 && extraction.attributesCreated === 0) {
 		return <span className="truncate font-mono text-[9px] text-muted-foreground">no structured graph result</span>;
 	}
-	const entity = semantic.documentEntityId ? "entity linked" : "no entity linked";
+	const entity = extraction.documentEntityId ? "entity linked" : "no entity linked";
 	return (
 		<span
 			className="truncate font-mono text-[9px] text-muted-foreground"
-			title={semantic.documentEntityId ? `Document entity ${semantic.documentEntityId}` : undefined}
+			title={extraction.documentEntityId ? `Document entity ${extraction.documentEntityId}` : undefined}
 		>
-			{semantic.aspects} aspects · {semantic.attributes} attributes · {entity}
+			{extraction.aspectsCreated} aspects · {extraction.attributesCreated} attributes · {entity}
 		</span>
 	);
 }
