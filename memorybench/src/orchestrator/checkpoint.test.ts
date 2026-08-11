@@ -43,6 +43,29 @@ describe("CheckpointManager question metadata", () => {
     expect(checkpoint.questions.q1?.questionDate).toBe("2023/05/06 (Sat) 09:18")
   })
 
+  test("persists fixture capture agent scopes across resume", async () => {
+    const manager = new CheckpointManager(dir)
+    const checkpoint = manager.create("dreaming-scope-resume", "signet-dreaming", "dreaming-scenarios", "judge", "answerer")
+    manager.initQuestion(checkpoint, "scope-question", "scope-question-run", {
+      question: "Which scope owns this fixture?",
+      groundTruth: "The fixture scope is preserved.",
+      questionType: "dreaming",
+    })
+    manager.updatePhase(checkpoint, "scope-question", "ingest", {
+      status: "completed",
+      ingestResult: {
+        documentIds: ["memorybench:scope-question-run:alpha"],
+        taskIds: ["capture-alpha"],
+        taskAgentIds: { "capture-alpha": "dreaming-gate-alpha" },
+      },
+    })
+    await manager.flush("dreaming-scope-resume")
+
+    expect(manager.load("dreaming-scope-resume")?.questions["scope-question"]?.phases.ingest.ingestResult).toMatchObject({
+      taskAgentIds: { "capture-alpha": "dreaming-gate-alpha" },
+    })
+  })
+
   test("backfills missing question dates when resuming older checkpoints", () => {
     const manager = new CheckpointManager(dir)
     const checkpoint = manager.create(

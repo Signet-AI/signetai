@@ -142,6 +142,29 @@ describe("Signet benchmark profiles", () => {
     expect(JSON.parse(String(recall?.init.body))).toMatchObject({ agentId: "dreaming-gate-alpha" })
   })
 
+  it("rejects resumed Dreaming captures whose fixture scopes were not checkpointed", async () => {
+    class MissingScopeDreamingProvider extends SignetDreamingProvider {
+      calls: string[] = []
+
+      protected override async request<T>(path: string): Promise<T> {
+        this.calls.push(path)
+        throw new Error(`Unexpected request ${path}`)
+      }
+    }
+
+    const provider = new MissingScopeDreamingProvider()
+    await expect(
+      provider.awaitIndexing(
+        {
+          documentIds: ["memorybench:scope-contract:alpha"],
+          taskIds: ["capture-alpha"],
+        },
+        "scope-contract"
+      )
+    ).rejects.toThrow("missing its fixture agent scope")
+    expect(provider.calls).toEqual([])
+  })
+
   it("drains every ingested fixture scope through one canonical Dreaming pass", async () => {
     class MultiScopeDreamingProvider extends SignetDreamingProvider {
       calls: Array<{ path: string; init: RequestInit }> = []

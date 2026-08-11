@@ -8,10 +8,11 @@ on:
       - "memorybench/src/benchmarks/index.ts"
       - "memorybench/src/cli/index.ts"
       - "memorybench/src/providers/signet/**"
-      - "memorybench/src/orchestrator/phases/ingest.ts"
-      - "memorybench/src/orchestrator/phases/search.ts"
+      - "memorybench/src/orchestrator/**"
       - "memorybench/src/types/benchmark.ts"
       - "memorybench/src/types/provider.ts"
+      - "platform/daemon/src/pipeline/dreaming*.ts"
+      - "platform/daemon/src/ontology-proposals.ts"
       - ".github/workflows/memorybench-dreaming-gate.yml"
   push:
     branches: [main]
@@ -21,10 +22,11 @@ on:
       - "memorybench/src/benchmarks/index.ts"
       - "memorybench/src/cli/index.ts"
       - "memorybench/src/providers/signet/**"
-      - "memorybench/src/orchestrator/phases/ingest.ts"
-      - "memorybench/src/orchestrator/phases/search.ts"
+      - "memorybench/src/orchestrator/**"
       - "memorybench/src/types/benchmark.ts"
       - "memorybench/src/types/provider.ts"
+      - "platform/daemon/src/pipeline/dreaming*.ts"
+      - "platform/daemon/src/ontology-proposals.ts"
 
 permissions:
   contents: read
@@ -42,4 +44,6 @@ jobs:
         run: >-
           bun test
           memorybench/src/benchmarks/dreaming-scenarios/index.test.ts
+          memorybench/src/orchestrator/checkpoint.test.ts
           memorybench/src/providers/signet/index.test.ts
+          platform/daemon/src/pipeline/memorybench-dreaming-gate.test.ts

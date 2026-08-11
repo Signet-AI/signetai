@@ -16,6 +16,17 @@ describe("Dreaming scenario MemoryBench gate", () => {
     ])
     expect(questions.every((question) => question.metadata?.requiresExactSourceRefs === true)).toBe(true)
     expect(questions.every((question) => question.relevantSessionIds && question.relevantSessionIds.length > 0)).toBe(true)
+    expect(questions.every((question) => Array.isArray(question.metadata?.sourceSessionIds))).toBe(true)
+    expect(questions.every((question) => typeof question.metadata?.semanticOutcome === "object")).toBe(true)
+    expect(questions.find((question) => question.questionId === "joined-source-promotion")?.metadata).toMatchObject({
+      sourceSessionIds: ["atlas-confirmation"],
+      semanticOutcome: {
+        entity: "Atlas deployment",
+        aspect: "runtime",
+        claimKey: "deployment-runtime",
+        value: "The Atlas deployment runs on the edge runtime.",
+      },
+    })
 
     const isolationSessions = benchmark.getHaystackSessions("cross-scope-isolation")
     expect(isolationSessions.map((session) => session.metadata?.agentId)).toEqual([
@@ -52,7 +63,14 @@ describe("Dreaming scenario MemoryBench gate", () => {
             expected: {
               relevantSessionIds: ["session"],
               sourceQuotes: ["Ungrounded quote."],
+              sourceSessionIds: ["session"],
               requiresExactSourceRefs: true,
+              semanticOutcome: {
+                entity: "Invalid scenario",
+                aspect: "validation",
+                claimKey: "grounding",
+                value: "A fact changed.",
+              },
             },
           },
         ],

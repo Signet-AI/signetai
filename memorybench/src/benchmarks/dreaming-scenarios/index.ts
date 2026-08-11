@@ -21,13 +21,22 @@ interface ScenarioSession {
   messages: ScenarioMessage[]
 }
 
-interface ScenarioExpected {
-  relevantSessionIds: string[]
-  sourceQuotes: string[]
-  requiresExactSourceRefs: boolean
+export interface DreamingSemanticOutcome {
+  entity: string
+  aspect: string
+  claimKey: string
+  value: string
 }
 
-interface DreamingScenario {
+export interface ScenarioExpected {
+  relevantSessionIds: string[]
+  sourceQuotes: string[]
+  sourceSessionIds: string[]
+  requiresExactSourceRefs: boolean
+  semanticOutcome: DreamingSemanticOutcome
+}
+
+export interface DreamingScenario {
   id: string
   agentId: string
   question: string
@@ -36,7 +45,7 @@ interface DreamingScenario {
   expected: ScenarioExpected
 }
 
-interface DreamingScenarioCorpus {
+export interface DreamingScenarioCorpus {
   schemaVersion: number
   name: string
   scenarios: DreamingScenario[]
@@ -93,12 +102,22 @@ export function parseDreamingScenarioCorpus(value: unknown): DreamingScenarioCor
     }
     assertStringArray(scenario.expected.relevantSessionIds, `${scenario.id}.expected.relevantSessionIds`)
     assertStringArray(scenario.expected.sourceQuotes, `${scenario.id}.expected.sourceQuotes`)
+    assertStringArray(scenario.expected.sourceSessionIds, `${scenario.id}.expected.sourceSessionIds`)
+    if (scenario.expected.sourceQuotes.length !== scenario.expected.sourceSessionIds.length) {
+      throw new Error(`Dreaming scenario ${scenario.id} must pair each source quote with one source session`)
+    }
     if (scenario.expected.requiresExactSourceRefs !== true) {
       throw new Error(`Dreaming scenario ${scenario.id} must require exact source references`)
     }
+    if (!scenario.expected.semanticOutcome || typeof scenario.expected.semanticOutcome !== "object") {
+      throw new Error(`Dreaming scenario ${scenario.id} must define a semantic outcome`)
+    }
+    assertNonEmptyString(scenario.expected.semanticOutcome.entity, `${scenario.id}.expected.semanticOutcome.entity`)
+    assertNonEmptyString(scenario.expected.semanticOutcome.aspect, `${scenario.id}.expected.semanticOutcome.aspect`)
+    assertNonEmptyString(scenario.expected.semanticOutcome.claimKey, `${scenario.id}.expected.semanticOutcome.claimKey`)
+    assertNonEmptyString(scenario.expected.semanticOutcome.value, `${scenario.id}.expected.semanticOutcome.value`)
 
     const sessionIds = new Set<string>()
-    const sessionText: string[] = []
     for (const session of scenario.sessions) {
       assertAgentId(session.id, `${scenario.id}.session.id`)
       if (sessionIds.has(session.id)) throw new Error(`Dreaming scenario ${scenario.id} has duplicate session id: ${session.id}`)
@@ -114,7 +133,6 @@ export function parseDreamingScenarioCorpus(value: unknown): DreamingScenarioCor
           throw new Error(`Dreaming scenario ${scenario.id}.${session.id} has invalid message role`)
         }
         assertNonEmptyString(message.content, `${scenario.id}.${session.id}.message.content`)
-        sessionText.push(message.content)
       }
     }
 
@@ -123,9 +141,14 @@ export function parseDreamingScenarioCorpus(value: unknown): DreamingScenarioCor
         throw new Error(`Dreaming scenario ${scenario.id} expects unknown relevant session: ${sessionId}`)
       }
     }
-    for (const quote of scenario.expected.sourceQuotes) {
-      if (!sessionText.some((content) => content.includes(quote))) {
-        throw new Error(`Dreaming scenario ${scenario.id} source quote is not present in a fixture session: ${quote}`)
+    for (const [index, quote] of scenario.expected.sourceQuotes.entries()) {
+      const sourceSessionId = scenario.expected.sourceSessionIds[index]
+      const sourceSession = scenario.sessions.find((session) => session.id === sourceSessionId)
+      if (!sourceSession) {
+        throw new Error(`Dreaming scenario ${scenario.id} expects unknown source session: ${sourceSessionId}`)
+      }
+      if (!sourceSession.messages.some((message) => message.content.includes(quote))) {
+        throw new Error(`Dreaming scenario ${scenario.id} source quote is not present in its declared session: ${quote}`)
       }
     }
   }
@@ -154,7 +177,9 @@ export class DreamingScenariosBenchmark implements Benchmark {
       metadata: {
         agentId: scenario.agentId,
         sourceQuotes: scenario.expected.sourceQuotes,
+        sourceSessionIds: scenario.expected.sourceSessionIds,
         requiresExactSourceRefs: scenario.expected.requiresExactSourceRefs,
+        semanticOutcome: scenario.expected.semanticOutcome,
       },
     }))
     this.sessionsByQuestion = new Map(

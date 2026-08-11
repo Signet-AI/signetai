@@ -27,7 +27,14 @@
       "expected": {
         "relevantSessionIds": ["atlas-decision", "atlas-confirmation"],
         "sourceQuotes": ["The Atlas deployment now runs on the edge runtime."],
-        "requiresExactSourceRefs": true
+        "sourceSessionIds": ["atlas-confirmation"],
+        "requiresExactSourceRefs": true,
+        "semanticOutcome": {
+          "entity": "Atlas deployment",
+          "aspect": "runtime",
+          "claimKey": "deployment-runtime",
+          "value": "The Atlas deployment runs on the edge runtime."
+        }
       }
     },
     {
@@ -54,7 +61,14 @@
       "expected": {
         "relevantSessionIds": ["meridian-correction"],
         "sourceQuotes": ["Correction: Meridian now uses PostgreSQL instead of SQLite."],
-        "requiresExactSourceRefs": true
+        "sourceSessionIds": ["meridian-correction"],
+        "requiresExactSourceRefs": true,
+        "semanticOutcome": {
+          "entity": "Meridian service",
+          "aspect": "database",
+          "claimKey": "database-engine",
+          "value": "Meridian now uses PostgreSQL."
+        }
       }
     },
     {
@@ -82,7 +96,14 @@
       "expected": {
         "relevantSessionIds": ["harbor-alpha"],
         "sourceQuotes": ["The Harbor release is blue."],
-        "requiresExactSourceRefs": true
+        "sourceSessionIds": ["harbor-alpha"],
+        "requiresExactSourceRefs": true,
+        "semanticOutcome": {
+          "entity": "Harbor release",
+          "aspect": "color",
+          "claimKey": "release-color",
+          "value": "The alpha Harbor release is blue."
+        }
       }
     },
     {
@@ -109,7 +130,14 @@
       "expected": {
         "relevantSessionIds": ["cedar-repaired"],
         "sourceQuotes": ["The Cedar deployment region was confirmed as eu-west-1."],
-        "requiresExactSourceRefs": true
+        "sourceSessionIds": ["cedar-repaired"],
+        "requiresExactSourceRefs": true,
+        "semanticOutcome": {
+          "entity": "Cedar deployment",
+          "aspect": "region",
+          "claimKey": "deployment-region",
+          "value": "Cedar was confirmed for eu-west-1."
+        }
       }
     }
   ]

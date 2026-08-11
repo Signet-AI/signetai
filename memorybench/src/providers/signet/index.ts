@@ -592,7 +592,12 @@ export class SignetProvider implements Provider {
 
     while (pending.size > 0 && Date.now() < deadline) {
       for (const id of [...pending]) {
-        const agentId = result.taskAgentIds?.[id] ?? this.agentId
+        const agentId = result.taskAgentIds?.[id]
+        if (!agentId) {
+          throw new Error(
+            `Canonical transcript capture ${id} is missing its fixture agent scope; resume requires a scope-preserving checkpoint`
+          )
+        }
         const job = await this.request<TranscriptCaptureJobResponse>(
           `/api/hooks/transcript-capture/${encodeURIComponent(id)}?agentId=${encodeURIComponent(agentId)}`,
           { method: "GET" }
