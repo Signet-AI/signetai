@@ -22,12 +22,18 @@ resources and marks that daemon as desktop-owned.
 The daemon remains a separate local process. The desktop app is a
 distribution and control layer, not a replacement for the daemon.
 
-When `signet update install` or daemon auto-update installs a new Signet
-version, the update system checks for a managed Linux desktop install at
-`~/.local/bin/signet-desktop` / `~/.local/share/signet/desktop/Signet.AppImage`.
-If present, it refreshes the Electron AppImage from the synced Signet source
-checkout as part of the same update. Unmanaged desktop launchers are left
-untouched and reported as skipped.
+Update ownership is split by install surface. The CLI daemon updater owns the
+CLI/native daemon used by headless and server-style installs. It does not own a
+packaged Electron desktop app. Packaged desktop builds own their updates through
+`electron-updater` and the Signet GitHub release feed. The app checks on startup
+and from the tray menu on macOS, Windows, and Linux AppImage builds. Linux `.deb`
+installs do not have an Electron auto-update path. The legacy CLI-managed Linux
+AppImage refresh remains separate and does not detect or update packaged
+macOS/Windows applications.
+
+This keeps the dashboard/runtime bundle and its Electron shell on one update
+channel. Users on an older packaged desktop build must first install a build
+that includes the updater; older builds cannot self-bootstrap an updater.
 
 ## User-facing behavior
 

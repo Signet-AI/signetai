@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { DESKTOP_UPDATE_FEED, desktopUpdateSupport } from "./desktop-update-policy";
 
 const desktopRoot = join(import.meta.dir, "..");
 
@@ -32,7 +33,22 @@ describe("desktop update packaging", () => {
 	test("loads electron-updater through CommonJS interop for packaged ESM", () => {
 		const updateSource = readFileSync(join(import.meta.dir, "desktop-updates.ts"), "utf8");
 		expect(updateSource).toContain("createRequire(import.meta.url)");
+		expect(updateSource).toContain("autoUpdater.setFeedURL(DESKTOP_UPDATE_FEED)");
 		expect(updateSource).not.toContain('autoUpdater } from "electron-updater"');
+	});
+
+	test("owns packaged macOS and Windows updates instead of treating them as Linux-only", () => {
+		expect(desktopUpdateSupport({ isPackaged: true, platform: "darwin", hasAppImage: false })).toEqual({
+			supported: true,
+		});
+		expect(desktopUpdateSupport({ isPackaged: true, platform: "win32", hasAppImage: false })).toEqual({
+			supported: true,
+		});
+		expect(desktopUpdateSupport({ isPackaged: true, platform: "linux", hasAppImage: false })).toEqual({
+			supported: false,
+			reason: "Desktop auto-updates on Linux require the AppImage build.",
+		});
+		expect(DESKTOP_UPDATE_FEED).toEqual({ provider: "github", owner: "Signet-AI", repo: "signetai" });
 	});
 
 	test("publishes metadata and mac zip artifacts required by electron-updater", () => {

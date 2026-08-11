@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { app, dialog } from "electron";
 import type { AppUpdater, UpdateCheckResult } from "electron-updater";
+import { DESKTOP_UPDATE_FEED, desktopUpdateSupport } from "./desktop-update-policy.js";
 
 const require = createRequire(import.meta.url);
 const { autoUpdater } = require("electron-updater") as { readonly autoUpdater: AppUpdater };
@@ -32,6 +33,7 @@ let checkPromise: Promise<DesktopUpdateResult> | null = null;
 export function configureDesktopUpdates(): void {
 	if (configured) return;
 	configured = true;
+	autoUpdater.setFeedURL(DESKTOP_UPDATE_FEED);
 	autoUpdater.autoDownload = false;
 	autoUpdater.autoInstallOnAppQuit = true;
 }
@@ -39,13 +41,11 @@ export function configureDesktopUpdates(): void {
 export function desktopUpdatesSupported():
 	| { readonly supported: true }
 	| { readonly supported: false; readonly reason: string } {
-	if (!app.isPackaged && process.env.SIGNET_DESKTOP_ENABLE_UPDATES_IN_DEV !== "1") {
-		return { supported: false, reason: "Desktop updates are only available in packaged builds." };
-	}
-	if (process.platform === "linux" && !process.env.APPIMAGE) {
-		return { supported: false, reason: "Desktop auto-updates on Linux require the AppImage build." };
-	}
-	return { supported: true };
+	return desktopUpdateSupport({
+		isPackaged: app.isPackaged || process.env.SIGNET_DESKTOP_ENABLE_UPDATES_IN_DEV === "1",
+		platform: process.platform,
+		hasAppImage: Boolean(process.env.APPIMAGE),
+	});
 }
 
 export async function checkForDesktopUpdate(options: CheckDesktopUpdateOptions = {}): Promise<DesktopUpdateResult> {
