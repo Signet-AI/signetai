@@ -62,7 +62,13 @@ function shellProfilePath(home: string, shell: string | undefined, platform: Nod
 	if (platform === "win32") return null;
 	const shellName = shell ? basename(shell).toLowerCase() : "";
 	if (shellName === "zsh") return join(home, ".zprofile");
-	if (shellName === "bash") return join(home, ".bash_profile");
+	if (shellName === "bash") {
+		const bashProfiles = [".bash_profile", ".bash_login", ".profile"];
+		return (
+			bashProfiles.map((profile) => join(home, profile)).find((profile) => existsSync(profile)) ??
+			join(home, ".bash_profile")
+		);
+	}
 	if (platform === "darwin" && shellName === "") return join(home, ".zprofile");
 	return null;
 }
@@ -75,17 +81,15 @@ function shellPathEntry(binDir: string, home: string, platform: NodeJS.Platform)
 
 function profileContainsPath(contents: string, binDir: string, home: string, platform: NodeJS.Platform): boolean {
 	const normalizedDir = normalizePathEntry(binDir, platform);
-	const homeRelativeDir = normalizePathEntry(join(home, ".local", "bin"), platform);
+	const isDefaultBinDir = normalizedDir === normalizePathEntry(join(home, ".local", "bin"), platform);
 	return contents.split(/\r?\n/).some((line) => {
 		const trimmed = line.trim();
 		if (trimmed.startsWith("#") || !/^(?:export\s+)?PATH\s*=/.test(trimmed)) return false;
+		const containsRequestedDir = line.includes(binDir) || line.includes(normalizedDir);
+		if (containsRequestedDir) return true;
 		return (
-			line.includes(binDir) ||
-			line.includes(normalizedDir) ||
-			line.includes("$HOME/.local/bin") ||
-			line.includes("${HOME}/.local/bin") ||
-			line.includes("~/.local/bin") ||
-			line.includes(homeRelativeDir)
+			isDefaultBinDir &&
+			(line.includes("$HOME/.local/bin") || line.includes("${HOME}/.local/bin") || line.includes("~/.local/bin"))
 		);
 	});
 }

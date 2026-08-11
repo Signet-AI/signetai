@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { persistNativeInstallPath, printNativeInstallResult } from "./native-install.js";
@@ -64,6 +64,45 @@ describe("persistNativeInstallPath", () => {
 
 		expect(result).toEqual({ profilePath: join(home, ".bash_profile"), persisted: true });
 		expect(readFileSync(join(home, ".bash_profile"), "utf8")).toBe('export PATH="$HOME/.local/bin:$PATH"\n');
+	});
+
+	test("persists a custom bin directory even when the profile has the default alias", () => {
+		const home = makeHome();
+		homes.push(home);
+		const binDir = join(home, "custom", "bin");
+		const profilePath = join(home, ".bash_profile");
+		writeFileSync(profilePath, 'export PATH="$HOME/.local/bin:$PATH"\n', "utf8");
+
+		const result = persistNativeInstallPath(binDir, {
+			home,
+			platform: "linux",
+			shell: "/bin/bash",
+			pathValue: "/usr/bin:/bin",
+		});
+
+		expect(result).toEqual({ profilePath, persisted: true });
+		expect(readFileSync(profilePath, "utf8")).toBe(
+			`export PATH="$HOME/.local/bin:$PATH"\nexport PATH="${binDir}:$PATH"\n`,
+		);
+	});
+
+	test("updates the first existing bash startup file instead of creating .bash_profile", () => {
+		const home = makeHome();
+		homes.push(home);
+		const binDir = join(home, ".local", "bin");
+		const profilePath = join(home, ".profile");
+		writeFileSync(profilePath, "# existing profile\n", "utf8");
+
+		const result = persistNativeInstallPath(binDir, {
+			home,
+			platform: "linux",
+			shell: "/bin/bash",
+			pathValue: "/usr/bin:/bin",
+		});
+
+		expect(result).toEqual({ profilePath, persisted: true });
+		expect(existsSync(join(home, ".bash_profile"))).toBe(false);
+		expect(readFileSync(profilePath, "utf8")).toBe('# existing profile\nexport PATH="$HOME/.local/bin:$PATH"\n');
 	});
 
 	test("skips persistence when PATH already contains the directory", () => {
