@@ -3,7 +3,8 @@
 	"compilerOptions": {
 		"outDir": "./dist",
 		"rootDir": "./src",
-		"types": ["bun-types"]
+		"types": ["bun-types"],
+		"noUncheckedIndexedAccess": false
 	},
 	"include": ["src/**/*"],
 	"exclude": ["node_modules", "dist", "src/**/*.test.ts"]
