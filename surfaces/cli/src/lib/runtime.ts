@@ -124,8 +124,16 @@ interface DaemonInstance {
 		readonly memory: QueueCountsFromStatus | null;
 		readonly summary: QueueCountsFromStatus | null;
 	} | null;
+	/** Latest periodic Dreaming scheduler decision reported by `/api/status`. */
+	readonly scheduler: DreamingSchedulerStatusFromStatus | null;
 	readonly probe: DaemonHealthProbe;
 	readonly openclaw: DaemonOpenClawHealthSummary | null;
+}
+
+interface DreamingSchedulerStatusFromStatus {
+	readonly status: "idle" | "deferred";
+	readonly reason: "queue_pressure" | "system_pressure" | null;
+	readonly checkedAt: string | null;
 }
 
 interface QueueCountsFromStatus {
@@ -461,6 +469,8 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 					const pipelineRaw = data.pipeline;
 					const queueRaw =
 						typeof pipelineRaw === "object" && pipelineRaw !== null ? Reflect.get(pipelineRaw, "queue") : undefined;
+					const dreamingRaw =
+						typeof pipelineRaw === "object" && pipelineRaw !== null ? Reflect.get(pipelineRaw, "dreaming") : undefined;
 					const health =
 						typeof healthRaw === "object" && healthRaw !== null
 							? {
@@ -481,6 +491,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 									summary: normalizeQueueCountsFromStatus(Reflect.get(queueRaw, "summary")),
 								}
 							: null;
+					const scheduler = normalizeDreamingSchedulerFromStatus(dreamingRaw);
 					return {
 						baseUrl,
 						pid: data.pid ?? null,
@@ -531,6 +542,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 							: null,
 						health,
 						queue,
+						scheduler,
 						probe: reachableDaemonProbe(baseUrl, data.pid ?? null, readiness),
 						openclaw: summarizeOpenClawHealth(openclawReport),
 					};
@@ -552,6 +564,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				transcripts: null,
 				health: null,
 				queue: null,
+				scheduler: null,
 				probe: reachableDaemonProbe(
 					baseUrl,
 					null,
@@ -599,6 +612,20 @@ function normalizeQueueCountsFromStatus(value: unknown): QueueCountsFromStatus |
 		oldestAgeSec: toNumber("oldestAgeSec"),
 		oldestDeadAgeSec: toNumber("oldestDeadAgeSec"),
 		lastError: typeof lastErrorRaw === "string" && lastErrorRaw.trim().length > 0 ? lastErrorRaw : null,
+	};
+}
+
+function normalizeDreamingSchedulerFromStatus(value: unknown): DreamingSchedulerStatusFromStatus | null {
+	if (typeof value !== "object" || value === null) return null;
+	const record = value as Record<string, unknown>;
+	const status = record.status;
+	if (status !== "idle" && status !== "deferred") return null;
+	const reason = record.reason;
+	const checkedAt = record.checkedAt;
+	return {
+		status,
+		reason: reason === "queue_pressure" || reason === "system_pressure" ? reason : null,
+		checkedAt: typeof checkedAt === "string" && checkedAt.trim().length > 0 ? checkedAt : null,
 	};
 }
 
@@ -725,6 +752,7 @@ export async function getDaemonStatus(): Promise<{
 	transcripts: DaemonInstance["transcripts"];
 	health: DaemonInstance["health"];
 	queue: DaemonInstance["queue"];
+	scheduler: DaemonInstance["scheduler"];
 	probe: DaemonHealthProbe;
 	openclaw: DaemonOpenClawHealthSummary | null;
 }> {
@@ -745,6 +773,7 @@ export async function getDaemonStatus(): Promise<{
 			transcripts: preferred.transcripts,
 			health: preferred.health,
 			queue: preferred.queue,
+			scheduler: preferred.scheduler,
 			probe: {
 				...preferred.probe,
 				processPid: preferred.probe.processPid ?? fallbackPid,
@@ -767,6 +796,7 @@ export async function getDaemonStatus(): Promise<{
 		transcripts: null,
 		health: null,
 		queue: null,
+		scheduler: null,
 		probe,
 		openclaw: null,
 	};

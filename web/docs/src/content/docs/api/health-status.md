@@ -169,9 +169,10 @@ and one entry per failing gate in `reasons`:
 exit 0); `degraded` means the daemon is reachable but returned `not_ready`
 (`ok: false`, exit 2); `unavailable` means the required daemon or local
 installation is unavailable or invalid (`ok: false`, exit 1). A queue-caused
-readiness failure includes an explicit Automatic Dreaming deferral finding with
-the queue age and last error. Other readiness failures do not claim that
-Dreaming was deferred by the queue.
+periodic scheduler decision deferred for queue pressure includes an explicit
+Automatic Dreaming deferral finding with the queue age and last error. A queue
+readiness failure alone does not claim that Dreaming was deferred by the queue:
+the scheduler can instead defer for higher-priority system pressure.
 
 ### GET /api/status
 

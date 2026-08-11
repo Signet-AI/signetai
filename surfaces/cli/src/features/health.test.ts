@@ -1041,6 +1041,11 @@ describe("dead-job backlog surfacing (#1048)", () => {
 						},
 						summary: { ...queueFixture.summary, dead: 0, lastError: null },
 					},
+					scheduler: {
+						status: "deferred" as const,
+						reason: "queue_pressure" as const,
+						checkedAt: "2026-08-11T15:00:00Z",
+					},
 					probe: {
 						status: "degraded" as const,
 						detail: "/health responded; readiness degraded",
@@ -1062,6 +1067,49 @@ describe("dead-job backlog surfacing (#1048)", () => {
 					message: expect.stringContaining("Automatic Dreaming is deferred by queue pressure"),
 				}),
 			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not call a queue-caused Dreaming deferral when system pressure won the scheduler decision (#1446)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "doctor-system-pressure-"));
+		try {
+			const workspace = createDoctorWorkspace(root);
+			const jsonOut = await captureDoctorJson(
+				async () => ({
+					...(await deadBacklogDeps(root, false).getDaemonStatus()),
+					health: { score: 0.91, status: "degraded" },
+					queue: {
+						memory: {
+							...queueFixture.memory,
+							pending: 51,
+							dead: 0,
+							oldestAgeSec: 11_698_968,
+							lastError: "Unable to connect to the configured inference endpoint.",
+						},
+						summary: { ...queueFixture.summary, dead: 0, lastError: null },
+					},
+					scheduler: {
+						status: "deferred" as const,
+						reason: "system_pressure" as const,
+						checkedAt: "2026-08-11T15:00:00Z",
+					},
+					probe: {
+						status: "degraded" as const,
+						detail: "/health responded; readiness degraded",
+						url: "http://127.0.0.1:3850",
+						listenerPresent: true,
+						processPid: 42,
+						stalePid: null,
+						readinessReasons: ["queue oldest pending job age 11698968s exceeds 300s"],
+					},
+				}),
+				workspace,
+			);
+			expect(jsonOut.status).toBe("degraded");
+			expect(jsonOut.exitCode).toBe(2);
+			expect(jsonOut.findings.some((finding) => finding.code === "dreaming_deferred_queue_pressure")).toBe(false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

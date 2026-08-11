@@ -81,6 +81,11 @@ interface DaemonStatus {
 			readonly lastError: string | null;
 		} | null;
 	} | null;
+	readonly scheduler?: {
+		readonly status: "idle" | "deferred";
+		readonly reason: "queue_pressure" | "system_pressure" | null;
+		readonly checkedAt: string | null;
+	} | null;
 	readonly probe?: {
 		readonly status: "healthy" | "degraded" | "listener-unhealthy" | "process-unhealthy" | "stale-artifact" | "absent";
 		readonly detail: string;
@@ -656,28 +661,30 @@ function addDaemonProbeFindings(report: StatusReport, findings: DoctorFinding[])
 
 function addReadinessFindings(report: StatusReport, findings: DoctorFinding[]): void {
 	const probe = report.daemon.probe;
-	if (!report.daemon.running || probe?.status !== "degraded") return;
-	const reasons = probe.readinessReasons ?? [];
-	const reasonText = reasons.length > 0 ? reasons.join("; ") : "the readiness probe returned not_ready";
-	findings.push({
-		level: "warn",
-		code: "daemon_readiness_degraded",
-		message: `Daemon readiness is degraded: ${reasonText}.`,
-		fix: "Inspect `signet status` and the failing readiness check before relying on automatic maintenance.",
-	});
+	if (report.daemon.running && probe?.status === "degraded") {
+		const reasons = probe.readinessReasons ?? [];
+		const reasonText = reasons.length > 0 ? reasons.join("; ") : "the readiness probe returned not_ready";
+		findings.push({
+			level: "warn",
+			code: "daemon_readiness_degraded",
+			message: `Daemon readiness is degraded: ${reasonText}.`,
+			fix: "Inspect `signet status` and the failing readiness check before relying on automatic maintenance.",
+		});
+	}
 
-	// This mirrors the worker's actual scheduling gate: `getQueueHealth` is
-	// the only readiness source that makes Dreaming defer a sweep. Do not
-	// infer a Dreaming deferral from migration, database, embedding, or
-	// inference reasons that merely share the readiness envelope.
-	if (!reasons.some((reason) => reason.startsWith("queue "))) return;
+	// Readiness is a composite signal. The scheduler alone knows whether its
+	// latest deferred sweep yielded to queue pressure or higher-priority system
+	// pressure, so never infer its cause from readiness reasons or queue counts.
+	const scheduler = report.daemon.scheduler;
+	if (scheduler?.status !== "deferred" || scheduler.reason !== "queue_pressure") return;
 	const memory = report.daemon.queue?.memory;
-	if (!memory) return;
-	const lastError = memory.lastError ? ` Last error: ${memory.lastError.slice(0, 160)}` : "";
+	const detail = memory
+		? `: memory queue has ${memory.pending} pending job(s), oldest age ${formatAge(memory.oldestAgeSec)}.${memory.lastError ? ` Last error: ${memory.lastError.slice(0, 160)}` : ""}`
+		: ".";
 	findings.push({
 		level: "warn",
 		code: "dreaming_deferred_queue_pressure",
-		message: `Automatic Dreaming is deferred by queue pressure: memory queue has ${memory.pending} pending job(s), oldest age ${formatAge(memory.oldestAgeSec)}.${lastError}`,
+		message: `Automatic Dreaming is deferred by queue pressure${detail}`,
 		fix: "Inspect the queue in `signet status`; repair only identified jobs with `signet repair queue requeue --apply` or retire obsolete jobs with `signet repair queue cancel --apply`.",
 	});
 }

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
+import { reportEventLoopLag, resetPressureState } from "../system-pressure";
 import {
 	DREAMING_AGENT_PROMPT,
 	type DreamingAgentExecutor,
@@ -76,6 +77,7 @@ describe("dreaming worker agent scope", () => {
 	});
 
 	afterEach(() => {
+		resetPressureState();
 		rmSync(agentsDir, { recursive: true, force: true });
 		db.close();
 	});
@@ -172,6 +174,28 @@ describe("dreaming worker agent scope", () => {
 			expect(worker.scheduler).toEqual({
 				status: "deferred",
 				reason: "queue_pressure",
+				checkedAt: expect.any(String),
+			});
+		} finally {
+			worker.stop();
+		}
+	});
+
+	it("reports system pressure when both system and queue pressure defer a sweep (#1446)", async () => {
+		const now = new Date().toISOString();
+		for (let index = 0; index <= 50; index += 1) {
+			db.prepare(
+				`INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at)
+				 VALUES (?, ?, 'index', 'pending', ?, ?)`,
+			).run(`combined-pressure-${index}`, `combined-memory-${index}`, now, now);
+		}
+		reportEventLoopLag(600);
+		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", { checkIntervalMs: 10 });
+		try {
+			await waitFor(() => worker.scheduler.reason === "system_pressure", 2_000);
+			expect(worker.scheduler).toEqual({
+				status: "deferred",
+				reason: "system_pressure",
 				checkedAt: expect.any(String),
 			});
 		} finally {

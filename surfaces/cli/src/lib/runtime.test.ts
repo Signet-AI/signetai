@@ -497,7 +497,9 @@ describe("getDaemonStatus", () => {
 							blockedReason: null,
 						},
 					},
-					pipeline: {},
+					pipeline: {
+						dreaming: { status: "deferred", reason: "system_pressure", checkedAt: "2026-08-11T15:00:00.000Z" },
+					},
 				});
 			}
 			return new Response("not found", { status: 404 });
@@ -508,6 +510,11 @@ describe("getDaemonStatus", () => {
 		// The mock has no /health/ready route (older daemon): readiness is unknown, not a regression.
 		expect(status.probe.status).toBe("healthy");
 		expect(status.probe.readinessReasons).toBeUndefined();
+		expect(status.scheduler).toEqual({
+			status: "deferred",
+			reason: "system_pressure",
+			checkedAt: "2026-08-11T15:00:00.000Z",
+		});
 		expect(status.extraction).toEqual({
 			configured: "claude-code",
 			resolved: "claude-code",
