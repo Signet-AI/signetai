@@ -146,6 +146,14 @@ this), then a rate limiter with per-action cooldown and hourly budget.
 Each successful repair writes an audit event to `memory_history` with
 `memory_id = 'system'`.
 
+**Embedding refresh tracker** (`embedding-tracker.ts`): the existing
+incremental tracker owns stale and missing-memory vector writes. It does not
+create a second repair queue. Before a provider batch, it acquires a durable
+SQLite lease and consumes one `repair.reembedHourlyBudget` slot. Per-memory
+provider failures retain exponential retry deadlines across daemon restarts;
+the lease, completed batch count, and last error are returned with
+`GET /api/repair/embedding-gaps`.
+
 **Maintenance worker** (`pipeline/maintenance-worker.ts`): runs on a
 configurable interval. Each cycle calls `getDiagnostics`, builds repair
 recommendations from the report, and either logs them (`observe` mode)

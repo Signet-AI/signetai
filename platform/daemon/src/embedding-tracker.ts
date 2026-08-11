@@ -7,11 +7,17 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { PipelineEmbeddingTrackerConfig } from "@signet/core";
+import type { PipelineEmbeddingTrackerConfig, PipelineRepairConfig } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { listStaleEmbeddingRows } from "./embedding-coverage";
 import { isActiveEmbeddingConfig } from "./embedding-index-state";
+import {
+	acquireEmbeddingRepairLease,
+	computeRetryBackoffMs,
+	finishEmbeddingRepairLease,
+	loadEmbeddingRepairFailures,
+} from "./embedding-repair-state";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import { isSystemPressureHigh } from "./system-pressure";
@@ -62,14 +68,12 @@ interface CycleSuccess {
 interface CycleResult {
 	readonly queueDepth: number;
 	readonly failed: number;
+	readonly failedRows: readonly StaleRow[];
 	readonly results: readonly CycleSuccess[];
 }
 
 export function computeEmbeddingRetryBackoffMs(count: number, pollMs: number): number {
-	if (count <= 1) return Math.max(pollMs * 5, 60_000);
-	if (count === 2) return Math.max(pollMs * 25, 5 * 60_000);
-	if (count === 3) return Math.max(pollMs * 150, 30 * 60_000);
-	return Math.max(pollMs * 300, 60 * 60_000);
+	return computeRetryBackoffMs(count, pollMs);
 }
 
 function failureKey(row: StaleRow, model: string): string {
@@ -100,11 +104,20 @@ export async function processEmbeddingCycle(
 	});
 
 	const results: CycleSuccess[] = [];
+	const failedRows: StaleRow[] = [];
 	let failed = 0;
 
 	for (const row of readyRows) {
 		const key = failureKey(row, embeddingCfg.model);
-		const vec = await fetchEmbeddingFn(row.content, embeddingCfg);
+		let vec: number[] | null = null;
+		try {
+			vec = await fetchEmbeddingFn(row.content, embeddingCfg);
+		} catch (error) {
+			logger.warn("embedding-tracker", "Embedding refresh request failed", {
+				memoryId: row.id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 		if (vec !== null) {
 			clearRowFailures(failures, row, embeddingCfg.model);
 			results.push({ row, vector: vec, contentHash: row.contentHash });
@@ -112,6 +125,7 @@ export async function processEmbeddingCycle(
 		}
 
 		failed++;
+		failedRows.push(row);
 		const next = (failures.get(key)?.count ?? 0) + 1;
 		const wait = computeEmbeddingRetryBackoffMs(next, pollMs);
 		failures.set(key, {
@@ -129,6 +143,7 @@ export async function processEmbeddingCycle(
 	return {
 		queueDepth: readyRows.length,
 		failed,
+		failedRows,
 		results,
 	};
 }
@@ -141,6 +156,7 @@ export function startEmbeddingTracker(
 	accessor: DbAccessor,
 	embeddingCfg: EmbeddingConfig,
 	trackerCfg: PipelineEmbeddingTrackerConfig,
+	repairCfg: PipelineRepairConfig,
 	fetchEmbeddingFn: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	checkProviderFn: (cfg: EmbeddingConfig) => Promise<{ available: boolean }>,
 ): EmbeddingTrackerHandle {
@@ -170,65 +186,123 @@ export function startEmbeddingTracker(
 				return;
 			}
 
-			// 2. Query stale/missing embeddings (read-only)
+			// 2. Query stale/missing embeddings (read-only), then merge durable
+			// failure backoff so restarting the daemon cannot immediately replay a
+			// poison row against the provider.
+			const now = Date.now();
 			const staleRows = accessor.withReadDb((db) => {
-				return listStaleEmbeddingRows(db, embeddingCfg.model, trackerCfg.batchSize) as StaleRow[];
+				return listStaleEmbeddingRows(
+					db,
+					embeddingCfg.model,
+					trackerCfg.batchSize,
+					new Date(now).toISOString(),
+				) as StaleRow[];
 			});
-			const cycle = await processEmbeddingCycle(staleRows, failures, embeddingCfg, trackerCfg.pollMs, fetchEmbeddingFn);
+			const persistedFailures = loadEmbeddingRepairFailures(
+				accessor,
+				staleRows.map((row) => ({ id: row.id, contentHash: row.contentHash })),
+				embeddingCfg.model,
+			);
+			for (const [key, state] of persistedFailures) {
+				failures.set(key, { count: state.attempts, retryAt: state.retryAt });
+			}
+			const readyRows = staleRows.filter((row) => {
+				const state = failures.get(failureKey(row, embeddingCfg.model));
+				return state === undefined || state.retryAt <= now;
+			});
+			lastQueueDepth = readyRows.length;
+			lastCycleAt = new Date(now).toISOString();
+			if (readyRows.length === 0) return;
 
-			lastQueueDepth = cycle.queueDepth;
-			lastCycleAt = new Date().toISOString();
-
-			failed += cycle.failed;
-
-			if (cycle.results.length === 0) return;
-
-			// 4. Re-check pressure after the async embedding work — the event loop
-			// may have degraded during the awaits above.
-			if (isSystemPressureHigh()) {
+			// The durable lease counts a batch before provider calls. A crash or a
+			// second daemon therefore consumes the same budget instead of replaying
+			// work indefinitely after each restart.
+			const admission = acquireEmbeddingRepairLease(
+				accessor,
+				repairCfg.reembedCooldownMs,
+				repairCfg.reembedHourlyBudget,
+				now,
+			);
+			if (!admission.allowed || admission.lease === undefined) {
 				skippedCycles++;
 				return;
 			}
 
-			// 5. Batch write in a single write transaction
-			accessor.withWriteTx((db) => {
-				// A promotion may commit while this batch is encoding. Never let a
-				// tracker closed over the previous generation overwrite its vectors.
-				if (!isActiveEmbeddingConfig(db, embeddingCfg)) return;
-				for (const { row, vector, contentHash } of cycle.results) {
-					// Delete stale embeddings for this source
-					syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);
+			try {
+				const cycle = await processEmbeddingCycle(
+					readyRows,
+					failures,
+					embeddingCfg,
+					trackerCfg.pollMs,
+					fetchEmbeddingFn,
+					now,
+				);
+				failed += cycle.failed;
 
-					// Upsert embedding row
-					const embId = randomUUID();
-					db.prepare(
-						`INSERT INTO embeddings
-						   (id, source_type, source_id, content_hash, vector, dimensions, chunk_text, created_at)
-						 VALUES (?, 'memory', ?, ?, ?, ?, ?, datetime('now'))
-						 ON CONFLICT(content_hash) DO UPDATE SET
-						   vector = excluded.vector,
-						   dimensions = excluded.dimensions,
-						   chunk_text = excluded.chunk_text,
-						   created_at = excluded.created_at`,
-					).run(embId, row.id, contentHash, vectorToBlob(vector), vector.length, row.content);
-
-					// Sync vec table -- grab the actual id (may be existing on conflict)
-					const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-						| { id: string }
-						| undefined;
-
-					if (actualRow) {
-						syncVecInsert(db, actualRow.id, vector);
-					}
-
-					// Update embedding_model on the memory row
-					db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
-
-					processed++;
+				// Re-check pressure after the async embedding work — the event loop
+				// may have degraded during the awaits above. The lease still closes so
+				// another process cannot pick up the same batch concurrently.
+				if (isSystemPressureHigh()) {
+					skippedCycles++;
+					finishEmbeddingRepairLease(accessor, admission.lease, {
+						successful: [],
+						failed: cycle.failedRows,
+						model: embeddingCfg.model,
+						pollMs: trackerCfg.pollMs,
+						error: "system pressure became high before embedding persistence",
+					});
+					return;
 				}
-			});
 
-			logger.debug("embedding-tracker", `Refreshed ${cycle.results.length} embeddings`);
+				let applied = false;
+				if (cycle.results.length > 0) {
+					// Batch write in a single write transaction. A promotion may commit
+					// while this batch is encoding, so never let a tracker closed over
+					// the previous generation overwrite its vectors.
+					applied = accessor.withWriteTx((db) => {
+						if (!isActiveEmbeddingConfig(db, embeddingCfg)) return false;
+						for (const { row, vector, contentHash } of cycle.results) {
+							syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);
+							const embId = randomUUID();
+							db.prepare(
+								`INSERT INTO embeddings
+								   (id, source_type, source_id, content_hash, vector, dimensions, chunk_text, created_at)
+								 VALUES (?, 'memory', ?, ?, ?, ?, ?, datetime('now'))
+								 ON CONFLICT(content_hash) DO UPDATE SET
+								   vector = excluded.vector,
+								   dimensions = excluded.dimensions,
+								   chunk_text = excluded.chunk_text,
+								   created_at = excluded.created_at`,
+							).run(embId, row.id, contentHash, vectorToBlob(vector), vector.length, row.content);
+							const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+								| { id: string }
+								| undefined;
+							if (actualRow) syncVecInsert(db, actualRow.id, vector);
+							db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
+							processed++;
+						}
+						return true;
+					});
+				}
+
+				finishEmbeddingRepairLease(accessor, admission.lease, {
+					successful: applied ? cycle.results.map(({ row }) => ({ id: row.id, contentHash: row.contentHash })) : [],
+					failed: cycle.failedRows.map((row) => ({ id: row.id, contentHash: row.contentHash })),
+					model: embeddingCfg.model,
+					pollMs: trackerCfg.pollMs,
+					...(applied || cycle.results.length === 0 ? {} : { error: "embedding profile changed before persistence" }),
+				});
+				logger.debug("embedding-tracker", `Refreshed ${applied ? cycle.results.length : 0} embeddings`);
+			} catch (error) {
+				finishEmbeddingRepairLease(accessor, admission.lease, {
+					successful: [],
+					failed: [],
+					model: embeddingCfg.model,
+					pollMs: trackerCfg.pollMs,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				throw error;
+			}
 		} catch (err) {
 			logger.warn("embedding-tracker", "Cycle error", err instanceof Error ? err : new Error(String(err)));
 		}

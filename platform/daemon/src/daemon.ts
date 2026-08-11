@@ -1605,6 +1605,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			getDbAccessor(),
 			activeEmbeddingCfg,
 			memoryCfg.pipelineV2.embeddingTracker,
+			memoryCfg.pipelineV2.repair,
 			fetchEmbedding,
 			checkEmbeddingProvider,
 		);

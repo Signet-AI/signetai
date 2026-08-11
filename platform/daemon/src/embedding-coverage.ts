@@ -127,15 +127,23 @@ export function listUnembeddedMemories(db: ReadDb, limit: number): ReadonlyArray
 		.all(limit) as UnembeddedRow[];
 }
 
-export function listStaleEmbeddingRows(db: ReadDb, model: string, limit: number): ReadonlyArray<StaleEmbeddingRow> {
+export function listStaleEmbeddingRows(
+	db: ReadDb,
+	model: string,
+	limit: number,
+	now = new Date().toISOString(),
+): ReadonlyArray<StaleEmbeddingRow> {
 	return db
 		.prepare(
 			`SELECT m.id, m.content, m.content_hash AS contentHash,
 			        m.embedding_model AS currentModel
 			 FROM memories m
+			 LEFT JOIN embedding_repair_backoff b
+			   ON b.memory_id = m.id AND b.content_hash = m.content_hash AND b.model = ?
 			 WHERE m.is_deleted = 0
 			   AND m.content_hash IS NOT NULL
 			   AND trim(m.content_hash) <> ''
+			   AND (b.retry_at IS NULL OR b.retry_at <= ?)
 			   AND (
 			     (
 			       NOT EXISTS (
@@ -158,5 +166,5 @@ export function listStaleEmbeddingRows(db: ReadDb, model: string, limit: number)
 			 ORDER BY m.updated_at DESC
 			 LIMIT ?`,
 		)
-		.all(model, limit) as StaleEmbeddingRow[];
+		.all(model, now, model, limit) as StaleEmbeddingRow[];
 }

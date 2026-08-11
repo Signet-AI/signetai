@@ -35,6 +35,7 @@ import {
 } from "./embedding-coverage";
 import { type EmbeddingMigrationCoverage, stagingCoverage } from "./embedding-index-migration";
 import { readEmbeddingIndexState } from "./embedding-index-state";
+import { type EmbeddingRepairState, readEmbeddingRepairState } from "./embedding-repair-state";
 import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
@@ -600,9 +601,12 @@ export interface EmbeddingGapStats {
 	readonly complete: boolean;
 	readonly coverage: string;
 	readonly staging: EmbeddingMigrationCoverage | null;
+	/** Durable autonomous-tracker admission and completion state. */
+	readonly repair: EmbeddingRepairState | null;
 }
 
 export function getEmbeddingGapStats(accessor: DbAccessor): EmbeddingGapStats {
+	const repair = readEmbeddingRepairState(accessor);
 	return accessor.withReadDb((db) => {
 		const totalRow = db.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0").get() as { n: number };
 		const total = totalRow.n;
@@ -627,6 +631,7 @@ export function getEmbeddingGapStats(accessor: DbAccessor): EmbeddingGapStats {
 			complete,
 			coverage: `${displayed.toFixed(1)}%`,
 			staging,
+			repair,
 		};
 	});
 }

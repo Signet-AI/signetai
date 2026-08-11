@@ -280,13 +280,22 @@ Each cycle:
    - The embedding's `content_hash` differs from the memory's (stale)
    - The memory's `embedding_model` differs from the configured model
      (model switch)
-   Results are ordered by `updated_at DESC` and capped at `batchSize`.
+   Rows with a persisted provider-failure backoff are excluded until their retry
+   time, so a poison row cannot starve other eligible work. Results are ordered
+   by `updated_at DESC` and capped at `batchSize`.
 
-3. **Sequential embedding fetch** — each stale row's content is embedded
+3. **Durable admission** — before provider work, the tracker claims a singleton
+   SQLite lease and increments the shared hourly batch budget. The lease spans
+   the accounting window, so daemon restarts cannot reset the budget or cause a
+   slow batch to run twice. The existing repair cooldown and hourly budget
+   control this admission.
+
+4. **Sequential embedding fetch** — each stale row's content is embedded
    one at a time, outside any transaction. Failed fetches increment the
-   `failed` counter without aborting the cycle.
+   `failed` counter without aborting the cycle. Their retry state is persisted
+   by memory id, content hash, and embedding model.
 
-4. **Batch write** — all successful embeddings are upserted in a single
+5. **Batch write** — all successful embeddings are upserted in a single
    `withWriteTx` call. For each result: stale embeddings are deleted by
    source (except the new hash), the new embedding row is upserted on
    `content_hash` conflict, the `vec_embeddings` virtual table is synced,
