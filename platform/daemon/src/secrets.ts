@@ -171,6 +171,12 @@ export interface SecretProviderV1 {
 // ---------------------------------------------------------------------------
 
 type MachineIdResolver = () => string | undefined;
+type MachineIdSource = "persisted" | "resolved" | "fallback";
+
+interface MachineIdSelection {
+	readonly id: string;
+	readonly source: MachineIdSource;
+}
 
 /** Read a machine-specific identifier to bind the key to this host. */
 function resolveMachineId(): string | undefined {
@@ -219,6 +225,7 @@ function resolveMachineId(): string | undefined {
 }
 
 let _masterKey: Uint8Array | null = null;
+let machineIdSelection: MachineIdSelection | null = null;
 let machineIdResolverForTests: MachineIdResolver | null = null;
 type SodiumModule = typeof import("libsodium-wrappers").default;
 let sodiumPromise: Promise<SodiumModule> | null = null;
@@ -256,32 +263,49 @@ function persistMachineId(machineId: string): string {
 /**
  * Resolve the durable identity used by the secrets key.
  *
- * Once written, the anchor is authoritative. This prevents a transient
- * platform resolver failure from changing the key on the next process start.
+ * Existing stores predate the identity anchor. Do not persist a newly selected
+ * identity for one of those stores until its ciphertext has been verified with
+ * that identity. A transient resolver failure must not make the old key
+ * unrecoverable.
  */
 function getMachineId(): string {
 	const persisted = readPersistedMachineId();
-	if (persisted) return persisted;
-
-	const resolved = (machineIdResolverForTests ?? resolveMachineId)()?.trim();
-	if (resolved) {
-		return persistMachineId(resolved);
+	if (persisted) {
+		machineIdSelection = { id: persisted, source: "persisted" };
+		return persisted;
 	}
 
-	const username = process.env.USER?.trim() || process.env.USERNAME?.trim();
-	if (!username) {
-		throw new Error("Unable to derive stable secrets machine identity: USER and USERNAME are unset");
+	if (!machineIdSelection) {
+		const resolved = (machineIdResolverForTests ?? resolveMachineId)()?.trim();
+		if (resolved) {
+			machineIdSelection = { id: resolved, source: "resolved" };
+		} else {
+			const username = process.env.USER?.trim() || process.env.USERNAME?.trim();
+			if (!username) {
+				throw new Error("Unable to derive stable secrets machine identity: USER and USERNAME are unset");
+			}
+
+			machineIdSelection = { id: `${hostname()}-${username}`, source: "fallback" };
+			logger.warn(
+				"secrets",
+				"Machine identifier unavailable; using a stable persisted fallback for secrets encryption",
+				{
+					fallback: "hostname-and-user",
+				},
+			);
+		}
 	}
 
-	const fallback = `${hostname()}-${username}`;
-	logger.warn("secrets", "Machine identifier unavailable; using a stable persisted fallback for secrets encryption", {
-		fallback: "hostname-and-user",
-	});
-	return persistMachineId(fallback);
+	if (!existsSync(getSecretsFile())) {
+		const persistedId = persistMachineId(machineIdSelection.id);
+		machineIdSelection = { id: persistedId, source: "persisted" };
+	}
+	return machineIdSelection.id;
 }
 
 export function setMachineIdResolverForTests(resolver: MachineIdResolver | null): void {
 	machineIdResolverForTests = resolver;
+	machineIdSelection = null;
 	_masterKey = null;
 }
 
@@ -314,9 +338,56 @@ async function getMasterKey(): Promise<Uint8Array> {
 // Encrypt / decrypt
 // ---------------------------------------------------------------------------
 
+async function decryptWithKey(ciphertext: string, key: Uint8Array): Promise<string> {
+	const sodium = await getSodium();
+	let message: Uint8Array | false;
+	try {
+		const combined = sodium.from_base64(ciphertext, sodium.base64_variants.ORIGINAL);
+		const nonce = combined.slice(0, sodium.crypto_secretbox_NONCEBYTES);
+		const box = combined.slice(sodium.crypto_secretbox_NONCEBYTES);
+		message = sodium.crypto_secretbox_open_easy(box, nonce, key);
+	} catch {
+		throw new Error("Decryption failed - key mismatch or corrupted data");
+	}
+	if (!message) throw new Error("Decryption failed - key mismatch or corrupted data");
+
+	return new TextDecoder().decode(message);
+}
+
+async function verifyExistingStore(key: Uint8Array): Promise<boolean> {
+	const store = loadStore();
+	for (const entry of Object.values(store.secrets)) {
+		try {
+			await decryptWithKey(entry.ciphertext, key);
+		} catch {
+			return false;
+		}
+	}
+	return true;
+}
+
+async function anchorMachineIdAfterCompatibilityCheck(key: Uint8Array): Promise<boolean> {
+	if (
+		!machineIdSelection ||
+		machineIdSelection.source === "persisted" ||
+		existsSync(getMachineIdFile()) ||
+		!existsSync(getSecretsFile())
+	) {
+		return true;
+	}
+
+	if (!(await verifyExistingStore(key))) return false;
+	const persistedId = persistMachineId(machineIdSelection.id);
+	machineIdSelection = { id: persistedId, source: "persisted" };
+	return true;
+}
+
 async function encrypt(plaintext: string): Promise<string> {
 	const sodium = await getSodium();
 	const key = await getMasterKey();
+	if (!(await anchorMachineIdAfterCompatibilityCheck(key))) {
+		throw new Error("Existing secrets store could not be verified; refusing to rewrite it");
+	}
 	const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
 	const message = new TextEncoder().encode(plaintext);
 	const box = sodium.crypto_secretbox_easy(message, nonce, key);
@@ -330,22 +401,10 @@ async function encrypt(plaintext: string): Promise<string> {
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
-	const sodium = await getSodium();
 	const key = await getMasterKey();
-
-	const combined = sodium.from_base64(ciphertext, sodium.base64_variants.ORIGINAL);
-	const nonce = combined.slice(0, sodium.crypto_secretbox_NONCEBYTES);
-	const box = combined.slice(sodium.crypto_secretbox_NONCEBYTES);
-
-	let message: Uint8Array | false;
-	try {
-		message = sodium.crypto_secretbox_open_easy(box, nonce, key);
-	} catch {
-		throw new Error("Decryption failed - key mismatch or corrupted data");
-	}
-	if (!message) throw new Error("Decryption failed - key mismatch or corrupted data");
-
-	return new TextDecoder().decode(message);
+	const plaintext = await decryptWithKey(ciphertext, key);
+	await anchorMachineIdAfterCompatibilityCheck(key);
+	return plaintext;
 }
 
 // ---------------------------------------------------------------------------

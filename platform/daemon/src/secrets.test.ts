@@ -165,12 +165,33 @@ describe("local secrets provider", () => {
 		const persistedMachineId = readFileSync(machineIdFile(), "utf-8");
 
 		expect(persistedMachineId.trim()).not.toBe("");
-		expect(statSync(machineIdFile()).mode & 0o777).toBe(0o600);
+		if (process.platform !== "win32") {
+			expect(statSync(machineIdFile()).mode & 0o777).toBe(0o600);
+		}
 
 		// Re-derive the key as a fresh process would, after the platform resolver recovers.
 		setMachineIdResolverForTests(() => "ioreg-id-after-transient-failure");
 		expect(await getSecret("OPENAI_API_KEY")).toBe("«redacted:sk-…»");
 		expect(readFileSync(machineIdFile(), "utf-8")).toBe(persistedMachineId);
+	});
+
+	test("existing v1 store stays recoverable when the machine-id resolver is unavailable during upgrade", async () => {
+		process.env.USER = "signet-secrets-test-user";
+		setMachineIdResolverForTests(() => "legacy-machine-id");
+		await putSecret("OPENAI_API_KEY", "«redacted:sk-…»");
+		const before = readFileSync(secretsFile(), "utf-8");
+		rmSync(machineIdFile());
+
+		setMachineIdResolverForTests(() => undefined);
+		await expect(putSecret("GITHUB_TOKEN", "new-value")).rejects.toThrow("could not be verified");
+		expect(existsSync(machineIdFile())).toBe(false);
+		expect(readFileSync(secretsFile(), "utf-8")).toBe(before);
+		await expect(getSecret("OPENAI_API_KEY")).rejects.toThrow("Decryption failed");
+		expect(existsSync(machineIdFile())).toBe(false);
+
+		setMachineIdResolverForTests(() => "legacy-machine-id");
+		expect(await getSecret("OPENAI_API_KEY")).toBe("«redacted:sk-…»");
+		expect(readFileSync(machineIdFile(), "utf-8")).toBe("legacy-machine-id\n");
 	});
 
 	test("execWithSecrets injects secrets and redacts stdout and stderr", async () => {
