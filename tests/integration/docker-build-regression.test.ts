@@ -62,10 +62,12 @@ const desktopHomepage =
 const openclawEntry = readFileSync(join(rootDir, "integrations/openclaw/memory-adapter/src/index.ts"), "utf8");
 
 function getBuildCommands(source: string): string[] {
+	const runBuildPattern = /^RUN (?:SIGNET_SKIP_NATIVE_BUILD=1 )?bun run /;
+
 	return source
 		.split("\n")
-		.filter((line) => line.startsWith("RUN bun run "))
-		.map((line) => line.replace("RUN bun run ", "").trim());
+		.filter((line) => runBuildPattern.test(line))
+		.map((line) => line.replace(runBuildPattern, "").trim());
 }
 
 describe("Docker build pipeline regression guard", () => {
@@ -94,6 +96,7 @@ describe("Docker build pipeline regression guard", () => {
 	});
 
 	it("keeps the shared prebuild sequence aligned before packaging signetai", () => {
+		expect(dockerfile).toContain("RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native");
 		expect(getBuildCommands(dockerfile)).toEqual([
 			"build:core",
 			"build:connector-base",
