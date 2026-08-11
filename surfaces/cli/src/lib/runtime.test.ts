@@ -224,6 +224,7 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<key>SIGNET_PATH</key>");
 		expect(plist).toContain("<string>/Users/user/.agents</string>");
 		expect(plist).toContain("<key>SIGNET_DAEMON_ENTRYPOINT</key>");
+		expect(plist).toMatch(/<key>SIGNET_DAEMON_SERVICE<\/key>\s*<string>launchd<\/string>/);
 		expect(plist).not.toContain("<key>BUN_INSPECT</key>");
 		expect(plist).toContain("<string>1</string>");
 		expect(plist).toContain("<key>HOME</key>");

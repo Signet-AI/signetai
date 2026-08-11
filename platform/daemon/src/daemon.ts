@@ -185,6 +185,7 @@ import {
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 
+import { resolveDaemonRestartMode } from "./daemon-restart";
 import {
 	getSynthesisWorker as getSynthesisRenderWorker,
 	setSynthesisWorker as setSynthesisRenderWorker,
@@ -2265,6 +2266,14 @@ async function main() {
 
 	startGitSyncTimer();
 	initUpdateSystem(CURRENT_VERSION, AGENTS_DIR, (preferredExecutablePath) => {
+		if (resolveDaemonRestartMode() === "service-manager") {
+			logger.info("daemon", "Update installed; releasing lock for launchd KeepAlive restart");
+			setTimeout(() => {
+				requestShutdown("update:launchd-restart", 0, undefined, false);
+			}, 500);
+			return;
+		}
+
 		const daemonScript = process.argv[1] ?? "";
 		if (!daemonScript) {
 			logger.warn("daemon", "Cannot self-restart: process.argv[1] is empty, falling back to clean exit");

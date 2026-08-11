@@ -1035,6 +1035,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 		SIGNET_BIND: input.bind,
 		SIGNET_PATH: input.agentsDir,
 		SIGNET_DAEMON_ENTRYPOINT: "1",
+		SIGNET_DAEMON_SERVICE: "launchd",
 		...resolveTelemetryEnvironment(input.telemetryEnv ?? process.env),
 		...(input.bunInspect ? { BUN_INSPECT: input.bunInspect } : {}),
 		...(process.env.SIGNET_DIR ? { SIGNET_DIR: process.env.SIGNET_DIR } : {}),
