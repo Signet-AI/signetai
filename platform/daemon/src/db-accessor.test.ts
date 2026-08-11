@@ -1,8 +1,9 @@
 /**
  * Tests for the DB accessor (singleton read/write transaction wrapper).
  */
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -43,6 +44,33 @@ describe("DbAccessor", () => {
 		initDbAccessor(dbPath);
 		const acc = getDbAccessor();
 		expect(acc).toBeTruthy();
+		expect(readdirSync(join(dbPath, "..")).filter((name) => name.includes(".bak-v"))).toEqual([]);
+	});
+
+	test("retains the pre-migration backup when migration fails", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+
+		initDbAccessor(dbPath);
+		closeDbAccessor();
+
+		const db = new Database(dbPath);
+		try {
+			db.exec("DELETE FROM schema_migrations WHERE version = 128");
+			db.exec("DROP INDEX IF EXISTS idx_memory_jobs_diagnostics_status_created_at");
+			db.exec("DROP INDEX IF EXISTS idx_memory_jobs_diagnostics_error_updated_at");
+			db.exec("ALTER TABLE memory_jobs RENAME TO memory_jobs_original");
+			db.exec("CREATE TABLE memory_jobs (id TEXT PRIMARY KEY)");
+			db.exec("DROP TABLE memory_jobs_original");
+		} finally {
+			db.close();
+		}
+
+		expect(() => initDbAccessor(dbPath)).toThrow();
+
+		const backupNames = readdirSync(join(dbPath, "..")).filter((name) => name.includes(".bak-v"));
+		expect(backupNames).toHaveLength(1);
+		expect(statSync(join(dbPath, "..", backupNames[0])).size).toBe(statSync(dbPath).size);
 	});
 
 	test("withWriteTx provides working write access", () => {
@@ -234,14 +262,9 @@ describe("DbAccessor", () => {
 			log: () => {},
 		});
 
-		expect(operations[0]).toBe("unlink:test.db.bak-v58-1000");
-		expect(Array.from(files.keys()).sort()).toEqual([
-			"test.db.bak-v59-2000",
-			"test.db.bak-v60-3000",
-			"test.db.bak-v61-4000",
-			"test.db.bak-v62-5000",
-			"test.db.bak-v62-6000",
-		]);
+		expect(operations[0]).toBe("unlink:test.db.bak-v61-4000");
+		expect(Array.from(files.keys()).sort()).toEqual(["test.db.bak-v62-6000"]);
+		expect(files.size).toBe(1);
 	});
 
 	test("prunes oldest migration backup for disk headroom below retention cap", () => {
@@ -282,13 +305,13 @@ describe("DbAccessor", () => {
 			log: () => {},
 		});
 
-		expect(operations[0]).toBe("unlink:test.db.bak-v60-3000");
-		expect(Array.from(files.keys()).sort()).toEqual([
-			"test.db",
-			"test.db.bak-v61-4000",
-			"test.db.bak-v62-5000",
-			"test.db.bak-v63-6000",
-		]);
+		expect(operations[0]).toBe("unlink:test.db.bak-v61-4000");
+		expect(Array.from(files.keys()).sort()).toEqual(["test.db", "test.db.bak-v63-6000"]);
+		expect(
+			Array.from(files.entries())
+				.filter(([name]) => name.includes(".bak-v"))
+				.reduce((total, [, file]) => total + file.size, 0),
+		).toBe(8);
 	});
 
 	test("ignores migration backups removed during metadata collection", () => {

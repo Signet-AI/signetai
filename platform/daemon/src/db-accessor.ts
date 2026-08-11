@@ -514,7 +514,7 @@ export function isVectorRuntimeUsable(): boolean {
 	return vecLoaded && vecLoadError === null;
 }
 
-const MAX_MIGRATION_BACKUPS = 5;
+const MAX_MIGRATION_BACKUPS = 1;
 
 interface MigrationBackupDeps {
 	readonly copyFileSync: (source: string, destination: string) => void;
@@ -632,7 +632,7 @@ export function backupBeforeMigration(
 	dbPath: string,
 	schemaVersion: number,
 	deps: MigrationBackupDeps = migrationBackupDeps,
-): void {
+): string {
 	prepareMigrationBackup(db, dbPath, deps);
 	const backupDest = migrationBackupDestination(dbPath, schemaVersion, deps);
 	try {
@@ -642,6 +642,7 @@ export function backupBeforeMigration(
 		throw migrationBackupError(backupDest, err);
 	}
 	finishMigrationBackup(dbPath, backupDest, deps);
+	return backupDest;
 }
 
 export async function backupBeforeMigrationAsync(
@@ -649,7 +650,7 @@ export async function backupBeforeMigrationAsync(
 	dbPath: string,
 	schemaVersion: number,
 	deps: MigrationBackupDeps = migrationBackupDeps,
-): Promise<void> {
+): Promise<string> {
 	prepareMigrationBackup(db, dbPath, deps);
 	const backupDest = migrationBackupDestination(dbPath, schemaVersion, deps);
 	try {
@@ -663,6 +664,7 @@ export async function backupBeforeMigrationAsync(
 		throw migrationBackupError(backupDest, err);
 	}
 	finishMigrationBackup(dbPath, backupDest, deps);
+	return backupDest;
 }
 
 function prepareMigrationBackup(db: { exec(sql: string): unknown }, dbPath: string, deps: MigrationBackupDeps): void {
@@ -676,10 +678,10 @@ function prepareMigrationBackup(db: { exec(sql: string): unknown }, dbPath: stri
 	// Make room for the incoming backup first. Otherwise retention only helps
 	// after copy succeeds, which can brick daemon startup on ENOSPC when older
 	// database-sized backups are present but still below the retention cap.
-	pruneMigrationBackups(dbPath, MAX_MIGRATION_BACKUPS - 1, deps);
+	pruneMigrationBackups(dbPath, MAX_MIGRATION_BACKUPS, deps);
 	const requiredBytes = fileSize(dbPath, deps);
 	if (requiredBytes !== null) {
-		pruneMigrationBackupsForHeadroom(dbPath, requiredBytes, 1, deps);
+		pruneMigrationBackupsForHeadroom(dbPath, requiredBytes, MAX_MIGRATION_BACKUPS, deps);
 	}
 }
 
@@ -717,6 +719,24 @@ function finishMigrationBackup(dbPath: string, backupDest: string, deps: Migrati
 	pruneMigrationBackups(dbPath, MAX_MIGRATION_BACKUPS, deps);
 }
 
+function verifyPostMigrationIntegrity(writeConn: SqliteDatabase): void {
+	const rows = writeConn.prepare("PRAGMA integrity_check").all() as ReadonlyArray<Record<string, unknown>>;
+	const messages = rows.map((row) => String(row.integrity_check ?? ""));
+	if (messages.length === 1 && messages[0] === "ok") return;
+	throw new Error(`Post-migration integrity check failed: ${messages.join("; ") || "no result"}`);
+}
+
+function cleanupMigrationBackupAfterSuccess(backupDest: string, deps: MigrationBackupDeps): void {
+	try {
+		deps.unlinkSync(backupDest);
+		deps.log(`[db-accessor] Removed verified migration backup: ${backupDest}`);
+	} catch (err) {
+		if (!isMissingPathError(err)) {
+			deps.log(`[db-accessor] Retained verified migration backup after cleanup failure: ${backupDest}`);
+		}
+	}
+}
+
 /**
  * Initialise the singleton accessor. Must be called once at daemon startup
  * before any route handler runs. Ensures the memory directory exists, opens
@@ -724,14 +744,14 @@ function finishMigrationBackup(dbPath: string, backupDest: string, deps: Migrati
  */
 export function initDbAccessor(path: string, opts?: { readonly agentsDir?: string }): void {
 	const writeConn = openDbAccessorConnection(path, opts);
-	backupBeforePendingMigrations(writeConn, path);
-	finishDbAccessorInit(writeConn, opts);
+	const migrationBackup = backupBeforePendingMigrations(writeConn, path);
+	finishDbAccessorInit(writeConn, opts, migrationBackup);
 }
 
 export async function initDbAccessorAsync(path: string, opts?: { readonly agentsDir?: string }): Promise<void> {
 	const writeConn = openDbAccessorConnection(path, opts);
-	await backupBeforePendingMigrationsAsync(writeConn, path);
-	finishDbAccessorInit(writeConn, opts);
+	const migrationBackup = await backupBeforePendingMigrationsAsync(writeConn, path);
+	finishDbAccessorInit(writeConn, opts, migrationBackup);
 }
 
 function openDbAccessorConnection(path: string, opts?: { readonly agentsDir?: string }): SqliteDatabase {
@@ -761,22 +781,34 @@ function readCurrentSchemaVersion(writeConn: SqliteDatabase): number {
 	return row && typeof row.version === "number" ? row.version : 0;
 }
 
-function backupBeforePendingMigrations(writeConn: SqliteDatabase, path: string): void {
+function backupBeforePendingMigrations(writeConn: SqliteDatabase, path: string): string | null {
 	if (existsSync(path) && hasPendingMigrations(toMigrationDb(writeConn))) {
-		backupBeforeMigration(writeConn, path, readCurrentSchemaVersion(writeConn));
+		return backupBeforeMigration(writeConn, path, readCurrentSchemaVersion(writeConn));
 	}
+	return null;
 }
 
-async function backupBeforePendingMigrationsAsync(writeConn: SqliteDatabase, path: string): Promise<void> {
+async function backupBeforePendingMigrationsAsync(writeConn: SqliteDatabase, path: string): Promise<string | null> {
 	if (existsSync(path) && hasPendingMigrations(toMigrationDb(writeConn))) {
-		await backupBeforeMigrationAsync(writeConn, path, readCurrentSchemaVersion(writeConn));
+		return await backupBeforeMigrationAsync(writeConn, path, readCurrentSchemaVersion(writeConn));
 	}
+	return null;
 }
 
-function finishDbAccessorInit(writeConn: SqliteDatabase, opts?: { readonly agentsDir?: string }): void {
+function finishDbAccessorInit(
+	writeConn: SqliteDatabase,
+	opts?: { readonly agentsDir?: string },
+	migrationBackup?: string | null,
+): void {
 	// Run schema migrations — this is the sole schema authority.
 	// Failures here are fatal: the daemon must not start on bad schema.
 	runMigrations(toMigrationDb(writeConn));
+	if (migrationBackup !== null && migrationBackup !== undefined) {
+		// Keep the rollback point until migration and a full integrity check both
+		// succeed. Any thrown error leaves it available for recovery.
+		verifyPostMigrationIntegrity(writeConn);
+		cleanupMigrationBackupAfterSuccess(migrationBackup, migrationBackupDeps);
+	}
 
 	// Record one-time conversion state only after migrations have succeeded.
 	// The conversion itself is deliberately post-ready because VACUUM can
