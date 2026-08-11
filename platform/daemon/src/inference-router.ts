@@ -337,7 +337,10 @@ function isAbortLikeError(error: unknown): boolean {
 		(error instanceof Error &&
 			(error.name === "AbortError" ||
 				error.message.toLowerCase().includes("aborted") ||
-				error.message.toLowerCase().includes("cancelled")))
+				error.message.toLowerCase().includes("cancelled") ||
+				error.message.toLowerCase().includes("timeout") ||
+				error.message.toLowerCase().includes("timed out") ||
+				error.message.toLowerCase().includes("deadline")))
 	);
 }
 
@@ -1238,7 +1241,7 @@ export class InferenceRouter {
 					durationMs: Date.now() - startedAt,
 					error: message,
 				});
-				if (opts?.signal?.aborted) break;
+				if (opts?.signal?.aborted || /\b(?:aborted|cancelled|deadline|timeout|timed out)\b/i.test(message)) break;
 			}
 		}
 		return {

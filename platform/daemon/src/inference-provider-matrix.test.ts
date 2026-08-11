@@ -35,9 +35,20 @@ function parseStructured(raw: string): StructuredProbe | null {
 }
 
 function requestModel(init: RequestInit | undefined): string {
-	const parsed = JSON.parse(String(init?.body)) as { readonly model?: unknown };
+	const parsed = requestBody(init);
 	if (typeof parsed.model !== "string") throw new Error("matrix request did not include a model");
 	return parsed.model;
+}
+
+function requestBody(init: RequestInit | undefined): Readonly<Record<string, unknown>> {
+	const parsed: unknown = JSON.parse(String(init?.body));
+	if (!isRecord(parsed)) throw new Error("matrix request body was not an object");
+	return parsed;
+}
+
+function requestOutputTokenBound(init: RequestInit | undefined): unknown {
+	const body = requestBody(init);
+	return body.max_tokens ?? body.max_completion_tokens;
 }
 
 function writeMatrixConfig(dir: string): void {
@@ -47,32 +58,44 @@ function writeMatrixConfig(dir: string): void {
 		`inference:
   defaultPolicy: matrix
   accounts:
-    matrix:
+    structured-account:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: SIGNET_MATRIX_API_KEY
+    primary-account:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: SIGNET_MATRIX_API_KEY
+    fallback-account:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: SIGNET_MATRIX_API_KEY
+    abort-account:
       kind: api
       providerFamily: openrouter
       credentialRef: SIGNET_MATRIX_API_KEY
   targets:
     structured:
       executor: openrouter
-      account: matrix
+      account: structured-account
       models:
         default:
           model: openai/gpt-4o-mini
     primary:
       executor: openrouter
-      account: matrix
+      account: primary-account
       models:
         default:
           model: deepseek/deepseek-v4-flash
     fallback:
       executor: openrouter
-      account: matrix
+      account: fallback-account
       models:
         default:
           model: inception/mercury-2
     abort:
       executor: openrouter
-      account: matrix
+      account: abort-account
       models:
         default:
           model: openai/gpt-4o-mini
@@ -110,15 +133,17 @@ afterEach(() => {
 });
 
 describe("InferenceRouter hermetic provider matrix (#1324)", () => {
-	test("uses workload-selected targets and parses bounded structured output", async () => {
+	test("uses workload-selected targets, forwards output bounds, and parses structured output", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-provider-matrix-structured-"));
 		try {
 			writeMatrixConfig(dir);
 			process.env.SIGNET_MATRIX_API_KEY = "test-matrix-key";
 			const requestedModels: string[] = [];
+			const requestedMaxTokens: unknown[] = [];
 			globalThis.fetch = mock((_input: string | URL | Request, init?: RequestInit) => {
 				const model = requestModel(init);
 				requestedModels.push(model);
+				requestedMaxTokens.push(requestOutputTokenBound(init));
 				if (model === "openai/gpt-4o-mini" && String(init?.body).includes("MALFORMED")) {
 					return Promise.resolve(openAiSseResponse("MALFORMED"));
 				}
@@ -147,12 +172,13 @@ describe("InferenceRouter hermetic provider matrix (#1324)", () => {
 			expect(malformed.value.decision.targetRef).toBe("structured/default");
 			expect(parseStructured(malformed.value.text)).toBeNull();
 			expect(requestedModels).toEqual(["openai/gpt-4o-mini", "openai/gpt-4o-mini"]);
+			expect(requestedMaxTokens).toEqual([32, 32]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	test("retries the workload route once and keeps another workload target usable", async () => {
+	test("classifies a rate-limited workload account without blocking another workload", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-provider-matrix-fallback-"));
 		try {
 			writeMatrixConfig(dir);
@@ -163,7 +189,7 @@ describe("InferenceRouter hermetic provider matrix (#1324)", () => {
 				requestedModels.push(model);
 				if (model === "deepseek/deepseek-v4-flash") {
 					return Promise.resolve(
-						new Response(JSON.stringify({ error: { message: "temporary upstream failure" } }), { status: 503 }),
+						new Response(JSON.stringify({ error: { message: "rate limit exceeded" } }), { status: 429 }),
 					);
 				}
 				if (model === "inception/mercury-2") return Promise.resolve(openAiSseResponse("fallback response"));
@@ -184,7 +210,24 @@ describe("InferenceRouter hermetic provider matrix (#1324)", () => {
 				["fallback/default", true],
 			]);
 			const failedAttempt = retried.value.attempts[0];
-			expect(failedAttempt?.error).toContain("503");
+			expect(failedAttempt?.error).toContain("429");
+
+			const observed = await router.status();
+			expect(observed.ok).toBe(true);
+			if (!observed.ok) return;
+			expect(observed.value.runtimeSnapshot.targets["primary/default"]?.accountState).toBe("rate_limited");
+			expect(observed.value.runtimeSnapshot.targets["fallback/default"]?.accountState).toBe("ready");
+			expect(observed.value.runtimeSnapshot.targets["structured/default"]?.accountState).toBe("ready");
+
+			const rerouted = await router.execute(
+				{ operation: "memory_extraction", promptPreview: "matrix blocked primary" },
+				"Use the available fallback route.",
+				{ maxTokens: 32, timeoutMs: 1_000 },
+			);
+			expect(rerouted.ok).toBe(true);
+			if (!rerouted.ok) return;
+			expect(rerouted.value.decision.targetRef).toBe("fallback/default");
+			expect(rerouted.value.attempts).toEqual([expect.objectContaining({ targetRef: "fallback/default", ok: true })]);
 
 			const isolated = await router.execute(
 				{ operation: "aggregate_recall", promptPreview: "matrix target isolation" },
@@ -195,14 +238,19 @@ describe("InferenceRouter hermetic provider matrix (#1324)", () => {
 			if (!isolated.ok) return;
 			expect(isolated.value.decision.targetRef).toBe("structured/default");
 			expect(isolated.value.attempts).toEqual([expect.objectContaining({ targetRef: "structured/default", ok: true })]);
-			expect(requestedModels).toEqual(["deepseek/deepseek-v4-flash", "inception/mercury-2", "openai/gpt-4o-mini"]);
+			expect(requestedModels).toEqual([
+				"deepseek/deepseek-v4-flash",
+				"inception/mercury-2",
+				"inception/mercury-2",
+				"openai/gpt-4o-mini",
+			]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	test("aborts the selected workload request without running a fallback", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "signet-provider-matrix-abort-"));
+	test("aborts an expired deadline and returns a normalized timeout without fallback", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-provider-matrix-deadline-"));
 		try {
 			writeMatrixConfig(dir);
 			process.env.SIGNET_MATRIX_API_KEY = "test-matrix-key";
@@ -210,6 +258,7 @@ describe("InferenceRouter hermetic provider matrix (#1324)", () => {
 			const started = new Promise<void>((resolve) => {
 				markStarted = resolve;
 			});
+			let deadlineAborted = false;
 			const requestedModels: string[] = [];
 			globalThis.fetch = mock((_input: string | URL | Request, init?: RequestInit) => {
 				const model = requestModel(init);
@@ -218,29 +267,36 @@ describe("InferenceRouter hermetic provider matrix (#1324)", () => {
 				markStarted?.();
 				return new Promise<Response>((_resolve, reject) => {
 					if (init?.signal?.aborted) {
-						reject(new DOMException("aborted", "AbortError"));
+						deadlineAborted = true;
+						reject(new DOMException("timeout", "AbortError"));
 						return;
 					}
-					init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
-						once: true,
-					});
+					init?.signal?.addEventListener(
+						"abort",
+						() => {
+							deadlineAborted = init.signal?.aborted === true;
+							reject(new DOMException("timeout", "AbortError"));
+						},
+						{ once: true },
+					);
 				});
 			}) as unknown as typeof fetch;
 
 			const router = getOrCreateInferenceRouter(dir);
-			const controller = new AbortController();
 			const pending = router.execute(
-				{ operation: "interactive", promptPreview: "matrix abort" },
-				"Wait for cancellation.",
-				{ maxTokens: 32, timeoutMs: 1_000, signal: controller.signal },
+				{ operation: "interactive", promptPreview: "matrix deadline" },
+				"Wait for the request deadline.",
+				{ maxTokens: 32, timeoutMs: 25 },
 			);
 			await started;
-			controller.abort();
-			const aborted = await pending;
-			expect(aborted.ok).toBe(false);
-			if (aborted.ok) return;
-			const attempts = aborted.error.details?.attempts;
-			expect(attempts).toEqual([expect.objectContaining({ targetRef: "abort/default", ok: false })]);
+			const timedOut = await pending;
+			expect(deadlineAborted).toBe(true);
+			expect(timedOut.ok).toBe(false);
+			if (timedOut.ok) return;
+			const attempts = timedOut.error.details?.attempts;
+			expect(attempts).toEqual([
+				expect.objectContaining({ targetRef: "abort/default", ok: false, error: expect.stringMatching(/timed out/i) }),
+			]);
 			expect(requestedModels).toEqual(["openai/gpt-4o-mini"]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

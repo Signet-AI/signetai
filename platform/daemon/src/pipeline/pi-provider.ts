@@ -382,6 +382,7 @@ function callerAbort(
 ): {
 	signal: AbortSignal;
 	abort: () => void;
+	timedOut: () => boolean;
 	cleanup: () => void;
 } {
 	const timeoutMs = opts?.timeoutMs ?? defaultTimeoutMs;
@@ -394,12 +395,17 @@ function callerAbort(
 		else s.addEventListener("abort", () => controller.abort(), { once: true });
 	}
 	let timeout: ReturnType<typeof setTimeout> | null = null;
+	let timedOut = false;
 	if (timeoutMs > 0) {
-		timeout = setTimeout(() => controller.abort(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
+		timeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort(new Error(`timeout after ${timeoutMs}ms`));
+		}, timeoutMs);
 	}
 	return {
 		signal: controller.signal,
 		abort: () => controller.abort(),
+		timedOut: () => timedOut,
 		cleanup: () => {
 			if (timeout) clearTimeout(timeout);
 		},
@@ -481,6 +487,11 @@ export function createPiModelProvider(
 			} finally {
 				release();
 			}
+		} catch (error) {
+			if (abort.timedOut()) {
+				throw new Error(`Pi provider ${name} timed out after ${opts?.timeoutMs ?? defaultTimeoutMs}ms`);
+			}
+			throw error;
 		} finally {
 			abort.cleanup();
 		}
