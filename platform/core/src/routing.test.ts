@@ -58,7 +58,7 @@ describe("inference config + decision engine", () => {
 		expect(isLocalInferenceEndpoint("https://gateway.example.test/v1")).toBe(false);
 	});
 
-	it("separates ACPX harness execution from provider and locality", () => {
+	it("keeps ACPX telemetry bounded and classifies known remote harnesses over conflicting privacy intent", () => {
 		const remoteAcpx = {
 			executor: "acpx" as const,
 			acpx: { agent: "codex" },
@@ -70,8 +70,39 @@ describe("inference config + decision engine", () => {
 			model: "gpt-5.4",
 			locality: "remote",
 		});
-		expect(routingTargetLocality({ ...remoteAcpx, privacy: "local_only" as const })).toBe("local");
-		expect(routingTargetLocality({ executor: "acpx" as const, acpx: { agent: "opencode" } })).toBe("unknown");
+		const contradictoryCodex = { ...remoteAcpx, privacy: "local_only" as const };
+		expect(routingTargetLocality(contradictoryCodex)).toBe("remote");
+		expect(routingTelemetryAttribution(contradictoryCodex, { model: "gpt-5.4" })).toEqual({
+			executor: "acpx",
+			provider: "codex",
+			model: "gpt-5.4",
+			locality: "remote",
+		});
+		const unknownAcpx = { executor: "acpx" as const, acpx: { agent: "person@example.test" } };
+		expect(routingTargetLocality(unknownAcpx)).toBe("unknown");
+		expect(routingTargetLocality({ ...unknownAcpx, privacy: "local_only" as const })).toBe("local");
+		expect(routingTelemetryAttribution(unknownAcpx, { model: "custom-model" })).toEqual({
+			executor: "acpx",
+			provider: "unknown",
+			model: "custom-model",
+			locality: "unknown",
+		});
+		expect(routingTargetLocality({ executor: "ollama" as const, privacy: "restricted_remote" as const })).toBe(
+			"local",
+		);
+		expect(routingTargetLocality({ executor: "llama-cpp" as const, privacy: "restricted_remote" as const })).toBe(
+			"local",
+		);
+		expect(
+			routingTargetLocality({ executor: "openai-compatible" as const, endpoint: "http://127.0.0.1:11434/v1" }),
+		).toBe("local");
+		expect(
+			routingTargetLocality({
+				executor: "openai-compatible" as const,
+				endpoint: "https://provider.example.test/v1",
+				privacy: "local_only" as const,
+			}),
+		).toBe("remote");
 	});
 
 	it("resolves configured target refs through policies instead of unused target blocks", () => {

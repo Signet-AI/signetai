@@ -156,6 +156,12 @@ export interface RoutingTargetConfig {
 }
 
 const REMOTE_ACPX_AGENTS = new Set(["claude", "codex", "gemini"]);
+const UNKNOWN_ACPX_PROVIDER = "unknown";
+
+function acpxTelemetryProvider(agent?: string): string {
+	const normalized = agent?.trim().toLowerCase();
+	return normalized && REMOTE_ACPX_AGENTS.has(normalized) ? normalized : UNKNOWN_ACPX_PROVIDER;
+}
 
 /**
  * Classify configuration, not a process name. ACPX is a harness: an
@@ -165,15 +171,16 @@ const REMOTE_ACPX_AGENTS = new Set(["claude", "codex", "gemini"]);
 export function routingTargetLocality(
 	target: Pick<RoutingTargetConfig, "executor" | "endpoint" | "privacy" | "acpx">,
 ): InferenceLocality {
-	if (target.privacy === "local_only") return "local";
 	if (target.executor === "ollama" || target.executor === "llama-cpp") return "local";
 	if (target.executor === "openai-compatible") {
 		return isLocalInferenceEndpoint(target.endpoint) ? "local" : "remote";
 	}
 	if (target.executor === "acpx") {
-		return REMOTE_ACPX_AGENTS.has(target.acpx?.agent.trim().toLowerCase() ?? "") ? "remote" : "unknown";
+		if (REMOTE_ACPX_AGENTS.has(target.acpx?.agent.trim().toLowerCase() ?? "")) return "remote";
 	}
 	if (target.executor === "anthropic" || target.executor === "openrouter") return "remote";
+	if (target.privacy === "local_only") return "local";
+	if (target.executor === "acpx") return "unknown";
 	return "unknown";
 }
 
@@ -186,7 +193,7 @@ export function routingTelemetryAttribution(
 	const executor = target.executor.trim().toLowerCase();
 	const provider =
 		executor === "acpx"
-			? target.acpx?.agent.trim().toLowerCase()
+			? acpxTelemetryProvider(target.acpx?.agent)
 			: (account?.providerFamily ?? target.executor).trim().toLowerCase();
 	return {
 		executor,
