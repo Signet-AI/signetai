@@ -26,6 +26,8 @@ export interface NativeInstallResult {
 	readonly target: string;
 	readonly installed: boolean;
 	readonly pathHint: string | null;
+	readonly pathProfile: string | null;
+	readonly pathPersisted: boolean;
 	readonly connectorAssetsDir: string | null;
 }
 
@@ -45,12 +47,84 @@ function binaryName(): string {
 	return process.platform === "win32" ? "signet.exe" : "signet";
 }
 
-function pathContains(dir: string): boolean {
-	const pathValue = process.env.PATH ?? "";
-	const separator = process.platform === "win32" ? ";" : ":";
-	const normalize = (value: string): string =>
-		process.platform === "win32" ? value.replaceAll("\\", "/").toLowerCase() : value.replaceAll("\\", "/");
+function normalizePathEntry(value: string, platform: NodeJS.Platform): string {
+	const normalized = platform === "win32" ? value.replaceAll("\\", "/").toLowerCase() : value.replaceAll("\\", "/");
+	return normalized.replace(/\/+$/, "");
+}
+
+function pathContains(dir: string, pathValue = process.env.PATH ?? "", platform = process.platform): boolean {
+	const separator = platform === "win32" ? ";" : ":";
+	const normalize = (value: string): string => normalizePathEntry(value, platform);
 	return pathValue.split(separator).some((entry) => normalize(entry) === normalize(dir));
+}
+
+function shellProfilePath(home: string, shell: string | undefined, platform: NodeJS.Platform): string | null {
+	if (platform === "win32") return null;
+	const shellName = shell ? basename(shell).toLowerCase() : "";
+	if (shellName === "zsh") return join(home, ".zprofile");
+	if (shellName === "bash") return join(home, ".bash_profile");
+	if (platform === "darwin" && shellName === "") return join(home, ".zprofile");
+	return null;
+}
+
+function shellPathEntry(binDir: string, home: string, platform: NodeJS.Platform): string {
+	const homeBinDir = join(home, ".local", "bin");
+	if (normalizePathEntry(binDir, platform) === normalizePathEntry(homeBinDir, platform)) return "$HOME/.local/bin";
+	return binDir.replaceAll('"', '\\"');
+}
+
+function profileContainsPath(contents: string, binDir: string, home: string, platform: NodeJS.Platform): boolean {
+	const normalizedDir = normalizePathEntry(binDir, platform);
+	const homeRelativeDir = normalizePathEntry(join(home, ".local", "bin"), platform);
+	return contents.split(/\r?\n/).some((line) => {
+		const trimmed = line.trim();
+		if (trimmed.startsWith("#") || !/^(?:export\s+)?PATH\s*=/.test(trimmed)) return false;
+		return (
+			line.includes(binDir) ||
+			line.includes(normalizedDir) ||
+			line.includes("$HOME/.local/bin") ||
+			line.includes("${HOME}/.local/bin") ||
+			line.includes("~/.local/bin") ||
+			line.includes(homeRelativeDir)
+		);
+	});
+}
+
+export interface NativeInstallPathOptions {
+	readonly home?: string;
+	readonly shell?: string;
+	readonly platform?: NodeJS.Platform;
+	readonly pathValue?: string;
+}
+
+export interface NativeInstallPathResult {
+	readonly profilePath: string | null;
+	readonly persisted: boolean;
+}
+
+export function persistNativeInstallPath(
+	binDir: string,
+	options: NativeInstallPathOptions = {},
+): NativeInstallPathResult {
+	const home = options.home ?? homedir();
+	const platform = options.platform ?? process.platform;
+	const profilePath = shellProfilePath(home, options.shell ?? process.env.SHELL, platform);
+	if (pathContains(binDir, options.pathValue, platform) || profilePath === null) {
+		return { profilePath: null, persisted: false };
+	}
+
+	let contents = "";
+	try {
+		if (existsSync(profilePath)) contents = readFileSync(profilePath, "utf8");
+		if (!profileContainsPath(contents, binDir, home, platform)) {
+			const entry = shellPathEntry(binDir, home, platform);
+			const prefix = contents.length > 0 && !contents.endsWith("\n") ? "\n" : "";
+			writeFileSync(profilePath, `${contents}${prefix}export PATH="${entry}:$PATH"\n`, "utf8");
+		}
+		return { profilePath, persisted: true };
+	} catch {
+		return { profilePath, persisted: false };
+	}
 }
 
 function verifySha256(path: string, expected: string): void {
@@ -130,13 +204,22 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 
 	const binDir = options.binDir ?? defaultBinDir();
 	const target = join(binDir, binaryName());
-	const pathHint = pathContains(binDir) ? null : binDir;
 
 	if (existsSync(target) && !options.force) {
 		const connectorAssetsDir = options.connectorAssets
 			? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
 			: null;
-		return { source, target, installed: false, pathHint, connectorAssetsDir };
+		const pathPersistence = persistNativeInstallPath(binDir);
+		const pathHint = pathPersistence.persisted || pathContains(binDir) ? null : binDir;
+		return {
+			source,
+			target,
+			installed: false,
+			pathHint,
+			pathProfile: pathPersistence.profilePath,
+			pathPersisted: pathPersistence.persisted,
+			connectorAssetsDir,
+		};
 	}
 
 	// Validate and extract companion assets before replacing an existing
@@ -174,7 +257,17 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		rmSync(tmp, { force: true });
 	}
 
-	return { source, target, installed: true, pathHint, connectorAssetsDir };
+	const pathPersistence = persistNativeInstallPath(binDir);
+	const pathHint = pathPersistence.persisted || pathContains(binDir) ? null : binDir;
+	return {
+		source,
+		target,
+		installed: true,
+		pathHint,
+		pathProfile: pathPersistence.profilePath,
+		pathPersisted: pathPersistence.persisted,
+		connectorAssetsDir,
+	};
 }
 
 export function printNativeInstallResult(result: NativeInstallResult, json = false): void {
@@ -194,7 +287,19 @@ export function printNativeInstallResult(result: NativeInstallResult, json = fal
 		console.log(chalk.green(`Installed connector assets to ${result.connectorAssetsDir}`));
 	}
 
+	if (result.pathPersisted && result.pathProfile) {
+		console.log(
+			chalk.green(
+				`PATH is configured in ${result.pathProfile}. Open a new shell or run \`source ${result.pathProfile}\`.`,
+			),
+		);
+	}
+
 	if (result.pathHint) {
-		console.log(chalk.yellow(`Add ${result.pathHint} to PATH if \`signet\` is not found.`));
+		if (result.pathProfile) {
+			console.log(chalk.yellow(`Could not update ${result.pathProfile}. Add ${result.pathHint} to PATH manually.`));
+		} else {
+			console.log(chalk.yellow(`Add ${result.pathHint} to PATH if \`signet\` is not found.`));
+		}
 	}
 }
