@@ -64,7 +64,7 @@
     "start": "cd platform/daemon && bun run start",
     "dev": "bun run --filter '*' dev",
     "test": "bun run test:workspace",
-    "test:workspace": "bun test scripts tests platform/core platform/daemon platform/native surfaces/cli surfaces/dashboard surfaces/desktop surfaces/tray integrations libs memorybench web/workers && bun run --filter '@signet/codex-plugin' test",
+    "test:workspace": "bun run build && bun test scripts tests platform/core platform/daemon platform/native surfaces/cli surfaces/dashboard surfaces/desktop surfaces/tray integrations libs memorybench web/workers && bun run --filter '@signet/codex-plugin' test",
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "bun run --filter '*' typecheck",
@@ -82,6 +82,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
+    "@opencode-ai/plugin": "^1.18.13",
     "@signet/sdk": "workspace:*",
     "@types/node": "^24.5.2",
     "bun-types": "^1.3.9",

@@ -18,7 +18,8 @@ const MAINTAINED_TEST_ROOTS = [
 ];
 
 const WORKSPACE_TEST_COMMAND = packageJson.scripts["test:workspace"];
-const DIRECTORY_TEST_COMMAND = WORKSPACE_TEST_COMMAND.split(" && ")[0] ?? "";
+const DIRECTORY_TEST_COMMAND =
+	WORKSPACE_TEST_COMMAND.split(" && ").find((command) => command.startsWith("bun test ")) ?? "";
 
 test("the root test command covers every maintained test root", () => {
 	const scripts = packageJson.scripts;
@@ -35,4 +36,12 @@ test("the root test command covers every maintained test root", () => {
 
 test("the root test command retains the Codex plugin package smoke test", () => {
 	expect(WORKSPACE_TEST_COMMAND).toContain("bun run --filter '@signet/codex-plugin' test");
+});
+
+test("the root test command builds workspace runtime dependencies before test roots", () => {
+	expect(WORKSPACE_TEST_COMMAND).toContain("bun run build && bun test ");
+});
+
+test("the root test contract installs OpenCode's runtime test dependency", () => {
+	expect(packageJson.devDependencies["@opencode-ai/plugin"]).toBeDefined();
 });
