@@ -1386,62 +1386,85 @@ describe("hybridRecall", () => {
 		expect(result.results.map((row) => row.id)).not.toContain("mem-bm25-deleted");
 	});
 
-	it("keeps hint recall scoped to live memories for the requesting non-default agent", async () => {
+	it("keeps hint and memory scope coupled across isolated, shared, and group recall", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
+			const agent = db.prepare(
+				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES (?, ?, 'isolated', ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET policy_group = excluded.policy_group, updated_at = excluded.updated_at`,
+			);
+			agent.run("agent-owner", "agent-owner", "team-1", now, now);
+			agent.run("agent-group-reader", "agent-group-reader", "team-1", now, now);
+			agent.run("agent-outsider", "agent-outsider", "team-2", now, now);
 			db.prepare(
 				`INSERT INTO memories (
-					id, content, type, agent_id, created_at, updated_at, updated_by, is_deleted
-				) VALUES (?, ?, 'fact', 'agent-b', ?, ?, 'test', 1)`,
-			).run("mem-hint-deleted", "deleted hint target has unrelated body", now, now);
-			db.prepare(
-				`INSERT INTO memories (
-					id, content, type, agent_id, created_at, updated_at, updated_by
-				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
-			).run("mem-hint-other-agent", "other agent hint target has unrelated body", now, now);
-			db.prepare(
-				`INSERT INTO memories (
-					id, content, type, agent_id, created_at, updated_at, updated_by
-				) VALUES (?, ?, 'fact', 'agent-b', ?, ?, 'test')`,
-			).run("mem-hint-live", "live hint target has unrelated body", now, now);
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'agent-owner', 'global', ?, ?, 'test')`,
+			).run("mem-hint-owner", "owner memory has unrelated body", now, now);
 			const stmt = db.prepare(
 				`INSERT INTO memory_hints (id, memory_id, agent_id, hint, created_at)
 				 VALUES (?, ?, ?, ?, ?)`,
 			);
-			stmt.run("hint-deleted", "mem-hint-deleted", "agent-b", "hint-scope-marker", now);
-			stmt.run("hint-other-agent", "mem-hint-other-agent", "default", "hint-scope-marker", now);
-			stmt.run("hint-live", "mem-hint-live", "agent-b", "hint-scope-marker", now);
-			// A legacy bad write with a default hint agent must not leak agent-b's
-			// memory through a default-scoped recall request.
-			stmt.run("hint-mismatched", "mem-hint-live", "default", "hint-scope-marker mismatched", now);
+			stmt.run("hint-owner", "mem-hint-owner", "agent-owner", "hint-scope-marker", now);
+			// A legacy bad write with a different hint agent must not expose the
+			// owner's memory through any authorized-memory scope.
+			stmt.run("hint-mismatched", "mem-hint-owner", "default", "hint-scope-marker mismatched", now);
 		});
 
-		const result = await hybridRecall(
+		const ownerResult = await hybridRecall(
 			{
 				query: "hint-scope-marker",
 				keywordQuery: "hint-scope-marker",
 				limit: 5,
-				agentId: "agent-b",
+				agentId: "agent-owner",
 				readPolicy: "isolated",
 			},
 			loadMemoryConfig(dir),
 			async () => null,
 		);
+		expect(ownerResult.results.map((row) => row.id)).toEqual(["mem-hint-owner"]);
 
-		expect(result.results.map((row) => row.id)).toEqual(["mem-hint-live"]);
-
-		const defaultResult = await hybridRecall(
+		const sharedResult = await hybridRecall(
 			{
 				query: "hint-scope-marker",
 				keywordQuery: "hint-scope-marker",
 				limit: 5,
-				agentId: "default",
-				readPolicy: "isolated",
+				agentId: "agent-shared-reader",
+				readPolicy: "shared",
 			},
 			loadMemoryConfig(dir),
 			async () => null,
 		);
-		expect(defaultResult.results.map((row) => row.id)).toEqual(["mem-hint-other-agent"]);
+		expect(sharedResult.results.map((row) => row.id)).toEqual(["mem-hint-owner"]);
+
+		const groupResult = await hybridRecall(
+			{
+				query: "hint-scope-marker",
+				keywordQuery: "hint-scope-marker",
+				limit: 5,
+				agentId: "agent-group-reader",
+				readPolicy: "group",
+				policyGroup: "team-1",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+		expect(groupResult.results.map((row) => row.id)).toEqual(["mem-hint-owner"]);
+
+		const outsiderResult = await hybridRecall(
+			{
+				query: "hint-scope-marker",
+				keywordQuery: "hint-scope-marker",
+				limit: 5,
+				agentId: "agent-outsider",
+				readPolicy: "group",
+				policyGroup: "team-2",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+		expect(outsiderResult.results.map((row) => row.id)).toEqual([]);
 	});
 
 	it("defaults agent searches without readPolicy to isolated access", async () => {

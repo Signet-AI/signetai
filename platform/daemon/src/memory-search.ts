@@ -1495,14 +1495,12 @@ export async function hybridRecall(
 					   CROSS JOIN memory_hints h ON memory_hints_fts.rowid = h.rowid
 					   CROSS JOIN memories m ON m.id = h.memory_id
 					   WHERE memory_hints_fts MATCH ?
-					     AND h.agent_id = ?
-					     AND m.agent_id = ?
+					     AND h.agent_id = m.agent_id
 					     AND m.is_deleted = 0
 					     ${memorySupersessionSql(db)}${filter.sql}
 					   ORDER BY raw_score LIMIT ?`;
 
-					const agentId = params.agentId ?? "default";
-					const args = [keywordQuery, agentId, agentId, ...filter.args, cfg.search.top_k];
+					const args = [keywordQuery, ...filter.args, cfg.search.top_k];
 
 					const rows = prepareTypedStatement<{ id: string; raw_score: number }>(db, sql).all(...args);
 

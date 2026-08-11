@@ -619,9 +619,9 @@ describe("prospective-index", () => {
 			expect(handle.running).toBe(false);
 		});
 
-		it("deduplicates hints via UNIQUE constraint", async () => {
+		it("keeps retried hint indexing in the parent memory agent scope", async () => {
 			const mid = crypto.randomUUID();
-			insertMemory(db, mid, "test");
+			insertMemory(db, mid, "test", "agent-b");
 
 			// Enqueue two jobs for the same memory
 			accessor.withWriteTx((wdb) => {
@@ -638,9 +638,15 @@ describe("prospective-index", () => {
 			await new Promise((r) => setTimeout(r, 400));
 			await handle.stop();
 
-			// Same hints should not duplicate due to UNIQUE(memory_id, hint)
+			// Same hints should not duplicate due to UNIQUE(memory_id, hint), and
+			// every retry must re-read the parent memory's agent rather than use a
+			// worker-default scope.
 			const hints = getHints(db, mid);
 			expect(hints.length).toBe(5);
+			const agentIds = db.prepare("SELECT DISTINCT agent_id FROM memory_hints WHERE memory_id = ?").all(mid) as Array<{
+				agent_id: string;
+			}>;
+			expect(agentIds).toEqual([{ agent_id: "agent-b" }]);
 		});
 
 		it("requeues throwing jobs immediately instead of leaving them leased for the reaper", async () => {
