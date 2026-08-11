@@ -17,15 +17,22 @@ const MAINTAINED_TEST_ROOTS = [
 	"web/workers",
 ];
 
+const WORKSPACE_TEST_COMMAND = packageJson.scripts["test:workspace"];
+const DIRECTORY_TEST_COMMAND = WORKSPACE_TEST_COMMAND.split(" && ")[0] ?? "";
+
 test("the root test command covers every maintained test root", () => {
 	const scripts = packageJson.scripts;
 	expect(scripts.test).toBe("bun run test:workspace");
-	expect(scripts["test:workspace"]).toBeDefined();
+	expect(WORKSPACE_TEST_COMMAND).toBeDefined();
 
 	for (const root of MAINTAINED_TEST_ROOTS) {
-		expect(scripts["test:workspace"]).toContain(root);
+		expect(DIRECTORY_TEST_COMMAND).toContain(root);
 	}
 
-	expect(scripts["test:workspace"]).not.toContain("--filter");
-	expect(scripts["test:workspace"]).not.toContain("references");
+	expect(DIRECTORY_TEST_COMMAND).not.toContain("--filter");
+	expect(DIRECTORY_TEST_COMMAND).not.toContain("references");
+});
+
+test("the root test command retains the Codex plugin package smoke test", () => {
+	expect(WORKSPACE_TEST_COMMAND).toContain("bun run --filter '@signet/codex-plugin' test");
 });

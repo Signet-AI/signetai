@@ -12,9 +12,13 @@ describe("createTools", () => {
 			},
 		} as unknown as DaemonClient;
 		const tools = createTools(client);
+		const memorySearch = tools.memory_search;
+		if (memorySearch == null) {
+			throw new Error("memory_search tool must be registered");
+		}
 
-		await tools.memory_search.execute({ query: "default recall" }, {} as never);
-		await tools.memory_search.execute(
+		await memorySearch.execute({ query: "default recall" }, {} as never);
+		await memorySearch.execute(
 			{ query: "bounded recall", limit: 5000, scope: "world:alpha", include_recalled: true },
 			{} as never,
 		);
@@ -55,7 +59,11 @@ describe("createTools", () => {
 		} as unknown as DaemonClient;
 
 		const tools = createTools(client);
-		const result = await tools.session_search.execute(
+		const sessionSearch = tools.session_search;
+		if (sessionSearch == null) {
+			throw new Error("session_search tool must be registered");
+		}
+		const result = await sessionSearch.execute(
 			{
 				query: "Juniper trunk ports",
 				session_key: "parent-session",

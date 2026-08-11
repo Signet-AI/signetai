@@ -64,7 +64,7 @@
     "start": "cd platform/daemon && bun run start",
     "dev": "bun run --filter '*' dev",
     "test": "bun run test:workspace",
-    "test:workspace": "bun test scripts tests platform/core platform/daemon platform/native surfaces/cli surfaces/dashboard surfaces/desktop surfaces/tray integrations libs memorybench web/workers",
+    "test:workspace": "bun test scripts tests platform/core platform/daemon platform/native surfaces/cli surfaces/dashboard surfaces/desktop surfaces/tray integrations libs memorybench web/workers && bun run --filter '@signet/codex-plugin' test",
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "bun run --filter '*' typecheck",
