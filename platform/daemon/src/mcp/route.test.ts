@@ -1,6 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Hono } from "hono";
-import { mountMcpRoute } from "./route.js";
+import { createConcurrencyAdmission } from "../concurrency-admission.js";
+import { __setMcpAdmissionForTests, MCP_MAX_BODY_BYTES, mountMcpRoute } from "./route.js";
 
 function makeApp(): Hono {
 	const app = new Hono();
@@ -14,6 +15,43 @@ const streamableHeaders = {
 };
 
 describe("MCP route", () => {
+	const originalFetch = globalThis.fetch;
+	beforeEach(() => {
+		globalThis.fetch = mock(
+			async () =>
+				new Response(
+					JSON.stringify({
+						policy: { mode: "hybrid", maxExpandedTools: 12, maxSearchResults: 8 },
+						tools: [],
+						servers: [],
+						count: 0,
+					}),
+					{
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					},
+				),
+		) as unknown as typeof fetch;
+	});
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		__setMcpAdmissionForTests(null);
+	});
+
+	it("rejects requests when the in-flight admission cap is saturated", async () => {
+		const admission = createConcurrencyAdmission(1);
+		expect(admission.acquire()).toBe(true);
+		__setMcpAdmissionForTests(admission);
+		try {
+			const res = await makeApp().request("/mcp", { method: "GET" });
+			expect(res.status).toBe(503);
+			expect((await res.json()).error.message).toContain("Too many concurrent MCP requests");
+		} finally {
+			admission.release();
+			__setMcpAdmissionForTests(null);
+		}
+	});
+
 	it("passes parsed Bun/Hono JSON bodies to the streamable HTTP transport", async () => {
 		const res = await makeApp().request("/mcp", {
 			method: "POST",
@@ -48,5 +86,16 @@ describe("MCP route", () => {
 			error: { code: -32700, message: "Parse error: Invalid JSON" },
 			id: null,
 		});
+	});
+
+	it("rejects oversized JSON bodies before server creation", async () => {
+		const res = await makeApp().request("/mcp", {
+			method: "POST",
+			headers: streamableHeaders,
+			body: JSON.stringify({ payload: "x".repeat(MCP_MAX_BODY_BYTES) }),
+		});
+
+		expect(res.status).toBe(413);
+		expect((await res.json()).error.message).toContain("body exceeds");
 	});
 });

@@ -9,6 +9,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
 import type { Hono } from "hono";
+import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission.js";
 import { createMcpServer } from "./tools.js";
 
 interface ActiveMcpRequest {
@@ -19,9 +20,18 @@ interface ActiveMcpRequest {
 const activeMcpRequests = new Map<number, ActiveMcpRequest>();
 let nextMcpRequestId = 1;
 
+export const MCP_MAX_IN_FLIGHT = 8;
+export const MCP_MAX_BODY_BYTES = 512 * 1024;
+let mcpAdmission: ConcurrencyAdmission = createConcurrencyAdmission(MCP_MAX_IN_FLIGHT);
+
+export function __setMcpAdmissionForTests(admission: ConcurrencyAdmission | null): void {
+	mcpAdmission = admission ?? createConcurrencyAdmission(MCP_MAX_IN_FLIGHT);
+}
+
 export interface McpWorkloadDiagnostics {
 	readonly inFlight: number;
 	readonly oldestAgeMs: number | null;
+	readonly maxInFlight: number;
 }
 
 export function getMcpWorkloadDiagnostics(agentId = "default"): McpWorkloadDiagnostics {
@@ -35,7 +45,7 @@ export function getMcpWorkloadDiagnostics(agentId = "default"): McpWorkloadDiagn
 		const ageMs = Math.max(0, now - request.startedAt);
 		oldestAgeMs = oldestAgeMs === null ? ageMs : Math.max(oldestAgeMs, ageMs);
 	}
-	return { inFlight, oldestAgeMs };
+	return { inFlight, oldestAgeMs, maxInFlight: MCP_MAX_IN_FLIGHT };
 }
 
 function resolveMcpWorkloadAgentId(c: Context): string {
@@ -50,18 +60,30 @@ export function mountMcpRoute(app: Hono): void {
 	// GET /mcp — SSE stream for server-initiated notifications
 	// DELETE /mcp — session termination
 	app.all("/mcp", async (c) => {
-		const parsedBody = await parseMcpJsonBody(c);
-		if (parsedBody instanceof Response) {
-			return parsedBody;
+		if (!mcpAdmission.acquire()) {
+			return c.json(
+				{
+					jsonrpc: "2.0",
+					error: {
+						code: -32000,
+						message: `Too many concurrent MCP requests (max ${MCP_MAX_IN_FLIGHT}); retry shortly`,
+					},
+					id: null,
+				},
+				503,
+			);
 		}
-		const requestId = nextMcpRequestId++;
-		activeMcpRequests.set(requestId, {
-			agentId: resolveMcpWorkloadAgentId(c),
-			startedAt: Date.now(),
-		});
+		let requestId: number | null = null;
 		let transport: WebStandardStreamableHTTPServerTransport | null = null;
 		let server: Awaited<ReturnType<typeof createMcpServer>> | null = null;
 		try {
+			const parsedBody = await parseMcpJsonBody(c);
+			if (parsedBody instanceof Response) return parsedBody;
+			requestId = nextMcpRequestId++;
+			activeMcpRequests.set(requestId, {
+				agentId: resolveMcpWorkloadAgentId(c),
+				startedAt: Date.now(),
+			});
 			transport = new WebStandardStreamableHTTPServerTransport({
 				sessionIdGenerator: undefined, // stateless
 				enableJsonResponse: true,
@@ -88,7 +110,8 @@ export function mountMcpRoute(app: Hono): void {
 				try {
 					if (server) await server.close();
 				} finally {
-					activeMcpRequests.delete(requestId);
+					if (requestId !== null) activeMcpRequests.delete(requestId);
+					mcpAdmission.release();
 				}
 			}
 		}
@@ -102,8 +125,40 @@ async function parseMcpJsonBody(c: Context): Promise<unknown | Response | undefi
 	if (!c.req.raw.headers.get("content-type")?.includes("application/json")) {
 		return undefined;
 	}
+	const contentLength = c.req.raw.headers.get("content-length");
+	if (contentLength) {
+		const bytes = Number(contentLength);
+		if (Number.isFinite(bytes) && bytes > MCP_MAX_BODY_BYTES) {
+			return tooLargeMcpBody();
+		}
+	}
 	try {
-		return JSON.parse(await c.req.raw.clone().text());
+		const reader = c.req.raw.clone().body?.getReader();
+		if (!reader) return undefined;
+		const chunks: Uint8Array[] = [];
+		let total = 0;
+		try {
+			while (true) {
+				const next = await reader.read();
+				if (next.done || !next.value) break;
+				total += next.value.byteLength;
+				if (total > MCP_MAX_BODY_BYTES) {
+					await reader.cancel().catch(() => undefined);
+					return tooLargeMcpBody();
+				}
+				chunks.push(next.value);
+			}
+		} finally {
+			await reader.cancel().catch(() => undefined);
+		}
+		const bytes = new Uint8Array(total);
+		let offset = 0;
+		for (const chunk of chunks) {
+			bytes.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		const raw = new TextDecoder().decode(bytes);
+		return JSON.parse(raw);
 	} catch {
 		return c.json(
 			{
@@ -114,4 +169,18 @@ async function parseMcpJsonBody(c: Context): Promise<unknown | Response | undefi
 			400,
 		);
 	}
+}
+
+function tooLargeMcpBody(): Response {
+	return new Response(
+		JSON.stringify({
+			jsonrpc: "2.0",
+			error: { code: -32000, message: `MCP request body exceeds ${MCP_MAX_BODY_BYTES} byte limit` },
+			id: null,
+		}),
+		{
+			status: 413,
+			headers: { "Content-Type": "application/json" },
+		},
+	);
 }

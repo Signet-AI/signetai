@@ -348,7 +348,7 @@ agent.
     "oldestAgentSessionAgeMs": 3200,
     "byOperation": { "memory_extraction": 1 }
   },
-  "mcp": { "inFlight": 0, "oldestAgeMs": null }
+  "mcp": { "inFlight": 0, "oldestAgeMs": null, "maxInFlight": 8 }
 }
 ```
 

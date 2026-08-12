@@ -74,6 +74,11 @@ interface MarketplaceToolsResponse {
 	readonly count: number;
 }
 
+interface MarketplaceRefreshSnapshot {
+	readonly policy: MarketplacePolicy | null;
+	readonly routed: FetchResult<MarketplaceToolsResponse>;
+}
+
 interface MarketplaceServerRecord {
 	readonly id: string;
 	readonly name: string;
@@ -260,6 +265,15 @@ const GRAPHIQ_COMPAT_ALIASES: ReadonlyMap<string, string> = new Map([
 // four-client budget can require two normal two-second discovery batches, so
 // its deadline must exceed the old 3s request timeout while remaining bounded.
 const MARKETPLACE_PROXY_REFRESH_TIMEOUT_MS = 5_000;
+const MARKETPLACE_PROXY_REFRESH_TTL_MS = 30_000;
+const marketplaceRefreshes = new Map<
+	string,
+	{ readonly expiresAt: number; readonly promise: Promise<MarketplaceRefreshSnapshot> }
+>();
+
+export function __resetMarketplaceRefreshesForTests(): void {
+	marketplaceRefreshes.clear();
+}
 
 // Standalone `signet-mcp` uses process env auth. Hosted `/mcp` requests pass
 // a per-request Authorization header through createMcpServer(), which takes
@@ -579,6 +593,42 @@ async function fetchMarketplacePolicy(
 	return result.data.policy;
 }
 
+function marketplaceRefreshKey(
+	baseUrl: string,
+	context: MarketplaceProxyState["context"],
+	authorizationHeader: string | undefined,
+): string {
+	return JSON.stringify({ baseUrl, context, authorizationHeader });
+}
+
+async function fetchMarketplaceRefreshSnapshot(state: MarketplaceProxyState): Promise<MarketplaceRefreshSnapshot> {
+	const key = marketplaceRefreshKey(state.baseUrl, state.context, state.authorizationHeader);
+	const now = Date.now();
+	const cached = marketplaceRefreshes.get(key);
+	if (cached && cached.expiresAt > now) return cached.promise;
+
+	const promise = (async (): Promise<MarketplaceRefreshSnapshot> => {
+		const policy = await fetchMarketplacePolicy(state.baseUrl, state.authorizationHeader);
+		const routed = await daemonFetch<MarketplaceToolsResponse>(
+			state.baseUrl,
+			appendMarketplaceContext("/api/marketplace/mcp/tools?refresh=1", state.context),
+			{
+				timeout: MARKETPLACE_PROXY_REFRESH_TIMEOUT_MS,
+				authorizationHeader: state.authorizationHeader,
+			},
+		);
+		return { policy, routed };
+	})();
+
+	marketplaceRefreshes.set(key, { expiresAt: now + MARKETPLACE_PROXY_REFRESH_TTL_MS, promise });
+	try {
+		return await promise;
+	} catch (error) {
+		if (marketplaceRefreshes.get(key)?.promise === promise) marketplaceRefreshes.delete(key);
+		throw error;
+	}
+}
+
 export async function refreshMarketplaceProxyTools(
 	server: McpServer,
 	options?: {
@@ -592,19 +642,9 @@ export async function refreshMarketplaceProxyTools(
 
 	const notify = options?.notify ?? true;
 	const registeredTools = getRegisteredToolsMap(server);
-	const policy = await fetchMarketplacePolicy(state.baseUrl, state.authorizationHeader);
-	if (policy) {
-		state.policy = policy;
-	}
-
-	const routed = await daemonFetch<MarketplaceToolsResponse>(
-		state.baseUrl,
-		appendMarketplaceContext("/api/marketplace/mcp/tools?refresh=1", state.context),
-		{
-			timeout: MARKETPLACE_PROXY_REFRESH_TIMEOUT_MS,
-			authorizationHeader: state.authorizationHeader,
-		},
-	);
+	const snapshot = await fetchMarketplaceRefreshSnapshot(state);
+	if (snapshot.policy) state.policy = snapshot.policy;
+	const routed = snapshot.routed;
 
 	if (!routed.ok) {
 		return { changed: false, count: state.names.size, error: routed.error };

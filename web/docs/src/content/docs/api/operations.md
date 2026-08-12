@@ -247,7 +247,8 @@ agent.
 
 The response contains `agentId`, `inference` (`active`, `agentSessions`,
 `oldestAgeMs`, `oldestAgentSessionAgeMs`, and per-operation `byOperation`), and
-`mcp` (`inFlight` and `oldestAgeMs`).
+`mcp` (`inFlight`, `oldestAgeMs`, and `maxInFlight`). MCP requests are admitted
+at most 8 at a time.
 
 ### GET /api/diagnostics/memory-content-safety
 

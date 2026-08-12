@@ -22,7 +22,7 @@ import {
 import { Hono } from "hono";
 import { resetDefaultPluginHostForTests } from "../plugins/index.js";
 import { mountMarketplaceRoutes } from "../routes/marketplace.js";
-import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
+import { createMcpServer, __resetMarketplaceRefreshesForTests, refreshMarketplaceProxyTools } from "./tools.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -191,6 +191,7 @@ describe("createMcpServer", () => {
 	});
 
 	afterEach(() => {
+		__resetMarketplaceRefreshesForTests();
 		globalThis.fetch = originalFetch;
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -1466,6 +1467,37 @@ describe("createMcpServer", () => {
 	});
 
 	describe("marketplace proxy tools", () => {
+		it("single-flights marketplace refreshes across concurrent server creation", async () => {
+			__resetMarketplaceRefreshesForTests();
+			let refreshCalls = 0;
+			globalThis.fetch = mock(async (input: string | URL | Request) => {
+				const url = new URL(typeof input === "string" ? input : input.toString());
+				if (url.pathname === "/api/marketplace/mcp/policy") {
+					return new Response(
+						JSON.stringify({ policy: { mode: "expanded", maxExpandedTools: 12, maxSearchResults: 8 } }),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				if (url.pathname === "/api/marketplace/mcp/tools") {
+					refreshCalls += 1;
+					await new Promise((resolve) => setTimeout(resolve, 20));
+					return new Response(JSON.stringify({ count: 0, servers: [], tools: [] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				return new Response(JSON.stringify({ error: "unexpected" }), { status: 404 });
+			}) as unknown as typeof fetch;
+
+			const [first, second] = await Promise.all([
+				createMcpServer({ daemonUrl: "http://localhost:3850", enableMarketplaceProxyTools: true }),
+				createMcpServer({ daemonUrl: "http://localhost:3850", enableMarketplaceProxyTools: true }),
+			]);
+			expect(refreshCalls).toBe(1);
+			await first.close();
+			await second.close();
+		});
+
 		it("registers dynamic proxy tools for installed MCP tools", async () => {
 			globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
 				const url = typeof input === "string" ? input : input.toString();
@@ -1627,6 +1659,7 @@ describe("createMcpServer", () => {
 			expect(getToolNames(dynamicServer)).not.toContain("signet_dogfood_everything_get_sum");
 
 			stage = "updated";
+			__resetMarketplaceRefreshesForTests();
 			const refresh = await refreshMarketplaceProxyTools(dynamicServer, { notify: false });
 			expect(refresh.changed).toBe(true);
 			expect(getToolNames(dynamicServer)).toContain("signet_dogfood_everything_get_sum");

@@ -640,7 +640,12 @@ The MCP server supports two transports:
 
 Embedded in the daemon's Hono server at `/mcp`. Uses the web-standard
 Streamable HTTP transport (MCP spec 2025-03-26). Runs stateless — each
-request gets a fresh server instance.
+request gets a fresh server instance. Requests are admitted through a bounded
+in-flight cap of 8; excess requests receive a structured 503 response and can
+retry. JSON request bodies are limited to 512 KiB and oversized bodies receive
+413 before MCP server creation. Marketplace tool discovery is shared per
+authorization and scope context for a 30-second refresh window, so concurrent
+stateless servers do not repeat the same marketplace refresh.
 
 ```
 POST http://localhost:3850/mcp     # Send MCP messages
