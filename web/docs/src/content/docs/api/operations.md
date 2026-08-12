@@ -581,7 +581,7 @@ count that would remain if the preview were applied.
 ### GET /api/pipeline/status
 
 Composite pipeline status snapshot for dashboard visualization. Returns
-worker status, job queue counts (memory and summary), diagnostics, latency
+worker status, database maintenance state, job queue counts (memory and summary), diagnostics, latency
 histograms, error summary, and the current pipeline mode.
 
 Known `mode` values: `controlled-write`, `shadow`, `frozen`, `paused`,
@@ -592,6 +592,18 @@ Known `mode` values: `controlled-write`, `shadow`, `frozen`, `paused`,
 ```json
 {
   "workers": { ... },
+  "databaseMaintenance": {
+    "vacuumConversion": {
+      "state": "pending",
+      "attempts": 0,
+      "maxAttempts": 3,
+      "requestedAt": "2026-08-11T23:00:00.000Z",
+      "startedAt": null,
+      "completedAt": null,
+      "updatedAt": "2026-08-11T23:00:00.000Z",
+      "lastError": null
+    }
+  },
   "queues": {
     "memory": { "pending": 3, "leased": 1, "completed": 200, "failed": 0, "dead": 0 },
     "summary": { "pending": 0, "leased": 0, "completed": 5, "failed": 0, "dead": 0 }
@@ -604,6 +616,13 @@ Known `mode` values: `controlled-write`, `shadow`, `frozen`, `paused`,
 ```
 
 Mode is one of: `disabled`, `frozen`, `shadow`, `paused`, `controlled-write`.
+
+`databaseMaintenance.vacuumConversion` reports the durable legacy SQLite
+conversion state. Existing databases enter `pending` after migrations and are
+converted by a single-flight worker after readiness. A restart changes an
+interrupted `running` conversion back to `pending`; failures retain
+`lastError` and retry only within the reported attempt budget. Fresh or already
+converted databases report `not_required` or `completed`.
 
 ### POST /api/pipeline/pause
 

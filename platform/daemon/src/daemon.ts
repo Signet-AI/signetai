@@ -50,6 +50,7 @@ import {
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
+import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum";
 import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
@@ -253,6 +254,7 @@ let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
+let vacuumConversionHandle: VacuumConversionHandle | null = null;
 let embeddingPromotionRestart: Promise<void> | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let schedulerHandle: { stop(): Promise<void> } | null = null;
@@ -1270,6 +1272,10 @@ function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
 }
 
 async function stopPipelineRuntime(): Promise<void> {
+	if (vacuumConversionHandle) {
+		vacuumConversionHandle.stop();
+		vacuumConversionHandle = null;
+	}
 	if (skillReconcilerHandle) {
 		try {
 			await Promise.resolve(skillReconcilerHandle.stop());
@@ -2347,6 +2353,7 @@ async function main() {
 		logger.info("daemon", "Daemon ready");
 		logFdSnapshot("server-ready");
 		writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
+		vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor());
 
 		const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
 		try {

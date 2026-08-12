@@ -11,7 +11,16 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { convertToIncrementalVacuum, getFreePageRatio } from "./db-vacuum";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import {
+	convertToIncrementalVacuum,
+	getFreePageRatio,
+	getVacuumConversionStatus,
+	startVacuumConversionWorker,
+} from "./db-vacuum";
 
 // The functions accept a narrower interface; bun:sqlite.Database satisfies it.
 type PragmaDb = Parameters<typeof convertToIncrementalVacuum>[0];
@@ -124,5 +133,94 @@ describe("db-vacuum (#1139)", () => {
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_signet_vacuum_converted'")
 			.get();
 		expect(marker).toBeNull();
+	});
+});
+
+function legacyDbPath(): { readonly dir: string; readonly path: string } {
+	const dir = mkdtempSync(join(tmpdir(), "signet-vacuum-test-"));
+	const path = join(dir, "memories.db");
+	const db = new Database(path);
+	db.exec("PRAGMA auto_vacuum = NONE; CREATE TABLE legacy_data (value TEXT); INSERT INTO legacy_data VALUES ('keep');");
+	db.close();
+	return { dir, path };
+}
+
+describe("deferred vacuum conversion (#1493)", () => {
+	let dir = "";
+
+	afterEach(() => {
+		closeDbAccessor();
+		if (dir) rmSync(dir, { recursive: true, force: true });
+		dir = "";
+	});
+
+	it("normal initialization records pending work without running VACUUM", () => {
+		const db = legacyDbPath();
+		dir = db.dir;
+		initDbAccessor(db.path);
+
+		expect(getVacuumConversionStatus(getDbAccessor())).toMatchObject({
+			state: "pending",
+			attempts: 0,
+		});
+		const mode = getDbAccessor().withReadDb((readDb) => {
+			return (readDb.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum;
+		});
+		expect(mode).toBe(0);
+	});
+
+	it("conversion completes exactly once through the post-ready worker", async () => {
+		const db = legacyDbPath();
+		dir = db.dir;
+		initDbAccessor(db.path);
+		const worker = startVacuumConversionWorker(getDbAccessor(), { startImmediately: false });
+
+		const completed = await worker.run();
+		expect(completed.state).toBe("completed");
+		expect(completed.attempts).toBe(1);
+		expect(await worker.run()).toMatchObject({ state: "completed", attempts: 1 });
+
+		const markerCount = getDbAccessor().withReadDb(
+			(readDb) =>
+				(readDb.prepare("SELECT COUNT(*) AS count FROM _signet_vacuum_converted").get() as { count: number }).count,
+		);
+		expect(markerCount).toBe(1);
+	});
+
+	it("a killed or failed conversion remains retryable without blocking initialization", async () => {
+		const db = legacyDbPath();
+		dir = db.dir;
+		initDbAccessor(db.path);
+		getDbAccessor().withWriteTx((writeDb) => {
+			writeDb
+				.prepare(
+					"UPDATE _signet_vacuum_conversion SET state = 'running', attempts = 1, started_at = ?, updated_at = ? WHERE id = 1",
+				)
+				.run(new Date().toISOString(), new Date().toISOString());
+		});
+		closeDbAccessor();
+		initDbAccessor(db.path);
+		expect(getVacuumConversionStatus(getDbAccessor())).toMatchObject({ state: "pending", attempts: 1 });
+
+		const accessor = getDbAccessor();
+		const originalConversion = accessor.vacuumConversion;
+		accessor.vacuumConversion = () => {
+			throw new Error("simulated conversion failure");
+		};
+		const worker = startVacuumConversionWorker(accessor, { startImmediately: false });
+		const failed = await worker.run();
+		accessor.vacuumConversion = originalConversion;
+		expect(failed).toMatchObject({ state: "failed", attempts: 2, lastError: "simulated conversion failure" });
+
+		closeDbAccessor();
+		initDbAccessor(db.path);
+		expect(getVacuumConversionStatus(getDbAccessor())).toMatchObject({ state: "pending", attempts: 2 });
+
+		getDbAccessor().withWriteTx((writeDb) => {
+			writeDb.prepare("UPDATE _signet_vacuum_conversion SET state = 'running', attempts = 3 WHERE id = 1").run();
+		});
+		closeDbAccessor();
+		initDbAccessor(db.path);
+		expect(getVacuumConversionStatus(getDbAccessor())).toMatchObject({ state: "failed", attempts: 3 });
 	});
 });

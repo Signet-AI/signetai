@@ -5,6 +5,7 @@ import type { Context, Hono } from "hono";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
+import { getVacuumConversionStatus } from "../db-vacuum.js";
 import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-queue.js";
 import { readEmbeddingUsageSummary } from "../embedding-usage";
 import { getInferenceRouterOrNull } from "../inference-router.js";
@@ -569,6 +570,9 @@ export function registerPipelineRoutes(app: Hono): void {
 
 		return c.json({
 			workers,
+			databaseMaintenance: {
+				vacuumConversion: getVacuumConversionStatus(accessor),
+			},
 			providerResolution: {
 				...providerRuntimeResolution,
 				extraction: getExtractionWorkloadState({

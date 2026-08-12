@@ -30,7 +30,7 @@ import {
 	recreateMemoriesFts,
 	runMigrations,
 } from "@signet/core";
-import { convertToIncrementalVacuum } from "./db-vacuum";
+import { convertToIncrementalVacuum, ensureVacuumConversionState } from "./db-vacuum";
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { loadMemoryConfig } from "./memory-config";
 import { observeDbLatency } from "./runtime-pressure";
@@ -167,6 +167,9 @@ export interface DbAccessor {
 	/** Admit incremental vacuum through the bounded async writer queue. */
 	incrementalVacuumAsync?(): Promise<number>;
 
+	/** Run the one-time legacy auto_vacuum conversion outside a transaction. */
+	vacuumConversion?(): boolean;
+
 	/** Return bounded local diagnostics for the writer admission path. */
 	getWritePressure?(): WritePressure;
 
@@ -212,8 +215,8 @@ let vecLoadError: string | null = null;
 
 function configurePragmas(db: SqliteDatabase): void {
 	// Set auto_vacuum = INCREMENTAL before any tables are created. This only
-	// affects fresh databases; existing databases are converted by
-	// convertToIncrementalVacuum in finishDbAccessorInit (#1139).
+	// affects fresh databases; existing databases are converted by the
+	// post-ready vacuum worker after finishDbAccessorInit (#1139, #1493).
 	db.exec("PRAGMA auto_vacuum = INCREMENTAL");
 	db.exec("PRAGMA journal_mode = WAL");
 	db.exec("PRAGMA busy_timeout = 5000");
@@ -775,11 +778,10 @@ function finishDbAccessorInit(writeConn: SqliteDatabase, opts?: { readonly agent
 	// Failures here are fatal: the daemon must not start on bad schema.
 	runMigrations(toMigrationDb(writeConn));
 
-	// One-time conversion of legacy databases (auto_vacuum = 0) to
-	// incremental mode. Runs VACUUM outside any transaction. New databases
-	// already have auto_vacuum = INCREMENTAL from configurePragmas, so this
-	// is a no-op for them (#1139).
-	convertToIncrementalVacuum(toMigrationDb(writeConn));
+	// Record one-time conversion state only after migrations have succeeded.
+	// The conversion itself is deliberately post-ready because VACUUM can
+	// block the event loop for minutes on a large legacy database (#1493).
+	ensureVacuumConversionState(toMigrationDb(writeConn));
 
 	// Ensure FTS5 virtual table exists — may be missing on upgrades from
 	// older installs where the table was dropped or never created.
@@ -1130,6 +1132,10 @@ function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 		});
 	}
 
+	function runVacuumConversion(): boolean {
+		return runWriteOperation(() => convertToIncrementalVacuum(toMigrationDb(writeConn)));
+	}
+
 	function enqueueWrite<T>(run: () => T): Promise<T> {
 		if (closed) return Promise.reject(new Error("DbAccessor is closed"));
 		if (writeQueue.length >= MAX_WRITE_QUEUE) return Promise.reject(new DbWriteQueueFullError());
@@ -1188,6 +1194,11 @@ function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 
 		incrementalVacuumAsync(): Promise<number> {
 			return enqueueWrite(runIncrementalVacuum);
+		},
+
+		vacuumConversion(): boolean {
+			if (closed) throw new Error("DbAccessor is closed");
+			return runVacuumConversion();
 		},
 
 		getWritePressure(): WritePressure {
