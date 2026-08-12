@@ -103,6 +103,7 @@ export interface NativeInstallPathOptions {
 	readonly shell?: string;
 	readonly platform?: NodeJS.Platform;
 	readonly pathValue?: string;
+	readonly interactive?: boolean;
 }
 
 export interface NativeInstallPathResult {
@@ -117,7 +118,7 @@ export function persistNativeInstallPath(
 	const home = options.home ?? homedir();
 	const platform = options.platform ?? process.platform;
 	const profilePath = shellProfilePath(home, options.shell ?? process.env.SHELL, platform);
-	if (pathContains(binDir, options.pathValue, platform) || profilePath === null) {
+	if (options.interactive === false || pathContains(binDir, options.pathValue, platform) || profilePath === null) {
 		return { profilePath: null, persisted: false };
 	}
 
@@ -217,7 +218,9 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		const connectorAssetsDir = options.connectorAssets
 			? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
 			: null;
-		const pathPersistence = persistNativeInstallPath(binDir);
+		const pathPersistence = persistNativeInstallPath(binDir, {
+			interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+		});
 		const pathHint = pathPersistence.persisted || pathContains(binDir) ? null : binDir;
 		return {
 			source,
@@ -265,7 +268,9 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		rmSync(tmp, { force: true });
 	}
 
-	const pathPersistence = persistNativeInstallPath(binDir);
+	const pathPersistence = persistNativeInstallPath(binDir, {
+		interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+	});
 	const pathHint = pathPersistence.persisted || pathContains(binDir) ? null : binDir;
 	return {
 		source,

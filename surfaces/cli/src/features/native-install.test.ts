@@ -140,6 +140,56 @@ describe("persistNativeInstallPath", () => {
 		expect(existsSync(join(home, ".bash_profile"))).toBe(false);
 	});
 
+	test("skips persistence in a non-interactive shell and leaves a manual fallback", () => {
+		const home = makeHome();
+		homes.push(home);
+		const binDir = join(home, ".local", "bin");
+
+		const result = persistNativeInstallPath(binDir, {
+			home,
+			platform: "darwin",
+			shell: "/bin/zsh",
+			pathValue: "/usr/bin:/bin",
+			interactive: false,
+		});
+
+		expect(result).toEqual({ profilePath: null, persisted: false });
+		expect(existsSync(join(home, ".zprofile"))).toBe(false);
+	});
+
+	test("does not modify the profile when the exact directory is already on PATH", () => {
+		const home = makeHome();
+		homes.push(home);
+		const binDir = join(home, ".local", "bin");
+		const profilePath = join(home, ".zprofile");
+		const existing = '# Signet\nexport PATH="$HOME/.local/bin:$PATH"\n';
+		writeFileSync(profilePath, existing, "utf8");
+
+		const result = persistNativeInstallPath(binDir, {
+			home,
+			platform: "darwin",
+			shell: "/bin/zsh",
+			pathValue: `${binDir}:/usr/bin`,
+		});
+
+		expect(result).toEqual({ profilePath: null, persisted: false });
+		expect(readFileSync(profilePath, "utf8")).toBe(existing);
+	});
+
+	test("does not persist PATH on Windows", () => {
+		const home = makeHome();
+		homes.push(home);
+
+		const result = persistNativeInstallPath(join(home, "Signet"), {
+			home,
+			platform: "win32",
+			shell: "powershell.exe",
+			pathValue: "C:\\\\Windows\\\\System32",
+		});
+
+		expect(result).toEqual({ profilePath: null, persisted: false });
+	});
+
 	test("prints the shell reload step after configuring PATH", () => {
 		const lines: string[] = [];
 		const originalLog = console.log;
