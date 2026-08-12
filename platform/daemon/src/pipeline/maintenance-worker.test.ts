@@ -142,6 +142,50 @@ describe("maintenance-worker", () => {
 		db.close();
 	});
 
+	it("scopes autonomous missing-vector repair to the maintenance agent", async () => {
+		const db = freshDb();
+		const accessor = asAccessor(db);
+		const tracker = createProviderTracker();
+		for (const [id, agentId] of [
+			["missing-agent-a", "agent-a"],
+			["missing-agent-b", "agent-b"],
+		] as const) {
+			db.prepare(
+				`INSERT INTO memories
+				 (id, type, content, content_hash, embedding_model, confidence, tags, created_at, updated_at, updated_by, version, manual_override, is_deleted, agent_id)
+				 VALUES (?, 'fact', ?, ?, 'maintenance-test', 0.9, '[]', ?, ?, 'test', 1, 0, 0, ?)`,
+			).run(id, `missing vector for ${agentId}`, `hash-${agentId}`, now, now, agentId);
+		}
+
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null, {
+			cfg: TEST_EMBEDDING_CFG,
+			fetchEmbedding: async (content) => {
+				expect(content).toContain("agent-a");
+				return [0.1, 0.2, 0.3];
+			},
+			agentId: "agent-a",
+			batchSize: 20,
+		});
+		handle.stop();
+
+		const result = await handle.tick();
+		expect(result.executed).toContainEqual(
+			expect.objectContaining({
+				action: "repairEmbeddingIndex",
+				success: true,
+				affected: 1,
+			}),
+		);
+		expect(getEmbeddingGapStats(accessor, "agent-a").unembedded).toBe(0);
+		expect(getEmbeddingGapStats(accessor, "agent-b").unembedded).toBe(1);
+		expect(
+			(db.prepare("SELECT source_id FROM embeddings WHERE source_type = 'memory'").all() as Array<{ source_id: string }>).map(
+				(row) => row.source_id,
+			),
+		).toEqual(["missing-agent-a"]);
+		db.close();
+	});
+
 	it("does not recommend embedding repair when the index is healthy", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);

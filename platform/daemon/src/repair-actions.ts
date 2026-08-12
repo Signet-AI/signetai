@@ -640,12 +640,18 @@ function listOrphanedEmbeddingIds(db: WriteDb, limit: number): Array<{ id: strin
 		.all(limit) as Array<{ id: string }>;
 }
 
-export function getEmbeddingGapStats(accessor: DbAccessor): EmbeddingGapStats {
+export function getEmbeddingGapStats(accessor: DbAccessor, agentId?: string): EmbeddingGapStats {
 	const repair = readEmbeddingRepairState(accessor);
 	return accessor.withReadDb((db) => {
-		const totalRow = db.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0").get() as { n: number };
+		const totalRow = db
+			.prepare(
+				agentId === undefined
+					? "SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0"
+					: "SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0 AND COALESCE(NULLIF(agent_id, ''), 'default') = ?",
+			)
+			.get(...(agentId === undefined ? [] : [agentId])) as { n: number };
 		const total = totalRow.n;
-		const unembedded = countUnembeddedMemories(db);
+		const unembedded = countUnembeddedMemories(db, agentId);
 		const embedded = total - unembedded;
 		const state = tableExists(db, "embedding_index_state") ? readEmbeddingIndexState(db) : null;
 		const staging =
@@ -676,7 +682,7 @@ export function getEmbeddingRepairStats(
 	embeddingCfg: EmbeddingConfig,
 	agentId: string,
 ): EmbeddingRepairStats {
-	const gap = getEmbeddingGapStats(accessor);
+	const gap = getEmbeddingGapStats(accessor, agentId);
 	const migration = accessor.withReadDb((db) =>
 		countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
 	);
@@ -704,9 +710,10 @@ async function reembedMissingMemoriesBatch(
 	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	embeddingCfg: EmbeddingConfig,
 	batchSize: number,
+	agentId?: string,
 ): Promise<ReembedBatchOutcome> {
 	const unembedded = accessor.withReadDb((db) => {
-		return listUnembeddedMemories(db, batchSize) as UnembeddedRow[];
+		return listUnembeddedMemories(db, batchSize, agentId) as UnembeddedRow[];
 	});
 
 	if (unembedded.length === 0) {
@@ -841,6 +848,7 @@ export async function reembedMissingMemories(
 	dryRun = false,
 	runToCompletion = false,
 	cooldownMsOverride?: number,
+	agentId?: string,
 ): Promise<RepairResult> {
 	const action = "reembedMissingMemories";
 	const effectiveCooldownMs =
@@ -861,7 +869,7 @@ export async function reembedMissingMemories(
 	const normalizedBatchSize =
 		Number.isFinite(batchSize) && batchSize > 0 ? Math.max(1, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
 
-	const initialStats = getEmbeddingGapStats(accessor);
+	const initialStats = getEmbeddingGapStats(accessor, agentId);
 	if (initialStats.unembedded === 0) {
 		return {
 			action,
@@ -898,7 +906,13 @@ export async function reembedMissingMemories(
 		let profileChanged = false;
 
 		while (true) {
-			const outcome = await reembedMissingMemoriesBatch(accessor, embeddingFn, embeddingCfg, normalizedBatchSize);
+			const outcome = await reembedMissingMemoriesBatch(
+				accessor,
+				embeddingFn,
+				embeddingCfg,
+				normalizedBatchSize,
+				agentId,
+			);
 
 			if (outcome.selected === 0) break;
 
@@ -941,7 +955,7 @@ export async function reembedMissingMemories(
 			};
 		}
 
-		const remaining = getEmbeddingGapStats(accessor).unembedded;
+		const remaining = getEmbeddingGapStats(accessor, agentId).unembedded;
 		const scope = runToCompletion ? `across ${batches} batch(es)` : "in one batch";
 		const msg =
 			failed > 0

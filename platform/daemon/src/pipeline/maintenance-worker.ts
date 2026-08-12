@@ -230,8 +230,8 @@ async function executeRecommendation(
 								ctx,
 								deps.limiter,
 								batchSize,
-							)
-						: stats.gap.unembedded > 0
+								)
+								: stats.gap.unembedded > 0
 							? await reembedMissingMemories(
 									deps.accessor,
 									deps.cfg,
@@ -240,6 +240,10 @@ async function executeRecommendation(
 									embedding.fetchEmbedding,
 									embedding.cfg,
 									batchSize,
+									false,
+									false,
+									undefined,
+									embedding.agentId,
 								)
 							: await reembedModelMigration(
 									deps.accessor,

@@ -87,44 +87,63 @@ function count(db: ReadDb, sql: string, ...args: readonly unknown[]): number {
 	return row?.n ?? 0;
 }
 
-export function countUnembeddedMemories(db: ReadDb): number {
+export function countUnembeddedMemories(db: ReadDb, agentId?: string): number {
+	const scope = agentId === undefined ? "" : " AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?";
+	const hashScope =
+		agentId === undefined
+			? ""
+			: ` AND EXISTS (
+			     SELECT 1 FROM memories owner
+			     WHERE owner.id = e.source_id
+			       AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
+			   )`;
 	return count(
 		db,
 		`SELECT COUNT(*) AS n FROM memories m
-		 WHERE m.is_deleted = 0
+		 WHERE m.is_deleted = 0${scope}
 		   AND NOT EXISTS (
 		     SELECT 1 FROM embeddings e
 		     WHERE e.source_type = 'memory' AND e.source_id = m.id
 		   )
 		   AND NOT EXISTS (
 		     SELECT 1 FROM embeddings e
-		     WHERE e.source_type = 'memory'
+		     WHERE e.source_type = 'memory'${hashScope}
 		       AND m.content_hash IS NOT NULL
 		       AND e.content_hash = m.content_hash
 		   )`,
+		...(agentId === undefined ? [] : [agentId]),
 	);
 }
 
-export function listUnembeddedMemories(db: ReadDb, limit: number): ReadonlyArray<UnembeddedRow> {
+export function listUnembeddedMemories(db: ReadDb, limit: number, agentId?: string): ReadonlyArray<UnembeddedRow> {
+	const scope = agentId === undefined ? "" : " AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?";
+	const hashScope =
+		agentId === undefined
+			? ""
+			: ` AND EXISTS (
+			       SELECT 1 FROM memories owner
+			       WHERE owner.id = e.source_id
+			         AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
+			     )`;
 	return db
 		.prepare(
 			`SELECT m.id, m.content, m.content_hash AS contentHash
 			 FROM memories m
-			 WHERE m.is_deleted = 0
+			 WHERE m.is_deleted = 0${scope}
 			   AND NOT EXISTS (
 			     SELECT 1 FROM embeddings e
 			     WHERE e.source_type = 'memory' AND e.source_id = m.id
 			   )
 			   AND NOT EXISTS (
 			     SELECT 1 FROM embeddings e
-			     WHERE e.source_type = 'memory'
+			     WHERE e.source_type = 'memory'${hashScope}
 			       AND m.content_hash IS NOT NULL
 			       AND e.content_hash = m.content_hash
 			   )
 			 ORDER BY m.created_at ASC
 			 LIMIT ?`,
 		)
-		.all(limit) as UnembeddedRow[];
+		.all(...(agentId === undefined ? [limit] : [agentId, limit])) as UnembeddedRow[];
 }
 
 export function listStaleEmbeddingRows(
