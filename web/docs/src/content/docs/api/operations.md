@@ -584,6 +584,11 @@ Composite pipeline status snapshot for dashboard visualization. Returns
 worker status, database maintenance state, job queue counts (memory and summary), diagnostics, latency
 histograms, error summary, and the current pipeline mode.
 
+The `workers.document` entry includes `inFlight` and `maxInFlight` counts for
+the shared document-ingest admission budget. `inFlight` counts jobs that have
+been leased and are still processing; the worker does not lease another job
+when this budget is full.
+
 Known `mode` values: `controlled-write`, `shadow`, `frozen`, `paused`,
 `disabled`.
 
@@ -591,7 +596,13 @@ Known `mode` values: `controlled-write`, `shadow`, `frozen`, `paused`,
 
 ```json
 {
-  "workers": { ... },
+  "workers": {
+    "document": {
+      "running": true,
+      "inFlight": 1,
+      "maxInFlight": 2
+    }
+  },
   "databaseMaintenance": {
     "vacuumConversion": {
       "state": "pending",

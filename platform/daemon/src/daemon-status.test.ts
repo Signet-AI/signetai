@@ -503,6 +503,10 @@ describe("structural worker retirement under Dreaming (#946)", () => {
 		expect(workers).not.toHaveProperty("dependencySynthesis");
 		// Preserved non-semantic workers remain present.
 		expect(workers).toHaveProperty("document");
+		expect(workers.document).toMatchObject({
+			inFlight: 0,
+			maxInFlight: 2,
+		});
 		expect(workers).toHaveProperty("retention");
 		expect(workers).toHaveProperty("maintenance");
 		expect(workers).toHaveProperty("synthesis");

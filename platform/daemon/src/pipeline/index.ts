@@ -17,7 +17,11 @@ import { getLlmProvider } from "../llm";
 import { logger } from "../logger";
 import type { EmbeddingConfig, MemorySearchConfig, PipelineV2Config } from "../memory-config";
 import type { TelemetryCollector } from "../telemetry";
-import { type DocumentWorkerHandle, startDocumentWorker } from "./document-worker";
+import {
+	DOCUMENT_WORK_MAX_IN_FLIGHT,
+	type DocumentWorkerHandle,
+	startDocumentWorker,
+} from "./document-worker";
 import type { DreamingWorkerHandle } from "./dreaming-worker";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
@@ -86,6 +90,11 @@ type WorkerStatusEntry = {
 	readonly running: boolean;
 };
 
+type DocumentWorkerStatusEntry = WorkerStatusEntry & {
+	readonly inFlight: number;
+	readonly maxInFlight: number;
+};
+
 type LlmConcurrencyStatus = ReturnType<typeof getLlmConcurrencyStatus>;
 
 export type PipelineWorkerStatus = {
@@ -96,7 +105,7 @@ export type PipelineWorkerStatus = {
 		readonly stats: LlmConcurrencyStatus;
 	};
 	readonly summary: WorkerStatusEntry;
-	readonly document: WorkerStatusEntry;
+	readonly document: DocumentWorkerStatusEntry;
 	readonly retention: WorkerStatusEntry;
 	readonly maintenance: WorkerStatusEntry;
 	readonly synthesis: WorkerStatusEntry;
@@ -114,7 +123,11 @@ export function getPipelineWorkerStatus(): PipelineWorkerStatus {
 			stats: llmConcurrency,
 		},
 		summary: { running: false },
-		document: { running: documentWorkerHandle !== null },
+		document: {
+			running: documentWorkerHandle !== null,
+			inFlight: documentWorkerHandle?.inFlight ?? 0,
+			maxInFlight: documentWorkerHandle?.maxInFlight ?? DOCUMENT_WORK_MAX_IN_FLIGHT,
+		},
 		retention: { running: retentionHandle !== null },
 		maintenance: { running: maintenanceHandle !== null },
 		synthesis: { running: synthesisWorkerHandle !== null },

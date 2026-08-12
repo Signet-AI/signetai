@@ -6,6 +6,7 @@ describe("concurrency admission", () => {
 		const admission = createConcurrencyAdmission(2);
 
 		expect(admission.inFlight()).toBe(0);
+		expect(admission.maxInFlight).toBe(2);
 		expect(admission.acquire()).toBe(true);
 		expect(admission.acquire()).toBe(true);
 		expect(admission.acquire()).toBe(false);

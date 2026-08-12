@@ -2,6 +2,7 @@ export interface ConcurrencyAdmission {
 	acquire(): boolean;
 	release(): void;
 	inFlight(): number;
+	readonly maxInFlight: number;
 }
 
 export function createConcurrencyAdmission(maxInFlight: number): ConcurrencyAdmission {
@@ -11,6 +12,7 @@ export function createConcurrencyAdmission(maxInFlight: number): ConcurrencyAdmi
 
 	let active = 0;
 	return {
+		maxInFlight,
 		acquire(): boolean {
 			if (active >= maxInFlight) return false;
 			active += 1;

@@ -57,6 +57,10 @@ cannot outrun the shared budget. A failed operation releases its slot before
 retry handling runs, and the durable lease/recovery path remains responsible
 for jobs interrupted by shutdown or process failure.
 
+The `/api/pipeline/status` diagnostics surface reports the document worker's
+`inFlight` and `maxInFlight` counts so operators can distinguish a full
+document-ingest budget from durable queue depth.
+
 The referenced row in the `documents` table carries the source content and
 type. Two source types are supported: `url` (content fetched via HTTP) and
 anything else (content read from `raw_content`). URL fetch is bounded by

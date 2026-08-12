@@ -117,6 +117,9 @@ describe("document worker admission", () => {
 			await new Promise((resolve) => setTimeout(resolve, 25));
 			expect(started).toEqual(["slow"]);
 			expect(admission.inFlight()).toBe(1);
+			expect(workerA.inFlight).toBe(1);
+			expect(workerB.inFlight).toBe(1);
+			expect(workerA.maxInFlight).toBe(1);
 			expect(jobStatus(db, "doc-a-job")).toBe("leased");
 			expect(jobStatus(db, "doc-b-job")).toBe("pending");
 

@@ -31,6 +31,8 @@ import { fetchUrlContent } from "./url-fetcher";
 export interface DocumentWorkerHandle {
 	stop(): Promise<void>;
 	readonly running: boolean;
+	readonly inFlight: number;
+	readonly maxInFlight: number;
 }
 
 /** Keep URL, chunking, and embedding work bounded before leasing another job. */
@@ -711,6 +713,12 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 		},
 		get running() {
 			return running;
+		},
+		get inFlight() {
+			return admission.inFlight();
+		},
+		get maxInFlight() {
+			return admission.maxInFlight;
 		},
 	};
 }
