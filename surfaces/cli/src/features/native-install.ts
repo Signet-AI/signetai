@@ -91,7 +91,10 @@ function profileContainsPath(contents: string, binDir: string, home: string, pla
 			.some((entry) => normalizePathEntry(entry.trim(), platform) === normalizedDir);
 		if (containsRequestedDir) return true;
 		const homeBinDirAliases = ["$HOME/.local/bin", "$" + "{HOME}/.local/bin", "~/.local/bin"];
-		return isDefaultBinDir && homeBinDirAliases.some((alias) => line.includes(alias));
+		return (
+			isDefaultBinDir &&
+			homeBinDirAliases.some((alias) => assignment.split(":").some((entry) => entry.trim() === alias))
+		);
 	});
 }
 
