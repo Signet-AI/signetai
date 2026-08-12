@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairTelemetryIndexes, runDeferredIntegrityCheck } from "./database-integrity";
@@ -148,7 +148,7 @@ describe("deferred database integrity recovery (#1513)", () => {
 		const workerPath = join(dir, "corrupt-worker.mjs");
 		writeFileSync(
 			workerPath,
-			'import { parentPort } from "node:worker_threads"; parentPort.postMessage({ type: "result", result: { quickCheck: { ok: false, messages: ["database disk image is malformed"] } } });\n',
+			'process.stdout.write(JSON.stringify({ type: "result", result: { quickCheck: { ok: false, messages: ["database disk image is malformed"] } } }) + "\\n");\n',
 		);
 
 		const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, "/tmp/not-used.db", {
@@ -174,6 +174,55 @@ describe("deferred database integrity recovery (#1513)", () => {
 		expect(result.state).toBe("healthy");
 		expect(result.phase).toBe("complete");
 		expect(result.quickCheck.ok).toBe(true);
+	});
+
+	it("handles worker construction failures as unavailable", async () => {
+		const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, "/tmp/not-used.db", {
+			workerPath: "/tmp/missing-database-integrity-worker.mjs",
+			timeoutMs: 1000,
+		});
+
+		expect(result.state).toBe("unavailable");
+		expect(result.phase).toBe("complete");
+		expect(result.repairGuidance).toContain("back up the database");
+	});
+
+	it("kills a synchronous scan at the deadline on a large fixture", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-large-"));
+		const dbPath = join(dir, "memory.db");
+		const workerPath = join(dir, "blocking-worker.mjs");
+		const database = new Database(dbPath);
+		database.exec("CREATE TABLE large_fixture (value TEXT)");
+		database.exec(
+			"WITH RECURSIVE numbers(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM numbers WHERE value < 250000) INSERT INTO large_fixture SELECT printf('fixture-%06d', value) FROM numbers",
+		);
+		database.close();
+		writeFileSync(
+			workerPath,
+			[
+				'import { Database } from "bun:sqlite";',
+				"const dbPath = process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH;",
+				'if (dbPath === undefined) throw new Error("missing database path");',
+				'process.stdout.write("started\\n");',
+				"const database = new Database(dbPath, { readonly: true });",
+				'while (true) database.prepare("PRAGMA quick_check").all();',
+			].join("\n"),
+		);
+
+		const startedAt = Date.now();
+		let scanStarted = false;
+		const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, dbPath, {
+			workerPath,
+			timeoutMs: 25,
+			onWorkerStarted: () => {
+				scanStarted = true;
+			},
+		});
+
+		expect(scanStarted).toBe(true);
+		expect(result.phase).toBe("timed_out");
+		expect(Date.now() - startedAt).toBeLessThan(500);
+		rmSync(dir, { recursive: true, force: true });
 	});
 
 	it("bounds a worker that does not complete and returns actionable guidance", async () => {

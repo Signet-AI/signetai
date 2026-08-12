@@ -334,7 +334,12 @@ if (!process.env.SIGNET_DIR?.trim()) {
 		}
 	}
 }
-await import("../surfaces/cli/src/cli.ts");
+if (process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH) {
+	const { runDatabaseIntegrityWorker } = await import("../platform/daemon/src/database-integrity-worker");
+	runDatabaseIntegrityWorker();
+} else {
+	await import("../surfaces/cli/src/cli.ts");
+}
 `,
 );
 

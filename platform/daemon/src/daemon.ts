@@ -2370,18 +2370,22 @@ async function main() {
 					});
 				}
 			},
-		}).then((status) => {
-			if (status.state === "corrupt" || status.state === "unavailable") {
-				logger.error("startup-recovery", "Database integrity failed after readiness", undefined, {
-					state: status.state,
-					phase: status.phase,
-					quickCheck: status.quickCheck.messages,
-					telemetryCheck: status.telemetryCheck.messages,
-					guidance:
-						"Stop the daemon, back up the database, and run the operator integrity repair flow before restarting.",
-				});
-			}
-		});
+		})
+			.then((status) => {
+				if (status.state === "corrupt" || status.state === "unavailable") {
+					logger.error("startup-recovery", "Database integrity failed after readiness", undefined, {
+						state: status.state,
+						phase: status.phase,
+						quickCheck: status.quickCheck.messages,
+						telemetryCheck: status.telemetryCheck.messages,
+						guidance:
+							"Stop the daemon, back up the database, and run the operator integrity repair flow before restarting.",
+					});
+				}
+			})
+			.catch((error) => {
+				logger.error("startup-recovery", "Deferred database integrity check rejected", error);
+			});
 
 		const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
 		try {
