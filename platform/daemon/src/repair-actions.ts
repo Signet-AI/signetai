@@ -1041,6 +1041,7 @@ export async function reembedModelMigration(
 	}
 	let written = 0;
 	let failed = 0;
+	let profileChanged = false;
 	for (const row of rows) {
 		let vector: number[] | null;
 		try {
@@ -1058,11 +1059,15 @@ export async function reembedModelMigration(
 			continue;
 		}
 		try {
-			const wrote = accessor.withWriteTx((db): boolean => {
+			const writeOutcome = accessor.withWriteTx((db): { wrote: boolean; profileChanged: boolean } => {
+				// Provider work happens outside the transaction. Promotion can therefore
+				// change the active vector space while this row is being encoded.
+				// Never commit a vector or model marker from the superseded profile.
+				if (!isActiveEmbeddingConfig(db, embeddingCfg)) return { wrote: false, profileChanged: true };
 				const current = db.prepare("SELECT content_hash FROM memories WHERE id = ? AND is_deleted = 0").get(row.id) as
 					| { content_hash: string }
 					| undefined;
-				if (!current) return false;
+				if (!current) return { wrote: false, profileChanged: false };
 				const id = crypto.randomUUID();
 				db.prepare(
 					`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now')) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
@@ -1070,12 +1075,16 @@ export async function reembedModelMigration(
 				const embedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(current.content_hash) as
 					| { id: string }
 					| undefined;
-				if (!embedding) return false;
+				if (!embedding) return { wrote: false, profileChanged: false };
 				syncVecInsert(db, embedding.id, vector);
 				db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
-				return true;
+				return { wrote: true, profileChanged: false };
 			});
-			if (wrote) written++;
+			if (writeOutcome.profileChanged) {
+				profileChanged = true;
+				break;
+			}
+			if (writeOutcome.wrote) written++;
 		} catch (error) {
 			failed++;
 			logger.warn("pipeline", "re-embed migration: write failed", {
@@ -1087,6 +1096,16 @@ export async function reembedModelMigration(
 	const message = `re-embedded ${written} of ${rows.length} selected memories${
 		failed > 0 ? ` (${failed} failed)` : ""
 	}`;
+	if (profileChanged) {
+		return {
+			action,
+			success: false,
+			affected: written,
+			message: "embedding profile changed during provider work; skipped stale migration vectors",
+			totalMatching,
+			details: { ...details, failed },
+		};
+	}
 	if (written > 0) {
 		try {
 			accessor.withWriteTx((db) => writeRepairAudit(db, action, ctx, written, message));

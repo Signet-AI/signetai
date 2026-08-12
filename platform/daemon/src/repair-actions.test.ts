@@ -1376,6 +1376,74 @@ describe("reembedModelMigration", () => {
 		db.close();
 	});
 
+	it("skips stale migration vectors when promotion happens during provider work", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		ensureVecTable(db);
+		const accessor = asAccessor(db);
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, embedding_model, type, created_at, updated_at, updated_by) VALUES ('migration-race', 'old vector', 'hash-race', 'model-a', 'fact', ?, ?, 'test')`,
+		).run(now, now);
+		insertEmbedding(db, {
+			id: "emb-race",
+			sourceId: "migration-race",
+			contentHash: "hash-race",
+			vector: [0.1, 0.2, 0.3],
+		});
+		const targetEmbeddingCfg = { ...TEST_EMBEDDING_CFG, model: "model-b" };
+		accessor.withWriteTx((writeDb) => ensureEmbeddingIndexState(writeDb, targetEmbeddingCfg));
+
+		let providerStarted!: () => void;
+		const providerReady = new Promise<void>((resolve) => {
+			providerStarted = resolve;
+		});
+		let releaseProvider!: () => void;
+		const providerReleased = new Promise<void>((resolve) => {
+			releaseProvider = resolve;
+		});
+		const repair = reembedModelMigration(
+			accessor,
+			TEST_CFG,
+			CTX_DAEMON,
+			createRateLimiter(),
+			async () => {
+				providerStarted();
+				await providerReleased;
+				return [0.4, 0.5, 0.6];
+			},
+			targetEmbeddingCfg,
+			"default",
+			10,
+			false,
+			false,
+		);
+
+		await providerReady;
+		const promoted = { ...TEST_EMBEDDING_CFG, model: "promoted-model" };
+		db.prepare("UPDATE embedding_index_state SET active_profile_json = ? WHERE id = 1").run(
+			JSON.stringify({
+				fingerprint: embeddingProfileFingerprint(promoted),
+				provider: promoted.provider,
+				model: promoted.model,
+				dimensions: promoted.dimensions,
+				baseUrl: promoted.base_url,
+			}),
+		);
+		releaseProvider();
+
+		const result = await repair;
+		expect(result.success).toBe(false);
+		expect(result.message).toMatch(/skipped stale migration vectors/);
+		expect(db.prepare("SELECT embedding_model FROM memories WHERE id = 'migration-race'").get()).toEqual({
+			embedding_model: "model-a",
+		});
+		expect(
+			db.prepare("SELECT vector FROM embeddings WHERE source_id = 'migration-race'").get() as { vector: Buffer },
+		).toEqual({ vector: vectorBlob([0.1, 0.2, 0.3]) });
+		db.close();
+	});
+
 	it("survives a per-row write failure, records partial progress, and still returns a structured result", async () => {
 		// Regression guard: without try/catch around withWriteTx, a single
 		// transaction failure (SQLITE_BUSY / disk error) propagated as an
