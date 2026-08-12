@@ -380,6 +380,63 @@ describe("native install smoke", () => {
 		expect(result.stderr).toContain("missing runtime/connectors/");
 	});
 
+	test("postinstall reinstalls a valid-JSON marker with a non-string SHA-256", async () => {
+		if (process.platform === "win32") return;
+
+		const version = "0.0.0-smoke-malformed-marker";
+		const tarball = buildFakeConnectorTarball();
+		const release = await serveConnectorRelease(tarball, version);
+
+		const dir = tempDir();
+		const packageDir = join(dir, "signetai");
+		const platform = platformKey();
+		const nativePackageName = `signetai-${platform}`;
+		const nativePackageDir = join(packageDir, "node_modules", nativePackageName);
+		const nativePackageBin = join(nativePackageDir, "bin", "signet");
+		mkdirSync(packageDir, { recursive: true });
+		mkdirSync(join(nativePackageDir, "bin"), { recursive: true });
+		cpSync(join(root, "dist", "signetai", "scripts"), join(packageDir, "scripts"), { recursive: true });
+		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), { recursive: true });
+		writeFileSync(
+			join(packageDir, "native-manifest.json"),
+			JSON.stringify({
+				schemaVersion: 1,
+				version,
+				assets: [],
+				components: {
+					connectors: {
+						url: `signet-connectors-${version}.tar.gz`,
+						sha256: createHash("sha256").update(tarball).digest("hex"),
+						size: tarball.length,
+					},
+				},
+			}),
+		);
+		writeFileSync(
+			join(nativePackageDir, "package.json"),
+			JSON.stringify({ name: nativePackageName, version, type: "module" }),
+		);
+		writeFileSync(nativePackageBin, "");
+		chmodSync(nativePackageBin, 0o755);
+		const connectorDir = join(packageDir, "runtime", "connectors");
+		mkdirSync(connectorDir, { recursive: true });
+		writeFileSync(join(connectorDir, ".signet-connectors-version"), JSON.stringify({ version, sha256: 123 }));
+
+		const result = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
+			...process.env,
+			SIGNET_DOWNLOAD_BASE: release.downloadBase,
+			SIGNET_TELEMETRY_OPTOUT: "1",
+		});
+
+		if (result.status !== 0) throw new Error(result.stderr);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("Installed connector assets to");
+		expect(JSON.parse(readFileSync(join(connectorDir, ".signet-connectors-version"), "utf8"))).toEqual({
+			version,
+			sha256: createHash("sha256").update(tarball).digest("hex"),
+		});
+	});
+
 	test("postinstall extracts connector assets from a manifest-aware release", async () => {
 		if (process.platform === "win32") return;
 

@@ -208,6 +208,16 @@ function verifySha256(path, expected) {
 	}
 }
 
+function isConnectorMarker(value) {
+	if (typeof value !== "object" || value === null) return false;
+	return (
+		typeof value.version === "string" &&
+		value.version.length > 0 &&
+		typeof value.sha256 === "string" &&
+		/^[a-f0-9]{64}$/i.test(value.sha256)
+	);
+}
+
 function nativePackageVersion() {
 	try {
 		return JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).version;
@@ -246,8 +256,9 @@ async function installConnectorAssets() {
 	}
 	if (
 		existsSync(targetMarker) &&
-		installedMarker?.version === manifest.version &&
-		installedMarker?.sha256?.toLowerCase() === component.sha256.toLowerCase()
+		isConnectorMarker(installedMarker) &&
+		installedMarker.version === manifest.version &&
+		installedMarker.sha256.toLowerCase() === component.sha256.toLowerCase()
 	) {
 		// Already extracted for this version. Skip to keep postinstall fast
 		// and to avoid clobbering user-tweaked assets.
