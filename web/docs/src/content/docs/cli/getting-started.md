@@ -17,9 +17,30 @@ bun add -g signetai
 signet --help
 ```
 
-Use one installation route per machine. See [Install](/getting-started/install/) for platform notes.
+Use one installation route per machine. See [Install](/getting-started/install/) for platform notes. All three installation paths provide the same compiled Signet binary through the matching native package.
 
 ## Common commands
+
+### macOS Gatekeeper and unsigned CLI binaries
+
+The macOS CLI binaries (`signet-darwin-x64` and `signet-darwin-arm64`) are
+unsigned by design until Apple Developer signing is available. A binary
+downloaded through a browser may be blocked by macOS Gatekeeper because it has
+the quarantine attribute.
+
+To open a trusted binary, right-click it in Finder and choose **Open**, or go to
+**System Settings > Privacy & Security** and choose **Open Anyway** for the
+blocked binary. You can also remove the quarantine attribute in Terminal:
+
+```bash
+xattr -d com.apple.quarantine <path>
+```
+
+Only bypass Gatekeeper for binaries downloaded from the official Signet source
+that you trust. Verify the release and checksum first. For non-server
+deployments, use the Signet desktop app instead of the CLI binary.
+
+---
 
 | Command | Purpose |
 |---|---|

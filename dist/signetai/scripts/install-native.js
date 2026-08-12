@@ -164,6 +164,9 @@ async function main() {
 			await chmod(destination, 0o755);
 		}
 		console.log(`Linked Signet native binary for ${platform}`);
+		if (process.platform === "darwin") {
+			console.log("macOS Gatekeeper tip: browser-downloaded unsigned binaries may require right-click Open or Open Anyway. Only bypass Gatekeeper for a trusted official Signet binary. See https://docs.signetai.sh/getting-started/install/");
+		}
 	} catch (err) {
 		rmSync(destination, { force: true });
 		throw err;
