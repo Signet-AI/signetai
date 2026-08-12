@@ -212,6 +212,8 @@ describe("runStartupRecovery", () => {
 		expect(report1.documentLeasesRecovered).toBe(0);
 		expect(report1.stagingRowsCleaned).toBe(0);
 		expect(report1.orphanedPassesSwept).toBe(0);
+		expect(report1.databaseIntegrity.phase).toBe("pending");
+		expect(report1.databaseIntegrity.quickCheck.messages).toEqual(["not checked"]);
 
 		// Run again — still nothing.
 		const report2 = runStartupRecovery(getDbAccessor());

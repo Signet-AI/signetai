@@ -95,6 +95,7 @@ const hermesPluginDir = join(root, "integrations", "hermes-agent", "connector", 
 
 const workerEntries = [
 	["synthesis-render-worker", "platform/daemon/src/synthesis-render-worker.ts"],
+	["database-integrity-worker", "platform/daemon/src/database-integrity-worker.ts"],
 	// Native ONNX embedding runs in a worker so model download / WASM compile /
 	// inference can never block the daemon's main event loop (see
 	// embedding-worker.ts). Transformers is bundled into this asset; the ONNX

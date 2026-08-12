@@ -7,7 +7,13 @@
  * when SQLite reports an index mismatch.
  */
 
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import { logger } from "./logger";
+import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 
 export type DatabaseIntegrityState = "unknown" | "healthy" | "repaired" | "corrupt" | "unavailable";
 
@@ -19,19 +25,27 @@ export interface IntegrityCheckStatus {
 export interface DatabaseIntegrityStatus {
 	readonly checkedAt: string;
 	readonly state: DatabaseIntegrityState;
+	readonly phase: "pending" | "running" | "complete" | "timed_out";
 	readonly quickCheck: IntegrityCheckStatus;
 	readonly telemetryCheck: IntegrityCheckStatus;
 	readonly rebuiltIndexes: readonly string[];
+	readonly durationMs: number;
+	readonly repairGuidance: string | null;
 }
 
 const UNKNOWN_CHECK: IntegrityCheckStatus = { ok: false, messages: ["not checked"] };
+const REPAIR_GUIDANCE =
+	"Stop the daemon, back up the database, and run the operator integrity repair flow before restarting.";
 
 let latestStatus: DatabaseIntegrityStatus = {
 	checkedAt: "",
 	state: "unknown",
+	phase: "pending",
 	quickCheck: UNKNOWN_CHECK,
 	telemetryCheck: UNKNOWN_CHECK,
 	rebuiltIndexes: [],
+	durationMs: 0,
+	repairGuidance: null,
 };
 
 function check(db: ReadDb, pragma: "quick_check" | "integrity_check", table?: string): IntegrityCheckStatus {
@@ -61,13 +75,19 @@ function statusWith(
 	quickCheck: IntegrityCheckStatus,
 	telemetryCheck: IntegrityCheckStatus,
 	rebuiltIndexes: readonly string[],
+	phase: DatabaseIntegrityStatus["phase"] = "complete",
+	durationMs = 0,
+	repairGuidance: string | null = state === "corrupt" || state === "unavailable" ? REPAIR_GUIDANCE : null,
 ): DatabaseIntegrityStatus {
 	return {
 		checkedAt: new Date().toISOString(),
 		state,
+		phase,
 		quickCheck,
 		telemetryCheck,
 		rebuiltIndexes,
+		durationMs,
+		repairGuidance,
 	};
 }
 
@@ -82,6 +102,120 @@ export type TelemetryIndexRepairAudit = (
 	detectionMessages: readonly string[],
 ) => void;
 
+export interface DatabaseIntegrityWorkerResult {
+	readonly quickCheck: IntegrityCheckStatus;
+}
+
+export interface DatabaseIntegrityWorkerMessage {
+	readonly type: "result";
+	readonly result: DatabaseIntegrityWorkerResult;
+}
+
+export interface DeferredIntegrityCheckOptions {
+	readonly workerPath: string;
+	readonly timeoutMs?: number;
+	readonly audit?: TelemetryIndexRepairAudit;
+}
+
+const DEFAULT_INTEGRITY_TIMEOUT_MS = 30_000;
+let deferredIntegrityRun: Promise<DatabaseIntegrityStatus> | null = null;
+
+function workerPathFromModule(): string {
+	const moduleDir = dirname(fileURLToPath(import.meta.url));
+	const bundled = join(moduleDir, "database-integrity-worker.js");
+	if (existsSync(bundled)) return bundled;
+	return join(moduleDir, "database-integrity-worker.ts");
+}
+
+/**
+ * Run the global quick_check away from Bun's main event loop after readiness.
+ * SQLite does not expose progress callbacks for this pragma, so the caller
+ * gets a wall-clock deadline and periodic progress logs instead.
+ */
+export function runDeferredIntegrityCheck(
+	accessor: DbAccessor,
+	dbPath: string,
+	options: Partial<DeferredIntegrityCheckOptions> = {},
+): Promise<DatabaseIntegrityStatus> {
+	if (deferredIntegrityRun !== null) return deferredIntegrityRun;
+	const run = runDeferredIntegrityCheckInternal(accessor, dbPath, options);
+	deferredIntegrityRun = run;
+	const clear = (): void => {
+		if (deferredIntegrityRun === run) deferredIntegrityRun = null;
+	};
+	run.then(clear, clear);
+	return run;
+}
+
+async function runDeferredIntegrityCheckInternal(
+	accessor: DbAccessor,
+	dbPath: string,
+	options: Partial<DeferredIntegrityCheckOptions>,
+): Promise<DatabaseIntegrityStatus> {
+	const timeoutMs = options.timeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS;
+	const startedAt = Date.now();
+	latestStatus = statusWith("unknown", UNKNOWN_CHECK, UNKNOWN_CHECK, [], "running", 0);
+	logger.info("startup-recovery", "Deferred database integrity check started", { timeoutMs });
+	const workerPath =
+		options.workerPath ?? resolveEmbeddedWorkerPath("database-integrity-worker") ?? workerPathFromModule();
+	const worker = new Worker(workerPath, { workerData: { dbPath } });
+	let progressTimer: ReturnType<typeof setInterval> | undefined;
+
+	try {
+		const result = await new Promise<DatabaseIntegrityWorkerResult>((resolve, reject) => {
+			const timer = setTimeout(() => {
+				void worker.terminate();
+				reject(new Error(`database integrity check exceeded ${timeoutMs}ms`));
+			}, timeoutMs);
+			progressTimer = setInterval(() => {
+				logger.info("startup-recovery", "Database integrity check in progress", {
+					elapsedMs: Date.now() - startedAt,
+					budgetMs: timeoutMs,
+				});
+			}, 1000);
+			worker.once("message", (message: DatabaseIntegrityWorkerMessage) => {
+				clearTimeout(timer);
+				resolve(message.result);
+			});
+			worker.once("error", (error) => {
+				clearTimeout(timer);
+				reject(error);
+			});
+			worker.once("exit", (code) => {
+				if (code !== 0) {
+					clearTimeout(timer);
+					reject(new Error(`database integrity worker exited with code ${code}`));
+				}
+			});
+		});
+		const databaseIntegrity = repairTelemetryIndexes(accessor, options.audit, { quickCheck: result.quickCheck });
+		latestStatus = { ...databaseIntegrity, durationMs: Date.now() - startedAt };
+		logger.info("startup-recovery", "Deferred database integrity check complete", {
+			state: latestStatus.state,
+			durationMs: latestStatus.durationMs,
+		});
+		return latestStatus;
+	} catch (error) {
+		latestStatus = statusWith(
+			"unavailable",
+			{ ok: false, messages: [error instanceof Error ? error.message : String(error)] },
+			UNKNOWN_CHECK,
+			[],
+			"timed_out",
+			Date.now() - startedAt,
+			REPAIR_GUIDANCE,
+		);
+		logger.error("startup-recovery", "Deferred database integrity check failed", undefined, {
+			error: latestStatus.quickCheck.messages[0],
+			durationMs: latestStatus.durationMs,
+		});
+		return latestStatus;
+	} finally {
+		if (progressTimer !== undefined) clearInterval(progressTimer);
+		await worker.terminate();
+	}
+}
+
 /**
  * Check the database before background workers start and repair only the
  * disposable telemetry indexes when the targeted check identifies damage.
@@ -90,13 +224,14 @@ export type TelemetryIndexRepairAudit = (
 export function repairTelemetryIndexes(
 	accessor: DbAccessor,
 	audit?: TelemetryIndexRepairAudit,
+	options?: { readonly quickCheck?: IntegrityCheckStatus },
 ): DatabaseIntegrityStatus {
 	let quickCheck: IntegrityCheckStatus;
 	let telemetryCheck: IntegrityCheckStatus;
 	let telemetryIndexes: readonly string[];
 	try {
 		const checks = accessor.withReadDb((db) => ({
-			quick: check(db, "quick_check"),
+			quick: options?.quickCheck ?? check(db, "quick_check"),
 			telemetry: check(db, "integrity_check", "telemetry_events"),
 			indexes: listTelemetryIndexes(db),
 		}));

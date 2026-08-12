@@ -18,11 +18,9 @@
 
 import { reconcileAcpDeliveries } from "./cross-agent";
 import type { DatabaseIntegrityStatus } from "./database-integrity";
-import { repairTelemetryIndexes } from "./database-integrity";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 import { recoverStaleLeases } from "./pipeline/stale-leases";
-import { insertHistoryEvent } from "./transactions";
 
 export interface StartupRecoveryReport {
 	readonly walCheckpointed: boolean;
@@ -39,7 +37,6 @@ const DEAD_JOB_RETENTION_DAYS = 7;
 const BATCH_SIZE = 500;
 const JOB_MAX_TOTAL = 50_000;
 const STAGING_MAX_TOTAL = 200_000;
-const ALLOW_UNAUDITED_TELEMETRY_REPAIR = "1";
 
 /**
  * Synchronous bounded batch drain. No yielding, no pressure checks.
@@ -71,40 +68,19 @@ function drainBatchesSync<Item>(
 export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport {
 	const startedAt = Date.now();
 	logger.info("startup-recovery", "Running startup recovery");
-
-	const databaseIntegrity = repairTelemetryIndexes(accessor, (db, indexes) => {
-		try {
-			insertHistoryEvent(db, {
-				memoryId: "system",
-				event: "none",
-				oldContent: null,
-				newContent: null,
-				changedBy: "daemon",
-				reason: "startup database integrity repair",
-				metadata: JSON.stringify({ repairAction: "reindex-telemetry", indexes }),
-				createdAt: new Date().toISOString(),
-				actorType: "daemon",
-			});
-		} catch (error) {
-			if (process.env.SIGNET_ALLOW_UNAUDITED_TELEMETRY_REPAIR !== ALLOW_UNAUDITED_TELEMETRY_REPAIR) throw error;
-			logger.error("startup-recovery", "Telemetry index repair committed without audit", undefined, {
-				error: error instanceof Error ? error.message : String(error),
-				indexes,
-			});
-		}
-	});
-	if (databaseIntegrity.state === "repaired") {
-		logger.warn("startup-recovery", "Rebuilt corrupt telemetry indexes", {
-			indexes: databaseIntegrity.rebuiltIndexes,
-			messages: databaseIntegrity.telemetryCheck.messages,
-		});
-	} else if (databaseIntegrity.state === "corrupt" || databaseIntegrity.state === "unavailable") {
-		logger.error("startup-recovery", "Database integrity check failed", undefined, {
-			state: databaseIntegrity.state,
-			quickCheck: databaseIntegrity.quickCheck.messages,
-			telemetryCheck: databaseIntegrity.telemetryCheck.messages,
-		});
-	}
+	// The full-database quick_check is intentionally deferred until after the
+	// HTTP server is ready. Running it here monopolizes Bun's main thread on
+	// large databases and makes even /health/live unreachable (#1513).
+	const databaseIntegrity: DatabaseIntegrityStatus = {
+		checkedAt: "",
+		state: "unknown",
+		phase: "pending",
+		quickCheck: { ok: false, messages: ["not checked"] },
+		telemetryCheck: { ok: false, messages: ["not checked"] },
+		rebuiltIndexes: [],
+		durationMs: 0,
+		repairGuidance: null,
+	};
 
 	// NOTE: WAL checkpoint intentionally omitted. An explicit
 	// PRAGMA wal_checkpoint(TRUNCATE) during startup blocks the event loop for

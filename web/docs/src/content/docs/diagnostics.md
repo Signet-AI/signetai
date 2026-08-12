@@ -43,6 +43,13 @@ POST /api/repair/check-fts
 POST /api/repair/retention-sweep
 ```
 
+The daemon's full-database integrity scan runs in a single-flight worker after
+HTTP readiness, with a 30-second wall-clock budget and periodic progress logs.
+It transactionally rebuilds disposable telemetry indexes when only
+`telemetry_events` is corrupt. A confirmed failure is reported by `/health` and
+`/health/ready`, with actionable offline repair guidance. If the audit store
+prevents committing a verified repair, the default remains fail-closed.
+
 Examples:
 
 ```bash

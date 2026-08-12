@@ -245,7 +245,10 @@ export function mountHealthRoutes(app: Hono): void {
 		const migrationsOk = dbResult?.migrationsOk ?? false;
 		const databaseIntegrity = getDatabaseIntegrityStatus();
 		if (databaseIntegrity.state === "corrupt" || databaseIntegrity.state === "unavailable") {
-			reasons.push(`database integrity ${databaseIntegrity.state}`);
+			reasons.push(
+				databaseIntegrity.repairGuidance ??
+					`database integrity ${databaseIntegrity.state}; stop the daemon, back up the database, and run the operator integrity repair flow`,
+			);
 		}
 		if (dbOk && !migrationsOk) {
 			reasons.push("pending migrations");

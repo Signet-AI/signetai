@@ -49,6 +49,7 @@ import {
 } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
+import { runDeferredIntegrityCheck } from "./database-integrity";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum";
 import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnostics-queue";
@@ -183,6 +184,7 @@ import {
 	stopActiveTelemetry,
 	telemetryDisabledByEnv,
 } from "./telemetry";
+import { insertHistoryEvent } from "./transactions";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 
@@ -2003,19 +2005,10 @@ async function main() {
 	startFdPollMonitor();
 
 	// Clean accumulated crash-loop damage (dead jobs, stagnant staging buffer,
-	// WAL bloat) before any worker starts. Fully synchronous — no yielding to
-	// the event loop — because pending boot operations (plugin init, route
-	// registration) would interfere with the DB write connection if allowed
-	// to run between recovery batches (#1059).
+	// WAL bloat) before any worker starts. Integrity scanning is deliberately
+	// not part of this synchronous phase. The full-database quick_check runs in
+	// a bounded worker after the HTTP server is ready (#1513).
 	const startupRecovery = runStartupRecovery(getDbAccessor());
-	if (
-		startupRecovery.databaseIntegrity.state === "corrupt" ||
-		startupRecovery.databaseIntegrity.state === "unavailable"
-	) {
-		throw new Error(
-			`Database integrity check failed before workers started (${startupRecovery.databaseIntegrity.state}). Resolve the database issue offline; if only the audit store prevents a verified telemetry repair, restart once with SIGNET_ALLOW_UNAUDITED_TELEMETRY_REPAIR=1.`,
-		);
-	}
 
 	// Purge artifacts of sources deleted while the daemon was down (e.g.
 	// crash-loop-disabled sources). This needs the DB accessor, so it runs
@@ -2354,6 +2347,41 @@ async function main() {
 		logFdSnapshot("server-ready");
 		writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
 		vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor());
+		void runDeferredIntegrityCheck(getDbAccessor(), MEMORY_DB, {
+			timeoutMs: 30_000,
+			audit: (db, indexes) => {
+				try {
+					insertHistoryEvent(db, {
+						memoryId: "system",
+						event: "none",
+						oldContent: null,
+						newContent: null,
+						changedBy: "daemon",
+						reason: "deferred database integrity repair",
+						metadata: JSON.stringify({ repairAction: "reindex-telemetry", indexes }),
+						createdAt: new Date().toISOString(),
+						actorType: "daemon",
+					});
+				} catch (error) {
+					if (process.env.SIGNET_ALLOW_UNAUDITED_TELEMETRY_REPAIR !== "1") throw error;
+					logger.error("startup-recovery", "Telemetry index repair committed without audit", undefined, {
+						error: error instanceof Error ? error.message : String(error),
+						indexes,
+					});
+				}
+			},
+		}).then((status) => {
+			if (status.state === "corrupt" || status.state === "unavailable") {
+				logger.error("startup-recovery", "Database integrity failed after readiness", undefined, {
+					state: status.state,
+					phase: status.phase,
+					quickCheck: status.quickCheck.messages,
+					telemetryCheck: status.telemetryCheck.messages,
+					guidance:
+						"Stop the daemon, back up the database, and run the operator integrity repair flow before restarting.",
+				});
+			}
+		});
 
 		const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
 		try {

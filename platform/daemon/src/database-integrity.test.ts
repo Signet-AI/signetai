@@ -1,5 +1,9 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
-import { repairTelemetryIndexes } from "./database-integrity";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { repairTelemetryIndexes, runDeferredIntegrityCheck } from "./database-integrity";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 
 function fakeAccessor(options: { readonly quickMessage?: string; readonly telemetryMessage?: string }): {
@@ -135,5 +139,54 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		expect(result.state).toBe("corrupt");
 		expect(result.quickCheck.ok).toBe(false);
 		expect(reindexed).toEqual([]);
+	});
+});
+
+describe("deferred database integrity recovery (#1513)", () => {
+	it("keeps confirmed corruption fail-closed after the worker reports it", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-corrupt-"));
+		const workerPath = join(dir, "corrupt-worker.mjs");
+		writeFileSync(
+			workerPath,
+			'import { parentPort } from "node:worker_threads"; parentPort.postMessage({ type: "result", result: { quickCheck: { ok: false, messages: ["database disk image is malformed"] } } });\n',
+		);
+
+		const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, "/tmp/not-used.db", {
+			workerPath,
+			timeoutMs: 1000,
+		});
+
+		expect(result.state).toBe("corrupt");
+		expect(result.phase).toBe("complete");
+		expect(result.quickCheck.messages).toEqual(["database disk image is malformed"]);
+		expect(result.repairGuidance).toContain("back up the database");
+	});
+
+	it("uses the bounded worker for a healthy SQLite database", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-healthy-"));
+		const dbPath = join(dir, "memory.db");
+		const database = new Database(dbPath);
+		database.exec("CREATE TABLE check_me (value TEXT)");
+		database.close();
+
+		const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, dbPath, { timeoutMs: 5000 });
+
+		expect(result.state).toBe("healthy");
+		expect(result.phase).toBe("complete");
+		expect(result.quickCheck.ok).toBe(true);
+	});
+
+	it("bounds a worker that does not complete and returns actionable guidance", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-timeout-"));
+		const workerPath = join(dir, "slow-worker.mjs");
+		writeFileSync(workerPath, "setTimeout(() => {}, 1000);\n");
+		const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, "/tmp/not-used.db", {
+			workerPath,
+			timeoutMs: 10,
+		});
+
+		expect(result.state).toBe("unavailable");
+		expect(result.phase).toBe("timed_out");
+		expect(result.repairGuidance).toContain("back up the database");
 	});
 });
