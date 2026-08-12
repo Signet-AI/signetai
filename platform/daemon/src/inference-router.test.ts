@@ -547,6 +547,81 @@ printf 'never reached\\n'
 		}
 	});
 
+	it("normalizes an occupied Pi permit timeout and suppresses fallback (#1332)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-pi-permit-timeout-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`inference:
+  defaultPolicy: pi-test
+  targets:
+    pi-test:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:1234/v1
+      models:
+        default:
+          model: pi-test-model
+    fallback:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:1234/v1
+      models:
+        default:
+          model: fallback-model
+  policies:
+    pi-test:
+      mode: automatic
+      defaultTargets:
+        - pi-test/default
+      fallbackTargets:
+        - fallback/default
+  workloads:
+    memoryExtraction:
+      policy: pi-test
+`,
+		);
+		const originalLimit = getLlmConcurrencyStatus().limit;
+		let releaseBlocker: (() => void) | undefined;
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			if (String(input).endsWith("/models")) return new Response("not found", { status: 404 });
+			return openAiSseResponse("should not reach");
+		}) as unknown as typeof fetch;
+		try {
+			configureLlmConcurrency(1);
+			const blocker = withLlmConcurrency(
+				() =>
+					new Promise<void>((resolve) => {
+						releaseBlocker = resolve;
+					}),
+				5_000,
+				"test-blocker",
+			);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			const router = getOrCreateInferenceRouter(dir);
+			const startedAt = Date.now();
+			const result = await router.runAgent(
+				{ operation: "memory_extraction", promptPreview: "occupied permit" },
+				"Use the supplied daemon tools.",
+				[],
+				{ timeoutMs: 25 },
+			);
+			const elapsed = Date.now() - startedAt;
+			releaseBlocker?.();
+			await blocker;
+			expect(elapsed).toBeLessThan(150);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				const details = JSON.stringify(result.error);
+				expect(details).toMatch(/deadline/);
+				expect(details).toContain("pi-test/default");
+				expect(details).not.toContain("fallback/default");
+			}
+		} finally {
+			releaseBlocker?.();
+			configureLlmConcurrency(originalLimit);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("allows a Pi agent session with timeoutMs: 0 to complete without a deadline (#1416)", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-pi-no-deadline-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });

@@ -44,6 +44,7 @@ import {
 	type StreamCapableLlmProvider,
 	acquireLlmConcurrencyPermit,
 	generateWithTracking,
+	SemaphoreTimeoutError,
 } from "./pipeline/provider";
 import { getSecret } from "./secrets";
 
@@ -1084,7 +1085,19 @@ export class InferenceRouter {
 					const deadlineMs = opts?.timeoutMs ?? provider.agentSessionTimeoutMs;
 					const deadline = deadlineMs > 0 ? performance.now() + deadlineMs : undefined;
 					let sessionUsage: LlmUsage | null = null;
-					const release = await acquireLlmConcurrencyPermit(deadlineMs > 0 ? deadlineMs : undefined, "pi-agent");
+					const remainingBeforePermit = deadline === undefined ? undefined : deadline - performance.now();
+					if (remainingBeforePermit !== undefined && remainingBeforePermit <= 0) {
+						throw new PiAgentSessionTimeoutError(deadlineMs, Promise.resolve());
+					}
+					let release: (() => void) | undefined;
+					try {
+						release = await acquireLlmConcurrencyPermit(remainingBeforePermit, "pi-agent");
+					} catch (error) {
+						if (error instanceof SemaphoreTimeoutError) {
+							throw new PiAgentSessionTimeoutError(deadlineMs, Promise.resolve());
+						}
+						throw error;
+					}
 					let session: PiAgentSession | undefined;
 					let releaseDeferred = false;
 					const remainingBeforeInitialization = deadline === undefined ? undefined : deadline - performance.now();
@@ -1138,7 +1151,7 @@ export class InferenceRouter {
 									try {
 										session?.dispose();
 									} finally {
-										release();
+										release?.();
 									}
 								});
 							}
@@ -1161,7 +1174,7 @@ export class InferenceRouter {
 							try {
 								session?.dispose();
 							} finally {
-								release();
+								release?.();
 							}
 						}
 					}
