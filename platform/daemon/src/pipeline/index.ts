@@ -179,7 +179,20 @@ export function startPipeline(
 
 	// Maintenance worker (F3) — runs alongside retention
 	if (!maintenanceHandle && providerTracker) {
-		maintenanceHandle = startMaintenanceWorker(accessor, pipelineCfg, providerTracker, retentionHandle);
+		maintenanceHandle = startMaintenanceWorker(
+			accessor,
+			pipelineCfg,
+			providerTracker,
+			retentionHandle,
+			embeddingCfg.provider === "none"
+				? undefined
+				: {
+						cfg: embeddingCfg,
+						fetchEmbedding,
+						agentId,
+						batchSize: pipelineCfg.embeddingTracker.batchSize,
+					},
+		);
 	}
 
 	// Document ingest worker runs alongside the pipeline

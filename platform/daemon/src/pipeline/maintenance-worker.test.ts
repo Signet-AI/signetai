@@ -3,8 +3,9 @@ import { describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { createProviderTracker } from "../diagnostics";
+import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import { DEFAULT_PIPELINE_V2 } from "../memory-config";
-import type { PipelineV2Config } from "../memory-config";
+import { getEmbeddingGapStats } from "../repair-actions";
 import { startMaintenanceWorker } from "./maintenance-worker";
 
 // ---------------------------------------------------------------------------
@@ -71,6 +72,13 @@ const BASE_CFG: PipelineV2Config = {
 
 const now = new Date().toISOString();
 
+const TEST_EMBEDDING_CFG: EmbeddingConfig = {
+	provider: "ollama",
+	model: "maintenance-test",
+	dimensions: 3,
+	base_url: "http://127.0.0.1:11434",
+};
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -87,6 +95,68 @@ describe("maintenance-worker", () => {
 		expect(result.report.composite.status).toBe("healthy");
 		expect(result.recommendations).toHaveLength(0);
 		expect(result.executed).toHaveLength(0);
+		db.close();
+	});
+
+	it("repairs a bounded missing-embedding batch and records durable progress", async () => {
+		const db = freshDb();
+		const accessor = asAccessor(db);
+		const tracker = createProviderTracker();
+		for (let i = 0; i < 2; i++) {
+			db.prepare(
+				`INSERT INTO memories
+				 (id, type, content, content_hash, embedding_model, confidence, tags, created_at, updated_at, updated_by, version, manual_override, is_deleted, agent_id)
+				 VALUES (?, 'fact', ?, ?, 'maintenance-test', 0.9, '[]', ?, ?, 'test', 1, 0, 0, 'default')`,
+			).run(`missing-maintenance-${i}`, `maintenance repair fixture ${i}`, `hash-maintenance-${i}`, now, now);
+		}
+		const limitedCfg: PipelineV2Config = {
+			...BASE_CFG,
+			repair: { ...BASE_CFG.repair, reembedCooldownMs: 0, reembedHourlyBudget: 1 },
+		};
+
+		const handle = startMaintenanceWorker(accessor, limitedCfg, tracker, null, {
+			cfg: TEST_EMBEDDING_CFG,
+			fetchEmbedding: async () => [0.1, 0.2, 0.3],
+			agentId: "default",
+			batchSize: 1,
+		});
+		handle.stop();
+
+		const result = await handle.tick();
+		expect(result.recommendations.map((recommendation) => recommendation.action)).toContain("repairEmbeddingIndex");
+		expect(result.executed).toContainEqual(
+			expect.objectContaining({
+				action: "repairEmbeddingIndex",
+				success: true,
+				affected: 1,
+				details: expect.objectContaining({ delegatedAction: "reembedMissingMemories" }),
+			}),
+		);
+		expect(getEmbeddingGapStats(accessor).unembedded).toBe(1);
+		expect(getEmbeddingGapStats(accessor).repair).toMatchObject({ batchesStarted: 1, lastAffected: 1 });
+		const capped = await handle.tick();
+		expect(capped.executed).toContainEqual(
+			expect.objectContaining({ action: "repairEmbeddingIndex", success: false, affected: 0 }),
+		);
+		expect(capped.executed[0]?.message).toContain("hourly budget exhausted");
+		db.close();
+	});
+
+	it("does not recommend embedding repair when the index is healthy", async () => {
+		const db = freshDb();
+		const accessor = asAccessor(db);
+		const tracker = createProviderTracker();
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null, {
+			cfg: TEST_EMBEDDING_CFG,
+			fetchEmbedding: async () => [0.1, 0.2, 0.3],
+			agentId: "default",
+			batchSize: 1,
+		});
+		handle.stop();
+
+		const result = await handle.tick();
+		expect(result.recommendations.map((recommendation) => recommendation.action)).not.toContain("repairEmbeddingIndex");
+		expect(result.executed.map((execution) => execution.action)).not.toContain("repairEmbeddingIndex");
 		db.close();
 	});
 

@@ -174,6 +174,8 @@ export function finishEmbeddingRepairLease(
 	lease: EmbeddingRepairLease,
 	outcome: {
 		readonly successful: readonly EmbeddingRepairKey[];
+		/** Number of committed rows when the caller uses a bounded repair action. */
+		readonly affected?: number;
 		readonly failed: readonly EmbeddingRepairKey[];
 		readonly model: string;
 		readonly pollMs: number;
@@ -222,7 +224,7 @@ export function finishEmbeddingRepairLease(
 		// A lease serializes attempted work, but the hourly budget represents
 		// completed repair work. A pressure abort can still persist failure
 		// backoff while releasing its lease without spending a batch slot.
-		const charged = outcome.successful.length > 0;
+		const charged = outcome.successful.length > 0 || (outcome.affected ?? 0) > 0;
 		const error = outcome.error ?? (outcome.failed.length > 0 ? "embedding provider returned no vector" : null);
 		db.prepare(
 			`UPDATE embedding_repair_budget
@@ -233,7 +235,7 @@ export function finishEmbeddingRepairLease(
 			inWindow ? current.window_started_at : iso(now),
 			batchesStarted + (charged ? 1 : 0),
 			iso(now),
-			outcome.successful.length,
+			outcome.affected ?? outcome.successful.length,
 			error,
 			iso(now),
 			lease.id,

@@ -13,18 +13,25 @@ import type { DbAccessor } from "../db-accessor";
 import { getFreePageRatio } from "../db-vacuum";
 import type { DiagnosticsReport, ProviderTracker } from "../diagnostics";
 import { getDiagnostics } from "../diagnostics";
+import { isActiveEmbeddingConfig } from "../embedding-index-state";
+import { acquireEmbeddingRepairLease, finishEmbeddingRepairLease } from "../embedding-repair-state";
 import { propagateMemoryStatus } from "../knowledge-graph";
 import { logger } from "../logger";
-import type { PipelineV2Config } from "../memory-config";
+import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import {
 	DEAD_MEMORY_DEFAULT_ACCESS_DAYS,
 	DEAD_MEMORY_DEFAULT_CONFIDENCE,
+	type EmbeddingRepairStats,
 	type RateLimiter,
 	type RepairContext,
 	type RepairResult,
 	checkFtsConsistency,
+	cleanOrphanedEmbeddings,
 	createRateLimiter,
 	deduplicateMemories,
+	getEmbeddingRepairStats,
+	reembedMissingMemories,
+	reembedModelMigration,
 	releaseStaleLeases,
 	requeueDeadJobs,
 	triggerRetentionSweep,
@@ -62,8 +69,21 @@ export interface RepairRecommendation {
 // Recommendation engine
 // ---------------------------------------------------------------------------
 
-function buildRecommendations(report: DiagnosticsReport): RepairRecommendation[] {
+function buildRecommendations(
+	report: DiagnosticsReport,
+	embedding: EmbeddingRepairStats | null,
+): RepairRecommendation[] {
 	const recs: RepairRecommendation[] = [];
+
+	if (embedding && (embedding.orphaned > 0 || embedding.migration > 0 || embedding.gap.unembedded > 0)) {
+		const priority =
+			embedding.orphaned > 0 ? "orphan cleanup" : embedding.gap.unembedded > 0 ? "missing vectors" : "model migration";
+		recs.push({
+			domain: "embedding",
+			action: "repairEmbeddingIndex",
+			trigger: `${priority}: ${embedding.gap.unembedded} missing, ${embedding.migration} migration, ${embedding.orphaned} orphaned`,
+		});
+	}
 
 	if (report.queue.deadRate > 0.01) {
 		recs.push({
@@ -135,7 +155,17 @@ interface ExecutionDeps {
 	cfg: PipelineV2Config;
 	limiter: RateLimiter;
 	retentionHandle: { sweep(): unknown } | null;
+	embedding: EmbeddingRepairDeps | null;
 }
+
+export interface EmbeddingRepairDeps {
+	readonly cfg: EmbeddingConfig;
+	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
+	readonly agentId: string;
+	readonly batchSize: number;
+}
+
+const AUTONOMOUS_EMBEDDING_BATCH = 20;
 
 async function executeRecommendation(
 	rec: RepairRecommendation,
@@ -156,6 +186,85 @@ async function executeRecommendation(
 			return null;
 		case "deduplicateMemories":
 			return deduplicateMemories(deps.accessor, deps.cfg, ctx, deps.limiter);
+		case "repairEmbeddingIndex": {
+			if (deps.embedding === null) return null;
+			const embedding = deps.embedding;
+			const admission = acquireEmbeddingRepairLease(
+				deps.accessor,
+				deps.cfg.repair.reembedCooldownMs,
+				deps.cfg.repair.reembedHourlyBudget,
+			);
+			if (!admission.allowed || admission.lease === undefined) {
+				return {
+					action: rec.action,
+					success: false,
+					affected: 0,
+					message: admission.reason ?? "embedding repair admission denied",
+				};
+			}
+			const lease = admission.lease;
+
+			const finish = (affected: number, error?: string): void => {
+				finishEmbeddingRepairLease(deps.accessor, lease, {
+					successful: [],
+					affected,
+					failed: [],
+					model: embedding.cfg.model,
+					pollMs: deps.cfg.embeddingTracker.pollMs,
+					eligibility: (db) => isActiveEmbeddingConfig(db, embedding.cfg),
+					...(error ? { error } : {}),
+				});
+			};
+
+			try {
+				const stats = getEmbeddingRepairStats(deps.accessor, embedding.cfg, embedding.agentId);
+				const batchSize =
+					Number.isFinite(embedding.batchSize) && embedding.batchSize > 0
+						? Math.max(1, Math.min(AUTONOMOUS_EMBEDDING_BATCH, Math.floor(embedding.batchSize)))
+						: 1;
+				const result =
+					stats.orphaned > 0
+						? cleanOrphanedEmbeddings(
+								deps.accessor,
+								deps.cfg,
+								ctx,
+								deps.limiter,
+								batchSize,
+							)
+						: stats.gap.unembedded > 0
+							? await reembedMissingMemories(
+									deps.accessor,
+									deps.cfg,
+									ctx,
+									deps.limiter,
+									embedding.fetchEmbedding,
+									embedding.cfg,
+									batchSize,
+								)
+							: await reembedModelMigration(
+									deps.accessor,
+									deps.cfg,
+									ctx,
+									deps.limiter,
+									embedding.fetchEmbedding,
+									embedding.cfg,
+									embedding.agentId,
+									batchSize,
+								);
+				finish(result.affected, result.success ? undefined : result.message);
+				return {
+					action: rec.action,
+					success: result.success,
+					affected: result.affected,
+					message: `${result.action}: ${result.message}`,
+					details: { delegatedAction: result.action, ...(result.details ?? {}) },
+				};
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				finish(0, message);
+				return { action: rec.action, success: false, affected: 0, message };
+			}
+		}
 		default:
 			return null;
 	}
@@ -200,6 +309,7 @@ export function startMaintenanceWorker(
 	cfg: PipelineV2Config,
 	tracker: ProviderTracker,
 	retentionHandle: { sweep(): unknown } | null,
+	embedding?: EmbeddingRepairDeps,
 ): MaintenanceHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
@@ -215,6 +325,7 @@ export function startMaintenanceWorker(
 		cfg,
 		limiter,
 		retentionHandle,
+		embedding: embedding ?? null,
 	};
 
 	async function doTick(): Promise<MaintenanceCycleResult> {
@@ -224,7 +335,10 @@ export function startMaintenanceWorker(
 		}
 		const report = accessor.withReadDb((db) => getDiagnostics(db, tracker));
 
-		const recommendations = buildRecommendations(report);
+		const embeddingStats = deps.embedding
+			? getEmbeddingRepairStats(accessor, deps.embedding.cfg, deps.embedding.agentId)
+			: null;
+		const recommendations = buildRecommendations(report, embeddingStats);
 		const executed: RepairResult[] = [];
 		let feedbackDecayedAspects = 0;
 		let feedbackPropagatedAttributes = 0;

@@ -38,8 +38,7 @@ import { readEmbeddingIndexState } from "./embedding-index-state";
 import { type EmbeddingRepairState, readEmbeddingRepairState } from "./embedding-repair-state";
 import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
-import type { EmbeddingConfig } from "./memory-config";
-import type { PipelineV2Config } from "./memory-config";
+import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import { recoverStaleLeases } from "./pipeline/stale-leases";
 import { insertHistoryEvent } from "./transactions";
 
@@ -605,6 +604,42 @@ export interface EmbeddingGapStats {
 	readonly repair: EmbeddingRepairState | null;
 }
 
+export interface EmbeddingRepairStats {
+	readonly gap: EmbeddingGapStats;
+	readonly migration: number;
+	readonly orphaned: number;
+}
+
+const orphanedEmbeddingWhere = `e.source_type = 'memory'
+	AND (m.id IS NULL OR m.is_deleted = 1)
+	AND m2.id IS NULL`;
+
+function countOrphanedEmbeddings(db: ReadDb): number {
+	const row = db
+		.prepare(
+			`SELECT COUNT(*) AS n FROM embeddings e
+			 LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
+			 LEFT JOIN memories m2
+			   ON e.source_type = 'memory' AND e.content_hash = m2.content_hash AND m2.is_deleted = 0
+			 WHERE ${orphanedEmbeddingWhere}`,
+		)
+		.get() as { n: number } | undefined;
+	return row?.n ?? 0;
+}
+
+function listOrphanedEmbeddingIds(db: WriteDb, limit: number): Array<{ id: string }> {
+	return db
+		.prepare(
+			`SELECT e.id FROM embeddings e
+			 LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
+			 LEFT JOIN memories m2
+			   ON e.source_type = 'memory' AND e.content_hash = m2.content_hash AND m2.is_deleted = 0
+			 WHERE ${orphanedEmbeddingWhere}
+			 LIMIT ?`,
+		)
+		.all(limit) as Array<{ id: string }>;
+}
+
 export function getEmbeddingGapStats(accessor: DbAccessor): EmbeddingGapStats {
 	const repair = readEmbeddingRepairState(accessor);
 	return accessor.withReadDb((db) => {
@@ -634,6 +669,19 @@ export function getEmbeddingGapStats(accessor: DbAccessor): EmbeddingGapStats {
 			repair,
 		};
 	});
+}
+
+export function getEmbeddingRepairStats(
+	accessor: DbAccessor,
+	embeddingCfg: EmbeddingConfig,
+	agentId: string,
+): EmbeddingRepairStats {
+	const gap = getEmbeddingGapStats(accessor);
+	const migration = accessor.withReadDb((db) =>
+		countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
+	);
+	const orphaned = accessor.withReadDb((db) => countOrphanedEmbeddings(db));
+	return { gap, migration, orphaned };
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,6 +1101,7 @@ export function cleanOrphanedEmbeddings(
 	cfg: PipelineV2Config,
 	ctx: RepairContext,
 	limiter: RateLimiter,
+	maxBatch = Number.MAX_SAFE_INTEGER,
 ): RepairResult {
 	const action = "cleanOrphanedEmbeddings";
 	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
@@ -1066,20 +1115,9 @@ export function cleanOrphanedEmbeddings(
 		};
 	}
 
+	const limit = Number.isFinite(maxBatch) && maxBatch > 0 ? Math.floor(maxBatch) : Number.MAX_SAFE_INTEGER;
 	const affected = accessor.withWriteTx((db) => {
-		const orphans = db
-			.prepare(
-				`SELECT e.id FROM embeddings e
-				 LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
-				 LEFT JOIN memories m2
-				   ON e.source_type = 'memory'
-				  AND e.content_hash = m2.content_hash
-				  AND m2.is_deleted = 0
-				 WHERE e.source_type = 'memory'
-				   AND (m.id IS NULL OR m.is_deleted = 1)
-				   AND m2.id IS NULL`,
-			)
-			.all() as Array<{ id: string }>;
+		const orphans = listOrphanedEmbeddingIds(db, limit);
 
 		if (orphans.length === 0) return 0;
 
