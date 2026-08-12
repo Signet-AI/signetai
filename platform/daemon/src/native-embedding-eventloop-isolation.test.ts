@@ -18,16 +18,50 @@
  */
 
 import { afterEach, describe, expect, it } from "bun:test";
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
+import type { Readable } from "node:stream";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { type Server, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+type TestChild = ChildProcessByStdio<null, Readable, Readable>;
+
 const daemonScript = join(import.meta.dir, "daemon.ts");
 const tempDirs: string[] = [];
-const children: ChildProcessWithoutNullStreams[] = [];
+const children: TestChild[] = [];
 const servers: Server[] = [];
+
+type ChildExit = {
+	readonly code: number | null;
+	readonly signal: NodeJS.Signals | null;
+};
+
+type ChildLifecycle = {
+	readonly stderr: Buffer[];
+	readonly closed: Promise<ChildExit>;
+};
+
+function captureChildLifecycle(child: TestChild): ChildLifecycle {
+	const stderr: Buffer[] = [];
+	const closed = new Promise<ChildExit>((resolve) => {
+		child.once("close", (code, signal) => resolve({ code, signal }));
+	});
+	child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+	return { stderr, closed };
+}
+
+function formatChildExitError(status: number | null, signal: NodeJS.Signals | null, stderr: string): Error {
+	const signalDetails = signal === null ? "" : `, signal ${signal}`;
+	const details = stderr.trim() || "<empty>";
+	return new Error(`daemon exited before health (status ${status ?? "unknown"}${signalDetails}); stderr:\n${details}`);
+}
+
+async function childExitError(child: TestChild, lifecycle: ChildLifecycle): Promise<Error> {
+	const exit = await lifecycle.closed;
+	const stderr = Buffer.concat(lifecycle.stderr).toString("utf8");
+	return formatChildExitError(child.exitCode ?? exit.code, exit.signal, stderr);
+}
 
 afterEach(async () => {
 	for (const child of children.splice(0)) {
@@ -88,12 +122,13 @@ async function blackholeOrigin(): Promise<string> {
 
 async function waitForHealth(
 	origin: string,
-	child: ChildProcessWithoutNullStreams,
+	child: TestChild,
+	lifecycle: ChildLifecycle,
 	deadlineMs = 30_000,
 ): Promise<void> {
 	const deadline = Date.now() + deadlineMs;
 	while (Date.now() < deadline) {
-		if (child.exitCode !== null) throw new Error(`daemon exited before health (status ${child.exitCode})`);
+		if (child.exitCode !== null) throw await childExitError(child, lifecycle);
 		try {
 			const res = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(1_000) });
 			if (res.ok) return;
@@ -106,6 +141,17 @@ async function waitForHealth(
 process.env.SIGNET_TELEMETRY_OPTOUT = "1"; // keep CI/test daemons out of the PostHog project
 
 describe("native embedding event-loop isolation (e2e)", () => {
+	it("preserves child stderr when startup exits before health", async () => {
+		const child = spawn(process.execPath, ["-e", 'console.error("startup failure"); process.exit(1)'], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const lifecycle = captureChildLifecycle(child);
+		const error = await childExitError(child, lifecycle);
+
+		expect(error.message).toContain("status 1");
+		expect(error.message).toContain("startup failure");
+	});
+
 	// Generous timeout: daemon startup + a 5s probe window.
 	it("/health stays within SLA while the embedding worker is stuck on a model download", async () => {
 		const agentsDir = tempDir();
@@ -141,12 +187,12 @@ describe("native embedding event-loop isolation (e2e)", () => {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		children.push(child);
+		const lifecycle = captureChildLifecycle(child);
 
-		// Surface daemon failures fast.
-		child.stderr.on("data", () => {});
+		// Drain stdout so the child cannot block on a full pipe.
 		child.stdout.on("data", () => {});
 
-		await waitForHealth(origin, child);
+		await waitForHealth(origin, child, lifecycle);
 
 		// The daemon's startup probe (daemon.ts) fires checkEmbeddingProvider
 		// at boot, so the embedding worker is now grinding against the
