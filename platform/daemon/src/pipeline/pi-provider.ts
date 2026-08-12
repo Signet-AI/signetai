@@ -38,7 +38,6 @@ import { logger } from "../logger";
 import {
 	type LlmProviderCallOptions,
 	type LlmProviderStreamEvent,
-	type LlmProviderStreamResult,
 	type StreamCapableLlmProvider,
 	acquireLlmConcurrencyPermit,
 } from "./provider";
@@ -130,8 +129,60 @@ export interface PiAgentSessionProvider {
 	readonly agentSessionTimeoutMs: number;
 	createAgentSession(
 		tools: readonly ToolDefinition[],
-		options?: { readonly maxTokens?: number },
+		options?: { readonly maxTokens?: number; readonly signal?: AbortSignal },
 	): Promise<PiAgentSession>;
+}
+
+function abortError(signal: AbortSignal): Error {
+	const reason = signal.reason;
+	if (reason instanceof Error) return reason;
+	return new DOMException("The operation was aborted", "AbortError");
+}
+
+export async function awaitWithAbort<T>(
+	promise: Promise<T>,
+	signal: AbortSignal | undefined,
+	onLateValue?: (value: T) => void,
+): Promise<T> {
+	if (!signal) return promise;
+	if (signal.aborted) {
+		void promise
+			.then(
+				(value) => onLateValue?.(value),
+				() => {},
+			)
+			.catch(() => {});
+		throw abortError(signal);
+	}
+	return new Promise<T>((resolve, reject) => {
+		let settled = false;
+		const onAbort = (): void => {
+			if (settled) return;
+			settled = true;
+			signal.removeEventListener("abort", onAbort);
+			reject(abortError(signal));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		void promise
+			.then(
+				(value) => {
+					if (settled) {
+						onLateValue?.(value);
+						return;
+					}
+					settled = true;
+					signal.removeEventListener("abort", onAbort);
+					resolve(value);
+				},
+				(error: unknown) => {
+					if (settled) return;
+					settled = true;
+					signal.removeEventListener("abort", onAbort);
+					reject(error);
+				},
+			)
+			.catch(() => {});
+	});
 }
 
 export function isPiAgentSessionProvider(
@@ -658,10 +709,13 @@ export function createPiModelProvider(
 		...(accountingProvenance ? { accountingProvenance } : {}),
 		isPiAgentSessionProvider: true,
 		agentSessionTimeoutMs: defaultTimeoutMs,
-		async createAgentSession(tools: readonly ToolDefinition[], options: { readonly maxTokens?: number } = {}) {
+		async createAgentSession(
+			tools: readonly ToolDefinition[],
+			options: { readonly maxTokens?: number; readonly signal?: AbortSignal } = {},
+		) {
 			// Isolated from the user's Pi credentials and models.json. The same
 			// daemon-owned runtime services ordinary calls and this AgentSession.
-			const isolatedRuntime = await modelRuntime;
+			const isolatedRuntime = await awaitWithAbort(modelRuntime, options.signal);
 			const settingsManager = SettingsManager.inMemory();
 			const resourceLoader = new DefaultResourceLoader({
 				cwd: process.cwd(),
@@ -674,16 +728,20 @@ export function createPiModelProvider(
 				noContextFiles: true,
 				systemPrompt: "You are a bounded Signet maintenance agent. You may use only the supplied daemon tools.",
 			});
-			await resourceLoader.reload();
-			const { session } = await createAgentSession({
-				model: options.maxTokens ? { ...piModel, maxTokens: options.maxTokens } : piModel,
-				modelRuntime: isolatedRuntime,
-				sessionManager: SessionManager.inMemory(),
-				settingsManager,
-				resourceLoader,
-				tools: tools.map((tool) => tool.name),
-				customTools: [...tools],
-			});
+			await awaitWithAbort(resourceLoader.reload(), options.signal);
+			const { session } = await awaitWithAbort(
+				createAgentSession({
+					model: options.maxTokens ? { ...piModel, maxTokens: options.maxTokens } : piModel,
+					modelRuntime: isolatedRuntime,
+					sessionManager: SessionManager.inMemory(),
+					settingsManager,
+					resourceLoader,
+					tools: tools.map((tool) => tool.name),
+					customTools: [...tools],
+				}),
+				options.signal,
+				(result) => result.session.dispose(),
+			);
 			return {
 				prompt: (text) => session.prompt(text),
 				abort: () => session.abort(),

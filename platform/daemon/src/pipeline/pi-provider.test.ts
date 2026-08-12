@@ -9,10 +9,47 @@ import {
 	mapUsage,
 	resolvePiModel,
 	summarizeCacheRequests,
+	awaitWithAbort,
 } from "./pi-provider";
 import { configureLlmConcurrency, getLlmConcurrencyStatus, withLlmConcurrency } from "./provider";
 
 describe("pi provider catalog models", () => {
+	test.each([
+		["modelRuntime", () => new Promise<never>(() => {})],
+		["resourceLoader.reload", () => new Promise<never>(() => {})],
+		["createAgentSession", () => new Promise<never>(() => {})],
+	] as const)("aborts stalled %s initialization within the shared deadline", async (stage, createStalled) => {
+		const controller = new AbortController();
+		const pending = awaitWithAbort(createStalled(), controller.signal);
+		setTimeout(() => controller.abort(new Error("Agent session exceeded the 25ms deadline")), 25);
+		await expect(pending).rejects.toThrow("Agent session exceeded the 25ms deadline");
+		expect(stage).toBeDefined();
+	});
+
+	test("allows initialization to complete before the shared deadline", async () => {
+		const controller = new AbortController();
+		await expect(awaitWithAbort(Promise.resolve("initialized"), controller.signal)).resolves.toBe("initialized");
+		expect(controller.signal.aborted).toBe(false);
+	});
+
+	test("does not resurrect a late session after initialization cancellation", async () => {
+		const controller = new AbortController();
+		let disposed = false;
+		let resolveLate: ((session: { dispose: () => void }) => void) | undefined;
+		const pending = awaitWithAbort(
+			new Promise<{ dispose: () => void }>((resolve) => {
+				resolveLate = resolve;
+			}),
+			controller.signal,
+			(session) => session.dispose(),
+		);
+		controller.abort(new Error("Agent session exceeded the 25ms deadline"));
+		await expect(pending).rejects.toThrow("Agent session exceeded the 25ms deadline");
+		resolveLate?.({ dispose: () => (disposed = true) });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(disposed).toBe(true);
+	});
+
 	test("preserves the Codex responses API and registry metadata", () => {
 		const model = getModels("openai-codex").find((candidate) => candidate.id === "gpt-5.4");
 		expect(model).toBeDefined();

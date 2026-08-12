@@ -41,7 +41,6 @@ import {
 import {
 	type AcpxHooksMode,
 	type LlmProviderStreamEvent,
-	type LlmProviderStreamResult,
 	type StreamCapableLlmProvider,
 	acquireLlmConcurrencyPermit,
 	generateWithTracking,
@@ -1088,8 +1087,39 @@ export class InferenceRouter {
 					const release = await acquireLlmConcurrencyPermit(deadlineMs > 0 ? deadlineMs : undefined, "pi-agent");
 					let session: PiAgentSession | undefined;
 					let releaseDeferred = false;
+					const remainingBeforeInitialization = deadline === undefined ? undefined : deadline - performance.now();
+					const initializationController = new AbortController();
+					let initializationTimer: ReturnType<typeof setTimeout> | undefined;
+					let initializationTimedOut = false;
+					let initializationTimeout: PiAgentSessionTimeoutError | undefined;
+					const abortInitialization = (): void => {
+						initializationTimedOut = true;
+						initializationTimeout = new PiAgentSessionTimeoutError(deadlineMs, Promise.resolve());
+						initializationController.abort(initializationTimeout);
+					};
+					if (remainingBeforeInitialization !== undefined && remainingBeforeInitialization <= 0) {
+						abortInitialization();
+					} else if (remainingBeforeInitialization !== undefined) {
+						initializationTimer = setTimeout(() => {
+							abortInitialization();
+						}, remainingBeforeInitialization);
+					}
 					try {
-						session = await provider.createAgentSession(tools, { maxTokens: opts?.maxTokens });
+						try {
+							session = await provider.createAgentSession(tools, {
+								maxTokens: opts?.maxTokens,
+								signal: initializationController.signal,
+							});
+						} catch (error) {
+							if (initializationTimedOut) {
+								throw initializationTimeout ?? new PiAgentSessionTimeoutError(deadlineMs, Promise.resolve());
+							}
+							throw error;
+						}
+						if (initializationTimedOut)
+							throw initializationTimeout ?? new PiAgentSessionTimeoutError(deadlineMs, Promise.resolve());
+						if (initializationTimer) clearTimeout(initializationTimer);
+						initializationTimer = undefined;
 						// AgentSession owns an internal model loop, so acquire the
 						// process-wide permit before initialization and hold it until
 						// the whole session is disposed. This prevents tool-driven
@@ -1097,7 +1127,7 @@ export class InferenceRouter {
 						// provider boundary, including cancellation cleanup.
 						const remainingMs = deadline === undefined ? undefined : deadline - performance.now();
 						if (remainingMs !== undefined && remainingMs <= 0) {
-							throw new Error(`Agent session exceeded the ${deadlineMs}ms deadline`);
+							throw new PiAgentSessionTimeoutError(deadlineMs, Promise.resolve());
 						}
 						try {
 							await promptPiAgentSession(session, prompt, remainingMs);
@@ -1126,6 +1156,7 @@ export class InferenceRouter {
 							session.getRequestUsages(),
 						);
 					} finally {
+						if (initializationTimer) clearTimeout(initializationTimer);
 						if (!releaseDeferred) {
 							try {
 								session?.dispose();
@@ -1148,6 +1179,7 @@ export class InferenceRouter {
 					const message = formatExecutionError(error);
 					this.observeExecutionFailure(loaded.value, targetRef, message);
 					attempts.push({ targetRef, ok: false, durationMs: Date.now() - startedAt, error: message });
+					if (error instanceof PiAgentSessionTimeoutError || error instanceof PiProviderDeadlineError) break;
 				} finally {
 					mcpConfig?.dispose();
 				}
