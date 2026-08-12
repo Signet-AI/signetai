@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
 const binaryName = process.platform === "win32" ? "signet.exe" : "signet";
 const binaryPath = join(packageDir, "native", binaryName);
+const connectorAssetsPath = join(packageDir, "runtime", "connectors");
 
 function resolveNativePackageBinaryPath() {
 	const platform = detectNativePlatform();
@@ -33,6 +34,50 @@ function resolveBinaryPath() {
 	return null;
 }
 
+function hasConnectorAssets() {
+	try {
+		return (
+			existsSync(connectorAssetsPath) &&
+			existsSync(join(connectorAssetsPath, ".signet-connectors-version")) &&
+			readFileSync(join(connectorAssetsPath, ".signet-connectors-version"), "utf8").trim().length > 0
+		);
+	} catch {
+		return false;
+	}
+}
+
+function connectorAssetsRequired() {
+	try {
+		const manifest = JSON.parse(readFileSync(join(packageDir, "native-manifest.json"), "utf8"));
+		return (
+			typeof manifest === "object" &&
+			manifest !== null &&
+			"components" in manifest &&
+			typeof manifest.components === "object" &&
+			manifest.components !== null &&
+			"connectors" in manifest.components
+		);
+	} catch {
+		return false;
+	}
+}
+
+function warnIfInstallAssetsMissing(resolvedBinaryPath) {
+	const missing = [];
+	if (resolvedBinaryPath !== binaryPath) missing.push("native/");
+	if (connectorAssetsRequired() && !hasConnectorAssets()) missing.push("runtime/connectors/");
+	if (missing.length === 0) return;
+
+	console.error(`Signet install assets are incomplete: missing ${missing.join(" and ")}.`);
+	if (resolvedBinaryPath !== binaryPath) {
+		console.error("The platform native package is installed, but Signet's postinstall did not finish linking the wrapper assets.");
+	} else {
+		console.error("Signet's postinstall did not finish installing all required wrapper assets.");
+	}
+	console.error("If Bun blocked the lifecycle script, run `bun pm -g untrusted`, trust Signet's postinstall, then reinstall with `bun add -g signetai`.");
+	console.error("If the postinstall failed, reinstall with npm or use the official installer from https://signetai.sh/install.sh.");
+}
+
 export function launchSignet() {
 	const resolvedBinaryPath = resolveBinaryPath();
 	if (!resolvedBinaryPath) {
@@ -41,6 +86,8 @@ export function launchSignet() {
 		console.error("The npm package should install the matching native optional dependency for your platform.");
 		process.exit(1);
 	}
+
+	warnIfInstallAssetsMissing(resolvedBinaryPath);
 
 	// Point the binary at the wrapper's installed runtime tree so the
 	// connector's `getPluginSourceDir()` `SIGNET_DIR/runtime/connectors/...`

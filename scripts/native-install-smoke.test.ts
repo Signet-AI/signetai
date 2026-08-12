@@ -260,7 +260,92 @@ function buildFakeConnectorTarball(): Buffer {
 	return buf;
 }
 
+function stageWrapperInstall(
+	packageDir: string,
+	options: { readonly nativeInstalled: boolean; readonly connectorAssetsInstalled: boolean },
+): void {
+	const platform = platformKey();
+	const nativePackageName = `signetai-${platform}`;
+	const nativePackageDir = join(packageDir, "node_modules", nativePackageName);
+	const nativePackageBin = join(nativePackageDir, "bin", "signet");
+	mkdirSync(join(nativePackageDir, "bin"), { recursive: true });
+	cpSync(join(root, "dist", "signetai", "scripts"), join(packageDir, "scripts"), { recursive: true });
+	cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), { recursive: true });
+	writeFileSync(
+		join(packageDir, "package.json"),
+		JSON.stringify({ name: "signetai", version: "0.0.0", type: "module" }),
+	);
+	writeFileSync(
+		join(nativePackageDir, "package.json"),
+		JSON.stringify({ name: nativePackageName, version: "0.0.0", type: "module" }),
+	);
+	writeFileSync(nativePackageBin, fakeNativeBinary());
+	chmodSync(nativePackageBin, 0o755);
+
+	if (options.nativeInstalled) {
+		mkdirSync(join(packageDir, "native"), { recursive: true });
+		cpSync(nativePackageBin, join(packageDir, "native", "signet"));
+		chmodSync(join(packageDir, "native", "signet"), 0o755);
+	}
+
+	writeFileSync(
+		join(packageDir, "native-manifest.json"),
+		JSON.stringify({
+			schemaVersion: 1,
+			version: "0.0.0",
+			assets: [],
+			components: {
+				connectors: {
+					url: "signet-connectors-0.0.0.tar.gz",
+					sha256: "0".repeat(64),
+					size: 1,
+				},
+			},
+		}),
+	);
+
+	if (options.connectorAssetsInstalled) {
+		const connectorDir = join(packageDir, "runtime", "connectors");
+		mkdirSync(connectorDir, { recursive: true });
+		writeFileSync(join(connectorDir, ".signet-connectors-version"), "0.0.0\n");
+	}
+}
+
 describe("native install smoke", () => {
+	test("warns when Bun blocked postinstall leaves native and connector assets absent", async () => {
+		if (process.platform === "win32") return;
+
+		const dir = tempDir();
+		const packageDir = join(dir, "signetai");
+		stageWrapperInstall(packageDir, { nativeInstalled: false, connectorAssetsInstalled: false });
+
+		const result = await runCommand("node", [join(packageDir, "bin", "signet.js"), "--version"], {
+			...process.env,
+		});
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("fake native signet --version");
+		expect(result.stderr).toContain("missing native/ and runtime/connectors/");
+		expect(result.stderr).toContain("The platform native package is installed");
+		expect(result.stderr).toContain("bun pm -g untrusted");
+	});
+
+	test("stays silent when native and connector assets are installed", async () => {
+		if (process.platform === "win32") return;
+
+		const dir = tempDir();
+		const packageDir = join(dir, "signetai");
+		stageWrapperInstall(packageDir, { nativeInstalled: true, connectorAssetsInstalled: true });
+
+		const result = await runCommand("node", [join(packageDir, "bin", "signet.js"), "--version"], {
+			...process.env,
+		});
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("fake native signet --version");
+		expect(result.stderr).toBe("");
+	});
+
 	test("postinstall extracts connector assets from a manifest-aware release", async () => {
 		if (process.platform === "win32") return;
 
