@@ -38,7 +38,8 @@ async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiRe
 			headers: { Accept: "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
 		});
 		const body = (await res.json().catch(() => null)) as { error?: unknown; details?: unknown } | T | null;
-		if (!res.ok) {
+		const errorBody = typeof body === "object" && body !== null && "error" in body;
+		if (!res.ok || errorBody) {
 			const error =
 				typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
 					? body.error
