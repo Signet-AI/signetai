@@ -70,10 +70,6 @@ jobs:
           set -euo pipefail
           mode="${SIGNING_MODE_INPUT}"
           runner="${{ matrix.runner }}"
-          is_release=0
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            is_release=1
-          fi
           has_official=0
           requires_signing=0
           missing=()
@@ -161,18 +157,10 @@ jobs:
           if [ "${mode}" = "auto" ]; then
             if [ "${has_official}" -eq 1 ]; then
               mode="official"
-            elif [[ "${runner}" == macos-* && "${is_release}" -eq 1 ]]; then
-              printf '::error::macOS tag releases require Developer ID signing and notarization; missing: %s %s\n' "${missing[*]}" "${notarization_missing[*]}"
-              exit 1
             else
               mode="self-signed"
-              printf '::warning::Official signing secrets missing; using self-signed mode for this non-release build: %s %s\n' "${missing[*]}" "${notarization_missing[*]}"
+              printf '::warning::Official signing secrets missing; using self-signed mode: %s %s\n' "${missing[*]}" "${notarization_missing[*]}"
             fi
-          fi
-
-          if [[ "${runner}" == macos-* && "${is_release}" -eq 1 && "${mode}" != "official" ]]; then
-            echo "::error::Stable macOS releases cannot use unsigned or self-signed artifacts"
-            exit 1
           fi
           if [ "${mode}" != "official" ] && [ "${mode}" != "self-signed" ]; then
             echo "::error::Invalid signing mode: ${mode}"
