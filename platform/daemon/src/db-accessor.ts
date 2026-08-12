@@ -30,10 +30,14 @@ import {
 	recreateMemoriesFts,
 	runMigrations,
 } from "@signet/core";
-import { convertToIncrementalVacuum, ensureVacuumConversionState } from "./db-vacuum";
+import { convertToIncrementalVacuum, DbSpacePreflightError, ensureVacuumConversionState } from "./db-vacuum";
+import type { DbSpaceMetrics } from "./db-vacuum";
+
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { loadMemoryConfig } from "./memory-config";
 import { observeDbLatency } from "./runtime-pressure";
+
+export { DbSpacePreflightError };
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const require = createRequire(import.meta.url);
@@ -596,36 +600,43 @@ function fileSize(path: string, deps: MigrationBackupDeps): number | null {
 	}
 }
 
-function pruneMigrationBackupsForHeadroom(
-	dbPath: string,
-	requiredBytes: number,
-	minimumRetainedBackups: number,
-	deps: MigrationBackupDeps,
-): void {
-	const dir = dirname(dbPath);
-	let free = availableBytes(dir, deps);
-	if (free === null || free >= requiredBytes) return;
+function isDbFullError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	const code = "code" in err ? err.code : undefined;
+	return (
+		code === "ENOSPC" ||
+		code === "SQLITE_FULL" ||
+		err.message.includes("ENOSPC") ||
+		err.message.includes("SQLITE_FULL") ||
+		err.message.toLowerCase().includes("no space left on device") ||
+		err.message.toLowerCase().includes("database or disk is full")
+	);
+}
 
-	const backups = migrationBackups(dbPath, deps);
-	let retained = backups.length;
-	for (const old of [...backups].reverse()) {
-		if (free >= requiredBytes || retained <= minimumRetainedBackups) break;
-		try {
-			deps.unlinkSync(join(dir, old.name));
-			retained -= 1;
-			free = availableBytes(dir, deps) ?? free + old.size;
-			deps.log(`[db-accessor] Pruned old backup for migration headroom: ${old.name}`);
-		} catch {
-			// Best effort.
-		}
-	}
+function preflightMigrationBackupSpace(dbPath: string, deps: MigrationBackupDeps): DbSpaceMetrics | null {
+	const dbBytes = fileSize(dbPath, deps);
+	const freeBytes = availableBytes(dirname(dbPath), deps);
+	if (dbBytes === null || freeBytes === null) return null;
+	const metrics = { dbBytes, freeBytes, requiredBytes: dbBytes };
+	if (freeBytes < dbBytes) throw new DbSpacePreflightError("migration_backup", metrics);
+	return metrics;
+}
+
+function migrationBackupSpaceError(
+	dbPath: string,
+	metrics: DbSpaceMetrics,
+	deps: MigrationBackupDeps,
+	err: unknown,
+): DbSpacePreflightError {
+	const freeBytes = availableBytes(dirname(dbPath), deps) ?? metrics.freeBytes;
+	return new DbSpacePreflightError("migration_backup", { ...metrics, freeBytes }, err);
 }
 
 /**
  * Back up the database file before running migrations.
  * Flushes WAL first, then copies the main file. Prunes old
- * backups before copying so a full backup set does not require
- * temporary disk headroom for one extra database-sized file.
+ * backups after the space preflight, so a failed preflight keeps existing
+ * recovery backups intact.
  */
 export function backupBeforeMigration(
 	db: { exec(sql: string): unknown },
@@ -633,12 +644,15 @@ export function backupBeforeMigration(
 	schemaVersion: number,
 	deps: MigrationBackupDeps = migrationBackupDeps,
 ): string {
-	prepareMigrationBackup(db, dbPath, deps);
+	const space = prepareMigrationBackup(db, dbPath, deps);
 	const backupDest = migrationBackupDestination(dbPath, schemaVersion, deps);
 	try {
 		deps.copyFileSync(dbPath, backupDest);
 	} catch (err) {
 		cleanupPartialMigrationBackup(backupDest, deps);
+		if (isDbFullError(err) && space !== null) {
+			throw migrationBackupSpaceError(dbPath, space, deps, err);
+		}
 		throw migrationBackupError(backupDest, err);
 	}
 	finishMigrationBackup(dbPath, backupDest, deps);
@@ -651,7 +665,7 @@ export async function backupBeforeMigrationAsync(
 	schemaVersion: number,
 	deps: MigrationBackupDeps = migrationBackupDeps,
 ): Promise<string> {
-	prepareMigrationBackup(db, dbPath, deps);
+	const space = prepareMigrationBackup(db, dbPath, deps);
 	const backupDest = migrationBackupDestination(dbPath, schemaVersion, deps);
 	try {
 		if (deps === migrationBackupDeps) {
@@ -661,28 +675,34 @@ export async function backupBeforeMigrationAsync(
 		}
 	} catch (err) {
 		await cleanupPartialMigrationBackupAsync(backupDest, deps);
+		if (isDbFullError(err) && space !== null) {
+			throw migrationBackupSpaceError(dbPath, space, deps, err);
+		}
 		throw migrationBackupError(backupDest, err);
 	}
 	finishMigrationBackup(dbPath, backupDest, deps);
 	return backupDest;
 }
 
-function prepareMigrationBackup(db: { exec(sql: string): unknown }, dbPath: string, deps: MigrationBackupDeps): void {
-	// Flush WAL so the .db file is self-contained.
+function prepareMigrationBackup(
+	db: { exec(sql: string): unknown },
+	dbPath: string,
+	deps: MigrationBackupDeps,
+): DbSpaceMetrics | null {
+	// Flush WAL so the .db file is self-contained before measuring the copy.
 	try {
 		db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 	} catch {
 		// Non-fatal — backup still useful even with WAL.
 	}
 
-	// Make room for the incoming backup first. Otherwise retention only helps
-	// after copy succeeds, which can brick daemon startup on ENOSPC when older
-	// database-sized backups are present but still below the retention cap.
+	// Check space before pruning or copying. A failed preflight must not remove
+	// the only retained backup that the operator may need for recovery.
+	const space = preflightMigrationBackupSpace(dbPath, deps);
+
+	// Make room for the incoming backup only after the preflight has passed.
 	pruneMigrationBackups(dbPath, MAX_MIGRATION_BACKUPS, deps);
-	const requiredBytes = fileSize(dbPath, deps);
-	if (requiredBytes !== null) {
-		pruneMigrationBackupsForHeadroom(dbPath, requiredBytes, MAX_MIGRATION_BACKUPS, deps);
-	}
+	return space;
 }
 
 function migrationBackupDestination(dbPath: string, schemaVersion: number, deps: MigrationBackupDeps): string {
@@ -1165,7 +1185,9 @@ function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 	}
 
 	function runVacuumConversion(): boolean {
-		return runWriteOperation(() => convertToIncrementalVacuum(toMigrationDb(writeConn)));
+		return runWriteOperation(() =>
+			convertToIncrementalVacuum(toMigrationDb(writeConn), { dbPath: dbPath ?? undefined }),
+		);
 	}
 
 	function enqueueWrite<T>(run: () => T): Promise<T> {

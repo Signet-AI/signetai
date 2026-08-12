@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DbSpacePreflightError,
 	DbWriteQueueFullError,
 	MAX_WRITE_QUEUE,
 	backupBeforeMigration,
@@ -267,53 +268,38 @@ describe("DbAccessor", () => {
 		expect(files.size).toBe(1);
 	});
 
-	test("prunes oldest migration backup for disk headroom below retention cap", () => {
+	test("blocks a migration backup before deleting retained backups when headroom is insufficient", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));
 		const dbDir = join(dbPath, "..");
 		writeFileSync(dbPath, "database");
 
-		let freeBytes = 4;
 		const files = new Map<string, { readonly mtimeMs: number; readonly size: number }>([
-			["test.db", { mtimeMs: 0, size: 8 }],
-			["test.db.bak-v60-3000", { mtimeMs: 3000, size: 8 }],
-			["test.db.bak-v61-4000", { mtimeMs: 4000, size: 8 }],
 			["test.db.bak-v62-5000", { mtimeMs: 5000, size: 8 }],
 		]);
 		const operations: string[] = [];
 
-		backupBeforeMigration({ exec: () => {} }, dbPath, 63, {
-			copyFileSync: (_source, dest) => {
-				operations.push(`copy:${String(dest).slice(dbDir.length + 1)}`);
-				expect(operations).toContain("unlink:test.db.bak-v60-3000");
-				files.set(String(dest).slice(dbDir.length + 1), { mtimeMs: 6000, size: 8 });
-				freeBytes -= 8;
-			},
-			readdirSync: () => Array.from(files.keys()).filter((name) => name !== "test.db"),
-			statSync: (path) => {
-				const name = String(path).slice(dbDir.length + 1);
-				return files.get(name) ?? { mtimeMs: 0, size: 0 };
-			},
-			statfsSync: () => ({ bavail: freeBytes, bsize: 1 }),
-			unlinkSync: (path) => {
-				const name = String(path).slice(dbDir.length + 1);
-				operations.push(`unlink:${name}`);
-				freeBytes += files.get(name)?.size ?? 0;
-				files.delete(name);
-			},
-			now: () => 6000,
-			log: () => {},
-		});
-
-		expect(operations[0]).toBe("unlink:test.db.bak-v61-4000");
-		expect(Array.from(files.keys()).sort()).toEqual(["test.db", "test.db.bak-v63-6000"]);
-		expect(
-			Array.from(files.entries())
-				.filter(([name]) => name.includes(".bak-v"))
-				.reduce((total, [, file]) => total + file.size, 0),
-		).toBe(8);
+		expect(() =>
+			backupBeforeMigration({ exec: () => {} }, dbPath, 63, {
+				copyFileSync: () => {
+					operations.push("copy");
+				},
+				readdirSync: () => Array.from(files.keys()),
+				statSync: (path) => {
+					const name = String(path).slice(dbDir.length + 1);
+					return files.get(name) ?? { mtimeMs: 0, size: 8 };
+				},
+				statfsSync: () => ({ bavail: 4, bsize: 1 }),
+				unlinkSync: (path) => {
+					operations.push(`unlink:${String(path).slice(dbDir.length + 1)}`);
+				},
+				now: () => 6000,
+				log: () => {},
+			}),
+		).toThrow(DbSpacePreflightError);
+		expect(operations).toEqual([]);
+		expect(Array.from(files.keys())).toEqual(["test.db.bak-v62-5000"]);
 	});
-
 	test("ignores migration backups removed during metadata collection", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));

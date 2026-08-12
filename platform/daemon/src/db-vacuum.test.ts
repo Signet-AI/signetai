@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	convertToIncrementalVacuum,
+	DbSpacePreflightError,
 	getFreePageRatio,
 	getVacuumConversionStatus,
 	startVacuumConversionWorker,
@@ -113,6 +114,68 @@ describe("db-vacuum (#1139)", () => {
 
 		// Silence unused warnings.
 		expect(freeBefore).toBeDefined();
+	});
+
+	it("does not run VACUUM when two database copies do not fit", () => {
+		const operations: string[] = [];
+		const pragmaDb = {
+			exec(sql: string): void {
+				operations.push(sql);
+			},
+			prepare(sql: string) {
+				return {
+					get: () => (sql === "PRAGMA auto_vacuum" ? { auto_vacuum: 0 } : { freelist_count: 0 }),
+					all: () => [],
+					run: () => undefined,
+				};
+			},
+		};
+		expect(() =>
+			convertToIncrementalVacuum(pragmaDb, {
+				dbPath: "/tmp/test.db",
+				deps: {
+					statSync: () => ({ size: 8 }),
+					statfsSync: () => ({ bavail: 8, bsize: 1 }),
+				},
+			}),
+		).toThrow(DbSpacePreflightError);
+		expect(operations).toEqual([]);
+	});
+
+	it("normalizes SQLite FULL errors from VACUUM", () => {
+		const operations: string[] = [];
+		const error = Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" });
+		const pragmaDb = {
+			exec(sql: string): void {
+				operations.push(sql);
+				if (sql === "VACUUM") throw error;
+			},
+			prepare(sql: string) {
+				return {
+					get: () => (sql === "PRAGMA auto_vacuum" ? { auto_vacuum: 0 } : { freelist_count: 0 }),
+					all: () => [],
+					run: () => undefined,
+				};
+			},
+		};
+
+		let thrown: unknown;
+		try {
+			convertToIncrementalVacuum(pragmaDb, {
+				dbPath: "/tmp/test.db",
+				deps: {
+					statSync: () => ({ size: 8 }),
+					statfsSync: () => ({ bavail: 16, bsize: 1 }),
+				},
+			});
+		} catch (caught) {
+			thrown = caught;
+		}
+		expect(thrown).toBeInstanceOf(DbSpacePreflightError);
+		expect((thrown as DbSpacePreflightError).operation).toBe("vacuum");
+		expect((thrown as DbSpacePreflightError).metrics.requiredBytes).toBe(16);
+		expect((thrown as DbSpacePreflightError).message).toContain("Cause: database or disk is full");
+		expect(operations).toContain("VACUUM");
 	});
 
 	it("convertToIncrementalVacuum is idempotent (does not re-run VACUUM)", () => {

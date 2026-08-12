@@ -7,6 +7,8 @@
  * runs after the daemon is ready and is single-flight across the worker.
  */
 
+import { statSync, statfsSync } from "node:fs";
+import { dirname } from "node:path";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 
@@ -14,6 +16,69 @@ import { logger } from "./logger";
 const VACUUM_CONVERSION_TABLE = "_signet_vacuum_converted";
 const VACUUM_CONVERSION_STATE_TABLE = "_signet_vacuum_conversion";
 const MAX_CONVERSION_ATTEMPTS = 3;
+
+export type DbSpaceOperation = "migration_backup" | "vacuum";
+
+export interface DbSpaceMetrics {
+	readonly dbBytes: number;
+	readonly freeBytes: number;
+	readonly requiredBytes: number;
+}
+
+export class DbSpacePreflightError extends Error {
+	readonly code = "DB_SPACE_PREFLIGHT_FAILED" as const;
+
+	constructor(
+		readonly operation: DbSpaceOperation,
+		readonly metrics: DbSpaceMetrics,
+		cause?: unknown,
+	) {
+		const label = operation === "migration_backup" ? "migration backup" : "VACUUM scratch space";
+		super(
+			`[${operation}] ${label} blocked: insufficient disk space. Database size: ${metrics.dbBytes} bytes; free: ${metrics.freeBytes} bytes; required: ${metrics.requiredBytes} bytes. Free disk space and retry.${cause === undefined ? "" : ` Cause: ${cause instanceof Error ? cause.message : String(cause)}`}`,
+		);
+		this.name = "DbSpacePreflightError";
+	}
+}
+
+export interface DbSpaceDeps {
+	readonly statSync: (path: string) => { readonly size: number };
+	readonly statfsSync: (path: string) => { readonly bavail: number; readonly bsize: number };
+}
+
+const dbSpaceDeps: DbSpaceDeps = { statSync, statfsSync };
+
+function isDbFullError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	const code = "code" in error ? error.code : undefined;
+	return (
+		code === "ENOSPC" ||
+		code === "SQLITE_FULL" ||
+		error.message.includes("ENOSPC") ||
+		error.message.includes("SQLITE_FULL") ||
+		error.message.toLowerCase().includes("no space left on device") ||
+		error.message.toLowerCase().includes("database or disk is full")
+	);
+}
+
+function measureDbSpace(dbPath: string, deps: DbSpaceDeps): DbSpaceMetrics | null {
+	try {
+		const dbBytes = deps.statSync(dbPath).size;
+		const directory = dirname(dbPath);
+		const stats = deps.statfsSync(directory);
+		const freeBytes = stats.bavail * stats.bsize;
+		// SQLite's VACUUM documentation says that as much as twice the original
+		// database size may be required while the rebuilt file is in progress.
+		return { dbBytes, freeBytes, requiredBytes: dbBytes * 2 };
+	} catch {
+		return null;
+	}
+}
+
+function assertDbSpace(operation: DbSpaceOperation, dbPath: string, deps: DbSpaceDeps): void {
+	const metrics = measureDbSpace(dbPath, deps);
+	if (metrics && metrics.freeBytes < metrics.requiredBytes) throw new DbSpacePreflightError(operation, metrics);
+}
 
 /** Read-only pragma surface. */
 export interface PragmaReadDb {
@@ -266,12 +331,17 @@ export function getFreePageRatio(db: PragmaReadDb): number {
  * This function must only be called by the post-ready worker. It deliberately
  * does not run from either synchronous or asynchronous DB initialization.
  */
-export function convertToIncrementalVacuum(db: PragmaDb): boolean {
+export function convertToIncrementalVacuum(
+	db: PragmaDb,
+	options: { readonly dbPath?: string; readonly deps?: DbSpaceDeps } = {},
+): boolean {
 	const mode = getAutoVacuumMode(db);
 
 	// 2 = INCREMENTAL. Already converted or fresh DB created after the fix.
 	if (mode === 2) return false;
 	if (hasTable(db, VACUUM_CONVERSION_TABLE)) return false;
+
+	if (options.dbPath) assertDbSpace("vacuum", options.dbPath, options.deps ?? dbSpaceDeps);
 
 	// Set the desired mode BEFORE VACUUM so the rebuilt file uses it.
 	db.exec("PRAGMA auto_vacuum = INCREMENTAL");
@@ -286,7 +356,15 @@ export function convertToIncrementalVacuum(db: PragmaDb): boolean {
 	logger.info("db-vacuum", "Running one-time VACUUM after readiness; large databases may take several minutes");
 
 	const startedAt = Date.now();
-	db.exec("VACUUM");
+	try {
+		db.exec("VACUUM");
+	} catch (error) {
+		if (options.dbPath && isDbFullError(error)) {
+			const metrics = measureDbSpace(options.dbPath, options.deps ?? dbSpaceDeps);
+			if (metrics) throw new DbSpacePreflightError("vacuum", metrics, error);
+		}
+		throw error;
+	}
 	const elapsedMs = Date.now() - startedAt;
 
 	const freelistAfter = db.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
