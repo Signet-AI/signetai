@@ -40,6 +40,20 @@ function asAccessor(db: Database): DbAccessor {
 	};
 }
 
+function ensureVecTable(db: Database): void {
+	try {
+		db.exec("DROP TABLE IF EXISTS vec_embeddings");
+	} catch {
+		// The migration may have created a sqlite-vec virtual table.
+	}
+	db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB)");
+}
+
+function vectorBlob(values: readonly number[]): Buffer {
+	const f32 = new Float32Array(values);
+	return Buffer.from(f32.buffer.slice(0));
+}
+
 const BASE_CFG: PipelineV2Config = {
 	...DEFAULT_PIPELINE_V2,
 	shadowMode: false,
@@ -179,10 +193,59 @@ describe("maintenance-worker", () => {
 		expect(getEmbeddingGapStats(accessor, "agent-a").unembedded).toBe(0);
 		expect(getEmbeddingGapStats(accessor, "agent-b").unembedded).toBe(1);
 		expect(
-			(db.prepare("SELECT source_id FROM embeddings WHERE source_type = 'memory'").all() as Array<{ source_id: string }>).map(
-				(row) => row.source_id,
-			),
+			(
+				db.prepare("SELECT source_id FROM embeddings WHERE source_type = 'memory'").all() as Array<{
+					source_id: string;
+				}>
+			).map((row) => row.source_id),
 		).toEqual(["missing-agent-a"]);
+		db.close();
+	});
+
+	it("scopes autonomous orphan cleanup to the maintenance agent", async () => {
+		const db = freshDb();
+		const accessor = asAccessor(db);
+		const tracker = createProviderTracker();
+		ensureVecTable(db);
+		const insert = db.prepare(
+			`INSERT INTO embeddings
+			 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+			 VALUES (?, ?, ?, 3, 'memory', ?, ?, ?, ?)`,
+		);
+		for (const agentId of ["agent-a", "agent-b"] as const) {
+			const embeddingId = `orphan-${agentId}`;
+			insert.run(
+				embeddingId,
+				`hash-${agentId}`,
+				vectorBlob([0.1, 0.2, 0.3]),
+				`missing-${agentId}`,
+				"orphan",
+				now,
+				agentId,
+			);
+			db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(
+				embeddingId,
+				vectorBlob([0.1, 0.2, 0.3]),
+			);
+		}
+
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null, {
+			cfg: TEST_EMBEDDING_CFG,
+			fetchEmbedding: async () => [0.1, 0.2, 0.3],
+			agentId: "agent-a",
+			batchSize: 20,
+		});
+		handle.stop();
+
+		const result = await handle.tick();
+		expect(result.executed).toContainEqual(
+			expect.objectContaining({ action: "repairEmbeddingIndex", success: true, affected: 1 }),
+		);
+		expect(db.prepare("SELECT id FROM embeddings WHERE id = 'orphan-agent-a'").get()).toBeNull();
+		expect(db.prepare("SELECT id FROM embeddings WHERE id = 'orphan-agent-b'").get()).toEqual({ id: "orphan-agent-b" });
+		expect(db.prepare("SELECT id FROM vec_embeddings WHERE id = 'orphan-agent-b'").get()).toEqual({
+			id: "orphan-agent-b",
+		});
 		db.close();
 	});
 

@@ -224,14 +224,8 @@ async function executeRecommendation(
 						: 1;
 				const result =
 					stats.orphaned > 0
-						? cleanOrphanedEmbeddings(
-								deps.accessor,
-								deps.cfg,
-								ctx,
-								deps.limiter,
-								batchSize,
-								)
-								: stats.gap.unembedded > 0
+						? cleanOrphanedEmbeddings(deps.accessor, deps.cfg, ctx, deps.limiter, batchSize, embedding.agentId)
+						: stats.gap.unembedded > 0
 							? await reembedMissingMemories(
 									deps.accessor,
 									deps.cfg,

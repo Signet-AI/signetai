@@ -610,34 +610,47 @@ export interface EmbeddingRepairStats {
 	readonly orphaned: number;
 }
 
-const orphanedEmbeddingWhere = `e.source_type = 'memory'
-	AND (m.id IS NULL OR m.is_deleted = 1)
-	AND m2.id IS NULL`;
+function orphanedEmbeddingQuery(agentId?: string): { join: string; where: string; args: string[] } {
+	const agentScope =
+		agentId === undefined ? "" : " AND COALESCE(NULLIF(e.agent_id, ''), NULLIF(m.agent_id, ''), 'default') = ?";
+	const hashPeerScope =
+		agentId === undefined
+			? ""
+			: " AND COALESCE(NULLIF(m2.agent_id, ''), 'default') = COALESCE(NULLIF(e.agent_id, ''), NULLIF(m.agent_id, ''), 'default')";
+	return {
+		join: `LEFT JOIN memories m2
+			   ON e.source_type = 'memory' AND e.content_hash = m2.content_hash AND m2.is_deleted = 0${hashPeerScope}`,
+		where: `e.source_type = 'memory'
+			AND (m.id IS NULL OR m.is_deleted = 1)
+			AND m2.id IS NULL${agentScope}`,
+		args: agentId === undefined ? [] : [agentId],
+	};
+}
 
-function countOrphanedEmbeddings(db: ReadDb): number {
+function countOrphanedEmbeddings(db: ReadDb, agentId?: string): number {
+	const query = orphanedEmbeddingQuery(agentId);
 	const row = db
 		.prepare(
 			`SELECT COUNT(*) AS n FROM embeddings e
 			 LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
-			 LEFT JOIN memories m2
-			   ON e.source_type = 'memory' AND e.content_hash = m2.content_hash AND m2.is_deleted = 0
-			 WHERE ${orphanedEmbeddingWhere}`,
+			 ${query.join}
+			 WHERE ${query.where}`,
 		)
-		.get() as { n: number } | undefined;
+		.get(...query.args) as { n: number } | undefined;
 	return row?.n ?? 0;
 }
 
-function listOrphanedEmbeddingIds(db: WriteDb, limit: number): Array<{ id: string }> {
+function listOrphanedEmbeddingIds(db: WriteDb, limit: number, agentId?: string): Array<{ id: string }> {
+	const query = orphanedEmbeddingQuery(agentId);
 	return db
 		.prepare(
 			`SELECT e.id FROM embeddings e
 			 LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
-			 LEFT JOIN memories m2
-			   ON e.source_type = 'memory' AND e.content_hash = m2.content_hash AND m2.is_deleted = 0
-			 WHERE ${orphanedEmbeddingWhere}
+			 ${query.join}
+			 WHERE ${query.where}
 			 LIMIT ?`,
 		)
-		.all(limit) as Array<{ id: string }>;
+		.all(...query.args, limit) as Array<{ id: string }>;
 }
 
 export function getEmbeddingGapStats(accessor: DbAccessor, agentId?: string): EmbeddingGapStats {
@@ -686,7 +699,7 @@ export function getEmbeddingRepairStats(
 	const migration = accessor.withReadDb((db) =>
 		countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
 	);
-	const orphaned = accessor.withReadDb((db) => countOrphanedEmbeddings(db));
+	const orphaned = accessor.withReadDb((db) => countOrphanedEmbeddings(db, agentId));
 	return { gap, migration, orphaned };
 }
 
@@ -1171,6 +1184,7 @@ export function cleanOrphanedEmbeddings(
 	ctx: RepairContext,
 	limiter: RateLimiter,
 	maxBatch = Number.MAX_SAFE_INTEGER,
+	agentId?: string,
 ): RepairResult {
 	const action = "cleanOrphanedEmbeddings";
 	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
@@ -1186,7 +1200,7 @@ export function cleanOrphanedEmbeddings(
 
 	const limit = Number.isFinite(maxBatch) && maxBatch > 0 ? Math.floor(maxBatch) : Number.MAX_SAFE_INTEGER;
 	const affected = accessor.withWriteTx((db) => {
-		const orphans = listOrphanedEmbeddingIds(db, limit);
+		const orphans = listOrphanedEmbeddingIds(db, limit, agentId);
 
 		if (orphans.length === 0) return 0;
 

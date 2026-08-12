@@ -227,12 +227,13 @@ function insertEmbedding(
 		contentHash: string;
 		sourceId: string;
 		vector: readonly number[];
+		agentId?: string;
 	},
 ): void {
 	const now = new Date().toISOString();
 	db.prepare(
-		`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-		 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)`,
+		`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+		 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)`,
 	).run(
 		params.id,
 		params.contentHash,
@@ -241,6 +242,7 @@ function insertEmbedding(
 		params.sourceId,
 		`chunk for ${params.sourceId}`,
 		now,
+		params.agentId ?? null,
 	);
 }
 
