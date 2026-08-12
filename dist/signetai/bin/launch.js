@@ -13,6 +13,7 @@ const require = createRequire(import.meta.url);
 const binaryName = process.platform === "win32" ? "signet.exe" : "signet";
 const binaryPath = join(packageDir, "native", binaryName);
 const connectorAssetsPath = join(packageDir, "runtime", "connectors");
+const connectorMarkerPath = join(connectorAssetsPath, ".signet-connectors-version");
 
 function resolveNativePackageBinaryPath() {
 	const platform = detectNativePlatform();
@@ -34,29 +35,31 @@ function resolveBinaryPath() {
 	return null;
 }
 
-function hasConnectorAssets() {
+function loadNativeManifest() {
 	try {
-		return (
-			existsSync(connectorAssetsPath) &&
-			existsSync(join(connectorAssetsPath, ".signet-connectors-version")) &&
-			readFileSync(join(connectorAssetsPath, ".signet-connectors-version"), "utf8").trim().length > 0
-		);
+		const manifest = JSON.parse(readFileSync(join(packageDir, "native-manifest.json"), "utf8"));
+		if (typeof manifest !== "object" || manifest === null) return null;
+		return manifest;
 	} catch {
-		return false;
+		return null;
 	}
 }
 
-function connectorAssetsRequired() {
+function connectorComponent(manifest) {
+	if (typeof manifest.components !== "object" || manifest.components === null) return null;
+	const component = manifest.components.connectors;
+	if (typeof component !== "object" || component === null) return null;
+	if (typeof manifest.version !== "string" || typeof component.sha256 !== "string") return null;
+	return component;
+}
+
+function hasConnectorAssets(manifest) {
+	const component = connectorComponent(manifest);
+	if (!existsSync(connectorAssetsPath) || !existsSync(connectorMarkerPath)) return false;
+
 	try {
-		const manifest = JSON.parse(readFileSync(join(packageDir, "native-manifest.json"), "utf8"));
-		return (
-			typeof manifest === "object" &&
-			manifest !== null &&
-			"components" in manifest &&
-			typeof manifest.components === "object" &&
-			manifest.components !== null &&
-			"connectors" in manifest.components
-		);
+		const marker = JSON.parse(readFileSync(connectorMarkerPath, "utf8"));
+		return marker.version === manifest.version && marker.sha256.toLowerCase() === component.sha256.toLowerCase();
 	} catch {
 		return false;
 	}
@@ -65,7 +68,10 @@ function connectorAssetsRequired() {
 function warnIfInstallAssetsMissing(resolvedBinaryPath) {
 	const missing = [];
 	if (resolvedBinaryPath !== binaryPath) missing.push("native/");
-	if (connectorAssetsRequired() && !hasConnectorAssets()) missing.push("runtime/connectors/");
+	const manifest = loadNativeManifest();
+	if (manifest !== null && connectorComponent(manifest) !== null && !hasConnectorAssets(manifest)) {
+		missing.push("runtime/connectors/");
+	}
 	if (missing.length === 0) return;
 
 	console.error(`Signet install assets are incomplete: missing ${missing.join(" and ")}.`);

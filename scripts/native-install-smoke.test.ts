@@ -307,7 +307,10 @@ function stageWrapperInstall(
 	if (options.connectorAssetsInstalled) {
 		const connectorDir = join(packageDir, "runtime", "connectors");
 		mkdirSync(connectorDir, { recursive: true });
-		writeFileSync(join(connectorDir, ".signet-connectors-version"), "0.0.0\n");
+		writeFileSync(
+			join(connectorDir, ".signet-connectors-version"),
+			`${JSON.stringify({ version: "0.0.0", sha256: "0".repeat(64) })}\n`,
+		);
 	}
 }
 
@@ -344,6 +347,37 @@ describe("native install smoke", () => {
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("fake native signet --version");
 		expect(result.stderr).toBe("");
+	});
+
+	test("warns when an upgrade leaves stale connector assets behind", async () => {
+		if (process.platform === "win32") return;
+
+		const dir = tempDir();
+		const packageDir = join(dir, "signetai");
+		stageWrapperInstall(packageDir, { nativeInstalled: true, connectorAssetsInstalled: true });
+		writeFileSync(
+			join(packageDir, "native-manifest.json"),
+			JSON.stringify({
+				schemaVersion: 1,
+				version: "0.0.1",
+				assets: [],
+				components: {
+					connectors: {
+						url: "signet-connectors-0.0.1.tar.gz",
+						sha256: "1".repeat(64),
+						size: 1,
+					},
+				},
+			}),
+		);
+
+		const result = await runCommand("node", [join(packageDir, "bin", "signet.js"), "--version"], {
+			...process.env,
+		});
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("fake native signet --version");
+		expect(result.stderr).toContain("missing runtime/connectors/");
 	});
 
 	test("postinstall extracts connector assets from a manifest-aware release", async () => {
@@ -409,9 +443,12 @@ describe("native install smoke", () => {
 		expect(existsSync(join(extractedDir, "__init__.py"))).toBe(true);
 		expect(existsSync(join(extractedDir, "plugin.yaml"))).toBe(true);
 		expect(readFileSync(join(extractedDir, "__init__.py"), "utf8")).toContain("Smoke test plugin for issue #831");
-		expect(readFileSync(join(packageDir, "runtime", "connectors", ".signet-connectors-version"), "utf8").trim()).toBe(
+		expect(
+			JSON.parse(readFileSync(join(packageDir, "runtime", "connectors", ".signet-connectors-version"), "utf8")),
+		).toEqual({
 			version,
-		);
+			sha256: createHash("sha256").update(tarball).digest("hex"),
+		});
 	});
 
 	test("postinstall rejects a tarball whose SHA-256 does not match the manifest", async () => {

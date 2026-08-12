@@ -238,9 +238,16 @@ async function installConnectorAssets() {
 
 	const targetDir = join(packageDir, "runtime", "connectors");
 	const targetMarker = join(targetDir, ".signet-connectors-version");
+	let installedMarker = null;
+	try {
+		installedMarker = JSON.parse(readFileSync(targetMarker, "utf8"));
+	} catch {
+		// Reinstall legacy or malformed markers instead of trusting stale assets.
+	}
 	if (
 		existsSync(targetMarker) &&
-		readFileSync(targetMarker, "utf8").trim() === manifest.version
+		installedMarker?.version === manifest.version &&
+		installedMarker?.sha256?.toLowerCase() === component.sha256.toLowerCase()
 	) {
 		// Already extracted for this version. Skip to keep postinstall fast
 		// and to avoid clobbering user-tweaked assets.
@@ -273,7 +280,10 @@ async function installConnectorAssets() {
 		if (result.status !== 0) {
 			throw new Error(`tar extraction failed with status ${result.status ?? "unknown"}`);
 		}
-		writeFileSync(targetMarker, `${manifest.version}\n`);
+		writeFileSync(
+			targetMarker,
+			`${JSON.stringify({ version: manifest.version, sha256: component.sha256 })}\n`,
+		);
 		console.log(`Installed connector assets to ${targetDir}`);
 	} finally {
 		rmSync(tempPath, { force: true });
