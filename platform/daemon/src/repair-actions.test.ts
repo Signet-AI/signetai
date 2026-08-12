@@ -9,6 +9,8 @@ import { runMigrations } from "../../core/src/migrations";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { toFtsSchemaQueryDb } from "./db-accessor";
+import { ensureEmbeddingIndexState } from "./embedding-index-state";
+import { embeddingProfileFingerprint } from "./embedding-profile";
 import { DEFAULT_PIPELINE_V2 } from "./memory-config";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import {
@@ -966,6 +968,54 @@ describe("reembedMissingMemories", () => {
 		expect(second.success).toBe(true);
 		expect(second.affected).toBe(1);
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-write-failure")).toBeTruthy();
+	});
+
+	it("skips stale vectors when promotion happens during provider work", async () => {
+		insertMemory(db, "mem-promotion-race");
+		accessor.withWriteTx((writeDb) => ensureEmbeddingIndexState(writeDb, TEST_EMBEDDING_CFG));
+		let providerStarted!: () => void;
+		const providerReady = new Promise<void>((resolve) => {
+			providerStarted = resolve;
+		});
+		let releaseProvider!: () => void;
+		const providerReleased = new Promise<void>((resolve) => {
+			releaseProvider = resolve;
+		});
+
+		const repair = reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_DAEMON,
+			createRateLimiter(),
+			async () => {
+				providerStarted();
+				await providerReleased;
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			1,
+		);
+
+		await providerReady;
+		const promoted = { ...TEST_EMBEDDING_CFG, model: "promoted-model" };
+		db.prepare("UPDATE embedding_index_state SET active_profile_json = ? WHERE id = 1").run(
+			JSON.stringify({
+				fingerprint: embeddingProfileFingerprint(promoted),
+				provider: promoted.provider,
+				model: promoted.model,
+				dimensions: promoted.dimensions,
+				baseUrl: promoted.base_url,
+			}),
+		);
+		releaseProvider();
+
+		const result = await repair;
+		expect(result.success).toBe(false);
+		expect(result.message).toMatch(/skipped stale vectors/);
+		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-promotion-race")).toBeNull();
+		expect(db.prepare("SELECT embedding_model FROM memories WHERE id = ?").get("mem-promotion-race")).toEqual({
+			embedding_model: null,
+		});
 	});
 
 	it("repairs memories even when content_hash is NULL", async () => {

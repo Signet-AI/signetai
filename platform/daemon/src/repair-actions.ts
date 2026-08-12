@@ -34,7 +34,7 @@ import {
 	listUnembeddedMemories,
 } from "./embedding-coverage";
 import { type EmbeddingMigrationCoverage, stagingCoverage } from "./embedding-index-migration";
-import { readEmbeddingIndexState } from "./embedding-index-state";
+import { isActiveEmbeddingConfig, readEmbeddingIndexState } from "./embedding-index-state";
 import { type EmbeddingRepairState, readEmbeddingRepairState } from "./embedding-repair-state";
 import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
@@ -694,6 +694,7 @@ interface ReembedBatchOutcome {
 	readonly selected: number;
 	readonly written: number;
 	readonly failed: number;
+	readonly profileChanged: boolean;
 }
 
 let reembedInProgress = false;
@@ -713,6 +714,7 @@ async function reembedMissingMemoriesBatch(
 			selected: 0,
 			written: 0,
 			failed: 0,
+			profileChanged: false,
 		};
 	}
 
@@ -740,10 +742,17 @@ async function reembedMissingMemoriesBatch(
 			selected: unembedded.length,
 			written: 0,
 			failed: unembedded.length,
+			profileChanged: false,
 		};
 	}
 
-	const written = accessor.withWriteTx((db) => {
+	const writeOutcome = accessor.withWriteTx((db) => {
+		// Provider work happens outside the transaction. Promotion can therefore
+		// change the active vector space while this batch is being encoded.
+		// Never commit vectors from the superseded profile.
+		if (!isActiveEmbeddingConfig(db, embeddingCfg)) {
+			return { count: 0, profileChanged: true };
+		}
 		const now = new Date().toISOString();
 		let count = 0;
 		// Hoisted outside loop (pattern: db.prepare inside a loop is flagged)
@@ -804,13 +813,14 @@ async function reembedMissingMemoriesBatch(
 			}
 		}
 
-		return count;
+		return { count, profileChanged: false };
 	});
 
 	return {
 		selected: unembedded.length,
-		written,
+		written: writeOutcome.count,
 		failed: unembedded.length - results.length,
+		profileChanged: writeOutcome.profileChanged,
 	};
 }
 
@@ -885,6 +895,7 @@ export async function reembedMissingMemories(
 		let written = 0;
 		let failed = 0;
 		let batches = 0;
+		let profileChanged = false;
 
 		while (true) {
 			const outcome = await reembedMissingMemoriesBatch(accessor, embeddingFn, embeddingCfg, normalizedBatchSize);
@@ -895,6 +906,8 @@ export async function reembedMissingMemories(
 			written += outcome.written;
 			failed += outcome.failed;
 			batches++;
+			profileChanged ||= outcome.profileChanged;
+			if (outcome.profileChanged) break;
 
 			if (!runToCompletion) break;
 			if (outcome.selected < normalizedBatchSize) break;
@@ -907,6 +920,15 @@ export async function reembedMissingMemories(
 				success: true,
 				affected: 0,
 				message: "no unembedded memories found",
+			};
+		}
+
+		if (profileChanged) {
+			return {
+				action,
+				success: false,
+				affected: written,
+				message: "embedding profile changed during provider work; skipped stale vectors",
 			};
 		}
 
