@@ -178,6 +178,45 @@ describe("db-vacuum (#1139)", () => {
 		expect(operations).toContain("VACUUM");
 	});
 
+	it("normalizes SQLite FULL errors when the post-failure space probe fails", () => {
+		let statfsCalls = 0;
+		const error = Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" });
+		const pragmaDb = {
+			exec(sql: string): void {
+				if (sql === "VACUUM") throw error;
+			},
+			prepare(sql: string) {
+				return {
+					get: () => (sql === "PRAGMA auto_vacuum" ? { auto_vacuum: 0 } : { freelist_count: 0 }),
+					all: () => [],
+					run: () => undefined,
+				};
+			},
+		};
+
+		let thrown: unknown;
+		try {
+			convertToIncrementalVacuum(pragmaDb, {
+				dbPath: "/tmp/test.db",
+				deps: {
+					statSync: () => ({ size: 8 }),
+					statfsSync: () => {
+						statfsCalls += 1;
+						if (statfsCalls === 2) throw new Error("statfs unavailable");
+						return { bavail: 16, bsize: 1 };
+					},
+				},
+			});
+		} catch (caught) {
+			thrown = caught;
+		}
+
+		expect(thrown).toBeInstanceOf(DbSpacePreflightError);
+		expect((thrown as DbSpacePreflightError).cause).toBe(error);
+		expect((thrown as DbSpacePreflightError).metrics.requiredBytes).toBe(16);
+		expect(statfsCalls).toBe(2);
+	});
+
 	it("convertToIncrementalVacuum is idempotent (does not re-run VACUUM)", () => {
 		// First conversion.
 		expect(convertToIncrementalVacuum(toPragmaDb(db))).toBe(true);

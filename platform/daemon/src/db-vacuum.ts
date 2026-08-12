@@ -36,6 +36,7 @@ export class DbSpacePreflightError extends Error {
 		const label = operation === "migration_backup" ? "migration backup" : "VACUUM scratch space";
 		super(
 			`[${operation}] ${label} blocked: insufficient disk space. Database size: ${metrics.dbBytes} bytes; free: ${metrics.freeBytes} bytes; required: ${metrics.requiredBytes} bytes. Free disk space and retry.${cause === undefined ? "" : ` Cause: ${cause instanceof Error ? cause.message : String(cause)}`}`,
+			cause === undefined ? undefined : { cause },
 		);
 		this.name = "DbSpacePreflightError";
 	}
@@ -75,10 +76,13 @@ function measureDbSpace(dbPath: string, deps: DbSpaceDeps): DbSpaceMetrics | nul
 	}
 }
 
-function assertDbSpace(operation: DbSpaceOperation, dbPath: string, deps: DbSpaceDeps): void {
+function assertDbSpace(operation: DbSpaceOperation, dbPath: string, deps: DbSpaceDeps): DbSpaceMetrics | null {
 	const metrics = measureDbSpace(dbPath, deps);
 	if (metrics && metrics.freeBytes < metrics.requiredBytes) throw new DbSpacePreflightError(operation, metrics);
+	return metrics;
 }
+
+const UNKNOWN_DB_SPACE_METRICS: DbSpaceMetrics = { dbBytes: 0, freeBytes: 0, requiredBytes: 0 };
 
 /** Read-only pragma surface. */
 export interface PragmaReadDb {
@@ -341,7 +345,7 @@ export function convertToIncrementalVacuum(
 	if (mode === 2) return false;
 	if (hasTable(db, VACUUM_CONVERSION_TABLE)) return false;
 
-	if (options.dbPath) assertDbSpace("vacuum", options.dbPath, options.deps ?? dbSpaceDeps);
+	const preflightMetrics = options.dbPath ? assertDbSpace("vacuum", options.dbPath, options.deps ?? dbSpaceDeps) : null;
 
 	// Set the desired mode BEFORE VACUUM so the rebuilt file uses it.
 	db.exec("PRAGMA auto_vacuum = INCREMENTAL");
@@ -360,8 +364,9 @@ export function convertToIncrementalVacuum(
 		db.exec("VACUUM");
 	} catch (error) {
 		if (options.dbPath && isDbFullError(error)) {
-			const metrics = measureDbSpace(options.dbPath, options.deps ?? dbSpaceDeps);
-			if (metrics) throw new DbSpacePreflightError("vacuum", metrics, error);
+			const metrics =
+				measureDbSpace(options.dbPath, options.deps ?? dbSpaceDeps) ?? preflightMetrics ?? UNKNOWN_DB_SPACE_METRICS;
+			throw new DbSpacePreflightError("vacuum", metrics, error);
 		}
 		throw error;
 	}
