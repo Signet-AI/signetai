@@ -1444,6 +1444,75 @@ describe("reembedModelMigration", () => {
 		db.close();
 	});
 
+	it("skips stale migration vectors when content changes during provider work", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		ensureVecTable(db);
+		const accessor = asAccessor(db);
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, embedding_model, type, created_at, updated_at, updated_by) VALUES ('content-race', 'old content', 'hash-old', 'model-a', 'fact', ?, ?, 'test')`,
+		).run(now, now);
+		insertEmbedding(db, {
+			id: "emb-content-race",
+			sourceId: "content-race",
+			contentHash: "hash-old",
+			vector: [0.1, 0.2, 0.3],
+		});
+		const targetEmbeddingCfg = { ...TEST_EMBEDDING_CFG, model: "model-b" };
+		accessor.withWriteTx((writeDb) => ensureEmbeddingIndexState(writeDb, targetEmbeddingCfg));
+
+		let providerStarted!: () => void;
+		const providerReady = new Promise<void>((resolve) => {
+			providerStarted = resolve;
+		});
+		let releaseProvider!: () => void;
+		const providerReleased = new Promise<void>((resolve) => {
+			releaseProvider = resolve;
+		});
+		const repair = reembedModelMigration(
+			accessor,
+			TEST_CFG,
+			CTX_DAEMON,
+			createRateLimiter(),
+			async () => {
+				providerStarted();
+				await providerReleased;
+				return [0.4, 0.5, 0.6];
+			},
+			targetEmbeddingCfg,
+			"default",
+			10,
+			false,
+			false,
+		);
+
+		await providerReady;
+		db.prepare("UPDATE memories SET content = ?, content_hash = ? WHERE id = ?").run(
+			"new content",
+			"hash-new",
+			"content-race",
+		);
+		releaseProvider();
+
+		const result = await repair;
+		expect(result.success).toBe(false);
+		expect(result.affected).toBe(0);
+		expect(result.message).toContain("changed during provider work");
+		expect(result.details).toMatchObject({ contentChanged: 1 });
+		expect(db.prepare("SELECT embedding_model FROM memories WHERE id = 'content-race'").get()).toEqual({
+			embedding_model: "model-a",
+		});
+		expect(
+			db.prepare("SELECT content_hash, chunk_text FROM embeddings WHERE source_id = 'content-race'").get(),
+		).toEqual({
+			content_hash: "hash-old",
+			chunk_text: "chunk for content-race",
+		});
+		expect(db.prepare("SELECT id FROM embeddings WHERE content_hash = 'hash-new'").get()).toBeNull();
+		db.close();
+	});
+
 	it("survives a per-row write failure, records partial progress, and still returns a structured result", async () => {
 		// Regression guard: without try/catch around withWriteTx, a single
 		// transaction failure (SQLITE_BUSY / disk error) propagated as an

@@ -1041,6 +1041,7 @@ export async function reembedModelMigration(
 	}
 	let written = 0;
 	let failed = 0;
+	let contentChanged = 0;
 	let profileChanged = false;
 	for (const row of rows) {
 		let vector: number[] | null;
@@ -1059,30 +1060,43 @@ export async function reembedModelMigration(
 			continue;
 		}
 		try {
-			const writeOutcome = accessor.withWriteTx((db): { wrote: boolean; profileChanged: boolean } => {
-				// Provider work happens outside the transaction. Promotion can therefore
-				// change the active vector space while this row is being encoded.
-				// Never commit a vector or model marker from the superseded profile.
-				if (!isActiveEmbeddingConfig(db, embeddingCfg)) return { wrote: false, profileChanged: true };
-				const current = db.prepare("SELECT content_hash FROM memories WHERE id = ? AND is_deleted = 0").get(row.id) as
-					| { content_hash: string }
-					| undefined;
-				if (!current) return { wrote: false, profileChanged: false };
-				const id = crypto.randomUUID();
-				db.prepare(
-					`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now')) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
-				).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content);
-				const embedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(current.content_hash) as
-					| { id: string }
-					| undefined;
-				if (!embedding) return { wrote: false, profileChanged: false };
-				syncVecInsert(db, embedding.id, vector);
-				db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
-				return { wrote: true, profileChanged: false };
-			});
+			const writeOutcome = accessor.withWriteTx(
+				(db): { wrote: boolean; profileChanged: boolean; contentChanged: boolean } => {
+					// Provider work happens outside the transaction. Promotion can therefore
+					// change the active vector space while this row is being encoded.
+					// Never commit a vector or model marker from the superseded profile.
+					if (!isActiveEmbeddingConfig(db, embeddingCfg))
+						return { wrote: false, profileChanged: true, contentChanged: false };
+					const current = db
+						.prepare("SELECT content, content_hash FROM memories WHERE id = ? AND is_deleted = 0")
+						.get(row.id) as { content: string; content_hash: string | null } | null;
+					if (!current) return { wrote: false, profileChanged: false, contentChanged: false };
+					// The provider encoded row.content before this transaction. If the
+					// memory changed while it awaited the provider, its vector belongs to
+					// the old row version and must not be committed under the new one.
+					if (current.content_hash !== row.contentHash || current.content !== row.content) {
+						return { wrote: false, profileChanged: false, contentChanged: true };
+					}
+					const id = crypto.randomUUID();
+					db.prepare(
+						`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now')) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
+					).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content);
+					const embedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(current.content_hash) as
+						| { id: string }
+						| undefined;
+					if (!embedding) return { wrote: false, profileChanged: false, contentChanged: false };
+					syncVecInsert(db, embedding.id, vector);
+					db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
+					return { wrote: true, profileChanged: false, contentChanged: false };
+				},
+			);
 			if (writeOutcome.profileChanged) {
 				profileChanged = true;
 				break;
+			}
+			if (writeOutcome.contentChanged) {
+				contentChanged++;
+				continue;
 			}
 			if (writeOutcome.wrote) written++;
 		} catch (error) {
@@ -1095,7 +1109,7 @@ export async function reembedModelMigration(
 	}
 	const message = `re-embedded ${written} of ${rows.length} selected memories${
 		failed > 0 ? ` (${failed} failed)` : ""
-	}`;
+	}${contentChanged > 0 ? ` (${contentChanged} changed during provider work)` : ""}`;
 	if (profileChanged) {
 		return {
 			action,
@@ -1103,7 +1117,7 @@ export async function reembedModelMigration(
 			affected: written,
 			message: "embedding profile changed during provider work; skipped stale migration vectors",
 			totalMatching,
-			details: { ...details, failed },
+			details: { ...details, failed, contentChanged },
 		};
 	}
 	if (written > 0) {
@@ -1120,11 +1134,11 @@ export async function reembedModelMigration(
 	}
 	return {
 		action,
-		success: failed === 0,
+		success: failed === 0 && contentChanged === 0,
 		affected: written,
 		message,
 		totalMatching,
-		details: { ...details, failed },
+		details: { ...details, failed, contentChanged },
 	};
 }
 
