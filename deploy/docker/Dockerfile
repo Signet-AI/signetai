@@ -3,6 +3,11 @@
 FROM oven/bun:1 AS build
 WORKDIR /app
 
+# The daemon image does not run the Electron desktop application. Skipping
+# Electron's postinstall download keeps this daemon-only build independent of
+# the GitHub release asset network.
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
+
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends python3 make g++ \
 	&& rm -rf /var/lib/apt/lists/*

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const rootDir = fileURLToPath(new URL("../../", import.meta.url));
 const dockerfile = readFileSync(join(rootDir, "deploy/docker/Dockerfile"), "utf8");
 const dockerImageWorkflow = readFileSync(join(rootDir, ".github/workflows/docker-image.yml"), "utf8");
+const desktopBuildWorkflow = readFileSync(join(rootDir, ".github/workflows/desktop-build.yml"), "utf8");
 const dockerignore = readFileSync(join(rootDir, ".dockerignore"), "utf8");
 const openclawPackageJson = JSON.parse(
 	readFileSync(join(rootDir, "integrations/openclaw/memory-adapter/package.json"), "utf8"),
@@ -71,6 +72,14 @@ function getBuildCommands(source: string): string[] {
 }
 
 describe("Docker build pipeline regression guard", () => {
+	it("skips the Electron binary download in the daemon image build", () => {
+		expect(dockerfile).toContain("ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1");
+		expect(dockerfile.indexOf("ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1")).toBeLessThan(
+			dockerfile.indexOf("RUN bun install --frozen-lockfile"),
+		);
+		expect(desktopBuildWorkflow).not.toContain("ELECTRON_SKIP_BINARY_DOWNLOAD");
+	});
+
 	it("uses shared build scripts instead of hardcoded connector filters", () => {
 		expect(dockerfile).toContain("RUN bun run build:deps");
 		expect(dockerfile).not.toContain("--filter '@signet/connector-");

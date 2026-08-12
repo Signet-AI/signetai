@@ -46,6 +46,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
+        env:
+          # This daemon-only job does not run Electron's desktop application.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
       - name: Build @signet/core (workspace dep the daemon imports)

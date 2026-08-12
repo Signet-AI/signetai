@@ -8,6 +8,9 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      # Release builds use the daemon and native package paths, not Electron.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     concurrency:
       group: nightly-release-pipeline
       cancel-in-progress: true
@@ -182,6 +185,7 @@ jobs:
             asset: signet-win32-x64.exe
     runs-on: ${{ matrix.os }}
     env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
       SIGNET_NATIVE_PLATFORM: ${{ matrix.platform }}
       RELEASE_ASSET: ${{ matrix.asset }}
@@ -249,6 +253,7 @@ jobs:
     permissions:
       contents: write
     env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       NEW_VERSION: ${{ needs.release.outputs.version }}
     steps:
       - uses: actions/checkout@v4

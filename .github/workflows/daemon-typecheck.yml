@@ -35,6 +35,9 @@ jobs:
 
       - name: Install dependencies
         shell: bash
+        env:
+          # This daemon-only job does not run Electron's desktop application.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
       - name: Build @signet/core (daemon imports its compiled types)

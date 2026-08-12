@@ -27,6 +27,9 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    env:
+      # This workflow builds documentation, not the Electron desktop app.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
 
     steps:
       - uses: actions/checkout@v4
