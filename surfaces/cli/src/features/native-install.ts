@@ -85,12 +85,13 @@ function profileContainsPath(contents: string, binDir: string, home: string, pla
 	return contents.split(/\r?\n/).some((line) => {
 		const trimmed = line.trim();
 		if (trimmed.startsWith("#") || !/^(?:export\s+)?PATH\s*=/.test(trimmed)) return false;
-		const containsRequestedDir = line.includes(binDir) || line.includes(normalizedDir);
+		const assignment = trimmed.replace(/^(?:export\s+)?PATH\s*=\s*/, "").replace(/^["']|["']$/g, "");
+		const containsRequestedDir = assignment
+			.split(":")
+			.some((entry) => normalizePathEntry(entry.trim(), platform) === normalizedDir);
 		if (containsRequestedDir) return true;
-		return (
-			isDefaultBinDir &&
-			(line.includes("$HOME/.local/bin") || line.includes("${HOME}/.local/bin") || line.includes("~/.local/bin"))
-		);
+		const homeBinDirAliases = ["$HOME/.local/bin", "$" + "{HOME}/.local/bin", "~/.local/bin"];
+		return isDefaultBinDir && homeBinDirAliases.some((alias) => line.includes(alias));
 	});
 }
 

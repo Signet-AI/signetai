@@ -105,6 +105,26 @@ describe("persistNativeInstallPath", () => {
 		expect(readFileSync(profilePath, "utf8")).toBe('# existing profile\nexport PATH="$HOME/.local/bin:$PATH"\n');
 	});
 
+	test("does not treat a near-prefix profile PATH entry as the requested directory", () => {
+		const home = makeHome();
+		homes.push(home);
+		const binDir = "/custom/bin";
+		const profilePath = join(home, ".bash_profile");
+		writeFileSync(profilePath, 'export PATH="/custom/bin-old:$PATH"\n', "utf8");
+
+		const result = persistNativeInstallPath(binDir, {
+			home,
+			platform: "linux",
+			shell: "/bin/bash",
+			pathValue: "/usr/bin:/bin",
+		});
+
+		expect(result).toEqual({ profilePath, persisted: true });
+		expect(readFileSync(profilePath, "utf8")).toBe(
+			`export PATH="/custom/bin-old:$PATH"\nexport PATH="${binDir}:$PATH"\n`,
+		);
+	});
+
 	test("skips persistence when PATH already contains the directory", () => {
 		const home = makeHome();
 		homes.push(home);
