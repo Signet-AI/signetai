@@ -423,6 +423,10 @@ export interface SourcesResponse {
 	sources: SignetSource[];
 }
 
+export interface SkillsResponse {
+	count: number;
+}
+
 export interface ImportSourcesResponse {
 	imported: number;
 	failed: number;
@@ -623,6 +627,14 @@ export const api = {
 		if (opts.type) p.set("type", opts.type);
 		const qs = p.toString();
 		return getJSON<{ memories: Memory[]; stats: MemoryStats }>(`/api/memories${qs ? `?${qs}` : ""}`);
+	},
+	getSkills: async (): Promise<SkillsResponse | null> => {
+		const result = await getJSONResult<{ count?: unknown; skills?: unknown; error?: unknown }>("/api/skills");
+		if (result.error) return null;
+		const data = result.data;
+		if (typeof data?.error === "string") return null;
+		if (typeof data?.count === "number") return { count: data.count };
+		return Array.isArray(data?.skills) ? { count: data.skills.length } : null;
 	},
 	getMemoryTimeline: (tzOffset = 0) => getJSON<MemoryTimeline>(`/api/memory/timeline?tzOffset=${tzOffset}`),
 	getEmbeddingHealth: () => getJSON<EmbeddingHealthReport>("/api/embeddings/health"),

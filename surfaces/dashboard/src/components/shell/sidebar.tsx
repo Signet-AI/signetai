@@ -35,6 +35,7 @@ function navIcon(children: ReactNode) {
 				strokeLinecap="round"
 				strokeLinejoin="round"
 				className={className}
+				aria-hidden="true"
 			>
 				{children}
 			</svg>
@@ -87,29 +88,62 @@ const SecretsIcon = navIcon(
 	</>,
 );
 
-const GROUPS: { label: string; items: NavItem[] }[] = [
+export const BASE_GROUPS: { label: string; items: NavItem[] }[] = [
 	{
 		label: "System",
 		items: [
 			{ view: "home", label: "Home", icon: HomeIcon },
-			{ view: "agents", label: "Agents", icon: AgentsIcon, badge: "3", disabled: true },
+			{ view: "agents", label: "Agents", icon: AgentsIcon, disabled: true },
 		],
 	},
 	{
 		label: "Focus",
 		items: [
-			{ view: "memory", label: "Memory", icon: MemoryIcon, badge: "8.1k" },
-			{ view: "sources", label: "Sources", icon: SourcesIcon, badge: "4" },
+			{ view: "memory", label: "Memory", icon: MemoryIcon },
+			{ view: "sources", label: "Sources", icon: SourcesIcon },
 		],
 	},
 	{
 		label: "Knowledge engine",
 		items: [
-			{ view: "graph", label: "Graph", icon: GraphIcon, badge: "2.4k" },
+			{ view: "graph", label: "Graph", icon: GraphIcon },
 			{ view: "dreaming", label: "Dreams", icon: DreamsIcon },
 		],
 	},
 ];
+
+export const ASSET_ITEMS: NavItem[] = [
+	{ view: "skills", label: "Skills", icon: SkillsIcon, disabled: true },
+	{ view: "secrets", label: "Secrets", icon: SecretsIcon },
+];
+
+export interface SidebarCounts {
+	agent: number | null;
+	memory: number | null;
+	sources: number | null;
+	graph: number | null;
+	dreaming: number | null;
+	skills: number | null;
+	secrets: number | null;
+}
+
+export function buildSidebarGroups(counts: SidebarCounts): { label: string; items: NavItem[] }[] {
+	const groups = BASE_GROUPS.map((group) => ({
+		...group,
+		items: group.items.map((item) => {
+			const count = counts[item.view as keyof SidebarCounts];
+			return count === undefined ? item : { ...item, badge: countBadge(count, item.view === "graph") };
+		}),
+	}));
+	return groups;
+}
+
+export function buildSidebarAssets(counts: Pick<SidebarCounts, "skills" | "secrets">): NavItem[] {
+	return ASSET_ITEMS.map((item) => ({
+		...item,
+		badge: countBadge(counts[item.view as "skills" | "secrets"]),
+	}));
+}
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 	const { view, setView } = useView();
@@ -117,23 +151,20 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 	const secretsList = useAsync(() => api.getSecrets(), { intervalMs: 30_000 }).data;
 	const status = useAsync(() => api.getStatus(), { intervalMs: 30_000 }).data;
 	const dreaming = useAsync(() => api.getDreamStatus(), { intervalMs: 30_000 }).data;
-	const agentCount = status?.agentId ? 1 : 0;
-	const groups = GROUPS.map((group) => ({
-		...group,
-		items: group.items.map((item) => {
-			if (item.view === "agents") {
-				return { ...item, badge: agentCount ? String(agentCount) : undefined };
-			}
-			if (item.view === "graph") {
-				return { ...item, badge: graphStats ? compactCount(graphStats.entityCount) : undefined };
-			}
-			if (item.view === "dreaming") {
-				const pending = dreaming?.attention.length;
-				return { ...item, badge: pending ? String(pending) : undefined };
-			}
-			return item;
-		}),
-	}));
+	const memories = useAsync(() => api.getMemories({ limit: 1 }), { intervalMs: 30_000 }).data;
+	const sources = useAsync(() => api.getSources(), { intervalMs: 30_000 }).data;
+	const skills = useAsync(() => api.getSkills(), { intervalMs: 30_000 }).data;
+	const agentCount = status ? (status.agentId ? 1 : 0) : null;
+	const groups = buildSidebarGroups({
+		agent: agentCount,
+		memory: memories?.stats.total ?? null,
+		sources: sources?.sources.filter((source) => source.enabled).length ?? null,
+		graph: graphStats?.entityCount ?? null,
+		dreaming: dreaming?.attention.length ?? null,
+		skills: skills?.count ?? null,
+		secrets: secretsList?.secrets?.length ?? null,
+	});
+	const assets = buildSidebarAssets({ skills: skills?.count ?? null, secrets: secretsList?.secrets?.length ?? null });
 	const navigate = (nextView: ViewId) => {
 		setView(nextView);
 		onNavigate?.();
@@ -151,7 +182,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 					<span className="flex flex-1 flex-col gap-px overflow-hidden leading-[1.15]">
 						<span className="truncate text-sm leading-[1.15] font-semibold tracking-tight">Signet</span>
 						<span className="truncate font-mono text-[10.5px] text-muted-foreground">
-							Personal · {agentCount} agent{agentCount === 1 ? "" : "s"}
+							Personal · {agentCount === null ? "-" : agentCount} agent{agentCount === 1 ? "" : "s"}
 						</span>
 					</span>
 					<ChevronIcon className="size-[15px] shrink-0 text-muted-foreground" />
@@ -177,21 +208,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 						Assets
 					</div>
 					<ul className="flex flex-col gap-px">
-						<NavRow
-							item={{ view: "skills", label: "Skills", icon: SkillsIcon, badge: "120", disabled: true }}
-							active={view === "skills"}
-							onClick={() => navigate("skills")}
-						/>
-						<NavRow
-							item={{
-								view: "secrets",
-								label: "Secrets",
-								icon: SecretsIcon,
-								badge: secretsList ? String(secretsList.secrets?.length ?? 0) : undefined,
-							}}
-							active={view === "secrets"}
-							onClick={() => navigate("secrets")}
-						/>
+						{assets.map((item) => (
+							<NavRow key={item.view} item={item} active={view === item.view} onClick={() => navigate(item.view)} />
+						))}
 					</ul>
 				</div>
 			</nav>
@@ -205,6 +224,11 @@ function compactCount(value: number): string {
 	if (value < 1_000) return String(value);
 	// Mockup badge format: one decimal ("2.4k", "8.1k").
 	return `${(value / 1_000).toFixed(1)}k`;
+}
+
+function countBadge(value: number | null, compact = false): string {
+	if (value === null) return "-";
+	return compact ? compactCount(value) : String(value);
 }
 
 function NavRow({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
@@ -323,6 +347,7 @@ function ChevronIcon({ className }: { className?: string }) {
 			strokeLinecap="round"
 			strokeLinejoin="round"
 			className={className}
+			aria-hidden="true"
 		>
 			<path d="m7 9 5-5 5 5" />
 			<path d="m7 15 5 5 5-5" />
@@ -339,6 +364,7 @@ function SettingsIcon({ className }: { className?: string }) {
 			strokeLinecap="round"
 			strokeLinejoin="round"
 			className={className}
+			aria-hidden="true"
 		>
 			<circle cx="12" cy="12" r="3" />
 			<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
