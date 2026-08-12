@@ -128,7 +128,7 @@ async function waitForHealth(
 ): Promise<void> {
 	const deadline = Date.now() + deadlineMs;
 	while (Date.now() < deadline) {
-		if (child.exitCode !== null) throw await childExitError(child, lifecycle);
+		if (child.exitCode !== null || child.signalCode !== null) throw await childExitError(child, lifecycle);
 		try {
 			const res = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(1_000) });
 			if (res.ok) return;
@@ -150,6 +150,16 @@ describe("native embedding event-loop isolation (e2e)", () => {
 
 		expect(error.message).toContain("status 1");
 		expect(error.message).toContain("startup failure");
+	});
+
+	it("reports a signal-terminated child instead of waiting for the health timeout", async () => {
+		const child = spawn(process.execPath, ["-e", 'process.kill(process.pid, "SIGTERM")'], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const lifecycle = captureChildLifecycle(child);
+
+		const result = waitForHealth("http://127.0.0.1:1", child, lifecycle, 2_000);
+		await expect(result).rejects.toThrow(/status unknown, signal SIGTERM/);
 	});
 
 	// Generous timeout: daemon startup + a 5s probe window.
