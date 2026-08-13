@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
+import { buildLaunchdEnvironment, buildLaunchdPlist } from "@signet/core";
 import { resolveDaemonNetwork } from "./network.js";
 import { resolveAgentsDir } from "./workspace.js";
 
@@ -1001,15 +1002,6 @@ export function macOSLaunchAgentAttributionNotice(
 	return `macOS may show a Login Items / Background Activity notification naming ${signer} instead of Signet. This is expected when Signet is started from a source checkout or JavaScript daemon path. The public curl, npm, and Bun installers use the compiled Signet binary instead.`;
 }
 
-function xmlEscape(value: string): string {
-	return value
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&apos;");
-}
-
 export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
 
 function currentLaunchdDomain(): string {
@@ -1023,62 +1015,32 @@ export function launchdDaemonPlistPath(_agentsDir: string, home: string = homedi
 
 export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string {
 	const label = input.label ?? LAUNCHD_DAEMON_LABEL;
-	const programArguments = resolveDaemonLaunchCommand(input.daemonPath)
-		.map(
-			(arg) => `
-		<string>${xmlEscape(arg)}</string>`,
-		)
-		.join("");
-	const env = {
-		SIGNET_PORT: String(input.port),
-		SIGNET_HOST: input.host,
-		SIGNET_BIND: input.bind,
-		SIGNET_PATH: input.agentsDir,
-		SIGNET_DAEMON_ENTRYPOINT: "1",
-		SIGNET_DAEMON_SERVICE: "launchd",
-		...resolveTelemetryEnvironment(input.telemetryEnv ?? process.env),
-		...(input.bunInspect ? { BUN_INSPECT: input.bunInspect } : {}),
-		...(process.env.SIGNET_DIR ? { SIGNET_DIR: process.env.SIGNET_DIR } : {}),
-		...(process.env.SIGNET_DASHBOARD_DIR ? { SIGNET_DASHBOARD_DIR: process.env.SIGNET_DASHBOARD_DIR } : {}),
-		HOME: process.env.HOME ?? homedir(),
-		PATH: process.env.PATH ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-	};
-	const envEntries = Object.entries(env)
-		.map(
-			([key, value]) => `
-			<key>${xmlEscape(key)}</key>
-			<string>${xmlEscape(value)}</string>`,
-		)
-		.join("");
-
-	return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Label</key>
-	<string>${xmlEscape(label)}</string>
-	<key>ProgramArguments</key>
-	<array>
-${programArguments}
-	</array>
-	<key>EnvironmentVariables</key>
-	<dict>${envEntries}
-	</dict>
-	<key>WorkingDirectory</key>
-	<string>${xmlEscape(process.cwd())}</string>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>KeepAlive</key>
-	<true/>
-	<key>StandardOutPath</key>
-	<string>/dev/null</string>
-	<key>StandardErrorPath</key>
-	<string>${xmlEscape(input.startupLogPath)}</string>
-	<key>ProcessType</key>
-	<string>Background</string>
-</dict>
-</plist>
-`;
+	const sourceEnvironment = input.telemetryEnv ?? process.env;
+	const environment = buildLaunchdEnvironment({
+		environment: sourceEnvironment,
+		values: {
+			SIGNET_PORT: String(input.port),
+			SIGNET_HOST: input.host,
+			SIGNET_BIND: input.bind,
+			SIGNET_PATH: input.agentsDir,
+			SIGNET_DAEMON_ENTRYPOINT: "1",
+			SIGNET_DAEMON_SERVICE: "launchd",
+			...resolveTelemetryEnvironment(sourceEnvironment),
+			...(input.bunInspect ? { BUN_INSPECT: input.bunInspect } : {}),
+			...(sourceEnvironment.SIGNET_DIR ? { SIGNET_DIR: sourceEnvironment.SIGNET_DIR } : {}),
+			...(sourceEnvironment.SIGNET_DASHBOARD_DIR
+				? { SIGNET_DASHBOARD_DIR: sourceEnvironment.SIGNET_DASHBOARD_DIR }
+				: {}),
+		},
+	});
+	return buildLaunchdPlist({
+		label,
+		programArguments: resolveDaemonLaunchCommand(input.daemonPath),
+		environment,
+		workingDirectory: process.cwd(),
+		standardOutPath: "/dev/null",
+		standardErrorPath: input.startupLogPath,
+	});
 }
 
 export function buildLaunchdDaemonStartArgs(plistPath: string): string[] {
