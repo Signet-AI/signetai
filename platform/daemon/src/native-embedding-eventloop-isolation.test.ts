@@ -20,7 +20,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import type { Readable } from "node:stream";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { type Server, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,29 +38,78 @@ type ChildExit = {
 };
 
 type ChildLifecycle = {
+	readonly stdout: Buffer[];
 	readonly stderr: Buffer[];
 	readonly closed: Promise<ChildExit>;
+	readonly agentsDir: string;
 };
 
-function captureChildLifecycle(child: TestChild): ChildLifecycle {
+const MAX_DIAGNOSTIC_LINES = 80;
+const MAX_DIAGNOSTIC_CHARS = 16_000;
+
+function captureChildLifecycle(child: TestChild, agentsDir: string): ChildLifecycle {
+	const stdout: Buffer[] = [];
 	const stderr: Buffer[] = [];
 	const closed = new Promise<ChildExit>((resolve) => {
 		child.once("close", (code, signal) => resolve({ code, signal }));
 	});
+	child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
 	child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-	return { stderr, closed };
+	return { stdout, stderr, closed, agentsDir };
 }
 
-function formatChildExitError(status: number | null, signal: NodeJS.Signals | null, stderr: string): Error {
+function readDiagnosticArtifact(path: string, missing: string): string {
+	try {
+		const content = readFileSync(path, "utf8").trim();
+		return content || "<empty>";
+	} catch (error) {
+		return `${missing}: ${error instanceof Error ? error.message : String(error)}`;
+	}
+}
+
+function readDaemonLogTail(agentsDir: string): string {
+	const logDir = join(agentsDir, ".daemon", "logs");
+	try {
+		const contents = readdirSync(logDir)
+			.filter((name) => name.endsWith(".log"))
+			.sort()
+			.map((name) => `--- ${name} ---\n${readFileSync(join(logDir, name), "utf8")}`)
+			.join("\n");
+		if (!contents) return "<no daemon log files>";
+		return contents.split(/\r?\n/).slice(-MAX_DIAGNOSTIC_LINES).join("\n").slice(-MAX_DIAGNOSTIC_CHARS);
+	} catch (error) {
+		return `<daemon log unavailable: ${error instanceof Error ? error.message : String(error)}>`;
+	}
+}
+
+function formatChildExitError(
+	status: number | null,
+	signal: NodeJS.Signals | null,
+	stdout: string,
+	stderr: string,
+	agentsDir: string,
+): Error {
 	const signalDetails = signal === null ? "" : `, signal ${signal}`;
-	const details = stderr.trim() || "<empty>";
-	return new Error(`daemon exited before health (status ${status ?? "unknown"}${signalDetails}); stderr:\n${details}`);
+	const stdoutDetails = stdout.trim() || "<empty>";
+	const stderrDetails = stderr.trim() || "<empty>";
+	const lifecycle = readDiagnosticArtifact(join(agentsDir, ".daemon", "lifecycle.json"), "<lifecycle unavailable>");
+	const logTail = readDaemonLogTail(agentsDir);
+	return new Error(
+		[
+			`daemon exited before health (status ${status ?? "unknown"}${signalDetails})`,
+			`stdout:\n${stdoutDetails}`,
+			`stderr:\n${stderrDetails}`,
+			`lifecycle.json:\n${lifecycle}`,
+			`daemon log tail:\n${logTail}`,
+		].join("\n\n"),
+	);
 }
 
 async function childExitError(child: TestChild, lifecycle: ChildLifecycle): Promise<Error> {
 	const exit = await lifecycle.closed;
+	const stdout = Buffer.concat(lifecycle.stdout).toString("utf8");
 	const stderr = Buffer.concat(lifecycle.stderr).toString("utf8");
-	return formatChildExitError(child.exitCode ?? exit.code, exit.signal, stderr);
+	return formatChildExitError(child.exitCode ?? exit.code, exit.signal, stdout, stderr, lifecycle.agentsDir);
 }
 
 afterEach(async () => {
@@ -141,22 +190,33 @@ async function waitForHealth(
 process.env.SIGNET_TELEMETRY_OPTOUT = "1"; // keep CI/test daemons out of the PostHog project
 
 describe("native embedding event-loop isolation (e2e)", () => {
-	it("preserves child stderr when startup exits before health", async () => {
-		const child = spawn(process.execPath, ["-e", 'console.error("startup failure"); process.exit(1)'], {
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		const lifecycle = captureChildLifecycle(child);
+	it("preserves child output and daemon diagnostics when startup exits before health", async () => {
+		const agentsDir = tempDir();
+		mkdirSync(join(agentsDir, ".daemon", "logs"), { recursive: true });
+		writeFileSync(join(agentsDir, ".daemon", "lifecycle.json"), '{"state":"error","reason":"error:startup"}');
+		writeFileSync(join(agentsDir, ".daemon", "logs", "signet-2026-08-13.log"), "fatal startup detail\n");
+		const child = spawn(
+			process.execPath,
+			["-e", 'console.log("startup output"); console.error("startup failure"); process.exit(1)'],
+			{
+				stdio: ["ignore", "pipe", "pipe"],
+			},
+		);
+		const lifecycle = captureChildLifecycle(child, agentsDir);
 		const error = await childExitError(child, lifecycle);
 
 		expect(error.message).toContain("status 1");
+		expect(error.message).toContain("startup output");
 		expect(error.message).toContain("startup failure");
+		expect(error.message).toContain('{"state":"error","reason":"error:startup"}');
+		expect(error.message).toContain("fatal startup detail");
 	});
 
 	it("reports a signal-terminated child instead of waiting for the health timeout", async () => {
 		const child = spawn(process.execPath, ["-e", 'process.kill(process.pid, "SIGTERM")'], {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
-		const lifecycle = captureChildLifecycle(child);
+		const lifecycle = captureChildLifecycle(child, tempDir());
 
 		const result = waitForHealth("http://127.0.0.1:1", child, lifecycle, 2_000);
 		await expect(result).rejects.toThrow(/status unknown, signal SIGTERM/);
@@ -197,7 +257,7 @@ describe("native embedding event-loop isolation (e2e)", () => {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		children.push(child);
-		const lifecycle = captureChildLifecycle(child);
+		const lifecycle = captureChildLifecycle(child, agentsDir);
 
 		// Drain stdout so the child cannot block on a full pipe.
 		child.stdout.on("data", () => {});
