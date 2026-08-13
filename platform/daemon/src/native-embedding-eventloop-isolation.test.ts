@@ -219,6 +219,12 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		const lifecycle = captureChildLifecycle(child, tempDir());
 
 		const result = waitForHealth("http://127.0.0.1:1", child, lifecycle, 2_000);
+		if (process.platform === "win32") {
+			// Bun reports process.kill(SIGTERM) as an ordinary status-1 exit on
+			// Windows, rather than exposing the POSIX signal through close().
+			await expect(result).rejects.toThrow(/status 1;/);
+			return;
+		}
 		await expect(result).rejects.toThrow(/status unknown, signal SIGTERM/);
 	});
 
