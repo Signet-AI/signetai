@@ -972,6 +972,73 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-write-failure")).toBeTruthy();
 	});
 
+	it("reconciles canonical embedding state after a mid-write vector-index failure", async () => {
+		// Proof for #1325: the canonical embedding write and the derived vec
+		// index update are separate failure boundaries. If vec insertion fails
+		// after the canonical row commits, the existing resync owner must make
+		// the derived index converge without re-embedding or changing the source.
+		ensureVecTable(db);
+		insertMemory(db, "mem-mid-write");
+		db.exec(`
+			CREATE TRIGGER reject_vec_insert
+			BEFORE INSERT ON vec_embeddings
+			BEGIN SELECT RAISE(ABORT, 'simulated mid-write vector failure'); END
+		`);
+
+		let providerCalls = 0;
+		const first = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				providerCalls++;
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			1,
+			false,
+		);
+
+		expect(first.success).toBe(true);
+		expect(first.affected).toBe(1);
+		expect(providerCalls).toBe(1);
+		expect(db.prepare("SELECT id FROM memories WHERE id = 'mem-mid-write' AND is_deleted = 0").get()).toBeTruthy();
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-mid-write'").all()).toHaveLength(1);
+		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toHaveLength(0);
+
+		// Reconciliation owns the derived index. It must repair the missing vec
+		// row from the canonical embedding without invoking the provider again.
+		db.exec("DROP TRIGGER reject_vec_insert");
+		const repaired = resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
+		expect(repaired.success).toBe(true);
+		expect(repaired.affected).toBe(1);
+		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toHaveLength(1);
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-mid-write'").all()).toHaveLength(1);
+
+		// The delete boundary must also fail closed. A failed derived delete
+		// rolls back canonical cleanup, so retrying the existing orphan owner is
+		// safe and eventually removes both projections.
+		db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = 'mem-mid-write'").run();
+		db.exec(`
+			CREATE TRIGGER reject_vec_delete
+			BEFORE DELETE ON vec_embeddings
+			BEGIN SELECT RAISE(ABORT, 'simulated mid-write vector delete failure'); END
+		`);
+		expect(() => cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter())).toThrow(
+			"failed to reconcile vec_embeddings before orphan cleanup",
+		);
+		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = 'mem-mid-write'").all()).toHaveLength(1);
+		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toHaveLength(1);
+
+		db.exec("DROP TRIGGER reject_vec_delete");
+		const cleaned = cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
+		expect(cleaned.success).toBe(true);
+		expect(cleaned.affected).toBe(1);
+		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = 'mem-mid-write'").all()).toHaveLength(0);
+		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toHaveLength(0);
+	});
+
 	it("does not overwrite another agent's embedding on a hash conflict", async () => {
 		// Regression for cross-agent hash collisions: the embedding hash is
 		// globally unique, but autonomous repair is agent-scoped. Agent A must
