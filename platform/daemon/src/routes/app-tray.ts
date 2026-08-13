@@ -500,7 +500,7 @@ async function installViaCatalog(
 	// This reuses all existing logic (config fetch, dedup, etc.) without
 	// duplicating it.
 	const port = process.env.SIGNET_PORT || "3850";
-	const res = await fetchInternal(`http://localhost:${port}/api/marketplace/mcp/install`, {
+	const res = await fetchInternal(`http://127.0.0.1:${port}/api/marketplace/mcp/install`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({

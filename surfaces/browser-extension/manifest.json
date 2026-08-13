@@ -4,7 +4,7 @@
 	"version": "0.29.0",
 	"description": "Portable AI agent identity — memory, search, and quick actions from your browser",
 	"permissions": ["storage", "contextMenus", "activeTab"],
-	"host_permissions": ["http://localhost:3850/*"],
+	"host_permissions": ["http://127.0.0.1:3850/*"],
 	"action": {
 		"default_popup": "popup/index.html",
 		"default_icon": {

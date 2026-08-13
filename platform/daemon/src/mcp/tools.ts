@@ -13,6 +13,7 @@ import {
 	buildRecallRequestBody,
 	buildRememberRequestBody,
 	formatRecallText,
+	resolveSignetDaemonUrl,
 } from "@signet/core";
 import { z } from "zod";
 import { getActiveGraphiqDbPath, runGraphiqCli } from "../graphiq.js";
@@ -25,7 +26,7 @@ import { createDefaultPluginHost } from "../plugins/index.js";
 // ---------------------------------------------------------------------------
 
 interface McpServerOptions {
-	/** Daemon HTTP base URL (default: http://localhost:3850) */
+	/** Daemon HTTP base URL (default: http://127.0.0.1:3850) */
 	readonly daemonUrl?: string;
 	/** Server version string */
 	readonly version?: string;
@@ -886,7 +887,7 @@ function registerGraphiqCompatAliases(server: McpServer, pluginHostProvider: Gra
 // ---------------------------------------------------------------------------
 
 export async function createMcpServer(opts?: McpServerOptions): Promise<McpServer> {
-	const baseUrl = opts?.daemonUrl ?? "http://localhost:3850";
+	const baseUrl = opts?.daemonUrl ?? resolveSignetDaemonUrl({ env: {} });
 	const version = opts?.version ?? "0.1.0";
 	const enableMarketplaceProxyTools = opts?.enableMarketplaceProxyTools ?? true;
 	const context = normalizeContext(opts?.context);

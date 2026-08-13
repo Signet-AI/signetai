@@ -1,7 +1,7 @@
 # @signet/extension
 
 Browser extension for Chrome and Firefox that connects to the Signet
-daemon running on `localhost:3850`. Provides a popup mini dashboard,
+daemon running on `127.0.0.1:3850`. Provides a popup mini dashboard,
 highlight-to-remember functionality, and keyboard shortcuts for saving
 web content directly to Signet memory.
 
@@ -38,7 +38,7 @@ The memory is saved with `source_type: "browser-extension"` and
 
 Configure the extension via the settings page:
 
-- **Daemon URL** — defaults to `http://localhost:3850`
+- **Daemon URL** — defaults to `http://127.0.0.1:3850`
 - **Auth Token** — optional, required only for team/hybrid auth mode
 - **Theme** — auto (follows browser), dark, or light
 
@@ -116,7 +116,7 @@ src/
 ### Manifest
 
 Manifest V3. Permissions: `storage`, `contextMenus`, `activeTab`.
-Host permission: `http://localhost:3850/*`.
+Host permission: `http://127.0.0.1:3850/*`.
 
 Content script runs on all URLs at `document_idle`.
 
@@ -127,7 +127,7 @@ the options page (`chrome://extensions` → Signet → Options).
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Daemon URL | `http://localhost:3850` | Signet daemon HTTP address |
+| Daemon URL | `http://127.0.0.1:3850` | Signet daemon HTTP address |
 | Auth Token | _(empty)_ | Bearer token for authenticated daemon instances |
 | Theme | `auto` | `auto`, `dark`, or `light` |
 

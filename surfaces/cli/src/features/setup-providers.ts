@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { platform } from "node:os";
 import { confirm, select } from "@inquirer/prompts";
+import { LOOPBACK_HOST } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import { getEmbeddingDimensions, readErr } from "./setup-shared.js";
@@ -266,7 +267,7 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 }
 
 async function queryLlamaCppModels(
-	baseUrl = "http://localhost:8080",
+	baseUrl = `http://${LOOPBACK_HOST}:8080`,
 ): Promise<{ available: boolean; models: string[]; error?: string }> {
 	try {
 		const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/models`, {
@@ -300,7 +301,7 @@ export async function hasLlamaCppServer(): Promise<boolean> {
 }
 
 async function queryOllamaModels(
-	baseUrl = "http://localhost:11434",
+	baseUrl = `http://${LOOPBACK_HOST}:11434`,
 ): Promise<{ available: boolean; models: string[]; error?: string }> {
 	try {
 		const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/tags`, {

@@ -75,7 +75,7 @@ export interface ExtensionConfig {
 }
 
 export const DEFAULT_CONFIG: ExtensionConfig = {
-	daemonUrl: "http://localhost:3850",
+	daemonUrl: "http://127.0.0.1:3850",
 	authToken: "",
 	theme: "auto",
 } as const;

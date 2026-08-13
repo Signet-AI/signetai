@@ -11,7 +11,7 @@ describe("daemon service health probe (#1340)", () => {
 			return Response.json({ status: "healthy", uptime: 12, pid: 42 });
 		});
 
-		expect(url).toBe("http://localhost:3850/health/live");
+		expect(url).toBe("http://127.0.0.1:3850/health/live");
 		expect(signal).toBeDefined();
 		expect(signal?.aborted).toBe(false);
 		expect(result).toEqual({ status: "healthy", uptime: 12, pid: 42 });

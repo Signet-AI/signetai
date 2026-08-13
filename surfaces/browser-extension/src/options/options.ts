@@ -35,7 +35,7 @@ async function init(): Promise<void> {
 	// Save
 	saveBtn.addEventListener("click", async () => {
 		await setConfig({
-			daemonUrl: daemonUrl.value.trim() || "http://localhost:3850",
+			daemonUrl: daemonUrl.value.trim() || "http://127.0.0.1:3850",
 			authToken: authToken.value,
 			theme: themeSelect.value as ThemeMode,
 		});

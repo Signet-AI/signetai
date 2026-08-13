@@ -49,7 +49,7 @@ describe("resolveDaemonNetwork", () => {
 describe("daemonAccessLines", () => {
 	test("includes a tailnet hint when the daemon is remotely bound", () => {
 		expect(daemonAccessLines(3850, { bindHost: "0.0.0.0" })).toEqual([
-			"Dashboard: http://localhost:3850",
+			"Dashboard: http://127.0.0.1:3850",
 			"Tailnet: this machine's Tailscale IP on port 3850 (bind 0.0.0.0)",
 		]);
 	});

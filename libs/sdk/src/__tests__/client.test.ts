@@ -66,6 +66,23 @@ afterEach(() => {
 });
 
 describe("SignetClient", () => {
+	test("uses IPv4 loopback for the implicit daemon URL", async () => {
+		const originalFetch = globalThis.fetch;
+		let requestedUrl = "";
+		globalThis.fetch = async (input) => {
+			requestedUrl = String(input);
+			return Response.json({ ok: true });
+		};
+
+		try {
+			await new SignetClient({ retries: 0 }).remember("loopback regression");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+
+		expect(requestedUrl).toBe("http://127.0.0.1:3850/api/memory/remember");
+	});
+
 	test("remember() sends POST /api/memory/remember with content", async () => {
 		const { client } = mockDaemon();
 		await client.remember("user prefers dark mode", {

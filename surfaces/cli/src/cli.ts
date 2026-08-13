@@ -47,6 +47,7 @@ import {
 	importMemoryLogs,
 	loadConfiguredHarnesses,
 	loadSqliteVec,
+	LOOPBACK_HOST,
 	readStaticIdentity,
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
@@ -1069,7 +1070,7 @@ const { fetchFromDaemon, fetchDaemonResult, secretApiCall } = createDaemonClient
 const SKILLS_DIR = join(AGENTS_DIR, "skills");
 
 registerRepairQueueCommands(program, {
-	baseUrl: `http://localhost:${DEFAULT_PORT}`,
+	baseUrl: `http://${LOOPBACK_HOST}:${DEFAULT_PORT}`,
 	apiCall: secretApiCall,
 });
 

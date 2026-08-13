@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
 	type NetworkMode,
 	networkModeFromBindHost,
+	normalizeLoopbackHost,
 	parseSimpleYaml,
 	readNetworkMode,
 	resolveNetworkBinding,
@@ -42,8 +43,8 @@ export function resolveDaemonNetwork(
 	readonly mode: NetworkMode;
 } {
 	const cfg = resolveNetworkBinding(readConfiguredNetworkMode(dir));
-	const host = readEnv(env.SIGNET_HOST) ?? cfg.host;
-	const bind = readEnv(env.SIGNET_BIND) ?? (readEnv(env.SIGNET_HOST) ? host : cfg.bind);
+	const host = normalizeLoopbackHost(readEnv(env.SIGNET_HOST) ?? cfg.host);
+	const bind = normalizeLoopbackHost(readEnv(env.SIGNET_BIND) ?? (readEnv(env.SIGNET_HOST) ? host : cfg.bind));
 
 	return {
 		host,
@@ -64,7 +65,7 @@ export function daemonAccessLines(port: number, info?: DaemonNetworkInfo | Netwo
 					? networkModeFromBindHost(info.bindHost)
 					: "localhost";
 
-	const lines = [`Dashboard: http://localhost:${port}`];
+	const lines = [`Dashboard: http://127.0.0.1:${port}`];
 	if (mode === "tailscale") {
 		lines.push(`Tailnet: this machine's Tailscale IP on port ${port} (bind 0.0.0.0)`);
 	}

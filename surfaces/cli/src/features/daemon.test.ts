@@ -12,7 +12,7 @@ import {
 describe("requestPipelinePauseApi", () => {
 	it("uses the live daemon pause endpoint when available", async () => {
 		const result = await requestPipelinePauseApi(3850, true, async (input, init) => {
-			expect(String(input)).toBe("http://localhost:3850/api/pipeline/pause");
+			expect(String(input)).toBe("http://127.0.0.1:3850/api/pipeline/pause");
 			expect(init?.method).toBe("POST");
 			return new Response(
 				JSON.stringify({
@@ -454,7 +454,7 @@ describe("launchDashboard", () => {
 		expect(startCalls).toBe(0);
 		expect(lines.join("\n")).not.toContain("Daemon is not running");
 		expect(lines.join("\n")).not.toContain("Daemon started");
-		expect(lines.join("\n")).toContain("http://localhost:3850");
+		expect(lines.join("\n")).toContain("http://127.0.0.1:3850");
 	});
 
 	// Regression (#1045): the health probe can transiently false-negative while
@@ -528,7 +528,7 @@ describe("launchDashboard", () => {
 		await launchDashboard({}, deps);
 		expect(lines.join("\n")).toContain("Daemon is not running. Starting...");
 		expect(lines.join("\n")).toContain("Daemon started");
-		expect(lines.join("\n")).toContain("OPEN:http://localhost:3850");
+		expect(lines.join("\n")).toContain("OPEN:http://127.0.0.1:3850");
 	});
 
 	it("exits non-zero when the daemon still cannot be reached after start", async () => {

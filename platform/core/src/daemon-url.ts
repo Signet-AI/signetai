@@ -1,3 +1,5 @@
+import { LOOPBACK_HOST, normalizeLoopbackHost } from "./network.js";
+
 export interface SignetDaemonUrlOptions {
 	readonly env?: Record<string, string | undefined>;
 	readonly defaultHost?: string;
@@ -69,18 +71,21 @@ function normalizeDaemonUrl(raw: string, source: string): string {
 	if (parsed.pathname !== "/" && parsed.pathname !== "") {
 		throw new Error(`${source} must point at the daemon origin, not a path: ${raw}`);
 	}
+	if (normalizeLoopbackHost(parsed.hostname) !== parsed.hostname) {
+		parsed.hostname = LOOPBACK_HOST;
+	}
 	return parsed.toString().replace(/\/$/, "");
 }
 
 export function resolveSignetDaemonUrl(opts: SignetDaemonUrlOptions = {}): string {
 	const env = opts.env ?? process.env;
-	const fallbackHost = opts.defaultHost ?? "127.0.0.1";
+	const fallbackHost = opts.defaultHost ?? LOOPBACK_HOST;
 	const fallbackPort = opts.defaultPort ?? 3850;
 	const explicit = readEnv(env, "SIGNET_DAEMON_URL");
 	if (explicit) return normalizeDaemonUrl(explicit, "SIGNET_DAEMON_URL");
 	if (opts.configUrl) return normalizeDaemonUrl(opts.configUrl, "daemon.url");
 
-	const host = readEnv(env, "SIGNET_HOST") ?? fallbackHost;
+	const host = normalizeLoopbackHost(readEnv(env, "SIGNET_HOST") ?? fallbackHost);
 	assertPlainHost(host);
 	const port = normalizePort(readEnv(env, "SIGNET_PORT"), fallbackPort);
 	return normalizeDaemonUrl(`http://${bracketIpv6Host(host)}:${port}`, "SIGNET_HOST/SIGNET_PORT");

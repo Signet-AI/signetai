@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSimpleYaml, resolveSignetDaemonUrl } from "@signet/core";
+import { LOOPBACK_HOST, parseSimpleYaml, resolveSignetDaemonUrl } from "@signet/core";
 import chalk from "chalk";
 
 export type DaemonFetch = <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
@@ -170,7 +170,7 @@ export function createDaemonClient(
 function resolveDaemonClientUrl(port: number, agentsDir?: string): string {
 	const configUrl = agentsDir ? readDaemonUrlConfig(agentsDir) : undefined;
 	try {
-		return resolveSignetDaemonUrl({ defaultHost: "localhost", defaultPort: port, configUrl });
+		return resolveSignetDaemonUrl({ defaultHost: LOOPBACK_HOST, defaultPort: port, configUrl });
 	} catch (err) {
 		// A malformed daemon.url must never brick every CLI command (the client is
 		// built at module load). Fall back to env/default resolution and warn.
@@ -179,7 +179,7 @@ function resolveDaemonClientUrl(port: number, agentsDir?: string): string {
 				chalk.yellow(`Ignoring invalid daemon.url "${configUrl}": ${err instanceof Error ? err.message : err}`),
 			);
 		}
-		return resolveSignetDaemonUrl({ defaultHost: "localhost", defaultPort: port });
+		return resolveSignetDaemonUrl({ defaultHost: LOOPBACK_HOST, defaultPort: port });
 	}
 }
 

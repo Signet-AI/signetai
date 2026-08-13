@@ -32,7 +32,7 @@ import {
 	isJsonObject,
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
-import { expandHome } from "@signet/core";
+import { LOOPBACK_HOST, expandHome } from "@signet/core";
 
 // ============================================================================
 // Deep merge helper
@@ -255,7 +255,7 @@ export class OpenClawConnector extends BaseConnector {
 								allowConversationAccess: true,
 							},
 							config: {
-								daemonUrl: "http://localhost:3850",
+								daemonUrl: `http://${LOOPBACK_HOST}:3850`,
 							},
 						},
 					},
@@ -1005,7 +1005,7 @@ description: "Signet memory integration"
 - \`/recall <query>\` - Search memories
 `;
 
-		const handlerJs = `const DAEMON_URL = process.env.SIGNET_DAEMON_URL || "http://localhost:3850";
+		const handlerJs = `const DAEMON_URL = process.env.SIGNET_DAEMON_URL || "http://127.0.0.1:3850";
 
 async function fetchDaemon(path, body) {
   const res = await fetch(\`\${DAEMON_URL}\${path}\`, {

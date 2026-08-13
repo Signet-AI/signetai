@@ -1,7 +1,7 @@
 """Signet memory plugin — MemoryProvider for Signet persistent memory.
 
 Bridges Hermes Agent's memory provider interface to the Signet daemon
-(localhost:3850), providing hybrid search (BM25 + vector + knowledge graph),
+(127.0.0.1:3850), providing hybrid search (BM25 + vector + knowledge graph),
 predictive recall, cross-session memory, and the full Signet pipeline
 (extraction, knowledge graph, retention decay, synthesis).
 
@@ -12,7 +12,7 @@ lifting: embedding, reranking, knowledge graph traversal, and predictive
 scoring.
 
 Config:
-  - SIGNET_HOST / SIGNET_PORT env vars (default: localhost:3850)
+  - SIGNET_HOST / SIGNET_PORT env vars (default: 127.0.0.1:3850)
   - SIGNET_DAEMON_URL env var for full URL override
   - SIGNET_AGENT_ID env var for agent scoping (unset: daemon's configured agent, usually "default")
   - SIGNET_AGENT_WORKSPACE env var for the active named-agent workspace
@@ -411,7 +411,7 @@ class SignetMemoryProvider(MemoryProvider):
             {
                 "key": "daemon_url",
                 "description": "Signet daemon URL",
-                "default": "http://localhost:3850",
+                "default": "http://127.0.0.1:3850",
                 "env_var": "SIGNET_DAEMON_URL",
             },
             {

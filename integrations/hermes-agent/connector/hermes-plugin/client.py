@@ -1,12 +1,12 @@
 """Signet daemon HTTP client.
 
-Communicates with the Signet daemon on localhost:3850 (default) for
+Communicates with the Signet daemon on 127.0.0.1:3850 (default) for
 memory operations: search, store, hooks, and session lifecycle.
 
 Configuration resolution:
   1. SIGNET_HOST + SIGNET_PORT env vars
   2. SIGNET_DAEMON_URL env var (full URL override)
-  3. Default: http://localhost:3850
+  3. Default: http://127.0.0.1:3850
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_HOST = "localhost"
+_DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 3850
 _TIMEOUT_SECS = 5
 _LONG_TIMEOUT_SECS = 15

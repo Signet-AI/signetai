@@ -8,6 +8,19 @@ describe("resolveSignetDaemonUrl", () => {
 		);
 	});
 
+	test("normalizes IPv6-first loopback URLs to the daemon's IPv4 listener", () => {
+		expect(resolveSignetDaemonUrl({ env: { SIGNET_DAEMON_URL: "http://localhost:3850" } })).toBe(
+			"http://127.0.0.1:3850",
+		);
+		expect(resolveSignetDaemonUrl({ configUrl: "http://[::1]:3850" })).toBe("http://127.0.0.1:3850");
+	});
+
+	test("defaults to the IPv4 loopback family for local clients", () => {
+		expect(resolveSignetDaemonUrl({ env: {} })).toBe("http://127.0.0.1:3850");
+		expect(resolveSignetDaemonUrl({ env: { SIGNET_HOST: "::1" } })).toBe("http://127.0.0.1:3850");
+		expect(resolveSignetDaemonUrl({ defaultHost: "localhost" })).toBe("http://127.0.0.1:3850");
+	});
+
 	test("resolves SIGNET_HOST and SIGNET_PORT when no explicit daemon URL is set", () => {
 		expect(
 			resolveSignetDaemonUrl({
@@ -19,7 +32,9 @@ describe("resolveSignetDaemonUrl", () => {
 	});
 
 	test("supports IPv6 hosts from SIGNET_HOST", () => {
-		expect(resolveSignetDaemonUrl({ env: { SIGNET_HOST: "::1", SIGNET_PORT: "3850" } })).toBe("http://[::1]:3850");
+		expect(resolveSignetDaemonUrl({ env: { SIGNET_HOST: "2001:db8::1", SIGNET_PORT: "3850" } })).toBe(
+			"http://[2001:db8::1]:3850",
+		);
 	});
 
 	test("rejects explicit daemon URLs with shell-breaking path or query syntax", () => {
@@ -53,7 +68,7 @@ describe("resolveSignetDaemonUrl", () => {
 	});
 
 	test("honors a persisted configUrl below the env override", () => {
-		expect(resolveSignetDaemonUrl({ configUrl: "https://remote.signet.example:8443" })).toBe(
+		expect(resolveSignetDaemonUrl({ configUrl: "https://remote.signet.example:8443", env: {} })).toBe(
 			"https://remote.signet.example:8443",
 		);
 		// SIGNET_DAEMON_URL wins over configUrl.
@@ -75,6 +90,8 @@ describe("resolveSignetDaemonUrl", () => {
 	});
 
 	test("rejects an invalid configUrl", () => {
-		expect(() => resolveSignetDaemonUrl({ configUrl: "ftp://x" })).toThrow("daemon.url must use http or https");
+		expect(() => resolveSignetDaemonUrl({ env: {}, configUrl: "ftp://x" })).toThrow(
+			"daemon.url must use http or https",
+		);
 	});
 });

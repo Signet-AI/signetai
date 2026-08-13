@@ -89,11 +89,11 @@ export async function launchDashboard(options: PathOptions, deps: Deps): Promise
 	}
 
 	console.log();
-	console.log(`  ${chalk.cyan(`http://localhost:${deps.defaultPort}`)}`);
+	console.log(`  ${chalk.cyan(`http://127.0.0.1:${deps.defaultPort}`)}`);
 	console.log();
 
 	const openUrl = deps.openUrl ?? open;
-	await openUrl(`http://localhost:${deps.defaultPort}`);
+	await openUrl(`http://127.0.0.1:${deps.defaultPort}`);
 }
 
 export async function migrateSchema(options: PathOptions, deps: Deps): Promise<void> {
@@ -365,7 +365,7 @@ export async function requestPipelinePauseApi(
 ): Promise<PipelinePauseApiResult> {
 	let res: Response;
 	try {
-		res = await doFetch(`http://localhost:${port}/api/pipeline/${paused ? "pause" : "resume"}`, {
+		res = await doFetch(`http://127.0.0.1:${port}/api/pipeline/${paused ? "pause" : "resume"}`, {
 			method: "POST",
 		});
 	} catch {
@@ -563,7 +563,7 @@ async function fetchApiLogs(limit: number, options: LogOptions, deps: Deps): Pro
 		}
 
 		const fetchImpl = deps.fetch ?? fetch;
-		const res = await fetchImpl(`http://localhost:${deps.defaultPort}/api/logs?${params}`);
+		const res = await fetchImpl(`http://127.0.0.1:${deps.defaultPort}/api/logs?${params}`);
 		const json = await res.json();
 		return readLogPayload(json);
 	} catch {
@@ -588,7 +588,7 @@ async function followLogs(port: number, fetchImpl: FetchLike = fetch): Promise<v
 	console.log(chalk.dim("  Streaming logs... (Ctrl+C to stop)\n"));
 
 	try {
-		const res = await fetchImpl(`http://localhost:${port}/api/logs/stream`, {
+		const res = await fetchImpl(`http://127.0.0.1:${port}/api/logs/stream`, {
 			headers: { Accept: "text/event-stream" },
 		});
 		if (!res.ok || !res.body) {

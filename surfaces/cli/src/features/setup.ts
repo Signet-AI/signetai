@@ -787,7 +787,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			}
 
 			if (options.openDashboard === true) {
-				await open(`http://localhost:${deps.DEFAULT_PORT}`);
+				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 
 			printSetupProtectionSummary(protection);

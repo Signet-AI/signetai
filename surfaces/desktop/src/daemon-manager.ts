@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { LOOPBACK_HOST } from "@signet/core";
 import { type WorkspaceMismatch, healthWorkspaceMismatch } from "./daemon-workspace.js";
 import { bunPath, daemonEntry, daemonRoot } from "./paths.js";
 
@@ -58,7 +59,7 @@ function stringOrNull(value: unknown): string | null {
 
 export class DaemonManager {
 	readonly port = readPort();
-	readonly baseUrl = `http://localhost:${this.port}`;
+	readonly baseUrl = `http://${LOOPBACK_HOST}:${this.port}`;
 	readonly #workspacePath: string;
 	#child: ChildProcess | null = null;
 	#owned = false;
@@ -124,7 +125,7 @@ export class DaemonManager {
 	/**
 	 * Dual-mode startup (fixes #606 spawn fd race + update drift):
 	 *
-	 * 1. Probe http://localhost:<port>/health with a short 500ms timeout.
+	 * 1. Probe http://127.0.0.1:<port>/health with a short 500ms timeout.
 	 * 2. If a daemon responds → attach (skip spawn, no version check, no auto-update).
 	 *    This eliminates the update-drift restart loop: the CLI-managed daemon is
 	 *    already running its own version; we just proxy to it.

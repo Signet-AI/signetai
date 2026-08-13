@@ -459,12 +459,12 @@ export async function runExistingSetupWizard(
 		console.log();
 		if (options?.nonInteractive === true) {
 			if (options.openDashboard === true) {
-				await open(`http://localhost:${deps.DEFAULT_PORT}`);
+				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		} else {
 			const launchNow = await confirm({ message: "Open the dashboard?", default: true });
 			if (launchNow) {
-				await open(`http://localhost:${deps.DEFAULT_PORT}`);
+				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		}
 

@@ -231,7 +231,7 @@ export function registerDefaultAction(program: Command, deps: DefaultActionDeps)
 		if (!report.installed) {
 			console.log(chalk.dim("Run `signet setup` to initialize a workspace."));
 		} else if (report.daemon.running) {
-			console.log(chalk.dim(`Daemon running at http://localhost:${deps.defaultPort} • ${report.basePath}`));
+			console.log(chalk.dim(`Daemon running at http://127.0.0.1:${deps.defaultPort} • ${report.basePath}`));
 		} else {
 			console.log(chalk.dim("Workspace found. Run `signet daemon start` or `signet doctor`."));
 		}

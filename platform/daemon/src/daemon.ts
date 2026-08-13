@@ -406,7 +406,7 @@ async function syncHarnessConfigs() {
 # Edit the source file instead: ${safe(agentsMdPath)}
 #
 # Signet Agent Home: ${safe(AGENTS_DIR)}
-# Dashboard: http://localhost:3850
+# Dashboard: http://127.0.0.1:3850
 # CLI: signet --help
 #
 # Related documents:

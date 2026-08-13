@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	networkModeFromBindHost,
+	normalizeLoopbackHost,
 	parseSimpleYaml,
 	readNetworkMode,
 	resolveDefaultBasePath,
@@ -52,10 +53,6 @@ export function normalizeBaseUrl(url: string | undefined): string | undefined {
 	return url.endsWith("/") ? url.slice(0, -1) : url;
 }
 
-export function normalizeLoopbackHost(host: string): string {
-	return host === "localhost" || host === "::1" ? "127.0.0.1" : host;
-}
-
 export function parseOriginPort(url: URL): number | null {
 	if (url.port.length > 0) {
 		const port = Number.parseInt(url.port, 10);
@@ -93,9 +90,7 @@ export function normalizeRuntimeBaseUrl(url: string | undefined, fallback: strin
 	const base = normalizeBaseUrl(url) ?? fallback;
 	try {
 		const parsed = new URL(base);
-		if (parsed.hostname === "localhost" || parsed.hostname === "::1") {
-			parsed.hostname = "127.0.0.1";
-		}
+		parsed.hostname = normalizeLoopbackHost(parsed.hostname);
 		return normalizeBaseUrl(parsed.toString()) ?? fallback;
 	} catch {
 		return base;

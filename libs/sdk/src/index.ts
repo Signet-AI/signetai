@@ -3,6 +3,7 @@
  * No native dependencies (no SQLite).
  */
 
+import { resolveSignetDaemonUrl } from "@signet/core";
 import { buildRecallRequestBody } from "@signet/core/recall";
 import { SignetClientP2 } from "./client-p2.js";
 import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
@@ -111,7 +112,7 @@ export class SignetClient extends SignetClientHelpers {
 		}
 
 		const transport = new SignetTransport({
-			baseUrl: config?.daemonUrl ?? "http://localhost:3850",
+			baseUrl: config?.daemonUrl ?? resolveSignetDaemonUrl({ env: {} }),
 			timeoutMs: config?.timeoutMs ?? 10_000,
 			retries: config?.retries ?? 2,
 			headers: Object.keys(headers).length > 0 ? headers : undefined,

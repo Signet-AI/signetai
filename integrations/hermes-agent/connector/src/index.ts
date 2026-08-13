@@ -838,7 +838,7 @@ export class HermesAgentConnector extends BaseConnector {
 		// 2. Write env config for the Signet daemon connection
 		const envPath = join(hermesHome, ".env");
 		let configuredSignetAgentId = "default";
-		const configuredDaemonUrl = (process.env.SIGNET_DAEMON_URL?.trim() || "http://localhost:3850").replace(
+		const configuredDaemonUrl = (process.env.SIGNET_DAEMON_URL?.trim() || "http://127.0.0.1:3850").replace(
 			/[\r\n]+/g,
 			"",
 		);
@@ -1045,7 +1045,7 @@ export class HermesAgentConnector extends BaseConnector {
 		return diagnoseHermesIntegration({
 			hermesHome,
 			hermesRepo,
-			daemonUrl: (process.env.SIGNET_DAEMON_URL?.trim() || "http://localhost:3850").replace(/[\r\n]+/g, ""),
+			daemonUrl: (process.env.SIGNET_DAEMON_URL?.trim() || "http://127.0.0.1:3850").replace(/[\r\n]+/g, ""),
 		});
 	}
 }
@@ -1057,7 +1057,7 @@ export async function diagnoseHermesIntegration(opts?: {
 }): Promise<HermesDoctorReport> {
 	const hermesHome = opts?.hermesHome ?? resolveHermesHomePath();
 	const hermesRepo = opts && "hermesRepo" in opts ? (opts.hermesRepo ?? null) : resolveHermesRepoPath();
-	const daemonUrl = opts?.daemonUrl ?? (process.env.SIGNET_DAEMON_URL?.trim() || "http://localhost:3850");
+	const daemonUrl = opts?.daemonUrl ?? (process.env.SIGNET_DAEMON_URL?.trim() || "http://127.0.0.1:3850");
 	const configPath = resolveConfigPath(hermesHome);
 	const userPluginDir = getUserPluginTargetDir(hermesHome);
 	const repoPluginDir = hermesRepo ? getRepoPluginTargetDir(hermesRepo) : null;

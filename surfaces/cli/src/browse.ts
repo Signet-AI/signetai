@@ -306,7 +306,7 @@ class CDPClient {
 async function getCDPTabs(port: number): Promise<CDPTab[]> {
 	let resp: Response;
 	try {
-		resp = await fetch(`http://localhost:${port}/json`, {
+		resp = await fetch(`http://127.0.0.1:${port}/json`, {
 			signal: AbortSignal.timeout(3000),
 		});
 	} catch (err) {

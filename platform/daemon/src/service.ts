@@ -7,7 +7,12 @@ import { execSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import { buildLaunchdEnvironment, buildLaunchdPlist, resolveDefaultBasePath } from "@signet/core";
+import {
+	LOOPBACK_HOST,
+	buildLaunchdEnvironment,
+	buildLaunchdPlist,
+	resolveDefaultBasePath,
+} from "@signet/core";
 
 const AGENTS_DIR = resolveDefaultBasePath();
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
@@ -15,7 +20,7 @@ const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 const DAEMON_PORT = 3850;
 const HEALTH_PROBE_TIMEOUT_MS = 1_200;
-const HEALTH_PROBE_URL = `http://localhost:${DAEMON_PORT}/health/live`;
+const HEALTH_PROBE_URL = `http://${LOOPBACK_HOST}:${DAEMON_PORT}/health/live`;
 
 // Platform-specific paths
 const LAUNCHD_PLIST = join(homedir(), "Library", "LaunchAgents", "ai.signet.daemon.plist");

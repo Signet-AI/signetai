@@ -38,7 +38,7 @@ import type {
 	PluginHookBeforePromptBuildEvent,
 } from "./openclaw-types.js";
 
-const DEFAULT_DAEMON_URL = "http://localhost:3850";
+const DEFAULT_DAEMON_URL = "http://127.0.0.1:3850";
 const RUNTIME_PATH = "plugin" as const;
 const READ_TIMEOUT = 5000;
 const WRITE_TIMEOUT = 10000;

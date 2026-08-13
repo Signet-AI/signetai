@@ -4,10 +4,11 @@
  * `POST /api/diagnostics/queue/repair`; this CLI is a thin wrapper.
  */
 
+import { LOOPBACK_HOST } from "@signet/core";
 import chalk from "chalk";
 
 export function getDaemonBaseUrl(port = 3850): string {
-	return process.env.SIGNET_DAEMON_URL ?? `http://localhost:${port}`;
+	return process.env.SIGNET_DAEMON_URL ?? `http://${LOOPBACK_HOST}:${port}`;
 }
 
 export interface RepairQueueActionResult {

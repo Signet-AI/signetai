@@ -307,12 +307,12 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.model).toBe("nomic-embed-text");
 	});
 
-	it("defaults ollama base_url to localhost:11434 when not specified", () => {
+	it("defaults ollama base_url to the IPv4 loopback when not specified", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: ollama\n  model: nomic-embed-text\n");
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.embedding.provider).toBe("ollama");
-		expect(cfg.embedding.base_url).toBe("http://localhost:11434");
+		expect(cfg.embedding.base_url).toBe("http://127.0.0.1:11434");
 	});
 
 	it("respects explicit ollama base_url when provided", () => {
@@ -345,7 +345,7 @@ describe("loadMemoryConfig", () => {
 		);
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.embedding.provider).toBe("ollama");
-		expect(cfg.embedding.base_url).toBe("http://localhost:11434");
+		expect(cfg.embedding.base_url).toBe("http://127.0.0.1:11434");
 	});
 
 	it("defaults openai base_url to the official API endpoint when not specified", () => {

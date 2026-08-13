@@ -172,7 +172,7 @@ export function buildExtractionRoute(opts: ExtractionRouteOptions): ExtractionRo
 		};
 	} else if (opts.kind === "local") {
 		if (opts.executor === "openai-compatible") {
-			target.endpoint = opts.endpoint ?? "http://localhost:1234/v1";
+			target.endpoint = opts.endpoint ?? "http://127.0.0.1:1234/v1";
 		}
 		// ollama / llama-cpp / openai-compatible(localhost) are keyless.
 	} else if (opts.kind === "acpx") {

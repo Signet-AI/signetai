@@ -1,3 +1,4 @@
+import { resolveSignetDaemonUrl } from "@signet/core";
 import { SignetApiError, SignetNetworkError, SignetTimeoutError } from "./errors.js";
 
 export interface TransportConfig {
@@ -9,7 +10,7 @@ export interface TransportConfig {
 }
 
 const DEFAULT_CONFIG: TransportConfig = {
-	baseUrl: "http://localhost:3850",
+	baseUrl: resolveSignetDaemonUrl({ env: {} }),
 	timeoutMs: 10_000,
 	retries: 2,
 	retryDelayMs: 500,

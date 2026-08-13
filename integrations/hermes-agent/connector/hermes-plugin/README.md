@@ -4,7 +4,7 @@ Persistent cross-session memory powered by the [Signet](https://github.com/Signe
 
 ## Requirements
 
-- Signet daemon running on localhost:3850 (default)
+- Signet daemon running on 127.0.0.1:3850 (default)
 - Install: `curl -fsSL https://signetai.sh/install.sh | bash`, `npm install -g signetai`, or `bun add -g signetai`
 
 ## Setup
@@ -22,7 +22,7 @@ signet start   # ensure daemon is running
 ## Config
 
 Environment variables:
-- `SIGNET_DAEMON_URL` — Full daemon URL (default: `http://localhost:3850`)
+- `SIGNET_DAEMON_URL` — Full daemon URL (default: `http://127.0.0.1:3850`)
 - `SIGNET_HOST` / `SIGNET_PORT` — Host and port separately
 - `SIGNET_TOKEN` — Optional daemon bearer token; sent to loopback daemon URLs by default
 - `SIGNET_TRUSTED_DAEMON_ORIGINS` — Comma-separated remote daemon origins allowed to receive `SIGNET_TOKEN`

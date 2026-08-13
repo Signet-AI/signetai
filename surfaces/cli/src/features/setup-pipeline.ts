@@ -164,7 +164,7 @@ export function buildSetupInference(
 	};
 	let accounts: Record<string, unknown> | undefined;
 	if (provider === "openai-compatible") {
-		target.endpoint = endpoint?.trim() || "http://localhost:1234/v1";
+		target.endpoint = endpoint?.trim() || "http://127.0.0.1:1234/v1";
 	}
 	if (provider === "openrouter") {
 		target.account = "extraction";
@@ -276,7 +276,7 @@ export function buildSetupAggregateRecall(
 	};
 	let accounts: Record<string, unknown> | undefined;
 	if (provider === "openai-compatible") {
-		target.endpoint = endpoint?.trim() || "http://localhost:1234/v1";
+		target.endpoint = endpoint?.trim() || "http://127.0.0.1:1234/v1";
 	} else if (provider === "openrouter") {
 		// The interactive connect flow stores its API key as SIGNET_KEY_OPENROUTER
 		// on the extraction account. Reuse that account rather than creating an

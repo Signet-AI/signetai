@@ -1,11 +1,12 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import react from "@vitejs/plugin-react";
+import { LOOPBACK_HOST } from "@signet/core";
 import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const daemonProxyTarget = process.env.SIGNET_DAEMON_URL ?? "http://localhost:3850";
+const daemonProxyTarget = process.env.SIGNET_DAEMON_URL ?? `http://${LOOPBACK_HOST}:3850`;
 
 // Dashboard build contract (issue #948):
 // - Emits to `build/index.html` (+ hashed assets under build/assets).

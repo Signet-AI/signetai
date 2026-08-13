@@ -8,6 +8,7 @@ import {
 	DEFAULT_TELEMETRY_POSTHOG_API_KEY,
 	DEFAULT_TELEMETRY_POSTHOG_HOST,
 	type DreamingConfig,
+	LOOPBACK_HOST,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
@@ -270,8 +271,8 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	},
 };
 
-export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
-export const DEFAULT_LLAMACPP_BASE_URL = "http://localhost:8080";
+export const DEFAULT_OLLAMA_BASE_URL = `http://${LOOPBACK_HOST}:11434`;
+export const DEFAULT_LLAMACPP_BASE_URL = `http://${LOOPBACK_HOST}:8080`;
 export const DEFAULT_LLAMACPP_MAX_INPUT_TOKENS = 1400;
 export const MIN_LLAMACPP_MAX_INPUT_TOKENS = 128;
 export const MAX_LLAMACPP_MAX_INPUT_TOKENS = 131072;

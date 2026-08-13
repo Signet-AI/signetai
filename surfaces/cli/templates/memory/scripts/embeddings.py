@@ -32,7 +32,7 @@ def load_config() -> dict:
                 "provider": "ollama",
                 "model": "nomic-embed-text",
                 "dimensions": 768,
-                "base_url": "http://localhost:11434",
+                "base_url": "http://127.0.0.1:11434",
             }
         }
     
@@ -113,7 +113,7 @@ def embed(text: str, config: Optional[dict] = None) -> tuple[list[float], str]:
     emb_config = config.get("embeddings", {})
     provider = emb_config.get("provider", "ollama")
     model = emb_config.get("model", "nomic-embed-text")
-    base_url = emb_config.get("base_url", "http://localhost:11434")
+    base_url = emb_config.get("base_url", "http://127.0.0.1:11434")
     
     # Normalize text
     text = text.strip()
@@ -156,7 +156,7 @@ def check_status() -> dict:
     emb_config = config.get("embeddings", {})
     provider = emb_config.get("provider", "ollama")
     model = emb_config.get("model", "nomic-embed-text")
-    base_url = emb_config.get("base_url", "http://localhost:11434")
+    base_url = emb_config.get("base_url", "http://127.0.0.1:11434")
     
     status = {
         "provider": provider,

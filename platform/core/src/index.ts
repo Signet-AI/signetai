@@ -150,7 +150,9 @@ export type {
 	MemoryContentSafetyStatus,
 } from "./memory-content-safety";
 export {
+	LOOPBACK_HOST,
 	NETWORK_MODES,
+	normalizeLoopbackHost,
 	normalizeNetworkMode,
 	networkModeFromBindHost,
 	readNetworkMode,

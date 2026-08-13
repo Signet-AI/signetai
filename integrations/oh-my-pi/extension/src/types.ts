@@ -6,7 +6,7 @@ import type {
 	BaseSessionHeader,
 } from "@signet/pi-extension-base";
 
-export const DAEMON_URL_DEFAULT = "http://localhost:3850";
+export const DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
 export const HARNESS = "oh-my-pi" as const;
 export const RUNTIME_PATH = "plugin" as const;
 

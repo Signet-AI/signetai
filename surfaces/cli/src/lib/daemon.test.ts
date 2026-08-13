@@ -75,7 +75,7 @@ describe("createDaemonClient", () => {
 		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			const client = createDaemonClient(3850, dir);
-			expect(client.url).toBe("http://localhost:3850");
+			expect(client.url).toBe("http://127.0.0.1:3850");
 			expect(String(warnSpy.mock.calls[0]?.[0] ?? "")).toContain("Ignoring invalid daemon.url");
 		} finally {
 			warnSpy.mockRestore();

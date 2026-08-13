@@ -113,7 +113,7 @@ needed."
 
 Do not speculate about implementation details beyond what's described
 here. If pressed for specifics, suggest the user check the Signet
-dashboard at http://localhost:3850.
+dashboard at http://127.0.0.1:3850.
 `;
 }
 

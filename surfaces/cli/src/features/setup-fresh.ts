@@ -443,14 +443,14 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 
 		if (context.nonInteractive) {
 			if (context.openDashboard) {
-				await open(`http://localhost:${deps.DEFAULT_PORT}`);
+				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		} else {
 			const launchNow = await import("@inquirer/prompts").then(({ confirm }) =>
 				confirm({ message: "Open the dashboard?", default: true }),
 			);
 			if (launchNow) {
-				await open(`http://localhost:${deps.DEFAULT_PORT}`);
+				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		}
 

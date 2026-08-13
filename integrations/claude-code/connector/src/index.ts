@@ -159,7 +159,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 	constructor(config: ConnectorConfig = {}) {
 		super();
 		this.config = config;
-		this.daemonUrl = config.daemonUrl || "http://localhost:3850";
+		this.daemonUrl = config.daemonUrl || "http://127.0.0.1:3850";
 	}
 
 	/**

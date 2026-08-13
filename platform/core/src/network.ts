@@ -1,7 +1,18 @@
 export const NETWORK_MODES = ["localhost", "tailscale"] as const;
 export type NetworkMode = (typeof NETWORK_MODES)[number];
 
-const LOCAL_BINDS = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
+/** IPv4 loopback is the daemon's canonical local listener family. */
+export const LOOPBACK_HOST = "127.0.0.1";
+
+export function normalizeLoopbackHost(host: string): string {
+	const normalized = host
+		.trim()
+		.toLowerCase()
+		.replace(/^\[|\]$/g, "");
+	return normalized === "localhost" || normalized === "::1" || normalized === "0:0:0:0:0:0:0:1" ? LOOPBACK_HOST : host;
+}
+
+const LOCAL_BINDS = new Set([LOOPBACK_HOST, "localhost", "::1", "::ffff:127.0.0.1"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -27,13 +38,13 @@ export function resolveNetworkBinding(mode: NetworkMode): {
 } {
 	if (mode === "tailscale") {
 		return {
-			host: "127.0.0.1",
+			host: LOOPBACK_HOST,
 			bind: "0.0.0.0",
 		};
 	}
 
 	return {
-		host: "127.0.0.1",
-		bind: "127.0.0.1",
+		host: LOOPBACK_HOST,
+		bind: LOOPBACK_HOST,
 	};
 }

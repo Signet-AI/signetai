@@ -5,7 +5,7 @@
  * possible so OpenCode stays aligned with CLI, MCP, and harness surfaces.
  */
 
-export const DAEMON_URL_DEFAULT = "http://localhost:3850";
+export const DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
 export const RUNTIME_PATH = "plugin" as const;
 export const HARNESS = "opencode" as const;
 export const READ_TIMEOUT = 5000;
