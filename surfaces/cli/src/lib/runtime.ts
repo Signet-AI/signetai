@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
-import { buildLaunchdEnvironment, buildLaunchdPlist } from "@signet/core";
+import { buildLaunchdEnvironment, buildLaunchdPlist, resolveLaunchdExecutable } from "@signet/core";
 import { resolveDaemonNetwork } from "./network.js";
 import { resolveAgentsDir } from "./workspace.js";
 
@@ -965,6 +965,7 @@ export function resolveDaemonRuntimeCommand(
 	if (basename(execPath).startsWith("bun")) return execPath;
 	const found = findExecutableOnPath("bun", pathValue);
 	if (found) return found;
+	if (process.platform === "darwin") return resolveLaunchdExecutable("bun", { environment: env, pathValue });
 	throw new Error("bun executable not found on PATH. Reinstall bun or run signet with bun.");
 }
 
@@ -976,7 +977,7 @@ export function resolveDaemonLaunchCommand(daemonPath: string, env: NodeJS.Proce
 	if (!isJavaScriptDaemonPath(daemonPath)) {
 		return [daemonPath];
 	}
-	return [resolveDaemonRuntimeCommand(env), daemonPath];
+	return [resolveDaemonRuntimeCommand(env, process.execPath, env.PATH), daemonPath];
 }
 
 export function macOSLaunchAgentAttributionNotice(
@@ -1035,7 +1036,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 	});
 	return buildLaunchdPlist({
 		label,
-		programArguments: resolveDaemonLaunchCommand(input.daemonPath),
+		programArguments: resolveDaemonLaunchCommand(input.daemonPath, sourceEnvironment),
 		environment,
 		workingDirectory: process.cwd(),
 		standardOutPath: "/dev/null",

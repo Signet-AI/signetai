@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "hono";
+import { resolveLaunchdExecutable } from "@signet/core";
 import { normalizeAndHashContent } from "../content-normalization";
 import { getAgentPresenceForSession } from "../cross-agent";
 import { getDbAccessor } from "../db-accessor";
@@ -385,7 +386,8 @@ export async function runLegacyEmbeddingsExport(
 
 	return await new Promise<LegacyEmbeddingsResponse>((resolve) => {
 		const timeout = withVectors ? 120000 : 30000;
-		const proc = spawn("python3", args, {
+		const python = process.platform === "darwin" ? resolveLaunchdExecutable("python3") : "python3";
+		const proc = spawn(python, args, {
 			cwd: agentsDir,
 			stdio: "pipe",
 			windowsHide: true,

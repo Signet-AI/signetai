@@ -61,7 +61,7 @@ export function resolveLaunchdExecutable(
 		if (isExecutableFile(candidate)) return candidate;
 	}
 
-	return FALLBACK_EXECUTABLE_PATHS[name][0];
+	return FALLBACK_EXECUTABLE_PATHS[name].find(isExecutableFile) ?? FALLBACK_EXECUTABLE_PATHS[name][0];
 }
 
 export function buildLaunchdEnvironment(input: LaunchdEnvironmentInput = {}): Record<string, string> {
