@@ -708,6 +708,28 @@ memory:
 	});
 
 	it("saves ontology claim evidence links without memory-only provenance links", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('aggregate-entity', 'ARTBAT', 'artbat', 'project', 'agent-a', 1, ?, ?)`,
+			).run("2026-05-20T12:00:00.000Z", "2026-05-20T12:00:00.000Z");
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aggregate-aspect', 'aggregate-entity', 'agent-a', 'billing_context', 'billing_context', 0.8, ?, ?)`,
+			).run("2026-05-20T12:00:00.000Z", "2026-05-20T12:00:00.000Z");
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-artbat-invoice', 'aggregate-aspect', 'agent-a', 'attribute', ?, ?, 0.9, 0.8, 'active', ?, ?)`,
+			).run(
+				"Current ARTBAT invoice is €1,000 and the outstanding 2025 balance is €2,000.",
+				"current artbat invoice is €1,000 and the outstanding 2025 balance is €2,000.",
+				"2026-05-20T12:00:00.000Z",
+				"2026-05-20T12:00:00.000Z",
+			);
+		});
 		const ontologyRow: RecallResult = {
 			id: "ontology-claim:attr-artbat-invoice",
 			content:

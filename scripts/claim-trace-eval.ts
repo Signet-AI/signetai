@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db-accessor";
 import { createEpistemicAssertionsInTx } from "../platform/daemon/src/ontology-assertions";
+import { linkDerivedMemorySourcesInTx } from "../platform/daemon/src/derived-memory-provenance";
 import {
 	type ClaimTraceResult,
 	OntologyClaimTraceError,
@@ -267,6 +268,30 @@ try {
 		});
 		link(db, "eval-foreign-derived", "memory", "eval-foreign-source");
 
+		db.prepare(
+			`INSERT INTO entities
+			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+			 VALUES ('eval-foreign-entity', 'Foreign Semantic Entity', 'foreign semantic entity', 'tool', 'other-agent', 1, ?, ?)`,
+		).run(now, now);
+		db.prepare(
+			`INSERT INTO entity_aspects
+			 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+			 VALUES ('eval-foreign-aspect', 'eval-foreign-entity', 'other-agent', 'preferences', 'preferences', 0.8, ?, ?)`,
+		).run(now, now);
+		insertMemory(db, {
+			id: "eval-foreign-semantic-derived",
+			content: "Foreign semantic claim.",
+			agentId: "other-agent",
+			memoryKind: "derived",
+		});
+		db.prepare(
+			`INSERT INTO entity_attributes
+			 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance,
+			  status, group_key, claim_key, version, version_root_id, proposal_evidence, created_at, updated_at)
+			 VALUES ('eval-foreign-semantic-attr', 'eval-foreign-aspect', 'other-agent', 'eval-foreign-semantic-derived', 'attribute', 'Foreign semantic claim.', 'foreign semantic claim', 0.9, 0.8,
+			         'active', 'eval', 'foreign_semantic', 1, 'eval-foreign-semantic-attr', '[]', ?, ?)`,
+		).run(now, now);
+
 		insertMemory(db, { id: "eval-fabricated-derived", content: "Fabricated claim.", memoryKind: "derived" });
 		insertClaim(db, {
 			id: "eval-fabricated-attr",
@@ -339,6 +364,67 @@ try {
 		"409",
 		() => explain("fabricated"),
 		(value) => value instanceof OntologyClaimTraceError && value.status === 409,
+	);
+	run(
+		"same-agent semantic premise is persisted once across retries",
+		"one ontology_claim link",
+		() => {
+			getDbAccessor().withWriteTx((db) => {
+				linkDerivedMemorySourcesInTx(db, {
+					derivedMemoryId: "eval-dependent",
+					agentId,
+					sources: [{ sourceKind: "ontology_claim", sourceId: "eval-current" }],
+					createdAt: now,
+				});
+				linkDerivedMemorySourcesInTx(db, {
+					derivedMemoryId: "eval-dependent",
+					agentId,
+					sources: [{ sourceKind: "ontology_claim", sourceId: "eval-current" }],
+					createdAt: now,
+				});
+			});
+			return getDbAccessor().withReadDb(
+				(db) =>
+					(
+						db
+							.prepare(
+								`SELECT COUNT(*) AS count
+							 FROM derived_memory_sources
+							 WHERE derived_memory_id = 'eval-dependent' AND source_kind = 'ontology_claim' AND source_id = 'eval-current'`,
+							)
+							.get() as { count: number }
+					)?.count ?? 0,
+			);
+		},
+		(value) => value === 1,
+	);
+	run(
+		"fabricated semantic premise is rejected before persistence",
+		"fail closed",
+		() =>
+			getDbAccessor().withWriteTx((db) =>
+				linkDerivedMemorySourcesInTx(db, {
+					derivedMemoryId: "eval-dependent",
+					agentId,
+					sources: [{ sourceKind: "ontology_claim", sourceId: "does-not-exist" }],
+					createdAt: now,
+				}),
+			),
+		(value) => value instanceof Error && value.message.includes("not in the authorized agent scope"),
+	);
+	run(
+		"cross-agent semantic premise is rejected before persistence",
+		"fail closed",
+		() =>
+			getDbAccessor().withWriteTx((db) =>
+				linkDerivedMemorySourcesInTx(db, {
+					derivedMemoryId: "eval-dependent",
+					agentId,
+					sources: [{ sourceKind: "ontology_claim", sourceId: "eval-foreign-semantic-attr" }],
+					createdAt: now,
+				}),
+			),
+		(value) => value instanceof Error && value.message.includes("not in the authorized agent scope"),
 	);
 	run(
 		"reverse lineage is bounded",

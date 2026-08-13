@@ -420,6 +420,43 @@ describe("ontology proposals", () => {
 		expect(getOntologyProposal(getDbAccessor(), pending.id, "ant")?.status).toBe("pending");
 	});
 
+	it("rejects fabricated and cross-agent semantic premise links before persistence (#1343)", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('foreign-entity', 'Foreign', 'foreign', 'project', 'other', 1, ?, ?)`,
+			).run("2026-08-04T00:00:00.000Z", "2026-08-04T00:00:00.000Z");
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('foreign-aspect', 'foreign-entity', 'other', 'evidence', 'evidence', 0.8, ?, ?)`,
+			).run("2026-08-04T00:00:00.000Z", "2026-08-04T00:00:00.000Z");
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+				 VALUES ('foreign-attribute', 'foreign-aspect', 'other', 'attribute', 'Foreign premise', 'foreign premise', 0.8, 0.7, 'active', ?, ?)`,
+			).run("2026-08-04T00:00:00.000Z", "2026-08-04T00:00:00.000Z");
+		});
+
+		const link = (sourceId: string) =>
+			getDbAccessor().withWriteTx((db) =>
+				linkDerivedMemorySourcesInTx(db, {
+					derivedMemoryId: "derived-premise-target",
+					agentId: "ant",
+					sources: [{ sourceKind: "ontology_claim", sourceId }],
+					createdAt: "2026-08-04T00:00:00.000Z",
+				}),
+			);
+
+		expect(() => link("missing-attribute")).toThrow(
+			"Derived memory provenance semantic premise is not in the authorized agent scope: missing-attribute",
+		);
+		expect(() => link("foreign-attribute")).toThrow(
+			"Derived memory provenance semantic premise is not in the authorized agent scope: foreign-attribute",
+		);
+	});
+
 	it("rejects a deduped claim apply whose evidence source disappeared after creation", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
