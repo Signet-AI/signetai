@@ -105,12 +105,26 @@ async function appendToTelemetryLog(
 	let dropped = 0;
 	try {
 		await mkdir(dirname(logPath), { recursive: true });
-		for (const line of lines) {
-			const payload = `${line}\n`;
-			if (Buffer.byteLength(payload) > options.maxBytes) {
-				dropped++;
-				continue;
-			}
+	} catch (error) {
+		// The whole batch is undeliverable when its parent cannot be prepared.
+		// Count it explicitly rather than silently losing the lines removed from
+		// the pending queue. Telemetry must never break the daemon.
+		logger.warn("telemetry", "Failed to prepare JSONL audit log", {
+			dropped: lines.length,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return lines.length;
+	}
+
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index];
+		if (line === undefined) continue;
+		const payload = `${line}\n`;
+		if (Buffer.byteLength(payload) > options.maxBytes) {
+			dropped++;
+			continue;
+		}
+		try {
 			let currentSize = 0;
 			try {
 				currentSize = (await stat(logPath)).size;
@@ -124,11 +138,21 @@ async function appendToTelemetryLog(
 				await rename(logPath, rotatedPath);
 			}
 			await appendFile(logPath, payload, "utf-8");
+		} catch (error) {
+			// Do not continue past a failed write or rotation. Writing a later line
+			// would make the JSONL appear reordered relative to this batch. The
+			// failed line and all following lines are dropped and reported together.
+			const remaining = lines.length - index;
+			dropped += remaining;
+			logger.warn("telemetry", "Dropped JSONL audit events after write failure", {
+				dropped: remaining,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			break;
 		}
-		await cleanupTelemetryLog(logPath, options);
-	} catch {
-		// Telemetry must never break the daemon. Best-effort only.
 	}
+
+	await cleanupTelemetryLog(logPath, options);
 	return dropped;
 }
 

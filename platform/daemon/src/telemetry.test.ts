@@ -988,6 +988,29 @@ describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 		expect(existsSync(recentPath)).toBe(true);
 	});
 
+	it("counts JSONL events dropped when rotation fails without breaking the hot path", async () => {
+		const collector = createTelemetryCollector(
+			fakeDbAccessor(),
+			{
+				posthogHost: "",
+				posthogApiKey: "",
+				flushIntervalMs: 60000,
+				flushBatchSize: 50,
+				retentionDays: 90,
+				memorySearchQaEnabled: false,
+			},
+			"0.163.15",
+			{
+				telemetryLogPath: "/proc/self/stat",
+				telemetryLogMaxBytes: 1,
+			},
+		);
+
+		expect(() => collector.record("daemon.started", { version: "0.163.15" })).not.toThrow();
+		await collector.flush();
+		expect(collector.deliveryHealth().droppedEventCount).toBeGreaterThan(0);
+	});
+
 	it("does not write a log when telemetryLogPath is omitted", () => {
 		const collector = createTelemetryCollector(
 			fakeDbAccessor(),
@@ -1005,7 +1028,7 @@ describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 		expect(existsSync(logPath)).toBe(false);
 	});
 
-	it("tolerates an unwritable log path without throwing", () => {
+	it("counts JSONL events dropped when log preparation fails without breaking the hot path", async () => {
 		const collector = createTelemetryCollector(
 			fakeDbAccessor(),
 			{
@@ -1017,9 +1040,12 @@ describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 				memorySearchQaEnabled: false,
 			},
 			"0.163.15",
-			{ telemetryLogPath: "/dev/null/nonexistent/events.jsonl" },
+			{ telemetryLogPath: "/dev/full" },
 		);
+
 		expect(() => collector.record("daemon.started", { version: "0.163.15" })).not.toThrow();
+		await collector.flush();
+		expect(collector.deliveryHealth().droppedEventCount).toBeGreaterThan(0);
 	});
 });
 
