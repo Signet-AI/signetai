@@ -7,7 +7,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFile, mkdir, readdir, rename, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
 	type AccountingProvenance,
@@ -42,14 +42,94 @@ export function parseTelemetryTimestamp(timestamp: string): number {
 	return Date.parse(normalized);
 }
 
-function appendToTelemetryLog(logPath: string | null, line: string): void {
-	if (!logPath) return;
+export const TELEMETRY_LOG_MAX_BYTES = 10 * 1024 * 1024;
+export const TELEMETRY_LOG_MAX_ROTATED_FILES = 5;
+export const TELEMETRY_LOG_RETENTION_DAYS = 90;
+const MAX_PENDING_LOG_LINES = 1_000;
+
+let telemetryLogRotationSequence = 0;
+
+interface TelemetryLogOptions {
+	readonly maxBytes: number;
+	readonly maxRotatedFiles: number;
+	readonly retentionDays: number;
+}
+
+function rotatedTelemetryLogPrefix(logPath: string): string {
+	return `${logPath.slice(0, -".jsonl".length)}.`;
+}
+
+async function cleanupTelemetryLog(logPath: string, options: TelemetryLogOptions): Promise<void> {
+	const directory = dirname(logPath);
+	const basename = logPath.slice(directory.length + 1);
+	const prefix = rotatedTelemetryLogPrefix(basename);
+	let entries: string[];
 	try {
-		mkdirSync(dirname(logPath), { recursive: true });
-		appendFileSync(logPath, `${line}\n`, "utf-8");
+		entries = (await readdir(directory)).filter((entry) => entry.startsWith(prefix) && entry.endsWith(".jsonl"));
+	} catch {
+		return;
+	}
+
+	const cutoff = Date.now() - options.retentionDays * 24 * 60 * 60 * 1_000;
+	const rotated: Array<{ readonly path: string; readonly mtimeMs: number }> = [];
+	for (const entry of entries) {
+		const path = join(directory, entry);
+		try {
+			const metadata = await stat(path);
+			if (metadata.mtimeMs < cutoff) {
+				await unlink(path);
+				continue;
+			}
+			rotated.push({ path, mtimeMs: metadata.mtimeMs });
+		} catch {
+			// Another cleanup or operator action may remove a rotated file first.
+		}
+	}
+
+	rotated.sort((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
+	for (const entry of rotated.slice(Math.max(0, options.maxRotatedFiles))) {
+		try {
+			await unlink(entry.path);
+		} catch {
+			// Best effort retention cleanup.
+		}
+	}
+}
+
+async function appendToTelemetryLog(
+	logPath: string | null,
+	lines: readonly string[],
+	options: TelemetryLogOptions,
+): Promise<number> {
+	if (!logPath) return 0;
+	let dropped = 0;
+	try {
+		await mkdir(dirname(logPath), { recursive: true });
+		for (const line of lines) {
+			const payload = `${line}\n`;
+			if (Buffer.byteLength(payload) > options.maxBytes) {
+				dropped++;
+				continue;
+			}
+			let currentSize = 0;
+			try {
+				currentSize = (await stat(logPath)).size;
+			} catch (error) {
+				if (error && typeof error === "object" && "code" in error && error.code !== "ENOENT") {
+					throw error;
+				}
+			}
+			if (currentSize > 0 && currentSize + Buffer.byteLength(payload) > options.maxBytes) {
+				const rotatedPath = `${rotatedTelemetryLogPrefix(logPath)}${Date.now()}-${telemetryLogRotationSequence++}.jsonl`;
+				await rename(logPath, rotatedPath);
+			}
+			await appendFile(logPath, payload, "utf-8");
+		}
+		await cleanupTelemetryLog(logPath, options);
 	} catch {
 		// Telemetry must never break the daemon. Best-effort only.
 	}
+	return dropped;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,9 +320,9 @@ function sessionCostProperties(cost: SessionCostAccumulator): TelemetryPropertie
 export interface TelemetryCollector {
 	record(event: TelemetryEventType, properties: TelemetryProperties): void;
 	/**
-	 * Record with a bounded synchronous JSONL audit append while deferring
-	 * SQLite persistence. The local line survives a hard process kill; the
-	 * wedge path does not enter SQLite or provider work.
+	 * Record with a bounded asynchronous JSONL audit append while deferring
+	 * SQLite persistence. The local line is best effort and may be dropped
+	 * under pressure; drops are included in delivery health.
 	 */
 	recordDeferred?(event: TelemetryEventType, properties: TelemetryProperties): void;
 	reopenSession(sessionHash: string): void;
@@ -623,12 +703,48 @@ export function createTelemetryCollector(
 	daemonVersion: string,
 	opts: {
 		readonly telemetryLogPath?: string | null;
+		readonly telemetryLogMaxBytes?: number;
+		readonly telemetryLogMaxRotatedFiles?: number;
+		readonly telemetryLogRetentionDays?: number;
 		readonly configSnapshot?: TelemetryConfigSnapshot;
 		readonly env?: NodeJS.ProcessEnv;
 	} = {},
 ): TelemetryCollector {
 	const buffer: TelemetryEvent[] = [];
 	const logPath = opts.telemetryLogPath ?? null;
+	const logOptions: TelemetryLogOptions = {
+		maxBytes: opts.telemetryLogMaxBytes ?? TELEMETRY_LOG_MAX_BYTES,
+		maxRotatedFiles: opts.telemetryLogMaxRotatedFiles ?? TELEMETRY_LOG_MAX_ROTATED_FILES,
+		retentionDays: opts.telemetryLogRetentionDays ?? TELEMETRY_LOG_RETENTION_DAYS,
+	};
+	const pendingLogLines: string[] = [];
+	let logFlushPromise: Promise<void> | null = null;
+
+	function flushLog(): Promise<void> {
+		if (!logPath || logFlushPromise) return logFlushPromise ?? Promise.resolve();
+		logFlushPromise = (async () => {
+			while (pendingLogLines.length > 0) {
+				const lines = pendingLogLines.splice(0, MAX_PENDING_LOG_LINES);
+				const dropped = await appendToTelemetryLog(logPath, lines, logOptions);
+				if (dropped > 0) recordDroppedEvents(dropped);
+			}
+		})()
+			.catch(() => {})
+			.finally(() => {
+				logFlushPromise = null;
+			});
+		return logFlushPromise;
+	}
+
+	function queueLogLine(event: TelemetryEvent): void {
+		if (!logPath) return;
+		if (pendingLogLines.length >= MAX_PENDING_LOG_LINES) {
+			pendingLogLines.shift();
+			recordDroppedEvents(1);
+		}
+		pendingLogLines.push(JSON.stringify(event));
+		void flushLog();
+	}
 	const deployment = telemetryDeployment(opts.env);
 	const reportedVersion = telemetryReportedVersion(daemonVersion, deployment);
 	const deploymentRole = telemetryDeploymentRole(config.deploymentRole, opts.env);
@@ -1078,7 +1194,7 @@ export function createTelemetryCollector(
 			properties: addContext(event, enrichSessionEvent(event, properties)),
 		};
 		buffer.push(next);
-		if (logPath) appendToTelemetryLog(logPath, JSON.stringify(next));
+		queueLogLine(next);
 	}
 
 	function drainBuffer(): void {
@@ -1262,11 +1378,12 @@ export function createTelemetryCollector(
 			if (!event) return;
 			// The database row is durable before the open log mirror is written.
 			// A failed log write must not affect the claim or delivery queue.
-			appendToTelemetryLog(logPath, JSON.stringify(event));
+			queueLogLine(event);
 		},
 
 		async flush(): Promise<void> {
 			await flushInternal(false, true);
+			await flushLog();
 		},
 
 		start(): void {
@@ -1296,11 +1413,13 @@ export function createTelemetryCollector(
 				flushTimer = null;
 			}
 			await flushInternal(true, true);
+			await flushLog();
 			// Stop accepting new events only after the first drain completes,
 			// so events recorded while an outbound request was awaiting are
 			// included in this final serialized drain.
 			recordingStopped = true;
 			await flushInternal(true, true);
+			await flushLog();
 			logger.info("telemetry", "Telemetry collector stopped");
 		},
 

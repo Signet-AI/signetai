@@ -11,7 +11,16 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { parseRoutingConfig } from "@signet/core";
 import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -25,6 +34,8 @@ import {
 	defaultTelemetryLogPath,
 	nextFlushIntervalMs,
 	parseTelemetryTimestamp,
+	TELEMETRY_LOG_MAX_BYTES,
+	TELEMETRY_LOG_MAX_ROTATED_FILES,
 	sanitizeCrashError,
 	setActiveTelemetry,
 	telemetryDeployment,
@@ -859,7 +870,7 @@ describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 		}
 	});
 
-	it("mirrors recorded events to the open JSONL log", () => {
+	it("mirrors recorded events to the open JSONL log", async () => {
 		const collector = createTelemetryCollector(
 			fakeDbAccessor(),
 			{
@@ -876,6 +887,7 @@ describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 
 		collector.record("daemon.started", { version: "0.163.15", platform: process.platform, uptimeMs: 0 });
 		collector.record("command.invoked", { command: "status" });
+		await collector.flush();
 
 		expect(existsSync(logPath)).toBe(true);
 		const lines = readFileSync(logPath, "utf-8").trim().split("\n");
@@ -906,13 +918,74 @@ describe("telemetry lifecycle events (issue #1026 Phase 2)", () => {
 			{ telemetryLogPath: logPath },
 		);
 
-		const before = readFileSync(logPath, "utf-8");
+		const before = existsSync(logPath) ? readFileSync(logPath, "utf-8") : "";
 		collector.recordDeferred?.("error.occurred", { type: "EventLoopLag", lagMs: 900 });
+		await collector.flush();
 		const afterRecord = readFileSync(logPath, "utf-8");
 		expect(afterRecord).not.toBe(before);
 		expect(afterRecord).toContain('"event":"error.occurred"');
-		await collector.flush();
 		expect(readFileSync(logPath, "utf-8")).toContain('"event":"error.occurred"');
+	});
+
+	it("writes queued JSONL events asynchronously in record order", async () => {
+		const collector = createTelemetryCollector(fakeDbAccessor(), { ...TELEMETRY_CONFIG, posthogHost: "" }, "0.163.15", {
+			telemetryLogPath: logPath,
+		});
+		collector.record("daemon.started", { marker: "first" });
+		collector.record("command.invoked", { marker: "second" });
+		collector.record("error.occurred", { marker: "third" });
+		await collector.flush();
+
+		const lines = readFileSync(logPath, "utf-8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { readonly properties: { readonly marker?: string } });
+		expect(lines.map((line) => line.properties.marker).filter((marker) => marker)).toEqual([
+			"first",
+			"second",
+			"third",
+		]);
+	});
+
+	it("rotates the JSONL log at its size bound and retains only recent files", async () => {
+		const collector = createTelemetryCollector(fakeDbAccessor(), { ...TELEMETRY_CONFIG, posthogHost: "" }, "0.163.15", {
+			telemetryLogPath: logPath,
+			telemetryLogMaxBytes: 500,
+			telemetryLogMaxRotatedFiles: 2,
+		});
+		for (let i = 0; i < 8; i++) {
+			collector.record("command.invoked", { marker: `event-${i}` });
+		}
+		await collector.flush();
+
+		const files = readdirSync(join(dir, ".daemon", "telemetry")).filter((file) => file.endsWith(".jsonl"));
+		const rotated = files.filter((file) => file !== "events.jsonl");
+		expect(rotated.length).toBeLessThanOrEqual(2);
+		expect(files).toContain("events.jsonl");
+		expect(readFileSync(logPath, "utf-8")).toContain('"marker":"event-7"');
+		expect(TELEMETRY_LOG_MAX_BYTES).toBeGreaterThan(0);
+		expect(TELEMETRY_LOG_MAX_ROTATED_FILES).toBeGreaterThan(0);
+	});
+
+	it("removes rotated JSONL files outside the retention window", async () => {
+		const telemetryDir = join(dir, ".daemon", "telemetry");
+		mkdirSync(telemetryDir, { recursive: true });
+		const oldPath = join(telemetryDir, "events.older.jsonl");
+		const recentPath = join(telemetryDir, "events.recent.jsonl");
+		await Bun.write(oldPath, "old\n");
+		await Bun.write(recentPath, "recent\n");
+		const oldTime = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+		utimesSync(oldPath, oldTime, oldTime);
+
+		const collector = createTelemetryCollector(fakeDbAccessor(), { ...TELEMETRY_CONFIG, posthogHost: "" }, "0.163.15", {
+			telemetryLogPath: logPath,
+			telemetryLogRetentionDays: 1,
+		});
+		collector.record("daemon.started", { marker: "cleanup" });
+		await collector.flush();
+
+		expect(existsSync(oldPath)).toBe(false);
+		expect(existsSync(recentPath)).toBe(true);
 	});
 
 	it("does not write a log when telemetryLogPath is omitted", () => {
