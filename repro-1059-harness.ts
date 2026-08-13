@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { evaluate, termination } from "./repro-1059-eval";
 
 const daemonScript = join(import.meta.dir, "platform/daemon/src/daemon.ts");
 const agentsDir = mkdtempSync(join(tmpdir(), "signet-1059-"));
@@ -64,7 +65,12 @@ async function request(
 async function waitForLive(origin: string, child: ChildProcess): Promise<void> {
 	const deadline = Date.now() + 60_000;
 	while (Date.now() < deadline) {
-		if (child.exitCode !== null) throw new Error(`daemon exited during startup: ${child.exitCode}`);
+		const state = termination(child);
+		if (state.exited) {
+			throw new Error(
+				`daemon exited during startup: code=${state.exitCode ?? "null"} signal=${state.signal ?? "null"}`,
+			);
+		}
 		try {
 			const result = await request(origin, "/health/live", { signal: AbortSignal.timeout(1_000) });
 			if (result.status === 200) return;
@@ -101,12 +107,12 @@ try {
 		res.writeHead(404);
 		res.end("not found");
 	});
-	await listen(downstream);
+	const downstreamPort = await listen(downstream);
 	const portServer = createServer();
 	const daemonPort = await listen(portServer);
 	await new Promise<void>((resolve) => portServer.close(() => resolve()));
 	const origin = `http://127.0.0.1:${daemonPort}`;
-	const downstreamOrigin = "https://httpbingo.org";
+	const downstreamOrigin = `http://127.0.0.1:${downstreamPort}`;
 
 	daemon = spawn(process.execPath, [daemonScript], {
 		cwd: import.meta.dir,
@@ -140,7 +146,7 @@ try {
 				mode === 0
 					? { source_type: "text", title: `mixed-text-${n}`, content: `${"document text ".repeat(700)} ${n}` }
 					: mode === 1
-						? { source_type: "url", title: `mixed-url-${n}`, url: `${downstreamOrigin}/delay/2?probe=${n}` }
+						? { source_type: "url", title: `mixed-url-${n}`, url: `${downstreamOrigin}/slow/${n}` }
 						: { source_type: "file", title: `mixed-file-${n}`, url: `/tmp/synthetic-${n}.pdf` };
 			requests.push(
 				request(origin, "/api/documents", {
@@ -165,6 +171,7 @@ try {
 	const submitDurationMs = Date.now() - start;
 
 	const liveLatencies: number[] = [];
+	let liveSuccessfulSamples = 0;
 	const healthLatencies: number[] = [];
 	const snapshots: Array<{
 		elapsedSec: number;
@@ -175,7 +182,7 @@ try {
 	}> = [];
 	const deadline = Date.now() + 360_000;
 	while (Date.now() < deadline) {
-		if (daemon.exitCode !== null) break;
+		if (termination(daemon).exited) break;
 		const live = await request(origin, "/health/live", { signal: AbortSignal.timeout(2_000) }).catch(() => ({
 			status: 0,
 			body: "",
@@ -187,6 +194,7 @@ try {
 			ms: 2_000,
 		}));
 		liveLatencies.push(live.ms);
+		if (live.status === 200) liveSuccessfulSamples++;
 		healthLatencies.push(health.ms);
 		let statusCounts: Record<string, number> = {};
 		const documents = await request(origin, "/api/documents?limit=500", { signal: AbortSignal.timeout(2_000) }).catch(
@@ -217,12 +225,29 @@ try {
 		for (const name of readdirSync(logDir)) if (name.endsWith(".log")) logs += readFileSync(join(logDir, name), "utf8");
 	} catch {}
 	const tail = logs.split(/\r?\n/).slice(-120).join("\n");
+	const finalSnapshot = snapshots.at(-1);
+	const finalCounts = finalSnapshot?.counts ?? {};
+	const terminal = (finalCounts.done ?? 0) + (finalCounts.failed ?? 0) + (finalCounts.deleted ?? 0);
+	const residualBacklog = snapshots.length === 0 ? null : Math.max(0, posted.length - terminal);
+	const child = termination(daemon);
+	const evaluation = evaluate({
+		expectedSubmissions: total,
+		posted: posted.length,
+		postErrors: postErrors.length,
+		daemonExited: child.exited,
+		liveSamples: liveLatencies.length,
+		liveSuccessfulSamples,
+		liveP95Ms: Math.round(percentile(liveLatencies, 0.95)),
+		backlogObserved: snapshots.length > 0,
+		residualBacklog,
+	});
 	const result = {
 		agentsDir,
 		submitDurationMs,
 		posted: posted.length,
 		postErrors,
-		daemonExit: daemon.exitCode,
+		daemonExit: child.exitCode,
+		daemonSignal: child.signal,
 		live: {
 			samples: liveLatencies.length,
 			maxMs: Math.round(Math.max(...liveLatencies)),
@@ -234,11 +259,20 @@ try {
 			p95Ms: Math.round(percentile(healthLatencies, 0.95)),
 		},
 		snapshots: snapshots.filter((_, i) => i % 10 === 0 || i === snapshots.length - 1),
+		backlog: {
+			observed: snapshots.length > 0,
+			residual: residualBacklog,
+			drained: evaluation.backlogDrained,
+		},
+		evaluation,
+		childStdout: stdout.join(""),
+		childStderr: stderr.join(""),
 		logTail: tail,
 	};
 	console.log(JSON.stringify(result, null, 2));
+	process.exitCode = evaluation.pass ? 0 : 1;
 } finally {
-	if (daemon && daemon.exitCode === null) {
+	if (daemon && !termination(daemon).exited) {
 		daemon.kill("SIGTERM");
 		await new Promise<void>((resolve) => {
 			const timer = setTimeout(() => {
