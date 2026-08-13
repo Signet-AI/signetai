@@ -233,7 +233,7 @@ function buildAuthUrlFromCreds(baseUrl: string, creds: { username: string; passw
 
 function isLockedKeychainError(result: CommandResult): boolean {
 	const output = `${result.stderr}\n${result.stdout}`;
-	return /errSecAuthFailed|could not read username|user interaction is not allowed|keychain is locked/i.test(output);
+	return /errSecAuthFailed|user interaction is not allowed|keychain is locked/i.test(output);
 }
 
 async function getCredentialHelperToken(url: string, cwd?: string): Promise<CredentialHelperResult> {
@@ -254,7 +254,7 @@ async function getCredentialHelperToken(url: string, cwd?: string): Promise<Cred
 		return username && password ? { status: "available", username, password } : { status: "missing" };
 	} catch (error) {
 		const output = error instanceof Error ? error.message : String(error);
-		return /errSecAuthFailed|could not read username|user interaction is not allowed|keychain is locked/i.test(output)
+		return /errSecAuthFailed|user interaction is not allowed|keychain is locked/i.test(output)
 			? { status: "keychain-locked" }
 			: { status: "missing" };
 	}

@@ -142,7 +142,13 @@ describe("getGitStatus", () => {
 		setGitRepoProbeForTests(() => true);
 		setGitCommandRunnerForTests(async (_cmd, args) => {
 			if (args[0] === "remote") return { code: 0, stdout: "https://git.example.com/team/project\n", stderr: "" };
-			if (args[0] === "credential") return { code: 1, stdout: "", stderr: "" };
+			if (args[0] === "credential") {
+				return {
+					code: 128,
+					stdout: "",
+					stderr: "fatal: could not read Username for 'https://git.example.com': No such device or address",
+				};
+			}
 			if (args[0] === "rev-parse") return { code: 0, stdout: "main\n", stderr: "" };
 			if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
 			return { code: 0, stdout: "0\n", stderr: "" };
