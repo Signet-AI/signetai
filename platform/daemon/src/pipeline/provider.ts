@@ -63,6 +63,7 @@ export class LlmConcurrencySemaphore {
 	private active = 0;
 	private readonly queue: Array<{
 		readonly start: () => void;
+		readonly queuedAt: number;
 	}> = [];
 	private timers = 0;
 
@@ -90,6 +91,7 @@ export class LlmConcurrencySemaphore {
 				reject(new Error("semaphore acquisition aborted"));
 			};
 			const entry = {
+				queuedAt: Date.now(),
 				start: (): void => {
 					signal?.removeEventListener("abort", onAbort);
 					this.active++;
@@ -130,6 +132,7 @@ export class LlmConcurrencySemaphore {
 				settle(() => reject(new SemaphoreTimeoutError(ms)));
 			}, ms);
 			const entry = {
+				queuedAt: Date.now(),
 				start: (): void => {
 					settle(() => {
 						this.active++;
@@ -152,6 +155,12 @@ export class LlmConcurrencySemaphore {
 
 	get pending(): number {
 		return this.queue.length;
+	}
+
+	get oldestPendingAgeMs(): number | null {
+		if (this.queue.length === 0) return null;
+		const oldestQueuedAt = Math.min(...this.queue.map((entry) => entry.queuedAt));
+		return Math.max(0, Date.now() - oldestQueuedAt);
 	}
 
 	get running(): number {
@@ -199,11 +208,13 @@ export function getLlmConcurrencyStatus(): {
 	readonly running: number;
 	readonly pending: number;
 	readonly limit: number;
+	readonly oldestPendingAgeMs: number | null;
 } {
 	return {
 		running: llmSemaphore.running,
 		pending: llmSemaphore.pending,
 		limit: llmSemaphore.limit,
+		oldestPendingAgeMs: llmSemaphore.oldestPendingAgeMs,
 	};
 }
 

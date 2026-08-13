@@ -14,7 +14,7 @@ curl -fsS http://127.0.0.1:3850/health/ready
 curl -fsS http://127.0.0.1:3850/api/diagnostics
 ```
 
-`/health/live` answers whether the process is up. `/health/ready` includes readiness gates. `/api/diagnostics` returns the detailed report. In authenticated deployments, diagnostics require the appropriate operator or admin permission.
+`/health/live` answers whether the process is up. `/health/ready` includes readiness gates. `/api/diagnostics` returns the detailed report. Its `workloads` block is scoped to the requested agent and includes active inference/Pi and MCP requests, provider semaphore running and pending counts, oldest ages, and Dreaming pass and attention backlog counts and ages. The focused `/api/diagnostics/workloads` endpoint returns the same bounded workload snapshot. In authenticated deployments, diagnostics require the appropriate operator or admin permission.
 
 Use the report to identify the failing domain before taking action. Do not treat a low composite score as a diagnosis by itself.
 

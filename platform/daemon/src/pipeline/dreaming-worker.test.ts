@@ -13,6 +13,7 @@ import {
 	type DreamingPassFocus,
 	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
+	getDreamingWorkloadDiagnostics,
 } from "./dreaming";
 import {
 	AlreadyRunningError,
@@ -225,6 +226,30 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
+	it("reports scoped Dreaming pass and attention backlog ages", () => {
+		db.prepare(
+			`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
+			 VALUES ('active-pass', 'default', 'incremental', 'running', '2026-08-13 10:00:00', '2026-08-13 10:00:00')`,
+		).run();
+		db.prepare(
+			`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority, created_at)
+			 VALUES ('pending-attention', 'default', 'review_due', 'subject', '{}', 50, '2026-08-13 09:00:00')`,
+		).run();
+
+		expect(getDreamingWorkloadDiagnostics(accessor, "default", Date.parse("2026-08-13 11:00:00"))).toEqual({
+			activePasses: 1,
+			oldestPassAgeMs: 60 * 60 * 1_000,
+			pendingAttention: 1,
+			oldestAttentionAgeMs: 2 * 60 * 60 * 1_000,
+		});
+		expect(getDreamingWorkloadDiagnostics(accessor, "other", Date.parse("2026-08-13 11:00:00"))).toEqual({
+			activePasses: 0,
+			oldestPassAgeMs: null,
+			pendingAttention: 0,
+			oldestAttentionAgeMs: null,
+		});
+	});
+
 	it("rejects an overlapping manual pass without skipping the active pass", async () => {
 		db.prepare(
 			`INSERT INTO session_transcripts
@@ -252,6 +277,8 @@ describe("dreaming worker agent scope", () => {
 		try {
 			const first = worker.trigger("incremental", "default");
 			await waitFor(() => started, 2_000);
+			expect(worker.running).toBe(true);
+			expect(worker.activeAgentId).toBe("default");
 			await expect(worker.trigger("incremental", "default")).rejects.toBeInstanceOf(AlreadyRunningError);
 			release();
 			await first;

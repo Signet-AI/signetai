@@ -12,6 +12,7 @@ import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { BackgroundWorkloadDiagnostics } from "../inference-router.js";
 import { getLlmProvider } from "../llm.js";
 import { getMcpWorkloadDiagnostics } from "../mcp/route.js";
+import { getLlmConcurrencyStatus } from "../pipeline/provider.js";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config.js";
 import { listMemoryContentSafety, parseMemorySafetyReasons } from "../memory-content-safety.js";
 import {
@@ -23,6 +24,7 @@ import {
 	getDreamingState,
 	getDreamingToolCalls,
 	getDreamingWorker,
+	getDreamingWorkloadDiagnostics,
 	getPipelineWorkerStatus,
 	requestDreamingEvidenceRequeue,
 } from "../pipeline";
@@ -116,6 +118,12 @@ export function pipelineQueueBlock(): PipelineQueueBlock {
 function workloadDiagnosticsSnapshot(agentId: string): {
 	readonly inference: BackgroundWorkloadDiagnostics;
 	readonly mcp: ReturnType<typeof getMcpWorkloadDiagnostics>;
+	readonly pi: {
+		readonly active: number;
+		readonly oldestAgeMs: number | null;
+	};
+	readonly providerSemaphore: ReturnType<typeof getLlmConcurrencyStatus>;
+	readonly dreaming: ReturnType<typeof getDreamingWorkloadDiagnostics>;
 } {
 	const inference: BackgroundWorkloadDiagnostics = getInferenceRouterOrNull()?.getBackgroundWorkloadDiagnostics(
 		agentId,
@@ -126,7 +134,13 @@ function workloadDiagnosticsSnapshot(agentId: string): {
 		oldestAgentSessionAgeMs: null,
 		byOperation: {},
 	};
-	return { inference, mcp: getMcpWorkloadDiagnostics(agentId) };
+	return {
+		inference,
+		mcp: getMcpWorkloadDiagnostics(agentId),
+		pi: { active: inference.agentSessions, oldestAgeMs: inference.oldestAgentSessionAgeMs },
+		providerSemaphore: getLlmConcurrencyStatus(),
+		dreaming: getDreamingWorkloadDiagnostics(getDbAccessor(), agentId),
+	};
 }
 
 function workloadDiagnostics(c: Context): Response {

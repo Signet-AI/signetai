@@ -23,9 +23,14 @@ let nextMcpRequestId = 1;
 export const MCP_MAX_IN_FLIGHT = 8;
 export const MCP_MAX_BODY_BYTES = 512 * 1024;
 let mcpAdmission: ConcurrencyAdmission = createConcurrencyAdmission(MCP_MAX_IN_FLIGHT);
+let mcpRequestGateForTests: (() => Promise<void>) | null = null;
 
 export function __setMcpAdmissionForTests(admission: ConcurrencyAdmission | null): void {
 	mcpAdmission = admission ?? createConcurrencyAdmission(MCP_MAX_IN_FLIGHT);
+}
+
+export function __setMcpRequestGateForTests(gate: (() => Promise<void>) | null): void {
+	mcpRequestGateForTests = gate;
 }
 
 export interface McpWorkloadDiagnostics {
@@ -84,6 +89,7 @@ export function mountMcpRoute(app: Hono): void {
 				agentId: resolveMcpWorkloadAgentId(c),
 				startedAt: Date.now(),
 			});
+			await mcpRequestGateForTests?.();
 			transport = new WebStandardStreamableHTTPServerTransport({
 				sessionIdGenerator: undefined, // stateless
 				enableJsonResponse: true,

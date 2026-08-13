@@ -29,6 +29,11 @@ export interface DreamingAttentionSnapshot extends DreamingAttention {
 	readonly generation: number;
 }
 
+export interface DreamingAttentionWorkloadDiagnostics {
+	readonly pending: number;
+	readonly oldestAgeMs: number | null;
+}
+
 function parseDetails(value: string): Readonly<Record<string, string>> {
 	try {
 		const parsed: unknown = JSON.parse(value);
@@ -127,6 +132,30 @@ export function getDreamingAttention(
 	limit?: number,
 ): readonly DreamingAttention[] {
 	return accessor.withReadDb((db) => getDreamingAttentionInDb(db, agentId, limit));
+}
+
+export function getDreamingAttentionWorkloadDiagnostics(
+	accessor: DbAccessor,
+	agentId: string,
+	nowMs = Date.now(),
+): DreamingAttentionWorkloadDiagnostics {
+	return accessor.withReadDb((db) => {
+		const row = db
+			.prepare(
+				`SELECT COUNT(*) AS pending, MIN(created_at) AS oldestCreatedAt
+				 FROM dreaming_attention
+				 WHERE agent_id = ? AND resolved_at IS NULL`,
+			)
+			.get(agentId) as { pending: number; oldestCreatedAt: string | null } | undefined;
+		if (!row || row.pending === 0 || row.oldestCreatedAt === null) {
+			return { pending: 0, oldestAgeMs: null };
+		}
+		const oldestMs = Date.parse(row.oldestCreatedAt);
+		return {
+			pending: row.pending,
+			oldestAgeMs: Number.isFinite(oldestMs) ? Math.max(0, nowMs - oldestMs) : null,
+		};
+	});
 }
 
 /** Scoped attention query with kind and resolution filters (attention_list). */

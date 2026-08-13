@@ -46,6 +46,7 @@ import {
 	enqueueDreamingAttentionInTx,
 	getDreamingAttention,
 	getDreamingAttentionInDb,
+	getDreamingAttentionWorkloadDiagnostics,
 	getDreamingAttentionSnapshots,
 	hasDreamingAttentionKindInDb,
 	renderDreamingAttentionForPrompt,
@@ -239,6 +240,45 @@ interface DreamingPassRow {
 	readonly mutationsFailed: number | null;
 	readonly summary: string | null;
 	readonly error: string | null;
+}
+
+export interface DreamingWorkloadDiagnostics {
+	readonly activePasses: number;
+	readonly oldestPassAgeMs: number | null;
+	readonly pendingAttention: number;
+	readonly oldestAttentionAgeMs: number | null;
+}
+
+export function getDreamingWorkloadDiagnostics(
+	accessor: DbAccessor,
+	agentId: string,
+	nowMs = Date.now(),
+): DreamingWorkloadDiagnostics {
+	const attention = getDreamingAttentionWorkloadDiagnostics(accessor, agentId, nowMs);
+	return accessor.withReadDb((db) => {
+		const row = db
+			.prepare(
+				`SELECT COUNT(*) AS active, MIN(started_at) AS oldestStartedAt
+				 FROM dreaming_passes
+				 WHERE agent_id = ? AND status = 'running'`,
+			)
+			.get(agentId) as { active: number; oldestStartedAt: string | null } | undefined;
+		if (!row || row.active === 0 || row.oldestStartedAt === null) {
+			return {
+				activePasses: 0,
+				oldestPassAgeMs: null,
+				pendingAttention: attention.pending,
+				oldestAttentionAgeMs: attention.oldestAgeMs,
+			};
+		}
+		const oldestMs = Date.parse(row.oldestStartedAt);
+		return {
+			activePasses: row.active,
+			oldestPassAgeMs: Number.isFinite(oldestMs) ? Math.max(0, nowMs - oldestMs) : null,
+			pendingAttention: attention.pending,
+			oldestAttentionAgeMs: attention.oldestAgeMs,
+		};
+	});
 }
 
 export interface DreamingToolCall {

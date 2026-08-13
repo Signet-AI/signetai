@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Hono } from "hono";
 import { createConcurrencyAdmission } from "../concurrency-admission.js";
-import { __setMcpAdmissionForTests, MCP_MAX_BODY_BYTES, mountMcpRoute } from "./route.js";
+import {
+	__setMcpAdmissionForTests,
+	__setMcpRequestGateForTests,
+	getMcpWorkloadDiagnostics,
+	MCP_MAX_BODY_BYTES,
+	mountMcpRoute,
+} from "./route.js";
 
 function makeApp(): Hono {
 	const app = new Hono();
@@ -36,6 +42,7 @@ describe("MCP route", () => {
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
 		__setMcpAdmissionForTests(null);
+		__setMcpRequestGateForTests(null);
 	});
 
 	it("rejects requests when the in-flight admission cap is saturated", async () => {
@@ -71,6 +78,40 @@ describe("MCP route", () => {
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(body.result.serverInfo.name).toBe("signet");
+	});
+
+	it("reports scoped in-flight MCP count and oldest age", async () => {
+		let releaseGate: (() => void) | undefined;
+		const gateReached = new Promise<void>((resolve) => {
+			__setMcpRequestGateForTests(
+				() =>
+					new Promise<void>((release) => {
+						releaseGate = release;
+						resolve();
+					}),
+			);
+		});
+		const request = makeApp().request("/mcp?agentId=agent-a", {
+			method: "POST",
+			headers: streamableHeaders,
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "initialize",
+				params: {
+					protocolVersion: "2024-11-05",
+					capabilities: {},
+					clientInfo: { name: "route-test", version: "0.1.0" },
+				},
+			}),
+		});
+		await gateReached;
+		expect(getMcpWorkloadDiagnostics("agent-a").inFlight).toBe(1);
+		expect(getMcpWorkloadDiagnostics("agent-a").oldestAgeMs).toBeGreaterThanOrEqual(0);
+		expect(getMcpWorkloadDiagnostics("other")).toEqual({ inFlight: 0, oldestAgeMs: null, maxInFlight: 8 });
+		releaseGate?.();
+		await request;
+		expect(getMcpWorkloadDiagnostics("agent-a")).toEqual({ inFlight: 0, oldestAgeMs: null, maxInFlight: 8 });
 	});
 
 	it("returns the SDK parse-error shape for malformed JSON", async () => {

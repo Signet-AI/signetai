@@ -1381,6 +1381,7 @@ describe("InferenceRouter background quiescence", () => {
 				agentSessions: 0,
 				byOperation: { memory_extraction: 1 },
 			});
+			expect(router.getBackgroundWorkloadDiagnostics("default").oldestAgeMs).toBeGreaterThan(0);
 			expect(router.getBackgroundWorkloadDiagnostics("other").active).toBe(0);
 
 			expect(await router.quiesceBackgroundInference(1_000)).toEqual({

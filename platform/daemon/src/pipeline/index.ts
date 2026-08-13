@@ -17,11 +17,7 @@ import { getLlmProvider } from "../llm";
 import { logger } from "../logger";
 import type { EmbeddingConfig, MemorySearchConfig, PipelineV2Config } from "../memory-config";
 import type { TelemetryCollector } from "../telemetry";
-import {
-	DOCUMENT_WORK_MAX_IN_FLIGHT,
-	type DocumentWorkerHandle,
-	startDocumentWorker,
-} from "./document-worker";
+import { DOCUMENT_WORK_MAX_IN_FLIGHT, type DocumentWorkerHandle, startDocumentWorker } from "./document-worker";
 import type { DreamingWorkerHandle } from "./dreaming-worker";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
@@ -56,6 +52,7 @@ export {
 	requestDreamingEvidenceRequeue,
 } from "./dreaming";
 export { getDreamingAttention } from "./dreaming-attention";
+export { getDreamingWorkloadDiagnostics } from "./dreaming";
 export { getDreamingQualityReport } from "./dreaming-quality";
 export type { DreamingSchedulerStatus, DreamingWorkerHandle } from "./dreaming-worker";
 

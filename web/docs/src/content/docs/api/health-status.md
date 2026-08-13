@@ -330,11 +330,14 @@ Use `GET /api/inference/status` for the shared inference control plane status.
 
 Returns bounded in-flight workload pressure for one resolved agent. The
 inference snapshot covers background routed work and Pi agent sessions; the
-MCP snapshot covers stateless Streamable HTTP requests. Counts are held in
-memory and ages are calculated from admission time, so this endpoint does not
-scan durable queue tables. `agentId` may be supplied as a query parameter or
-`x-signet-agent-id` header; scoped deployments reject requests for another
-agent.
+MCP snapshot covers stateless Streamable HTTP requests; the provider semaphore
+snapshot covers global LLM permit occupancy; and the Dreaming snapshot covers
+running passes plus pending attention. Counts are held in memory except for
+the Dreaming snapshot, which reads scoped durable rows. Ages are calculated
+from admission or persisted start/creation time, so this endpoint does not
+scan general-purpose durable queue tables. `agentId` may be supplied as a
+query parameter or `x-signet-agent-id` header; scoped deployments reject
+requests for another agent.
 
 **Response**
 
@@ -348,7 +351,15 @@ agent.
     "oldestAgentSessionAgeMs": 3200,
     "byOperation": { "memory_extraction": 1 }
   },
-  "mcp": { "inFlight": 0, "oldestAgeMs": null, "maxInFlight": 8 }
+  "mcp": { "inFlight": 0, "oldestAgeMs": null, "maxInFlight": 8 },
+  "pi": { "active": 1, "oldestAgeMs": 3200 },
+  "providerSemaphore": { "running": 1, "pending": 0, "limit": 2, "oldestPendingAgeMs": null },
+  "dreaming": {
+    "activePasses": 0,
+    "oldestPassAgeMs": null,
+    "pendingAttention": 0,
+    "oldestAttentionAgeMs": null
+  }
 }
 ```
 

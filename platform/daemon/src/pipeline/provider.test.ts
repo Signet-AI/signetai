@@ -420,11 +420,24 @@ fi
 			if (existsSync(queuedPidPath)) {
 				expect(await waitForProcessExit(Number(readFileSync(queuedPidPath, "utf8")))).toBe(true);
 			}
-			expect(getLlmConcurrencyStatus()).toEqual({ limit: 1, pending: 0, running: 0 });
+			expect(getLlmConcurrencyStatus()).toEqual({ limit: 1, pending: 0, running: 0, oldestPendingAgeMs: null });
 		} finally {
 			configureLlmConcurrency(originalLimit);
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	it("reports the age of the oldest queued provider call", async () => {
+		const semaphore = new LlmConcurrencySemaphore(1);
+		await semaphore.acquire();
+		const queued = semaphore.acquire();
+		await new Promise((resolve) => setTimeout(resolve, 15));
+		expect(semaphore.pending).toBe(1);
+		expect(semaphore.oldestPendingAgeMs).toBeGreaterThan(0);
+		semaphore.release();
+		await queued;
+		semaphore.release();
+		expect(semaphore.oldestPendingAgeMs).toBeNull();
 	});
 
 	it("reports structured diagnostics after repeated empty completions", async () => {
