@@ -30,6 +30,8 @@
 	--sl-color-hairline-light: var(--sl-color-gray-5);
 	--sl-color-hairline: var(--sl-color-gray-6);
 	--sl-color-hairline-shade: var(--sl-color-black);
+	--signet-blue: #4d7cfe;
+	--signet-selection-text: #060608;
 	--signet-border: #26262c;
 	--signet-nav-hover: #101014;
 	--signet-nav-active: #151519;
@@ -77,6 +79,11 @@
 	--signet-border: #d5d0d2;
 	--signet-nav-hover: #efeced;
 	--signet-nav-active: #e8e4e5;
+}
+
+::selection {
+	background: var(--signet-blue);
+	color: var(--signet-selection-text);
 }
 
 html,
@@ -192,7 +199,7 @@ header.header > .header {
 	margin-inline: calc(-1 * var(--sl-sidebar-pad-x)) calc(-1 * (var(--sl-sidebar-pad-x) + 1rem));
 	padding-inline: calc(1.25rem + var(--sl-sidebar-pad-x)) 1.25rem;
 	background: var(--signet-nav-active);
-	box-shadow: inset 2px 0 var(--sl-color-white);
+	box-shadow: inset 2px 0 var(--signet-blue);
 	color: var(--sl-color-white);
 	font-weight: 600;
 }
