@@ -7,6 +7,7 @@ import {
 	getAutoCommitQueueStateForTests,
 	getGitStatus,
 	gitAutoCommitForTests,
+	gitPull,
 	resetGitHealthForTests,
 	scheduleAutoCommit,
 	setGitCommandRunnerForTests,
@@ -85,6 +86,82 @@ describe("applyGitConfigPatch", () => {
 });
 
 describe("getGitStatus", () => {
+	it("keeps a retryable credential state when the macOS keychain is locked", async () => {
+		resetGitHealthForTests();
+		setGitRepoProbeForTests(() => true);
+		setGitCommandRunnerForTests(async (_cmd, args) => {
+			if (args[0] === "remote") return { code: 0, stdout: "https://git.example.com/team/project\n", stderr: "" };
+			if (args[0] === "credential") {
+				return {
+					code: 1,
+					stdout: "",
+					stderr: "fatal: could not read Username for 'https://git.example.com': errSecAuthFailed",
+				};
+			}
+			if (args[0] === "rev-parse") return { code: 0, stdout: "main\n", stderr: "" };
+			if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+			return { code: 0, stdout: "0\n", stderr: "" };
+		});
+
+		try {
+			const status = await getGitStatus();
+			expect(status.hasCredentials).toBe(true);
+			expect(status.authMethod).toBe("keychain-locked");
+			expect(status.degraded).toBe(false);
+		} finally {
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+		}
+	});
+
+	it("surfaces unlock guidance when sync is attempted with a locked keychain", async () => {
+		resetGitHealthForTests();
+		setGitRepoProbeForTests(() => true);
+		setGitCommandRunnerForTests(async (_cmd, args) => {
+			if (args[0] === "remote") return { code: 0, stdout: "https://git.example.com/team/project\n", stderr: "" };
+			if (args[0] === "credential") {
+				return { code: 1, stdout: "", stderr: "could not read Username: user interaction is not allowed" };
+			}
+			return { code: 0, stdout: "", stderr: "" };
+		});
+
+		try {
+			const result = await gitPull();
+			expect(result.success).toBe(false);
+			expect(result.message).toContain("Unlock it in Keychain Access");
+		} finally {
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+		}
+	});
+
+	it("reports genuinely missing credentials as unavailable", async () => {
+		resetGitHealthForTests();
+		setGitRepoProbeForTests(() => true);
+		setGitCommandRunnerForTests(async (_cmd, args) => {
+			if (args[0] === "remote") return { code: 0, stdout: "https://git.example.com/team/project\n", stderr: "" };
+			if (args[0] === "credential") return { code: 1, stdout: "", stderr: "" };
+			if (args[0] === "rev-parse") return { code: 0, stdout: "main\n", stderr: "" };
+			if (args[0] === "status") return { code: 0, stdout: "", stderr: "" };
+			return { code: 0, stdout: "0\n", stderr: "" };
+		});
+
+		try {
+			const status = await getGitStatus();
+			expect(status.hasCredentials).toBe(false);
+			expect(status.authMethod).toBe("none");
+			const result = await gitPull();
+			expect(result.success).toBe(false);
+			expect(result.message).toContain("No git credentials found");
+		} finally {
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+		}
+	});
+
 	it("degrades instead of throwing when workspace status times out", async () => {
 		resetGitHealthForTests();
 		setGitRepoProbeForTests(() => true);

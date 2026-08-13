@@ -12,7 +12,7 @@ import { logger } from "../logger";
 import { getSecret, hasSecret } from "../secrets.js";
 import { AGENTS_DIR } from "./state";
 
-import { clampGitSyncIntervalSeconds, type GitConfig, gitConfig } from "./git-config";
+import { clampGitSyncIntervalSeconds, gitConfig } from "./git-config";
 export { gitConfig };
 
 let gitSyncTimer: ReturnType<typeof setInterval> | null = null;
@@ -57,10 +57,18 @@ function isGitRepo(dir: string): boolean {
 }
 
 interface GitCredentials {
-	method: "token" | "gh" | "credential-helper" | "ssh" | "no-remote" | "none";
+	method: "token" | "gh" | "credential-helper" | "keychain-locked" | "ssh" | "no-remote" | "none";
 	authUrl?: string;
 	usePlainGit?: boolean;
 }
+
+type CredentialHelperResult =
+	| { status: "available"; username: string; password: string }
+	| { status: "missing" }
+	| { status: "keychain-locked" };
+
+const KEYCHAIN_LOCKED_MESSAGE =
+	"The macOS login keychain is locked. Unlock it in Keychain Access, then retry Git sync.";
 
 function killProcessTree(proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
 	try {
@@ -223,10 +231,12 @@ function buildAuthUrlFromCreds(baseUrl: string, creds: { username: string; passw
 	);
 }
 
-async function getCredentialHelperToken(
-	url: string,
-	cwd?: string,
-): Promise<{ username: string; password: string } | null> {
+function isLockedKeychainError(result: CommandResult): boolean {
+	const output = `${result.stderr}\n${result.stdout}`;
+	return /errSecAuthFailed|could not read username|user interaction is not allowed|keychain is locked/i.test(output);
+}
+
+async function getCredentialHelperToken(url: string, cwd?: string): Promise<CredentialHelperResult> {
 	try {
 		const urlObj = new URL(url);
 		const input = `protocol=${urlObj.protocol.replace(":", "")}\nhost=${urlObj.host}\n\n`;
@@ -235,15 +245,18 @@ async function getCredentialHelperToken(
 			cwd,
 		});
 
-		if (result.code !== 0) return null;
+		if (result.code !== 0) return isLockedKeychainError(result) ? { status: "keychain-locked" } : { status: "missing" };
 
 		const lines = result.stdout.split("\n");
 		const username = lines.find((l) => l.startsWith("username="))?.slice(9);
 		const password = lines.find((l) => l.startsWith("password="))?.slice(9);
 
-		return username && password ? { username, password } : null;
-	} catch {
-		return null;
+		return username && password ? { status: "available", username, password } : { status: "missing" };
+	} catch (error) {
+		const output = error instanceof Error ? error.message : String(error);
+		return /errSecAuthFailed|could not read username|user interaction is not allowed|keychain is locked/i.test(output)
+			? { status: "keychain-locked" }
+			: { status: "missing" };
 	}
 }
 
@@ -264,8 +277,9 @@ async function hasAnyGitCredentials(): Promise<boolean> {
 	if (remoteUrl.startsWith("git@")) return true;
 
 	if (remoteUrl.startsWith("https://")) {
-		const creds = await getCredentialHelperToken(remoteUrl, AGENTS_DIR);
-		if (creds) return true;
+		const helper = await getCredentialHelperToken(remoteUrl, AGENTS_DIR);
+		if (helper.status === "available") return true;
+		if (helper.status === "keychain-locked") return true;
 	}
 
 	const isGitHub = extractGitHubHost(remoteUrl);
@@ -298,19 +312,21 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 		return { method: "ssh", usePlainGit: true };
 	}
 
+	let keychainLocked = false;
 	if (remoteUrl.startsWith("https://")) {
-		try {
-			const creds = await getCredentialHelperToken(remoteUrl, dir);
-			if (creds) {
-				logger.debug("git", "Using git credential helper for authentication");
-				return {
-					method: "credential-helper",
-					authUrl: buildAuthUrlFromCreds(remoteUrl, creds),
-				};
-			}
-		} catch {
-			/* ignore */
+		const helper = await getCredentialHelperToken(remoteUrl, dir);
+		if (helper.status === "available") {
+			logger.debug("git", "Using git credential helper for authentication");
+			return {
+				method: "credential-helper",
+				authUrl: buildAuthUrlFromCreds(remoteUrl, helper),
+			};
 		}
+		keychainLocked = helper.status === "keychain-locked";
+		if (keychainLocked) logger.warn("git", KEYCHAIN_LOCKED_MESSAGE);
+
+		const isGitHub = extractGitHubHost(remoteUrl);
+		if (!isGitHub) return keychainLocked ? { method: "keychain-locked" } : { method: "none" };
 	}
 
 	const isGitHub = extractGitHubHost(remoteUrl);
@@ -343,6 +359,8 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 		}
 	}
 
+	if (keychainLocked) return { method: "keychain-locked" };
+
 	return { method: "none" };
 }
 
@@ -357,6 +375,11 @@ function runGitCommand(args: string[], cwd: string, options?: CommandOptions): P
 function failingGitResultMessage(operation: string, result: CommandResult): string {
 	const degraded = degradedReason(result, operation);
 	return degraded ?? `${operation} failed: ${result.stderr || result.stdout || `exit code ${result.code}`}`;
+}
+
+function missingCredentialMessage(creds: GitCredentials): string {
+	if (creds.method === "keychain-locked") return KEYCHAIN_LOCKED_MESSAGE;
+	return "No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.";
 }
 
 export async function gitPull(): Promise<{
@@ -394,7 +417,7 @@ export async function gitPull(): Promise<{
 	} else {
 		return {
 			success: false,
-			message: "No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.",
+			message: missingCredentialMessage(creds),
 		};
 	}
 
@@ -533,7 +556,7 @@ export async function gitPush(): Promise<{
 	} else {
 		return {
 			success: false,
-			message: "No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.",
+			message: missingCredentialMessage(creds),
 		};
 	}
 
