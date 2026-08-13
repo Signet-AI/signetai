@@ -114,6 +114,30 @@ describe("MCP route", () => {
 		expect(getMcpWorkloadDiagnostics("agent-a")).toEqual({ inFlight: 0, oldestAgeMs: null, maxInFlight: 8 });
 	});
 
+	it("counts malformed-body requests while the body is still being read", async () => {
+		let releaseGate: (() => void) | undefined;
+		const gateReached = new Promise<void>((resolve) => {
+			__setMcpRequestGateForTests(
+				() =>
+					new Promise<void>((release) => {
+						releaseGate = release;
+						resolve();
+					}),
+			);
+		});
+		const request = makeApp().request("/mcp?agentId=agent-a", {
+			method: "POST",
+			headers: streamableHeaders,
+			body: "{",
+		});
+		await gateReached;
+		expect(getMcpWorkloadDiagnostics("agent-a").inFlight).toBe(1);
+		releaseGate?.();
+		const response = await request;
+		expect(response.status).toBe(400);
+		expect(getMcpWorkloadDiagnostics("agent-a")).toEqual({ inFlight: 0, oldestAgeMs: null, maxInFlight: 8 });
+	});
+
 	it("returns the SDK parse-error shape for malformed JSON", async () => {
 		const res = await makeApp().request("/mcp", {
 			method: "POST",

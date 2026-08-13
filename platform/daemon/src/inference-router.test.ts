@@ -37,7 +37,10 @@ function openAiSseResponse(
 	return new Response(chunks.join(""), { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-function writeDreamingAcpxAgentFixture(root: string): {
+function writeDreamingAcpxAgentFixture(
+	root: string,
+	holdPath?: string,
+): {
 	readonly argsPath: string;
 	readonly mcpConfigPathPath: string;
 	readonly mcpConfigCopyPath: string;
@@ -47,6 +50,7 @@ function writeDreamingAcpxAgentFixture(root: string): {
 	const argsPath = join(root, "acpx-args.txt");
 	const mcpConfigPathPath = join(root, "acpx-mcp-path.txt");
 	const mcpConfigCopyPath = join(root, "acpx-mcp.json");
+	const holdCommand = holdPath ? `while [ ! -f ${JSON.stringify(holdPath)} ]; do sleep 0.01; done` : ":";
 	writeFileSync(
 		bin,
 		`#!/usr/bin/env bash
@@ -60,6 +64,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 cat >/dev/null
+${holdCommand}
 printf 'dreaming agent completed\\n'
 `,
 	);
@@ -251,6 +256,38 @@ describe("InferenceRouter config caching", () => {
 });
 
 describe("InferenceRouter legacy API credentials", () => {
+	it("does not count an in-flight ACPX agent as a Pi session", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-dreaming-acpx-diagnostics-"));
+		const releasePath = join(dir, "release");
+		const fixture = writeDreamingAcpxAgentFixture(dir, releasePath);
+		try {
+			const router = getOrCreateInferenceRouter(dir);
+			const run = router.runAgent(
+				{ operation: "memory_extraction", agentId: "agent-a", promptPreview: "diagnostics" },
+				"Use the supplied evidence.",
+				[],
+				{
+					acpxMcp: {
+						agentId: "agent-a",
+						passId: "pass-a",
+						daemonUrl: "http://127.0.0.1:3850",
+					},
+				},
+			);
+			const deadline = Date.now() + 2_000;
+			while (!existsSync(fixture.argsPath) && Date.now() < deadline)
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(existsSync(fixture.argsPath)).toBe(true);
+			expect(router.getBackgroundWorkloadDiagnostics("agent-a")).toMatchObject({ active: 1, agentSessions: 0 });
+			writeFileSync(releasePath, "release");
+			expect((await run).ok).toBe(true);
+		} finally {
+			writeFileSync(releasePath, "release");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("runs an ACPX agent with one ephemeral agent-scoped Dreaming MCP binding", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-dreaming-acpx-"));
 		const fixture = writeDreamingAcpxAgentFixture(dir);

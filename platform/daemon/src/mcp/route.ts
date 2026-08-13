@@ -82,14 +82,14 @@ export function mountMcpRoute(app: Hono): void {
 		let transport: WebStandardStreamableHTTPServerTransport | null = null;
 		let server: Awaited<ReturnType<typeof createMcpServer>> | null = null;
 		try {
-			const parsedBody = await parseMcpJsonBody(c);
-			if (parsedBody instanceof Response) return parsedBody;
 			requestId = nextMcpRequestId++;
 			activeMcpRequests.set(requestId, {
 				agentId: resolveMcpWorkloadAgentId(c),
 				startedAt: Date.now(),
 			});
 			await mcpRequestGateForTests?.();
+			const parsedBody = await parseMcpJsonBody(c);
+			if (parsedBody instanceof Response) return parsedBody;
 			transport = new WebStandardStreamableHTTPServerTransport({
 				sessionIdGenerator: undefined, // stateless
 				enableJsonResponse: true,

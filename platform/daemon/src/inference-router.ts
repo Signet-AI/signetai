@@ -395,7 +395,7 @@ export class InferenceRouter {
 			readonly controller: AbortController;
 			readonly operation: RoutingOperationKind;
 			readonly agentId: string;
-			readonly kind: "inference" | "agent";
+			kind: "inference" | "agent" | "pi";
 			readonly startedAt: number;
 		}
 	>();
@@ -483,7 +483,7 @@ export class InferenceRouter {
 			byOperation[execution.operation] = (byOperation[execution.operation] ?? 0) + 1;
 			const ageMs = Math.max(0, now - execution.startedAt);
 			oldestAgeMs = oldestAgeMs === null ? ageMs : Math.max(oldestAgeMs, ageMs);
-			if (execution.kind === "agent") {
+			if (execution.kind === "pi") {
 				agentSessions += 1;
 				oldestAgentSessionAgeMs = oldestAgentSessionAgeMs === null ? ageMs : Math.max(oldestAgentSessionAgeMs, ageMs);
 			}
@@ -497,6 +497,12 @@ export class InferenceRouter {
 		if (this.activeBackgroundExecutions.size !== 0) return;
 		for (const resolve of this.backgroundSettledWaiters) resolve();
 		this.backgroundSettledWaiters.clear();
+	}
+
+	private markBackgroundExecutionAsPi(id: number | undefined): void {
+		if (id === undefined) return;
+		const execution = this.activeBackgroundExecutions.get(id);
+		if (execution) execution.kind = "pi";
 	}
 
 	/**
@@ -1082,6 +1088,7 @@ export class InferenceRouter {
 							},
 						};
 					}
+					this.markBackgroundExecutionAsPi(backgroundExecutionId);
 					const deadlineMs = opts?.timeoutMs ?? provider.agentSessionTimeoutMs;
 					const deadline = deadlineMs > 0 ? performance.now() + deadlineMs : undefined;
 					let sessionUsage: LlmUsage | null = null;

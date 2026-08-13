@@ -226,7 +226,7 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
-	it("reports scoped Dreaming pass and attention backlog ages", () => {
+	it("reports scoped Dreaming ages using SQLite UTC timestamps", () => {
 		db.prepare(
 			`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
 			 VALUES ('active-pass', 'default', 'incremental', 'running', '2026-08-13 10:00:00', '2026-08-13 10:00:00')`,
@@ -236,13 +236,14 @@ describe("dreaming worker agent scope", () => {
 			 VALUES ('pending-attention', 'default', 'review_due', 'subject', '{}', 50, '2026-08-13 09:00:00')`,
 		).run();
 
-		expect(getDreamingWorkloadDiagnostics(accessor, "default", Date.parse("2026-08-13 11:00:00"))).toEqual({
+		const nowMs = Date.UTC(2026, 7, 13, 11);
+		expect(getDreamingWorkloadDiagnostics(accessor, "default", nowMs)).toEqual({
 			activePasses: 1,
 			oldestPassAgeMs: 60 * 60 * 1_000,
 			pendingAttention: 1,
 			oldestAttentionAgeMs: 2 * 60 * 60 * 1_000,
 		});
-		expect(getDreamingWorkloadDiagnostics(accessor, "other", Date.parse("2026-08-13 11:00:00"))).toEqual({
+		expect(getDreamingWorkloadDiagnostics(accessor, "other", nowMs)).toEqual({
 			activePasses: 0,
 			oldestPassAgeMs: null,
 			pendingAttention: 0,

@@ -271,10 +271,10 @@ export function getDreamingWorkloadDiagnostics(
 				oldestAttentionAgeMs: attention.oldestAgeMs,
 			};
 		}
-		const oldestMs = Date.parse(row.oldestStartedAt);
+		const oldestMs = timestampMillis(row.oldestStartedAt);
 		return {
 			activePasses: row.active,
-			oldestPassAgeMs: Number.isFinite(oldestMs) ? Math.max(0, nowMs - oldestMs) : null,
+			oldestPassAgeMs: oldestMs > 0 ? Math.max(0, nowMs - oldestMs) : null,
 			pendingAttention: attention.pending,
 			oldestAttentionAgeMs: attention.oldestAgeMs,
 		};

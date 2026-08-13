@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { timestampMillis } from "../episodic-sources";
 
 export const DREAMING_ATTENTION_KINDS = [
 	"review_due",
@@ -150,10 +151,10 @@ export function getDreamingAttentionWorkloadDiagnostics(
 		if (!row || row.pending === 0 || row.oldestCreatedAt === null) {
 			return { pending: 0, oldestAgeMs: null };
 		}
-		const oldestMs = Date.parse(row.oldestCreatedAt);
+		const oldestMs = timestampMillis(row.oldestCreatedAt);
 		return {
 			pending: row.pending,
-			oldestAgeMs: Number.isFinite(oldestMs) ? Math.max(0, nowMs - oldestMs) : null,
+			oldestAgeMs: oldestMs > 0 ? Math.max(0, nowMs - oldestMs) : null,
 		};
 	});
 }
