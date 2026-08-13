@@ -53,11 +53,21 @@ test("the hermetic test runner owns host-sensitive paths and overrides", () => {
 test("hermetic environment", () => {
 	expect(process.env.HOME).toMatch(/signet-test-run-/);
 	expect(process.env.TMPDIR).toMatch(/signet-test-run-/);
+	expect(process.env.TMP).toMatch(/signet-test-run-/);
+	expect(process.env.TEMP).toMatch(/signet-test-run-/);
+	expect(process.env.USERPROFILE).toMatch(/signet-test-run-/);
+	expect(process.env.HOMEDRIVE).toMatch(/signet-test-run-/);
+	expect(process.env.HOMEPATH).toMatch(/signet-test-run-/);
 	expect(process.env.XDG_CONFIG_HOME).toMatch(/signet-test-run-/);
 	expect(process.env.XDG_DATA_HOME).toMatch(/signet-test-run-/);
 	expect(process.env.XDG_CACHE_HOME).toMatch(/signet-test-run-/);
+	expect(process.env.XDG_STATE_HOME).toMatch(/signet-test-run-/);
+	expect(process.env.XDG_RUNTIME_DIR).toMatch(/signet-test-run-/);
 	expect(process.env.SIGNET_PATH).toBeUndefined();
 	expect(process.env.SIGNET_DAEMON_URL).toBeUndefined();
+	expect(process.env.SIGNET_API_KEY).toBeUndefined();
+	expect(process.env.SIGNET_TOKEN).toBeUndefined();
+	expect(process.env.SIGNET_TRUSTED_DAEMON_ORIGINS).toBeUndefined();
 	expect(process.env.SIGNET_AGENT_WORKSPACE).toBeUndefined();
 	expect(process.env.SIGNET_AGENT_ID).toBeUndefined();
 	expect(process.env.SIGNET_HOST).toBeUndefined();
@@ -70,7 +80,12 @@ test("hermetic environment", () => {
 			env: {
 				...process.env,
 				HOME: "/host/home",
-				TMPDIR: "/host/tmp",
+				TMPDIR: root,
+				TMP: root,
+				TEMP: root,
+				USERPROFILE: "/host/user-profile",
+				HOMEDRIVE: "C:",
+				HOMEPATH: "\\host\\home",
 				SIGNET_PATH: "/host/agents",
 				SIGNET_DAEMON_URL: "http://host.example:3850",
 				SIGNET_AGENT_WORKSPACE: "/host/workspace",
@@ -80,6 +95,11 @@ test("hermetic environment", () => {
 				XDG_CONFIG_HOME: "/host/config",
 				XDG_DATA_HOME: "/host/data",
 				XDG_CACHE_HOME: "/host/cache",
+				XDG_STATE_HOME: "/host/state",
+				XDG_RUNTIME_DIR: "/host/runtime",
+				SIGNET_API_KEY: "host-api-key",
+				SIGNET_TOKEN: "host-token",
+				SIGNET_TRUSTED_DAEMON_ORIGINS: "https://host.example",
 			},
 			encoding: "utf8",
 		});
