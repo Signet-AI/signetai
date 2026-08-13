@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveLaunchdExecutable } from "@signet/core";
 import { app } from "electron";
 
 const distDir = dirname(fileURLToPath(import.meta.url));
@@ -25,7 +26,8 @@ export function bunPath(): string {
 	const executable = process.platform === "win32" ? "bun.exe" : "bun";
 	const bundled = appResourcePath("runtime", executable);
 	if (existsSync(bundled)) return bundled;
-	return executable;
+	if (process.platform === "win32") return executable;
+	return resolveLaunchdExecutable("bun");
 }
 
 export function daemonRoot(): string {

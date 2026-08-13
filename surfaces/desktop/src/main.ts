@@ -270,11 +270,11 @@ code { color: #b7ff00; word-break: break-all; }
 </head>
 <body>
 <main>
-<h1>Daemon workspace mismatch</h1>
-<p>Signet blocked the dashboard because the daemon on the configured port is not confirmed to be using this desktop workspace.</p>
+<h1>Signet daemon blocked</h1>
+<p>Signet could not start the local daemon, so the dashboard is unavailable.</p>
 <p>Expected workspace: <code>${safeWorkspace}</code></p>
 <p class="error">${safeMessage}</p>
-<p>Stop the other daemon or restart it with the configured workspace, then reopen Signet.</p>
+<p>Follow the corrective action above, then reopen Signet. If another daemon is using the configured port, stop it or restart it with this workspace.</p>
 </main>
 </body>
 </html>`;

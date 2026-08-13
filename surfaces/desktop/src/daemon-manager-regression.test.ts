@@ -133,6 +133,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 
 		// Assert: spawn was invoked exactly once.
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
+		expect(spawnSpy.mock.calls[0][0]).toBe("/usr/local/bin/bun");
 
 		const spawnOpts = spawnSpy.mock.calls[0][2] as { stdio: unknown[] };
 		const stdioArg = spawnOpts.stdio;
@@ -214,5 +215,36 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 		// The manager must report bundled mode.
 		expect(status.mode).toBe("bundled");
 		expect(manager.daemonMode).toBe("bundled");
+	});
+
+	test("ENOENT from bundled runtime produces actionable startup state instead of an unhandled error", async () => {
+		globalThis.fetch = async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+			throw new Error("ECONNREFUSED");
+		};
+
+		const fs = await import("node:fs");
+		spyOn(fs, "openSync").mockImplementation((_path: fs.PathLike | number, _flags: fs.OpenMode): number => 99);
+		spyOn(fs, "existsSync").mockReturnValue(true);
+		spyOn(fs, "mkdirSync").mockReturnValue(undefined);
+
+		const cp = await import("node:child_process");
+		const fakeChild = makeFakeChild();
+		const spawnSpy = spyOn(cp, "spawn").mockImplementation(() => {
+			queueMicrotask(() => {
+				const error = Object.assign(new Error("spawn /missing/bun ENOENT"), { code: "ENOENT" });
+				fakeChild.emit("error", error);
+			});
+			return fakeChild;
+		});
+
+		const manager = new DaemonManager({ workspacePath: "/tmp/signet-workspace" });
+		await expect(manager.ensureStarted()).rejects.toThrow("Reinstall the desktop app or install Bun");
+
+		const status = await manager.status();
+		expect(spawnSpy).toHaveBeenCalledTimes(1);
+		expect(status.running).toBe(false);
+		expect(status.mode).toBe("none");
+		expect(status.startupErrorCode).toBe("bundled-runtime-enoent");
+		expect(status.startupError).toContain("Reinstall the desktop app or install Bun");
 	});
 });

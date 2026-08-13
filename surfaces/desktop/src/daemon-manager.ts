@@ -6,6 +6,7 @@ import { type WorkspaceMismatch, healthWorkspaceMismatch } from "./daemon-worksp
 import { bunPath, daemonEntry, daemonRoot } from "./paths.js";
 
 export type DaemonMode = "attached" | "bundled" | "none";
+export type DaemonStartupErrorCode = "bundled-runtime-enoent" | "bundled-spawn-failed";
 
 export interface HealthStatus {
 	readonly version: string;
@@ -25,6 +26,8 @@ export interface DesktopDaemonStatus {
 	readonly baseUrl: string;
 	readonly workspacePath: string;
 	readonly mismatch: WorkspaceMismatch | null;
+	readonly startupError: string | null;
+	readonly startupErrorCode: DaemonStartupErrorCode | null;
 }
 
 export interface DaemonManagerOptions {
@@ -69,6 +72,7 @@ export class DaemonManager {
 	#stdoutFd: number | null = null;
 	#stderrFd: number | null = null;
 	#lastMismatch: WorkspaceMismatch | null = null;
+	#startupError: { readonly code: DaemonStartupErrorCode; readonly message: string } | null = null;
 
 	constructor(options: DaemonManagerOptions) {
 		this.#workspacePath = resolve(options.workspacePath);
@@ -119,6 +123,8 @@ export class DaemonManager {
 			baseUrl: this.baseUrl,
 			workspacePath: this.#workspacePath,
 			mismatch: this.#lastMismatch,
+			startupError: this.#startupError?.message ?? null,
+			startupErrorCode: this.#startupError?.code ?? null,
 		};
 	}
 
@@ -152,6 +158,7 @@ export class DaemonManager {
 		this.#lastMismatch = mismatch;
 
 		if (mismatch) {
+			this.#startupError = null;
 			throw new Error(
 				`Signet daemon on ${this.baseUrl} is using workspace ${mismatch.actual}, expected ${mismatch.expected}. Stop that daemon or start it with the configured workspace before opening the desktop app.`,
 			);
@@ -162,6 +169,7 @@ export class DaemonManager {
 			// Skip bundled spawn, version check, and auto-update entirely.
 			this.#owned = false;
 			this.#mode = "attached";
+			this.#startupError = null;
 			return this.status();
 		}
 
@@ -170,10 +178,12 @@ export class DaemonManager {
 		// TypeError: stream must have an underlying descriptor race from issue #606.
 		if (!this.#child) this.#spawnBundled();
 		for (let i = 0; i < 60; i += 1) {
+			if (this.#startupError) throw new Error(this.#startupError.message);
 			const health = await this.probe(500);
 			if (health) return this.status();
 			await sleep(250);
 		}
+		if (this.#startupError) throw new Error(this.#startupError.message);
 		throw new Error("Bundled daemon failed to start within 15 seconds");
 	}
 
@@ -296,6 +306,19 @@ export class DaemonManager {
 		});
 		this.#owned = true;
 		this.#mode = "bundled";
+		this.#startupError = null;
+		this.#child.once("error", (error: NodeJS.ErrnoException) => {
+			const code: DaemonStartupErrorCode = error.code === "ENOENT" ? "bundled-runtime-enoent" : "bundled-spawn-failed";
+			const message =
+				code === "bundled-runtime-enoent"
+					? `Signet could not start the bundled daemon because its Bun runtime is missing or not executable. Reinstall the desktop app or install Bun at ~/.bun/bin/bun, /opt/homebrew/bin/bun, or /usr/local/bin/bun, then reopen Signet. (${error.message})`
+					: `Signet could not start the bundled daemon: ${error.message}`;
+			this.#startupError = { code, message };
+			this.#child = null;
+			this.#owned = false;
+			this.#mode = "none";
+			this.#closeFds();
+		});
 		this.#child.once("exit", () => {
 			this.#child = null;
 			this.#owned = false;
