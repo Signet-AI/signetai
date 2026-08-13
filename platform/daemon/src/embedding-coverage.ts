@@ -4,6 +4,7 @@ export interface UnembeddedRow {
 	readonly id: string;
 	readonly content: string;
 	readonly contentHash: string | null;
+	readonly agentId: string | null;
 }
 
 export interface StaleEmbeddingRow {
@@ -127,7 +128,7 @@ export function listUnembeddedMemories(db: ReadDb, limit: number, agentId?: stri
 			     )`;
 	return db
 		.prepare(
-			`SELECT m.id, m.content, m.content_hash AS contentHash
+			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId
 			 FROM memories m
 			 WHERE m.is_deleted = 0${scope}
 			   AND NOT EXISTS (

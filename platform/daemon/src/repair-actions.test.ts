@@ -161,12 +161,12 @@ const CTX_DAEMON = {
 	actorType: "daemon" as const,
 };
 
-function insertMemory(db: Database, id: string): void {
+function insertMemory(db: Database, id: string, agentId?: string, contentHash?: string): void {
 	const now = new Date().toISOString();
 	db.prepare(
-		`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-	).run(id, `content for ${id}`, "fact", now, now, "test");
+		`INSERT INTO memories (id, content, content_hash, agent_id, type, created_at, updated_at, updated_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	).run(id, `content for ${id}`, contentHash ?? null, agentId ?? null, "fact", now, now, "test");
 }
 
 function repairAuditCount(db: Database, action: string): number {
@@ -970,6 +970,47 @@ describe("reembedMissingMemories", () => {
 		expect(second.success).toBe(true);
 		expect(second.affected).toBe(1);
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-write-failure")).toBeTruthy();
+	});
+
+	it("does not overwrite another agent's embedding on a hash conflict", async () => {
+		// Regression for cross-agent hash collisions: the embedding hash is
+		// globally unique, but autonomous repair is agent-scoped. Agent A must
+		// not update Agent B's vector or source fields when both memories share a hash.
+		ensureVecTable(db);
+		const sharedHash = "cross-agent-shared-hash";
+		insertMemory(db, "mem-a", "agent-a", sharedHash);
+		insertMemory(db, "mem-b", "agent-b", sharedHash);
+		insertEmbedding(db, {
+			id: "emb-b",
+			contentHash: sharedHash,
+			sourceId: "mem-b",
+			vector: [0.9, 0.8, 0.7],
+			agentId: "agent-b",
+		});
+		const before = db
+			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-b'")
+			.get();
+
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_AGENT,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			10,
+			false,
+			false,
+			undefined,
+			"agent-a",
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.message).toMatch(/provider returned no vectors/);
+		const after = db
+			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-b'")
+			.get();
+		expect(after).toEqual(before);
 	});
 
 	it("skips stale vectors when promotion happens during provider work", async () => {

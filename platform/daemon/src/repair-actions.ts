@@ -785,6 +785,7 @@ async function reembedMissingMemoriesBatch(
 		const checkHash = db.prepare(
 			"SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 AND id <> ? LIMIT 1",
 		);
+		const readEmbeddingByHash = db.prepare("SELECT id, agent_id FROM embeddings WHERE content_hash = ? LIMIT 1");
 
 		for (const { memory, vector } of results) {
 			const contentHash =
@@ -801,6 +802,17 @@ async function reembedMissingMemoriesBatch(
 				if (!collision) writeHash.run(contentHash, memory.id);
 			}
 
+			// content_hash is globally unique in the embeddings table, while the
+			// repair selection is agent-scoped. A hash peer owned by another agent
+			// must never be updated by this repair, or its vector and source fields
+			// become cross-agent data corruption.
+			const existing = readEmbeddingByHash.get(contentHash) as { id: string; agent_id: string | null } | undefined;
+			if (existing) {
+				const existingAgentId = existing.agent_id ?? "default";
+				const memoryAgentId = memory.agentId ?? agentId ?? "default";
+				if (existingAgentId !== memoryAgentId) continue;
+			}
+
 			const embId = crypto.randomUUID();
 			const blob = vectorToBlob(vector);
 			syncVecDeleteBySourceExceptHash(db, "memory", memory.id, contentHash);
@@ -813,8 +825,8 @@ async function reembedMissingMemoriesBatch(
 				.prepare(
 					`INSERT INTO embeddings
 					 (id, content_hash, vector, dimensions, source_type,
-					  source_id, chunk_text, created_at)
-					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+					  source_id, chunk_text, created_at, agent_id)
+					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)
 					 ON CONFLICT(content_hash) DO UPDATE SET
 					   vector = excluded.vector,
 					   dimensions = excluded.dimensions,
@@ -822,7 +834,16 @@ async function reembedMissingMemoriesBatch(
 					   chunk_text = excluded.chunk_text,
 					   created_at = excluded.created_at`,
 				)
-				.run(embId, contentHash, blob, vector.length, memory.id, memory.content, now);
+				.run(
+					embId,
+					contentHash,
+					blob,
+					vector.length,
+					memory.id,
+					memory.content,
+					now,
+					memory.agentId ?? agentId ?? null,
+				);
 			// Resolve actual embedding ID (may differ from embId on conflict)
 			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 				| { id: string }
