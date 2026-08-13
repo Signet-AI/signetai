@@ -1,16 +1,14 @@
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const ISOLATED_ENV_KEYS = [
-	"HOME",
-	"TMPDIR",
-	"TMP",
-	"TEMP",
-	"USERPROFILE",
-	"HOMEDRIVE",
-	"HOMEPATH",
+/**
+ * Stage 1 isolates process environment and filesystem roots only. Provider
+ * fixtures, generated artifacts, shared database state, and parallel-suite
+ * coordination remain later hermetic-runner stages.
+ */
+export const CLEARED_ENV_KEYS = [
 	"SIGNET_PATH",
 	"SIGNET_WORKSPACE",
 	"SIGNET_DAEMON_URL",
@@ -18,20 +16,50 @@ const ISOLATED_ENV_KEYS = [
 	"SIGNET_AGENT_ID",
 	"SIGNET_HOST",
 	"SIGNET_PORT",
-	"XDG_CONFIG_HOME",
-	"XDG_DATA_HOME",
-	"XDG_CACHE_HOME",
-	"XDG_STATE_HOME",
-	"XDG_RUNTIME_DIR",
 	"SIGNET_API_KEY",
 	"SIGNET_TOKEN",
 	"SIGNET_TRUSTED_DAEMON_ORIGINS",
+	"AGENTS_DIR",
+	"SIGNET_AGENTS_DIR",
+	"CODEX_HOME",
+	"HERMES_HOME",
+	"HERMES_REPO",
+	"FORGE_CONFIG",
+	"OPENCLAW_CONFIG_PATH",
+	"OPENCLAW_STATE_DIR",
+	"OPENCLAW_STATE_HOME",
+	"OPENCLAW_HOME",
+	"PI_CODING_AGENT_DIR",
+	"SIGNET_DREAMING_AGENT_ID",
+	"SIGNET_NO_HOOKS",
+	"SIGNET_ENABLED",
+	"SIGNET_BYPASS",
+	"SIGNET_CONNECTOR_ASSETS_DIR",
+	"SIGNET_DIR",
+	"SIGNET_TEMPLATES_DIR",
+	"SIGNET_SKILLS_SOURCE",
+	"SIGNET_DATABASE_INTEGRITY_DB_PATH",
+	"SIGNET_AGENT_READ_POLICY",
+	"SIGNET_AGENT_MEMORY_POLICY",
+	"SIGNET_AGENT_POLICY_GROUP",
+	"SIGNET_SKIP_AGENT_REGISTER",
+	"SIGNET_RUNTIME_PATH",
+	"SIGNET_DASHBOARD_DIR",
+	"SIGNET_WRAPPER_DIR",
+	"SIGNET_BASE_URL",
+	"SIGNET_ACP_ALLOWED_ORIGINS",
 ] as const;
 
 type HermeticEnvironment = NodeJS.ProcessEnv;
 
 function createHermeticRoot(): string {
-	return mkdtempSync(join(tmpdir(), "signet-test-run-"));
+	const candidates = [tmpdir(), import.meta.dir];
+	for (const candidate of candidates) {
+		try {
+			return mkdtempSync(join(candidate, "signet-test-run-"));
+		} catch {}
+	}
+	throw new Error("Unable to create a temporary hermetic test root");
 }
 
 export function buildHermeticEnvironment(
@@ -50,7 +78,7 @@ export function buildHermeticEnvironment(
 	}
 
 	const env: HermeticEnvironment = { ...baseEnv };
-	for (const key of ISOLATED_ENV_KEYS) delete env[key];
+	for (const key of CLEARED_ENV_KEYS) delete env[key];
 	env.HOME = home;
 	env.TMPDIR = temporary;
 	env.TMP = temporary;
