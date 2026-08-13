@@ -54,3 +54,13 @@ export {
 	MAX_PENDING_SESSIONS,
 	sanitizeInject,
 } from "./session-state.js";
+
+export {
+	assertLifecycleInvariants,
+	LIFECYCLE_INVARIANTS,
+	type LifecycleObservation,
+	type LifecycleProofInput,
+	type LifecycleProofResult,
+	type LifecycleProviderWindow,
+	type LifecycleShutdownWindow,
+} from "@signet/lifecycle-proof";

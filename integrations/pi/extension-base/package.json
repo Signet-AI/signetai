@@ -9,7 +9,8 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@signet/core": "workspace:*"
+		"@signet/core": "workspace:*",
+		"@signet/lifecycle-proof": "workspace:*"
 	},
 	"files": [
 		"src"

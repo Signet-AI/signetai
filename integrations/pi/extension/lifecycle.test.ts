@@ -8,7 +8,10 @@ import {
 	endCurrentSession,
 	endPreviousSession,
 	flushPendingSessionEnds,
+	refreshSessionStart,
+	requestRecallForPrompt,
 } from "./src/lifecycle.js";
+import { assertLifecycleInvariants } from "@signet/pi-extension-base";
 import { createSessionState } from "./src/session-state.js";
 
 const tempDirs: string[] = [];
@@ -33,6 +36,72 @@ function createTestContext(sessionId: string, project = "/tmp/project") {
 }
 
 describe("pi lifecycle session-end handling", () => {
+	it("proves the real session rotation owner preserves ordering and attribution", async () => {
+		const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+		const deps: LifecycleDeps = {
+			agentId: "agent-1",
+			client: {
+				async post(path, body) {
+					calls.push({ path, body: body as Record<string, unknown> });
+					return { ok: true };
+				},
+				async postResult(path, body) {
+					calls.push({ path, body: body as Record<string, unknown> });
+					if (path.endsWith("session-start")) return { ok: true as const, data: {} };
+					return { ok: true as const, data: { sessionKnown: true } };
+				},
+			},
+			state: createSessionState(),
+			config: PI_LIFECYCLE_CONFIG,
+		};
+		const dir = mkdtempSync(join(tmpdir(), "pi-lifecycle-proof-"));
+		tempDirs.push(dir);
+		const sessionFile = join(dir, "previous-session.jsonl");
+		writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "old-session", cwd: "/tmp/project" }));
+		deps.state.setActiveSession("old-session", sessionFile);
+		await endPreviousSession(deps, { previousSessionFile: sessionFile }, "session_switch");
+		await refreshSessionStart(deps, createTestContext("new-session") as never);
+		await requestRecallForPrompt(deps, createTestContext("new-session") as never, "hello");
+		const promptCall = calls.find((call) => call.path.endsWith("user-prompt-submit"));
+		expect(promptCall?.body.sessionKey).toBe("new-session");
+		const observations: Array<import("@signet/lifecycle-proof").LifecycleObservation> = [
+			{ stage: "startup", sequence: 1 },
+			{
+				stage: "session-end",
+				sessionId: String(calls[0]?.body.sessionKey),
+				sequence: 2,
+			},
+			{ stage: "session-switch", fromSessionId: "old-session", toSessionId: "new-session", sequence: 3 },
+			{
+				stage: "session-start",
+				sessionId: String(calls[1]?.body.sessionKey),
+				contextGeneration: 1,
+				sequence: 4,
+			},
+			{
+				stage: "prompt-submit",
+				sessionId: String(promptCall?.body.sessionKey),
+				turn: 1,
+				state: "completed",
+				sourceSessionId: String(promptCall?.body.sessionKey),
+				targetSessionId: String(promptCall?.body.sessionKey),
+				sequence: 5,
+			},
+		];
+		assertLifecycleInvariants({
+			observations,
+			shutdown: {
+				startedAtMs: 100,
+				completedAtMs: 150,
+				budgetMs: 200,
+				startedWork: 0,
+				pendingWork: 0,
+				completedWork: 0,
+				abandonedWork: 0,
+			},
+			slowProvider: { startedAtMs: 100, completedAtMs: 2_000, promptHandledAtMs: 150 },
+		});
+	});
 	it("defers marking a previous session ended until its session file can be reconstructed and submitted", async () => {
 		const calls: Array<{ path: string; body: unknown }> = [];
 		let shouldSucceed = false;
@@ -60,7 +129,7 @@ describe("pi lifecycle session-end handling", () => {
 		// Release call sent even without transcript (to free daemon claim)
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.path).toBe("/api/hooks/session-end");
-		expect((calls[0]?.body as Record<string, unknown>).transcript).toBeUndefined();
+		expect((calls[0]?.body as Record<string, unknown> | undefined)?.transcript).toBeUndefined();
 		expect(deps.state.sessionAlreadyEnded("prev-session")).toBe(false);
 		expect(deps.state.getPendingSessionEnds()).toHaveLength(1);
 

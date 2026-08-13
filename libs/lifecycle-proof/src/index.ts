@@ -56,8 +56,10 @@ export interface LifecycleProviderWindow {
 
 export interface LifecycleProofInput {
 	readonly observations: readonly LifecycleObservation[];
-	readonly shutdown?: LifecycleShutdownWindow;
-	readonly slowProvider?: LifecycleProviderWindow;
+	/** Required evidence from the owner that drains deferred work. */
+	readonly shutdown: LifecycleShutdownWindow;
+	/** Required evidence from the owner that handles prompts and provider calls. */
+	readonly slowProvider: LifecycleProviderWindow;
 }
 
 export interface LifecycleProofResult {
@@ -109,10 +111,13 @@ function assertCompletedTurnsSerialized(observations: readonly LifecycleObservat
 	}
 	for (const completed of completedBySession.values()) {
 		completed.sort((left, right) => left.sequence - right.sequence);
+		if (completed[0]?.turn !== 1) {
+			fail(LIFECYCLE_INVARIANTS[1], "completed turns must start at turn 1");
+		}
 		for (let index = 1; index < completed.length; index += 1) {
 			const previous = completed[index - 1]?.turn;
 			const current = completed[index]?.turn;
-			if (previous !== undefined && current !== undefined && current <= previous) {
+			if (previous !== undefined && current !== undefined && current !== previous + 1) {
 				fail(LIFECYCLE_INVARIANTS[1], `turn ${String(current)} completed after turn ${String(previous)}`);
 			}
 		}
@@ -172,9 +177,12 @@ function assertInvalidatedContextIsNotReused(observations: readonly LifecycleObs
 }
 
 function assertRestartResolvesQueuedWork(observations: readonly LifecycleObservation[]): void {
-	const queued = observations.filter((observation) => observation.state === "queued" && observation.workId);
+	const queued = observations.filter(
+		(observation) => observation.stage === "restart" && observation.state === "queued" && observation.workId,
+	);
 	const resolved = observations.filter(
 		(observation) =>
+			observation.stage === "restart" &&
 			(observation.state === "completed" || observation.state === "abandoned" || observation.state === "replayable") &&
 			observation.workId,
 	);
@@ -189,8 +197,7 @@ function assertRestartResolvesQueuedWork(observations: readonly LifecycleObserva
 	}
 }
 
-function assertShutdownBounded(window: LifecycleShutdownWindow | undefined): void {
-	if (!window) return;
+function assertShutdownBounded(window: LifecycleShutdownWindow): void {
 	if (
 		window.budgetMs < 0 ||
 		window.startedWork < 0 ||
@@ -209,8 +216,7 @@ function assertShutdownBounded(window: LifecycleShutdownWindow | undefined): voi
 	}
 }
 
-function assertSlowProviderDoesNotBlockPrompt(window: LifecycleProviderWindow | undefined): void {
-	if (!window) return;
+function assertSlowProviderDoesNotBlockPrompt(window: LifecycleProviderWindow): void {
 	if (
 		window.startedAtMs < 0 ||
 		window.completedAtMs < window.startedAtMs ||
@@ -225,9 +231,10 @@ function assertSlowProviderDoesNotBlockPrompt(window: LifecycleProviderWindow | 
 
 function assertWorkAttribution(observations: readonly LifecycleObservation[]): void {
 	const mismatched = observations.find((observation) => {
+		if (!observation.workId) return false;
 		const hasSource = observation.sourceSessionId !== undefined;
 		const hasTarget = observation.targetSessionId !== undefined;
-		return hasSource !== hasTarget || (hasSource && observation.sourceSessionId !== observation.targetSessionId);
+		return !hasSource || !hasTarget || observation.sourceSessionId !== observation.targetSessionId;
 	});
 	if (mismatched) {
 		fail(
@@ -252,6 +259,8 @@ function countWorkStates(observations: readonly LifecycleObservation[]): Readonl
 
 /** Assert the shared lifecycle contract against observations from real owners. */
 export function assertLifecycleInvariants(input: LifecycleProofInput): LifecycleProofResult {
+	if (!input.shutdown) fail(LIFECYCLE_INVARIANTS[6], "shutdown evidence was not recorded");
+	if (!input.slowProvider) fail(LIFECYCLE_INVARIANTS[7], "slow-provider evidence was not recorded");
 	assertStartupPrecedesWork(input.observations);
 	assertCompletedTurnsSerialized(input.observations);
 	assertInterruptedTurnsAreNotDurable(input.observations);
