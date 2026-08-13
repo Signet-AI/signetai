@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import ts from "typescript";
 
 export const SYNC_APIS = [
 	"withWriteTx",
@@ -117,35 +118,45 @@ function sourceFiles(root: string): string[] {
 	return files.sort();
 }
 
-function codeForLine(line: string): string {
-	return line.replace(/\/\/.*$/u, "").trim();
-}
-
 function findSites(root: string): AuditSite[] {
 	const sites: AuditSite[] = [];
 	for (const absolutePath of sourceFiles(root)) {
 		const path = relative(root, absolutePath).replaceAll("\\", "/");
-		const lines = readFileSync(absolutePath, "utf8").split("\n");
-		for (const [index, rawLine] of lines.entries()) {
-			const source = codeForLine(rawLine);
-			if (source.length === 0) continue;
-			for (const api of SYNC_APIS) {
-				const pattern =
-					api === "withWriteTx" || api === "withReadDb"
-						? new RegExp(`\\.${api}(?:<[^>]+>)?\\s*\\(`, "u")
-						: new RegExp(`\\b${api}\\s*\\(`, "u");
-				if (!pattern.test(source)) continue;
-				sites.push({
-					path,
-					line: index + 1,
-					api,
-					source,
-					category: classifySite(path),
-				});
+		const text = readFileSync(absolutePath, "utf8");
+		const sourceFile = ts.createSourceFile(absolutePath, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+		const lines = text.split("\n");
+		const seenOnLine = new Set<string>();
+		const visit = (node: ts.Node): void => {
+			if (ts.isCallExpression(node)) {
+				const call = calledSyncApi(node.expression);
+				if (call) {
+					const line = sourceFile.getLineAndCharacterOfPosition(call.position).line;
+					const key = `${line}:${call.api}`;
+					if (seenOnLine.has(key)) return;
+					seenOnLine.add(key);
+					const source = lines[line]?.replace(/\/\/.*$/u, "").trim() ?? "";
+					sites.push({ path, line: line + 1, api: call.api, source, category: classifySite(path) });
+				}
 			}
-		}
+			ts.forEachChild(node, visit);
+		};
+		visit(sourceFile);
 	}
 	return sites;
+}
+
+function calledSyncApi(expression: ts.Expression): { readonly api: SyncApi; readonly position: number } | null {
+	if (ts.isPropertyAccessExpression(expression)) {
+		const api = expression.name.text;
+		if (!SYNC_APIS.includes(api as SyncApi)) return null;
+		return { api: api as SyncApi, position: expression.name.getStart() };
+	}
+	if (!ts.isIdentifier(expression)) {
+		return null;
+	}
+	if (expression.text === "withWriteTx" || expression.text === "withReadDb") return null;
+	if (!SYNC_APIS.includes(expression.text as SyncApi)) return null;
+	return { api: expression.text as SyncApi, position: expression.getStart() };
 }
 
 function siteKey(site: Pick<AuditSite, "path" | "api" | "source">): string {

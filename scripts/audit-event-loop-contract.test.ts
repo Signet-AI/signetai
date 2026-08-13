@@ -21,6 +21,33 @@ test("event-loop audit rejects a new synchronous hot-path call", () => {
 	}
 });
 
+test("event-loop audit detects multiline synchronous calls and ignores literals/comments", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		writeFileSync(
+			join(root, "hot-path.ts"),
+			[
+				'const text = "readFileSync( .withReadDb( .withWriteTx(";',
+				"/* readFileSync( .withReadDb( .withWriteTx( */",
+				"getDbAccessor()",
+				"\t.withReadDb((db) => db);",
+				"accessor",
+				"\t.withWriteTx((db) => db);",
+				"readFileSync",
+				'	(path, "utf8");',
+			].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
+			{ api: "withReadDb", line: 4 },
+			{ api: "withWriteTx", line: 6 },
+			{ api: "readFileSync", line: 7 },
+		]);
+		expect(result.violations).toHaveLength(3);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 test("event-loop audit accepts a classified bootstrap exception", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
 	try {
