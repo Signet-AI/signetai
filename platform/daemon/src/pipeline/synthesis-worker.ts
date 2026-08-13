@@ -16,6 +16,7 @@ import { getDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import { handleSynthesisRequest, writeMemoryMd } from "../memory-synthesis";
 import { activeSessionCount } from "../session-tracker";
+import { emitLifecycleObservation, emitLifecycleShutdown } from "@signet/lifecycle-proof";
 
 type SynthesisDeps = {
 	readonly getDbAccessor: typeof getDbAccessor;
@@ -297,6 +298,7 @@ export function startSynthesisWorker(
 	let activeLockToken: number | null = null;
 	let lockReleasedResolver: (() => void) | null = null;
 	let lockReleasedPromise: Promise<void> = Promise.resolve();
+	let activeWorkId: string | null = null;
 	const pendingQueue: PendingForce[] = [];
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
 
@@ -345,8 +347,16 @@ export function startSynthesisWorker(
 		}
 
 		try {
+			activeWorkId = `synthesis:${entry.agentId}`;
 			currentRunPromise = runSynthesisWithDeps(deps, config, entry.agentId);
 			const result = await currentRunPromise;
+			emitLifecycleObservation({
+				stage: "restart",
+				workId: activeWorkId,
+				state: result === "ok" || result === "empty" ? "completed" : "abandoned",
+				sourceSessionId: "daemon",
+				targetSessionId: "daemon",
+			});
 			if (result === "busy" || result === "failed") {
 				deps.logger.info("synthesis", "Retrying forced synthesis after busy head", {
 					source: entry.source,
@@ -361,6 +371,7 @@ export function startSynthesisWorker(
 			return "completed";
 		} finally {
 			currentRunPromise = null;
+			activeWorkId = null;
 			releaseWriteLock(lockToken);
 		}
 	}
@@ -469,6 +480,7 @@ export function startSynthesisWorker(
 
 	// Initial delay to let other workers settle
 	scheduleTick(STARTUP_DELAY_MS);
+	emitLifecycleObservation({ stage: "startup" });
 
 	deps.logger.info("synthesis", "Synthesis worker started", {
 		idleGapMinutes: config.idleGapMinutes,
@@ -481,6 +493,7 @@ export function startSynthesisWorker(
 			deps.logger.info("synthesis", "Synthesis worker stopped");
 		},
 		async drain() {
+			const startedAtMs = Date.now();
 			// Cancel any pending tick to prevent new synthesis starting
 			if (timer) {
 				clearTimeout(timer);
@@ -503,6 +516,26 @@ export function startSynthesisWorker(
 						}, config.timeout + DRAIN_TIMEOUT_BUFFER_MS);
 					}),
 				]);
+				const completedAtMs = Date.now();
+				const workId = activeWorkId;
+				if (workId) {
+					emitLifecycleObservation({
+						stage: "restart",
+						workId,
+						state: timedOut ? "abandoned" : "completed",
+						sourceSessionId: "daemon",
+						targetSessionId: "daemon",
+					});
+				}
+				emitLifecycleShutdown({
+					startedAtMs,
+					completedAtMs,
+					budgetMs: config.timeout + DRAIN_TIMEOUT_BUFFER_MS + 100,
+					startedWork: workId ? 1 : 0,
+					pendingWork: 0,
+					completedWork: workId && !timedOut ? 1 : 0,
+					abandonedWork: workId && timedOut ? 1 : 0,
+				});
 				return timedOut ? "timeout" : "completed";
 			} finally {
 				if (timeoutId !== null) clearTimeout(timeoutId);
@@ -549,6 +582,16 @@ export function startSynthesisWorker(
 				const lastRun = readLastSynthesisTime(key);
 				const elapsed = Date.now() - lastRun;
 
+				if (opts?.force) {
+					emitLifecycleObservation({
+						stage: "restart",
+						workId: `synthesis:${key}`,
+						state: "queued",
+						sourceSessionId: "daemon",
+						targetSessionId: "daemon",
+					});
+				}
+
 				if (!opts?.force && elapsed < MIN_INTERVAL_MS) {
 					const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
 					deps.logger.info("synthesis", "Skipping manual trigger", {
@@ -559,6 +602,7 @@ export function startSynthesisWorker(
 				}
 
 				currentRunPromise = runSynthesisWithDeps(deps, config, opts?.agentId);
+				activeWorkId = `synthesis:${key}`;
 				const result = await currentRunPromise;
 				if ((result === "busy" || result === "failed") && opts?.force) {
 					enqueuePendingForce(opts.source ?? "manual", opts.agentId);

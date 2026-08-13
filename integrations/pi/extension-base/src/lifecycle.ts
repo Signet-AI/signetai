@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readStaticIdentity } from "@signet/core";
+import { emitLifecycleObservation } from "@signet/lifecycle-proof";
 import type { DaemonClient } from "./daemon-client.js";
 import { readTrimmedRuntimeEnv, readTrimmedString } from "./helpers.js";
 import type { BaseSessionState } from "./session-state.js";
@@ -130,6 +131,7 @@ export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<void
 		});
 		if (!submitted) continue;
 
+		emitLifecycleObservation({ stage: "session-end", sessionId: pending.sessionId });
 		deps.state.markSessionEnded(pending.sessionId);
 		deps.state.clearPendingSessionData(pending.sessionId);
 		deps.state.clearPendingSessionEnd(pending.sessionId);
@@ -140,6 +142,14 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: BaseExtensio
 	await flushPendingSessionEnds(deps);
 
 	const session = currentSessionRef(ctx);
+	const previousSessionId = deps.state.getActiveSessionId();
+	if (previousSessionId && previousSessionId !== session.sessionId) {
+		emitLifecycleObservation({
+			stage: "session-switch",
+			fromSessionId: previousSessionId,
+			toSessionId: session.sessionId,
+		});
+	}
 	deps.state.setActiveSession(session.sessionId, session.sessionFile);
 	deps.state.clearSessionEnded(session.sessionId);
 
@@ -169,6 +179,7 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: BaseExtensio
 		.join("\n");
 	deps.state.setSessionContext(stableSystemPrompt ?? dynamicContext ?? "");
 	deps.state.setPendingSessionContext(session.sessionId, firstTurnContext);
+	emitLifecycleObservation({ stage: "session-start", sessionId: session.sessionId });
 }
 
 export async function ensureSessionContext(deps: LifecycleDeps, ctx: BaseExtensionContext): Promise<void> {
@@ -200,6 +211,7 @@ export async function endCurrentSession(deps: LifecycleDeps, ctx: BaseExtensionC
 	});
 	if (!submitted) return;
 
+	emitLifecycleObservation({ stage: "session-end", sessionId: session.sessionId });
 	deps.state.markSessionEnded(session.sessionId);
 	deps.state.clearPendingSessionData(session.sessionId);
 }
@@ -248,6 +260,7 @@ export async function endPreviousSession(
 		return;
 	}
 
+	emitLifecycleObservation({ stage: "session-end", sessionId });
 	deps.state.markSessionEnded(sessionId);
 	deps.state.clearPendingSessionData(sessionId);
 }
@@ -304,6 +317,12 @@ export async function requestRecallForPrompt(
 		deps.config.promptSubmitTimeout,
 	);
 	if (!result) return;
+	emitLifecycleObservation({
+		stage: "prompt-submit",
+		sessionId: session.sessionId,
+		sourceSessionId: session.sessionId,
+		targetSessionId: session.sessionId,
+	});
 
 	if (result.sessionKnown === false) {
 		await refreshSessionStart(deps, ctx);

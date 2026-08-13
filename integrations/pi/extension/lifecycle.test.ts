@@ -11,12 +11,18 @@ import {
 	refreshSessionStart,
 	requestRecallForPrompt,
 } from "./src/lifecycle.js";
-import { assertLifecycleObservationInvariants, LifecycleObservationRecorder } from "@signet/pi-extension-base";
+import {
+	assertLifecycleObservationInvariants,
+	LifecycleObservationRecorder,
+	setLifecycleObservers,
+	type LifecycleObservationInput,
+} from "@signet/pi-extension-base";
 import { createSessionState } from "./src/session-state.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+	setLifecycleObservers(undefined);
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -38,6 +44,8 @@ function createTestContext(sessionId: string, project = "/tmp/project") {
 describe("pi lifecycle session-end handling", () => {
 	it("proves the real session rotation owner preserves ordering and attribution", async () => {
 		const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+		const recorder = new LifecycleObservationRecorder();
+		setLifecycleObservers({ observation: (observation: LifecycleObservationInput) => recorder.record(observation) });
 		const deps: LifecycleDeps = {
 			agentId: "agent-1",
 			client: {
@@ -58,36 +66,12 @@ describe("pi lifecycle session-end handling", () => {
 		tempDirs.push(dir);
 		const sessionFile = join(dir, "previous-session.jsonl");
 		writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "old-session", cwd: "/tmp/project" }));
-		const recorder = new LifecycleObservationRecorder();
-		recorder.record({ stage: "startup" });
 		deps.state.setActiveSession("old-session", sessionFile);
 		await endPreviousSession(deps, { previousSessionFile: sessionFile }, "session_switch");
-		recorder.record({
-			stage: "session-end",
-			sessionId: String(calls[0]?.body.sessionKey),
-		});
-		recorder.record({
-			stage: "session-switch",
-			fromSessionId: "old-session",
-			toSessionId: "new-session",
-		});
 		await refreshSessionStart(deps, createTestContext("new-session") as never);
-		recorder.record({
-			stage: "session-start",
-			sessionId: String(calls[1]?.body.sessionKey),
-			contextGeneration: 1,
-		});
 		await requestRecallForPrompt(deps, createTestContext("new-session") as never, "hello");
 		const promptCall = calls.find((call) => call.path.endsWith("user-prompt-submit"));
 		expect(promptCall?.body.sessionKey).toBe("new-session");
-		recorder.record({
-			stage: "prompt-submit",
-			sessionId: String(promptCall?.body.sessionKey),
-			turn: 1,
-			state: "completed",
-			sourceSessionId: String(promptCall?.body.sessionKey),
-			targetSessionId: String(promptCall?.body.sessionKey),
-		});
 		const proof = assertLifecycleObservationInvariants(recorder.observations);
 		expect(proof.observations).toBe(5);
 	});

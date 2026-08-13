@@ -3,13 +3,20 @@ import {
 	assertLifecycleObservationInvariants,
 	assertShutdownInvariant,
 	LifecycleObservationRecorder,
+	setLifecycleObservers,
+	type LifecycleObservationInput,
+	type LifecycleShutdownWindow,
 } from "@signet/lifecycle-proof";
 import { startSynthesisWorker } from "./synthesis-worker";
 
 describe("daemon lifecycle proof integration", () => {
 	it("pins the real synthesis owner's bounded shutdown result", async () => {
 		const recorder = new LifecycleObservationRecorder();
-		recorder.record({ stage: "startup" });
+		const recorderShutdown: LifecycleShutdownWindow[] = [];
+		setLifecycleObservers({
+			observation: (observation: LifecycleObservationInput) => recorder.record(observation),
+			shutdown: (window) => recorderShutdown.push(window),
+		});
 		let resolveSynthesis: (() => void) | undefined;
 		const synthesisFinished = new Promise<void>((resolve) => {
 			resolveSynthesis = resolve;
@@ -31,40 +38,21 @@ describe("daemon lifecycle proof integration", () => {
 		);
 
 		try {
-			recorder.record({
-				stage: "restart",
-				workId: "synthesis",
-				state: "queued",
-				sourceSessionId: "session",
-				targetSessionId: "session",
-			});
 			const trigger = worker.triggerNow({ force: true, source: "lifecycle-proof" });
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			worker.stop();
-			const shutdownStartedAtMs = Date.now();
 			expect(await worker.drain()).toBe("timeout");
-			const shutdownCompletedAtMs = Date.now();
-			recorder.record({
-				stage: "restart",
-				workId: "synthesis",
-				state: "abandoned",
-				sourceSessionId: "session",
-				targetSessionId: "session",
-			});
+
 			resolveSynthesis?.();
 			await trigger;
 			const proof = assertLifecycleObservationInvariants(recorder.observations);
 			expect(proof.workStateCounts).toMatchObject({ queued: 1, abandoned: 1 });
-			assertShutdownInvariant({
-				startedAtMs: shutdownStartedAtMs,
-				completedAtMs: shutdownCompletedAtMs,
-				budgetMs: Math.max(0, shutdownCompletedAtMs - shutdownStartedAtMs),
-				startedWork: 1,
-				pendingWork: 0,
-				completedWork: 0,
-				abandonedWork: 1,
-			});
+			expect(recorderShutdown).toHaveLength(1);
+			const shutdown = recorderShutdown[0];
+			if (!shutdown) throw new Error("expected owner-emitted shutdown evidence");
+			assertShutdownInvariant(shutdown);
 		} finally {
+			setLifecycleObservers(undefined);
 			resolveSynthesis?.();
 			worker.stop();
 			await worker.drain();

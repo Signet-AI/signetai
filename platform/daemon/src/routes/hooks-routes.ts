@@ -85,6 +85,7 @@ import { recordSkillsFromTranscript } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { upsertThreadHead } from "../thread-heads";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
+import { emitLifecycleProvider } from "@signet/lifecycle-proof";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
@@ -547,11 +548,17 @@ function registerUserPromptSubmit(app: Hono): void {
 				);
 			}
 			let result: Awaited<ReturnType<typeof handleUserPromptSubmit>>;
+			const providerStartedAtMs = Date.now();
 			try {
 				result = await handleUserPromptSubmit(body);
 			} finally {
 				promptSubmitAdmission.release();
 			}
+			emitLifecycleProvider({
+				startedAtMs: providerStartedAtMs,
+				completedAtMs: Date.now(),
+				promptHandledAtMs: providerStartedAtMs,
+			});
 			return c.json(
 				withCrossAgentNotifications(
 					{ ...result, sessionKnown: known },

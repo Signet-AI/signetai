@@ -37,6 +37,43 @@ export interface LifecycleObservation {
 }
 
 export type LifecycleObservationInput = Omit<LifecycleObservation, "sequence">;
+export type LifecycleObserver = (observation: LifecycleObservationInput) => void;
+export type LifecycleShutdownObserver = (window: LifecycleShutdownWindow) => void;
+export type LifecycleProviderObserver = (window: LifecycleProviderWindow) => void;
+
+let lifecycleObserver: LifecycleObserver | undefined;
+let shutdownObserver: LifecycleShutdownObserver | undefined;
+let providerObserver: LifecycleProviderObserver | undefined;
+
+/** Install the owner-emission sink used by daemon and harness proof adapters. */
+export function setLifecycleObservers(
+	observers:
+		| {
+				readonly observation?: LifecycleObserver;
+				readonly shutdown?: LifecycleShutdownObserver;
+				readonly provider?: LifecycleProviderObserver;
+		  }
+		| undefined,
+): void {
+	lifecycleObserver = observers?.observation;
+	shutdownObserver = observers?.shutdown;
+	providerObserver = observers?.provider;
+}
+
+/** Emit an observation from a production lifecycle owner. */
+export function emitLifecycleObservation(observation: LifecycleObservationInput): void {
+	lifecycleObserver?.(observation);
+}
+
+/** Emit measured bounded-shutdown evidence from a production lifecycle owner. */
+export function emitLifecycleShutdown(window: LifecycleShutdownWindow): void {
+	shutdownObserver?.(window);
+}
+
+/** Emit measured provider/prompt timing from a production lifecycle owner. */
+export function emitLifecycleProvider(window: LifecycleProviderWindow): void {
+	providerObserver?.(window);
+}
 
 /** Assigns a monotonic sequence to observations emitted by lifecycle owners. */
 export class LifecycleObservationRecorder {

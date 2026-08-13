@@ -1,4 +1,9 @@
-import { type BaseSessionState, BaseSessionStateStore, sanitizeInject } from "@signet/pi-extension-base";
+import {
+	emitLifecycleObservation,
+	type BaseSessionState,
+	BaseSessionStateStore,
+	sanitizeInject,
+} from "@signet/pi-extension-base";
 import { readTrimmedString } from "@signet/pi-extension-base";
 import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE, type PiAgentMessage } from "./types.js";
 
@@ -37,5 +42,6 @@ class PiSessionStateStore extends BaseSessionStateStore implements PiSessionStat
 }
 
 export function createSessionState(): PiSessionState {
+	emitLifecycleObservation({ stage: "startup" });
 	return new PiSessionStateStore();
 }
