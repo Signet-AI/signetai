@@ -300,6 +300,66 @@ describe("DbAccessor", () => {
 		expect(operations).toEqual([]);
 		expect(Array.from(files.keys())).toEqual(["test.db.bak-v62-5000"]);
 	});
+
+	test("allows a small writable migration backup when statfs reports zero free bytes", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		const dbDir = join(dbPath, "..");
+		writeFileSync(dbPath, "database");
+
+		const files = new Map<string, number>();
+		const operations: string[] = [];
+
+		backupBeforeMigration({ exec: () => {} }, dbPath, 64, {
+			copyFileSync: (source, destination) => {
+				const name = String(destination).slice(dbDir.length + 1);
+				operations.push(`copy:${String(source).slice(dbDir.length + 1)}->${name}`);
+				files.set(name, 1);
+			},
+			readdirSync: () => Array.from(files.keys()),
+			statSync: (path) => ({ mtimeMs: files.get(String(path).slice(dbDir.length + 1)) ?? 0, size: 8 }),
+			statfsSync: () => ({ bavail: 0, bsize: 1 }),
+			unlinkSync: (path) => {
+				const name = String(path).slice(dbDir.length + 1);
+				operations.push(`unlink:${name}`);
+				files.delete(name);
+			},
+			now: () => 6000,
+			log: () => {},
+		});
+
+		expect(operations).toEqual([
+			"copy:test.db->test.db.space-probe-6000",
+			"unlink:test.db.space-probe-6000",
+			"copy:test.db->test.db.bak-v64-6000",
+		]);
+		expect(files.has("test.db.bak-v64-6000")).toBe(true);
+	});
+
+	test("still blocks a large migration backup when statfs reports zero free bytes", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		writeFileSync(dbPath, "database");
+		const operations: string[] = [];
+
+		expect(() =>
+			backupBeforeMigration({ exec: () => {} }, dbPath, 65, {
+				copyFileSync: () => {
+					operations.push("copy");
+				},
+				readdirSync: () => [],
+				statSync: () => ({ mtimeMs: 0, size: 1024 * 1024 + 1 }),
+				statfsSync: () => ({ bavail: 0, bsize: 1 }),
+				unlinkSync: () => {
+					operations.push("unlink");
+				},
+				now: () => 7000,
+				log: () => {},
+			}),
+		).toThrow(DbSpacePreflightError);
+		expect(operations).toEqual([]);
+	});
+
 	test("ignores migration backups removed during metadata collection", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));

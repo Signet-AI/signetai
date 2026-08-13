@@ -519,6 +519,10 @@ export function isVectorRuntimeUsable(): boolean {
 }
 
 const MAX_MIGRATION_BACKUPS = 1;
+// Some runner and edge filesystems report zero available blocks even though a
+// small write still succeeds. Probe those small databases instead of treating
+// the statfs result as definitive, while keeping large databases fail-closed.
+const MAX_ZERO_FREE_SPACE_PROBE_BYTES = 1024 * 1024;
 
 interface MigrationBackupDeps {
 	readonly copyFileSync: (source: string, destination: string) => void;
@@ -618,6 +622,24 @@ function preflightMigrationBackupSpace(dbPath: string, deps: MigrationBackupDeps
 	const freeBytes = availableBytes(dirname(dbPath), deps);
 	if (dbBytes === null || freeBytes === null) return null;
 	const metrics = { dbBytes, freeBytes, requiredBytes: dbBytes };
+	if (freeBytes === 0 && dbBytes <= MAX_ZERO_FREE_SPACE_PROBE_BYTES) {
+		const probeDest = `${dbPath}.space-probe-${deps.now()}`;
+		try {
+			// A zero statfs reading is not reliable on every runner or edge
+			// filesystem. Copy the actual database before failing closed so this
+			// exception is allowed only when the required backup write succeeds.
+			deps.copyFileSync(dbPath, probeDest);
+			return metrics;
+		} catch (err) {
+			throw new DbSpacePreflightError("migration_backup", metrics, err);
+		} finally {
+			try {
+				deps.unlinkSync(probeDest);
+			} catch {
+				// Best effort cleanup of the preflight probe.
+			}
+		}
+	}
 	if (freeBytes < dbBytes) throw new DbSpacePreflightError("migration_backup", metrics);
 	return metrics;
 }
