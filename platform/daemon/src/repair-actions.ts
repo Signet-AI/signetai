@@ -842,7 +842,7 @@ async function reembedMissingMemoriesBatch(
 					memory.id,
 					memory.content,
 					now,
-					memory.agentId ?? agentId ?? null,
+					memory.agentId ?? agentId ?? "default",
 				);
 			// Resolve actual embedding ID (may differ from embId on conflict)
 			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
