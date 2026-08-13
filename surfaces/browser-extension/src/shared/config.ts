@@ -4,15 +4,37 @@ import { DEFAULT_CONFIG, type ExtensionConfig } from "./types.js";
 
 const STORAGE_KEY = "signet_config";
 
+export function migrateDaemonUrl(raw: string): string {
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		return raw;
+	}
+
+	if (parsed.protocol !== "http:" || parsed.hostname.toLowerCase() !== "localhost") {
+		return raw;
+	}
+
+	parsed.hostname = "127.0.0.1";
+	return parsed.toString().replace(/\/$/, "");
+}
+
 export async function getConfig(): Promise<ExtensionConfig> {
 	return new Promise((resolve) => {
 		chrome.storage.local.get([STORAGE_KEY], (result) => {
 			const stored = result[STORAGE_KEY] as Partial<ExtensionConfig> | undefined;
-			resolve({
-				daemonUrl: stored?.daemonUrl ?? DEFAULT_CONFIG.daemonUrl,
+			const daemonUrl = migrateDaemonUrl(stored?.daemonUrl ?? DEFAULT_CONFIG.daemonUrl);
+			const config: ExtensionConfig = {
+				daemonUrl,
 				authToken: stored?.authToken ?? DEFAULT_CONFIG.authToken,
 				theme: stored?.theme ?? DEFAULT_CONFIG.theme,
-			});
+			};
+			if (stored?.daemonUrl !== undefined && stored.daemonUrl !== daemonUrl) {
+				chrome.storage.local.set({ [STORAGE_KEY]: config }, () => resolve(config));
+				return;
+			}
+			resolve(config);
 		});
 	});
 }
