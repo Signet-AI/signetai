@@ -20,6 +20,7 @@ import {
 	resolveDaemonLaunchCommand,
 	resolveDaemonPaths,
 	resolveDaemonRuntimeCommand,
+	waitForDaemonLiveness,
 } from "./runtime.js";
 
 const originalFetch = globalThis.fetch;
@@ -482,18 +483,50 @@ describe("getDaemonStatus", () => {
 		expect(statusRequests).toBe(2);
 	});
 
-	it("uses liveness for startup checks without waiting on metadata health", async () => {
+	it("single-flights concurrent liveness checks without waiting on metadata health", async () => {
 		const requests: string[] = [];
+		const resolvers: Array<(response: Response) => void> = [];
 		globalThis.fetch = (async (input: string | URL) => {
 			const url = String(input);
 			requests.push(url);
-			if (url.endsWith("/health/live")) return new Response("ok", { status: 200 });
+			if (url.endsWith("/health/live")) {
+				return new Promise<Response>((resolve) => resolvers.push(resolve));
+			}
 			return new Response("unexpected probe", { status: 500 });
 		}) as typeof fetch;
 
-		expect(await isDaemonRunning()).toBe(true);
+		const first = isDaemonRunning();
+		const second = isDaemonRunning();
+		await Promise.resolve();
 		expect(requests).toHaveLength(2);
+		expect(resolvers).toHaveLength(2);
+		for (const resolve of resolvers) resolve(new Response("ok", { status: 200 }));
+		expect(await first).toBe(true);
+		expect(await second).toBe(true);
 		expect(requests.every((url) => url.endsWith("/health/live"))).toBe(true);
+	});
+
+	it("bounds startup liveness polling while allowing readiness to resolve", async () => {
+		let requests = 0;
+		let now = 0;
+		globalThis.fetch = (async (input: string | URL) => {
+			expect(String(input)).toEndWith("/health/live");
+			requests += 1;
+			return new Response("ok", { status: requests >= 6 ? 200 : 503 });
+		}) as typeof fetch;
+
+		const result = await waitForDaemonLiveness(
+			1000,
+			() => false,
+			async (ms) => {
+				now += ms;
+			},
+			() => now,
+		);
+
+		expect(result).toBe(true);
+		expect(now).toBe(750);
+		expect(requests).toBe(6);
 	});
 
 	it("parses extraction provider degradation from /api/status", async () => {

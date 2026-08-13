@@ -235,6 +235,24 @@ async function isDaemonAliveAt(baseUrl: string): Promise<boolean> {
 	}
 }
 
+let daemonLivenessFlight: Promise<boolean> | null = null;
+
+/** Coalesce all liveness callers so startup cannot duplicate /health/live probes. */
+function probeDaemonLiveness(): Promise<boolean> {
+	if (daemonLivenessFlight !== null) return daemonLivenessFlight;
+
+	const flight = (async (): Promise<boolean> => {
+		const checks = await Promise.all(DAEMON_BASE_URLS.map((baseUrl) => isDaemonAliveAt(baseUrl)));
+		return checks.some((reachable) => reachable);
+	})();
+	daemonLivenessFlight = flight;
+	const clearFlight = (): void => {
+		if (daemonLivenessFlight === flight) daemonLivenessFlight = null;
+	};
+	void flight.then(clearFlight, clearFlight);
+	return flight;
+}
+
 interface DaemonReadiness {
 	readonly ready: boolean;
 	readonly reasons: string[];
@@ -598,8 +616,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 }
 
 export async function isDaemonRunning(): Promise<boolean> {
-	const checks = await Promise.all(DAEMON_BASE_URLS.map((baseUrl) => isDaemonAliveAt(baseUrl)));
-	return checks.some((reachable) => reachable);
+	return probeDaemonLiveness();
 }
 
 function normalizeCmd(value: string): string {
@@ -1119,6 +1136,20 @@ export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "st
 
 export const didLaunchdDaemonStart = didSystemdDaemonStart;
 
+export async function waitForDaemonLiveness(
+	deadline: number,
+	shouldStop: () => boolean = () => false,
+	pause: (ms: number) => Promise<void> = sleep,
+	now: () => number = Date.now,
+): Promise<boolean> {
+	while (now() < deadline) {
+		await pause(250);
+		if (shouldStop()) return false;
+		if (await isDaemonRunning()) return true;
+	}
+	return false;
+}
+
 export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemonPath?: string): Promise<boolean> {
 	if ((await isDaemonRunning()) || (await hasDaemonProcess(agentsDir))) return true;
 
@@ -1311,19 +1342,8 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 	// while still failing fast on a genuinely broken daemon.
 	// If the spawned process exits early (fast failure), break immediately.
 	const deadline = Date.now() + 60_000;
-	while (Date.now() < deadline) {
-		await sleep(250);
-		if (procExited) break;
-		// Check liveness first (cheap, DB-free /health/live), then health
-		// (DB-touching /health). On a fresh start the server may bind before
-		// migrations finish — /health/live catches that case.
-		for (const baseUrl of DAEMON_BASE_URLS) {
-			if (await isDaemonAliveAt(baseUrl)) return true;
-		}
-		if (await isDaemonRunning()) {
-			return true;
-		}
-	}
+	const ready = await waitForDaemonLiveness(deadline, () => procExited);
+	if (ready) return true;
 
 	try {
 		const diagnostics = readDaemonStartFailureDiagnostics({
