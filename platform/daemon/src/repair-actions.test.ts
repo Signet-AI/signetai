@@ -980,6 +980,7 @@ describe("reembedMissingMemories", () => {
 		const sharedHash = "cross-agent-shared-hash";
 		insertMemory(db, "mem-a", "agent-a", sharedHash);
 		insertMemory(db, "mem-b", "agent-b", sharedHash);
+		insertMemory(db, "mem-a-unique", "agent-a", "agent-a-unique-hash");
 		insertEmbedding(db, {
 			id: "emb-b",
 			contentHash: sharedHash,
@@ -1005,8 +1006,10 @@ describe("reembedMissingMemories", () => {
 			"agent-a",
 		);
 
-		expect(result.success).toBe(false);
-		expect(result.message).toMatch(/provider returned no vectors/);
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		const repaired = db.prepare("SELECT agent_id FROM embeddings WHERE content_hash = 'agent-a-unique-hash'").get();
+		expect(repaired).toEqual({ agent_id: "agent-a" });
 		const after = db
 			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-b'")
 			.get();
