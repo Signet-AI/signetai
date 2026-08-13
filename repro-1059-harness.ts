@@ -162,7 +162,9 @@ try {
 						const parsed = JSON.parse(result.body) as { id?: string };
 						if (typeof parsed.id === "string") posted.push({ id: parsed.id, kind });
 					})
-					.catch((error) => postErrors.push(`${n}: ${String(error)}`)),
+					.catch((error) => {
+						postErrors.push(`${n}: ${String(error)}`);
+					}),
 			);
 		}
 		await Promise.all(requests);
@@ -174,6 +176,7 @@ try {
 	let liveSuccessfulSamples = 0;
 	const healthLatencies: number[] = [];
 	let healthSuccessfulSamples = 0;
+	let backlogSnapshotFailures = 0;
 	const backlogSamples: number[] = [];
 	const snapshots: Array<{
 		elapsedSec: number;
@@ -199,27 +202,33 @@ try {
 		if (live.status === 200) liveSuccessfulSamples++;
 		healthLatencies.push(health.ms);
 		if (health.status === 200) healthSuccessfulSamples++;
-		let statusCounts: Record<string, number> = {};
+		let statusCounts: Record<string, number> | null = null;
 		const documents = await request(origin, "/api/documents?limit=500", { signal: AbortSignal.timeout(2_000) }).catch(
 			() => ({ status: 0, body: "", ms: 2_000 }),
 		);
 		if (documents.status === 200) {
 			try {
-				statusCounts = counts(
-					(JSON.parse(documents.body) as { documents?: Array<{ status?: string }> }).documents ?? [],
-				);
-			} catch {}
+				const parsed = JSON.parse(documents.body) as { documents?: unknown };
+				if (!Array.isArray(parsed.documents)) throw new Error("malformed document list response");
+				statusCounts = counts(parsed.documents as Array<{ status?: string }>);
+			} catch {
+				backlogSnapshotFailures++;
+			}
+		} else {
+			backlogSnapshotFailures++;
 		}
-		const terminal = (statusCounts.done ?? 0) + (statusCounts.failed ?? 0) + (statusCounts.deleted ?? 0);
-		backlogSamples.push(Math.max(0, posted.length - terminal));
-		snapshots.push({
-			elapsedSec: Math.round((Date.now() - start) / 1000),
-			status: health.status,
-			counts: statusCounts,
-			liveMs: Math.round(live.ms),
-			healthMs: Math.round(health.ms),
-		});
-		if (posted.length > 0 && terminal >= posted.length) break;
+		if (statusCounts !== null) {
+			const terminal = (statusCounts.done ?? 0) + (statusCounts.failed ?? 0) + (statusCounts.deleted ?? 0);
+			backlogSamples.push(Math.max(0, posted.length - terminal));
+			snapshots.push({
+				elapsedSec: Math.round((Date.now() - start) / 1000),
+				status: health.status,
+				counts: statusCounts,
+				liveMs: Math.round(live.ms),
+				healthMs: Math.round(health.ms),
+			});
+			if (posted.length > 0 && terminal >= posted.length) break;
+		}
 		await Bun.sleep(1000);
 	}
 
@@ -245,6 +254,7 @@ try {
 		healthP95Ms: Math.round(percentile(healthLatencies, 0.95)),
 		healthMaxMs: Math.round(Math.max(...healthLatencies)),
 		backlogObserved: snapshots.length > 0,
+		backlogSnapshotFailures,
 		backlogSamples,
 		residualBacklog,
 	});
@@ -268,6 +278,7 @@ try {
 		snapshots: snapshots.filter((_, i) => i % 10 === 0 || i === snapshots.length - 1),
 		backlog: {
 			observed: snapshots.length > 0,
+			snapshotFailures: backlogSnapshotFailures,
 			samples: backlogSamples.length,
 			residual: residualBacklog,
 			drained: evaluation.backlogDrained,

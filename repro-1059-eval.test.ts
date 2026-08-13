@@ -25,6 +25,7 @@ describe("sustained-ingestion harness evaluation", () => {
 			healthP95Ms: 4,
 			healthMaxMs: 4,
 			backlogObserved: true,
+			backlogSnapshotFailures: 0,
 			backlogSamples: [180, 170, 158],
 			residualBacklog: 158,
 		});
@@ -50,6 +51,7 @@ describe("sustained-ingestion harness evaluation", () => {
 			healthP95Ms: 1,
 			healthMaxMs: 1,
 			backlogObserved: true,
+			backlogSnapshotFailures: 0,
 			backlogSamples: [1, 2],
 			residualBacklog: 2,
 		});
@@ -74,6 +76,7 @@ describe("sustained-ingestion harness evaluation", () => {
 			healthP95Ms: 1,
 			healthMaxMs: 1,
 			backlogObserved: true,
+			backlogSnapshotFailures: 0,
 			backlogSamples: [0],
 			residualBacklog: 0,
 		});
@@ -98,11 +101,38 @@ describe("sustained-ingestion harness evaluation", () => {
 			healthP95Ms: 1,
 			healthMaxMs: 1,
 			backlogObserved: true,
+			backlogSnapshotFailures: 0,
 			backlogSamples: [0],
 			residualBacklog: 0,
 		});
 
 		expect(result.pass).toBe(false);
 		expect(result.checks.healthWithinBound).toBe(false);
+	});
+
+	test("fails when every backlog snapshot is a failed document-list request", () => {
+		const result = evaluate({
+			expectedSubmissions: 180,
+			posted: 180,
+			postErrors: 0,
+			daemonExited: false,
+			liveSamples: 3,
+			liveSuccessfulSamples: 3,
+			liveP95Ms: 1,
+			liveMaxMs: 1,
+			healthSamples: 3,
+			healthSuccessfulSamples: 3,
+			healthP95Ms: 1,
+			healthMaxMs: 1,
+			backlogObserved: false,
+			backlogSnapshotFailures: 3,
+			backlogSamples: [],
+			residualBacklog: null,
+		});
+
+		expect(result.pass).toBe(false);
+		expect(result.checks.backlogMeasured).toBe(false);
+		expect(result.checks.backlogSnapshotsHealthy).toBe(false);
+		expect(result.checks.backlogNonIncreasing).toBe(false);
 	});
 });
