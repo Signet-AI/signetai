@@ -160,6 +160,12 @@ artifact residue, or orphan chunks. If diagnostics cannot read the backing
 tables, the source health reports `unhealthy` with error context rather than
 pretending the source is healthy.
 
+On macOS, a protected source path denied with `EACCES` is reported as a
+permission issue instead of a transient filesystem failure. The source health
+response and dashboard show one actionable Full Disk Access instruction per
+denied path, including the exact path. The daemon backs off that path while
+permission is denied so a TCC denial does not create a retry storm.
+
 Source artifacts are also scanned by the memory-content-safety policy before
 native recall, source-chunk fallback, Dreaming, or other prompt-facing
 projections use them. The raw artifact and provenance remain unchanged when a

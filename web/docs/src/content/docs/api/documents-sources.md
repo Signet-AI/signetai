@@ -180,7 +180,8 @@ agent.
           "communities": 3,
           "total": 26,
           "documentEntityId": null
-        }
+        },
+        "permission": { "status": "clear", "issues": [] }
       }
     }
   ]
@@ -192,6 +193,12 @@ the durable extraction outcome. It reports the source-document entity id plus
 the aspects and attributes created by the import pipeline. This is distinct
 from `health.semantic`, which remains the current source-attributed graph
 diagnostic and can include later Dreaming-derived work.
+
+For macOS sources whose configured paths are protected by TCC, `health.status`
+is `unhealthy` and `health.permission` is `{ "status": "denied", "issues":
+[{ "path": "...", "guidance": "..." }] }`. The guidance names Full Disk
+Access and includes the denied path. The daemon backs off denied paths until
+permission is restored.
 
 ### POST /api/sources/import
 

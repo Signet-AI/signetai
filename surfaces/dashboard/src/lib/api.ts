@@ -381,6 +381,10 @@ export interface SourceHealth {
 		aspectsCreated: number;
 		attributesCreated: number;
 	};
+	permission?: {
+		status: "clear" | "denied";
+		issues: Array<{ path: string; guidance: string }>;
+	};
 }
 
 export interface SignetSource {

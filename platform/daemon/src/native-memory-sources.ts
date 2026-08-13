@@ -103,8 +103,58 @@ interface IndexedNativeMemory {
 const indexed = new Map<string, IndexedNativeMemory>();
 
 /** Test-only: drop the in-process content-hash cache so scans behave like a fresh daemon. */
+export interface NativeMemorySourcePermissionIssue {
+	readonly path: string;
+	readonly guidance: string;
+}
+
+export interface NativeMemorySourcePermissionHealth {
+	readonly status: "clear" | "denied";
+	readonly issues: readonly NativeMemorySourcePermissionIssue[];
+}
+
+const permissionDeniedPaths = new Map<string, NativeMemorySourcePermissionIssue>();
+const TCC_PERMISSION_GUIDANCE =
+	"Grant Full Disk Access to ai.signet.daemon (or the Signet app) in System Settings → Privacy & Security → Full Disk Access.";
+
+export type NativeMemoryReadFailureClass = "permission-denied" | "missing" | "transient" | "unknown";
+
+export function isDarwinPermissionDenied(err: unknown, platform = process.platform): boolean {
+	if (platform !== "darwin") return false;
+	return typeof err === "object" && err !== null && (err as NodeJS.ErrnoException).code === "EACCES";
+}
+
+export function classifyNativeMemoryReadFailure(
+	err: unknown,
+	platform = process.platform,
+): NativeMemoryReadFailureClass {
+	if (isDarwinPermissionDenied(err, platform)) return "permission-denied";
+	if (isEnoentError(err)) return "missing";
+	if (err instanceof Error || (typeof err === "object" && err !== null)) return "transient";
+	return "unknown";
+}
+
+export function nativeMemorySourcePermissionHealth(
+	source: Pick<NativeMemorySource, "harness" | "root">,
+	agentId: string,
+): NativeMemorySourcePermissionHealth {
+	const prefix = `${agentId}:${source.harness}:`;
+	const root = normalizedRoot(source.root);
+	const issues = [...permissionDeniedPaths.entries()]
+		.filter(([key]) => {
+			if (!key.startsWith(prefix)) return false;
+			const path = key.slice(prefix.length);
+			return path === root || path.startsWith(`${root}/`);
+		})
+		.map(([, issue]) => issue);
+	return { status: issues.length > 0 ? "denied" : "clear", issues };
+}
+
 export function resetNativeMemoryIndexCache(): void {
 	indexed.clear();
+	readFailureBackoffUntil.clear();
+	permissionDeniedPaths.clear();
+	datalessReadFailuresByHarness.clear();
 }
 const DEFAULT_OBSIDIAN_SOURCE_FILE_DELAY_MS = 250;
 
@@ -621,11 +671,23 @@ export async function indexNativeMemoryFile(
 			// same ENOENT on every pass instead of accumulating stale
 			// artifact rows that desync the FTS index (#1142).
 			readFailureBackoffUntil.delete(key);
+			permissionDeniedPaths.delete(key);
 			removeNativeMemoryFile(source, filePath, agentId);
 			logger.debug("watcher", "Dropped vanished native memory artifact", {
 				harness: source.harness,
 				path: filePath,
 			});
+			return false;
+		}
+		if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
+			readFailureBackoffUntil.set(key, Date.now() + READ_FAILURE_BACKOFF_MS);
+			const issue = {
+				path: filePath,
+				guidance: `${TCC_PERMISSION_GUIDANCE} Path: ${filePath}`,
+			};
+			const firstDenied = !permissionDeniedPaths.has(key);
+			permissionDeniedPaths.set(key, issue);
+			if (firstDenied) logger.warn("watcher", issue.guidance, { path: filePath });
 			return false;
 		}
 		// Transient failures (locks, permission flaps) back off instead of
@@ -658,6 +720,7 @@ export async function indexNativeMemoryFile(
 		return false;
 	}
 	readFailureBackoffUntil.delete(key);
+	permissionDeniedPaths.delete(key);
 	if (!content.trim()) {
 		removeNativeMemoryFile(source, filePath, agentId);
 		return false;

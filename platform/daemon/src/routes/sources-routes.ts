@@ -25,6 +25,7 @@ import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import {
 	type NativeMemoryBridgeHandle,
+	nativeMemorySourcePermissionHealth,
 	purgeNativeMemorySourceArtifacts,
 	resolveEmbeddingBridgeOptions,
 	startNativeMemoryBridge,
@@ -771,6 +772,10 @@ interface SourceHealth {
 		readonly documentEntityId: string | null;
 	};
 	readonly importExtraction?: ImportExtractionOutcome;
+	readonly permission: {
+		readonly status: "clear" | "denied";
+		readonly issues: readonly { readonly path: string; readonly guidance: string }[];
+	};
 }
 
 function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
@@ -845,18 +850,30 @@ function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
 function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceStats): SourceHealth {
 	const generatedAt = new Date().toISOString();
 	try {
+		const permission =
+			source.kind === "obsidian"
+				? nativeMemorySourcePermissionHealth({ harness: "obsidian", root: source.root }, agentId)
+				: { status: "clear" as const, issues: [] };
 		const artifactSummary = artifactHealthSummary(source, agentId);
 		const discordSummary = discordHealthSummary(source, agentId);
 		const semantic = semanticHealthSummary(source, agentId);
 		const importExtraction = source.kind === "import" ? readImportedSourceOutcome(source.id, agentId) : undefined;
 		const orphanChunks = sourceOrphanChunks(source, agentId);
 		const hasDegradation =
+			permission.status === "denied" ||
 			discordSummary.failures.total > 0 ||
 			discordSummary.checkpoints.partial > 0 ||
 			discordSummary.checkpoints.stale > 0 ||
 			artifactSummary.deletedArtifacts > 0 ||
 			orphanChunks > 0;
-		const status = hasDegradation ? "degraded" : stats.artifacts === 0 && stats.chunks === 0 ? "empty" : "healthy";
+		const status =
+			permission.status === "denied"
+				? "unhealthy"
+				: hasDegradation
+					? "degraded"
+					: stats.artifacts === 0 && stats.chunks === 0
+						? "empty"
+						: "healthy";
 		return {
 			status,
 			generatedAt,
@@ -871,6 +888,7 @@ function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceS
 			},
 			semantic,
 			...(importExtraction ? { importExtraction } : {}),
+			permission,
 		};
 	} catch (err) {
 		return {
@@ -892,6 +910,7 @@ function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceS
 				total: 0,
 				documentEntityId: null,
 			},
+			permission: { status: "clear", issues: [] },
 		};
 	}
 }

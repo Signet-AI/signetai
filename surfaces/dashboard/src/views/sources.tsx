@@ -381,6 +381,15 @@ function SourceCard({ source, onMutate }: { source: SignetSource; onMutate: () =
 			</div>
 
 			<PipeStrip job={source.indexJob} health={health} />
+			{source.health?.permission?.status === "denied" && (
+				<div className="rounded-md border border-[oklch(0.7_0.18_25/0.35)] bg-[oklch(0.7_0.18_25/0.08)] px-2 py-1.5 font-mono text-[9.5px] text-[oklch(0.7_0.18_25)]">
+					{source.health.permission.issues.map((issue) => (
+						<div key={issue.path} title={issue.path}>
+							{issue.guidance}
+						</div>
+					))}
+				</div>
+			)}
 
 			<div className="mt-0.5 flex items-center justify-between border-t border-[oklch(1_0_0/0.06)] pt-2 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
 				{error ? (
