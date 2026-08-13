@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir, stat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import {
@@ -224,11 +225,19 @@ function isEnoentError(err: unknown): boolean {
 	return typeof err === "object" && err !== null && (err as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-async function pathExists(path: string): Promise<boolean> {
+async function pathExists(
+	path: string,
+	source: Pick<NativeMemorySource, "harness">,
+	agentId: string,
+): Promise<boolean> {
+	if (nativeMemoryReadBackoffActive(source, path, agentId)) return false;
 	try {
 		await stat(path);
 		return true;
-	} catch {
+	} catch (err) {
+		if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
+			recordNativeMemoryPermissionDenied(source, path, agentId);
+		}
 		return false;
 	}
 }
@@ -351,14 +360,28 @@ export function configuredNativeMemorySources(agentsDir?: string): NativeMemoryS
 	return [codexNativeMemorySource(), claudeCodeNativeMemorySource(), hermesNativeMemorySource(), ...configured];
 }
 
-async function* walkNativeMemoryFiles(dir: string): AsyncGenerator<string> {
-	if (!(await pathExists(dir))) return;
-	const entries = await readdir(dir, { withFileTypes: true });
+async function* walkNativeMemoryFiles(
+	dir: string,
+	source: Pick<NativeMemorySource, "harness">,
+	agentId: string,
+): AsyncGenerator<string> {
+	if (!(await pathExists(dir, source, agentId))) return;
+	if (nativeMemoryReadBackoffActive(source, dir, agentId)) return;
+	let entries: readonly Dirent[];
+	try {
+		entries = await readdir(dir, { withFileTypes: true });
+		clearNativeMemoryPermissionDenied(source, dir, agentId);
+	} catch (err) {
+		if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
+			recordNativeMemoryPermissionDenied(source, dir, agentId);
+		}
+		return;
+	}
 	for (const entry of entries) {
 		if (entry.name === ".git") continue;
 		const path = join(dir, entry.name);
 		if (entry.isDirectory()) {
-			yield* walkNativeMemoryFiles(path);
+			yield* walkNativeMemoryFiles(path, source, agentId);
 		} else if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".jsonl"))) {
 			yield path;
 		}
@@ -986,10 +1009,10 @@ export function startNativeMemoryBridge(
 			let scanned = 0;
 			const key = sourceStateKey(source, agentId);
 			const current = new Set<string>();
-			const rootExists = await pathExists(source.root);
+			const rootExists = await pathExists(source.root, source, agentId);
 			if (rootExists) {
 				const files: string[] = [];
-				for await (const file of walkNativeMemoryFiles(source.root)) {
+				for await (const file of walkNativeMemoryFiles(source.root, source, agentId)) {
 					if (!matchesPattern(source, file)) continue;
 					files.push(file);
 					await yielder();

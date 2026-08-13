@@ -616,7 +616,7 @@ describe("discord-source-provider", () => {
 					source: added.source,
 					agentId: "default",
 					cachePath: join(dir, "discord"),
-					fullScan: true,
+					fullScan: false,
 					shouldContinue: () => true,
 					fileSystem,
 				});

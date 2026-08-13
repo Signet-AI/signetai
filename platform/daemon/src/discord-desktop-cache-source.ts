@@ -219,7 +219,6 @@ function discoverCandidates(
 		try {
 			if (nativeMemoryReadBackoffActive({ harness: DISCORD_HARNESS }, path, agentId)) return;
 			stat = fileSystem.lstatSync(path);
-			clearNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, path, agentId);
 		} catch (err) {
 			if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
 				recordNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, path, agentId);
@@ -238,7 +237,7 @@ function discoverCandidates(
 			return;
 		}
 		const source = isRouteFilteredCachePath(root, path) ? "cache" : "context";
-		if (source === "cache" && !fullScan && !cacheFileHasRouteHint(path)) {
+		if (source === "cache" && !fullScan && !cacheFileHasRouteHint(path, fileSystem, agentId)) {
 			stats.filesSkipped++;
 			stats.cacheFilesFastSkipped++;
 			return;
@@ -1080,12 +1079,17 @@ function extractGzipPayloads(data: Buffer): readonly Buffer[] {
 	return out;
 }
 
-function cacheFileHasRouteHint(path: string): boolean {
+function cacheFileHasRouteHint(path: string, fileSystem: DiscordDesktopCacheFileSystem, agentId: string): boolean {
+	if (nativeMemoryReadBackoffActive({ harness: DISCORD_HARNESS }, path, agentId)) return false;
 	try {
-		const data = readFileSync(path).subarray(0, CACHE_SNIFF_BYTES).toString("utf8");
+		const data = fileSystem.readFileSync(path).subarray(0, CACHE_SNIFF_BYTES).toString("utf8");
+		clearNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, path, agentId);
 		channelRoutePattern.lastIndex = 0;
 		return channelRoutePattern.test(data) || apiMessagesRoutePattern.test(data);
-	} catch {
+	} catch (err) {
+		if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
+			recordNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, path, agentId);
+		}
 		return false;
 	}
 }

@@ -10,14 +10,26 @@ let readAttempts = 0;
 let readError: Error & { code: string } = Object.assign(new Error("EDEADLK: resource deadlock avoided"), {
 	code: "EDEADLK",
 });
+let statError: (path: string) => (Error & { code: string }) | null = () => null;
+let readdirError: (path: string) => (Error & { code: string }) | null = () => null;
 afterEach(() => {
 	closeDbAccessor();
 	resetNativeMemoryIndexCache();
+	statError = () => null;
+	readdirError = () => null;
 });
 mock.module("node:fs/promises", () => ({
 	lstat: async () => ({ isSymbolicLink: () => false }),
-	stat: async () => ({ isFile: () => true, mtimeMs: Date.now() }),
-	readdir: async () => [],
+	stat: async (path: string) => {
+		const error = statError(path);
+		if (error) throw error;
+		return { isFile: () => true, mtimeMs: Date.now() };
+	},
+	readdir: async (path: string) => {
+		const error = readdirError(path);
+		if (error) throw error;
+		return [];
+	},
 	readFile: async () => {
 		readAttempts++;
 		throw readError;
@@ -33,6 +45,7 @@ import {
 	nativeMemorySourcePermissionHealth,
 	obsidianNativeMemorySource,
 	resetNativeMemoryIndexCache,
+	startNativeMemoryBridge,
 } from "./native-memory-sources";
 
 describe("dataless / EDEADLK native artifact reads (#1161)", () => {
@@ -135,6 +148,46 @@ describe("dataless / EDEADLK native artifact reads (#1161)", () => {
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
 			closeDbAccessor();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("classifies protected native source discovery roots and directories", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-tcc-discovery-"));
+		const source = obsidianNativeMemorySource(dir);
+		const originalPlatform = process.platform;
+		const originalWarn = logger.warn;
+		const warnCalls: string[] = [];
+		Object.defineProperty(process, "platform", { value: "darwin" });
+		logger.warn = ((_category: unknown, message: unknown) => warnCalls.push(String(message))) as typeof logger.warn;
+		try {
+			const permissionError = () => Object.assign(new Error("permission denied"), { code: "EACCES" });
+			statError = (path) => (path === dir ? permissionError() : null);
+			const rootBridge = startNativeMemoryBridge([source], { agentId: "agent-discovery", pollIntervalMs: 0 });
+			await rootBridge.syncExisting();
+			await rootBridge.syncExisting();
+			await rootBridge.close();
+			expect(nativeMemorySourcePermissionHealth(source, "agent-discovery")).toEqual({
+				status: "denied",
+				issues: [expect.objectContaining({ path: dir, guidance: expect.stringContaining(`Path: ${dir}`) })],
+			});
+			expect(warnCalls.filter((message) => message.includes("Full Disk Access"))).toHaveLength(1);
+
+			resetNativeMemoryIndexCache();
+			statError = () => null;
+			readdirError = (path) => (path === dir ? permissionError() : null);
+			const readdirBridge = startNativeMemoryBridge([source], { agentId: "agent-readdir", pollIntervalMs: 0 });
+			await readdirBridge.syncExisting();
+			await readdirBridge.syncExisting();
+			await readdirBridge.close();
+			expect(nativeMemorySourcePermissionHealth(source, "agent-readdir")).toEqual({
+				status: "denied",
+				issues: [expect.objectContaining({ path: dir, guidance: expect.stringContaining(`Path: ${dir}`) })],
+			});
+			expect(warnCalls.filter((message) => message.includes("Full Disk Access"))).toHaveLength(2);
+		} finally {
+			logger.warn = originalWarn;
+			Object.defineProperty(process, "platform", { value: originalPlatform });
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
