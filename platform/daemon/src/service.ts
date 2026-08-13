@@ -7,12 +7,7 @@ import { execSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import {
-	LOOPBACK_HOST,
-	buildLaunchdEnvironment,
-	buildLaunchdPlist,
-	resolveDefaultBasePath,
-} from "@signet/core";
+import { LOOPBACK_HOST, buildLaunchdEnvironment, buildLaunchdPlist, resolveDefaultBasePath } from "@signet/core";
 
 const AGENTS_DIR = resolveDefaultBasePath();
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");

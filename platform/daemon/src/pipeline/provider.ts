@@ -846,9 +846,7 @@ function buildAcpxCommand(
 ): { bin: string; args: string[]; cwd?: string } {
 	const configuredBin = config.bin ?? "npx";
 	const bin =
-		process.platform === "darwin" && configuredBin === "npx"
-			? resolveLaunchdExecutable("npx")
-			: configuredBin;
+		process.platform === "darwin" && configuredBin === "npx" ? resolveLaunchdExecutable("npx") : configuredBin;
 	const cwd = resolveAcpxCwd(config.cwd, config.hooks);
 	const packageRef = config.package ?? (!config.bin ? `acpx@${config.version ?? DEFAULT_ACPX_VERSION}` : undefined);
 	const allowedTools = resolveAcpxAllowedTools(config);
@@ -1401,9 +1399,7 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 		async available(): Promise<boolean> {
 			const configuredBin = config.bin ?? "npx";
 			const bin =
-				process.platform === "darwin" && configuredBin === "npx"
-					? resolveLaunchdExecutable("npx")
-					: configuredBin;
+				process.platform === "darwin" && configuredBin === "npx" ? resolveLaunchdExecutable("npx") : configuredBin;
 			return which(bin) !== null;
 		},
 	};
