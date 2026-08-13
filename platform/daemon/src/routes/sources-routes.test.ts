@@ -62,6 +62,12 @@ describe("Sources routes", () => {
 			syncGate?: Promise<void>;
 			onPurge?: () => void;
 			onSyncStart?: () => void;
+			pickerExecFile?: (
+				command: string,
+				args: string[],
+				options: { readonly timeout: number },
+			) => Promise<{ readonly stdout: string; readonly stderr: string }>;
+			pickerPlatform?: NodeJS.Platform;
 		} = {},
 	): Hono {
 		const app = new Hono();
@@ -99,6 +105,8 @@ describe("Sources routes", () => {
 				options.onPurge?.();
 				return options.purged ?? 7;
 			},
+			pickerExecFile: options.pickerExecFile,
+			pickerPlatform: options.pickerPlatform,
 		});
 		return app;
 	}
@@ -110,6 +118,36 @@ describe("Sources routes", () => {
 		}
 		throw new Error("Timed out waiting for condition");
 	}
+
+	it("fails fast with an actionable error when a macOS picker has no Aqua GUI session (#1457)", async () => {
+		const previousFilePicker = process.env.SIGNET_FILE_PICKER;
+		const previousDirectoryPicker = process.env.SIGNET_DIRECTORY_PICKER;
+		Reflect.deleteProperty(process.env, "SIGNET_FILE_PICKER");
+		Reflect.deleteProperty(process.env, "SIGNET_DIRECTORY_PICKER");
+		const calls: Array<{ command: string; timeout: number }> = [];
+		try {
+			const app = makeApp({
+				pickerPlatform: "darwin",
+				pickerExecFile: async (command, _args, options) => {
+					calls.push({ command, timeout: options.timeout });
+					return { stdout: "", stderr: "" };
+				},
+			});
+			const startedAt = performance.now();
+			const response = await app.request("/api/sources/pick-directory", { method: "POST" });
+			const elapsedMs = performance.now() - startedAt;
+
+			expect(response.status).toBe(501);
+			expect(((await response.json()) as { error: string }).error).toContain("requires an active GUI session (Aqua)");
+			expect(calls).toEqual([{ command: "launchctl", timeout: 3_000 }]);
+			expect(elapsedMs).toBeLessThan(1_000);
+		} finally {
+			if (previousFilePicker === undefined) Reflect.deleteProperty(process.env, "SIGNET_FILE_PICKER");
+			else process.env.SIGNET_FILE_PICKER = previousFilePicker;
+			if (previousDirectoryPicker === undefined) Reflect.deleteProperty(process.env, "SIGNET_DIRECTORY_PICKER");
+			else process.env.SIGNET_DIRECTORY_PICKER = previousDirectoryPicker;
+		}
+	});
 
 	it("lists no configured sources by default", async () => {
 		const res = await makeApp().request("/api/sources");

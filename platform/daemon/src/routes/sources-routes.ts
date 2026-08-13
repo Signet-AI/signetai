@@ -125,10 +125,18 @@ interface PickDirectoryBody {
 	readonly title?: string;
 }
 
+type PickerExecFile = (
+	command: string,
+	args: string[],
+	options: { readonly timeout: number },
+) => Promise<{ readonly stdout: string; readonly stderr: string }>;
+
 export interface RegisterSourcesRoutesDeps {
 	readonly agentsDir?: string;
 	readonly startBridge?: typeof startNativeMemoryBridge;
 	readonly purgeNativeSource?: typeof purgeNativeMemorySourceArtifacts;
+	readonly pickerExecFile?: PickerExecFile;
+	readonly pickerPlatform?: NodeJS.Platform;
 }
 
 const sourceIndexRuns = new Set<{ readonly sourceId: string; readonly jobId: string; readonly run: Promise<void> }>();
@@ -165,6 +173,8 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const agentsDir = deps.agentsDir ?? process.env.SIGNET_PATH ?? `${homedir()}/.agents`;
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
+	const pickerExecFile = deps.pickerExecFile ?? execFileAsync;
+	const pickerPlatform = deps.pickerPlatform ?? process.platform;
 	app.get("/api/sources", (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();
@@ -192,7 +202,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			body = {};
 		}
 
-		const result = await pickDirectory(body.title ?? "Choose folder");
+		const result = await pickDirectory(body.title ?? "Choose folder", pickerPlatform, pickerExecFile);
 		if (result.ok === false) return c.json({ error: result.error }, 501);
 		return c.json({ path: result.path });
 	});
@@ -206,7 +216,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			body = {};
 		}
 
-		const result = await pickFiles(body.title ?? "Choose files");
+		const result = await pickFiles(body.title ?? "Choose files", pickerPlatform, pickerExecFile);
 		if (result.ok === false) return c.json({ error: result.error }, 501);
 		return c.json({ paths: result.paths });
 	});
@@ -1229,13 +1239,19 @@ function countRow(row: unknown): number {
 		: 0;
 }
 
-async function pickFiles(title: string): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
+async function pickFiles(
+	title: string,
+	platform: NodeJS.Platform,
+	execFileForPicker: PickerExecFile,
+): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
 	const trimmedTitle = title.trim() || "Choose files";
 	const errors: string[] = [];
+	const preflightError = await osascriptPickerPreflight(platform, execFileForPicker, "file");
+	if (preflightError) return { ok: false, error: preflightError };
 
-	for (const candidate of filePickerCommands(trimmedTitle)) {
+	for (const candidate of filePickerCommands(trimmedTitle, platform)) {
 		try {
-			const { stdout } = await execFileAsync(candidate.command, candidate.args, { timeout: 120_000 });
+			const { stdout } = await execFileForPicker(candidate.command, candidate.args, { timeout: 120_000 });
 			const paths = stdout
 				.split(/\r?\n|\|/)
 				.map((path) => path.trim())
@@ -1267,12 +1283,12 @@ function isLoopbackRequest(c: Context): boolean {
 	);
 }
 
-function filePickerCommands(title: string): Array<{ command: string; args: string[] }> {
+function filePickerCommands(title: string, platform: NodeJS.Platform): Array<{ command: string; args: string[] }> {
 	if (process.env.SIGNET_FILE_PICKER) {
 		return [{ command: process.env.SIGNET_FILE_PICKER, args: [] }];
 	}
 
-	if (process.platform === "darwin") {
+	if (platform === "darwin") {
 		return [
 			{
 				command: "osascript",
@@ -1284,7 +1300,7 @@ function filePickerCommands(title: string): Array<{ command: string; args: strin
 		];
 	}
 
-	if (process.platform === "win32") {
+	if (platform === "win32") {
 		return [
 			{
 				command: "powershell.exe",
@@ -1306,14 +1322,20 @@ function filePickerCommands(title: string): Array<{ command: string; args: strin
 	];
 }
 
-async function pickDirectory(title: string): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+async function pickDirectory(
+	title: string,
+	platform: NodeJS.Platform,
+	execFileForPicker: PickerExecFile,
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
 	const trimmedTitle = title.trim() || "Choose folder";
-	const candidates = pickerCommands(trimmedTitle);
+	const preflightError = await osascriptPickerPreflight(platform, execFileForPicker, "folder");
+	if (preflightError) return { ok: false, error: preflightError };
+	const candidates = pickerCommands(trimmedTitle, platform);
 	const errors: string[] = [];
 
 	for (const candidate of candidates) {
 		try {
-			const { stdout } = await execFileAsync(candidate.command, candidate.args, { timeout: 120_000 });
+			const { stdout } = await execFileForPicker(candidate.command, candidate.args, { timeout: 120_000 });
 			const path = stdout.trim();
 			if (path) return { ok: true, path };
 		} catch (err) {
@@ -1327,12 +1349,12 @@ async function pickDirectory(title: string): Promise<{ ok: true; path: string } 
 	};
 }
 
-function pickerCommands(title: string): Array<{ command: string; args: string[] }> {
+function pickerCommands(title: string, platform: NodeJS.Platform): Array<{ command: string; args: string[] }> {
 	if (process.env.SIGNET_DIRECTORY_PICKER) {
 		return [{ command: process.env.SIGNET_DIRECTORY_PICKER, args: [] }];
 	}
 
-	if (process.platform === "darwin") {
+	if (platform === "darwin") {
 		return [
 			{
 				command: "osascript",
@@ -1341,7 +1363,7 @@ function pickerCommands(title: string): Array<{ command: string; args: string[] 
 		];
 	}
 
-	if (process.platform === "win32") {
+	if (platform === "win32") {
 		return [
 			{
 				command: "powershell.exe",
@@ -1358,4 +1380,29 @@ function pickerCommands(title: string): Array<{ command: string; args: string[] 
 		{ command: "zenity", args: ["--file-selection", "--directory", "--title", title] },
 		{ command: "kdialog", args: ["--title", title, "--getexistingdirectory", homedir()] },
 	];
+}
+
+async function osascriptPickerPreflight(
+	platform: NodeJS.Platform,
+	execFileForPicker: PickerExecFile,
+	kind: "file" | "folder",
+): Promise<string | null> {
+	if (platform !== "darwin") return null;
+	const override = kind === "file" ? process.env.SIGNET_FILE_PICKER : process.env.SIGNET_DIRECTORY_PICKER;
+	if (override) return null;
+
+	const guiError = `Native macOS ${kind} picking requires an active GUI session (Aqua). Run the desktop app in a logged-in macOS session, or configure a non-interactive picker override.`;
+	try {
+		const { stdout } = await execFileForPicker("launchctl", ["managername"], { timeout: 3_000 });
+		if (stdout.trim() !== "Aqua") return guiError;
+	} catch {
+		return guiError;
+	}
+
+	try {
+		await execFileForPicker("osascript", ["-e", 'tell application "System Events" to return name'], { timeout: 5_000 });
+		return null;
+	} catch {
+		return `Native macOS ${kind} picking requires Automation permission for osascript. Grant access in System Settings → Privacy & Security → Automation, or configure a non-interactive picker override.`;
+	}
 }

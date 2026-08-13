@@ -266,7 +266,9 @@ state rather than infer zero counts.
 
 Open the native multi-file picker on a local desktop daemon. This endpoint is
 loopback-only and returns filesystem paths for a subsequent `paths`-based import.
-A remote client must upload bytes through `POST /api/sources/import` instead.
+On macOS, it returns `501` immediately with actionable guidance when no Aqua GUI
+session or Automation permission is available. A remote client must upload bytes
+through `POST /api/sources/import` instead.
 
 **Response**
 
@@ -567,7 +569,9 @@ The JSON returned by `GET /api/sources/:sourceId/snapshot`.
 ### POST /api/sources/pick-directory
 
 Best-effort local directory picker used by dashboard/browser flows. It returns
-`501` when no OS picker command is available.
+`501` when no OS picker command is available or when macOS has no active Aqua
+GUI session or Automation permission. The error explains how to run the desktop
+app in a logged-in session or configure a picker override.
 
 **Request body**
 
