@@ -55,6 +55,14 @@ describe("retry-github-release", () => {
 		expect(result.stderr).toContain("retrying");
 	});
 
+	test("does not retry a 4xx response whose body contains timeout", () => {
+		const command = writeFakeCommand("echo 'HTTP 400: request timeout is invalid' >&2; exit 1");
+		const result = runFakeCommand(command);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).not.toContain("retrying");
+	});
+
 	test("does not retry a non-transient 401", () => {
 		const command = writeFakeCommand("echo 'HTTP 401: Bad credentials' >&2; exit 1");
 		const result = runFakeCommand(command);

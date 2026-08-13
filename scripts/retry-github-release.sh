@@ -15,8 +15,7 @@ fi
 
 is_retryable_failure() {
   local output="$1"
-  [[ "${output}" =~ (^|[^0-9])HTTP[[:space:]]+5[0-9][0-9]([^0-9]|$) ]] ||
-    [[ "${output}" =~ (failed[[:space:]]+to[[:space:]]+connect|connection[[:space:]]+(reset|refused|closed)|network[[:space:]]+is[[:space:]]+unreachable|could[[:space:]]+not[[:space:]]+resolve[[:space:]]+host|temporary[[:space:]]+failure[[:space:]]+in[[:space:]]+name[[:space:]]+resolution|timed[[:space:]]+out|timeout|TLS[[:space:]]+handshake|unexpected[[:space:]]+EOF) ]]
+  [[ "${output}" =~ (^|[^0-9])HTTP[[:space:]]+5[0-9][0-9]([^0-9]|$) ]]
 }
 
 for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
