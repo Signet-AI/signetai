@@ -222,7 +222,7 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		if (process.platform === "win32") {
 			// Bun reports process.kill(SIGTERM) as an ordinary status-1 exit on
 			// Windows, rather than exposing the POSIX signal through close().
-			await expect(result).rejects.toThrow(/status 1;/);
+			await expect(result).rejects.toThrow(/status 1\);/);
 			return;
 		}
 		await expect(result).rejects.toThrow(/status unknown, signal SIGTERM/);
