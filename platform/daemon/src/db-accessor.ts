@@ -28,6 +28,7 @@ import {
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsSql,
 	recreateMemoriesFts,
+	resolveSqliteJournalConfig,
 	runMigrations,
 } from "@signet/core";
 import { convertToIncrementalVacuum, DbSpacePreflightError, ensureVacuumConversionState } from "./db-vacuum";
@@ -217,14 +218,15 @@ let vecLoadError: string | null = null;
 // Initialisation
 // ---------------------------------------------------------------------------
 
-function configurePragmas(db: SqliteDatabase): void {
+function configurePragmas(db: SqliteDatabase, path: string): void {
 	// Set auto_vacuum = INCREMENTAL before any tables are created. This only
 	// affects fresh databases; existing databases are converted by the
 	// post-ready vacuum worker after finishDbAccessorInit (#1139, #1493).
 	db.exec("PRAGMA auto_vacuum = INCREMENTAL");
-	db.exec("PRAGMA journal_mode = WAL");
+	const journal = resolveSqliteJournalConfig({ directory: dirname(path) });
+	db.exec(`PRAGMA journal_mode = ${journal.journalMode}`);
 	db.exec("PRAGMA busy_timeout = 5000");
-	db.exec("PRAGMA synchronous = NORMAL");
+	db.exec(`PRAGMA synchronous = ${journal.networkFilesystem ? "FULL" : "NORMAL"}`);
 	db.exec("PRAGMA temp_store = MEMORY");
 }
 
@@ -811,7 +813,7 @@ function openDbAccessorConnection(path: string, opts?: { readonly agentsDir?: st
 	configureCustomSqlite(opts?.agentsDir);
 
 	const writeConn = new Database(path);
-	configurePragmas(writeConn);
+	configurePragmas(writeConn, path);
 	loadVecExtension(writeConn);
 	return writeConn;
 }
@@ -904,7 +906,7 @@ export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string
 	vecExtPath = vecExtensionPath;
 
 	const writeConn = new Database(dbPathParam);
-	configurePragmas(writeConn);
+	configurePragmas(writeConn, dbPathParam);
 
 	if (vecExtensionPath) {
 		try {

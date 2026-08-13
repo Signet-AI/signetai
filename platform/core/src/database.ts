@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { MEMORY_CONTENT_SAFETY_POLICY_VERSION, scanMemoryContent } from "./memory-content-safety";
 import { isDaemonDerivedMemorySourceType } from "./memory-provenance";
 import { runMigrations } from "./migrations/index";
+import { resolveSqliteJournalConfig } from "./sqlite-journal";
 import type { Conversation, Embedding, Memory } from "./types";
 import type { MemoryHistory, MemoryJob } from "./types";
 
@@ -243,17 +244,19 @@ export class Database {
 		// Load sqlite-vec extension for vector search capabilities
 		this.vecEnabled = loadSqliteVec(this.db);
 
-		// Enable WAL mode (skip for readonly)
+		// Enable WAL only when the filesystem supports SQLite's shared-memory
+		// and locking requirements. Darwin network filesystems such as SMB/NFS
+		// use rollback journaling instead.
 		if (!this.options?.readonly) {
 			// Set auto_vacuum = INCREMENTAL before any tables are created (#1139).
 			// Only affects fresh databases; existing databases are converted by
 			// the daemon's convertToIncrementalVacuum on startup.
 			this.getDb().exec("PRAGMA auto_vacuum = INCREMENTAL");
-			if (isBun) {
-				this.getDb().exec("PRAGMA journal_mode = WAL");
-			} else {
-				(this.getDb() as { pragma(s: string): void }).pragma("journal_mode = WAL");
-			}
+			const journal = resolveSqliteJournalConfig({ directory: dirname(this.dbPath) });
+			const journalMode = `journal_mode = ${journal.journalMode}`;
+			if (isBun) this.getDb().exec(`PRAGMA ${journalMode}`);
+			else (this.getDb() as { pragma(s: string): void }).pragma(journalMode);
+			if (journal.networkFilesystem) this.getDb().exec("PRAGMA synchronous = FULL");
 		}
 
 		// Run migrations

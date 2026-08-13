@@ -5,6 +5,8 @@
 
 export { Signet } from "./signet";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
+export { detectFilesystemType, isNetworkFilesystem, resolveSqliteJournalConfig } from "./sqlite-journal";
+export type { SqliteJournalConfig, SqliteJournalMode } from "./sqlite-journal";
 export {
 	DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE,
 	DEFAULT_TELEMETRY_FLUSH_INTERVAL_MS,
