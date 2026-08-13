@@ -36,6 +36,24 @@ export interface LifecycleObservation {
 	readonly sequence: number;
 }
 
+export type LifecycleObservationInput = Omit<LifecycleObservation, "sequence">;
+
+/** Assigns a monotonic sequence to observations emitted by lifecycle owners. */
+export class LifecycleObservationRecorder {
+	private nextSequence = 1;
+	private readonly recorded: LifecycleObservation[] = [];
+
+	record(observation: LifecycleObservationInput): LifecycleObservation {
+		const next = { ...observation, sequence: this.nextSequence++ };
+		this.recorded.push(next);
+		return next;
+	}
+
+	get observations(): readonly LifecycleObservation[] {
+		return this.recorded;
+	}
+}
+
 export interface LifecycleShutdownWindow {
 	readonly startedAtMs: number;
 	readonly completedAtMs: number;
@@ -60,6 +78,35 @@ export interface LifecycleProofInput {
 	readonly shutdown: LifecycleShutdownWindow;
 	/** Required evidence from the owner that handles prompts and provider calls. */
 	readonly slowProvider: LifecycleProviderWindow;
+}
+
+/** Collects lifecycle observations and measured owner evidence for one run. */
+export class LifecycleEvidenceRecorder {
+	private readonly observationRecorder = new LifecycleObservationRecorder();
+	private shutdown: LifecycleShutdownWindow | undefined;
+	private slowProvider: LifecycleProviderWindow | undefined;
+
+	record(observation: LifecycleObservationInput): LifecycleObservation {
+		return this.observationRecorder.record(observation);
+	}
+
+	recordShutdown(window: LifecycleShutdownWindow): void {
+		this.shutdown = window;
+	}
+
+	recordSlowProvider(window: LifecycleProviderWindow): void {
+		this.slowProvider = window;
+	}
+
+	get observations(): readonly LifecycleObservation[] {
+		return this.observationRecorder.observations;
+	}
+
+	get input(): LifecycleProofInput {
+		if (!this.shutdown) throw new Error("Lifecycle shutdown evidence was not recorded");
+		if (!this.slowProvider) throw new Error("Lifecycle slow-provider evidence was not recorded");
+		return { observations: this.observations, shutdown: this.shutdown, slowProvider: this.slowProvider };
+	}
 }
 
 export interface LifecycleProofResult {

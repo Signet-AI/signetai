@@ -295,7 +295,7 @@
     },
     "libs/lifecycle-proof": {
       "name": "@signet/lifecycle-proof",
-      "version": "0.199.29",
+      "version": "0.199.30",
     },
     "libs/sdk": {
       "name": "@signet/sdk",
