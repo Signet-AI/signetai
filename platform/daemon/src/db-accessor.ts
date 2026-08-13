@@ -153,18 +153,16 @@ export class DbWriteQueueFullError extends Error {
 	}
 }
 
-export interface DbAccessor {
-	/** Run `fn` inside BEGIN IMMEDIATE / COMMIT (ROLLBACK on error). */
-	withWriteTx<T>(fn: (db: WriteDb) => T): T;
-
-	/**
-	 * Admit a write transaction through the bounded async writer queue.
-	 *
-	 * The synchronous API remains available for transactions that must be
-	 * composed inline. Async request and background paths should prefer this
-	 * method so bursts are bounded instead of accumulating unobserved work.
-	 */
-	withWriteTxAsync?<T>(fn: (db: WriteDb) => T): Promise<T>;
+/**
+ * Canonical contract for daemon code that can cross an event-loop boundary.
+ *
+ * New production code must use these async primitives. They are required here
+ * rather than optional so an accessor implementation cannot silently omit the
+ * async boundary and force callers back onto synchronous SQLite.
+ */
+export interface AsyncDbAccessor {
+	/** Admit a write transaction through the bounded async writer queue. */
+	withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T>;
 
 	/** Admit a WAL checkpoint through the bounded async writer queue. */
 	checkpointWalAsync?(): Promise<void>;
@@ -177,9 +175,6 @@ export interface DbAccessor {
 
 	/** Return bounded local diagnostics for the writer admission path. */
 	getWritePressure?(): WritePressure;
-
-	/** Open a readonly connection, run `fn`, close it. */
-	withReadDb<T>(fn: (db: ReadDb) => T): T;
 
 	/** Async variant of withReadDb. The connection stays checked out of the
 	 *  read pool for the whole `fn`, including across event-loop yields, so
@@ -201,6 +196,24 @@ export interface DbAccessor {
 	/** Close all held connections. Safe to call multiple times. */
 	close(): void;
 }
+
+/**
+ * Legacy synchronous surface retained only while Phase A migrates callers.
+ *
+ * This type is deliberately separate from AsyncDbAccessor. The static audit
+ * rejects new production call sites, and the compatibility surface is removed
+ * after the migration phases finish.
+ */
+export interface SyncDbAccessorCompat {
+	/** @deprecated Use withWriteTxAsync from production code. */
+	withWriteTx<T>(fn: (db: WriteDb) => T): T;
+
+	/** @deprecated Use withReadDbAsync from production code. */
+	withReadDb<T>(fn: (db: ReadDb) => T): T;
+}
+
+/** DbAccessor exposes the async contract plus the temporary migration surface. */
+export interface DbAccessor extends AsyncDbAccessor, SyncDbAccessorCompat {}
 
 // ---------------------------------------------------------------------------
 // Singleton state

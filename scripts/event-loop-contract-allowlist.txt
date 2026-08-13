@@ -1,0 +1,3 @@
+# path|api|category|reason
+# Keep this file intentionally narrow. Existing sites live in the baseline;
+# only newly introduced non-hot-path exceptions belong here.

@@ -1,0 +1,37 @@
+name: Event-loop Contract Audit
+
+on:
+  pull_request:
+    paths:
+      - "platform/daemon/src/**"
+      - "scripts/audit-event-loop-contract.ts"
+      - "scripts/event-loop-contract-allowlist.txt"
+      - "scripts/event-loop-contract-baseline.json"
+      - "scripts/audit-event-loop-contract.test.ts"
+      - ".github/workflows/event-loop-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "platform/daemon/src/**"
+      - "scripts/audit-event-loop-contract.ts"
+      - "scripts/event-loop-contract-allowlist.txt"
+      - "scripts/event-loop-contract-baseline.json"
+      - "scripts/audit-event-loop-contract.test.ts"
+      - ".github/workflows/event-loop-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Reject new synchronous daemon call sites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Audit production call sites
+        run: bun scripts/audit-event-loop-contract.ts
+      - name: Test audit fixtures
+        run: bun test scripts/audit-event-loop-contract.test.ts
