@@ -150,6 +150,41 @@ export function nativeMemorySourcePermissionHealth(
 	return { status: issues.length > 0 ? "denied" : "clear", issues };
 }
 
+export function nativeMemoryReadBackoffActive(
+	source: Pick<NativeMemorySource, "harness">,
+	filePath: string,
+	agentId: string,
+): boolean {
+	const cooldownUntil = readFailureBackoffUntil.get(fingerprintKey(source, filePath, agentId));
+	return cooldownUntil !== undefined && Date.now() < cooldownUntil;
+}
+
+export function recordNativeMemoryPermissionDenied(
+	source: Pick<NativeMemorySource, "harness">,
+	filePath: string,
+	agentId: string,
+): void {
+	const key = fingerprintKey(source, filePath, agentId);
+	readFailureBackoffUntil.set(key, Date.now() + READ_FAILURE_BACKOFF_MS);
+	const issue = {
+		path: filePath,
+		guidance: `${TCC_PERMISSION_GUIDANCE} Path: ${filePath}`,
+	};
+	const firstDenied = !permissionDeniedPaths.has(key);
+	permissionDeniedPaths.set(key, issue);
+	if (firstDenied) logger.warn("watcher", issue.guidance, { path: filePath });
+}
+
+export function clearNativeMemoryPermissionDenied(
+	source: Pick<NativeMemorySource, "harness">,
+	filePath: string,
+	agentId: string,
+): void {
+	const key = fingerprintKey(source, filePath, agentId);
+	readFailureBackoffUntil.delete(key);
+	permissionDeniedPaths.delete(key);
+}
+
 export function resetNativeMemoryIndexCache(): void {
 	indexed.clear();
 	readFailureBackoffUntil.clear();
@@ -392,8 +427,8 @@ function activeBridgeSources(
 	return [...byKey.values()];
 }
 
-function fingerprintKey(source: NativeMemorySource, filePath: string, agentId: string): string {
-	return `${agentId}:${source.harness}:${filePath}`;
+function fingerprintKey(source: Pick<NativeMemorySource, "harness">, filePath: string, agentId: string): string {
+	return `${agentId}:${source.harness}:${normalizedRoot(filePath)}`;
 }
 
 function sourceStateKey(source: NativeMemorySource, agentId: string): string {

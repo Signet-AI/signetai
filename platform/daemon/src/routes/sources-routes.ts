@@ -851,8 +851,11 @@ function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceS
 	const generatedAt = new Date().toISOString();
 	try {
 		const permission =
-			source.kind === "obsidian"
-				? nativeMemorySourcePermissionHealth({ harness: "obsidian", root: source.root }, agentId)
+			source.kind === "obsidian" || source.kind === "discord"
+				? nativeMemorySourcePermissionHealth(
+						{ harness: source.kind === "discord" ? "discord" : "obsidian", root: source.root },
+						agentId,
+					)
 				: { status: "clear" as const, issues: [] };
 		const artifactSummary = artifactHealthSummary(source, agentId);
 		const discordSummary = discordHealthSummary(source, agentId);

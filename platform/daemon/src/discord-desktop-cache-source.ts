@@ -1,10 +1,16 @@
-import { type Stats, existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { type Stats, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
 import type { SignetSourceEntry } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
+import {
+	classifyNativeMemoryReadFailure,
+	clearNativeMemoryPermissionDenied,
+	nativeMemoryReadBackoffActive,
+	recordNativeMemoryPermissionDenied,
+} from "./native-memory-sources";
 import { indexSourceArtifactStructure, purgeSourceArtifactStructure } from "./source-artifact-graph";
 import type { SourceProviderSyncResult } from "./source-providers";
 
@@ -28,6 +34,7 @@ export interface DiscordDesktopCacheSyncOptions {
 	readonly cachePath: string;
 	readonly fullScan: boolean;
 	readonly shouldContinue: () => boolean;
+	readonly fileSystem?: DiscordDesktopCacheFileSystem;
 	readonly onProgress?: (event: {
 		readonly scanned: number;
 		readonly total: number;
@@ -35,6 +42,14 @@ export interface DiscordDesktopCacheSyncOptions {
 		readonly currentPath: string;
 	}) => void;
 }
+
+export interface DiscordDesktopCacheFileSystem {
+	readonly lstatSync: (path: string) => Stats;
+	readonly readdirSync: (path: string) => readonly string[];
+	readonly readFileSync: (path: string) => Buffer;
+}
+
+const defaultFileSystem: DiscordDesktopCacheFileSystem = { lstatSync, readdirSync, readFileSync };
 
 interface CacheCandidate {
 	readonly absPath: string;
@@ -151,7 +166,8 @@ export async function syncDiscordDesktopCacheSource(
 	const stats = emptyStats();
 	const snapshot = emptySnapshot();
 	const root = options.cachePath;
-	const candidates = discoverCandidates(root, options.fullScan, stats);
+	const fileSystem = options.fileSystem ?? defaultFileSystem;
+	const candidates = discoverCandidates(root, options.fullScan, stats, fileSystem, options.agentId);
 	let indexed = 0;
 	let cancelled = false;
 
@@ -160,7 +176,7 @@ export async function syncDiscordDesktopCacheSource(
 			cancelled = true;
 			break;
 		}
-		const data = readCandidateFile(candidate, stats);
+		const data = readCandidateFile(candidate, stats, fileSystem, options.agentId);
 		if (!data) continue;
 		stats.filesScanned++;
 		stats.bytesScanned += data.length;
@@ -190,20 +206,30 @@ export async function syncDiscordDesktopCacheSource(
 	return { indexed, scanned: stats.filesScanned, total: candidates.length, failures: [] };
 }
 
-function discoverCandidates(root: string, fullScan: boolean, stats: CacheStats): readonly CacheCandidate[] {
-	if (!existsSync(root)) return [];
+function discoverCandidates(
+	root: string,
+	fullScan: boolean,
+	stats: CacheStats,
+	fileSystem: DiscordDesktopCacheFileSystem,
+	agentId: string,
+): readonly CacheCandidate[] {
 	const candidates: CacheCandidate[] = [];
 	const visit = (path: string): void => {
 		let stat: Stats;
 		try {
-			stat = lstatSync(path);
-		} catch {
+			if (nativeMemoryReadBackoffActive({ harness: DISCORD_HARNESS }, path, agentId)) return;
+			stat = fileSystem.lstatSync(path);
+			clearNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, path, agentId);
+		} catch (err) {
+			if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
+				recordNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, path, agentId);
+			}
 			stats.filesSkipped++;
 			return;
 		}
 		if (stat.isDirectory()) {
 			if (path !== root && shouldSkipDir(basename(path))) return;
-			for (const entry of readDirectoryEntries(path, stats)) visit(join(path, entry));
+			for (const entry of readDirectoryEntries(path, stats, fileSystem, agentId)) visit(join(path, entry));
 			return;
 		}
 		stats.filesVisited++;
@@ -229,19 +255,41 @@ function discoverCandidates(root: string, fullScan: boolean, stats: CacheStats):
 	return candidates;
 }
 
-function readDirectoryEntries(path: string, stats: CacheStats): readonly string[] {
+function readDirectoryEntries(
+	path: string,
+	stats: CacheStats,
+	fileSystem: DiscordDesktopCacheFileSystem,
+	agentId: string,
+): readonly string[] {
+	if (nativeMemoryReadBackoffActive({ harness: DISCORD_HARNESS }, path, agentId)) return [];
 	try {
-		return readdirSync(path);
-	} catch {
+		const entries = fileSystem.readdirSync(path);
+		clearNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, path, agentId);
+		return entries;
+	} catch (err) {
+		if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
+			recordNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, path, agentId);
+		}
 		stats.filesSkipped++;
 		return [];
 	}
 }
 
-function readCandidateFile(candidate: CacheCandidate, stats: CacheStats): Buffer | null {
+function readCandidateFile(
+	candidate: CacheCandidate,
+	stats: CacheStats,
+	fileSystem: DiscordDesktopCacheFileSystem,
+	agentId: string,
+): Buffer | null {
+	if (nativeMemoryReadBackoffActive({ harness: DISCORD_HARNESS }, candidate.absPath, agentId)) return null;
 	try {
-		return readFileSync(candidate.absPath);
-	} catch {
+		const data = fileSystem.readFileSync(candidate.absPath);
+		clearNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, candidate.absPath, agentId);
+		return data;
+	} catch (err) {
+		if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
+			recordNativeMemoryPermissionDenied({ harness: DISCORD_HARNESS }, candidate.absPath, agentId);
+		}
 		stats.filesSkipped++;
 		return null;
 	}

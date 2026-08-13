@@ -1,12 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addDiscordSource } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { DISCORD_CHANNEL_TYPES } from "./discord-source-fetch";
 import { discordSourceProvider, setDiscordGatewaySocketFactoryForTest } from "./discord-source-provider";
+import { nativeMemorySourcePermissionHealth, resetNativeMemoryIndexCache } from "./native-memory-sources";
+import { syncDiscordDesktopCacheSource } from "./discord-desktop-cache-source";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
+import { logger } from "./logger";
 import { putSecret } from "./secrets";
 import { indexSourceArtifactStructure } from "./source-artifact-graph";
 
@@ -562,6 +574,70 @@ describe("discord-source-provider", () => {
 		expect(rows.some((row) => row.content.includes("later clear route message"))).toBe(true);
 		const stats = rows.find((row) => row.source_kind === "source_discord_desktop_import");
 		expect(stats?.source_meta_json).toContain('"skippedMessages":1');
+	});
+
+	it("classifies Discord Desktop cache EACCES as TCC denial and suppresses retries per path", async () => {
+		const cachePath = join(dir, "discord", "Local Storage", "leveldb");
+		mkdirSync(cachePath, { recursive: true });
+		const deniedPath = join(cachePath, "000001.log");
+		writeFileSync(deniedPath, '{"content":"permission denied cache"}');
+		const added = addDiscordSource(
+			{
+				name: "Desktop Cache",
+				desktopCachePath: join(dir, "discord"),
+				syncMode: "desktop-cache",
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		const originalPlatform = process.platform;
+		const originalWarn = logger.warn;
+		const warnCalls: string[] = [];
+		let readAttempts = 0;
+		Object.defineProperty(process, "platform", { value: "darwin" });
+		logger.warn = ((_category: unknown, message: unknown) => warnCalls.push(String(message))) as typeof logger.warn;
+		resetNativeMemoryIndexCache();
+		try {
+			const fileSystem = {
+				lstatSync,
+				readdirSync,
+				readFileSync: (path: string) => {
+					if (path === deniedPath) {
+						readAttempts++;
+						throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+					}
+					return readFileSync(path);
+				},
+			};
+			const sync = () =>
+				syncDiscordDesktopCacheSource({
+					source: added.source,
+					agentId: "default",
+					cachePath: join(dir, "discord"),
+					fullScan: true,
+					shouldContinue: () => true,
+					fileSystem,
+				});
+			await sync();
+			await sync();
+			expect(readAttempts).toBe(1);
+			expect(warnCalls.filter((message) => message.includes("Full Disk Access"))).toHaveLength(1);
+			expect(nativeMemorySourcePermissionHealth({ harness: "discord", root: added.source.root }, "default")).toEqual({
+				status: "denied",
+				issues: [
+					expect.objectContaining({
+						path: deniedPath,
+						guidance: expect.stringContaining(`Path: ${deniedPath}`),
+					}),
+				],
+			});
+		} finally {
+			logger.warn = originalWarn;
+			Object.defineProperty(process, "platform", { value: originalPlatform });
+			resetNativeMemoryIndexCache();
+		}
 	});
 
 	it("skips unreadable Discord Desktop cache files without failing the source sync", async () => {
