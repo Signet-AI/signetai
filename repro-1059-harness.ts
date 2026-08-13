@@ -173,6 +173,7 @@ try {
 	const liveLatencies: number[] = [];
 	let liveSuccessfulSamples = 0;
 	const healthLatencies: number[] = [];
+	let healthSuccessfulSamples = 0;
 	const snapshots: Array<{
 		elapsedSec: number;
 		status: number;
@@ -196,6 +197,7 @@ try {
 		liveLatencies.push(live.ms);
 		if (live.status === 200) liveSuccessfulSamples++;
 		healthLatencies.push(health.ms);
+		if (health.status === 200) healthSuccessfulSamples++;
 		let statusCounts: Record<string, number> = {};
 		const documents = await request(origin, "/api/documents?limit=500", { signal: AbortSignal.timeout(2_000) }).catch(
 			() => ({ status: 0, body: "", ms: 2_000 }),
@@ -238,6 +240,11 @@ try {
 		liveSamples: liveLatencies.length,
 		liveSuccessfulSamples,
 		liveP95Ms: Math.round(percentile(liveLatencies, 0.95)),
+		liveMaxMs: Math.round(Math.max(...liveLatencies)),
+		healthSamples: healthLatencies.length,
+		healthSuccessfulSamples,
+		healthP95Ms: Math.round(percentile(healthLatencies, 0.95)),
+		healthMaxMs: Math.round(Math.max(...healthLatencies)),
 		backlogObserved: snapshots.length > 0,
 		residualBacklog,
 	});
