@@ -916,8 +916,9 @@ describe("Bug 6: systemd unit uses dynamic runtime path", () => {
 		expect(SERVICE_SRC).toContain("function resolveRuntimePath()");
 		// systemd
 		expect(SERVICE_SRC).toMatch(/const runtimePath = resolveRuntimePath\(\)/);
-		// launchd
-		expect(SERVICE_SRC).toContain("${resolveRuntimePath()}");
+		// launchd uses the shared plist builder and resolves the runtime before passing it in.
+		expect(SERVICE_SRC).toContain("buildLaunchdPlist({");
+		expect(SERVICE_SRC).toContain("programArguments: [resolveRuntimePath(), daemonPath]");
 	});
 
 	it("resolveRuntimePath tries process.execPath first", () => {

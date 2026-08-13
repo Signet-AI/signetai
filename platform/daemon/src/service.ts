@@ -3,11 +3,11 @@
  * Handles systemd (Linux), launchd (macOS), and Windows service management
  */
 
-import { execSync, spawn } from "child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
-import { homedir, platform } from "os";
-import { join } from "path";
-import { resolveDefaultBasePath } from "@signet/core";
+import { execSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { join } from "node:path";
+import { buildLaunchdEnvironment, buildLaunchdPlist, resolveDefaultBasePath } from "@signet/core";
 
 const AGENTS_DIR = resolveDefaultBasePath();
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
@@ -123,51 +123,21 @@ function getRuntime(): string {
 // ============================================================================
 
 function generateLaunchdPlist(port: number = 3850): string {
-	const runtime = getRuntime();
 	const daemonPath = getDaemonPath();
-
-	return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>ai.signet.daemon</string>
-    
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>-c</string>
-        <string>exec &quot;$0&quot; &quot;$1&quot;</string>
-        <string>${resolveRuntimePath()}</string>
-        <string>${daemonPath}</string>
-    </array>
-    
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>SIGNET_PORT</key>
-        <string>${port}</string>
-        <key>SIGNET_PATH</key>
-        <string>${AGENTS_DIR}</string>
-        <key>PATH</key>
-        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-    </dict>
-    
-    <key>RunAtLoad</key>
-    <true/>
-    
-    <key>KeepAlive</key>
-    <true/>
-    
-    <key>StandardOutPath</key>
-    <string>${LOG_DIR}/daemon.out.log</string>
-    
-    <key>StandardErrorPath</key>
-    <string>${LOG_DIR}/daemon.err.log</string>
-    
-    <key>WorkingDirectory</key>
-    <string>${AGENTS_DIR}</string>
-</dict>
-</plist>`;
+	const environment = buildLaunchdEnvironment({
+		values: {
+			SIGNET_PORT: String(port),
+			SIGNET_PATH: AGENTS_DIR,
+		},
+	});
+	return buildLaunchdPlist({
+		label: "ai.signet.daemon",
+		programArguments: [resolveRuntimePath(), daemonPath],
+		environment,
+		workingDirectory: AGENTS_DIR,
+		standardOutPath: join(LOG_DIR, "daemon.out.log"),
+		standardErrorPath: join(LOG_DIR, "daemon.err.log"),
+	});
 }
 
 async function installLaunchd(port: number = 3850): Promise<void> {
@@ -237,7 +207,6 @@ function resolveRuntimePath(): string {
 }
 
 function generateSystemdUnit(port: number = 3850): string {
-	const runtime = getRuntime();
 	const daemonPath = getDaemonPath();
 	const runtimePath = resolveRuntimePath();
 

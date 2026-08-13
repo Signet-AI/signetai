@@ -159,6 +159,12 @@ export { loadConfiguredHarnesses, parseHarnessList } from "./harness-config";
 export { resolveSignetDaemonUrl } from "./daemon-url";
 export type { SignetDaemonUrlOptions } from "./daemon-url";
 export {
+	buildLaunchdEnvironment,
+	buildLaunchdPlist,
+	resolveLaunchdExecutable,
+} from "./launchd";
+export type { LaunchdEnvironmentInput, LaunchdPlistInput } from "./launchd";
+export {
 	composeApiUserContent,
 	escapeMemoryContextForFence,
 	StreamingMemoryContextScrubber,
