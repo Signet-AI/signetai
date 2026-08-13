@@ -292,6 +292,10 @@
         "typescript": "^5.7.0",
       },
     },
+    "libs/lifecycle-proof": {
+      "name": "@signet/lifecycle-proof",
+      "version": "0.199.29",
+    },
     "libs/sdk": {
       "name": "@signet/sdk",
       "version": "0.203.1",
@@ -1637,6 +1641,8 @@
     "@signet/docs": ["@signet/docs@workspace:web/docs"],
 
     "@signet/extension": ["@signet/extension@workspace:surfaces/browser-extension"],
+
+    "@signet/lifecycle-proof": ["@signet/lifecycle-proof@workspace:libs/lifecycle-proof"],
 
     "@signet/native": ["@signet/native@workspace:platform/native"],
 

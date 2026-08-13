@@ -42,6 +42,7 @@ setup and `plugin/` for the runtime plugin loaded by OpenCode.
 | `@signet/extension` | `surfaces/browser-extension/` |
 | `@signet/sdk` | `libs/sdk/` |
 | `@signet/connector-base` | `libs/connector-base/` |
+| `@signet/lifecycle-proof` | `libs/lifecycle-proof/` |
 | `@signet/connector-*` | `integrations/<tool>/connector/` |
 | external runtime plugins | `integrations/<tool>/plugin/` |
 | Signet-native plugins | `plugins/<scope>/<name>/` |

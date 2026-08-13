@@ -75,6 +75,8 @@ areas:
         name: "@signet/sdk"
       - path: libs/connector-base
         name: "@signet/connector-base"
+      - path: libs/lifecycle-proof
+        name: "@signet/lifecycle-proof"
 
   dist:
     purpose: "Assembled shipping artifacts."
