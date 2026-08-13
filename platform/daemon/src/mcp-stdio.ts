@@ -13,10 +13,9 @@ import { isAbsolute } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createDreamingMcpServer } from "./mcp/dreaming-tools.js";
 import { createMcpServer, refreshMarketplaceProxyTools } from "./mcp/tools.js";
+import { resolveMcpDaemonUrl } from "./mcp-stdio-url.js";
 
-const DAEMON_URL =
-	process.env.SIGNET_DAEMON_URL ??
-	`http://${process.env.SIGNET_HOST ?? "127.0.0.1"}:${process.env.SIGNET_PORT ?? "3850"}`;
+const DAEMON_URL = resolveMcpDaemonUrl();
 
 function isLocalDaemonUrl(url: string): boolean {
 	let parsed: URL;

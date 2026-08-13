@@ -1032,7 +1032,32 @@ for vector in contract["vectors"]:
 		expect(plugin).toContain("def _strip_internal_memory_context");
 	});
 
-	it("serializes claim-only session recovery for the daemon (#1243)", () => {
+	it("serializes the canonical IPv4 loopback URL when localhost resolves IPv6-first", () => {
+		const clientPath = join(import.meta.dir, "hermes-plugin", "client.py");
+		const script = `
+import importlib.util
+import os
+import sys
+
+spec = importlib.util.spec_from_file_location("signet_client", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+os.environ["SIGNET_DAEMON_URL"] = "http://localhost:3850"
+assert module.SignetClient().base_url == "http://127.0.0.1:3850"
+os.environ.pop("SIGNET_DAEMON_URL")
+os.environ["SIGNET_HOST"] = "::1"
+os.environ["SIGNET_PORT"] = "3850"
+assert module.SignetClient().base_url == "http://127.0.0.1:3850"
+`;
+
+		const result = spawnSync(process.env.PYTHON?.trim() || resolveTestPythonPath(), ["-c", script, clientPath], {
+			encoding: "utf-8",
+		});
+
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
+	it("serializes claim-only session-start recovery for the daemon (#1243)", () => {
 		const clientPath = join(import.meta.dir, "hermes-plugin", "client.py");
 		const script = String.raw`
 import importlib.util
@@ -1432,7 +1457,7 @@ assert calls == [{
 
 		expect(result.status).toBe(0);
 		expect(JSON.parse(result.stdout)).toEqual({
-			default: { auth: "Bearer review-token", base: "http://localhost:3850" },
+			default: { auth: "Bearer review-token", base: "http://127.0.0.1:3850" },
 			loopback: { auth: "Bearer review-token", base: "http://127.0.0.1:3850" },
 			remote: { auth: null, base: "https://daemon.example.test:8443" },
 			trusted_remote: { auth: "Bearer review-token", base: "https://daemon.example.test:8443" },

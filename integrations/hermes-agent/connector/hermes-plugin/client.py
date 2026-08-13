@@ -95,6 +95,19 @@ def _build_recall_request_body(
     return body
 
 
+def _normalize_loopback_host(host: str) -> str:
+    """Use the daemon's IPv4 listener for IPv6-first local aliases."""
+    normalized = host.strip().lower().strip("[]")
+    if normalized in ("localhost", "::1", "0:0:0:0:0:0:0:1"):
+        return _DEFAULT_HOST
+    return host
+
+
+def _format_host(host: str) -> str:
+    """Format a hostname or IPv6 literal for an HTTP origin."""
+    return host if host.startswith("[") or ":" not in host else f"[{host}]"
+
+
 def _normalize_base_url(raw: str, source: str) -> str:
     """Normalize a daemon URL to an origin string."""
     parsed = urllib.parse.urlparse(raw)
@@ -106,17 +119,28 @@ def _normalize_base_url(raw: str, source: str) -> str:
         raise ValueError(f"{source} must not include query strings or fragments")
     if parsed.path not in ("", "/"):
         raise ValueError(f"{source} must point at the daemon origin, not a path")
-    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+    try:
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{source} must be a valid HTTP origin") from error
+    if not hostname:
+        raise ValueError(f"{source} must include a hostname")
+    normalized_host = _normalize_loopback_host(hostname)
+    authority = _format_host(normalized_host)
+    if port is not None:
+        authority = f"{authority}:{port}"
+    return urllib.parse.urlunparse((parsed.scheme, authority, "", "", "", ""))
 
 
 def _resolve_base_url() -> str:
-    """Resolve the Signet daemon base URL."""
+    """Resolve the Signet daemon base URL using the canonical loopback policy."""
     explicit = _sanitize(os.environ.get("SIGNET_DAEMON_URL", ""))
     if explicit:
         return _normalize_base_url(explicit, "SIGNET_DAEMON_URL")
-    host = _sanitize(os.environ.get("SIGNET_HOST", _DEFAULT_HOST))
+    host = _normalize_loopback_host(_sanitize(os.environ.get("SIGNET_HOST", _DEFAULT_HOST)))
     port = _sanitize(os.environ.get("SIGNET_PORT", str(_DEFAULT_PORT)))
-    return _normalize_base_url(f"http://{host}:{port}", "SIGNET_HOST/SIGNET_PORT")
+    return _normalize_base_url(f"http://{_format_host(host)}:{port}", "SIGNET_HOST/SIGNET_PORT")
 
 
 def _is_loopback_host(host: str) -> bool:
