@@ -114,7 +114,11 @@ async function* walkDir(
 			yield* walkDir(fullPath, ignorePatterns, relativePath, dot, signal);
 		} else if (entry.isFile()) {
 			filesInDirectory += 1;
-			if (filesInDirectory > MAX_FILES_PER_DIRECTORY) continue;
+			if (filesInDirectory > MAX_FILES_PER_DIRECTORY) {
+				throw new Error(
+					`Filesystem traversal exceeded the per-directory file budget of ${MAX_FILES_PER_DIRECTORY} at ${dir}`,
+				);
+			}
 			yield fullPath;
 		}
 	}
@@ -172,7 +176,9 @@ async function* discoverFileStream(
 		if (seen.has(rel)) continue;
 		seen.add(rel);
 		matched += 1;
-		if (matched > MAX_DISCOVERED_FILES) return;
+		if (matched > MAX_DISCOVERED_FILES) {
+			throw new Error(`Filesystem traversal exceeded the total file budget of ${MAX_DISCOVERED_FILES}`);
+		}
 		if (matched <= skipResults) continue;
 		if (yielded >= maxResults) return;
 

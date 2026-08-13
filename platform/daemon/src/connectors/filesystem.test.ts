@@ -199,6 +199,26 @@ describe("globToRegex", () => {
 		}
 	});
 
+	test("filesystem discovery fails loudly instead of skipping files over the directory budget", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-fs-connector-budget-"));
+		try {
+			for (let index = 0; index < 1_001; index += 1) {
+				writeFileSync(join(root, `file-${index}.md`), "content");
+			}
+
+			await expect(
+				discoverFiles({
+					rootPath: root,
+					patterns: ["**/*.md"],
+					ignorePatterns: [],
+					maxFileSize: 1_048_576,
+				}),
+			).rejects.toThrow("per-directory file budget");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	test("*.md does not match .env", () => {
 		expect(matchGlob("**/*.md", ".env")).toBe(false);
 	});
