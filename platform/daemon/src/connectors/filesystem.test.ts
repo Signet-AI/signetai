@@ -135,6 +135,70 @@ describe("globToRegex", () => {
 		}
 	});
 
+	test("filesystem discovery yields to the event loop during a deep and wide traversal", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-fs-connector-responsive-"));
+		let timer: ReturnType<typeof setInterval> | undefined;
+		try {
+			for (let depth = 0; depth < 12; depth += 1) {
+				const directory = join(root, ...Array.from({ length: depth + 1 }, (_, index) => `d${index}`));
+				mkdirSync(directory, { recursive: true });
+				for (let index = 0; index < 20; index += 1) writeFileSync(join(directory, `file-${index}.md`), "content");
+			}
+
+			let ticks = 0;
+			timer = setInterval(() => {
+				ticks += 1;
+			}, 1);
+			const files = await discoverFiles({
+				rootPath: root,
+				patterns: ["**/*.md"],
+				ignorePatterns: [],
+				maxFileSize: 1_048_576,
+			});
+
+			expect(files.length).toBe(240);
+			expect(ticks).toBeGreaterThan(0);
+		} finally {
+			if (timer !== undefined) clearInterval(timer);
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("filesystem discovery supports bounded pages and abortable traversal", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-fs-connector-page-"));
+		try {
+			for (let index = 0; index < 8; index += 1) writeFileSync(join(root, `file-${index}.md`), "content");
+			const controller = new AbortController();
+			controller.abort();
+			await expect(
+				discoverFiles(
+					{ rootPath: root, patterns: ["**/*.md"], ignorePatterns: [], maxFileSize: 1_048_576 },
+					{ maxResults: 2, signal: controller.signal },
+				),
+			).rejects.toThrow("aborted");
+
+			const all = await discoverFiles({
+				rootPath: root,
+				patterns: ["**/*.md"],
+				ignorePatterns: [],
+				maxFileSize: 1_048_576,
+			});
+			const page = await discoverFiles(
+				{ rootPath: root, patterns: ["**/*.md"], ignorePatterns: [], maxFileSize: 1_048_576 },
+				{ maxResults: 3, skipResults: 2 },
+			);
+			expect(page).toHaveLength(3);
+			expect(page.map((file) => file.relativePath).sort()).toEqual(
+				all
+					.slice(2, 5)
+					.map((file) => file.relativePath)
+					.sort(),
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	test("*.md does not match .env", () => {
 		expect(matchGlob("**/*.md", ".env")).toBe(false);
 	});

@@ -6,8 +6,7 @@
  * embedding, and indexing are handled downstream by the document worker.
  */
 
-import type { Dirent } from "node:fs";
-import { constants, access, open, readdir, stat } from "node:fs/promises";
+import { constants, access, opendir, open, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import type {
 	ConnectorConfig,
@@ -29,6 +28,10 @@ import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 const DEFAULT_PATTERNS = ["**/*.md", "**/*.txt"];
 const DEFAULT_IGNORE = [".git", "node_modules", ".DS_Store"];
 const DEFAULT_MAX_FILE_SIZE = 1_048_576; // 1 MB
+const FILESYSTEM_LIST_PAGE_SIZE = 100;
+const DIRECTORY_ENTRIES_PER_YIELD = 64;
+const MAX_FILES_PER_DIRECTORY = 1_000;
+const MAX_DISCOVERED_FILES = 50_000;
 
 interface FilesystemSettings {
 	readonly rootPath: string;
@@ -68,20 +71,39 @@ interface DiscoveredFile {
 	readonly size: number;
 }
 
+interface DiscoveryOptions {
+	readonly maxResults?: number;
+	readonly skipResults?: number;
+	readonly signal?: AbortSignal;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+	if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Filesystem traversal aborted");
+}
+
+function parseCursor(cursor: string | undefined): number {
+	if (cursor === undefined || cursor.trim() === "") return 0;
+	const offset = Number(cursor);
+	return Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
+}
+
 async function* walkDir(
 	dir: string,
 	ignorePatterns: readonly string[],
 	relativePrefix = "",
 	dot = false,
+	signal?: AbortSignal,
 ): AsyncGenerator<string> {
-	let entries: Dirent<string>[];
+	let directory: Awaited<ReturnType<typeof opendir>>;
 	try {
-		entries = await readdir(dir, { withFileTypes: true });
+		directory = await opendir(dir);
 	} catch {
 		return;
 	}
-	const yielder = yieldEvery(100);
-	for (const entry of entries) {
+	const yielder = yieldEvery(DIRECTORY_ENTRIES_PER_YIELD);
+	let filesInDirectory = 0;
+	for await (const entry of directory) {
+		throwIfAborted(signal);
 		await yielder();
 		if (!dot && entry.name.startsWith(".")) continue;
 		const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
@@ -89,8 +111,10 @@ async function* walkDir(
 			continue;
 		const fullPath = join(dir, entry.name);
 		if (entry.isDirectory()) {
-			yield* walkDir(fullPath, ignorePatterns, relativePath, dot);
+			yield* walkDir(fullPath, ignorePatterns, relativePath, dot, signal);
 		} else if (entry.isFile()) {
+			filesInDirectory += 1;
+			if (filesInDirectory > MAX_FILES_PER_DIRECTORY) continue;
 			yield fullPath;
 		}
 	}
@@ -126,19 +150,31 @@ export function globToRegex(pattern: string): RegExp {
 	return new RegExp(`^${normalized}$`, "i");
 }
 
-export async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
+async function* discoverFileStream(
+	settings: FilesystemSettings,
+	options: DiscoveryOptions = {},
+): AsyncGenerator<DiscoveredFile> {
 	const { patterns, ignorePatterns, maxFileSize } = settings;
 	const resolvedRoot = resolve(settings.rootPath);
 	const seen = new Set<string>();
-	const results: DiscoveredFile[] = [];
+	const maxResults = options.maxResults ?? Number.POSITIVE_INFINITY;
+	const skipResults = Math.max(0, options.skipResults ?? 0);
+	let matched = 0;
+	let yielded = 0;
 
 	const wantsDot = patterns.some(patternAllowsDotSegment);
-	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns, "", wantsDot)) {
+	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns, "", wantsDot, options.signal)) {
+		throwIfAborted(options.signal);
 		const rel = relative(resolvedRoot, absolutePath);
 		if (!rel || rel.startsWith("..")) continue;
 		const matches = patterns.some((p) => matchConnectorPattern(p, rel));
 		if (!matches) continue;
 		if (seen.has(rel)) continue;
+		seen.add(rel);
+		matched += 1;
+		if (matched > MAX_DISCOVERED_FILES) return;
+		if (matched <= skipResults) continue;
+		if (yielded >= maxResults) return;
 
 		let fileStat: Awaited<ReturnType<typeof stat>>;
 		try {
@@ -156,16 +192,23 @@ export async function discoverFiles(settings: FilesystemSettings): Promise<reado
 			});
 		}
 
-		seen.add(rel);
-		results.push({
+		yielded += 1;
+		yield {
 			absolutePath,
 			relativePath: rel,
 			name: basename(rel),
 			mtime: fileStat.mtime,
 			size: fileStat.size,
-		});
+		};
 	}
+}
 
+export async function discoverFiles(
+	settings: FilesystemSettings,
+	options: DiscoveryOptions = {},
+): Promise<readonly DiscoveredFile[]> {
+	const results: DiscoveredFile[] = [];
+	for await (const file of discoverFileStream(settings, options)) results.push(file);
 	return results;
 }
 
@@ -186,17 +229,24 @@ function findDocBySourceUrl(accessor: DbAccessor, sourceUrl: string): ExistingDo
 	});
 }
 
-export async function readFileContent(file: DiscoveredFile, maxFileSize: number): Promise<string | null> {
+export async function readFileContent(
+	file: DiscoveredFile,
+	maxFileSize: number,
+	signal?: AbortSignal,
+): Promise<string | null> {
 	if (file.size > maxFileSize) return null;
 	try {
+		throwIfAborted(signal);
 		const handle = await open(file.absolutePath, "r");
 		try {
+			throwIfAborted(signal);
 			const fileStat = await handle.stat();
 			if (!fileStat.isFile() || fileStat.size > maxFileSize) return null;
 
 			const buffer = Buffer.alloc(fileStat.size);
 			let bytesRead = 0;
 			while (bytesRead < fileStat.size) {
+				throwIfAborted(signal);
 				const result = await handle.read(buffer, bytesRead, fileStat.size - bytesRead, bytesRead);
 				bytesRead += result.bytesRead;
 				if (result.bytesRead === 0) break;
@@ -341,32 +391,40 @@ class FilesystemConnector implements ConnectorRuntime {
 		}
 	}
 
-	async listResources(_cursor?: string): Promise<{
+	async listResources(cursor?: string): Promise<{
 		readonly resources: readonly ConnectorResource[];
 		readonly nextCursor?: string;
 	}> {
-		const files = await discoverFiles(this.settings);
+		const offset = parseCursor(cursor);
+		const files = await discoverFiles(this.settings, {
+			maxResults: FILESYSTEM_LIST_PAGE_SIZE + 1,
+			skipResults: offset,
+		});
+		const hasNextPage = files.length > FILESYSTEM_LIST_PAGE_SIZE;
+		const page = hasNextPage ? files.slice(0, FILESYSTEM_LIST_PAGE_SIZE) : files;
 
-		const resources: ConnectorResource[] = files.map((f) => ({
+		const resources: ConnectorResource[] = page.map((f) => ({
 			id: f.relativePath,
 			name: f.name,
 			updatedAt: f.mtime.toISOString(),
 		}));
 
-		// Filesystem listing is not paginated — return all at once
-		return { resources };
+		return {
+			resources,
+			...(hasNextPage ? { nextCursor: String(offset + FILESYSTEM_LIST_PAGE_SIZE) } : {}),
+		};
 	}
 
 	async syncIncremental(cursor: SyncCursor): Promise<SyncResult> {
 		const since = new Date(cursor.lastSyncAt);
-		const files = await discoverFiles(this.settings);
-		const changed = files.filter((f) => f.mtime > since);
-
 		let added = 0;
 		let updated = 0;
 		const errors: SyncError[] = [];
 
-		for (const file of changed) {
+		let filesChecked = 0;
+		for await (const file of discoverFileStream(this.settings)) {
+			if (file.mtime <= since) continue;
+			filesChecked += 1;
 			const result = await processFile(this.accessor, this.id, file, this.settings.maxFileSize, false);
 			added += result.added;
 			updated += result.updated;
@@ -376,7 +434,7 @@ class FilesystemConnector implements ConnectorRuntime {
 		logger.info("pipeline", "Filesystem incremental sync complete", {
 			connectorId: this.id,
 			rootPath: this.settings.rootPath,
-			filesChecked: changed.length,
+			filesChecked,
 			added,
 			updated,
 			errors: errors.length,
@@ -392,13 +450,13 @@ class FilesystemConnector implements ConnectorRuntime {
 	}
 
 	async syncFull(): Promise<SyncResult> {
-		const files = await discoverFiles(this.settings);
-
 		let added = 0;
 		let updated = 0;
 		const errors: SyncError[] = [];
 
-		for (const file of files) {
+		let filesTotal = 0;
+		for await (const file of discoverFileStream(this.settings)) {
+			filesTotal += 1;
 			const result = await processFile(this.accessor, this.id, file, this.settings.maxFileSize, true);
 			added += result.added;
 			updated += result.updated;
@@ -408,7 +466,7 @@ class FilesystemConnector implements ConnectorRuntime {
 		logger.info("pipeline", "Filesystem full sync complete", {
 			connectorId: this.id,
 			rootPath: this.settings.rootPath,
-			filesTotal: files.length,
+			filesTotal,
 			added,
 			updated,
 			errors: errors.length,
