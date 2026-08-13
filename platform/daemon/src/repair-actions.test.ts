@@ -1016,6 +1016,134 @@ describe("reembedMissingMemories", () => {
 		expect(after).toEqual(before);
 	});
 
+	it("skips stale vectors when content changes during provider work", async () => {
+		insertMemory(db, "mem-content-race");
+		let providerStarted!: () => void;
+		const providerReady = new Promise<void>((resolve) => {
+			providerStarted = resolve;
+		});
+		let releaseProvider!: () => void;
+		const providerReleased = new Promise<void>((resolve) => {
+			releaseProvider = resolve;
+		});
+
+		const repair = reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_DAEMON,
+			createRateLimiter(),
+			async () => {
+				providerStarted();
+				await providerReleased;
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			1,
+		);
+
+		await providerReady;
+		const changedHash = normalizeAndHashContent("new content for mem-content-race").contentHash;
+		db.prepare("UPDATE memories SET content = ?, content_hash = ? WHERE id = ?").run(
+			"new content for mem-content-race",
+			changedHash,
+			"mem-content-race",
+		);
+		releaseProvider();
+
+		const result = await repair;
+		expect(result.success).toBe(false);
+		expect(result.affected).toBe(0);
+		expect(result.message).toMatch(/re-embedded 0/);
+		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-content-race")).toBeNull();
+	});
+
+	it("does not overwrite another agent's embedding on migration hash conflict", async () => {
+		const migrationDb = new Database(":memory:");
+		runMigrations(migrationDb as unknown as Parameters<typeof runMigrations>[0]);
+		ensureVecTable(migrationDb);
+		const migrationAccessor = asAccessor(migrationDb);
+		const now = new Date().toISOString();
+		migrationDb
+			.prepare(
+				`INSERT INTO memories (id, content, content_hash, agent_id, embedding_model, type, created_at, updated_at, updated_by)
+			 VALUES ('migration-agent-a', 'agent a content', 'shared-migration-hash', 'agent-a', 'model-a', 'fact', ?, ?, 'test')`,
+			)
+			.run(now, now);
+		insertEmbedding(migrationDb, {
+			id: "emb-agent-b",
+			contentHash: "shared-migration-hash",
+			sourceId: "agent-b-memory",
+			vector: [0.9, 0.8, 0.7],
+			agentId: "agent-b",
+		});
+		migrationAccessor.withWriteTx((writeDb) =>
+			ensureEmbeddingIndexState(writeDb, { ...TEST_EMBEDDING_CFG, model: "model-b" }),
+		);
+		const before = migrationDb
+			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-agent-b'")
+			.get();
+
+		const result = await reembedModelMigration(
+			migrationAccessor,
+			TEST_CFG,
+			CTX_DAEMON,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			{ ...TEST_EMBEDDING_CFG, model: "model-b" },
+			"agent-a",
+			10,
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.affected).toBe(0);
+		expect(result.message).toMatch(/cross-agent hash conflict/);
+		expect(migrationDb.prepare("SELECT embedding_model FROM memories WHERE id = 'migration-agent-a'").get()).toEqual({
+			embedding_model: "model-a",
+		});
+		expect(
+			migrationDb
+				.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-agent-b'")
+				.get(),
+		).toEqual(before);
+		migrationDb.close();
+	});
+
+	it("persists agent_id on new migration embeddings", async () => {
+		const migrationDb = new Database(":memory:");
+		runMigrations(migrationDb as unknown as Parameters<typeof runMigrations>[0]);
+		ensureVecTable(migrationDb);
+		const migrationAccessor = asAccessor(migrationDb);
+		const now = new Date().toISOString();
+		migrationDb
+			.prepare(
+				`INSERT INTO memories (id, content, content_hash, agent_id, embedding_model, type, created_at, updated_at, updated_by)
+			 VALUES ('migration-agent-a-new', 'agent a content', 'agent-a-migration-hash', 'agent-a', 'model-a', 'fact', ?, ?, 'test')`,
+			)
+			.run(now, now);
+		const target = { ...TEST_EMBEDDING_CFG, model: "model-b" };
+		migrationAccessor.withWriteTx((writeDb) => ensureEmbeddingIndexState(writeDb, target));
+
+		const result = await reembedModelMigration(
+			migrationAccessor,
+			TEST_CFG,
+			CTX_DAEMON,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			target,
+			"agent-a",
+			10,
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(
+			migrationDb.prepare("SELECT agent_id FROM embeddings WHERE content_hash = ?").get("agent-a-migration-hash"),
+		).toEqual({
+			agent_id: "agent-a",
+		});
+		migrationDb.close();
+	});
+
 	it("skips stale vectors when promotion happens during provider work", async () => {
 		insertMemory(db, "mem-promotion-race");
 		accessor.withWriteTx((writeDb) => ensureEmbeddingIndexState(writeDb, TEST_EMBEDDING_CFG));

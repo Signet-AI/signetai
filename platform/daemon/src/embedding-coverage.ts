@@ -39,7 +39,7 @@ export function listEmbeddingMigrationRows(
 ): ReadonlyArray<MigrationEmbeddingRow> {
 	return db
 		.prepare(
-			`SELECT m.id, m.content, m.content_hash AS contentHash, m.embedding_model AS currentModel,
+			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId, m.embedding_model AS currentModel,
 				(SELECT e.dimensions FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id LIMIT 1) AS currentDimensions
 			 FROM memories m WHERE ${migrationWhere}
 			 ORDER BY m.updated_at ASC LIMIT ?`,
