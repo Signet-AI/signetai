@@ -739,6 +739,86 @@ function readManagedDaemonProcess(pid: number): boolean {
 	return cmd !== null && matchesDaemon(cmd, daemonPaths());
 }
 
+function readProcessGroupId(pid: number): number | null {
+	if (process.platform === "win32") return null;
+	try {
+		const result = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], {
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+			windowsHide: true,
+		});
+		if (result.status !== 0) return null;
+		const groupId = Number.parseInt(result.stdout.trim(), 10);
+		return Number.isInteger(groupId) && groupId > 1 ? groupId : null;
+	} catch {
+		return null;
+	}
+}
+
+function readOwnedProcessGroupId(pid: number): number | null {
+	const groupId = readProcessGroupId(pid);
+	// Detached daemon spawns are process-group leaders. Never signal a group
+	// unless the pid still owns that group, or a reused pid could kill unrelated
+	// processes in the caller's group.
+	return groupId === pid ? groupId : null;
+}
+
+function isProcessGroupAlive(groupId: number): boolean {
+	try {
+		const result = spawnSync("ps", ["-o", "stat=", "-g", String(groupId)], {
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+			windowsHide: true,
+		});
+		if (result.status !== 0) return false;
+		const states = result.stdout
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((state) => state.length > 0);
+		return states.some((state) => !state.startsWith("Z"));
+	} catch {
+		return false;
+	}
+}
+
+async function waitForProcessGroupExit(groupId: number): Promise<boolean> {
+	for (let i = 0; i < 8; i += 1) {
+		if (!isProcessGroupAlive(groupId)) return true;
+		await sleep(250);
+	}
+	return !isProcessGroupAlive(groupId);
+}
+
+export async function stopManagedDaemonProcess(pid: number): Promise<void> {
+	const groupId = readOwnedProcessGroupId(pid);
+	try {
+		process.kill(groupId === null ? pid : -groupId, "SIGTERM");
+	} catch {
+		// Process might already be dead.
+	}
+
+	if (groupId !== null) {
+		if (!(await waitForProcessGroupExit(groupId))) {
+			try {
+				process.kill(-groupId, "SIGKILL");
+			} catch {
+				// Process group already gone.
+			}
+			await waitForProcessGroupExit(groupId);
+		}
+		return;
+	}
+
+	const leaderExited = await waitForPidExit(pid);
+	if (!leaderExited) {
+		try {
+			process.kill(pid, "SIGKILL");
+		} catch {
+			// Process might already be dead.
+		}
+	}
+}
+
 export function readManagedDaemonPid(agentsDir: string = AGENTS_DIR, deps: DaemonProbeDeps = {}): number | null {
 	const path = pidFile(agentsDir);
 	if (!existsSync(path)) {
@@ -1390,28 +1470,7 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: 
 		pids.add(pid);
 	}
 
-	for (const pid of pids) {
-		try {
-			process.kill(pid, "SIGTERM");
-		} catch {
-			// Ignore.
-		}
-	}
-
-	for (const pid of pids) {
-		const exited = await waitForPidExit(pid);
-		if (!exited) {
-			try {
-				process.kill(pid, "SIGKILL");
-			} catch {
-				// Ignore.
-			}
-		}
-	}
-
-	for (const pid of pids) {
-		await waitForPidExit(pid);
-	}
+	for (const pid of pids) await stopManagedDaemonProcess(pid);
 
 	const path = pidFile(agentsDir);
 	if (existsSync(path)) {

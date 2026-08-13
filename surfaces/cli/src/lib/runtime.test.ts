@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,6 +22,7 @@ import {
 	resolveDaemonLaunchCommand,
 	resolveDaemonPaths,
 	resolveDaemonRuntimeCommand,
+	stopManagedDaemonProcess,
 	waitForDaemonLiveness,
 } from "./runtime.js";
 
@@ -446,6 +449,74 @@ describe("readManagedDaemonPid", () => {
 		expect(existsSync(path)).toBe(false);
 
 		rmSync(root, { recursive: true, force: true });
+	});
+});
+
+describe("stopManagedDaemonProcess", () => {
+	it("terminates the detached process group and releases a child-held port", async () => {
+		const port = 39871;
+		const holderScript = [
+			'const net = require("node:net");',
+			"const server = net.createServer();",
+			'server.listen(Number(process.env.SIGNET_TEST_PORT), "127.0.0.1");',
+			"setInterval(() => {}, 1000);",
+		].join(" ");
+		const leaderScript = [
+			'const { spawn } = require("node:child_process");',
+			`spawn(process.execPath, ["-e", ${JSON.stringify(holderScript)}], { env: { ...process.env, SIGNET_TEST_PORT: process.env.SIGNET_TEST_PORT }, stdio: "ignore" });`,
+			'setTimeout(() => process.stdout.write("ready\\n"), 100);',
+			"setInterval(() => {}, 1000);",
+		].join(" ");
+		const child = spawn(process.execPath, ["-e", leaderScript], {
+			detached: true,
+			stdio: ["ignore", "pipe", "ignore"],
+			env: { ...process.env, SIGNET_TEST_PORT: String(port) },
+		});
+		if (typeof child.pid !== "number") throw new Error("detached child did not expose a pid");
+
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const deadline = setTimeout(() => reject(new Error("child did not start")), 5000);
+				child.stdout?.once("data", () => {
+					clearTimeout(deadline);
+					resolve();
+				});
+				child.once("error", reject);
+			});
+
+			await new Promise<void>((resolve, reject) => {
+				const deadline = setTimeout(() => reject(new Error("child did not bind the test port")), 5000);
+				const probe = (): void => {
+					const socket = connect({ host: "127.0.0.1", port });
+					socket.once("connect", () => {
+						clearTimeout(deadline);
+						socket.destroy();
+						resolve();
+					});
+					socket.once("error", () => {
+						socket.destroy();
+						setTimeout(probe, 25);
+					});
+				};
+				probe();
+			});
+
+			await stopManagedDaemonProcess(child.pid);
+
+			await new Promise<void>((resolve, reject) => {
+				const socket = connect({ host: "127.0.0.1", port });
+				socket.once("error", () => {
+					socket.destroy();
+					resolve();
+				});
+				socket.once("connect", () => {
+					socket.destroy();
+					reject(new Error("detached child still holds the port"));
+				});
+			});
+		} finally {
+			if (child.exitCode === null) child.kill("SIGKILL");
+		}
 	});
 });
 
