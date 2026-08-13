@@ -9,6 +9,18 @@ import { dashboardRoot, iconPath, preloadPath } from "./paths.js";
 import { daemonRouteTarget, isDaemonRouteUrl } from "./protocol-routes.js";
 import { DesktopTray } from "./tray.js";
 import { applyDesktopWorkspaceEnv, resolveDesktopWorkspace } from "./workspace.js";
+import { installSingleInstanceLock } from "./single-instance.js";
+
+const hasSingleInstanceLock = installSingleInstanceLock(
+	{
+		requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
+		quit: () => app.quit(),
+		onSecondInstance: (listener) => {
+			app.on("second-instance", listener);
+		},
+	},
+	showDashboard,
+);
 
 const workspace = applyDesktopWorkspaceEnv(resolveDesktopWorkspace());
 const daemon = new DaemonManager({ workspacePath: workspace.path });
@@ -357,6 +369,7 @@ protocol.registerSchemesAsPrivileged([
 app.setName("Signet");
 
 app.whenReady().then(async () => {
+	if (!hasSingleInstanceLock) return;
 	Menu.setApplicationMenu(null);
 	if (process.platform === "darwin" && app.dock) {
 		app.dock.setIcon(iconPath("icon.png"));
