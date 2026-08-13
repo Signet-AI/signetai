@@ -414,6 +414,6 @@ jobs:
       - name: Publish release
         # Undraft after release assets, manifest checks, and required npm
         # packages are all published.
-        run: gh release edit "v${NEW_VERSION}" --draft=false
+        run: scripts/retry-github-release.sh gh release edit "v${NEW_VERSION}" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

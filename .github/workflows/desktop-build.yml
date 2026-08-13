@@ -316,9 +316,10 @@ jobs:
 
       - name: Publish release assets
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          release_files=(
             surfaces/desktop/release/*.dmg
             surfaces/desktop/release/*.zip
             surfaces/desktop/release/*.AppImage
@@ -326,6 +327,20 @@ jobs:
             surfaces/desktop/release/*.exe
             surfaces/desktop/release/*.blockmap
             surfaces/desktop/release/latest*.yml
+          )
+          if [ "${#release_files[@]}" -eq 0 ]; then
+            echo "::error::No desktop release assets found"
+            exit 1
+          fi
+          scripts/retry-github-release.sh gh release upload "${GITHUB_REF_NAME}" "${release_files[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Finalize GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: scripts/retry-github-release.sh gh release edit "${GITHUB_REF_NAME}" --draft=false --repo "${GITHUB_REPOSITORY}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   validate-aur:
     needs: build
