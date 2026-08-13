@@ -25,7 +25,7 @@ export interface MigrationEmbeddingSource {
 	readonly count: number;
 }
 
-const migrationWhere = `m.agent_id = ? AND m.is_deleted = 0 AND m.content_hash IS NOT NULL AND trim(m.content_hash) <> ''
+const migrationWhere = `COALESCE(NULLIF(m.agent_id, ''), 'default') = ? AND m.is_deleted = 0 AND m.content_hash IS NOT NULL AND trim(m.content_hash) <> ''
 			 AND (? = 1 OR m.embedding_model IS NULL OR m.embedding_model <> ? OR NOT EXISTS (
 			 SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id AND e.dimensions = ?))`;
 

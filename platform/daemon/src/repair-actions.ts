@@ -709,6 +709,11 @@ export function getEmbeddingRepairStats(
 
 const DEFAULT_REEMBED_BATCH = 50;
 
+function normalizeRepairAgentId(agentId: string | null | undefined): string {
+	const trimmed = agentId?.trim();
+	return trimmed && trimmed.length > 0 ? trimmed : "default";
+}
+
 interface ReembedBatchOutcome {
 	readonly selected: number;
 	readonly written: number;
@@ -811,12 +816,16 @@ async function reembedMissingMemoriesBatch(
 				stale++;
 				continue;
 			}
+			if (normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(memory.agentId)) {
+				stale++;
+				continue;
+			}
 
 			const contentHash =
 				typeof current.content_hash === "string" && current.content_hash.trim().length > 0
 					? current.content_hash
 					: normalizeAndHashContent(current.content).contentHash;
-			const memoryAgentId = current.agent_id ?? agentId ?? "default";
+			const memoryAgentId = normalizeRepairAgentId(current.agent_id ?? agentId);
 
 			// Write computed hash back to the memories row when it was NULL.
 			// Without this, the embedding-coverage queries can never use the
@@ -833,7 +842,7 @@ async function reembedMissingMemoriesBatch(
 			// become cross-agent data corruption.
 			const existing = readEmbeddingByHash.get(contentHash) as { id: string; agent_id: string | null } | undefined;
 			if (existing) {
-				const existingAgentId = existing.agent_id ?? "default";
+				const existingAgentId = normalizeRepairAgentId(existing.agent_id);
 				if (existingAgentId !== memoryAgentId) continue;
 			}
 
@@ -858,16 +867,7 @@ async function reembedMissingMemoriesBatch(
 					   chunk_text = excluded.chunk_text,
 					   created_at = excluded.created_at`,
 				)
-				.run(
-					embId,
-					contentHash,
-					blob,
-					vector.length,
-					memory.id,
-					memory.content,
-					now,
-					memory.agentId ?? agentId ?? "default",
-				);
+				.run(embId, contentHash, blob, vector.length, memory.id, memory.content, now, memoryAgentId);
 			// Resolve actual embedding ID (may differ from embId on conflict)
 			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 				| { id: string }
@@ -1120,6 +1120,7 @@ export async function reembedModelMigration(
 	let written = 0;
 	let failed = 0;
 	let contentChanged = 0;
+	let ownershipChanged = 0;
 	let crossAgentConflict = 0;
 	let profileChanged = false;
 	for (const row of rows) {
@@ -1140,30 +1141,71 @@ export async function reembedModelMigration(
 		}
 		try {
 			const writeOutcome = accessor.withWriteTx(
-				(db): { wrote: boolean; profileChanged: boolean; contentChanged: boolean; crossAgentConflict: boolean } => {
+				(
+					db,
+				): {
+					wrote: boolean;
+					profileChanged: boolean;
+					contentChanged: boolean;
+					ownershipChanged: boolean;
+					crossAgentConflict: boolean;
+				} => {
 					// Provider work happens outside the transaction. Promotion can therefore
 					// change the active vector space while this row is being encoded.
 					// Never commit a vector or model marker from the superseded profile.
 					if (!isActiveEmbeddingConfig(db, embeddingCfg))
-						return { wrote: false, profileChanged: true, contentChanged: false, crossAgentConflict: false };
+						return {
+							wrote: false,
+							profileChanged: true,
+							contentChanged: false,
+							ownershipChanged: false,
+							crossAgentConflict: false,
+						};
 					const current = db
 						.prepare("SELECT content, content_hash, agent_id FROM memories WHERE id = ? AND is_deleted = 0")
 						.get(row.id) as { content: string; content_hash: string | null; agent_id: string | null } | null;
 					if (!current)
-						return { wrote: false, profileChanged: false, contentChanged: false, crossAgentConflict: false };
+						return {
+							wrote: false,
+							profileChanged: false,
+							contentChanged: false,
+							ownershipChanged: false,
+							crossAgentConflict: false,
+						};
 					// The provider encoded row.content before this transaction. If the
 					// memory changed while it awaited the provider, its vector belongs to
 					// the old row version and must not be committed under the new one.
 					if (current.content_hash !== row.contentHash || current.content !== row.content) {
-						return { wrote: false, profileChanged: false, contentChanged: true, crossAgentConflict: false };
+						return {
+							wrote: false,
+							profileChanged: false,
+							contentChanged: true,
+							ownershipChanged: false,
+							crossAgentConflict: false,
+						};
 					}
-					const memoryAgentId = current.agent_id ?? row.agentId ?? agentId;
+					if (normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(row.agentId)) {
+						return {
+							wrote: false,
+							profileChanged: false,
+							contentChanged: false,
+							ownershipChanged: true,
+							crossAgentConflict: false,
+						};
+					}
+					const memoryAgentId = normalizeRepairAgentId(current.agent_id ?? agentId);
 					const id = crypto.randomUUID();
 					const existing = db
 						.prepare("SELECT agent_id FROM embeddings WHERE content_hash = ? LIMIT 1")
 						.get(current.content_hash) as { agent_id: string | null } | null;
-					if (existing != null && (existing.agent_id ?? "default") !== (memoryAgentId ?? "default"))
-						return { wrote: false, profileChanged: false, contentChanged: false, crossAgentConflict: true };
+					if (existing != null && normalizeRepairAgentId(existing.agent_id) !== memoryAgentId)
+						return {
+							wrote: false,
+							profileChanged: false,
+							contentChanged: false,
+							ownershipChanged: false,
+							crossAgentConflict: true,
+						};
 					db.prepare(
 						`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now'), ?) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
 					).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content, memoryAgentId);
@@ -1171,10 +1213,22 @@ export async function reembedModelMigration(
 						| { id: string }
 						| undefined;
 					if (!embedding)
-						return { wrote: false, profileChanged: false, contentChanged: false, crossAgentConflict: false };
+						return {
+							wrote: false,
+							profileChanged: false,
+							contentChanged: false,
+							ownershipChanged: false,
+							crossAgentConflict: false,
+						};
 					syncVecInsert(db, embedding.id, vector);
 					db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
-					return { wrote: true, profileChanged: false, contentChanged: false, crossAgentConflict: false };
+					return {
+						wrote: true,
+						profileChanged: false,
+						contentChanged: false,
+						ownershipChanged: false,
+						crossAgentConflict: false,
+					};
 				},
 			);
 			if (writeOutcome.profileChanged) {
@@ -1183,6 +1237,10 @@ export async function reembedModelMigration(
 			}
 			if (writeOutcome.contentChanged) {
 				contentChanged++;
+				continue;
+			}
+			if (writeOutcome.ownershipChanged) {
+				ownershipChanged++;
 				continue;
 			}
 			if (writeOutcome.crossAgentConflict) {
@@ -1201,8 +1259,8 @@ export async function reembedModelMigration(
 	const message = `re-embedded ${written} of ${rows.length} selected memories${
 		failed > 0 ? ` (${failed} failed)` : ""
 	}${contentChanged > 0 ? ` (${contentChanged} changed during provider work)` : ""}${
-		crossAgentConflict > 0 ? ` (${crossAgentConflict} cross-agent hash conflict(s) skipped)` : ""
-	}`;
+		ownershipChanged > 0 ? ` (${ownershipChanged} ownership change(s) during provider work)` : ""
+	}${crossAgentConflict > 0 ? ` (${crossAgentConflict} cross-agent hash conflict(s) skipped)` : ""}`;
 	if (profileChanged) {
 		return {
 			action,
@@ -1210,7 +1268,7 @@ export async function reembedModelMigration(
 			affected: written,
 			message: "embedding profile changed during provider work; skipped stale migration vectors",
 			totalMatching,
-			details: { ...details, failed, contentChanged, crossAgentConflict },
+			details: { ...details, failed, contentChanged, ownershipChanged, crossAgentConflict },
 		};
 	}
 	if (written > 0) {
@@ -1227,11 +1285,11 @@ export async function reembedModelMigration(
 	}
 	return {
 		action,
-		success: failed === 0 && contentChanged === 0 && crossAgentConflict === 0,
+		success: failed === 0 && contentChanged === 0 && ownershipChanged === 0 && crossAgentConflict === 0,
 		affected: written,
 		message,
 		totalMatching,
-		details: { ...details, failed, contentChanged },
+		details: { ...details, failed, contentChanged, ownershipChanged, crossAgentConflict },
 	};
 }
 

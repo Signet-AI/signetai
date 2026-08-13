@@ -1057,6 +1057,61 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-content-race")).toBeNull();
 	});
 
+	it("skips stale vectors when ownership changes during provider work", async () => {
+		insertMemory(db, "mem-agent-race", "agent-a");
+		let providerStarted!: () => void;
+		const providerReady = new Promise<void>((resolve) => {
+			providerStarted = resolve;
+		});
+		let releaseProvider!: () => void;
+		const providerReleased = new Promise<void>((resolve) => {
+			releaseProvider = resolve;
+		});
+
+		const repair = reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_DAEMON,
+			createRateLimiter(),
+			async () => {
+				providerStarted();
+				await providerReleased;
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			1,
+		);
+
+		await providerReady;
+		db.prepare("UPDATE memories SET agent_id = ? WHERE id = ?").run("agent-b", "mem-agent-race");
+		releaseProvider();
+
+		const result = await repair;
+		expect(result.success).toBe(false);
+		expect(result.affected).toBe(0);
+		expect(result.message).toMatch(/changed during provider work/);
+		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-agent-race")).toBeNull();
+	});
+
+	it("normalizes an empty memory agent_id on missing-memory repair", async () => {
+		insertMemory(db, "mem-empty-agent", "");
+
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_DAEMON,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			1,
+		);
+
+		expect(result.success).toBe(true);
+		expect(db.prepare("SELECT agent_id FROM embeddings WHERE source_id = ?").get("mem-empty-agent")).toEqual({
+			agent_id: "default",
+		});
+	});
+
 	it("does not overwrite another agent's embedding on migration hash conflict", async () => {
 		const migrationDb = new Database(":memory:");
 		runMigrations(migrationDb as unknown as Parameters<typeof runMigrations>[0]);
@@ -1141,6 +1196,39 @@ describe("reembedMissingMemories", () => {
 		).toEqual({
 			agent_id: "agent-a",
 		});
+		migrationDb.close();
+	});
+
+	it("normalizes an empty memory agent_id on migration repair", async () => {
+		const migrationDb = new Database(":memory:");
+		runMigrations(migrationDb as unknown as Parameters<typeof runMigrations>[0]);
+		ensureVecTable(migrationDb);
+		const migrationAccessor = asAccessor(migrationDb);
+		const now = new Date().toISOString();
+		migrationDb
+			.prepare(
+				`INSERT INTO memories (id, content, content_hash, agent_id, embedding_model, type, created_at, updated_at, updated_by)
+				 VALUES ('migration-empty-agent', 'empty agent content', 'empty-agent-hash', '', 'model-a', 'fact', ?, ?, 'test')`,
+			)
+			.run(now, now);
+		const target = { ...TEST_EMBEDDING_CFG, model: "model-b" };
+		migrationAccessor.withWriteTx((writeDb) => ensureEmbeddingIndexState(writeDb, target));
+
+		const result = await reembedModelMigration(
+			migrationAccessor,
+			TEST_CFG,
+			CTX_DAEMON,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			target,
+			"default",
+			10,
+		);
+
+		expect(result.success).toBe(true);
+		expect(
+			migrationDb.prepare("SELECT agent_id FROM embeddings WHERE content_hash = ?").get("empty-agent-hash"),
+		).toEqual({ agent_id: "default" });
 		migrationDb.close();
 	});
 
