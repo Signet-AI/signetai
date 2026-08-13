@@ -401,11 +401,30 @@ async function buildUnreachableDaemonProbe(agentsDir: string): Promise<DaemonHea
 	};
 }
 
-export async function getReachableDaemonUrls(): Promise<string[]> {
-	const checks = await Promise.all(
-		DAEMON_BASE_URLS.map(async (baseUrl) => ((await isDaemonHealthyAt(baseUrl)) ? baseUrl : null)),
-	);
-	return checks.flatMap((url) => (url === null ? [] : [url]));
+let reachableDaemonUrlsFlight: Promise<string[]> | null = null;
+
+/**
+ * Probe daemon listeners at most once while a result is in flight. Several CLI
+ * startup/status paths ask the same question concurrently. Without this
+ * single-flight boundary, each caller starts another pair of health requests
+ * and the resulting probe storm can keep the CLI's event loop busy while the
+ * daemon is starting.
+ */
+export function getReachableDaemonUrls(): Promise<string[]> {
+	if (reachableDaemonUrlsFlight !== null) return reachableDaemonUrlsFlight;
+
+	const flight = (async (): Promise<string[]> => {
+		const checks = await Promise.all(
+			DAEMON_BASE_URLS.map(async (baseUrl) => ((await isDaemonHealthyAt(baseUrl)) ? baseUrl : null)),
+		);
+		return checks.flatMap((url) => (url === null ? [] : [url]));
+	})();
+	reachableDaemonUrlsFlight = flight;
+	const clearFlight = (): void => {
+		if (reachableDaemonUrlsFlight === flight) reachableDaemonUrlsFlight = null;
+	};
+	void flight.then(clearFlight, clearFlight);
+	return flight;
 }
 
 async function getDaemonInstances(): Promise<DaemonInstance[]> {
@@ -579,8 +598,8 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 }
 
 export async function isDaemonRunning(): Promise<boolean> {
-	const urls = await getReachableDaemonUrls();
-	return urls.length > 0;
+	const checks = await Promise.all(DAEMON_BASE_URLS.map((baseUrl) => isDaemonAliveAt(baseUrl)));
+	return checks.some((reachable) => reachable);
 }
 
 function normalizeCmd(value: string): string {
@@ -740,7 +759,7 @@ export async function hasDaemonProcess(agentsDir: string = AGENTS_DIR): Promise<
 	return readManagedDaemonPid(agentsDir) !== null || findMarkedDaemonProcessPids().length > 0;
 }
 
-export async function getDaemonStatus(): Promise<{
+async function readDaemonStatus(): Promise<{
 	running: boolean;
 	pid: number | null;
 	uptime: number | null;
@@ -801,6 +820,21 @@ export async function getDaemonStatus(): Promise<{
 		probe,
 		openclaw: null,
 	};
+}
+
+let daemonStatusFlight: Promise<Awaited<ReturnType<typeof readDaemonStatus>>> | null = null;
+
+/** Coalesce concurrent status requests so startup cannot amplify daemon probes. */
+export function getDaemonStatus(): Promise<Awaited<ReturnType<typeof readDaemonStatus>>> {
+	if (daemonStatusFlight !== null) return daemonStatusFlight;
+
+	const flight = readDaemonStatus();
+	daemonStatusFlight = flight;
+	const clearFlight = (): void => {
+		if (daemonStatusFlight === flight) daemonStatusFlight = null;
+	};
+	void flight.then(clearFlight, clearFlight);
+	return flight;
 }
 
 export interface DaemonStartArgsInput {

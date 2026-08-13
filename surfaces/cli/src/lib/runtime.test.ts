@@ -11,6 +11,7 @@ import {
 	didSystemdDaemonStart,
 	getDaemonStatus,
 	isDaemonEntrypointEnvironment,
+	isDaemonRunning,
 	isLaunchdDaemonLoaded,
 	launchdDaemonPlistPath,
 	macOSLaunchAgentAttributionNotice,
@@ -448,6 +449,53 @@ describe("readManagedDaemonPid", () => {
 });
 
 describe("getDaemonStatus", () => {
+	it("single-flights concurrent daemon status probes", async () => {
+		let healthRequests = 0;
+		let statusRequests = 0;
+		const healthResolvers: Array<(response: Response) => void> = [];
+		globalThis.fetch = (async (input: string | URL) => {
+			const url = String(input);
+			if (url.endsWith("/health")) {
+				healthRequests += 1;
+				return new Promise<Response>((resolve) => {
+					healthResolvers.push(resolve);
+				});
+			}
+			if (url.endsWith("/api/status")) {
+				statusRequests += 1;
+				return Response.json({ pid: 42, uptime: 10, version: "0.199.32" });
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const first = getDaemonStatus();
+		const second = getDaemonStatus();
+		expect(first).toBe(second);
+		await Promise.resolve();
+		expect(healthRequests).toBe(2);
+		expect(statusRequests).toBe(0);
+		expect(healthResolvers).toHaveLength(2);
+		for (const resolve of healthResolvers) resolve(new Response("ok", { status: 200 }));
+		const [firstStatus, secondStatus] = await Promise.all([first, second]);
+		expect(firstStatus.running).toBe(true);
+		expect(secondStatus.running).toBe(true);
+		expect(statusRequests).toBe(2);
+	});
+
+	it("uses liveness for startup checks without waiting on metadata health", async () => {
+		const requests: string[] = [];
+		globalThis.fetch = (async (input: string | URL) => {
+			const url = String(input);
+			requests.push(url);
+			if (url.endsWith("/health/live")) return new Response("ok", { status: 200 });
+			return new Response("unexpected probe", { status: 500 });
+		}) as typeof fetch;
+
+		expect(await isDaemonRunning()).toBe(true);
+		expect(requests).toHaveLength(2);
+		expect(requests.every((url) => url.endsWith("/health/live"))).toBe(true);
+	});
+
 	it("parses extraction provider degradation from /api/status", async () => {
 		globalThis.fetch = async (input: string | URL) => {
 			const url = String(input);
