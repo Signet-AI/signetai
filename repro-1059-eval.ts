@@ -17,6 +17,7 @@ export type HarnessEvaluationInput = Readonly<{
 	healthP95Ms: number;
 	healthMaxMs: number;
 	backlogObserved: boolean;
+	backlogSamples: readonly number[];
 	residualBacklog: number | null;
 }>;
 
@@ -28,6 +29,7 @@ export type HarnessEvaluation = Readonly<{
 		livenessWithinBound: boolean;
 		healthWithinBound: boolean;
 		backlogMeasured: boolean;
+		backlogNonIncreasing: boolean;
 	}>;
 	backlogDrained: boolean | null;
 }>;
@@ -64,6 +66,10 @@ export function evaluate(input: HarnessEvaluationInput): HarnessEvaluation {
 			input.healthP95Ms <= MAX_HEALTH_P95_MS &&
 			input.healthMaxMs <= MAX_HEALTH_MS,
 		backlogMeasured: input.backlogObserved && input.residualBacklog !== null,
+		backlogNonIncreasing:
+			input.backlogObserved &&
+			input.backlogSamples.length > 0 &&
+			input.backlogSamples.every((value, index) => index === 0 || value <= (input.backlogSamples[index - 1] ?? value)),
 	};
 	return {
 		pass: Object.values(checks).every(Boolean),

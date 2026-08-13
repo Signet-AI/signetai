@@ -10,7 +10,7 @@ describe("sustained-ingestion harness evaluation", () => {
 		});
 	});
 
-	test("requires measurable backlog evidence while keeping drain separate from liveness", () => {
+	test("requires a non-increasing backlog while allowing a residual queue", () => {
 		const result = evaluate({
 			expectedSubmissions: 180,
 			posted: 180,
@@ -25,12 +25,38 @@ describe("sustained-ingestion harness evaluation", () => {
 			healthP95Ms: 4,
 			healthMaxMs: 4,
 			backlogObserved: true,
+			backlogSamples: [180, 170, 158],
 			residualBacklog: 158,
 		});
 
 		expect(result.pass).toBe(true);
 		expect(result.checks.backlogMeasured).toBe(true);
+		expect(result.checks.backlogNonIncreasing).toBe(true);
 		expect(result.backlogDrained).toBe(false);
+	});
+
+	test("fails when the residual backlog grows during the fixed observation window", () => {
+		const result = evaluate({
+			expectedSubmissions: 2,
+			posted: 2,
+			postErrors: 0,
+			daemonExited: false,
+			liveSamples: 2,
+			liveSuccessfulSamples: 2,
+			liveP95Ms: 1,
+			liveMaxMs: 1,
+			healthSamples: 2,
+			healthSuccessfulSamples: 2,
+			healthP95Ms: 1,
+			healthMaxMs: 1,
+			backlogObserved: true,
+			backlogSamples: [1, 2],
+			residualBacklog: 2,
+		});
+
+		expect(result.pass).toBe(false);
+		expect(result.checks.backlogMeasured).toBe(true);
+		expect(result.checks.backlogNonIncreasing).toBe(false);
 	});
 
 	test("fails when the daemon exits or the liveness tail exceeds the bound", () => {
@@ -48,6 +74,7 @@ describe("sustained-ingestion harness evaluation", () => {
 			healthP95Ms: 1,
 			healthMaxMs: 1,
 			backlogObserved: true,
+			backlogSamples: [0],
 			residualBacklog: 0,
 		});
 
@@ -71,6 +98,7 @@ describe("sustained-ingestion harness evaluation", () => {
 			healthP95Ms: 1,
 			healthMaxMs: 1,
 			backlogObserved: true,
+			backlogSamples: [0],
 			residualBacklog: 0,
 		});
 

@@ -174,6 +174,7 @@ try {
 	let liveSuccessfulSamples = 0;
 	const healthLatencies: number[] = [];
 	let healthSuccessfulSamples = 0;
+	const backlogSamples: number[] = [];
 	const snapshots: Array<{
 		elapsedSec: number;
 		status: number;
@@ -209,6 +210,8 @@ try {
 				);
 			} catch {}
 		}
+		const terminal = (statusCounts.done ?? 0) + (statusCounts.failed ?? 0) + (statusCounts.deleted ?? 0);
+		backlogSamples.push(Math.max(0, posted.length - terminal));
 		snapshots.push({
 			elapsedSec: Math.round((Date.now() - start) / 1000),
 			status: health.status,
@@ -216,7 +219,6 @@ try {
 			liveMs: Math.round(live.ms),
 			healthMs: Math.round(health.ms),
 		});
-		const terminal = (statusCounts.done ?? 0) + (statusCounts.failed ?? 0) + (statusCounts.deleted ?? 0);
 		if (posted.length > 0 && terminal >= posted.length) break;
 		await Bun.sleep(1000);
 	}
@@ -227,10 +229,7 @@ try {
 		for (const name of readdirSync(logDir)) if (name.endsWith(".log")) logs += readFileSync(join(logDir, name), "utf8");
 	} catch {}
 	const tail = logs.split(/\r?\n/).slice(-120).join("\n");
-	const finalSnapshot = snapshots.at(-1);
-	const finalCounts = finalSnapshot?.counts ?? {};
-	const terminal = (finalCounts.done ?? 0) + (finalCounts.failed ?? 0) + (finalCounts.deleted ?? 0);
-	const residualBacklog = snapshots.length === 0 ? null : Math.max(0, posted.length - terminal);
+	const residualBacklog = backlogSamples.at(-1) ?? null;
 	const child = termination(daemon);
 	const evaluation = evaluate({
 		expectedSubmissions: total,
@@ -246,6 +245,7 @@ try {
 		healthP95Ms: Math.round(percentile(healthLatencies, 0.95)),
 		healthMaxMs: Math.round(Math.max(...healthLatencies)),
 		backlogObserved: snapshots.length > 0,
+		backlogSamples,
 		residualBacklog,
 	});
 	const result = {
@@ -268,8 +268,10 @@ try {
 		snapshots: snapshots.filter((_, i) => i % 10 === 0 || i === snapshots.length - 1),
 		backlog: {
 			observed: snapshots.length > 0,
+			samples: backlogSamples.length,
 			residual: residualBacklog,
 			drained: evaluation.backlogDrained,
+			nonIncreasing: evaluation.checks.backlogNonIncreasing,
 		},
 		evaluation,
 		childStdout: stdout.join(""),
