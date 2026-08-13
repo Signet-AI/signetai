@@ -304,6 +304,34 @@ function countWorkStates(observations: readonly LifecycleObservation[]): Readonl
 	return counts;
 }
 
+/** Assert ordering and attribution evidence emitted by a lifecycle owner. */
+export function assertLifecycleObservationInvariants(
+	observations: readonly LifecycleObservation[],
+): Pick<LifecycleProofResult, "invariants" | "observations" | "workStateCounts"> {
+	assertStartupPrecedesWork(observations);
+	assertCompletedTurnsSerialized(observations);
+	assertInterruptedTurnsAreNotDurable(observations);
+	assertEndPrecedesSwitch(observations);
+	assertInvalidatedContextIsNotReused(observations);
+	assertRestartResolvesQueuedWork(observations);
+	assertWorkAttribution(observations);
+	return {
+		invariants: LIFECYCLE_INVARIANTS,
+		observations: observations.length,
+		workStateCounts: countWorkStates(observations),
+	};
+}
+
+/** Assert the shutdown window measured by a lifecycle owner. */
+export function assertShutdownInvariant(window: LifecycleShutdownWindow): void {
+	assertShutdownBounded(window);
+}
+
+/** Assert the provider window measured by a lifecycle owner. */
+export function assertSlowProviderInvariant(window: LifecycleProviderWindow): void {
+	assertSlowProviderDoesNotBlockPrompt(window);
+}
+
 /** Assert the shared lifecycle contract against observations from real owners. */
 export function assertLifecycleInvariants(input: LifecycleProofInput): LifecycleProofResult {
 	if (!input.shutdown) fail(LIFECYCLE_INVARIANTS[6], "shutdown evidence was not recorded");

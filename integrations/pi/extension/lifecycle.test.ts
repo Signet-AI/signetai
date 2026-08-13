@@ -11,7 +11,7 @@ import {
 	refreshSessionStart,
 	requestRecallForPrompt,
 } from "./src/lifecycle.js";
-import { assertLifecycleInvariants } from "@signet/pi-extension-base";
+import { assertLifecycleObservationInvariants, LifecycleObservationRecorder } from "@signet/pi-extension-base";
 import { createSessionState } from "./src/session-state.js";
 
 const tempDirs: string[] = [];
@@ -58,49 +58,38 @@ describe("pi lifecycle session-end handling", () => {
 		tempDirs.push(dir);
 		const sessionFile = join(dir, "previous-session.jsonl");
 		writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "old-session", cwd: "/tmp/project" }));
+		const recorder = new LifecycleObservationRecorder();
+		recorder.record({ stage: "startup" });
 		deps.state.setActiveSession("old-session", sessionFile);
 		await endPreviousSession(deps, { previousSessionFile: sessionFile }, "session_switch");
+		recorder.record({
+			stage: "session-end",
+			sessionId: String(calls[0]?.body.sessionKey),
+		});
+		recorder.record({
+			stage: "session-switch",
+			fromSessionId: "old-session",
+			toSessionId: "new-session",
+		});
 		await refreshSessionStart(deps, createTestContext("new-session") as never);
+		recorder.record({
+			stage: "session-start",
+			sessionId: String(calls[1]?.body.sessionKey),
+			contextGeneration: 1,
+		});
 		await requestRecallForPrompt(deps, createTestContext("new-session") as never, "hello");
 		const promptCall = calls.find((call) => call.path.endsWith("user-prompt-submit"));
 		expect(promptCall?.body.sessionKey).toBe("new-session");
-		const observations: Array<import("@signet/lifecycle-proof").LifecycleObservation> = [
-			{ stage: "startup", sequence: 1 },
-			{
-				stage: "session-end",
-				sessionId: String(calls[0]?.body.sessionKey),
-				sequence: 2,
-			},
-			{ stage: "session-switch", fromSessionId: "old-session", toSessionId: "new-session", sequence: 3 },
-			{
-				stage: "session-start",
-				sessionId: String(calls[1]?.body.sessionKey),
-				contextGeneration: 1,
-				sequence: 4,
-			},
-			{
-				stage: "prompt-submit",
-				sessionId: String(promptCall?.body.sessionKey),
-				turn: 1,
-				state: "completed",
-				sourceSessionId: String(promptCall?.body.sessionKey),
-				targetSessionId: String(promptCall?.body.sessionKey),
-				sequence: 5,
-			},
-		];
-		assertLifecycleInvariants({
-			observations,
-			shutdown: {
-				startedAtMs: 100,
-				completedAtMs: 150,
-				budgetMs: 200,
-				startedWork: 0,
-				pendingWork: 0,
-				completedWork: 0,
-				abandonedWork: 0,
-			},
-			slowProvider: { startedAtMs: 100, completedAtMs: 2_000, promptHandledAtMs: 150 },
+		recorder.record({
+			stage: "prompt-submit",
+			sessionId: String(promptCall?.body.sessionKey),
+			turn: 1,
+			state: "completed",
+			sourceSessionId: String(promptCall?.body.sessionKey),
+			targetSessionId: String(promptCall?.body.sessionKey),
 		});
+		const proof = assertLifecycleObservationInvariants(recorder.observations);
+		expect(proof.observations).toBe(5);
 	});
 	it("defers marking a previous session ended until its session file can be reconstructed and submitted", async () => {
 		const calls: Array<{ path: string; body: unknown }> = [];

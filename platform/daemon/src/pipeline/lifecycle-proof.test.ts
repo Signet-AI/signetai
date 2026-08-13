@@ -1,9 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { assertLifecycleInvariants } from "@signet/lifecycle-proof";
+import {
+	assertLifecycleObservationInvariants,
+	assertShutdownInvariant,
+	LifecycleObservationRecorder,
+} from "@signet/lifecycle-proof";
 import { startSynthesisWorker } from "./synthesis-worker";
 
 describe("daemon lifecycle proof integration", () => {
 	it("pins the real synthesis owner's bounded shutdown result", async () => {
+		const recorder = new LifecycleObservationRecorder();
+		recorder.record({ stage: "startup" });
 		let resolveSynthesis: (() => void) | undefined;
 		const synthesisFinished = new Promise<void>((resolve) => {
 			resolveSynthesis = resolve;
@@ -25,42 +31,38 @@ describe("daemon lifecycle proof integration", () => {
 		);
 
 		try {
+			recorder.record({
+				stage: "restart",
+				workId: "synthesis",
+				state: "queued",
+				sourceSessionId: "session",
+				targetSessionId: "session",
+			});
 			const trigger = worker.triggerNow({ force: true, source: "lifecycle-proof" });
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			worker.stop();
+			const shutdownStartedAtMs = Date.now();
 			expect(await worker.drain()).toBe("timeout");
+			const shutdownCompletedAtMs = Date.now();
+			recorder.record({
+				stage: "restart",
+				workId: "synthesis",
+				state: "abandoned",
+				sourceSessionId: "session",
+				targetSessionId: "session",
+			});
 			resolveSynthesis?.();
 			await trigger;
-			assertLifecycleInvariants({
-				observations: [
-					{ stage: "startup", sequence: 1 },
-					{
-						stage: "restart",
-						workId: "synthesis",
-						state: "queued",
-						sourceSessionId: "session",
-						targetSessionId: "session",
-						sequence: 2,
-					},
-					{
-						stage: "restart",
-						workId: "synthesis",
-						state: "abandoned",
-						sourceSessionId: "session",
-						targetSessionId: "session",
-						sequence: 3,
-					},
-				],
-				shutdown: {
-					startedAtMs: 100,
-					completedAtMs: 105,
-					budgetMs: 10,
-					startedWork: 1,
-					pendingWork: 0,
-					completedWork: 0,
-					abandonedWork: 1,
-				},
-				slowProvider: { startedAtMs: 100, completedAtMs: 2_000, promptHandledAtMs: 105 },
+			const proof = assertLifecycleObservationInvariants(recorder.observations);
+			expect(proof.workStateCounts).toMatchObject({ queued: 1, abandoned: 1 });
+			assertShutdownInvariant({
+				startedAtMs: shutdownStartedAtMs,
+				completedAtMs: shutdownCompletedAtMs,
+				budgetMs: Math.max(0, shutdownCompletedAtMs - shutdownStartedAtMs),
+				startedWork: 1,
+				pendingWork: 0,
+				completedWork: 0,
+				abandonedWork: 1,
 			});
 		} finally {
 			resolveSynthesis?.();

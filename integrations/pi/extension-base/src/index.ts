@@ -57,8 +57,14 @@ export {
 
 export {
 	assertLifecycleInvariants,
+	assertLifecycleObservationInvariants,
+	assertShutdownInvariant,
+	assertSlowProviderInvariant,
+	LifecycleEvidenceRecorder,
+	LifecycleObservationRecorder,
 	LIFECYCLE_INVARIANTS,
 	type LifecycleObservation,
+	type LifecycleObservationInput,
 	type LifecycleProofInput,
 	type LifecycleProofResult,
 	type LifecycleProviderWindow,
