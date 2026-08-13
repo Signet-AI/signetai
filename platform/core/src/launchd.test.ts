@@ -1,4 +1,5 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "bun:test";
@@ -60,6 +61,27 @@ describe("launchd environment", () => {
 		expect(environment.PATH.split(":")).toContain(bin);
 		expect(environment.HOME).toBe("/Users/user");
 		expect(environment.SIGNET_PATH).toBe("/Users/user/.agents");
+	});
+
+	it("passes the resolved launchd environment to a spawned child", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-launchd-spawn-"));
+		temporaryDirectories.push(directory);
+		const bin = join(directory, "bin");
+		mkdirSync(bin);
+		const executable = join(bin, "python3");
+		writeFileSync(executable, "#!/bin/sh\nprintf '%s' \"$PATH\"\n");
+		chmodSync(executable, 0o755);
+
+		const environment = buildLaunchdEnvironment({
+			environment: { HOME: "/Users/user", PATH: bin },
+			pathValue: bin,
+		});
+		const resolvedPython = resolveLaunchdExecutable("python3", { environment: { HOME: "/Users/user", PATH: bin } });
+		const result = spawnSync(resolvedPython, [], { env: environment, encoding: "utf8" });
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(bin);
+		expect(environment.PATH.split(":")).toContain(bin);
 	});
 
 	it("puts the resolved environment in the launchd plist", () => {

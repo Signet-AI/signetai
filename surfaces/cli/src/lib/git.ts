@@ -3,6 +3,7 @@ import {
 	isSignetGitProtectedPath,
 	isSignetGitTrackedPath,
 	mergeSignetGitignoreEntries,
+	resolveLaunchdExecutable,
 } from "@signet/core";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -113,7 +114,8 @@ function splitNullSeparated(value: string): string[] {
 
 async function runGit(dir: string, args: string[], timeoutMs = GIT_COMMAND_TIMEOUT_MS): Promise<GitResult> {
 	return await new Promise((resolve) => {
-		const proc = spawn("git", args, {
+		const git = process.platform === "darwin" ? resolveLaunchdExecutable("git") : "git";
+		const proc = spawn(git, args, {
 			cwd: dir,
 			stdio: "pipe",
 			windowsHide: true,

@@ -32,6 +32,7 @@ import {
 	type ProviderRateLimitConfig,
 	resolveAcpxModelSelection,
 	resolveDefaultBasePath,
+	resolveLaunchdExecutable,
 } from "@signet/core";
 import { logger } from "../logger";
 import { getActiveTelemetry } from "../telemetry";
@@ -832,7 +833,11 @@ function buildAcpxCommand(
 	config: AcpxProviderConfig,
 	timeoutMs: number,
 ): { bin: string; args: string[]; cwd?: string } {
-	const bin = config.bin ?? "npx";
+	const configuredBin = config.bin ?? "npx";
+	const bin =
+		process.platform === "darwin" && configuredBin === "npx"
+			? resolveLaunchdExecutable("npx")
+			: configuredBin;
 	const cwd = resolveAcpxCwd(config.cwd, config.hooks);
 	const packageRef = config.package ?? (!config.bin ? `acpx@${config.version ?? DEFAULT_ACPX_VERSION}` : undefined);
 	const allowedTools = resolveAcpxAllowedTools(config);
@@ -1383,7 +1388,11 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 			throw new Error(`${config.agent} via ACPX retry loop exhausted`);
 		},
 		async available(): Promise<boolean> {
-			const bin = config.bin ?? "npx";
+			const configuredBin = config.bin ?? "npx";
+			const bin =
+				process.platform === "darwin" && configuredBin === "npx"
+					? resolveLaunchdExecutable("npx")
+					: configuredBin;
 			return which(bin) !== null;
 		},
 	};
