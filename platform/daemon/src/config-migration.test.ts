@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrateEmbeddingBaseUrl, migrateInferenceProviders } from "./config-migration";
+import { migrateEmbeddingBaseUrl, migrateInferenceProviders, migrateLegacyRoutingToRegistry } from "./config-migration";
 
 function setupDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "signet-config-migration-"));
@@ -39,6 +39,11 @@ inference:
       models:
         default:
           model: x
+    kimi-target:
+      executor: kimi
+      models:
+        default:
+          model: kimi-k2.5
     sonnet:          # direct API, must be untouched
       executor: anthropic
       models:
@@ -57,6 +62,7 @@ inference:
 			expect(after).toMatch(/acpx:\s*\n\s*agent: claude\b/);
 			expect(after).toMatch(/agent: codex\b/);
 			expect(after).toMatch(/agent: opencode\b/);
+			expect(after).toMatch(/agent: kimi\b/);
 			// anthropic untouched
 			expect(after).toContain("executor: anthropic");
 			// comments preserved
@@ -148,6 +154,28 @@ inference:
 			migrateInferenceProviders(dir);
 			const after2 = readFileSync(join(dir, "agent.yaml"), "utf-8");
 			expect(after2).toBe(after1);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("compiles a nested legacy Kimi provider into the ACPX registry", () => {
+		const dir = setupDir();
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`memory:
+  pipelineV2:
+    extraction:
+      provider: kimi
+      model: kimi-k2.5
+`,
+			);
+			migrateLegacyRoutingToRegistry(dir);
+			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			expect(after).toMatch(/executor: acpx/);
+			expect(after).toMatch(/agent: kimi/);
+			expect(after).toMatch(/model: kimi-k2\.5/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

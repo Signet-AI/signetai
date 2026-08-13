@@ -417,6 +417,7 @@ export {
 	resolveAgentBasePath,
 	resolveHermesHomePath,
 	resolveHermesRepoPath,
+	resolveKimiHomePath,
 	resolveHermesRepoPluginPath,
 	hermesAgentCandidateDirs,
 } from "./identity";

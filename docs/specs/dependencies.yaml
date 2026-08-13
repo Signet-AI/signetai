@@ -1397,6 +1397,22 @@ specs:
       - "Selector failures and insufficient samples fail open to ordinary Dreaming behavior"
     decision: null
 
+  - id: kimi-harness-provider-support
+    status: approved
+    path: docs/specs/approved/kimi-harness-provider-support.md
+    hard_depends_on:
+      - signet-runtime
+      - model-provider-router
+    soft_depends_on:
+      - native-harness-memory-bridge
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Kimi CLI is detected from current and legacy config homes and can be selected by setup"
+      - "The connector preserves unrelated Kimi TOML and MCP configuration while installing idempotent lifecycle hooks"
+      - "ACPX exposes Kimi as a selectable agent without adding a separate provider runtime"
+    decision: "Phase 1: connector, setup, detection, and ACPX registration only"
+
   - id: native-harness-memory-bridge
     status: approved
     path: docs/specs/approved/native-harness-memory-bridge.md

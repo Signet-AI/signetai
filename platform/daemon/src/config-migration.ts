@@ -118,7 +118,7 @@ export function migrateConfig(agentsDir: string): void {
 // v3: inference provider cutover (#947)
 // ---------------------------------------------------------------------------
 // Rewrites folded harness-executor targets to the retained ACPX backend.
-// The folded executors (claude-code, codex, opencode) are replaced by
+// The folded executors (claude-code, codex, opencode, kimi) are replaced by
 // `executor: acpx` with an `acpx: { agent: <mapped> }` block. The generic
 // `command` executor and legacy `memory.pipelineV2.*.provider` fields cannot
 // be mapped deterministically (arbitrary bin/args, or implicit-target
@@ -132,6 +132,7 @@ const EXECUTOR_AGENT_MAP: Readonly<Record<string, string>> = {
 	"claude-code": "claude",
 	codex: "codex",
 	opencode: "opencode",
+	kimi: "kimi",
 };
 
 function findConfigPath(agentsDir: string): string | undefined {
@@ -261,6 +262,7 @@ const LEGACY_HARNESS_AGENT: Readonly<Record<string, string>> = {
 	"claude-code": "claude",
 	codex: "codex",
 	opencode: "opencode",
+	kimi: "kimi",
 };
 
 /** Map a legacy provider to the account name/id this migration creates. */

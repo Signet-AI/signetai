@@ -17,7 +17,7 @@ The exact branches depend on your answers, but a fresh interactive setup follows
 
 1. **Identity mode**: let Signet manage identity files or turn identity management off.
 2. **Identity preset**: when managed identity is selected, choose Minimal, Hermes, OpenClaw, or Custom.
-3. **Agent name** and then selected **harnesses**. OpenClaw adds an opt-in workspace patch and a plugin-or-legacy integration choice when its configuration is detected.
+3. **Agent name** and then selected **harnesses**, including Kimi CLI when it is installed or selected explicitly. OpenClaw adds an opt-in workspace patch and a plugin-or-legacy integration choice when its configuration is detected.
 4. **Description** and optional core plugins: Signet Secrets and GraphIQ.
 5. **Daemon hosting**: local-only, local with Tailscale/network access, or a remote daemon URL. This is the interactive hosting question. `--deployment-type` is not prompted here.
 6. **Embedding search**: built-in, Ollama, OpenAI, or no embeddings, followed by model/search choices when applicable.

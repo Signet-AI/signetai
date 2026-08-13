@@ -252,6 +252,7 @@ export interface SetupDetection {
 		opencode: boolean;
 		forge: boolean;
 		codex: boolean;
+		kimi: boolean;
 		ohMyPi: boolean;
 		pi: boolean;
 		hermesAgent: boolean;
@@ -295,6 +296,26 @@ function isSignetManagedPiInstall(): boolean {
 
 function userHome(): string {
 	return process.env.HOME?.trim() || homedir();
+}
+
+export function resolveKimiHomePath(): string {
+	const currentOverride = process.env.KIMI_SHARE_DIR?.trim();
+	if (currentOverride) return currentOverride;
+	const legacyOverride = process.env.KIMI_CODE_HOME?.trim();
+	if (legacyOverride) return legacyOverride;
+
+	const currentHome = join(userHome(), ".kimi");
+	const legacyHome = join(userHome(), ".kimi-code");
+	if (existsSync(currentHome)) return currentHome;
+	if (existsSync(legacyHome)) return legacyHome;
+	return currentHome;
+}
+
+function isBinaryOnPath(bin: string): boolean {
+	const separator = process.platform === "win32" ? ";" : ":";
+	return (process.env.PATH ?? "")
+		.split(separator)
+		.some((directory) => directory.length > 0 && existsSync(join(directory, bin)));
 }
 
 export function resolveHermesHomePath(): string {
@@ -434,6 +455,10 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 				existsSync(join(home, "forge", ".forge.toml")),
 			codex:
 				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
+			kimi:
+				existsSync(join(resolveKimiHomePath(), "config.toml")) ||
+				existsSync(join(home, ".kimi-code", "config.toml")) ||
+				isBinaryOnPath("kimi"),
 			ohMyPi: isSignetManagedOhMyPiInstall() || existsSync(resolveOhMyPiAgentDir()),
 			pi: isSignetManagedPiInstall() || existsSync(resolvePiAgentDir()),
 			hermesAgent: resolveHermesRepoPath() !== null,

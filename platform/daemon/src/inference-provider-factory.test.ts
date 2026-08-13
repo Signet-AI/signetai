@@ -98,4 +98,26 @@ describe("inference provider factory", () => {
 			globalThis.fetch = originalFetch;
 		}
 	});
+
+	test("fails clearly when Kimi is configured as a direct executor", async () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					kimi: { executor: "kimi", models: { default: { model: "kimi-k2.5" } } },
+				},
+			},
+		});
+		if (!parsed.ok) throw new Error(parsed.error.message);
+
+		await expect(
+			createRoutingProvider({
+				config: parsed.value,
+				targetId: "kimi",
+				modelId: "default",
+				async resolveCredential() {
+					return undefined;
+				},
+			}),
+		).rejects.toThrow('Routing executor "kimi" has been folded into the Pi + ACPX backends');
+	});
 });

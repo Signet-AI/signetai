@@ -374,10 +374,12 @@ async function probeExtractionEnvironment(): Promise<ExtractionEnvironment> {
 	const hasCodexCommand = hasCommand("codex");
 	const hasOllamaCommand = hasCommand("ollama");
 	const hasOpenCodeCommand = hasCommand("opencode");
+	const hasKimiCommand = hasCommand("kimi");
 	const acpxBin = resolveCommandPath("bunx") ?? resolveCommandPath("npx");
 	const llamaCppServerAvailable = await hasLlamaCppServer();
 	const availableExtractionProviders: ExtractionProviderChoice[] = [];
-	if (acpxBin && (hasClaudeCommand || hasCodexCommand || hasOpenCodeCommand)) availableExtractionProviders.push("acpx");
+	if (acpxBin && (hasClaudeCommand || hasCodexCommand || hasOpenCodeCommand || hasKimiCommand))
+		availableExtractionProviders.push("acpx");
 	if (llamaCppServerAvailable) availableExtractionProviders.push("llama-cpp");
 	if (hasClaudeCommand) availableExtractionProviders.push("claude-code");
 	if (hasCodexCommand) availableExtractionProviders.push("codex");
@@ -741,6 +743,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				if (h.opencode) detectedIds.add("opencode");
 				if (h.forge) detectedIds.add("forge");
 				if (h.codex) detectedIds.add("codex");
+				if (h.kimi) detectedIds.add("kimi");
 				if (h.ohMyPi) detectedIds.add("oh-my-pi");
 				if (h.pi) detectedIds.add("pi");
 				if (h.hermesAgent) detectedIds.add("hermes-agent");
@@ -1080,6 +1083,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const harnessChoices = [
 		{ value: "claude-code", name: "Claude Code (Anthropic CLI)", checked: existingHarnesses.includes("claude-code") },
 		{ value: "codex", name: "Codex", checked: existingHarnesses.includes("codex") },
+		{ value: "kimi", name: "Kimi CLI", checked: existingHarnesses.includes("kimi") },
 		{ value: "opencode", name: "OpenCode", checked: existingHarnesses.includes("opencode") },
 		{ value: "forge", name: "ForgeCode", checked: existingHarnesses.includes("forge") },
 		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },

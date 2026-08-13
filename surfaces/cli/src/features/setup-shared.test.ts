@@ -15,7 +15,8 @@ describe("setup deployment defaults", () => {
 		expect(DEPLOYMENT_TYPE_CHOICES).toEqual(["local", "vps", "server"]);
 	});
 
-	it("supports Hermes Agent and ForgeCode as setup harness choices", () => {
+	it("supports Kimi, Hermes Agent, and ForgeCode as setup harness choices", () => {
+		expect(SETUP_HARNESS_CHOICES).toContain("kimi");
 		expect(SETUP_HARNESS_CHOICES).toContain("hermes-agent");
 		expect(SETUP_HARNESS_CHOICES).toContain("forge");
 		expect(

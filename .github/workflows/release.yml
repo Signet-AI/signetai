@@ -400,6 +400,7 @@ jobs:
           publish_npm_package "${STAGED_NPM_ROOT}/connector-forge"
           publish_npm_package "${STAGED_NPM_ROOT}/connector-gemini"
           publish_npm_package "${STAGED_NPM_ROOT}/connector-hermes-agent"
+          publish_npm_package "${STAGED_NPM_ROOT}/connector-kimi"
           publish_npm_package "${STAGED_NPM_ROOT}/connector-oh-my-pi"
           publish_npm_package "${STAGED_NPM_ROOT}/connector-openclaw"
           publish_npm_package "${STAGED_NPM_ROOT}/connector-opencode"

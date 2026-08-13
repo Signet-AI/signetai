@@ -37,7 +37,7 @@ export interface ResolvedInferenceCredential {
  * Encountering one means the install's agent.yaml was not migrated; the daemon
  * fails with a structured error rather than silently degrading.
  */
-const FOLDED_EXECUTORS = new Set(["claude-code", "codex", "opencode", "command"]);
+const FOLDED_EXECUTORS = new Set(["claude-code", "codex", "opencode", "kimi", "command"]);
 
 const CUSTOM_PI_EXECUTORS = new Set(["anthropic", "openrouter", "ollama", "llama-cpp", "openai-compatible"]);
 
@@ -84,7 +84,7 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 
 	if (FOLDED_EXECUTORS.has(target.executor)) {
 		throw new Error(
-			`Routing executor "${target.executor}" has been folded into the Pi + ACPX backends (#947). Reconfigure target "${opts.targetId}" to use one of: anthropic, openrouter, ollama, llama-cpp, openai-compatible, acpx. For claude-code/codex/opencode use 'executor: acpx' with an 'acpx: { agent: <name> }' block; see https://docs.signetai.sh/upgrading/. Restart the daemon to re-run the automatic one-time config migration.`,
+			`Routing executor "${target.executor}" has been folded into the Pi + ACPX backends (#947). Reconfigure target "${opts.targetId}" to use one of: anthropic, openrouter, ollama, llama-cpp, openai-compatible, acpx. For claude-code/codex/opencode/kimi use 'executor: acpx' with an 'acpx: { agent: <name> }' block; see https://docs.signetai.sh/upgrading/. Restart the daemon to re-run the automatic one-time config migration.`,
 		);
 	}
 

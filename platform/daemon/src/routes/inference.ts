@@ -866,7 +866,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			oauthProviders,
 			// ACPX agent subcommands (acpx <agent> ...). Static — matches the
 			// agents createAcpxProvider drives. Mirrors `acpx --help` subcommands.
-			acpxAgents: ["claude", "codex", "opencode", "gemini", "pi", "openclaw"],
+			acpxAgents: ["claude", "codex", "opencode", "gemini", "pi", "openclaw", "kimi"],
 		});
 	});
 

@@ -26,6 +26,7 @@ import { CodexConnector } from "@signet/connector-codex";
 import { ForgeConnector } from "@signet/connector-forge";
 import { GeminiConnector } from "@signet/connector-gemini";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
+import { KimiConnector } from "@signet/connector-kimi";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
@@ -186,6 +187,17 @@ async function configureHarnessHooks(
 		case "codex": {
 			const connector = new CodexConnector();
 			await connector.install(basePath);
+			break;
+		}
+		case "kimi": {
+			const connector = new KimiConnector();
+			const result = await connector.install(basePath);
+			if (!result.success) {
+				console.warn(chalk.yellow(`  Warning: Kimi integration setup failed: ${result.message}`));
+			}
+			for (const warning of result.warnings ?? []) {
+				console.warn(chalk.yellow(`  ${warning}`));
+			}
 			break;
 		}
 		case "opencode": {

@@ -8,6 +8,7 @@ import {
 	getPiConfigPath,
 	loadConfiguredHarnesses,
 	resolveHermesRepoPath,
+	resolveKimiHomePath,
 } from "@signet/core";
 import chalk from "chalk";
 
@@ -286,6 +287,9 @@ function detectInstalledHarnesses(): string[] {
 	}
 	if (existsSync(join(home, ".gemini", "settings.json"))) {
 		found.push("gemini");
+	}
+	if (existsSync(join(resolveKimiHomePath(), "config.toml"))) {
+		found.push("kimi");
 	}
 	if (existsSync(getPiConfigPath())) {
 		found.push("pi");

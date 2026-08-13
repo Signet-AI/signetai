@@ -54,7 +54,7 @@ export const LOCAL_EXECUTORS = [
 	{ value: "llama-cpp", label: "llama.cpp (local)" },
 ] as const;
 
-export const ACPX_AGENTS = ["claude", "codex", "opencode", "gemini", "pi", "openclaw"] as const;
+export const ACPX_AGENTS = ["claude", "codex", "opencode", "gemini", "pi", "openclaw", "kimi"] as const;
 
 export interface ConnectableProvider {
 	id: string;

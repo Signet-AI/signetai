@@ -10,6 +10,7 @@ export type HarnessChoice =
 	| "oh-my-pi"
 	| "pi"
 	| "codex"
+	| "kimi"
 	| "hermes-agent"
 	| "gemini";
 export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
@@ -43,6 +44,7 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"oh-my-pi",
 	"pi",
 	"codex",
+	"kimi",
 	"hermes-agent",
 	"gemini",
 ];
@@ -106,6 +108,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.ohMyPi) harnesses.push("Oh My Pi");
 	if (detection.harnesses.pi) harnesses.push("Pi");
 	if (detection.harnesses.codex) harnesses.push("Codex");
+	if (detection.harnesses.kimi) harnesses.push("Kimi");
 	if (detection.harnesses.hermesAgent) harnesses.push("Hermes Agent");
 	if (detection.harnesses.gemini) harnesses.push("Gemini");
 	if (harnesses.length > 0) {
@@ -278,7 +281,7 @@ function extractionProvidersFromHarnesses(harnesses: readonly HarnessChoice[]): 
 	const providers: ExtractionProviderChoice[] = [];
 	for (const harness of harnesses) {
 		let provider: ExtractionProviderChoice | null = null;
-		if (harness === "claude-code" || harness === "codex" || harness === "opencode") {
+		if (harness === "claude-code" || harness === "codex" || harness === "opencode" || harness === "kimi") {
 			provider = "acpx";
 		}
 		if (provider && !providers.includes(provider)) {

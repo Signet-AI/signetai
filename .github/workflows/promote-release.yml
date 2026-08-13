@@ -32,6 +32,7 @@ jobs:
             "@signetai/connector-forge"
             "@signetai/connector-gemini"
             "@signetai/connector-hermes-agent"
+            "@signetai/connector-kimi"
             "@signetai/connector-oh-my-pi"
             "@signetai/connector-openclaw"
             "@signetai/connector-opencode"

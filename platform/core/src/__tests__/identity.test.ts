@@ -19,6 +19,8 @@ const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
 const ORIGINAL_HERMES_HOME = process.env.HERMES_HOME;
 const ORIGINAL_FORGE_CONFIG = process.env.FORGE_CONFIG;
+const ORIGINAL_KIMI_SHARE_DIR = process.env.KIMI_SHARE_DIR;
+const ORIGINAL_KIMI_CODE_HOME = process.env.KIMI_CODE_HOME;
 
 beforeEach(() => mkdirSync(TMP, { recursive: true }));
 afterEach(() => {
@@ -45,6 +47,18 @@ afterEach(() => {
 		delete process.env.FORGE_CONFIG;
 	} else {
 		process.env.FORGE_CONFIG = ORIGINAL_FORGE_CONFIG;
+	}
+	if (ORIGINAL_KIMI_SHARE_DIR === undefined) {
+		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+		delete process.env.KIMI_SHARE_DIR;
+	} else {
+		process.env.KIMI_SHARE_DIR = ORIGINAL_KIMI_SHARE_DIR;
+	}
+	if (ORIGINAL_KIMI_CODE_HOME === undefined) {
+		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+		delete process.env.KIMI_CODE_HOME;
+	} else {
+		process.env.KIMI_CODE_HOME = ORIGINAL_KIMI_CODE_HOME;
 	}
 	rmSync(TMP, { recursive: true, force: true });
 });
@@ -246,6 +260,27 @@ describe("detectExistingSetup", () => {
 		const detection = detectExistingSetup(TMP);
 
 		expect(detection.harnesses.forge).toBe(true);
+	});
+
+	test("detects Kimi from the current ~/.kimi config home", () => {
+		process.env.HOME = TMP;
+		mkdirSync(join(TMP, ".kimi"), { recursive: true });
+		writeFileSync(join(TMP, ".kimi", "config.toml"), "[loop_control]\nmax_steps = 10\n");
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.kimi).toBe(true);
+	});
+
+	test("detects Kimi from the legacy KIMI_CODE_HOME override", () => {
+		const legacyHome = join(TMP, "legacy-kimi");
+		process.env.KIMI_CODE_HOME = legacyHome;
+		mkdirSync(legacyHome, { recursive: true });
+		writeFileSync(join(legacyHome, "config.toml"), "[loop_control]\nmax_steps = 10\n");
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.kimi).toBe(true);
 	});
 });
 
