@@ -179,6 +179,9 @@ function getLastSessionEndTime(deps: SynthesisDeps): number {
 
 type SynthesisResult = "ok" | "empty" | "failed" | "busy";
 export type SynthesisDrainResult = "completed" | "timeout";
+type SynthesisRunOptions = {
+	readonly canWrite?: () => boolean;
+};
 
 export interface SynthesisWorkerConfig {
 	readonly timeout: number;
@@ -200,6 +203,7 @@ async function runSynthesisWithDeps(
 	deps: SynthesisDeps,
 	config: SynthesisWorkerConfig,
 	agentId?: string,
+	options: SynthesisRunOptions = {},
 ): Promise<SynthesisResult> {
 	const scopeAgentId = normalizeAgentId(agentId);
 	deps.logger.info("synthesis", "Starting scheduled synthesis", {
@@ -225,6 +229,10 @@ async function runSynthesisWithDeps(
 			return "failed";
 		}
 		const finalText = synthesisData.prompt.trimEnd();
+		if (options.canWrite && !options.canWrite()) {
+			deps.logger.warn("synthesis", "Discarding synthesis result after shutdown abandoned the run");
+			return "failed";
+		}
 
 		// Write MEMORY.md via shared helper (handles backup)
 		const writeResult = deps.writeMemoryMd(finalText, {
@@ -299,6 +307,7 @@ export function startSynthesisWorker(
 	let lockReleasedResolver: (() => void) | null = null;
 	let lockReleasedPromise: Promise<void> = Promise.resolve();
 	let activeWorkId: string | null = null;
+	let activeRunState: { abandoned: boolean } | null = null;
 	const pendingQueue: PendingForce[] = [];
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
 
@@ -348,7 +357,11 @@ export function startSynthesisWorker(
 
 		try {
 			activeWorkId = `synthesis:${entry.agentId}`;
-			currentRunPromise = runSynthesisWithDeps(deps, config, entry.agentId);
+			const runState = { abandoned: false };
+			activeRunState = runState;
+			currentRunPromise = runSynthesisWithDeps(deps, config, entry.agentId, {
+				canWrite: () => !runState.abandoned,
+			});
 			const result = await currentRunPromise;
 			emitLifecycleObservation({
 				stage: "restart",
@@ -371,6 +384,7 @@ export function startSynthesisWorker(
 			return "completed";
 		} finally {
 			currentRunPromise = null;
+			activeRunState = null;
 			activeWorkId = null;
 			releaseWriteLock(lockToken);
 		}
@@ -448,7 +462,11 @@ export function startSynthesisWorker(
 			}
 
 			try {
-				currentRunPromise = runSynthesisWithDeps(deps, config);
+				const runState = { abandoned: false };
+				activeRunState = runState;
+				currentRunPromise = runSynthesisWithDeps(deps, config, undefined, {
+					canWrite: () => !runState.abandoned,
+				});
 				const result = await currentRunPromise;
 				if (shouldRecordSuccess(result)) {
 					// Busy means another writer currently owns the shared
@@ -458,6 +476,7 @@ export function startSynthesisWorker(
 				}
 			} finally {
 				currentRunPromise = null;
+				activeRunState = null;
 				releaseWriteLock(lockToken);
 			}
 		} catch (e) {
@@ -516,6 +535,7 @@ export function startSynthesisWorker(
 						}, config.timeout + DRAIN_TIMEOUT_BUFFER_MS);
 					}),
 				]);
+				if (timedOut && activeRunState) activeRunState.abandoned = true;
 				const completedAtMs = Date.now();
 				const workId = activeWorkId;
 				if (workId) {
@@ -601,8 +621,12 @@ export function startSynthesisWorker(
 					return { success: false, skipped: true, reason };
 				}
 
-				currentRunPromise = runSynthesisWithDeps(deps, config, opts?.agentId);
 				activeWorkId = `synthesis:${key}`;
+				const runState = { abandoned: false };
+				activeRunState = runState;
+				currentRunPromise = runSynthesisWithDeps(deps, config, opts?.agentId, {
+					canWrite: () => !runState.abandoned,
+				});
 				const result = await currentRunPromise;
 				if ((result === "busy" || result === "failed") && opts?.force) {
 					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
@@ -626,6 +650,7 @@ export function startSynthesisWorker(
 				};
 			} finally {
 				currentRunPromise = null;
+				activeRunState = null;
 				releaseWriteLock(lockToken);
 			}
 		},

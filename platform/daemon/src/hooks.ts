@@ -23,6 +23,7 @@ import {
 	resolveStartupIdentityFiles,
 	scanMemoryContent,
 } from "@signet/core";
+import { emitLifecycleProvider } from "@signet/lifecycle-proof";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
 import { applyTokenBudget, selectWithEstimatedTokenBudget } from "./context-budget";
 import {
@@ -1505,6 +1506,7 @@ type UserPromptSubmitDeps = {
 	readonly getExpiryWarning: typeof getExpiryWarning;
 	readonly hybridRecall: typeof hybridRecall;
 	readonly fetchEmbedding: typeof fetchEmbedding;
+	readonly buildEntityPromptContext: typeof buildEntityPromptContext;
 	readonly searchTemporalFallback: typeof searchTemporalFallback;
 	readonly trackFtsHits: typeof trackFtsHits;
 };
@@ -1525,6 +1527,7 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 	getExpiryWarning,
 	hybridRecall,
 	fetchEmbedding,
+	buildEntityPromptContext,
 	searchTemporalFallback,
 	trackFtsHits,
 };
@@ -1732,10 +1735,13 @@ export async function handleUserPromptSubmit(
 
 	recordRecallAttempt("prompt_injection");
 	promptRecallAttempted = true;
+	const promptHandledAtMs = Date.now();
+	let providerStartedAtMs = promptHandledAtMs;
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
-		const entityContext = await buildEntityPromptContext({
+		providerStartedAtMs = Date.now();
+		const entityContext = await deps.buildEntityPromptContext({
 			userMessage,
 			agentId,
 			minScore: resolveUserPromptMinScore(submitCfg.minScore),
@@ -1744,6 +1750,11 @@ export async function handleUserPromptSubmit(
 			fetchEmbedding: deps.fetchEmbedding,
 			embedding: cfg.embedding,
 			sessionHash: hashSessionKey(req.sessionKey) ?? undefined,
+		});
+		emitLifecycleProvider({
+			startedAtMs: providerStartedAtMs,
+			completedAtMs: Date.now(),
+			promptHandledAtMs,
 		});
 		if (entityContext.lines.length === 0) {
 			recordUserPromptRecallTelemetry({
@@ -1812,6 +1823,11 @@ export async function handleUserPromptSubmit(
 			deps.logger,
 		);
 	} catch (e) {
+		emitLifecycleProvider({
+			startedAtMs: providerStartedAtMs,
+			completedAtMs: Date.now(),
+			promptHandledAtMs,
+		});
 		if (promptRecallAttempted && !promptRecallOutcomeRecorded) {
 			recordRecallOutcome({ surface: "prompt_injection", error: true, delivery: "not_delivered" });
 		}

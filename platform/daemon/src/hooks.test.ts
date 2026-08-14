@@ -20,6 +20,7 @@ process.env.SIGNET_PATH = TEST_DIR;
 
 const { initDbAccessor, closeDbAccessor, getDbAccessor } = await import("./db-accessor");
 const hooks = await import("./hooks");
+const { setLifecycleObservers } = await import("@signet/lifecycle-proof");
 const lineage = await import("./memory-lineage");
 const transcriptAudit = await import("./transcript-audit");
 const { deriveSessionEndFallbackId } = await import("./session-end-recovery");
@@ -565,6 +566,7 @@ beforeEach(() => {
 
 afterEach(async () => {
 	await flushSessionEndDeferredWork();
+	setLifecycleObservers(undefined);
 	resetProjectionPurgeState();
 	closeDbAccessor();
 	if (existsSync(TEST_DIR)) {
@@ -1633,6 +1635,33 @@ describe("direct transcript regressions", () => {
 // ============================================================================
 
 describe("handleUserPromptSubmit", () => {
+	test.serial("records a measured slow-provider window from a delayed provider", async () => {
+		createMemoryDb();
+		const providerWindows: Array<{
+			readonly startedAtMs: number;
+			readonly completedAtMs: number;
+			readonly promptHandledAtMs: number;
+		}> = [];
+		setLifecycleObservers({ provider: (window) => providerWindows.push(window) });
+		const delayMs = 30;
+
+		await handleUserPromptSubmit(
+			{ harness: "test", sessionKey: "slow-provider", userPrompt: "recall the slow provider test" },
+			{
+				buildEntityPromptContext: async () => {
+					await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+					return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
+				},
+			} as never,
+		);
+
+		expect(providerWindows).toHaveLength(1);
+		const window = providerWindows[0];
+		if (!window) throw new Error("expected owner-emitted provider timing");
+		expect(window.completedAtMs - window.startedAtMs).toBeGreaterThanOrEqual(delayMs - 5);
+		expect(window.promptHandledAtMs).toBeLessThan(window.completedAtMs);
+	});
+
 	test.serial("returns empty inject when no known entity or alias is mentioned", async () => {
 		createMemoryDb([{ content: "Use TypeScript as the preferred language for this project", importance: 0.8 }]);
 

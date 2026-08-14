@@ -18,6 +18,7 @@ describe("daemon lifecycle proof integration", () => {
 			shutdown: (window) => recorderShutdown.push(window),
 		});
 		let resolveSynthesis: (() => void) | undefined;
+		let writesAfterAbandonment = 0;
 		const synthesisFinished = new Promise<void>((resolve) => {
 			resolveSynthesis = resolve;
 		});
@@ -31,7 +32,10 @@ describe("daemon lifecycle proof integration", () => {
 					await synthesisFinished;
 					return { prompt: "# MEMORY", fileCount: 1 };
 				}) as never,
-				writeMemoryMd: (() => ({ ok: true })) as never,
+				writeMemoryMd: (() => {
+					writesAfterAbandonment += 1;
+					return { ok: true };
+				}) as never,
 				logger: { info() {}, warn() {}, error() {} } as never,
 				activeSessionCount: () => 0,
 			},
@@ -45,6 +49,7 @@ describe("daemon lifecycle proof integration", () => {
 
 			resolveSynthesis?.();
 			await trigger;
+			expect(writesAfterAbandonment).toBe(0);
 			const proof = assertLifecycleObservationInvariants(recorder.observations);
 			expect(proof.workStateCounts).toMatchObject({ queued: 1, abandoned: 1 });
 			expect(recorderShutdown).toHaveLength(1);
