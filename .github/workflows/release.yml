@@ -452,6 +452,8 @@ jobs:
             echo "Waiting for desktop release assets (attempt ${attempt}/60): ${missing[*]}"
             sleep 30
           done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Finalize GitHub release
         run: scripts/retry-github-release.sh gh release edit "v${NEW_VERSION}" --draft=false --repo "${GITHUB_REPOSITORY}"

@@ -144,6 +144,16 @@ describe("desktop update packaging", () => {
 		expect(releaseWorkflow).toContain("scripts/retry-github-release.sh gh release view");
 	});
 
+	test("authenticates the cross-workflow desktop asset poll", () => {
+		const releaseWorkflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "release.yml"), "utf8");
+		const waitStart = releaseWorkflow.indexOf("      - name: Wait for desktop release assets");
+		const finalizeStart = releaseWorkflow.indexOf("      - name: Finalize GitHub release", waitStart);
+		const wait = releaseWorkflow.slice(waitStart, finalizeStart);
+
+		expect(wait).toContain("scripts/retry-github-release.sh gh release view");
+		expect(wait).toContain(`        env:\n          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}`);
+	});
+
 	test("uses a Linux-safe Electron executable name", () => {
 		const packageJson = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
 		expect(packageJson.build.executableName).toBe("signet");
