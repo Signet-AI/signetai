@@ -41,12 +41,15 @@ function resolveWorkerPath(): string {
 /**
  * Memoized exact backlog counts. The cache key includes the source and its
  * delivered offset, while the text comparison catches in-place revisions.
+ * Entries and counts are nested by agent ID rather than concatenated, so an
+ * agent ID containing ":" cannot collide with a source key or aggregate.
  * Consumption therefore removes or changes entries on the next refresh
  * without maintaining a second counter that could drift from the evidence DB.
  */
 export class DreamingBacklogTokenCache {
 	private readonly values = new Map<string, number>();
-	private readonly entries = new Map<string, DreamingBacklogTokenEntry>();
+	private readonly entries = new Map<string, Map<string, DreamingBacklogTokenEntry>>();
+	private readonly entryValues = new Map<string, Map<string, number>>();
 	private readonly pending = new Map<number, PendingRequest>();
 	private readonly inflight = new Map<string, Promise<number>>();
 	private worker: DreamingTokenWorkerLike | null = null;
@@ -82,13 +85,17 @@ export class DreamingBacklogTokenCache {
 	}
 
 	private async refreshNow(agentId: string, entries: readonly DreamingBacklogTokenEntry[]): Promise<number> {
-		const nextKeys = new Set(entries.map((entry) => `${agentId}:${entry.key}`));
-		for (const key of this.entries.keys()) {
-			if (key.startsWith(`${agentId}:`) && !nextKeys.has(key)) this.entries.delete(key);
+		const nextKeys = new Set(entries.map((entry) => entry.key));
+		const agentEntries = this.entries.get(agentId) ?? new Map<string, DreamingBacklogTokenEntry>();
+		const agentValues = this.entryValues.get(agentId) ?? new Map<string, number>();
+		this.entries.set(agentId, agentEntries);
+		this.entryValues.set(agentId, agentValues);
+		for (const key of agentEntries.keys()) {
+			if (!nextKeys.has(key)) agentEntries.delete(key);
 		}
 
 		const uncached = entries.filter((entry) => {
-			const cached = this.entries.get(`${agentId}:${entry.key}`);
+			const cached = agentEntries.get(entry.key);
 			return cached === undefined || cached.text !== entry.text;
 		});
 		if (uncached.length > 0) {
@@ -96,19 +103,19 @@ export class DreamingBacklogTokenCache {
 			for (const entry of uncached) {
 				const result = counts.find((item) => item.key === entry.key);
 				if (result === undefined) throw new Error(`Dreaming token worker omitted ${entry.key}`);
-				this.entries.set(`${agentId}:${entry.key}`, entry);
-				this.values.set(`${agentId}:${entry.key}`, result.count);
+				agentEntries.set(entry.key, entry);
+				agentValues.set(entry.key, result.count);
 			}
 		}
 
 		let total = 0;
 		for (const entry of entries) {
-			const count = this.values.get(`${agentId}:${entry.key}`);
+			const count = agentValues.get(entry.key);
 			if (count === undefined) throw new Error(`Missing cached Dreaming token count for ${entry.key}`);
 			total += count;
 		}
-		for (const key of this.values.keys()) {
-			if (key.startsWith(`${agentId}:`) && !nextKeys.has(key)) this.values.delete(key);
+		for (const key of agentValues.keys()) {
+			if (!nextKeys.has(key)) agentValues.delete(key);
 		}
 		this.values.set(agentId, total);
 		return total;

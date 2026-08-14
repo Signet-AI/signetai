@@ -202,6 +202,26 @@ describe("Dreaming", () => {
 		expect(tokenizerStats.encodeChars).toBe(0);
 	});
 
+	it("keeps backlog cache entries isolated from colon-containing agent IDs (#1555)", async () => {
+		const leftAgent = "cache-collision-left";
+		const leftSource = "cache-collision-source";
+		const rightAgent = `${leftAgent}:transcript:${leftSource}:0`;
+		seedTranscript(db, leftSource, "The left scope has a distinct exact token count.", undefined, leftAgent);
+		seedTranscript(
+			db,
+			"cache-collision-other",
+			"The right scope must not overwrite the left scope. ".repeat(10),
+			undefined,
+			rightAgent,
+		);
+
+		const leftInitial = await getDreamingEpisodicTokenBacklog(accessor, leftAgent);
+		await getDreamingEpisodicTokenBacklog(accessor, rightAgent);
+
+		expect(rightAgent).toContain(":");
+		expect(await getDreamingEpisodicTokenBacklog(accessor, leftAgent)).toBe(leftInitial);
+	});
+
 	it("keeps the event loop responsive during a large exact-BPE backlog refresh (#1552, #1543)", async () => {
 		for (let i = 0; i < 50; i += 1) {
 			seedTranscript(
