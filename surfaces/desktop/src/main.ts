@@ -9,6 +9,7 @@ import { dashboardRoot, iconPath, preloadPath } from "./paths.js";
 import { daemonRouteTarget, isDaemonRouteUrl } from "./protocol-routes.js";
 import { DesktopTray } from "./tray.js";
 import { applyDesktopWorkspaceEnv, resolveDesktopWorkspace } from "./workspace.js";
+import { applicationMenuTemplate } from "./application-menu.js";
 import { installSingleInstanceLock } from "./single-instance.js";
 
 const hasSingleInstanceLock = installSingleInstanceLock(
@@ -293,6 +294,11 @@ function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+function configureApplicationMenu(): void {
+	const template = applicationMenuTemplate(process.platform);
+	Menu.setApplicationMenu(template === null ? null : Menu.buildFromTemplate(template));
+}
+
 async function quickCapture(content: string): Promise<void> {
 	const trimmed = content.trim();
 	if (!trimmed) throw new Error("content is required");
@@ -370,7 +376,7 @@ app.setName("Signet");
 
 app.whenReady().then(async () => {
 	if (!hasSingleInstanceLock) return;
-	Menu.setApplicationMenu(null);
+	configureApplicationMenu();
 	if (process.platform === "darwin" && app.dock) {
 		app.dock.setIcon(iconPath("icon.png"));
 	}
