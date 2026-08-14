@@ -124,6 +124,21 @@ describe("resolveWorkspacePath precedence", () => {
 });
 
 describe("resolveWorkspacePath malformed config", () => {
+	it("keeps the exported config reader strict by default", () => {
+		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-reader-strict-"));
+		try {
+			const configHome = join(home, "config");
+			mkdirSync(join(configHome, "signet"), { recursive: true });
+			writeFileSync(join(configHome, "signet", "workspace.json"), "{not json");
+
+			expect(() => readConfiguredWorkspacePath(makeEnv({ XDG_CONFIG_HOME: configHome }), home)).toThrow(
+				"Invalid Signet workspace config",
+			);
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	it("throws instead of falling back when an existing config is malformed", () => {
 		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-malformed-"));
 		try {

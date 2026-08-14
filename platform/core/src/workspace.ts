@@ -146,15 +146,16 @@ export function getWorkspaceConfigPath(env: NodeJS.ProcessEnv = process.env, hom
 /**
  * Read the persisted `workspace` value from `workspace.json`.
  *
- * Returns `null` when the file is absent or (in non-strict mode) malformed.
- * In strict mode an existing malformed file throws.
+ * Returns `null` only when the file is absent. By default, an existing
+ * malformed file throws. Pass `strict: false` only when an explicit caller
+ * can safely ignore malformed persisted configuration.
  */
 export function readConfiguredWorkspacePath(
 	env: NodeJS.ProcessEnv = process.env,
 	home = homedir(),
 	options: { readonly strict?: boolean } = {},
 ): string | null {
-	const strict = options.strict ?? false;
+	const strict = options.strict ?? true;
 	const configPath = getWorkspaceConfigPath(env, home);
 	if (!existsSync(configPath)) return null;
 
