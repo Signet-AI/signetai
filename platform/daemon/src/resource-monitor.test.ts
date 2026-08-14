@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+	classifyMacOsProcPidInfoResult,
 	getResourceSnapshot,
 	logFdSnapshot,
 	parseMacOsFdInfo,
@@ -14,14 +15,28 @@ afterEach(() => {
 });
 
 describe("getResourceSnapshot", () => {
-	it("returns a snapshot with non-negative total on Linux", () => {
+	it("reports accurate platform FD accounting or an explicit unsupported state", () => {
 		const snap = getResourceSnapshot();
-		// On Linux /proc/self/fd is readable; unsupported platforms report null.
 		if (process.platform === "linux") {
 			expect(snap.total).toBeGreaterThan(0);
-		} else {
-			expect(snap.total).toBeNull();
+			return;
 		}
+		if (process.platform === "darwin" && snap.total !== null) {
+			expect(snap.total).toBeGreaterThan(0);
+			expect(snap.sockets).not.toBeNull();
+			expect(snap.pipes).not.toBeNull();
+			expect(snap.other).not.toBeNull();
+			expect(snap.memoryMd).toBeNull();
+			expect(snap.inotify).toBeNull();
+			expect(snap.db).toBeNull();
+			if (snap.sockets === null || snap.pipes === null || snap.other === null) {
+				throw new Error("macOS FD accounting unexpectedly returned an unavailable category");
+			}
+			const sum = snap.sockets + snap.pipes + snap.other;
+			expect(sum).toBe(snap.total);
+			return;
+		}
+		expect(snap.total).toBeNull();
 	});
 
 	it("returns all required fields", () => {
@@ -118,6 +133,16 @@ describe("getResourceSnapshot", () => {
 			db: null,
 			other: null,
 		});
+	});
+
+	it("distinguishes documented proc_pidinfo failures from empty success", () => {
+		expect(classifyMacOsProcPidInfoResult(0, 0)).toEqual({ kind: "success", bytes: 0 });
+		expect(classifyMacOsProcPidInfoResult(0, null)).toEqual({ kind: "unavailable", reason: "unknown" });
+		expect(classifyMacOsProcPidInfoResult(0, 3)).toEqual({ kind: "unavailable", reason: "process-gone" });
+		expect(classifyMacOsProcPidInfoResult(0, 4)).toEqual({ kind: "retry" });
+		expect(classifyMacOsProcPidInfoResult(0, 12)).toEqual({ kind: "grow" });
+		expect(classifyMacOsProcPidInfoResult(0, 1)).toEqual({ kind: "unavailable", reason: "permission-denied" });
+		expect(classifyMacOsProcPidInfoResult(0, 22)).toEqual({ kind: "unavailable", reason: "invalid-request" });
 	});
 });
 

@@ -1,7 +1,7 @@
 /**
  * Daemon resource instrumentation for file descriptors and event loop lag.
  */
-import { dlopen, ptr } from "bun:ffi";
+import { dlopen, ptr, read } from "bun:ffi";
 import { readdirSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -18,6 +18,13 @@ const PROC_FDTYPE_SOCKET = 2;
 const PROC_FDTYPE_PIPE = 6;
 const INITIAL_MACOS_FD_BUFFER_SIZE = 4096;
 const MAX_MACOS_FD_BUFFER_SIZE = 1024 * 1024;
+const MACOS_ERRNO_EPERM = 1;
+const MACOS_ERRNO_ESRCH = 3;
+const MACOS_ERRNO_EINTR = 4;
+const MACOS_ERRNO_ENOMEM = 12;
+const MACOS_ERRNO_EACCES = 13;
+const MACOS_ERRNO_EINVAL = 22;
+const MACOS_ERRNO_ENOTSUP = 45;
 // sizeof(struct rusage_info_v4) per bsd/sys/resource.h (1×u8[16] + 35×u64).
 const RUSAGE_INFO_V4_SIZE = 296;
 const RUSAGE_INFO_PHYS_FOOTPRINT_OFFSET = 72;
@@ -43,6 +50,13 @@ interface LibprocHandle {
 	};
 }
 
+interface LibSystemHandle {
+	readonly symbols: {
+		readonly __error: () => ReturnType<typeof ptr>;
+		readonly memset: (destination: ReturnType<typeof ptr>, value: number, size: number) => ReturnType<typeof ptr>;
+	};
+}
+
 interface FileDescriptorUsage {
 	readonly total: number | null;
 	readonly memoryMd: number | null;
@@ -54,6 +68,7 @@ interface FileDescriptorUsage {
 }
 
 let libprocHandle: LibprocHandle | null | undefined;
+let libSystemHandle: LibSystemHandle | null | undefined;
 
 function loadLibproc(): LibprocHandle | null {
 	if (libprocHandle !== undefined) return libprocHandle;
@@ -72,6 +87,25 @@ function loadLibproc(): LibprocHandle | null {
 		libprocHandle = null;
 	}
 	return libprocHandle;
+}
+
+function loadLibSystem(): LibSystemHandle | null {
+	if (libSystemHandle !== undefined) return libSystemHandle;
+	try {
+		libSystemHandle = dlopen("/usr/lib/libSystem.B.dylib", {
+			__error: {
+				args: [],
+				returns: "ptr",
+			},
+			memset: {
+				args: ["ptr", "i32", "u64"],
+				returns: "ptr",
+			},
+		}) as LibSystemHandle;
+	} catch {
+		libSystemHandle = null;
+	}
+	return libSystemHandle;
 }
 
 function unavailableFileDescriptorUsage(): FileDescriptorUsage {
@@ -117,16 +151,61 @@ export function parseMacOsFdInfo(raw: Uint8Array): FileDescriptorUsage {
 	};
 }
 
+type MacOsProcPidInfoResult =
+	| { readonly kind: "success"; readonly bytes: number }
+	| { readonly kind: "retry" }
+	| { readonly kind: "grow" }
+	| {
+			readonly kind: "unavailable";
+			readonly reason: "process-gone" | "permission-denied" | "invalid-request" | "unsupported" | "unknown";
+	  };
+
+/**
+ * libproc's proc_pidinfo wrapper returns 0 when __proc_info fails, so errno
+ * must be read immediately after the call to distinguish an empty result from
+ * a vanished process, a permission failure, or a retryable interruption.
+ */
+export function classifyMacOsProcPidInfoResult(bytes: number, errno: number | null): MacOsProcPidInfoResult {
+	if (bytes > 0) return { kind: "success", bytes };
+	if (bytes < 0) return { kind: "unavailable", reason: "unknown" };
+	if (errno === null) return { kind: "unavailable", reason: "unknown" };
+	if (errno === 0) return { kind: "success", bytes: 0 };
+	if (errno === MACOS_ERRNO_EINTR) return { kind: "retry" };
+	if (errno === MACOS_ERRNO_ENOMEM) return { kind: "grow" };
+	if (errno === MACOS_ERRNO_ESRCH) return { kind: "unavailable", reason: "process-gone" };
+	if (errno === MACOS_ERRNO_EPERM || errno === MACOS_ERRNO_EACCES) {
+		return { kind: "unavailable", reason: "permission-denied" };
+	}
+	if (errno === MACOS_ERRNO_EINVAL) return { kind: "unavailable", reason: "invalid-request" };
+	if (errno === MACOS_ERRNO_ENOTSUP) return { kind: "unavailable", reason: "unsupported" };
+	return { kind: "unavailable", reason: "unknown" };
+}
+
 function readMacOsFileDescriptors(): FileDescriptorUsage {
 	if (process.platform !== "darwin") return unavailableFileDescriptorUsage();
 	const libproc = loadLibproc();
-	if (!libproc) return unavailableFileDescriptorUsage();
+	const libSystem = loadLibSystem();
+	if (!libproc || !libSystem) return unavailableFileDescriptorUsage();
+	const errnoPointer = libSystem.symbols.__error();
+	if (!errnoPointer) return unavailableFileDescriptorUsage();
 
-	for (let bufferSize = INITIAL_MACOS_FD_BUFFER_SIZE; bufferSize <= MAX_MACOS_FD_BUFFER_SIZE; bufferSize *= 2) {
+	let interruptedAttempts = 0;
+	for (let bufferSize = INITIAL_MACOS_FD_BUFFER_SIZE; bufferSize <= MAX_MACOS_FD_BUFFER_SIZE; ) {
 		const raw = new Uint8Array(bufferSize);
+		libSystem.symbols.memset(errnoPointer, 0, 4);
 		const bytes = libproc.symbols.proc_pidinfo(pid, PROC_PIDLISTFDS, 0, ptr(raw), bufferSize);
-		if (bytes < 0) return unavailableFileDescriptorUsage();
-		if (bytes < bufferSize) return parseMacOsFdInfo(raw.subarray(0, bytes));
+		const result = classifyMacOsProcPidInfoResult(bytes, read.i32(errnoPointer, 0));
+		if (result.kind === "retry") {
+			if (interruptedAttempts++ >= 2) return unavailableFileDescriptorUsage();
+			continue;
+		}
+		if (result.kind === "grow") {
+			bufferSize *= 2;
+			continue;
+		}
+		if (result.kind === "unavailable") return unavailableFileDescriptorUsage();
+		if (result.bytes < bufferSize) return parseMacOsFdInfo(raw.subarray(0, result.bytes));
+		bufferSize *= 2;
 	}
 
 	// Do not turn a process with more descriptors than our bounded read into a
