@@ -70,6 +70,7 @@ describe("buildSetupInference", () => {
 		expect(defaultAcpxModel(["codex"], ["acpx"])).toBe("gpt-5.4-mini");
 		expect(defaultAcpxModel(["opencode"], ["acpx"])).toBe("google/gemini-2.5-flash");
 		expect(defaultAcpxModel(["claude-code"], ["acpx"])).toBe("haiku");
+		expect(defaultAcpxModel(["kimi"], ["acpx"])).toBe("haiku");
 
 		expect(
 			buildSetupInference("acpx", undefined, ["codex"], ["acpx"], "/usr/local/bin/bunx")?.targets["background-acpx"],
@@ -82,6 +83,12 @@ describe("buildSetupInference", () => {
 		).toMatchObject({
 			acpx: { agent: "opencode" },
 			models: { default: { model: "google/gemini-2.5-flash" } },
+		});
+		expect(
+			buildSetupInference("acpx", undefined, ["kimi"], ["acpx"], "/usr/local/bin/bunx")?.targets["background-acpx"],
+		).toMatchObject({
+			acpx: { agent: "kimi" },
+			models: { default: { model: "haiku" } },
 		});
 	});
 

@@ -63,9 +63,11 @@ export interface SetupInferenceConfig {
 	readonly workloads: Record<string, unknown>;
 }
 
-export type SetupAcpxAgent = "codex" | "claude" | "opencode";
+export type SetupAcpxAgent = "codex" | "claude" | "opencode" | "kimi";
 
-function toAcpxAgent(provider: Extract<HarnessChoice, "codex" | "claude-code" | "opencode">): SetupAcpxAgent {
+type AcpxHarnessChoice = Extract<HarnessChoice, "codex" | "claude-code" | "opencode" | "kimi">;
+
+function toAcpxAgent(provider: AcpxHarnessChoice): SetupAcpxAgent {
 	return provider === "claude-code" ? "claude" : provider;
 }
 
@@ -74,7 +76,9 @@ function selectAcpxAgent(
 	availableProviders: readonly ExtractionProviderChoice[] = [],
 ): SetupAcpxAgent {
 	for (const harness of harnesses) {
-		if (harness === "codex" || harness === "claude-code" || harness === "opencode") return toAcpxAgent(harness);
+		if (harness === "codex" || harness === "claude-code" || harness === "opencode" || harness === "kimi") {
+			return toAcpxAgent(harness);
+		}
 	}
 	for (const provider of availableProviders) {
 		if (provider === "codex" || provider === "claude-code" || provider === "opencode") return toAcpxAgent(provider);
@@ -90,6 +94,8 @@ export function defaultAcpxModelForAgent(agent: SetupAcpxAgent): string {
 			return defaultPipelineModel("opencode");
 		case "codex":
 			return defaultPipelineModel("codex");
+		case "kimi":
+			return defaultPipelineModel("acpx");
 	}
 }
 
