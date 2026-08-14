@@ -11,12 +11,13 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { connect } from "node:net";
+import { createServer, connect } from "node:net";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import { buildLaunchdEnvironment, buildLaunchdPlist, resolveLaunchdExecutable } from "@signet/core";
+import { formatInspectorEndpoint, parseInspectorEndpoint } from "./inspector-proxy.js";
 import { resolveDaemonNetwork } from "./network.js";
 import { resolveAgentsDir } from "./workspace.js";
 
@@ -968,6 +969,49 @@ export function resolveDaemonChildInspector(
 	return runtimeIsBun ? undefined : env.BUN_INSPECT;
 }
 
+export interface DaemonInspectorForwarding {
+	readonly childInspector?: string;
+	readonly proxy?: {
+		readonly publicInspector: string;
+		readonly targetInspector: string;
+	};
+}
+
+function reserveInspectorPort(host: string): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const server = createServer();
+		server.once("error", reject);
+		server.listen(0, host, () => {
+			const address = server.address();
+			if (typeof address !== "object" || address === null) {
+				server.close();
+				reject(new Error("Inspector port reservation returned no address"));
+				return;
+			}
+			const port = address.port;
+			server.close((error) => (error ? reject(error) : resolve(port)));
+		});
+	});
+}
+
+export async function resolveDaemonInspectorForwarding(
+	env: NodeJS.ProcessEnv = process.env,
+	runtimeIsBun: boolean = typeof process.versions.bun === "string",
+): Promise<DaemonInspectorForwarding> {
+	const publicInspector = env.BUN_INSPECT;
+	if (!runtimeIsBun || !publicInspector) return { childInspector: resolveDaemonChildInspector(env, runtimeIsBun) };
+
+	try {
+		parseInspectorEndpoint(publicInspector);
+		const targetPort = await reserveInspectorPort("127.0.0.1");
+		const targetInspector = formatInspectorEndpoint({ host: "127.0.0.1", port: targetPort, path: "/" }, "/json");
+		return { childInspector: targetInspector, proxy: { publicInspector, targetInspector } };
+	} catch {
+		// Preserve the handshake fix when an invalid inspector setting cannot be proxied.
+		return { childInspector: undefined };
+	}
+}
+
 const TELEMETRY_ENVIRONMENT_KEYS = [
 	"SIGNET_TELEMETRY_ENV",
 	"SIGNET_TELEMETRY_OPTOUT",
@@ -1230,6 +1274,27 @@ export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "st
 
 export const didLaunchdDaemonStart = didSystemdDaemonStart;
 
+function inspectorProxyLaunchCommand(): string[] {
+	const nativeExecutable = currentNativeExecutablePath();
+	return nativeExecutable ? [nativeExecutable] : [process.execPath, join(__dirname, "inspector-proxy.ts")];
+}
+
+function spawnInspectorProxy(proxy: NonNullable<DaemonInspectorForwarding["proxy"]>): void {
+	const [command, ...args] = inspectorProxyLaunchCommand();
+	const processHandle = spawn(command, args, {
+		detached: true,
+		stdio: "ignore",
+		windowsHide: true,
+		env: {
+			...process.env,
+			BUN_INSPECT: "",
+			SIGNET_INSPECTOR_PROXY_PUBLIC: proxy.publicInspector,
+			SIGNET_INSPECTOR_PROXY_TARGET: proxy.targetInspector,
+		},
+	});
+	processHandle.unref();
+}
+
 export async function waitForDaemonLiveness(
 	deadline: number,
 	shouldStop: () => boolean = () => false,
@@ -1254,6 +1319,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 	}
 
 	const net = resolveDaemonNetwork(agentsDir, process.env);
+	const inspectorForwarding = await resolveDaemonInspectorForwarding();
 
 	const daemonDir = join(agentsDir, ".daemon");
 	const logDir = join(daemonDir, "logs");
@@ -1287,7 +1353,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 		SIGNET_BIND: net.bind,
 		SIGNET_PATH: agentsDir,
 		SIGNET_DAEMON_ENTRYPOINT: "1",
-		BUN_INSPECT: resolveDaemonChildInspector(),
+		BUN_INSPECT: inspectorForwarding.childInspector,
 		// SIGNET_DAEMON_UNIT is deliberately NOT set here: it is only meaningful
 		// when systemd-run actually creates the transient unit (the --setenv in
 		// buildSystemdDaemonStartArgs). On the launchd/detached-spawn fallback
@@ -1312,7 +1378,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 			bind: net.bind,
 			startupLogPath,
 			unitName: systemdUnitName,
-			bunInspect: resolveDaemonChildInspector(),
+			bunInspect: inspectorForwarding.childInspector,
 			telemetryEnv: process.env,
 		});
 		const result = spawnSync("systemd-run", systemdArgs, {
@@ -1344,7 +1410,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 				host: net.host,
 				bind: net.bind,
 				startupLogPath,
-				bunInspect: resolveDaemonChildInspector(),
+				bunInspect: inspectorForwarding.childInspector,
 				telemetryEnv: process.env,
 			}),
 		);
@@ -1426,6 +1492,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 
 		proc.unref();
 	}
+	if (inspectorForwarding.proxy) spawnInspectorProxy(inspectorForwarding.proxy);
 	if (stderrFd !== null) {
 		closeSync(stderrFd);
 	}

@@ -20,6 +20,7 @@ import {
 	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
 	resolveDaemonChildInspector,
+	resolveDaemonInspectorForwarding,
 	resolveDaemonLaunchCommand,
 	resolveDaemonPaths,
 	resolveDaemonRuntimeCommand,
@@ -117,6 +118,18 @@ describe("resolveDaemonChildInspector", () => {
 
 	it("forwards the inspector setting from a non-Bun parent", () => {
 		expect(resolveDaemonChildInspector({ BUN_INSPECT: "127.0.0.1:9230" }, false)).toBe("127.0.0.1:9230");
+	});
+});
+
+describe("resolveDaemonInspectorForwarding", () => {
+	it("moves a Bun daemon inspector behind a discovery-compatible proxy", async () => {
+		const forwarding = await resolveDaemonInspectorForwarding({ BUN_INSPECT: "127.0.0.1:9230" }, true);
+
+		expect(forwarding.proxy).toEqual({
+			publicInspector: "127.0.0.1:9230",
+			targetInspector: expect.stringMatching(/^127\.0\.0\.1:\d+\/json$/),
+		});
+		expect(forwarding.childInspector).toBe(forwarding.proxy?.targetInspector);
 	});
 });
 

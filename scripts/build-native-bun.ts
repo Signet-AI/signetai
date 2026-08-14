@@ -335,7 +335,10 @@ if (!process.env.SIGNET_DIR?.trim()) {
 		}
 	}
 }
-if (process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH) {
+if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PROXY_TARGET) {
+	const { runInspectorProxyFromEnvironment } = await import("../surfaces/cli/src/lib/inspector-proxy");
+	await runInspectorProxyFromEnvironment();
+} else if (process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH) {
 	const { runDatabaseIntegrityWorker } = await import("../platform/daemon/src/database-integrity-worker");
 	runDatabaseIntegrityWorker();
 } else {
