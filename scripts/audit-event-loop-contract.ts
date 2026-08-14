@@ -398,6 +398,8 @@ function report(sites: readonly AuditSite[], allowlist: readonly AllowlistEntry[
 		"",
 		"The counts exclude test, benchmark, generated, and `__tests__` fixtures. A source line is a call site when it contains one of the named synchronous APIs followed by `()`. The baseline key includes the normalized source line and occurrence number, so line shifts do not look like new calls while added calls still fail CI.",
 		"",
+		"The legacy 1057-site baseline was not an exact inventory: it counted two comment-only lines as call sites and collapsed one real same-line call into a single site. Regenerating with the occurrence-accurate scanner yields 1056 sites (1057 legacy minus 2 comment-only false positives plus 1 previously collapsed same-line call).",
+		"",
 		"## Classification",
 		"",
 		"| Category | Call sites | Meaning |",
