@@ -156,9 +156,88 @@ function isIsolatedWorkerSource(sourceFile: ts.SourceFile): boolean {
 	);
 }
 
-function classifySite(path: string, sourceFile: ts.SourceFile): SiteCategory {
+function functionName(node: ts.Node): string | null {
+	if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) {
+		return node.name && ts.isIdentifier(node.name) ? node.name.text : null;
+	}
+	if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isVariableDeclaration(node.parent)) {
+		return ts.isIdentifier(node.parent.name) ? node.parent.name.text : null;
+	}
+	return null;
+}
+
+function calledFunctionName(expression: ts.Expression): string | null {
+	if (ts.isIdentifier(expression)) return expression.text;
+	if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+	return null;
+}
+
+function functionBody(node: ts.Node): ts.Node | null {
+	if (
+		ts.isFunctionDeclaration(node) ||
+		ts.isMethodDeclaration(node) ||
+		ts.isFunctionExpression(node) ||
+		ts.isArrowFunction(node)
+	) {
+		return node.body ?? null;
+	}
+	return null;
+}
+
+function collectFunctionCalls(node: ts.Node, calls: Set<string>): void {
+	if (ts.isCallExpression(node)) {
+		const name = calledFunctionName(node.expression);
+		if (name !== null) calls.add(name);
+	}
+	if (
+		ts.isFunctionDeclaration(node) ||
+		ts.isMethodDeclaration(node) ||
+		ts.isArrowFunction(node) ||
+		ts.isFunctionExpression(node)
+	) {
+		return;
+	}
+	ts.forEachChild(node, (child) => collectFunctionCalls(child, calls));
+}
+
+function bootstrapFunctionNames(sourceFile: ts.SourceFile): ReadonlySet<string> {
+	const callsByFunction = new Map<string, Set<string>>();
+	const visit = (node: ts.Node): void => {
+		const name = functionName(node);
+		if (name !== null) {
+			const calls = new Set<string>();
+			const body = functionBody(node);
+			if (body !== null) collectFunctionCalls(body, calls);
+			callsByFunction.set(name, calls);
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+
+	const reachable = new Set(["initDbAccessor", "initDbAccessorAsync"]);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const name of reachable) {
+			for (const called of callsByFunction.get(name) ?? []) {
+				if (callsByFunction.has(called) && !reachable.has(called)) {
+					reachable.add(called);
+					changed = true;
+				}
+			}
+		}
+	}
+	return reachable;
+}
+
+function classifySite(
+	path: string,
+	sourceFile: ts.SourceFile,
+	functionStack: readonly string[],
+	bootstrapNames: ReadonlySet<string>,
+): SiteCategory {
 	const normalized = path.replaceAll("\\", "/");
-	if (normalized === "db-accessor.ts" && hasIdentifier(sourceFile, "initDbAccessor")) {
+	if (normalized === "db-accessor.ts" && functionStack.some((name) => bootstrapNames.has(name))) {
 		return "pre-readiness-bootstrap";
 	}
 	if (isCliOnlySource(sourceFile)) return "cli-only";
@@ -189,16 +268,27 @@ function findSites(root: string): AuditSite[] {
 		const text = readFileSync(absolutePath, "utf8");
 		const sourceFile = ts.createSourceFile(absolutePath, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 		const lines = text.split("\n");
+		const bootstrapNames = bootstrapFunctionNames(sourceFile);
+		const functionStack: string[] = [];
 		const visit = (node: ts.Node): void => {
+			const name = functionName(node);
+			if (name !== null) functionStack.push(name);
 			if (ts.isCallExpression(node)) {
 				const call = calledSyncApi(node.expression);
 				if (call) {
 					const line = sourceFile.getLineAndCharacterOfPosition(call.position).line;
 					const source = lines[line]?.replace(/\/\/.*$/u, "").trim() ?? "";
-					sites.push({ path, line: line + 1, api: call.api, source, category: classifySite(path, sourceFile) });
+					sites.push({
+						path,
+						line: line + 1,
+						api: call.api,
+						source,
+						category: classifySite(path, sourceFile, functionStack, bootstrapNames),
+					});
 				}
 			}
 			ts.forEachChild(node, visit);
+			if (name !== null) functionStack.pop();
 		};
 		visit(sourceFile);
 	}

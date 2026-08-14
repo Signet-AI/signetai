@@ -104,6 +104,44 @@ test("event-loop audit accepts a classified bootstrap exception", () => {
 	}
 });
 
+test("event-loop audit rejects a request-path call allowlisted in a mixed bootstrap file", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		const source = [
+			"function initDbAccessor() { return existsSync('/tmp/signet-bootstrap'); }",
+			"export function requestPath() { return readFileSync('/tmp/signet-request', 'utf8'); }",
+			"",
+		].join("\n");
+		writeFileSync(join(root, "db-accessor.ts"), source);
+		expect(() =>
+			runAudit({
+				sourceRoot: root,
+				baselineSites: [
+					{
+						path: "db-accessor.ts",
+						line: 1,
+						api: "existsSync",
+						source: source.split("\n")[0] ?? "",
+						category: "pre-readiness-bootstrap",
+					},
+				],
+				allowlist: [
+					{
+						path: "db-accessor.ts",
+						line: 2,
+						api: "readFileSync",
+						category: "pre-readiness-bootstrap",
+						source: source.split("\n")[1] ?? "",
+						reason: "This request path is incorrectly treated as startup-only.",
+					},
+				],
+			}),
+		).toThrow("Allowlist classification mismatch");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("event-loop audit rejects a hot-path call mislabeled as an isolated exception", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
 	try {
