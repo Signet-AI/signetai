@@ -219,6 +219,11 @@ async function runSynthesisWithDeps(
 			},
 		);
 
+		if (options.canWrite && !options.canWrite()) {
+			deps.logger.warn("synthesis", "Discarding synthesis result after shutdown abandoned the run");
+			return "failed";
+		}
+
 		if (synthesisData.fileCount === 0) {
 			deps.logger.info("synthesis", "No synthesis sources available, skipping");
 			return "empty";
@@ -378,7 +383,7 @@ export function startSynthesisWorker(
 				});
 				return "retry";
 			}
-			if (shouldRecordSuccess(result)) {
+			if (shouldRecordSuccess(result) && !runState.abandoned) {
 				writeLastSynthesisTime(deps, Date.now(), entry.agentId);
 			}
 			return "completed";
@@ -462,13 +467,14 @@ export function startSynthesisWorker(
 			}
 
 			try {
+				activeWorkId = "synthesis:default";
 				const runState = { abandoned: false };
 				activeRunState = runState;
 				currentRunPromise = runSynthesisWithDeps(deps, config, undefined, {
 					canWrite: () => !runState.abandoned,
 				});
 				const result = await currentRunPromise;
-				if (shouldRecordSuccess(result)) {
+				if (shouldRecordSuccess(result) && !runState.abandoned) {
 					// Busy means another writer currently owns the shared
 					// MEMORY.md head lease. Leave last-run untouched so the
 					// next tick retries instead of waiting a full interval.
@@ -477,6 +483,7 @@ export function startSynthesisWorker(
 			} finally {
 				currentRunPromise = null;
 				activeRunState = null;
+				activeWorkId = null;
 				releaseWriteLock(lockToken);
 			}
 		} catch (e) {
@@ -513,12 +520,31 @@ export function startSynthesisWorker(
 		},
 		async drain() {
 			const startedAtMs = Date.now();
+			// Capture work at shutdown entry. The active run may clear its owner
+			// fields before the drain wait resolves, but it still counts toward the
+			// shutdown result. Queued forced work is scheduled work even if it has
+			// not started yet.
+			const workIdAtShutdown = activeWorkId;
+			const pendingWorkAtShutdown = pendingQueue.reduce((sum, entry) => sum + entry.count, 0);
 			// Cancel any pending tick to prevent new synthesis starting
 			if (timer) {
 				clearTimeout(timer);
 				timer = null;
 			}
-			if (!isSynthesizing) return "completed";
+			if (!isSynthesizing) {
+				if (pendingWorkAtShutdown === 0) return "completed";
+				const completedAtMs = Date.now();
+				emitLifecycleShutdown({
+					startedAtMs,
+					completedAtMs,
+					budgetMs: config.timeout + DRAIN_TIMEOUT_BUFFER_MS + 100,
+					startedWork: pendingWorkAtShutdown,
+					pendingWork: pendingWorkAtShutdown,
+					completedWork: 0,
+					abandonedWork: 0,
+				});
+				return "completed";
+			}
 			let timeoutId: ReturnType<typeof setTimeout> | null = null;
 			let timedOut = false;
 			try {
@@ -537,7 +563,7 @@ export function startSynthesisWorker(
 				]);
 				if (timedOut && activeRunState) activeRunState.abandoned = true;
 				const completedAtMs = Date.now();
-				const workId = activeWorkId;
+				const workId = workIdAtShutdown;
 				if (workId) {
 					emitLifecycleObservation({
 						stage: "restart",
@@ -551,8 +577,8 @@ export function startSynthesisWorker(
 					startedAtMs,
 					completedAtMs,
 					budgetMs: config.timeout + DRAIN_TIMEOUT_BUFFER_MS + 100,
-					startedWork: workId ? 1 : 0,
-					pendingWork: 0,
+					startedWork: (workId ? 1 : 0) + pendingWorkAtShutdown,
+					pendingWork: pendingWorkAtShutdown,
 					completedWork: workId && !timedOut ? 1 : 0,
 					abandonedWork: workId && timedOut ? 1 : 0,
 				});
@@ -632,7 +658,7 @@ export function startSynthesisWorker(
 					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
 					scheduleTick(FORCE_RETRY_MS);
 				}
-				if (shouldRecordSuccess(result)) {
+				if (shouldRecordSuccess(result) && !runState.abandoned) {
 					writeLastSynthesisTime(deps, Date.now(), key);
 					clearPendingForceFor(opts?.agentId);
 				}
@@ -651,6 +677,7 @@ export function startSynthesisWorker(
 			} finally {
 				currentRunPromise = null;
 				activeRunState = null;
+				activeWorkId = null;
 				releaseWriteLock(lockToken);
 			}
 		},

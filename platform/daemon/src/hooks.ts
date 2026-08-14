@@ -1735,26 +1735,86 @@ export async function handleUserPromptSubmit(
 
 	recordRecallAttempt("prompt_injection");
 	promptRecallAttempted = true;
-	const promptHandledAtMs = Date.now();
-	let providerStartedAtMs = promptHandledAtMs;
+	let providerStartedAtMs: number | null = null;
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
-		providerStartedAtMs = Date.now();
-		const entityContext = await deps.buildEntityPromptContext({
-			userMessage,
-			agentId,
-			minScore: resolveUserPromptMinScore(submitCfg.minScore),
-			injectBudget,
-			memoryDbPath: getMemoryDbPath(),
-			fetchEmbedding: deps.fetchEmbedding,
-			embedding: cfg.embedding,
-			sessionHash: hashSessionKey(req.sessionKey) ?? undefined,
-		});
+		const providerStartTime = Date.now();
+		providerStartedAtMs = providerStartTime;
+		const providerOutcome = deps
+			.buildEntityPromptContext({
+				userMessage,
+				agentId,
+				minScore: resolveUserPromptMinScore(submitCfg.minScore),
+				injectBudget,
+				memoryDbPath: getMemoryDbPath(),
+				fetchEmbedding: deps.fetchEmbedding,
+				embedding: cfg.embedding,
+				sessionHash: hashSessionKey(req.sessionKey) ?? undefined,
+			})
+			.then(
+				(context) => ({ ok: true as const, context, completedAtMs: Date.now() }),
+				(error: unknown) => ({ ok: false as const, error, completedAtMs: Date.now() }),
+			);
+		const timeoutMarker = Symbol("prompt-provider-timeout");
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
+		const providerResult = await Promise.race([
+			providerOutcome,
+			new Promise<typeof timeoutMarker>((resolve) => {
+				timeoutId = setTimeout(() => resolve(timeoutMarker), cfg.embedding.promptSubmitTimeoutMs ?? 1000);
+			}),
+		]);
+		if (timeoutId !== null) clearTimeout(timeoutId);
+		if (providerResult === timeoutMarker) {
+			const promptHandledAtMs = Date.now();
+			void providerOutcome.then((outcome) => {
+				emitLifecycleProvider({
+					startedAtMs: providerStartTime,
+					completedAtMs: outcome.completedAtMs,
+					promptHandledAtMs,
+				});
+			});
+			recordUserPromptRecallTelemetry({
+				cfg,
+				agentId,
+				sessionKey: req.sessionKey,
+				project: req.project,
+				userMessage,
+				memories: [],
+				startedAt: start,
+				engine: "provider-timeout",
+			});
+			recordRecallOutcome({
+				surface: "prompt_injection",
+				resultCount: 0,
+				delivery: "not_delivered",
+				error: true,
+			});
+			promptRecallOutcomeRecorded = true;
+			return finalizeUserPromptSubmitSuccess(
+				req,
+				userMessage,
+				start,
+				{
+					dynamicContext: "",
+					inject: "",
+					memoryCount: 0,
+					queryTerms: keywordTerms.join(" ") || undefined,
+					engine: "provider-timeout",
+					warnings,
+				},
+				deps.logger,
+			);
+		}
+		if (!providerResult.ok) throw providerResult.error;
+		const entityContext = providerResult.context;
+		// This timestamp records the handoff to the provider. A timeout returns
+		// the prompt response before the provider settles, so it is independent
+		// of slow-provider completion.
 		emitLifecycleProvider({
-			startedAtMs: providerStartedAtMs,
-			completedAtMs: Date.now(),
-			promptHandledAtMs,
+			startedAtMs: providerStartTime,
+			completedAtMs: providerResult.completedAtMs,
+			promptHandledAtMs: providerStartTime,
 		});
 		if (entityContext.lines.length === 0) {
 			recordUserPromptRecallTelemetry({
@@ -1823,11 +1883,13 @@ export async function handleUserPromptSubmit(
 			deps.logger,
 		);
 	} catch (e) {
-		emitLifecycleProvider({
-			startedAtMs: providerStartedAtMs,
-			completedAtMs: Date.now(),
-			promptHandledAtMs,
-		});
+		if (providerStartedAtMs !== null) {
+			emitLifecycleProvider({
+				startedAtMs: providerStartedAtMs,
+				completedAtMs: Date.now(),
+				promptHandledAtMs: providerStartedAtMs,
+			});
+		}
 		if (promptRecallAttempted && !promptRecallOutcomeRecorded) {
 			recordRecallOutcome({ surface: "prompt_injection", error: true, delivery: "not_delivered" });
 		}

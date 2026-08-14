@@ -19,8 +19,9 @@ process.env.SIGNET_AGENT_ID = "default";
 process.env.SIGNET_PATH = TEST_DIR;
 
 const { initDbAccessor, closeDbAccessor, getDbAccessor } = await import("./db-accessor");
+const { loadMemoryConfig } = await import("./memory-config");
 const hooks = await import("./hooks");
-const { setLifecycleObservers } = await import("@signet/lifecycle-proof");
+const { setLifecycleObservers, assertSlowProviderInvariant } = await import("@signet/lifecycle-proof");
 const lineage = await import("./memory-lineage");
 const transcriptAudit = await import("./transcript-audit");
 const { deriveSessionEndFallbackId } = await import("./session-end-recovery");
@@ -1635,7 +1636,7 @@ describe("direct transcript regressions", () => {
 // ============================================================================
 
 describe("handleUserPromptSubmit", () => {
-	test.serial("records a measured slow-provider window from a delayed provider", async () => {
+	test.serial("returns before a real slow provider settles and records the bounded outcome", async () => {
 		createMemoryDb();
 		const providerWindows: Array<{
 			readonly startedAtMs: number;
@@ -1643,23 +1644,45 @@ describe("handleUserPromptSubmit", () => {
 			readonly promptHandledAtMs: number;
 		}> = [];
 		setLifecycleObservers({ provider: (window) => providerWindows.push(window) });
-		const delayMs = 30;
+		const configured = loadMemoryConfig(TEST_DIR);
+		const timeoutConfig = {
+			...configured,
+			embedding: { ...configured.embedding, promptSubmitTimeoutMs: 10 },
+		};
+		const delayMs = 200;
+		let resolveProvider: (() => void) | undefined;
+		const providerFinished = new Promise<void>((resolve) => {
+			resolveProvider = resolve;
+		});
 
-		await handleUserPromptSubmit(
-			{ harness: "test", sessionKey: "slow-provider", userPrompt: "recall the slow provider test" },
-			{
-				buildEntityPromptContext: async () => {
-					await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-					return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
-				},
-			} as never,
-		);
+		try {
+			const startedAtMs = Date.now();
+			const result = await handleUserPromptSubmit(
+				{ harness: "test", sessionKey: "slow-provider", userPrompt: "recall the slow provider test" },
+				{
+					loadMemoryConfig: () => timeoutConfig,
+					buildEntityPromptContext: async () => {
+						await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+						resolveProvider?.();
+						return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
+					},
+				} as never,
+			);
 
-		expect(providerWindows).toHaveLength(1);
-		const window = providerWindows[0];
-		if (!window) throw new Error("expected owner-emitted provider timing");
-		expect(window.completedAtMs - window.startedAtMs).toBeGreaterThanOrEqual(delayMs - 5);
-		expect(window.promptHandledAtMs).toBeLessThan(window.completedAtMs);
+			expect(result.engine).toBe("provider-timeout");
+			expect(Date.now() - startedAtMs).toBeLessThan(delayMs);
+			await providerFinished;
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+			expect(providerWindows).toHaveLength(1);
+			const window = providerWindows[0];
+			if (!window) throw new Error("expected owner-emitted provider timing");
+			expect(window.completedAtMs - window.startedAtMs).toBeGreaterThanOrEqual(delayMs - 5);
+			expect(window.promptHandledAtMs).toBeLessThan(window.completedAtMs);
+			assertSlowProviderInvariant(window);
+		} finally {
+			resolveProvider?.();
+			setLifecycleObservers(undefined);
+		}
 	});
 
 	test.serial("returns empty inject when no known entity or alias is mentioned", async () => {
