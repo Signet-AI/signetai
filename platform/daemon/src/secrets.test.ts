@@ -10,6 +10,7 @@ import {
 	setBitwardenClientFactoryForTests,
 } from "./bitwarden.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index.js";
+import type { SecretKeyringAdapter, SecretKeyringResult } from "./secrets-keyring.js";
 import {
 	__setSecretStoreWriteHookForTests,
 	deleteSecret,
@@ -23,6 +24,7 @@ import {
 	putSecret,
 	resetSecretExecJobsForTests,
 	setMachineIdResolverForTests,
+	setSecretKeyringAdapterForTests,
 	startSecretExecJob,
 } from "./secrets.js";
 
@@ -44,11 +46,44 @@ function machineIdFile(): string {
 	return join(agentsDir, ".secrets", ".machine-id");
 }
 
+function makeKeyring(initial: SecretKeyringResult): SecretKeyringAdapter & { setCalls: number } {
+	let stored = initial.state === "found" ? initial.value : undefined;
+	let next = initial;
+	const adapter = {
+		platform: "test",
+		service: "ai.signet.secrets",
+		account: "test",
+		setCalls: 0,
+		async get(): Promise<SecretKeyringResult> {
+			return stored === undefined ? next : { state: "found", value: stored };
+		},
+		async set(value: string): Promise<SecretKeyringResult> {
+			adapter.setCalls += 1;
+			if (next.state !== "missing" && next.state !== "found") return next;
+			stored = value;
+			next = { state: "found", value };
+			return next;
+		},
+	};
+	return adapter;
+}
+
 describe("local secrets provider", () => {
 	beforeEach(() => {
 		agentsDir = join(tmpdir(), `signet-secrets-provider-${process.pid}-${Date.now()}`);
 		process.env.SIGNET_PATH = agentsDir;
 		mkdirSync(agentsDir, { recursive: true });
+		setSecretKeyringAdapterForTests({
+			platform: "test",
+			service: "test",
+			account: "test",
+			async get() {
+				return { state: "unavailable", message: "test keyring unavailable" };
+			},
+			async set() {
+				return { state: "unavailable", message: "test keyring unavailable" };
+			},
+		});
 	});
 
 	afterEach(() => {
@@ -57,6 +92,7 @@ describe("local secrets provider", () => {
 		setBitwardenClientFactoryForTests(null);
 		__setSecretStoreWriteHookForTests(null);
 		setMachineIdResolverForTests(null);
+		setSecretKeyringAdapterForTests(null);
 		invalidateSecretsCache();
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -71,6 +107,69 @@ describe("local secrets provider", () => {
 		if (agentsDir && existsSync(agentsDir)) {
 			rmSync(agentsDir, { recursive: true, force: true });
 		}
+	});
+
+	test("new local stores use a random native-keyring master key", async () => {
+		const keyring = makeKeyring({ state: "missing" });
+		setSecretKeyringAdapterForTests(keyring);
+
+		await putSecret("OPENAI_API_KEY", "native-secret");
+		const store = JSON.parse(readFileSync(secretsFile(), "utf-8")) as { version: number; provider: string };
+
+		expect(store).toMatchObject({ version: 2, provider: "native-keyring" });
+		expect(keyring.setCalls).toBe(1);
+		expect(await getSecret("OPENAI_API_KEY")).toBe("native-secret");
+	});
+
+	test("locked native keyrings never fall back or report no credentials", async () => {
+		setSecretKeyringAdapterForTests(makeKeyring({ state: "locked", message: "keychain is locked" }));
+
+		await expect(putSecret("OPENAI_API_KEY", "locked-secret")).rejects.toMatchObject({
+			name: "SecretKeyringError",
+			state: "locked",
+			retryable: true,
+		});
+		expect(existsSync(secretsFile())).toBe(false);
+	});
+
+	test("native keyring unavailability stays retryable after a store exists", async () => {
+		const keyring = makeKeyring({ state: "missing" });
+		setSecretKeyringAdapterForTests(keyring);
+		await putSecret("OPENAI_API_KEY", "native-secret");
+
+		setSecretKeyringAdapterForTests({
+			platform: "test",
+			service: "test",
+			account: "test",
+			async get() {
+				return { state: "unavailable", message: "keyring daemon unavailable" };
+			},
+			async set() {
+				return { state: "unavailable", message: "keyring daemon unavailable" };
+			},
+		});
+		await expect(getSecret("OPENAI_API_KEY")).rejects.toMatchObject({
+			name: "SecretKeyringError",
+			state: "unavailable",
+			retryable: true,
+		});
+	});
+
+	test("legacy stores migrate once keyring access is restored", async () => {
+		await putSecret("OPENAI_API_KEY", "legacy-secret");
+		const legacyStore = JSON.parse(readFileSync(secretsFile(), "utf-8")) as { version: number };
+		expect(legacyStore.version).toBe(1);
+
+		const keyring = makeKeyring({ state: "missing" });
+		setSecretKeyringAdapterForTests(keyring);
+		expect(await getSecret("OPENAI_API_KEY")).toBe("legacy-secret");
+		const migratedStore = JSON.parse(readFileSync(secretsFile(), "utf-8")) as { version: number; provider: string };
+		expect(migratedStore).toMatchObject({ version: 2, provider: "native-keyring" });
+		expect(keyring.setCalls).toBe(1);
+		expect((await localSecretProvider.health({})).status).toBe("healthy");
+
+		expect(await getSecret("OPENAI_API_KEY")).toBe("legacy-secret");
+		expect(keyring.setCalls).toBe(1);
 	});
 
 	test("bare names and local:// references resolve through the same local store", async () => {
@@ -201,7 +300,7 @@ describe("local secrets provider", () => {
 			script,
 			[
 				"process.stdout.write(process.env.OPENAI_API_KEY);",
-				"process.stderr.write(`err:${process.env.OPENAI_API_KEY}`);",
+				'process.stderr.write("err:" + process.env.OPENAI_API_KEY);',
 			].join("\n"),
 		);
 

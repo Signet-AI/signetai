@@ -9,7 +9,7 @@ import {
 	mergeSignetGitignoreEntries,
 } from "@signet/core";
 import { logger } from "../logger";
-import { getSecret, hasSecret } from "../secrets.js";
+import { SecretKeyringError, getSecret, hasSecret } from "../secrets.js";
 import { AGENTS_DIR } from "./state";
 
 import { clampGitSyncIntervalSeconds, gitConfig } from "./git-config";
@@ -57,7 +57,15 @@ function isGitRepo(dir: string): boolean {
 }
 
 interface GitCredentials {
-	method: "token" | "gh" | "credential-helper" | "keychain-locked" | "ssh" | "no-remote" | "none";
+	method:
+		| "token"
+		| "gh"
+		| "credential-helper"
+		| "keychain-locked"
+		| "keychain-unavailable"
+		| "ssh"
+		| "no-remote"
+		| "none";
 	authUrl?: string;
 	usePlainGit?: boolean;
 }
@@ -69,6 +77,8 @@ type CredentialHelperResult =
 
 const KEYCHAIN_LOCKED_MESSAGE =
 	"The macOS login keychain is locked. Unlock it in Keychain Access, then retry Git sync.";
+const KEYCHAIN_UNAVAILABLE_MESSAGE =
+	"The native secrets keyring is unavailable. Start or unlock the user keyring, then retry Git sync.";
 
 function killProcessTree(proc: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
 	try {
@@ -341,7 +351,11 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 					authUrl: buildAuthUrlFromToken(remoteUrl, token),
 				};
 			}
-		} catch {
+		} catch (error) {
+			if (error instanceof SecretKeyringError) {
+				if (error.state === "locked") return { method: "keychain-locked" };
+				if (error.state === "unavailable" || error.state === "unsupported") return { method: "keychain-unavailable" };
+			}
 			/* ignore */
 		}
 
@@ -379,6 +393,7 @@ function failingGitResultMessage(operation: string, result: CommandResult): stri
 
 function missingCredentialMessage(creds: GitCredentials): string {
 	if (creds.method === "keychain-locked") return KEYCHAIN_LOCKED_MESSAGE;
+	if (creds.method === "keychain-unavailable") return KEYCHAIN_UNAVAILABLE_MESSAGE;
 	return "No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.";
 }
 

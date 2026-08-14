@@ -68,7 +68,19 @@ Use an integration only when its access boundary matches the deployment. Keep it
 
 Local secret state is kept under `$SIGNET_WORKSPACE/.secrets/`. Keep this directory private and out of source control. Secret values are intentionally not available through a `get` command; `signet secret get NAME` explains how to use an existing reference instead.
 
-Moving a workspace to a different machine or restoring it from backup is a security-sensitive operation. Verify the recovered secret provider state before restarting automation. Do not hand-copy ciphertext or reset secret files to troubleshoot a provider issue.
+New stores are keyring-first. Signet generates a random 256-bit master key and stores it as a generic credential named `ai.signet.secrets` in the current user account. The encrypted payload remains in `secrets.enc`, but the machine identifier is no longer used to protect new stores.
+
+The native adapter uses the platform user credential store:
+
+- macOS: Keychain Services.
+- Windows: user-scoped Credential Manager. Signet does not use a machine-wide DPAPI scope.
+- Linux: Secret Service through the user D-Bus session, such as GNOME Keyring or KWallet. Signet does not silently switch to the kernel keyring.
+
+The daemon never prompts for an unlock. A locked keyring is reported as a retryable `keyring-locked` condition and is not treated as missing credentials. An unavailable headless Linux keyring is distinct from an empty keyring. Existing local-first deployments can continue in the documented degraded compatibility mode when no native keyring is available. In that mode the current machine-id-derived encryption is used, a one-time warning is emitted, a persistent degraded health marker is written, and the store is not portable across machines. A locked or permission-denied keyring never triggers this fallback.
+
+Existing version-1 `secrets.enc` files migrate on first read or write after the native keyring becomes available. Signet validates the complete old store, writes or reuses the keyring master key, re-encrypts every entry into version 2, and atomically replaces the file. The keyring write happens before the file replacement, so an interrupted migration can be retried. Repeated access is idempotent. A version-2 file fails closed if its keyring item is missing or inaccessible; Signet never derives a replacement key for it.
+
+Moving a workspace to a different machine or restoring it from backup is a security-sensitive operation. Restoring only `secrets.enc` is not sufficient after migration. Restore the platform keychain or use an explicit recovery export/import flow when available. Verify the recovered secret provider state before restarting automation. Do not hand-copy ciphertext or reset secret files to troubleshoot a provider issue.
 
 ## API boundary
 

@@ -43,6 +43,7 @@
 		"@hono/node-server": "^2.1.0",
 		"@huggingface/transformers": "^4.2.0",
 		"@modelcontextprotocol/sdk": "^1.30.0",
+		"@napi-rs/keyring": "1.3.0",
 		"@signet/core": "workspace:*",
 		"acpx": "0.13.0",
 		"better-sqlite3": "^11.0.0",

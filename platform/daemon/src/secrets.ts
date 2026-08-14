@@ -12,7 +12,7 @@
  */
 
 import { execSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
 	chmodSync,
 	closeSync,
@@ -42,6 +42,13 @@ import {
 	readBitwardenReference,
 } from "./bitwarden.js";
 import { logger } from "./logger.js";
+import {
+	getSecretKeyring,
+	setSecretKeyringForTests,
+	type SecretKeyringAdapter,
+	type SecretKeyringResult,
+	type SecretKeyringState,
+} from "./secrets-keyring.js";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, isOnePasswordReference, readOnePasswordReference } from "./onepassword.js";
 import { recordPluginAuditEvent } from "./plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID } from "./plugins/bundled/secrets.js";
@@ -77,7 +84,8 @@ interface SecretEntry {
 }
 
 interface SecretsStore {
-	version: 1;
+	version: 1 | 2;
+	provider?: "legacy-obfuscated" | "native-keyring";
 	secrets: Record<string, SecretEntry>;
 }
 
@@ -224,11 +232,32 @@ function resolveMachineId(): string | undefined {
 	return undefined;
 }
 
-let _masterKey: Uint8Array | null = null;
 let machineIdSelection: MachineIdSelection | null = null;
 let machineIdResolverForTests: MachineIdResolver | null = null;
 type SodiumModule = typeof import("libsodium-wrappers").default;
 let sodiumPromise: Promise<SodiumModule> | null = null;
+let degradedWarningEmitted = false;
+
+const NATIVE_STORE_VERSION = 2 as const;
+const DEGRADED_WARNING_FILE = ".degraded-warning";
+const KEYRING_ACCOUNT_SCOPE = "workspace";
+
+interface MasterKeyResolution {
+	readonly key: Uint8Array;
+	readonly provider: "legacy-obfuscated" | "native-keyring";
+}
+
+export class SecretKeyringError extends Error {
+	readonly state: SecretKeyringState;
+	readonly retryable: boolean;
+
+	constructor(result: SecretKeyringResult) {
+		super(result.message ?? `Secrets keyring is ${result.state}`);
+		this.name = "SecretKeyringError";
+		this.state = result.state;
+		this.retryable = result.state === "locked" || result.state === "unavailable";
+	}
+}
 
 function readPersistedMachineId(): string | undefined {
 	try {
@@ -306,7 +335,11 @@ function getMachineId(): string {
 export function setMachineIdResolverForTests(resolver: MachineIdResolver | null): void {
 	machineIdResolverForTests = resolver;
 	machineIdSelection = null;
-	_masterKey = null;
+}
+
+export function setSecretKeyringAdapterForTests(adapter: SecretKeyringAdapter | null): void {
+	setSecretKeyringForTests(adapter);
+	degradedWarningEmitted = false;
 }
 
 async function getSodium(): Promise<SodiumModule> {
@@ -318,20 +351,108 @@ async function getSodium(): Promise<SodiumModule> {
 	return sodiumPromise;
 }
 
-async function getMasterKey(): Promise<Uint8Array> {
-	if (_masterKey) return _masterKey;
-
+async function getLegacyMasterKey(): Promise<Uint8Array> {
 	const sodium = await getSodium();
-
 	const machineId = getMachineId();
 	const input = `signet:secrets:${machineId}`;
 	const inputBytes = new TextEncoder().encode(input);
+	return sodium.crypto_generichash(32, inputBytes, null);
+}
 
-	// Stretch the machine-id into a 32-byte key via BLAKE2b.
-	// In a future version this can be replaced with Argon2 + passphrase.
-	const key = sodium.crypto_generichash(32, inputBytes, null);
-	_masterKey = key;
-	return key;
+function decodeKeyringValue(result: SecretKeyringResult): Uint8Array {
+	if (result.value === undefined)
+		throw new SecretKeyringError({ state: "corrupt", message: "Keyring returned no master key" });
+	try {
+		const key = Buffer.from(result.value, "base64");
+		if (key.length !== 32) throw new Error("master key has an invalid length");
+		return new Uint8Array(key);
+	} catch (error) {
+		throw new SecretKeyringError({ state: "corrupt", message: error instanceof Error ? error.message : String(error) });
+	}
+}
+
+function emitDegradedWarning(result: SecretKeyringResult): void {
+	if (degradedWarningEmitted) return;
+	degradedWarningEmitted = true;
+	logger.warn("secrets", "Using degraded machine-id secrets encryption because no native keyring is available", {
+		provider: "legacy-obfuscated",
+		keyringState: result.state,
+		message: "Configure a native user keyring and migrate the store to improve protection and portability",
+	});
+	try {
+		mkdirSync(getSecretsDir(), { recursive: true, mode: 0o700 });
+		writeFileSync(join(getSecretsDir(), DEGRADED_WARNING_FILE), "legacy-obfuscated\n", {
+			encoding: "utf-8",
+			mode: 0o600,
+		});
+	} catch {
+		// The health response still reports degraded state if the marker cannot be written.
+	}
+}
+
+function clearDegradedWarning(): void {
+	try {
+		unlinkSync(join(getSecretsDir(), DEGRADED_WARNING_FILE));
+	} catch (error) {
+		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+	}
+}
+
+async function migrateLegacyStore(store: SecretsStore, legacyKey: Uint8Array, nativeKey: Uint8Array): Promise<void> {
+	const plaintexts = new Map<string, string>();
+	for (const [name, entry] of Object.entries(store.secrets)) {
+		plaintexts.set(name, await decryptWithKey(entry.ciphertext, legacyKey));
+	}
+	const migrated: SecretsStore = {
+		version: NATIVE_STORE_VERSION,
+		provider: "native-keyring",
+		secrets: {},
+	};
+	for (const [name, plaintext] of plaintexts) {
+		const entry = store.secrets[name];
+		if (!entry) continue;
+		migrated.secrets[name] = {
+			ciphertext: await encryptWithKey(plaintext, nativeKey),
+			created: entry.created,
+			updated: entry.updated,
+		};
+	}
+	store.version = migrated.version;
+	store.provider = migrated.provider;
+	store.secrets = migrated.secrets;
+	saveStore(store);
+	clearDegradedWarning();
+}
+
+async function resolveMasterKey(store: SecretsStore): Promise<MasterKeyResolution> {
+	const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
+	const result = await keyring.get();
+	if (store.version === NATIVE_STORE_VERSION || store.provider === "native-keyring") {
+		if (result.state !== "found") throw new SecretKeyringError(result);
+		return { key: decodeKeyringValue(result), provider: "native-keyring" };
+	}
+
+	if (result.state === "found") {
+		const nativeKey = decodeKeyringValue(result);
+		if (existsSync(getSecretsFile())) await migrateLegacyStore(store, await getLegacyMasterKey(), nativeKey);
+		return { key: nativeKey, provider: "native-keyring" };
+	}
+
+	if (result.state === "missing") {
+		const nativeKey = randomBytes(32);
+		const legacyKey = existsSync(getSecretsFile()) ? await getLegacyMasterKey() : undefined;
+		const saved = await keyring.set(Buffer.from(nativeKey).toString("base64"));
+		if (saved.state === "found") {
+			if (legacyKey) await migrateLegacyStore(store, legacyKey, nativeKey);
+			return { key: nativeKey, provider: "native-keyring" };
+		}
+		throw new SecretKeyringError(saved);
+	}
+
+	if (result.state === "locked") throw new SecretKeyringError(result);
+	if (result.state !== "unavailable" && result.state !== "unsupported") throw new SecretKeyringError(result);
+	emitDegradedWarning(result);
+	return { key: await getLegacyMasterKey(), provider: "legacy-obfuscated" };
 }
 
 // ---------------------------------------------------------------------------
@@ -350,61 +471,33 @@ async function decryptWithKey(ciphertext: string, key: Uint8Array): Promise<stri
 		throw new Error("Decryption failed - key mismatch or corrupted data");
 	}
 	if (!message) throw new Error("Decryption failed - key mismatch or corrupted data");
-
 	return new TextDecoder().decode(message);
 }
 
-async function verifyExistingStore(key: Uint8Array): Promise<boolean> {
-	const store = loadStore();
-	for (const entry of Object.values(store.secrets)) {
-		try {
-			await decryptWithKey(entry.ciphertext, key);
-		} catch {
-			return false;
-		}
-	}
-	return true;
-}
-
-async function anchorMachineIdAfterCompatibilityCheck(key: Uint8Array): Promise<boolean> {
+async function anchorLegacyMachineIdAfterVerification(key: Uint8Array): Promise<void> {
 	if (
 		!machineIdSelection ||
 		machineIdSelection.source === "persisted" ||
 		existsSync(getMachineIdFile()) ||
 		!existsSync(getSecretsFile())
 	) {
-		return true;
+		return;
 	}
-
-	if (!(await verifyExistingStore(key))) return false;
+	const store = loadStore();
+	for (const entry of Object.values(store.secrets)) await decryptWithKey(entry.ciphertext, key);
 	const persistedId = persistMachineId(machineIdSelection.id);
 	machineIdSelection = { id: persistedId, source: "persisted" };
-	return true;
 }
 
-async function encrypt(plaintext: string): Promise<string> {
+async function encryptWithKey(plaintext: string, key: Uint8Array): Promise<string> {
 	const sodium = await getSodium();
-	const key = await getMasterKey();
-	if (!(await anchorMachineIdAfterCompatibilityCheck(key))) {
-		throw new Error("Existing secrets store could not be verified; refusing to rewrite it");
-	}
 	const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
 	const message = new TextEncoder().encode(plaintext);
 	const box = sodium.crypto_secretbox_easy(message, nonce, key);
-
-	// Prepend nonce so we can recover it during decryption
 	const combined = new Uint8Array(nonce.length + box.length);
 	combined.set(nonce);
 	combined.set(box, nonce.length);
-
 	return sodium.to_base64(combined, sodium.base64_variants.ORIGINAL);
-}
-
-async function decrypt(ciphertext: string): Promise<string> {
-	const key = await getMasterKey();
-	const plaintext = await decryptWithKey(ciphertext, key);
-	await anchorMachineIdAfterCompatibilityCheck(key);
-	return plaintext;
 }
 
 // ---------------------------------------------------------------------------
@@ -504,17 +597,30 @@ function saveStore(store: SecretsStore): void {
 async function putLocalSecret(name: string, value: string): Promise<void> {
 	const localName = parseLocalSecretName(name);
 	const store = loadStore();
+	const resolution = await resolveMasterKey(store);
+	if (
+		resolution.provider === "legacy-obfuscated" &&
+		existsSync(getSecretsFile()) &&
+		!existsSync(getMachineIdFile()) &&
+		machineIdResolverForTests !== null &&
+		!machineIdResolverForTests()?.trim()
+	) {
+		throw new Error("Existing secrets store could not be verified: unable to resolve its machine identity");
+	}
+	await anchorLegacyMachineIdAfterVerification(resolution.key);
+	store.version = resolution.provider === "native-keyring" ? NATIVE_STORE_VERSION : 1;
+	store.provider = resolution.provider;
 	const now = new Date().toISOString();
 	const existing = store.secrets[localName];
 
 	store.secrets[localName] = {
-		ciphertext: await encrypt(value),
+		ciphertext: await encryptWithKey(value, resolution.key),
 		created: existing?.created ?? now,
 		updated: now,
 	};
 
 	saveStore(store);
-	recordSecretEvent("secret.stored", { name: localName });
+	recordSecretEvent("secret.stored", { name: localName, providerId: resolution.provider });
 }
 
 export async function putSecret(name: string, value: string): Promise<void> {
@@ -539,9 +645,12 @@ export async function putSecret(name: string, value: string): Promise<void> {
 
 async function getStoredSecret(name: string): Promise<string> {
 	const store = loadStore();
+	const resolution = await resolveMasterKey(store);
 	const entry = store.secrets[name];
 	if (!entry) throw new Error(`Secret '${name}' not found`);
-	return decrypt(entry.ciphertext);
+	const plaintext = await decryptWithKey(entry.ciphertext, resolution.key);
+	if (resolution.provider === "legacy-obfuscated") await anchorLegacyMachineIdAfterVerification(resolution.key);
+	return plaintext;
 }
 
 function canonicalBitwardenDeletedName(name: string): string {
@@ -788,6 +897,13 @@ export const localSecretProvider: LocalSecretProviderV1 = {
 export function getLocalSecretProviderHealth(): SecretProviderHealthV1 {
 	try {
 		loadStore();
+		if (existsSync(join(getSecretsDir(), DEGRADED_WARNING_FILE))) {
+			return {
+				status: "degraded",
+				message: "Using legacy machine-id-obfuscated secrets encryption because no native keyring is available",
+				checkedAt: new Date().toISOString(),
+			};
+		}
 		return { status: "healthy", checkedAt: new Date().toISOString() };
 	} catch (err) {
 		return {
@@ -1152,8 +1268,11 @@ function parseSecretsStore(value: unknown): SecretsStore {
 	if (!isRecord(value)) {
 		throw new Error("store must be a JSON object");
 	}
-	if (value.version !== 1) {
+	if (value.version !== 1 && value.version !== NATIVE_STORE_VERSION) {
 		throw new Error("unsupported secrets store version");
+	}
+	if (value.version === NATIVE_STORE_VERSION && value.provider !== "native-keyring") {
+		throw new Error("native-keyring store is missing its provider marker");
 	}
 	if (!isRecord(value.secrets)) {
 		throw new Error("secrets field must be an object");
@@ -1177,7 +1296,11 @@ function parseSecretsStore(value: unknown): SecretsStore {
 			updated: entry.updated,
 		};
 	}
-	return { version: 1, secrets };
+	return {
+		version: value.version,
+		...(value.provider === "native-keyring" ? { provider: value.provider } : {}),
+		secrets,
+	};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
