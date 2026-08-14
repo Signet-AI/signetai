@@ -1,8 +1,14 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { expect, test } from "bun:test";
-import { runAudit, type AllowlistEntry } from "./audit-event-loop-contract";
+import {
+	occurrenceKeys,
+	parseAllowlist,
+	runAudit,
+	type AllowlistEntry,
+	type AuditSite,
+} from "./audit-event-loop-contract";
 
 test("event-loop audit rejects a new synchronous hot-path call", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
@@ -118,4 +124,27 @@ test("event-loop audit rejects a hot-path call mislabeled as an isolated excepti
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("event-loop audit baseline is an exact, pinned, deterministic production inventory", () => {
+	const productionSourceRoot = resolve(import.meta.dir, "..", "platform/daemon/src");
+	const baseline = JSON.parse(readFileSync(resolve(import.meta.dir, "event-loop-contract-baseline.json"), "utf8")) as {
+		version: 1;
+		generatedFrom: string;
+		sites: AuditSite[];
+	};
+	const allowlist = parseAllowlist(readFileSync(resolve(import.meta.dir, "event-loop-contract-allowlist.txt"), "utf8"));
+	const first = runAudit({ sourceRoot: productionSourceRoot, baselineSites: baseline.sites, allowlist });
+	const second = runAudit({ sourceRoot: productionSourceRoot, baselineSites: baseline.sites, allowlist });
+
+	// No new or missed sites: every live production call site is covered by the baseline.
+	expect(first.violations).toEqual([]);
+	// No stale baseline entries: the committed baseline is an exact occurrence inventory, not a superset.
+	// This is the regression that lets a legacy over-count (1057 with two comment-only false positives)
+	// silently pass CI while the live scan reports fewer sites.
+	expect(occurrenceKeys(baseline.sites)).toEqual(occurrenceKeys(first.sites));
+	// The truthful pinned count (1057 legacy - 2 comment-only false positives + 1 same-line call = 1056).
+	expect(first.sites).toHaveLength(1056);
+	// Deterministic ordering and content: repeated runs of the full scan are byte-identical.
+	expect(JSON.stringify(second.sites)).toBe(JSON.stringify(first.sites));
 });

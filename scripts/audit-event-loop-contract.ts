@@ -223,7 +223,7 @@ function siteKey(site: Pick<AuditSite, "path" | "api" | "source">): string {
 	return `${site.path}\u0000${site.api}\u0000${site.source}`;
 }
 
-function occurrenceKeys(sites: readonly AuditSite[]): Set<string> {
+export function occurrenceKeys(sites: readonly AuditSite[]): Set<string> {
 	const seen = new Map<string, number>();
 	const keys = new Set<string>();
 	for (const site of sites) {
@@ -235,7 +235,7 @@ function occurrenceKeys(sites: readonly AuditSite[]): Set<string> {
 	return keys;
 }
 
-function parseAllowlist(text: string): AllowlistEntry[] {
+export function parseAllowlist(text: string): AllowlistEntry[] {
 	const entries: AllowlistEntry[] = [];
 	for (const [index, rawLine] of text.split("\n").entries()) {
 		const line = rawLine.trim();
@@ -452,6 +452,21 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
 	if (result.violations.length > 0) {
 		for (const violation of result.violations) console.error(`event-loop audit: ${violation.message}`);
 		throw new Error(`${result.violations.length} new synchronous event-loop call site(s) detected`);
+	}
+	const liveKeys = occurrenceKeys(sites);
+	const baselineKeys = occurrenceKeys(baseline.sites);
+	const stale = [...baselineKeys].filter((key) => !liveKeys.has(key));
+	if (stale.length > 0) {
+		const preview = stale
+			.slice(0, 3)
+			.map((key) => {
+				const [path, api] = key.split("\u0000");
+				return `${path}:${api}`;
+			})
+			.join(", ");
+		throw new Error(
+			`event-loop baseline is stale: ${stale.length} baseline occurrence(s) no longer exist in the source (${preview}); run with --write-baseline to regenerate the exact inventory`,
+		);
 	}
 	console.log(`event-loop audit passed: ${result.sites.length} production call sites checked`);
 }
