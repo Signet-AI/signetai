@@ -158,6 +158,8 @@ describe("MemoryBench Dreaming gate", () => {
 			"platform/daemon/src/db-accessor.ts",
 			"platform/daemon/src/episodic-sources.ts",
 			"platform/daemon/src/pipeline/memorybench-dreaming-gate.test.ts",
+			"platform/daemon/src/yielding-writes.ts",
+			"platform/daemon/src/derived-memory-provenance.ts",
 			"platform/core/src/index.ts",
 			"platform/core/src/migration.ts",
 			"platform/core/src/migrations/**",
