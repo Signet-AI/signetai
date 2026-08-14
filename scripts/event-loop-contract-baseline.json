@@ -609,14 +609,14 @@
       "line": 317,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return null;",
-      "category": "pre-readiness-bootstrap"
+      "category": "hot-path"
     },
     {
       "path": "db-accessor.ts",
       "line": 320,
       "api": "readFileSync",
       "source": "const raw: unknown = JSON.parse(readFileSync(path, \"utf8\"));",
-      "category": "pre-readiness-bootstrap"
+      "category": "hot-path"
     },
     {
       "path": "db-accessor.ts",
@@ -1071,6 +1071,13 @@
       "line": 490,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "graphiq.ts",
+      "line": 34,
+      "api": "accessSync",
+      "source": "accessSync(candidate, constants.X_OK);",
       "category": "hot-path"
     },
     {
@@ -3041,6 +3048,13 @@
       "category": "hot-path"
     },
     {
+      "path": "pipeline/dreaming-token-cache.ts",
+      "line": 36,
+      "api": "existsSync",
+      "source": "return existsSync(bundled)",
+      "category": "hot-path"
+    },
+    {
       "path": "pipeline/dreaming-worker.ts",
       "line": 95,
       "api": "withReadDb",
@@ -3070,217 +3084,217 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 270,
+      "line": 271,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 117,
+      "line": 118,
       "api": "withWriteTx",
       "source": "return accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 149,
+      "line": 150,
       "api": "withReadDb",
       "source": "const selection = accessor.withReadDb((db) => selectDreamingSurprisalInDb(db, agentId, surprisal, null));",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 151,
+      "line": 152,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 258,
+      "line": 259,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 403,
+      "line": 404,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db) => readDreamingState(db, agentId));",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 437,
+      "line": 438,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 503,
+      "line": 504,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 513,
+      "line": 514,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 525,
+      "line": 526,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 579,
+      "line": 580,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 605,
+      "line": 606,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 650,
+      "line": 651,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 673,
+      "line": 674,
       "api": "withWriteTx",
       "source": "return accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 730,
+      "line": 731,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return { content: \"\", unreadable: false };",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 732,
+      "line": 733,
       "api": "readFileSync",
       "source": "const raw = readFileSync(path, \"utf-8\").trim();",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1182,
+      "line": 1183,
       "api": "withReadDb",
       "source": "const row = accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1202,
+      "line": 1203,
       "api": "withReadDb",
       "source": "const rows = accessor.withReadDb((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1242,
+      "line": 1243,
       "api": "withReadDb",
       "source": "const rows = accessor.withReadDb((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1391,
+      "line": 1392,
       "api": "withReadDb",
       "source": "const cutoff = accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1400,
+      "line": 1401,
       "api": "withReadDb",
       "source": "accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, [\"hygiene\"])),",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1403,
+      "line": 1404,
       "api": "withReadDb",
       "source": "accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS)),",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1406,
+      "line": 1407,
       "api": "withReadDb",
       "source": "accessor.withReadDb((db) => getDreamingAttentionInDb(db, scope, 1).length > 0),",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1419,
+      "line": 1422,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1480,
+      "line": 1483,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db) => resolveRequeuedDreamingEvidenceInTx(db, scopeId, passId, result, operations));",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1564,
+      "line": 1567,
       "api": "withReadDb",
       "source": "const previous = accessor.withReadDb((db) => readDreamingState(db, scope).lastPassAt);",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1576,
+      "line": 1579,
       "api": "withReadDb",
       "source": "accessor.withReadDb((db) =>",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1585,
+      "line": 1588,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1827,
+      "line": 1884,
       "api": "withReadDb",
-      "source": "return accessor.withReadDb((db) => getDreamingEpisodicTokenBacklogInDb(db, agentId));",
+      "source": "const entries = accessor.withReadDb((db) => readDreamingEpisodicTokenBacklogEntriesInDb(db, agentId));",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1874,
+      "line": 1912,
       "api": "withReadDb",
       "source": "const hasAttention = accessor.withReadDb((db) => getDreamingAttentionInDb(db, agentId, 1).length > 0);",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 1891,
+      "line": 1929,
       "api": "withReadDb",
       "source": "const hasContinuation = accessor.withReadDb((db) => hasDreamingEvidenceContinuation(db, agentId, state.lastPassId));",
       "category": "hot-path"
@@ -3952,14 +3966,14 @@
     },
     {
       "path": "resource-monitor.ts",
-      "line": 122,
+      "line": 228,
       "api": "readdirSync",
       "source": "const entries = readdirSync(fdDir);",
       "category": "hot-path"
     },
     {
       "path": "resource-monitor.ts",
-      "line": 127,
+      "line": 233,
       "api": "readlinkSync",
       "source": "const target = readlinkSync(join(fdDir, fd));",
       "category": "hot-path"
@@ -4218,6 +4232,13 @@
     },
     {
       "path": "routes/graphiq-routes.ts",
+      "line": 110,
+      "api": "accessSync",
+      "source": "accessSync(resolved, constants.R_OK | constants.X_OK);",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/graphiq-routes.ts",
       "line": 161,
       "api": "existsSync",
       "source": "if (!existsSync(script)) {",
@@ -4228,6 +4249,13 @@
       "line": 182,
       "api": "existsSync",
       "source": "if (!existsSync(script)) {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/graphiq-routes.ts",
+      "line": 204,
+      "api": "accessSync",
+      "source": "accessSync(path, constants.X_OK);",
       "category": "hot-path"
     },
     {
@@ -4309,42 +4337,42 @@
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 304,
+      "line": 305,
       "api": "withReadDb",
       "source": "const rows = getDbAccessor().withReadDb((db) => {",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 367,
+      "line": 370,
       "api": "withReadDb",
       "source": ": getDbAccessor().withReadDb((db) =>",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 404,
+      "line": 407,
       "api": "withReadDb",
       "source": "<T>(fn: (db: ReadDb) => T): T => getDbAccessor().withReadDb(fn),",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 419,
+      "line": 422,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db) => {",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 591,
+      "line": 594,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db) => {",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 705,
+      "line": 708,
       "api": "withReadDb",
       "source": "const result = getDbAccessor().withReadDb((db) =>",
       "category": "hot-path"
@@ -5625,7 +5653,7 @@
     },
     {
       "path": "routes/utils.ts",
-      "line": 771,
+      "line": 769,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db) => {",
       "category": "hot-path"
@@ -5800,378 +5828,378 @@
     },
     {
       "path": "service.ts",
-      "line": 98,
+      "line": 93,
       "api": "existsSync",
       "source": "if (existsSync(candidate)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 113,
+      "line": 108,
       "api": "execSync",
       "source": "execSync(`${locator} bun`, { encoding: \"utf-8\", windowsHide: true });",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 150,
+      "line": 145,
       "api": "mkdirSync",
       "source": "mkdirSync(plistDir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 151,
+      "line": 146,
       "api": "mkdirSync",
       "source": "mkdirSync(LOG_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 155,
+      "line": 150,
       "api": "execSync",
       "source": "execSync(`launchctl unload \"${LAUNCHD_PLIST}\" 2>/dev/null`);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 161,
+      "line": 156,
       "api": "writeFileSync",
       "source": "writeFileSync(LAUNCHD_PLIST, generateLaunchdPlist(port));",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 164,
+      "line": 159,
       "api": "execSync",
       "source": "execSync(`launchctl load \"${LAUNCHD_PLIST}\"`);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 168,
+      "line": 163,
       "api": "existsSync",
       "source": "if (!existsSync(LAUNCHD_PLIST)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 173,
+      "line": 168,
       "api": "execSync",
       "source": "execSync(`launchctl unload \"${LAUNCHD_PLIST}\"`);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 178,
+      "line": 173,
       "api": "unlinkSync",
       "source": "unlinkSync(LAUNCHD_PLIST);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 183,
+      "line": 178,
       "api": "execSync",
       "source": "const output = execSync(\"launchctl list ai.signet.daemon 2>/dev/null\", {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 199,
+      "line": 194,
       "api": "existsSync",
       "source": "if (execPath && existsSync(execPath)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 204,
+      "line": 199,
       "api": "execSync",
       "source": "return execSync(`${locator} bun`, { encoding: \"utf-8\", windowsHide: true }).trim().split(/\\r?\\n/)[0];",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 207,
+      "line": 202,
       "api": "execSync",
       "source": "return execSync(`${locator} node`, { encoding: \"utf-8\", windowsHide: true }).trim().split(/\\r?\\n/)[0];",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 241,
+      "line": 236,
       "api": "mkdirSync",
       "source": "mkdirSync(unitDir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 242,
+      "line": 237,
       "api": "mkdirSync",
       "source": "mkdirSync(LOG_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 246,
+      "line": 241,
       "api": "execSync",
       "source": "execSync(\"systemctl --user stop signet.service 2>/dev/null\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 252,
+      "line": 247,
       "api": "writeFileSync",
       "source": "writeFileSync(SYSTEMD_UNIT, generateSystemdUnit(port));",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 255,
+      "line": 250,
       "api": "execSync",
       "source": "execSync(\"systemctl --user daemon-reload\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 258,
+      "line": 253,
       "api": "execSync",
       "source": "execSync(\"systemctl --user enable signet.service\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 259,
+      "line": 254,
       "api": "execSync",
       "source": "execSync(\"systemctl --user start signet.service\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 264,
+      "line": 259,
       "api": "execSync",
       "source": "execSync(\"systemctl --user stop signet.service 2>/dev/null\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 265,
+      "line": 260,
       "api": "execSync",
       "source": "execSync(\"systemctl --user disable signet.service 2>/dev/null\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 270,
+      "line": 265,
       "api": "existsSync",
       "source": "if (existsSync(SYSTEMD_UNIT)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 271,
+      "line": 266,
       "api": "unlinkSync",
       "source": "unlinkSync(SYSTEMD_UNIT);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 275,
+      "line": 270,
       "api": "execSync",
       "source": "execSync(\"systemctl --user daemon-reload\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 283,
+      "line": 278,
       "api": "execSync",
       "source": "const output = execSync(\"systemctl --user is-active signet.service 2>/dev/null\", { encoding: \"utf-8\" });",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 295,
+      "line": 290,
       "api": "mkdirSync",
       "source": "mkdirSync(DAEMON_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 296,
+      "line": 291,
       "api": "mkdirSync",
       "source": "mkdirSync(LOG_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 321,
+      "line": 316,
       "api": "existsSync",
       "source": "if (!existsSync(PID_FILE)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 325,
+      "line": 320,
       "api": "readFileSync",
       "source": "const pid = parseInt(readFileSync(PID_FILE, \"utf-8\").trim(), 10);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 335,
+      "line": 330,
       "api": "unlinkSync",
       "source": "unlinkSync(PID_FILE);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 342,
+      "line": 337,
       "api": "existsSync",
       "source": "if (!existsSync(PID_FILE)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 346,
+      "line": 341,
       "api": "readFileSync",
       "source": "const pid = parseInt(readFileSync(PID_FILE, \"utf-8\").trim(), 10);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 354,
+      "line": 349,
       "api": "unlinkSync",
       "source": "unlinkSync(PID_FILE);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 404,
+      "line": 399,
       "api": "existsSync",
       "source": "if (os === \"darwin\" && existsSync(LAUNCHD_PLIST)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 405,
+      "line": 400,
       "api": "execSync",
       "source": "execSync(`launchctl load \"${LAUNCHD_PLIST}\"`);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 406,
+      "line": 401,
       "api": "existsSync",
       "source": "} else if (os === \"linux\" && existsSync(SYSTEMD_UNIT)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 407,
+      "line": 402,
       "api": "execSync",
       "source": "execSync(\"systemctl --user start signet.service\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 419,
+      "line": 414,
       "api": "existsSync",
       "source": "if (os === \"darwin\" && existsSync(LAUNCHD_PLIST)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 421,
+      "line": 416,
       "api": "execSync",
       "source": "execSync(`launchctl unload \"${LAUNCHD_PLIST}\"`);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 425,
+      "line": 420,
       "api": "existsSync",
       "source": "} else if (os === \"linux\" && existsSync(SYSTEMD_UNIT)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 427,
+      "line": 422,
       "api": "execSync",
       "source": "execSync(\"systemctl --user stop signet.service\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 451,
+      "line": 446,
       "api": "existsSync",
       "source": "if (os === \"darwin\" && existsSync(LAUNCHD_PLIST)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 453,
+      "line": 448,
       "api": "existsSync",
       "source": "} else if (os === \"linux\" && existsSync(SYSTEMD_UNIT)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 467,
+      "line": 462,
       "api": "existsSync",
       "source": "return existsSync(LAUNCHD_PLIST);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 469,
+      "line": 464,
       "api": "existsSync",
       "source": "return existsSync(SYSTEMD_UNIT);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 472,
+      "line": 467,
       "api": "existsSync",
       "source": "return existsSync(PID_FILE);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 489,
+      "line": 484,
       "api": "existsSync",
       "source": "if (running && existsSync(PID_FILE)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 491,
+      "line": 486,
       "api": "readFileSync",
       "source": "pid = parseInt(readFileSync(PID_FILE, \"utf-8\").trim(), 10);",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 520,
+      "line": 515,
       "api": "existsSync",
       "source": "if (!existsSync(logFile)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 523,
+      "line": 518,
       "api": "existsSync",
       "source": "if (existsSync(outLog)) {",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 524,
+      "line": 519,
       "api": "readFileSync",
       "source": "const content = readFileSync(outLog, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "service.ts",
-      "line": 530,
+      "line": 525,
       "api": "readFileSync",
       "source": "const content = readFileSync(logFile, \"utf-8\");",
       "category": "hot-path"
@@ -6276,28 +6304,28 @@
     },
     {
       "path": "session-memories.ts",
-      "line": 145,
+      "line": 148,
       "api": "existsSync",
       "source": "if (!sessionKey || matchedIds.length === 0 || !existsSync(getMemoryDbPath())) return;",
       "category": "hot-path"
     },
     {
       "path": "session-memories.ts",
-      "line": 148,
+      "line": 151,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db) => {",
       "category": "hot-path"
     },
     {
       "path": "session-memories.ts",
-      "line": 256,
+      "line": 262,
       "api": "existsSync",
       "source": "if (!sessionKey || Object.keys(feedback).length === 0 || !existsSync(getMemoryDbPath())) return;",
       "category": "hot-path"
     },
     {
       "path": "session-memories.ts",
-      "line": 259,
+      "line": 265,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db) => {",
       "category": "hot-path"
@@ -7322,6 +7350,13 @@
       "line": 158,
       "api": "readFileSync",
       "source": "cache = { stamp, patterns: parseSigignore(readFileSync(sigignorePath, \"utf-8\")) };",
+      "category": "hot-path"
+    },
+    {
+      "path": "which.ts",
+      "line": 8,
+      "api": "accessSync",
+      "source": "accessSync(file, constants.X_OK);",
       "category": "hot-path"
     },
     {

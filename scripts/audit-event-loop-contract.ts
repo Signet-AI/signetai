@@ -5,6 +5,7 @@ import ts from "typescript";
 export const SYNC_APIS = [
 	"withWriteTx",
 	"withReadDb",
+	"accessSync",
 	"readdirSync",
 	"readFileSync",
 	"statSync",
@@ -200,7 +201,12 @@ function collectFunctionCalls(node: ts.Node, calls: Set<string>): void {
 	ts.forEachChild(node, (child) => collectFunctionCalls(child, calls));
 }
 
-function bootstrapFunctionNames(sourceFile: ts.SourceFile): ReadonlySet<string> {
+interface FunctionGraph {
+	readonly callsByFunction: ReadonlyMap<string, ReadonlySet<string>>;
+	readonly callersByFunction: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+function functionGraph(sourceFile: ts.SourceFile): FunctionGraph {
 	const callsByFunction = new Map<string, Set<string>>();
 	const visit = (node: ts.Node): void => {
 		const name = functionName(node);
@@ -213,8 +219,22 @@ function bootstrapFunctionNames(sourceFile: ts.SourceFile): ReadonlySet<string> 
 		ts.forEachChild(node, visit);
 	};
 	visit(sourceFile);
+	const callersByFunction = new Map<string, Set<string>>();
+	for (const [caller, calls] of callsByFunction) {
+		for (const called of calls) {
+			const callers = callersByFunction.get(called) ?? new Set<string>();
+			callers.add(caller);
+			callersByFunction.set(called, callers);
+		}
+	}
+	return { callsByFunction, callersByFunction };
+}
 
-	const reachable = new Set(["initDbAccessor", "initDbAccessorAsync"]);
+function reachableFunctionNames(
+	callsByFunction: ReadonlyMap<string, ReadonlySet<string>>,
+	seeds: Iterable<string>,
+): ReadonlySet<string> {
+	const reachable = new Set(seeds);
 	let changed = true;
 	while (changed) {
 		changed = false;
@@ -230,14 +250,40 @@ function bootstrapFunctionNames(sourceFile: ts.SourceFile): ReadonlySet<string> 
 	return reachable;
 }
 
+function bootstrapFunctionNames(graph: FunctionGraph): ReadonlySet<string> {
+	return reachableFunctionNames(graph.callsByFunction, ["initDbAccessor", "initDbAccessorAsync"]);
+}
+
+function bootstrapOnlyFunctionNames(graph: FunctionGraph, bootstrapNames: ReadonlySet<string>): ReadonlySet<string> {
+	const bootstrapOnly = new Set(["initDbAccessor", "initDbAccessorAsync"].filter((name) => bootstrapNames.has(name)));
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const name of bootstrapNames) {
+			if (bootstrapOnly.has(name)) continue;
+			const callers = graph.callersByFunction.get(name);
+			if (callers === undefined || [...callers].every((caller) => bootstrapOnly.has(caller))) {
+				bootstrapOnly.add(name);
+				changed = true;
+			}
+		}
+	}
+	return bootstrapOnly;
+}
+
 function classifySite(
 	path: string,
 	sourceFile: ts.SourceFile,
 	functionStack: readonly string[],
 	bootstrapNames: ReadonlySet<string>,
+	bootstrapOnlyNames: ReadonlySet<string>,
 ): SiteCategory {
 	const normalized = path.replaceAll("\\", "/");
-	if (normalized === "db-accessor.ts" && functionStack.some((name) => bootstrapNames.has(name))) {
+	if (
+		normalized === "db-accessor.ts" &&
+		functionStack.some((name) => bootstrapNames.has(name)) &&
+		functionStack.every((name) => bootstrapOnlyNames.has(name))
+	) {
 		return "pre-readiness-bootstrap";
 	}
 	if (isCliOnlySource(sourceFile)) return "cli-only";
@@ -268,7 +314,9 @@ function findSites(root: string): AuditSite[] {
 		const text = readFileSync(absolutePath, "utf8");
 		const sourceFile = ts.createSourceFile(absolutePath, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 		const lines = text.split("\n");
-		const bootstrapNames = bootstrapFunctionNames(sourceFile);
+		const graph = functionGraph(sourceFile);
+		const bootstrapNames = bootstrapFunctionNames(graph);
+		const bootstrapOnlyNames = bootstrapOnlyFunctionNames(graph, bootstrapNames);
 		const functionStack: string[] = [];
 		const visit = (node: ts.Node): void => {
 			const name = functionName(node);
@@ -283,7 +331,7 @@ function findSites(root: string): AuditSite[] {
 						line: line + 1,
 						api: call.api,
 						source,
-						category: classifySite(path, sourceFile, functionStack, bootstrapNames),
+						category: classifySite(path, sourceFile, functionStack, bootstrapNames, bootstrapOnlyNames),
 					});
 				}
 			}
@@ -488,7 +536,7 @@ function report(sites: readonly AuditSite[], allowlist: readonly AllowlistEntry[
 		"",
 		"The counts exclude test, benchmark, generated, and `__tests__` fixtures. A source line is a call site when it contains one of the named synchronous APIs followed by `()`. The baseline key includes the normalized source line and occurrence number, so line shifts do not look like new calls while added calls still fail CI.",
 		"",
-		"The legacy 1057-site baseline was not an exact inventory: it counted two comment-only lines as call sites and collapsed one real same-line call into a single site. Regenerating with the occurrence-accurate scanner yields 1056 sites (1057 legacy minus 2 comment-only false positives plus 1 previously collapsed same-line call).",
+		"The legacy 1057-site baseline was not an exact inventory: it counted two comment-only lines as call sites and collapsed one real same-line call into a single site. Regenerating with the occurrence-accurate scanner yielded 1056 sites before the inventory added the four production accessSync() call sites and current-main changes now included in the 1061-site exact inventory.",
 		"",
 		"## Classification",
 		"",

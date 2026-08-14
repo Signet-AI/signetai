@@ -80,6 +80,21 @@ test("event-loop audit detects multiline synchronous calls and ignores literals/
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("event-loop audit detects an unlisted accessSync call", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		writeFileSync(join(root, "hot-path.ts"), "accessSync('/tmp/signet-access');\n");
+		const result = runAudit({ sourceRoot: root });
+		expect(result.sites).toHaveLength(1);
+		expect(result.sites[0]?.api).toBe("accessSync");
+		expect(result.sites[0]?.category).toBe("hot-path");
+		expect(result.violations).toHaveLength(1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("event-loop audit accepts a classified bootstrap exception", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
 	try {
@@ -164,6 +179,26 @@ test("event-loop audit rejects a hot-path call mislabeled as an isolated excepti
 	}
 });
 
+test("event-loop audit rejects a helper shared by bootstrap and request paths", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		const source = [
+			"function initDbAccessor() { return shared(); }",
+			"export function requestPath() { return shared(); }",
+			"function shared() { return readFileSync('/tmp/signet-shared', 'utf8'); }",
+			"",
+		].join("\n");
+		writeFileSync(join(root, "db-accessor.ts"), source);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.sites).toHaveLength(1);
+		expect(result.sites[0]?.category).toBe("hot-path");
+		expect(result.violations).toHaveLength(1);
+		expect(result.violations[0]?.message).toContain("hot-path");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("event-loop audit baseline is an exact, pinned, deterministic production inventory", () => {
 	const productionSourceRoot = resolve(import.meta.dir, "..", "platform/daemon/src");
 	const baseline = JSON.parse(readFileSync(resolve(import.meta.dir, "event-loop-contract-baseline.json"), "utf8")) as {
@@ -181,8 +216,8 @@ test("event-loop audit baseline is an exact, pinned, deterministic production in
 	// This is the regression that lets a legacy over-count (1057 with two comment-only false positives)
 	// silently pass CI while the live scan reports fewer sites.
 	expect(occurrenceKeys(baseline.sites)).toEqual(occurrenceKeys(first.sites));
-	// The truthful pinned count (1057 legacy - 2 comment-only false positives + 1 same-line call = 1056).
-	expect(first.sites).toHaveLength(1056);
+	// The occurrence-accurate baseline was 1056 before the accessSync coverage and current-main inventory changes.
+	expect(first.sites).toHaveLength(1061);
 	// Deterministic ordering and content: repeated runs of the full scan are byte-identical.
 	expect(JSON.stringify(second.sites)).toBe(JSON.stringify(first.sites));
 });
