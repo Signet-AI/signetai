@@ -269,7 +269,7 @@ const MARKETPLACE_PROXY_REFRESH_TIMEOUT_MS = 5_000;
 const MARKETPLACE_PROXY_REFRESH_TTL_MS = 30_000;
 const marketplaceRefreshes = new Map<
 	string,
-	{ readonly expiresAt: number; readonly promise: Promise<MarketplaceRefreshSnapshot> }
+	{ readonly expiresAt: number; readonly promise: Promise<MarketplaceRefreshSnapshot>; settled: boolean }
 >();
 
 export function __resetMarketplaceRefreshesForTests(): void {
@@ -602,11 +602,15 @@ function marketplaceRefreshKey(
 	return JSON.stringify({ baseUrl, context, authorizationHeader });
 }
 
-async function fetchMarketplaceRefreshSnapshot(state: MarketplaceProxyState): Promise<MarketplaceRefreshSnapshot> {
+async function fetchMarketplaceRefreshSnapshot(
+	state: MarketplaceProxyState,
+	options?: { readonly force?: boolean },
+): Promise<MarketplaceRefreshSnapshot> {
 	const key = marketplaceRefreshKey(state.baseUrl, state.context, state.authorizationHeader);
 	const now = Date.now();
 	const cached = marketplaceRefreshes.get(key);
-	if (cached && cached.expiresAt > now) return cached.promise;
+	const force = options?.force ?? false;
+	if (cached && (!cached.settled || (!force && cached.expiresAt > now))) return cached.promise;
 
 	const promise = (async (): Promise<MarketplaceRefreshSnapshot> => {
 		const policy = await fetchMarketplacePolicy(state.baseUrl, state.authorizationHeader);
@@ -621,7 +625,16 @@ async function fetchMarketplaceRefreshSnapshot(state: MarketplaceProxyState): Pr
 		return { policy, routed };
 	})();
 
-	marketplaceRefreshes.set(key, { expiresAt: now + MARKETPLACE_PROXY_REFRESH_TTL_MS, promise });
+	const entry = { expiresAt: now + MARKETPLACE_PROXY_REFRESH_TTL_MS, promise, settled: false };
+	marketplaceRefreshes.set(key, entry);
+	void promise.then(
+		() => {
+			if (marketplaceRefreshes.get(key)?.promise === promise) entry.settled = true;
+		},
+		() => {
+			if (marketplaceRefreshes.get(key)?.promise === promise) marketplaceRefreshes.delete(key);
+		},
+	);
 	try {
 		return await promise;
 	} catch (error) {
@@ -634,6 +647,8 @@ export async function refreshMarketplaceProxyTools(
 	server: McpServer,
 	options?: {
 		readonly notify?: boolean;
+		/** Bypass a completed snapshot while still coalescing in-flight refreshes. */
+		readonly force?: boolean;
 	},
 ): Promise<{ changed: boolean; count: number; error?: string }> {
 	const state = marketplaceProxyState.get(server);
@@ -643,7 +658,7 @@ export async function refreshMarketplaceProxyTools(
 
 	const notify = options?.notify ?? true;
 	const registeredTools = getRegisteredToolsMap(server);
-	const snapshot = await fetchMarketplaceRefreshSnapshot(state);
+	const snapshot = await fetchMarketplaceRefreshSnapshot(state, { force: options?.force });
 	if (snapshot.policy) state.policy = snapshot.policy;
 	const routed = snapshot.routed;
 
@@ -1865,7 +1880,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 		async ({ refresh }) => {
 			if (refresh && enableMarketplaceProxyTools) {
-				await refreshMarketplaceProxyTools(server, { notify: true });
+				await refreshMarketplaceProxyTools(server, { notify: true, force: true });
 			}
 
 			const path = refresh ? "/api/marketplace/mcp/tools?refresh=1" : "/api/marketplace/mcp/tools";
@@ -1929,7 +1944,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				}
 				trimHotToolSet(hotSet);
 				hotToolTouchedAt.set(proxyState.contextKey, Date.now());
-				await refreshMarketplaceProxyTools(server, { notify: true });
+				await refreshMarketplaceProxyTools(server, { notify: true, force: refresh === true });
 			}
 
 			return textResult({

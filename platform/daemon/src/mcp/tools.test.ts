@@ -1467,6 +1467,55 @@ describe("createMcpServer", () => {
 	});
 
 	describe("marketplace proxy tools", () => {
+		it("forces explicit refresh past the recent snapshot but keeps implicit refresh cached", async () => {
+			__resetMarketplaceRefreshesForTests();
+			let stage: "initial" | "updated" = "initial";
+			const buildTool = (toolName: string) => ({
+				id: `dogfood-everything:${toolName}`,
+				serverId: "dogfood-everything",
+				serverName: "dogfood-everything",
+				toolName,
+				description: `Test ${toolName} tool`,
+				readOnly: false,
+				inputSchema: {},
+			});
+
+			globalThis.fetch = mock(async (input: string | URL | Request) => {
+				const url = new URL(typeof input === "string" ? input : input.toString());
+				if (url.pathname === "/api/marketplace/mcp/policy") {
+					return new Response(
+						JSON.stringify({ policy: { mode: "expanded", maxExpandedTools: 12, maxSearchResults: 8 } }),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				if (url.pathname === "/api/marketplace/mcp/tools") {
+					const tools = stage === "initial" ? [buildTool("echo")] : [buildTool("echo"), buildTool("fresh")];
+					return new Response(JSON.stringify({ count: tools.length, servers: [], tools }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				return new Response(JSON.stringify({ error: "unexpected" }), { status: 404 });
+			}) as unknown as typeof fetch;
+
+			await server.close();
+			server = await createMcpServer({
+				daemonUrl: "http://localhost:3850",
+				version: "0.0.1-test",
+				enableMarketplaceProxyTools: true,
+			});
+			expect(getToolNames(server)).toContain("signet_dogfood_everything_echo");
+
+			stage = "updated";
+			const implicit = await refreshMarketplaceProxyTools(server, { notify: false });
+			expect(implicit.changed).toBe(false);
+			expect(getToolNames(server)).not.toContain("signet_dogfood_everything_fresh");
+
+			const explicit = await callTool(server, "mcp_server_list", { refresh: true });
+			expect(explicit.isError).toBeUndefined();
+			expect(getToolNames(server)).toContain("signet_dogfood_everything_fresh");
+		});
+
 		it("single-flights marketplace refreshes across concurrent server creation", async () => {
 			__resetMarketplaceRefreshesForTests();
 			let refreshCalls = 0;
