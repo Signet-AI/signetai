@@ -4,6 +4,7 @@ import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "../telemetry";
+import { resetTokenizerStats, tokenizerStats } from "../pipeline/tokenizer";
 import {
 	DREAMING_AGENT_PROMPT,
 	DREAMING_CONTENT_AGENT_PROMPT,
@@ -174,6 +175,15 @@ describe("Dreaming", () => {
 				JSON.stringify({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment", fragmentOffset: -1 }),
 			),
 		).toEqual({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment" });
+	});
+
+	it("keeps backlog checks off the synchronous BPE encoder (#1552)", () => {
+		seedTranscript(db, "large-backlog", "pending evidence ".repeat(2_000));
+		resetTokenizerStats();
+
+		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(tokenizerStats.encodeCalls).toBe(0);
+		expect(tokenizerStats.encodeChars).toBe(0);
 	});
 
 	it("drains oversized evidence only after every delivered fragment completes (#1430)", async () => {

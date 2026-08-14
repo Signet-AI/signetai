@@ -82,7 +82,7 @@ import {
 	type DreamingSurprisalSelection,
 	selectDreamingSurprisalInDb,
 } from "./dreaming-surprisal";
-import { countTokens } from "./tokenizer";
+import { countTokens, estimateTokens } from "./tokenizer";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1840,7 +1840,9 @@ export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string)
 		});
 		return queued.reduce((total, source) => {
 			const remaining = renderDreamingEvidence(source).slice(deliveredOffsetForSource(db, agentId, source));
-			return total + countTokens(remaining);
+			// This is only a trigger estimate. Exact BPE encoding here blocks the
+			// daemon's event loop while scanning every queued source.
+			return total + estimateTokens(remaining);
 		}, 0);
 	}
 	const state = readDreamingState(db, agentId);
@@ -1858,8 +1860,11 @@ export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string)
 			? readEpisodicSource(db, { agentId, from: `${state.evidenceCursor.kind}:${state.evidenceCursor.id}` })
 			: null;
 	const remaining = resumed ? renderDreamingEvidence(resumed).slice(state.evidenceCursor?.fragmentOffset) : "";
+	// This is only a trigger estimate. Exact BPE encoding here blocks the
+	// daemon's event loop while scanning every queued source.
 	return (
-		queued.reduce((total, source) => total + countTokens(renderDreamingEvidence(source)), 0) + countTokens(remaining)
+		queued.reduce((total, source) => total + estimateTokens(renderDreamingEvidence(source)), 0) +
+		estimateTokens(remaining)
 	);
 }
 
