@@ -34,6 +34,8 @@ export type SignetUpdateTarget =
 
 export interface SignetInstallationReport {
 	readonly target: SignetUpdateTarget;
+	/** Whether the active target can be resolved as `signet` from the current PATH. */
+	readonly targetPathResolvable?: boolean;
 	readonly installations: readonly SignetInstallation[];
 	readonly inactive: readonly SignetInstallation[];
 }
@@ -81,14 +83,19 @@ function executableNames(platform: NodeJS.Platform): readonly string[] {
 	return platform === "win32" ? ["signet.exe", "signet.cmd", "signet"] : ["signet"];
 }
 
-function candidatePaths(env: NodeJS.ProcessEnv, home: string, platform: NodeJS.Platform, pathValue: string): string[] {
+function pathExecutableCandidates(pathValue: string, platform: NodeJS.Platform): string[] {
 	const pathApi = platform === "win32" ? win32 : posix;
 	const separator = platform === "win32" ? ";" : ":";
-	const paths = pathValue
+	return pathValue
 		.split(separator)
 		.map((entry) => entry.trim())
 		.filter(Boolean)
 		.flatMap((entry) => executableNames(platform).map((name) => pathApi.join(entry, name)));
+}
+
+function candidatePaths(env: NodeJS.ProcessEnv, home: string, platform: NodeJS.Platform, pathValue: string): string[] {
+	const pathApi = platform === "win32" ? win32 : posix;
+	const paths = pathExecutableCandidates(pathValue, platform);
 
 	const nativeName = platform === "win32" ? "signet.exe" : "signet";
 	paths.push(
@@ -133,6 +140,10 @@ export function detectSignetInstallations(options: SignetInstallationDetectionOp
 	const realpath = options.realpath ?? realpathSync;
 	const activeRealPath = safeRealpath(activeExecutablePath, platform, realpath);
 	const signetDir = env.SIGNET_DIR?.trim();
+	const pathCandidates = pathExecutableCandidates(options.pathValue ?? env.PATH ?? "", platform);
+	const targetPathResolvable = pathCandidates.some(
+		(path) => pathExists(path) && safeRealpath(path, platform, realpath) === activeRealPath,
+	);
 	const activeMethod = inferPackageManagerFromExecutable(activeExecutablePath, {
 		realPath: activeRealPath,
 		env,
@@ -202,6 +213,7 @@ export function detectSignetInstallations(options: SignetInstallationDetectionOp
 
 	return {
 		target,
+		targetPathResolvable,
 		installations,
 		inactive: installations.filter((installation) => !installation.active),
 	};

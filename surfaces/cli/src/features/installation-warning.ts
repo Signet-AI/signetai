@@ -24,6 +24,13 @@ export function concurrentInstallationWarningLines(
 	for (const duplicate of duplicates) {
 		lines.push(`Inactive: ${displayPath(duplicate.executablePath, home)} (${duplicate.method})`);
 	}
+	if (report.targetPathResolvable !== true) {
+		lines.push(
+			"",
+			"The active native installation is not resolvable as `signet` on PATH. Keep the duplicate launcher until the native binary is exposed on PATH, then rerun this command.",
+		);
+		return lines;
+	}
 	lines.push(
 		"",
 		"After verifying the active installation, remove only the duplicate launcher (this keeps signet-mcp available):",

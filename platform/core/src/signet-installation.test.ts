@@ -30,6 +30,7 @@ describe("detectSignetInstallations", () => {
 		});
 
 		expect(report.target).toEqual({ kind: "native", executablePath: nativePath });
+		expect(report.targetPathResolvable).toBe(true);
 		expect(inactivePackageManagerInstallations(report)).toEqual([
 			{
 				method: "npm",
@@ -38,6 +39,25 @@ describe("detectSignetInstallations", () => {
 				active: false,
 				removalCommand: `rm -f -- '${npmBin}'`,
 			},
+		]);
+	});
+
+	it("detects when the native executable is not resolvable from PATH", () => {
+		const nativePath = "/home/test/node_modules/signetai/native/signet";
+		const bunBin = "/home/test/.bun/bin/signet";
+		const report = detectSignetInstallations({
+			execPath: nativePath,
+			env: { HOME: "/home/test", PATH: "/home/test/.bun/bin" },
+			home: "/home/test",
+			platform: "linux",
+			exists: existing([nativePath, bunBin]),
+			realpath: (path) =>
+				path === bunBin ? "/home/test/.bun/install/global/node_modules/signetai/bin/signet.js" : path,
+		});
+
+		expect(report.targetPathResolvable).toBe(false);
+		expect(inactivePackageManagerInstallations(report)).toEqual([
+			expect.objectContaining({ method: "bun", executablePath: bunBin }),
 		]);
 	});
 

@@ -508,6 +508,7 @@ describe("doctor concurrent Signet installations", () => {
 							kind: "native",
 							executablePath: join(root, ".local", "bin", "signet"),
 						},
+						targetPathResolvable: true,
 						installations: [],
 						inactive: [
 							{
@@ -536,6 +537,55 @@ describe("doctor concurrent Signet installations", () => {
 					fix: expect.stringContaining("rm -f --"),
 				}),
 			);
+		} finally {
+			console.log = oldLog;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not recommend removing the duplicate when native is not resolvable", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-installations-unresolvable-"));
+		const lines: string[] = [];
+		const oldLog = console.log;
+		try {
+			mkdirSync(root, { recursive: true });
+			console.log = (...args: unknown[]) => {
+				lines.push(args.join(" "));
+			};
+
+			await showDoctor(
+				{ json: true },
+				{
+					...depsFor(root),
+					detectInstallations: () => ({
+						target: {
+							kind: "native",
+							executablePath: join(root, "node_modules", "signetai", "native", "signet"),
+						},
+						targetPathResolvable: false,
+						installations: [],
+						inactive: [
+							{
+								method: "bun",
+								executablePath: join(root, ".bun", "bin", "signet"),
+								active: false,
+								removalCommand: `rm -f -- '${join(root, ".bun", "bin", "signet")}'`,
+							},
+						],
+					}),
+				},
+			);
+
+			const output = JSON.parse(lines.join("\n")) as {
+				findings?: Array<{ code?: string; fix?: string }>;
+			};
+			expect(output.findings).toContainEqual(
+				expect.objectContaining({
+					code: "duplicate_signet_installation",
+					fix: expect.stringContaining("not resolvable as `signet` on PATH"),
+				}),
+			);
+			expect(output.findings?.some((finding) => finding.fix?.includes("rm -f --"))).toBe(false);
 		} finally {
 			console.log = oldLog;
 			rmSync(root, { recursive: true, force: true });

@@ -234,11 +234,13 @@ Subcommands:
 After `signet update install` completes, a daemon restart is required to
 run the new version: `signet daemon restart`. When a direct native install
 coexists with an npm/Bun/pnpm/Yarn wrapper, the updater uses the native binary
-instead of selecting a package manager from PATH. The CLI prints an exact
+instead of selecting a package manager from PATH. When the native executable is
+itself resolvable as `signet` on the current PATH, the CLI prints an exact
 command that removes only the duplicate launcher after the update; `signet
-doctor` reports the same conflict. Do not uninstall the whole package, because
-it may also provide `signet-mcp`. Signet never removes the duplicate
-automatically.
+doctor` reports the same conflict. If the native executable is not resolvable on
+PATH, the CLI tells you to expose it first and does not recommend removing the
+duplicate launcher. Do not uninstall the whole package, because it may also
+provide `signet-mcp`. Signet never removes the duplicate automatically.
 
 ---
 
