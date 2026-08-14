@@ -145,9 +145,8 @@ jobs:
             echo "::error::Missing CHANGELOG.md section for v$NEW_VERSION"
             exit 1
           fi
-          # Create as a draft prerelease. The native release workflow publishes
-          # its assets and npm packages, while the desktop workflow owns
-          # undrafting after its full matrix finishes.
+          # Create as a draft prerelease. The publish job undrafts only after
+          # native publishing completes and every desktop asset is present.
           gh release create "v$NEW_VERSION" --draft --prerelease --title "v$NEW_VERSION" --notes "$NOTES"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         env:
@@ -248,7 +247,8 @@ jobs:
     needs: [release, build-native]
     runs-on: ubuntu-latest
     # Publish only when every native binary matrix leg completed and uploaded
-    # its binary/checksum pair. The desktop workflow owns undrafting.
+    # its binary/checksum pair. This job is also the sole release finalizer:
+    # it waits for every desktop asset before undrafting the release.
     if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
     permissions:
       contents: write
@@ -410,3 +410,50 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
+
+      - name: Wait for desktop release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(
+            "Signet-${NEW_VERSION}-linux-amd64.deb"
+            "Signet-${NEW_VERSION}-linux-x86_64.AppImage"
+            "Signet-${NEW_VERSION}-mac-arm64.dmg"
+            "Signet-${NEW_VERSION}-mac-arm64.dmg.blockmap"
+            "Signet-${NEW_VERSION}-mac-arm64.zip"
+            "Signet-${NEW_VERSION}-mac-arm64.zip.blockmap"
+            "Signet-${NEW_VERSION}-mac-x64.dmg"
+            "Signet-${NEW_VERSION}-mac-x64.dmg.blockmap"
+            "Signet-${NEW_VERSION}-mac-x64.zip"
+            "Signet-${NEW_VERSION}-mac-x64.zip.blockmap"
+            "Signet-${NEW_VERSION}-win-x64.exe"
+            "Signet-${NEW_VERSION}-win-x64.exe.blockmap"
+            "latest-linux.yml"
+            "latest-mac.yml"
+            "latest.yml"
+          )
+
+          for attempt in $(seq 1 60); do
+            assets=$(scripts/retry-github-release.sh gh release view "v${NEW_VERSION}" --json assets --jq '.assets[].name' --repo "${GITHUB_REPOSITORY}" 2>/dev/null || true)
+            missing=()
+            for asset in "${expected[@]}"; do
+              if ! printf '%s\n' "${assets}" | grep -Fxq "${asset}"; then
+                missing+=("${asset}")
+              fi
+            done
+            if [ "${#missing[@]}" -eq 0 ]; then
+              echo "All desktop release assets are present"
+              break
+            fi
+            if [ "${attempt}" -eq 60 ]; then
+              echo "::error::Timed out waiting for desktop release assets: ${missing[*]}"
+              exit 1
+            fi
+            echo "Waiting for desktop release assets (attempt ${attempt}/60): ${missing[*]}"
+            sleep 30
+          done
+
+      - name: Finalize GitHub release
+        run: scripts/retry-github-release.sh gh release edit "v${NEW_VERSION}" --draft=false --repo "${GITHUB_REPOSITORY}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

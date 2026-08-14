@@ -127,21 +127,21 @@ describe("desktop update packaging", () => {
 		expect(publish).not.toContain("if: startsWith(github.ref, 'refs/tags/')");
 	});
 
-	test("lets only the desktop finalizer undraft after every matrix leg publishes", () => {
+	test("lets only the native publish finalizer undraft after every workflow publishes", () => {
 		const workflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "desktop-build.yml"), "utf8");
 		const releaseWorkflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "release.yml"), "utf8");
-		const buildStart = workflow.indexOf("  build:");
-		const finalizeStart = workflow.indexOf("  finalize-release:");
-		const finalizeEnd = workflow.indexOf("\n\n  validate-aur:", finalizeStart);
-		const build = workflow.slice(buildStart, finalizeStart);
-		const finalize = workflow.slice(finalizeStart, finalizeEnd);
+		const publishStart = releaseWorkflow.indexOf("  publish:");
+		const publish = releaseWorkflow.slice(publishStart);
 
-		expect(build).not.toContain("Finalize GitHub release");
-		expect(build).not.toContain("--draft=false");
-		expect(finalize).toContain("needs: build");
-		expect(finalize).toContain("scripts/retry-github-release.sh gh release edit");
-		expect(finalize).toContain("--draft=false");
-		expect(releaseWorkflow).not.toContain("--draft=false");
+		expect(workflow).not.toContain("finalize-release:");
+		expect(workflow).not.toContain("--draft=false");
+		expect(publish).toContain("needs: [release, build-native]");
+		expect(publish).toContain("Wait for desktop release assets");
+		expect(publish).toContain("latest-mac.yml");
+		expect(publish).toContain("sleep 30");
+		expect(publish).toContain("scripts/retry-github-release.sh gh release edit");
+		expect(publish).toContain("--draft=false");
+		expect(releaseWorkflow).toContain("scripts/retry-github-release.sh gh release view");
 	});
 
 	test("uses a Linux-safe Electron executable name", () => {
