@@ -24,6 +24,7 @@ import {
 	resolveNamedEntity,
 } from "../knowledge-graph";
 import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
+import { getDreamingEpisodicTokenBacklog } from "../pipeline/dreaming";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import { isMemoryContentContextEligible } from "../memory-content-safety";
 import { OntologyProposalError, applyOntologyOperation } from "../ontology-proposals";
@@ -327,10 +328,12 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/knowledge/constellation", (c) => {
+	app.get("/api/knowledge/constellation", async (c) => {
 		const agentId = c.req.query("agent_id") ?? resolveDaemonAgentId();
+		const accessor = getDbAccessor();
+		await getDreamingEpisodicTokenBacklog(accessor, agentId);
 		return c.json(
-			getKnowledgeGraphForConstellation(getDbAccessor(), agentId, {
+			getKnowledgeGraphForConstellation(accessor, agentId, {
 				limit: parseNavigationLimit(c.req.query("limit"), 150, 1000),
 				maxAspectsPerEntity: parseNavigationLimit(c.req.query("max_aspects_per_entity"), 6, 25),
 				maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 250),

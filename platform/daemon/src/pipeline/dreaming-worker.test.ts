@@ -357,7 +357,7 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
-	it("alternates hygiene and content runbooks across sweep checks (#1098)", () => {
+	it("alternates hygiene and content runbooks across sweep checks (#1098)", async () => {
 		// Regression for #1098: with the hygiene queue perpetually full, the
 		// sweep scheduled the combined runbook every cycle and content
 		// ingestion never got budget. When both hygiene and content work are
@@ -377,31 +377,31 @@ describe("dreaming worker agent scope", () => {
 		enqueueDreamingHygieneAttention(accessor, "default");
 
 		let focus: DreamingPassFocus | null = null;
-		const first = selectDreamingCheckMode(accessor, ["default"], focus);
+		const first = await selectDreamingCheckMode(accessor, ["default"], focus);
 		expect(first).toBe("incremental-hygiene");
 		focus = dreamingFocusOfMode(first) ?? focus;
-		const second = selectDreamingCheckMode(accessor, ["default"], focus);
+		const second = await selectDreamingCheckMode(accessor, ["default"], focus);
 		expect(second).toBe("incremental-content");
 		focus = dreamingFocusOfMode(second) ?? focus;
-		expect(selectDreamingCheckMode(accessor, ["default"], focus)).toBe("incremental-hygiene");
+		expect(await selectDreamingCheckMode(accessor, ["default"], focus)).toBe("incremental-hygiene");
 	});
 
-	it("routes pending surprisal hints to a content pass without an evidence backlog", () => {
+	it("routes pending surprisal hints to a content pass without an evidence backlog", async () => {
 		db.prepare(
 			`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
 			 VALUES ('surprisal-hint', 'default', 'surprisal', 'memory:outlier', '{}', 90)`,
 		).run();
 
-		expect(selectDreamingCheckMode(accessor, ["default"], null)).toBe("incremental-content");
+		expect(await selectDreamingCheckMode(accessor, ["default"], null)).toBe("incremental-content");
 	});
 
-	it("routes pending temporal review attention to a content pass", () => {
+	it("routes pending temporal review attention to a content pass", async () => {
 		db.prepare(
 			`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
 			 VALUES ('review-hint', 'default', 'review_due', 'memory:temporal', '{}', 90)`,
 		).run();
 
-		expect(selectDreamingCheckMode(accessor, ["default"], null)).toBe("incremental-content");
+		expect(await selectDreamingCheckMode(accessor, ["default"], null)).toBe("incremental-content");
 	});
 
 	it("seeds deterministic hygiene attention for legacy graph rows", () => {

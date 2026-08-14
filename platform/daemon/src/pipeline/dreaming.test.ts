@@ -4,7 +4,7 @@ import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "../telemetry";
-import { resetTokenizerStats, tokenizerStats } from "../pipeline/tokenizer";
+import { countTokens, resetTokenizerStats, tokenizerStats } from "../pipeline/tokenizer";
 import {
 	DREAMING_AGENT_PROMPT,
 	DREAMING_CONTENT_AGENT_PROMPT,
@@ -35,6 +35,8 @@ import {
 	resolveDreamingAttentionInTx,
 } from "./dreaming-attention";
 import { pendingDreamingEvidenceContinuations } from "./dreaming-evidence-consumption";
+import { renderDreamingEvidence } from "./dreaming-evidence";
+import { searchEpisodicSources } from "../episodic-sources";
 import {
 	autoRequeueRepairedDreamingEvidence,
 	collectRejectedDreamingEvidence,
@@ -177,18 +179,75 @@ describe("Dreaming", () => {
 		).toEqual({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment" });
 	});
 
-	it("keeps backlog checks off the synchronous BPE encoder (#1552)", () => {
-		seedTranscript(db, "large-backlog", "pending evidence ".repeat(2_000));
+	it("keeps backlog checks off the synchronous BPE encoder (#1552)", async () => {
+		seedTranscript(
+			db,
+			"large-backlog",
+			"function parseEvidence(input) { return input?.items?.filter((item) => item.active); }\n\n" +
+				"The backlog must preserve exact token semantics for operator-tuned thresholds.",
+		);
+		const source = searchEpisodicSources(db as unknown as ReadDb, {
+			agentId: AGENT,
+			query: "",
+			excludeDelivered: true,
+			limit: 50,
+		})[0];
+		if (source === undefined) throw new Error("test fixture did not create an episodic source");
+		const expected = countTokens(renderDreamingEvidence(source));
 		resetTokenizerStats();
 
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(expected);
+		expect(expected).not.toBe(Math.ceil(renderDreamingEvidence(source).length / 4));
 		expect(tokenizerStats.encodeCalls).toBe(0);
 		expect(tokenizerStats.encodeChars).toBe(0);
 	});
 
+	it("keeps the event loop responsive during a large exact-BPE backlog refresh (#1552, #1543)", async () => {
+		for (let i = 0; i < 50; i += 1) {
+			seedTranscript(
+				db,
+				`large-backlog-${i}`,
+				`function parseEvidence${i}(input) { return input?.items?.filter((item) => item.active); }\n` +
+					"The unreachable provider must not turn exact BPE backlog accounting into a main-thread wedge.\n" +
+					"prose ".repeat(2_000),
+			);
+		}
+
+		const latencies: number[] = [];
+		let measuring = true;
+		const measureLoop = async (): Promise<void> => {
+			while (measuring) {
+				const start = performance.now();
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				latencies.push(performance.now() - start);
+			}
+		};
+		const measurePromise = measureLoop();
+
+		const pass = runDreamingAgentPass(
+			accessor,
+			{
+				async run() {
+					throw new Error("provider unavailable");
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		await expect(pass).rejects.toThrow("provider unavailable");
+		measuring = false;
+		await measurePromise;
+
+		expect(Math.max(...latencies)).toBeLessThan(200);
+		expect(latencies.length).toBeGreaterThan(2);
+	});
+
 	it("drains oversized evidence only after every delivered fragment completes (#1430)", async () => {
 		seedTranscript(db, "s1", "x".repeat(5_000));
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		let prompt = "";
 		const run = async () =>
 			runDreamingAgentPass(
@@ -228,7 +287,7 @@ describe("Dreaming", () => {
 		expect(partial).toEqual(expect.objectContaining({ length: 5_000 }));
 		expect(partial?.offset).toBeGreaterThan(0);
 		expect(partial?.offset).toBeLessThan(partial?.length ?? 0);
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 
 		const second = await run();
 		const secondDelivery = getDreamingToolCalls(accessor, AGENT, second.passId).find(
@@ -239,9 +298,9 @@ describe("Dreaming", () => {
 		});
 		// The second pass records the next contiguous fragment; the final
 		// 1,000-character fragment remains pending until a third pass.
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		await run();
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
 	}, 15_000);
 
 	it("does not consume evidence delivered by a failed pass (#1430)", async () => {
@@ -273,7 +332,7 @@ describe("Dreaming", () => {
 				}
 			).count,
 		).toBe(0);
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 	});
 
 	it("does not acknowledge an artifact revision replaced during a pass (#1430)", async () => {
@@ -309,7 +368,7 @@ describe("Dreaming", () => {
 					.get("sources/revised.md", "sha-new") as { count: number }
 			).count,
 		).toBe(0);
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 	});
 
 	it("keeps deferred delivery pending in its owning agent scope (#1430)", async () => {
@@ -360,7 +419,7 @@ describe("Dreaming", () => {
 				}
 			).count,
 		).toBe(1);
-		expect(getDreamingEpisodicTokenBacklog(accessor, otherAgent)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, otherAgent)).toBeGreaterThan(0);
 	});
 
 	it("replaces a historical summary DAG row with the direct transcript projection", async () => {
@@ -426,17 +485,17 @@ describe("Dreaming", () => {
 		});
 	});
 
-	it("uses wall-clock backoff independently of later evidence volume", () => {
+	it("uses wall-clock backoff independently of later evidence volume", async () => {
 		seedSummary(db, "first", "episodic source", 10);
 		recordDreamingFailure(accessor, AGENT);
 		const failedAt = Date.parse(getDreamingState(accessor, AGENT).lastFailureAt ?? "");
 		const cfg = defaultCfg({ tokenThreshold: 1, backfillOnFirstRun: false });
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 10 * 60 * 1000 - 1)).toBe(false);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 10 * 60 * 1000 - 1)).toBe(false);
 		seedSummary(db, "later", "episodic source ".repeat(3_000), 3_000);
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 10 * 60 * 1000)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 10 * 60 * 1000)).toBe(true);
 	});
 
-	it("halts automatic scheduling after repeated consecutive failures", () => {
+	it("halts automatic scheduling after repeated consecutive failures", async () => {
 		seedSummary(db, "first", "episodic source", 10);
 		for (let i = 0; i < DREAMING_FAILURE_HALT_THRESHOLD; i += 1) {
 			recordDreamingFailure(accessor, AGENT);
@@ -446,9 +505,9 @@ describe("Dreaming", () => {
 		// Halted: a large backlog and fresh attention must not trigger a pass
 		// inside the cooldown window.
 		seedSummary(db, "later", "episodic source ".repeat(3_000), 3_000);
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 60 * 1000)).toBe(false);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 60 * 1000)).toBe(false);
 		// Cooldown elapsed: scheduling resumes (the next failure re-halts).
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + DREAMING_HALT_COOLDOWN_MS + 1_000)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + DREAMING_HALT_COOLDOWN_MS + 1_000)).toBe(true);
 	});
 
 	it("isDreamingScopeHalted gates on the failure threshold and cooldown", () => {
@@ -494,7 +553,7 @@ describe("Dreaming", () => {
 		expect(isDreamingHaltActive(accessor, AGENT)).toBe(true);
 	});
 
-	it("schedules a near-term continuation only after the latest capped content delivery (#1430)", () => {
+	it("schedules a near-term continuation only after the latest capped content delivery (#1430)", async () => {
 		const now = Date.now();
 		const capturedAt = new Date(now).toISOString();
 		const passId = "partial-content-pass";
@@ -512,14 +571,14 @@ describe("Dreaming", () => {
 			).run(AGENT, capturedAt, capturedAt, passId, capturedAt);
 		});
 		const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(true);
 
 		// A subsequent no-progress pass gets a new id. It may be retried later
 		// through the normal threshold/interval policy, but it cannot spin here.
 		accessor.withWriteTx((tx) => {
 			tx.prepare("UPDATE dreaming_state SET last_pass_id = ? WHERE agent_id = ?").run("no-progress-pass", AGENT);
 		});
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
 
 		// Completion clears the continuation even when it was the latest pass.
 		accessor.withWriteTx((tx) => {
@@ -528,7 +587,7 @@ describe("Dreaming", () => {
 				passId,
 			);
 		});
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
 
 		// Scheduler failure backoff gates a partial continuation like every other
 		// automatic pass. It cannot bypass error recovery or the failure halt.
@@ -536,7 +595,7 @@ describe("Dreaming", () => {
 			tx.prepare("UPDATE dreaming_evidence_consumption SET delivered_offset = 2_000 WHERE pass_id = ?").run(passId);
 		});
 		recordDreamingFailure(accessor, AGENT);
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
 	});
 
 	it("pins a capped frontier ahead of newer evidence on its next pass (#1430)", async () => {
@@ -570,7 +629,7 @@ describe("Dreaming", () => {
 				new Date(now + (index + 1) * 1_000).toISOString(),
 			);
 		}
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, now + 21_000)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now + 21_000)).toBe(true);
 
 		const second = await run();
 		const delivery = getDreamingToolCalls(accessor, AGENT, second.passId).find(
@@ -589,7 +648,7 @@ describe("Dreaming", () => {
 		// The progression moved to the second pass, so the final page remains a
 		// bounded continuation rather than falling behind the newer evidence.
 		expect(second.passId).not.toBe(first.passId);
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, now + 21_000)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now + 21_000)).toBe(true);
 	}, 15_000);
 
 	it("rotates every capped partial frontier before revisiting a newer subset (#1430)", async () => {
@@ -737,7 +796,7 @@ describe("Dreaming", () => {
 		expect(plan.map((row) => row.detail).join("\n")).toContain("idx_dreaming_evidence_consumption_continuation");
 	});
 
-	it("runs a low-volume episodic backlog once its maximum wait elapses", () => {
+	it("runs a low-volume episodic backlog once its maximum wait elapses", async () => {
 		const now = Date.now();
 		seedSummary(db, "trickle", "small episodic source", 10);
 		accessor.withWriteTx((tx) => {
@@ -747,8 +806,8 @@ describe("Dreaming", () => {
 			).run(AGENT, new Date(now - 6 * 60 * 60 * 1_000).toISOString());
 		});
 		const cfg = defaultCfg({ tokenThreshold: 100_000, maxInterval: 6 * 60 * 60 * 1_000, backfillOnFirstRun: false });
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, now - 1)).toBe(false);
-		expect(shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now - 1)).toBe(false);
+		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(true);
 	});
 
 	it("runs a pass when attention is pending and leaves it for the agent to consume", async () => {
@@ -761,7 +820,7 @@ describe("Dreaming", () => {
 				priority: 90,
 			});
 		});
-		expect(shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
 
 		let prompt = "";
 		const result = await runDreamingAgentPass(
@@ -797,7 +856,7 @@ describe("Dreaming", () => {
 				priority: 90,
 			});
 		});
-		expect(shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
 
 		const result = await runDreamingAgentPass(
 			accessor,
@@ -851,7 +910,7 @@ describe("Dreaming", () => {
 				);
 			}
 		});
-		expect(shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
 
 		await runDreamingAgentPass(
 			accessor,
@@ -921,7 +980,7 @@ describe("Dreaming", () => {
 		);
 	});
 
-	it("turns deterministic graph hygiene into scoped attention without episodic evidence", () => {
+	it("turns deterministic graph hygiene into scoped attention without episodic evidence", async () => {
 		db.prepare(
 			`INSERT INTO entities
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
@@ -937,7 +996,7 @@ describe("Dreaming", () => {
 				}),
 			]),
 		);
-		expect(shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
+		expect(await shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
 		const snapshots = getDreamingAttentionSnapshots(accessor, AGENT);
 		accessor.withWriteTx((tx) => resolveDreamingAttentionInTx(tx, AGENT, "pass-hygiene", snapshots));
 		enqueueDreamingHygieneAttention(accessor, AGENT);
@@ -1685,7 +1744,7 @@ describe("Dreaming", () => {
 				subjectRef: "entity:legacy-husk",
 			});
 		});
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 
 		await runDreamingAgentPass(
 			accessor,
@@ -1702,7 +1761,7 @@ describe("Dreaming", () => {
 		);
 		// The hygiene pass consumed no evidence: the backlog still counts as
 		// new, so the next scheduled content pass gets it.
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 
 		await runDreamingAgentPass(
 			accessor,
@@ -1723,7 +1782,7 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
 	});
 
 	it("acknowledges evidence that arrives during a content-attention pass without advancing the watermark (#1430)", async () => {
@@ -1765,7 +1824,7 @@ describe("Dreaming", () => {
 				}
 			).count,
 		).toBe(1);
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
 	});
 
 	it("does not advance the evidence watermark past evidence a content pass never surfaced (#1149)", async () => {
@@ -1792,7 +1851,7 @@ describe("Dreaming", () => {
 			"incremental-content",
 		);
 		expect(getDreamingState(accessor, AGENT).lastPassAt).toBeNull();
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 	});
 
 	it("advances the evidence watermark only to the evidence the pass surfaced (#1149)", async () => {
@@ -1840,7 +1899,7 @@ describe("Dreaming", () => {
 		expect(getDreamingState(accessor, AGENT).lastPassAt).toBe("2026-08-06T12:00:00.000Z");
 		// The gap evidence (captured after the surfaced frontier, before pass
 		// start) remains pending for the next scan-first search.
-		expect(getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		const manifestNodes = accessor.withReadDb(
 			(db) =>
 				db

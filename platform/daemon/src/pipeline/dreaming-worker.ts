@@ -170,18 +170,19 @@ export function createAgentScopeSnapshot(
  * kinds are pending so content gets a guaranteed turn even while the hygiene
  * queue stays full. Shared between check() and tests.
  */
-export function selectDreamingCheckMode(
+export async function selectDreamingCheckMode(
 	accessor: DbAccessor,
 	scopes: readonly string[],
 	lastScheduled: DreamingPassFocus | null,
-): DreamingMode {
+): Promise<DreamingMode> {
 	const hasPendingHygieneAttention = scopes.some((scope) =>
 		accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"])),
 	);
 	const hasPendingContentAttention = scopes.some((scope) =>
 		accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS)),
 	);
-	const hasBacklog = scopes.some((scope) => getDreamingEpisodicTokenBacklog(accessor, scope) > 0);
+	const backlogs = await Promise.all(scopes.map((scope) => getDreamingEpisodicTokenBacklog(accessor, scope)));
+	const hasBacklog = backlogs.some((backlog) => backlog > 0);
 	return selectDreamingPassMode(lastScheduled, hasPendingHygieneAttention, hasBacklog, hasPendingContentAttention);
 }
 
@@ -352,8 +353,8 @@ export function startDreamingWorker(
 			try {
 				enqueueDreamingHygieneAttention(accessor, scopeId, undefined, caps);
 				enqueueDreamingSurprisalAttention(accessor, scopeId, cfg);
-				const episodicTokens = getDreamingEpisodicTokenBacklog(accessor, scopeId);
-				if (!shouldTriggerDreaming(accessor, cfg, scopeId, Date.now(), episodicTokens)) continue;
+				const episodicTokens = await getDreamingEpisodicTokenBacklog(accessor, scopeId);
+				if (!(await shouldTriggerDreaming(accessor, cfg, scopeId, Date.now(), episodicTokens))) continue;
 				triggered = true;
 				logger.info("dreaming-worker", "Episodic evidence threshold reached, starting dreaming pass", {
 					scopeId,
@@ -375,7 +376,7 @@ export function startDreamingWorker(
 		// content a guaranteed turn: alternate the runbook per check cycle
 		// when both kinds of work are pending; run the only-pending kind
 		// directly otherwise.
-		const mode = selectDreamingCheckMode(accessor, scopes, nextScheduledFocus);
+		const mode = await selectDreamingCheckMode(accessor, scopes, nextScheduledFocus);
 		nextScheduledFocus = dreamingFocusOfMode(mode) ?? nextScheduledFocus;
 		try {
 			await runPass(defaultAgentId, mode, undefined, scopes);

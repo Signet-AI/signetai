@@ -23,6 +23,10 @@ import {
 	listKnowledgeEntities,
 } from "./knowledge-graph";
 import { applyOntologyOperation } from "./ontology-proposals";
+import { getDreamingEpisodicTokenBacklog } from "./pipeline/dreaming";
+import { countTokens } from "./pipeline/tokenizer";
+import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
+import { searchEpisodicSources } from "./episodic-sources";
 
 function makeDbPath(): string {
 	const dir = join(tmpdir(), `signet-kg-list-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -350,7 +354,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(0);
 	});
 
-	test("builds a bounded constellation graph without loading every graph row", () => {
+	test("builds a bounded constellation graph without loading every graph row", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -441,6 +445,17 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			).run();
 		});
 
+		await getDreamingEpisodicTokenBacklog(getDbAccessor(), "default");
+		const source = getDbAccessor().withReadDb(
+			(db) =>
+				searchEpisodicSources(db, {
+					agentId: "default",
+					query: "",
+					excludeDelivered: true,
+					limit: 50,
+				})[0],
+		);
+		if (source === undefined) throw new Error("test fixture did not create an episodic source");
 		const graph = getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
 			limit: 2,
 			maxAspectsPerEntity: 1,
@@ -460,7 +475,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(graph.proposals[0]?.targetAspectName).toBe("alpha");
 		expect(graph.metadata.proposals.pending).toBe(1);
 		expect(graph.metadata.proposals.appliedRecent).toBe(1);
-		expect(graph.metadata.dreaming.episodicTokensPending).toBeGreaterThan(0);
+		expect(graph.metadata.dreaming.episodicTokensPending).toBe(countTokens(renderDreamingEvidence(source)));
 		expect(graph.metadata.dreaming.latestPass?.mutationsApplied).toBe(3);
 	});
 

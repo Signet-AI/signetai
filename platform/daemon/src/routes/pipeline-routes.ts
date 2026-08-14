@@ -676,7 +676,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		return requirePermission("admin", authConfig)(c, next);
 	});
 
-	app.get("/api/dream/status", (c) => {
+	app.get("/api/dream/status", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const accessor = getDbAccessor();
 		const scopedAgent = resolveScopedDreamAgent(c);
@@ -684,7 +684,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const agentId = scopedAgent.agentId;
 
 		const state = getDreamingState(accessor, agentId);
-		const episodicTokensPending = getDreamingEpisodicTokenBacklog(accessor, agentId);
+		const episodicTokensPending = await getDreamingEpisodicTokenBacklog(accessor, agentId);
 		const passes = getDreamingPasses(accessor, agentId, 10);
 		const exclusions = getDreamingEvidenceExclusions(accessor, agentId);
 		const attention = getDreamingAttention(accessor, agentId);

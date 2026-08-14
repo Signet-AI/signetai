@@ -102,6 +102,7 @@ const workerEntries = [
 	// .wasm is embedded separately (wasmAssets) and the main thread passes the
 	// materialized wasmDir to the worker via workerData.
 	["embedding-worker", "platform/daemon/src/embedding-worker.ts"],
+	["dreaming-token-worker", "platform/daemon/src/pipeline/dreaming-token-worker.ts"],
 ] as const;
 const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
 

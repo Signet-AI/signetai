@@ -22,7 +22,7 @@ import type {
 } from "@signet/core";
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor, ReadDb } from "./db-accessor";
-import { getDreamingEpisodicTokenBacklogInDb } from "./pipeline/dreaming";
+import { getDreamingEpisodicTokenBacklogCached } from "./pipeline/dreaming";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1877,7 +1877,7 @@ function getConstellationDreamingSummary(db: ReadDb, agentId: string): Constella
 	}
 
 	return {
-		episodicTokensPending: getDreamingEpisodicTokenBacklogInDb(db, agentId),
+		episodicTokensPending: getDreamingEpisodicTokenBacklogCached(agentId),
 		consecutiveFailures: Math.max(0, state?.consecutive_failures ?? 0),
 		lastPassAt: state?.last_pass_at ?? null,
 		lastPassId: state?.last_pass_id ?? null,

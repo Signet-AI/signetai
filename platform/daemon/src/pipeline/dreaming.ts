@@ -82,7 +82,8 @@ import {
 	type DreamingSurprisalSelection,
 	selectDreamingSurprisalInDb,
 } from "./dreaming-surprisal";
-import { countTokens, estimateTokens } from "./tokenizer";
+import { DreamingBacklogTokenCache, type DreamingBacklogTokenEntry } from "./dreaming-token-cache";
+import { countTokens } from "./tokenizer";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1406,7 +1407,9 @@ export async function runDreamingAgentPass(
 			accessor.withReadDb((db) => getDreamingAttentionInDb(db, scope, 1).length > 0),
 		);
 		const backlogByScope = new Map(
-			scopes.map((scope) => [scope, getDreamingEpisodicTokenBacklog(accessor, scope)] as const),
+			await Promise.all(
+				scopes.map(async (scope) => [scope, await getDreamingEpisodicTokenBacklog(accessor, scope)] as const),
+			),
 		);
 		const totalBacklog = [...backlogByScope.values()].reduce((total, backlog) => total + backlog, 0);
 		const earlyExitSummary = dreamingEarlyExitSummary(
@@ -1806,6 +1809,7 @@ function writeDreamingTranscriptManifestInTx(
 // on the next forced or post-cooldown pass (#1059).
 export const DREAMING_FAILURE_HALT_THRESHOLD = 5;
 export const DREAMING_HALT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const dreamingBacklogTokenCache = new DreamingBacklogTokenCache();
 
 export function isDreamingScopeHalted(state: DreamingState, nowMs = Date.now()): boolean {
 	if (state.consecutiveFailures < DREAMING_FAILURE_HALT_THRESHOLD) return false;
@@ -1818,16 +1822,10 @@ export function isDreamingHaltActive(accessor: DbAccessor, agentId: string, nowM
 	return isDreamingScopeHalted(getDreamingState(accessor, agentId), nowMs);
 }
 
-/**
- * The worker's backlog is the episodic evidence it has not yet reasoned over,
- * not a separately maintained token counter. This keeps the trigger aligned
- * with every supported input source.
- */
-export function getDreamingEpisodicTokenBacklog(accessor: DbAccessor, agentId: string): number {
-	return accessor.withReadDb((db) => getDreamingEpisodicTokenBacklogInDb(db, agentId));
-}
-
-export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string): number {
+function readDreamingEpisodicTokenBacklogEntriesInDb(
+	db: ReadDb,
+	agentId: string,
+): readonly DreamingBacklogTokenEntry[] {
 	const hasConsumption =
 		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_consumption'").get() !=
 		null;
@@ -1838,12 +1836,12 @@ export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string)
 			excludeDelivered: true,
 			limit: 50,
 		});
-		return queued.reduce((total, source) => {
+		return queued.flatMap((source) => {
 			const remaining = renderDreamingEvidence(source).slice(deliveredOffsetForSource(db, agentId, source));
-			// This is only a trigger estimate. Exact BPE encoding here blocks the
-			// daemon's event loop while scanning every queued source.
-			return total + estimateTokens(remaining);
-		}, 0);
+			return remaining.length === 0
+				? []
+				: [{ key: `${source.kind}:${source.id}:${deliveredOffsetForSource(db, agentId, source)}`, text: remaining }];
+		});
 	}
 	const state = readDreamingState(db, agentId);
 	const queued = readRecentEpisodicSources(
@@ -1859,22 +1857,57 @@ export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string)
 		state.evidenceCursor?.fragmentOffset && state.evidenceCursor.kind !== null
 			? readEpisodicSource(db, { agentId, from: `${state.evidenceCursor.kind}:${state.evidenceCursor.id}` })
 			: null;
-	const remaining = resumed ? renderDreamingEvidence(resumed).slice(state.evidenceCursor?.fragmentOffset) : "";
-	// This is only a trigger estimate. Exact BPE encoding here blocks the
-	// daemon's event loop while scanning every queued source.
-	return (
-		queued.reduce((total, source) => total + estimateTokens(renderDreamingEvidence(source)), 0) +
-		estimateTokens(remaining)
-	);
+	const entries = queued.map((source) => ({
+		key: `${source.kind}:${source.id}:0`,
+		text: renderDreamingEvidence(source),
+	}));
+	if (resumed === null) return entries;
+	const remaining = renderDreamingEvidence(resumed).slice(state.evidenceCursor?.fragmentOffset);
+	return remaining.length === 0
+		? entries
+		: [
+				...entries,
+				{ key: `${resumed.kind}:${resumed.id}:${state.evidenceCursor?.fragmentOffset ?? 0}`, text: remaining },
+			];
 }
 
-export function shouldTriggerDreaming(
+/**
+ * Refresh the exact BPE backlog count without encoding on the daemon thread.
+ * Database reads and evidence rendering stay bounded on the caller; the
+ * worker owns all cl100k encoding and memoizes unchanged source fragments.
+ */
+export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string): Promise<number> {
+	return dreamingBacklogTokenCache.refresh(agentId, readDreamingEpisodicTokenBacklogEntriesInDb(db, agentId));
+}
+
+export async function getDreamingEpisodicTokenBacklog(accessor: DbAccessor, agentId: string): Promise<number> {
+	const entries = accessor.withReadDb((db) => readDreamingEpisodicTokenBacklogEntriesInDb(db, agentId));
+	return dreamingBacklogTokenCache.refresh(agentId, entries);
+}
+
+/** Read the last worker-computed value for synchronous dashboard metadata. */
+export function getDreamingEpisodicTokenBacklogCached(agentId: string): number {
+	return dreamingBacklogTokenCache.get(agentId);
+}
+
+export async function shouldTriggerDreaming(
 	accessor: DbAccessor,
 	cfg: DreamingConfig,
 	agentId: string,
 	nowMs = Date.now(),
-	episodicTokens = getDreamingEpisodicTokenBacklog(accessor, agentId),
-): boolean {
+	episodicTokens?: number,
+): Promise<boolean> {
+	const tokens = episodicTokens ?? (await getDreamingEpisodicTokenBacklog(accessor, agentId));
+	return shouldTriggerDreamingAfterBacklog(accessor, cfg, agentId, nowMs, tokens);
+}
+
+async function shouldTriggerDreamingAfterBacklog(
+	accessor: DbAccessor,
+	cfg: DreamingConfig,
+	agentId: string,
+	nowMs: number,
+	episodicTokens: number,
+): Promise<boolean> {
 	const state = getDreamingState(accessor, agentId);
 	const hasAttention = accessor.withReadDb((db) => getDreamingAttentionInDb(db, agentId, 1).length > 0);
 
