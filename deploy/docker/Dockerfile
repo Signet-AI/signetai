@@ -27,6 +27,12 @@ COPY public ./public
 COPY web ./web
 
 RUN bun install --frozen-lockfile
+# @signet/sdk bundles @signet/core. Keep the core package's optional native
+# dependencies materialized for that build even when their postinstall cannot
+# produce a Node addon in this Bun-only image. The runtime uses Bun's SQLite
+# implementation, so no better-sqlite3 addon is copied into the final image.
+RUN bun install --frozen-lockfile --ignore-scripts --filter '@signet/core'
+RUN test -e platform/core/node_modules/better-sqlite3
 ARG TARGETOS=linux
 ARG TARGETARCH
 RUN set -eux; \

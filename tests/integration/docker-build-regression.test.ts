@@ -157,6 +157,16 @@ describe("Docker build pipeline regression guard", () => {
 		expect(desktopHomepage).toBe("https://signetai.sh");
 	});
 
+	it("keeps the core optional native package available to the SDK bundle", () => {
+		const install = "RUN bun install --frozen-lockfile --ignore-scripts --filter '@signet/core'";
+		const installIndex = dockerfile.indexOf(install);
+		const depsBuildIndex = dockerfile.indexOf("RUN bun run build:deps");
+
+		expect(installIndex).toBeGreaterThanOrEqual(0);
+		expect(dockerfile).toContain("RUN test -e platform/core/node_modules/better-sqlite3");
+		expect(installIndex).toBeLessThan(depsBuildIndex);
+	});
+
 	it("fails stable Docker release CI when GHCR latest is not publicly pullable", () => {
 		expect(dockerImageWorkflow).toContain("Verify public GHCR latest pull");
 		expect(dockerImageWorkflow).toContain("if: ${{ !contains(github.ref_name, '-') }}");
