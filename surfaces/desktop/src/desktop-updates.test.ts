@@ -113,11 +113,11 @@ describe("desktop update packaging", () => {
 		const installStart = workflow.indexOf("      - name: Install dependencies", configureStart);
 		const configure = workflow.slice(configureStart, installStart);
 
-		expect(configure).toContain('api_key_path="${RUNNER_TEMP}/signet-apple-api-key.p8"');
-		expect(configure).toContain('printf \'%s\\n\' "${APPLE_API_KEY}" > "${api_key_path}"');
-		expect(configure).toContain('write_env APPLE_API_KEY "${api_key_path}"');
+		expect(configure).toContain(`api_key_path="\${RUNNER_TEMP}/signet-apple-api-key.p8"`);
+		expect(configure).toContain(`printf '%s\\n' "\${APPLE_API_KEY}" > "\${api_key_path}"`);
+		expect(configure).toContain(`write_env APPLE_API_KEY "\${api_key_path}"`);
 		expect(configure).toContain("notarytool store-credentials");
-		expect(configure).toContain('xcrun "${store_credentials[@]}"');
+		expect(configure).toContain(`xcrun "\${store_credentials[@]}"`);
 		expect(configure).toContain('write_env APPLE_API_KEY ""');
 
 		const publishStart = workflow.indexOf("      - name: Publish release assets");
@@ -127,8 +127,9 @@ describe("desktop update packaging", () => {
 		expect(publish).not.toContain("if: startsWith(github.ref, 'refs/tags/')");
 	});
 
-	test("keeps tag releases draft until every desktop matrix leg publishes", () => {
+	test("lets only the desktop finalizer undraft after every matrix leg publishes", () => {
 		const workflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "desktop-build.yml"), "utf8");
+		const releaseWorkflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "release.yml"), "utf8");
 		const buildStart = workflow.indexOf("  build:");
 		const finalizeStart = workflow.indexOf("  finalize-release:");
 		const finalizeEnd = workflow.indexOf("\n\n  validate-aur:", finalizeStart);
@@ -140,6 +141,7 @@ describe("desktop update packaging", () => {
 		expect(finalize).toContain("needs: build");
 		expect(finalize).toContain("scripts/retry-github-release.sh gh release edit");
 		expect(finalize).toContain("--draft=false");
+		expect(releaseWorkflow).not.toContain("--draft=false");
 	});
 
 	test("uses a Linux-safe Electron executable name", () => {
