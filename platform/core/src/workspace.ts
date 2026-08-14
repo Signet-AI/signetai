@@ -51,8 +51,10 @@ export interface ResolveWorkspacePathOptions {
 	readonly home?: string;
 	/**
 	 * Throw on a malformed persisted workspace.json instead of falling back to
-	 * the default. Existing malformed files now always throw; this option is
-	 * retained for source compatibility with explicit install operations.
+	 * the default. Defaults to `true` for canonical workspace resolution so a
+	 * malformed persisted pointer fails loudly when no environment override
+	 * wins. An environment override is always resolved leniently because it has
+	 * higher precedence.
 	 */
 	readonly strict?: boolean;
 	/**
@@ -144,14 +146,15 @@ export function getWorkspaceConfigPath(env: NodeJS.ProcessEnv = process.env, hom
 /**
  * Read the persisted `workspace` value from `workspace.json`.
  *
- * Returns `null` only when the file is absent. An existing malformed file
- * throws instead of silently selecting the default workspace.
+ * Returns `null` when the file is absent or (in non-strict mode) malformed.
+ * In strict mode an existing malformed file throws.
  */
 export function readConfiguredWorkspacePath(
 	env: NodeJS.ProcessEnv = process.env,
 	home = homedir(),
-	_options: { readonly strict?: boolean } = {},
+	options: { readonly strict?: boolean } = {},
 ): string | null {
+	const strict = options.strict ?? false;
 	const configPath = getWorkspaceConfigPath(env, home);
 	if (!existsSync(configPath)) return null;
 
@@ -159,16 +162,19 @@ export function readConfiguredWorkspacePath(
 	try {
 		raw = JSON.parse(readFileSync(configPath, "utf-8"));
 	} catch (err) {
+		if (!strict) return null;
 		const detail = err instanceof Error ? err.message : String(err);
 		throw new Error(`Invalid Signet workspace config at ${configPath}: ${detail}`);
 	}
 
 	if (!isRecord(raw) || !("workspace" in raw)) {
+		if (!strict) return null;
 		throw new Error(`Invalid Signet workspace config at ${configPath}: missing workspace`);
 	}
 
 	const workspace = raw.workspace;
 	if (typeof workspace !== "string" || workspace.trim().length === 0) {
+		if (!strict) return null;
 		throw new Error(`Invalid Signet workspace config at ${configPath}: workspace must be a non-empty string`);
 	}
 
@@ -232,14 +238,16 @@ export function clearConfiguredWorkspacePath(env: NodeJS.ProcessEnv = process.en
 export function resolveWorkspacePath(options: ResolveWorkspacePathOptions = {}): WorkspaceResolution {
 	const env = options.env ?? process.env;
 	const home = options.home ?? homedir();
+	const strict = options.strict ?? true;
 	const requireExistingEnvPath = options.requireExistingEnvPath ?? false;
 
 	const configPath = getWorkspaceConfigPath(env, home);
-	// Resolve the env override first. The persisted config is still read so the
-	// structured result reports it, but an existing malformed config is always an
-	// error rather than a reason to silently select the default workspace.
+	// Resolve the env override first. When it wins, a malformed persisted config
+	// is irrelevant and must not block the explicit override. Without an env
+	// override, keep strict validation so a malformed persisted pointer fails
+	// loudly instead of silently selecting the default workspace.
 	const envPath = resolveEnvWorkspace(env, home, requireExistingEnvPath);
-	const configValue = readConfiguredWorkspacePath(env, home);
+	const configValue = readConfiguredWorkspacePath(env, home, { strict: envPath ? false : strict });
 
 	if (envPath) {
 		return {

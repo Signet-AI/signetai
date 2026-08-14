@@ -154,7 +154,7 @@ describe("resolveWorkspacePath malformed config", () => {
 		}
 	});
 
-	it("does not let an env override hide an existing malformed config", () => {
+	it("uses SIGNET_WORKSPACE when persisted config is malformed", () => {
 		const home = mkdtempSync(join(tmpdir(), "signet-core-ws-malformed-env-"));
 		try {
 			const configHome = join(home, "config");
@@ -163,12 +163,14 @@ describe("resolveWorkspacePath malformed config", () => {
 			mkdirSync(join(configHome, "signet"), { recursive: true });
 			writeFileSync(join(configHome, "signet", "workspace.json"), "{not json");
 
-			expect(() =>
-				resolveWorkspacePath({
-					env: makeEnv({ SIGNET_PATH: envWorkspace, XDG_CONFIG_HOME: configHome }),
-					home,
-				}),
-			).toThrow("Invalid Signet workspace config");
+			const resolved = resolveWorkspacePath({
+				env: makeEnv({ SIGNET_WORKSPACE: envWorkspace, XDG_CONFIG_HOME: configHome }),
+				home,
+			});
+
+			expect(resolved.path).toBe(envWorkspace);
+			expect(resolved.source).toBe("env");
+			expect(resolved.configuredPath).toBeNull();
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}
