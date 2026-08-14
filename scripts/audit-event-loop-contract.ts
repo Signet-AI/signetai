@@ -189,15 +189,11 @@ function findSites(root: string): AuditSite[] {
 		const text = readFileSync(absolutePath, "utf8");
 		const sourceFile = ts.createSourceFile(absolutePath, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 		const lines = text.split("\n");
-		const seenOnLine = new Set<string>();
 		const visit = (node: ts.Node): void => {
 			if (ts.isCallExpression(node)) {
 				const call = calledSyncApi(node.expression);
 				if (call) {
 					const line = sourceFile.getLineAndCharacterOfPosition(call.position).line;
-					const key = `${line}:${call.api}`;
-					if (seenOnLine.has(key)) return;
-					seenOnLine.add(key);
 					const source = lines[line]?.replace(/\/\/.*$/u, "").trim() ?? "";
 					sites.push({ path, line: line + 1, api: call.api, source, category: classifySite(path, sourceFile) });
 				}

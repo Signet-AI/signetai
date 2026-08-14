@@ -21,6 +21,32 @@ test("event-loop audit rejects a new synchronous hot-path call", () => {
 	}
 });
 
+test("event-loop audit counts a second same-line call beyond the baseline", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		const source = "getDbAccessor().withReadDb((db) => db); getDbAccessor().withReadDb((db) => db);\n";
+		writeFileSync(join(root, "same-line.ts"), source);
+		const result = runAudit({
+			sourceRoot: root,
+			baselineSites: [
+				{
+					path: "same-line.ts",
+					line: 1,
+					api: "withReadDb",
+					source: source.trim(),
+					category: "hot-path",
+				},
+			],
+		});
+		expect(result.sites).toHaveLength(2);
+		expect(result.violations).toHaveLength(1);
+		expect(result.violations[0]?.line).toBe(1);
+		expect(result.violations[0]?.api).toBe("withReadDb");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("event-loop audit detects multiline synchronous calls and ignores literals/comments", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
 	try {
