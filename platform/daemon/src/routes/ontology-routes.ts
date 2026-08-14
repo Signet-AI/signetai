@@ -14,6 +14,7 @@ import {
 	parseEpistemicAssertionPredicate,
 	parseEpistemicAssertionStatus,
 	supersedeEpistemicAssertion,
+	validateEpistemicObserverScope,
 } from "../ontology-assertions";
 import {
 	OntologyClaimEvidenceError,
@@ -527,6 +528,11 @@ export function registerOntologyRoutes(app: Hono): void {
 	app.get("/api/ontology/assertions", (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
+		try {
+			validateEpistemicObserverScope(scoped.agentId, c.req.query("observer_id"));
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
 		const predicate = parseEpistemicAssertionPredicate(c.req.query("predicate"));
 		if (c.req.query("predicate") && !predicate) return c.json({ error: "predicate is invalid" }, 400);
 		const status = parseEpistemicAssertionStatus(c.req.query("status"));
@@ -534,6 +540,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		return c.json(
 			listEpistemicAssertions(getDbAccessor(), {
 				agentId: scoped.agentId,
+				observerId: c.req.query("observer_id"),
 				entity: c.req.query("entity"),
 				entityId: c.req.query("entity_id"),
 				predicate,
@@ -583,7 +590,16 @@ export function registerOntologyRoutes(app: Hono): void {
 	app.get("/api/ontology/assertions/:id", (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
-		const assertion = getEpistemicAssertion(getDbAccessor(), { agentId: scoped.agentId, id: c.req.param("id") });
+		try {
+			validateEpistemicObserverScope(scoped.agentId, c.req.query("observer_id"));
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+		const assertion = getEpistemicAssertion(getDbAccessor(), {
+			agentId: scoped.agentId,
+			id: c.req.param("id"),
+			observerId: c.req.query("observer_id"),
+		});
 		if (assertion === null) return c.json({ error: "Assertion not found" }, 404);
 		return c.json(assertion);
 	});
@@ -596,6 +612,7 @@ export function registerOntologyRoutes(app: Hono): void {
 			return c.json(
 				createEpistemicAssertion(getDbAccessor(), {
 					agentId: scoped.agentId,
+					observerId: readString(body, "observer_id") ?? null,
 					entity: readString(body, "entity"),
 					entityId: readString(body, "entity_id"),
 					predicate: readString(body, "predicate") ?? "",
@@ -663,6 +680,7 @@ export function registerOntologyRoutes(app: Hono): void {
 			return c.json(
 				supersedeEpistemicAssertion(getDbAccessor(), {
 					agentId: scoped.agentId,
+					observerId: readString(body, "observer_id") ?? null,
 					oldAssertionId: c.req.param("id"),
 					entity: readString(body, "entity"),
 					entityId: readString(body, "entity_id"),

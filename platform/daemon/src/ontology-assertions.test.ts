@@ -51,6 +51,18 @@ describe("epistemic assertions", () => {
 				  'signet has epistemic assertions.', 0.9, 0.8, 'active', 'ontology', 'epistemic_assertions', ?, ?)`,
 			).run("2026-05-16T00:00:00.000Z", "2026-05-16T00:00:00.000Z");
 			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-other', 'entity-other', 'dot', 'architecture', 'architecture', 0.7, ?, ?)`,
+			).run("2026-05-16T00:00:00.000Z", "2026-05-16T00:00:00.000Z");
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance,
+				  status, group_key, claim_key, created_at, updated_at)
+				 VALUES ('attr-other', 'aspect-other', 'dot', 'attribute', 'Other has a different belief.',
+				  'other has a different belief.', 0.9, 0.8, 'active', 'ontology', 'epistemic_assertions', ?, ?)`,
+			).run("2026-05-16T00:00:00.000Z", "2026-05-16T00:00:00.000Z");
+			db.prepare(
 				`INSERT INTO entity_attributes
 				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance,
 				  status, group_key, claim_key, created_at, updated_at)
@@ -99,6 +111,98 @@ describe("epistemic assertions", () => {
 			"believes what",
 		);
 		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "dot", status: "all" }).items).toHaveLength(0);
+	});
+
+	it("keeps directional beliefs separate by the agent-scoped observer", () => {
+		const ant = createEpistemicAssertion(getDbAccessor(), {
+			agentId: "ant",
+			observerId: "ant",
+			entity: "Signet",
+			predicate: "believes",
+			content: "Signet is reliable for local-first memory.",
+			speaker: "Alice",
+			evidence: [{ quote: "Alice believes local-first" }],
+		});
+		const dot = createEpistemicAssertion(getDbAccessor(), {
+			agentId: "dot",
+			observerId: "dot",
+			entity: "Other",
+			predicate: "believes",
+			content: "Signet needs stronger multi-agent projections.",
+			speaker: "Bob",
+			evidence: [{ quote: "Bob believes projections" }],
+		});
+
+		expect(ant.observerId).toBe("ant");
+		expect(dot.observerId).toBe("dot");
+		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "ant", observerId: "ant" }).items).toEqual(
+			expect.arrayContaining([expect.objectContaining({ id: ant.id, content: ant.content })]),
+		);
+		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "dot", observerId: "dot" }).items).toEqual(
+			expect.arrayContaining([expect.objectContaining({ id: dot.id, content: dot.content })]),
+		);
+		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(1);
+	});
+
+	it("exposes observer-scoped assertion queries through the API", async () => {
+		const assertion = createEpistemicAssertion(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			predicate: "believes",
+			content: "The API preserves directional belief reads.",
+			evidence: [{ quote: "directional API" }],
+		});
+		const app = new Hono();
+		registerOntologyRoutes(app);
+
+		const allowed = await app.request("/api/ontology/assertions?agent_id=ant&observer_id=ant");
+		expect(allowed.status).toBe(200);
+		const payload = (await allowed.json()) as { readonly items: readonly { readonly id: string }[] };
+		expect(payload.items.some((item) => item.id === assertion.id)).toBe(true);
+
+		const denied = await app.request("/api/ontology/assertions?agent_id=ant&observer_id=dot");
+		expect(denied.status).toBe(403);
+	});
+
+	it("rejects a peer observer and cross-scope semantic premise", () => {
+		expect(() =>
+			createEpistemicAssertion(getDbAccessor(), {
+				agentId: "ant",
+				observerId: "dot",
+				entity: "Signet",
+				predicate: "claims",
+				content: "A peer observer must not be fabricated.",
+				evidence: [{ quote: "fabricated observer" }],
+			}),
+		).toThrow(OntologyAssertionError);
+
+		expect(() =>
+			createEpistemicAssertion(getDbAccessor(), {
+				agentId: "ant",
+				observerId: "ant",
+				entity: "Signet",
+				predicate: "claims",
+				content: "Cross-scope premise must not be accepted.",
+				evidence: [{ quote: "cross-scope premise" }],
+				sourceKind: "ontology_claim",
+				sourceId: "attr-other",
+			}),
+		).toThrow(OntologyAssertionError);
+
+		expect(() => listEpistemicAssertions(getDbAccessor(), { agentId: "ant", observerId: "dot" })).toThrow(
+			OntologyAssertionError,
+		);
+
+		expect(() =>
+			createEpistemicAssertion(getDbAccessor(), {
+				agentId: "ant",
+				entity: "Signet",
+				predicate: "claims",
+				content: "A semantic premise must identify its source row.",
+				evidence: [{ quote: "missing source" }],
+				sourceKind: "ontology_claim",
+			}),
+		).toThrow(OntologyAssertionError);
 	});
 
 	it("links assertions to same-agent claim attributes and rejects cross-entity links", () => {

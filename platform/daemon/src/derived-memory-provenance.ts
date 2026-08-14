@@ -76,6 +76,14 @@ function validateSource(db: WriteDb, agentId: string, sourceKind: string, source
 	}
 }
 
+/** Validate one provenance source before a derived row or assertion is persisted. */
+export function validateDerivedMemorySourceInTx(
+	db: WriteDb,
+	input: { readonly agentId: string; readonly sourceKind: string; readonly sourceId: string },
+): void {
+	validateSource(db, input.agentId, input.sourceKind, input.sourceId);
+}
+
 /** A canonical evidence record used to derive a semantic memory. */
 export interface DerivedMemorySource {
 	readonly sourceKind: string;
@@ -120,7 +128,7 @@ export function linkDerivedMemorySourcesInTx(
 		const key = `${sourceKind}\u0000${sourceId}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
-		validateSource(db, agentId, sourceKind, sourceId);
+		validateDerivedMemorySourceInTx(db, { agentId, sourceKind, sourceId });
 		insert.run(derivedMemoryId, sourceKind, sourceId, source.sourcePath?.trim() || null, agentId, createdAt);
 	}
 }

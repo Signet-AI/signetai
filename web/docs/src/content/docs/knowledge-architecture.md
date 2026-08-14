@@ -45,6 +45,14 @@ where the evidence came from. An `entity_attribute` represents the current claim
 value Signet should use when acting. These are related, but they are not the same
 layer.
 
+For the agent-only observer projection, `agent_id` is also the assertion's
+canonical observer scope. The API exposes that dimension as `observer_id` for
+directional reads, but requires it to equal the authorized `agent_id`; `speaker`
+remains attribution. This keeps Alice's and Bob's scoped assertions separate
+without a second semantic graph or an unvalidated peer identity. Arbitrary peer
+observers require a future validated observer identity and are intentionally not
+part of this surface.
+
 ## Ontology Shape
 
 The main navigable shape is:

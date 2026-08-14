@@ -1181,6 +1181,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 			.description("List source-attributed epistemic assertions")
 			.option("--entity <name>", "Filter by entity name")
 			.option("--entity-id <id>", "Filter by entity id")
+			.option("--observer <name>", "Observer scope, must match --agent in the agent-only MVP")
 			.option("--predicate <predicate>", "Filter by predicate")
 			.option("--status <status>", "Filter by status", "active")
 			.option("--speaker <name>", "Filter by speaker")
@@ -1194,6 +1195,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		for (const [key, value] of [
 			["entity", options.entity],
 			["entity_id", options.entityId],
+			["observer_id", options.observer],
 			["predicate", options.predicate],
 			["status", options.status],
 			["speaker", options.speaker],
@@ -1213,11 +1215,16 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 	const assertion = ontology.command("assertion").description("Inspect and maintain epistemic assertions");
 
 	addCommonOptions(
-		assertion.command("show").description("Show one epistemic assertion").argument("<id>", "Assertion id"),
+		assertion
+			.command("show")
+			.description("Show one epistemic assertion")
+			.argument("<id>", "Assertion id")
+			.option("--observer <name>", "Observer scope, must match --agent in the agent-only MVP"),
 	).action(async (id: string, options) => {
 		if (!(await deps.ensureDaemonForSecrets())) return;
 		const params = new URLSearchParams();
 		appendAgent(params, options.agent);
+		if (options.observer) params.set("observer_id", options.observer);
 		const data = await apiGet(deps, `/api/ontology/assertions/${encodeURIComponent(id)}`, params);
 		if (options.json) console.log(JSON.stringify(data, null, 2));
 		else printAssertions(data, "Epistemic Assertion");
@@ -1229,6 +1236,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 			.description("Create a source-attributed epistemic assertion")
 			.option("--entity <name>", "Subject entity name")
 			.option("--entity-id <id>", "Subject entity id")
+			.option("--observer <name>", "Observer scope, must match --agent in the agent-only MVP")
 			.requiredOption("--predicate <predicate>", "claims|believes|observed|decided|prefers|denies|questions")
 			.requiredOption("--content <text>", "Assertion content")
 			.option("--speaker <name>", "Speaker or claimant")
@@ -1251,6 +1259,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 			agent_id: options.agent,
 			entity: options.entity,
 			entity_id: options.entityId,
+			observer_id: options.observer,
 			predicate: options.predicate,
 			content: options.content,
 			speaker: options.speaker,

@@ -1045,6 +1045,8 @@ export interface EntityDependency {
 export interface EpistemicAssertion {
 	readonly id: string;
 	readonly agentId: string;
+	/** The agent-scoped observer. This is intentionally the same identity as agentId in the MVP. */
+	readonly observerId: string;
 	readonly subjectEntityId: string;
 	readonly subjectEntityName: string | null;
 	readonly claimAttributeId: string | null;

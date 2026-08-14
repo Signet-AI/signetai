@@ -1091,8 +1091,30 @@ describe("registerOntologyCommands", () => {
 			},
 		});
 
-		await program.parseAsync(["node", "test", "ontology", "assertions", "--entity", "Signet", "--agent", "ant"]);
-		await program.parseAsync(["node", "test", "ontology", "assertion", "show", "assertion-1", "--agent", "ant"]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"assertions",
+			"--entity",
+			"Signet",
+			"--agent",
+			"ant",
+			"--observer",
+			"ant",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"assertion",
+			"show",
+			"assertion-1",
+			"--agent",
+			"ant",
+			"--observer",
+			"ant",
+		]);
 		await program.parseAsync([
 			"node",
 			"test",
@@ -1101,6 +1123,8 @@ describe("registerOntologyCommands", () => {
 			"create",
 			"--entity",
 			"Signet",
+			"--observer",
+			"ant",
 			"--predicate",
 			"claims",
 			"--content",
@@ -1134,11 +1158,16 @@ describe("registerOntologyCommands", () => {
 			"transcript",
 		]);
 
-		expect(calls[0]?.path).toBe("/api/ontology/assertions?entity=Signet&status=active&agent_id=ant");
-		expect(calls[1]?.path).toBe("/api/ontology/assertions/assertion-1?agent_id=ant");
+		expect(calls[0]?.path).toBe("/api/ontology/assertions?entity=Signet&observer_id=ant&status=active&agent_id=ant");
+		expect(calls[1]?.path).toBe("/api/ontology/assertions/assertion-1?agent_id=ant&observer_id=ant");
 		expect(calls[2]?.path).toBe("/api/ontology/assertions");
-		expect((calls[2]?.body as { readonly predicate?: string; readonly confidence?: number }).predicate).toBe("claims");
-		expect((calls[2]?.body as { readonly confidence?: number }).confidence).toBe(0.9);
+		const createBody = calls[2]?.body as
+			| { readonly predicate?: string; readonly confidence?: number; readonly observer_id?: string }
+			| undefined;
+		expect(createBody).toBeDefined();
+		expect(createBody?.predicate).toBe("claims");
+		expect(createBody?.confidence).toBe(0.9);
+		expect(createBody?.observer_id).toBe("ant");
 		expect(calls[3]?.path).toBe("/api/ontology/assertions/assertion-1/link-claim");
 		expect(calls[4]?.path).toBe("/api/ontology/assertions/assertion-1/archive");
 		expect(calls[5]?.path).toBe("/api/ontology/assertions/assertion-1/supersede");

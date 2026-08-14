@@ -137,6 +137,7 @@ import { up as boundedQueueDiagnostics } from "./128-bounded-queue-diagnostics";
 import { up as retireStructuralJobs } from "./129-retire-structural-jobs";
 import { up as embeddingRepairState } from "./130-embedding-repair-state";
 import { up as dreamingEvidenceConsumption } from "./131-dreaming-evidence-consumption";
+import { up as observerScopedEpistemicAssertions } from "./132-observer-scoped-epistemic-assertions";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1218,6 +1219,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "dreaming-evidence-consumption",
 		up: dreamingEvidenceConsumption,
 		artifacts: { tables: ["dreaming_evidence_consumption"] },
+	},
+	{
+		version: 132,
+		name: "observer-scoped-epistemic-assertions",
+		up: observerScopedEpistemicAssertions,
+		artifacts: { tables: ["epistemic_assertions"] },
 	},
 ];
 

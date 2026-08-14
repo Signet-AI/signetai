@@ -182,6 +182,15 @@ describe("migration framework", () => {
 		);
 	});
 
+	test("migration 132 creates the observer assertion index idempotently", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		runMigrations(db);
+
+		const indexes = db.query("PRAGMA index_list(epistemic_assertions)").all() as Array<{ name: string }>;
+		expect(indexes.map((index) => index.name)).toContain("idx_epistemic_assertions_observer_entity");
+	});
+
 	test("document scope columns backfill from metadata and linked memories", () => {
 		db = createFreshDb();
 		db.exec(`

@@ -1,11 +1,12 @@
 import type { EpistemicAssertion, EpistemicAssertionPredicate, EpistemicAssertionStatus } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import { validateDerivedMemorySourceInTx } from "./derived-memory-provenance";
 import { resolveNamedEntity } from "./knowledge-graph";
 
 export class OntologyAssertionError extends Error {
 	constructor(
 		message: string,
-		readonly status: 400 | 404 | 409,
+		readonly status: 400 | 403 | 404 | 409,
 	) {
 		super(message);
 		this.name = "OntologyAssertionError";
@@ -14,6 +15,8 @@ export class OntologyAssertionError extends Error {
 
 export interface CreateEpistemicAssertionInput {
 	readonly agentId: string;
+	/** In the agent-only MVP, an observer must be the scoped agent itself. */
+	readonly observerId?: string | null;
 	readonly entity?: string;
 	readonly entityId?: string;
 	readonly predicate: string;
@@ -33,6 +36,7 @@ export interface CreateEpistemicAssertionInput {
 
 export interface ListEpistemicAssertionsParams {
 	readonly agentId: string;
+	readonly observerId?: string;
 	readonly entity?: string;
 	readonly entityId?: string;
 	readonly predicate?: EpistemicAssertionPredicate;
@@ -61,6 +65,19 @@ function trim(value: string | null | undefined): string | null {
 	return trimmed.length > 0 ? trimmed : null;
 }
 
+export function validateEpistemicObserverScope(agentId: string, observerId?: string | null): string {
+	const normalizedAgentId = trim(agentId);
+	if (normalizedAgentId === null) throw new OntologyAssertionError("agent_id is required", 400);
+	const normalizedObserverId = trim(observerId);
+	if (normalizedObserverId !== null && normalizedObserverId !== normalizedAgentId) {
+		throw new OntologyAssertionError(
+			"observer_id must match the authorized agent scope; arbitrary peer observers are not enabled",
+			403,
+		);
+	}
+	return normalizedAgentId;
+}
+
 function normalizeContent(value: string): string {
 	return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -84,6 +101,7 @@ function rowToAssertion(row: Record<string, unknown>): EpistemicAssertion {
 	return {
 		id: row.id as string,
 		agentId: row.agent_id as string,
+		observerId: row.agent_id as string,
 		subjectEntityId: row.subject_entity_id as string,
 		subjectEntityName: typeof row.subject_entity_name === "string" ? row.subject_entity_name : null,
 		claimAttributeId: typeof row.claim_attribute_id === "string" ? row.claim_attribute_id : null,
@@ -208,6 +226,7 @@ function validateClaimAttribute(
 }
 
 function insertAssertion(accessor: DbAccessor, db: WriteDb, input: CreateEpistemicAssertionInput): EpistemicAssertion {
+	validateEpistemicObserverScope(input.agentId, input.observerId);
 	const subject = resolveSubject(accessor, db, input);
 	const content = trim(input.content);
 	if (content === null) throw new OntologyAssertionError("content is required", 400);
@@ -215,6 +234,21 @@ function insertAssertion(accessor: DbAccessor, db: WriteDb, input: CreateEpistem
 	const evidence = validateEvidence(input);
 	const assertedAt = parseAssertedAt(input.assertedAt);
 	const claimAttributeId = validateClaimAttribute(db, input.agentId, subject.id, trim(input.claimAttributeId));
+	const sourceKind = trim(input.sourceKind);
+	const sourceId = trim(input.sourceId);
+	if (sourceKind === "ontology_claim" && sourceId === null) {
+		throw new OntologyAssertionError("ontology_claim source_id is required", 400);
+	}
+	if (sourceKind === "ontology_claim" && sourceId !== null) {
+		try {
+			validateDerivedMemorySourceInTx(db, { agentId: input.agentId, sourceKind, sourceId });
+		} catch (err) {
+			throw new OntologyAssertionError(
+				err instanceof Error ? err.message : "assertion provenance is unauthorized",
+				409,
+			);
+		}
+	}
 	const supersedesAssertionId = trim(input.supersedesAssertionId);
 	if (supersedesAssertionId !== null) {
 		const existing = db
@@ -244,8 +278,8 @@ function insertAssertion(accessor: DbAccessor, db: WriteDb, input: CreateEpistem
 		assertedAt,
 		clamp01(input.confidence),
 		JSON.stringify(evidence),
-		trim(input.sourceKind),
-		trim(input.sourceId),
+		sourceKind,
+		sourceId,
 		trim(input.sourcePath),
 		trim(input.sourceRoot),
 		supersedesAssertionId,
@@ -288,8 +322,9 @@ export function listEpistemicAssertions(
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
 	return accessor.withReadDb((db) => {
+		const observerId = validateEpistemicObserverScope(params.agentId, params.observerId);
 		const where = ["a.agent_id = ?"];
-		const args: unknown[] = [params.agentId];
+		const args: unknown[] = [observerId];
 		const entityId = trim(params.entityId);
 		if (entityId !== null) {
 			where.push("a.subject_entity_id = ?");
@@ -349,9 +384,10 @@ export function listEpistemicAssertions(
 
 export function getEpistemicAssertion(
 	accessor: DbAccessor,
-	params: { readonly agentId: string; readonly id: string },
+	params: { readonly agentId: string; readonly id: string; readonly observerId?: string | null },
 ): EpistemicAssertion | null {
 	return accessor.withReadDb((db) => {
+		const observerId = validateEpistemicObserverScope(params.agentId, params.observerId);
 		const row = db
 			.prepare(
 				`SELECT a.*, e.name AS subject_entity_name
@@ -359,7 +395,7 @@ export function getEpistemicAssertion(
 				 JOIN entities e ON e.id = a.subject_entity_id AND e.agent_id = a.agent_id
 				 WHERE a.id = ? AND a.agent_id = ?`,
 			)
-			.get(params.id, params.agentId) as Record<string, unknown> | undefined;
+			.get(params.id, observerId) as Record<string, unknown> | undefined;
 		return row ? rowToAssertion(row) : null;
 	});
 }
