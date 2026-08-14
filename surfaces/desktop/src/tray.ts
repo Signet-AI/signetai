@@ -2,6 +2,7 @@ import { type DaemonState, type RecentMemory, type TrayUpdate, buildTrayUpdate }
 import { BrowserWindow, Menu, type MenuItemConstructorOptions, Tray, app, nativeImage } from "electron";
 import type { DaemonManager } from "./daemon-manager.js";
 import { iconPath, preloadPath } from "./paths.js";
+import { bindTrayInteractions } from "./tray-interactions.js";
 
 interface MemoryResponse {
 	readonly memories?: readonly Record<string, unknown>[];
@@ -114,6 +115,7 @@ export class DesktopTray {
 	readonly #openDashboard: () => void;
 	readonly #checkForUpdate: () => void;
 	#tray: Tray | null = null;
+	#contextMenu: Menu | null = null;
 	#lastJson = "";
 	#timer: NodeJS.Timeout | null = null;
 	#snapshot: SnapshotState | null = null;
@@ -132,7 +134,7 @@ export class DesktopTray {
 	start(): void {
 		this.#tray = new Tray(iconFor({ kind: "stopped" }));
 		this.#tray.setToolTip("Signet — Starting");
-		this.#tray.on("click", () => this.#openDashboard());
+		bindTrayInteractions(this.#tray, this.#openDashboard, () => this.#contextMenu);
 		void this.poll();
 	}
 
@@ -142,6 +144,7 @@ export class DesktopTray {
 		this.#pollAgain = false;
 		this.#tray?.destroy();
 		this.#tray = null;
+		this.#contextMenu = null;
 	}
 
 	async poll(): Promise<void> {
@@ -188,7 +191,10 @@ export class DesktopTray {
 				update.kind === "running" && typeof update.memory_count === "number" ? formatCount(update.memory_count) : "",
 			);
 		}
-		this.#tray.setContextMenu(Menu.buildFromTemplate(this.#menu(update)));
+		this.#contextMenu = Menu.buildFromTemplate(this.#menu(update));
+		// Electron suppresses Tray's click event on macOS when a context menu is set.
+		// Keep the menu detached so left-click can open the dashboard; right-click pops it manually.
+		if (process.platform !== "darwin") this.#tray.setContextMenu(this.#contextMenu);
 	}
 
 	#menu(update: TrayUpdate): MenuItemConstructorOptions[] {
