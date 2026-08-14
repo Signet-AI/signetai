@@ -37,8 +37,10 @@ export interface AuditSite {
 
 export interface AllowlistEntry {
 	readonly path: string;
+	readonly line: number;
 	readonly api: SyncApi;
 	readonly category: AllowlistCategory;
+	readonly source: string;
 	readonly reason: string;
 }
 
@@ -74,12 +76,6 @@ const HOT_PATH_MARKERS = [
 	"recall",
 	"repair",
 ];
-const ISOLATED_WORKER_FILES = new Set([
-	"database-integrity-worker.ts",
-	"embedding-worker.ts",
-	"embedding-worker-handle.ts",
-]);
-
 function isTypeScriptSource(path: string): boolean {
 	return path.endsWith(".ts") && !path.endsWith(".d.ts");
 }
@@ -90,15 +86,83 @@ function isExcludedSource(path: string): boolean {
 	);
 }
 
-function classifySite(path: string): SiteCategory {
+function hasNamedImport(sourceFile: ts.SourceFile, moduleName: string, name: string): boolean {
+	let found = false;
+	const visit = (node: ts.Node): void => {
+		if (found) return;
+		if (
+			ts.isImportDeclaration(node) &&
+			ts.isStringLiteral(node.moduleSpecifier) &&
+			node.moduleSpecifier.text === moduleName
+		) {
+			const bindings = node.importClause?.namedBindings;
+			if (bindings && ts.isNamedImports(bindings)) {
+				found = bindings.elements.some((element) => (element.propertyName ?? element.name).text === name);
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	return found;
+}
+
+function hasIdentifier(sourceFile: ts.SourceFile, name: string): boolean {
+	let found = false;
+	const visit = (node: ts.Node): void => {
+		if (found) return;
+		if (ts.isIdentifier(node) && node.text === name) {
+			found = true;
+			return;
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	return found;
+}
+
+function hasStringLiteral(sourceFile: ts.SourceFile, value: string): boolean {
+	let found = false;
+	const visit = (node: ts.Node): void => {
+		if (found) return;
+		if (ts.isStringLiteral(node) && node.text === value) {
+			found = true;
+			return;
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	return found;
+}
+
+function isCliOnlySource(sourceFile: ts.SourceFile): boolean {
+	const text = sourceFile.getFullText();
+	return (
+		text.startsWith("#!") &&
+		hasNamedImport(sourceFile, "@modelcontextprotocol/sdk/server/stdio.js", "StdioServerTransport")
+	);
+}
+
+function isIsolatedWorkerSource(sourceFile: ts.SourceFile): boolean {
+	const workerThread =
+		hasNamedImport(sourceFile, "node:worker_threads", "parentPort") ||
+		hasNamedImport(sourceFile, "node:worker_threads", "workerData");
+	if (workerThread && hasIdentifier(sourceFile, "isMainThread")) return true;
+
+	return (
+		hasIdentifier(sourceFile, "process") &&
+		hasIdentifier(sourceFile, "argv") &&
+		hasIdentifier(sourceFile, "SIGNET_DATABASE_INTEGRITY_DB_PATH") &&
+		hasStringLiteral(sourceFile, "database-integrity-worker.ts")
+	);
+}
+
+function classifySite(path: string, sourceFile: ts.SourceFile): SiteCategory {
 	const normalized = path.replaceAll("\\", "/");
-	const basename = normalized.slice(normalized.lastIndexOf("/") + 1);
-	if (ISOLATED_WORKER_FILES.has(basename)) return "isolated-worker";
-	if (normalized.includes("mcp-stdio") || normalized.includes("mcp-probe") || normalized.includes("/cli/")) {
-		return "cli-only";
+	if (normalized === "db-accessor.ts" && hasIdentifier(sourceFile, "initDbAccessor")) {
+		return "pre-readiness-bootstrap";
 	}
-	if (normalized === "db-accessor.ts") return "pre-readiness-bootstrap";
-	if (HOT_PATH_MARKERS.some((marker) => normalized.includes(marker))) return "hot-path";
+	if (isCliOnlySource(sourceFile)) return "cli-only";
+	if (isIsolatedWorkerSource(sourceFile)) return "isolated-worker";
 	return "hot-path";
 }
 
@@ -135,7 +199,7 @@ function findSites(root: string): AuditSite[] {
 					if (seenOnLine.has(key)) return;
 					seenOnLine.add(key);
 					const source = lines[line]?.replace(/\/\/.*$/u, "").trim() ?? "";
-					sites.push({ path, line: line + 1, api: call.api, source, category: classifySite(path) });
+					sites.push({ path, line: line + 1, api: call.api, source, category: classifySite(path, sourceFile) });
 				}
 			}
 			ts.forEachChild(node, visit);
@@ -180,8 +244,18 @@ function parseAllowlist(text: string): AllowlistEntry[] {
 	for (const [index, rawLine] of text.split("\n").entries()) {
 		const line = rawLine.trim();
 		if (line.length === 0 || line.startsWith("#")) continue;
-		const [path, api, category, ...reasonParts] = line.split("|");
-		if (!path || !api || !category || reasonParts.length === 0) {
+		const [path, lineNumber, api, category, source, ...reasonParts] = line.split("|");
+		const parsedLine = Number(lineNumber);
+		if (
+			!path ||
+			!lineNumber ||
+			!Number.isInteger(parsedLine) ||
+			parsedLine < 1 ||
+			!api ||
+			!category ||
+			!source ||
+			reasonParts.length === 0
+		) {
 			throw new Error(`Invalid event-loop allowlist entry at line ${index + 1}`);
 		}
 		if (!SYNC_APIS.includes(api as SyncApi))
@@ -189,16 +263,54 @@ function parseAllowlist(text: string): AllowlistEntry[] {
 		if (!ALLOWLIST_CATEGORIES.has(category as AllowlistCategory)) {
 			throw new Error(`Invalid allowlist category at line ${index + 1}: ${category}`);
 		}
-		if (category === "hot-path" || HOT_PATH_MARKERS.some((marker) => path.includes(marker))) {
-			throw new Error(`Hot-path event-loop calls cannot be allowlisted: ${path}:${api}`);
-		}
-		entries.push({ path, api: api as SyncApi, category: category as AllowlistCategory, reason: reasonParts.join("|") });
+		entries.push({
+			path,
+			line: parsedLine,
+			api: api as SyncApi,
+			category: category as AllowlistCategory,
+			source,
+			reason: reasonParts.join("|").trim(),
+		});
 	}
 	return entries;
 }
 
 function allowlisted(site: AuditSite, entries: readonly AllowlistEntry[]): boolean {
-	return entries.some((entry) => entry.path === site.path && entry.api === site.api);
+	return entries.some(
+		(entry) =>
+			entry.path === site.path &&
+			entry.line === site.line &&
+			entry.api === site.api &&
+			entry.source === site.source &&
+			entry.category === site.category,
+	);
+}
+
+function validateAllowlist(entries: readonly AllowlistEntry[], sites: readonly AuditSite[]): void {
+	for (const entry of entries) {
+		if (entry.reason.trim().length === 0) {
+			throw new Error(`Allowlist entry has no justification: ${entry.path}:${entry.api}`);
+		}
+		const matches = sites.filter(
+			(site) =>
+				site.path === entry.path && site.line === entry.line && site.api === entry.api && site.source === entry.source,
+		);
+		if (matches.length !== 1) {
+			throw new Error(
+				`Allowlist entry must identify exactly one audited call site: ${entry.path}:${entry.api}:${entry.source}`,
+			);
+		}
+		const [site] = matches;
+		if (site?.category !== entry.category) {
+			throw new Error(
+				`Allowlist classification mismatch for ${entry.path}:${entry.api}; ` +
+					`source context is ${site?.category ?? "unknown"}, not ${entry.category}`,
+			);
+		}
+		if (HOT_PATH_MARKERS.some((marker) => entry.path.replaceAll("\\", "/").includes(marker))) {
+			throw new Error(`Hot-path event-loop calls cannot be allowlisted: ${entry.path}:${entry.api}`);
+		}
+	}
 }
 
 export function runAudit(input: {
@@ -207,6 +319,7 @@ export function runAudit(input: {
 	readonly allowlist?: readonly AllowlistEntry[];
 }): AuditResult {
 	const sites = findSites(resolve(input.sourceRoot));
+	validateAllowlist(input.allowlist ?? [], sites);
 	const baseline = occurrenceKeys(input.baselineSites ?? []);
 	const seen = new Map<string, number>();
 	const violations: AuditViolation[] = [];
@@ -267,7 +380,10 @@ function report(sites: readonly AuditSite[], allowlist: readonly AllowlistEntry[
 	const allowlistLines =
 		allowlist.length === 0
 			? ["(empty: no non-baseline exception is currently granted)"]
-			: allowlist.map((entry) => `- \`${entry.path}\` ${entry.api}: ${entry.category}. ${entry.reason}`);
+			: allowlist.map(
+					(entry) =>
+						`- \`${entry.path}:${entry.line}\` ${entry.api} \`${entry.source}\`: ${entry.category}. ${entry.reason}`,
+				);
 	const apiLines = [...apiCounts.entries()]
 		.sort(([a], [b]) => a.localeCompare(b))
 		.map(([api, count]) => `- \`${api}()\` : ${count}`);
@@ -305,7 +421,7 @@ function report(sites: readonly AuditSite[], allowlist: readonly AllowlistEntry[
 		"",
 		"## Allowlist",
 		"",
-		"The allowlist is separate from the baseline. Every entry must use `pre-readiness-bootstrap`, `cli-only`, or `isolated-worker`; hot-path entries are rejected by the audit script.",
+		"The allowlist is separate from the baseline. Every entry names one exact source call, its semantic exemption class, and a justification. The audit verifies the source context before accepting it; hot-path entries are rejected.",
 		"",
 		...allowlistLines,
 		"",

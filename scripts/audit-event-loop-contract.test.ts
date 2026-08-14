@@ -51,17 +51,44 @@ test("event-loop audit detects multiline synchronous calls and ignores literals/
 test("event-loop audit accepts a classified bootstrap exception", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
 	try {
-		writeFileSync(join(root, "bootstrap.ts"), "existsSync('/tmp/signet-bootstrap');\n");
+		writeFileSync(
+			join(root, "db-accessor.ts"),
+			"function initDbAccessor() { return existsSync('/tmp/signet-bootstrap'); }\n",
+		);
 		const allowlist: AllowlistEntry[] = [
 			{
-				path: "bootstrap.ts",
+				path: "db-accessor.ts",
+				line: 1,
 				api: "existsSync",
 				category: "pre-readiness-bootstrap",
+				source: "function initDbAccessor() { return existsSync('/tmp/signet-bootstrap'); }",
 				reason: "Checks the workspace directory before the daemon serves requests.",
 			},
 		];
 		const result = runAudit({ sourceRoot: root, allowlist });
 		expect(result.violations).toEqual([]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("event-loop audit rejects a hot-path call mislabeled as an isolated exception", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		mkdirSync(join(root, "routes"));
+		const source = "getDbAccessor().withReadDb((db) => db);\n";
+		writeFileSync(join(root, "routes", "new-route.ts"), source);
+		const allowlist: AllowlistEntry[] = [
+			{
+				path: "routes/new-route.ts",
+				line: 1,
+				api: "withReadDb",
+				category: "isolated-worker",
+				source: "getDbAccessor().withReadDb((db) => db);",
+				reason: "The route does not serve requests in the isolated worker.",
+			},
+		];
+		expect(() => runAudit({ sourceRoot: root, allowlist })).toThrow("Allowlist classification mismatch");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

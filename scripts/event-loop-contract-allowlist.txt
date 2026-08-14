@@ -1,3 +1,5 @@
-# path|api|category|reason
+# path|line|api|category|source|reason
 # Keep this file intentionally narrow. Existing sites live in the baseline;
-# only newly introduced non-hot-path exceptions belong here.
+# only newly introduced, individually justified non-hot-path exceptions belong here.
+# The source field must match exactly one audited AST call site. Category is
+# checked against source context, not inferred from the file name.
