@@ -942,7 +942,8 @@ export interface DaemonStartArgsInput {
 	readonly bind: string;
 	readonly startupLogPath: string;
 	readonly unitName?: string;
-	// Service managers do not inherit this debugger setting unless it is explicit.
+	// The parent CLI forwards this only when it is not already a Bun process.
+	// A Bun parent has already bound BUN_INSPECT before this code runs.
 	readonly bunInspect?: string;
 	/** Source environment for the allowlisted telemetry variables below. */
 	readonly telemetryEnv?: NodeJS.ProcessEnv;
@@ -952,6 +953,19 @@ export type SystemdDaemonStartArgsInput = DaemonStartArgsInput;
 
 export interface LaunchdDaemonPlistInput extends DaemonStartArgsInput {
 	readonly label?: string;
+}
+
+/**
+ * Resolve the inspector setting for the daemon child. Bun binds BUN_INSPECT
+ * before the CLI reaches this function, so forwarding the same setting to the
+ * child creates an EADDRINUSE failure. A Node parent does not bind it and must
+ * continue forwarding the setting to the Bun daemon child.
+ */
+export function resolveDaemonChildInspector(
+	env: NodeJS.ProcessEnv = process.env,
+	runtimeIsBun: boolean = typeof process.versions.bun === "string",
+): string | undefined {
+	return runtimeIsBun ? undefined : env.BUN_INSPECT;
 }
 
 const TELEMETRY_ENVIRONMENT_KEYS = [
@@ -986,11 +1000,11 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		`--setenv=SIGNET_BIND=${input.bind}`,
 		`--setenv=SIGNET_PATH=${input.agentsDir}`,
 		"--setenv=SIGNET_DAEMON_ENTRYPOINT=1",
+		`--setenv=BUN_INSPECT=${input.bunInspect ?? ""}`,
 		...Object.entries(resolveTelemetryEnvironment(input.telemetryEnv ?? process.env)).map(
 			([key, value]) => `--setenv=${key}=${value}`,
 		),
 		...(input.unitName ? [`--setenv=SIGNET_DAEMON_UNIT=${input.unitName}`] : []),
-		...(input.bunInspect ? [`--setenv=BUN_INSPECT=${input.bunInspect}`] : []),
 		...resolveDaemonLaunchCommand(input.daemonPath),
 	];
 }
@@ -1158,7 +1172,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 			SIGNET_DAEMON_ENTRYPOINT: "1",
 			SIGNET_DAEMON_SERVICE: "launchd",
 			...resolveTelemetryEnvironment(sourceEnvironment),
-			...(input.bunInspect ? { BUN_INSPECT: input.bunInspect } : {}),
+			BUN_INSPECT: input.bunInspect ?? "",
 			...(sourceEnvironment.SIGNET_DIR ? { SIGNET_DIR: sourceEnvironment.SIGNET_DIR } : {}),
 			...(sourceEnvironment.SIGNET_DASHBOARD_DIR
 				? { SIGNET_DASHBOARD_DIR: sourceEnvironment.SIGNET_DASHBOARD_DIR }
@@ -1273,6 +1287,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 		SIGNET_BIND: net.bind,
 		SIGNET_PATH: agentsDir,
 		SIGNET_DAEMON_ENTRYPOINT: "1",
+		BUN_INSPECT: resolveDaemonChildInspector(),
 		// SIGNET_DAEMON_UNIT is deliberately NOT set here: it is only meaningful
 		// when systemd-run actually creates the transient unit (the --setenv in
 		// buildSystemdDaemonStartArgs). On the launchd/detached-spawn fallback
@@ -1297,7 +1312,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 			bind: net.bind,
 			startupLogPath,
 			unitName: systemdUnitName,
-			bunInspect: process.env.BUN_INSPECT,
+			bunInspect: resolveDaemonChildInspector(),
 			telemetryEnv: process.env,
 		});
 		const result = spawnSync("systemd-run", systemdArgs, {
@@ -1329,7 +1344,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 				host: net.host,
 				bind: net.bind,
 				startupLogPath,
-				bunInspect: process.env.BUN_INSPECT,
+				bunInspect: resolveDaemonChildInspector(),
 				telemetryEnv: process.env,
 			}),
 		);

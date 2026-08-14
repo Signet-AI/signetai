@@ -19,6 +19,7 @@ import {
 	macOSLaunchAgentAttributionNotice,
 	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
+	resolveDaemonChildInspector,
 	resolveDaemonLaunchCommand,
 	resolveDaemonPaths,
 	resolveDaemonRuntimeCommand,
@@ -109,6 +110,16 @@ describe("macOSLaunchAgentAttributionNotice", () => {
 	});
 });
 
+describe("resolveDaemonChildInspector", () => {
+	it("does not forward the inspector setting from a Bun parent", () => {
+		expect(resolveDaemonChildInspector({ BUN_INSPECT: "127.0.0.1:9230" }, true)).toBeUndefined();
+	});
+
+	it("forwards the inspector setting from a non-Bun parent", () => {
+		expect(resolveDaemonChildInspector({ BUN_INSPECT: "127.0.0.1:9230" }, false)).toBe("127.0.0.1:9230");
+	});
+});
+
 describe("buildSystemdDaemonStartArgs", () => {
 	it("starts daemon in a transient user service with explicit env and log routing", () => {
 		const args = buildSystemdDaemonStartArgs({
@@ -128,7 +139,7 @@ describe("buildSystemdDaemonStartArgs", () => {
 		expect(args).toContain("--setenv=SIGNET_BIND=0.0.0.0");
 		expect(args).toContain("--setenv=SIGNET_PATH=/home/user/.agents");
 		expect(args).toContain("--setenv=SIGNET_DAEMON_ENTRYPOINT=1");
-		expect(args.some((arg) => arg.startsWith("--setenv=BUN_INSPECT="))).toBe(false);
+		expect(args).toContain("--setenv=BUN_INSPECT=");
 		expect(args).toContain("--property=StandardError=append:/home/user/.agents/.daemon/logs/startup.log");
 		expect(args.slice(-2)).toEqual([process.execPath, "/opt/signet/dist/daemon.js"]);
 	});
@@ -183,7 +194,7 @@ describe("buildSystemdDaemonStartArgs", () => {
 		expect(plist).not.toContain("SIGNET_TELEMETRY_SECRET");
 	});
 
-	it("omits empty inspector settings", () => {
+	it("clears empty inspector settings at the service boundary", () => {
 		const input = {
 			daemonPath: "/opt/signet/dist/daemon.js",
 			agentsDir: "/home/user/.agents",
@@ -196,8 +207,8 @@ describe("buildSystemdDaemonStartArgs", () => {
 		const args = buildSystemdDaemonStartArgs({ ...input, bunInspect: "" });
 		const plist = buildLaunchdDaemonPlist({ ...input, bunInspect: "" });
 
-		expect(args.some((arg) => arg.startsWith("--setenv=BUN_INSPECT="))).toBe(false);
-		expect(plist).not.toContain("<key>BUN_INSPECT</key>");
+		expect(args).toContain("--setenv=BUN_INSPECT=");
+		expect(plist).toMatch(/<key>BUN_INSPECT<\/key>\s*<string><\/string>/);
 	});
 });
 
@@ -230,7 +241,7 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<string>/Users/user/.agents</string>");
 		expect(plist).toContain("<key>SIGNET_DAEMON_ENTRYPOINT</key>");
 		expect(plist).toMatch(/<key>SIGNET_DAEMON_SERVICE<\/key>\s*<string>launchd<\/string>/);
-		expect(plist).not.toContain("<key>BUN_INSPECT</key>");
+		expect(plist).toMatch(/<key>BUN_INSPECT<\/key>\s*<string><\/string>/);
 		expect(plist).toContain("<string>1</string>");
 		expect(plist).toContain("<key>HOME</key>");
 		expect(plist).toContain("<key>RunAtLoad</key>");
