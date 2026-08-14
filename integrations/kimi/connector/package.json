@@ -1,6 +1,6 @@
 {
 	"name": "@signet/connector-kimi",
-	"version": "0.200.23",
+	"version": "0.200.25",
 	"description": "Signet connector for Kimi CLI / Kimi Code",
 	"type": "module",
 	"main": "./dist/index.js",

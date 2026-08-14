@@ -132,7 +132,7 @@
     },
     "integrations/kimi/connector": {
       "name": "@signet/connector-kimi",
-      "version": "0.200.23",
+      "version": "0.200.25",
       "bin": {
         "signet-connector-kimi": "bin/install.js",
       },
