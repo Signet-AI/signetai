@@ -15,9 +15,10 @@ const BASE = process.env.SIGNET_PI_LIVE_BASE ?? "http://localhost:1234/v1";
 const SKIP = !MODEL;
 
 describe.skipIf(SKIP)("createPiModelProvider (live)", () => {
+	if (!MODEL) return;
 	const provider = createPiModelProvider({
 		executor: "openai-compatible",
-		model: MODEL!,
+		model: MODEL,
 		baseUrl: BASE,
 		defaultTimeoutMs: 60_000,
 	});
@@ -29,15 +30,18 @@ describe.skipIf(SKIP)("createPiModelProvider (live)", () => {
 	});
 
 	test("generateWithUsage reports input/output tokens and duration", async () => {
-		const res = await provider.generateWithUsage!("What is 3 times 3? Just the number.");
-		expect(res.usage).not.toBeNull();
-		expect(res.usage!.inputTokens!).toBeGreaterThan(0);
-		expect(res.usage!.outputTokens!).toBeGreaterThan(0);
-		expect(res.usage!.totalDurationMs).not.toBeNull();
+		if (!provider.generateWithUsage) throw new Error("usage generation is unavailable");
+		const res = await provider.generateWithUsage("What is 3 times 3? Just the number.");
+		if (!res.usage) throw new Error("usage data is missing");
+		expect(res.usage.inputTokens).toBeGreaterThan(0);
+		expect(res.usage.outputTokens).toBeGreaterThan(0);
+		expect(res.usage.totalDurationMs).not.toBeNull();
 	});
 
 	test("streamWithUsage emits deltas and a done event with usage", async () => {
-		const stream = await provider.streamWithUsage!("Count from 1 to 5, comma separated.");
+		if (!provider.streamWithUsage) throw new Error("usage streaming is unavailable");
+		const stream = await provider.streamWithUsage("Count from 1 to 5, comma separated.");
+		if (!stream) throw new Error("usage stream is missing");
 		let streamed = "";
 		let doneUsage = null;
 		for await (const ev of stream.stream) {
@@ -49,10 +53,12 @@ describe.skipIf(SKIP)("createPiModelProvider (live)", () => {
 	});
 
 	test("abort signal propagates and throws", async () => {
+		if (!provider.streamWithUsage) throw new Error("usage streaming is unavailable");
 		const ctrl = new AbortController();
-		const stream = await provider.streamWithUsage!("Write a 500-word essay about oceans. Be very verbose.", {
+		const stream = await provider.streamWithUsage("Write a 500-word essay about oceans. Be very verbose.", {
 			signal: ctrl.signal,
 		});
+		if (!stream) throw new Error("usage stream is missing");
 		setTimeout(() => ctrl.abort(), 300);
 		let threw = false;
 		let doneSeen = false;

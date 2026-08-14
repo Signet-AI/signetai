@@ -493,10 +493,11 @@ describeNative("normaliseAxes", () => {
 		const tsYs = tsNormaliseAxis(ys, scale);
 		const tsZs = tsNormaliseAxis(zs, scale);
 
+		if (!result.zs) throw new Error("native normaliseAxes result is missing z coordinates");
 		for (let i = 0; i < xs.length; i++) {
 			expect(Math.abs(result.xs[i] - tsXs[i])).toBeLessThan(1e-10);
 			expect(Math.abs(result.ys[i] - tsYs[i])).toBeLessThan(1e-10);
-			expect(Math.abs(result.zs![i] - tsZs[i])).toBeLessThan(1e-10);
+			expect(Math.abs(result.zs[i] - tsZs[i])).toBeLessThan(1e-10);
 		}
 	});
 

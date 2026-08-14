@@ -19,8 +19,9 @@ const SKIP = !AGENT;
 
 describe.skipIf(SKIP)(`createAcpxProvider drives ${AGENT ?? "harness"} (live)`, () => {
 	test("completes a one-shot prompt through ACPX (or reaches the auth gate)", async () => {
+		if (!AGENT) return;
 		const provider = createAcpxProvider({
-			agent: AGENT!,
+			agent: AGENT,
 			hooks: "disabled",
 			format: "quiet",
 		});
@@ -47,8 +48,9 @@ describe.skipIf(SKIP)(`createAcpxProvider drives ${AGENT ?? "harness"} (live)`, 
 	}, 120_000);
 
 	test("reports unavailable when the agent binary is missing", async () => {
+		if (!AGENT) return;
 		const provider = createAcpxProvider({
-			agent: AGENT!,
+			agent: AGENT,
 			bin: "./node_modules/.bin/signet-definitely-missing-acpx",
 			hooks: "disabled",
 		});

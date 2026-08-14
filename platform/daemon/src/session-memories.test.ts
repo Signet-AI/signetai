@@ -387,12 +387,12 @@ describe("trackFtsHits", () => {
 		const newRow = rows.find((r) => r.memory_id === "mem-bbb-222");
 
 		expect(existing).toBeDefined();
-		expect(existing!.fts_hit_count).toBe(1);
-		expect(existing!.source).toBe("effective");
+		expect(existing?.fts_hit_count).toBe(1);
+		expect(existing?.source).toBe("effective");
 
 		expect(newRow).toBeDefined();
-		expect(newRow!.fts_hit_count).toBe(1);
-		expect(newRow!.source).toBe("fts_only");
+		expect(newRow?.fts_hit_count).toBe(1);
+		expect(newRow?.source).toBe("fts_only");
 	});
 });
 
@@ -486,8 +486,8 @@ describe("recordAgentFeedbackInner", () => {
 		testDb.close();
 
 		expect(result).toBeDefined();
-		expect(result!.agent_relevance_score).toBeCloseTo(0.8, 6);
-		expect(result!.agent_feedback_count).toBe(1);
+		expect(result?.agent_relevance_score).toBeCloseTo(0.8, 6);
+		expect(result?.agent_feedback_count).toBe(1);
 	});
 
 	it("computes running mean on second feedback", () => {
@@ -505,8 +505,8 @@ describe("recordAgentFeedbackInner", () => {
 		testDb.close();
 
 		// mean = (0.8 * 1 + 0.4) / 2 = 0.6
-		expect(result!.agent_relevance_score).toBeCloseTo(0.6, 6);
-		expect(result!.agent_feedback_count).toBe(2);
+		expect(result?.agent_relevance_score).toBeCloseTo(0.6, 6);
+		expect(result?.agent_feedback_count).toBe(2);
 	});
 
 	it("multiple feedbacks converge to the mean", () => {
@@ -526,8 +526,8 @@ describe("recordAgentFeedbackInner", () => {
 		testDb.close();
 
 		const expectedMean = scores.reduce((a, b) => a + b, 0) / scores.length;
-		expect(result!.agent_relevance_score).toBeCloseTo(expectedMean, 4);
-		expect(result!.agent_feedback_count).toBe(5);
+		expect(result?.agent_relevance_score).toBeCloseTo(expectedMean, 4);
+		expect(result?.agent_feedback_count).toBe(5);
 	});
 
 	it("handles multiple memories in one feedback call", () => {
@@ -550,8 +550,8 @@ describe("recordAgentFeedbackInner", () => {
 		const b = getFeedbackColumns(testDb, "session-fb-4", "mem-bbb-222");
 		testDb.close();
 
-		expect(a!.agent_relevance_score).toBeCloseTo(0.9, 6);
-		expect(b!.agent_relevance_score).toBeCloseTo(-0.5, 6);
+		expect(a?.agent_relevance_score).toBeCloseTo(0.9, 6);
+		expect(b?.agent_relevance_score).toBeCloseTo(-0.5, 6);
 	});
 
 	it("ignores feedback for non-existent session memories", () => {
@@ -572,7 +572,7 @@ describe("recordAgentFeedbackInner", () => {
 		const ghost = getFeedbackColumns(testDb, "session-fb-5", "mem-ghost");
 		testDb.close();
 
-		expect(real!.agent_relevance_score).toBeCloseTo(0.5, 6);
+		expect(real?.agent_relevance_score).toBeCloseTo(0.5, 6);
 		expect(ghost).toBeFalsy();
 	});
 
@@ -595,8 +595,8 @@ describe("recordAgentFeedbackInner", () => {
 		const b = getFeedbackColumns(testDb, "session-fb-6b", "mem-aaa-111");
 		testDb.close();
 
-		expect(a!.agent_relevance_score).toBeCloseTo(0.7, 6);
-		expect(b!.agent_relevance_score).toBeNull();
+		expect(a?.agent_relevance_score).toBeCloseTo(0.7, 6);
+		expect(b?.agent_relevance_score).toBeNull();
 	});
 
 	it("feedback is scoped by agent_id", () => {
@@ -620,8 +620,8 @@ describe("recordAgentFeedbackInner", () => {
 		const b = getFeedbackColumns(testDb, "session-fb-agent", "mem-aaa-111", "agent-b");
 		testDb.close();
 
-		expect(a!.agent_relevance_score).toBeCloseTo(0.9, 6);
-		expect(b!.agent_relevance_score).toBeNull();
+		expect(a?.agent_relevance_score).toBeCloseTo(0.9, 6);
+		expect(b?.agent_relevance_score).toBeNull();
 	});
 
 	it("handles negative scores correctly", () => {
@@ -639,8 +639,8 @@ describe("recordAgentFeedbackInner", () => {
 		testDb.close();
 
 		// mean = (-0.8 * 1 + (-0.4)) / 2 = -0.6
-		expect(result!.agent_relevance_score).toBeCloseTo(-0.6, 6);
-		expect(result!.agent_feedback_count).toBe(2);
+		expect(result?.agent_relevance_score).toBeCloseTo(-0.6, 6);
+		expect(result?.agent_feedback_count).toBe(2);
 	});
 
 	it("empty feedback object is a no-op", () => {
@@ -656,7 +656,7 @@ describe("recordAgentFeedbackInner", () => {
 		const result = getFeedbackColumns(testDb, "session-fb-8", "mem-aaa-111");
 		testDb.close();
 
-		expect(result!.agent_relevance_score).toBeNull();
-		expect(result!.agent_feedback_count).toBe(0);
+		expect(result?.agent_relevance_score).toBeNull();
+		expect(result?.agent_feedback_count).toBe(0);
 	});
 });

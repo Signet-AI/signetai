@@ -49,7 +49,7 @@
 			"suspicious": {
 				"noAssignInExpressions": "off",
 				"noArrayIndexKey": "warn",
-				"noExplicitAny": "warn",
+				"noExplicitAny": "error",
 				"useIterableCallbackReturn": "warn"
 			},
 			"correctness": {
@@ -67,11 +67,11 @@
 				"noLabelWithoutControl": "warn"
 			},
 			"style": {
-				"noNonNullAssertion": "warn"
+				"noNonNullAssertion": "error"
 			},
 			"complexity": {
-				"noForEach": "warn",
-				"noBannedTypes": "warn"
+				"noForEach": "error",
+				"noBannedTypes": "error"
 			}
 		}
 	},

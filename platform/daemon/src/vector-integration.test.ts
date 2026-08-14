@@ -80,8 +80,11 @@ describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 		}
 
 		// cosineSimilarity uses native when available, TS fallback otherwise
-		const similarScore = cosineSimilarity(queryF32, embMap.get("mem-similar")!);
-		const dissimilarScore = cosineSimilarity(queryF32, embMap.get("mem-dissimilar")!);
+		const similar = embMap.get("mem-similar");
+		const dissimilar = embMap.get("mem-dissimilar");
+		if (!similar || !dissimilar) throw new Error("expected both embedding rows");
+		const similarScore = cosineSimilarity(queryF32, similar);
+		const dissimilarScore = cosineSimilarity(queryF32, dissimilar);
 
 		// Similar vector should score much higher
 		expect(similarScore).toBeGreaterThan(0.9);

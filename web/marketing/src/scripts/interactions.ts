@@ -19,9 +19,9 @@ function commandKind(command: string): string {
 }
 
 function initCopyButtons() {
-	document.querySelectorAll(".copy-btn").forEach((button) => {
+	for (const button of document.querySelectorAll(".copy-btn")) {
 		const el = button as HTMLElement;
-		if (el.dataset.bound === "true") return;
+		if (el.dataset.bound === "true") continue;
 
 		el.dataset.bound = "true";
 		button.addEventListener("click", async () => {
@@ -47,43 +47,43 @@ function initCopyButtons() {
 				button.classList.remove("is-copied");
 			}
 		});
-	});
+	}
 }
 
 function initInstallTabs() {
-	document.querySelectorAll(".install-panels").forEach((wrap) => {
+	for (const wrap of document.querySelectorAll(".install-panels")) {
 		const terminalBox = wrap.querySelector(".install-box:not(.install-box--agent)");
 		if (terminalBox) {
 			(wrap as HTMLElement).style.width = `${terminalBox.getBoundingClientRect().width}px`;
 		}
 
 		const tabGroup = wrap.previousElementSibling;
-		if (!tabGroup?.classList.contains("install-tabs")) return;
+		if (!tabGroup?.classList.contains("install-tabs")) continue;
 		const panels = wrap.querySelectorAll(".install-panel");
 
-		tabGroup.querySelectorAll(".install-tab").forEach((tab) => {
+		for (const tab of tabGroup.querySelectorAll(".install-tab")) {
 			const tabEl = tab as HTMLElement;
-			if (tabEl.dataset.bound === "true") return;
+			if (tabEl.dataset.bound === "true") continue;
 
 			tabEl.dataset.bound = "true";
 			tab.addEventListener("click", () => {
 				const method = tabEl.dataset.install;
 				if (!method) return;
-				tabGroup.querySelectorAll(".install-tab").forEach((t) => t.classList.remove("active"));
-				panels.forEach((p) => p.classList.remove("active"));
+				for (const t of tabGroup.querySelectorAll(".install-tab")) t.classList.remove("active");
+				for (const p of panels) p.classList.remove("active");
 				tab.classList.add("active");
-				panels.forEach((p) => {
+				for (const p of panels) {
 					if (p.id.endsWith(`install-${method}`)) p.classList.add("active");
-				});
+				}
 			});
-		});
-	});
+		}
+	}
 }
 
 function initCodeTabs() {
-	document.querySelectorAll(".code-tab").forEach((tab) => {
+	for (const tab of document.querySelectorAll(".code-tab")) {
 		const tabEl = tab as HTMLElement;
-		if (tabEl.dataset.bound === "true") return;
+		if (tabEl.dataset.bound === "true") continue;
 
 		tabEl.dataset.bound = "true";
 		tab.addEventListener("click", () => {
@@ -91,41 +91,41 @@ function initCodeTabs() {
 			if (!panelId) return;
 			const parent = tab.closest(".code-tabs");
 			if (!parent) return;
-			parent.querySelectorAll(".code-tab").forEach((t) => t.classList.remove("active"));
-			parent.querySelectorAll(".code-panel").forEach((p) => p.classList.remove("active"));
+			for (const t of parent.querySelectorAll(".code-tab")) t.classList.remove("active");
+			for (const p of parent.querySelectorAll(".code-panel")) p.classList.remove("active");
 			tab.classList.add("active");
 			document.getElementById(panelId)?.classList.add("active");
 		});
-	});
+	}
 }
 
 function initQuickstartTabs() {
-	document.querySelectorAll(".quickstart-shell, .quickstart-terminal").forEach((terminal) => {
+	for (const terminal of document.querySelectorAll(".quickstart-shell, .quickstart-terminal")) {
 		const tabs = terminal.querySelectorAll<HTMLElement>("[data-quickstart-target]");
 		const panels = terminal.querySelectorAll<HTMLElement>("[data-quickstart-panel]");
 
-		tabs.forEach((tab) => {
-			if (tab.dataset.bound === "true") return;
+		for (const tab of tabs) {
+			if (tab.dataset.bound === "true") continue;
 			tab.dataset.bound = "true";
 
 			tab.addEventListener("click", () => {
 				const target = tab.dataset.quickstartTarget;
 				if (!target) return;
 
-				tabs.forEach((item) => {
+				for (const item of tabs) {
 					const isActive = item.dataset.quickstartTarget === target;
 					item.classList.toggle("is-active", isActive);
 					item.setAttribute("aria-selected", isActive ? "true" : "false");
-				});
+				}
 
-				panels.forEach((panel) => {
+				for (const panel of panels) {
 					const isActive = panel.dataset.quickstartPanel === target;
 					panel.classList.toggle("is-active", isActive);
 					panel.hidden = !isActive;
-				});
+				}
 			});
-		});
-	});
+		}
+	}
 }
 
 function bindScrollParallax() {

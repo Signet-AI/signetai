@@ -80,10 +80,13 @@ export function recordSessionCandidates(
 
 				// Reuse pre-compiled statement for full chunks; compile once for
 				// the remainder chunk (different SQL, can't reuse).
-				const stmt =
-					chunk.length === CHUNK_SIZE
-						? fullChunkStmt!
-						: db.prepare(BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(","));
+				let stmt: NonNullable<typeof fullChunkStmt>;
+				if (chunk.length === CHUNK_SIZE) {
+					if (!fullChunkStmt) throw new Error("full session-memory statement was not prepared");
+					stmt = fullChunkStmt;
+				} else {
+					stmt = db.prepare(BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(","));
+				}
 
 				const values: unknown[] = [];
 				for (const c of chunk) {
@@ -168,10 +171,13 @@ export function trackFtsHits(
 			for (let i = 0; i < matchedIds.length; i += CHUNK_SIZE) {
 				const chunk = matchedIds.slice(i, i + CHUNK_SIZE);
 
-				const stmt =
-					chunk.length === CHUNK_SIZE
-						? fullChunkStmt!
-						: db.prepare(BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(",") + CONFLICT_CLAUSE);
+				let stmt: NonNullable<typeof fullChunkStmt>;
+				if (chunk.length === CHUNK_SIZE) {
+					if (!fullChunkStmt) throw new Error("full session-memory statement was not prepared");
+					stmt = fullChunkStmt;
+				} else {
+					stmt = db.prepare(BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(",") + CONFLICT_CLAUSE);
+				}
 
 				const values: unknown[] = [];
 				for (const id of chunk) {

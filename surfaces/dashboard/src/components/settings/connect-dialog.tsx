@@ -226,7 +226,7 @@ export function ConnectProviderDialog({
 								</div>
 							)}
 							{phase.url && safeOAuthHref(phase.url) && (
-								<a className="cp-link" href={safeOAuthHref(phase.url)!} target="_blank" rel="noreferrer">
+								<a className="cp-link" href={safeOAuthHref(phase.url) ?? undefined} target="_blank" rel="noreferrer">
 									Open {hostnameOf(phase.url)} to continue →
 								</a>
 							)}

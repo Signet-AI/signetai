@@ -144,11 +144,11 @@ describe("acquireNativeSyncLock / releaseNativeSyncLock", () => {
 		mkdirSync(join(root, ".daemon"), { recursive: true });
 
 		const lock = await acquireNativeSyncLock(root);
-		expect(lock).not.toBeNull();
-		expect(existsSync(lock!.path)).toBe(true);
+		if (!lock) throw new Error("expected native sync lock");
+		expect(existsSync(lock.path)).toBe(true);
 
-		releaseNativeSyncLock(lock!);
-		expect(existsSync(lock!.path)).toBe(false);
+		releaseNativeSyncLock(lock);
+		expect(existsSync(lock.path)).toBe(false);
 	});
 
 	it("returns null when lock is already held by this process", async () => {
@@ -156,7 +156,7 @@ describe("acquireNativeSyncLock / releaseNativeSyncLock", () => {
 		mkdirSync(join(root, ".daemon"), { recursive: true });
 
 		const lock1 = await acquireNativeSyncLock(root);
-		expect(lock1).not.toBeNull();
+		if (!lock1) throw new Error("expected first native sync lock");
 
 		const startMs = Date.now();
 		const lock2 = await acquireNativeSyncLock(root);
@@ -170,7 +170,7 @@ describe("acquireNativeSyncLock / releaseNativeSyncLock", () => {
 		expect(lock2).toBeNull();
 		expect(elapsed).toBeGreaterThanOrEqual(14_000);
 
-		releaseNativeSyncLock(lock1!);
+		releaseNativeSyncLock(lock1);
 	}, 20_000);
 
 	it("clears stale lock from dead PID", async () => {
@@ -182,8 +182,8 @@ describe("acquireNativeSyncLock / releaseNativeSyncLock", () => {
 		writeFileSync(lockPath, "999999999\n0\n");
 
 		const lock = await acquireNativeSyncLock(root);
-		expect(lock).not.toBeNull();
+		if (!lock) throw new Error("expected native sync lock after stale lock cleanup");
 
-		releaseNativeSyncLock(lock!);
+		releaseNativeSyncLock(lock);
 	});
 });

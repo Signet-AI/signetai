@@ -763,7 +763,7 @@ export async function traverseKnowledgeGraph(
 				const seen = new Set<string>();
 				let write = 0;
 				for (let read = 0; read < phase1.constraints.length; read++) {
-					const c = phase1.constraints[read]!;
+					const c = phase1.constraints[read];
 					const key = `${c.entityName}::${c.content}`;
 					if (!seen.has(key)) {
 						seen.add(key);

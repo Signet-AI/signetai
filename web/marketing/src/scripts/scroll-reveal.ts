@@ -10,20 +10,20 @@ export function initReveal(): void {
 	if (revealNodes.length === 0) return;
 
 	if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-		revealNodes.forEach((node) => node.classList.add("is-visible"));
+		for (const node of revealNodes) node.classList.add("is-visible");
 		return;
 	}
 
 	const observer = new IntersectionObserver(
 		(entries) => {
-			entries.forEach((entry) => {
-				if (!entry.isIntersecting) return;
+			for (const entry of entries) {
+				if (!entry.isIntersecting) continue;
 
 				const node = entry.target;
-				if (!(node instanceof HTMLElement)) return;
+				if (!(node instanceof HTMLElement)) continue;
 				node.classList.add("is-visible");
 				observer.unobserve(node);
-			});
+			}
 		},
 		{
 			threshold: 0.12,
@@ -31,10 +31,10 @@ export function initReveal(): void {
 		},
 	);
 
-	revealNodes.forEach((node) => {
+	for (const node of revealNodes) {
 		node.classList.remove("is-visible");
 		observer.observe(node);
-	});
+	}
 
 	cleanupReveal = () => observer.disconnect();
 }

@@ -112,8 +112,9 @@ describe("session-checkpoints", () => {
 		expect(rows[0].session_key).toBe("sess-1");
 		expect(rows[0].harness).toBe("claude-code");
 		expect(rows[0].prompt_count).toBe(5);
-		expect(JSON.parse(rows[0].memory_queries!)).toEqual(["typescript", "database"]);
-		expect(JSON.parse(rows[0].focal_entity_names!)).toEqual(["signetai"]);
+		if (!rows[0].memory_queries || !rows[0].focal_entity_names) throw new Error("checkpoint JSON fields missing");
+		expect(JSON.parse(rows[0].memory_queries)).toEqual(["typescript", "database"]);
+		expect(JSON.parse(rows[0].focal_entity_names)).toEqual(["signetai"]);
 	});
 
 	test("writeCheckpoint enforces maxPerSession", () => {
@@ -189,12 +190,14 @@ describe("session-checkpoints", () => {
 
 		flushPendingCheckpoints();
 		const row = getLatestCheckpointBySession(dbAcc, "structural-merge");
-		expect(row).toBeDefined();
-		expect(JSON.parse(row!.focal_entity_ids!)).toEqual(["entity-1", "entity-2"]);
-		expect(JSON.parse(row!.focal_entity_names!)).toEqual(["signetai", "signet-core"]);
-		expect(JSON.parse(row!.active_aspect_ids!)).toEqual(["aspect-1", "aspect-2"]);
-		expect(row!.surfaced_constraint_count).toBe(3);
-		expect(row!.traversal_memory_count).toBe(24);
+		if (!row?.focal_entity_ids || !row.focal_entity_names || !row.active_aspect_ids) {
+			throw new Error("merged checkpoint fields missing");
+		}
+		expect(JSON.parse(row.focal_entity_ids)).toEqual(["entity-1", "entity-2"]);
+		expect(JSON.parse(row.focal_entity_names)).toEqual(["signetai", "signet-core"]);
+		expect(JSON.parse(row.active_aspect_ids)).toEqual(["aspect-1", "aspect-2"]);
+		expect(row.surfaced_constraint_count).toBe(3);
+		expect(row.traversal_memory_count).toBe(24);
 	});
 
 	test("pruneCheckpoints deletes all old rows strictly", () => {
@@ -265,7 +268,8 @@ describe("redaction", () => {
 		const redacted = redactCheckpointRow(row);
 		expect(redacted.digest).not.toContain("eyJtoken");
 		expect(redacted.digest).toContain("[REDACTED]");
-		const remembers = JSON.parse(redacted.recent_remembers!);
+		if (!redacted.recent_remembers) throw new Error("redacted remembers missing");
+		const remembers = JSON.parse(redacted.recent_remembers);
 		expect(remembers[0]).toContain("[REDACTED]");
 	});
 });
@@ -510,10 +514,11 @@ describe("debounce merge", () => {
 		// Digest takes latest
 		expect(rows[0].digest).toBe("second digest");
 		// Queries merged
-		const queries = JSON.parse(rows[0].memory_queries!);
+		if (!rows[0].memory_queries || !rows[0].recent_remembers) throw new Error("merged JSON fields missing");
+		const queries = JSON.parse(rows[0].memory_queries);
 		expect(queries).toEqual(["query-a", "query-b"]);
 		// Remembers merged
-		const remembers = JSON.parse(rows[0].recent_remembers!);
+		const remembers = JSON.parse(rows[0].recent_remembers);
 		expect(remembers).toEqual(["rem-a", "rem-b"]);
 	});
 });

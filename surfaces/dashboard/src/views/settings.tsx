@@ -415,7 +415,7 @@ function InferenceSection() {
 											: p.supportsOAuth
 												? "OAuth sign-in"
 												: "API key"}
-									{(catalog?.models[p.id]?.length ?? 0) > 0 ? ` · ${catalog!.models[p.id].length} models` : ""}
+									{(catalog?.models[p.id]?.length ?? 0) > 0 ? ` · ${catalog?.models[p.id].length} models` : ""}
 								</span>
 							</span>
 							<button
@@ -441,7 +441,7 @@ function InferenceSection() {
 				</div>
 				{Object.keys(catalog?.modelErrors ?? {}).length > 0 && (
 					<div className="flex flex-col gap-1 px-1.5 pb-1">
-						{Object.entries(catalog!.modelErrors).map(([providerId, message]) => (
+						{Object.entries(catalog?.modelErrors ?? {}).map(([providerId, message]) => (
 							<div
 								key={providerId}
 								className="flex items-center gap-1.5 font-mono text-[10px] text-[oklch(0.82_0.15_85)]"

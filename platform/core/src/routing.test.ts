@@ -826,7 +826,7 @@ describe("routing reference validation (#1005)", () => {
 		if (!parsed.ok) return;
 		const broken = {
 			...parsed.value,
-			workloads: { ...parsed.value.workloads!, memoryExtraction: { target: "ghost/default" } },
+			workloads: { ...parsed.value.workloads, memoryExtraction: { target: "ghost/default" } },
 		};
 		const issues = validateRoutingReferences(broken);
 		expect(issues.every((i) => i.severity === "warning")).toBe(true);
@@ -838,7 +838,7 @@ describe("routing reference validation (#1005)", () => {
 		if (!parsed.ok) return;
 		const broken = {
 			...parsed.value,
-			workloads: { ...parsed.value.workloads!, default: { policy: "nope", taskClass: "interactive" } },
+			workloads: { ...parsed.value.workloads, default: { policy: "nope", taskClass: "interactive" } },
 		};
 		const issues = validateRoutingReferences(broken);
 		expect(issues.every((i) => i.severity === "warning")).toBe(true);
@@ -852,7 +852,7 @@ describe("routing reference validation (#1005)", () => {
 			...parsed.value,
 			policies: {
 				...parsed.value.policies,
-				auto: { ...parsed.value.policies.auto!, defaultTargets: ["ghost/default"] },
+				auto: { ...parsed.value.policies.auto, defaultTargets: ["ghost/default"] },
 			},
 		};
 		const issues = validateRoutingReferences(broken);
@@ -865,7 +865,7 @@ describe("routing reference validation (#1005)", () => {
 		if (!parsed.ok) return;
 		const broken = {
 			...parsed.value,
-			targets: { ...parsed.value.targets, remote: { ...parsed.value.targets.remote!, account: "ghost-account" } },
+			targets: { ...parsed.value.targets, remote: { ...parsed.value.targets.remote, account: "ghost-account" } },
 		};
 		const issues = validateRoutingReferences(broken);
 		expect(issues.every((i) => i.severity === "warning")).toBe(true);
@@ -901,7 +901,7 @@ describe("routing reference validation (#1005)", () => {
 		const broken = {
 			...parsed.value,
 			workloads: {
-				...parsed.value.workloads!,
+				...parsed.value.workloads,
 				memoryExtraction: { target: "ghost-a/default" },
 				aggregateRecall: { target: "ghost-b/default" },
 			},
@@ -946,13 +946,13 @@ describe("routing reference validation (#1005)", () => {
 			policies: {
 				...parsed.value.policies,
 				auto: {
-					...parsed.value.policies.auto!,
+					...parsed.value.policies.auto,
 					taskTargets: { code_reasining: [makeRoutingTargetRef("remote", "sonnet")] },
 				},
 			},
 			agents: {
 				rose: {
-					...parsed.value.agents.rose!,
+					...parsed.value.agents.rose,
 					preferredTargets: { intaractive: [makeRoutingTargetRef("remote", "sonnet")] },
 					pinnedTargets: { intaractive: makeRoutingTargetRef("remote", "sonnet") },
 				},
@@ -974,10 +974,10 @@ describe("routing reference validation (#1005)", () => {
 			...parsed.value,
 			policies: {
 				...parsed.value.policies,
-				auto: { ...parsed.value.policies.auto!, taskTargets: { hard_coding: [remoteRef] } },
+				auto: { ...parsed.value.policies.auto, taskTargets: { hard_coding: [remoteRef] } },
 			},
 			agents: {
-				rose: { ...parsed.value.agents.rose!, pinnedTargets: { local_sensitive: remoteRef } },
+				rose: { ...parsed.value.agents.rose, pinnedTargets: { local_sensitive: remoteRef } },
 			},
 		};
 		const issues = validateRoutingReferences(cfg);

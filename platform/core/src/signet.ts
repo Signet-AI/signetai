@@ -28,7 +28,7 @@ export class Signet {
 	 * Initialize Signet in a directory
 	 */
 	async init(name: string): Promise<Agent> {
-		const basePath = this.config.basePath!;
+		const basePath = this.getBasePath();
 
 		if (!existsSync(basePath)) {
 			mkdirSync(basePath, { recursive: true });
@@ -70,7 +70,7 @@ export class Signet {
 	 * Load an existing Signet agent
 	 */
 	async load(): Promise<Agent> {
-		const basePath = this.config.basePath!;
+		const basePath = this.getBasePath();
 
 		if (!existsSync(join(basePath, "agent.yaml"))) {
 			throw new Error(`No agent found at ${basePath}. Run 'signet init' first.`);
@@ -104,6 +104,12 @@ export class Signet {
 	 */
 	getDatabase(): Database | null {
 		return this.db;
+	}
+
+	private getBasePath(): string {
+		const { basePath } = this.config;
+		if (!basePath) throw new Error("Signet base path is not configured");
+		return basePath;
 	}
 
 	/**

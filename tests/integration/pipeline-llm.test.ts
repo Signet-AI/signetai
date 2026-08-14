@@ -614,10 +614,10 @@ describe("Extraction Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateExtractionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("extraction/small", result);
@@ -654,10 +654,10 @@ describe("Extraction Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateExtractionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("extraction/medium", result);
@@ -684,10 +684,10 @@ describe("Extraction Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateExtractionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("extraction/large", result);
@@ -712,16 +712,16 @@ describe("Extraction Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateExtractionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
 				// Every fact type should be a recognized type
-				for (const fact of validation.output!.facts) {
+				for (const fact of validation.output.facts) {
 					if (!VALID_FACT_TYPES.has(fact.type)) {
 						throw new Error(`Unknown fact type: "${fact.type}"`);
 					}
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("extraction/types", result);
@@ -741,16 +741,16 @@ describe("Extraction Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateExtractionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
 				// Entities should have non-empty source, relationship, target
-				for (const entity of validation.output!.entities) {
+				for (const entity of validation.output.entities) {
 					if (!entity.source || !entity.target) {
 						throw new Error(`Entity missing source/target: ${JSON.stringify(entity)}`);
 					}
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("extraction/entities", result);
@@ -770,15 +770,15 @@ describe("Extraction Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateExtractionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
-				for (const fact of validation.output!.facts) {
+				for (const fact of validation.output.facts) {
 					if (fact.confidence < 0 || fact.confidence > 1) {
 						throw new Error(`Confidence out of range: ${fact.confidence}`);
 					}
 				}
-				for (const entity of validation.output!.entities) {
+				for (const entity of validation.output.entities) {
 					if (entity.confidence < 0 || entity.confidence > 1) {
 						throw new Error(`Entity confidence out of range: ${entity.confidence}`);
 					}
@@ -826,10 +826,10 @@ describe("Decision Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateDecisionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("decision/add-novel", result);
@@ -865,10 +865,10 @@ describe("Decision Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateDecisionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("decision/duplicate", result);
@@ -901,11 +901,11 @@ describe("Decision Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateDecisionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
 				// Verify all required fields are present and well-formed
-				const output = validation.output!;
+				const output = validation.output;
 				if (output.reason.length < 5) {
 					throw new Error(`Reason too short: "${output.reason}"`);
 				}
@@ -938,10 +938,10 @@ describe("Summary Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateSummaryOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("summary/medium", result);
@@ -972,15 +972,15 @@ describe("Summary Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateSummaryOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
 				// Summary should contain markdown headings
-				const hasHeading = /^#/m.test(validation.output!.summary);
+				const hasHeading = /^#/m.test(validation.output.summary);
 				if (!hasHeading) {
 					throw new Error("Summary missing markdown headings");
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("summary/headings", result);
@@ -1000,16 +1000,16 @@ describe("Summary Quality", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateSummaryOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
 				// Each fact content should be at least 20 chars (meaningful sentence)
-				for (const fact of validation.output!.facts) {
+				for (const fact of validation.output.facts) {
 					if (fact.content.length < 15) {
 						throw new Error(`Fact too short: "${fact.content}"`);
 					}
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("summary/facts-quality", result);
@@ -1104,10 +1104,10 @@ describe("Prompt Robustness", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateExtractionOutput(parsed);
-				if (!validation.valid) {
+				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
-				return { value: validation.output!, durationMs };
+				return { value: validation.output, durationMs };
 			});
 
 			logTimings("robustness/unicode", result);
@@ -1239,8 +1239,8 @@ describe("Schema Compliance (parsing)", () => {
 			],
 		});
 		expect(result.valid).toBe(true);
-		expect(result.output!.facts.length).toBe(1);
-		expect(result.output!.entities.length).toBe(1);
+		expect(result.output?.facts.length).toBe(1);
+		expect(result.output?.entities.length).toBe(1);
 	});
 
 	test("validateDecisionOutput accepts valid actions", () => {

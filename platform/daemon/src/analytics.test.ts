@@ -241,7 +241,7 @@ describe("buildTimeline", () => {
 
 	beforeEach(() => {
 		db = new Database(":memory:");
-		runMigrations(db as any);
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 	});
 
 	function makeSources(logs: LogEntry[] = [], errors: ErrorEntry[] = []): TimelineSources {
