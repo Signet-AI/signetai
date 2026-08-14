@@ -127,6 +127,21 @@ describe("desktop update packaging", () => {
 		expect(publish).not.toContain("if: startsWith(github.ref, 'refs/tags/')");
 	});
 
+	test("keeps tag releases draft until every desktop matrix leg publishes", () => {
+		const workflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "desktop-build.yml"), "utf8");
+		const buildStart = workflow.indexOf("  build:");
+		const finalizeStart = workflow.indexOf("  finalize-release:");
+		const finalizeEnd = workflow.indexOf("\n\n  validate-aur:", finalizeStart);
+		const build = workflow.slice(buildStart, finalizeStart);
+		const finalize = workflow.slice(finalizeStart, finalizeEnd);
+
+		expect(build).not.toContain("Finalize GitHub release");
+		expect(build).not.toContain("--draft=false");
+		expect(finalize).toContain("needs: build");
+		expect(finalize).toContain("scripts/retry-github-release.sh gh release edit");
+		expect(finalize).toContain("--draft=false");
+	});
+
 	test("uses a Linux-safe Electron executable name", () => {
 		const packageJson = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
 		expect(packageJson.build.executableName).toBe("signet");
