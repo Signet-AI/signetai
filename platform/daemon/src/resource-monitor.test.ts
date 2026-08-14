@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
 	getResourceSnapshot,
 	logFdSnapshot,
+	parseMacOsFdInfo,
 	startEventLoopMonitor,
 	startFdPollMonitor,
 	stopResourceMonitors,
@@ -15,11 +16,11 @@ afterEach(() => {
 describe("getResourceSnapshot", () => {
 	it("returns a snapshot with non-negative total on Linux", () => {
 		const snap = getResourceSnapshot();
-		// On Linux /proc/self/fd is readable; on other platforms total = -1
+		// On Linux /proc/self/fd is readable; unsupported platforms report null.
 		if (process.platform === "linux") {
 			expect(snap.total).toBeGreaterThan(0);
 		} else {
-			expect(snap.total).toBe(-1);
+			expect(snap.total).toBeNull();
 		}
 	});
 
@@ -38,11 +39,7 @@ describe("getResourceSnapshot", () => {
 			"cpuPercent",
 		];
 		for (const key of keys) {
-			if (key === "cpuPercent") {
-				expect(snap[key] === null || typeof snap[key] === "number").toBe(true);
-				continue;
-			}
-			expect(typeof snap[key]).toBe("number");
+			expect(snap[key] === null || typeof snap[key] === "number").toBe(true);
 		}
 		expect(snap.physicalFootprint === null || typeof snap.physicalFootprint === "number").toBe(true);
 		expect(snap.peakPhysicalFootprint === null || typeof snap.peakPhysicalFootprint === "number").toBe(true);
@@ -78,15 +75,56 @@ describe("getResourceSnapshot", () => {
 	it("FD category counts sum to total on Linux", () => {
 		if (process.platform !== "linux") return;
 		const snap = getResourceSnapshot();
+		if (
+			snap.memoryMd === null ||
+			snap.sockets === null ||
+			snap.inotify === null ||
+			snap.pipes === null ||
+			snap.db === null ||
+			snap.other === null ||
+			snap.total === null
+		) {
+			throw new Error("Linux FD accounting unexpectedly returned an unavailable category");
+		}
 		const sum = snap.memoryMd + snap.sockets + snap.inotify + snap.pipes + snap.db + snap.other;
 		expect(sum).toBe(snap.total);
+	});
+
+	it("parses macOS proc_pidinfo FD records without using Linux procfs", () => {
+		const raw = new Uint8Array(24);
+		const view = new DataView(raw.buffer);
+		view.setUint32(4, 2, true); // socket
+		view.setUint32(12, 6, true); // pipe
+		view.setUint32(20, 1, true); // vnode, path categories are unavailable
+
+		expect(parseMacOsFdInfo(raw)).toEqual({
+			total: 3,
+			memoryMd: null,
+			sockets: 1,
+			inotify: null,
+			pipes: 1,
+			db: null,
+			other: 1,
+		});
+	});
+
+	it("reports unavailable counts for a truncated macOS proc_fdinfo record", () => {
+		expect(parseMacOsFdInfo(new Uint8Array(7))).toEqual({
+			total: null,
+			memoryMd: null,
+			sockets: null,
+			inotify: null,
+			pipes: null,
+			db: null,
+			other: null,
+		});
 	});
 });
 
 describe("logFdSnapshot", () => {
 	it("returns the same shape as getResourceSnapshot", () => {
 		const snap = logFdSnapshot("test-stage");
-		expect(typeof snap.total).toBe("number");
+		expect(snap.total === null || typeof snap.total === "number").toBe(true);
 		expect(typeof snap.rss).toBe("number");
 	});
 });

@@ -12,6 +12,12 @@ const pid = process.pid;
 const fdDir = `/proc/${pid}/fd`;
 const BYTES_PER_MIB = 1024 * 1024;
 const RUSAGE_INFO_V4 = 4;
+const PROC_PIDLISTFDS = 1;
+const PROC_FDINFO_SIZE = 8;
+const PROC_FDTYPE_SOCKET = 2;
+const PROC_FDTYPE_PIPE = 6;
+const INITIAL_MACOS_FD_BUFFER_SIZE = 4096;
+const MAX_MACOS_FD_BUFFER_SIZE = 1024 * 1024;
 // sizeof(struct rusage_info_v4) per bsd/sys/resource.h (1×u8[16] + 35×u64).
 const RUSAGE_INFO_V4_SIZE = 296;
 const RUSAGE_INFO_PHYS_FOOTPRINT_OFFSET = 72;
@@ -27,7 +33,24 @@ type PhysicalMemoryReader = () => PhysicalMemoryUsage | null;
 interface LibprocHandle {
 	readonly symbols: {
 		readonly proc_pid_rusage: (pid: number, flavor: number, buffer: ReturnType<typeof ptr>) => number;
+		readonly proc_pidinfo: (
+			pid: number,
+			flavor: number,
+			arg: number,
+			buffer: ReturnType<typeof ptr>,
+			bufferSize: number,
+		) => number;
 	};
+}
+
+interface FileDescriptorUsage {
+	readonly total: number | null;
+	readonly memoryMd: number | null;
+	readonly sockets: number | null;
+	readonly inotify: number | null;
+	readonly pipes: number | null;
+	readonly db: number | null;
+	readonly other: number | null;
 }
 
 let libprocHandle: LibprocHandle | null | undefined;
@@ -40,11 +63,116 @@ function loadLibproc(): LibprocHandle | null {
 				args: ["i32", "i32", "ptr"],
 				returns: "i32",
 			},
+			proc_pidinfo: {
+				args: ["i32", "i32", "u64", "ptr", "i32"],
+				returns: "i32",
+			},
 		}) as LibprocHandle;
 	} catch {
 		libprocHandle = null;
 	}
 	return libprocHandle;
+}
+
+function unavailableFileDescriptorUsage(): FileDescriptorUsage {
+	return {
+		total: null,
+		memoryMd: null,
+		sockets: null,
+		inotify: null,
+		pipes: null,
+		db: null,
+		other: null,
+	};
+}
+
+/**
+ * Parse macOS's struct proc_fdinfo array returned by PROC_PIDLISTFDS.
+ * The structure is two little-endian 32-bit fields: descriptor and type.
+ */
+export function parseMacOsFdInfo(raw: Uint8Array): FileDescriptorUsage {
+	if (raw.byteLength % PROC_FDINFO_SIZE !== 0) return unavailableFileDescriptorUsage();
+
+	const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+	let sockets = 0;
+	let pipes = 0;
+	let other = 0;
+	for (let offset = 0; offset < raw.byteLength; offset += PROC_FDINFO_SIZE) {
+		const type = view.getUint32(offset + 4, true);
+		if (type === PROC_FDTYPE_SOCKET) sockets++;
+		else if (type === PROC_FDTYPE_PIPE) pipes++;
+		else other++;
+	}
+
+	return {
+		total: sockets + pipes + other,
+		// libproc gives descriptor types, but not vnode paths. Keep path-based
+		// categories explicitly unavailable instead of reporting misleading zeroes.
+		memoryMd: null,
+		sockets,
+		inotify: null,
+		pipes,
+		db: null,
+		other,
+	};
+}
+
+function readMacOsFileDescriptors(): FileDescriptorUsage {
+	if (process.platform !== "darwin") return unavailableFileDescriptorUsage();
+	const libproc = loadLibproc();
+	if (!libproc) return unavailableFileDescriptorUsage();
+
+	for (let bufferSize = INITIAL_MACOS_FD_BUFFER_SIZE; bufferSize <= MAX_MACOS_FD_BUFFER_SIZE; bufferSize *= 2) {
+		const raw = new Uint8Array(bufferSize);
+		const bytes = libproc.symbols.proc_pidinfo(pid, PROC_PIDLISTFDS, 0, ptr(raw), bufferSize);
+		if (bytes < 0) return unavailableFileDescriptorUsage();
+		if (bytes < bufferSize) return parseMacOsFdInfo(raw.subarray(0, bytes));
+	}
+
+	// Do not turn a process with more descriptors than our bounded read into a
+	// plausible but incomplete count.
+	return unavailableFileDescriptorUsage();
+}
+
+function readLinuxFileDescriptors(): FileDescriptorUsage {
+	const usage = {
+		total: 0,
+		memoryMd: 0,
+		sockets: 0,
+		inotify: 0,
+		pipes: 0,
+		db: 0,
+		other: 0,
+	};
+
+	try {
+		const entries = readdirSync(fdDir);
+		usage.total = entries.length;
+
+		for (const fd of entries) {
+			try {
+				const target = readlinkSync(join(fdDir, fd));
+				if (target.includes("/memory/") && target.endsWith(".md")) usage.memoryMd++;
+				else if (target.startsWith("socket:")) usage.sockets++;
+				else if (target.includes("inotify")) usage.inotify++;
+				else if (target.startsWith("pipe:")) usage.pipes++;
+				else if (target.includes("memories.db")) usage.db++;
+				else usage.other++;
+			} catch {
+				usage.other++;
+			}
+		}
+	} catch {
+		return unavailableFileDescriptorUsage();
+	}
+
+	return usage;
+}
+
+function readFileDescriptors(): FileDescriptorUsage {
+	if (process.platform === "linux") return readLinuxFileDescriptors();
+	if (process.platform === "darwin") return readMacOsFileDescriptors();
+	return unavailableFileDescriptorUsage();
 }
 
 /**
@@ -67,13 +195,13 @@ function readMacOsPhysicalMemory(): PhysicalMemoryUsage | null {
 }
 
 export interface ResourceSnapshot {
-	total: number;
-	memoryMd: number;
-	sockets: number;
-	inotify: number;
-	pipes: number;
-	db: number;
-	other: number;
+	total: number | null;
+	memoryMd: number | null;
+	sockets: number | null;
+	inotify: number | null;
+	pipes: number | null;
+	db: number | null;
+	other: number | null;
 	rss: number;
 	heapUsed: number;
 	physicalFootprint: number | null;
@@ -104,13 +232,13 @@ function readCpuPercent(): number | null {
 
 function snapshotResources(readPhysicalMemory: PhysicalMemoryReader = readMacOsPhysicalMemory): ResourceSnapshot {
 	const snap: ResourceSnapshot = {
-		total: 0,
-		memoryMd: 0,
-		sockets: 0,
-		inotify: 0,
-		pipes: 0,
-		db: 0,
-		other: 0,
+		total: null,
+		memoryMd: null,
+		sockets: null,
+		inotify: null,
+		pipes: null,
+		db: null,
+		other: null,
 		rss: 0,
 		heapUsed: 0,
 		physicalFootprint: null,
@@ -118,26 +246,14 @@ function snapshotResources(readPhysicalMemory: PhysicalMemoryReader = readMacOsP
 		cpuPercent: null,
 	};
 
-	try {
-		const entries = readdirSync(fdDir);
-		snap.total = entries.length;
-
-		for (const fd of entries) {
-			try {
-				const target = readlinkSync(join(fdDir, fd));
-				if (target.includes("/memory/") && target.endsWith(".md")) snap.memoryMd++;
-				else if (target.startsWith("socket:")) snap.sockets++;
-				else if (target.includes("inotify")) snap.inotify++;
-				else if (target.startsWith("pipe:")) snap.pipes++;
-				else if (target.includes("memories.db")) snap.db++;
-				else snap.other++;
-			} catch {
-				snap.other++;
-			}
-		}
-	} catch {
-		snap.total = -1;
-	}
+	const fdUsage = readFileDescriptors();
+	snap.total = fdUsage.total;
+	snap.memoryMd = fdUsage.memoryMd;
+	snap.sockets = fdUsage.sockets;
+	snap.inotify = fdUsage.inotify;
+	snap.pipes = fdUsage.pipes;
+	snap.db = fdUsage.db;
+	snap.other = fdUsage.other;
 
 	const mem = process.memoryUsage();
 	snap.rss = Math.round(mem.rss / 1024 / 1024);
@@ -214,9 +330,9 @@ export function startFdPollMonitor(intervalMs = 30_000): void {
 		const snap = snapshotResources();
 		const delta = prev
 			? {
-					total: snap.total - prev.total,
-					memoryMd: snap.memoryMd - prev.memoryMd,
-					sockets: snap.sockets - prev.sockets,
+					total: snap.total !== null && prev.total !== null ? snap.total - prev.total : null,
+					memoryMd: snap.memoryMd !== null && prev.memoryMd !== null ? snap.memoryMd - prev.memoryMd : null,
+					sockets: snap.sockets !== null && prev.sockets !== null ? snap.sockets - prev.sockets : null,
 				}
 			: null;
 		logger.debug("resources", "[periodic]", {
@@ -225,7 +341,8 @@ export function startFdPollMonitor(intervalMs = 30_000): void {
 			sockets: snap.sockets,
 			db: snap.db,
 			rss: `${snap.rss}MB`,
-			...(delta ? { delta_total: delta.total, delta_memoryMd: delta.memoryMd } : {}),
+			...(delta?.total !== null && delta?.total !== undefined ? { delta_total: delta.total } : {}),
+			...(delta?.memoryMd !== null && delta?.memoryMd !== undefined ? { delta_memoryMd: delta.memoryMd } : {}),
 		});
 		prev = snap;
 	}, intervalMs);
