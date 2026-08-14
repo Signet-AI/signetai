@@ -37,7 +37,7 @@ dependencies = [
 		expect(findCargoLockPackageVersion(lock, "signet-native")).toBeNull();
 	});
 
-	test("resolves publishable runtime workspace protocols and exact internal pins without rewriting dev-only links", () => {
+	test("resolves publishable runtime workspace protocols without rewriting dev-only links or breaking Biome formatting", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-version-sync-publish-"));
 		try {
 			const coreManifest = join(root, "core.package.json");
@@ -72,6 +72,7 @@ dependencies = [
 			);
 
 			expect(resolveWorkspaceProtocols([coreManifest, manifest], "0.115.2", false)).toEqual([manifest]);
+			expect(readFileSync(manifest, "utf8").startsWith('{\n	"name"')).toBe(true);
 			const updated = JSON.parse(readFileSync(manifest, "utf8")) as {
 				dependencies: Record<string, string>;
 				optionalDependencies: Record<string, string>;
@@ -112,6 +113,7 @@ dependencies = [
 			);
 
 			expect(syncSignetNativeOptionalDependencies("0.115.2", false, manifest)).toEqual([manifest]);
+			expect(readFileSync(manifest, "utf8").startsWith('{\n	"name"')).toBe(true);
 			const updated = JSON.parse(readFileSync(manifest, "utf8")) as {
 				optionalDependencies: Record<string, string>;
 			};

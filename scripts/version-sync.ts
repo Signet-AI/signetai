@@ -239,6 +239,10 @@ function isPublishablePackage(pkg: Record<string, unknown>): boolean {
 	);
 }
 
+function stringifyPackageJson(pkg: Record<string, unknown>): string {
+	return `${JSON.stringify(pkg, null, "	")}\n`;
+}
+
 export function resolveWorkspaceProtocols(files: readonly string[], version: string, checkOnly: boolean): string[] {
 	const packageJsonByFile = new Map<string, Record<string, unknown>>();
 	const publishablePackageNames = new Set<string>();
@@ -280,7 +284,7 @@ export function resolveWorkspaceProtocols(files: readonly string[], version: str
 		}
 		if (changed) {
 			if (!checkOnly) {
-				writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
+				writeFileSync(file, stringifyPackageJson(pkg));
 			}
 			patched.push(file);
 		}
@@ -310,7 +314,7 @@ export function syncSignetNativeOptionalDependencies(
 
 	if (!changed) return [];
 	if (!checkOnly) {
-		writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
+		writeFileSync(file, stringifyPackageJson(pkg));
 	}
 	return [file];
 }
