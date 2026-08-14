@@ -1834,7 +1834,10 @@ function readDreamingEpisodicTokenBacklogEntriesInDb(
 			agentId,
 			query: "",
 			excludeDelivered: true,
-			limit: 50,
+			// The trigger metric must include every pending revision. The ordinary
+			// search API is page-bounded, but backlog accounting cannot use a
+			// newest-50 slice without suppressing automatic Dreaming (#1559).
+			limit: null,
 		});
 		return queued.flatMap((source) => {
 			const remaining = renderDreamingEvidence(source).slice(deliveredOffsetForSource(db, agentId, source));

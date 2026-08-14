@@ -795,8 +795,9 @@ export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly s
  *
  * This belongs beside the canonical cross-store reader so every Dreaming
  * caller uses the same provenance, deletion, and source-native boundaries.
- * It deliberately returns complete source records: callers bound the number
- * of matches, never by truncating the evidence a model may cite.
+ * It deliberately returns complete source records. Ordinary callers bound the
+ * number of matches, while aggregate metrics may request the complete set;
+ * neither path truncates the evidence a model may cite.
  */
 export function searchEpisodicSources(
 	db: ReadDb,
@@ -808,11 +809,12 @@ export function searchEpisodicSources(
 		readonly kind?: "memory" | "artifact" | "transcript" | "summary";
 		/** Scan-first delivery drains only records whose current revision is not complete. */
 		readonly excludeDelivered?: boolean;
-		readonly limit?: number;
+		/** `null` requests the complete matching set instead of a bounded page. */
+		readonly limit?: number | null;
 	},
 ): EpisodicSourceRecord[] {
 	const query = params.query.trim();
-	const limit = Math.max(1, Math.min(Math.floor(params.limit ?? 20), 50));
+	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 50));
 	const like = `%${query}%`;
 	// An empty query still lists recent sources (runbook cutoff pattern); the
 	// LIKE below degrades to a match-all and the outer ORDER BY picks newest.
@@ -926,9 +928,9 @@ export function searchEpisodicSources(
 			 ${union}
 			 )
 			 ORDER BY julianday(captured_at) DESC, kind ASC, id ASC
-			 LIMIT ?`,
+			 LIMIT ${limit === null ? -1 : "?"}`,
 		)
-		.all(...branches.flatMap((branch) => branch.args), limit) as Array<{
+		.all(...branches.flatMap((branch) => branch.args), ...(limit === null ? [] : [limit])) as Array<{
 		kind: EpisodicSourceKind;
 		id: string;
 	}>;

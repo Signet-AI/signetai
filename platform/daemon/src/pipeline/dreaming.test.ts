@@ -43,6 +43,7 @@ import {
 	resolveRequeuedDreamingEvidenceInTx,
 } from "./dreaming-evidence-retry";
 import { readDreamingRunbook } from "./dreaming-runbook";
+import { countTokens } from "./tokenizer";
 
 const AGENT = "default";
 
@@ -828,6 +829,20 @@ describe("Dreaming", () => {
 		const cfg = defaultCfg({ tokenThreshold: 100_000, maxInterval: 6 * 60 * 60 * 1_000, backfillOnFirstRun: false });
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now - 1)).toBe(false);
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(true);
+	});
+
+	it("counts the full scan-first episodic backlog beyond one search page (#1559)", () => {
+		const contents = Array.from({ length: 51 }, (_, index) => `pending episodic source ${index}`);
+		for (const [index, content] of contents.entries()) {
+			seedArtifact(db, `imports/pending-${index}.md`, content, `revision-${index}`, "2026-08-01T00:00:00.000Z");
+		}
+		const expected = contents.reduce((total, content) => total + countTokens(content), 0);
+		const backlog = getDreamingEpisodicTokenBacklog(accessor, AGENT);
+
+		expect(backlog).toBe(expected);
+		expect(
+			shouldTriggerDreaming(accessor, defaultCfg({ tokenThreshold: expected, backfillOnFirstRun: false }), AGENT),
+		).toBe(true);
 	});
 
 	it("runs a pass when attention is pending and leaves it for the agent to consume", async () => {
