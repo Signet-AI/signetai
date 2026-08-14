@@ -5,8 +5,7 @@ description: "Inspect embedding status, health, vectors, and projection data."
 
 ### GET /api/embeddings
 
-Export all stored embeddings with their parent memory metadata. Falls back to
-a legacy Python export script if the `embeddings` table does not exist.
+Export all stored embeddings with their parent memory metadata.
 Requires `recall` permission.
 
 **Query parameters**

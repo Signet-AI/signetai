@@ -334,17 +334,7 @@ def save_explicit(
     db.commit()
     db.close()
 
-    # Generate and store embedding
-    try:
-        from embeddings import embed
-        from vector_store import insert_vector
-
-        vector, _ = embed(content)
-        insert_vector(str(memory_id), vector)
-        print(f"saved + embedded: {content[:50]}...")
-    except Exception as e:
-        debug_log(f"embedding failed for memory {memory_id}: {e}")
-        print(f"saved (no embedding): {content[:50]}...")
+    print(f"saved: {content[:50]}...")
 
 
 def save_auto():
@@ -500,34 +490,8 @@ def is_duplicate(db: sqlite3.Connection, content: str) -> bool:
 
 
 def query_memories(search: str, limit: int = 20):
-    """Query memories using hybrid search (vector + BM25)"""
-    try:
-        from hybrid_search import search_with_fallback
-
-        results = search_with_fallback(search, limit)
-
-        if not results:
-            print("no memories found")
-            return
-
-        for r in results:
-            tags = f" [{r['tags']}]" if r["tags"] else ""
-            pinned = " [pinned]" if r["pinned"] else ""
-            source = (
-                "hybrid"
-                if r["vector_score"] > 0 and r["bm25_score"] > 0
-                else ("vector" if r["vector_score"] > 0 else "keyword")
-            )
-
-            print(f"[{r['hybrid_score']:.2f}|{source}] {r['content']}{tags}{pinned}")
-            print(
-                f"       type: {r['type']} | who: {r['who']} | project: {r['project'] or 'global'}"
-            )
-            print()
-
-    except ImportError:
-        # Fallback to old FTS-only search if hybrid search not available
-        query_memories_fts_only(search, limit)
+    """Query memories using SQLite FTS5 and tag matching."""
+    query_memories_fts_only(search, limit)
 
 
 def query_memories_fts_only(search: str, limit: int = 20):

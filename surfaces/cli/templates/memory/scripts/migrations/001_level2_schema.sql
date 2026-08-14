@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   manual_override INTEGER DEFAULT 0
 );
 
--- Vector embeddings (spec-required, mirrors zvec)
+-- Vector embeddings (spec-required)
 CREATE TABLE IF NOT EXISTS embeddings (
   id            TEXT PRIMARY KEY,
   content_hash  TEXT NOT NULL,

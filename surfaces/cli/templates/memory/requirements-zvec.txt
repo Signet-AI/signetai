@@ -1,3 +1,0 @@
-# zvec - vector similarity search
-# IMPORTANT: Requires Python 3.10, 3.11, or 3.12 (NOT 3.13+)
-zvec
