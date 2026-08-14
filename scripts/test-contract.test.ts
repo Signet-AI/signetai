@@ -71,6 +71,10 @@ const CLEARED_ENV_KEYS = [
 	"SIGNET_WRAPPER_DIR",
 	"SIGNET_BASE_URL",
 	"SIGNET_ACP_ALLOWED_ORIGINS",
+	"SIGNET_TELEMETRY_OPTOUT",
+	"SIGNET_TELEMETRY_ENV",
+	"SIGNET_TELEMETRY_DEPLOYMENT_ROLE",
+	"SIGNET_TELEMETRY_INSTALL_CHANNEL",
 ] as const;
 
 test("the root test command covers every maintained test root", () => {
@@ -176,6 +180,10 @@ test("hermetic environment", () => {
 				SIGNET_WRAPPER_DIR: "/host/wrapper",
 				SIGNET_BASE_URL: "http://host.example:3850",
 				SIGNET_ACP_ALLOWED_ORIGINS: "http://host.example",
+				SIGNET_TELEMETRY_OPTOUT: "0",
+				SIGNET_TELEMETRY_ENV: "production",
+				SIGNET_TELEMETRY_DEPLOYMENT_ROLE: "host-role",
+				SIGNET_TELEMETRY_INSTALL_CHANNEL: "host-channel",
 			},
 			encoding: "utf8",
 		});
