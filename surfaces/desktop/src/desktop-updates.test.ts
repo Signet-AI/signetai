@@ -71,7 +71,7 @@ describe("desktop update packaging", () => {
 		expect(workflow).toContain("surfaces/desktop/release/latest*.yml");
 	});
 
-	test("fails closed for stable macOS artifacts without notarization", () => {
+	test("configures macOS artifacts for verified official releases", () => {
 		const packageJson = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
 		const mac = packageJson.build.mac;
 		expect(mac.hardenedRuntime).toBe(true);
@@ -99,8 +99,8 @@ describe("desktop update packaging", () => {
 		]) {
 			expect(workflow).toContain(`secrets.${secret}`);
 		}
-		expect(workflow).toContain("macOS tag releases require Developer ID signing and notarization");
-		expect(workflow).toContain("Stable macOS releases cannot use unsigned or self-signed artifacts");
+		expect(workflow).toContain("signing_mode=official but required signing/notarization secrets are missing");
+		expect(workflow).toContain("if: startsWith(matrix.runner, 'macos-') && steps.signing.outputs.mode == 'official'");
 		expect(workflow).toContain("bun run verify:macos");
 		const verifier = readFileSync(join(desktopRoot, "scripts", "verify-macos-release.mjs"), "utf8");
 		expect(verifier).toContain('run("xcrun", ["stapler", "validate"');
