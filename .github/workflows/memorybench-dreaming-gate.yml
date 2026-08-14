@@ -11,22 +11,11 @@ on:
       - "memorybench/src/orchestrator/**"
       - "memorybench/src/types/benchmark.ts"
       - "memorybench/src/types/provider.ts"
-      - "platform/daemon/src/pipeline/dreaming*.ts"
-      - "platform/daemon/src/db-accessor.ts"
-      - "platform/daemon/src/episodic-sources.ts"
-      - "platform/daemon/src/pipeline/memorybench-dreaming-gate.test.ts"
-      - "platform/daemon/src/ontology-proposals.ts"
-      - "platform/daemon/src/yielding-writes.ts"
-      - "platform/daemon/src/derived-memory-provenance.ts"
-      - "platform/daemon/src/transcript-capture*.ts"
-      - "platform/daemon/src/transcript-jsonl.ts"
-      - "platform/daemon/src/memory-lineage.ts"
-      - "platform/daemon/src/session-noise.ts"
-      - "platform/core/src/index.ts"
-      - "platform/core/src/migration.ts"
-      - "platform/core/src/migrations/**"
-      - "platform/core/src/source-*.ts"
-      - "platform/core/src/sources-*.ts"
+      # The fixture imports source transitively from both packages. Keep these
+      # broad dependency contracts instead of maintaining drifting allowlists
+      # whenever Dreaming or its storage implementation gains a helper.
+      - "platform/daemon/src/**"
+      - "platform/core/src/**"
       - ".github/workflows/memorybench-dreaming-gate.yml"
   push:
     branches: [main]
@@ -39,22 +28,11 @@ on:
       - "memorybench/src/orchestrator/**"
       - "memorybench/src/types/benchmark.ts"
       - "memorybench/src/types/provider.ts"
-      - "platform/daemon/src/pipeline/dreaming*.ts"
-      - "platform/daemon/src/db-accessor.ts"
-      - "platform/daemon/src/episodic-sources.ts"
-      - "platform/daemon/src/pipeline/memorybench-dreaming-gate.test.ts"
-      - "platform/daemon/src/ontology-proposals.ts"
-      - "platform/daemon/src/yielding-writes.ts"
-      - "platform/daemon/src/derived-memory-provenance.ts"
-      - "platform/daemon/src/transcript-capture*.ts"
-      - "platform/daemon/src/transcript-jsonl.ts"
-      - "platform/daemon/src/memory-lineage.ts"
-      - "platform/daemon/src/session-noise.ts"
-      - "platform/core/src/index.ts"
-      - "platform/core/src/migration.ts"
-      - "platform/core/src/migrations/**"
-      - "platform/core/src/source-*.ts"
-      - "platform/core/src/sources-*.ts"
+      # The fixture imports source transitively from both packages. Keep these
+      # broad dependency contracts instead of maintaining drifting allowlists
+      # whenever Dreaming or its storage implementation gains a helper.
+      - "platform/daemon/src/**"
+      - "platform/core/src/**"
       - ".github/workflows/memorybench-dreaming-gate.yml"
 
 permissions:

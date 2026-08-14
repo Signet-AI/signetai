@@ -1,8 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
@@ -138,6 +139,68 @@ function readWorkflowTriggerPaths(trigger: "pull_request" | "push"): readonly st
 	return paths;
 }
 
+const LOCAL_IMPORT_PATTERN = /(?:from\s+|import\s*\(\s*|export\s+from\s*)["']([^"']+)["']/g;
+
+function resolveLocalImport(source: URL, specifier: string): URL | null {
+	if (!specifier.startsWith(".")) return null;
+	const candidates = [
+		new URL(`${specifier}.ts`, source),
+		new URL(`${specifier}.tsx`, source),
+		new URL(`${specifier}/index.ts`, source),
+		new URL(specifier, source),
+	];
+	for (const candidate of candidates) {
+		try {
+			if (statSync(candidate).isFile()) return candidate;
+		} catch {
+			// The import may target a package or a non-TypeScript asset.
+		}
+	}
+	return null;
+}
+
+function readGateDependencyPaths(): readonly string[] {
+	const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+	const pending = [new URL(import.meta.url)];
+	const seen = new Set<string>();
+	while (pending.length > 0) {
+		const source = pending.pop();
+		if (!source) continue;
+		const sourcePath = fileURLToPath(source);
+		if (seen.has(sourcePath)) continue;
+		seen.add(sourcePath);
+		const text = readFileSync(source, "utf8");
+		for (const match of text.matchAll(LOCAL_IMPORT_PATTERN)) {
+			const specifier = match[1];
+			if (!specifier) continue;
+			const dependency = resolveLocalImport(source, specifier);
+			if (dependency) pending.push(dependency);
+		}
+	}
+	return [...seen].map((path) => relative(repoRoot, path).replaceAll("\\", "/")).sort();
+}
+
+function workflowPathPatternMatches(path: string, pattern: string): boolean {
+	let expression = "^";
+	for (let index = 0; index < pattern.length; ) {
+		if (pattern.startsWith("**", index)) {
+			expression += ".*";
+			index += 2;
+			continue;
+		}
+		const character = pattern[index];
+		if (character === "*") {
+			expression += "[^/]*";
+			index += 1;
+			continue;
+		}
+		if ("\\^$+?.()|[]{}".includes(character)) expression += `\\${character}`;
+		else expression += character;
+		index += 1;
+	}
+	return new RegExp(`${expression}$`).test(path);
+}
+
 describe("MemoryBench Dreaming gate", () => {
 	let db: Database;
 	let accessor: DbAccessor;
@@ -152,22 +215,32 @@ describe("MemoryBench Dreaming gate", () => {
 		db.close();
 	});
 
-	it("triggers for every direct gate dependency on pull requests and main pushes", () => {
-		const requiredPaths = [
+	it("triggers for every transitive gate dependency on pull requests and main pushes", () => {
+		const requiredContractPaths = [
 			".github/workflows/memorybench-dreaming-gate.yml",
-			"platform/daemon/src/db-accessor.ts",
-			"platform/daemon/src/episodic-sources.ts",
-			"platform/daemon/src/pipeline/memorybench-dreaming-gate.test.ts",
+			"platform/daemon/src/**",
+			"platform/core/src/**",
+		];
+		const newlyCoveredDependencies = [
 			"platform/daemon/src/yielding-writes.ts",
 			"platform/daemon/src/derived-memory-provenance.ts",
-			"platform/core/src/index.ts",
-			"platform/core/src/migration.ts",
-			"platform/core/src/migrations/**",
-			"platform/core/src/source-*.ts",
-			"platform/core/src/sources-*.ts",
+			"platform/daemon/src/knowledge-graph-hygiene.ts",
+			"platform/daemon/src/pipeline/tokenizer.ts",
+			"platform/daemon/src/ontology-contradictions.ts",
+			"platform/daemon/src/ontology-evidence.ts",
+			"platform/daemon/src/transactions.ts",
 		];
+		const gateDependencies = readGateDependencyPaths();
 		for (const trigger of ["pull_request", "push"] as const) {
-			expect(readWorkflowTriggerPaths(trigger)).toEqual(expect.arrayContaining(requiredPaths));
+			const triggerPaths = readWorkflowTriggerPaths(trigger);
+			expect(triggerPaths).toEqual(expect.arrayContaining(requiredContractPaths));
+			for (const dependency of newlyCoveredDependencies) {
+				expect(triggerPaths.some((pattern) => workflowPathPatternMatches(dependency, pattern))).toBe(true);
+			}
+			for (const dependency of gateDependencies) {
+				if (!dependency.startsWith("platform/daemon/src/") && !dependency.startsWith("platform/core/src/")) continue;
+				expect(triggerPaths.some((pattern) => workflowPathPatternMatches(dependency, pattern))).toBe(true);
+			}
 		}
 	});
 
