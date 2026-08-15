@@ -176,7 +176,13 @@ import {
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "./source-index-progress";
-import { recordSourceConnected, recordSourceIndexOperation, sourceFailureClass } from "./source-lifecycle-telemetry";
+import {
+	flushPendingSourceLifecycleTelemetry,
+	recordSourceConnected,
+	recordSourceIndexOperation,
+	sourceFailureClass,
+	trackSourceLifecycleWrite,
+} from "./source-lifecycle-telemetry";
 import { runStartupRecovery } from "./startup-recovery";
 import { getPressureRecoveryOutcome, getSystemPressure, reportStartupGrace } from "./system-pressure";
 import {
@@ -1773,6 +1779,7 @@ async function cleanup() {
 	}
 	stopResourceMonitors();
 	logFdSnapshot("cleanup-start");
+	await flushPendingSourceLifecycleTelemetry();
 	if (telemetryRef) {
 		try {
 			await telemetryRef.stop();
@@ -2175,7 +2182,10 @@ async function main() {
 			});
 		}
 		for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
-			if (source.enabled) recordSourceConnected(source, resolveDaemonAgentId());
+			if (source.enabled) {
+				// Server readiness must not wait on best-effort telemetry, but shutdown must drain it.
+				void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
+			}
 		}
 
 		const daemonStartTime = Date.now();
@@ -2451,7 +2461,8 @@ async function main() {
 			const startupSourceJobs = new Map<string, string>();
 			for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
 				if (!source.enabled || source.kind !== "obsidian") continue;
-				recordSourceConnected(source, resolveDaemonAgentId());
+				// Startup indexing is asynchronous; keep its lifecycle write in the shutdown drain.
+				void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
 				const job = beginSourceIndexJob(source.id, "source-startup");
 				startupSourceJobs.set(source.id, job.id);
 				markSourceIndexInFlight(source.id);
@@ -2487,17 +2498,20 @@ async function main() {
 						const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
 						const job = getSourceIndexJob(sourceId);
 						if (source) {
-							recordSourceIndexOperation({
-								source,
-								agentId: resolveDaemonAgentId(),
-								discovered: job?.scanned ?? 0,
-								accepted: job?.indexed ?? 0,
-								durationMs:
-									job?.startedAt && job.finishedAt
-										? Math.max(0, Date.parse(job.finishedAt) - Date.parse(job.startedAt))
-										: 0,
-								outcome: "success",
-							});
+							// Index completion is intentionally fire-and-forget, but tracked until shutdown.
+							void trackSourceLifecycleWrite(
+								recordSourceIndexOperation({
+									source,
+									agentId: resolveDaemonAgentId(),
+									discovered: job?.scanned ?? 0,
+									accepted: job?.indexed ?? 0,
+									durationMs:
+										job?.startedAt && job.finishedAt
+											? Math.max(0, Date.parse(job.finishedAt) - Date.parse(job.startedAt))
+											: 0,
+									outcome: "success",
+								}),
+							);
 						}
 					}
 				})
@@ -2506,17 +2520,20 @@ async function main() {
 						const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
 						const job = getSourceIndexJob(sourceId);
 						if (source) {
-							recordSourceIndexOperation({
-								source,
-								agentId: resolveDaemonAgentId(),
-								discovered: job?.scanned ?? 0,
-								accepted: job?.indexed ?? 0,
-								failed: 1,
-								durationMs: job?.startedAt ? Math.max(0, Date.now() - Date.parse(job.startedAt)) : 0,
-								outcome: (job?.indexed ?? 0) > 0 ? "partial" : "failed",
-								failureClass: sourceFailureClass(e),
-								searchable: (job?.indexed ?? 0) > 0,
-							});
+							// Failed indexing follows the same tracked best-effort shutdown path.
+							void trackSourceLifecycleWrite(
+								recordSourceIndexOperation({
+									source,
+									agentId: resolveDaemonAgentId(),
+									discovered: job?.scanned ?? 0,
+									accepted: job?.indexed ?? 0,
+									failed: 1,
+									durationMs: job?.startedAt ? Math.max(0, Date.now() - Date.parse(job.startedAt)) : 0,
+									outcome: (job?.indexed ?? 0) > 0 ? "partial" : "failed",
+									failureClass: sourceFailureClass(e),
+									searchable: (job?.indexed ?? 0) > 0,
+								}),
+							);
 						}
 						failSourceIndexJob(sourceId, jobId, e);
 					}

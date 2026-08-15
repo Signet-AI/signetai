@@ -93,6 +93,32 @@ const FRESHNESS_EVENT_INTERVAL_MS = 60 * 60 * 1_000;
 const CONNECTION_FAILURE_INTERVAL_MS = 5 * 60 * 1_000;
 const recentConnectionFailures = new Map<SourceClass, number>();
 const readinessClaimedInProcess = new Set<string>();
+const pendingSourceLifecycleWrites = new Set<Promise<void>>();
+
+/**
+ * Track an intentional fire-and-forget lifecycle write. The async DB accessor
+ * already bounds its write queue; this registry gives daemon shutdown a
+ * bounded set of writes to drain before the database is closed.
+ */
+export function trackSourceLifecycleWrite(operation: Promise<void>): Promise<void> {
+	let tracked: Promise<void>;
+	tracked = operation.then(
+		() => {
+			pendingSourceLifecycleWrites.delete(tracked);
+		},
+		() => {
+			pendingSourceLifecycleWrites.delete(tracked);
+		},
+	);
+	pendingSourceLifecycleWrites.add(tracked);
+	return tracked;
+}
+
+export async function flushPendingSourceLifecycleTelemetry(): Promise<void> {
+	while (pendingSourceLifecycleWrites.size > 0) {
+		await Promise.allSettled([...pendingSourceLifecycleWrites]);
+	}
+}
 
 async function writeTx<T>(fn: (db: WriteDb) => T): Promise<T> {
 	const writer = getDbAccessor().withWriteTxAsync;

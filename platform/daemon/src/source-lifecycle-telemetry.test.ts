@@ -1,11 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import {
+	flushPendingSourceLifecycleTelemetry,
 	sourceClassForKind,
 	sourceCountBucket,
 	sourceDurationBucket,
 	sourceFailureClass,
 	sourceLagBucket,
 	sourceSizeBucket,
+	trackSourceLifecycleWrite,
 } from "./source-lifecycle-telemetry";
 
 describe("source lifecycle telemetry contract", () => {
@@ -32,5 +34,29 @@ describe("source lifecycle telemetry contract", () => {
 		expect(sourceFailureClass(new Error("unexpected implementation detail with /Users/alice/private.md"))).toBe(
 			"unknown",
 		);
+	});
+
+	it("drains tracked fire-and-forget writes before shutdown continues", async () => {
+		let release: (() => void) | undefined;
+		let settled = false;
+		const operation = new Promise<void>((resolve) => {
+			release = () => {
+				settled = true;
+				resolve();
+			};
+		});
+		void trackSourceLifecycleWrite(operation);
+
+		let flushed = false;
+		const drain = flushPendingSourceLifecycleTelemetry().then(() => {
+			flushed = true;
+		});
+		await Promise.resolve();
+		expect(flushed).toBe(false);
+
+		release?.();
+		await drain;
+		expect(settled).toBe(true);
+		expect(flushed).toBe(true);
 	});
 });
