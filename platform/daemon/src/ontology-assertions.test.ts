@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { extractOntologyProposals } from "./ontology-extraction";
 import {
 	OntologyAssertionError,
 	archiveEpistemicAssertion,
@@ -162,6 +163,102 @@ describe("epistemic assertions", () => {
 
 		const denied = await app.request("/api/ontology/assertions?agent_id=ant&observer_id=dot");
 		expect(denied.status).toBe(403);
+	});
+
+	it("ingests interleaved same-entity assertions before observer-scoped reads", async () => {
+		const now = "2026-08-14T00:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('shared-ant', 'Shared Person', 'shared person', 'person', 'ant', 1, ?, ?),
+				        ('shared-dot', 'Shared Person', 'shared person', 'person', 'dot', 1, ?, ?)`,
+			).run(now, now, now, now);
+			const insertTranscript = db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at, completed_at)
+				 VALUES (?, ?, 'eval', '/observer-test', ?, ?, ?, ?)`,
+			);
+			insertTranscript.run(
+				"shared-conversation-ant",
+				JSON.stringify({
+					messages: [
+						{ speaker: "Alice", text: "Shared Person prefers local-first memory." },
+						{ speaker: "Bob", text: "Shared Person prefers hosted memory." },
+					],
+					assertions: [
+						{
+							entity: "Shared Person",
+							predicate: "believes",
+							content: "Shared Person prefers local-first memory.",
+							speaker: "Alice",
+							evidence: [{ quote: "Alice: local-first" }],
+						},
+					],
+				}),
+				"ant",
+				now,
+				now,
+				now,
+			);
+			insertTranscript.run(
+				"shared-conversation-dot",
+				JSON.stringify({
+					messages: [
+						{ speaker: "Alice", text: "Shared Person prefers local-first memory." },
+						{ speaker: "Bob", text: "Shared Person prefers hosted memory." },
+					],
+					assertions: [
+						{
+							entity: "Shared Person",
+							predicate: "believes",
+							content: "Shared Person prefers hosted memory.",
+							speaker: "Bob",
+							evidence: [{ quote: "Bob: hosted" }],
+						},
+					],
+				}),
+				"dot",
+				now,
+				now,
+				now,
+			);
+		});
+
+		const extractedAnt = await extractOntologyProposals(getDbAccessor(), {
+			agentId: "ant",
+			from: "shared-conversation-ant",
+			writeAssertions: true,
+		});
+		const extractedDot = await extractOntologyProposals(getDbAccessor(), {
+			agentId: "dot",
+			from: "shared-conversation-dot",
+			writeAssertions: true,
+		});
+		expect(extractedAnt.writtenAssertionCount).toBe(1);
+		expect(extractedDot.writtenAssertionCount).toBe(1);
+
+		const app = new Hono();
+		registerOntologyRoutes(app);
+		const antResponse = await app.request(
+			"/api/ontology/assertions?agent_id=ant&observer_id=ant&entity=Shared%20Person",
+		);
+		const dotResponse = await app.request(
+			"/api/ontology/assertions?agent_id=dot&observer_id=dot&entity=Shared%20Person",
+		);
+		expect(antResponse.status).toBe(200);
+		expect(dotResponse.status).toBe(200);
+		const antPayload = (await antResponse.json()) as {
+			readonly items: readonly { readonly observerId: string; readonly content: string }[];
+		};
+		const dotPayload = (await dotResponse.json()) as {
+			readonly items: readonly { readonly observerId: string; readonly content: string }[];
+		};
+		expect(antPayload.items).toHaveLength(1);
+		expect(dotPayload.items).toHaveLength(1);
+		expect(antPayload.items[0]?.observerId).toBe("ant");
+		expect(dotPayload.items[0]?.observerId).toBe("dot");
+		expect(antPayload.items[0]?.content).not.toBe(dotPayload.items[0]?.content);
 	});
 
 	it("rejects a peer observer and cross-scope semantic premise", () => {

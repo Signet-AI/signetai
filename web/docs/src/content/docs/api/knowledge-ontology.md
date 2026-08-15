@@ -310,28 +310,42 @@ copied proposal evidence before broader source fallback evidence.
 List source-attributed epistemic assertions. Assertions record who claimed,
 believed, observed, decided, preferred, denied, or questioned something about an
 entity without promoting that statement into current ontology truth. Query
-parameters: `agent_id`, `entity`, `entity_id`, `predicate`, `status`,
-`speaker`, `source_kind`, `source_id`, `query`, `limit`, and `offset`.
+parameters: `agent_id`, `observer_id`, `entity`, `entity_id`, `predicate`,
+`status`, `speaker`, `source_kind`, `source_id`, `query`, `limit`, and `offset`.
+
+`observer_id` is the explicit observer-scoped projection for directional reads.
+In the current agent-only model it must match the authorized `agent_id`; arbitrary
+peer observer identities are rejected. Omitting it preserves the existing
+agent-scoped query behavior.
 
 Valid predicates are `claims`, `believes`, `observed`, `decided`, `prefers`,
 `denies`, and `questions`. Valid statuses are `active`, `archived`,
 `superseded`, and `all` for list reads.
 
 ```text
-/api/ontology/assertions?entity=Signet&predicate=believes&speaker=Nicholai
+/api/ontology/assertions?entity=Signet&observer_id=ant&predicate=believes&speaker=Nicholai
 ```
 
 ### GET /api/ontology/assertions/:id
 
 Return one epistemic assertion by id, scoped to the resolved `agent_id`.
-Returns `404` when the assertion does not exist in that agent scope.
+The optional `observer_id` query parameter must match that authorized agent
+scope. Returns `404` when the assertion does not exist in that agent scope.
+
+```text
+/api/ontology/assertions/assertion_123?agent_id=ant&observer_id=ant
+```
 
 ### POST /api/ontology/assertions
 
 Create a source-attributed epistemic assertion. Body parameters: `agent_id`,
-`entity` or `entity_id`, `predicate`, `content`, `speaker`, `asserted_at`,
-`confidence`, `evidence`, `source_kind`, `source_id`, `source_path`,
-`source_root`, `claim_attribute_id`, and `created_by`.
+`observer_id`, `entity` or `entity_id`, `predicate`, `content`, `speaker`,
+`asserted_at`, `confidence`, `evidence`, `source_kind`, `source_id`,
+`source_path`, `source_root`, `claim_attribute_id`, and `created_by`.
+
+`observer_id` is optional and must match the authorized `agent_id`. It records
+the same agent-only observer projection returned by assertion queries; it does
+not authorize writing on behalf of another agent.
 
 Every assertion must include either structured `evidence` or source provenance
 fields. If `claim_attribute_id` is supplied, the referenced applied claim value
