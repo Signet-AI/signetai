@@ -109,4 +109,88 @@ describe("daemon lifecycle proof integration", () => {
 			await worker.drain();
 		}
 	});
+
+	it("does not report failed forced work as completed during shutdown", async () => {
+		const recorder = new LifecycleObservationRecorder();
+		const recorderShutdown: LifecycleShutdownWindow[] = [];
+		setLifecycleObservers({
+			observation: (observation: LifecycleObservationInput) => recorder.record(observation),
+			shutdown: (window) => recorderShutdown.push(window),
+		});
+		let releaseSynthesis: (() => void) | undefined;
+		let synthesisStarted: (() => void) | undefined;
+		const synthesisStartedPromise = new Promise<void>((resolve) => {
+			synthesisStarted = resolve;
+		});
+		const synthesisGate = new Promise<void>((resolve) => {
+			releaseSynthesis = resolve;
+		});
+		const worker = startSynthesisWorker(
+			{ timeout: 100, maxTokens: 100, idleGapMinutes: 15 },
+			{
+				getDbAccessor: (() => ({ withReadDb: () => ({ last_end: new Date().toISOString() }) })) as never,
+				handleSynthesisRequest: (async () => {
+					synthesisStarted?.();
+					await synthesisGate;
+					return { prompt: "", fileCount: 1 };
+				}) as never,
+				writeMemoryMd: (() => ({ ok: true })) as never,
+				logger: { info() {}, warn() {}, error() {} } as never,
+				activeSessionCount: () => 0,
+			},
+		);
+		try {
+			const queued = worker.triggerNow({ force: true, source: "failed-shutdown" });
+			await synthesisStartedPromise;
+			worker.stop();
+			const drain = worker.drain();
+			releaseSynthesis?.();
+			await Promise.all([queued, drain]);
+
+			const proof = assertLifecycleObservationInvariants(recorder.observations);
+			expect(proof.workStateCounts).toMatchObject({ queued: 1, completed: 0, abandoned: 2 });
+			expect(recorderShutdown).toHaveLength(1);
+			const shutdown = recorderShutdown[0];
+			if (!shutdown) throw new Error("expected owner-emitted shutdown evidence");
+			expect(shutdown.startedWork).toBe(2);
+			expect(shutdown.completedWork).toBe(0);
+			expect(shutdown.abandonedWork).toBe(2);
+			assertShutdownInvariant(shutdown);
+		} finally {
+			setLifecycleObservers(undefined);
+			releaseSynthesis?.();
+			worker.stop();
+			await worker.drain();
+		}
+	});
+
+	it("resolves an immediately started forced run with a terminal outcome", async () => {
+		const recorder = new LifecycleObservationRecorder();
+		setLifecycleObservers({
+			observation: (observation: LifecycleObservationInput) => recorder.record(observation),
+		});
+		const worker = startSynthesisWorker(
+			{ timeout: 100, maxTokens: 100, idleGapMinutes: 15 },
+			{
+				getDbAccessor: (() => ({ withReadDb: () => ({ last_end: new Date().toISOString() }) })) as never,
+				handleSynthesisRequest: (async () => ({ prompt: "# MEMORY", fileCount: 1 })) as never,
+				writeMemoryMd: (() => ({ ok: true })) as never,
+				logger: { info() {}, warn() {}, error() {} } as never,
+				activeSessionCount: () => 0,
+			},
+		);
+
+		try {
+			expect(await worker.triggerNow({ force: true, source: "immediate-force" })).toMatchObject({
+				success: true,
+				skipped: false,
+			});
+			const proof = assertLifecycleObservationInvariants(recorder.observations);
+			expect(proof.workStateCounts).toMatchObject({ queued: 1, completed: 1, abandoned: 0 });
+		} finally {
+			setLifecycleObservers(undefined);
+			worker.stop();
+			await worker.drain();
+		}
+	});
 });

@@ -313,6 +313,8 @@ export function startSynthesisWorker(
 	let lockReleasedPromise: Promise<void> = Promise.resolve();
 	let activeWorkId: string | null = null;
 	let activeRunState: { abandoned: boolean } | null = null;
+	type ActiveWorkOutcome = "completed" | "abandoned";
+	let activeWorkOutcome: ActiveWorkOutcome | null = null;
 	const pendingQueue: PendingForce[] = [];
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
 
@@ -372,6 +374,19 @@ export function startSynthesisWorker(
 		}
 	}
 
+	function emitActiveWorkOutcome(outcome: ActiveWorkOutcome): void {
+		if (activeWorkOutcome !== null) return;
+		activeWorkOutcome = outcome;
+		if (!activeWorkId) return;
+		emitLifecycleObservation({
+			stage: "restart",
+			workId: activeWorkId,
+			state: outcome,
+			sourceSessionId: "daemon",
+			targetSessionId: "daemon",
+		});
+	}
+
 	async function runForcedDrainAttempt(entry: PendingForce): Promise<"completed" | "retry"> {
 		const lockToken = acquireWriteLock();
 		if (lockToken === null) {
@@ -380,19 +395,14 @@ export function startSynthesisWorker(
 
 		try {
 			activeWorkId = `synthesis:${entry.agentId}`;
+			activeWorkOutcome = null;
 			const runState = { abandoned: false };
 			activeRunState = runState;
 			currentRunPromise = runSynthesisWithDeps(deps, config, entry.agentId, {
 				canWrite: () => !runState.abandoned,
 			});
 			const result = await currentRunPromise;
-			emitLifecycleObservation({
-				stage: "restart",
-				workId: activeWorkId,
-				state: result === "ok" || result === "empty" ? "completed" : "abandoned",
-				sourceSessionId: "daemon",
-				targetSessionId: "daemon",
-			});
+			emitActiveWorkOutcome(shouldRecordSuccess(result) ? "completed" : "abandoned");
 			if (result === "busy" || result === "failed") {
 				deps.logger.info("synthesis", "Retrying forced synthesis after busy head", {
 					source: entry.source,
@@ -583,14 +593,8 @@ export function startSynthesisWorker(
 				const abandonedPendingWork = abandonPendingForceWork();
 				const completedAtMs = Date.now();
 				const workId = workIdAtShutdown;
-				if (workId) {
-					emitLifecycleObservation({
-						stage: "restart",
-						workId,
-						state: timedOut ? "abandoned" : "completed",
-						sourceSessionId: "daemon",
-						targetSessionId: "daemon",
-					});
+				if (workId && activeWorkOutcome === null) {
+					emitActiveWorkOutcome(timedOut ? "abandoned" : "completed");
 				}
 				emitLifecycleShutdown({
 					startedAtMs,
@@ -598,8 +602,8 @@ export function startSynthesisWorker(
 					budgetMs: config.timeout + DRAIN_TIMEOUT_BUFFER_MS + 100,
 					startedWork: (workId ? 1 : 0) + abandonedPendingWork,
 					pendingWork: 0,
-					completedWork: workId && !timedOut ? 1 : 0,
-					abandonedWork: (workId && timedOut ? 1 : 0) + abandonedPendingWork,
+					completedWork: workId && activeWorkOutcome === "completed" ? 1 : 0,
+					abandonedWork: (workId && activeWorkOutcome === "abandoned" ? 1 : 0) + abandonedPendingWork,
 				});
 				return timedOut ? "timeout" : "completed";
 			} finally {
@@ -677,10 +681,14 @@ export function startSynthesisWorker(
 				activeWorkId = `synthesis:${key}`;
 				const runState = { abandoned: false };
 				activeRunState = runState;
+				activeWorkOutcome = null;
 				currentRunPromise = runSynthesisWithDeps(deps, config, opts?.agentId, {
 					canWrite: () => !runState.abandoned,
 				});
 				const result = await currentRunPromise;
+				if (opts?.force) {
+					emitActiveWorkOutcome(shouldRecordSuccess(result) ? "completed" : "abandoned");
+				}
 				if ((result === "busy" || result === "failed") && opts?.force) {
 					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
 					scheduleTick(FORCE_RETRY_MS);
