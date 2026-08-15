@@ -174,30 +174,110 @@ function calledFunctionName(expression: ts.Expression): string | null {
 }
 
 function destructuredSyncApis(sourceFile: ts.SourceFile): ReadonlyMap<string, SyncApi> {
+	const declarations: ts.VariableDeclaration[] = [];
+	const collectDeclarations = (node: ts.Node): void => {
+		if (ts.isVariableDeclaration(node)) declarations.push(node);
+		ts.forEachChild(node, collectDeclarations);
+	};
+	collectDeclarations(sourceFile);
+
+	const accessorAliases = new Set<string>();
+	const isAccessorExpression = (expression: ts.Expression): boolean => {
+		const unwrapped = unwrapExpression(expression);
+		if (ts.isIdentifier(unwrapped)) return accessorAliases.has(unwrapped.text);
+		if (!ts.isCallExpression(unwrapped)) return false;
+		const callee = unwrapExpression(unwrapped.expression);
+		return ts.isIdentifier(callee) && callee.text === "getDbAccessor";
+	};
+	let accessorsChanged = true;
+	while (accessorsChanged) {
+		accessorsChanged = false;
+		for (const declaration of declarations) {
+			if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) continue;
+			if (!isAccessorExpression(declaration.initializer) || accessorAliases.has(declaration.name.text)) continue;
+			accessorAliases.add(declaration.name.text);
+			accessorsChanged = true;
+		}
+	}
+
 	const aliases = new Map<string, SyncApi>();
-	const visit = (node: ts.Node): void => {
-		if (
-			ts.isVariableDeclaration(node) &&
-			ts.isObjectBindingPattern(node.name) &&
-			node.initializer &&
-			ts.isCallExpression(node.initializer) &&
-			ts.isIdentifier(node.initializer.expression) &&
-			node.initializer.expression.text === "getDbAccessor"
-		) {
-			for (const element of node.name.elements) {
-				if (!ts.isIdentifier(element.name)) continue;
-				const property = element.propertyName;
-				const propertyName =
-					property && (ts.isIdentifier(property) || ts.isStringLiteral(property)) ? property.text : element.name.text;
-				if (propertyName === "withReadDb" || propertyName === "withWriteTx") {
-					aliases.set(element.name.text, propertyName);
+	const isDbAccessorSyncApi = (api: string): api is "withReadDb" | "withWriteTx" =>
+		api === "withReadDb" || api === "withWriteTx";
+	const addAlias = (name: string, api: string): void => {
+		if (isDbAccessorSyncApi(api)) aliases.set(name, api);
+	};
+	const apiFromExpression = (expression: ts.Expression): SyncApi | null => {
+		const unwrapped = unwrapExpression(expression);
+		if (ts.isIdentifier(unwrapped)) return aliases.get(unwrapped.text) ?? null;
+		const api = staticPropertyName(unwrapped);
+		if (api === null || !isDbAccessorSyncApi(api)) return null;
+		if (ts.isPropertyAccessExpression(unwrapped) || ts.isElementAccessExpression(unwrapped)) {
+			return isAccessorExpression(unwrapped.expression) ? (api as SyncApi) : null;
+		}
+		return null;
+	};
+	let aliasesChanged = true;
+	while (aliasesChanged) {
+		aliasesChanged = false;
+		for (const declaration of declarations) {
+			if (
+				ts.isObjectBindingPattern(declaration.name) &&
+				declaration.initializer &&
+				isAccessorExpression(declaration.initializer)
+			) {
+				for (const element of declaration.name.elements) {
+					if (!ts.isIdentifier(element.name)) continue;
+					const propertyName =
+						element.propertyName === undefined
+							? element.name.text
+							: ts.isComputedPropertyName(element.propertyName)
+								? staticPropertyName(element.propertyName.expression)
+								: element.propertyName.text;
+					if (
+						propertyName !== null &&
+						isDbAccessorSyncApi(propertyName) &&
+						aliases.get(element.name.text) !== propertyName
+					) {
+						addAlias(element.name.text, propertyName);
+						aliasesChanged = true;
+					}
 				}
+				continue;
+			}
+			if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) continue;
+			const api = apiFromExpression(declaration.initializer);
+			if (api !== null && aliases.get(declaration.name.text) !== api) {
+				addAlias(declaration.name.text, api);
+				aliasesChanged = true;
 			}
 		}
-		ts.forEachChild(node, visit);
-	};
-	visit(sourceFile);
+	}
 	return aliases;
+}
+
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+	let current = expression;
+	while (true) {
+		if (
+			ts.isParenthesizedExpression(current) ||
+			ts.isAsExpression(current) ||
+			ts.isTypeAssertionExpression(current) ||
+			ts.isNonNullExpression(current)
+		) {
+			current = current.expression;
+			continue;
+		}
+		return current;
+	}
+}
+
+function staticPropertyName(expression: ts.Expression): string | null {
+	const unwrapped = unwrapExpression(expression);
+	if (ts.isPropertyAccessExpression(unwrapped)) return unwrapped.name.text;
+	if (!ts.isElementAccessExpression(unwrapped) || unwrapped.argumentExpression === undefined) return null;
+	const argument = unwrapExpression(unwrapped.argumentExpression);
+	if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) return argument.text;
+	return null;
 }
 
 function functionBody(node: ts.Node): ts.Node | null {
@@ -375,19 +455,23 @@ function calledSyncApi(
 	expression: ts.Expression,
 	destructuredApis: ReadonlyMap<string, SyncApi>,
 ): { readonly api: SyncApi; readonly position: number } | null {
-	if (ts.isPropertyAccessExpression(expression)) {
-		const api = expression.name.text;
-		if (!SYNC_APIS.includes(api as SyncApi)) return null;
-		return { api: api as SyncApi, position: expression.name.getStart() };
+	const unwrapped = unwrapExpression(expression);
+	const propertyName = staticPropertyName(unwrapped);
+	if (propertyName !== null) {
+		if (!SYNC_APIS.includes(propertyName as SyncApi)) return null;
+		const position = ts.isPropertyAccessExpression(unwrapped)
+			? unwrapped.name.getStart()
+			: ts.isElementAccessExpression(unwrapped)
+				? (unwrapped.argumentExpression?.getStart() ?? unwrapped.getStart())
+				: unwrapped.getStart();
+		return { api: propertyName as SyncApi, position };
 	}
-	if (!ts.isIdentifier(expression)) {
-		return null;
-	}
-	const destructuredApi = destructuredApis.get(expression.text);
+	if (!ts.isIdentifier(unwrapped)) return null;
+	const destructuredApi = destructuredApis.get(unwrapped.text);
 	if (destructuredApi !== undefined) return { api: destructuredApi, position: expression.getStart() };
-	if (expression.text === "withWriteTx" || expression.text === "withReadDb") return null;
-	if (!SYNC_APIS.includes(expression.text as SyncApi)) return null;
-	return { api: expression.text as SyncApi, position: expression.getStart() };
+	if (unwrapped.text === "withWriteTx" || unwrapped.text === "withReadDb") return null;
+	if (!SYNC_APIS.includes(unwrapped.text as SyncApi)) return null;
+	return { api: unwrapped.text as SyncApi, position: unwrapped.getStart() };
 }
 
 function siteKey(site: Pick<AuditSite, "path" | "api" | "source" | "category">): string {
@@ -510,8 +594,8 @@ function readBaseline(path: string): BaselineFile {
 	return parsed;
 }
 
-function writeBaseline(path: string, sourceRoot: string, sites: readonly AuditSite[]): void {
-	writeFileSync(path, `${JSON.stringify({ version: 1, generatedFrom: sourceRoot, sites }, null, 2)}\n`);
+export function writeBaseline(path: string, sourceRoot: string, sites: readonly AuditSite[]): void {
+	writeFileSync(path, `${JSON.stringify({ version: 1, generatedFrom: sourceRoot, sites }, null, "	")}\n`);
 }
 
 function countBy(sites: readonly AuditSite[], key: "api" | "category" | "path"): Map<string, number> {

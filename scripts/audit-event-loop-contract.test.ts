@@ -8,6 +8,7 @@ import {
 	runAudit,
 	type AllowlistEntry,
 	type AuditSite,
+	writeBaseline,
 } from "./audit-event-loop-contract";
 
 test("event-loop audit rejects a new synchronous hot-path call", () => {
@@ -236,6 +237,68 @@ test("event-loop audit detects destructured DbAccessor sync methods", () => {
 		expect(result.sites).toHaveLength(1);
 		expect(result.sites[0]?.api).toBe("withReadDb");
 		expect(result.violations).toHaveLength(1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("event-loop audit detects parenthesized and computed synchronous calls", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		writeFileSync(
+			join(root, "computed.ts"),
+			[
+				'getDbAccessor()["withReadDb"]((db) => db);',
+				"(getDbAccessor().withWriteTx)((db) => db);",
+				'fs["readFileSync"]("/tmp/signet-computed");',
+			].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
+			{ api: "withReadDb", line: 1 },
+			{ api: "withWriteTx", line: 2 },
+			{ api: "readFileSync", line: 3 },
+		]);
+		expect(result.violations).toHaveLength(3);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("event-loop audit detects transitive and asserted DbAccessor aliases", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		writeFileSync(
+			join(root, "aliases.ts"),
+			[
+				"const accessor = getDbAccessor();",
+				"const intermediate = accessor;",
+				"const asserted = intermediate as DbAccessor;",
+				"const { withReadDb: readDb } = asserted;",
+				'const writeDb = asserted["withWriteTx"];',
+				"readDb((db) => db);",
+				"writeDb((db) => db);",
+			].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
+			{ api: "withReadDb", line: 6 },
+			{ api: "withWriteTx", line: 7 },
+		]);
+		expect(result.violations).toHaveLength(2);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("baseline regeneration uses Biome-compatible tab indentation", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		const path = join(root, "baseline.json");
+		writeBaseline(path, "platform/daemon/src", []);
+		const output = readFileSync(path, "utf8");
+		expect(output).toContain('\n\t"generatedFrom"');
+		expect(output).not.toContain('\n  "generatedFrom"');
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
