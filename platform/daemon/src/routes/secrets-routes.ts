@@ -140,7 +140,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			}
 			await putSecret(BITWARDEN_SESSION_SECRET, session);
 			if (folderId) await putSecret(BITWARDEN_MANAGED_FOLDER_SECRET, folderId);
-			else deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
+			else await deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
 			if (activate) await setActiveSecretProvider("bitwarden");
 			logger.info("secrets", "Connected Bitwarden session", { connected: status.connected, activate });
 			return c.json({ success: true, ...status, activeProvider: activate || currentActiveProvider });
@@ -155,8 +155,8 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
 		if (denied) return denied;
 		try {
-			const sessionDeleted = deleteSecret(BITWARDEN_SESSION_SECRET);
-			const folderDeleted = deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
+			const sessionDeleted = await deleteSecret(BITWARDEN_SESSION_SECRET);
+			const folderDeleted = await deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
 			await setActiveSecretProvider("local");
 			return c.json({
 				success: true,
@@ -298,11 +298,11 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		}
 	});
 
-	app.delete("/api/secrets/1password/connect", (c) => {
+	app.delete("/api/secrets/1password/connect", async (c) => {
 		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
 		if (denied) return denied;
 		try {
-			const deleted = deleteSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
+			const deleted = await deleteSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
 			return c.json({ success: true, disconnected: true, existed: deleted });
 		} catch (e) {
 			const err = e as Error;

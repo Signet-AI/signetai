@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { type BitwardenClient, setBitwardenClientFactoryForTests } from "../bitwarden.js";
+import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET } from "../onepassword.js";
 import { queryPluginAuditEvents } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "../plugins/bundled/secrets.js";
 import { PluginHostV1 } from "../plugins/host.js";
@@ -364,5 +365,14 @@ describe("secrets routes plugin capability enforcement", () => {
 			connected: false,
 			vaults: [],
 		});
+	});
+
+	test("1Password disconnect returns the resolved deletion result", async () => {
+		await putSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET, "op-test-token");
+
+		const res = await makeApp(makeHost()).request("/api/secrets/1password/connect", { method: "DELETE" });
+
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ success: true, disconnected: true, existed: true });
 	});
 });
