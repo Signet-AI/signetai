@@ -897,7 +897,12 @@ export const localSecretProvider: LocalSecretProviderV1 = {
 function healthForKeyringState(result: SecretKeyringResult): SecretProviderHealthV1 {
 	const checkedAt = new Date().toISOString();
 	const message = result.message ?? `Native secrets keyring is ${result.state}`;
-	if (result.state === "locked" || result.state === "unavailable" || result.state === "unsupported") {
+	if (
+		result.state === "missing" ||
+		result.state === "locked" ||
+		result.state === "unavailable" ||
+		result.state === "unsupported"
+	) {
 		return { status: "degraded", message, checkedAt };
 	}
 	if (result.state === "permission-denied" || result.state === "corrupt") {

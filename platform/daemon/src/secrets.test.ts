@@ -187,6 +187,18 @@ describe("local secrets provider", () => {
 		expect(health.message).toContain("keychain is locked");
 	});
 
+	test("native v2 health reports a missing keyring item as degraded", async () => {
+		const keyring = makeKeyring({ state: "missing" });
+		setSecretKeyringAdapterForTests(keyring);
+		await putSecret("OPENAI_API_KEY", "native-secret");
+
+		setSecretKeyringAdapterForTests(makeKeyring({ state: "missing" }));
+		const health = await localSecretProvider.health({});
+
+		expect(health.status).toBe("degraded");
+		expect(health.message).toContain("Native secrets keyring is missing");
+	});
+
 	test("bare names and local:// references resolve through the same local store", async () => {
 		await putSecret("OPENAI_API_KEY", "sk-test-local");
 
