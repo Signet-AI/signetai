@@ -53,6 +53,7 @@ export {
 	MAX_ENDED_SESSIONS,
 	MAX_PENDING_PER_SESSION,
 	MAX_PENDING_SESSIONS,
+	MAX_PENDING_SESSION_SWITCHES,
 	sanitizeInject,
 } from "./session-state.js";
 

@@ -3,6 +3,7 @@ import { readTrimmedString } from "./helpers.js";
 
 export const MAX_PENDING_SESSIONS = 64;
 export const MAX_PENDING_PER_SESSION = 4;
+export const MAX_PENDING_SESSION_SWITCHES = MAX_PENDING_SESSIONS;
 export const MAX_ENDED_SESSIONS = 128;
 
 export function sanitizeInject(inject: string): string {
@@ -158,9 +159,21 @@ export class BaseSessionStateStore implements BaseSessionState {
 
 	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void {
 		if (!this.pendingSessionEnds.has(sessionId)) {
-			evictOldestKey(this.pendingSessionEnds, MAX_PENDING_SESSIONS);
+			const oldestSessionId = this.pendingSessionEnds.keys().next().value;
+			if (this.pendingSessionEnds.size >= MAX_PENDING_SESSIONS && oldestSessionId !== undefined) {
+				this.pendingSessionEnds.delete(oldestSessionId);
+				this.cancelPendingSessionSwitches(oldestSessionId);
+			}
 		}
 		this.pendingSessionEnds.set(sessionId, { sessionId, sessionFile, agentId, reason });
+	}
+
+	private cancelPendingSessionSwitches(fromSessionId: string): void {
+		for (let index = this.pendingSessionSwitches.length - 1; index >= 0; index -= 1) {
+			if (this.pendingSessionSwitches[index]?.fromSessionId === fromSessionId) {
+				this.pendingSessionSwitches.splice(index, 1);
+			}
+		}
 	}
 
 	clearPendingSessionEnd(sessionId: string | undefined): void {
@@ -173,6 +186,9 @@ export class BaseSessionStateStore implements BaseSessionState {
 	}
 
 	queuePendingSessionSwitch(fromSessionId: string, toSessionId: string): void {
+		if (this.pendingSessionSwitches.length >= MAX_PENDING_SESSION_SWITCHES) {
+			this.pendingSessionSwitches.shift();
+		}
 		this.pendingSessionSwitches.push({ fromSessionId, toSessionId });
 	}
 

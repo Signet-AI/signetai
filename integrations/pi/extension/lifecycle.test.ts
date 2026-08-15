@@ -14,6 +14,8 @@ import {
 import {
 	assertLifecycleObservationInvariants,
 	LifecycleObservationRecorder,
+	MAX_PENDING_SESSION_SWITCHES,
+	MAX_PENDING_SESSIONS,
 	setLifecycleObservers,
 	type LifecycleObservationInput,
 } from "@signet/pi-extension-base";
@@ -128,6 +130,50 @@ describe("pi lifecycle session-end handling", () => {
 			["new-session", "third-session"],
 		]);
 		expect(deps.state.getPendingSessionSwitch()).toBeUndefined();
+	});
+
+	it("bounds deferred switches and cancels the edge for an evicted pending session", async () => {
+		const boundedState = createSessionState();
+		for (let index = 0; index <= MAX_PENDING_SESSION_SWITCHES; index += 1) {
+			boundedState.queuePendingSessionSwitch(`session-${index}`, `session-${index + 1}`);
+		}
+
+		let queuedSwitches = 0;
+		while (boundedState.getPendingSessionSwitch()) {
+			boundedState.clearPendingSessionSwitch();
+			queuedSwitches += 1;
+		}
+		expect(queuedSwitches).toBe(MAX_PENDING_SESSION_SWITCHES);
+
+		const state = createSessionState();
+		for (let index = 0; index <= MAX_PENDING_SESSIONS; index += 1) {
+			const fromSessionId = `session-${index}`;
+			state.queuePendingSessionEnd(fromSessionId, `/tmp/${fromSessionId}.jsonl`, undefined, "session_switch");
+			state.queuePendingSessionSwitch(fromSessionId, `session-${index + 1}`);
+		}
+
+		expect(state.getPendingSessionEnds()).toHaveLength(MAX_PENDING_SESSIONS);
+		expect(state.getPendingSessionSwitch()?.fromSessionId).toBe("session-1");
+
+		for (let index = 1; index <= MAX_PENDING_SESSIONS; index += 1) {
+			state.markSessionEnded(`session-${index}`);
+		}
+
+		const deps: LifecycleDeps = {
+			agentId: "agent-1",
+			client: {
+				async post<T>(_path: string, _body: unknown): Promise<T | null> {
+					return null;
+				},
+				async postResult<T>(_path: string, _body: unknown): Promise<{ ok: true; data: T }> {
+					return { ok: true, data: {} as T };
+				},
+			},
+			state,
+			config: PI_LIFECYCLE_CONFIG,
+		};
+		await flushPendingSessionEnds(deps);
+		expect(state.getPendingSessionSwitch()).toBeUndefined();
 	});
 
 	it("defers marking a previous session ended until its session file can be reconstructed and submitted", async () => {
