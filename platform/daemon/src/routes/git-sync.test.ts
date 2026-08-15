@@ -12,10 +12,12 @@ import {
 	scheduleAutoCommit,
 	setGitCommandRunnerForTests,
 	setGitRepoProbeForTests,
+	setGitSecretResolverForTests,
 	stopGitSyncTimer,
 	toRelativeGitPathForTests,
 } from "./git-sync";
 import { type GitConfig, applyGitConfigPatch } from "./session-routes";
+import { SecretKeyringError } from "../secrets.js";
 
 describe("loadGitConfig", () => {
 	it("keeps background git automation disabled by default", () => {
@@ -162,6 +164,34 @@ describe("getGitStatus", () => {
 			expect(result.success).toBe(false);
 			expect(result.message).toContain("No git credentials found");
 		} finally {
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+		}
+	});
+
+	it("tries the gh CLI credential fallback when the native keyring is unavailable", async () => {
+		resetGitHealthForTests();
+		setGitRepoProbeForTests(() => true);
+		const calls: string[][] = [];
+		setGitSecretResolverForTests(async () => {
+			throw new SecretKeyringError({ state: "unavailable", message: "keyring daemon unavailable" });
+		});
+		setGitCommandRunnerForTests(async (_cmd, args) => {
+			calls.push(args);
+			if (args[0] === "remote") return { code: 0, stdout: "https://github.com/team/project.git\n", stderr: "" };
+			if (args[0] === "credential") return { code: 1, stdout: "", stderr: "no credentials" };
+			if (args[0] === "auth" && args[1] === "token") return { code: 0, stdout: "gh-token\n", stderr: "" };
+			if (args[0] === "rev-list") return { code: 0, stdout: "0\n", stderr: "" };
+			return { code: 0, stdout: "", stderr: "" };
+		});
+
+		try {
+			const result = await gitPull();
+			expect(result).toMatchObject({ success: true, message: "Already up to date" });
+			expect(calls).toContainEqual(["auth", "token"]);
+		} finally {
+			setGitSecretResolverForTests(null);
 			setGitCommandRunnerForTests(null);
 			setGitRepoProbeForTests(null);
 			resetGitHealthForTests();

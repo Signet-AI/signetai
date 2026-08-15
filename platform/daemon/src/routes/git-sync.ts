@@ -51,6 +51,8 @@ let gitRepoProbe = (dir: string): boolean => existsSync(join(dir, ".git"));
 
 type CommandRunner = (cmd: string, args: string[], options?: CommandOptions) => Promise<CommandResult>;
 let commandRunner: CommandRunner = runBoundedCommand;
+type SecretResolver = (name: string) => Promise<string>;
+let secretResolver: SecretResolver = getSecret;
 
 function isGitRepo(dir: string): boolean {
 	return gitRepoProbe(dir);
@@ -323,6 +325,7 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 	}
 
 	let keychainLocked = false;
+	let keychainUnavailable = false;
 	if (remoteUrl.startsWith("https://")) {
 		const helper = await getCredentialHelperToken(remoteUrl, dir);
 		if (helper.status === "available") {
@@ -343,7 +346,7 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 
 	if (isGitHub) {
 		try {
-			const token = await getSecret("GITHUB_TOKEN");
+			const token = await secretResolver("GITHUB_TOKEN");
 			if (token) {
 				logger.debug("git", "Using stored GITHUB_TOKEN for authentication");
 				return {
@@ -354,7 +357,10 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 		} catch (error) {
 			if (error instanceof SecretKeyringError) {
 				if (error.state === "locked") return { method: "keychain-locked" };
-				if (error.state === "unavailable" || error.state === "unsupported") return { method: "keychain-unavailable" };
+				if (error.state === "unavailable" || error.state === "unsupported") {
+					keychainUnavailable = true;
+					logger.warn("git", "Native secrets keyring unavailable; trying gh CLI credentials fallback");
+				}
 			}
 			/* ignore */
 		}
@@ -374,8 +380,13 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 	}
 
 	if (keychainLocked) return { method: "keychain-locked" };
+	if (keychainUnavailable) return { method: "keychain-unavailable" };
 
 	return { method: "none" };
+}
+
+export function setGitSecretResolverForTests(resolver: SecretResolver | null): void {
+	secretResolver = resolver ?? getSecret;
 }
 
 function runGitCommand(args: string[], cwd: string, options?: CommandOptions): Promise<CommandResult> {

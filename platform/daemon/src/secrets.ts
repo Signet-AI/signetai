@@ -894,15 +894,32 @@ export const localSecretProvider: LocalSecretProviderV1 = {
 	},
 };
 
+function healthForKeyringState(result: SecretKeyringResult): SecretProviderHealthV1 {
+	const checkedAt = new Date().toISOString();
+	const message = result.message ?? `Native secrets keyring is ${result.state}`;
+	if (result.state === "locked" || result.state === "unavailable" || result.state === "unsupported") {
+		return { status: "degraded", message, checkedAt };
+	}
+	if (result.state === "permission-denied" || result.state === "corrupt") {
+		return { status: "unhealthy", message, checkedAt };
+	}
+	return { status: "healthy", checkedAt };
+}
+
 export function getLocalSecretProviderHealth(): SecretProviderHealthV1 {
 	try {
-		loadStore();
+		const store = loadStore();
 		if (existsSync(join(getSecretsDir(), DEGRADED_WARNING_FILE))) {
 			return {
 				status: "degraded",
 				message: "Using legacy machine-id-obfuscated secrets encryption because no native keyring is available",
 				checkedAt: new Date().toISOString(),
 			};
+		}
+		if (store.version === NATIVE_STORE_VERSION || store.provider === "native-keyring") {
+			const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
+			const state = keyring.getStatus?.();
+			if (state && state.state !== "found") return healthForKeyringState(state);
 		}
 		return { status: "healthy", checkedAt: new Date().toISOString() };
 	} catch (err) {

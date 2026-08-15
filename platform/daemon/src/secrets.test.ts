@@ -64,6 +64,9 @@ function makeKeyring(initial: SecretKeyringResult): SecretKeyringAdapter & { set
 			next = { state: "found", value };
 			return next;
 		},
+		getStatus(): SecretKeyringResult {
+			return stored === undefined ? next : { state: "found", value: stored };
+		},
 	};
 	return adapter;
 }
@@ -170,6 +173,18 @@ describe("local secrets provider", () => {
 
 		expect(await getSecret("OPENAI_API_KEY")).toBe("legacy-secret");
 		expect(keyring.setCalls).toBe(1);
+	});
+
+	test("native v2 health reflects a locked keyring instead of reporting healthy", async () => {
+		const keyring = makeKeyring({ state: "missing" });
+		setSecretKeyringAdapterForTests(keyring);
+		await putSecret("OPENAI_API_KEY", "native-secret");
+
+		setSecretKeyringAdapterForTests(makeKeyring({ state: "locked", message: "keychain is locked" }));
+		const health = await localSecretProvider.health({});
+
+		expect(health.status).toBe("degraded");
+		expect(health.message).toContain("keychain is locked");
 	});
 
 	test("bare names and local:// references resolve through the same local store", async () => {

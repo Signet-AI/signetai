@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import type { AsyncEntry } from "@napi-rs/keyring";
 
 export type SecretKeyringState =
@@ -23,10 +24,13 @@ export interface SecretKeyringAdapter {
 	readonly account: string;
 	get(): Promise<SecretKeyringResult>;
 	set(value: string): Promise<SecretKeyringResult>;
+	getStatus?(): SecretKeyringResult;
 }
 
 const SERVICE = "ai.signet.secrets";
+const require = createRequire(import.meta.url);
 let modulePromise: Promise<typeof import("@napi-rs/keyring") | null> | null = null;
+let syncModule: typeof import("@napi-rs/keyring") | null | undefined;
 let adapterForTests: SecretKeyringAdapter | null = null;
 
 function workspaceAccount(workspace: string): string {
@@ -60,6 +64,17 @@ function classifyError(error: unknown): SecretKeyringResult {
 async function loadModule(): Promise<typeof import("@napi-rs/keyring") | null> {
 	modulePromise ??= import("@napi-rs/keyring").catch(() => null);
 	return modulePromise;
+}
+
+function loadModuleSync(): typeof import("@napi-rs/keyring") | null {
+	if (syncModule !== undefined) return syncModule;
+	try {
+		const mod: typeof import("@napi-rs/keyring") = require("@napi-rs/keyring");
+		syncModule = mod;
+	} catch {
+		syncModule = null;
+	}
+	return syncModule;
 }
 
 function linuxKeyringAvailable(): SecretKeyringResult | null {
@@ -131,6 +146,23 @@ class NativeSecretKeyringAdapter implements SecretKeyringAdapter {
 			return classifyError(error);
 		}
 	}
+
+	getStatus(): SecretKeyringResult {
+		const linuxUnavailable = linuxKeyringAvailable();
+		if (linuxUnavailable) return linuxUnavailable;
+		try {
+			const mod = loadModuleSync();
+			if (!mod)
+				return { state: "unsupported", message: "The native keyring module is not installed for this platform" };
+			const entry = new mod.Entry(this.service, this.account);
+			const value = entry.getPassword();
+			return value === undefined || value === null || value.length === 0
+				? { state: "missing" }
+				: { state: "found", value };
+		} catch (error) {
+			return classifyError(error);
+		}
+	}
 }
 
 export function getSecretKeyring(workspace: string): SecretKeyringAdapter {
@@ -140,8 +172,10 @@ export function getSecretKeyring(workspace: string): SecretKeyringAdapter {
 export function setSecretKeyringForTests(adapter: SecretKeyringAdapter | null): void {
 	adapterForTests = adapter;
 	modulePromise = null;
+	syncModule = undefined;
 }
 
 export function resetSecretKeyringModuleForTests(): void {
 	modulePromise = null;
+	syncModule = undefined;
 }
