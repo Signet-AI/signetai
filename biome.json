@@ -28,7 +28,8 @@
 			"!**/web/marketing/public/marketing",
 			"!**/memorybench/data",
 			"!**/memorybench/dist",
-			"!**/memorybench/node_modules"
+			"!**/memorybench/node_modules",
+			"!scripts/event-loop-contract-baseline.json"
 		]
 	},
 	"formatter": {

@@ -34,7 +34,14 @@ test("Biome gate excludes generated output and runs in pull requests", async () 
 	const biomeConfig = await readJson<BiomeConfig>("biome.json");
 	const workflow = await Bun.file(join(ROOT, ".github/workflows/biome.yml")).text();
 
-	for (const pattern of ["!**/built", "!**/*.bundle.*", "!**/*.min.*", "!**/generated", "!**/*.generated.*"]) {
+	for (const pattern of [
+		"!**/built",
+		"!**/*.bundle.*",
+		"!**/*.min.*",
+		"!**/generated",
+		"!**/*.generated.*",
+		"!scripts/event-loop-contract-baseline.json",
+	]) {
 		expect(biomeConfig.files.includes).toContain(pattern);
 	}
 	expect(workflow).toContain("pull_request:");

@@ -88,7 +88,7 @@ const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 function parseTimestamp(v: unknown): string | null {
 	if (typeof v !== "string" || !ISO_RE.test(v)) return null;
 	const ts = new Date(v).getTime();
-	if (isNaN(ts)) return null;
+	if (Number.isNaN(ts)) return null;
 	if (ts > Date.now() + 30 * 24 * 60 * 60 * 1_000) return null;
 	return v;
 }
