@@ -496,6 +496,7 @@ export function startSynthesisWorker(
 
 			try {
 				activeWorkId = "synthesis:default";
+				activeWorkOutcome = null;
 				const runState = { abandoned: false };
 				activeRunState = runState;
 				currentRunPromise = runSynthesisWithDeps(deps, config, undefined, {
