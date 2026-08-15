@@ -25,7 +25,7 @@ Terminology
   sessions: prompts, session lifecycle, cancellation, permissions, and
   capability exchange.
 - **ACPX** is the CLI/runtime Signet uses to drive ACP-capable harnesses such
-  as Codex, Claude Code, OpenCode, OpenClaw, Gemini, and others.
+  as Codex, Claude Code, OpenCode, OpenClaw, Gemini, Kimi Code, and others.
 - **Signet inference routing** is Signet's daemon-owned control plane for
   choosing a target/model for workloads such as memory extraction and session
   synthesis.
@@ -245,7 +245,8 @@ field is not a setup marker and is rejected if it remains after migration.
 
 ACPX needs an agent, model, hook mode, permission mode, timeout, and workload
 binding. Those belong in top-level `inference:` routing. Keep the generated
-`inference.targets.*.executor: acpx` block, or write one manually.
+`inference.targets.*.executor: acpx` block, or write one manually. For Kimi
+Code, set `acpx.agent: kimi`.
 
 This is different from old direct providers:
 

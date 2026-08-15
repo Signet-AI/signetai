@@ -713,6 +713,27 @@ The OpenCode connector registers the MCP server in
 This coexists with the plugin (`plugins/signet.mjs`) — the plugin handles
 lifecycle hooks, MCP handles on-demand tool calls.
 
+### Kimi Code
+
+The Kimi connector registers the Signet MCP server in the selected Kimi home,
+normally `~/.kimi/mcp.json` (or the legacy `~/.kimi-code/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "signet": {
+      "command": "signet-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Install it with `signet setup --harness kimi` or
+`signet connector install kimi`. Kimi lifecycle hooks remain in
+`config.toml`; see [Kimi Code](/harnesses/kimi/) for the hook events and home
+directory environment overrides.
+
 ### OpenClaw
 
 OpenClaw uses the `@signetai/adapter-openclaw` runtime plugin, which already

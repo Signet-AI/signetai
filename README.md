@@ -67,6 +67,7 @@ Signet runs underneath the tools you already use. Run `signet setup` to configur
 |[OpenCode](https://github.com/sst/opencode)|Plugin|
 |[OpenClaw](https://github.com/openclaw/openclaw)|Plugin|
 |[Codex](https://github.com/openai/codex)|Hooks + MCP|
+|[Kimi Code](https://github.com/MoonshotAI/kimi-cli)|Hooks + MCP / ACPX|
 |[Hermes Agent](https://github.com/NousResearch/hermes-agent)|Memory provider plugin|
 |[Pi](https://github.com/mariozechner/pi-coding-agent)|Extension|
 |Oh My Pi|Extension|
@@ -154,7 +155,7 @@ Requirements:
 - Bun for normal repo development
 - Node.js 18+ for Node-targeted package surfaces
 - macOS or Linux
-- Optional for harness integrations: Claude Code, Codex, OpenCode, OpenClaw, Gemini CLI, Pi, Oh My Pi, or Hermes Agent
+- Optional for harness integrations: Claude Code, Codex, Kimi Code, OpenCode, OpenClaw, Gemini CLI, Pi, Oh My Pi, or Hermes Agent
 
 ## Contributing
 

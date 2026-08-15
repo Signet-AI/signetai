@@ -72,6 +72,7 @@ If no messages are unread, the endpoint returns `{ "inject": "" }`. Unsupported 
 |---------|---------------------------|
 | Claude Code | `SessionStart`, `UserPromptSubmit`, `PreToolUse` |
 | Codex | `SessionStart`, `UserPromptSubmit`, `PreToolUse` |
+| Kimi Code | `SessionStart`, `UserPromptSubmit`, `SessionEnd` |
 | OpenCode | `chat.message`, `tool.execute.before`, `experimental.chat.system.transform`, `experimental.chat.messages.transform` |
 | OpenClaw | `message_received`, `before_tool_call`, `before_prompt_build`, `before_agent_start` |
 | pi | `context` |

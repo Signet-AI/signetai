@@ -63,8 +63,8 @@ Degraded mode rules:
 
 - [Claude Code](/harnesses/claude-code/)
   Connect Signet to Claude Code.
-- [Kimi CLI](/harnesses/kimi/)
-  Connect Signet to Kimi CLI through ACPX and lifecycle hooks.
+- [Kimi Code (Kimi CLI)](/harnesses/kimi/)
+  Connect Signet to Kimi Code through ACPX, MCP, and lifecycle hooks.
 - [Codex](/harnesses/codex/)
   Connect Signet to Codex.
 - [OpenCode](/harnesses/opencode/)
