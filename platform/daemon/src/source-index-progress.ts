@@ -70,7 +70,7 @@ export function updateSourceIndexJobProgress(sourceId: string, jobId: string, ev
 		total: event.total,
 		indexed: event.indexed,
 		currentPath: event.currentPath,
-		...(event.statusMessage ? { statusMessage: event.statusMessage } : {}),
+		statusMessage: event.statusMessage,
 	});
 }
 

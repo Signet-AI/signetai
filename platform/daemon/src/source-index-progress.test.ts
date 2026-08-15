@@ -23,6 +23,26 @@ describe("source index progress", () => {
 		expect(getSourceIndexJob("source-2")?.statusMessage).toBe("embeddings pending - provider down");
 	});
 
+	test("clears degraded embedding status after provider recovery", () => {
+		clearSourceIndexProgressForTests();
+		const job = beginSourceIndexJob("source-recovery");
+		const progress = {
+			scanned: 1,
+			total: 1,
+			indexed: 0,
+			currentPath: "/vault/Recovering.md",
+		};
+		updateSourceIndexJobProgress("source-recovery", job.id, {
+			...progress,
+			statusMessage: "embeddings pending - provider down",
+		});
+		expect(getSourceIndexJob("source-recovery")?.statusMessage).toBe("embeddings pending - provider down");
+
+		updateSourceIndexJobProgress("source-recovery", job.id, progress);
+
+		expect(getSourceIndexJob("source-recovery")?.statusMessage).toBeUndefined();
+	});
+
 	test("does not reopen completed jobs when a duplicate delayed runner fires", () => {
 		clearSourceIndexProgressForTests();
 		const job = beginSourceIndexJob("source-1");
