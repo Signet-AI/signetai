@@ -681,6 +681,106 @@ printf 'ok\\n'
 		}
 	});
 
+	it("reaps escaped Codex ACP children on darwin via a bounded ps sweep (#1459)", async () => {
+		const root = join(tmpdir(), `signet-acpx-darwin-sweep-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const childPid = 4242;
+		const foreignPid = 4243;
+		const runidFile = join(root, "runid.txt");
+		const fakePs = join(root, "ps");
+		const fakeProcinfo = join(root, "procinfo");
+		const bin = join(root, "fake-acpx.sh");
+		// fake ps: the full process listing for `-axo pid=,command=`. Two
+		// same-named agent processes; only one is bound to our run id.
+		writeFileSync(
+			fakePs,
+			`#!/usr/bin/env bash
+if [[ "$1" == "-axo" && "$2" == "pid=,command=" ]]; then
+  printf '%s\\n' "${childPid} /usr/local/bin/codex-acp"
+  printf '%s\\n' "${foreignPid} /usr/local/bin/codex-acp"
+  exit 0
+fi
+exit 0
+`,
+		);
+		// fake procinfo: per-pid environment. The child carries the run id (read
+		// from the file the acpx child wrote from its real env); the foreign
+		// same-named process does not, so it must never be signalled.
+		writeFileSync(
+			fakeProcinfo,
+			`#!/usr/bin/env bash
+pid="\${@: -1}"
+if [[ "$pid" == "${childPid}" ]]; then
+  runid=""
+  if [[ -n "\${SIGNET_ACPX_RUNID_FILE}" && -f "\${SIGNET_ACPX_RUNID_FILE}" ]]; then
+    runid="$(cat "\${SIGNET_ACPX_RUNID_FILE}")"
+  fi
+  printf 'environment:\\n'
+  printf '  PATH = /usr/bin\\n'
+  printf '  SIGNET_ACPX_RUN_ID = %s\\n' "$runid"
+  printf '  HOME = /Users/tester\\n'
+else
+  printf 'environment:\\n'
+  printf '  PATH = /usr/bin\\n'
+  printf '  HOME = /Users/tester\\n'
+fi
+exit 0
+`,
+		);
+		// fake acpx: records its own run id (from the real env the provider
+		// passed) so the sweep's environment read matches the actual runtime
+		// value rather than a literal.
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+if [[ -n "\${SIGNET_ACPX_RUNID_FILE}" && -n "\${SIGNET_ACPX_RUN_ID}" ]]; then
+  printf '%s' "\${SIGNET_ACPX_RUN_ID}" > "\${SIGNET_ACPX_RUNID_FILE}"
+fi
+printf 'ok\\n'
+`,
+		);
+		chmodSync(fakePs, 0o755);
+		chmodSync(fakeProcinfo, 0o755);
+		chmodSync(bin, 0o755);
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousPs = process.env.SIGNET_ACPX_PS;
+		const previousProcinfo = process.env.SIGNET_ACPX_PROCINFO;
+		const previousRunidFile = process.env.SIGNET_ACPX_RUNID_FILE;
+		process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "darwin";
+		process.env.SIGNET_ACPX_PS = fakePs;
+		process.env.SIGNET_ACPX_PROCINFO = fakeProcinfo;
+		process.env.SIGNET_ACPX_RUNID_FILE = runidFile;
+		const killLog: string[] = [];
+		const previousKill = process.kill;
+		try {
+			// Record the signals the sweep issues so we can assert it targeted
+			// only the child bound to the run id, not the foreign one.
+			process.kill = ((pid: number, signal: NodeJS.Signals) => {
+				killLog.push(`${pid}:${signal}`);
+				return true;
+			}) as typeof process.kill;
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			// Let the SIGTERM->SIGKILL escalation timers (~1s) fire.
+			await new Promise((resolve) => setTimeout(resolve, 1600));
+		} finally {
+			process.kill = previousKill;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			if (previousPs === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PS");
+			else process.env.SIGNET_ACPX_PS = previousPs;
+			if (previousProcinfo === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROCINFO");
+			else process.env.SIGNET_ACPX_PROCINFO = previousProcinfo;
+			if (previousRunidFile === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_RUNID_FILE");
+			else process.env.SIGNET_ACPX_RUNID_FILE = previousRunidFile;
+			rmSync(root, { recursive: true, force: true });
+		}
+		const childKilled = killLog.some((entry) => entry.startsWith(`${childPid}:`));
+		const foreignKilled = killLog.some((entry) => entry.startsWith(`${foreignPid}:`));
+		expect(childKilled).toBe(true);
+		expect(foreignKilled).toBe(false);
+	});
+
 	it("treats an unreadable ACPX proc root as best-effort cleanup", async () => {
 		if (process.platform !== "linux") return;
 		const root = join(tmpdir(), `signet-acpx-missing-proc-${Date.now()}-${Math.random().toString(36).slice(2)}`);

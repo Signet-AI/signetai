@@ -17,7 +17,7 @@
  */
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
-import { spawn as nodeSpawn } from "node:child_process";
+import { execFile, spawn as nodeSpawn } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
@@ -957,6 +957,93 @@ function acpxProcRoot(): string {
 	return process.env.SIGNET_ACPX_PROC_ROOT || "/proc";
 }
 
+// Test seam mirroring SIGNET_ACPX_PROC_ROOT: forces a cleanup platform so the
+// darwin sweep is exercisable on Linux CI runners.
+function acpxCleanupPlatform(): NodeJS.Platform {
+	const override = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+	if (override === "linux" || override === "darwin") return override;
+	return process.platform;
+}
+
+function acpxPsBinary(): string {
+	return process.env.SIGNET_ACPX_PS || "ps";
+}
+
+function acpxProcinfoCommand(): string {
+	return process.env.SIGNET_ACPX_PROCINFO || "launchctl procinfo";
+}
+
+function runProcessCapture(binary: string, args: readonly string[]): Promise<string> {
+	return new Promise((resolve) => {
+		execFile(binary, [...args], { timeout: 800, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+			if (error) {
+				resolve("");
+				return;
+			}
+			resolve(stdout);
+		});
+	});
+}
+
+function commandMatchesAgentBasename(command: string, basenames: ReadonlySet<string>): boolean {
+	for (const arg of command.split(" ")) {
+		const basename = arg.split("/").pop();
+		if (basename !== undefined && basenames.has(basename)) return true;
+	}
+	return false;
+}
+
+// `launchctl procinfo <pid>` prints an `environment:` block whose lines look
+// like `  NAME = value`. Return true when one of those lines carries the run
+// id exactly. Tolerate a `:` separator too so a variant renderer is not a
+// silent no-op.
+function procinfoEnvironmentContainsRunId(stdout: string, runId: string): boolean {
+	const marker = "SIGNET_ACPX_RUN_ID";
+	for (const rawLine of stdout.split("\n")) {
+		const line = rawLine.trim();
+		if (!line.startsWith(marker)) continue;
+		const rest = line.slice(marker.length).trimStart();
+		if ((rest.startsWith("=") || rest.startsWith(":")) && rest.slice(1).trim() === runId) return true;
+	}
+	return false;
+}
+
+/**
+ * macOS has no /proc, so the Linux sweep cannot enumerate candidate agent
+ * processes there. Mirror it with a bounded scan: `ps -axo pid=,command=`
+ * lists the full process table; we filter it down to commands whose basename
+ * is an agent process, then read only those candidates' environments via
+ * `launchctl procinfo` (the standard macOS mechanism for another process's
+ * env; `ps` has no such option on BSD) to require the run id. The
+ * per-candidate env read keeps the scan bounded the way per-pid /proc reads
+ * are bounded on Linux, and it never signals a same-named process from
+ * another run or a user tool.
+ */
+async function darwinSweepCandidates(basenames: ReadonlySet<string>, runId: string): Promise<number[]> {
+	const listing = await runProcessCapture(acpxPsBinary(), ["-axo", "pid=,command="]);
+	const candidates = new Set<number>();
+	for (const line of listing.split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed === "") continue;
+		const separator = trimmed.indexOf(" ");
+		if (separator <= 0) continue;
+		const pid = Number(trimmed.slice(0, separator));
+		const command = trimmed.slice(separator + 1);
+		if (!Number.isFinite(pid) || pid <= 0) continue;
+		if (commandMatchesAgentBasename(command, basenames)) candidates.add(pid);
+	}
+	const matched: number[] = [];
+	for (const pid of candidates) {
+		const procinfo = acpxProcinfoCommand();
+		const space = procinfo.indexOf(" ");
+		const binary = space > 0 ? procinfo.slice(0, space) : procinfo;
+		const leading = space > 0 ? procinfo.slice(space + 1).split(" ") : [];
+		const stdout = await runProcessCapture(binary, [...leading, String(pid)]);
+		if (procinfoEnvironmentContainsRunId(stdout, runId)) matched.push(pid);
+	}
+	return matched;
+}
+
 async function procEnvContainsRunId(procRoot: string, pid: string, runId: string): Promise<boolean> {
 	try {
 		const environ = await readFile(`${procRoot}/${pid}/environ`, "utf8");
@@ -983,23 +1070,29 @@ async function procCommandMatchesAgent(
 }
 
 async function cleanupAcpxAgentProcesses(agent: string, runId: string): Promise<void> {
-	if (process.platform !== "linux") return;
 	const basenames = new Set(acpxAgentProcessBasenames(agent));
 	if (basenames.size === 0) return;
-	const procRoot = acpxProcRoot();
-	let procEntries: string[];
-	try {
-		procEntries = await readdir(procRoot);
-	} catch {
-		return;
-	}
-	const pids: number[] = [];
-	for (const pid of procEntries) {
-		if (!/^\d+$/.test(pid)) continue;
-		if (!(await procCommandMatchesAgent(procRoot, pid, basenames))) continue;
-		if (!(await procEnvContainsRunId(procRoot, pid, runId))) continue;
-		const numericPid = Number(pid);
-		if (Number.isFinite(numericPid) && numericPid > 0) pids.push(numericPid);
+	const platform = acpxCleanupPlatform();
+	if (platform !== "linux" && platform !== "darwin") return;
+	let pids: number[];
+	if (platform === "linux") {
+		const procRoot = acpxProcRoot();
+		let procEntries: string[];
+		try {
+			procEntries = await readdir(procRoot);
+		} catch {
+			return;
+		}
+		pids = [];
+		for (const pid of procEntries) {
+			if (!/^\d+$/.test(pid)) continue;
+			if (!(await procCommandMatchesAgent(procRoot, pid, basenames))) continue;
+			if (!(await procEnvContainsRunId(procRoot, pid, runId))) continue;
+			const numericPid = Number(pid);
+			if (Number.isFinite(numericPid) && numericPid > 0) pids.push(numericPid);
+		}
+	} else {
+		pids = await darwinSweepCandidates(basenames, runId);
 	}
 	for (const pid of pids) {
 		try {
