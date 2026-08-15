@@ -531,6 +531,18 @@ describe("launchDashboard", () => {
 		expect(lines.join("\n")).toContain("OPEN:http://127.0.0.1:3850");
 	});
 
+	it("prints a manual URL when the dashboard browser cannot be opened (#1477)", async () => {
+		const deps = dashboardDeps();
+		deps.openUrl = async () => {
+			throw new Error("browser unavailable");
+		};
+
+		await launchDashboard({}, deps);
+
+		expect(lines.join("\n")).toContain("Paste this URL into your browser:");
+		expect(lines.join("\n")).toContain("http://127.0.0.1:3850");
+	});
+
 	it("exits non-zero when the daemon still cannot be reached after start", async () => {
 		exitSpy = spyOn(process, "exit").mockImplementation(() => {
 			throw new Error("EXIT_1");

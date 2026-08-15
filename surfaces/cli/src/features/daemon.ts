@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
 import { detectSchema, ensureUnifiedSchema, runMigrations } from "@signet/core";
 import chalk from "chalk";
-import open from "open";
 import ora from "ora";
 import type { LogOptions, PathOptions, RestartOptions } from "../commands/shared.js";
 import { daemonAccessLines } from "../lib/network.js";
+import { openUrlWithFallback } from "../lib/open-url.js";
 import Database from "../sqlite.js";
 import { readPipelinePauseState, releaseOllamaModels, setPipelinePaused } from "./pipeline-pause.js";
 
@@ -92,8 +92,9 @@ export async function launchDashboard(options: PathOptions, deps: Deps): Promise
 	console.log(`  ${chalk.cyan(`http://127.0.0.1:${deps.defaultPort}`)}`);
 	console.log();
 
-	const openUrl = deps.openUrl ?? open;
-	await openUrl(`http://127.0.0.1:${deps.defaultPort}`);
+	await openUrlWithFallback(`http://127.0.0.1:${deps.defaultPort}`, {
+		open: deps.openUrl,
+	});
 }
 
 export async function migrateSchema(options: PathOptions, deps: Deps): Promise<void> {

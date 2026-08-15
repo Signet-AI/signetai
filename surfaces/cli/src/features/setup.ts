@@ -19,10 +19,10 @@ import {
 	resolveIdentityModeFromConfig,
 } from "@signet/core";
 import chalk from "chalk";
-import open from "open";
 import ora from "ora";
 import { validateName } from "../commands/agent.js";
 import { createDaemonClient } from "../lib/daemon.js";
+import { openUrlWithFallback } from "../lib/open-url.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { runOAuthLogin, storeApiKey, storeOAuthCredentials } from "./setup-connect.js";
 import type { ConnectUi } from "./setup-connect.js";
@@ -119,7 +119,7 @@ function connectUi(): ConnectUi {
 	return {
 		openUrl: (url) => {
 			console.log(chalk.cyan(`  Opening browser: ${url}`));
-			void open(url).catch(() => {});
+			void openUrlWithFallback(url);
 		},
 		showDeviceCode: (userCode, verificationUri) => {
 			console.log(chalk.cyan(`  Enter this code at ${verificationUri}:`));
@@ -790,7 +790,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			}
 
 			if (options.openDashboard === true) {
-				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
+				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 
 			printSetupProtectionSummary(protection);

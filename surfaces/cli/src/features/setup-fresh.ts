@@ -11,9 +11,9 @@ import {
 	runMigrations,
 } from "@signet/core";
 import chalk from "chalk";
-import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
+import { openUrlWithFallback } from "../lib/open-url.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { applyInferenceRoute, buildExtractionRoute, modelOptions } from "./setup-inference-connect.js";
@@ -443,14 +443,14 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 
 		if (context.nonInteractive) {
 			if (context.openDashboard) {
-				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
+				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		} else {
 			const launchNow = await import("@inquirer/prompts").then(({ confirm }) =>
 				confirm({ message: "Open the dashboard?", default: true }),
 			);
 			if (launchNow) {
-				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
+				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		}
 

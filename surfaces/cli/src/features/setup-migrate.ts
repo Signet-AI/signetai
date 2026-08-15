@@ -18,9 +18,9 @@ import {
 } from "@signet/core";
 import { readNetworkMode } from "@signet/core";
 import chalk from "chalk";
-import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
+import { openUrlWithFallback } from "../lib/open-url.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import {
@@ -459,12 +459,12 @@ export async function runExistingSetupWizard(
 		console.log();
 		if (options?.nonInteractive === true) {
 			if (options.openDashboard === true) {
-				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
+				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		} else {
 			const launchNow = await confirm({ message: "Open the dashboard?", default: true });
 			if (launchNow) {
-				await open(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
+				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		}
 
