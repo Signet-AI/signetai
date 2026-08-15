@@ -1,4 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import { spawn } from "node:child_process";
 import { openUrlWithFallback } from "./open-url.js";
 
 describe("openUrlWithFallback", () => {
@@ -36,6 +37,45 @@ describe("openUrlWithFallback", () => {
 		}
 
 		expect(lines.join("\n")).toContain("https://example.com/stuck");
+	});
+
+	it("prints the manual URL when a headless opener exits nonzero (#1477)", async () => {
+		const lines: string[] = [];
+		let waitOption: boolean | undefined;
+		const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			lines.push(args.join(" "));
+		});
+		try {
+			await openUrlWithFallback("https://example.com/headless", {
+				open: async (_url, options) => {
+					waitOption = options?.wait;
+					const child = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(7), 25)"]);
+					if (options?.wait !== true) {
+						child.unref();
+						return child;
+					}
+
+					await new Promise<void>((resolve, reject) => {
+						child.once("error", reject);
+						child.once("close", (code) => {
+							if (code === 0) {
+								resolve();
+								return;
+							}
+
+							reject(new Error(`Headless opener exited with code ${code}`));
+						});
+					});
+					return child;
+				},
+			});
+		} finally {
+			log.mockRestore();
+		}
+
+		expect(waitOption).toBe(true);
+		expect(lines.join("\n")).toContain("Paste this URL into your browser:");
+		expect(lines.join("\n")).toContain("https://example.com/headless");
 	});
 
 	it("prints the manual URL without invoking open when macOS has no Aqua session", async () => {

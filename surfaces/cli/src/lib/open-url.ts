@@ -6,7 +6,11 @@ import open from "open";
 const execFileAsync = promisify(execFile);
 const DEFAULT_OPEN_TIMEOUT_MS = 5_000;
 
-type OpenUrl = (url: string) => Promise<unknown>;
+type OpenInvocationOptions = {
+	readonly wait?: boolean;
+};
+
+type OpenUrl = (url: string, options?: OpenInvocationOptions) => Promise<unknown>;
 
 export interface OpenUrlOptions {
 	readonly open?: OpenUrl;
@@ -41,12 +45,12 @@ export async function openUrlWithFallback(url: string, options: OpenUrlOptions =
 	}
 
 	try {
-		const opener = options.open ?? ((target: string) => open(target));
+		const opener = options.open ?? ((target: string, openOptions: OpenInvocationOptions) => open(target, openOptions));
 		const timeoutMs = options.timeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			await Promise.race([
-				Promise.resolve(opener(url)),
+				Promise.resolve(opener(url, { wait: true })),
 				new Promise<never>((_, reject) => {
 					timer = setTimeout(() => reject(new Error("Timed out opening browser")), timeoutMs);
 				}),
