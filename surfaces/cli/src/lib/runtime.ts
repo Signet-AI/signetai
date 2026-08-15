@@ -1199,6 +1199,7 @@ export function macOSLaunchAgentAttributionNotice(
 	return `macOS may show a Login Items / Background Activity notification naming ${signer} instead of Signet. This is expected when Signet is started from a source checkout or JavaScript daemon path. The public curl, npm, and Bun installers use the compiled Signet binary instead.`;
 }
 
+/** Base name retained for compatibility with the pre-workspace launchd job. */
 export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
 
 function currentLaunchdDomain(): string {
@@ -1206,12 +1207,110 @@ function currentLaunchdDomain(): string {
 	return uid === null ? "user" : `gui/${uid}`;
 }
 
-export function launchdDaemonPlistPath(_agentsDir: string, home: string = homedir()): string {
+export function launchdDaemonLabel(agentsDir: string): string {
+	const workspaceHash = sha256(Buffer.from(normalize(agentsDir), "utf8")).slice(0, 12);
+	return `${LAUNCHD_DAEMON_LABEL}.${workspaceHash}`;
+}
+
+export function launchdDaemonLegacyPlistPath(home: string = homedir()): string {
 	return join(home, "Library", "LaunchAgents", `${LAUNCHD_DAEMON_LABEL}.plist`);
 }
 
+export function launchdDaemonPlistPath(agentsDir: string, home: string = homedir()): string {
+	return join(home, "Library", "LaunchAgents", `${launchdDaemonLabel(agentsDir)}.plist`);
+}
+
+interface LaunchdDaemonLoadDeps {
+	readonly platform?: NodeJS.Platform;
+	readonly spawnSync?: LaunchctlProbeSpawnSync;
+}
+
+function isLaunchdJobLoaded(label: string, deps: LaunchdDaemonLoadDeps = {}): boolean {
+	if ((deps.platform ?? process.platform) !== "darwin") return false;
+	const spawn = deps.spawnSync ?? spawnSync;
+	const result = spawn("launchctl", ["print", `${currentLaunchdDomain()}/${label}`], {
+		stdio: "ignore",
+		windowsHide: true,
+		timeout: 3000,
+	});
+	return result.status === 0;
+}
+
+interface LaunchdDaemonMigrationDeps {
+	readonly existsSync: (path: string) => boolean;
+	readonly readFileSync: (path: string, encoding: "utf-8") => string;
+}
+
+const launchdDaemonMigrationDeps: LaunchdDaemonMigrationDeps = {
+	existsSync,
+	readFileSync,
+};
+
+export interface LaunchdDaemonMigration {
+	readonly action: "none" | "migrate" | "preserve";
+	readonly legacyPlistPath: string;
+	readonly legacyWorkspace: string | null;
+	readonly warning: string | null;
+}
+
+function decodePlistValue(value: string): string {
+	return value
+		.replaceAll("&lt;", "<")
+		.replaceAll("&gt;", ">")
+		.replaceAll("&quot;", '"')
+		.replaceAll("&apos;", "'")
+		.replaceAll("&amp;", "&");
+}
+
+function readLaunchdWorkspace(plist: string): string | null {
+	const match = plist.match(/<key>SIGNET_PATH<\/key>\s*<string>([\s\S]*?)<\/string>/);
+	return match?.[1] ? decodePlistValue(match[1]) : null;
+}
+
+/**
+ * Decide how to handle the pre-#1479 global launchd plist before creating a
+ * per-workspace job. A legacy job for another workspace is preserved so the
+ * second workspace does not silently stop the first one.
+ */
+export function resolveLaunchdDaemonMigration(
+	agentsDir: string,
+	home: string = homedir(),
+	deps: LaunchdDaemonMigrationDeps = launchdDaemonMigrationDeps,
+): LaunchdDaemonMigration {
+	const legacyPlistPath = launchdDaemonLegacyPlistPath(home);
+	if (!deps.existsSync(legacyPlistPath)) {
+		return { action: "none", legacyPlistPath, legacyWorkspace: null, warning: null };
+	}
+
+	let legacyWorkspace: string | null = null;
+	try {
+		legacyWorkspace = readLaunchdWorkspace(deps.readFileSync(legacyPlistPath, "utf-8"));
+	} catch {
+		// Treat an unreadable plist as an obsolete job that must be replaced.
+	}
+
+	if (legacyWorkspace !== null && normalize(legacyWorkspace) !== normalize(agentsDir)) {
+		return {
+			action: "preserve",
+			legacyPlistPath,
+			legacyWorkspace,
+			warning: `Existing legacy launchd daemon plist ${legacyPlistPath} points to ${legacyWorkspace}. Starting ${agentsDir} will use a separate per-workspace job and leave the existing legacy plist untouched.`,
+		};
+	}
+
+	return {
+		action: "migrate",
+		legacyPlistPath,
+		legacyWorkspace,
+		warning:
+			legacyWorkspace === null
+				? `Existing legacy launchd daemon plist ${legacyPlistPath} has no readable SIGNET_PATH. It will be replaced by the per-workspace job for ${agentsDir}.`
+				: null,
+	};
+}
+
 export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string {
-	const label = input.label ?? LAUNCHD_DAEMON_LABEL;
+	const label = input.label ?? launchdDaemonLabel(input.agentsDir);
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
 	const environment = buildLaunchdEnvironment({
 		environment: sourceEnvironment,
@@ -1258,21 +1357,17 @@ type LaunchctlProbeSpawnSync = (
 };
 
 /**
- * Whether launchd currently has the Signet daemon job loaded. Under KeepAlive
- * the job respawns the daemon on exit, so `stop`/`start` must coordinate with
- * it. The check is darwin-only; other platforms return false.
+ * Whether launchd currently has the per-workspace Signet daemon job loaded.
+ * Under KeepAlive the job respawns the daemon on exit, so `stop`/`start` must
+ * coordinate with it. The object overload keeps existing probe callers stable.
  */
 export function isLaunchdDaemonLoaded(
-	deps: { readonly platform?: NodeJS.Platform; readonly spawnSync?: LaunchctlProbeSpawnSync } = {},
+	agentsDirOrDeps: string | LaunchdDaemonLoadDeps = AGENTS_DIR,
+	maybeDeps: LaunchdDaemonLoadDeps = {},
 ): boolean {
-	if ((deps.platform ?? process.platform) !== "darwin") return false;
-	const spawn = deps.spawnSync ?? spawnSync;
-	const result = spawn("launchctl", ["print", `${currentLaunchdDomain()}/${LAUNCHD_DAEMON_LABEL}`], {
-		stdio: "ignore",
-		windowsHide: true,
-		timeout: 3000,
-	});
-	return result.status === 0;
+	const agentsDir = typeof agentsDirOrDeps === "string" ? agentsDirOrDeps : AGENTS_DIR;
+	const deps = typeof agentsDirOrDeps === "string" ? maybeDeps : agentsDirOrDeps;
+	return isLaunchdJobLoaded(launchdDaemonLabel(agentsDir), deps);
 }
 
 export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "status" | "signal" | "error">): boolean {
@@ -1406,6 +1501,26 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 			}
 		}
 	} else if (process.platform === "darwin") {
+		const migration = resolveLaunchdDaemonMigration(agentsDir);
+		if (migration.warning) console.warn(chalk.yellow(`  Warning: ${migration.warning}`));
+		if (migration.action === "migrate") {
+			if (isLaunchdJobLoaded(LAUNCHD_DAEMON_LABEL)) {
+				const legacyBootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(LAUNCHD_DAEMON_LABEL), {
+					stdio: ["ignore", "ignore", stderrTarget],
+					windowsHide: true,
+					env: daemonEnv,
+					timeout: 5000,
+				});
+				if (!didLaunchdDaemonStart(legacyBootout)) {
+					console.error(
+						chalk.red("Could not stop the legacy global launchd daemon. Leaving it in place and aborting migration."),
+					);
+					if (stderrFd !== null) closeSync(stderrFd);
+					return false;
+				}
+			}
+			rmSync(migration.legacyPlistPath, { force: true });
+		}
 		const plistPath = launchdDaemonPlistPath(agentsDir);
 		mkdirSync(dirname(plistPath), { recursive: true });
 		writeFileSync(
@@ -1427,8 +1542,8 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 		// noise, not a start failure. Skip the bootout in that case so the
 		// message never pollutes the startup log (#1074).
 		let bootout: SpawnSyncReturns<Buffer> | null = null;
-		if (isLaunchdDaemonLoaded()) {
-			bootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(), {
+		if (isLaunchdDaemonLoaded(agentsDir)) {
+			bootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(launchdDaemonLabel(agentsDir)), {
 				stdio: ["ignore", "ignore", stderrTarget],
 				windowsHide: true,
 				env: daemonEnv,
@@ -1443,7 +1558,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 		});
 		startedByServiceManager = didLaunchdDaemonStart(bootstrap);
 		if (!startedByServiceManager) {
-			const target = buildLaunchdDaemonStopArgs()[1];
+			const target = buildLaunchdDaemonStopArgs(launchdDaemonLabel(agentsDir))[1];
 			const kickstart = spawnSync("launchctl", ["kickstart", "-k", target], {
 				stdio: ["ignore", "ignore", stderrTarget],
 				windowsHide: true,
@@ -1534,7 +1649,16 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 
 export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: number): Promise<boolean> {
 	if (process.platform === "darwin") {
-		spawnSync("launchctl", buildLaunchdDaemonStopArgs(), {
+		const migration = resolveLaunchdDaemonMigration(agentsDir);
+		if (migration.action === "migrate") {
+			const legacyBootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(LAUNCHD_DAEMON_LABEL), {
+				stdio: "ignore",
+				windowsHide: true,
+				timeout: 5000,
+			});
+			if (didLaunchdDaemonStart(legacyBootout)) rmSync(migration.legacyPlistPath, { force: true });
+		}
+		spawnSync("launchctl", buildLaunchdDaemonStopArgs(launchdDaemonLabel(agentsDir)), {
 			stdio: "ignore",
 			windowsHide: true,
 			timeout: 5000,

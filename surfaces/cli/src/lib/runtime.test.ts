@@ -15,10 +15,13 @@ import {
 	isDaemonEntrypointEnvironment,
 	isDaemonRunning,
 	isLaunchdDaemonLoaded,
+	launchdDaemonLegacyPlistPath,
+	launchdDaemonLabel,
 	launchdDaemonPlistPath,
 	macOSLaunchAgentAttributionNotice,
 	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
+	resolveLaunchdDaemonMigration,
 	resolveDaemonChildInspector,
 	resolveDaemonInspectorForwarding,
 	resolveDaemonLaunchCommand,
@@ -307,13 +310,22 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(strings).toHaveLength(2);
 		expect(strings[0]).toBe(process.execPath);
 		expect(strings[1]).toBe("/opt/signet/dist/daemon.js");
+		expect(plist).toContain(`<string>${launchdDaemonLabel("/Users/user/.agents")}</string>`);
 		expect(strings[0]).toMatch(/^\//);
 	});
 
 	it("uses a persistent user LaunchAgent path", () => {
-		expect(launchdDaemonPlistPath("/Users/user/.agents", "/Users/user")).toBe(
-			"/Users/user/Library/LaunchAgents/ai.signet.daemon.plist",
+		const agentsDir = "/Users/user/.agents";
+		expect(launchdDaemonPlistPath(agentsDir, "/Users/user")).toBe(
+			`/Users/user/Library/LaunchAgents/${launchdDaemonLabel(agentsDir)}.plist`,
 		);
+		expect(launchdDaemonPlistPath("/Users/other/.agents", "/Users/user")).not.toBe(
+			launchdDaemonPlistPath(agentsDir, "/Users/user"),
+		);
+	});
+
+	it("keeps the legacy plist path available for migration", () => {
+		expect(launchdDaemonLegacyPlistPath("/Users/user")).toBe("/Users/user/Library/LaunchAgents/ai.signet.daemon.plist");
 	});
 
 	it("uses launchctl bootstrap against the current user launchd domain", () => {
@@ -324,10 +336,50 @@ describe("buildLaunchdDaemonPlist", () => {
 	});
 
 	it("uses launchctl bootout against the current user launchd service", () => {
-		const args = buildLaunchdDaemonStopArgs();
+		const label = launchdDaemonLabel("/Users/user/.agents");
+		const args = buildLaunchdDaemonStopArgs(label);
 		expect(args[0]).toBe("bootout");
 		expect(args[1]).toStartWith("gui/");
-		expect(args[1]).toEndWith("/ai.signet.daemon");
+		expect(args[1]).toEndWith(`/${label}`);
+	});
+});
+
+describe("resolveLaunchdDaemonMigration", () => {
+	const legacyHome = "/Users/user";
+	const legacyPlistPath = launchdDaemonLegacyPlistPath(legacyHome);
+
+	it("migrates a legacy plist for the same workspace", () => {
+		const migration = resolveLaunchdDaemonMigration("/Users/user/.agents", legacyHome, {
+			existsSync: (path) => path === legacyPlistPath,
+			readFileSync: () => "<key>SIGNET_PATH</key>\n<string>/Users/user/.agents</string>",
+		});
+
+		expect(migration.action).toBe("migrate");
+		expect(migration.legacyWorkspace).toBe("/Users/user/.agents");
+		expect(migration.warning).toBeNull();
+	});
+
+	it("warns and preserves a legacy plist for a different workspace", () => {
+		const migration = resolveLaunchdDaemonMigration("/Users/other/.agents", legacyHome, {
+			existsSync: (path) => path === legacyPlistPath,
+			readFileSync: () => "<key>SIGNET_PATH</key>\n<string>/Users/user/Work &amp; Projects</string>",
+		});
+
+		expect(migration.action).toBe("preserve");
+		expect(migration.legacyWorkspace).toBe("/Users/user/Work & Projects");
+		expect(migration.warning).toContain("points to /Users/user/Work & Projects");
+		expect(migration.warning).toContain("separate per-workspace job");
+	});
+
+	it("replaces an unreadable legacy plist instead of risking duplicate jobs", () => {
+		const migration = resolveLaunchdDaemonMigration("/Users/user/.agents", legacyHome, {
+			existsSync: (path) => path === legacyPlistPath,
+			readFileSync: () => "<plist></plist>",
+		});
+
+		expect(migration.action).toBe("migrate");
+		expect(migration.legacyWorkspace).toBeNull();
+		expect(migration.warning).toContain("no readable SIGNET_PATH");
 	});
 });
 
@@ -809,12 +861,21 @@ describe("isLaunchdDaemonLoaded", () => {
 		expect(spawned).toBe(false);
 	});
 
-	it("reports loaded when launchctl print succeeds", () => {
-		const loaded = isLaunchdDaemonLoaded({
+	it("reports loaded for the requested workspace label", () => {
+		let args: readonly string[] = [];
+		const agentsDir = "/Users/user/.agents";
+		const loaded = isLaunchdDaemonLoaded(agentsDir, {
 			platform: "darwin",
-			spawnSync: () => ({ status: 0 }),
+			spawnSync: (_command, probeArgs) => {
+				args = probeArgs;
+				return { status: 0 };
+			},
 		});
+
 		expect(loaded).toBe(true);
+		expect(args).toContain(
+			`gui/${typeof process.getuid === "function" ? process.getuid() : "user"}/${launchdDaemonLabel(agentsDir)}`,
+		);
 	});
 
 	it("reports not loaded when launchctl print fails (no such job)", () => {
