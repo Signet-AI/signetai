@@ -852,7 +852,7 @@ export function registerPipelineRoutes(app: Hono): void {
 
 		let passId: string;
 		try {
-			passId = worker.triggerAsync(mode, agentId);
+			passId = await worker.triggerAsync(mode, agentId);
 		} catch (e) {
 			if (e instanceof AlreadyRunningError) return c.json({ error: e.message }, 409);
 			const msg = e instanceof Error ? e.message : String(e);

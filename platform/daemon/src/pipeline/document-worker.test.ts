@@ -26,7 +26,23 @@ function asAccessor(db: Database): DbAccessor {
 				throw err;
 			}
 		},
+		withWriteTxAsync<T>(fn: (wdb: WriteDb) => T): Promise<T> {
+			return Promise.resolve().then(() => {
+				db.exec("BEGIN IMMEDIATE");
+				try {
+					const result = fn(db as unknown as WriteDb);
+					db.exec("COMMIT");
+					return result;
+				} catch (error) {
+					db.exec("ROLLBACK");
+					throw error;
+				}
+			});
+		},
 		withReadDb<T>(fn: (rdb: ReadDb) => T): T {
+			return fn(db as unknown as ReadDb);
+		},
+		withReadDbAsync<T>(fn: (rdb: ReadDb) => Promise<T>): Promise<T> {
 			return fn(db as unknown as ReadDb);
 		},
 		close(): void {

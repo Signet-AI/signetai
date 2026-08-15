@@ -16,6 +16,12 @@
 
 import type { DbAccessor, WriteDb } from "../db-accessor";
 
+async function writeTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
+	const writer = accessor.withWriteTxAsync;
+	if (!writer) throw new Error("async write API is unavailable");
+	return writer(fn);
+}
+
 /** Typed shape of a row fetched from the memories table for cold archival. */
 interface MemoryRow {
 	readonly id: unknown;
@@ -45,6 +51,7 @@ import { logger } from "../logger";
 import { isSystemPressureHigh } from "../system-pressure";
 import { txDecrementEntityMentions } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
+import { runWriteBatches } from "../yielding-writes";
 
 export interface RetentionConfig {
 	/** How often to run the retention sweep (ms) */
@@ -74,7 +81,7 @@ export interface RetentionHandle {
 	stop(): void;
 	readonly running: boolean;
 	/** Run a single sweep immediately (for testing) */
-	sweep(): RetentionSweepResult;
+	sweep(): Promise<RetentionSweepResult>;
 }
 
 export interface RetentionSweepResult {
@@ -358,10 +365,10 @@ function normalizeRetentionConfig(cfg: RetentionConfig): RetentionConfig {
 	};
 }
 
-export function runRetentionSweepOnce(
+export async function runRetentionSweepOnce(
 	accessor: DbAccessor,
 	cfg: RetentionConfig = DEFAULT_RETENTION,
-): RetentionSweepResult {
+): Promise<RetentionSweepResult> {
 	const normalizedCfg = normalizeRetentionConfig(cfg);
 	const now = Date.now();
 	const tombstoneCutoff = new Date(now - normalizedCfg.tombstoneRetentionMs).toISOString();
@@ -372,8 +379,7 @@ export function runRetentionSweepOnce(
 	// A retention batch has dependent graph, vector, canonical, and archival
 	// writes. Keep them together so a vec failure cannot commit irreversible
 	// provenance cleanup while leaving the canonical embedding retryable.
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	const retentionResult = accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+	const retentionResult = await writeTx(accessor, (db) => {
 		const graph = purgeGraphLinks(db, tombstoneCutoff, normalizedCfg.batchLimit);
 		const embeddingsPurged = purgeEmbeddings(db, tombstoneCutoff, normalizedCfg.batchLimit);
 		const tombstonesPurged = purgeTombstones(db, tombstoneCutoff, normalizedCfg.batchLimit);
@@ -386,33 +392,43 @@ export function runRetentionSweepOnce(
 
 	if (entitiesOrphaned > 0) invalidateTraversalCache();
 
-	// Step 4: old history events
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	const historyPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
-		purgeHistory(db, historyCutoff, normalizedCfg.batchLimit),
+	// The remaining steps are independent bounded transactions. Drain them
+	// through the shared yielding writer so a sweep gives the event loop a turn
+	// between each maintenance batch.
+	const steps = [
+		{ kind: "history", cutoff: historyCutoff },
+		{ kind: "completed", cutoff: completedJobCutoff },
+		{ kind: "dead", cutoff: deadJobCutoff },
+		{ kind: "transcript-completed", cutoff: completedJobCutoff },
+		{ kind: "transcript-dead", cutoff: deadJobCutoff },
+	] as const;
+	const postRetention = await runWriteBatches(
+		accessor,
+		steps,
+		(db, step) => {
+			switch (step.kind) {
+				case "history":
+					return purgeHistory(db, step.cutoff, normalizedCfg.batchLimit);
+				case "completed":
+					return purgeCompletedJobs(db, step.cutoff, normalizedCfg.batchLimit);
+				case "dead":
+					return purgeDeadJobs(db, step.cutoff, normalizedCfg.batchLimit);
+				case "transcript-completed":
+					return purgeTranscriptCaptureJobs(db, "completed", step.cutoff, normalizedCfg.batchLimit);
+				case "transcript-dead":
+					return purgeTranscriptCaptureJobs(db, "dead", step.cutoff, normalizedCfg.batchLimit);
+			}
+		},
+		{ label: "retention sweep", maxPerTx: 1 },
 	);
-
-	// Step 5: completed jobs
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	const completedJobsPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
-		purgeCompletedJobs(db, completedJobCutoff, normalizedCfg.batchLimit),
-	);
-
-	// Step 6: dead-letter jobs
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	const deadJobsPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
-		purgeDeadJobs(db, deadJobCutoff, normalizedCfg.batchLimit),
-	);
-
-	// Step 7: transcript-capture job queue retention
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	const completedTranscriptCaptureJobsPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
-		purgeTranscriptCaptureJobs(db, "completed", completedJobCutoff, normalizedCfg.batchLimit),
-	);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	const deadTranscriptCaptureJobsPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
-		purgeTranscriptCaptureJobs(db, "dead", deadJobCutoff, normalizedCfg.batchLimit),
-	);
+	if (postRetention.error) throw new Error(postRetention.error);
+	const [
+		historyPurged,
+		completedJobsPurged,
+		deadJobsPurged,
+		completedTranscriptCaptureJobsPurged,
+		deadTranscriptCaptureJobsPurged,
+	] = postRetention.items;
 
 	return {
 		graphLinksPurged,
@@ -432,8 +448,8 @@ export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig 
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
 
-	function doSweep(): RetentionSweepResult {
-		const result = runRetentionSweepOnce(accessor, normalizedCfg);
+	async function doSweep(): Promise<RetentionSweepResult> {
+		const result = await runRetentionSweepOnce(accessor, normalizedCfg);
 		const total =
 			result.graphLinksPurged +
 			result.entitiesOrphaned +
@@ -454,13 +470,11 @@ export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig 
 	timer = setInterval(() => {
 		if (!running) return;
 		if (isSystemPressureHigh()) return;
-		try {
-			doSweep();
-		} catch (e) {
+		void doSweep().catch((e) => {
 			logger.warn("retention", "Sweep error", {
 				error: e instanceof Error ? e.message : String(e),
 			});
-		}
+		});
 	}, normalizedCfg.intervalMs);
 
 	logger.info("retention", "Worker started", {

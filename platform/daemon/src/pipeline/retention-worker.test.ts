@@ -18,7 +18,23 @@ function makeAccessor(db: Database, writeDb: WriteDb = db as unknown as WriteDb)
 				throw err;
 			}
 		},
+		withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
+			return Promise.resolve().then(() => {
+				db.exec("BEGIN IMMEDIATE");
+				try {
+					const result = fn(writeDb);
+					db.exec("COMMIT");
+					return result;
+				} catch (error) {
+					db.exec("ROLLBACK");
+					throw error;
+				}
+			});
+		},
 		withReadDb<T>(fn: (db: ReadDb) => T): T {
+			return fn(db as unknown as ReadDb);
+		},
+		withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T> {
 			return fn(db as unknown as ReadDb);
 		},
 		close() {
@@ -87,7 +103,7 @@ describe("retention worker", () => {
 		db.close();
 	});
 
-	it("purges tombstoned memories past retention window", () => {
+	it("purges tombstoned memories past retention window", async () => {
 		const now = new Date().toISOString();
 		// Fresh soft-delete (within window)
 		db.prepare(
@@ -102,7 +118,7 @@ describe("retention worker", () => {
 		).run("old-del", "old", "fact", daysAgo(35), now, now, "test");
 
 		const handle = startRetentionWorker(accessor, testRetentionConfig());
-		const result = handle.sweep();
+		const result = await handle.sweep();
 		handle.stop();
 
 		expect(result.tombstonesPurged).toBe(1);
@@ -116,7 +132,7 @@ describe("retention worker", () => {
 		expect(old).toBeNull();
 	});
 
-	it("purges old history events past retention window", () => {
+	it("purges old history events past retention window", async () => {
 		// Insert a memory for FK reference
 		const now = new Date().toISOString();
 		db.prepare(
@@ -137,7 +153,7 @@ describe("retention worker", () => {
 		).run("hist-old", "mem-hist", "updated", "test", daysAgo(200));
 
 		const handle = startRetentionWorker(accessor, testRetentionConfig());
-		const result = handle.sweep();
+		const result = await handle.sweep();
 		handle.stop();
 
 		expect(result.historyPurged).toBe(1);
@@ -145,7 +161,7 @@ describe("retention worker", () => {
 		expect(db.prepare("SELECT id FROM memory_history WHERE id = ?").get("hist-old")).toBeNull();
 	});
 
-	it("purges completed and dead jobs past retention windows", () => {
+	it("purges completed and dead jobs past retention windows", async () => {
 		const now = new Date().toISOString();
 		db.prepare(
 			`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by)
@@ -177,7 +193,7 @@ describe("retention worker", () => {
 		).run("job-dead-recent", "mem-jobs", "extract", "dead", daysAgo(10), now, now);
 
 		const handle = startRetentionWorker(accessor, testRetentionConfig());
-		const result = handle.sweep();
+		const result = await handle.sweep();
 		handle.stop();
 
 		expect(result.completedJobsPurged).toBe(1);
@@ -189,7 +205,7 @@ describe("retention worker", () => {
 		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-dead-recent")).toBeTruthy();
 	});
 
-	it("purges old transcript capture jobs past retention windows", () => {
+	it("purges old transcript capture jobs past retention windows", async () => {
 		const insertCompleted = db.prepare(
 			`INSERT INTO transcript_capture_jobs (
 				id, agent_id, harness, session_id, transcript, captured_at, status, attempts, max_attempts,
@@ -206,7 +222,7 @@ describe("retention worker", () => {
 		).run("tc-dead", "tc-dead", daysAgo(35), daysAgo(35), daysAgo(35));
 
 		const handle = startRetentionWorker(accessor, testRetentionConfig());
-		const result = handle.sweep();
+		const result = await handle.sweep();
 		handle.stop();
 
 		expect(result.completedTranscriptCaptureJobsPurged).toBe(1);
@@ -216,7 +232,7 @@ describe("retention worker", () => {
 		expect(db.prepare("SELECT id FROM transcript_capture_jobs WHERE id = ?").get("tc-dead")).toBeNull();
 	});
 
-	it("purges graph links before tombstones and cleans orphaned entities", () => {
+	it("purges graph links before tombstones and cleans orphaned entities", async () => {
 		const now = new Date().toISOString();
 		// Tombstoned memory
 		db.prepare(
@@ -235,7 +251,7 @@ describe("retention worker", () => {
 		).run("mem-graph", "ent-1");
 
 		const handle = startRetentionWorker(accessor, testRetentionConfig());
-		const result = handle.sweep();
+		const result = await handle.sweep();
 		handle.stop();
 
 		expect(result.graphLinksPurged).toBe(1);
@@ -250,7 +266,7 @@ describe("retention worker", () => {
 		expect(db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-graph")).toBeNull();
 	});
 
-	it("decrements entity mentions and orphans during graph link purge", () => {
+	it("decrements entity mentions and orphans during graph link purge", async () => {
 		const now = new Date().toISOString();
 		// Tombstoned memory past retention
 		db.prepare(
@@ -281,7 +297,7 @@ describe("retention worker", () => {
 		).run("mem-orphan", "ent-survive");
 
 		const handle = startRetentionWorker(accessor, testRetentionConfig());
-		const result = handle.sweep();
+		const result = await handle.sweep();
 		handle.stop();
 
 		expect(result.graphLinksPurged).toBe(2);
@@ -296,7 +312,7 @@ describe("retention worker", () => {
 		expect(survivor.mentions).toBe(2);
 	});
 
-	it("keeps tombstones and canonical embeddings when vec deletion fails, then retries atomically", () => {
+	it("keeps tombstones and canonical embeddings when vec deletion fails, then retries atomically", async () => {
 		const now = new Date().toISOString();
 		db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL)");
 		db.prepare(
@@ -332,7 +348,7 @@ describe("retention worker", () => {
 
 		const failingAccessor = makeAccessor(db, failVectorDeleteOnce(db));
 		const failingHandle = startRetentionWorker(failingAccessor, testRetentionConfig());
-		expect(() => failingHandle.sweep()).toThrow("failed to reconcile vec_embeddings");
+		await expect(failingHandle.sweep()).rejects.toThrow("failed to reconcile vec_embeddings");
 		failingHandle.stop();
 
 		// The failed derived-index step rolls back graph/provenance cleanup,
@@ -353,8 +369,8 @@ describe("retention worker", () => {
 		expect(db.prepare("SELECT memory_id FROM memories_cold WHERE memory_id = ?").get("mem-expired")).toBeNull();
 
 		const retryHandle = startRetentionWorker(failingAccessor, testRetentionConfig());
-		const retry = retryHandle.sweep();
-		const repeat = retryHandle.sweep();
+		const retry = await retryHandle.sweep();
+		const repeat = await retryHandle.sweep();
 		retryHandle.stop();
 
 		expect(retry.embeddingsPurged).toBe(1);
@@ -383,9 +399,9 @@ describe("retention worker", () => {
 		expect(cold).toMatchObject({ memory_id: "mem-expired", agent_id: "agent-a", archived_reason: "retention_decay" });
 	});
 
-	it("returns zero counts when nothing to purge", () => {
+	it("returns zero counts when nothing to purge", async () => {
 		const handle = startRetentionWorker(accessor, testRetentionConfig());
-		const result = handle.sweep();
+		const result = await handle.sweep();
 		handle.stop();
 
 		expect(result.tombstonesPurged).toBe(0);

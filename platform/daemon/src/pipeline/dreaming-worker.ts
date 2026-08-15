@@ -50,7 +50,7 @@ export interface DreamingWorkerHandle {
 	 * background. Callers should poll GET /api/dream/status for completion.
 	 * Throws AlreadyRunningError if a pass is already active.
 	 */
-	triggerAsync(mode: DreamingMode, agentId?: string): string;
+	triggerAsync(mode: DreamingMode, agentId?: string): Promise<string>;
 	readonly running: boolean;
 	readonly activeAgentId: string | null;
 	/**
@@ -356,10 +356,10 @@ export function startDreamingWorker(
 			if (stopped || active) return;
 			// A halted scope must not burn the 6-query hygiene scan and the
 			// episodic backlog read on every sweep: skip straight past it.
-			if (isDreamingHaltActive(accessor, scopeId)) continue;
+			if (await isDreamingHaltActive(accessor, scopeId)) continue;
 			try {
-				enqueueDreamingHygieneAttention(accessor, scopeId, undefined, caps);
-				enqueueDreamingSurprisalAttention(accessor, scopeId, cfg);
+				await enqueueDreamingHygieneAttention(accessor, scopeId, undefined, caps);
+				await enqueueDreamingSurprisalAttention(accessor, scopeId, cfg);
 				const episodicTokens = await getDreamingEpisodicTokenBacklog(accessor, scopeId);
 				if (!(await shouldTriggerDreaming(accessor, cfg, scopeId, Date.now(), episodicTokens))) continue;
 				triggered = true;
@@ -475,12 +475,19 @@ export function startDreamingWorker(
 			return runPass(normalizeAgentId(agentId, defaultAgentId), mode);
 		},
 
-		triggerAsync(mode: DreamingMode, agentId?: string): string {
+		async triggerAsync(mode: DreamingMode, agentId?: string): Promise<string> {
 			if (active) throw new AlreadyRunningError();
 			const runAgentId = normalizeAgentId(agentId, defaultAgentId);
-			const passId = createDreamingPass(accessor, runAgentId, mode);
 			active = true;
 			activeAgent = runAgentId;
+			let passId: string;
+			try {
+				passId = await createDreamingPass(accessor, runAgentId, mode);
+			} catch (error) {
+				active = false;
+				activeAgent = null;
+				throw error;
+			}
 			const p = runDreamingAgentPass(
 				accessor,
 				executorForAgent(runAgentId),

@@ -155,7 +155,7 @@ interface ExecutionDeps {
 	accessor: DbAccessor;
 	cfg: PipelineV2Config;
 	limiter: RateLimiter;
-	retentionHandle: { sweep(): unknown } | null;
+	retentionHandle: { sweep(): Promise<unknown> } | null;
 	embedding: EmbeddingRepairDeps | null;
 }
 
@@ -175,18 +175,18 @@ async function executeRecommendation(
 ): Promise<RepairResult | null> {
 	switch (rec.action) {
 		case "requeueDeadJobs":
-			return requeueDeadJobs(deps.accessor, deps.cfg, ctx, deps.limiter);
+			return await requeueDeadJobs(deps.accessor, deps.cfg, ctx, deps.limiter);
 		case "releaseStaleLeases":
-			return releaseStaleLeases(deps.accessor, deps.cfg, ctx, deps.limiter);
+			return await releaseStaleLeases(deps.accessor, deps.cfg, ctx, deps.limiter);
 		case "checkFtsConsistency":
-			return checkFtsConsistency(deps.accessor, deps.cfg, ctx, deps.limiter, true);
+			return await checkFtsConsistency(deps.accessor, deps.cfg, ctx, deps.limiter, true);
 		case "triggerRetentionSweep":
 			if (deps.retentionHandle) {
-				return triggerRetentionSweep(deps.cfg, ctx, deps.limiter, deps.retentionHandle);
+				return await triggerRetentionSweep(deps.cfg, ctx, deps.limiter, deps.retentionHandle);
 			}
 			return null;
 		case "deduplicateMemories":
-			return deduplicateMemories(deps.accessor, deps.cfg, ctx, deps.limiter);
+			return await deduplicateMemories(deps.accessor, deps.cfg, ctx, deps.limiter);
 		case "repairEmbeddingIndex": {
 			if (deps.embedding === null) return null;
 			const embedding = deps.embedding;
@@ -218,14 +218,14 @@ async function executeRecommendation(
 			};
 
 			try {
-				const stats = getEmbeddingRepairStats(deps.accessor, embedding.cfg, embedding.agentId);
+				const stats = await getEmbeddingRepairStats(deps.accessor, embedding.cfg, embedding.agentId);
 				const batchSize =
 					Number.isFinite(embedding.batchSize) && embedding.batchSize > 0
 						? Math.max(1, Math.min(AUTONOMOUS_EMBEDDING_BATCH, Math.floor(embedding.batchSize)))
 						: 1;
 				const result =
 					stats.orphaned > 0
-						? cleanOrphanedEmbeddings(deps.accessor, deps.cfg, ctx, deps.limiter, batchSize, embedding.agentId)
+						? await cleanOrphanedEmbeddings(deps.accessor, deps.cfg, ctx, deps.limiter, batchSize, embedding.agentId)
 						: stats.gap.unembedded > 0
 							? await reembedMissingMemories(
 									deps.accessor,
@@ -307,7 +307,7 @@ export function startMaintenanceWorker(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
 	tracker: ProviderTracker,
-	retentionHandle: { sweep(): unknown } | null,
+	retentionHandle: { sweep(): Promise<unknown> } | null,
 	embedding?: EmbeddingRepairDeps,
 ): MaintenanceHandle {
 	let running = true;
@@ -337,7 +337,7 @@ export function startMaintenanceWorker(
 		const report = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getDiagnostics(db, tracker));
 
 		const embeddingStats = deps.embedding
-			? getEmbeddingRepairStats(accessor, deps.embedding.cfg, deps.embedding.agentId)
+			? await getEmbeddingRepairStats(accessor, deps.embedding.cfg, deps.embedding.agentId)
 			: null;
 		const recommendations = buildRecommendations(report, embeddingStats);
 		const executed: RepairResult[] = [];

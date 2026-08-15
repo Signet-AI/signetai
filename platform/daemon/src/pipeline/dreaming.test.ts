@@ -63,6 +63,22 @@ function wrapDb(db: Database): DbAccessor {
 		withReadDb<T>(fn: (db: Database) => T): T {
 			return fn(db);
 		},
+		withReadDbAsync<T>(fn: (db: Database) => Promise<T>): Promise<T> {
+			return fn(db);
+		},
+		withWriteTxAsync<T>(fn: (db: Database) => T): Promise<T> {
+			return Promise.resolve().then(() => {
+				db.exec("BEGIN IMMEDIATE");
+				try {
+					const result = fn(db);
+					db.exec("COMMIT");
+					return result;
+				} catch (error) {
+					db.exec("ROLLBACK");
+					throw error;
+				}
+			});
+		},
 		withWriteTx<T>(fn: (db: Database) => T): T {
 			db.exec("BEGIN IMMEDIATE");
 			try {
@@ -293,7 +309,7 @@ describe("Dreaming", () => {
 		const result = await run();
 		expect(result.summary).toBe("Done");
 		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
-		const firstDelivery = getDreamingToolCalls(accessor, AGENT, result.passId).find(
+		const firstDelivery = (await getDreamingToolCalls(accessor, AGENT, result.passId)).find(
 			(call) => call.toolName === "search_evidence",
 		);
 		expect(firstDelivery?.output).toMatchObject({
@@ -310,7 +326,7 @@ describe("Dreaming", () => {
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 
 		const second = await run();
-		const secondDelivery = getDreamingToolCalls(accessor, AGENT, second.passId).find(
+		const secondDelivery = (await getDreamingToolCalls(accessor, AGENT, second.passId)).find(
 			(call) => call.toolName === "search_evidence",
 		);
 		expect(secondDelivery?.output).toMatchObject({
@@ -507,8 +523,8 @@ describe("Dreaming", () => {
 
 	it("uses wall-clock backoff independently of later evidence volume", async () => {
 		seedSummary(db, "first", "episodic source", 10);
-		recordDreamingFailure(accessor, AGENT);
-		const failedAt = Date.parse(getDreamingState(accessor, AGENT).lastFailureAt ?? "");
+		await recordDreamingFailure(accessor, AGENT);
+		const failedAt = Date.parse((await getDreamingState(accessor, AGENT)).lastFailureAt ?? "");
 		const cfg = defaultCfg({ tokenThreshold: 1, backfillOnFirstRun: false });
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 10 * 60 * 1000 - 1)).toBe(false);
 		seedSummary(db, "later", "episodic source ".repeat(3_000), 3_000);
@@ -518,9 +534,9 @@ describe("Dreaming", () => {
 	it("halts automatic scheduling after repeated consecutive failures", async () => {
 		seedSummary(db, "first", "episodic source", 10);
 		for (let i = 0; i < DREAMING_FAILURE_HALT_THRESHOLD; i += 1) {
-			recordDreamingFailure(accessor, AGENT);
+			await recordDreamingFailure(accessor, AGENT);
 		}
-		const failedAt = Date.parse(getDreamingState(accessor, AGENT).lastFailureAt ?? "");
+		const failedAt = Date.parse((await getDreamingState(accessor, AGENT)).lastFailureAt ?? "");
 		const cfg = defaultCfg({ tokenThreshold: 1, backfillOnFirstRun: false });
 		// Halted: a large backlog and fresh attention must not trigger a pass
 		// inside the cooldown window.
@@ -564,13 +580,13 @@ describe("Dreaming", () => {
 		).toBe(false);
 	});
 
-	it("isDreamingHaltActive reads the halt state through the accessor", () => {
+	it("isDreamingHaltActive reads the halt state through the accessor", async () => {
 		for (let i = 0; i < DREAMING_FAILURE_HALT_THRESHOLD - 1; i += 1) {
-			recordDreamingFailure(accessor, AGENT);
+			await recordDreamingFailure(accessor, AGENT);
 		}
-		expect(isDreamingHaltActive(accessor, AGENT)).toBe(false);
-		recordDreamingFailure(accessor, AGENT);
-		expect(isDreamingHaltActive(accessor, AGENT)).toBe(true);
+		expect(await isDreamingHaltActive(accessor, AGENT)).toBe(false);
+		await recordDreamingFailure(accessor, AGENT);
+		expect(await isDreamingHaltActive(accessor, AGENT)).toBe(true);
 	});
 
 	it("schedules a near-term continuation only after the latest capped content delivery (#1430)", async () => {
@@ -614,7 +630,7 @@ describe("Dreaming", () => {
 		accessor.withWriteTx((tx) => {
 			tx.prepare("UPDATE dreaming_evidence_consumption SET delivered_offset = 2_000 WHERE pass_id = ?").run(passId);
 		});
-		recordDreamingFailure(accessor, AGENT);
+		await recordDreamingFailure(accessor, AGENT);
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
 	});
 
@@ -652,7 +668,7 @@ describe("Dreaming", () => {
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now + 21_000)).toBe(true);
 
 		const second = await run();
-		const delivery = getDreamingToolCalls(accessor, AGENT, second.passId).find(
+		const delivery = (await getDreamingToolCalls(accessor, AGENT, second.passId)).find(
 			(call) => call.toolName === "search_evidence",
 		);
 		expect(delivery?.output).toMatchObject({
@@ -720,7 +736,7 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-		const delivery = getDreamingToolCalls(accessor, AGENT, result.passId).find(
+		const delivery = (await getDreamingToolCalls(accessor, AGENT, result.passId)).find(
 			(call) => call.toolName === "search_evidence",
 		);
 		const refs = ((delivery?.output as { items?: Array<{ sourceRef?: string }> } | undefined)?.items ?? []).map(
@@ -1020,7 +1036,7 @@ describe("Dreaming", () => {
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 			 VALUES ('legacy-husk', 'Legacy Husk', 'legacy husk', 'project', ?, 5, datetime('now'), datetime('now'))`,
 		).run(AGENT);
-		expect(enqueueDreamingHygieneAttention(accessor, AGENT)).toBeGreaterThan(0);
+		expect(await enqueueDreamingHygieneAttention(accessor, AGENT)).toBeGreaterThan(0);
 		expect(getDreamingAttention(accessor, AGENT)).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
@@ -1033,10 +1049,10 @@ describe("Dreaming", () => {
 		expect(await shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
 		const snapshots = getDreamingAttentionSnapshots(accessor, AGENT);
 		accessor.withWriteTx((tx) => resolveDreamingAttentionInTx(tx, AGENT, "pass-hygiene", snapshots));
-		enqueueDreamingHygieneAttention(accessor, AGENT);
+		await enqueueDreamingHygieneAttention(accessor, AGENT);
 		expect(getDreamingAttention(accessor, AGENT)).toEqual([]);
 		db.prepare("UPDATE entities SET name = 'Renamed legacy husk' WHERE id = 'legacy-husk'").run();
-		enqueueDreamingHygieneAttention(accessor, AGENT);
+		await enqueueDreamingHygieneAttention(accessor, AGENT);
 		expect(getDreamingAttention(accessor, AGENT)).toContainEqual(
 			expect.objectContaining({
 				subjectRef: "entity:legacy-husk",
@@ -1045,7 +1061,7 @@ describe("Dreaming", () => {
 		);
 	});
 
-	it("enqueues over-cap attention rows when caps are supplied (#1138)", () => {
+	it("enqueues over-cap attention rows when caps are supplied (#1138)", async () => {
 		db.prepare(
 			`INSERT INTO entities
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
@@ -1066,7 +1082,7 @@ describe("Dreaming", () => {
 		}
 
 		const caps = { maxAspectsPerEntity: 20, maxAttributesPerAspect: 5 };
-		enqueueDreamingHygieneAttention(accessor, AGENT, 50, caps);
+		await enqueueDreamingHygieneAttention(accessor, AGENT, 50, caps);
 		expect(getDreamingAttention(accessor, AGENT)).toContainEqual(
 			expect.objectContaining({
 				kind: "hygiene",
@@ -1080,7 +1096,7 @@ describe("Dreaming", () => {
 		);
 	});
 
-	it("reopens duplicate hygiene attention when group membership changes", () => {
+	it("reopens duplicate hygiene attention when group membership changes", async () => {
 		for (const [id, name] of [
 			["acme-a", "Acme"],
 			["acme-b", "ACME"],
@@ -1091,7 +1107,7 @@ describe("Dreaming", () => {
 				 VALUES (?, ?, 'acme', 'project', ?, 1, datetime('now'), datetime('now'))`,
 			).run(id, name, AGENT);
 		}
-		enqueueDreamingHygieneAttention(accessor, AGENT);
+		await enqueueDreamingHygieneAttention(accessor, AGENT);
 		const snapshots = getDreamingAttentionSnapshots(accessor, AGENT);
 		accessor.withWriteTx((tx) => resolveDreamingAttentionInTx(tx, AGENT, "pass-duplicates", snapshots));
 		db.prepare("DELETE FROM entities WHERE id = 'acme-b'").run();
@@ -1100,7 +1116,7 @@ describe("Dreaming", () => {
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 			 VALUES ('acme-c', 'Acme Inc.', 'acme', 'project', ?, 1, datetime('now'), datetime('now'))`,
 		).run(AGENT);
-		enqueueDreamingHygieneAttention(accessor, AGENT);
+		await enqueueDreamingHygieneAttention(accessor, AGENT);
 		expect(getDreamingAttention(accessor, AGENT)).toContainEqual(
 			expect.objectContaining({ subjectRef: "duplicate:acme", details: expect.objectContaining({ count: "2" }) }),
 		);
@@ -1179,14 +1195,14 @@ describe("Dreaming", () => {
 		);
 	});
 
-	it("turns an explicit evidence requeue into scoped semantic attention", () => {
+	it("turns an explicit evidence requeue into scoped semantic attention", async () => {
 		db.prepare(
 			`INSERT INTO dreaming_evidence_exclusions
 			 (agent_id, source_kind, source_id, reason, pass_id, excluded_at, requeue_requested_at, resolved_at)
 			 VALUES (?, 'summary', 'retry-summary', 'semantic_operation_rejected', 'failed-pass', datetime('now'), NULL, NULL)`,
 		).run(AGENT);
 
-		expect(requestDreamingEvidenceRequeue(accessor, AGENT, "summary", "retry-summary")).toBe(true);
+		expect(await requestDreamingEvidenceRequeue(accessor, AGENT, "summary", "retry-summary")).toBe(true);
 		const attention = getDreamingAttention(accessor, AGENT);
 		expect(attention).toEqual([
 			expect.objectContaining({
@@ -1374,7 +1390,7 @@ describe("Dreaming", () => {
 		);
 
 		expect(result.summary).toBe("Rejected citation");
-		expect(getDreamingEvidenceExclusions(accessor, "other-agent")).toContainEqual(
+		expect(await getDreamingEvidenceExclusions(accessor, "other-agent")).toContainEqual(
 			expect.objectContaining({
 				sourceKind: "summary",
 				sourceId: "rejected-citation",
@@ -1382,7 +1398,7 @@ describe("Dreaming", () => {
 				retryCount: 0,
 			}),
 		);
-		expect(getDreamingEvidenceExclusions(accessor, AGENT)).toEqual([]);
+		expect(await getDreamingEvidenceExclusions(accessor, AGENT)).toEqual([]);
 	});
 
 	it("applies cited operations only through the daemon-owned tool surface", async () => {
@@ -1433,7 +1449,7 @@ describe("Dreaming", () => {
 		).toMatchObject({
 			proposal_id: expect.any(String),
 		});
-		const calls = getDreamingToolCalls(accessor, AGENT, result.passId);
+		const calls = await getDreamingToolCalls(accessor, AGENT, result.passId);
 		expect(calls).toHaveLength(1);
 		expect(calls[0]).toMatchObject({
 			passId: result.passId,
@@ -1618,7 +1634,9 @@ describe("Dreaming", () => {
 				"incremental",
 			),
 		).rejects.toThrow("agent timeout");
-		expect(getDreamingPasses(accessor, AGENT).find((pass) => pass.status === "failed")?.error).toBe("agent timeout");
+		expect((await getDreamingPasses(accessor, AGENT)).find((pass) => pass.status === "failed")?.error).toBe(
+			"agent timeout",
+		);
 		expect(telemetry.events).toContainEqual(
 			expect.objectContaining({
 				event: "dreaming.pass",
@@ -1848,7 +1866,7 @@ describe("Dreaming", () => {
 
 		// The time watermark remains a pass-start discovery boundary, but the
 		// returned late source is durably consumed and leaves no episodic backlog.
-		expect(getDreamingState(accessor, AGENT).lastPassAt).toBeNull();
+		expect((await getDreamingState(accessor, AGENT)).lastPassAt).toBeNull();
 		expect(
 			(
 				db
@@ -1884,7 +1902,7 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-		expect(getDreamingState(accessor, AGENT).lastPassAt).toBeNull();
+		expect((await getDreamingState(accessor, AGENT)).lastPassAt).toBeNull();
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 	});
 
@@ -1930,7 +1948,7 @@ describe("Dreaming", () => {
 			"incremental-content",
 		);
 		// The watermark advanced to the newest surfaced source, not pass-start.
-		expect(getDreamingState(accessor, AGENT).lastPassAt).toBe("2026-08-06T12:00:00.000Z");
+		expect((await getDreamingState(accessor, AGENT)).lastPassAt).toBe("2026-08-06T12:00:00.000Z");
 		// The gap evidence (captured after the surfaced frontier, before pass
 		// start) remains pending for the next scan-first search.
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
@@ -1982,7 +2000,7 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-		expect(getDreamingState(accessor, AGENT).lastPassAt).toBe("2026-08-05T00:00:00.000Z");
+		expect((await getDreamingState(accessor, AGENT)).lastPassAt).toBe("2026-08-05T00:00:00.000Z");
 	});
 
 	it("does not advance the evidence watermark when a hygiene pass early-exits (#1098, #1149)", async () => {
@@ -2003,7 +2021,7 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-hygiene",
 		);
-		expect(getDreamingState(accessor, AGENT).lastPassAt).toBeNull();
+		expect((await getDreamingState(accessor, AGENT)).lastPassAt).toBeNull();
 	});
 });
 

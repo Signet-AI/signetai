@@ -348,7 +348,7 @@ async function processFile(
 
 	if (existing === undefined) {
 		const docId = insertDocument(accessor, connectorId, sourceUrl, file.name, content);
-		enqueueDocumentIngestJob(accessor, docId);
+		await enqueueDocumentIngestJob(accessor, docId);
 		return { added: 1, updated: 0, error: null };
 	}
 
@@ -361,7 +361,7 @@ async function processFile(
 	}
 
 	updateDocument(accessor, existing.id, content);
-	enqueueDocumentIngestJob(accessor, existing.id);
+	await enqueueDocumentIngestJob(accessor, existing.id);
 	return { added: 0, updated: 1, error: null };
 }
 

@@ -190,7 +190,7 @@ export function registerQueueDiagnosticsRoutes(
 		const options = { dryRun: parsed.dryRun, ...parsed.options };
 		let result: RepairResult;
 		try {
-			result = dispatchRepairWith(ctx, resolveAccessor(), limiter, parsed.action, options);
+			result = await dispatchRepairWith(ctx, resolveAccessor(), limiter, parsed.action, options);
 		} catch (err) {
 			// Repair actions throw synchronously from inside withWriteTx (e.g. a
 			// missing migrations table, a closed DbAccessor, or a SQLite error).
@@ -209,13 +209,13 @@ export function registerQueueDiagnosticsRoutes(
 	});
 }
 
-function dispatchRepairWith(
+async function dispatchRepairWith(
 	ctx: RepairContext,
 	accessor: DbAccessor,
 	limiter: ReturnType<typeof createRateLimiter>,
 	action: "requeue" | "cancel" | "prune",
 	options: Record<string, unknown>,
-): RepairResult {
+): Promise<RepairResult> {
 	let cfg: ReturnType<typeof loadMemoryConfig>["pipelineV2"];
 	try {
 		cfg = loadMemoryConfig(resolveAgentsDir()).pipelineV2;
@@ -227,7 +227,7 @@ function dispatchRepairWith(
 			message: `config unavailable: ${(err as Error).message}`,
 		};
 	}
-	if (action === "requeue") return requeueDeadJobs(accessor, cfg, ctx, limiter, options as never);
-	if (action === "cancel") return cancelObsoleteJobs(accessor, cfg, ctx, limiter, options as never);
-	return pruneTerminalJobs(accessor, cfg, ctx, limiter, options as never);
+	if (action === "requeue") return await requeueDeadJobs(accessor, cfg, ctx, limiter, options as never);
+	if (action === "cancel") return await cancelObsoleteJobs(accessor, cfg, ctx, limiter, options as never);
+	return await pruneTerminalJobs(accessor, cfg, ctx, limiter, options as never);
 }

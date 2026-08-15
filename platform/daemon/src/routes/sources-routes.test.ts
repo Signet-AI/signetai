@@ -531,7 +531,7 @@ describe("Sources routes", () => {
 		expect(runtimePurges).toBe(1);
 
 		// The startup sequence runs the purge after DB init.
-		cleanupSourceDeletionTombstones(dir, () => {
+		await cleanupSourceDeletionTombstones(dir, () => {
 			startupPurges++;
 			return 1;
 		});
@@ -541,7 +541,7 @@ describe("Sources routes", () => {
 		await waitFor(() => runtimePurges === 2);
 	});
 
-	it("defers a failed tombstone purge instead of crashing startup", () => {
+	it("defers a failed tombstone purge instead of crashing startup", async () => {
 		const tombstonePath = join(dir, ".daemon", "source-deletion-tombstones.json");
 		mkdirSync(join(dir, ".daemon"), { recursive: true });
 		writeFileSync(
@@ -560,17 +560,15 @@ describe("Sources routes", () => {
 			)}\n`,
 		);
 		let attempts = 0;
-		expect(() =>
-			cleanupSourceDeletionTombstones(dir, () => {
-				attempts++;
-				throw new Error("embedding store unavailable");
-			}),
-		).not.toThrow();
+		await cleanupSourceDeletionTombstones(dir, () => {
+			attempts++;
+			throw new Error("embedding store unavailable");
+		});
 		expect(attempts).toBe(1);
 		// The tombstone survives a failed purge so the next boot retries it.
 		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(1);
 
-		cleanupSourceDeletionTombstones(dir, () => 1);
+		await cleanupSourceDeletionTombstones(dir, () => 1);
 		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
 	});
 

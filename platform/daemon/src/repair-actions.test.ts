@@ -55,7 +55,15 @@ function asAccessor(db: Database, onAsyncWrite?: () => void): DbAccessor {
 			return new Promise<T>((resolve, reject) => {
 				setTimeout(() => {
 					try {
-						resolve(this.withWriteTx(fn));
+						db.exec("BEGIN IMMEDIATE");
+						try {
+							const result = fn(db as unknown as WriteDb);
+							db.exec("COMMIT");
+							resolve(result);
+						} catch (error) {
+							db.exec("ROLLBACK");
+							throw error;
+						}
 					} catch (error) {
 						reject(error);
 					}
@@ -63,6 +71,9 @@ function asAccessor(db: Database, onAsyncWrite?: () => void): DbAccessor {
 			});
 		},
 		withReadDb<T>(fn: (rdb: ReadDb) => T): T {
+			return fn(db as unknown as ReadDb);
+		},
+		withReadDbAsync<T>(fn: (rdb: ReadDb) => Promise<T>): Promise<T> {
 			return fn(db as unknown as ReadDb);
 		},
 		close() {
@@ -251,13 +262,13 @@ function insertEmbedding(
 // ---------------------------------------------------------------------------
 
 describe("createRateLimiter", () => {
-	it("allows the first call", () => {
+	it("allows the first call", async () => {
 		const limiter = createRateLimiter();
 		const result = limiter.check("action", 60000, 10);
 		expect(result.allowed).toBe(true);
 	});
 
-	it("blocks a second call within cooldown", () => {
+	it("blocks a second call within cooldown", async () => {
 		const limiter = createRateLimiter();
 		limiter.record("action");
 		const result = limiter.check("action", 60000, 10);
@@ -265,7 +276,7 @@ describe("createRateLimiter", () => {
 		expect(result.reason).toMatch(/cooldown active/);
 	});
 
-	it("enforces hourly budget", () => {
+	it("enforces hourly budget", async () => {
 		const limiter = createRateLimiter();
 		// Use a 0ms cooldown so the limiter only blocks on budget, not cooldown
 		for (let i = 0; i < 3; i++) {
@@ -296,7 +307,7 @@ describe("createRateLimiter", () => {
 		expect(result.reason).toMatch(/hourly budget exhausted/);
 	});
 
-	it("resets hourly count after the hour window expires", () => {
+	it("resets hourly count after the hour window expires", async () => {
 		const limiter = createRateLimiter();
 		// Record, then directly verify that a past hourResetAt causes reset.
 		// We can observe this indirectly: record with budget=1, then once
@@ -326,7 +337,7 @@ describe("createRateLimiter", () => {
 // ---------------------------------------------------------------------------
 
 describe("checkRepairGate", () => {
-	it("denies when autonomousFrozen is true", () => {
+	it("denies when autonomousFrozen is true", async () => {
 		const limiter = createRateLimiter();
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, frozen: true } };
 		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
@@ -334,7 +345,7 @@ describe("checkRepairGate", () => {
 		expect(result.reason).toMatch(/autonomous\.frozen/);
 	});
 
-	it("denies agent when autonomous.enabled is false", () => {
+	it("denies agent when autonomous.enabled is false", async () => {
 		const limiter = createRateLimiter();
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
 		const result = checkRepairGate(cfg, CTX_AGENT, limiter, "a", 0, 100);
@@ -342,7 +353,7 @@ describe("checkRepairGate", () => {
 		expect(result.reason).toMatch(/autonomous\.enabled is false/);
 	});
 
-	it("allows operator even when autonomous.enabled is false", () => {
+	it("allows operator even when autonomous.enabled is false", async () => {
 		const limiter = createRateLimiter();
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
 		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
@@ -351,7 +362,7 @@ describe("checkRepairGate", () => {
 });
 
 describe("pruneGenericEntities", () => {
-	it("dry-runs and deletes generic entities without touching pinned or concrete entities", () => {
+	it("dry-runs and deletes generic entities without touching pinned or concrete entities", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
@@ -374,12 +385,12 @@ describe("pruneGenericEntities", () => {
 				 VALUES (?, 'default', 'signet', ?, ?)`,
 			).run("ent-skill", now, "/skills/skill-creator/SKILL.md");
 
-			const dryRun = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: true });
+			const dryRun = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: true });
 			expect(dryRun.success).toBe(true);
 			expect(dryRun.affected).toBe(1);
 			expect(dryRun.message).toContain("Sender");
 
-			const result = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: false });
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: false });
 			expect(result.success).toBe(true);
 			expect(result.affected).toBe(1);
 
@@ -390,7 +401,7 @@ describe("pruneGenericEntities", () => {
 		}
 	});
 
-	it("prunes Markdown-polluted and standalone structural nodes while preserving specific names", () => {
+	it("prunes Markdown-polluted and standalone structural nodes while preserving specific names", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
@@ -418,13 +429,13 @@ describe("pruneGenericEntities", () => {
 				 VALUES ('default', 'ent-current', 'ent-project', 1, 'session-1', ?, ?)`,
 			).run(now, now);
 
-			const dryRun = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: true });
+			const dryRun = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: true });
 			expect(dryRun.success).toBe(true);
 			expect(dryRun.affected).toBe(2);
 			expect(dryRun.message).toContain("Current");
 			expect(dryRun.message).toContain("**Status:**");
 
-			const result = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: false });
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: false });
 			expect(result.success).toBe(true);
 			expect(result.affected).toBe(2);
 			const remaining = db.prepare("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
@@ -440,7 +451,7 @@ describe("pruneGenericEntities", () => {
 		}
 	});
 
-	it("continues scanning past recent valid entities to find older generic rows", () => {
+	it("continues scanning past recent valid entities to find older generic rows", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
@@ -459,7 +470,7 @@ describe("pruneGenericEntities", () => {
 			}
 			insert.run("ent-sender-old", "Sender", "sender", "person", 12, old, old);
 
-			const dryRun = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+			const dryRun = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
 				dryRun: true,
 				batchSize: 1,
 			});
@@ -490,13 +501,13 @@ describe("requeueDeadJobs", () => {
 		db.close();
 	});
 
-	it("resets dead jobs to pending", () => {
+	it("resets dead jobs to pending", async () => {
 		insertMemory(db, "mem-1");
 		insertJob(db, "job-1", "mem-1", "dead");
 		insertJob(db, "job-2", "mem-1", "dead");
 
 		const limiter = createRateLimiter();
-		const result = requeueDeadJobs(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+		const result = await requeueDeadJobs(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(2);
@@ -507,14 +518,14 @@ describe("requeueDeadJobs", () => {
 		expect(statuses.every((r) => r.status === "pending")).toBe(true);
 	});
 
-	it("respects maxBatch limit", () => {
+	it("respects maxBatch limit", async () => {
 		insertMemory(db, "mem-2");
 		for (let i = 0; i < 5; i++) {
 			insertJob(db, `job-b-${i}`, "mem-2", "dead");
 		}
 
 		const limiter = createRateLimiter();
-		const result = requeueDeadJobs(accessor, TEST_CFG, CTX_OPERATOR, limiter, 3);
+		const result = await requeueDeadJobs(accessor, TEST_CFG, CTX_OPERATOR, limiter, 3);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(3);
@@ -523,11 +534,11 @@ describe("requeueDeadJobs", () => {
 		expect(remaining.n).toBe(2);
 	});
 
-	it("does not resurrect retired extraction jobs", () => {
+	it("does not resurrect retired extraction jobs", async () => {
 		insertMemory(db, "mem-retired");
 		insertJob(db, "job-retired", "mem-retired", "dead", undefined, 3, 3, "extract");
 
-		const result = requeueDeadJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
+		const result = await requeueDeadJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(0);
@@ -574,10 +585,10 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 	}
 
 	describe("cancelObsoleteJobs", () => {
-		it("default both-queue apply affects at most 1000 total rows (not 2000)", () => {
+		it("default both-queue apply affects at most 1000 total rows (not 2000)", async () => {
 			seedBothQueues(1001);
 
-			const result = cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			const result = await cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				olderThanMs: 0,
 			});
 
@@ -588,10 +599,10 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 			expect(countSummaryByStatus("cancelled")).toBe(0);
 		});
 
-		it("--max-batch 50 affects at most 50 total rows across both queues", () => {
+		it("--max-batch 50 affects at most 50 total rows across both queues", async () => {
 			seedBothQueues(1001);
 
-			const result = cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			const result = await cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				olderThanMs: 0,
 				maxBatch: 50,
 			});
@@ -602,10 +613,10 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 			expect(countSummaryByStatus("cancelled")).toBe(0);
 		});
 
-		it("single-table selection still affects up to the requested cap from the memory table", () => {
+		it("single-table selection still affects up to the requested cap from the memory table", async () => {
 			seedBothQueues(1001);
 
-			const result = cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			const result = await cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				olderThanMs: 0,
 				maxBatch: 50,
 				tables: ["memory"],
@@ -616,10 +627,10 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 			expect(countMemoryByStatus("cancelled")).toBe(50);
 		});
 
-		it("dry-run preview is selected from the same globally bounded set as apply", () => {
+		it("dry-run preview is selected from the same globally bounded set as apply", async () => {
 			seedBothQueues(1001);
 
-			const result = cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			const result = await cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				olderThanMs: 0,
 				maxBatch: 50,
 				dryRun: true,
@@ -638,10 +649,10 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 	});
 
 	describe("pruneTerminalJobs", () => {
-		it("default both-queue apply affects at most 1000 total rows (not 2000)", () => {
+		it("default both-queue apply affects at most 1000 total rows (not 2000)", async () => {
 			seedBothQueues(1001);
 
-			const result = pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			const result = await pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				retentionMs: 0,
 			});
 
@@ -651,10 +662,10 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 			expect(countSummaryByStatus("dead")).toBe(1001);
 		});
 
-		it("--max-batch 50 affects at most 50 total rows across both queues", () => {
+		it("--max-batch 50 affects at most 50 total rows across both queues", async () => {
 			seedBothQueues(1001);
 
-			const result = pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			const result = await pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				retentionMs: 0,
 				maxBatch: 50,
 			});
@@ -665,10 +676,10 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 			expect(countSummaryByStatus("dead")).toBe(1001);
 		});
 
-		it("single-table selection still affects up to the requested cap from the memory table", () => {
+		it("single-table selection still affects up to the requested cap from the memory table", async () => {
 			seedBothQueues(1001);
 
-			const result = pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			const result = await pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				retentionMs: 0,
 				maxBatch: 50,
 				tables: ["memory"],
@@ -679,10 +690,10 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 			expect(countMemoryByStatus("dead")).toBe(951);
 		});
 
-		it("dry-run preview is selected from the same globally bounded set as apply", () => {
+		it("dry-run preview is selected from the same globally bounded set as apply", async () => {
 			seedBothQueues(1001);
 
-			const result = pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			const result = await pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
 				retentionMs: 0,
 				maxBatch: 50,
 				dryRun: true,
@@ -717,7 +728,7 @@ describe("releaseStaleLeases", () => {
 		db.close();
 	});
 
-	it("releases stale leased jobs back to pending", () => {
+	it("releases stale leased jobs back to pending", async () => {
 		insertMemory(db, "mem-3");
 
 		// Leased 10 minutes ago — past a 5-minute lease timeout
@@ -730,7 +741,7 @@ describe("releaseStaleLeases", () => {
 
 		const cfg = { ...TEST_CFG, worker: { ...TEST_CFG.worker, leaseTimeoutMs: 5 * 60 * 1000 } };
 		const limiter = createRateLimiter();
-		const result = releaseStaleLeases(accessor, cfg, CTX_OPERATOR, limiter);
+		const result = await releaseStaleLeases(accessor, cfg, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
@@ -746,7 +757,7 @@ describe("releaseStaleLeases", () => {
 		expect(fresh.status).toBe("leased");
 	});
 
-	it("dead-letters stale leases that already exhausted max attempts", () => {
+	it("dead-letters stale leases that already exhausted max attempts", async () => {
 		insertMemory(db, "mem-4");
 
 		const staleAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
@@ -754,7 +765,7 @@ describe("releaseStaleLeases", () => {
 
 		const cfg = { ...TEST_CFG, worker: { ...TEST_CFG.worker, leaseTimeoutMs: 5 * 60 * 1000 } };
 		const limiter = createRateLimiter();
-		const result = releaseStaleLeases(accessor, cfg, CTX_OPERATOR, limiter);
+		const result = await releaseStaleLeases(accessor, cfg, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
@@ -941,6 +952,9 @@ describe("reembedMissingMemories", () => {
 				}
 				return accessor.withWriteTx(fn);
 			},
+			withWriteTxAsync<T>(fn: (wdb: WriteDb) => T): Promise<T> {
+				return Promise.resolve().then(() => flakyAccessor.withWriteTx(fn));
+			},
 		};
 
 		const first = reembedMissingMemories(
@@ -1010,7 +1024,7 @@ describe("reembedMissingMemories", () => {
 		// Reconciliation owns the derived index. It must repair the missing vec
 		// row from the canonical embedding without invoking the provider again.
 		db.exec("DROP TRIGGER reject_vec_insert");
-		const repaired = resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
+		const repaired = await resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
 		expect(repaired.success).toBe(true);
 		expect(repaired.affected).toBe(1);
 		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toHaveLength(1);
@@ -1025,14 +1039,14 @@ describe("reembedMissingMemories", () => {
 			BEFORE DELETE ON vec_embeddings
 			BEGIN SELECT RAISE(ABORT, 'simulated mid-write vector delete failure'); END
 		`);
-		expect(() => cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter())).toThrow(
+		await expect(cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter())).rejects.toThrow(
 			"failed to reconcile vec_embeddings before orphan cleanup",
 		);
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = 'mem-mid-write'").all()).toHaveLength(1);
 		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toHaveLength(1);
 
 		db.exec("DROP TRIGGER reject_vec_delete");
-		const cleaned = cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
+		const cleaned = await cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter());
 		expect(cleaned.success).toBe(true);
 		expect(cleaned.affected).toBe(1);
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = 'mem-mid-write'").all()).toHaveLength(0);
@@ -1535,7 +1549,7 @@ describe("reembedMissingMemories", () => {
 		).run("mem-dup-b", "identical content", "hash-dup", b, b);
 
 		// No embedding yet — both should show as missing
-		const before = getEmbeddingGapStats(accessor);
+		const before = await getEmbeddingGapStats(accessor);
 		expect(before.unembedded).toBe(2);
 
 		const limiter = createRateLimiter();
@@ -1554,7 +1568,7 @@ describe("reembedMissingMemories", () => {
 		expect(first.success).toBe(true);
 
 		// After one pass, both should be considered "embedded" via hash match
-		const after = getEmbeddingGapStats(accessor);
+		const after = await getEmbeddingGapStats(accessor);
 		expect(after.unembedded).toBe(0);
 		const rows = db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all("hash-dup") as Array<{
 			source_id: string;
@@ -1626,7 +1640,7 @@ describe("reembedModelMigration", () => {
 			`INSERT INTO memories (id, content, content_hash, embedding_model, type, created_at, updated_at, updated_by) VALUES ('model-a', 'old vector', 'hash-a', 'model-a', 'fact', ?, ?, 'test')`,
 		).run(now, now);
 		insertEmbedding(db, { id: "emb-a", sourceId: "model-a", contentHash: "hash-a", vector: [0.1, 0.2, 0.3] });
-		expect(getEmbeddingGapStats(accessor).unembedded).toBe(0);
+		expect((await getEmbeddingGapStats(accessor)).unembedded).toBe(0);
 		const result = await reembedModelMigration(
 			accessor,
 			TEST_CFG,
@@ -1648,7 +1662,7 @@ describe("reembedModelMigration", () => {
 			vectorIndexRebuildRequired: false,
 			target: { provider: "ollama", model: "model-b", dimensions: 3 },
 		});
-		expect(getEmbeddingGapStats(accessor).unembedded).toBe(0);
+		expect((await getEmbeddingGapStats(accessor)).unembedded).toBe(0);
 		expect(db.prepare("SELECT embedding_model FROM memories WHERE id = 'model-a'").get()).toEqual({
 			embedding_model: "model-b",
 		});
@@ -1870,8 +1884,14 @@ describe("reembedModelMigration", () => {
 				if (writeCalls === 1) throw new Error("simulated write failure");
 				return inner.withWriteTx(fn);
 			},
+			withWriteTxAsync<T>(fn: (wdb: WriteDb) => T): Promise<T> {
+				return Promise.resolve().then(() => flaky.withWriteTx(fn));
+			},
 			withReadDb<T>(fn: (rdb: ReadDb) => T): T {
 				return inner.withReadDb(fn);
+			},
+			withReadDbAsync<T>(fn: (rdb: ReadDb) => Promise<T>): Promise<T> {
+				return inner.withReadDbAsync(fn);
 			},
 			close() {
 				inner.close();
@@ -1922,7 +1942,7 @@ describe("cleanOrphanedEmbeddings", () => {
 		db.close();
 	});
 
-	it("keeps hash-covered embeddings even when the original source row is deleted", () => {
+	it("keeps hash-covered embeddings even when the original source row is deleted", async () => {
 		const now = new Date().toISOString();
 
 		db.prepare(
@@ -1946,11 +1966,11 @@ describe("cleanOrphanedEmbeddings", () => {
 		);
 
 		const limiter = createRateLimiter();
-		const result = cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+		const result = await cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(0);
-		expect(getEmbeddingGapStats(accessor).unembedded).toBe(0);
+		expect((await getEmbeddingGapStats(accessor)).unembedded).toBe(0);
 
 		const rows = db.prepare("SELECT id FROM embeddings WHERE id = ?").all("emb-shared") as Array<{ id: string }>;
 		expect(rows).toHaveLength(1);
@@ -1958,7 +1978,7 @@ describe("cleanOrphanedEmbeddings", () => {
 		expect(vecRows).toHaveLength(1);
 	});
 
-	it("removes embeddings with no source row and no active hash peer", () => {
+	it("removes embeddings with no source row and no active hash peer", async () => {
 		insertEmbedding(db, {
 			id: "emb-orphan",
 			contentHash: "hash-orphan",
@@ -1971,7 +1991,7 @@ describe("cleanOrphanedEmbeddings", () => {
 		);
 
 		const limiter = createRateLimiter();
-		const result = cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+		const result = await cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
@@ -2032,9 +2052,9 @@ describe("getEmbeddingGapStats", () => {
 		db.exec("COMMIT");
 	}
 
-	it("reports complete=true and exact 100% when every memory is embedded", () => {
+	it("reports complete=true and exact 100% when every memory is embedded", async () => {
 		seedCoverage(10, 0);
-		const stats = getEmbeddingGapStats(accessor);
+		const stats = await getEmbeddingGapStats(accessor);
 		expect(stats.total).toBe(10);
 		expect(stats.embedded).toBe(10);
 		expect(stats.unembedded).toBe(0);
@@ -2042,13 +2062,13 @@ describe("getEmbeddingGapStats", () => {
 		expect(stats.coverage).toBe("100.0%");
 	});
 
-	it("never reports 100% or complete=true while gaps remain (issue #906 scenario: 2251 memories, 5 gaps)", () => {
+	it("never reports 100% or complete=true while gaps remain (issue #906 scenario: 2251 memories, 5 gaps)", async () => {
 		// 5 gaps -> 99.78% already renders below 100% even under the old code, so
 		// this guards the sub-100% + complete=false invariant and exact-count
 		// parity for the issue's stated scenario. The round-up boundary itself
 		// (1 gap -> 99.96% -> old "100.0%") is covered by the test below.
 		seedCoverage(2251, 5);
-		const stats = getEmbeddingGapStats(accessor);
+		const stats = await getEmbeddingGapStats(accessor);
 		expect(stats.total).toBe(2251);
 		expect(stats.embedded).toBe(2246);
 		expect(stats.unembedded).toBe(5);
@@ -2060,17 +2080,17 @@ describe("getEmbeddingGapStats", () => {
 		expect(pct).toBeLessThan(100);
 	});
 
-	it("floors a single gap in a large store below 100% instead of rounding up", () => {
+	it("floors a single gap in a large store below 100% instead of rounding up", async () => {
 		// (2250/2251)*100 = 99.9556% would render as "100.0%" with naive toFixed(1).
 		seedCoverage(2251, 1);
-		const stats = getEmbeddingGapStats(accessor);
+		const stats = await getEmbeddingGapStats(accessor);
 		expect(stats.unembedded).toBe(1);
 		expect(stats.complete).toBe(false);
 		expect(stats.coverage).toBe("99.9%");
 	});
 
-	it("reports complete coverage on an empty store", () => {
-		const stats = getEmbeddingGapStats(accessor);
+	it("reports complete coverage on an empty store", async () => {
+		const stats = await getEmbeddingGapStats(accessor);
 		expect(stats.total).toBe(0);
 		expect(stats.embedded).toBe(0);
 		expect(stats.unembedded).toBe(0);
@@ -2095,14 +2115,14 @@ describe("getDedupStats", () => {
 		db.close();
 	});
 
-	it("returns zero stats on empty database", () => {
-		const stats = getDedupStats(accessor);
+	it("returns zero stats on empty database", async () => {
+		const stats = await getDedupStats(accessor);
 		expect(stats.exactClusters).toBe(0);
 		expect(stats.exactExcess).toBe(0);
 		expect(stats.totalActive).toBe(0);
 	});
 
-	it("counts exact hash clusters and excess", () => {
+	it("counts exact hash clusters and excess", async () => {
 		const now = new Date().toISOString();
 		// 3 memories with the same hash = 1 cluster, 2 excess
 		for (let i = 0; i < 3; i++) {
@@ -2124,13 +2144,13 @@ describe("getDedupStats", () => {
 			 VALUES (?, ?, 'hash-C', 'fact', ?, ?, 'test', 0.5)`,
 		).run("unique-c", "unique content", now, now);
 
-		const stats = getDedupStats(accessor);
+		const stats = await getDedupStats(accessor);
 		expect(stats.exactClusters).toBe(2);
 		expect(stats.exactExcess).toBe(3); // 2 + 1
 		expect(stats.totalActive).toBe(6);
 	});
 
-	it("excludes pinned and manual_override memories", () => {
+	it("excludes pinned and manual_override memories", async () => {
 		const now = new Date().toISOString();
 		// Insert 2 with same hash, but one is pinned
 		db.prepare(
@@ -2142,13 +2162,13 @@ describe("getDedupStats", () => {
 			 VALUES (?, ?, 'hash-pin', 'fact', ?, ?, 'test', 0.5)`,
 		).run("unpinned-1", "content", now, now);
 
-		const stats = getDedupStats(accessor);
+		const stats = await getDedupStats(accessor);
 		// The pinned one is excluded from the query, so there is only 1
 		// non-pinned row with hash-pin -- not a cluster
 		expect(stats.exactClusters).toBe(0);
 	});
 
-	it("excludes NULL content_hash from clustering", () => {
+	it("excludes NULL content_hash from clustering", async () => {
 		const now = new Date().toISOString();
 		// 3 memories with NULL hash -- should NOT form a cluster
 		for (let i = 0; i < 3; i++) {
@@ -2158,7 +2178,7 @@ describe("getDedupStats", () => {
 			).run(`null-hash-${i}`, `content ${i}`, now, now);
 		}
 
-		const stats = getDedupStats(accessor);
+		const stats = await getDedupStats(accessor);
 		expect(stats.exactClusters).toBe(0);
 		expect(stats.exactExcess).toBe(0);
 	});
@@ -2383,7 +2403,7 @@ describe("deduplicateMemories", () => {
 // ---------------------------------------------------------------------------
 
 describe("triggerRetentionSweep", () => {
-	it("calls sweep on the retention handle", () => {
+	it("calls sweep on the retention handle", async () => {
 		let swept = false;
 		const handle = {
 			sweep() {
@@ -2392,7 +2412,7 @@ describe("triggerRetentionSweep", () => {
 		};
 
 		const limiter = createRateLimiter();
-		const result = triggerRetentionSweep(TEST_CFG, CTX_OPERATOR, limiter, handle);
+		const result = await triggerRetentionSweep(TEST_CFG, CTX_OPERATOR, limiter, handle);
 
 		expect(result.success).toBe(true);
 		expect(swept).toBe(true);
@@ -2418,7 +2438,7 @@ describe("resyncVectorIndex", () => {
 		db.close();
 	});
 
-	it("inserts missing vec rows and removes orphan vec rows", () => {
+	it("inserts missing vec rows and removes orphan vec rows", async () => {
 		insertMemory(db, "mem-v-1");
 		insertMemory(db, "mem-v-2");
 
@@ -2445,7 +2465,7 @@ describe("resyncVectorIndex", () => {
 		);
 
 		const limiter = createRateLimiter();
-		const result = resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+		const result = await resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(2);
@@ -2454,10 +2474,10 @@ describe("resyncVectorIndex", () => {
 		expect(ids.map((row) => row.id)).toEqual(["emb-v-1", "emb-v-2"]);
 	});
 
-	it("returns a clear error when vec table is missing", () => {
+	it("returns a clear error when vec table is missing", async () => {
 		db.exec("DROP TABLE vec_embeddings");
 		const limiter = createRateLimiter();
-		const result = resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+		const result = await resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(false);
 		expect(result.message).toMatch(/vec_embeddings table not found/);

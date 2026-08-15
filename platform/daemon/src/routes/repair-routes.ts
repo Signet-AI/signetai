@@ -90,17 +90,17 @@ export function registerRepairRoutes(
 		return requirePermission("admin", deps.authConfig ?? authConfig)(c, next);
 	});
 
-	app.post("/api/repair/requeue-dead", (c) => {
+	app.post("/api/repair/requeue-dead", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const ctx = resolveRepairContext(c);
-		const result = requeueDeadJobs(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
+		const result = await requeueDeadJobs(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
 		return c.json(result, result.success ? 200 : 429);
 	});
 
-	app.post("/api/repair/release-leases", (c) => {
+	app.post("/api/repair/release-leases", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const ctx = resolveRepairContext(c);
-		const result = releaseStaleLeases(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
+		const result = await releaseStaleLeases(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
 		return c.json(result, result.success ? 200 : 429);
 	});
 
@@ -118,8 +118,8 @@ export function registerRepairRoutes(
 		return c.json(result, result.success ? 200 : 429);
 	});
 
-	app.post("/api/repair/retention-sweep", (c) => {
-		const details = runRetentionSweepOnce(getDbAccessor(), DEFAULT_RETENTION);
+	app.post("/api/repair/retention-sweep", async (c) => {
+		const details = await runRetentionSweepOnce(getDbAccessor(), DEFAULT_RETENTION);
 		const affected =
 			details.graphLinksPurged +
 			details.entitiesOrphaned +
@@ -137,8 +137,8 @@ export function registerRepairRoutes(
 		});
 	});
 
-	app.get("/api/repair/embedding-gaps", (c) => {
-		const stats = getEmbeddingGapStats(getDbAccessor());
+	app.get("/api/repair/embedding-gaps", async (c) => {
+		const stats = await getEmbeddingGapStats(getDbAccessor());
 		return c.json(stats);
 	});
 
@@ -192,22 +192,22 @@ export function registerRepairRoutes(
 		return c.json(result, repairHttpStatus(result));
 	});
 
-	app.post("/api/repair/resync-vec", (c) => {
+	app.post("/api/repair/resync-vec", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const ctx = resolveRepairContext(c);
-		const result = resyncVectorIndex(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
+		const result = await resyncVectorIndex(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
 		return c.json(result, repairHttpStatus(result));
 	});
 
-	app.post("/api/repair/clean-orphans", (c) => {
+	app.post("/api/repair/clean-orphans", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const ctx = resolveRepairContext(c);
-		const result = cleanOrphanedEmbeddings(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
+		const result = await cleanOrphanedEmbeddings(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
 		return c.json(result, repairHttpStatus(result));
 	});
 
-	app.get("/api/repair/dedup-stats", (c) => {
-		const stats = getDedupStats(getDbAccessor());
+	app.get("/api/repair/dedup-stats", async (c) => {
+		const stats = await getDedupStats(getDbAccessor());
 		return c.json(stats);
 	});
 
@@ -255,7 +255,7 @@ export function registerRepairRoutes(
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
-		const result = pruneChunkGroupEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+		const result = await pruneChunkGroupEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
 			batchSize,
 			dryRun,
 		});
@@ -276,7 +276,7 @@ export function registerRepairRoutes(
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
-		const result = pruneSingletonExtractedEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+		const result = await pruneSingletonExtractedEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
 			batchSize,
 			dryRun,
 			maxMentions,
@@ -298,7 +298,7 @@ export function registerRepairRoutes(
 			// no body or invalid JSON — use defaults
 		}
 		const agentId = resolveRepairAgentId(c, body);
-		const result = pruneGenericEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+		const result = await pruneGenericEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
 			batchSize,
 			dryRun,
 			agentId,

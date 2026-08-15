@@ -42,6 +42,9 @@ function wrapDb(db: Database): DbAccessor {
 		withReadDb<T>(fn: (db: Database) => T): T {
 			return fn(db);
 		},
+		withReadDbAsync<T>(fn: (db: Database) => Promise<T>): Promise<T> {
+			return fn(db);
+		},
 		withWriteTx<T>(fn: (db: Database) => T): T {
 			db.exec("BEGIN IMMEDIATE");
 			try {
@@ -52,6 +55,19 @@ function wrapDb(db: Database): DbAccessor {
 				db.exec("ROLLBACK");
 				throw e;
 			}
+		},
+		withWriteTxAsync<T>(fn: (db: Database) => T): Promise<T> {
+			return Promise.resolve().then(() => {
+				db.exec("BEGIN IMMEDIATE");
+				try {
+					const result = fn(db);
+					db.exec("COMMIT");
+					return result;
+				} catch (e) {
+					db.exec("ROLLBACK");
+					throw e;
+				}
+			});
 		},
 	} as unknown as DbAccessor;
 }
@@ -207,7 +223,7 @@ describe("dreaming worker agent scope", () => {
 	it("writes manual async trigger passes to the requested agent", async () => {
 		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default");
 		try {
-			const passId = worker.triggerAsync("incremental", "noam");
+			const passId = await worker.triggerAsync("incremental", "noam");
 			await worker.activePass;
 
 			const row = db.prepare("SELECT agent_id, status, mode FROM dreaming_passes WHERE id = ?").get(passId) as {
@@ -226,7 +242,7 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
-	it("reports scoped Dreaming ages using SQLite UTC timestamps", () => {
+	it("reports scoped Dreaming ages using SQLite UTC timestamps", async () => {
 		db.prepare(
 			`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
 			 VALUES ('active-pass', 'default', 'incremental', 'running', '2026-08-13 10:00:00', '2026-08-13 10:00:00')`,
@@ -237,13 +253,13 @@ describe("dreaming worker agent scope", () => {
 		).run();
 
 		const nowMs = Date.UTC(2026, 7, 13, 11);
-		expect(getDreamingWorkloadDiagnostics(accessor, "default", nowMs)).toEqual({
+		expect(await getDreamingWorkloadDiagnostics(accessor, "default", nowMs)).toEqual({
 			activePasses: 1,
 			oldestPassAgeMs: 60 * 60 * 1_000,
 			pendingAttention: 1,
 			oldestAttentionAgeMs: 2 * 60 * 60 * 1_000,
 		});
-		expect(getDreamingWorkloadDiagnostics(accessor, "other", nowMs)).toEqual({
+		expect(await getDreamingWorkloadDiagnostics(accessor, "other", nowMs)).toEqual({
 			activePasses: 0,
 			oldestPassAgeMs: null,
 			pendingAttention: 0,
@@ -374,7 +390,7 @@ describe("dreaming worker agent scope", () => {
 			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
 			 VALUES ('sweep-evidence', 'default', 'New episodic evidence awaiting a content pass.', 'pi', datetime('now'), datetime('now'), datetime('now'))`,
 		).run();
-		enqueueDreamingHygieneAttention(accessor, "default");
+		await enqueueDreamingHygieneAttention(accessor, "default");
 
 		let focus: DreamingPassFocus | null = null;
 		const first = await selectDreamingCheckMode(accessor, ["default"], focus);
@@ -404,7 +420,7 @@ describe("dreaming worker agent scope", () => {
 		expect(await selectDreamingCheckMode(accessor, ["default"], null)).toBe("incremental-content");
 	});
 
-	it("seeds deterministic hygiene attention for legacy graph rows", () => {
+	it("seeds deterministic hygiene attention for legacy graph rows", async () => {
 		// Hygiene attention is enqueued during regular check() ticks, not at
 		// worker startup (startup scans block the event loop before the HTTP
 		// server binds). Exercise the enqueue contract directly.
@@ -413,7 +429,7 @@ describe("dreaming worker agent scope", () => {
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 			 VALUES ('legacy-husk', 'Legacy Husk', 'legacy husk', 'project', 'default', 5, datetime('now'), datetime('now'))`,
 		).run();
-		enqueueDreamingHygieneAttention(accessor, "default");
+		await enqueueDreamingHygieneAttention(accessor, "default");
 		expect(db.prepare("SELECT kind, subject_ref FROM dreaming_attention WHERE agent_id = ?").get("default")).toEqual({
 			kind: "hygiene",
 			subject_ref: "entity:legacy-husk",

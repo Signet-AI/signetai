@@ -85,9 +85,14 @@ import {
 import { DreamingBacklogTokenCache, type DreamingBacklogTokenEntry } from "./dreaming-token-cache";
 import { countTokens } from "./tokenizer";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+async function writeTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
+	if (!accessor.withWriteTxAsync) throw new Error("async write API is unavailable");
+	return accessor.withWriteTxAsync(fn);
+}
+
+async function readDb<T>(accessor: DbAccessor, fn: (db: ReadDb) => T | PromiseLike<T>): Promise<T> {
+	return accessor.withReadDbAsync(async (db) => fn(db));
+}
 
 export type DreamingMode = "incremental" | "compact" | "incremental-hygiene" | "incremental-content";
 
@@ -109,14 +114,13 @@ export interface DreamingState {
 }
 
 /** Queue bounded deterministic graph cleanup work for the next Dreaming pass. */
-export function enqueueDreamingHygieneAttention(
+export async function enqueueDreamingHygieneAttention(
 	accessor: DbAccessor,
 	agentId: string,
 	limit = 50,
 	caps?: GraphHygieneCaps,
-): number {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+): Promise<number> {
+	return await writeTx(accessor, (db) => {
 		const candidates = getDreamingHygieneCandidatesInDb(db, { agentId, limit, caps });
 		for (const candidate of candidates) {
 			enqueueDreamingAttentionInTx(db, {
@@ -139,22 +143,18 @@ export function enqueueDreamingHygieneAttention(
  * episodic memories, then the normal Dreaming worker decides when and how to
  * spend an inference pass.
  */
-export function enqueueDreamingSurprisalAttention(
+export async function enqueueDreamingSurprisalAttention(
 	accessor: DbAccessor,
 	agentId: string,
 	cfg: DreamingConfig,
-): DreamingSurprisalSelection | null {
+): Promise<DreamingSurprisalSelection | null> {
 	const surprisal = cfg.surprisal;
 	if (!surprisal?.enabled) return null;
 	// Do not pass the Dreaming cursor as a write frontier. A surprisal hint is a
 	// bounded exploration sample and must never mark evidence as processed.
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const selection = accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
-		selectDreamingSurprisalInDb(db, agentId, surprisal, null),
-	);
+	const selection = await readDb(accessor, (db) => selectDreamingSurprisalInDb(db, agentId, surprisal, null));
 	if (selection.candidates.length > 0) {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+		await writeTx(accessor, (db) => {
 			for (const candidate of selection.candidates) {
 				enqueueDreamingAttentionInTx(db, {
 					agentId,
@@ -255,14 +255,13 @@ export interface DreamingWorkloadDiagnostics {
 	readonly oldestAttentionAgeMs: number | null;
 }
 
-export function getDreamingWorkloadDiagnostics(
+export async function getDreamingWorkloadDiagnostics(
 	accessor: DbAccessor,
 	agentId: string,
 	nowMs = Date.now(),
-): DreamingWorkloadDiagnostics {
-	const attention = getDreamingAttentionWorkloadDiagnostics(accessor, agentId, nowMs);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+): Promise<DreamingWorkloadDiagnostics> {
+	const attention = await getDreamingAttentionWorkloadDiagnostics(accessor, agentId, nowMs);
+	return readDb(accessor, (db) => {
 		const row = db
 			.prepare(
 				`SELECT COUNT(*) AS active, MIN(started_at) AS oldestStartedAt
@@ -406,9 +405,8 @@ function readDreamingState(db: ReadDb, agentId: string): DreamingState {
 	};
 }
 
-export function getDreamingState(accessor: DbAccessor, agentId: string): DreamingState {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => readDreamingState(db, agentId));
+export async function getDreamingState(accessor: DbAccessor, agentId: string): Promise<DreamingState> {
+	return readDb(accessor, (db) => readDreamingState(db, agentId));
 }
 
 function resetDreamingTokens(
@@ -441,9 +439,8 @@ function resetDreamingTokens(
 	}
 }
 
-export function recordDreamingFailure(accessor: DbAccessor, agentId: string): void {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+export async function recordDreamingFailure(accessor: DbAccessor, agentId: string): Promise<void> {
+	await writeTx(accessor, (db) => {
 		const exists = db.prepare("SELECT 1 FROM dreaming_state WHERE agent_id = ?").get(agentId);
 		if (exists) {
 			db.prepare(
@@ -507,10 +504,9 @@ function nextEvidenceWatermark(surfaced: string, previous: string | null, cutoff
 	return timestampMillis(capped) > timestampMillis(previous) ? capped : previous;
 }
 
-export function createDreamingPass(accessor: DbAccessor, agentId: string, mode: DreamingMode): string {
+export async function createDreamingPass(accessor: DbAccessor, agentId: string, mode: DreamingMode): Promise<string> {
 	const id = randomUUID();
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+	await writeTx(accessor, (db) => {
 		db.prepare(
 			`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
 			 VALUES (?, ?, ?, 'running', datetime('now'), datetime('now'))`,
@@ -519,9 +515,8 @@ export function createDreamingPass(accessor: DbAccessor, agentId: string, mode: 
 	return id;
 }
 
-function failDreamingPass(accessor: DbAccessor, passId: string, error: string): void {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+async function failDreamingPass(accessor: DbAccessor, passId: string, error: string): Promise<void> {
+	await writeTx(accessor, (db) => {
 		db.prepare(
 			`UPDATE dreaming_passes
 			 SET status = 'failed',
@@ -532,9 +527,12 @@ function failDreamingPass(accessor: DbAccessor, passId: string, error: string): 
 	});
 }
 
-export function getDreamingPasses(accessor: DbAccessor, agentId: string, limit = 10): readonly DreamingPassRow[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+export async function getDreamingPasses(
+	accessor: DbAccessor,
+	agentId: string,
+	limit = 10,
+): Promise<readonly DreamingPassRow[]> {
+	return readDb(accessor, (db) => {
 		return db
 			.prepare(
 				`SELECT id, mode, status, started_at AS startedAt,
@@ -581,15 +579,14 @@ function parseToolTrace(value: string): unknown {
 	}
 }
 
-function recordDreamingToolCall(
+async function recordDreamingToolCall(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
 	sequence: number,
 	trace: DreamingToolCallTrace,
-): void {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+): Promise<void> {
+	await writeTx(accessor, (db) => {
 		db.prepare(
 			`INSERT INTO dreaming_tool_calls
 			 (id, agent_id, pass_id, sequence, tool_call_id, tool_name, input_json, output_json, success, latency_ms)
@@ -610,14 +607,14 @@ function recordDreamingToolCall(
 }
 
 /** Return the Pi capability trace for one scoped Dreaming pass. */
-export function getDreamingToolCalls(
+export async function getDreamingToolCalls(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
-): readonly DreamingToolCall[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) =>
+): Promise<readonly DreamingToolCall[]> {
+	return readDb(
+		accessor,
+		(db) =>
 			db
 				.prepare(
 					`SELECT id, pass_id AS passId, sequence, tool_call_id AS toolCallId,
@@ -657,13 +654,13 @@ export function getDreamingToolCalls(
 	);
 }
 
-export function getDreamingEvidenceExclusions(
+export async function getDreamingEvidenceExclusions(
 	accessor: DbAccessor,
 	agentId: string,
-): readonly DreamingEvidenceExclusion[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) =>
+): Promise<readonly DreamingEvidenceExclusion[]> {
+	return readDb(
+		accessor,
+		(db) =>
 			db
 				.prepare(
 					`SELECT source_kind AS sourceKind, source_id AS sourceId, reason,
@@ -679,14 +676,13 @@ export function getDreamingEvidenceExclusions(
 	);
 }
 
-export function requestDreamingEvidenceRequeue(
+export async function requestDreamingEvidenceRequeue(
 	accessor: DbAccessor,
 	agentId: string,
 	sourceKind: EpisodicSourceRecord["kind"],
 	sourceId: string,
-): boolean {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+): Promise<boolean> {
+	return await writeTx(accessor, (db) => {
 		const result = db
 			.prepare(
 				`UPDATE dreaming_evidence_exclusions
@@ -1194,10 +1190,15 @@ function countDreamingEvidenceLinks(evidence: readonly unknown[] | undefined): n
 	return refs.size;
 }
 
-function addAttributeMemoryId(accessor: DbAccessor, agentId: string, attributeId: string, set: Set<string>): void {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const row = accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) =>
+async function addAttributeMemoryId(
+	accessor: DbAccessor,
+	agentId: string,
+	attributeId: string,
+	set: Set<string>,
+): Promise<void> {
+	const row = await readDb(
+		accessor,
+		(db) =>
 			db
 				.prepare("SELECT memory_id AS memoryId FROM entity_attributes WHERE id = ? AND agent_id = ?")
 				.get(attributeId, agentId) as { memoryId: string | null } | undefined,
@@ -1205,19 +1206,18 @@ function addAttributeMemoryId(accessor: DbAccessor, agentId: string, attributeId
 	if (typeof row?.memoryId === "string") set.add(row.memoryId);
 }
 
-function collectDreamingRetirementCandidates(
+async function collectDreamingRetirementCandidates(
 	accessor: DbAccessor,
 	agentId: string,
 	operations: readonly DreamingOperationRequest[],
-): DreamingRetirementCandidates {
+): Promise<DreamingRetirementCandidates> {
 	const candidates = new Map<number, ReadonlySet<string>>();
 	for (let index = 0; index < operations.length; index += 1) {
 		const operation = operations[index];
 		if (!operation) continue;
 		const target = typeof operation.payload.target === "string" ? operation.payload.target : null;
 		if (target === null) continue;
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const rows: Array<{ readonly memoryId: string }> = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+		const rows = await readDb(accessor, (db) => {
 			if (operation.operation === "archive_claim_value") {
 				return db
 					.prepare(
@@ -1249,16 +1249,15 @@ function collectDreamingRetirementCandidates(
 	return candidates;
 }
 
-function createdMemoryIdsRetiredByDreamingArchive(
+async function createdMemoryIdsRetiredByDreamingArchive(
 	accessor: DbAccessor,
 	agentId: string,
 	operation: DreamingOperationRequest,
 	createdMemoryIds: ReadonlySet<string>,
-): readonly string[] {
+): Promise<readonly string[]> {
 	const target = typeof operation.payload.target === "string" ? operation.payload.target : null;
 	if (target === null) return [];
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const rows: Array<{ readonly memoryId: string }> = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+	const rows = await readDb(accessor, (db) => {
 		if (operation.operation === "archive_claim_value") {
 			return db
 				.prepare(
@@ -1290,14 +1289,14 @@ function createdMemoryIdsRetiredByDreamingArchive(
 	return rows.map((row) => row.memoryId).filter((memoryId) => createdMemoryIds.has(memoryId));
 }
 
-function recordDreamingOperationEffects(
+async function recordDreamingOperationEffects(
 	accessor: DbAccessor,
 	agentId: string,
 	state: DreamingPassEffectState,
 	result: ApplyDreamingOperationsResult,
 	operations: readonly DreamingOperationRequest[],
 	retirementCandidates: DreamingRetirementCandidates,
-): void {
+): Promise<void> {
 	for (const item of result.items) {
 		if (!item.ok) continue;
 		const operation = operations[item.index];
@@ -1346,7 +1345,7 @@ function recordDreamingOperationEffects(
 					? [details.previousAttributeId]
 					: [];
 			for (const id of supersededAttributeIds) {
-				if (typeof id === "string") addAttributeMemoryId(accessor, agentId, id, state.supersededMemoryIds);
+				if (typeof id === "string") await addAttributeMemoryId(accessor, agentId, id, state.supersededMemoryIds);
 			}
 		}
 		if (operation.operation === "supersede_claim_value") {
@@ -1355,7 +1354,7 @@ function recordDreamingOperationEffects(
 			if (Array.isArray(details?.supersededAttributeIds)) {
 				for (const id of details.supersededAttributeIds) {
 					if (typeof id === "string") {
-						addAttributeMemoryId(
+						await addAttributeMemoryId(
 							accessor,
 							agentId,
 							id,
@@ -1365,13 +1364,13 @@ function recordDreamingOperationEffects(
 				}
 			}
 			if (replacementAttributeId !== null && details?.replacementCreated === true) {
-				addAttributeMemoryId(accessor, agentId, replacementAttributeId, state.createdMemoryIds);
+				await addAttributeMemoryId(accessor, agentId, replacementAttributeId, state.createdMemoryIds);
 			}
 		}
 		for (const memoryId of retirementCandidates.get(item.index) ?? []) {
 			state.retiredMemoryIds.add(memoryId);
 		}
-		for (const memoryId of createdMemoryIdsRetiredByDreamingArchive(
+		for (const memoryId of await createdMemoryIdsRetiredByDreamingArchive(
 			accessor,
 			agentId,
 			operation,
@@ -1392,7 +1391,7 @@ export async function runDreamingAgentPass(
 	existingPassId?: string,
 	writeCaps?: GraphWriteCaps,
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
-	const passId = existingPassId ?? createDreamingPass(accessor, agentId, mode);
+	const passId = existingPassId ?? (await createDreamingPass(accessor, agentId, mode));
 	const passStartedAtMs = Date.now();
 	const effects = createDreamingPassEffectState();
 	let toolCallSequence = 0;
@@ -1407,32 +1406,28 @@ export async function runDreamingAgentPass(
 		// Pass-start cutoff, SQLite format. The stored watermark may also be
 		// the raw surfaced captured_at (ISO); every comparison goes through
 		// julianday(), so the mixed formats stay ordered (#1149).
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const cutoff = accessor.withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
-				(db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now,
+		const cutoff = await readDb(
+			accessor,
+			(db) => (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now,
 		);
 
 		// One Dreaming pass covers the whole install: it only runs when some
 		// scope has pending attention or an episodic backlog. Scheduled checks
 		// are already gated by shouldTriggerDreaming; this protects manual
 		// triggers and compact runs from spending tokens on nothing.
-		const hasPendingHygieneAttention = scopes.some((scope) =>
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
-				hasDreamingAttentionKindInDb(db, scope, ["hygiene"]),
-			),
-		);
-		const hasPendingContentAttention = scopes.some((scope) =>
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
-				hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
-			),
-		);
-		const hasPendingAttention = scopes.some((scope) =>
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			accessor.withReadDb((db: import("../db-accessor").ReadDb) => getDreamingAttentionInDb(db, scope, 1).length > 0),
-		);
+		const [hasPendingHygieneAttention, hasPendingContentAttention, hasPendingAttention] = await Promise.all([
+			Promise.all(
+				scopes.map((scope) => readDb(accessor, (db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"]))),
+			).then((values) => values.some(Boolean)),
+			Promise.all(
+				scopes.map((scope) =>
+					readDb(accessor, (db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS)),
+				),
+			).then((values) => values.some(Boolean)),
+			Promise.all(
+				scopes.map((scope) => readDb(accessor, (db) => getDreamingAttentionInDb(db, scope, 1).length > 0)),
+			).then((values) => values.some(Boolean)),
+		]);
 		const backlogByScope = new Map(
 			await Promise.all(
 				scopes.map(async (scope) => [scope, await getDreamingEpisodicTokenBacklog(accessor, scope)] as const),
@@ -1446,8 +1441,7 @@ export async function runDreamingAgentPass(
 			hasPendingContentAttention || (hasPendingAttention && !hasPendingHygieneAttention),
 		);
 		if (earlyExitSummary !== null) {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+			await writeTx(accessor, (db) => {
 				db.prepare(
 					`UPDATE dreaming_passes SET status = 'completed', completed_at = datetime('now'),
 					 tokens_consumed = 0, mutations_applied = 0, mutations_skipped = 0,
@@ -1498,24 +1492,21 @@ export async function runDreamingAgentPass(
 			actor: "dreaming",
 			passId,
 			writeCaps,
-			onOperationsAboutToApply(operations, scopeId) {
-				retirementCandidates = collectDreamingRetirementCandidates(accessor, scopeId, operations);
+			async onOperationsAboutToApply(operations, scopeId) {
+				retirementCandidates = await collectDreamingRetirementCandidates(accessor, scopeId, operations);
 			},
-			onOperationsApplied(result, operations, scopeId) {
+			async onOperationsApplied(result, operations, scopeId) {
 				applyCallbackReported = true;
 				applied += result.items.filter((item) => item.ok).length;
 				failed += result.items.filter((item) => !item.ok).length;
 				if (!result.ok && result.items.length === 0) failed++;
-				recordDreamingOperationEffects(accessor, scopeId, effects, result, operations, retirementCandidates);
+				await recordDreamingOperationEffects(accessor, scopeId, effects, result, operations, retirementCandidates);
 				retirementCandidates = new Map();
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
-					resolveRequeuedDreamingEvidenceInTx(db, scopeId, passId, result, operations),
-				);
+				await writeTx(accessor, (db) => resolveRequeuedDreamingEvidenceInTx(db, scopeId, passId, result, operations));
 				rejectedEvidence.push(...collectRejectedDreamingEvidence(accessor, scopeId, result, operations));
 			},
-			onToolCall(trace) {
-				recordDreamingToolCall(accessor, agentId, passId, ++toolCallSequence, trace);
+			async onToolCall(trace) {
+				await recordDreamingToolCall(accessor, agentId, passId, ++toolCallSequence, trace);
 				if (trace.tool === "search_evidence" && trace.output.ok === true && Array.isArray(trace.output.items)) {
 					const input = isRecord(trace.input) ? trace.input : null;
 					const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
@@ -1595,10 +1586,7 @@ export async function runDreamingAgentPass(
 		// evidence must not skip it for the next scan-first search (#1149).
 		const nextWatermarkByScope = new Map<string, string | null>();
 		for (const scope of scopes) {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const previous = accessor.withReadDb(
-				(db: import("../db-accessor").ReadDb) => readDreamingState(db, scope).lastPassAt,
-			);
+			const previous = await readDb(accessor, (db) => readDreamingState(db, scope).lastPassAt);
 			const surfaced = surfacedWatermarkByScope.get(scope);
 			nextWatermarkByScope.set(
 				scope,
@@ -1609,19 +1597,21 @@ export async function runDreamingAgentPass(
 		// projection. Combined passes can ingest content too; gating this on the
 		// focused-mode name would advance the watermark without writing the
 		// manifest.
-		const transcriptManifestEntries = [...surfacedTranscriptRefsByScope.entries()].flatMap(([scope, refs]) =>
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
-				[...refs].flatMap((sourceRef) => {
-					const source = readEpisodicSource(db, { agentId: scope, from: sourceRef });
-					return source === null || !source.completed
-						? []
-						: [{ scope, source, content: renderDreamingEvidence(source) }];
-				}),
-			),
-		);
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+		const transcriptManifestEntries = (
+			await Promise.all(
+				[...surfacedTranscriptRefsByScope.entries()].map(([scope, refs]) =>
+					readDb(accessor, (db) =>
+						[...refs].flatMap((sourceRef) => {
+							const source = readEpisodicSource(db, { agentId: scope, from: sourceRef });
+							return source === null || !source.completed
+								? []
+								: [{ scope, source, content: renderDreamingEvidence(source) }];
+						}),
+					),
+				),
+			)
+		).flat();
+		await writeTx(accessor, (db) => {
 			writeDreamingTranscriptManifestInTx(db, {
 				passId,
 				entries: transcriptManifestEntries,
@@ -1715,7 +1705,7 @@ export async function runDreamingAgentPass(
 		recordPipelineError("decision", isPipelineTimeout(error) ? "DECISION_TIMEOUT" : "DECISION_INVALID");
 		logger.error("dreaming", "Agentic dreaming pass failed", undefined, { error: message });
 		try {
-			failDreamingPass(accessor, passId, message);
+			await failDreamingPass(accessor, passId, message);
 		} finally {
 			recordDreamingPassTelemetry({
 				mode,
@@ -1854,8 +1844,12 @@ export function isDreamingScopeHalted(state: DreamingState, nowMs = Date.now()):
 }
 
 /** Cheap sweep pre-check: one indexed dreaming_state row, no attention scan. */
-export function isDreamingHaltActive(accessor: DbAccessor, agentId: string, nowMs = Date.now()): boolean {
-	return isDreamingScopeHalted(getDreamingState(accessor, agentId), nowMs);
+export async function isDreamingHaltActive(
+	accessor: DbAccessor,
+	agentId: string,
+	nowMs = Date.now(),
+): Promise<boolean> {
+	return isDreamingScopeHalted(await getDreamingState(accessor, agentId), nowMs);
 }
 
 function readDreamingEpisodicTokenBacklogEntriesInDb(
@@ -1920,10 +1914,7 @@ export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string)
 }
 
 export async function getDreamingEpisodicTokenBacklog(accessor: DbAccessor, agentId: string): Promise<number> {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const entries = accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
-		readDreamingEpisodicTokenBacklogEntriesInDb(db, agentId),
-	);
+	const entries = await readDb(accessor, (db) => readDreamingEpisodicTokenBacklogEntriesInDb(db, agentId));
 	return dreamingBacklogTokenCache.refresh(agentId, entries);
 }
 
@@ -1950,11 +1941,8 @@ async function shouldTriggerDreamingAfterBacklog(
 	nowMs: number,
 	episodicTokens: number,
 ): Promise<boolean> {
-	const state = getDreamingState(accessor, agentId);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const hasAttention = accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) => getDreamingAttentionInDb(db, agentId, 1).length > 0,
-	);
+	const state = await getDreamingState(accessor, agentId);
+	const hasAttention = await readDb(accessor, (db) => getDreamingAttentionInDb(db, agentId, 1).length > 0);
 
 	// Hard halt after repeated consecutive failures: no automatic scheduling
 	// for the cooldown window. Explicit operator triggers bypass this gate.
@@ -1971,8 +1959,7 @@ async function shouldTriggerDreamingAfterBacklog(
 	// First run only backfills actual episodic evidence, except for explicit
 	// scoped attention that has been queued for a Dreaming review.
 	if (cfg.backfillOnFirstRun && state.lastPassAt === null) return episodicTokens > 0 || hasAttention;
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const hasContinuation = accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
+	const hasContinuation = await readDb(accessor, (db) =>
 		hasDreamingEvidenceContinuation(db, agentId, state.lastPassId),
 	);
 	if (hasAttention || episodicTokens >= cfg.tokenThreshold || hasContinuation) return true;

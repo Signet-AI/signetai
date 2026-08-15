@@ -4085,7 +4085,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				});
 			}
 
-			const jobId = enqueueDocumentIngestJob(accessor, id);
+			const jobId = await enqueueDocumentIngestJob(accessor, id);
 			return c.json({ id, status: "queued", jobId: jobId ?? undefined }, 201);
 		} catch (e) {
 			logger.error("documents", "Failed to create document", e as Error);

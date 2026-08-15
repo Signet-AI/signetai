@@ -266,9 +266,12 @@ export interface CreateDreamingCapabilitiesParams {
 		result: ApplyDreamingOperationsResult,
 		operations: readonly DreamingOperationRequest[],
 		agentId: string,
-	) => void;
-	readonly onOperationsAboutToApply?: (operations: readonly DreamingOperationRequest[], agentId: string) => void;
-	readonly onToolCall?: (trace: DreamingToolCallTrace) => void;
+	) => void | PromiseLike<void>;
+	readonly onOperationsAboutToApply?: (
+		operations: readonly DreamingOperationRequest[],
+		agentId: string,
+	) => void | PromiseLike<void>;
+	readonly onToolCall?: (trace: DreamingToolCallTrace) => void | PromiseLike<void>;
 }
 
 export interface DreamingCapabilityManifestEntry {
@@ -749,7 +752,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				operations: z.array(DREAMING_ONTOLOGY_OPERATION_SCHEMA).min(1).max(DREAMING_MAX_OPERATIONS_PER_REQUEST),
 			}),
 			async ({ agentId: scopeId, operations }) => {
-				params.onOperationsAboutToApply?.(operations, scopeId);
+				await params.onOperationsAboutToApply?.(operations, scopeId);
 				const result = await applyDreamingOperations({
 					accessor,
 					agentId: scopeId,
@@ -758,7 +761,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					passId: params.passId,
 					writeCaps: params.writeCaps,
 				});
-				params.onOperationsApplied?.(result, operations, scopeId);
+				await params.onOperationsApplied?.(result, operations, scopeId);
 				return {
 					ok: result.ok,
 					...(result.error ? { error: result.error } : {}),

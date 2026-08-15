@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SignetSourceEntry, SignetSourceKind } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
+import type { WriteDb } from "./db-accessor";
 import { getActiveTelemetry } from "./telemetry";
 
 export const SOURCE_LIFECYCLE_EVENT = "source.lifecycle" as const;
@@ -92,6 +93,12 @@ const FRESHNESS_EVENT_INTERVAL_MS = 60 * 60 * 1_000;
 const CONNECTION_FAILURE_INTERVAL_MS = 5 * 60 * 1_000;
 const recentConnectionFailures = new Map<SourceClass, number>();
 const readinessClaimedInProcess = new Set<string>();
+
+async function writeTx<T>(fn: (db: WriteDb) => T): Promise<T> {
+	const writer = getDbAccessor().withWriteTxAsync;
+	if (!writer) throw new Error("async write API is unavailable");
+	return writer(fn);
+}
 
 function boundedCount(value: number): number {
 	return Number.isFinite(value) ? Math.max(0, Math.min(MAX_COUNT, Math.floor(value))) : 0;
@@ -251,13 +258,16 @@ function ensureState(
 	return { key, inserted: (result.changes ?? 0) > 0 };
 }
 
-export function recordSourceConnected(source: SignetSourceEntry, agentId: string, mode = sourceModeFor(source)): void {
+export async function recordSourceConnected(
+	source: SignetSourceEntry,
+	agentId: string,
+	mode = sourceModeFor(source),
+): Promise<void> {
 	if (!getActiveTelemetry()?.enabled) return;
 	const now = new Date().toISOString();
 	try {
 		let claimed = false;
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await writeTx((db) => {
 			const state = ensureState(db, agentId, source, mode);
 			const result = db
 				.prepare(`
@@ -290,10 +300,9 @@ export function recordSourceConnectionFailure(kind: string, error: unknown, mode
 	});
 }
 
-function sourceSizeBytes(source: SourceLifecycleSource, agentId: string): number | undefined {
+async function sourceSizeBytes(source: SourceLifecycleSource, agentId: string): Promise<number | undefined> {
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return await getDbAccessor().withReadDbAsync(async (db) => {
 			const rootPrefix = `${(source.root ?? "").replace(/\\/g, "/").replace(/\/$/, "")}/`;
 			const legacyObsidianClause =
 				source.kind === "obsidian"
@@ -320,11 +329,10 @@ function sourceSizeBytes(source: SourceLifecycleSource, agentId: string): number
 	}
 }
 
-export function sourceHasSearchableArtifacts(source: SignetSourceEntry, agentId: string): boolean {
+export async function sourceHasSearchableArtifacts(source: SignetSourceEntry, agentId: string): Promise<boolean> {
 	if (!getActiveTelemetry()?.enabled) return false;
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return await getDbAccessor().withReadDbAsync(async (db) => {
 			const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
 			const legacyObsidianClause =
 				source.kind === "obsidian"
@@ -361,7 +369,7 @@ function freshnessEventNeeded(
 	return !Number.isFinite(last) || nowMs - last >= FRESHNESS_EVENT_INTERVAL_MS;
 }
 
-export function recordSourceIndexOperation(input: SourceIndexTelemetryInput): void {
+export async function recordSourceIndexOperation(input: SourceIndexTelemetryInput): Promise<void> {
 	if (!getActiveTelemetry()?.enabled) return;
 	const mode = input.mode ?? sourceModeFor(input.source);
 	const now = new Date();
@@ -371,7 +379,7 @@ export function recordSourceIndexOperation(input: SourceIndexTelemetryInput): vo
 	const discovered = boundedCount(input.discovered);
 	const skipped = boundedCount(input.skipped ?? Math.max(0, discovered - accepted - boundedCount(input.failed ?? 0)));
 	const failed = boundedCount(input.failed ?? 0);
-	const bytes = input.sourceBytes ?? sourceSizeBytes(input.source, input.agentId);
+	const bytes = input.sourceBytes ?? (await sourceSizeBytes(input.source, input.agentId));
 	const searchable = input.searchable ?? (accepted > 0 || (bytes !== undefined && bytes > 0));
 	const sizeBucket = sourceSizeBucket(bytes);
 	let firstIndexed = false;
@@ -379,8 +387,7 @@ export function recordSourceIndexOperation(input: SourceIndexTelemetryInput): vo
 	let freshness: { readonly state: SourceFreshnessState; readonly lag: SourceLagBucket } | null = null;
 
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await writeTx((db) => {
 			const ensured = ensureState(db, input.agentId, input.source, mode);
 			const before = readState(db, input.agentId, ensured.key);
 			if (accepted > 0 && !before?.firstIndexedAt) firstIndexed = true;
@@ -472,7 +479,10 @@ function recallSourceIdCandidates(value: string): readonly string[] {
 	return candidates;
 }
 
-export function recordFirstSourceRecall(agentId: string, results: readonly SourceRecallTelemetryResult[]): void {
+export async function recordFirstSourceRecall(
+	agentId: string,
+	results: readonly SourceRecallTelemetryResult[],
+): Promise<void> {
 	if (!getActiveTelemetry()?.enabled) return;
 	const byClass = new Map<SourceClass, string[]>();
 	const seenIds = new Set<string>();
@@ -487,19 +497,18 @@ export function recordFirstSourceRecall(agentId: string, results: readonly Sourc
 		}
 		byClass.set(klass, ids);
 	}
-	for (const [sourceClass, ids] of byClass) claimFirstSourceRecall(agentId, sourceClass, ids);
+	for (const [sourceClass, ids] of byClass) await claimFirstSourceRecall(agentId, sourceClass, ids);
 }
 
 /** Record a rate-limited checkpoint for a long-lived source stream. */
-export function recordSourceFreshness(source: SignetSourceEntry, agentId: string): void {
+export async function recordSourceFreshness(source: SignetSourceEntry, agentId: string): Promise<void> {
 	if (sourceModeFor(source) !== "recurring") return;
 	const now = new Date();
 	const nowIso = now.toISOString();
 	let lag: SourceLagBucket = "unknown";
 	let suppressed = false;
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await writeTx((db) => {
 			const ensured = ensureState(db, agentId, source, "recurring");
 			const state = readState(db, agentId, ensured.key);
 			if (state?.lastFreshnessEventAt) {
@@ -532,15 +541,14 @@ export function recordSourceFreshness(source: SignetSourceEntry, agentId: string
 }
 
 /** Claim readiness once a recurring source has produced its first item. */
-export function recordSourceReadiness(source: SignetSourceEntry, agentId: string): void {
+export async function recordSourceReadiness(source: SignetSourceEntry, agentId: string): Promise<void> {
 	const processKey = `${agentId}:${sourceKey(sourceIdentity(source))}`;
 	if (readinessClaimedInProcess.has(processKey)) return;
 	const now = new Date().toISOString();
 	let firstIndexed = false;
 	let firstSearchable = false;
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await writeTx((db) => {
 			const ensured = ensureState(db, agentId, source, "recurring");
 			const state = readState(db, agentId, ensured.key);
 			if (state?.firstIndexedAt && state.firstSearchableAt) {
@@ -568,12 +576,11 @@ export function recordSourceReadiness(source: SignetSourceEntry, agentId: string
 		emit({ phase: "readiness", readiness: "searchable", outcome: "success", sourceClass, mode: "recurring" });
 }
 
-export function removeSourceLifecycleState(source: SignetSourceEntry, agentId: string): void {
+export async function removeSourceLifecycleState(source: SignetSourceEntry, agentId: string): Promise<void> {
 	const processKey = `${agentId}:${sourceKey(sourceIdentity(source))}`;
 	readinessClaimedInProcess.delete(processKey);
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await writeTx((db) => {
 			db.prepare("DELETE FROM source_lifecycle_state WHERE agent_id = ? AND source_key = ?").run(
 				agentId,
 				sourceKey(sourceIdentity(source)),
@@ -584,11 +591,14 @@ export function removeSourceLifecycleState(source: SignetSourceEntry, agentId: s
 	}
 }
 
-function claimFirstSourceRecall(agentId: string, sourceClass: SourceClass, candidateIds: readonly string[]): void {
+async function claimFirstSourceRecall(
+	agentId: string,
+	sourceClass: SourceClass,
+	candidateIds: readonly string[],
+): Promise<void> {
 	try {
 		const claimed: SourceLifecycleState[] = [];
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await writeTx((db) => {
 			const keys = candidateIds.map(sourceKey);
 			if (keys.length === 0) return;
 			const rows = db

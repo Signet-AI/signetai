@@ -2037,7 +2037,7 @@ async function main() {
 	// executes before DB init and crashed the daemon whenever a tombstone
 	// existed at boot (#1143). Failures are tolerated inside the cleanup;
 	// failed purges defer to the next boot.
-	cleanupSourceDeletionTombstones(AGENTS_DIR);
+	await cleanupSourceDeletionTombstones(AGENTS_DIR);
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
@@ -2175,7 +2175,7 @@ async function main() {
 			});
 		}
 		for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
-			if (source.enabled) recordSourceConnected(source, resolveDaemonAgentId());
+			if (source.enabled) void recordSourceConnected(source, resolveDaemonAgentId());
 		}
 
 		const daemonStartTime = Date.now();

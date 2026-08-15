@@ -28,7 +28,7 @@ export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams)
 		async execute(toolCallId, rawParams) {
 			const startedAt = Date.now();
 			const result = await capability.invoke(rawParams);
-			params.onToolCall?.({
+			await params.onToolCall?.({
 				toolCallId,
 				tool: capability.id,
 				input: rawParams,
