@@ -4,15 +4,15 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 959 sites
-- Synchronous `withWriteTx()` sites: 174
-- Synchronous `withReadDb()` sites: 301
+- Exact ledger inventory: 945 sites
+- Synchronous `withWriteTx()` sites: 164
+- Synchronous `withReadDb()` sites: 297
 - Synchronous filesystem/process sites: 484
-- Compile-visible legacy DB sites remaining: 475
-  - `withWriteTx`: 174
-  - `withReadDb`: 301
+- Compile-visible legacy DB sites remaining: 461
+  - `withWriteTx`: 164
+  - `withReadDb`: 297
 
-The 959-site inventory excludes test, benchmark, generated, and `__tests__` fixtures. The 174 synchronous writes and 301 synchronous reads remain transitional callers for the later migration phase. They are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate 475 database operations.
+The 945-site inventory excludes test, benchmark, generated, and `__tests__` fixtures. The 164 synchronous writes and 297 synchronous reads remain transitional callers for the later migration phase. They are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate 461 database operations.
 
 ## A3 Slice 2 migration notes
 
@@ -29,4 +29,4 @@ The converted async sites are distributed as follows: document-worker (18), drea
 
 The structural boundary makes statically-resolved imports from the production source tree impossible: TypeScript reports TS6059 before aliases or computed member calls can use the compatibility type. The production bundle also only starts from source entrypoints, so this compatibility module is not a shipped production artifact.
 
-A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 475 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 174 write and 301 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.
+A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 461 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 164 write and 297 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.
