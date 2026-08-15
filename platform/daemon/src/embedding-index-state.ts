@@ -66,6 +66,11 @@ export function isActiveEmbeddingConfig(db: ReadDb, cfg: EmbeddingConfig): boole
 	// initialization cannot be mid-promotion. Preserve their legacy behavior;
 	// a running daemon always seeds this singleton before any worker starts.
 	if (!state) return true;
+	// The durable slots have already swapped while the sqlite-vec projection is
+	// rebuilt in bounded transactions. No generation may mutate the new active
+	// slot during that window: callers can finish an in-flight provider request,
+	// but their write must fail closed when it reaches the database.
+	if (state.state === "building" && state.staging?.projectionRebuild === true) return false;
 	return embeddingProfileFingerprint(cfg) === state.active.fingerprint;
 }
 

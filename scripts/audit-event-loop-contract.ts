@@ -409,25 +409,23 @@ export function writeBaseline(sites: readonly AuditSite[], path = DEFAULT_BASELI
 export function renderReport(baselineSites: readonly AuditSite[], legacyDbAccess: LegacyDbAccessCounts): string {
 	const counts = new Map<SyncApi, number>();
 	for (const site of baselineSites) counts.set(site.api, (counts.get(site.api) ?? 0) + 1);
-	const writeCount = counts.get("withWriteTx") ?? 0;
-	const readCount = counts.get("withReadDb") ?? 0;
-	const filesystemProcessCount = baselineSites.length - writeCount - readCount;
-	const formatCount = (value: number): string => value.toLocaleString("en-US");
+	const filesystemProcessCount =
+		baselineSites.length - (counts.get("withReadDb") ?? 0) - (counts.get("withWriteTx") ?? 0);
 	return `# Event-loop synchronous contract audit
 
 This report is generated from the deterministic migration ledger in \`scripts/event-loop-contract-baseline.json\`. Phase A enforces the type boundary structurally: production code receives an async-only \`DbAccessor\`, while the synchronous compatibility module lives outside the daemon production \`src/\` tree and is rejected by the production TypeScript project's \`rootDir\`. The AST import and call checks remain belt-and-suspenders diagnostics, and new synchronous DB call sites fail closed through exact ledger matching.
 
 ## Current inventory
 
-- Exact ledger inventory: ${formatCount(baselineSites.length)} sites
-- Synchronous \`withWriteTx()\` sites: ${formatCount(writeCount)}
-- Synchronous \`withReadDb()\` sites: ${formatCount(readCount)}
-- Synchronous filesystem/process sites: ${formatCount(filesystemProcessCount)}
-- Compile-visible legacy DB sites remaining: ${formatCount(legacyDbAccess.total)}
-  - \`withWriteTx\`: ${formatCount(legacyDbAccess.withWriteTx)}
-  - \`withReadDb\`: ${formatCount(legacyDbAccess.withReadDb)}
+- Exact ledger inventory: ${baselineSites.length} sites
+- Synchronous \`withWriteTx()\` sites: ${counts.get("withWriteTx") ?? 0}
+- Synchronous \`withReadDb()\` sites: ${counts.get("withReadDb") ?? 0}
+- Synchronous filesystem/process sites: ${filesystemProcessCount}
+- Compile-visible legacy DB sites remaining: ${legacyDbAccess.total}
+  - \`withWriteTx\`: ${legacyDbAccess.withWriteTx}
+  - \`withReadDb\`: ${legacyDbAccess.withReadDb}
 
-The ${formatCount(baselineSites.length)}-site inventory excludes test, benchmark, generated, and \`__tests__\` fixtures. The ${formatCount(writeCount)} synchronous writes and ${formatCount(readCount)} synchronous reads remain transitional callers for the later migration phase. They are marked with \`@ts-expect-error LEGACY_SYNC_DB_ACCESS\`, so the compiler reports every remaining site without forcing this phase to migrate ${formatCount(writeCount + readCount)} database operations.
+The ${baselineSites.length.toLocaleString("en-US")}-site inventory excludes test, benchmark, generated, and \`__tests__\` fixtures. The ${counts.get("withWriteTx") ?? 0} synchronous writes and ${counts.get("withReadDb") ?? 0} synchronous reads remain transitional callers for the later migration phase. They are marked with \`@ts-expect-error LEGACY_SYNC_DB_ACCESS\`, so the compiler reports every remaining site without forcing this phase to migrate ${legacyDbAccess.total} database operations.
 
 ## A3 Slice 2 migration notes
 
@@ -444,7 +442,7 @@ The converted async sites are distributed as follows: document-worker (18), drea
 
 The structural boundary makes statically-resolved imports from the production source tree impossible: TypeScript reports TS6059 before aliases or computed member calls can use the compatibility type. The production bundle also only starts from source entrypoints, so this compatibility module is not a shipped production artifact.
 
-A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the ${formatCount(legacyDbAccess.total)} transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all ${formatCount(legacyDbAccess.withWriteTx)} write and ${formatCount(legacyDbAccess.withReadDb)} read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.
+A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 576 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 230 write and 346 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.
 `;
 }
 

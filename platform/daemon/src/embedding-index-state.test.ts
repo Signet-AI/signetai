@@ -130,6 +130,23 @@ describe("embedding index state", () => {
 		expect(isActiveEmbeddingConfig(db, config)).toBe(false);
 	});
 
+	it("rejects the old active generation while the swapped projection rebuilds", () => {
+		const raw = new Database(":memory:");
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(
+			"CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, chunk_text TEXT, created_at TEXT, agent_id TEXT)",
+		);
+		const db = raw as unknown as WriteDb;
+		ensureEmbeddingIndexState(db, config);
+		const staged = beginEmbeddingIndexBuild(db, { ...config, model: "qwen3-embedding:0.6b", dimensions: 1024 });
+		expect(isActiveEmbeddingConfig(db, config)).toBe(true);
+		raw
+			.prepare("UPDATE embedding_index_state SET staging_profile_json = ? WHERE id = 1")
+			.run(JSON.stringify({ ...staged.staging, projectionRebuild: true }));
+
+		expect(isActiveEmbeddingConfig(db, config)).toBe(false);
+	});
+
 	it("normalizes malformed config before it becomes durable state", () => {
 		const raw = new Database(":memory:");
 		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);

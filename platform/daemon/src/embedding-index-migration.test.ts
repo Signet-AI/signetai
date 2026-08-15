@@ -590,6 +590,7 @@ describe("staging promotion", () => {
 			checkpointWal: () => undefined,
 			incrementalVacuum: () => 0,
 		};
+		let promotions = 0;
 
 		await expect(promoteStagingIndex(accessor, { shouldContinue: () => false })).rejects.toThrow(
 			"Embedding vector rebuild stopped",
@@ -607,8 +608,12 @@ describe("staging promotion", () => {
 				checkProvider: async () => ({ available: true }),
 				pollMs: 10,
 				batchSize: 10,
+				onPromoted: () => {
+					promotions++;
+				},
 			}),
 		).toBeNull();
+		expect(promotions).toBe(1);
 		expect(readEmbeddingIndexState(raw as unknown as ReadDb)?.state).toBe("ready");
 		expect(raw.prepare("SELECT id FROM vec_embeddings").get()).toEqual({ id: "new" });
 		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings").get()).toEqual({ count: 1 });

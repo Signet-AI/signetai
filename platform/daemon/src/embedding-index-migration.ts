@@ -545,6 +545,7 @@ export async function startEmbeddingIndexMigration(input: {
 		try {
 			await completeProjectionRebuild(input.accessor, staging);
 			if (input.accessor.incrementalVacuumAsync) await input.accessor.incrementalVacuumAsync();
+			input.onPromoted?.();
 		} catch (error) {
 			logger.warn("embedding", "Interrupted vector projection rebuild remains queued for retry", {
 				error: error instanceof Error ? error.message : String(error),
