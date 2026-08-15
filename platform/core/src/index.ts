@@ -6,6 +6,7 @@
 export { Signet } from "./signet";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
 export {
+	__setSecretStoreLockHookForTests,
 	__setSecretStoreWriteHookForTests,
 	deleteLocalSecret,
 	execWithSecrets,

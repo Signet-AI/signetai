@@ -562,7 +562,7 @@ describe("local secrets provider", () => {
 
 	test("delete accepts local:// compatibility references", async () => {
 		await putSecret("GITHUB_TOKEN", "ghp_test");
-		expect(deleteSecret("local://GITHUB_TOKEN")).toBe(true);
+		expect(await deleteSecret("local://GITHUB_TOKEN")).toBe(true);
 		expect(await listSecrets()).toEqual([]);
 	});
 });

@@ -12,6 +12,7 @@ import {
 	closeSync,
 	existsSync,
 	fsyncSync,
+	linkSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
@@ -551,68 +552,128 @@ const SECRET_STORE_LOCK_FILE = "secrets.enc.lock";
 const SECRET_STORE_LOCK_RETRIES = 400;
 const SECRET_STORE_LOCK_WAIT_MS = 10;
 
+type SecretStoreLockHookForTests = (stage: "after-acquire") => void;
+let secretStoreLockHookForTests: SecretStoreLockHookForTests | null = null;
+
+/** @internal Pause an acquired lock in a child-process race regression test. */
+export function __setSecretStoreLockHookForTests(hook: SecretStoreLockHookForTests | null): void {
+	secretStoreLockHookForTests = hook;
+}
+
 function getSecretStoreLockFile(): string {
 	return join(getSecretsDir(), SECRET_STORE_LOCK_FILE);
 }
 
-function isSecretStoreLockLive(): boolean {
+function readSecretStoreLockOwner(): string | null | undefined {
 	try {
-		const pid = Number(readFileSync(getSecretStoreLockFile(), "utf-8").trim());
-		if (!Number.isInteger(pid) || pid <= 0) return false;
-		process.kill(pid, 0);
-		return true;
+		const owner = readFileSync(getSecretStoreLockFile(), "utf-8").trim();
+		return owner || null;
 	} catch (error) {
-		return error instanceof Error && "code" in error && error.code === "EPERM";
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+		throw error;
 	}
 }
 
-function waitForSecretStoreLock(): void {
+function isSecretStoreLockLive(owner: string): boolean | null {
+	const pid = Number(owner.split("-", 1)[0]);
+	if (!Number.isInteger(pid) || pid <= 0) return null;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "EPERM") return true;
+		if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
+		throw error;
+	}
+}
+
+function tryAcquireSecretStoreLock(owner: string): boolean {
+	const lockFile = getSecretStoreLockFile();
+	const tempFile = `${lockFile}.${owner}`;
+	let fd: number | null = null;
+	try {
+		// Publish the complete owner token through a hard link. The lock path is
+		// never visible in its empty or partially-written state.
+		fd = openSync(tempFile, "wx", 0o600);
+		writeFileSync(fd, `${owner}\n`, "utf-8");
+		fsyncSync(fd);
+		closeSync(fd);
+		fd = null;
+		linkSync(tempFile, lockFile);
+		secretStoreLockHookForTests?.("after-acquire");
+		return true;
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "EEXIST") return false;
+		throw error;
+	} finally {
+		if (fd !== null) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Preserve the original lock acquisition error.
+			}
+		}
+		try {
+			unlinkSync(tempFile);
+		} catch {
+			// Best effort cleanup. The lock path owns the published link.
+		}
+	}
+}
+
+function removeStaleSecretStoreLock(observedOwner: string): boolean {
+	const currentOwner = readSecretStoreLockOwner();
+	if (currentOwner !== observedOwner || isSecretStoreLockLive(currentOwner) !== false) return false;
+	const staleFile = `${getSecretStoreLockFile()}.stale-${randomUUID()}`;
+	try {
+		// Re-check the token immediately before rename. A new owner can only
+		// appear after this path is removed, so it cannot be moved by this CAS.
+		renameSync(getSecretStoreLockFile(), staleFile);
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+		throw error;
+	}
+	try {
+		unlinkSync(staleFile);
+	} catch (error) {
+		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+	}
+	return true;
+}
+
+interface SecretStoreLock {
+	release: () => Promise<void>;
+}
+
+async function acquireSecretStoreLock(): Promise<SecretStoreLock> {
+	const owner = `${process.pid}-${randomUUID()}`;
 	for (let attempt = 0; attempt < SECRET_STORE_LOCK_RETRIES; attempt += 1) {
 		mkdirSync(getSecretsDir(), { recursive: true, mode: 0o700 });
-		try {
-			const fd = openSync(getSecretStoreLockFile(), "wx", 0o600);
-			writeFileSync(fd, `${process.pid}\n`, "utf-8");
-			closeSync(fd);
-			return;
-		} catch (error) {
-			if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-			if (!isSecretStoreLockLive()) {
-				try {
-					unlinkSync(getSecretStoreLockFile());
-				} catch {
-					/* another process won the race */
-				}
-				continue;
-			}
-			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SECRET_STORE_LOCK_WAIT_MS);
+		if (tryAcquireSecretStoreLock(owner)) {
+			return {
+				release: async () => {
+					try {
+						if (readSecretStoreLockOwner() !== owner) return;
+						unlinkSync(getSecretStoreLockFile());
+					} catch (error) {
+						if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+					}
+				},
+			};
 		}
+		const existingOwner = readSecretStoreLockOwner();
+		if (existingOwner !== undefined && existingOwner !== null && removeStaleSecretStoreLock(existingOwner)) continue;
+		await new Promise<void>((resolve) => setTimeout(resolve, SECRET_STORE_LOCK_WAIT_MS));
 	}
 	throw new Error("Timed out waiting for the secrets store lock");
 }
 
-function releaseSecretStoreLock(): void {
-	try {
-		unlinkSync(getSecretStoreLockFile());
-	} catch (error) {
-		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-	}
-}
-
-async function withSecretStoreLock<T>(fn: () => Promise<T>): Promise<T> {
-	waitForSecretStoreLock();
+async function withSecretStoreLock<T>(fn: () => Promise<T> | T): Promise<T> {
+	const lock = await acquireSecretStoreLock();
 	try {
 		return await fn();
 	} finally {
-		releaseSecretStoreLock();
-	}
-}
-
-function withSecretStoreLockSync<T>(fn: () => T): T {
-	waitForSecretStoreLock();
-	try {
-		return fn();
-	} finally {
-		releaseSecretStoreLock();
+		await lock.release();
 	}
 }
 
@@ -650,8 +711,9 @@ export async function putLocalSecret(name: string, value: string): Promise<void>
 export async function getLocalSecretValue(name: string): Promise<string> {
 	const store = loadStore();
 	const resolution = await resolveMasterKey(store);
-	const entry = store.secrets[name];
-	if (!entry) throw new Error(`Secret '${name}' not found`);
+	const localName = parseLocalSecretName(name);
+	const entry = store.secrets[localName];
+	if (!entry) throw new Error(`Secret '${localName}' not found`);
 	const plaintext = await decryptWithKey(entry.ciphertext, resolution.key);
 	if (resolution.provider === "legacy-obfuscated") {
 		await withSecretStoreLock(() => anchorLegacyMachineIdAfterVerification(resolution.key));
@@ -674,8 +736,8 @@ export function listLocalSecretNames(options: { includeInternal?: boolean } = {}
 	return names.filter((name) => !isInternalSecretName(name));
 }
 
-export function deleteLocalSecret(name: string): boolean {
-	return withSecretStoreLockSync(() => {
+export async function deleteLocalSecret(name: string): Promise<boolean> {
+	return withSecretStoreLock(async () => {
 		const store = loadStore();
 		const localName = parseLocalSecretName(name);
 		if (!(localName in store.secrets)) return false;
@@ -835,7 +897,7 @@ export async function execWithSecrets(
 	function redact(text: string): string {
 		let out = text;
 		for (const val of secretValues) {
-			if (val.length > 3) {
+			if (val.length > 0) {
 				out = out.replaceAll(val, "[REDACTED]");
 			}
 		}
@@ -843,7 +905,7 @@ export async function execWithSecrets(
 	}
 
 	function createStreamingRedactor(): { push: (text: string) => string; finish: () => string } {
-		const longestSecret = Math.max(0, ...secretValues.filter((value) => value.length > 3).map((value) => value.length));
+		const longestSecret = Math.max(0, ...secretValues.map((value) => value.length));
 		const overlap = Math.max(0, longestSecret * 2);
 		let pending = "";
 		return {

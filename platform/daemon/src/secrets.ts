@@ -174,7 +174,7 @@ async function readBitwardenDeletedNames(): Promise<Set<string>> {
 
 async function writeBitwardenDeletedNames(names: Set<string>): Promise<void> {
 	if (names.size === 0) {
-		deleteLocalSecretCore(BITWARDEN_DELETED_NAMES_SECRET);
+		await deleteLocalSecretCore(BITWARDEN_DELETED_NAMES_SECRET);
 		return;
 	}
 	await putLocalSecret(BITWARDEN_DELETED_NAMES_SECRET, JSON.stringify(Array.from(names).sort()));
@@ -271,7 +271,7 @@ export async function listSecrets(): Promise<string[]> {
 	}
 }
 
-export function deleteSecret(name: string): boolean {
+export async function deleteSecret(name: string): Promise<boolean> {
 	invalidateSecretsCache();
 	return deleteLocalSecretCore(name);
 }
@@ -300,13 +300,13 @@ export async function deleteSecretFromActiveProvider(name: string): Promise<bool
 	return deletedFromBitwarden || localFallbackPreserved;
 }
 
-export function deleteLocalSecretForMigration(name: string): boolean {
+export async function deleteLocalSecretForMigration(name: string): Promise<boolean> {
 	return deleteLocalSecretCore(name);
 }
 
 export async function setActiveSecretProvider(provider: "local" | "bitwarden"): Promise<void> {
 	if (provider === "local") {
-		deleteLocalSecretCore(BITWARDEN_ACTIVE_PROVIDER_SECRET);
+		await deleteLocalSecretCore(BITWARDEN_ACTIVE_PROVIDER_SECRET);
 		return;
 	}
 	await putLocalSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET, "bitwarden");

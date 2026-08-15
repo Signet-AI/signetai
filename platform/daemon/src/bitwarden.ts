@@ -200,7 +200,7 @@ export async function migrateLocalSecretsToBitwarden(options: {
 	readonly session: string;
 	readonly localNames: readonly string[];
 	readonly getLocalSecret: (name: string) => Promise<string>;
-	readonly deleteLocalSecret?: (name: string) => boolean;
+	readonly deleteLocalSecret?: (name: string) => boolean | Promise<boolean>;
 	readonly folderId?: string;
 	readonly overwrite?: boolean;
 	readonly dryRun?: boolean;
@@ -229,7 +229,7 @@ export async function migrateLocalSecretsToBitwarden(options: {
 			const item = await client.putSecret(name, value, { folderId: options.folderId, overwrite });
 			results.push({ name, action: "migrated", itemId: item.id });
 			migratedCount += 1;
-			if (deleteLocal && options.deleteLocalSecret?.(localName)) {
+			if (deleteLocal && (await options.deleteLocalSecret?.(localName))) {
 				results.push({ name: localName, action: "deleted-local" });
 				deletedLocalCount += 1;
 			}

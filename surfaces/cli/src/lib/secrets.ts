@@ -77,7 +77,7 @@ export function createOfflineSecretApiCall(): DaemonApiCall {
 
 		if (name !== null && method === "DELETE") {
 			try {
-				const deleted = deleteLocalSecret(name);
+				const deleted = await deleteLocalSecret(name);
 				return deleted ? { ok: true, data: { success: true, name } } : errorResponse(`Secret '${name}' not found`);
 			} catch (error) {
 				return errorResponse(error instanceof Error ? error.message : String(error));
