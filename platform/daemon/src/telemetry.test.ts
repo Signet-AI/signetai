@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { parseRoutingConfig } from "@signet/core";
-import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { type DbAccessor, type ReadDb, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { createRoutingProvider } from "./inference-provider-factory";
 import { generateWithTracking } from "./pipeline/provider";
 import {
@@ -98,6 +98,22 @@ function resetWorkspace(): void {
 
 function makeCollector(configSnapshot?: TelemetryConfigSnapshot): TelemetryCollector {
 	return createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.0.0-test", { configSnapshot });
+}
+
+function delayAsyncReads(gate: Promise<void>, started: () => void): DbAccessor {
+	const base = getDbAccessor();
+	let firstRead = true;
+	return {
+		...base,
+		async withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T> {
+			if (firstRead) {
+				firstRead = false;
+				started();
+				await gate;
+			}
+			return base.withReadDbAsync(fn);
+		},
+	};
 }
 
 /**
@@ -736,6 +752,47 @@ describe("telemetry collector", () => {
 		expect(nextFlushIntervalMs(60000, 2)).toBe(60000);
 		expect(nextFlushIntervalMs(60000, 3)).toBe(300000);
 		expect(nextFlushIntervalMs(60000, 9)).toBe(300000);
+	});
+
+	it("waits for startup delivery state before sending during backoff", async () => {
+		let releaseReads: (() => void) | undefined;
+		const readsReleased = new Promise<void>((resolve) => {
+			releaseReads = resolve;
+		});
+		let signalReadStarted: (() => void) | undefined;
+		const deliveryStateReadStarted = new Promise<void>((resolve) => {
+			signalReadStarted = resolve;
+		});
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE telemetry_delivery_state SET consecutive_failures = 3, last_attempt_at = ? WHERE id = 1").run(
+				now,
+			);
+		});
+
+		const collector = createTelemetryCollector(
+			delayAsyncReads(readsReleased, () => signalReadStarted?.()),
+			{ ...TELEMETRY_CONFIG, flushIntervalMs: 10 },
+			"0.0.0-test",
+		);
+		collector.record("daemon.heartbeat", { uptimeMs: 1 });
+		collector.start();
+		await deliveryStateReadStarted;
+		await new Promise<void>((resolve) => setTimeout(resolve, 30));
+		// The timer has reached the delivery path, but the persisted state is
+		// still loading. It must not send with the in-memory zero-failure state.
+		expect(captured).toHaveLength(0);
+
+		// Make the loaded state represent a recent failure, so the post-load
+		// assertion also proves the backoff is re-checked after the await.
+		const loadedAt = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE telemetry_delivery_state SET last_attempt_at = ? WHERE id = 1").run(loadedAt);
+		});
+		releaseReads?.();
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(captured).toHaveLength(0);
+		await collector.discardPending?.();
 	});
 
 	it("parses SQLite CURRENT_TIMESTAMP as UTC regardless of host timezone", () => {

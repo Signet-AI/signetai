@@ -488,7 +488,8 @@ function getOrCreateInstallId(
 	daemonVersion: string,
 ): { readonly id: string; readonly created: boolean; readonly previousVersion?: string } {
 	try {
-		return db.withWriteTx((w) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 			const existing = w
 				.prepare("SELECT id, last_seen_version FROM telemetry_install ORDER BY created_at ASC LIMIT 1")
 				.get() as { readonly id: string; readonly last_seen_version?: string | null } | null | undefined;
@@ -527,7 +528,8 @@ function getOrCreateInstallId(
 		// pre-117 telemetry_install shape. Preserve telemetry there without
 		// claiming a transition; the next normal migration adds the column.
 		try {
-			return db.withWriteTx((w) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			return db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 				const existing = w.prepare("SELECT id FROM telemetry_install ORDER BY created_at ASC LIMIT 1").get() as
 					| { readonly id: string }
 					| null
@@ -891,7 +893,7 @@ export function createTelemetryCollector(
 		pendingDroppedEventCount = 0;
 	}
 
-	void readDeliveryState().then((state) => {
+	const deliveryStateReady = readDeliveryState().then((state) => {
 		deliveryState = state;
 		consecutiveFailures = state.consecutiveFailures;
 		effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
@@ -1305,7 +1307,13 @@ export function createTelemetryCollector(
 		}
 	}
 
-	async function doFlush(emitHealth: boolean, allowRemote = true): Promise<void> {
+	async function doFlush(emitHealth: boolean, allowRemote = true, force = false): Promise<void> {
+		// The persisted delivery state may still be loading when the first timer
+		// fires. Do not let that first delivery bypass a restart backoff, and
+		// re-check the gate after the state has been applied because the caller's
+		// initial check necessarily ran before this await.
+		await deliveryStateReady;
+		if (allowRemote && !force && Date.now() < nextAllowedFlushAt) allowRemote = false;
 		await awaitPendingAsyncWrites();
 		flushCount++;
 		await drainBuffer();
@@ -1360,14 +1368,14 @@ export function createTelemetryCollector(
 			// Backoff suppresses network claims, not local durability. Persist the
 			// in-memory buffer so an outage cannot exhaust RAM or lose events;
 			// retain local health/pruning maintenance while skipping PostHog.
-			flushPromise = doFlush(emitHealth, false)
+			flushPromise = doFlush(emitHealth, false, force)
 				.catch(() => {})
 				.finally(() => {
 					flushPromise = null;
 				});
 			return flushPromise;
 		}
-		flushPromise = doFlush(emitHealth)
+		flushPromise = doFlush(emitHealth, true, force)
 			.catch(() => {
 				// Telemetry must never surface a flush failure to the daemon.
 			})
