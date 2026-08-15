@@ -24,6 +24,7 @@ import {
 	getLlmConcurrencyStatus,
 	withLlmConcurrency,
 } from "./provider";
+import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -779,6 +780,211 @@ printf 'ok\\n'
 		const foreignKilled = killLog.some((entry) => entry.startsWith(`${foreignPid}:`));
 		expect(childKilled).toBe(true);
 		expect(foreignKilled).toBe(false);
+	});
+
+	it("fails closed and warns when Darwin ps enumeration fails", async () => {
+		const root = join(tmpdir(), `signet-acpx-darwin-ps-failure-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const fakePs = join(root, "ps");
+		const bin = join(root, "fake-acpx.sh");
+		writeFileSync(
+			fakePs,
+			`#!/usr/bin/env bash
+exit 1
+`,
+		);
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf 'ok\\n'
+`,
+		);
+		chmodSync(fakePs, 0o755);
+		chmodSync(bin, 0o755);
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousPs = process.env.SIGNET_ACPX_PS;
+		const previousWarn = logger.warn;
+		const warnCalls: Array<{ message: string; data?: Record<string, unknown> }> = [];
+		const killLog: string[] = [];
+		const previousKill = process.kill;
+		process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "darwin";
+		process.env.SIGNET_ACPX_PS = fakePs;
+		logger.warn = ((_category: unknown, message: unknown, data?: Record<string, unknown>) => {
+			warnCalls.push({ message: String(message), data });
+		}) as typeof logger.warn;
+		process.kill = ((pid: number, signal: NodeJS.Signals) => {
+			killLog.push(`${pid}:${signal}`);
+			return true;
+		}) as typeof process.kill;
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+		} finally {
+			process.kill = previousKill;
+			logger.warn = previousWarn;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			if (previousPs === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PS");
+			else process.env.SIGNET_ACPX_PS = previousPs;
+			rmSync(root, { recursive: true, force: true });
+		}
+		expect(killLog).toEqual([]);
+		expect(warnCalls.some(({ message }) => message.includes("could not enumerate processes"))).toBe(true);
+	});
+
+	it("counts and logs Darwin procinfo failures without signaling the candidate", async () => {
+		const root = join(
+			tmpdir(),
+			`signet-acpx-darwin-procinfo-failure-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
+		mkdirSync(root, { recursive: true });
+		const candidatePid = 4244;
+		const fakePs = join(root, "ps");
+		const fakeProcinfo = join(root, "procinfo");
+		const bin = join(root, "fake-acpx.sh");
+		writeFileSync(
+			fakePs,
+			`#!/usr/bin/env bash
+printf '%s\\n' "${candidatePid} /usr/local/bin/codex-acp"
+`,
+		);
+		writeFileSync(
+			fakeProcinfo,
+			`#!/usr/bin/env bash
+exit 1
+`,
+		);
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf 'ok\\n'
+`,
+		);
+		chmodSync(fakePs, 0o755);
+		chmodSync(fakeProcinfo, 0o755);
+		chmodSync(bin, 0o755);
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousPs = process.env.SIGNET_ACPX_PS;
+		const previousProcinfo = process.env.SIGNET_ACPX_PROCINFO;
+		const previousWarn = logger.warn;
+		const warnCalls: Array<{ message: string; data?: Record<string, unknown> }> = [];
+		const killLog: string[] = [];
+		const previousKill = process.kill;
+		process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "darwin";
+		process.env.SIGNET_ACPX_PS = fakePs;
+		process.env.SIGNET_ACPX_PROCINFO = fakeProcinfo;
+		logger.warn = ((_category: unknown, message: unknown, data?: Record<string, unknown>) => {
+			warnCalls.push({ message: String(message), data });
+		}) as typeof logger.warn;
+		process.kill = ((pid: number, signal: NodeJS.Signals) => {
+			killLog.push(`${pid}:${signal}`);
+			return true;
+		}) as typeof process.kill;
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+		} finally {
+			process.kill = previousKill;
+			logger.warn = previousWarn;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			if (previousPs === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PS");
+			else process.env.SIGNET_ACPX_PS = previousPs;
+			if (previousProcinfo === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROCINFO");
+			else process.env.SIGNET_ACPX_PROCINFO = previousProcinfo;
+			rmSync(root, { recursive: true, force: true });
+		}
+		const ownershipWarning = warnCalls.find(({ message }) => message.includes("could not verify process ownership"));
+		expect(ownershipWarning?.data).toMatchObject({
+			failedChecks: 1,
+			candidateCount: 1,
+			mechanism: "launchctl procinfo",
+		});
+		expect(killLog).toEqual([]);
+	});
+
+	it("bounds Darwin candidate inspection at 128 processes and warns when capped", async () => {
+		const root = join(
+			tmpdir(),
+			`signet-acpx-darwin-candidate-cap-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
+		mkdirSync(root, { recursive: true });
+		const firstPid = 5000;
+		const fakePs = join(root, "ps");
+		const fakeProcinfo = join(root, "procinfo");
+		const procinfoCalls = join(root, "procinfo-calls.txt");
+		const bin = join(root, "fake-acpx.sh");
+		const candidateLines = Array.from(
+			{ length: 130 },
+			(_, index) => `echo "${firstPid + index} /usr/local/bin/codex-acp"`,
+		).join("\n");
+		writeFileSync(
+			fakePs,
+			`#!/usr/bin/env bash
+if [[ "$1" == "-axo" && "$2" == "pid=,command=" ]]; then
+${candidateLines}
+  exit 0
+fi
+exit 0
+`,
+		);
+		writeFileSync(
+			fakeProcinfo,
+			`#!/usr/bin/env bash
+count=0
+if [[ -f ${JSON.stringify(procinfoCalls)} ]]; then
+  count=$(<${JSON.stringify(procinfoCalls)})
+fi
+echo $((count + 1)) > ${JSON.stringify(procinfoCalls)}
+echo environment:
+echo '  HOME = /Users/tester'
+`,
+		);
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf 'ok\\n'
+`,
+		);
+		chmodSync(fakePs, 0o755);
+		chmodSync(fakeProcinfo, 0o755);
+		chmodSync(bin, 0o755);
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousPs = process.env.SIGNET_ACPX_PS;
+		const previousProcinfo = process.env.SIGNET_ACPX_PROCINFO;
+		const previousWarn = logger.warn;
+		const warnCalls: string[] = [];
+		const killLog: string[] = [];
+		const previousKill = process.kill;
+		let procinfoCallCount = 0;
+		process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "darwin";
+		process.env.SIGNET_ACPX_PS = fakePs;
+		process.env.SIGNET_ACPX_PROCINFO = fakeProcinfo;
+		logger.warn = ((_category: unknown, message: unknown) => {
+			warnCalls.push(String(message));
+		}) as typeof logger.warn;
+		process.kill = ((pid: number, signal: NodeJS.Signals) => {
+			killLog.push(`${pid}:${signal}`);
+			return true;
+		}) as typeof process.kill;
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 5000 })).resolves.toBe("ok");
+			procinfoCallCount = Number(readFileSync(procinfoCalls, "utf-8").trim());
+		} finally {
+			process.kill = previousKill;
+			logger.warn = previousWarn;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			if (previousPs === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PS");
+			else process.env.SIGNET_ACPX_PS = previousPs;
+			if (previousProcinfo === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROCINFO");
+			else process.env.SIGNET_ACPX_PROCINFO = previousProcinfo;
+			rmSync(root, { recursive: true, force: true });
+		}
+		expect(procinfoCallCount).toBe(128);
+		expect(warnCalls.some((message) => message.includes("reached its candidate cap"))).toBe(true);
+		expect(killLog).toEqual([]);
 	});
 
 	it("treats an unreadable ACPX proc root as best-effort cleanup", async () => {
