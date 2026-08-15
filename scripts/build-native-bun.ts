@@ -304,6 +304,7 @@ export const { env, pipeline } = transformers;
 writeFileSync(
 	join(buildDir, "cli-native.ts"),
 	`import { materializeEmbeddedAssetTree, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
+import { handoffInspectorParent } from "../surfaces/cli/src/lib/inspector-proxy";
 import { connectorAssets, dashboardAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
 import * as transformersWebRuntime from "./transformers-web-runtime";
 import { existsSync } from "node:fs";
@@ -335,6 +336,7 @@ if (!process.env.SIGNET_DIR?.trim()) {
 		}
 	}
 }
+handoffInspectorParent();
 if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PROXY_TARGET) {
 	const { runInspectorProxyFromEnvironment } = await import("../surfaces/cli/src/lib/inspector-proxy");
 	await runInspectorProxyFromEnvironment();

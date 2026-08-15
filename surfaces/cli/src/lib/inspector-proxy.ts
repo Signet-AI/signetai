@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import type { ServerWebSocket } from "bun";
 
 export interface InspectorEndpoint {
@@ -24,24 +25,29 @@ const INSPECTOR_PROTOCOL = {
 
 function endpointHost(host: string): string {
 	if (host === "0.0.0.0" || host === "::") return "127.0.0.1";
-	return host.includes(":") ? `[${host}]` : host;
+	const normalized = host.replace(/^\[|\]$/g, "");
+	return normalized.includes(":") ? `[${normalized}]` : normalized;
+}
+
+function validPort(port: number, value: string): number {
+	if (!Number.isInteger(port) || port < 1 || port > 65535) {
+		throw new Error(`Invalid inspector port: ${value}`);
+	}
+	return port;
 }
 
 export function parseInspectorEndpoint(value: string): InspectorEndpoint {
 	const trimmed = value.trim();
 	if (/^\d+(?:\/.*)?$/.test(trimmed)) {
 		const [portText, ...pathParts] = trimmed.split("/");
-		const port = Number(portText);
+		const port = validPort(Number(portText), value);
 		return { host: "127.0.0.1", port, path: pathParts.length > 0 ? `/${pathParts.join("/")}` : "/" };
 	}
 
 	const parsed = new URL(trimmed.includes("://") ? trimmed : `http://${trimmed}`);
-	const port = parsed.port.length > 0 ? Number(parsed.port) : 80;
-	if (!Number.isInteger(port) || port < 1 || port > 65535) {
-		throw new Error(`Invalid inspector port: ${value}`);
-	}
+	const port = validPort(parsed.port.length > 0 ? Number(parsed.port) : 80, value);
 	return {
-		host: parsed.hostname,
+		host: parsed.hostname.replace(/^\[|\]$/g, ""),
 		port,
 		path: parsed.pathname.length > 0 ? parsed.pathname : "/",
 	};
@@ -49,6 +55,52 @@ export function parseInspectorEndpoint(value: string): InspectorEndpoint {
 
 export function formatInspectorEndpoint(endpoint: InspectorEndpoint, path = endpoint.path): string {
 	return `${endpointHost(endpoint.host)}:${endpoint.port}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+export interface InspectorParentHandoff {
+	readonly publicInspector: string;
+	readonly environment: NodeJS.ProcessEnv;
+}
+
+/**
+ * Bun binds BUN_INSPECT before application code runs. A native CLI parent
+ * cannot bind a discovery proxy on that same port, so hand the command to a
+ * second process with Bun's automatic inspector disabled and retain the
+ * requested public endpoint for the daemon-start proxy.
+ */
+export function resolveInspectorParentHandoff(env: NodeJS.ProcessEnv = process.env): InspectorParentHandoff | null {
+	const publicInspector = env.BUN_INSPECT?.trim();
+	if (
+		!publicInspector ||
+		env.SIGNET_DAEMON_ENTRYPOINT === "1" ||
+		env.SIGNET_INSPECTOR_HANDOFF === "1" ||
+		env.SIGNET_INSPECTOR_PROXY_PUBLIC?.trim()
+	) {
+		return null;
+	}
+	return {
+		publicInspector,
+		environment: {
+			...env,
+			BUN_INSPECT: "",
+			SIGNET_INSPECTOR_PUBLIC: publicInspector,
+			SIGNET_INSPECTOR_HANDOFF: "1",
+		},
+	};
+}
+
+/** Re-exec the native CLI after releasing its parent-owned inspector socket. */
+export function handoffInspectorParent(env: NodeJS.ProcessEnv = process.env): void {
+	const handoff = resolveInspectorParentHandoff(env);
+	if (!handoff) return;
+	const child = spawn(process.execPath, process.argv.slice(1), {
+		detached: true,
+		stdio: "ignore",
+		windowsHide: true,
+		env: handoff.environment,
+	});
+	child.unref();
+	process.exit(0);
 }
 
 function publicWebSocketUrl(endpoint: InspectorEndpoint): string {

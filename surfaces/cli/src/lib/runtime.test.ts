@@ -131,6 +131,15 @@ describe("resolveDaemonInspectorForwarding", () => {
 		});
 		expect(forwarding.childInspector).toBe(forwarding.proxy?.targetInspector);
 	});
+
+	it("uses the handed-off public inspector when the Bun parent released BUN_INSPECT", async () => {
+		const forwarding = await resolveDaemonInspectorForwarding(
+			{ BUN_INSPECT: "", SIGNET_INSPECTOR_PUBLIC: "127.0.0.1:9230" },
+			true,
+		);
+
+		expect(forwarding.proxy?.publicInspector).toBe("127.0.0.1:9230");
+	});
 });
 
 describe("buildSystemdDaemonStartArgs", () => {

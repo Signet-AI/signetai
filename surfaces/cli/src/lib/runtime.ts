@@ -977,6 +977,13 @@ export interface DaemonInspectorForwarding {
 	};
 }
 
+function resolvePublicInspector(env: NodeJS.ProcessEnv): string | undefined {
+	const bunInspector = env.BUN_INSPECT?.trim();
+	if (bunInspector) return bunInspector;
+	const handedOffInspector = env.SIGNET_INSPECTOR_PUBLIC?.trim();
+	return handedOffInspector || undefined;
+}
+
 function reserveInspectorPort(host: string): Promise<number> {
 	return new Promise((resolve, reject) => {
 		const server = createServer();
@@ -998,7 +1005,7 @@ export async function resolveDaemonInspectorForwarding(
 	env: NodeJS.ProcessEnv = process.env,
 	runtimeIsBun: boolean = typeof process.versions.bun === "string",
 ): Promise<DaemonInspectorForwarding> {
-	const publicInspector = env.BUN_INSPECT;
+	const publicInspector = resolvePublicInspector(env);
 	if (!runtimeIsBun || !publicInspector) return { childInspector: resolveDaemonChildInspector(env, runtimeIsBun) };
 
 	try {

@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
-import { createInspectorProxy, formatInspectorEndpoint, parseInspectorEndpoint } from "./inspector-proxy.js";
+import {
+	createInspectorProxy,
+	formatInspectorEndpoint,
+	parseInspectorEndpoint,
+	resolveInspectorParentHandoff,
+} from "./inspector-proxy.js";
 
 let target: ChildProcess | null = null;
 let proxy: Bun.Server<unknown> | null = null;
@@ -44,6 +49,24 @@ afterEach(() => {
 });
 
 describe("inspector discovery proxy", () => {
+	it("hands off a parent-owned BUN_INSPECT listener before binding discovery", () => {
+		const handoff = resolveInspectorParentHandoff({ BUN_INSPECT: "127.0.0.1:9230" });
+
+		expect(handoff?.publicInspector).toBe("127.0.0.1:9230");
+		expect(handoff?.environment.BUN_INSPECT).toBe("");
+		expect(handoff?.environment.SIGNET_INSPECTOR_PUBLIC).toBe("127.0.0.1:9230");
+		expect(handoff?.environment.SIGNET_INSPECTOR_HANDOFF).toBe("1");
+		expect(resolveInspectorParentHandoff({ BUN_INSPECT: "127.0.0.1:9230", SIGNET_INSPECTOR_HANDOFF: "1" })).toBeNull();
+	});
+
+	it("normalizes IPv6 discovery endpoints and rejects invalid ports", () => {
+		const endpoint = parseInspectorEndpoint("[::1]:9230/json");
+		expect(endpoint.host).toBe("::1");
+		expect(formatInspectorEndpoint(endpoint)).toBe("[::1]:9230/json");
+		expect(() => parseInspectorEndpoint("0")).toThrow("Invalid inspector port");
+		expect(() => parseInspectorEndpoint("70000")).toThrow("Invalid inspector port");
+	});
+
 	it("serves discovery routes and forwards WebSocket messages for a Bun target", async () => {
 		const targetPort = await freePort();
 		const publicPort = await freePort();
