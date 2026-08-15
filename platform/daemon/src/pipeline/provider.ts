@@ -17,8 +17,8 @@
  */
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
-import { spawn as nodeSpawn } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { execFile, spawn as nodeSpawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
@@ -957,6 +957,128 @@ function acpxProcRoot(): string {
 	return process.env.SIGNET_ACPX_PROC_ROOT || "/proc";
 }
 
+// Test seam mirroring SIGNET_ACPX_PROC_ROOT: forces a cleanup platform so the
+// darwin sweep is exercisable on Linux CI runners.
+function acpxCleanupPlatform(): NodeJS.Platform {
+	const override = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+	if (override === "linux" || override === "darwin") return override;
+	return process.platform;
+}
+
+function acpxPsBinary(): string {
+	return process.env.SIGNET_ACPX_PS || "ps";
+}
+
+function acpxProcinfoCommand(): string {
+	return process.env.SIGNET_ACPX_PROCINFO || "launchctl procinfo";
+}
+
+const MAX_DARWIN_CLEANUP_CANDIDATES = 128;
+
+interface ProcessCaptureResult {
+	readonly stdout: string;
+	readonly succeeded: boolean;
+}
+
+function runProcessCapture(binary: string, args: readonly string[]): Promise<ProcessCaptureResult> {
+	return new Promise((resolve) => {
+		execFile(binary, [...args], { timeout: 800, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+			if (error) {
+				resolve({ stdout: "", succeeded: false });
+				return;
+			}
+			resolve({ stdout, succeeded: true });
+		});
+	});
+}
+
+function commandMatchesAgentBasename(command: string, basenames: ReadonlySet<string>): boolean {
+	for (const arg of command.split(" ")) {
+		const basename = arg.split("/").pop();
+		if (basename !== undefined && basenames.has(basename)) return true;
+	}
+	return false;
+}
+
+// `launchctl procinfo <pid>` prints an `environment:` block whose lines look
+// like `  NAME = value`. Return true when one of those lines carries the run
+// id exactly. Tolerate a `:` separator too so a variant renderer is not a
+// silent no-op.
+function procinfoEnvironmentContainsRunId(stdout: string, runId: string): boolean {
+	const marker = "SIGNET_ACPX_RUN_ID";
+	for (const rawLine of stdout.split("\n")) {
+		const line = rawLine.trim();
+		if (!line.startsWith(marker)) continue;
+		const rest = line.slice(marker.length).trimStart();
+		if ((rest.startsWith("=") || rest.startsWith(":")) && rest.slice(1).trim() === runId) return true;
+	}
+	return false;
+}
+
+/**
+ * macOS has no /proc, so the Linux sweep cannot enumerate candidate agent
+ * processes there. Mirror it with a bounded scan: `ps -axo pid=,command=`
+ * lists the full process table; we filter it down to commands whose basename
+ * is an agent process, then read only those candidates' environments via
+ * `launchctl procinfo` (the standard macOS mechanism for another process's
+ * env; `ps` has no such option on BSD) to require the run id. The
+ * per-candidate env read keeps the scan bounded the way per-pid /proc reads
+ * are bounded on Linux, and it never signals a same-named process from
+ * another run or a user tool.
+ */
+async function darwinSweepCandidates(basenames: ReadonlySet<string>, runId: string): Promise<number[]> {
+	const listingResult = await runProcessCapture(acpxPsBinary(), ["-axo", "pid=,command="]);
+	if (!listingResult.succeeded) {
+		logger.warn("inference", "ACPX Darwin orphan sweep could not enumerate processes", {
+			mechanism: "ps",
+		});
+		return [];
+	}
+	const candidates = new Set<number>();
+	for (const line of listingResult.stdout.split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed === "") continue;
+		const separator = trimmed.indexOf(" ");
+		if (separator <= 0) continue;
+		const pid = Number(trimmed.slice(0, separator));
+		const command = trimmed.slice(separator + 1);
+		if (!Number.isFinite(pid) || pid <= 0) continue;
+		if (commandMatchesAgentBasename(command, basenames)) {
+			candidates.add(pid);
+			if (candidates.size >= MAX_DARWIN_CLEANUP_CANDIDATES) break;
+		}
+	}
+	if (candidates.size >= MAX_DARWIN_CLEANUP_CANDIDATES) {
+		logger.warn("inference", "ACPX Darwin orphan sweep reached its candidate cap", {
+			candidateCap: MAX_DARWIN_CLEANUP_CANDIDATES,
+		});
+	}
+	const matched: number[] = [];
+	let procinfoFailures = 0;
+	for (const pid of candidates) {
+		const procinfo = acpxProcinfoCommand();
+		const [binary, ...leading] = procinfo.trim().split(/\s+/);
+		if (!binary) {
+			procinfoFailures++;
+			continue;
+		}
+		const procinfoResult = await runProcessCapture(binary, [...leading, String(pid)]);
+		if (!procinfoResult.succeeded) {
+			procinfoFailures++;
+			continue;
+		}
+		if (procinfoEnvironmentContainsRunId(procinfoResult.stdout, runId)) matched.push(pid);
+	}
+	if (procinfoFailures > 0) {
+		logger.warn("inference", "ACPX Darwin orphan sweep could not verify process ownership", {
+			failedChecks: procinfoFailures,
+			candidateCount: candidates.size,
+			mechanism: "launchctl procinfo",
+		});
+	}
+	return matched;
+}
+
 async function procEnvContainsRunId(procRoot: string, pid: string, runId: string): Promise<boolean> {
 	try {
 		const environ = await readFile(`${procRoot}/${pid}/environ`, "utf8");
@@ -983,23 +1105,37 @@ async function procCommandMatchesAgent(
 }
 
 async function cleanupAcpxAgentProcesses(agent: string, runId: string): Promise<void> {
-	if (process.platform !== "linux") return;
 	const basenames = new Set(acpxAgentProcessBasenames(agent));
 	if (basenames.size === 0) return;
-	const procRoot = acpxProcRoot();
-	let procEntries: string[];
-	try {
-		procEntries = await readdir(procRoot);
-	} catch {
+	const platform = acpxCleanupPlatform();
+	if (platform !== "linux" && platform !== "darwin") return;
+	let pids: number[];
+	if (platform === "linux") {
+		const procRoot = acpxProcRoot();
+		let procEntries: string[];
+		try {
+			procEntries = await readdir(procRoot);
+		} catch {
+			logger.warn("inference", "ACPX Linux orphan sweep could not enumerate /proc", {
+				procRoot,
+			});
+			return;
+		}
+		pids = [];
+		for (const pid of procEntries) {
+			if (!/^\d+$/.test(pid)) continue;
+			if (!(await procCommandMatchesAgent(procRoot, pid, basenames))) continue;
+			if (!(await procEnvContainsRunId(procRoot, pid, runId))) continue;
+			const numericPid = Number(pid);
+			if (Number.isFinite(numericPid) && numericPid > 0) pids.push(numericPid);
+		}
+	} else if (platform === "darwin") {
+		pids = await darwinSweepCandidates(basenames, runId);
+	} else {
+		logger.warn("inference", "ACPX orphan sweep has no supported process enumeration", {
+			platform,
+		});
 		return;
-	}
-	const pids: number[] = [];
-	for (const pid of procEntries) {
-		if (!/^\d+$/.test(pid)) continue;
-		if (!(await procCommandMatchesAgent(procRoot, pid, basenames))) continue;
-		if (!(await procEnvContainsRunId(procRoot, pid, runId))) continue;
-		const numericPid = Number(pid);
-		if (Number.isFinite(numericPid) && numericPid > 0) pids.push(numericPid);
 	}
 	for (const pid of pids) {
 		try {
