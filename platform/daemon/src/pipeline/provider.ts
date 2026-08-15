@@ -969,10 +969,6 @@ function acpxPsBinary(): string {
 	return process.env.SIGNET_ACPX_PS || "ps";
 }
 
-function acpxProcinfoCommand(): string {
-	return process.env.SIGNET_ACPX_PROCINFO || "launchctl procinfo";
-}
-
 const MAX_DARWIN_CLEANUP_CANDIDATES = 128;
 
 interface ProcessCaptureResult {
@@ -1000,31 +996,22 @@ function commandMatchesAgentBasename(command: string, basenames: ReadonlySet<str
 	return false;
 }
 
-// `launchctl procinfo <pid>` prints an `environment:` block whose lines look
-// like `  NAME = value`. Return true when one of those lines carries the run
-// id exactly. Tolerate a `:` separator too so a variant renderer is not a
-// silent no-op.
-function procinfoEnvironmentContainsRunId(stdout: string, runId: string): boolean {
-	const marker = "SIGNET_ACPX_RUN_ID";
-	for (const rawLine of stdout.split("\n")) {
-		const line = rawLine.trim();
-		if (!line.startsWith(marker)) continue;
-		const rest = line.slice(marker.length).trimStart();
-		if ((rest.startsWith("=") || rest.startsWith(":")) && rest.slice(1).trim() === runId) return true;
-	}
-	return false;
+// macOS ps(1) documents -E as "Display the environment as well". The ACPX
+// children are spawned under the same user as Signet, so this reads their
+// inherited run id without launchctl procinfo or root privileges.
+function psEnvironmentContainsRunId(stdout: string, runId: string): boolean {
+	const marker = `SIGNET_ACPX_RUN_ID=${runId}`;
+	return stdout.split(/\r?\n/).some((line) => line.split(/\s+/).includes(marker));
 }
 
 /**
  * macOS has no /proc, so the Linux sweep cannot enumerate candidate agent
  * processes there. Mirror it with a bounded scan: `ps -axo pid=,command=`
- * lists the full process table; we filter it down to commands whose basename
- * is an agent process, then read only those candidates' environments via
- * `launchctl procinfo` (the standard macOS mechanism for another process's
- * env; `ps` has no such option on BSD) to require the run id. The
- * per-candidate env read keeps the scan bounded the way per-pid /proc reads
- * are bounded on Linux, and it never signals a same-named process from
- * another run or a user tool.
+ * process table; we filter it down to commands whose basename is an agent
+ * process, then read only those candidates' environments via `ps -E` to
+ * require the run id. The per-candidate env read keeps the scan bounded the
+ * way per-pid /proc reads are bounded on Linux, and it never signals a
+ * same-named process from another run or a user tool.
  */
 async function darwinSweepCandidates(basenames: ReadonlySet<string>, runId: string): Promise<number[]> {
 	const listingResult = await runProcessCapture(acpxPsBinary(), ["-axo", "pid=,command="]);
@@ -1054,26 +1041,20 @@ async function darwinSweepCandidates(basenames: ReadonlySet<string>, runId: stri
 		});
 	}
 	const matched: number[] = [];
-	let procinfoFailures = 0;
+	let environmentFailures = 0;
 	for (const pid of candidates) {
-		const procinfo = acpxProcinfoCommand();
-		const [binary, ...leading] = procinfo.trim().split(/\s+/);
-		if (!binary) {
-			procinfoFailures++;
+		const environment = await runProcessCapture(acpxPsBinary(), ["-p", String(pid), "-E", "-o", "command="]);
+		if (!environment.succeeded) {
+			environmentFailures++;
 			continue;
 		}
-		const procinfoResult = await runProcessCapture(binary, [...leading, String(pid)]);
-		if (!procinfoResult.succeeded) {
-			procinfoFailures++;
-			continue;
-		}
-		if (procinfoEnvironmentContainsRunId(procinfoResult.stdout, runId)) matched.push(pid);
+		if (psEnvironmentContainsRunId(environment.stdout, runId)) matched.push(pid);
 	}
-	if (procinfoFailures > 0) {
+	if (environmentFailures > 0) {
 		logger.warn("inference", "ACPX Darwin orphan sweep could not verify process ownership", {
-			failedChecks: procinfoFailures,
+			failedChecks: environmentFailures,
 			candidateCount: candidates.size,
-			mechanism: "launchctl procinfo",
+			mechanism: "ps -E",
 		});
 	}
 	return matched;

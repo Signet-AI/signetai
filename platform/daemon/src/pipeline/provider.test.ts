@@ -689,10 +689,10 @@ printf 'ok\\n'
 		const foreignPid = 4243;
 		const runidFile = join(root, "runid.txt");
 		const fakePs = join(root, "ps");
-		const fakeProcinfo = join(root, "procinfo");
 		const bin = join(root, "fake-acpx.sh");
-		// fake ps: the full process listing for `-axo pid=,command=`. Two
-		// same-named agent processes; only one is bound to our run id.
+		// fake ps: the full process listing plus the environment returned by
+		// `ps -p <pid> -E -o command=`. Two same-named agent processes; only one
+		// is bound to our run id.
 		writeFileSync(
 			fakePs,
 			`#!/usr/bin/env bash
@@ -701,29 +701,13 @@ if [[ "$1" == "-axo" && "$2" == "pid=,command=" ]]; then
   printf '%s\\n' "${foreignPid} /usr/local/bin/codex-acp"
   exit 0
 fi
-exit 0
-`,
-		);
-		// fake procinfo: per-pid environment. The child carries the run id (read
-		// from the file the acpx child wrote from its real env); the foreign
-		// same-named process does not, so it must never be signalled.
-		writeFileSync(
-			fakeProcinfo,
-			`#!/usr/bin/env bash
-pid="\${@: -1}"
-if [[ "$pid" == "${childPid}" ]]; then
+if [[ "$1" == "-p" && "$2" == "${childPid}" ]]; then
   runid=""
   if [[ -n "\${SIGNET_ACPX_RUNID_FILE}" && -f "\${SIGNET_ACPX_RUNID_FILE}" ]]; then
     runid="$(cat "\${SIGNET_ACPX_RUNID_FILE}")"
   fi
-  printf 'environment:\\n'
-  printf '  PATH = /usr/bin\\n'
-  printf '  SIGNET_ACPX_RUN_ID = %s\\n' "$runid"
-  printf '  HOME = /Users/tester\\n'
-else
-  printf 'environment:\\n'
-  printf '  PATH = /usr/bin\\n'
-  printf '  HOME = /Users/tester\\n'
+  printf '/usr/local/bin/codex-acp SIGNET_ACPX_RUN_ID=%s\\n' "$runid"
+  exit 0
 fi
 exit 0
 `,
@@ -741,15 +725,12 @@ printf 'ok\\n'
 `,
 		);
 		chmodSync(fakePs, 0o755);
-		chmodSync(fakeProcinfo, 0o755);
 		chmodSync(bin, 0o755);
 		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
 		const previousPs = process.env.SIGNET_ACPX_PS;
-		const previousProcinfo = process.env.SIGNET_ACPX_PROCINFO;
 		const previousRunidFile = process.env.SIGNET_ACPX_RUNID_FILE;
 		process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "darwin";
 		process.env.SIGNET_ACPX_PS = fakePs;
-		process.env.SIGNET_ACPX_PROCINFO = fakeProcinfo;
 		process.env.SIGNET_ACPX_RUNID_FILE = runidFile;
 		const killLog: string[] = [];
 		const previousKill = process.kill;
@@ -770,8 +751,6 @@ printf 'ok\\n'
 			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
 			if (previousPs === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PS");
 			else process.env.SIGNET_ACPX_PS = previousPs;
-			if (previousProcinfo === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROCINFO");
-			else process.env.SIGNET_ACPX_PROCINFO = previousProcinfo;
 			if (previousRunidFile === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_RUNID_FILE");
 			else process.env.SIGNET_ACPX_RUNID_FILE = previousRunidFile;
 			rmSync(root, { recursive: true, force: true });
@@ -832,25 +811,22 @@ printf 'ok\\n'
 		expect(warnCalls.some(({ message }) => message.includes("could not enumerate processes"))).toBe(true);
 	});
 
-	it("counts and logs Darwin procinfo failures without signaling the candidate", async () => {
+	it("counts and logs Darwin ps environment failures without signaling the candidate", async () => {
 		const root = join(
 			tmpdir(),
-			`signet-acpx-darwin-procinfo-failure-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+			`signet-acpx-darwin-ps-environment-failure-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 		);
 		mkdirSync(root, { recursive: true });
 		const candidatePid = 4244;
 		const fakePs = join(root, "ps");
-		const fakeProcinfo = join(root, "procinfo");
 		const bin = join(root, "fake-acpx.sh");
 		writeFileSync(
 			fakePs,
 			`#!/usr/bin/env bash
+if [[ "$1" == "-axo" && "$2" == "pid=,command=" ]]; then
 printf '%s\\n' "${candidatePid} /usr/local/bin/codex-acp"
-`,
-		);
-		writeFileSync(
-			fakeProcinfo,
-			`#!/usr/bin/env bash
+  exit 0
+fi
 exit 1
 `,
 		);
@@ -861,18 +837,15 @@ printf 'ok\\n'
 `,
 		);
 		chmodSync(fakePs, 0o755);
-		chmodSync(fakeProcinfo, 0o755);
 		chmodSync(bin, 0o755);
 		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
 		const previousPs = process.env.SIGNET_ACPX_PS;
-		const previousProcinfo = process.env.SIGNET_ACPX_PROCINFO;
 		const previousWarn = logger.warn;
 		const warnCalls: Array<{ message: string; data?: Record<string, unknown> }> = [];
 		const killLog: string[] = [];
 		const previousKill = process.kill;
 		process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "darwin";
 		process.env.SIGNET_ACPX_PS = fakePs;
-		process.env.SIGNET_ACPX_PROCINFO = fakeProcinfo;
 		logger.warn = ((_category: unknown, message: unknown, data?: Record<string, unknown>) => {
 			warnCalls.push({ message: String(message), data });
 		}) as typeof logger.warn;
@@ -890,15 +863,13 @@ printf 'ok\\n'
 			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
 			if (previousPs === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PS");
 			else process.env.SIGNET_ACPX_PS = previousPs;
-			if (previousProcinfo === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROCINFO");
-			else process.env.SIGNET_ACPX_PROCINFO = previousProcinfo;
 			rmSync(root, { recursive: true, force: true });
 		}
 		const ownershipWarning = warnCalls.find(({ message }) => message.includes("could not verify process ownership"));
 		expect(ownershipWarning?.data).toMatchObject({
 			failedChecks: 1,
 			candidateCount: 1,
-			mechanism: "launchctl procinfo",
+			mechanism: "ps -E",
 		});
 		expect(killLog).toEqual([]);
 	});
@@ -911,8 +882,7 @@ printf 'ok\\n'
 		mkdirSync(root, { recursive: true });
 		const firstPid = 5000;
 		const fakePs = join(root, "ps");
-		const fakeProcinfo = join(root, "procinfo");
-		const procinfoCalls = join(root, "procinfo-calls.txt");
+		const psCalls = join(root, "ps-calls.txt");
 		const bin = join(root, "fake-acpx.sh");
 		const candidateLines = Array.from(
 			{ length: 130 },
@@ -925,19 +895,16 @@ if [[ "$1" == "-axo" && "$2" == "pid=,command=" ]]; then
 ${candidateLines}
   exit 0
 fi
-exit 0
-`,
-		);
-		writeFileSync(
-			fakeProcinfo,
-			`#!/usr/bin/env bash
-count=0
-if [[ -f ${JSON.stringify(procinfoCalls)} ]]; then
-  count=$(<${JSON.stringify(procinfoCalls)})
+if [[ "$1" == "-p" ]]; then
+  count=0
+  if [[ -f ${JSON.stringify(psCalls)} ]]; then
+    count=$(<${JSON.stringify(psCalls)})
+  fi
+  echo $((count + 1)) > ${JSON.stringify(psCalls)}
+  echo '/usr/local/bin/codex-acp'
+  exit 0
 fi
-echo $((count + 1)) > ${JSON.stringify(procinfoCalls)}
-echo environment:
-echo '  HOME = /Users/tester'
+exit 1
 `,
 		);
 		writeFileSync(
@@ -947,19 +914,16 @@ printf 'ok\\n'
 `,
 		);
 		chmodSync(fakePs, 0o755);
-		chmodSync(fakeProcinfo, 0o755);
 		chmodSync(bin, 0o755);
 		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
 		const previousPs = process.env.SIGNET_ACPX_PS;
-		const previousProcinfo = process.env.SIGNET_ACPX_PROCINFO;
 		const previousWarn = logger.warn;
 		const warnCalls: string[] = [];
 		const killLog: string[] = [];
 		const previousKill = process.kill;
-		let procinfoCallCount = 0;
+		let psCallCount = 0;
 		process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "darwin";
 		process.env.SIGNET_ACPX_PS = fakePs;
-		process.env.SIGNET_ACPX_PROCINFO = fakeProcinfo;
 		logger.warn = ((_category: unknown, message: unknown) => {
 			warnCalls.push(String(message));
 		}) as typeof logger.warn;
@@ -970,7 +934,7 @@ printf 'ok\\n'
 		try {
 			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
 			await expect(provider.generate("hello", { timeoutMs: 5000 })).resolves.toBe("ok");
-			procinfoCallCount = Number(readFileSync(procinfoCalls, "utf-8").trim());
+			psCallCount = Number(readFileSync(psCalls, "utf-8").trim());
 		} finally {
 			process.kill = previousKill;
 			logger.warn = previousWarn;
@@ -978,11 +942,9 @@ printf 'ok\\n'
 			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
 			if (previousPs === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PS");
 			else process.env.SIGNET_ACPX_PS = previousPs;
-			if (previousProcinfo === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROCINFO");
-			else process.env.SIGNET_ACPX_PROCINFO = previousProcinfo;
 			rmSync(root, { recursive: true, force: true });
 		}
-		expect(procinfoCallCount).toBe(128);
+		expect(psCallCount).toBe(128);
 		expect(warnCalls.some((message) => message.includes("reached its candidate cap"))).toBe(true);
 		expect(killLog).toEqual([]);
 	});
