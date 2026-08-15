@@ -22,20 +22,27 @@ describe("openUrlWithFallback", () => {
 		expect(lines.join("\n")).toContain("https://example.com/oauth");
 	});
 
-	it("falls back after a stuck browser opener instead of hanging", async () => {
+	it("kills a stuck browser opener process before printing the manual URL", async () => {
+		const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 1_000)"]);
 		const lines: string[] = [];
+		let waitOption: boolean | undefined;
 		const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
 			lines.push(args.join(" "));
 		});
 		try {
 			await openUrlWithFallback("https://example.com/stuck", {
-				open: () => new Promise<unknown>(() => {}),
+				open: async (_url, options) => {
+					waitOption = options?.wait;
+					return child;
+				},
 				timeoutMs: 10,
 			});
 		} finally {
 			log.mockRestore();
 		}
 
+		expect(waitOption).toBe(true);
+		expect(child.killed).toBe(true);
 		expect(lines.join("\n")).toContain("https://example.com/stuck");
 	});
 
@@ -78,6 +85,32 @@ describe("openUrlWithFallback", () => {
 		expect(lines.join("\n")).toContain("https://example.com/headless");
 	});
 
+	it("opens the browser on macOS when an Aqua session is available", async () => {
+		const opened: string[] = [];
+		const lines: string[] = [];
+		let waitOption: boolean | undefined;
+		const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			lines.push(args.join(" "));
+		});
+		try {
+			await openUrlWithFallback("https://example.com/macos", {
+				platform: "darwin",
+				hasGuiSession: async () => true,
+				open: async (url, options) => {
+					opened.push(url);
+					waitOption = options?.wait;
+					return undefined;
+				},
+			});
+		} finally {
+			log.mockRestore();
+		}
+
+		expect(opened).toEqual(["https://example.com/macos"]);
+		expect(waitOption).toBe(true);
+		expect(lines).toEqual([]);
+	});
+
 	it("prints the manual URL without invoking open when macOS has no Aqua session", async () => {
 		let openCalls = 0;
 		const lines: string[] = [];
@@ -90,6 +123,7 @@ describe("openUrlWithFallback", () => {
 				hasGuiSession: async () => false,
 				open: async () => {
 					openCalls += 1;
+					return undefined;
 				},
 			});
 		} finally {
@@ -111,6 +145,7 @@ describe("openUrlWithFallback", () => {
 			await openUrlWithFallback("https://example.com/dashboard", {
 				open: async (url) => {
 					opened.push(url);
+					return undefined;
 				},
 			});
 		} finally {
