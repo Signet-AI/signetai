@@ -28,6 +28,8 @@ import {
 } from "./obsidian-source-embeddings";
 import {
 	type ObsidianMarkdownPathIndex,
+	addObsidianMarkdownPathIndex,
+	buildObsidianMarkdownPathIndex,
 	indexObsidianSourceStructure,
 	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
@@ -71,6 +73,8 @@ export interface NativeMemoryBridgeOptions {
 	readonly sourceCleanupEnabled?: boolean;
 	readonly shouldCleanupSource?: (source: NativeMemorySource) => boolean;
 	readonly sourceGraphEnabled?: boolean;
+	/** Test and bounded-scan override. Production scans use the 50,000-file cap. */
+	readonly maxFilesPerScan?: number;
 	readonly shouldContinue?: (source: NativeMemorySource) => boolean;
 	readonly onEmbeddingStatus?: (status: string | undefined) => void;
 	readonly onFileIndexed?: (event: NativeMemoryFileIndexEvent) => void;
@@ -565,7 +569,8 @@ async function withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
 async function nativeArtifactContentHash(filePath: string, agentId: string): Promise<string | null> {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {
+			const row = db
 				.prepare(
 					"SELECT source_sha256 FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
 				)
@@ -580,7 +585,8 @@ async function nativeArtifactContentHash(filePath: string, agentId: string): Pro
 async function nativeArtifactCapturedAt(filePath: string, agentId: string): Promise<string | null> {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {
+			const row = db
 				.prepare(
 					"SELECT captured_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
 				)
@@ -608,7 +614,8 @@ async function healSentinelCapturedAt(
 	if (timestampMillis(capturedAt) >= Date.parse(EPISODIC_CAPTURED_AT_FLOOR)) return;
 	try {
 		const stampedAt = new Date().toISOString();
-		await withWriteTxAsync((db) => {			db.prepare(
+		await withWriteTxAsync((db) => {
+			db.prepare(
 				`UPDATE memory_artifacts
 				 SET captured_at = ?, updated_at = ?
 				 WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0`,
@@ -629,7 +636,8 @@ async function healSentinelCapturedAt(
 
 async function obsidianGraphExists(agentId: string, sourceId: string, filePath: string): Promise<boolean> {
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {
+			const row = db
 				.prepare(
 					`SELECT 1 FROM entities
 					 WHERE agent_id = ?
@@ -656,7 +664,8 @@ async function obsidianEmbeddingsExist(input: {
 	const chunks = buildObsidianSourceChunks(input);
 	if (chunks.length === 0) return true;
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {			const rows = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {
+			const rows = db
 				.prepare(
 					`SELECT source_id FROM embeddings
 					 WHERE agent_id = ?
@@ -681,7 +690,8 @@ async function obsidianEmbeddingsExist(input: {
 async function activeNativeArtifactPaths(source: NativeMemorySource, agentId: string): Promise<string[]> {
 	const rootPrefix = `${normalizedRoot(source.root)}/`;
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {			const rows = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {
+			const rows = db
 				.prepare(
 					`SELECT source_path FROM memory_artifacts
 					 WHERE agent_id = ?
@@ -1046,29 +1056,40 @@ export function startNativeMemoryBridge(
 			const key = sourceStateKey(source, agentId);
 			const current = new Set<string>();
 			const rootExists = await pathExists(source.root, source, agentId);
+			const maxFilesPerScan = options.maxFilesPerScan ?? NATIVE_MEMORY_MAX_FILES_PER_SCAN;
+			let scanComplete = true;
+			let scanTruncated = false;
 			if (rootExists) {
 				const fileDelayMs = sourceFileDelayMs(source, options);
 				let total = 0;
+				const markdownPathIndex =
+					source.harness === "obsidian" && (options.sourceGraphEnabled ?? true)
+						? buildObsidianMarkdownPathIndex(source.root, [])
+						: undefined;
 				for await (const file of walkNativeMemoryFiles(source.root, source, agentId)) {
-					if (matchesPattern(source, file)) total++;
-					if (total >= NATIVE_MEMORY_MAX_FILES_PER_SCAN) break;
+					if (!matchesPattern(source, file)) continue;
+					total++;
+					if (total > maxFilesPerScan) {
+						scanComplete = false;
+						scanTruncated = true;
+						break;
+					}
+					if (markdownPathIndex) addObsidianMarkdownPathIndex(markdownPathIndex, source.root, file);
+					await yielder();
 				}
 				// The generator plus awaited indexing below is a one-item bounded work queue.
 				for await (const file of walkNativeMemoryFiles(source.root, source, agentId)) {
-					if (scanned >= NATIVE_MEMORY_MAX_FILES_PER_SCAN) {
-						logger.warn("watcher", "Native memory scan reached its file budget", {
-							harness: source.harness,
-							root: source.root,
-							cap: NATIVE_MEMORY_MAX_FILES_PER_SCAN,
-						});
+					if (scanned >= maxFilesPerScan) break;
+					if (!matchesPattern(source, file)) continue;
+					if (options.shouldContinue && !options.shouldContinue(source)) {
+						scanComplete = false;
 						break;
 					}
-					if (!matchesPattern(source, file)) continue;
-					if (options.shouldContinue && !options.shouldContinue(source)) break;
 					scanned++;
 					let embeddingStatus: string | undefined;
 					const changed = await indexNativeMemoryFile(source, file, agentId, {
 						...options,
+						markdownPathIndex,
 						onEmbeddingStatus: (status) => {
 							embeddingStatus = status;
 							options.onEmbeddingStatus?.(status);
@@ -1091,21 +1112,34 @@ export function startNativeMemoryBridge(
 					await yielder();
 					await sleep(fileDelayMs);
 				}
+				if (scanTruncated) {
+					logger.warn("watcher", "Native memory scan reached its file budget", {
+						harness: source.harness,
+						root: source.root,
+						cap: maxFilesPerScan,
+					});
+				}
 			}
-			if (sourceCleanupEnabledFor(source, options)) {
+			const cleanupAllowed = sourceCleanupEnabledFor(source, options) && (!rootExists || scanComplete);
+			if (cleanupAllowed) {
 				const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
 				for (const file of await activeNativeArtifactPaths(source, agentId)) {
 					if (!currentPaths.has(file.replace(/\\/g, "/"))) removeNativeMemoryFile(source, file, agentId);
 				}
 			}
 			const previous = known.get(key);
-			if (previous && sourceCleanupEnabledFor(source, options)) {
+			if (previous && cleanupAllowed) {
 				for (const file of previous) {
 					if (!current.has(file)) removeNativeMemoryFile(source, file, agentId);
 				}
 			}
 			known.set(key, current);
-			if (rootExists && source.sourceId && (!options.shouldContinue || options.shouldContinue(source))) {
+			if (
+				rootExists &&
+				scanComplete &&
+				source.sourceId &&
+				(!options.shouldContinue || options.shouldContinue(source))
+			) {
 				markSourceIndexed(source.sourceId, undefined, options.agentsDir);
 			}
 		}

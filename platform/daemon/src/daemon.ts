@@ -730,7 +730,8 @@ async function readLegacyMarkdownImportState(filePath: string): Promise<{
 	readonly status: string;
 } | null> {
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {
+			const row = db
 				.prepare(
 					`SELECT mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count, status
 					 FROM legacy_markdown_imports
@@ -779,7 +780,8 @@ async function writeLegacyMarkdownImportState(args: {
 }): Promise<void> {
 	try {
 		const now = new Date().toISOString();
-		await withWriteTxAsync((db) => {			db.prepare(
+		await withWriteTxAsync((db) => {
+			db.prepare(
 				`INSERT INTO legacy_markdown_imports
 				 (path, mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count,
 				  last_imported_at, last_seen_at, status, error)
@@ -816,7 +818,8 @@ async function writeLegacyMarkdownImportState(args: {
 
 async function legacyMarkdownChunkKnown(filePath: string, chunkHash: string): Promise<boolean> {
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {
+			const row = db
 				.prepare("SELECT 1 FROM legacy_markdown_chunks WHERE file_path = ? AND chunk_hash = ?")
 				.get(filePath, chunkHash);
 			return row != null;
@@ -834,7 +837,8 @@ async function recordLegacyMarkdownChunk(args: {
 	readonly sourceId: string;
 }): Promise<void> {
 	try {
-		await withWriteTxAsync((db) => {			db.prepare(
+		await withWriteTxAsync((db) => {
+			db.prepare(
 				`INSERT INTO legacy_markdown_chunks
 				 (file_path, chunk_hash, chunk_index, memory_id, source_id, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?)

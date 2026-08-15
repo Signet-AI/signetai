@@ -707,6 +707,81 @@ describe("native memory sources", () => {
 		}
 	});
 
+	it("does not soft-delete artifacts beyond a capped scan", async () => {
+		const root = join(dir, "vault");
+		const first = join(root, "first.md");
+		const second = join(root, "second.md");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(first, "# First\n\nThe first source document remains active.\n");
+		writeFileSync(second, "# Second\n\nThe second source document remains active.\n");
+		const source = obsidianNativeMemorySource(root, "Capped Vault", "obsidian:capped-vault");
+
+		const initial = startNativeMemoryBridge([source], {
+			agentId: "agent-native",
+			pollIntervalMs: 0,
+			sourceGraphEnabled: false,
+		});
+		try {
+			expect(await initial.syncExisting()).toBe(2);
+		} finally {
+			await initial.close();
+		}
+
+		const capped = startNativeMemoryBridge([source], {
+			agentId: "agent-native",
+			pollIntervalMs: 0,
+			maxFilesPerScan: 1,
+			sourceGraphEnabled: false,
+		});
+		try {
+			expect(await capped.syncExisting()).toBe(0);
+		} finally {
+			await capped.close();
+		}
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT source_path, is_deleted FROM memory_artifacts WHERE agent_id = ? ORDER BY source_path")
+					.all("agent-native") as Array<{ source_path: string; is_deleted: number }>,
+		);
+		expect(rows).toEqual([
+			{ source_path: first, is_deleted: 0 },
+			{ source_path: second, is_deleted: 0 },
+		]);
+	});
+
+	it("preserves the Obsidian path index across an async graph-enabled scan", async () => {
+		const root = join(dir, "vault");
+		const sourceFile = join(root, "folder-a", "Source.md");
+		const targetFile = join(root, "folder-b", "Target.md");
+		mkdirSync(join(root, "folder-a"), { recursive: true });
+		mkdirSync(join(root, "folder-b"), { recursive: true });
+		writeFileSync(sourceFile, "# Source\n\nLinks to [[Target]].\n");
+		writeFileSync(targetFile, "# Target\n\nThe cross-folder target is indexed as source graph structure.\n");
+		const source = obsidianNativeMemorySource(root, "Async Graph Vault", "obsidian:async-graph");
+		const handle = startNativeMemoryBridge([source], {
+			agentId: "agent-native",
+			pollIntervalMs: 0,
+			sourceGraphEnabled: true,
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(2);
+		} finally {
+			await handle.close();
+		}
+
+		const target = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT entity_type, source_path FROM entities WHERE agent_id = ? AND canonical_name = ?")
+					.get("agent-native", "obsidian:obsidian:async-graph:document:folder-b/Target.md") as
+					| { entity_type: string; source_path: string }
+					| undefined,
+		);
+		expect(target).toEqual({ entity_type: "source_document", source_path: targetFile });
+	});
+
 	it("can defer stale source cleanup during bridge sync", async () => {
 		const root = join(dir, "vault");
 		const file = join(root, "permanent", "Old.md");

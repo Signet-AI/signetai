@@ -60,9 +60,9 @@ interface HeadingSection {
 }
 
 export interface ObsidianMarkdownPathIndex {
-	readonly byStem: ReadonlyMap<string, string>;
-	readonly byNormalizedStem: ReadonlyMap<string, string>;
-	readonly byRel: ReadonlyMap<string, string>;
+	readonly byStem: Map<string, string>;
+	readonly byNormalizedStem: Map<string, string>;
+	readonly byRel: Map<string, string>;
 }
 
 function normalizedRoot(root: string): string {
@@ -331,21 +331,27 @@ function markdownTarget(target: string): string {
 }
 
 export function buildObsidianMarkdownPathIndex(root: string, files: readonly string[]): ObsidianMarkdownPathIndex {
-	const normalized = normalizedRoot(root);
-	const byStem = new Map<string, string>();
-	const byNormalizedStem = new Map<string, string>();
-	const byRel = new Map<string, string>();
+	const index: ObsidianMarkdownPathIndex = {
+		byStem: new Map(),
+		byNormalizedStem: new Map(),
+		byRel: new Map(),
+	};
 	for (const file of files) {
-		const path = normalizedPath(file);
-		const rel = relPath(normalized, path);
-		if (!rel.endsWith(".md")) continue;
-		byRel.set(rel, path);
-		const stem = displayNameForFile(path);
-		if (!byStem.has(stem)) byStem.set(stem, path);
-		const normalizedStem = slug(stem);
-		if (!byNormalizedStem.has(normalizedStem)) byNormalizedStem.set(normalizedStem, path);
+		addObsidianMarkdownPathIndex(index, root, file);
 	}
-	return { byStem, byNormalizedStem, byRel };
+	return index;
+}
+
+/** Add one discovered Markdown path without materializing the full source tree. */
+export function addObsidianMarkdownPathIndex(index: ObsidianMarkdownPathIndex, root: string, file: string): void {
+	const path = normalizedPath(file);
+	const rel = relPath(normalizedRoot(root), path);
+	if (!rel.endsWith(".md")) return;
+	index.byRel.set(rel, path);
+	const stem = displayNameForFile(path);
+	if (!index.byStem.has(stem)) index.byStem.set(stem, path);
+	const normalizedStem = slug(stem);
+	if (!index.byNormalizedStem.has(normalizedStem)) index.byNormalizedStem.set(normalizedStem, path);
 }
 
 function resolveWikiLinkPath(
