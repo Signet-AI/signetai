@@ -11,7 +11,9 @@ import type { EmbeddingConfig } from "./memory-config";
 import type { PipelineCauseFamily } from "./pipeline-operation";
 
 const STAGING_VECTOR_TABLE = "vec_embeddings_staging";
-const VECTOR_REBUILD_BATCH_SIZE = 100;
+const VECTOR_REBUILD_BATCH_SIZE = 50;
+const VECTOR_REBUILD_RETRY_DELAY_MS = 100;
+const MAX_VECTOR_REBUILD_RETRIES_WITHOUT_CANCELLATION = 3;
 
 // #1160: after this many consecutive provider-unavailable checks the build is
 // aborted (state='failed') instead of retrying forever; the daemon restarts
@@ -119,49 +121,92 @@ export function resetStagingVectorIndex(db: WriteDb, dimensions: number): void {
 	createVectorIndex(db, STAGING_VECTOR_TABLE, dimensions);
 }
 
-/** Rebuild the active sqlite-vec projection from durable BLOB rows in bounded transactions. */
+function isDuplicateVectorProjectionRow(error: unknown): boolean {
+	return error instanceof Error && /vec_embeddings.*primary key/i.test(error.message);
+}
+
+/**
+ * Rebuild the active sqlite-vec projection from durable BLOB rows in bounded
+ * transactions. The projection is allowed to lag while active writers run, so
+ * duplicate ids are intentionally ignored. A failed chunk keeps its keyset
+ * cursor and retries until the caller stops the migration.
+ */
 async function rebuildActiveVectorIndex(
 	accessor: DbAccessor,
 	dimensions: number,
 	batchSize = VECTOR_REBUILD_BATCH_SIZE,
+	shouldContinue?: () => boolean,
 ): Promise<void> {
-	await withQueuedWrite(accessor, (db) => {
-		db.exec("DROP TABLE IF EXISTS vec_embeddings_staging");
-		db.exec("DROP TABLE vec_embeddings");
-		createVectorIndex(db, "vec_embeddings", dimensions);
-	});
-
+	const canCancel = shouldContinue !== undefined;
+	const isRunning = shouldContinue ?? (() => true);
 	const limit = Math.max(1, Math.floor(batchSize));
 	let lastId: string | null = null;
+	let initialized = false;
+	let retries = 0;
 	const yieldAfterChunk = yieldEvery(1);
-	while (true) {
-		const rows = await accessor.withReadDbAsync(async (db) => {
-			const query =
-				lastId === null
-					? "SELECT id, vector FROM embeddings ORDER BY id LIMIT ?"
-					: "SELECT id, vector FROM embeddings WHERE id > ? ORDER BY id LIMIT ?";
-			return (lastId === null ? db.prepare(query).all(limit) : db.prepare(query).all(lastId, limit)) as Array<{
-				readonly id: string;
-				readonly vector: Uint8Array;
-			}>;
-		});
-		if (rows.length === 0) return;
 
-		await withQueuedWrite(accessor, (db) => {
-			const insert = db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)");
-			for (const row of rows) {
-				const vector = new Float32Array(
-					row.vector.buffer,
-					row.vector.byteOffset,
-					row.vector.byteLength / Float32Array.BYTES_PER_ELEMENT,
-				);
-				if (vector.length !== dimensions)
-					throw new Error(`Embedding ${row.id} has ${vector.length} dimensions, expected ${dimensions}`);
-				insert.run(row.id, vector);
+	while (true) {
+		if (!isRunning()) throw new Error("Embedding vector rebuild stopped");
+		try {
+			if (!initialized) {
+				await withQueuedWrite(accessor, (db) => {
+					db.exec("DROP TABLE IF EXISTS vec_embeddings_staging");
+					db.exec("DROP TABLE vec_embeddings");
+					createVectorIndex(db, "vec_embeddings", dimensions);
+				});
+				initialized = true;
 			}
-		});
-		lastId = rows[rows.length - 1]?.id ?? null;
-		await yieldAfterChunk();
+
+			const rows = await accessor.withReadDbAsync(async (db) => {
+				const query =
+					lastId === null
+						? "SELECT id, vector FROM embeddings ORDER BY id LIMIT ?"
+						: "SELECT id, vector FROM embeddings WHERE id > ? ORDER BY id LIMIT ?";
+				return (lastId === null ? db.prepare(query).all(limit) : db.prepare(query).all(lastId, limit)) as Array<{
+					readonly id: string;
+					readonly vector: Uint8Array;
+				}>;
+			});
+			if (rows.length === 0) return;
+
+			await withQueuedWrite(accessor, (db) => {
+				// sqlite-vec does not implement SQLite's conflict algorithms for
+				// virtual tables. Keep the explicit OR IGNORE contract for normal
+				// SQLite projections, then swallow vec0's equivalent duplicate error.
+				const insert = db.prepare("INSERT OR IGNORE INTO vec_embeddings (id, embedding) VALUES (?, ?)");
+				const existing = db.prepare("SELECT 1 FROM vec_embeddings WHERE id = ?");
+				for (const row of rows) {
+					const vector = new Float32Array(
+						row.vector.buffer,
+						row.vector.byteOffset,
+						row.vector.byteLength / Float32Array.BYTES_PER_ELEMENT,
+					);
+					if (vector.length !== dimensions)
+						throw new Error(`Embedding ${row.id} has ${vector.length} dimensions, expected ${dimensions}`);
+					if (existing.get(row.id) != null) continue;
+					try {
+						insert.run(row.id, vector);
+					} catch (error) {
+						if (!isDuplicateVectorProjectionRow(error)) throw error;
+					}
+				}
+			});
+			lastId = rows[rows.length - 1]?.id ?? null;
+			retries = 0;
+			await yieldAfterChunk();
+		} catch (error) {
+			// Dimension mismatches are durable data errors, not transient rebuild
+			// failures. Keep the existing fail-closed behavior for those rows.
+			if (error instanceof Error && error.message.startsWith("Embedding ")) throw error;
+			if (!isRunning()) throw error;
+			if (!canCancel && retries >= MAX_VECTOR_REBUILD_RETRIES_WITHOUT_CANCELLATION) throw error;
+			retries++;
+			logger.warn("embedding", "Vector projection rebuild failed; retrying the current chunk", {
+				error: error instanceof Error ? error.message : String(error),
+				retry: retries,
+			});
+			await new Promise<void>((resolve) => setTimeout(resolve, VECTOR_REBUILD_RETRY_DELAY_MS));
+		}
 	}
 }
 
@@ -372,7 +417,7 @@ export async function stageEmbeddingBatch(input: {
  */
 export async function promoteStagingIndex(
 	accessor: DbAccessor,
-	options?: { readonly vectorBatchSize?: number },
+	options?: { readonly vectorBatchSize?: number; readonly shouldContinue?: () => boolean },
 ): Promise<boolean> {
 	const plan = await withQueuedWrite(accessor, (db) => {
 		const state = readEmbeddingIndexState(db);
@@ -410,7 +455,7 @@ export async function promoteStagingIndex(
 	});
 	if (plan === null) return false;
 	if (plan.rebuildVectorIndex) {
-		await rebuildActiveVectorIndex(accessor, plan.dimensions, options?.vectorBatchSize);
+		await rebuildActiveVectorIndex(accessor, plan.dimensions, options?.vectorBatchSize, options?.shouldContinue);
 	}
 	if (accessor.incrementalVacuumAsync) await accessor.incrementalVacuumAsync();
 	return true;
@@ -524,7 +569,7 @@ export async function startEmbeddingIndexMigration(input: {
 			const result = await stageEmbeddingBatch(input);
 			staged += result.staged;
 			coverage = result.coverage;
-			if (coverage?.ready && (await promoteStagingIndex(input.accessor))) {
+			if (coverage?.ready && (await promoteStagingIndex(input.accessor, { shouldContinue: () => running }))) {
 				running = false;
 				input.onPromoted?.();
 			}
