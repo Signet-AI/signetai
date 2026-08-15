@@ -364,7 +364,9 @@ function decodeKeyringValue(result: SecretKeyringResult): Uint8Array {
 		throw new SecretKeyringError({ state: "corrupt", message: "Keyring returned no master key" });
 	try {
 		const key = Buffer.from(result.value, "base64");
-		if (key.length !== 32) throw new Error("master key has an invalid length");
+		if (key.length !== 32 || key.toString("base64") !== result.value) {
+			throw new Error("master key is not valid canonical base64");
+		}
 		return new Uint8Array(key);
 	} catch (error) {
 		throw new SecretKeyringError({ state: "corrupt", message: error instanceof Error ? error.message : String(error) });

@@ -216,6 +216,23 @@ describe("local secrets provider", () => {
 		});
 	});
 
+	test("native v2 health rejects a non-canonical 32-byte-looking keyring value", async () => {
+		const keyring = makeKeyring({ state: "missing" });
+		setSecretKeyringAdapterForTests(keyring);
+		await putSecret("OPENAI_API_KEY", "native-secret");
+
+		setSecretKeyringAdapterForTests(makeKeyring({ state: "found", value: `${"A".repeat(43)}!` }));
+		const health = await localSecretProvider.health({});
+
+		expect(health.status).toBe("degraded");
+		expect(health.message).toContain("Native secrets keyring is corrupt");
+		await expect(getSecret("OPENAI_API_KEY")).rejects.toMatchObject({
+			name: "SecretKeyringError",
+			state: "corrupt",
+			retryable: false,
+		});
+	});
+
 	test("bare names and local:// references resolve through the same local store", async () => {
 		await putSecret("OPENAI_API_KEY", "sk-test-local");
 
