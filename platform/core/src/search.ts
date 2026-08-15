@@ -58,6 +58,7 @@ export interface SearchResult {
  * SQLite database interface for raw queries
  */
 interface SQLiteDatabase {
+	exec?(sql: string): void;
 	prepare(sql: string): {
 		run(...args: unknown[]): void;
 		get(...args: unknown[]): Record<string, unknown> | undefined;
@@ -129,6 +130,21 @@ interface VectorSearchTables {
 	readonly embeddings: "embeddings" | "embeddings_staging";
 }
 
+function withReadTransaction(db: SQLiteDatabase, read: () => void): void {
+	if (db.exec === undefined) {
+		read();
+		return;
+	}
+	db.exec("BEGIN");
+	try {
+		read();
+		db.exec("COMMIT");
+	} catch (error) {
+		db.exec("ROLLBACK");
+		throw error;
+	}
+}
+
 function activeVectorSearchTables(db: SQLiteDatabase): VectorSearchTables {
 	try {
 		const row = db
@@ -163,54 +179,56 @@ export function vectorSearch(
 ): Array<{ id: string; score: number }> {
 	const limit = options?.limit ?? 20;
 	const results: Array<{ id: string; score: number }> = [];
-	const searchTables = activeVectorSearchTables(db);
 
 	try {
-		// sqlite-vec uses MATCH syntax for vector search
-		// The query vector must be serialized as a blob
-		const queryBlob = new Float32Array(queryVector);
-		const maxK = options?.excludeAggregateRecall ? Math.max(limit, Math.min(limit * 8, 1000)) : limit;
-		let k = limit;
+		withReadTransaction(db, () => {
+			const searchTables = activeVectorSearchTables(db);
+			// sqlite-vec uses MATCH syntax for vector search
+			// The query vector must be serialized as a blob
+			const queryBlob = new Float32Array(queryVector);
+			const maxK = options?.excludeAggregateRecall ? Math.max(limit, Math.min(limit * 8, 1000)) : limit;
+			let k = limit;
 
-		while (true) {
-			// vec0 KNN queries require `k = ?` in the WHERE clause
-			const params: unknown[] = [queryBlob, k];
+			while (true) {
+				// vec0 KNN queries require `k = ?` in the WHERE clause
+				const params: unknown[] = [queryBlob, k];
 
-			// Build type filter if specified
-			let typeFilter = "";
-			if (options?.type) {
-				typeFilter = " AND m.type = ?";
-				params.push(options.type);
-			}
-			if (options?.excludeAggregateRecall) {
-				typeFilter += " AND COALESCE(m.source_type, '') != 'aggregate-recall'";
-			}
+				// Build type filter if specified
+				let typeFilter = "";
+				if (options?.type) {
+					typeFilter = " AND m.type = ?";
+					params.push(options.type);
+				}
+				if (options?.excludeAggregateRecall) {
+					typeFilter += " AND COALESCE(m.source_type, '') != 'aggregate-recall'";
+				}
 
-			// Query vec_embeddings virtual table, join with embeddings to get source_id
-			const rows = db
-				.prepare(`
+				// Query vec_embeddings virtual table, join with embeddings to get source_id
+				const rows = db
+					.prepare(`
       SELECT
         e.source_id,
         v.distance
       FROM ${searchTables.projection} v
-					JOIN ${searchTables.embeddings} e ON v.id = e.id
+						JOIN ${searchTables.embeddings} e ON v.id = e.id
       JOIN memories m ON e.source_id = m.id
       WHERE v.embedding MATCH ? AND k = ?${typeFilter}
       ORDER BY v.distance
     `)
-				.all(...params) as Array<{ source_id: string; distance: number }>;
+					.all(...params) as Array<{ source_id: string; distance: number }>;
 
-			results.length = 0;
-			// Convert cosine distance to similarity score
-			// sqlite-vec with distance_metric=cosine returns (1 - similarity)
-			// So similarity = 1 - distance
-			for (const row of rows.slice(0, limit)) {
-				const similarity = 1 - row.distance;
-				results.push({ id: row.source_id, score: Math.max(0, similarity) });
+				results.length = 0;
+				// Convert cosine distance to similarity score
+				// sqlite-vec with distance_metric=cosine returns (1 - similarity)
+				// So similarity = 1 - distance
+				for (const row of rows.slice(0, limit)) {
+					const similarity = 1 - row.distance;
+					results.push({ id: row.source_id, score: Math.max(0, similarity) });
+				}
+				if (results.length >= limit || k >= maxK || (!options?.excludeAggregateRecall && rows.length < k)) break;
+				k = Math.min(k * 2, maxK);
 			}
-			if (results.length >= limit || k >= maxK || (!options?.excludeAggregateRecall && rows.length < k)) break;
-			k = Math.min(k * 2, maxK);
-		}
+		});
 	} catch (e) {
 		// Vector search may fail if no embeddings exist or vec table unavailable
 		console.warn("Vector search failed:", e);
