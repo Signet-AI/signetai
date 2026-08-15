@@ -175,13 +175,45 @@ function calledFunctionName(expression: ts.Expression): string | null {
 
 function destructuredSyncApis(sourceFile: ts.SourceFile): ReadonlyMap<string, SyncApi> {
 	const declarations: ts.VariableDeclaration[] = [];
-	const collectDeclarations = (node: ts.Node): void => {
+	const assignments: ts.BinaryExpression[] = [];
+	const parameters: ts.ParameterDeclaration[] = [];
+	const collect = (node: ts.Node): void => {
 		if (ts.isVariableDeclaration(node)) declarations.push(node);
-		ts.forEachChild(node, collectDeclarations);
+		if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) assignments.push(node);
+		if (ts.isParameter(node)) parameters.push(node);
+		ts.forEachChild(node, collect);
 	};
-	collectDeclarations(sourceFile);
+	collect(sourceFile);
 
 	const accessorAliases = new Set<string>();
+	const namespaceAliases = new Set<string>();
+	const aliases = new Map<string, SyncApi>();
+	const filesystemModules = new Set(["fs", "node:fs"]);
+	const processModules = new Set(["child_process", "node:child_process"]);
+	const syncModule = (moduleName: string): boolean =>
+		filesystemModules.has(moduleName) || processModules.has(moduleName);
+	const syncApi = (name: string): name is SyncApi => SYNC_APIS.includes(name as SyncApi);
+	const dbAccessorSyncApi = (name: string): name is "withReadDb" | "withWriteTx" =>
+		name === "withReadDb" || name === "withWriteTx";
+	const addAccessorAlias = (name: string): boolean => {
+		if (accessorAliases.has(name)) return false;
+		accessorAliases.add(name);
+		return true;
+	};
+	const addNamespaceAlias = (name: string): boolean => {
+		if (namespaceAliases.has(name)) return false;
+		namespaceAliases.add(name);
+		return true;
+	};
+	const addApiAlias = (name: string, api: SyncApi): boolean => {
+		if (aliases.get(name) === api) return false;
+		aliases.set(name, api);
+		return true;
+	};
+	const isDbAccessorType = (type: ts.TypeNode | undefined): boolean => {
+		if (!type || !ts.isTypeReferenceNode(type)) return false;
+		return ts.isIdentifier(type.typeName) && type.typeName.text === "DbAccessor";
+	};
 	const isAccessorExpression = (expression: ts.Expression): boolean => {
 		const unwrapped = unwrapExpression(expression);
 		if (ts.isIdentifier(unwrapped)) return accessorAliases.has(unwrapped.text);
@@ -189,67 +221,104 @@ function destructuredSyncApis(sourceFile: ts.SourceFile): ReadonlyMap<string, Sy
 		const callee = unwrapExpression(unwrapped.expression);
 		return ts.isIdentifier(callee) && callee.text === "getDbAccessor";
 	};
-	let accessorsChanged = true;
-	while (accessorsChanged) {
-		accessorsChanged = false;
-		for (const declaration of declarations) {
-			if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) continue;
-			if (!isAccessorExpression(declaration.initializer) || accessorAliases.has(declaration.name.text)) continue;
-			accessorAliases.add(declaration.name.text);
-			accessorsChanged = true;
-		}
-	}
-
-	const aliases = new Map<string, SyncApi>();
-	const isDbAccessorSyncApi = (api: string): api is "withReadDb" | "withWriteTx" =>
-		api === "withReadDb" || api === "withWriteTx";
-	const addAlias = (name: string, api: string): void => {
-		if (isDbAccessorSyncApi(api)) aliases.set(name, api);
+	const isNamespaceExpression = (expression: ts.Expression): boolean => {
+		const unwrapped = unwrapExpression(expression);
+		if (ts.isIdentifier(unwrapped)) return namespaceAliases.has(unwrapped.text);
+		if (!ts.isCallExpression(unwrapped) || !ts.isIdentifier(unwrapped.expression)) return false;
+		const [argument] = unwrapped.arguments;
+		return (
+			unwrapped.expression.text === "require" &&
+			argument !== undefined &&
+			ts.isStringLiteral(argument) &&
+			syncModule(argument.text)
+		);
 	};
 	const apiFromExpression = (expression: ts.Expression): SyncApi | null => {
 		const unwrapped = unwrapExpression(expression);
 		if (ts.isIdentifier(unwrapped)) return aliases.get(unwrapped.text) ?? null;
-		const api = staticPropertyName(unwrapped);
-		if (api === null || !isDbAccessorSyncApi(api)) return null;
+		const propertyName = staticPropertyName(unwrapped);
+		if (propertyName === null || !syncApi(propertyName)) return null;
 		if (ts.isPropertyAccessExpression(unwrapped) || ts.isElementAccessExpression(unwrapped)) {
-			return isAccessorExpression(unwrapped.expression) ? (api as SyncApi) : null;
+			return isAccessorExpression(unwrapped.expression) || isNamespaceExpression(unwrapped.expression)
+				? propertyName
+				: null;
 		}
 		return null;
 	};
-	let aliasesChanged = true;
-	while (aliasesChanged) {
-		aliasesChanged = false;
+	const bindingPropertyName = (element: ts.BindingElement): string | null => {
+		if (element.propertyName === undefined) return ts.isIdentifier(element.name) ? element.name.text : null;
+		if (ts.isIdentifier(element.propertyName) || ts.isStringLiteral(element.propertyName))
+			return element.propertyName.text;
+		if (ts.isComputedPropertyName(element.propertyName)) return staticPropertyName(element.propertyName.expression);
+		return null;
+	};
+	const addObjectBindingAliases = (pattern: ts.ObjectBindingPattern, initializer: ts.Expression): boolean => {
+		const accessor = isAccessorExpression(initializer);
+		const namespace = isNamespaceExpression(initializer);
+		if (!accessor && !namespace) return false;
+		let changed = false;
+		for (const element of pattern.elements) {
+			const propertyName = bindingPropertyName(element);
+			if (!propertyName || !syncApi(propertyName)) continue;
+			if (accessor ? dbAccessorSyncApi(propertyName) : !dbAccessorSyncApi(propertyName)) {
+				if (addApiAlias(element.name.getText(sourceFile), propertyName)) changed = true;
+			}
+		}
+		return changed;
+	};
+
+	for (const statement of sourceFile.statements) {
+		if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+		if (!syncModule(statement.moduleSpecifier.text)) continue;
+		const bindings = statement.importClause?.namedBindings;
+		if (!bindings) continue;
+		if (ts.isNamespaceImport(bindings)) {
+			addNamespaceAlias(bindings.name.text);
+			continue;
+		}
+		for (const element of bindings.elements) {
+			const importedName = (element.propertyName ?? element.name).text;
+			if (syncApi(importedName)) addApiAlias(element.name.text, importedName);
+		}
+	}
+
+	for (const parameter of parameters) {
+		if (ts.isObjectBindingPattern(parameter.name)) {
+			for (const element of parameter.name.elements) {
+				const propertyName = bindingPropertyName(element);
+				if (propertyName && syncApi(propertyName)) addApiAlias(element.name.getText(sourceFile), propertyName);
+			}
+			continue;
+		}
+		if (ts.isIdentifier(parameter.name) && isDbAccessorType(parameter.type)) addAccessorAlias(parameter.name.text);
+	}
+
+	let changed = true;
+	while (changed) {
+		changed = false;
 		for (const declaration of declarations) {
-			if (
-				ts.isObjectBindingPattern(declaration.name) &&
-				declaration.initializer &&
-				isAccessorExpression(declaration.initializer)
-			) {
-				for (const element of declaration.name.elements) {
-					if (!ts.isIdentifier(element.name)) continue;
-					const propertyName =
-						element.propertyName === undefined
-							? element.name.text
-							: ts.isComputedPropertyName(element.propertyName)
-								? staticPropertyName(element.propertyName.expression)
-								: element.propertyName.text;
-					if (
-						propertyName !== null &&
-						isDbAccessorSyncApi(propertyName) &&
-						aliases.get(element.name.text) !== propertyName
-					) {
-						addAlias(element.name.text, propertyName);
-						aliasesChanged = true;
-					}
+			if (ts.isIdentifier(declaration.name)) {
+				if (isDbAccessorType(declaration.type)) changed = addAccessorAlias(declaration.name.text) || changed;
+				if (declaration.initializer !== undefined) {
+					if (isAccessorExpression(declaration.initializer))
+						changed = addAccessorAlias(declaration.name.text) || changed;
+					if (isNamespaceExpression(declaration.initializer))
+						changed = addNamespaceAlias(declaration.name.text) || changed;
+					const api = apiFromExpression(declaration.initializer);
+					if (api !== null) changed = addApiAlias(declaration.name.text, api) || changed;
 				}
 				continue;
 			}
-			if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) continue;
-			const api = apiFromExpression(declaration.initializer);
-			if (api !== null && aliases.get(declaration.name.text) !== api) {
-				addAlias(declaration.name.text, api);
-				aliasesChanged = true;
+			if (declaration.initializer && ts.isObjectBindingPattern(declaration.name)) {
+				changed = addObjectBindingAliases(declaration.name, declaration.initializer) || changed;
 			}
+		}
+		for (const assignment of assignments) {
+			if (!ts.isIdentifier(assignment.left)) continue;
+			if (isAccessorExpression(assignment.right)) changed = addAccessorAlias(assignment.left.text) || changed;
+			if (isNamespaceExpression(assignment.right)) changed = addNamespaceAlias(assignment.left.text) || changed;
+			const api = apiFromExpression(assignment.right);
+			if (api !== null) changed = addApiAlias(assignment.left.text, api) || changed;
 		}
 	}
 	return aliases;

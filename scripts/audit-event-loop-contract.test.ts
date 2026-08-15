@@ -291,6 +291,63 @@ test("event-loop audit detects transitive and asserted DbAccessor aliases", () =
 	}
 });
 
+test("event-loop audit detects imported, derived, and destructured filesystem-process aliases", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		writeFileSync(
+			join(root, "aliases.ts"),
+			[
+				'import { readFileSync as blockingRead } from "node:fs";',
+				'import { spawnSync as blockingSpawn } from "node:child_process";',
+				'import * as fs from "node:fs";',
+				"const copiedRead = blockingRead;",
+				"const fsAlias = fs;",
+				"const { existsSync: pathExists } = fsAlias;",
+				"blockingRead('/tmp/signet-imported');",
+				"copiedRead('/tmp/signet-derived');",
+				"pathExists('/tmp/signet-destructured');",
+				"blockingSpawn('true');",
+			].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
+			{ api: "readFileSync", line: 7 },
+			{ api: "readFileSync", line: 8 },
+			{ api: "existsSync", line: 9 },
+			{ api: "spawnSync", line: 10 },
+		]);
+		expect(result.violations).toHaveLength(4);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("event-loop audit detects assigned and parameter-destructured DbAccessor aliases", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		writeFileSync(
+			join(root, "aliases.ts"),
+			[
+				"let accessor: DbAccessor;",
+				"accessor = getDbAccessor();",
+				"const { withReadDb: readDb } = accessor;",
+				"readDb((db) => db);",
+				"function run({ withWriteTx: writeTx }: DbAccessor) {",
+				"\twriteTx((db) => db);",
+				"}",
+			].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
+			{ api: "withReadDb", line: 4 },
+			{ api: "withWriteTx", line: 6 },
+		]);
+		expect(result.violations).toHaveLength(2);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("baseline regeneration uses Biome-compatible tab indentation", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
 	try {
