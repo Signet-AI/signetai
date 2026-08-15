@@ -109,33 +109,11 @@ describe("telemetry database integrity recovery (#1360)", () => {
 	it("runs a Node ESM repair child and verifies its committed indexes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "integrity-repair-success-"));
 		const dbPath = join(dir, "memory.db");
-		const workerPath = join(dir, "repair-worker.mjs");
 		const database = new Database(dbPath);
 		database.exec(
-			"CREATE TABLE telemetry_events (event TEXT, queue TEXT, timestamp TEXT, unsent INTEGER); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event); CREATE INDEX idx_telemetry_events_queue ON telemetry_events(queue); CREATE INDEX idx_telemetry_events_timestamp ON telemetry_events(timestamp); CREATE INDEX idx_telemetry_events_unsent ON telemetry_events(unsent); CREATE TABLE repair_markers (committed INTEGER NOT NULL)",
+			"CREATE TABLE telemetry_events (event TEXT, queue TEXT, timestamp TEXT, unsent INTEGER); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event); CREATE INDEX idx_telemetry_events_queue ON telemetry_events(queue); CREATE INDEX idx_telemetry_events_timestamp ON telemetry_events(timestamp); CREATE INDEX idx_telemetry_events_unsent ON telemetry_events(unsent)",
 		);
 		database.close();
-		writeFileSync(
-			workerPath,
-			`import { DatabaseSync } from "node:sqlite";
-const database = new DatabaseSync(process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH);
-const indexes = JSON.parse(process.env.SIGNET_DATABASE_INTEGRITY_INDEXES);
-const escaped = (name) => '"' + String(name).replaceAll('"', '""') + '"';
-try {
-  database.exec("BEGIN IMMEDIATE");
-  for (const index of indexes) database.exec("REINDEX " + escaped(index));
-  database.exec("INSERT INTO repair_markers (committed) VALUES (1)");
-  database.exec("COMMIT");
-  process.stdout.write(JSON.stringify({ ok: true }) + "\\n");
-} catch (error) {
-  try { database.exec("ROLLBACK"); } catch {}
-  process.stderr.write(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-} finally {
-  database.close();
-}
-`,
-		);
 		const { accessor } = fakeAccessor({ telemetryMessage: "index mismatch" });
 
 		const result = await repairTelemetryIndexes(
@@ -145,7 +123,6 @@ try {
 			},
 			{
 				dbPath,
-				repairWorkerPath: workerPath,
 				repairTimeoutMs: 5_000,
 				repairRuntimePath: "node",
 			},
@@ -154,7 +131,6 @@ try {
 		expect(result.state).toBe("repaired");
 		expect(result.rebuiltIndexes).toHaveLength(4);
 		const verification = new Database(dbPath);
-		expect(verification.prepare("SELECT committed FROM repair_markers").all()).toEqual([{ committed: 1 }]);
 		expect(verification.prepare("PRAGMA integrity_check(telemetry_events)").all()).toEqual([{ integrity_check: "ok" }]);
 		verification.close();
 		rmSync(dir, { recursive: true, force: true });

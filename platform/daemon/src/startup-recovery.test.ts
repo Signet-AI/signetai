@@ -250,7 +250,7 @@ describe("runStartupRecovery", () => {
 		}
 	});
 
-	it("does not fail a live pass created during deferred orphan recovery", async () => {
+	it("does not fail a live pass created in the recovery cutoff second", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			insertPass(db, "abandoned-before-recovery", "running");
 			for (let index = 0; index < 1_000; index++) {
@@ -263,7 +263,7 @@ describe("runStartupRecovery", () => {
 		let livePassInserted = false;
 		setTimeout(() => {
 			getDbAccessor().withWriteTx((db) => {
-				insertPass(db, "live-during-recovery", "running", "datetime('now', '+1 minute')");
+				insertPass(db, "live-during-recovery", "running", "datetime('now')");
 			});
 			livePassInserted = true;
 		}, 0);

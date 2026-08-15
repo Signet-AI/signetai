@@ -509,7 +509,7 @@ export async function createDreamingPass(accessor: DbAccessor, agentId: string, 
 	await writeTx(accessor, (db) => {
 		db.prepare(
 			`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
-			 VALUES (?, ?, ?, 'running', datetime('now'), datetime('now'))`,
+			 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))`,
 		).run(id, agentId, mode);
 	});
 	return id;

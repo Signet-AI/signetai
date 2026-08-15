@@ -153,7 +153,10 @@ export function getStartupRecoveryCompletion(): Promise<StartupRecoveryReport> {
 
 async function runStartupRecoveryInternal(accessor: DbAccessor): Promise<StartupRecoveryReport> {
 	const startedAt = Date.now();
-	const recoveryStartedAt = new Date().toISOString();
+	// Pass timestamps are persisted with millisecond precision, but older rows
+	// and direct writers may still use SQLite's second precision. Round the
+	// cutoff down so a pass from the current second is never swept as orphaned.
+	const recoveryStartedAt = new Date(Math.floor(Date.now() / 1_000) * 1_000).toISOString();
 	logger.info("startup-recovery", "Running startup recovery asynchronously");
 
 	let documentLeasesRecovered = 0;
