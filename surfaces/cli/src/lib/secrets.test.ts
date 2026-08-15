@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setSecretKeyringAdapterForTests } from "@signet/core";
+import { __setSecretStoreLockHookForTests, getLocalSecretValue, setSecretKeyringAdapterForTests } from "@signet/core";
 import { createOfflineSecretApiCall } from "./secrets.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -49,6 +49,7 @@ function unavailableKeyring() {
 }
 
 afterEach(() => {
+	__setSecretStoreLockHookForTests(null);
 	setSecretKeyringAdapterForTests(null);
 	if (originalSignetPath === undefined) delete process.env.SIGNET_PATH;
 	else process.env.SIGNET_PATH = originalSignetPath;
@@ -133,7 +134,8 @@ describe("daemonless secret API", () => {
 				'import { existsSync, writeFileSync } from "node:fs";',
 				'import { __setSecretStoreLockHookForTests, putLocalSecret, setSecretKeyringAdapterForTests } from "@signet/core";',
 				'setSecretKeyringAdapterForTests({ platform: "test", service: "test", account: "test", async get() { return { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } });',
-				'if (process.env.SIGNET_LOCK_READY && process.env.SIGNET_LOCK_GO) __setSecretStoreLockHookForTests((stage) => { if (stage !== "after-acquire") return; writeFileSync(process.env.SIGNET_LOCK_READY, "ready"); while (!existsSync(process.env.SIGNET_LOCK_GO)) {} });',
+				'const pause = (stage, expected, ready, go) => { if (stage !== expected || !ready || !go) return; writeFileSync(ready, "ready"); while (!existsSync(go)) {} };',
+				'if (process.env.SIGNET_LOCK_READY || process.env.SIGNET_STALE_READY) __setSecretStoreLockHookForTests((stage) => { pause(stage, "after-acquire", process.env.SIGNET_LOCK_READY, process.env.SIGNET_LOCK_GO); pause(stage, "after-stale-check", process.env.SIGNET_STALE_READY, process.env.SIGNET_STALE_GO); });',
 				'if (process.env.SIGNET_WRITER_STARTED) writeFileSync(process.env.SIGNET_WRITER_STARTED, "started");',
 				"await putLocalSecret(process.argv[2], process.argv[3]);",
 			].join("\n"),
@@ -154,6 +156,55 @@ describe("daemonless secret API", () => {
 			ok: true,
 			data: { secrets: ["FIRST_KEY", "SECOND_KEY"], provider: "local" },
 		});
+	});
+
+	test("a delayed stale reaper cannot remove a newly reacquired lock", async () => {
+		workspace = mkdtempSync(join(tmpdir(), "signet-delayed-stale-reaper-"));
+		const lockDirectory = join(workspace, ".secrets", "secrets.enc.lock");
+		mkdirSync(lockDirectory, { recursive: true });
+		writeFileSync(join(lockDirectory, "owner"), "999999999-dead-owner\n");
+
+		const writer = join(import.meta.dir, `.secret-stale-writer-${process.pid}.mjs`);
+		writerScript = writer;
+		const staleReady = join(workspace, "stale-ready");
+		const staleGo = join(workspace, "stale-go");
+		const replacementReady = join(workspace, "replacement-ready");
+		const replacementGo = join(workspace, "replacement-go");
+		writeFileSync(
+			writer,
+			[
+				'import { existsSync, writeFileSync } from "node:fs";',
+				'import { __setSecretStoreLockHookForTests, putLocalSecret, setSecretKeyringAdapterForTests } from "@signet/core";',
+				'setSecretKeyringAdapterForTests({ platform: "test", service: "test", account: "test", async get() { return { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } });',
+				'const pause = (stage, expected, ready, go) => { if (stage !== expected || !ready || !go) return; writeFileSync(ready, "ready"); while (!existsSync(go)) {} };',
+				'__setSecretStoreLockHookForTests((stage) => { pause(stage, "after-acquire", process.env.SIGNET_LOCK_READY, process.env.SIGNET_LOCK_GO); pause(stage, "after-stale-check", process.env.SIGNET_STALE_READY, process.env.SIGNET_STALE_GO); });',
+				"await putLocalSecret(process.argv[2], process.argv[3]);",
+			].join("\n"),
+		);
+
+		const reaper = runWriter(writer, "FIRST_KEY", "first", {
+			SIGNET_STALE_READY: staleReady,
+			SIGNET_STALE_GO: staleGo,
+		});
+		await waitForFile(staleReady);
+
+		const replacement = runWriter(writer, "SECOND_KEY", "second", {
+			SIGNET_LOCK_READY: replacementReady,
+			SIGNET_LOCK_GO: replacementGo,
+		});
+		await waitForFile(replacementReady);
+		const replacementOwner = readFileSync(join(lockDirectory, "owner"), "utf-8");
+
+		writeFileSync(staleGo, "go");
+		await new Promise<void>((resolve) => setTimeout(resolve, 25));
+		expect(readFileSync(join(lockDirectory, "owner"), "utf-8")).toBe(replacementOwner);
+		writeFileSync(replacementGo, "go");
+		expect(await Promise.all([reaper, replacement])).toEqual([0, 0]);
+
+		process.env.SIGNET_PATH = workspace;
+		setSecretKeyringAdapterForTests(unavailableKeyring());
+		expect(await getLocalSecretValue("FIRST_KEY")).toBe("first");
+		expect(await getLocalSecretValue("SECOND_KEY")).toBe("second");
 	});
 
 	test("keeps external provider operations daemon-only", async () => {

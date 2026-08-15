@@ -12,12 +12,13 @@ import {
 	closeSync,
 	existsSync,
 	fsyncSync,
-	linkSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
 	readdirSync,
 	renameSync,
+	rmdirSync,
+	statSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -549,10 +550,13 @@ function saveStore(store: SecretsStore): void {
 }
 
 const SECRET_STORE_LOCK_FILE = "secrets.enc.lock";
+const SECRET_STORE_LOCK_OWNER_FILE = "owner";
+const SECRET_STORE_LOCK_STALE_CLAIM_FILE = ".stale-claim";
 const SECRET_STORE_LOCK_RETRIES = 400;
 const SECRET_STORE_LOCK_WAIT_MS = 10;
 
-type SecretStoreLockHookForTests = (stage: "after-acquire") => void;
+type SecretStoreLockHookStage = "after-acquire" | "after-stale-check";
+type SecretStoreLockHookForTests = (stage: SecretStoreLockHookStage) => void;
 let secretStoreLockHookForTests: SecretStoreLockHookForTests | null = null;
 
 /** @internal Pause an acquired lock in a child-process race regression test. */
@@ -564,12 +568,38 @@ function getSecretStoreLockFile(): string {
 	return join(getSecretsDir(), SECRET_STORE_LOCK_FILE);
 }
 
+function getSecretStoreLockOwnerFile(): string {
+	return join(getSecretStoreLockFile(), SECRET_STORE_LOCK_OWNER_FILE);
+}
+
+function getSecretStoreLockStaleClaimFile(): string {
+	const lockFile = getSecretStoreLockFile();
+	return isSecretStoreLockDirectory()
+		? join(lockFile, SECRET_STORE_LOCK_STALE_CLAIM_FILE)
+		: `${lockFile}.${SECRET_STORE_LOCK_STALE_CLAIM_FILE}`;
+}
+
+function isSecretStoreLockDirectory(): boolean {
+	try {
+		return statSync(getSecretStoreLockFile()).isDirectory();
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+		throw error;
+	}
+}
+
 function readSecretStoreLockOwner(): string | null | undefined {
 	try {
-		const owner = readFileSync(getSecretStoreLockFile(), "utf-8").trim();
+		const owner = readFileSync(getSecretStoreLockOwnerFile(), "utf-8").trim();
 		return owner || null;
 	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+			return isSecretStoreLockDirectory() ? null : undefined;
+		}
+		if (error instanceof Error && "code" in error && error.code === "ENOTDIR") {
+			const owner = readFileSync(getSecretStoreLockFile(), "utf-8").trim();
+			return owner || null;
+		}
 		throw error;
 	}
 }
@@ -589,21 +619,31 @@ function isSecretStoreLockLive(owner: string): boolean | null {
 
 function tryAcquireSecretStoreLock(owner: string): boolean {
 	const lockFile = getSecretStoreLockFile();
-	const tempFile = `${lockFile}.${owner}`;
+	const tempDirectory = `${lockFile}.tmp-${owner}`;
+	const ownerFile = join(tempDirectory, SECRET_STORE_LOCK_OWNER_FILE);
 	let fd: number | null = null;
 	try {
-		// Publish the complete owner token through a hard link. The lock path is
-		// never visible in its empty or partially-written state.
-		fd = openSync(tempFile, "wx", 0o600);
+		if (existsSync(`${lockFile}.${SECRET_STORE_LOCK_STALE_CLAIM_FILE}`)) return false;
+		// Build the complete owner directory before publishing it. Renaming a
+		// populated directory onto the non-empty lock directory cannot replace a
+		// lock that another writer has acquired.
+		mkdirSync(tempDirectory, { mode: 0o700 });
+		fd = openSync(ownerFile, "wx", 0o600);
 		writeFileSync(fd, `${owner}\n`, "utf-8");
 		fsyncSync(fd);
 		closeSync(fd);
 		fd = null;
-		linkSync(tempFile, lockFile);
+		renameSync(tempDirectory, lockFile);
 		secretStoreLockHookForTests?.("after-acquire");
 		return true;
 	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "EEXIST") return false;
+		if (
+			error instanceof Error &&
+			"code" in error &&
+			(error.code === "EEXIST" || error.code === "ENOTEMPTY" || error.code === "EISDIR")
+		) {
+			return false;
+		}
 		throw error;
 	} finally {
 		if (fd !== null) {
@@ -614,31 +654,88 @@ function tryAcquireSecretStoreLock(owner: string): boolean {
 			}
 		}
 		try {
-			unlinkSync(tempFile);
+			unlinkSync(ownerFile);
 		} catch {
-			// Best effort cleanup. The lock path owns the published link.
+			// Best effort cleanup. The published lock owns the owner file.
+		}
+		try {
+			rmdirSync(tempDirectory);
+		} catch {
+			// Best effort cleanup. The published lock owns the directory.
 		}
 	}
 }
 
-function removeStaleSecretStoreLock(observedOwner: string): boolean {
-	const currentOwner = readSecretStoreLockOwner();
-	if (currentOwner !== observedOwner || isSecretStoreLockLive(currentOwner) !== false) return false;
-	const staleFile = `${getSecretStoreLockFile()}.stale-${randomUUID()}`;
+function acquireSecretStoreLockStaleClaim(): string | null {
+	const claimFile = getSecretStoreLockStaleClaimFile();
+	let fd: number | null = null;
 	try {
-		// Re-check the token immediately before rename. A new owner can only
-		// appear after this path is removed, so it cannot be moved by this CAS.
-		renameSync(getSecretStoreLockFile(), staleFile);
+		fd = openSync(claimFile, "wx", 0o600);
+		writeFileSync(fd, `${process.pid}-${randomUUID()}\n`, "utf-8");
+		fsyncSync(fd);
+		return claimFile;
 	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+		if (
+			error instanceof Error &&
+			"code" in error &&
+			(error.code === "EEXIST" || error.code === "ENOENT" || error.code === "ENOTDIR")
+		)
+			return null;
 		throw error;
+	} finally {
+		if (fd !== null) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Preserve the original stale-claim error.
+			}
+		}
 	}
+}
+
+function removeStaleSecretStoreLock(observedOwner: string | null): boolean {
+	const currentOwner = readSecretStoreLockOwner();
+	if (currentOwner !== observedOwner) return false;
+	if (currentOwner !== null && isSecretStoreLockLive(currentOwner) !== false) return false;
+	secretStoreLockHookForTests?.("after-stale-check");
+	const claimFile = acquireSecretStoreLockStaleClaim();
+	if (claimFile === null) return false;
 	try {
-		unlinkSync(staleFile);
-	} catch (error) {
-		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+		const claimedOwner = readSecretStoreLockOwner();
+		if (claimedOwner !== observedOwner) return false;
+		if (claimedOwner !== null && isSecretStoreLockLive(claimedOwner) !== false) return false;
+		if (isSecretStoreLockDirectory()) {
+			try {
+				unlinkSync(getSecretStoreLockOwnerFile());
+			} catch (error) {
+				if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+			}
+			try {
+				unlinkSync(claimFile);
+			} catch (error) {
+				if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+			}
+			rmdirSync(getSecretStoreLockFile());
+			return true;
+		}
+		try {
+			unlinkSync(getSecretStoreLockFile());
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+		}
+		try {
+			unlinkSync(claimFile);
+		} catch (error) {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+		}
+		return true;
+	} finally {
+		try {
+			unlinkSync(claimFile);
+		} catch {
+			// The claim is removed with the stale lock directory.
+		}
 	}
-	return true;
 }
 
 interface SecretStoreLock {
@@ -654,7 +751,8 @@ async function acquireSecretStoreLock(): Promise<SecretStoreLock> {
 				release: async () => {
 					try {
 						if (readSecretStoreLockOwner() !== owner) return;
-						unlinkSync(getSecretStoreLockFile());
+						unlinkSync(getSecretStoreLockOwnerFile());
+						rmdirSync(getSecretStoreLockFile());
 					} catch (error) {
 						if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
 					}
@@ -662,7 +760,7 @@ async function acquireSecretStoreLock(): Promise<SecretStoreLock> {
 			};
 		}
 		const existingOwner = readSecretStoreLockOwner();
-		if (existingOwner !== undefined && existingOwner !== null && removeStaleSecretStoreLock(existingOwner)) continue;
+		if (existingOwner !== undefined && removeStaleSecretStoreLock(existingOwner)) continue;
 		await new Promise<void>((resolve) => setTimeout(resolve, SECRET_STORE_LOCK_WAIT_MS));
 	}
 	throw new Error("Timed out waiting for the secrets store lock");
