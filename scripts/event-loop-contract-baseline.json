@@ -417,34 +417,6 @@
 		},
 		{
 			"path": "daemon.ts",
-			"line": 723,
-			"api": "withReadDb",
-			"source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "daemon.ts",
-			"line": 774,
-			"api": "withWriteTx",
-			"source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "daemon.ts",
-			"line": 813,
-			"api": "withReadDb",
-			"source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "daemon.ts",
-			"line": 833,
-			"api": "withWriteTx",
-			"source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "daemon.ts",
 			"line": 865,
 			"api": "readFileSync",
 			"source": "content = readFileSync(filePath, \"utf-8\");",
@@ -2310,48 +2282,6 @@
 			"line": 2965,
 			"api": "withReadDb",
 			"source": "const blocks = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
-			"category": "hot-path"
-		},
-		{
-			"path": "native-memory-sources.ts",
-			"line": 550,
-			"api": "withReadDb",
-			"source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "native-memory-sources.ts",
-			"line": 567,
-			"api": "withReadDb",
-			"source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "native-memory-sources.ts",
-			"line": 592,
-			"api": "withWriteTx",
-			"source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "native-memory-sources.ts",
-			"line": 615,
-			"api": "withReadDb",
-			"source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "native-memory-sources.ts",
-			"line": 644,
-			"api": "withReadDb",
-			"source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "native-memory-sources.ts",
-			"line": 671,
-			"api": "withReadDb",
-			"source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
 			"category": "hot-path"
 		},
 		{
