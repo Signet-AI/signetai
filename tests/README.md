@@ -23,6 +23,16 @@ Note: these tests are NOT discovered by the default `bun test` command
 because `bunfig.toml` scopes test discovery to `platform/, surfaces/, integrations/, libs/, dist/, and web/`. Run them
 with an explicit `./` path prefix.
 
+## Issue Reproductions
+
+Issue-specific integration reproductions live under `tests/integration/repros/`.
+The #1059 sustained-ingestion reproduction can be evaluated with:
+
+```bash
+bun test ./tests/integration/repros/1059/repro-1059-eval.test.ts
+bun run ./tests/integration/repros/1059/repro-1059-harness.ts
+```
+
 ### Design
 
 - **Non-deterministic**: Each LLM prompt runs 3 times with statistical
