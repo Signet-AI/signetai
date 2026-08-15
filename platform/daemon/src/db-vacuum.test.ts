@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { getSyncDbAccessor } from "./db-accessor-sync";
+import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import {
 	convertToIncrementalVacuum,
 	DbSpacePreflightError,

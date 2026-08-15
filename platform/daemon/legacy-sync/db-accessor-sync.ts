@@ -1,9 +1,13 @@
 /**
  * Test/bootstrap-only synchronous DB accessor surface.
  *
- * Production code must not import this module. The public `DbAccessor` type in
- * `db-accessor.ts` exposes only async primitives, and the event-loop contract
- * audit rejects production imports of this compatibility module.
+ * Production code must not import this module. It intentionally lives outside
+ * `src/`, while the daemon production project uses `src/` as its `rootDir` and
+ * excludes this directory. A statically-resolved import therefore fails the
+ * production TypeScript compile with TS6059 before any alias or computed member
+ * can use the synchronous surface. The public `DbAccessor` type in
+ * `db-accessor.ts` exposes only async primitives. The event-loop audit remains
+ * belt-and-suspenders coverage for source-tree execution paths.
  *
  * The synchronous primitives remain available here for narrowly-scoped test,
  * bootstrap, CLI, and isolated-worker paths that cannot cross the async
@@ -20,8 +24,8 @@
  * this module after the legacy inventory reaches zero.
  */
 
-import { getDbAccessor } from "./db-accessor";
-import type { ReadDb, WriteDb } from "./db-accessor";
+import { getDbAccessor } from "../src/db-accessor";
+import type { ReadDb, WriteDb } from "../src/db-accessor";
 
 export interface SyncDbAccessor {
 	/** @deprecated Use `withWriteTxAsync` in production code. */

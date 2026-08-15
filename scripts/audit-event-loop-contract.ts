@@ -376,7 +376,7 @@ export function renderReport(baselineSites: readonly AuditSite[], legacyDbAccess
 		baselineSites.length - (counts.get("withReadDb") ?? 0) - (counts.get("withWriteTx") ?? 0);
 	return `# Event-loop synchronous contract audit
 
-This report is generated from the deterministic migration ledger in \`scripts/event-loop-contract-baseline.json\`. Phase A enforces the new type boundary: production code receives an async-only \`DbAccessor\`, CI rejects unallowlisted production imports of the explicit sync compatibility module, and new synchronous DB call sites fail closed even when marked \`LEGACY_SYNC_DB_ACCESS\`.
+This report is generated from the deterministic migration ledger in \`scripts/event-loop-contract-baseline.json\`. Phase A enforces the type boundary structurally: production code receives an async-only \`DbAccessor\`, while the synchronous compatibility module lives outside the daemon production \`src/\` tree and is rejected by the production TypeScript project's \`rootDir\`. The AST import and call checks remain belt-and-suspenders diagnostics, and new synchronous DB call sites fail closed through exact ledger matching.
 
 ## Current inventory
 
@@ -392,14 +392,16 @@ The 1,060-site inventory excludes test, benchmark, generated, and \`__tests__\` 
 
 ## Enforcement boundary
 
-- Production imports, CommonJS \`require()\`, dynamic imports, and re-exports of \`db-accessor-sync.ts\` are rejected unless the exact importer is allowlisted.
-- \`DbAccessor\` exports only asynchronous transaction and read primitives.
-- \`db-accessor-sync.ts\` is the explicit compatibility surface for test/bootstrap-only code. Its module documentation records the pre-readiness bootstrap, CLI, and isolated-worker rationale.
+- Statically-resolved production imports of the compatibility module fail the daemon TypeScript project because the module is outside its source rootDir. The AST import scan remains a supplementary diagnostic for source-tree execution.
+- DbAccessor exports only asynchronous transaction and read primitives.
+- db-accessor-sync.ts is the explicit compatibility surface for test/bootstrap-only code. Its module documentation records the pre-readiness bootstrap, CLI, and isolated-worker rationale.
 - The migration ledger is an allowlist for existing synchronous DB callers. It may shrink, but a new synchronous DB call is a violation even when its type error is suppressed.
 
 ## Risk and follow-up
 
-The remaining synchronous DB operations are still a known transitional risk. The next migration wave removes the 230 write and 346 read markers. Startup, recall, ingestion, and existing tests must continue to use the runtime implementation while their callers move to the async primitives.
+The structural boundary makes statically-resolved imports from the production source tree impossible: TypeScript reports TS6059 before aliases or computed member calls can use the compatibility type. The production bundle also only starts from source entrypoints, so this compatibility module is not a shipped production artifact.
+
+A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. The remaining synchronous DB operations also still rely on the exact migration ledger and the 576 legacy markers. The next migration wave removes the 230 write and 346 read markers.
 `;
 }
 

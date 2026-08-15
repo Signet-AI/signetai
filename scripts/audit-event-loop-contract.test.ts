@@ -1,7 +1,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { expect, test } from "bun:test";
+import ts from "typescript";
 import {
 	findStaleBaselineSites,
 	loadBaseline,
@@ -163,6 +164,50 @@ test("bootstrap, CLI, and worker fixtures can use the explicit compatibility mod
 	}
 });
 
+test("the production TypeScript project cannot import the compatibility module", () => {
+	const productionSourceRoot = resolve("platform/daemon/src");
+	const compatibilityModule = resolve("platform/daemon/legacy-sync/db-accessor-sync.ts");
+	expect(relative(productionSourceRoot, compatibilityModule).startsWith("..")).toBe(true);
+	expect(readFileSync(compatibilityModule, "utf8")).toContain("outside");
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-type-boundary-"));
+	try {
+		mkdirSync(join(root, "src"));
+		mkdirSync(join(root, "legacy-sync"));
+		writeFileSync(
+			join(root, "src", "new-production-code.ts"),
+			[
+				'import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";',
+				"const accessor = getSyncDbAccessor();",
+				'const method = "withReadDb";',
+				"const read = accessor[method];",
+				"read((db) => db);",
+			].join(String.fromCharCode(10)),
+		);
+		writeFileSync(
+			join(root, "legacy-sync", "db-accessor-sync.ts"),
+			[
+				"export interface SyncDbAccessor {",
+				"  withReadDb(callback: (db: unknown) => unknown): unknown;",
+				"}",
+				"export declare function getSyncDbAccessor(): SyncDbAccessor;",
+			].join(String.fromCharCode(10)),
+		);
+		const program = ts.createProgram([join(root, "src", "new-production-code.ts")], {
+			target: ts.ScriptTarget.ES2022,
+			module: ts.ModuleKind.ESNext,
+			moduleResolution: ts.ModuleResolutionKind.Bundler,
+			rootDir: join(root, "src"),
+			noEmit: true,
+			strict: true,
+			skipLibCheck: true,
+		});
+		const diagnostics = ts.getPreEmitDiagnostics(program);
+		expect(diagnostics.some((diagnostic) => diagnostic.code === 6059)).toBe(true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("the generated report describes the type boundary and transitional counts", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const report = renderReport(baseline, { total: 576, withWriteTx: 230, withReadDb: 346 });
@@ -175,7 +220,7 @@ test("the generated report describes the type boundary and transitional counts",
 // Keep the production/public type distinction visible in source review. The
 // daemon typecheck is the executable proof that DbAccessor has no sync keys.
 const productionAccessorType = readFileSync(resolve("platform/daemon/src/db-accessor.ts"), "utf8");
-const syncAccessorType = readFileSync(resolve("platform/daemon/src/db-accessor-sync.ts"), "utf8");
+const syncAccessorType = readFileSync(resolve("platform/daemon/legacy-sync/db-accessor-sync.ts"), "utf8");
 expect(productionAccessorType).toContain("export interface DbAccessor extends AsyncDbAccessor {}");
 expect(productionAccessorType).not.toContain("export interface SyncDbAccessorCompat");
 expect(syncAccessorType).toContain("export interface SyncDbAccessor");
