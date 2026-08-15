@@ -24,6 +24,7 @@ import {
 	indexObsidianSourceEmbeddings,
 	purgeObsidianSourceEmbeddings,
 	purgeObsidianSourceFileEmbeddings,
+	resetObsidianSourceEmbeddingBackoff,
 } from "./obsidian-source-embeddings";
 import {
 	type ObsidianMarkdownPathIndex,
@@ -72,6 +73,7 @@ export interface NativeMemoryBridgeOptions {
 	readonly shouldCleanupSource?: (source: NativeMemorySource) => boolean;
 	readonly sourceGraphEnabled?: boolean;
 	readonly shouldContinue?: (source: NativeMemorySource) => boolean;
+	readonly onEmbeddingStatus?: (status: string | undefined) => void;
 	readonly onFileIndexed?: (event: NativeMemoryFileIndexEvent) => void;
 }
 
@@ -95,6 +97,7 @@ export interface NativeMemoryFileIndexEvent {
 	readonly scanned: number;
 	readonly total: number;
 	readonly changed: number;
+	readonly status?: string;
 }
 
 interface IndexedNativeMemory {
@@ -191,6 +194,7 @@ export function resetNativeMemoryIndexCache(): void {
 	readFailureBackoffUntil.clear();
 	permissionDeniedPaths.clear();
 	datalessReadFailuresByHarness.clear();
+	resetObsidianSourceEmbeddingBackoff();
 }
 const DEFAULT_OBSIDIAN_SOURCE_FILE_DELAY_MS = 250;
 
@@ -697,7 +701,10 @@ export async function indexNativeMemoryFile(
 	source: NativeMemorySource,
 	filePath: string,
 	agentId = resolveDaemonAgentId(),
-	options: Pick<NativeMemoryBridgeOptions, "embeddingConfig" | "fetchEmbedding" | "sourceGraphEnabled"> & {
+	options: Pick<
+		NativeMemoryBridgeOptions,
+		"embeddingConfig" | "fetchEmbedding" | "sourceGraphEnabled" | "onEmbeddingStatus"
+	> & {
 		readonly markdownPathIndex?: ObsidianMarkdownPathIndex;
 	} = {},
 ): Promise<boolean> {
@@ -872,6 +879,13 @@ export async function indexNativeMemoryFile(
 					embeddingConfig: options.embeddingConfig,
 					fetchEmbedding: options.fetchEmbedding,
 				});
+				options.onEmbeddingStatus?.(embeddingResult.status);
+				if (embeddingResult.providerUnavailable) {
+					logger.warn("watcher", "embeddings pending - provider down", {
+						path: filePath,
+						retryAfterMs: embeddingResult.retryAfterMs,
+					});
+				}
 				if (embeddingResult.embedded > 0) {
 					logger.info("watcher", "Embedded Obsidian source chunks", {
 						path: filePath,
@@ -880,7 +894,7 @@ export async function indexNativeMemoryFile(
 						skipped: embeddingResult.skipped,
 					});
 				}
-				semanticIndexed = true;
+				semanticIndexed = !embeddingResult.providerUnavailable;
 			}
 		}
 		indexed.set(key, { contentHash: hash });
@@ -1026,16 +1040,29 @@ export function startNativeMemoryBridge(
 				for (const file of files) {
 					if (options.shouldContinue && !options.shouldContinue(source)) break;
 					scanned++;
+					let embeddingStatus: string | undefined;
 					const changed = await indexNativeMemoryFile(source, file, agentId, {
 						...options,
 						markdownPathIndex,
+						onEmbeddingStatus: (status) => {
+							embeddingStatus = status;
+							options.onEmbeddingStatus?.(status);
+						},
 					});
 					if (changed) {
 						count++;
 						changedCount++;
 					}
 					current.add(file);
-					options.onFileIndexed?.({ source, filePath: file, indexed: changed, scanned, total, changed: changedCount });
+					options.onFileIndexed?.({
+						source,
+						filePath: file,
+						indexed: changed,
+						scanned,
+						total,
+						changed: changedCount,
+						...(embeddingStatus ? { status: embeddingStatus } : {}),
+					});
 					await yielder();
 					await sleep(fileDelayMs);
 				}

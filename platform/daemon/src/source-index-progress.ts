@@ -11,6 +11,7 @@ export interface SourceIndexJob {
 	readonly total?: number;
 	readonly indexed?: number;
 	readonly currentPath?: string;
+	readonly statusMessage?: string;
 	readonly error?: string;
 }
 
@@ -19,6 +20,7 @@ export interface SourceIndexProgressEvent {
 	readonly total: number;
 	readonly indexed: number;
 	readonly currentPath: string;
+	readonly statusMessage?: string;
 }
 
 const sourceIndexJobs = new Map<string, SourceIndexJob>();
@@ -68,6 +70,7 @@ export function updateSourceIndexJobProgress(sourceId: string, jobId: string, ev
 		total: event.total,
 		indexed: event.indexed,
 		currentPath: event.currentPath,
+		...(event.statusMessage ? { statusMessage: event.statusMessage } : {}),
 	});
 }
 

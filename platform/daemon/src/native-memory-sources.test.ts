@@ -1114,6 +1114,58 @@ describe("native memory sources", () => {
 		expect(rows.some((row) => row.chunk_text.includes("heading: Signet Sources"))).toBe(true);
 	});
 
+	it("completes source artifact sync and backoffs embeddings when the provider is down", async () => {
+		const root = join(dir, "provider-down-vault");
+		const file = join(root, "permanent", "Pending.md");
+		mkdirSync(join(root, "permanent"), { recursive: true });
+		writeFileSync(
+			file,
+			"# Pending Embeddings\n\nThe source artifact remains searchable as canonical evidence while its provider-down embedding work waits for retry.\n",
+		);
+		let fetches = 0;
+		let heartbeats = 0;
+		const statuses: string[] = [];
+		const heartbeat = setInterval(() => {
+			heartbeats++;
+		}, 5);
+		const source = obsidianNativeMemorySource(root, "Provider Down Vault", "obsidian:provider-down");
+		const handle = startNativeMemoryBridge([source], {
+			agentId: "agent-native",
+			pollIntervalMs: 0,
+			sourceGraphEnabled: false,
+			embeddingConfig: { provider: "native", model: "down-model", dimensions: 3, base_url: "" },
+			fetchEmbedding: async (_text, _cfg, _role, options) => {
+				fetches++;
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				options?.onFailure?.("provider_unavailable");
+				return null;
+			},
+			onFileIndexed: (event) => {
+				if (event.status) statuses.push(event.status);
+			},
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(1);
+			expect(await handle.syncExisting()).toBe(0);
+			expect(fetches).toBe(1);
+			expect(heartbeats).toBeGreaterThan(0);
+			expect(statuses).toEqual(["embeddings pending - provider down", "embeddings pending - provider down"]);
+
+			const artifact = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT source_path, content FROM memory_artifacts WHERE source_path = ?").get(file) as {
+						source_path: string;
+						content: string;
+					},
+			);
+			expect(artifact.source_path).toBe(file);
+			expect(artifact.content).toContain("canonical evidence");
+		} finally {
+			clearInterval(heartbeat);
+			await handle.close();
+		}
+	});
+
 	it("purges all artifacts below a disconnected Obsidian source root", async () => {
 		const root = join(dir, "vault");
 		const source = obsidianNativeMemorySource(root, "Research Vault");

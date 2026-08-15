@@ -10,6 +10,7 @@ import {
 	indexObsidianSourceEmbeddings,
 	purgeObsidianSourceEmbeddings,
 	purgeObsidianSourceFileEmbeddings,
+	type SourceEmbeddingFetch,
 } from "./obsidian-source-embeddings";
 
 const embeddingConfig: EmbeddingConfig = {
@@ -142,6 +143,44 @@ describe("Obsidian source embeddings", () => {
 		expect(second.embedded).toBe(0);
 		expect(second.skipped).toBe(first.chunks);
 		expect(fetches).toBe(first.chunks);
+	});
+
+	it("backs off provider-down source embedding attempts instead of retrying every chunk", async () => {
+		const filePath = join(vault, "literature", "provider-down.md");
+		const content =
+			"# Provider Down\n\nThis source note has enough durable content to create multiple chunks while the embedding provider is unavailable.\n\nA second paragraph keeps the scan representative of a real source file.\n";
+		let fetches = 0;
+		const fetchEmbedding: SourceEmbeddingFetch = async (_text, _cfg, _role, opts) => {
+			fetches++;
+			opts?.onFailure?.("provider_unavailable");
+			return null;
+		};
+
+		const first = await indexObsidianSourceEmbeddings({
+			agentId: "obsidian-embedding-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath,
+			content,
+			embeddingConfig,
+			fetchEmbedding,
+		});
+		const second = await indexObsidianSourceEmbeddings({
+			agentId: "obsidian-embedding-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath,
+			content,
+			embeddingConfig,
+			fetchEmbedding,
+		});
+
+		expect(first.providerUnavailable).toBe(true);
+		expect(first.status).toBe("embeddings pending - provider down");
+		expect(first.skipped).toBe(first.chunks);
+		expect(second.providerUnavailable).toBe(true);
+		expect(second.status).toBe("embeddings pending - provider down");
+		expect(fetches).toBe(1);
 	});
 
 	it("removes legacy Obsidian chunk rows once generic chunks are refreshed", async () => {

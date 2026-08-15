@@ -309,6 +309,11 @@ chunk embeddings to its own database.
 }
 ```
 
+When a source artifact is indexed but its embedding provider is unavailable,
+`GET /api/sources` exposes `indexJob.statusMessage` as
+`"embeddings pending - provider down"` while embeddings wait for a bounded
+retry window.
+
 <a id="post-api-sources-discord"></a>
 
 ### POST /api/sources/discord

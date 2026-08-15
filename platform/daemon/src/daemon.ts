@@ -2450,6 +2450,7 @@ async function main() {
 						total: event.total,
 						indexed: event.changed,
 						currentPath: event.filePath,
+						statusMessage: event.status,
 					});
 				},
 			});

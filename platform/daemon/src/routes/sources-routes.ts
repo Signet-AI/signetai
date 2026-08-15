@@ -578,6 +578,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 					total: event.total,
 					indexed: event.changed,
 					currentPath: event.filePath,
+					statusMessage: event.status,
 				});
 			},
 			shouldContinue: () => isCurrentSourceIndexJob(input.source.id, job.id),

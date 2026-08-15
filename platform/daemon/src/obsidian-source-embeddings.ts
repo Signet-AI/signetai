@@ -4,7 +4,9 @@ import { LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, SOURCE_CHUNK_SOURCE_TYPE } from "@si
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { computeRetryBackoffMs } from "./embedding-repair-state";
 import type { EmbeddingFetchOptions } from "./embedding-fetch";
+import type { PipelineCauseFamily } from "./pipeline-operation";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingRole } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
@@ -45,6 +47,31 @@ export interface IndexObsidianSourceEmbeddingsResult {
 	readonly chunks: number;
 	readonly embedded: number;
 	readonly skipped: number;
+	readonly status?: typeof EMBEDDINGS_PENDING_PROVIDER_DOWN;
+	readonly providerUnavailable: boolean;
+	readonly retryAfterMs?: number;
+}
+
+export const EMBEDDINGS_PENDING_PROVIDER_DOWN = "embeddings pending - provider down";
+
+interface SourceEmbeddingFailureState {
+	readonly attempts: number;
+	readonly retryAt: number;
+}
+
+const SOURCE_EMBEDDING_POLL_MS = 10_000;
+const sourceEmbeddingFailures = new Map<string, SourceEmbeddingFailureState>();
+
+export function resetObsidianSourceEmbeddingBackoff(): void {
+	sourceEmbeddingFailures.clear();
+}
+
+function sourceEmbeddingFailureKey(input: IndexObsidianSourceEmbeddingsInput, model: string): string {
+	return `${input.agentId}:${input.sourceId}:${normalizePath(input.filePath)}:${model}`;
+}
+
+function providerUnavailableCause(cause: PipelineCauseFamily): boolean {
+	return cause === "provider_unavailable" || cause === "timeout";
 }
 
 export interface PurgeObsidianSourceEmbeddingsInput {
@@ -239,15 +266,32 @@ export async function indexObsidianSourceEmbeddings(
 	// Source watchers outlive a config edit. Keep their writes compatible with
 	// active recall while the requested profile is built in the inactive slot.
 	const embeddingConfig = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
-	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0 };
+	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
+	const failureKey = sourceEmbeddingFailureKey(input, embeddingConfig.model);
+	const failureState = sourceEmbeddingFailures.get(failureKey);
+	if (failureState && failureState.retryAt > Date.now()) {
+		return {
+			chunks: chunks.length,
+			embedded: 0,
+			skipped: chunks.length,
+			status: EMBEDDINGS_PENDING_PROVIDER_DOWN,
+			providerUnavailable: true,
+			retryAfterMs: failureState.retryAt - Date.now(),
+		};
+	}
+	if (failureState) sourceEmbeddingFailures.delete(failureKey);
 	const currentHashes = new Set<string>();
 	const yielder = yieldEvery(1);
 	let embedded = 0;
 	let skipped = 0;
+	let providerUnavailable = false;
+	let retryAfterMs: number | undefined;
 	const now = new Date().toISOString();
 
-	for (const chunk of chunks) {
+	for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+		const chunk = chunks[chunkIndex];
+		if (!chunk) continue;
 		const contentHash = hash(`${input.agentId}\n${chunk.id}\n${chunk.chunkText}`);
 		const embId = hash(`${OBSIDIAN_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
 		currentHashes.add(contentHash);
@@ -266,28 +310,47 @@ export async function indexObsidianSourceEmbeddings(
 			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
 			continue;
 		}
-		let stored = false;
-		for (let attempt = 0; attempt < 2 && !stored; attempt += 1) {
-			const writeConfig = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
-			const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
-				usage: { source: "artifact-index", agentId: input.agentId },
-			});
-			if (!vector || vector.length === 0) break;
-			stored = getDbAccessor().withWriteTx((db) => {
-				// Recheck after the asynchronous provider call: promotion may have
-				// committed a new active space while this chunk was encoding.
-				if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
-				const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
-					| { content_hash: string }
-					| undefined;
-				if (existingForId && existingForId.content_hash !== contentHash) {
-					if (!syncVecDeleteByEmbeddingIds(db, [embId])) {
-						throw new Error("failed to reconcile vec_embeddings before replacing source embedding");
-					}
-					db.prepare("DELETE FROM embeddings WHERE id = ?").run(embId);
+		const writeConfig = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
+		let failureCause: PipelineCauseFamily = "provider_unavailable";
+		const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
+			usage: { source: "artifact-index", agentId: input.agentId },
+			onFailure: (cause) => {
+				failureCause = cause;
+			},
+		});
+		if (!vector || vector.length === 0) {
+			if (providerUnavailableCause(failureCause)) {
+				const attempts = (failureState?.attempts ?? 0) + 1;
+				retryAfterMs = computeRetryBackoffMs(attempts, SOURCE_EMBEDDING_POLL_MS);
+				sourceEmbeddingFailures.set(failureKey, { attempts, retryAt: Date.now() + retryAfterMs });
+				providerUnavailable = true;
+				// Do not probe the same dead provider once per chunk. The source
+				// artifact and graph work above remain committed, while all
+				// embeddings stay pending for the next backoff window.
+				skipped += chunks.length - chunkIndex;
+				break;
+			}
+			skipped++;
+			await yielder();
+			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
+			continue;
+		}
+		sourceEmbeddingFailures.delete(failureKey);
+		const stored = getDbAccessor().withWriteTx((db) => {
+			// Recheck after the asynchronous provider call: promotion may have
+			// committed a new active space while this chunk was encoding.
+			if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
+			const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
+				| { content_hash: string }
+				| undefined;
+			if (existingForId && existingForId.content_hash !== contentHash) {
+				if (!syncVecDeleteByEmbeddingIds(db, [embId])) {
+					throw new Error("failed to reconcile vec_embeddings before replacing source embedding");
 				}
-				db.prepare(
-					`INSERT INTO embeddings
+				db.prepare("DELETE FROM embeddings WHERE id = ?").run(embId);
+			}
+			db.prepare(
+				`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(content_hash) DO UPDATE SET
@@ -298,30 +361,29 @@ export async function indexObsidianSourceEmbeddings(
 				   chunk_text = excluded.chunk_text,
 				   created_at = excluded.created_at,
 				   agent_id = excluded.agent_id`,
-				).run(
-					embId,
-					contentHash,
-					vectorToBlob(vector),
-					vector.length,
-					OBSIDIAN_CHUNK_SOURCE_TYPE,
-					chunk.id,
-					chunk.chunkText,
-					now,
-					input.agentId,
-				);
-				upsertMemoryContentSafetyInTx(db, {
-					agentId: input.agentId,
-					sourceKind: "source_chunk",
-					sourceId: embId,
-					content: chunk.chunkText,
-				});
-				const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-					| { id: string }
-					| undefined;
-				syncVecInsert(db, stored?.id ?? embId, vector);
-				return true;
+			).run(
+				embId,
+				contentHash,
+				vectorToBlob(vector),
+				vector.length,
+				OBSIDIAN_CHUNK_SOURCE_TYPE,
+				chunk.id,
+				chunk.chunkText,
+				now,
+				input.agentId,
+			);
+			upsertMemoryContentSafetyInTx(db, {
+				agentId: input.agentId,
+				sourceKind: "source_chunk",
+				sourceId: embId,
+				content: chunk.chunkText,
 			});
-		}
+			const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+				| { id: string }
+				| undefined;
+			syncVecInsert(db, stored?.id ?? embId, vector);
+			return true;
+		});
 		if (!stored) {
 			skipped++;
 			await yielder();
@@ -333,33 +395,45 @@ export async function indexObsidianSourceEmbeddings(
 		await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
 	}
 
-	getDbAccessor().withWriteTx((db) => {
-		const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
-		const stale = OBSIDIAN_CHUNK_SOURCE_TYPES.flatMap(
-			(sourceType) =>
-				db
-					.prepare(
-						"SELECT id, source_type, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
-					)
-					.all(sourceType, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
-					id: string;
-					source_type: string;
-					content_hash: string;
-				}>,
-		);
-		const staleIds = stale
-			.filter((row) => row.source_type === LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE || !currentHashes.has(row.content_hash))
-			.map((row) => row.id);
-		if (staleIds.length > 0) {
-			if (!syncVecDeleteByEmbeddingIds(db, staleIds)) {
-				throw new Error("failed to reconcile vec_embeddings before removing stale source embeddings");
+	if (!providerUnavailable)
+		getDbAccessor().withWriteTx((db) => {
+			const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
+			const stale = OBSIDIAN_CHUNK_SOURCE_TYPES.flatMap(
+				(sourceType) =>
+					db
+						.prepare(
+							"SELECT id, source_type, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
+						)
+						.all(sourceType, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
+						id: string;
+						source_type: string;
+						content_hash: string;
+					}>,
+			);
+			const staleIds = stale
+				.filter((row) => row.source_type === LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE || !currentHashes.has(row.content_hash))
+				.map((row) => row.id);
+			if (staleIds.length > 0) {
+				if (!syncVecDeleteByEmbeddingIds(db, staleIds)) {
+					throw new Error("failed to reconcile vec_embeddings before removing stale source embeddings");
+				}
+				const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
+				for (const id of staleIds) stmt.run(id);
 			}
-			const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
-			for (const id of staleIds) stmt.run(id);
-		}
-	});
+		});
 
-	return { chunks: chunks.length, embedded, skipped };
+	return {
+		chunks: chunks.length,
+		embedded,
+		skipped,
+		...(providerUnavailable
+			? {
+					status: EMBEDDINGS_PENDING_PROVIDER_DOWN as typeof EMBEDDINGS_PENDING_PROVIDER_DOWN,
+					providerUnavailable: true,
+					retryAfterMs,
+				}
+			: { providerUnavailable: false }),
+	};
 }
 
 function sleep(ms: number): Promise<void> {
