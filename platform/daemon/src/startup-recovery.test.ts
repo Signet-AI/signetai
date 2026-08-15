@@ -62,9 +62,9 @@ function insertEmbedding(db: WriteDb, id: string, hash: string, table: "embeddin
 	).run(id, id, hash);
 }
 
-function insertPass(db: WriteDb, id: string, status: string): void {
+function insertPass(db: WriteDb, id: string, status: string, startedAt = "datetime('now', '-1 minute')"): void {
 	db.prepare(
-		"INSERT INTO dreaming_passes (id, agent_id, status, started_at) VALUES (?, 'default', ?, datetime('now'))",
+		`INSERT INTO dreaming_passes (id, agent_id, status, started_at) VALUES (?, 'default', ?, ${startedAt})`,
 	).run(id, status);
 }
 
@@ -248,6 +248,35 @@ describe("runStartupRecovery", () => {
 		} finally {
 			worker.stop();
 		}
+	});
+
+	it("does not fail a live pass created during deferred orphan recovery", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			insertPass(db, "abandoned-before-recovery", "running");
+			for (let index = 0; index < 1_000; index++) {
+				const hash = `recovery-race-${index}`;
+				insertEmbedding(db, `recovery-emb-${index}`, hash, "embeddings");
+				insertEmbedding(db, `recovery-stage-${index}`, hash, "embeddings_staging");
+			}
+		});
+
+		let livePassInserted = false;
+		setTimeout(() => {
+			getDbAccessor().withWriteTx((db) => {
+				insertPass(db, "live-during-recovery", "running", "datetime('now', '+1 minute')");
+			});
+			livePassInserted = true;
+		}, 0);
+
+		const report = await runStartupRecoveryAsync(getDbAccessor());
+
+		expect(livePassInserted).toBe(true);
+		expect(report.orphanedPassesSwept).toBe(1);
+		const livePass = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT status FROM dreaming_passes WHERE id = ?").get("live-during-recovery") as { status: string },
+		);
+		expect(livePass.status).toBe("running");
 	});
 
 	it("is idempotent — a clean workspace cleans nothing", async () => {

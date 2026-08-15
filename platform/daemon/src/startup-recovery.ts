@@ -153,6 +153,7 @@ export function getStartupRecoveryCompletion(): Promise<StartupRecoveryReport> {
 
 async function runStartupRecoveryInternal(accessor: DbAccessor): Promise<StartupRecoveryReport> {
 	const startedAt = Date.now();
+	const recoveryStartedAt = new Date().toISOString();
 	logger.info("startup-recovery", "Running startup recovery asynchronously");
 
 	let documentLeasesRecovered = 0;
@@ -280,9 +281,14 @@ async function runStartupRecoveryInternal(accessor: DbAccessor): Promise<Startup
 					`UPDATE dreaming_passes
 					 SET status = 'failed', completed_at = datetime('now'),
 					     error = 'Orphaned by daemon restart (startup recovery)'
-					 WHERE status = 'running'`,
+					 WHERE status = 'running'
+					   AND started_at IS NOT NULL
+					   AND julianday(started_at) < julianday(?)`,
 				)
-				.run();
+				// The status and cutoff predicates are evaluated in this write
+				// transaction. A pass created after recovery began, or completed
+				// before this update, cannot be turned into an orphan.
+				.run(recoveryStartedAt);
 			return result.changes;
 		});
 	} catch (err) {
