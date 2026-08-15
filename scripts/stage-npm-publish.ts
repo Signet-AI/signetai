@@ -11,6 +11,7 @@ export const NPM_PACKAGE_RENAMES: ReadonlyMap<string, string> = new Map([
 	["@signet/connector-forge", "@signetai/connector-forge"],
 	["@signet/connector-gemini", "@signetai/connector-gemini"],
 	["@signet/connector-hermes-agent", "@signetai/connector-hermes-agent"],
+	["@signet/connector-kimi", "@signetai/connector-kimi"],
 	["@signet/connector-oh-my-pi", "@signetai/connector-oh-my-pi"],
 	["@signet/connector-openclaw", "@signetai/connector-openclaw"],
 	["@signet/connector-opencode", "@signetai/connector-opencode"],
@@ -18,7 +19,7 @@ export const NPM_PACKAGE_RENAMES: ReadonlyMap<string, string> = new Map([
 	["@signet/codex-plugin", "@signetai/codex-plugin"],
 ]);
 
-const PUBLISH_TARGETS = [
+export const PUBLISH_TARGETS = [
 	["platform/core", "core"],
 	["libs/connector-base", "connector-base"],
 	["integrations/claude-code/connector", "connector-claude-code"],
@@ -26,6 +27,7 @@ const PUBLISH_TARGETS = [
 	["integrations/forge/connector", "connector-forge"],
 	["integrations/gemini/connector", "connector-gemini"],
 	["integrations/hermes-agent/connector", "connector-hermes-agent"],
+	["integrations/kimi/connector", "connector-kimi"],
 	["integrations/oh-my-pi/connector", "connector-oh-my-pi"],
 	["integrations/openclaw/connector", "connector-openclaw"],
 	["integrations/opencode/connector", "connector-opencode"],
@@ -53,6 +55,13 @@ export function rewritePackageManifest(raw: string): string {
 	const pkg = JSON.parse(raw) as Record<string, unknown>;
 	if (typeof pkg.name === "string") {
 		pkg.name = NPM_PACKAGE_RENAMES.get(pkg.name) ?? pkg.name;
+	}
+	const repository = pkg.repository;
+	if (repository && typeof repository === "object" && !Array.isArray(repository)) {
+		const url = (repository as Record<string, unknown>).url;
+		if (typeof url === "string" && url.startsWith("https://")) {
+			(repository as Record<string, unknown>).url = `git+${url}`;
+		}
 	}
 
 	for (const field of ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"] as const) {
