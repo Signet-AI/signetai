@@ -94,7 +94,8 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
-			const rows = resolveDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const rows = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				return db
 					.prepare("SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ? ORDER BY created_at DESC LIMIT ?")
 					.all(agentId, date, limit) as ReflectionRow[];
@@ -113,7 +114,8 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
-			const rows = resolveDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const rows = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				return db
 					.prepare(
 						`SELECT id, date, summary, patterns, question, answer,
@@ -166,7 +168,8 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 			});
 		}
 
-		const rows = resolveDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const rows = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			return db
 				.prepare(
 					`SELECT * FROM daily_reflections WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at DESC`,
@@ -200,7 +203,8 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		}
 
 		try {
-			const existing = resolveDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const existing = resolveDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				return db.prepare("SELECT * FROM daily_reflections WHERE id = ? AND agent_id = ?").get(id, agentId) as
 					| ReflectionRow
 					| undefined;
@@ -217,7 +221,8 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 			const memoryId = randomUUID();
 
 			let claimed = false;
-			resolveDbAccessor().withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			resolveDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 				const result = db
 					.prepare(
 						`UPDATE daily_reflections

@@ -13,7 +13,8 @@ export interface LegacyExtractionRetirementOptions {
  */
 export function retireLegacyExtractionJobs(accessor: DbAccessor, options: LegacyExtractionRetirementOptions): number {
 	const now = new Date().toISOString();
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const sources = db
 			.prepare(
 				`SELECT DISTINCT m.id

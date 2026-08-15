@@ -105,6 +105,7 @@ export function writeCheckpoint(db: DbAccessor, params: WriteCheckpointParams, m
 	const now = new Date().toISOString();
 	const digest = redactSecrets(params.digest);
 
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	db.withWriteTx((wdb: WriteDb) => {
 		wdb
 			.prepare(
@@ -221,6 +222,7 @@ export function getLatestCheckpoint(
 	if (!projectNormalized) return undefined;
 	const cutoff = new Date(Date.now() - withinMs).toISOString();
 
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return db.withReadDb((rdb: ReadDb) => {
 		const row = rdb
 			.prepare(
@@ -237,6 +239,7 @@ export function getLatestCheckpoint(
 
 /** Get the most recent checkpoint for a specific session key. */
 export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string): CheckpointRow | undefined {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return db.withReadDb((rdb: ReadDb) => {
 		const row = rdb
 			.prepare(
@@ -252,6 +255,7 @@ export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string)
 
 /** Get all checkpoints for a session, newest first. */
 export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): ReadonlyArray<CheckpointRow> {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return db.withReadDb((rdb: ReadDb) => {
 		return rdb
 			.prepare(
@@ -269,6 +273,7 @@ export function getCheckpointsByProject(
 	projectNormalized: string,
 	limit: number,
 ): ReadonlyArray<CheckpointRow> {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return db.withReadDb((rdb: ReadDb) => {
 		return rdb
 			.prepare(
@@ -292,6 +297,7 @@ export function getCheckpointsByProject(
 export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number {
 	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
 
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return db.withWriteTx((wdb: WriteDb) => {
 		const result = wdb.prepare("DELETE FROM session_checkpoints WHERE created_at < ?").run(cutoff);
 

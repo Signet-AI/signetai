@@ -98,7 +98,8 @@ const UNKNOWN_QUEUE_COUNTS_SHAPE: QueueCounts = {
 export function pipelineQueueBlock(): PipelineQueueBlock {
 	try {
 		const accessor = getDbAccessor();
-		return accessor.withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 			const snapshot = getQueueDiagnosticsSnapshot(db);
 			return {
 				memory: snapshot.memory,
@@ -452,14 +453,16 @@ export function registerPipelineRoutes(app: Hono): void {
 		) {
 			return c.json({ error: "sourceKind is invalid" }, 400);
 		}
-		const report = getDbAccessor().withReadDb((db) =>
-			listMemoryContentSafety(db, {
-				agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
-				status,
-				sourceKind,
-				limit,
-				offset,
-			}),
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const report: ReturnType<typeof listMemoryContentSafety> = getDbAccessor().withReadDb(
+			(db: import("../db-accessor").ReadDb) =>
+				listMemoryContentSafety(db, {
+					agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
+					status,
+					sourceKind,
+					limit,
+					offset,
+				}),
 		);
 		return c.json({
 			agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
@@ -550,7 +553,8 @@ export function registerPipelineRoutes(app: Hono): void {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const accessor = getDbAccessor();
 
-		const dbData = accessor.withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const dbData = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 			const memoryRows = db
 				.prepare("SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status")
 				.all() as Array<{

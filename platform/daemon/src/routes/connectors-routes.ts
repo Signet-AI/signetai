@@ -273,7 +273,8 @@ export function registerConnectorRoutes(app: Hono): void {
 				};
 				const rootPath = config.settings?.rootPath;
 				if (rootPath) {
-					const docs = accessor.withReadDb((db) => {
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					const docs = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 						return db
 							.prepare(
 								`SELECT id FROM documents
@@ -283,7 +284,8 @@ export function registerConnectorRoutes(app: Hono): void {
 					});
 					const now = new Date().toISOString();
 					for (const doc of docs) {
-						accessor.withWriteTx((db) => {
+						// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+						accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 							db.prepare(
 								`UPDATE documents
 								 SET status = 'deleted',
@@ -313,7 +315,8 @@ export function registerConnectorRoutes(app: Hono): void {
 				return c.json({ error: "Connector not found" }, 404);
 			}
 
-			const docCount = accessor.withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const docCount = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 				const config = JSON.parse(connectorRow.config_json) as {
 					settings?: { rootPath?: string };
 				};

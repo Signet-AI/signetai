@@ -164,7 +164,8 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 			(typeof body.sessionKey === "string" ? body.sessionKey : undefined) ??
 			(typeof body.session_key === "string" ? body.session_key : undefined);
 
-		const hits = getDbAccessor().withReadDb((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const hits = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 			searchSessionTranscripts({
 				db,
 				query,
@@ -342,14 +343,16 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const limit = Number.isFinite(limitParsed) ? Math.min(Math.max(limitParsed, 0), 200) : 50;
 		const offset = Number.isFinite(offsetParsed) ? Math.max(offsetParsed, 0) : 0;
 
-		const tableExists = accessor.withReadDb((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const tableExists = accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
 			db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
 		}
 
-		return accessor.withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 			let where = "WHERE agent_id = ?";
 			const params: unknown[] = [agentId];
 

@@ -127,7 +127,8 @@ export function collectRejectedDreamingEvidence(
 	operations: readonly Pick<DreamingOperationRequest, "evidence">[],
 ): readonly RejectedDreamingEvidence[] {
 	const indexes = rejectedIndexes(result, operations);
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const candidates = new Map<string, RejectedDreamingEvidence>();
 		for (const index of indexes) {
 			const operation = operations[index];
@@ -248,7 +249,8 @@ export function autoRequeueRepairedDreamingEvidence(
 	if (hourlyBudget === 0 || maxAttempts === 0) return 0;
 	const now = new Date(nowMs).toISOString();
 	const hourAgo = nowMs - 60 * 60 * 1000;
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const recent = db
 			.prepare(
 				`SELECT COUNT(*) AS count FROM dreaming_evidence_exclusions

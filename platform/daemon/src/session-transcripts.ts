@@ -99,7 +99,8 @@ function markBackfillCanonical(classification: TranscriptSessionKeyClassificatio
 
 function tableExists(name: string): boolean {
 	try {
-		return getDbAccessor().withReadDb((db) => tableExistsInDatabase(db, name));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => tableExistsInDatabase(db, name));
 	} catch {
 		return false;
 	}
@@ -107,7 +108,8 @@ function tableExists(name: string): boolean {
 
 function sessionTranscriptsHasColumn(column: string): boolean {
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === column);
 		});
@@ -242,7 +244,8 @@ async function backfillDatabaseTranscripts(
 	try {
 		let offset = 0;
 		while (true) {
-			const rows = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const rows = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 				const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
 					Record<string, unknown>
 				>;
@@ -385,7 +388,8 @@ function writeMarker(markerPath: string, agentId?: string): boolean {
 
 function hasUpdatedAt(): boolean {
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === "updated_at");
 		});
@@ -438,7 +442,8 @@ export function upsertSessionTranscript(
 	if (sessionKey.trim().length === 0 || transcript.trim().length === 0) return false;
 
 	try {
-		return (accessor ?? getDbAccessor()).withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const row = db
 				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_transcripts'`)
 				.get();
@@ -552,7 +557,8 @@ export function markSessionTranscriptCompleted(
 ): boolean {
 	if (sessionKey.trim().length === 0 || agentId.trim().length === 0) return false;
 	try {
-		return (accessor ?? getDbAccessor()).withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
 		});
@@ -585,7 +591,8 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 	const contentHashExpr = hasHash ? "content_hash" : "NULL AS content_hash";
 	const seenExpr = hasUpdated ? "COALESCE(updated_at, created_at)" : "created_at";
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const row = db
 				.prepare(
 					`SELECT session_key, agent_id, content, harness, project, created_at, ${updatedAtExpr}, ${completedAtExpr}, ${contentHashExpr}
@@ -630,7 +637,8 @@ export function getSessionTranscriptContent(sessionKey: string, agentId: string)
 	const aliases = [...new Set([sessionKey, canonicalizeTranscriptLookup(sessionKey)])];
 	const placeholders = aliases.map(() => "?").join(", ");
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const row = db
 				.prepare(
 					`SELECT content FROM session_transcripts
@@ -668,7 +676,8 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 	const cutoff = new Date(Date.now() - staleOlderThanMs).toISOString();
 	const lastActivity = hasUpdatedAt() ? "updated_at" : "created_at";
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const rows = db
 				.prepare(
 					`SELECT session_key, agent_id, harness, project, content, ${lastActivity} AS last_activity
@@ -722,7 +731,8 @@ export function searchTranscriptFallback(params: {
 		const placeholders = aliases.map(() => "?").join(", ");
 		const keyPredicates = [`st.session_key IN (${placeholders})`];
 		if (hasSessionId) keyPredicates.push(`st.session_id IN (${placeholders})`);
-		const exactRows = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const exactRows: TranscriptRow[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const args: unknown[] = [
 				params.agentId,
 				...aliases,
@@ -765,25 +775,27 @@ export function searchTranscriptFallback(params: {
 			const ftsQueries = [...new Set([sanitizeFtsQuery(params.query), sanitizeFtsQuery(anchors)].filter(Boolean))];
 			for (const fts of ftsQueries) {
 				try {
-					const rows = getDbAccessor().withReadDb((db) => {
-						const parts = [
-							`SELECT st.session_key, st.project, ${seenExpr} AS seen_at,`,
-							`snippet(session_transcripts_fts, 0, '', '', ' … ', 18) AS excerpt,`,
-							"bm25(session_transcripts_fts) AS rank",
-							"FROM session_transcripts_fts",
-							"JOIN session_transcripts st ON st.rowid = session_transcripts_fts.rowid",
-							"WHERE session_transcripts_fts MATCH ?",
-							"AND st.agent_id = ?",
-						];
-						const args: unknown[] = [fts, params.agentId];
-						if (params.sessionKey) {
-							parts.push("AND st.session_key != ?");
-							args.push(params.sessionKey);
-						}
-						parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
-						args.push(limit * 2);
-						return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-					});
+					const rows: TranscriptRow[] =
+						// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+						getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+							const parts = [
+								`SELECT st.session_key, st.project, ${seenExpr} AS seen_at,`,
+								`snippet(session_transcripts_fts, 0, '', '', ' … ', 18) AS excerpt,`,
+								"bm25(session_transcripts_fts) AS rank",
+								"FROM session_transcripts_fts",
+								"JOIN session_transcripts st ON st.rowid = session_transcripts_fts.rowid",
+								"WHERE session_transcripts_fts MATCH ?",
+								"AND st.agent_id = ?",
+							];
+							const args: unknown[] = [fts, params.agentId];
+							if (params.sessionKey) {
+								parts.push("AND st.session_key != ?");
+								args.push(params.sessionKey);
+							}
+							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
+							args.push(limit * 2);
+							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
+						});
 
 					const hits = rows
 						.map((row) => ({
@@ -827,31 +839,33 @@ export function searchTranscriptFallback(params: {
 	if (terms.length === 0) return [];
 
 	try {
-		const rows = getDbAccessor().withReadDb((db) => {
-			const score = terms.map(() => "CASE WHEN LOWER(st.content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
-			const any = terms.map(() => "LOWER(st.content) LIKE ?").join(" OR ");
-			const parts = [
-				`SELECT st.session_key, st.project, ${seenExpr} AS seen_at, st.content, ${score} AS rank`,
-				"FROM session_transcripts st",
-				"WHERE st.agent_id = ?",
-			];
-			const args: unknown[] = [];
-			for (const term of terms) {
-				args.push(`%${term}%`);
-			}
-			args.push(params.agentId);
-			if (params.sessionKey) {
-				parts.push("AND st.session_key != ?");
-				args.push(params.sessionKey);
-			}
-			parts.push(`AND (${any})`);
-			for (const term of terms) {
-				args.push(`%${term}%`);
-			}
-			parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
-			args.push(limit);
-			return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-		});
+		const rows: TranscriptRow[] =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+				const score = terms.map(() => "CASE WHEN LOWER(st.content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
+				const any = terms.map(() => "LOWER(st.content) LIKE ?").join(" OR ");
+				const parts = [
+					`SELECT st.session_key, st.project, ${seenExpr} AS seen_at, st.content, ${score} AS rank`,
+					"FROM session_transcripts st",
+					"WHERE st.agent_id = ?",
+				];
+				const args: unknown[] = [];
+				for (const term of terms) {
+					args.push(`%${term}%`);
+				}
+				args.push(params.agentId);
+				if (params.sessionKey) {
+					parts.push("AND st.session_key != ?");
+					args.push(params.sessionKey);
+				}
+				parts.push(`AND (${any})`);
+				for (const term of terms) {
+					args.push(`%${term}%`);
+				}
+				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
+				args.push(limit);
+				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
+			});
 
 		return rows
 			.map((row) => ({

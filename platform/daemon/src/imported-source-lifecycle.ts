@@ -32,7 +32,8 @@ export function markImportedSourceUnsupported(
 	const agentId = input.agentId.trim();
 	if (!sourceId || !agentId)
 		return { artifacts: 0, embeddings: 0, derivedMemories: 0, entities: 0, aspects: 0, attributes: 0, dependencies: 0 };
-	return getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const now = new Date().toISOString();
 		const reason = input.reason?.trim() || "imported source removed";
 		db.prepare(

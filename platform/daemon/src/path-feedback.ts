@@ -607,7 +607,8 @@ export function recordPathFeedback(
 		minAspectWeight: input.minAspectWeight ?? DEFAULT_CFG.minAspectWeight,
 	};
 
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		recordAgentFeedbackInner(db, input.sessionKey, input.ratings, input.agentId);
 		const ts = new Date().toISOString();
 		const ids = Object.keys(input.ratings);

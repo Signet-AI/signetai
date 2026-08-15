@@ -93,7 +93,8 @@ export function getTranscriptHealthReport(
 	agentId?: string | null,
 ): TranscriptHealthReport {
 	const capture = getTranscriptCaptureStatus(dbAccessor, agentId);
-	const sessionStore = dbAccessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const sessionStore = dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const where = agentId ? "WHERE agent_id = ?" : "";
 		const params = agentId ? [agentId] : [];
 		const row = db
@@ -108,7 +109,8 @@ export function getTranscriptHealthReport(
 			newestUpdatedAt: asStringOrNull(row?.newest_updated_at),
 		};
 	});
-	const artifacts = dbAccessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const artifacts = dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const andAgent = agentId ? "AND agent_id = ?" : "";
 		const params = agentId ? [agentId] : [];
 		const countKind = (kind: string): number => {

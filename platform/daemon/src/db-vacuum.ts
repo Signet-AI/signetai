@@ -317,8 +317,9 @@ export function ensureVacuumConversionState(db: PragmaDb): VacuumConversionStatu
 }
 
 /** Read durable conversion state for status and readiness diagnostics. */
-export function getVacuumConversionStatus(accessor: Pick<DbAccessor, "withReadDb">): VacuumConversionStatus {
-	return accessor.withReadDb((db) => readStatusFromDb(toPragmaReadDb(db)));
+export function getVacuumConversionStatus(accessor: DbAccessor): VacuumConversionStatus {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => readStatusFromDb(toPragmaReadDb(db)));
 }
 
 /** Get the free-page ratio (freelist_count / page_count). */
@@ -406,7 +407,8 @@ export function startVacuumConversionWorker(
 			const before = getVacuumConversionStatus(accessor);
 			if (before.state !== "pending" || before.attempts >= before.maxAttempts) return before;
 
-			accessor.withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 				const state = stateFromRow(
 					toPragmaReadDb(db).prepare(`SELECT * FROM ${VACUUM_CONVERSION_STATE_TABLE} WHERE id = 1`).get(),
 				);
@@ -431,7 +433,8 @@ export function startVacuumConversionWorker(
 			try {
 				if (!accessor.vacuumConversion) throw new Error("VACUUM conversion operation is unavailable");
 				accessor.vacuumConversion();
-				accessor.withWriteTx((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 					const state = stateFromRow(
 						toPragmaReadDb(db).prepare(`SELECT * FROM ${VACUUM_CONVERSION_STATE_TABLE} WHERE id = 1`).get(),
 					);
@@ -446,7 +449,8 @@ export function startVacuumConversionWorker(
 				logger.info("db-vacuum", "Post-ready conversion worker completed");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				accessor.withWriteTx((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 					const state = stateFromRow(
 						toPragmaReadDb(db).prepare(`SELECT * FROM ${VACUUM_CONVERSION_STATE_TABLE} WHERE id = 1`).get(),
 					);

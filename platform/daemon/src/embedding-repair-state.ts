@@ -97,7 +97,8 @@ export function acquireEmbeddingRepairLease(
 	hourlyBudget: number,
 	now = Date.now(),
 ): EmbeddingRepairAdmission {
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const row = ensureBudget(db, now);
 		const leaseExpiry = parseMs(row.lease_expires_at);
 		if (row.lease_id !== null && leaseExpiry !== null && leaseExpiry > now) {
@@ -134,7 +135,8 @@ export function acquireEmbeddingRepairLease(
 }
 
 export function readEmbeddingRepairState(accessor: DbAccessor): EmbeddingRepairState | null {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const row = readBudget(db);
 		if (row == null) return null;
 		return {
@@ -154,7 +156,8 @@ export function loadEmbeddingRepairFailures(
 	model: string,
 ): ReadonlyMap<string, EmbeddingRepairFailure> {
 	if (keys.length === 0) return new Map();
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const failures = new Map<string, EmbeddingRepairFailure>();
 		const query = db.prepare(
 			"SELECT memory_id, content_hash, attempts, retry_at FROM embedding_repair_backoff WHERE memory_id = ? AND content_hash = ? AND model = ?",
@@ -184,7 +187,8 @@ export function finishEmbeddingRepairLease(
 	},
 	now = Date.now(),
 ): boolean {
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const current = readBudget(db);
 		if (current == null || current.lease_id !== lease.id) return false;
 		const eligible = typeof outcome.eligibility === "function" ? outcome.eligibility(db) : outcome.eligibility;

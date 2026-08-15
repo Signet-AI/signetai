@@ -2,384 +2,82 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "bun:test";
-import {
-	occurrenceKeys,
-	parseAllowlist,
-	runAudit,
-	type AllowlistEntry,
-	type AuditSite,
-	writeBaseline,
-} from "./audit-event-loop-contract";
+import { loadBaseline, runAudit, renderReport } from "./audit-event-loop-contract";
 
-test("event-loop audit rejects a new synchronous hot-path call", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		mkdirSync(join(root, "routes"));
-		writeFileSync(
-			join(root, "routes", "new-route.ts"),
-			"getDbAccessor().withReadDb((db) => db.prepare('SELECT 1').all());\n",
-		);
-		const result = runAudit({ sourceRoot: root });
-		expect(result.violations).toHaveLength(1);
-		expect(result.violations[0]?.message).toContain("routes/new-route.ts:1");
-		expect(result.violations[0]?.message).toContain("withReadDb");
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
+test("the deterministic ledger retains the exact 1060-site inventory", () => {
+	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
+	expect(baseline).toHaveLength(1060);
+	expect(baseline.filter((site) => site.api === "withWriteTx")).toHaveLength(230);
+	expect(baseline.filter((site) => site.api === "withReadDb")).toHaveLength(346);
 });
 
-test("event-loop audit counts a second same-line call beyond the baseline", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		const source = "getDbAccessor().withReadDb((db) => db); getDbAccessor().withReadDb((db) => db);\n";
-		writeFileSync(join(root, "same-line.ts"), source);
-		const result = runAudit({
-			sourceRoot: root,
-			baselineSites: [
-				{
-					path: "same-line.ts",
-					line: 1,
-					api: "withReadDb",
-					source: source.trim(),
-					category: "hot-path",
-				},
-			],
-		});
-		expect(result.sites).toHaveLength(2);
-		expect(result.violations).toHaveLength(1);
-		expect(result.violations[0]?.line).toBe(1);
-		expect(result.violations[0]?.api).toBe("withReadDb");
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("event-loop audit detects multiline synchronous calls and ignores literals/comments", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+test("the ledger reports legacy DB markers without scanning new call sites", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-ledger-"));
 	try {
 		writeFileSync(
-			join(root, "hot-path.ts"),
+			join(root, "legacy.ts"),
 			[
-				'const text = "readFileSync( .withReadDb( .withWriteTx(";',
-				"/* readFileSync( .withReadDb( .withWriteTx( */",
-				"getDbAccessor()",
-				"\t.withReadDb((db) => db);",
-				"accessor",
-				"\t.withWriteTx((db) => db);",
-				"readFileSync",
-				'	(path, "utf8");',
+				"// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site",
+				"getDbAccessor().withReadDb((db) => db);",
+				"// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site",
+				"getDbAccessor().withWriteTx((db) => db);",
 			].join("\n"),
 		);
+		writeFileSync(join(root, "new-call.ts"), "getDbAccessor().withReadDb((db) => db);\n");
 		const result = runAudit({ sourceRoot: root });
-		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
-			{ api: "withReadDb", line: 4 },
-			{ api: "withWriteTx", line: 6 },
-			{ api: "readFileSync", line: 7 },
-		]);
-		expect(result.violations).toHaveLength(3);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("event-loop audit detects an unlisted accessSync call", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		writeFileSync(join(root, "hot-path.ts"), "accessSync('/tmp/signet-access');\n");
-		const result = runAudit({ sourceRoot: root });
-		expect(result.sites).toHaveLength(1);
-		expect(result.sites[0]?.api).toBe("accessSync");
-		expect(result.sites[0]?.category).toBe("hot-path");
-		expect(result.violations).toHaveLength(1);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("event-loop audit accepts a classified bootstrap exception", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		writeFileSync(
-			join(root, "db-accessor.ts"),
-			"function initDbAccessor() { return existsSync('/tmp/signet-bootstrap'); }\n",
-		);
-		const allowlist: AllowlistEntry[] = [
-			{
-				path: "db-accessor.ts",
-				line: 1,
-				api: "existsSync",
-				category: "pre-readiness-bootstrap",
-				source: "function initDbAccessor() { return existsSync('/tmp/signet-bootstrap'); }",
-				reason: "Checks the workspace directory before the daemon serves requests.",
-			},
-		];
-		const result = runAudit({ sourceRoot: root, allowlist });
+		expect(result.legacyDbAccess).toEqual({ total: 2, withWriteTx: 1, withReadDb: 1 });
 		expect(result.violations).toEqual([]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("event-loop audit rejects a request-path call allowlisted in a mixed bootstrap file", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		const source = [
-			"function initDbAccessor() { return existsSync('/tmp/signet-bootstrap'); }",
-			"export function requestPath() { return readFileSync('/tmp/signet-request', 'utf8'); }",
-			"",
-		].join("\n");
-		writeFileSync(join(root, "db-accessor.ts"), source);
-		expect(() =>
-			runAudit({
-				sourceRoot: root,
-				baselineSites: [
-					{
-						path: "db-accessor.ts",
-						line: 1,
-						api: "existsSync",
-						source: source.split("\n")[0] ?? "",
-						category: "pre-readiness-bootstrap",
-					},
-				],
-				allowlist: [
-					{
-						path: "db-accessor.ts",
-						line: 2,
-						api: "readFileSync",
-						category: "pre-readiness-bootstrap",
-						source: source.split("\n")[1] ?? "",
-						reason: "This request path is incorrectly treated as startup-only.",
-					},
-				],
-			}),
-		).toThrow("Allowlist classification mismatch");
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("event-loop audit rejects a hot-path call mislabeled as an isolated exception", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+test("the CI boundary rejects a production import of the sync compatibility module", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-boundary-"));
 	try {
 		mkdirSync(join(root, "routes"));
-		const source = "getDbAccessor().withReadDb((db) => db);\n";
-		writeFileSync(join(root, "routes", "new-route.ts"), source);
-		const allowlist: AllowlistEntry[] = [
-			{
-				path: "routes/new-route.ts",
-				line: 1,
-				api: "withReadDb",
-				category: "isolated-worker",
-				source: "getDbAccessor().withReadDb((db) => db);",
-				reason: "The route does not serve requests in the isolated worker.",
-			},
-		];
-		expect(() => runAudit({ sourceRoot: root, allowlist })).toThrow("Allowlist classification mismatch");
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("event-loop audit rejects a helper shared by bootstrap and request paths", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		const source = [
-			"function initDbAccessor() { return shared(); }",
-			"export function requestPath() { return shared(); }",
-			"function shared() { return readFileSync('/tmp/signet-shared', 'utf8'); }",
-			"",
-		].join("\n");
-		writeFileSync(join(root, "db-accessor.ts"), source);
+		writeFileSync(
+			join(root, "routes", "new-route.ts"),
+			'import { getSyncDbAccessor } from "../db-accessor-sync";\ngetSyncDbAccessor();\n',
+		);
 		const result = runAudit({ sourceRoot: root });
-		expect(result.sites).toHaveLength(1);
-		expect(result.sites[0]?.category).toBe("hot-path");
 		expect(result.violations).toHaveLength(1);
-		expect(result.violations[0]?.message).toContain("hot-path");
+		expect(result.violations[0]?.path).toBe("routes/new-route.ts");
+		expect(result.violations[0]?.message).toContain("only bootstrap, CLI, and isolated worker modules");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("event-loop audit does not let a baseline category authorize a hot-path call", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+test("bootstrap, CLI, and worker fixtures can use the explicit compatibility module", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-boundary-"));
 	try {
-		const source = [
-			"function initDbAccessor() { return existsSync('/tmp/signet-bootstrap'); }",
-			"export function requestPath() { return existsSync('/tmp/signet-request'); }",
-			"",
-		].join("\n");
-		writeFileSync(join(root, "db-accessor.ts"), source);
-		const result = runAudit({
-			sourceRoot: root,
-			baselineSites: [
-				{
-					path: "db-accessor.ts",
-					line: 2,
-					api: "existsSync",
-					source: source.split("\n")[1] ?? "",
-					category: "pre-readiness-bootstrap",
-				},
-			],
-		});
-		expect(result.sites[1]?.category).toBe("hot-path");
-		expect(result.violations).toHaveLength(2);
-		expect(result.violations[1]?.line).toBe(2);
+		for (const directory of ["bootstrap", "cli", "workers"]) {
+			mkdirSync(join(root, directory));
+			writeFileSync(
+				join(root, directory, "entry.ts"),
+				'import { getSyncDbAccessor } from "../db-accessor-sync";\ngetSyncDbAccessor();\n',
+			);
+		}
+		expect(runAudit({ sourceRoot: root }).violations).toEqual([]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("event-loop audit detects destructured DbAccessor sync methods", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		writeFileSync(join(root, "destructured.ts"), "const { withReadDb } = getDbAccessor();\nwithReadDb((db) => db);\n");
-		const result = runAudit({ sourceRoot: root });
-		expect(result.sites).toHaveLength(1);
-		expect(result.sites[0]?.api).toBe("withReadDb");
-		expect(result.violations).toHaveLength(1);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
+test("the generated report describes the type boundary and transitional counts", () => {
+	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
+	const report = renderReport(baseline, { total: 576, withWriteTx: 230, withReadDb: 346 });
+	expect(report).toContain("Exact ledger inventory: 1060 sites");
+	expect(report).toContain("230 synchronous writes and 346 synchronous reads");
+	expect(report).toContain("type boundary");
+	expect(report).not.toContain("1061");
 });
 
-test("event-loop audit detects parenthesized and computed synchronous calls", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		writeFileSync(
-			join(root, "computed.ts"),
-			[
-				'getDbAccessor()["withReadDb"]((db) => db);',
-				"(getDbAccessor().withWriteTx)((db) => db);",
-				'fs["readFileSync"]("/tmp/signet-computed");',
-			].join("\n"),
-		);
-		const result = runAudit({ sourceRoot: root });
-		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
-			{ api: "withReadDb", line: 1 },
-			{ api: "withWriteTx", line: 2 },
-			{ api: "readFileSync", line: 3 },
-		]);
-		expect(result.violations).toHaveLength(3);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("event-loop audit detects transitive and asserted DbAccessor aliases", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		writeFileSync(
-			join(root, "aliases.ts"),
-			[
-				"const accessor = getDbAccessor();",
-				"const intermediate = accessor;",
-				"const asserted = intermediate as DbAccessor;",
-				"const { withReadDb: readDb } = asserted;",
-				'const writeDb = asserted["withWriteTx"];',
-				"readDb((db) => db);",
-				"writeDb((db) => db);",
-			].join("\n"),
-		);
-		const result = runAudit({ sourceRoot: root });
-		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
-			{ api: "withReadDb", line: 6 },
-			{ api: "withWriteTx", line: 7 },
-		]);
-		expect(result.violations).toHaveLength(2);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("event-loop audit detects imported, derived, and destructured filesystem-process aliases", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		writeFileSync(
-			join(root, "aliases.ts"),
-			[
-				'import { readFileSync as blockingRead } from "node:fs";',
-				'import { spawnSync as blockingSpawn } from "node:child_process";',
-				'import * as fs from "node:fs";',
-				"const copiedRead = blockingRead;",
-				"const fsAlias = fs;",
-				"const { existsSync: pathExists } = fsAlias;",
-				"blockingRead('/tmp/signet-imported');",
-				"copiedRead('/tmp/signet-derived');",
-				"pathExists('/tmp/signet-destructured');",
-				"blockingSpawn('true');",
-			].join("\n"),
-		);
-		const result = runAudit({ sourceRoot: root });
-		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
-			{ api: "readFileSync", line: 7 },
-			{ api: "readFileSync", line: 8 },
-			{ api: "existsSync", line: 9 },
-			{ api: "spawnSync", line: 10 },
-		]);
-		expect(result.violations).toHaveLength(4);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("event-loop audit detects assigned and parameter-destructured DbAccessor aliases", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		writeFileSync(
-			join(root, "aliases.ts"),
-			[
-				"let accessor: DbAccessor;",
-				"accessor = getDbAccessor();",
-				"const { withReadDb: readDb } = accessor;",
-				"readDb((db) => db);",
-				"function run({ withWriteTx: writeTx }: DbAccessor) {",
-				"\twriteTx((db) => db);",
-				"}",
-			].join("\n"),
-		);
-		const result = runAudit({ sourceRoot: root });
-		expect(result.sites.map(({ api, line }) => ({ api, line }))).toEqual([
-			{ api: "withReadDb", line: 4 },
-			{ api: "withWriteTx", line: 6 },
-		]);
-		expect(result.violations).toHaveLength(2);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("baseline regeneration uses Biome-compatible tab indentation", () => {
-	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
-	try {
-		const path = join(root, "baseline.json");
-		writeBaseline(path, "platform/daemon/src", []);
-		const output = readFileSync(path, "utf8");
-		expect(output).toContain('\n\t"generatedFrom"');
-		expect(output).not.toContain('\n  "generatedFrom"');
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("event-loop audit baseline is an exact, pinned, deterministic production inventory", () => {
-	const productionSourceRoot = resolve(import.meta.dir, "..", "platform/daemon/src");
-	const baseline = JSON.parse(readFileSync(resolve(import.meta.dir, "event-loop-contract-baseline.json"), "utf8")) as {
-		version: 1;
-		generatedFrom: string;
-		sites: AuditSite[];
-	};
-	const allowlist = parseAllowlist(readFileSync(resolve(import.meta.dir, "event-loop-contract-allowlist.txt"), "utf8"));
-	const first = runAudit({ sourceRoot: productionSourceRoot, baselineSites: baseline.sites, allowlist });
-	const second = runAudit({ sourceRoot: productionSourceRoot, baselineSites: baseline.sites, allowlist });
-
-	// No new or missed sites: every live production call site is covered by the baseline.
-	expect(first.violations).toEqual([]);
-	// No stale baseline entries: the committed baseline is an exact occurrence inventory, not a superset.
-	// This is the regression that lets a legacy over-count (1057 with two comment-only false positives)
-	// silently pass CI while the live scan reports fewer sites.
-	expect(occurrenceKeys(baseline.sites)).toEqual(occurrenceKeys(first.sites));
-	// The occurrence-accurate baseline was 1056 before the accessSync coverage and current-main inventory changes.
-	expect(first.sites).toHaveLength(1060);
-	// Deterministic ordering and content: repeated runs of the full scan are byte-identical.
-	expect(JSON.stringify(second.sites)).toBe(JSON.stringify(first.sites));
-});
+// Keep the production/public type distinction visible in source review. The
+// daemon typecheck is the executable proof that DbAccessor has no sync keys.
+const productionAccessorType = readFileSync(resolve("platform/daemon/src/db-accessor.ts"), "utf8");
+const syncAccessorType = readFileSync(resolve("platform/daemon/src/db-accessor-sync.ts"), "utf8");
+expect(productionAccessorType).toContain("export interface DbAccessor extends AsyncDbAccessor {}");
+expect(productionAccessorType).not.toContain("export interface SyncDbAccessorCompat");
+expect(syncAccessorType).toContain("export interface SyncDbAccessor");

@@ -477,8 +477,9 @@ function sourceArtifactDisplayName(artifact: CacheArtifact): string | undefined 
 }
 
 function purgeStaleDesktopCacheArtifacts(sourceId: string, agentId: string, syncStartedAt: string): number {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const rows = getDbAccessor().withReadDb(
-		(db) =>
+		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
 					`SELECT source_path FROM memory_artifacts
@@ -489,7 +490,8 @@ function purgeStaleDesktopCacheArtifacts(sourceId: string, agentId: string, sync
 				.all(agentId, sourceId, syncStartedAt) as Array<{ source_path: string }>,
 	);
 	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
-	return getDbAccessor().withWriteTx((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
 		countChanges(
 			db
 				.prepare(

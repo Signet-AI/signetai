@@ -438,7 +438,8 @@ function toRecallRow(row: RawTemporalRow): TemporalRecallRow {
 function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecallParams): RawTemporalRow[] {
 	const rows: RawTemporalRow[] = [];
 
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 		if (temporalFacetAllowed(intent.facets, "session") && tableExists(db, "session_summaries")) {
 			const owner = temporalOwnerSql("agent_id", params);
 			const project = projectSql(params.project, "project");

@@ -60,7 +60,8 @@ function readClaims(db: ReadDb): readonly PersistedSessionClaim[] {
 export function createSessionClaimStore(accessor: DbAccessor): SessionClaimStore {
 	return {
 		upsertActive(claim): void {
-			accessor.withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 				db.prepare(
 					`INSERT INTO session_claims
 						(session_key, agent_id, runtime_path, harness, claimed_at, expires_at, state, ended_at, end_marker)
@@ -77,7 +78,8 @@ export function createSessionClaimStore(accessor: DbAccessor): SessionClaimStore
 			});
 		},
 		markExpired(sessionKey, agentId): void {
-			accessor.withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 				db.prepare(
 					`UPDATE session_claims
 					 SET state = 'expired'
@@ -86,7 +88,8 @@ export function createSessionClaimStore(accessor: DbAccessor): SessionClaimStore
 			});
 		},
 		markEnded(claim): void {
-			accessor.withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 				db.prepare(
 					`INSERT INTO session_claims
 						(session_key, agent_id, runtime_path, harness, claimed_at, expires_at, state, ended_at, end_marker)
@@ -112,11 +115,13 @@ export function createSessionClaimStore(accessor: DbAccessor): SessionClaimStore
 			});
 		},
 		remove(sessionKey, agentId): void {
-			accessor.withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 				db.prepare("DELETE FROM session_claims WHERE session_key = ? AND agent_id = ?").run(sessionKey, agentId);
 			});
 		},
 		list(): readonly PersistedSessionClaim[] {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			return accessor.withReadDb(readClaims);
 		},
 	};

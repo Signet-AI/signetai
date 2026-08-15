@@ -467,7 +467,8 @@ export function indexObsidianSourceStructure(
 	const fileRel = relPath(root, filePath);
 	const now = new Date().toISOString();
 	const content = stripFrontmatter(input.content);
-	return getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		// A source file is authoritative: before rebuilding its projection,
 		// remove the prior per-file headings/claims/links so deleted Markdown
 		// structure does not linger as stale graph facts.
@@ -685,7 +686,10 @@ export function indexObsidianSourceStructure(
 export function purgeObsidianSourceFileStructure(
 	input: PurgeObsidianSourceFileStructureInput,
 ): PurgeObsidianSourceStructureResult {
-	return getDbAccessor().withWriteTx((db) => purgeObsidianSourceFileStructureInTx(db, input));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
+		purgeObsidianSourceFileStructureInTx(db, input),
+	);
 }
 
 export function purgeObsidianSourceStructure(
@@ -694,7 +698,8 @@ export function purgeObsidianSourceStructure(
 	const root = normalizedRoot(input.root);
 	const agentWhere = input.agentId ? "agent_id = ? AND " : "";
 	const params = input.agentId ? [input.agentId, input.sourceId, root] : [input.sourceId, root];
-	return getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		purgeAttributeMemoryProjectionsInTx(db, {
 			agentId: input.agentId,
 			sourceId: input.sourceId,

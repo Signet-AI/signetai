@@ -58,7 +58,8 @@ function filterDreamingAttributes(
 	agentId: string,
 	attributes: readonly EntityAttribute[],
 ): readonly EntityAttribute[] {
-	return accessor.withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
 		attributes.filter((attribute) => {
 			if (attribute.memoryId) {
 				return isMemoryContentContextEligible(db, {
@@ -515,7 +516,8 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				chunkSize: z.number().finite().optional(),
 			}),
 			async ({ agentId: scopeId, query, since, before, kind, limit, sourceRef, offset, chunkSize }) =>
-				accessor.withReadDb((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 					if (sourceRef !== undefined) {
 						const source = readEpisodicSource(db, { agentId: scopeId, from: sourceRef });
 						if (source === null) return { ok: false, error: "Evidence source not found" };
@@ -685,12 +687,14 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			async ({ agentId: scopeId, kind, status, limit }) => {
 				if (kind === "review_due") {
 					if (status === "resolved") return { ok: true, items: [] };
-					const due = accessor.withReadDb((db) =>
-						collectReviewDueClaims(
-							{ all: <T>(sql: string, ...params: unknown[]) => db.prepare(sql).all(...params) as T[] },
-							new Date(),
-							{ agentId: scopeId, limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200) },
-						),
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					const due: ReturnType<typeof collectReviewDueClaims> = accessor.withReadDb(
+						(db: import("../db-accessor").ReadDb) =>
+							collectReviewDueClaims(
+								{ all: <T>(sql: string, ...params: unknown[]) => db.prepare(sql).all(...params) as T[] },
+								new Date(),
+								{ agentId: scopeId, limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200) },
+							),
 					);
 					return {
 						ok: true,

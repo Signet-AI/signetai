@@ -1056,7 +1056,8 @@ export function explainOntologyClaim(accessor: DbAccessor, params: ExplainClaimP
 	if (result === null) throw new OntologyClaimTraceError("Claim path not found", 404);
 	if (result.items.length === 0) throw new OntologyClaimTraceError("Claim path has no versions", 404);
 
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		if (project !== null) {
 			// Graph rows are agent-scoped but do not carry a project column. A
 			// project-scoped caller may only receive a claim whose linked semantic

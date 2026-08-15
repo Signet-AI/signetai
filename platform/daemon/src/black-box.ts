@@ -430,7 +430,8 @@ export function buildBlackBoxSession(
 	},
 ): BlackBoxSession {
 	const limit = Math.max(1, Math.min(input.limit ?? MAX_EVENTS, MAX_EVENTS));
-	const events = accessor.withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const events = accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
 		[
 			...listTelemetryEvents(db, input.agentId, input.sessionKey, input.project, limit),
 			...listSessionRecallEvents(db, input.agentId, input.sessionKey, input.project, limit),
@@ -462,7 +463,8 @@ export function listBlackBoxSessions(
 	input: { readonly agentId: string; readonly project?: string; readonly limit?: number },
 ): readonly BlackBoxSessionSummary[] {
 	const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const bySession = new Map<string, BlackBoxSessionSummary>();
 		const telemetryRows = db
 			.prepare(

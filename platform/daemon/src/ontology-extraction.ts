@@ -643,7 +643,10 @@ function sourceInfo(source: SourceRecord): OntologyExtractionSourceInfo {
 function readSource(accessor: DbAccessor, params: Pick<ExtractOntologyParams, "agentId" | "from">): SourceRecord {
 	const from = params.from.trim();
 	if (from.length === 0) throw new OntologyExtractionError("from is required", 400);
-	const source = accessor.withReadDb((db) => readEpisodicSource(db, { agentId: params.agentId, from }));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const source = accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+		readEpisodicSource(db, { agentId: params.agentId, from }),
+	);
 	if (source) return source;
 	throw new OntologyExtractionError("Extraction source not found", 404);
 }
@@ -741,7 +744,8 @@ export async function extractOntologyProposals(
 		};
 	}
 
-	const written = accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const written = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const proposalResult = shouldWriteProposals
 			? createOntologyProposalsInTx(db, proposalInputs)
 			: { items: [] as readonly OntologyProposal[], count: 0 };

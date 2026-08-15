@@ -1159,8 +1159,9 @@ function registerCompactionComplete(app: Hono): void {
 			}
 			const agentId = scopedAgent.agentId;
 			const transcriptRow = body.sessionKey
-				? getDbAccessor().withReadDb(
-						(db) =>
+				? // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					getDbAccessor().withReadDb(
+						(db: import("../db-accessor").ReadDb) =>
 							db
 								.prepare(
 									`SELECT project
@@ -1186,7 +1187,8 @@ function registerCompactionComplete(app: Hono): void {
 			});
 			const summaryId = noise ? null : crypto.randomUUID();
 			if (summaryId) {
-				getDbAccessor().withWriteTx((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 					db.prepare(
 						`INSERT INTO memories (
 							id, content, type, importance, source_id, source_type,
@@ -1305,7 +1307,8 @@ function registerCompactionComplete(app: Hono): void {
 
 			if (body.sessionKey) {
 				try {
-					getDbAccessor().withWriteTx((db) => {
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+					getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 						const hasTx = db
 							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts'")
 							.get();

@@ -92,8 +92,9 @@ function qualityIssues(rows: readonly EntityRow[]): readonly DreamingQualityIssu
  * users inspect, while source-native topology is excluded from quality counts.
  */
 export function getDreamingQualityReport(accessor: DbAccessor, agentId: string): DreamingQualityReport {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const { claimPaths, entities, totalClaimValues, unaddressableClaimValues, structureQuality } = accessor.withReadDb(
-		(db) => {
+		(db: import("../db-accessor").ReadDb) => {
 			const topologyPlaceholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
 			const semanticFilter = `NOT (e.entity_type IN (${topologyPlaceholders}) OR (e.entity_type = 'source' AND e.source_root IS NOT NULL))`;
 			const claimPaths = db

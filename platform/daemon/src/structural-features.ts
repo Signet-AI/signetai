@@ -75,7 +75,8 @@ export function getStructuralFeatures(
 
 	if (memoryIds.length === 0) return featuresByMemoryId;
 
-	const primaryRows = accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const primaryRows = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT
@@ -158,7 +159,8 @@ export function buildCandidateFeatures(
 		}
 	}
 	const structuralById = getStructuralFeatures(accessor, candidateIds, agentId, sourceById);
-	const embeddedIds = accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const embeddedIds = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT DISTINCT source_id

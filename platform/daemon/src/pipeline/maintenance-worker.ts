@@ -129,7 +129,8 @@ function buildRecommendations(
 }
 
 function getGraphAgentIds(accessor: DbAccessor): readonly string[] {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT agent_id FROM entity_aspects
@@ -328,10 +329,12 @@ export function startMaintenanceWorker(
 
 	async function doTick(): Promise<MaintenanceCycleResult> {
 		if (isSystemPressureHigh()) {
-			const report = accessor.withReadDb((db) => getDiagnostics(db, tracker));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const report = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getDiagnostics(db, tracker));
 			return { report, recommendations: [], executed: [], feedbackDecayedAspects: 0, feedbackPropagatedAttributes: 0 };
 		}
-		const report = accessor.withReadDb((db) => getDiagnostics(db, tracker));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const report = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getDiagnostics(db, tracker));
 
 		const embeddingStats = deps.embedding
 			? getEmbeddingRepairStats(accessor, deps.embedding.cfg, deps.embedding.agentId)
@@ -407,7 +410,8 @@ export function startMaintenanceWorker(
 
 		// Re-check health to evaluate improvement
 		if (executed.length > 0) {
-			const postReport = accessor.withReadDb((db) => getDiagnostics(db, tracker));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const postReport = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getDiagnostics(db, tracker));
 			const improved = postReport.composite.score > preScore;
 
 			for (const exec of executed) {
@@ -449,8 +453,9 @@ export function startMaintenanceWorker(
 		// Dead memory hygiene: warn when stale/low-confidence memories accumulate.
 		// No auto-deletion — use GET /api/repair/dead-memories to review and act.
 		try {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const count = accessor.withReadDb(
-				(db) =>
+				(db: import("../db-accessor").ReadDb) =>
 					(
 						db
 							.prepare(
@@ -480,7 +485,8 @@ export function startMaintenanceWorker(
 		// Reclaim free pages from DROP/DELETE/promotion operations (#1139).
 		// Only run when the free-page ratio is high and the system is not under pressure.
 		try {
-			const ratio = accessor.withReadDb((db) => getFreePageRatio(db));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const ratio = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getFreePageRatio(db));
 			if (ratio >= 0.2) {
 				if (accessor.incrementalVacuumAsync) {
 					await accessor.incrementalVacuumAsync();

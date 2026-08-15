@@ -46,7 +46,8 @@ export function recordSkillInvocation(record: SkillInvocationRecord): void {
 	const latency = clampLatency(record.latencyMs);
 
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			// OR IGNORE lets the partial-unique idx_skill_inv_dedupe drop a repeated
 			// harness event (same agent/harness/session/tool_use_id). Internal rows have
 			// null ids, never match the partial index, and always insert.

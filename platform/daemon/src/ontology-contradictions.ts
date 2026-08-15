@@ -520,7 +520,8 @@ export function reconcileOntologyContradictions(
 	accessor: DbAccessor,
 	params: ReconcileOntologyContradictionsParams,
 ): number {
-	return accessor.withWriteTx((db) => reconcileOntologyContradictionsInTx(db, params));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => reconcileOntologyContradictionsInTx(db, params));
 }
 
 export function listOntologyContradictions(
@@ -530,7 +531,8 @@ export function listOntologyContradictions(
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
 	reconcileOntologyContradictions(accessor, { agentId: params.agentId, sourceId: params.sourceId });
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const where = ["c.agent_id = ?"];
 		const args: unknown[] = [params.agentId];
 		if (params.status !== "all") {
@@ -585,7 +587,8 @@ export function getOntologyContradiction(
 	params: { readonly agentId: string; readonly id: string },
 ): OntologyContradiction | null {
 	reconcileOntologyContradictions(accessor, { agentId: params.agentId });
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const row = db
 			.prepare(`${CONTRADICTION_SELECT}
 				WHERE c.id = ? AND c.agent_id = ?`)

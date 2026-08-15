@@ -32,7 +32,8 @@ export interface TemporalHit {
 
 function tableExists(name: string): boolean {
 	try {
-		return getDbAccessor().withReadDb((db) => tableExistsIn(db, name));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => tableExistsIn(db, name));
 	} catch (err) {
 		logger.warn("temporal-fallback", "tableExists failed", {
 			table: name,
@@ -145,7 +146,8 @@ function searchFromThreadHeads(params: {
 }): TemporalHit[] {
 	if (!tableExists("memory_thread_heads")) return [];
 	try {
-		const rows = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const rows = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const score = params.termPatterns
 				.map(() => "CASE WHEN LOWER(sample) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END")
 				.join(" + ");
@@ -200,7 +202,8 @@ function searchFromSessionSummaries(params: {
 }): TemporalHit[] {
 	if (!tableExists("session_summaries")) return [];
 	try {
-		const rows = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const rows = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const score = params.termPatterns
 				.map(() => "CASE WHEN LOWER(content) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END")
 				.join(" + ");

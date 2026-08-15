@@ -228,7 +228,8 @@ interface ExistingDocRow {
 }
 
 function findDocBySourceUrl(accessor: DbAccessor, sourceUrl: string): ExistingDocRow | undefined {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		return db.prepare("SELECT id, updated_at FROM documents WHERE source_url = ? LIMIT 1").get(sourceUrl) as
 			| ExistingDocRow
 			| undefined;
@@ -282,7 +283,8 @@ function insertDocument(
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		db.prepare(
 			`INSERT INTO documents
 			 (id, source_url, source_type, content_type, title,
@@ -304,7 +306,8 @@ function insertDocument(
 function updateDocument(accessor: DbAccessor, docId: string, rawContent: string): void {
 	const now = new Date().toISOString();
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		db.prepare(
 			`UPDATE documents
 			 SET raw_content = ?, status = 'queued', error = NULL,

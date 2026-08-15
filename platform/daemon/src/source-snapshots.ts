@@ -100,7 +100,8 @@ interface ArtifactRow {
 
 export function exportSourceSnapshot(options: ExportSourceSnapshotOptions): SourceSnapshot {
 	const includeLocalDiscord = options.includeLocalDiscord === true;
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 		let skippedLocal = 0;
 		const artifacts = (
 			db
@@ -174,7 +175,8 @@ export function importSourceSnapshot(options: ImportSourceSnapshotOptions): Impo
 	}
 
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const writeDb = db as WriteDb as Database;
 			const conflict = findPathOwnershipConflict(writeDb, artifacts, options.agentId, options.source.id);
 			if (conflict) throw new Error(conflict);

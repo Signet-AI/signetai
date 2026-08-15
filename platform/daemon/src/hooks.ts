@@ -456,7 +456,8 @@ function getSessionGapSummary(): string | undefined {
 	if (!existsSync(getMemoryDbPath())) return undefined;
 
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			// The completion marker covers explicit ends and daemon recovery/TTL
 			// boundaries; all are settled session activity for this brief.
 			const lastSession = db.prepare("SELECT MAX(completed_at) as last_end FROM session_transcripts").get() as
@@ -554,11 +555,19 @@ function getRecentMemories(
 	if (!existsSync(getMemoryDbPath())) return [];
 
 	try {
-		const rows = getDbAccessor().withReadDb((db) => {
-			const scope = agentScope
-				? buildAgentScopeClause(agentScope.agentId, agentScope.readPolicy, agentScope.policyGroup)
-				: { sql: " AND m.visibility != 'archived'", args: [] };
-			const query = `
+		const rows: Array<{
+			id: string;
+			content: string;
+			type: string;
+			importance: number;
+			created_at: string;
+		}> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+				const scope = agentScope
+					? buildAgentScopeClause(agentScope.agentId, agentScope.readPolicy, agentScope.policyGroup)
+					: { sql: " AND m.visibility != 'archived'", args: [] };
+				const query = `
         SELECT
           m.id, m.content, m.type, m.importance, m.created_at,
           (julianday('now') - julianday(m.created_at)) as age_days
@@ -571,22 +580,22 @@ function getRecentMemories(
         LIMIT ?
       `;
 
-			const rows = db.prepare(query).all(...scope.args, limit) as Array<{
-				id: string;
-				content: string;
-				type: string;
-				importance: number;
-				created_at: string;
-			}>;
-			return rows.filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId: agentScope?.agentId ?? "default",
-					sourceKind: "memory",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			);
-		});
+				const queried = db.prepare(query).all(...scope.args, limit) as Array<{
+					id: string;
+					content: string;
+					type: string;
+					importance: number;
+					created_at: string;
+				}>;
+				return queried.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId: agentScope?.agentId ?? "default",
+						sourceKind: "memory",
+						sourceId: row.id,
+						content: row.content,
+					}),
+				);
+			});
 
 		return rows.map((r) => ({
 			id: r.id,
@@ -762,7 +771,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	if (req.sessionKey && existsSync(getMemoryDbPath())) {
 		try {
 			const subagentCfg = memoryCfg.pipelineV2.subagents ?? { inheritContext: true, tailChars: 3000 };
-			const block = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const block = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 				const parent = resolveParentSession(db, {
 					harness: req.harness,
 					project: req.project,
@@ -837,7 +847,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	if (traversalEnabled) {
 		const _traversalStart = Date.now();
 		try {
-			const focal = getDbAccessor().withReadDb((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const focal = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
 				resolveFocalEntities(db, traversalAgentId, {
 					project: req.project,
 					sessionKey: req.sessionKey,
@@ -850,6 +861,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			if (focal.entityIds.length > 0) {
 				const traversalResult = await traverseKnowledgeGraph(
 					focal.entityIds,
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 					<T>(fn: (db: ReadDb) => T): T => getDbAccessor().withReadDb(fn),
 					traversalAgentId,
 					traversalRuntimeCfg,

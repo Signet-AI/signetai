@@ -226,7 +226,8 @@ export function startHintsWorker(deps: {
 
 		let job: HintJobRow | null = null;
 		try {
-			job = accessor.withWriteTx((db) => leaseJob(db, 3));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			job = accessor.withWriteTx((db: import("../db-accessor").WriteDb) => leaseJob(db, 3));
 			if (!job) {
 				schedule();
 				return;
@@ -237,7 +238,8 @@ export function startHintsWorker(deps: {
 			try {
 				payload = JSON.parse(j.payload) as HintPayload;
 			} catch {
-				accessor.withWriteTx((db) => failJob(db, j.id, "invalid payload"));
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				accessor.withWriteTx((db: import("../db-accessor").WriteDb) => failJob(db, j.id, "invalid payload"));
 				schedule();
 				return;
 			}
@@ -246,7 +248,8 @@ export function startHintsWorker(deps: {
 			const hints = await generateHints(provider, payload.content, cfg);
 
 			if (hints.length > 0) {
-				accessor.withWriteTx((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 					writeHints(db, payload.memoryId, hints);
 					completeJob(db, j.id);
 				});
@@ -255,7 +258,8 @@ export function startHintsWorker(deps: {
 					hints: hints.length,
 				});
 			} else {
-				accessor.withWriteTx((db) => completeJob(db, j.id));
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				accessor.withWriteTx((db: import("../db-accessor").WriteDb) => completeJob(db, j.id));
 				logger.debug("pipeline", "No hints generated (empty LLM response)", {
 					memoryId: payload.memoryId,
 				});
@@ -264,7 +268,8 @@ export function startHintsWorker(deps: {
 			if (job) {
 				const j = job;
 				const msg = e instanceof Error ? e.message : String(e);
-				accessor.withWriteTx((db) => failJob(db, j.id, msg));
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				accessor.withWriteTx((db: import("../db-accessor").WriteDb) => failJob(db, j.id, msg));
 				logger.warn("pipeline", "Hints worker job failed", {
 					jobId: j.id,
 					memoryId: j.memory_id,

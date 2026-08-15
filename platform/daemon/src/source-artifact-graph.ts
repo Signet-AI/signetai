@@ -300,14 +300,20 @@ export function purgeSourceArtifactStructureInTx(
 export function purgeSourceArtifactStructure(
 	input: PurgeSourceArtifactStructureInput,
 ): PurgeSourceArtifactStructureResult {
-	return getDbAccessor().withWriteTx((db) => purgeSourceArtifactStructureInTx(db, input));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
+		purgeSourceArtifactStructureInTx(db, input),
+	);
 }
 
 export function indexSourceArtifactStructure(
 	input: IndexSourceArtifactStructureInput,
 ): IndexSourceArtifactStructureResult {
 	const now = new Date().toISOString();
-	return getDbAccessor().withWriteTx((db) => indexSourceArtifactStructureInTx(db, input, now));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
+		indexSourceArtifactStructureInTx(db, input, now),
+	);
 }
 
 export function indexSourceArtifactStructureInTx(

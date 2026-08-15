@@ -488,7 +488,8 @@ function getOrCreateInstallId(
 	daemonVersion: string,
 ): { readonly id: string; readonly created: boolean; readonly previousVersion?: string } {
 	try {
-		return db.withWriteTx((w) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 			const existing = w
 				.prepare("SELECT id, last_seen_version FROM telemetry_install ORDER BY created_at ASC LIMIT 1")
 				.get() as { readonly id: string; readonly last_seen_version?: string | null } | null | undefined;
@@ -527,7 +528,8 @@ function getOrCreateInstallId(
 		// pre-117 telemetry_install shape. Preserve telemetry there without
 		// claiming a transition; the next normal migration adds the column.
 		try {
-			return db.withWriteTx((w) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			return db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 				const existing = w.prepare("SELECT id FROM telemetry_install ORDER BY created_at ASC LIMIT 1").get() as
 					| { readonly id: string }
 					| null
@@ -791,8 +793,9 @@ export function createTelemetryCollector(
 
 	function readDeliveryState(): TelemetryDeliveryState {
 		try {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const row = db.withReadDb(
-				(r) =>
+				(r: import("./db-accessor").ReadDb) =>
 					r
 						.prepare(
 							`SELECT window_started_at AS windowStartedAt,
@@ -872,7 +875,8 @@ export function createTelemetryCollector(
 		try {
 			const column = FIRST_USE_COLUMNS[kind];
 			let claimed = false;
-			db.withWriteTx((w) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 				const result = w
 					.prepare(
 						`UPDATE telemetry_install SET ${column} = ?
@@ -918,7 +922,8 @@ export function createTelemetryCollector(
 	function writeToDb(events: readonly TelemetryEvent[]): boolean {
 		if (events.length === 0) return true;
 		try {
-			db.withWriteTx((w) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 				const stmt = w.prepare(
 					`INSERT OR IGNORE INTO telemetry_events
 					 (id, event, timestamp, properties, sent_to_posthog, created_at, source)
@@ -973,7 +978,8 @@ export function createTelemetryCollector(
 		const now = new Date().toISOString();
 		let stateUpdated = false;
 		try {
-			db.withWriteTx((w) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 				w.prepare(
 					"UPDATE telemetry_events SET sent_to_posthog = 1, sent_at = ?, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
 				).run(now, token);
@@ -1004,7 +1010,8 @@ export function createTelemetryCollector(
 			// Older/partially migrated workspaces still need the event marked sent
 			// after PostHog accepted it; otherwise the claim would be retried.
 			try {
-				db.withWriteTx((w) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 					w.prepare(
 						"UPDATE telemetry_events SET sent_to_posthog = 1, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
 					).run(token);
@@ -1023,7 +1030,8 @@ export function createTelemetryCollector(
 		const now = new Date().toISOString();
 		let stateUpdated = false;
 		try {
-			db.withWriteTx((w) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 				w.prepare(
 					"UPDATE telemetry_events SET last_attempt_at = ?, last_failure_code = ?, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
 				).run(now, failureCode?.slice(0, MAX_HEALTH_FAILURE_CODE_LENGTH) ?? "unknown", token);
@@ -1052,7 +1060,8 @@ export function createTelemetryCollector(
 			});
 		} catch {
 			try {
-				db.withWriteTx((w) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 					w.prepare("UPDATE telemetry_events SET claim_token = NULL, claimed_at = NULL WHERE claim_token = ?").run(
 						token,
 					);
@@ -1072,7 +1081,8 @@ export function createTelemetryCollector(
 		const now = new Date();
 		const staleBefore = new Date(now.getTime() - TELEMETRY_CLAIM_TIMEOUT_MS).toISOString();
 		try {
-			return db.withWriteTx((w) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			return db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 				w.prepare(
 					`UPDATE telemetry_events
 					 SET claim_token = ?, claimed_at = ?
@@ -1119,7 +1129,8 @@ export function createTelemetryCollector(
 		const cutoff = new Date();
 		cutoff.setDate(cutoff.getDate() - config.retentionDays);
 		try {
-			db.withWriteTx((w) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 				// Never prune a row that is still waiting for remote delivery.
 				w.prepare("DELETE FROM telemetry_events WHERE timestamp < ? AND sent_to_posthog = 1").run(cutoff.toISOString());
 			});
@@ -1140,6 +1151,7 @@ export function createTelemetryCollector(
 		let oldestUnsentTimestamp: string | null = null;
 		let lastDaemonEventTimestamp: string | null = null;
 		try {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			db.withReadDb((r) => {
 				const queue = r
 					.prepare(
@@ -1458,7 +1470,8 @@ export function createTelemetryCollector(
 			flushAbortController?.abort();
 			if (flushPromise) await flushPromise;
 			try {
-				db.withWriteTx((w) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 					w.prepare("DELETE FROM telemetry_events WHERE sent_to_posthog = 0").run();
 				});
 			} catch {
@@ -1469,6 +1482,7 @@ export function createTelemetryCollector(
 
 		query(opts): readonly TelemetryEvent[] {
 			try {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 				return db.withReadDb((r) => {
 					const conditions: string[] = [];
 					const params: unknown[] = [];

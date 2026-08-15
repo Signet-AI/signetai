@@ -19,7 +19,8 @@ const SOURCE_OWNED_GRAPH_TABLES = [
 export function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): number {
 	const sourceId = input.sourceId.trim();
 	if (!sourceId) return 0;
-	return getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const embeddingPrefix = `${sourceId}:`;
 		const agentWhere = input.agentId ? "agent_id = ? AND " : "";
 		const embeddingRows = db

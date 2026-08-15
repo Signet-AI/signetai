@@ -111,7 +111,13 @@ import {
 } from "./utils";
 
 function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): ResolvedMemoryConfig {
-	return { ...cfg, embedding: getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, cfg.embedding)) };
+	return {
+		...cfg,
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		embedding: getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+			resolveActiveEmbeddingConfig(db, cfg.embedding),
+		),
+	};
 }
 
 const MAX_MUTATION_BATCH = 200;
@@ -614,7 +620,8 @@ function authorizeMemoryMutationScope(c: Context, memoryIds: readonly string[]):
 	if (!shouldEnforceAuthScope(c)) return {};
 	const ids = [...new Set(memoryIds.map((id) => id.trim()).filter(Boolean))];
 	if (ids.length === 0) return {};
-	const rows = getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const rows = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 		const stmt = db.prepare("SELECT id, agent_id, project FROM memories WHERE id = ?");
 		return ids.map((id) => stmt.get(id) as { id: string; agent_id: string | null; project: string | null } | undefined);
 	});
@@ -929,8 +936,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const auth = c.get("auth");
 			if (auth?.claims?.scope?.project) {
 				const memoryId = c.req.param("id");
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 				const row = getDbAccessor().withReadDb(
-					(db) =>
+					(db: import("../db-accessor").ReadDb) =>
 						db.prepare("SELECT project FROM memories WHERE id = ?").get(memoryId) as
 							| { project: string | null }
 							| undefined,
@@ -972,7 +980,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const limit = Number.parseInt(c.req.query("limit") || "100", 10);
 			const offset = Number.parseInt(c.req.query("offset") || "0", 10);
 
-			const result = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const result = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				const queriedMemories = db
 					.prepare(`
 	      SELECT id, content, created_at, who, importance, tags, source_type, pinned, type, agent_id
@@ -1047,7 +1056,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		try {
 			const raw = Number.parseInt(c.req.query("limit") || "6", 10);
 			const limit = Number.isNaN(raw) || raw < 1 ? 6 : Math.min(raw, 200);
-			const memories = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const memories = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				const rows = db
 					.prepare(`
 					SELECT id, content, agent_id, access_count, importance, type, tags
@@ -1099,7 +1109,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? `${access.sql}${scopeProject ? " AND m.project = ?" : ""}`
 				: "";
 			const scopeArgs = shouldEnforceAuthScope(c) ? (scopeProject ? [...access.args, scopeProject] : access.args) : [];
-			const slices = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const slices = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				const filterSafe = <T extends { id: string; content: string; agent_id: string | null }>(rows: T[]): T[] =>
 					rows.filter((row) =>
 						isMemoryContentContextEligible(db, {
@@ -1197,7 +1208,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			});
 			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 			const agentScope = getAgentScope(scopedAgent.agentId);
-			const timeline = getDbAccessor().withReadDb((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const timeline = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 				buildMemoryTimeline(db, {
 					tzOffsetMin,
 					agentId: shouldEnforceAuthScope(c) ? scopedAgent.agentId : undefined,
@@ -1242,7 +1254,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const projectSql = scopeProject ? " AND m.project = ?" : "";
 			const scopeArgs = scopeProject ? [...access.args, scopeProject] : access.args;
 			const scopePredicate = shouldEnforceAuthScope(c) ? `${access.sql}${projectSql}` : "";
-			const rows = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const rows = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				return db
 					.prepare(
 						`SELECT h.id, h.memory_id, h.event, h.old_content, h.new_content,
@@ -1277,7 +1290,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		// Shortcut: return distinct values for a column
 		if (distinct === "who") {
 			try {
-				const values = getDbAccessor().withReadDb((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				const values = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 					const rows = db.prepare("SELECT DISTINCT who FROM memories WHERE who IS NOT NULL ORDER BY who").all() as {
 						who: string;
 					}[];
@@ -1305,7 +1319,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		recordRecallAttempt(recallSurface);
 
 		try {
-			const results = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const results = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				let rows: unknown[] = [];
 
 				if (query.trim()) {
@@ -1604,15 +1619,18 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				return c.json({ error: "content produced no valid chunks" }, 400);
 			}
 
-			const baseIdempotencyMemory = getDbAccessor().withReadDb((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const baseIdempotencyMemory = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 				getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
 			}
 
-			const existingChunks = getDbAccessor().withReadDb((db) =>
-				getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const existingChunks: ReturnType<typeof getScopedChunkIdempotencyRows> = getDbAccessor().withReadDb(
+				(db: import("../db-accessor").ReadDb) =>
+					getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1644,7 +1662,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					return c.json({ error: "chunked content contains duplicate chunks" }, 409);
 				}
 				contentHashes.add(plan.normalized.contentHash);
-				const byHash = getDbAccessor().withReadDb((db) =>
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				const byHash = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 					getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
 				);
 				if (byHash) {
@@ -1663,7 +1682,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				| { readonly status: "non_chunk_idempotency_conflict" };
 
 			try {
-				const result: ChunkInsertResult = getDbAccessor().withWriteTx((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				const result: ChunkInsertResult = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 					const baseMemory = getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope);
 					if (baseMemory) return { status: "non_chunk_idempotency_conflict" };
 
@@ -1773,7 +1793,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								const embId = crypto.randomUUID();
 								const blob = vectorToBlob(vec);
 								const embHash = scope ? `${plan.normalized.contentHash}:${scope}` : plan.normalized.contentHash;
-								getDbAccessor().withWriteTx((db) => {
+								// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+								getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 									const activeCfg = resolveActiveEmbeddingConfig(db, fullCfgBase.embedding);
 									if (!isActiveEmbeddingConfig(db, activeCfg)) return;
 									syncVecDeleteBySourceId(db, "memory", chunkId);
@@ -1850,7 +1871,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const chunkedIdempotencyMemory =
 			rowProvenance.idempotencyKey === undefined
 				? []
-				: getDbAccessor().withReadDb((db) =>
+				: // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 						getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
@@ -1860,7 +1882,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		let supersededStatus: SupersedeMemoryTxStatus | null = null;
 
 		try {
-			const result = getDbAccessor().withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			const result = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 				// Check sourceId-based dedupe first (scope-aware)
 				if (sourceId) {
 					const bySource = getScopedSourceDedupeRow(db, sourceType, sourceId, dedupeScope);
@@ -1949,7 +1972,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			if (result.deduped) {
 				c.header("x-signet-operation-skipped", "1");
-				getDbAccessor().withWriteTx((db) =>
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
 					txInsertExplicitTemporalEdges({
 						db,
 						memoryId: result.row.id,
@@ -1974,14 +1998,16 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : "";
 			if (msg.includes("UNIQUE constraint")) {
-				const existing = getDbAccessor().withReadDb((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				const existing = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 					const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
 					if (byIdempotencyKey) return byIdempotencyKey;
 					return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 				});
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
-					getDbAccessor().withWriteTx((db) =>
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+					getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
 						txInsertExplicitTemporalEdges({
 							db,
 							memoryId: existing.id,
@@ -2044,7 +2070,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					// call) and re-checked later, so a startup building->ready promotion
 					// between the two could skip the insert while still reporting
 					// embedded=true. `embedded` now reflects whether the vector was written.
-					embedded = getDbAccessor().withWriteTx((db) => {
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+					embedded = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 						const activeCfg = resolveActiveEmbeddingConfig(db, baseCfg.embedding);
 						if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
 						syncVecDeleteBySourceId(db, "memory", id);
@@ -2086,7 +2113,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				: (body.hints ?? []);
 			if (allHints.length > 0) {
 				try {
-					getDbAccessor().withWriteTx((db) => {
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+					getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 						const stmt = db.prepare(
 							`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
 							 VALUES (?, ?, ?, ?, ?)`,
@@ -2190,7 +2218,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const access = buildAgentScopeClause(agentId, agentScope.readPolicy, agentScope.policyGroup);
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		const projectSql = scopeProject ? " AND m.project = ?" : "";
-		const memoryRead = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const memoryRead = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			const sessionSelect = hasMemoriesSessionIdColumn(db) ? "m.session_id," : "NULL AS session_id,";
 
 			const row = db
@@ -2255,37 +2284,52 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const limit = Math.min(parseOptionalInt(c.req.query("limit")) ?? 200, 1000);
 
-		const exists = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const exists = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			return db.prepare("SELECT id FROM memories WHERE id = ?").get(memoryId) as { id: string } | undefined;
 		});
 		if (!exists) {
 			return c.json({ error: "Not found", memoryId }, 404);
 		}
 
-		const history = getDbAccessor().withReadDb((db) => {
-			return db
-				.prepare(
-					`SELECT id, event, old_content, new_content, changed_by, reason,
+		const history: Array<{
+			id: string;
+			event: string;
+			old_content: string | null;
+			new_content: string | null;
+			changed_by: string;
+			reason: string | null;
+			metadata: string | null;
+			created_at: string;
+			actor_type: string | null;
+			session_id: string | null;
+			request_id: string | null;
+		}> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+				return db
+					.prepare(
+						`SELECT id, event, old_content, new_content, changed_by, reason,
 					        metadata, created_at, actor_type, session_id, request_id
 					 FROM memory_history
 					 WHERE memory_id = ?
 					 ORDER BY created_at ASC
 					 LIMIT ?`,
-				)
-				.all(memoryId, limit) as Array<{
-				id: string;
-				event: string;
-				old_content: string | null;
-				new_content: string | null;
-				changed_by: string;
-				reason: string | null;
-				metadata: string | null;
-				created_at: string;
-				actor_type: string | null;
-				session_id: string | null;
-				request_id: string | null;
-			}>;
-		});
+					)
+					.all(memoryId, limit) as Array<{
+					id: string;
+					event: string;
+					old_content: string | null;
+					new_content: string | null;
+					changed_by: string;
+					reason: string | null;
+					metadata: string | null;
+					created_at: string;
+					actor_type: string | null;
+					session_id: string | null;
+					request_id: string | null;
+				}>;
+			});
 
 		return c.json({
 			memoryId,
@@ -2360,7 +2404,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				)
 				.get(id, ...access.args) as LineageRow | undefined;
 
-		const rows = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const rows: LineageRow[] = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			const head = selectLineage(db, memoryId);
 			if (!head) return [];
 			// #1147 review (finding 9): walk BOTH directions so lineage from
@@ -2432,7 +2477,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "job id is required" }, 400);
 		}
 
-		const maybeRow = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const maybeRow = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			return db
 				.prepare(
 					`SELECT id, memory_id, document_id, job_type, status,
@@ -2541,7 +2587,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
-		const txResult = getDbAccessor().withWriteTx((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const txResult = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
 			txRecoverMemory(db, {
 				memoryId,
 				reason,
@@ -2643,7 +2690,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
-		const txResult = getDbAccessor().withWriteTx((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const txResult = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
 			txModifyMemory(db, {
 				memoryId,
 				patch: parsedPatch.value.patch,
@@ -2783,7 +2831,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
-		const txResult = getDbAccessor().withWriteTx((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const txResult = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
 			txForgetMemory(db, {
 				memoryId,
 				reason,
@@ -2867,7 +2916,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
 		const reason =
 			parseOptionalString(payload.reason) ?? parseOptionalString(c.req.query("reason")) ?? "curator tombstone";
-		const txResult = getDbAccessor().withWriteTx((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const txResult = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
 			txForgetMemory(db, {
 				memoryId,
 				reason,
@@ -2910,7 +2960,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
 		const reason = parseOptionalString(payload.reason) ?? null;
-		const txResult = getDbAccessor().withWriteTx((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const txResult = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
 			txSupersedeMemory(db, {
 				memoryId,
 				supersededBy,
@@ -3135,7 +3186,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}> = [];
 
 		for (const memoryId of candidateIds) {
-			const txResult = getDbAccessor().withWriteTx((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			const txResult = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
 				txForgetMemory(db, {
 					memoryId,
 					reason,
@@ -3260,7 +3312,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				});
 			}
 
-			const txResult = getDbAccessor().withWriteTx((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			const txResult = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
 				txModifyMemory(db, {
 					memoryId,
 					patch: parsedPatch.value.patch,
@@ -3522,9 +3575,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const type = c.req.query("type");
 
 		try {
-			const searchData = getDbAccessor().withReadDb((db) => {
-				const embeddingRow = db
-					.prepare(`
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const searchData: ReturnType<typeof vectorSearch> | null = getDbAccessor().withReadDb(
+				(db: import("../db-accessor").ReadDb) => {
+					const embeddingRow = db
+						.prepare(`
         SELECT e.vector
         FROM embeddings e
         INNER JOIN memories m ON m.id = e.source_id
@@ -3533,23 +3588,24 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
         ${memoryLifecycleSql(db)}
         LIMIT 1
       `)
-					.get(id) as { vector: Buffer } | undefined;
+						.get(id) as { vector: Buffer } | undefined;
 
-				if (!embeddingRow) return null;
+					if (!embeddingRow) return null;
 
-				const queryVector = new Float32Array(
-					embeddingRow.vector.buffer.slice(
-						embeddingRow.vector.byteOffset,
-						embeddingRow.vector.byteOffset + embeddingRow.vector.byteLength,
-					),
-				);
+					const queryVector = new Float32Array(
+						embeddingRow.vector.buffer.slice(
+							embeddingRow.vector.byteOffset,
+							embeddingRow.vector.byteOffset + embeddingRow.vector.byteLength,
+						),
+					);
 
-				return vectorSearch(db, queryVector, {
-					limit: k + 1,
-					type,
-					excludeAggregateRecall: true,
-				});
-			});
+					return vectorSearch(db, queryVector, {
+						limit: k + 1,
+						type,
+						excludeAggregateRecall: true,
+					});
+				},
+			);
 
 			if (!searchData) {
 				return c.json({ error: "No embedding found for this memory", results: [] }, 404);
@@ -3564,31 +3620,41 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const ids = filteredResults.map((r) => r.id);
 			const placeholders = ids.map(() => "?").join(", ");
 
-			const rows = getDbAccessor().withReadDb((db) => {
-				const queried = db
-					.prepare(`
+			const rows: Array<{
+				id: string;
+				content: string;
+				agent_id: string | null;
+				type: string;
+				tags: string | null;
+				confidence: number;
+				created_at: string;
+			}> =
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+					const queried = db
+						.prepare(`
 	        SELECT id, content, agent_id, type, tags, confidence, created_at
 	        FROM memories m
 	        WHERE id IN (${placeholders})${memoryLifecycleSql(db)}
 	      `)
-					.all(...ids) as Array<{
-					id: string;
-					content: string;
-					agent_id: string | null;
-					type: string;
-					tags: string | null;
-					confidence: number;
-					created_at: string;
-				}>;
-				return queried.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId: row.agent_id?.trim() || "default",
-						sourceKind: "memory",
-						sourceId: row.id,
-						content: row.content,
-					}),
-				);
-			});
+						.all(...ids) as Array<{
+						id: string;
+						content: string;
+						agent_id: string | null;
+						type: string;
+						tags: string | null;
+						confidence: number;
+						created_at: string;
+					}>;
+					return queried.filter((row) =>
+						isMemoryContentContextEligible(db, {
+							agentId: row.agent_id?.trim() || "default",
+							sourceKind: "memory",
+							sourceId: row.id,
+							content: row.content,
+						}),
+					);
+				});
 
 			const rowMap = new Map(rows.map((r) => [r.id, r]));
 			const results = filteredResults
@@ -3638,19 +3704,21 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		};
 
 		try {
-			const { total, rows } = getDbAccessor().withReadDb((db) => {
-				const totalRow = db
-					.prepare(`
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const { total, rows }: { total: number; rows: EmbeddingRow[] } = getDbAccessor().withReadDb(
+				(db: import("../db-accessor").ReadDb) => {
+					const totalRow = db
+						.prepare(`
 				SELECT COUNT(*) AS count
 				FROM embeddings e
 				INNER JOIN memories m ON m.id = e.source_id
 				WHERE e.source_type = 'memory'
 			`)
-					.get() as { count: number } | undefined;
+						.get() as { count: number } | undefined;
 
-				const rowData = withVectors
-					? (db
-							.prepare(`
+					const rowData = withVectors
+						? (db
+								.prepare(`
 					SELECT
 						m.id, m.content, m.who, m.importance, m.type, m.tags,
 						m.source_type, m.source_id, m.created_at,
@@ -3661,9 +3729,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					ORDER BY m.created_at DESC
 					LIMIT ? OFFSET ?
 				`)
-							.all(limit, offset) as EmbeddingRow[])
-					: (db
-							.prepare(`
+								.all(limit, offset) as EmbeddingRow[])
+						: (db
+								.prepare(`
 					SELECT
 						m.id, m.content, m.who, m.importance, m.type, m.tags,
 						m.source_type, m.source_id, m.created_at
@@ -3673,10 +3741,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					ORDER BY m.created_at DESC
 					LIMIT ? OFFSET ?
 				`)
-							.all(limit, offset) as EmbeddingRow[]);
+								.all(limit, offset) as EmbeddingRow[]);
 
-				return { total: totalRow?.count ?? 0, rows: rowData };
-			});
+					return { total: totalRow?.count ?? 0, rows: rowData };
+				},
+			);
 
 			const embeddings = rows.map((row) => ({
 				id: row.id,
@@ -3720,7 +3789,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const config = withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		const status = await checkEmbeddingProvider(config.embedding);
 		const tracker = embeddingTrackerHandle?.getStats() ?? null;
-		const index = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const index = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			const state = readEmbeddingIndexState(db);
 			return state?.staging
 				? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
@@ -3735,7 +3805,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.get("/api/embeddings/health", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
-		const report = getDbAccessor().withReadDb((db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const report = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+			buildEmbeddingHealth(db, cfg.embedding, providerStatus),
+		);
 		return c.json(report);
 	});
 
@@ -3795,7 +3868,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		if (!useCachedProjection) {
 			try {
-				const projection = getDbAccessor().withReadDb((db) =>
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				const projection = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 					computeProjectionForQuery(db, nComponents, {
 						limit,
 						offset,
@@ -3833,7 +3907,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			}
 		}
 
-		const { cached, total } = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const { cached, total } = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			const cachedResult = getCachedProjection(db, nComponents);
 			const countRow = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
 			const count =
@@ -3871,14 +3946,21 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			projectionErrors.delete(nComponents);
 			const computation = (async () => {
 				try {
-					const result = getDbAccessor().withReadDb((db) => computeProjection(db, nComponents));
-					const count = getDbAccessor().withReadDb((db) => {
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					const result = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+						computeProjection(db, nComponents),
+					);
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					const count = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 						const row = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
 						return typeof row === "object" && row !== null && "count" in row && typeof row.count === "number"
 							? row.count
 							: 0;
 					});
-					getDbAccessor().withWriteTx((db) => cacheProjection(db, nComponents, result, count));
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+					getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) =>
+						cacheProjection(db, nComponents, result, count),
+					);
 				} catch (err) {
 					const msg = err instanceof Error ? err.message : String(err);
 					logger.error("projection", "UMAP computation failed", err instanceof Error ? err : new Error(msg));
@@ -3951,7 +4033,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const id = crypto.randomUUID();
 			const now = new Date().toISOString();
 
-			const result = accessor.withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			const result = accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 				if (sourceUrl) {
 					const candidates = prepareTypedStatement<{ id: string; status: string } & DocumentScopeRow>(
 						db,
@@ -4023,7 +4106,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		try {
 			const accessor = getDbAccessor();
-			const result = accessor.withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const result = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 				const countSql = status
 					? "SELECT COUNT(*) AS cnt FROM documents WHERE status = ?"
 					: "SELECT COUNT(*) AS cnt FROM documents";
@@ -4061,7 +4145,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const id = c.req.param("id");
 		try {
 			const accessor = getDbAccessor();
-			const doc = accessor.withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const doc = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 				return db.prepare("SELECT * FROM documents WHERE id = ?").get(id);
 			});
 			if (!doc) return c.json({ error: "Document not found" }, 404);
@@ -4093,7 +4178,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const documentScopeSql = " AND d.agent_id = ?";
 			const scopePredicate = shouldEnforceAuthScope(c) ? `${documentScopeSql}${access.sql}${projectSql}` : "";
 			const accessor = getDbAccessor();
-			const chunks = accessor.withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const chunks = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 				return db
 					.prepare(
 						`SELECT m.id, m.content, m.type, m.created_at,
@@ -4125,7 +4211,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 
 		const accessor = getDbAccessor();
-		const doc = accessor.withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const doc = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 			return db.prepare("SELECT id, agent_id, project FROM documents WHERE id = ?").get(id) as
 				| ({ id: string } & DocumentScopeRow)
 				| undefined;
@@ -4156,7 +4243,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				return c.json({ error: "document not found" }, 404);
 			}
 
-			const memoriesRemoved = accessor.withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			const memoriesRemoved = accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 				db.prepare(
 					`UPDATE documents
 					 SET status = 'deleted', error = ?, updated_at = ?

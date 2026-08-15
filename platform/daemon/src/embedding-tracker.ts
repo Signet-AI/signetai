@@ -190,7 +190,8 @@ export function startEmbeddingTracker(
 			// failure backoff so restarting the daemon cannot immediately replay a
 			// poison row against the provider.
 			const now = Date.now();
-			const staleRows = accessor.withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const staleRows: StaleRow[] = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 				return listStaleEmbeddingRows(
 					db,
 					embeddingCfg.model,
@@ -260,7 +261,8 @@ export function startEmbeddingTracker(
 					// Batch write in a single write transaction. A promotion may commit
 					// while this batch is encoding, so never let a tracker closed over
 					// the previous generation overwrite its vectors.
-					applied = accessor.withWriteTx((db) => {
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+					applied = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 						if (!isActiveEmbeddingConfig(db, embeddingCfg)) return false;
 						for (const { row, vector, contentHash } of cycle.results) {
 							syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);

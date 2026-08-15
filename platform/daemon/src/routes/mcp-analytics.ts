@@ -85,7 +85,8 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 		const limit = clampPositiveInt(c.req.query("limit"), 10, 1, 100);
 
 		try {
-			const result = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const result = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				// Build WHERE clause
 				const conditions: string[] = ["agent_id = ?"];
 				const params: unknown[] = [agentId];
@@ -166,7 +167,8 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 		const since = c.req.query("since");
 
 		try {
-			const result = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const result = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				const conditions: string[] = ["agent_id = ?", "server_id = ?"];
 				const params: unknown[] = [agentId, serverId];
 				if (since) {

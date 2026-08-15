@@ -76,6 +76,7 @@ function tableExists(db: ReadDb, name: string): boolean {
 
 async function withQueuedWrite<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
 	if (accessor.withWriteTxAsync) return accessor.withWriteTxAsync(fn);
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return accessor.withWriteTx(fn);
 }
 
@@ -248,7 +249,8 @@ export async function stageEmbeddingBatch(input: {
 	) => Promise<number[] | null>;
 	readonly batchSize: number;
 }): Promise<{ staged: number; coverage: EmbeddingMigrationCoverage | null }> {
-	const state = input.accessor.withReadDb((db) => readEmbeddingIndexState(db));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const state = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) => readEmbeddingIndexState(db));
 	if (state?.state !== "building" || !state.staging) return { staged: 0, coverage: null };
 	const profile = state.staging;
 	const configured = input.readConfigured ? input.readConfigured() : input.configured;
@@ -256,7 +258,8 @@ export async function stageEmbeddingBatch(input: {
 	// Without this cleanup, an obsolete staging row would keep the count-based
 	// readiness gate false forever after its active counterpart disappears.
 	await pruneStagingRows(input.accessor);
-	const rows = input.accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const rows = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		if (!tableExists(db, STAGING_VECTOR_TABLE)) throw new Error("Staging vector index is unavailable");
 		const hasFailures = tableExists(db, "embedding_index_failures");
 		const failureFilter = hasFailures
@@ -336,7 +339,10 @@ export async function stageEmbeddingBatch(input: {
 		staged++;
 	}
 
-	const coverage = input.accessor.withReadDb((db) => stagingCoverage(db, profile.dimensions, profile.fingerprint));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const coverage = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+		stagingCoverage(db, profile.dimensions, profile.fingerprint),
+	);
 	return { staged, coverage };
 }
 
@@ -345,7 +351,8 @@ export async function stageEmbeddingBatch(input: {
  * gap between an asynchronous batch and a concurrent memory/source write.
  */
 export function promoteStagingIndex(accessor: DbAccessor): boolean {
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const state = readEmbeddingIndexState(db);
 		if (state?.state !== "building" || !state.staging) return false;
 		if (!stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint).ready) return false;
@@ -424,20 +431,31 @@ export function startEmbeddingIndexMigration(input: {
 	let nextDelayMs = input.pollMs;
 	let tickPromise: Promise<void> | null = null;
 
-	const before = input.accessor.withReadDb((db) => readEmbeddingIndexState(db));
-	const initial = input.accessor.withWriteTx((db) => beginEmbeddingIndexBuild(db, input.configured));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const before = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) => readEmbeddingIndexState(db));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const initial = input.accessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
+		beginEmbeddingIndexBuild(db, input.configured),
+	);
 	const staging = initial.staging;
 	if (initial.state !== "building" || !staging) return null;
 	const resumeExistingBuild = before?.state === "building" && before.staging?.fingerprint === staging.fingerprint;
 	try {
 		if (resumeExistingBuild) {
-			const hasStagingVectorIndex = input.accessor.withReadDb((db) => tableExists(db, STAGING_VECTOR_TABLE));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const hasStagingVectorIndex = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+				tableExists(db, STAGING_VECTOR_TABLE),
+			);
 			if (!hasStagingVectorIndex) throw new Error("Staging vector index is unavailable while resuming a build");
 		} else {
-			input.accessor.withWriteTx((db) => resetStagingVectorIndex(db, staging.dimensions));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			input.accessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
+				resetStagingVectorIndex(db, staging.dimensions),
+			);
 		}
 	} catch (error) {
-		input.accessor.withWriteTx((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		input.accessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
 			failEmbeddingIndexBuild(db, error instanceof Error ? error.message : String(error)),
 		);
 		return null;
@@ -447,7 +465,8 @@ export function startEmbeddingIndexMigration(input: {
 		if (!running) return;
 		nextDelayMs = input.pollMs;
 		try {
-			const state = input.accessor.withReadDb((db) => readEmbeddingIndexState(db));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const state = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) => readEmbeddingIndexState(db));
 			if (state?.state !== "building" || !state.staging) return;
 			// The persisted staging profile can go stale when agent.yaml
 			// changes mid-build; the migration then spins failing the old

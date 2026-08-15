@@ -55,7 +55,8 @@ export function recordSessionCandidates(
 	if (!sessionKey || candidates.length === 0 || !existsSync(getMemoryDbPath())) return;
 
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const now = new Date().toISOString();
 			const CHUNK_SIZE = 50;
 			const ROW = "(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)";
@@ -148,7 +149,8 @@ export function trackFtsHits(
 	if (!sessionKey || matchedIds.length === 0 || !existsSync(getMemoryDbPath())) return;
 
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const now = new Date().toISOString();
 			const CHUNK_SIZE = 50;
 			// Each row contributes 5 params: id, session_key, agent_id, memory_id, created_at
@@ -262,7 +264,8 @@ export function recordAgentFeedback(
 	if (!sessionKey || Object.keys(feedback).length === 0 || !existsSync(getMemoryDbPath())) return;
 
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			recordAgentFeedbackInner(db, sessionKey, feedback, agentId);
 		});
 

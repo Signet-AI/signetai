@@ -214,6 +214,7 @@ async function withRepairWriteTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T
 	if (accessor.withWriteTxAsync) {
 		return accessor.withWriteTxAsync(fn);
 	}
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return accessor.withWriteTx(fn);
 }
 
@@ -284,7 +285,8 @@ export function requeueDeadJobs(
 		return { action, success: false, affected: 0, message: gate.reason ?? "denied by policy gate" };
 	}
 
-	const result = accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const result = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const wantsMemory = !options.tables || options.tables.includes("memory");
 		const selected = wantsMemory
 			? buildDeadRequeueSql(db, "memory_jobs", maxBatch, options)
@@ -350,7 +352,8 @@ export function releaseStaleLeases(
 
 	const cutoff = new Date(Date.now() - cfg.worker.leaseTimeoutMs).toISOString();
 
-	const result = accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const result = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const now = new Date().toISOString();
 		const recovered = recoverStaleLeases(db, { cutoff, now });
 		const msg =
@@ -405,27 +408,30 @@ export async function checkFtsConsistency(
 		};
 	}
 
-	const { memCount, ftsCount, ftsMissing, tokenizerDrift } = accessor.withReadDb((db) => {
-		const memRow = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const { memCount, ftsCount, ftsMissing, tokenizerDrift } = accessor.withReadDb(
+		(db: import("./db-accessor").ReadDb) => {
+			const memRow = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
 
-		// Guard against missing FTS index state (can happen on upgrades before
-		// self-heal). Count the physical docsize rows, not the external-content
-		// table, whose COUNT(*) resolves through memories and includes tombstones.
-		let ftsN: number | null = null;
-		try {
-			ftsN = readMemoriesFtsIndexRowCount(toFtsSchemaQueryDb(db));
-		} catch {
-			// Missing FTS shadow state.
-		}
-		const missing = ftsN === null;
-		const ftsSql = missing ? null : readMemoriesFtsSql(toFtsSchemaQueryDb(db));
-		return {
-			memCount: memRow.n,
-			ftsCount: ftsN ?? 0,
-			ftsMissing: missing,
-			tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
-		};
-	});
+			// Guard against missing FTS index state (can happen on upgrades before
+			// self-heal). Count the physical docsize rows, not the external-content
+			// table, whose COUNT(*) resolves through memories and includes tombstones.
+			let ftsN: number | null = null;
+			try {
+				ftsN = readMemoriesFtsIndexRowCount(toFtsSchemaQueryDb(db));
+			} catch {
+				// Missing FTS shadow state.
+			}
+			const missing = ftsN === null;
+			const ftsSql = missing ? null : readMemoriesFtsSql(toFtsSchemaQueryDb(db));
+			return {
+				memCount: memRow.n,
+				ftsCount: ftsN ?? 0,
+				ftsMissing: missing,
+				tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
+			};
+		},
+	);
 
 	// If FTS table is missing entirely, report it (startup self-heal
 	// via ensureFtsTable should have caught this, but handle gracefully)
@@ -655,7 +661,8 @@ function listOrphanedEmbeddingIds(db: WriteDb, limit: number, agentId?: string):
 
 export function getEmbeddingGapStats(accessor: DbAccessor, agentId?: string): EmbeddingGapStats {
 	const repair = readEmbeddingRepairState(accessor);
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const totalRow = db
 			.prepare(
 				agentId === undefined
@@ -696,10 +703,12 @@ export function getEmbeddingRepairStats(
 	agentId: string,
 ): EmbeddingRepairStats {
 	const gap = getEmbeddingGapStats(accessor, agentId);
-	const migration = accessor.withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const migration = accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
 		countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
 	);
-	const orphaned = accessor.withReadDb((db) => countOrphanedEmbeddings(db, agentId));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const orphaned = accessor.withReadDb((db: import("./db-accessor").ReadDb) => countOrphanedEmbeddings(db, agentId));
 	return { gap, migration, orphaned };
 }
 
@@ -731,7 +740,8 @@ async function reembedMissingMemoriesBatch(
 	batchSize: number,
 	agentId?: string,
 ): Promise<ReembedBatchOutcome> {
-	const unembedded = accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const unembedded = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		return listUnembeddedMemories(db, batchSize, agentId) as UnembeddedRow[];
 	});
 
@@ -774,7 +784,8 @@ async function reembedMissingMemoriesBatch(
 		};
 	}
 
-	const writeOutcome = accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const writeOutcome = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		// Provider work happens outside the transaction. Promotion can therefore
 		// change the active vector space while this batch is being encoded.
 		// Never commit vectors from the superseded profile.
@@ -1026,7 +1037,8 @@ export async function reembedMissingMemories(
 				? `re-embedded ${written} of ${attempted} memories ${scope} (${failed} failed, ${remaining} still missing)`
 				: `re-embedded ${written} of ${attempted} memories ${scope} (${remaining} still missing)`;
 
-		accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 			writeRepairAudit(db, action, ctx, written, msg);
 		});
 
@@ -1071,12 +1083,20 @@ export async function reembedModelMigration(
 	if (!gate.allowed) return { action, success: false, affected: 0, message: gate.reason ?? "denied by policy gate" };
 	const size =
 		Number.isFinite(batchSize) && batchSize > 0 ? Math.min(500, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
-	const { rows, totalMatching, sources, liveVecDimensions } = accessor.withReadDb((db) => ({
-		rows: listEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, size, agentId),
-		totalMatching: countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
-		sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
-		liveVecDimensions: readVecDimensions(db),
-	}));
+	const migrationSelection: {
+		readonly rows: ReturnType<typeof listEmbeddingMigrationRows>;
+		readonly totalMatching: number;
+		readonly sources: ReturnType<typeof listEmbeddingMigrationSources>;
+		readonly liveVecDimensions: number | null;
+	} =
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		accessor.withReadDb((db: import("./db-accessor").ReadDb) => ({
+			rows: listEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, size, agentId),
+			totalMatching: countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
+			sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
+			liveVecDimensions: readVecDimensions(db),
+		}));
+	const { rows, totalMatching, sources, liveVecDimensions } = migrationSelection;
 	const vecDimensionMismatch = liveVecDimensions !== null && liveVecDimensions !== embeddingCfg.dimensions;
 	const details = {
 		selected: totalMatching,
@@ -1140,9 +1160,10 @@ export async function reembedModelMigration(
 			continue;
 		}
 		try {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			const writeOutcome = accessor.withWriteTx(
 				(
-					db,
+					db: import("./db-accessor").WriteDb,
 				): {
 					wrote: boolean;
 					profileChanged: boolean;
@@ -1273,7 +1294,10 @@ export async function reembedModelMigration(
 	}
 	if (written > 0) {
 		try {
-			accessor.withWriteTx((db) => writeRepairAudit(db, action, ctx, written, message));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			accessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
+				writeRepairAudit(db, action, ctx, written, message),
+			);
 		} catch (error) {
 			// The repair work is already committed per-row; a failed audit write
 			// must not discard the partial-progress result the caller needs.
@@ -1323,7 +1347,8 @@ export function cleanOrphanedEmbeddings(
 	}
 
 	const limit = Number.isFinite(maxBatch) && maxBatch > 0 ? Math.floor(maxBatch) : Number.MAX_SAFE_INTEGER;
-	const affected = accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const affected = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const orphans = listOrphanedEmbeddingIds(db, limit, agentId);
 
 		if (orphans.length === 0) return 0;
@@ -1404,6 +1429,7 @@ export function resyncVectorIndex(
 		};
 	}
 
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	const stats: VecResyncStats = accessor.withWriteTx((db): VecResyncStats => {
 		try {
 			db.prepare("SELECT 1 FROM vec_embeddings LIMIT 1").get();
@@ -1516,7 +1542,8 @@ export interface DedupStats {
 }
 
 export function getDedupStats(accessor: DbAccessor): DedupStats {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const row = db
 			.prepare(
 				`SELECT COUNT(*) AS clusters, COALESCE(SUM(excess), 0) AS excess_total
@@ -1701,10 +1728,12 @@ export async function deduplicateMemories(
 	const semanticEnabled = options?.semanticEnabled ?? false;
 
 	// Phase 1: Exact hash clusters
-	const hashClusters = accessor.withReadDb((db) => {
-		return db
-			.prepare(
-				`SELECT content_hash, COALESCE(scope, '__NULL__') AS scope_key, COUNT(*) AS cnt
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const hashClusters: Array<{ content_hash: string; scope_key: string; cnt: number }> = accessor.withReadDb(
+		(db: import("./db-accessor").ReadDb) => {
+			return db
+				.prepare(
+					`SELECT content_hash, COALESCE(scope, '__NULL__') AS scope_key, COUNT(*) AS cnt
 				 FROM memories
 				 WHERE is_deleted = 0 AND pinned = 0 AND manual_override = 0
 				   AND content_hash IS NOT NULL
@@ -1712,9 +1741,10 @@ export async function deduplicateMemories(
 				 HAVING COUNT(*) > 1
 				 ORDER BY cnt DESC
 				 LIMIT ?`,
-			)
-			.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
-	});
+				)
+				.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
+		},
+	);
 
 	if (dryRun) {
 		const totalExcess = hashClusters.reduce((sum, c) => sum + c.cnt - 1, 0);
@@ -1742,7 +1772,8 @@ export async function deduplicateMemories(
 
 	// Process exact hash clusters (scope-aware: only dedup within same scope)
 	for (const cluster of hashClusters) {
-		const removed = accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const removed = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const scopeFilter = cluster.scope_key === "__NULL__" ? "AND scope IS NULL" : "AND scope = ?";
 			const scopeArgs = cluster.scope_key === "__NULL__" ? [] : [cluster.scope_key];
 			const candidates = db
@@ -1772,7 +1803,8 @@ export async function deduplicateMemories(
 		const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize - totalClusters);
 
 		for (const cluster of semanticClusters) {
-			const removed = accessor.withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			const removed = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 				const ids = cluster.map((c) => c.id);
 				const placeholders = ids.map(() => "?").join(", ");
 				const candidates = db
@@ -1832,7 +1864,8 @@ async function findSemanticDuplicates(
 	const clusters: Array<Array<{ id: string }>> = [];
 	const seen = new Set<string>();
 
-	const candidates = accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const candidates = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		return db
 			.prepare(
 				`SELECT m.id, e.id AS embedding_id
@@ -1849,7 +1882,8 @@ async function findSemanticDuplicates(
 		if (seen.has(candidate.id)) continue;
 		if (clusters.length >= maxClusters) break;
 
-		const neighbors = accessor.withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const neighbors = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 			// Get the vector for this candidate's embedding
 			const vecRow = db.prepare("SELECT embedding FROM vec_embeddings WHERE id = ?").get(candidate.embedding_id) as
 				| { embedding: ArrayBuffer }
@@ -1918,8 +1952,9 @@ export function pruneChunkGroupEntities(
 
 	const batchSize = options?.batchSize ?? 500;
 
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const total = accessor.withReadDb(
-		(db) =>
+		(db: import("./db-accessor").ReadDb) =>
 			(db.prepare("SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group'").get() as { n: number }).n,
 	);
 
@@ -1932,7 +1967,8 @@ export function pruneChunkGroupEntities(
 		};
 	}
 
-	const affected = accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const affected = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const ids = db.prepare("SELECT id FROM entities WHERE entity_type = 'chunk_group' LIMIT ?").all(batchSize) as {
 			id: string;
 		}[];
@@ -1974,8 +2010,9 @@ export function pruneSingletonExtractedEntities(
 	const batchSize = options?.batchSize ?? 200;
 	const maxMentions = options?.maxMentions ?? 1;
 
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const candidates = accessor.withReadDb(
-		(db) =>
+		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
 					`SELECT e.id FROM entities e
@@ -2015,8 +2052,9 @@ export function pruneSingletonExtractedEntities(
 		return { action, success: true, affected: 0, message: "no singleton extracted entities found" };
 	}
 
-	const affected = accessor.withWriteTx((db) => {
-		const ids = candidates.map((r) => r.id);
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const affected = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+		const ids = candidates.map((r: { id: string }) => r.id);
 		const placeholders = ids.map(() => "?").join(",");
 		// Clean mention links (no FK cascade)
 		db.prepare(`DELETE FROM memory_entity_mentions WHERE entity_id IN (${placeholders})`).run(...ids);
@@ -2101,12 +2139,14 @@ export function pruneGenericEntities(
 
 	const batchSize = Math.max(1, Math.min(Math.floor(options?.batchSize ?? 100), 500));
 	const agentId = options?.agentId ?? "default";
-	const candidates = accessor.withReadDb((db) => {
-		const candidates: GenericEntityCandidate[] = [];
-		const pageSize = Math.max(batchSize * 10, 500);
-		let offset = 0;
-		const selectPage = db.prepare(
-			`SELECT e.id, e.name, e.entity_type
+	const candidates: GenericEntityCandidate[] =
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+			const candidates: GenericEntityCandidate[] = [];
+			const pageSize = Math.max(batchSize * 10, 500);
+			let offset = 0;
+			const selectPage = db.prepare(
+				`SELECT e.id, e.name, e.entity_type
 			 FROM entities e
 			 WHERE e.agent_id = ?
 			   AND COALESCE(e.pinned, 0) = 0
@@ -2114,22 +2154,22 @@ export function pruneGenericEntities(
 			   AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
 			 ORDER BY e.updated_at DESC
 			 LIMIT ? OFFSET ?`,
-		);
+			);
 
-		for (;;) {
-			const rows = selectPage.all(agentId, pageSize, offset) as GenericEntityCandidate[];
-			if (rows.length === 0) break;
-			for (const row of rows) {
-				const quality = classifyEntityQuality(row.name, row.entity_type);
-				if (!quality.ok) {
-					candidates.push({ ...row, reason: quality.reason });
-					if (candidates.length >= batchSize) return candidates;
+			for (;;) {
+				const rows = selectPage.all(agentId, pageSize, offset) as GenericEntityCandidate[];
+				if (rows.length === 0) break;
+				for (const row of rows) {
+					const quality = classifyEntityQuality(row.name, row.entity_type);
+					if (!quality.ok) {
+						candidates.push({ ...row, reason: quality.reason });
+						if (candidates.length >= batchSize) return candidates;
+					}
 				}
+				offset += rows.length;
 			}
-			offset += rows.length;
-		}
-		return candidates;
-	});
+			return candidates;
+		});
 
 	if (options?.dryRun ?? true) {
 		const preview = candidates
@@ -2148,8 +2188,9 @@ export function pruneGenericEntities(
 		return { action, success: true, affected: 0, message: "no generic/non-concrete entities found" };
 	}
 
-	const affected = accessor.withWriteTx((db) => {
-		const ids = candidates.map((row) => row.id);
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const affected = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+		const ids = candidates.map((row: GenericEntityCandidate) => row.id);
 		deleteEntityGraphRows(db, ids);
 		writeRepairAudit(
 			db,
@@ -2250,7 +2291,8 @@ export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMem
 export function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[]): number {
 	if (ids.length === 0) return 0;
 	const now = new Date().toISOString();
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const stmt = db.prepare("UPDATE memories SET is_deleted = 1, deleted_at = ? WHERE id = ? AND is_deleted = 0");
 		let total = 0;
 		for (const id of ids) {
@@ -2296,7 +2338,8 @@ function readIntegrityCheck(db: ReadDb, pragma: "quick_check" | "integrity_check
  * broad damage; integrity_check is the authoritative result for indexes.
  */
 export function integrityCheck(accessor: DbAccessor): IntegrityCheckResult {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const quickCheck = readIntegrityCheck(db, "quick_check");
 		const fullCheck = readIntegrityCheck(db, "integrity_check");
 		return { ok: fullCheck.ok, messages: fullCheck.messages, quickCheck, fullCheck };
@@ -2541,7 +2584,8 @@ export function cancelObsoleteJobs(
 
 	const olderThanMs = options.olderThanMs ?? 30 * 24 * 60 * 60 * 1000;
 	const wantsMemory = !options.tables || options.tables.includes("memory");
-	const result = accessor.withWriteTx<CancelResultMeta>((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const result = accessor.withWriteTx<CancelResultMeta>((db: import("./db-accessor").WriteDb) => {
 		if (!tableExists(db, "job_cancellations")) {
 			throw new Error("job_cancellations table missing; run migrations");
 		}
@@ -2675,7 +2719,8 @@ export function pruneTerminalJobs(
 	}
 
 	const wantsMemory = !options.tables || options.tables.includes("memory");
-	const result = accessor.withWriteTx<PruneResultMeta>((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const result = accessor.withWriteTx<PruneResultMeta>((db: import("./db-accessor").WriteDb) => {
 		if (!tableExists(db, "job_archive")) {
 			throw new Error("job_archive table missing; run migrations");
 		}

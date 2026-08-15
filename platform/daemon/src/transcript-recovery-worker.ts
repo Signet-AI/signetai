@@ -262,7 +262,8 @@ export async function runTranscriptRecoveryScan(
 			skippedOversized++;
 			continue;
 		}
-		if (dbAccessor.withReadDb((db) => unchanged(db, agentId, candidate))) {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		if (dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => unchanged(db, agentId, candidate))) {
 			skippedUnchanged++;
 			continue;
 		}
@@ -290,7 +291,8 @@ export async function runTranscriptRecoveryScan(
 				.update(contentSha256)
 				.digest("hex")
 				.slice(0, 24)}`;
-			dbAccessor.withWriteTx((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
 				markScanned(db, agentId, candidate, contentSha256, skippedSessionId, new Date(nowMs).toISOString()),
 			);
 			skippedInvalid++;
@@ -298,11 +300,13 @@ export async function runTranscriptRecoveryScan(
 		}
 		const sessionId = deriveSessionEndFallbackId(metadata.sessionKey, candidate.path, transcript);
 		const contentSha256 = createHash("sha256").update(raw).digest("hex");
-		const alreadyCaptured = dbAccessor.withReadDb((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const alreadyCaptured = dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) =>
 			snapshotAlreadyCaptured(db, agentId, candidate, sessionId, transcript),
 		);
 		if (alreadyCaptured) {
-			dbAccessor.withWriteTx((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
 				markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
 			);
 			deduplicated++;
@@ -321,7 +325,8 @@ export async function runTranscriptRecoveryScan(
 			transcript.length > existingTranscript.content.length &&
 			transcript.includes(existingTranscript.content);
 		if (existingTranscript?.completedAt && !completedSnapshotExtendsCanonical) {
-			dbAccessor.withWriteTx((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
 				markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
 			);
 			deduplicated++;
@@ -366,7 +371,8 @@ export async function runTranscriptRecoveryScan(
 			skippedInvalid++;
 			continue;
 		}
-		dbAccessor.withWriteTx((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
 			markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
 		);
 		enqueued++;

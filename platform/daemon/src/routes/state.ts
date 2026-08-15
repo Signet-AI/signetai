@@ -453,7 +453,8 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	}
 
 	const diagnosticsOptions = getDiagnosticsOptions();
-	const report = getDbAccessor().withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const report = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 		getDiagnostics(db, providerTracker, getUpdateState(), buildOpenClawHealth(), diagnosticsOptions),
 	);
 	diagnosticsCache = {

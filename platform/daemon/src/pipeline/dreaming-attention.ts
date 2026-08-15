@@ -132,7 +132,8 @@ export function getDreamingAttention(
 	agentId: string,
 	limit?: number,
 ): readonly DreamingAttention[] {
-	return accessor.withReadDb((db) => getDreamingAttentionInDb(db, agentId, limit));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => getDreamingAttentionInDb(db, agentId, limit));
 }
 
 export function getDreamingAttentionWorkloadDiagnostics(
@@ -140,7 +141,8 @@ export function getDreamingAttentionWorkloadDiagnostics(
 	agentId: string,
 	nowMs = Date.now(),
 ): DreamingAttentionWorkloadDiagnostics {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const row = db
 			.prepare(
 				`SELECT COUNT(*) AS pending, MIN(created_at) AS oldestCreatedAt
@@ -175,7 +177,8 @@ export function getDreamingAttentionScoped(
 	const params: unknown[] = [agentId];
 	if (kindFilter) params.push(options.kind);
 	params.push(boundedLimit);
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT id, kind, subject_ref AS subjectRef, details_json AS detailsJson, priority, created_at AS createdAt
@@ -218,7 +221,8 @@ export function getDreamingAttentionAcrossScopes(
 	const params: unknown[] = [];
 	if (kindFilter) params.push(options.kind);
 	params.push(boundedLimit);
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT agent_id AS agentId, id, kind, subject_ref AS subjectRef, details_json AS detailsJson,
@@ -248,7 +252,8 @@ export function getDreamingAttentionById(
 	accessor: DbAccessor,
 	input: { readonly agentId: string; readonly id: string },
 ): DreamingAttention | null {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const row = db
 			.prepare(
 				`SELECT id, kind, subject_ref AS subjectRef, details_json AS detailsJson, priority, created_at AS createdAt
@@ -281,7 +286,10 @@ export function getDreamingAttentionSnapshots(
 	agentId: string,
 	limit?: number,
 ): readonly DreamingAttentionSnapshot[] {
-	return accessor.withReadDb((db) => getDreamingAttentionSnapshotsInDb(db, agentId, limit));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
+		getDreamingAttentionSnapshotsInDb(db, agentId, limit),
+	);
 }
 
 export function enqueueDreamingAttentionInTx(

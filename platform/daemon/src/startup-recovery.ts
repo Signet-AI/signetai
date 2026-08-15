@@ -52,9 +52,11 @@ function drainBatchesSync<Item>(
 	while (processed < maxTotal) {
 		const remaining = maxTotal - processed;
 		const limit = Math.min(BATCH_SIZE, remaining);
-		const batch = accessor.withReadDb((db) => fetchBatch(db, limit));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const batch = accessor.withReadDb((db: import("./db-accessor").ReadDb) => fetchBatch(db, limit));
 		if (!batch || batch.length === 0) break;
-		accessor.withWriteTx((db) => processBatch(db, batch));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		accessor.withWriteTx((db: import("./db-accessor").WriteDb) => processBatch(db, batch));
 		processed += batch.length;
 	}
 	return processed;
@@ -96,7 +98,8 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 	let documentLeasesRecovered = 0;
 	try {
 		const now = new Date().toISOString();
-		documentLeasesRecovered = accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		documentLeasesRecovered = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 			// The daemon lock is held before this function runs, so every document
 			// lease belongs to a process that is no longer alive. Unlike maintenance,
 			// startup recovery must not wait for the lease timeout: a fresh lease can
@@ -163,7 +166,8 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 	// are migration progress, not redundant data.
 	let stagingRowsCleaned = 0;
 	try {
-		const migrationInProgress = accessor.withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const migrationInProgress = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 			const tableExists = db
 				.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index_state'")
 				.get() as { n: number } | undefined;
@@ -211,7 +215,8 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 	// 4. Sweep orphaned dreaming passes.
 	let orphanedPassesSwept = 0;
 	try {
-		orphanedPassesSwept = accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		orphanedPassesSwept = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const tableExists = db
 				.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_passes'")
 				.get() as { n: number };

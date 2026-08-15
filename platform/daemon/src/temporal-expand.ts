@@ -174,7 +174,8 @@ export function expandTemporalNode(
 	},
 ): TemporalExpandResult | null {
 	const accessor = opts?.accessor ?? getDbAccessor();
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const table = db
 			.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
 			.get();

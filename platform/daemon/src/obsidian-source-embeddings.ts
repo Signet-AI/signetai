@@ -265,7 +265,8 @@ export async function indexObsidianSourceEmbeddings(
 ): Promise<IndexObsidianSourceEmbeddingsResult> {
 	// Source watchers outlive a config edit. Keep their writes compatible with
 	// active recall while the requested profile is built in the inactive slot.
-	const embeddingConfig = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const embeddingConfig = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
 	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
 	const failureKey = sourceEmbeddingFailureKey(input, embeddingConfig.model);
@@ -297,7 +298,8 @@ export async function indexObsidianSourceEmbeddings(
 		currentHashes.add(contentHash);
 		const existingChunk = existingChunkEmbedding(input.agentId, chunk.id);
 		if (existingChunk?.content_hash === contentHash) {
-			getDbAccessor().withWriteTx((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
 				upsertMemoryContentSafetyInTx(db, {
 					agentId: input.agentId,
 					sourceKind: "source_chunk",
@@ -310,7 +312,8 @@ export async function indexObsidianSourceEmbeddings(
 			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
 			continue;
 		}
-		const writeConfig = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const writeConfig = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
 		let failureCause: PipelineCauseFamily = "provider_unavailable";
 		const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
 			usage: { source: "artifact-index", agentId: input.agentId },
@@ -336,7 +339,8 @@ export async function indexObsidianSourceEmbeddings(
 			continue;
 		}
 		sourceEmbeddingFailures.delete(failureKey);
-		const stored = getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const stored = getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			// Recheck after the asynchronous provider call: promotion may have
 			// committed a new active space while this chunk was encoding.
 			if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
@@ -396,7 +400,8 @@ export async function indexObsidianSourceEmbeddings(
 	}
 
 	if (!providerUnavailable)
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
 			const stale = OBSIDIAN_CHUNK_SOURCE_TYPES.flatMap(
 				(sourceType) =>
@@ -441,7 +446,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 function existingChunkEmbedding(agentId: string, chunkId: string): { id: string; content_hash: string } | null {
-	const row = getDbAccessor().withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const row = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
 		db
 			.prepare(
 				"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
@@ -461,7 +467,8 @@ export function purgeObsidianSourceEmbeddings(input: PurgeObsidianSourceEmbeddin
 }
 
 function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): number {
-	return getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const agentWhere = agentId ? " AND agent_id = ?" : "";
 		const upper = prefixUpperBound(prefix);
 		let changes = 0;

@@ -165,7 +165,10 @@ export function registerQueueDiagnosticsRoutes(
 
 	app.get("/api/diagnostics/queue", adminGuard, (c) => {
 		try {
-			const response = resolveAccessor().withReadDb((db) => buildQueueDiagnosticsResponse(db));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const response = resolveAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+				buildQueueDiagnosticsResponse(db),
+			);
 			return c.json(response);
 		} catch (err) {
 			return c.json({ error: (err as Error).message }, 500);

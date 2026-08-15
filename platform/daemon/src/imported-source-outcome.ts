@@ -12,7 +12,8 @@ export function persistImportedSourceOutcome(input: {
 	readonly sourcePath: string;
 	readonly outcome: ImportExtractionOutcome;
 }): void {
-	getDbAccessor().withWriteTx((db) => persistImportedSourceOutcomeInTx(db, input));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => persistImportedSourceOutcomeInTx(db, input));
 }
 
 export function persistImportedSourceOutcomeInTx(
@@ -54,7 +55,8 @@ export function persistImportedSourceOutcomeInTx(
 }
 
 export function readImportedSourceOutcome(sourceId: string, agentId: string): ImportExtractionOutcome | undefined {
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 		const row = db
 			.prepare(
 				`SELECT source_meta_json

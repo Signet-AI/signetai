@@ -159,8 +159,9 @@ export async function reconcileOnce(
 	}
 
 	// 3. Check for orphaned graph nodes (file removed from disk)
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const graphSkills = deps.accessor.withReadDb(
-		(db) =>
+		(db: import("../db-accessor").ReadDb) =>
 			db
 				.prepare("SELECT entity_id, fs_path FROM skill_meta WHERE agent_id = 'default' AND uninstalled_at IS NULL")
 				.all() as Array<{ entity_id: string; fs_path: string }>,
@@ -236,16 +237,18 @@ export async function reconcileSkillFile(
 			if (!parsed) return "skipped";
 
 			const entityId = `skill:default:${skillName}`;
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const existing = deps.accessor.withReadDb(
-				(db) =>
+				(db: import("../db-accessor").ReadDb) =>
 					db
 						.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = 'default')")
 						.get(entityId, skillName) as { id: string } | undefined,
 			);
 			const actualId = existing?.id ?? entityId;
 			const rawHash = skillEmbeddingHash(actualId, parsed.frontmatter);
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const storedEmb = deps.accessor.withReadDb(
-				(db) =>
+				(db: import("../db-accessor").ReadDb) =>
 					db
 						.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
 						.get(actualId) as { content_hash: string } | undefined,

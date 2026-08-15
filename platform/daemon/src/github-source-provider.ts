@@ -453,8 +453,9 @@ function purgeStaleGitHubArtifacts(
 	repo: string,
 ): void {
 	const repoPathPrefix = `github://${repo}/`;
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const rows = getDbAccessor().withReadDb(
-		(db) =>
+		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
 					`SELECT rowid, source_path FROM memory_artifacts
@@ -474,7 +475,8 @@ function purgeStaleGitHubArtifacts(
 		if (seenPaths.has(row.source_path)) continue;
 		purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
 	}
-	getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		for (const row of rows) {
 			if (seenPaths.has(row.source_path)) continue;
 			countChanges(
@@ -487,7 +489,8 @@ function purgeStaleGitHubArtifacts(
 }
 
 function purgeStaleGitHubFailureArtifacts(sourceId: string, agentId: string, syncStartedAt: string): void {
-	getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		countChanges(
 			db
 				.prepare(

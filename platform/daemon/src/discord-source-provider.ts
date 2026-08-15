@@ -550,8 +550,9 @@ function purgeStaleDiscordArtifacts(
 					...preservePaths.flatMap((path) => [`${path}/messages/%`, `${path}/message/%`]),
 				]
 			: [agentId, sourceId, syncStartedAt];
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const rows = getDbAccessor().withReadDb(
-		(db) =>
+		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
 					`SELECT source_path FROM memory_artifacts
@@ -563,7 +564,8 @@ function purgeStaleDiscordArtifacts(
 				.all(...params) as Array<{ source_path: string }>,
 	);
 	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
-	return getDbAccessor().withWriteTx((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
 		countChanges(
 			db
 				.prepare(
@@ -604,8 +606,9 @@ function readDiscordCheckpoint(
 	guildId: string,
 	channelId: string,
 ): DiscordCheckpoint | null {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const row = getDbAccessor().withReadDb(
-		(db) =>
+		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
 					`SELECT source_meta_json FROM memory_artifacts
@@ -848,8 +851,9 @@ function patchedMessageArtifact(
 	payload: unknown,
 ): DiscordArtifact | null {
 	if (!isRecord(payload)) return null;
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const row = getDbAccessor().withReadDb(
-		(db) =>
+		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
 					`SELECT content, source_meta_json
@@ -931,8 +935,9 @@ function purgeClearedPartialUpdateArtifacts(
 	const sourceParentPath = `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`;
 	const placeholders = clearedKinds.map(() => "?").join(", ");
 	const params = [agentId, source.id, sourceParentPath, ...clearedKinds];
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const rows = getDbAccessor().withReadDb(
-		(db) =>
+		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
 					`SELECT source_path FROM memory_artifacts
@@ -944,7 +949,8 @@ function purgeClearedPartialUpdateArtifacts(
 				.all(...params) as Array<{ source_path: string }>,
 	);
 	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId: source.id, sourcePath: row.source_path });
-	return getDbAccessor().withWriteTx((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
 		countChanges(
 			db
 				.prepare(

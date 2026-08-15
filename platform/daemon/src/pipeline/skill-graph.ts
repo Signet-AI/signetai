@@ -76,7 +76,8 @@ function findSkillEntityId(input: SkillUninstallInput, accessor: DbAccessor): st
 	const agentId = input.agentId ?? "default";
 	const canonicalId = skillEntityId(agentId, input.skillName);
 
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		if (input.entityId) {
 			const explicit = db
 				.prepare("SELECT id FROM entities WHERE id = ? AND agent_id = ?")
@@ -169,7 +170,8 @@ export async function installSkillNode(
 	const fm = input.frontmatter;
 
 	// Step 1: Create entity + skill_meta in a write transaction
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		// Check if entity already exists by id or name (idempotent)
 		const existing = db
 			.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = ?)")
@@ -286,7 +288,10 @@ export async function installSkillNode(
 	// Step 2: Generate embedding from the authored frontmatter
 	let embeddingCreated = false;
 	const embeddingText = buildEmbeddingText(fm);
-	const writeConfig = accessor.withReadDb((db) => resolveActiveEmbeddingConfig(db, embeddingCfg));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const writeConfig = accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
+		resolveActiveEmbeddingConfig(db, embeddingCfg),
+	);
 	const embVec = await fetchEmbedding(embeddingText, writeConfig, "document", {
 		usage: { source: "artifact-index", agentId },
 	});
@@ -296,7 +301,8 @@ export async function installSkillNode(
 		const blob = vectorToBlob(embVec);
 		const embHash = skillEmbeddingHash(entityId, input.frontmatter);
 
-		embeddingCreated = accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		embeddingCreated = accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 			if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
 			// Remove any old skill embeddings
 			const oldEmbs = db
@@ -355,7 +361,8 @@ export function uninstallSkillNode(input: SkillUninstallInput, accessor: DbAcces
 
 	if (!entityId) {
 		const now = new Date().toISOString();
-		accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 			for (const metaId of metaIds) {
 				db.prepare(
 					"UPDATE skill_meta SET uninstalled_at = ?, updated_at = ? WHERE entity_id = ? AND agent_id = ? AND uninstalled_at IS NULL",
@@ -365,7 +372,8 @@ export function uninstallSkillNode(input: SkillUninstallInput, accessor: DbAcces
 		return { removed: false, entityId: null };
 	}
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		// 1. Remove skill relation edges
 		db.prepare(
 			`DELETE FROM relations

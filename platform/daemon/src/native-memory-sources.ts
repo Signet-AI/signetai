@@ -546,7 +546,8 @@ function sleep(ms: number): Promise<void> {
 function nativeArtifactContentHash(filePath: string, agentId: string): string | null {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const row = db
 				.prepare(
 					"SELECT source_sha256 FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
@@ -562,7 +563,8 @@ function nativeArtifactContentHash(filePath: string, agentId: string): string | 
 function nativeArtifactCapturedAt(filePath: string, agentId: string): string | null {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const row = db
 				.prepare(
 					"SELECT captured_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
@@ -586,7 +588,8 @@ function healSentinelCapturedAt(filePath: string, agentId: string, harness: stri
 	if (timestampMillis(capturedAt) >= Date.parse(EPISODIC_CAPTURED_AT_FLOOR)) return;
 	try {
 		const stampedAt = new Date().toISOString();
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			db.prepare(
 				`UPDATE memory_artifacts
 				 SET captured_at = ?, updated_at = ?
@@ -608,7 +611,8 @@ function healSentinelCapturedAt(filePath: string, agentId: string, harness: stri
 
 function obsidianGraphExists(agentId: string, sourceId: string, filePath: string): boolean {
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const row = db
 				.prepare(
 					`SELECT 1 FROM entities
@@ -636,7 +640,8 @@ function obsidianEmbeddingsExist(input: {
 	const chunks = buildObsidianSourceChunks(input);
 	if (chunks.length === 0) return true;
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const rows = db
 				.prepare(
 					`SELECT source_id FROM embeddings
@@ -662,7 +667,8 @@ function obsidianEmbeddingsExist(input: {
 function activeNativeArtifactPaths(source: NativeMemorySource, agentId: string): string[] {
 	const rootPrefix = `${normalizedRoot(source.root)}/`;
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const rows = db
 				.prepare(
 					`SELECT source_path FROM memory_artifacts
@@ -954,7 +960,8 @@ export function purgeNativeMemorySourceArtifacts(source: NativeMemorySource, age
 		)
 			indexed.delete(key);
 	}
-	const artifactRows = getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const artifactRows = getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const agentWhere = agentId ? "agent_id = ? AND " : "";
 		const rootUpperBound = prefixUpperBound(rootPrefix);
 		const params = agentId

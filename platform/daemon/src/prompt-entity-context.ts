@@ -667,7 +667,10 @@ export async function buildEntityPromptContext({
 	if (isLowSignalPrompt(userMessage)) return { lines: [], memories: [], memoryCount: 0, engine: "low-signal" };
 	if (!existsSync(memoryDbPath)) return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
 	if (!hasDbAccessor()) return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
-	const matches = getDbAccessor().withReadDb((db) => resolvePromptEntityMatches(db, agentId, userMessage));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const matches: PromptEntityMatch[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+		resolvePromptEntityMatches(db, agentId, userMessage),
+	);
 	if (matches.length === 0) return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
 
 	const sharedSemanticQuery = queryWithoutPromptEntities(userMessage, matches);
@@ -690,7 +693,8 @@ export async function buildEntityPromptContext({
 			error: error instanceof Error ? error.message : String(error),
 		});
 	}
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 		const lines = matches.flatMap((entity) =>
 			loadEntityContextLines(db, entity, agentId, sharedSemanticQuery, minScore, sharedQueryVector),
 		);

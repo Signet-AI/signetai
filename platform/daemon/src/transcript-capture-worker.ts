@@ -101,7 +101,8 @@ export function enqueueTranscriptCaptureJob(dbAccessor: DbAccessor, input: Trans
 	const createdAt = nowIso();
 	const maxAttempts = normalizeMaxAttempts(input.maxAttempts);
 	let resolvedId = id;
-	dbAccessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		// capturedAt is delivery time for hooks but file mtime for recovery scans.
 		// Treat the stable snapshot identity + content as authoritative so a
 		// hook/recovery race cannot create two jobs for the same snapshot.
@@ -178,7 +179,8 @@ function resetInterruptedJobs(db: WriteDb): void {
 
 function leaseJob(dbAccessor: DbAccessor): TranscriptCaptureJobRow | null {
 	let leased: TranscriptCaptureJobRow | null = null;
-	dbAccessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const row = db
 			.prepare(
 				`SELECT * FROM transcript_capture_jobs
@@ -296,7 +298,8 @@ async function processTranscriptCaptureJob(basePath: string, job: TranscriptCapt
 }
 
 function markDone(dbAccessor: DbAccessor, id: string): void {
-	dbAccessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		db.prepare(
 			`UPDATE transcript_capture_jobs
 			 SET status = 'completed', completed_at = ?, updated_at = ?, error = NULL
@@ -308,7 +311,8 @@ function markDone(dbAccessor: DbAccessor, id: string): void {
 function markFailed(dbAccessor: DbAccessor, job: TranscriptCaptureJobRow, error: unknown): void {
 	const message = error instanceof Error ? error.message : String(error);
 	const status: TranscriptCaptureJobStatus = job.attempts >= job.maxAttempts ? "dead" : "failed";
-	dbAccessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		db.prepare(
 			`UPDATE transcript_capture_jobs
 			 SET status = ?, error = ?, updated_at = ?
@@ -344,6 +348,7 @@ export function startTranscriptCaptureWorker(dbAccessor: DbAccessor, basePath: s
 	let running = false;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	dbAccessor.withWriteTx(resetInterruptedJobs);
 
 	const schedule = (delayMs: number): void => {
@@ -405,7 +410,8 @@ export function getTranscriptCaptureStatus(
 	dbAccessor: DbAccessor,
 	agentId?: string | null,
 ): TranscriptCaptureStatusSummary {
-	return dbAccessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const where = agentId ? "WHERE agent_id = ?" : "";
 		const params = agentId ? [agentId] : [];
 		const rows = db
@@ -448,7 +454,8 @@ export function getTranscriptCaptureJobStatus(
 	agentId: string,
 	id: string,
 ): TranscriptCaptureJobReceipt | null {
-	return dbAccessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const row = db
 			.prepare(
 				`SELECT id, status, error

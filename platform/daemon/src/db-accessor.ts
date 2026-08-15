@@ -198,28 +198,31 @@ export interface AsyncDbAccessor {
 }
 
 /**
- * Legacy synchronous surface retained only while Phase A migrates callers.
- *
- * This type is deliberately separate from AsyncDbAccessor. The static audit
- * rejects new production call sites, and the compatibility surface is removed
- * after the migration phases finish.
+ * Production DB contract. Synchronous transaction and read methods are
+ * intentionally absent. Legacy callers are marked at their call sites with a
+ * tracked `@ts-expect-error LEGACY_SYNC_DB_ACCESS` until the A3 migration wave
+ * removes them.
  */
-export interface SyncDbAccessorCompat {
-	/** @deprecated Use withWriteTxAsync from production code. */
-	withWriteTx<T>(fn: (db: WriteDb) => T): T;
+export interface DbAccessor extends AsyncDbAccessor {}
 
-	/** @deprecated Use withReadDbAsync from production code. */
+/**
+ * Runtime-only implementation shape. This is not exported, so production
+ * callers cannot obtain synchronous methods through the public accessor type.
+ * The test/bootstrap-only `db-accessor-sync.ts` module provides the explicit
+ * compatibility surface for code that must exercise these legacy methods.
+ */
+interface SyncDbAccessorRuntime {
+	withWriteTx<T>(fn: (db: WriteDb) => T): T;
 	withReadDb<T>(fn: (db: ReadDb) => T): T;
 }
 
-/** DbAccessor exposes the async contract plus the temporary migration surface. */
-export interface DbAccessor extends AsyncDbAccessor, SyncDbAccessorCompat {}
+type RuntimeDbAccessor = DbAccessor & SyncDbAccessorRuntime;
 
 // ---------------------------------------------------------------------------
 // Singleton state
 // ---------------------------------------------------------------------------
 
-let accessor: DbAccessor | null = null;
+let accessor: RuntimeDbAccessor | null = null;
 let dbPath: string | null = null;
 let sqliteChoice: SqliteChoice | null = null;
 let sqliteAttempt: string | null = null;
@@ -1146,7 +1149,7 @@ function yieldToEventLoop(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function createAccessor(writeConn: SqliteDatabase): DbAccessor {
+function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 	let closed = false;
 	let writeDraining = false;
 	let lastWriteDurationMs: number | null = null;

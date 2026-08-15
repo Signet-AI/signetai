@@ -475,7 +475,8 @@ function getProposalInTx(db: WriteDb, id: string, agentId: string): ProposalRow 
 }
 
 function getProposalReadRow(accessor: DbAccessor, id: string, agentId: string): ProposalRow | null {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const row = db.prepare("SELECT * FROM ontology_proposals WHERE id = ? AND agent_id = ?").get(id, agentId) as
 			| ProposalRow
 			| undefined;
@@ -2284,7 +2285,8 @@ function applyOperation(
 
 function markFailed(accessor: DbAccessor, id: string, agentId: string, err: unknown): void {
 	const message = err instanceof Error ? err.message : String(err);
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		db.prepare(
 			`UPDATE ontology_proposals
 			 SET status = 'failed', result = ?, updated_at = ?
@@ -2295,7 +2297,8 @@ function markFailed(accessor: DbAccessor, id: string, agentId: string, err: unkn
 
 export function createOntologyProposal(accessor: DbAccessor, input: CreateOntologyProposalInput): OntologyProposal {
 	const ts = now();
-	return accessor.withWriteTx((db) => insertProposalInTx(db, input, ts));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => insertProposalInTx(db, input, ts));
 }
 
 export function createOntologyProposals(
@@ -2304,7 +2307,8 @@ export function createOntologyProposals(
 ): CreateOntologyProposalsResult {
 	if (inputs.length === 0) throw new OntologyProposalError("proposals are required", 400);
 	if (inputs.length > 500) throw new OntologyProposalError("cannot create more than 500 proposals at once", 400);
-	return accessor.withWriteTx((db) => createOntologyProposalsInTx(db, inputs));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => createOntologyProposalsInTx(db, inputs));
 }
 
 export function createOntologyProposalsInTx(
@@ -2330,7 +2334,8 @@ export function getOntologyProposalEvidence(
 ): OntologyProposalEvidenceResult {
 	const proposal = getOntologyProposal(accessor, id, agentId);
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
-	const items = accessor.withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const items = accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
 		proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
 	);
 	return { proposal, items, count: items.length };
@@ -2346,7 +2351,8 @@ export function listOntologyProposals(
 } {
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const filters = ["agent_id = ?"];
 		const args: unknown[] = [params.agentId];
 		if (params.status) {
@@ -2375,7 +2381,8 @@ export function listOntologyProposalConflicts(
 	params: { readonly agentId: string; readonly limit?: number },
 ): OntologyProposalConflictsResult {
 	const limit = Math.min(Math.max(params.limit ?? 500, 1), 1000);
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT * FROM ontology_proposals
@@ -2451,7 +2458,8 @@ export function listClaimVersions(
 	const claimKey = canonicalKey(params.claim);
 	if (claimKey === null) throw new OntologyProposalError("claim is required", 400);
 	const kind = params.kind ?? "attribute";
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const entityKey = canonical(params.entity);
 		const exactEntity = db
 			.prepare("SELECT id FROM entities WHERE agent_id = ? AND id = ? LIMIT 1")
@@ -2936,7 +2944,10 @@ export function findDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
-	return accessor.withReadDb((db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+		duplicateMergeCandidates(db, agentId, 1, canonicalName, true),
+	);
 }
 
 export function proposeDuplicateEntityMerges(
@@ -2945,7 +2956,10 @@ export function proposeDuplicateEntityMerges(
 ): DuplicateEntityMergeResult {
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
-	const items = accessor.withReadDb((db) => duplicateMergeCandidates(db, agentId, limit));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const items: DuplicateEntityMergeCandidate[] = accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+		duplicateMergeCandidates(db, agentId, limit),
+	);
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
 		return {
@@ -2990,7 +3004,10 @@ export function proposeDuplicateEntityMerges(
 export function createEntityMergePlan(accessor: DbAccessor, params: EntityMergePlanParams): EntityMergePlanResult {
 	const agentId = requireText(params.agentId, "agentId");
 	const dryRun = params.writeProposal !== true;
-	const plan = accessor.withReadDb((db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const plan = accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+		buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
+	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = createOntologyProposal(accessor, {
 		agentId,
@@ -3009,7 +3026,8 @@ export function createEntityMergePlan(accessor: DbAccessor, params: EntityMergeP
 
 export function applyOntologyProposal(accessor: DbAccessor, params: ApplyOntologyProposalParams): OntologyProposal {
 	try {
-		return accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const proposal = getProposalInTx(db, params.id, params.agentId);
 			if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 			if (proposal.status !== "pending") {
@@ -3089,7 +3107,8 @@ export function applyOntologyOperation(
 
 	let preview: ApplyOntologyOperationResult | null = null;
 	try {
-		const result = accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const result = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const inserted = insertProposalInTx(db, operationToProposalInput(params), now());
 			const row = getProposalInTx(db, inserted.id, params.agentId);
 			if (row === null) throw new OntologyProposalError("Proposal not found", 404);
@@ -3146,12 +3165,14 @@ export function applyOntologyOperationBatch(
 		};
 	}
 	if (!params.dryRun) {
-		return accessor.withWriteTx((db) => applyOntologyOperationBatchInTx(db, params));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => applyOntologyOperationBatchInTx(db, params));
 	}
 
 	let preview: ApplyOntologyOperationBatchResult | null = null;
 	try {
-		const result = accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const result = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const items: ApplyOntologyOperationResult[] = [];
 			const errors: OntologyOperationBatchError[] = [];
 			for (const [index, operation] of params.operations.entries()) {
@@ -3211,7 +3232,8 @@ export function applyOntologyOperationBatch(
 }
 
 export function rejectOntologyProposal(accessor: DbAccessor, params: RejectOntologyProposalParams): OntologyProposal {
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const proposal = getProposalInTx(db, params.id, params.agentId);
 		if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 		if (proposal.status !== "pending") {

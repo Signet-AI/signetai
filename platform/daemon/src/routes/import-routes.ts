@@ -208,7 +208,8 @@ export function registerImportRoutes(app: Hono): void {
 						sourceMeta: { ...normalized.value.sourceMeta, representation: "structured-json-canonical" },
 					});
 				}
-				const extraction = getDbAccessor().withWriteTx((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				const extraction = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 					const result = indexSourceArtifactStructureInTx(db, {
 						agentId,
 						sourceId: added.source.id,
@@ -247,7 +248,8 @@ export function registerImportRoutes(app: Hono): void {
 						sourceMeta: { ...normalized.value.sourceMeta, ...chunk.sourceMeta },
 					});
 				}
-				getDbAccessor().withWriteTx((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 					enqueueDreamingAttentionInTx(db, {
 						agentId,
 						kind: "hygiene",
@@ -331,7 +333,8 @@ function isLoopbackRequest(c: Context): boolean {
 }
 
 function hasIndexedSource(sourceId: string, agentId: string): boolean {
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 		const row = db
 			.prepare(
 				`SELECT 1 AS present

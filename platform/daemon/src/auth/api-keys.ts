@@ -193,7 +193,8 @@ export function createApiKey(accessor: DbAccessor, input: ApiKeyCreateInput): Cr
 	);
 	const expiresAt = normalizeIsoTimestamp(input.expiresAt);
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		db.prepare(
 			`INSERT INTO api_keys
 			   (id, prefix, name, key_hash, role, scope_json, permissions_json, connector, harness,
@@ -236,7 +237,8 @@ export function createApiKey(accessor: DbAccessor, input: ApiKeyCreateInput): Cr
 }
 
 export function listApiKeys(accessor: DbAccessor): readonly ApiKeyRecord[] {
-	return accessor.withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
 		(
 			db
 				.prepare(
@@ -252,7 +254,8 @@ export function listApiKeys(accessor: DbAccessor): readonly ApiKeyRecord[] {
 
 export function revokeApiKey(accessor: DbAccessor, idOrPrefix: string): ApiKeyRecord | null {
 	const now = new Date().toISOString();
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const row = queryByIdOrPrefix(db, idOrPrefix);
 		if (!row) return null;
 		db.prepare("UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?").run(now, row.id);
@@ -265,7 +268,8 @@ export function verifyApiKey(accessor: DbAccessor, token: string): AuthResult {
 	if (!prefix) return { authenticated: false, claims: null, error: "malformed api key" };
 	const now = new Date().toISOString();
 
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const row = db
 			.prepare(
 				`SELECT id, prefix, name, key_hash, role, scope_json, permissions_json, connector, harness,

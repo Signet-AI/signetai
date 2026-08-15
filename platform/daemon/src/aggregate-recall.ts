@@ -736,10 +736,14 @@ async function embedAggregateMemory(
 	// Aggregate saves can originate from hooks with the desired config while a
 	// new index is staging. They must stay in the active vector space until
 	// promotion; the staging worker independently copies every active row.
-	const activeCfg = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, cfg));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const activeCfg = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+		resolveActiveEmbeddingConfig(db, cfg),
+	);
 	const vec = await embedFn(content, activeCfg, "document");
 	if (!vec || vec.length !== activeCfg.dimensions) return false;
-	const written = getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const written = getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		// Promotion can commit while the provider call above is in flight. Do
 		// not contaminate the new generation with an old-space vector; the
 		// normal tracker will enqueue this memory against the new active model.
@@ -987,7 +991,8 @@ export async function aggregateRecall(
 	if (saveAggregate && evidenceCanSaveAsAggregate(evidence) && aggregateAnswerCanBeSaved(answer)) {
 		const normalized = normalizeAndHashContent(answer);
 		row = timings.time("aggregate_save", () =>
-			getDbAccessor().withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 				const duplicate = resolveAggregateDuplicate(db, {
 					key,
 					agentId,

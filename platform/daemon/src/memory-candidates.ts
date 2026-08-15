@@ -146,7 +146,8 @@ export async function fetchTraversalCandidates(
 		for (let offset = 0; offset < boundedMemoryIds.length; offset += TRAVERSAL_CANDIDATE_BATCH_SIZE) {
 			const batch = boundedMemoryIds.slice(offset, offset + TRAVERSAL_CANDIDATE_BATCH_SIZE);
 			const placeholders = batch.map(() => "?").join(", ");
-			const batchRows = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const batchRows: ScoredMemory[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 				const queried = db
 					.prepare(
 						`SELECT
@@ -212,35 +213,47 @@ export function getAllScoredCandidates(
 
 	try {
 		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
-		const rows = getDbAccessor().withReadDb((db) => {
-			const queried = db
-				.prepare(
-					`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
+		const rows: Array<{
+			id: string;
+			content: string;
+			type: string;
+			importance: number;
+			tags: string | null;
+			pinned: number;
+			project: string | null;
+			created_at: string;
+			access_count: number;
+		}> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+				const queried = db
+					.prepare(
+						`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
 						        COALESCE(access_count, 0) AS access_count
 					 FROM memories m
 					 WHERE m.is_deleted = 0${scope.sql}
 					 ORDER BY created_at DESC LIMIT ?`,
-				)
-				.all(...scope.args, limit * 3) as Array<{
-				id: string;
-				content: string;
-				type: string;
-				importance: number;
-				tags: string | null;
-				pinned: number;
-				project: string | null;
-				created_at: string;
-				access_count: number;
-			}>;
-			return queried.filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId,
-					sourceKind: "memory",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			);
-		});
+					)
+					.all(...scope.args, limit * 3) as Array<{
+					id: string;
+					content: string;
+					type: string;
+					importance: number;
+					tags: string | null;
+					pinned: number;
+					project: string | null;
+					created_at: string;
+					access_count: number;
+				}>;
+				return queried.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: "memory",
+						sourceId: row.id,
+						content: row.content,
+					}),
+				);
+			});
 
 		const scored: ScoredMemory[] = rows
 			.map((r) => ({
@@ -288,24 +301,26 @@ export function getPredictedContextMemories(
 	try {
 		// Get recent completed transcripts for this project only. Global predictive
 		// FTS is too broad for session-start latency on large memory stores.
-		const transcriptRows = getDbAccessor().withReadDb((db) => {
-			return (
-				db
-					.prepare(
-						`SELECT session_key, content AS transcript FROM session_transcripts
+		const transcriptRows: Array<{ session_key: string; transcript: string }> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+				return (
+					db
+						.prepare(
+							`SELECT session_key, content AS transcript FROM session_transcripts
 					 WHERE project = ? AND completed_at IS NOT NULL AND agent_id = ?
 					 ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 5`,
-					)
-					.all(project, agentId) as Array<{ session_key: string; transcript: string }>
-			).filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId,
-					sourceKind: "transcript",
-					sourceId: row.session_key,
-					content: row.transcript,
-				}),
-			);
-		});
+						)
+						.all(project, agentId) as Array<{ session_key: string; transcript: string }>
+				).filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: "transcript",
+						sourceId: row.session_key,
+						content: row.transcript,
+					}),
+				);
+			});
 
 		if (transcriptRows.length === 0) return [];
 
@@ -338,11 +353,23 @@ export function getPredictedContextMemories(
 		// Use recurring terms as FTS query.
 		const ftsQuery = recurring.join(" OR ");
 		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
-		const rows = getDbAccessor().withReadDb((db) =>
-			(
-				db
-					.prepare(
-						`SELECT m.id, m.content, m.type, m.importance, m.tags,
+		const rows: Array<{
+			id: string;
+			content: string;
+			type: string;
+			importance: number;
+			tags: string | null;
+			pinned: number;
+			project: string | null;
+			created_at: string;
+			access_count: number;
+		}> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+				(
+					db
+						.prepare(
+							`SELECT m.id, m.content, m.type, m.importance, m.tags,
 						        m.pinned, m.project, m.created_at,
 						        COALESCE(m.access_count, 0) AS access_count
 						 FROM memories_fts
@@ -353,27 +380,27 @@ export function getPredictedContextMemories(
 						   ${scope.sql}
 						 ORDER BY bm25(memories_fts)
 						 LIMIT ?`,
-					)
-					.all(ftsQuery, project, ...scope.args, limit * 2) as Array<{
-					id: string;
-					content: string;
-					type: string;
-					importance: number;
-					tags: string | null;
-					pinned: number;
-					project: string | null;
-					created_at: string;
-					access_count: number;
-				}>
-			).filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId,
-					sourceKind: "memory",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			),
-		);
+						)
+						.all(ftsQuery, project, ...scope.args, limit * 2) as Array<{
+						id: string;
+						content: string;
+						type: string;
+						importance: number;
+						tags: string | null;
+						pinned: number;
+						project: string | null;
+						created_at: string;
+						access_count: number;
+					}>
+				).filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: "memory",
+						sourceId: row.id,
+						content: row.content,
+					}),
+				),
+			);
 
 		const selected: ScoredMemory[] = [];
 		let used = 0;
@@ -401,7 +428,8 @@ export function getRecentMemories(memoryDbPath: string, limit: number, recencyBi
 	if (!existsSync(memoryDbPath)) return [];
 
 	try {
-		const rows = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const rows: SimpleMemory[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const query = `
         SELECT
           id, content, type, importance, created_at,
@@ -441,7 +469,8 @@ export function getMemoriesSince(memoryDbPath: string, sinceMs: number, limit: n
 
 	try {
 		const sinceIso = new Date(sinceMs).toISOString();
-		const rows = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const rows: SimpleMemory[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const rows = db
 				.prepare(`
 				SELECT id, content, type, importance, created_at

@@ -196,7 +196,8 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 
 	app.get("/api/analytics/memory-safety", (c) => {
-		const mutationHealth = getDbAccessor().withReadDb((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const mutationHealth = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 			getDiagnostics(db, providerTracker, getUpdateState(), undefined, getDiagnosticsOptions()),
 		);
 		const recentMutationErrors = analyticsCollector.getErrors({
@@ -214,7 +215,8 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const project = c.req.query("project");
 		const limit = Number.parseInt(c.req.query("limit") ?? "50", 10);
 
-		const scores = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const scores: Array<Record<string, unknown>> = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			if (project) {
 				return db
 					.prepare(
@@ -256,11 +258,13 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 
 	app.get("/api/analytics/continuity/latest", (c) => {
-		const scores = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT project, score, created_at
+		const scores: Array<Record<string, unknown>> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb(
+				(db: import("../db-accessor").ReadDb) =>
+					db
+						.prepare(
+							`SELECT project, score, created_at
 					 FROM session_scores
 					 WHERE id IN (
 					   SELECT id FROM session_scores s2
@@ -269,13 +273,13 @@ export function registerTelemetryRoutes(app: Hono): void {
 					   LIMIT 1
 					 )
 					 ORDER BY created_at DESC`,
-					)
-					.all() as Array<{
-					project: string | null;
-					score: number;
-					created_at: string;
-				}>,
-		);
+						)
+						.all() as Array<{
+						project: string | null;
+						score: number;
+						created_at: string;
+					}>,
+			);
 
 		return c.json({ scores });
 	});

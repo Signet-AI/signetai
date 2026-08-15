@@ -302,7 +302,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 	app.get("/api/knowledge/communities", (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
-		const rows = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const rows = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			return db
 				.prepare(
 					`SELECT id, name, cohesion, member_count, created_at, updated_at
@@ -367,7 +368,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				? {
 						entityIds: [resolved.id],
 					}
-				: getDbAccessor().withReadDb((db) =>
+				: // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 						resolveFocalEntities(db, agentId, {
 							queryTokens: entityName.split(/\s+/),
 						}),
@@ -404,6 +406,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const traversal = await traverseKnowledgeGraph(
 			focal.entityIds,
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			<T>(fn: (db: ReadDb) => T): T => getDbAccessor().withReadDb(fn),
 			agentId,
 			{
@@ -419,7 +422,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			},
 		);
 
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			const entityRow = db
 				.prepare(
 					`SELECT id, name, entity_type, description
@@ -591,7 +595,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entityName is required" }, 400);
 		}
 
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			const tbl = db
 				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
 				.get() as { name: string } | undefined;
@@ -705,7 +710,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entityId is required" }, 400);
 		}
 
-		const result = getDbAccessor().withReadDb((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const result = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 			walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
 		);
 		return c.json(result);

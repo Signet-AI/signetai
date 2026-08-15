@@ -75,7 +75,8 @@ export function applyFtsOverlapFeedback(
 		readonly minWeight: number;
 	},
 ): AspectFeedbackResult {
-	const result = accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const result = accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const confirmedRows = db
 			.prepare(
 				`SELECT memory_id, fts_hit_count
@@ -160,7 +161,8 @@ export function decayAspectWeights(
 		readonly staleDays: number;
 	},
 ): number {
-	const decayed = accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const decayed = accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const staleRows = db
 			.prepare(
 				`SELECT id, weight

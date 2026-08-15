@@ -433,7 +433,8 @@ export function loadForgetCandidates(
 	req: ForgetCandidatesRequest,
 	scope?: { readonly sql: string; readonly args: readonly unknown[] },
 ): ForgetCandidate[] {
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 		const limit = Math.max(1, Math.min(req.limit, MAX_MUTATION_BATCH));
 		const withQuery = req.query.trim().length > 0;
 		const { clause, args } = buildForgetCandidatesWhere(req, "m");
@@ -520,7 +521,8 @@ export function loadForgetCandidatesByIds(
 		.slice(0, Math.max(1, Math.min(limit, MAX_MUTATION_BATCH)));
 	if (dedupedIds.length === 0) return [];
 
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 		const placeholders = dedupedIds.map(() => "?").join(", ");
 		const scopeSql = scope?.sql ?? "";
 		const scopeArgs = scope?.args ?? [];

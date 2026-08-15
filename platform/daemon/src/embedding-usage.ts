@@ -86,7 +86,8 @@ export function recordEmbeddingUsage(input: {
 	});
 	if (!hasDbAccessor()) return;
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			db.prepare(UPSERT_SQL).run(todayKey(input.now), input.agentId ?? "", input.source, input.provider, input.tokens);
 		});
 	} catch (e) {
@@ -110,7 +111,8 @@ export interface EmbeddingUsageSummary {
  */
 export function readEmbeddingUsageSummary(accessor: DbAccessor, now: Date = new Date()): EmbeddingUsageSummary | null {
 	try {
-		return accessor.withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 			const day = todayKey(now);
 			const totals = db
 				.prepare(

@@ -424,7 +424,8 @@ export function getKnowledgeHygieneReport(
 	const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
 	const memoryLimit = Math.min(Math.max(opts.memoryLimit ?? 200, 1), 1000);
 
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const entities = db
 			.prepare(
 				`SELECT id, name, canonical_name, entity_type, mentions

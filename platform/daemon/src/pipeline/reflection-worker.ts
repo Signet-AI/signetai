@@ -362,7 +362,8 @@ export function collectReflectionContext(
 ): ReflectionSourceContext {
 	const dbAccessor = deps.getDbAccessor();
 
-	const memories = dbAccessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const memories = dbAccessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT id, content, type, tags, created_at FROM memories
@@ -394,7 +395,8 @@ export function collectReflectionContext(
 			}));
 	});
 
-	const existingReflections = dbAccessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const existingReflections = dbAccessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT id, question, summary, created_at FROM daily_reflections
@@ -455,7 +457,8 @@ export async function generateDailyBriefInsights(
 	const summaryIds = JSON.stringify(context.summaries.map((s) => s.id).filter(Boolean));
 	const ids: string[] = [];
 
-	deps.getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	deps.getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 		for (const insight of insights) {
 			const id = randomUUID();
 			const contentKey = normalizeInsight(insight.summary);
@@ -518,14 +521,17 @@ export function startReflectionWorker(
 	}
 
 	function listActiveAgentIds(): string[] {
-		const rows = deps.getDbAccessor().withReadDb((db) => {
-			return db
-				.prepare(
-					`SELECT DISTINCT agent_id FROM memories
+		const rows: Array<{ agent_id: string | null }> = deps
+			.getDbAccessor()
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			.withReadDb((db: import("../db-accessor").ReadDb) => {
+				return db
+					.prepare(
+						`SELECT DISTINCT agent_id FROM memories
 					 WHERE is_deleted = 0`,
-				)
-				.all() as { agent_id: string | null }[];
-		});
+					)
+					.all() as { agent_id: string | null }[];
+			});
 		const agentIds = rows.map((row) => row.agent_id).filter((agentId): agentId is string => !!agentId);
 		return agentIds.length > 0 ? agentIds : ["default"];
 	}

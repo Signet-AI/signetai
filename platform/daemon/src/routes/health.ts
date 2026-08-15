@@ -183,7 +183,8 @@ export function mountHealthRoutes(app: Hono): void {
 		let dbWriter: WritePressure | null = null;
 		try {
 			const accessor = getDbAccessor();
-			accessor.withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 				db.prepare("SELECT 1").get();
 				dbOk = true;
 			});
@@ -231,7 +232,8 @@ export function mountHealthRoutes(app: Hono): void {
 		// db, migrations, and queue share one readonly connection.
 		let dbResult: { readonly migrationsOk: boolean; readonly queueHealth: QueueHealth } | null = null;
 		try {
-			dbResult = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			dbResult = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 				db.prepare("SELECT 1").get();
 				return {
 					migrationsOk: !hasPendingMigrations(readDbAsMigrationDb(db)),

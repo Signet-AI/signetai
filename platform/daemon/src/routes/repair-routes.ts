@@ -309,7 +309,8 @@ export function registerRepairRoutes(
 	app.get("/api/repair/cold-stats", (c) => {
 		const accessor = getDbAccessor();
 		return c.json(
-			accessor.withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 				const tableExists = db
 					.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_cold'`)
 					.get();
@@ -352,7 +353,8 @@ export function registerRepairRoutes(
 
 	app.post("/api/repair/cluster-entities", (c) => {
 		const agentId = resolveRepairAgentId(c);
-		const result = getDbAccessor().withWriteTx((db) => clusterEntities(db, agentId));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const result = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => clusterEntities(db, agentId));
 		return c.json(result);
 	});
 
@@ -372,8 +374,9 @@ export function registerRepairRoutes(
 		const agentId = resolveRepairAgentId(c, body);
 		const accessor = deps.getDbAccessor?.() ?? getDbAccessor();
 
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const unlinked = accessor.withReadDb(
-			(db) =>
+			(db: import("../db-accessor").ReadDb) =>
 				db
 					.prepare(
 						`SELECT id, content FROM memories
@@ -401,7 +404,8 @@ export function registerRepairRoutes(
 		}
 
 		if (dryRun) {
-			const preview = accessor.withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const preview = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 				let linked = 0;
 				let entities = 0;
 				let aspects = 0;
@@ -451,15 +455,19 @@ export function registerRepairRoutes(
 		let attributes = 0;
 
 		for (const mem of unlinked) {
-			const result = accessor.withWriteTx((db) => linkMemoryToEntities(db, mem.id, mem.content, agentId));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			const result = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
+				linkMemoryToEntities(db, mem.id, mem.content, agentId),
+			);
 			linked += result.linked;
 			entities += result.entityIds.length;
 			aspects += result.aspects;
 			attributes += result.attributes;
 		}
 
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const remaining = accessor.withReadDb(
-			(db) =>
+			(db: import("../db-accessor").ReadDb) =>
 				(
 					db
 						.prepare(
@@ -500,8 +508,9 @@ export function registerRepairRoutes(
 		}
 
 		const accessor = getDbAccessor();
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const unhinted = accessor.withReadDb(
-			(db) =>
+			(db: import("../db-accessor").ReadDb) =>
 				db
 					.prepare(
 						`SELECT m.id, m.content FROM memories m
@@ -524,15 +533,17 @@ export function registerRepairRoutes(
 
 		const { enqueueHintsJob: enqueue } = await import("../pipeline/prospective-index.js");
 		let enqueued = 0;
-		accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 			for (const mem of unhinted) {
 				enqueue(db, mem.id, mem.content);
 				enqueued++;
 			}
 		});
 
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const remaining = accessor.withReadDb(
-			(db) =>
+			(db: import("../db-accessor").ReadDb) =>
 				(
 					db
 						.prepare(
@@ -570,7 +581,10 @@ export function registerRepairRoutes(
 		) {
 			return c.json({ error: "maxConfidence must be 0–1, maxAccessDays and limit must be non-negative" }, 400);
 		}
-		const dead = getDbAccessor().withReadDb((db) => findDeadMemories(db, { maxConfidence, maxAccessDays, limit }));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const dead = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+			findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
+		);
 		return c.json({ count: dead.length, memories: dead });
 	});
 

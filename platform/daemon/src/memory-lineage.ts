@@ -730,7 +730,8 @@ function upsertArtifactRow(
 	sourceMtimeMs = statSync(path).mtimeMs,
 	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
 ): void {
-	getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		upsertArtifactRowInTx(db as WriteDb as Database, path, frontmatter, body, sourceMtimeMs, options);
 	});
 }
@@ -845,7 +846,8 @@ export function softDeleteArtifactRowsForPath(
 ): void {
 	const sourcePath = relativePath(path);
 	const absolutePath = path.replace(/\\/g, "/");
-	getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const markDeleted = db.prepare(
 			`UPDATE memory_artifacts
 			 SET is_deleted = 1, deleted_at = ?, updated_at = ?
@@ -879,7 +881,8 @@ function deleteArtifactRowsForPathInTx(db: Database, path: string, agentId: stri
 }
 
 export function deleteArtifactRowsForPath(path: string, agentId: string | null): void {
-	getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		deleteArtifactRowsForPathInTx(db as WriteDb as Database, path, agentId);
 	});
 }
@@ -947,7 +950,8 @@ async function doReindex(agentId?: string): Promise<void> {
 	const flushUpsertBatch = (): boolean => {
 		if (pendingUpserts.length === 0) return false;
 		const batch = [...pendingUpserts];
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			for (const item of batch) {
 				upsertArtifactRowInTx(db as WriteDb as Database, item.path, item.frontmatter, item.body, item.mtime);
 			}
@@ -959,7 +963,8 @@ async function doReindex(agentId?: string): Promise<void> {
 	const flushDeleteBatch = (): boolean => {
 		if (pendingDeletes.length === 0) return false;
 		const batch = [...pendingDeletes];
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			for (const item of batch) {
 				deleteArtifactRowsForPathInTx(db as WriteDb as Database, item.path, scope);
 			}
@@ -971,7 +976,8 @@ async function doReindex(agentId?: string): Promise<void> {
 	lastChangedManifestsByAgent.delete(cacheKey);
 
 	try {
-		const ready = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const ready = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifacts'`).get();
 			return row !== undefined;
 		});
@@ -987,7 +993,8 @@ async function doReindex(agentId?: string): Promise<void> {
 	if (cache.size === 0) {
 		// Seed from DB state too so files deleted while daemon was down get
 		// detected, while unchanged files can skip a full reread on restart.
-		const dbPaths = getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const dbPaths = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const rows = scope
 				? (db
 						.prepare("SELECT source_path, source_mtime_ms FROM memory_artifacts WHERE agent_id = ?")
@@ -1016,7 +1023,8 @@ async function doReindex(agentId?: string): Promise<void> {
 		}
 	}
 
-	const tombstones = getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const tombstones = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 		const table = db
 			.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifact_tombstones'`)
 			.get();
@@ -1235,8 +1243,9 @@ function findExistingManifest(agentId: string, sessionId: string): ManifestState
 		// a separate session_key fallback is unnecessary because pre-fix rows
 		// match on session_id directly (it was persisted as the session_key
 		// value) and new rows have a unique derived session_id.
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const row = getDbAccessor().withReadDb(
-			(db) =>
+			(db: import("./db-accessor").ReadDb) =>
 				db
 					.prepare(
 						`SELECT source_path
@@ -1651,34 +1660,45 @@ function readThreadHeads(agentId: string): ReadonlyArray<{
 	readonly harness: string | null;
 }> {
 	try {
-		const rows = getDbAccessor().withReadDb((db) => {
-			const queried = db
-				.prepare(
-					`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
+		const rows: Array<{
+			label: string;
+			source_type: string;
+			latest_at: string;
+			sample: string;
+			node_id: string;
+			project: string | null;
+			session_key: string | null;
+			harness: string | null;
+		}> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+				const queried = db
+					.prepare(
+						`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
 				 FROM memory_thread_heads
 				 WHERE agent_id = ?
 				 ORDER BY latest_at DESC
 				 LIMIT 12`,
-				)
-				.all(agentId) as Array<{
-				label: string;
-				source_type: string;
-				latest_at: string;
-				sample: string;
-				node_id: string;
-				project: string | null;
-				session_key: string | null;
-				harness: string | null;
-			}>;
-			return queried.filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId,
-					sourceKind: "summary",
-					sourceId: row.node_id,
-					content: row.sample,
-				}),
-			);
-		});
+					)
+					.all(agentId) as Array<{
+					label: string;
+					source_type: string;
+					latest_at: string;
+					sample: string;
+					node_id: string;
+					project: string | null;
+					session_key: string | null;
+					harness: string | null;
+				}>;
+				return queried.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: "summary",
+						sourceId: row.node_id,
+						content: row.sample,
+					}),
+				);
+			});
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1702,31 +1722,33 @@ function readTopMemories(agentId: string): ReadonlyArray<{
 	try {
 		const scope = getAgentScope(agentId);
 		const clause = buildAgentScopeClause(agentId, scope.readPolicy, scope.policyGroup);
-		const rows = getDbAccessor().withReadDb((db) => {
-			const queried = db
-				.prepare(
-					`SELECT m.id, m.content, m.type, m.importance, m.project
+		const rows: Array<{ id: string; content: string; type: string; importance: number; project: string | null }> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+				const queried = db
+					.prepare(
+						`SELECT m.id, m.content, m.type, m.importance, m.project
 				 FROM memories m
 				 WHERE m.is_deleted = 0${clause.sql}
 				 ORDER BY m.pinned DESC, m.importance DESC, m.created_at DESC
 				 LIMIT 32`,
-				)
-				.all(...clause.args) as Array<{
-				id: string;
-				content: string;
-				type: string;
-				importance: number;
-				project: string | null;
-			}>;
-			return queried.filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId,
-					sourceKind: "memory",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			);
-		});
+					)
+					.all(...clause.args) as Array<{
+					id: string;
+					content: string;
+					type: string;
+					importance: number;
+					project: string | null;
+				}>;
+				return queried.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: "memory",
+						sourceId: row.id,
+						content: row.content,
+					}),
+				);
+			});
 		return rows.filter((row) => !isNoiseSession({ project: row.project })).slice(0, 8);
 	} catch {
 		return [];
@@ -1745,36 +1767,48 @@ function readTemporalNodes(agentId: string): ReadonlyArray<{
 	readonly content: string;
 }> {
 	try {
-		const rows = getDbAccessor().withReadDb((db) => {
-			const queried = db
-				.prepare(
-					`SELECT id, kind, COALESCE(source_type, kind) AS source_type, depth, latest_at,
+		const rows: Array<{
+			id: string;
+			kind: string;
+			source_type: string;
+			depth: number;
+			latest_at: string;
+			project: string | null;
+			session_key: string | null;
+			source_ref: string | null;
+			content: string;
+		}> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+				const queried = db
+					.prepare(
+						`SELECT id, kind, COALESCE(source_type, kind) AS source_type, depth, latest_at,
 				        project, session_key, source_ref, content
 				 FROM session_summaries
 				 WHERE agent_id = ?
 				 ORDER BY latest_at DESC
 				 LIMIT 20`,
-				)
-				.all(agentId) as Array<{
-				id: string;
-				kind: string;
-				source_type: string;
-				depth: number;
-				latest_at: string;
-				project: string | null;
-				session_key: string | null;
-				source_ref: string | null;
-				content: string;
-			}>;
-			return queried.filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId,
-					sourceKind: "summary",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			);
-		});
+					)
+					.all(agentId) as Array<{
+					id: string;
+					kind: string;
+					source_type: string;
+					depth: number;
+					latest_at: string;
+					project: string | null;
+					session_key: string | null;
+					source_ref: string | null;
+					content: string;
+				}>;
+				return queried.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: "summary",
+						sourceId: row.id,
+						content: row.content,
+					}),
+				);
+			});
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1833,7 +1867,8 @@ function buildLedger(agentId: string): ReadonlyArray<LedgerSession> {
 	const floor = now - 30 * 24 * 60 * 60 * 1000;
 	let rows: ArtifactRow[] = [];
 	try {
-		rows = getDbAccessor().withReadDb((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		rows = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
 			(
 				db
 					.prepare(
@@ -2174,8 +2209,9 @@ export function appendSynthesisIndexBlock(content: string, indexBlock: string): 
 }
 
 export function removeCanonicalSession(agentId: string, sessionToken: string, reason: string): void {
-	const rows = getDbAccessor().withReadDb(
-		(db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const rows: Array<{ source_path: string }> = getDbAccessor().withReadDb(
+		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
 					`SELECT source_path
@@ -2185,7 +2221,8 @@ export function removeCanonicalSession(agentId: string, sessionToken: string, re
 				.all(agentId, sessionToken) as Array<{ source_path: string }>,
 	);
 	const paths = rows.map((row) => row.source_path);
-	getDbAccessor().withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		db.prepare(
 			`INSERT INTO memory_artifact_tombstones (
 				agent_id, session_token, removed_at, reason, removed_paths
@@ -2229,8 +2266,9 @@ function isNoiseArtifactGroup(
 }
 
 export function purgeCanonicalNoiseSessions(agentId: string, reason: string): number {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const rows = getDbAccessor().withReadDb(
-		(db) =>
+		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
 					`SELECT session_token, session_id, session_key, project, harness

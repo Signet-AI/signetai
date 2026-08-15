@@ -793,7 +793,8 @@ function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
 	const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
 	const chunkPrefix = `${source.id}:`;
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			const artifacts =
 				source.kind === "obsidian"
 					? countRow(
@@ -931,7 +932,8 @@ function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceS
 
 function sourceOrphanChunks(source: SignetSourceEntry, agentId: string): number {
 	const chunkPrefix = `${source.id}:`;
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 		const livePaths = liveSourceArtifactPaths(db, source, agentId);
 		const chunks = db
 			.prepare(
@@ -1042,7 +1044,8 @@ function artifactHealthSummary(
 	readonly latestArtifactAt: string | null;
 	readonly deletedArtifacts: number;
 } {
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 		if (source.kind === "obsidian") {
 			const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
 			const row = db
@@ -1104,7 +1107,8 @@ function discordHealthSummary(source: SignetSourceEntry, agentId: string): Disco
 			checkpoints: { total: 0, partial: 0, stale: 0 },
 		};
 	}
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT source_kind, source_meta_json, updated_at
@@ -1142,7 +1146,8 @@ function discordHealthSummary(source: SignetSourceEntry, agentId: string): Disco
 }
 
 function semanticHealthSummary(source: SignetSourceEntry, agentId: string): SourceHealth["semantic"] {
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 		const entities = countSourceRows(db, "entities", agentId, source.id);
 		const documentEntity = db
 			.prepare(

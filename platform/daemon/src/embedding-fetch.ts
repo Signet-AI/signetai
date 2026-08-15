@@ -490,7 +490,8 @@ export async function fetchEmbedding(
 	const effectiveCfg =
 		cfg.indexGeneration === "staging" || !hasDbAccessor()
 			? cfg
-			: getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, cfg));
+			: // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, cfg));
 	if (effectiveCfg.provider === "none") return null;
 	const role = typeof roleOrOpts === "string" ? roleOrOpts : typeof optsOrRole === "string" ? optsOrRole : "document";
 	const opts = typeof roleOrOpts === "string" ? (typeof optsOrRole === "string" ? {} : optsOrRole) : roleOrOpts;

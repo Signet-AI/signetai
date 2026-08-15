@@ -123,7 +123,8 @@ function isExpectedSessionActivityLookupError(error: unknown, table: string): bo
 
 function getLastSessionEndTime(deps: SynthesisDeps): number {
 	try {
-		const checkpointRow = deps.getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const checkpointRow = deps.getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			return db
 				.prepare(`
 				SELECT MAX(created_at) as last_end
@@ -148,7 +149,8 @@ function getLastSessionEndTime(deps: SynthesisDeps): number {
 	}
 
 	try {
-		const transcriptRow = deps.getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const transcriptRow = deps.getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
 			// completed_at is the canonical settled-session boundary, including
 			// stale/TTL finalization when no explicit hook arrived.
 			return db

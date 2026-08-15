@@ -145,7 +145,8 @@ export function applyRecallDedupe<T extends RecallDedupeItem>(
 
 	const agentId = normalizeAgentId(opts.agentId);
 	try {
-		return getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!hasRecallDedupeTables(db)) {
 				return {
 					items: [...opts.items],
@@ -239,7 +240,8 @@ export function advanceRecallContextEpoch(input: {
 	if (!sessionKey) return { advanced: false };
 	const agentId = normalizeAgentId(input.agentId);
 	try {
-		return getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!hasRecallDedupeTables(db)) return { advanced: false };
 			const next = currentEpoch(db, sessionKey, agentId) + 1;
 			db.prepare(

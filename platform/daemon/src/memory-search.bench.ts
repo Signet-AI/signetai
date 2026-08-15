@@ -111,6 +111,7 @@ function setupWorkspace(): void {
 	initDbAccessor(dbPath);
 
 	const now = new Date().toISOString();
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	getDbAccessor().withWriteTx((db) => {
 		const memoryStmt = db.prepare(
 			`INSERT INTO memories (

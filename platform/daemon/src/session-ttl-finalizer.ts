@@ -75,7 +75,8 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 		// marker is idempotent and does not depend on a worker or length gate.
 		try {
 			const completedAt = new Date().toISOString();
-			const alreadyCompleted = deps.accessor.withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const alreadyCompleted = deps.accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 				const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
 					Record<string, unknown>
 				>;
@@ -87,7 +88,8 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 			});
 			transcriptFinalized =
 				alreadyCompleted ||
-				deps.accessor.withWriteTx((db) =>
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				deps.accessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
 					markSessionTranscriptCompletedInTx(db, info.sessionKey, info.agentId, completedAt),
 				);
 		} catch (err) {

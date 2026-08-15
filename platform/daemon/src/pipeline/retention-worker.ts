@@ -372,7 +372,8 @@ export function runRetentionSweepOnce(
 	// A retention batch has dependent graph, vector, canonical, and archival
 	// writes. Keep them together so a vec failure cannot commit irreversible
 	// provenance cleanup while leaving the canonical embedding retryable.
-	const retentionResult = accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const retentionResult = accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const graph = purgeGraphLinks(db, tombstoneCutoff, normalizedCfg.batchLimit);
 		const embeddingsPurged = purgeEmbeddings(db, tombstoneCutoff, normalizedCfg.batchLimit);
 		const tombstonesPurged = purgeTombstones(db, tombstoneCutoff, normalizedCfg.batchLimit);
@@ -386,21 +387,30 @@ export function runRetentionSweepOnce(
 	if (entitiesOrphaned > 0) invalidateTraversalCache();
 
 	// Step 4: old history events
-	const historyPurged = accessor.withWriteTx((db) => purgeHistory(db, historyCutoff, normalizedCfg.batchLimit));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const historyPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
+		purgeHistory(db, historyCutoff, normalizedCfg.batchLimit),
+	);
 
 	// Step 5: completed jobs
-	const completedJobsPurged = accessor.withWriteTx((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const completedJobsPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
 		purgeCompletedJobs(db, completedJobCutoff, normalizedCfg.batchLimit),
 	);
 
 	// Step 6: dead-letter jobs
-	const deadJobsPurged = accessor.withWriteTx((db) => purgeDeadJobs(db, deadJobCutoff, normalizedCfg.batchLimit));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const deadJobsPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
+		purgeDeadJobs(db, deadJobCutoff, normalizedCfg.batchLimit),
+	);
 
 	// Step 7: transcript-capture job queue retention
-	const completedTranscriptCaptureJobsPurged = accessor.withWriteTx((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const completedTranscriptCaptureJobsPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
 		purgeTranscriptCaptureJobs(db, "completed", completedJobCutoff, normalizedCfg.batchLimit),
 	);
-	const deadTranscriptCaptureJobsPurged = accessor.withWriteTx((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	const deadTranscriptCaptureJobsPurged = accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
 		purgeTranscriptCaptureJobs(db, "dead", deadJobCutoff, normalizedCfg.batchLimit),
 	);
 

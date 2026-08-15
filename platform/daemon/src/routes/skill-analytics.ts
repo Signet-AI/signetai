@@ -117,7 +117,8 @@ export function mountSkillAnalyticsRoutes(app: Hono): void {
 		const limit = clampPositiveInt(c.req.query("limit"), 10, 1, 100);
 
 		try {
-			const result = getDbAccessor().withReadDb((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const result = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
 				querySkillAnalytics(db, {
 					agentId: scoped.agentId,
 					since,

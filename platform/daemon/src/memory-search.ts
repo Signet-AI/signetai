@@ -606,21 +606,23 @@ function applyRehearsalBoost(
 	try {
 		const ids = scored.map((s) => s.id);
 		const placeholders = ids.map(() => "?").join(", ");
-		const accessRows = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT id, access_count, last_accessed, created_at
+		const accessRows: Array<{ id: string; access_count: number; last_accessed: string | null; created_at: string }> =
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb(
+				(db: import("./db-accessor").ReadDb) =>
+					db
+						.prepare(
+							`SELECT id, access_count, last_accessed, created_at
 						 FROM memories
 						 WHERE id IN (${placeholders})`,
-					)
-					.all(...ids) as Array<{
-					id: string;
-					access_count: number;
-					last_accessed: string | null;
-					created_at: string;
-				}>,
-		);
+						)
+						.all(...ids) as Array<{
+						id: string;
+						access_count: number;
+						last_accessed: string | null;
+						created_at: string;
+					}>,
+			);
 
 		const accessMap = new Map(accessRows.map((r) => [r.id, r]));
 		for (const s of scored) {
@@ -711,7 +713,8 @@ function authorizeScoredCandidates(
 	// are safe to use in stages that read content or mutate access metadata.
 	const ids = [...new Set(scored.map((row) => row.id))];
 	if (ids.length === 0) return [];
-	const allowed = getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const allowed = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 		const hasSafetyLedger = memoryContentSafetyTableExists(db);
 		const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
 		const safetyJoin = hasSafetyLedger
@@ -756,7 +759,8 @@ function authorizeScoredCandidates(
 function loadObservedScores(ids: readonly string[], agentId: string): Map<string, number> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
-	return getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT memory_id, AVG(agent_relevance_score) AS score
@@ -787,7 +791,8 @@ function shortenCurrentnessContent(content: string): string {
 function loadCurrentnessInfo(ids: readonly string[], agentId: string): Map<string, CurrentnessInfo> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
-	const rows = getDbAccessor().withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const rows = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 		const queried = db
 			.prepare(
 				`SELECT
@@ -968,7 +973,8 @@ function buildSourceChunkVectorHits(
 	// rescue path for project-scoped recall until the index has that strong key.
 	if (project) return [];
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const hasAgentId = hasColumn(db, "embeddings", "agent_id");
 			const rows = db
 				.prepare(
@@ -1139,7 +1145,8 @@ function buildNativeArtifactRecallHits(
 	if (fts.length === 0) return [];
 
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const table = db
 				.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memory_artifacts_fts'`)
 				.get();
@@ -1386,7 +1393,8 @@ export async function hybridRecall(
 			if (params.trackRecallAccess !== false && trackedIds.length > 0) {
 				timings.time("access_tracking_update", () => {
 					const trackedPlaceholders = trackedIds.map(() => "?").join(", ");
-					getDbAccessor().withWriteTx((db) => {
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+					getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 						db.prepare(
 							`UPDATE memories
 							 SET last_accessed = datetime('now'), access_count = access_count + 1
@@ -1488,7 +1496,8 @@ export async function hybridRecall(
 	};
 	const getFocalEntities = (agentId: string): ReturnType<typeof resolveFocalEntities> => {
 		if (focalCache?.agentId === agentId) return focalCache.value;
-		const value = getDbAccessor().withReadDb((db) =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const value = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
 			resolveFocalEntities(db, agentId, {
 				queryTokens: getGraphQueryTokens(),
 				includePinned: false,
@@ -1505,7 +1514,8 @@ export async function hybridRecall(
 	try {
 		timings.time("memory_fts", () => {
 			if (keywordQuery.length === 0) return;
-			getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 				// CROSS JOIN keeps SQLite from scanning memories first via
 				// low-selectivity filters before applying the FTS rowid match.
 				const ftsRows = prepareTypedStatement<{ id: string; raw_score: number }>(
@@ -1545,7 +1555,8 @@ export async function hybridRecall(
 		try {
 			timings.time("hints_fts", () => {
 				if (keywordQuery.length === 0) return;
-				getDbAccessor().withReadDb((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 					// Keep memory_hints_fts first; the agent/scope indexes are much
 					// less selective than the FTS match on large workspaces.
 					const sql = `SELECT h.memory_id AS id, bm25(memory_hints_fts) AS raw_score
@@ -1605,7 +1616,8 @@ export async function hybridRecall(
 		const vecLimit = needsPostFilter || excludeAggregateRecall ? cfg.search.top_k * 2 : cfg.search.top_k;
 		try {
 			timings.time("vector_search", () => {
-				getDbAccessor().withReadDb((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 					const vecResults = vectorSearch(db, queryVector, {
 						limit: vecLimit,
 						type: params.type,
@@ -1635,7 +1647,8 @@ export async function hybridRecall(
 		try {
 			const agentId = params.agentId ?? "default";
 			const candidates = timings.time("structured_path_candidates", () =>
-				getDbAccessor().withReadDb((db) =>
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
 					findStructuredPathCandidates(db, query, agentId, {
 						limit: cfg.search.top_k,
 						minScore,
@@ -1654,7 +1667,8 @@ export async function hybridRecall(
 			try {
 				const agentId = params.agentId ?? "default";
 				ontologyClaimCandidates = timings.time("ontology_claim_candidates", () =>
-					getDbAccessor().withReadDb((db) =>
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
 						findStructuredClaimCandidates(db, query, agentId, {
 							limit: cfg.search.top_k,
 							minScore,
@@ -1752,6 +1766,7 @@ export async function hybridRecall(
 						if (focal.entityIds.length > 0) {
 							const traversal = await traverseKnowledgeGraph(
 								focal.entityIds,
+								// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 								<T>(fn: (db: ReadDb) => T): T => getDbAccessor().withReadDb(fn),
 								agentId,
 								{
@@ -1776,8 +1791,9 @@ export async function hybridRecall(
 							if (queryVecF32 && traversal.memoryScores.size > 0) {
 								const ids = [...traversal.memoryScores.keys()];
 								const ph = ids.map(() => "?").join(", ");
+								// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 								const embRows = getDbAccessor().withReadDb(
-									(db) =>
+									(db: import("./db-accessor").ReadDb) =>
 										db
 											.prepare(
 												`SELECT source_id, vector FROM embeddings
@@ -1861,7 +1877,8 @@ export async function hybridRecall(
 		if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.graph.boostWeight > 0) {
 			try {
 				const graphResult = timings.time("graph_boost", () =>
-					getDbAccessor().withReadDb((db) =>
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
 						getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs, params.agentId),
 					),
 				);
@@ -1895,6 +1912,7 @@ export async function hybridRecall(
 						if (focal.entityIds.length > 0) {
 							const traversal = await traverseKnowledgeGraph(
 								focal.entityIds,
+								// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 								<T>(fn: (db: ReadDb) => T): T => getDbAccessor().withReadDb(fn),
 								agentId,
 								{
@@ -1925,8 +1943,9 @@ export async function hybridRecall(
 
 							if (missingIds.length > 0) {
 								const placeholders = missingIds.map(() => "?").join(", ");
+								// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 								const baseRows = getDbAccessor().withReadDb(
-									(db) =>
+									(db: import("./db-accessor").ReadDb) =>
 										db
 											.prepare(
 												`SELECT
@@ -2006,8 +2025,9 @@ export async function hybridRecall(
 			const candidateIds = scored.filter((row) => temporalCandidateSet.has(row.id)).map((row) => row.id);
 			if (candidateIds.length > 0) {
 				const placeholders = candidateIds.map(() => "?").join(", ");
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 				const contentRows = getDbAccessor().withReadDb(
-					(db) =>
+					(db: import("./db-accessor").ReadDb) =>
 						db
 							.prepare(
 								`SELECT id, content FROM memories
@@ -2051,7 +2071,8 @@ export async function hybridRecall(
 			const candidates = [...byId.values()];
 			try {
 				const agentId = params.agentId ?? "default";
-				const structured = getDbAccessor().withReadDb((db) =>
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				const structured = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
 					scoreStructuredPathEvidence(
 						db,
 						candidates.map((row) => row.id),
@@ -2085,8 +2106,9 @@ export async function hybridRecall(
 				let contentMap = new Map<string, string>();
 				if (coverageIds.length > 0) {
 					const placeholders = coverageIds.map(() => "?").join(", ");
-					const contentRows = getDbAccessor().withReadDb(
-						(db) =>
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					const contentRows: Array<{ id: string; content: string }> = getDbAccessor().withReadDb(
+						(db: import("./db-accessor").ReadDb) =>
 							db
 								.prepare(
 									`SELECT id, content FROM memories
@@ -2131,8 +2153,9 @@ export async function hybridRecall(
 			const rerankPlaceholders = rerankIds.map(() => "?").join(", ");
 
 			// Fetch content for reranker — cross-encoders need document text
-			const contentRows = getDbAccessor().withReadDb(
-				(db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const contentRows: Array<{ id: string; content: string }> = getDbAccessor().withReadDb(
+				(db: import("./db-accessor").ReadDb) =>
 					db
 						.prepare(
 							`SELECT id, content FROM memories
@@ -2204,8 +2227,9 @@ export async function hybridRecall(
 			const dampenPh = dampenIds.map(() => "?").join(", ");
 
 			// Fetch content + type for dampening analysis
-			const dampenRows = getDbAccessor().withReadDb(
-				(db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const dampenRows: Array<{ id: string; content: string; type: string }> = getDbAccessor().withReadDb(
+				(db: import("./db-accessor").ReadDb) =>
 					db
 						.prepare(
 							`SELECT id, content, type FROM memories
@@ -2224,8 +2248,9 @@ export async function hybridRecall(
 			const degrees = new Map<string, number>();
 
 			if (cfg.pipelineV2.graph.enabled) {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 				const links = getDbAccessor().withReadDb(
-					(db) =>
+					(db: import("./db-accessor").ReadDb) =>
 						db
 							.prepare(
 								`SELECT memory_id, entity_id FROM memory_entity_mentions
@@ -2252,8 +2277,9 @@ export async function hybridRecall(
 				if (entityIds.size > 0) {
 					const eidList = [...entityIds];
 					const eidPh = eidList.map(() => "?").join(", ");
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 					const degreeRows = getDbAccessor().withReadDb(
-						(db) =>
+						(db: import("./db-accessor").ReadDb) =>
 							db
 								.prepare(
 									`SELECT entity_id, COUNT(*) AS cnt
@@ -2478,9 +2504,24 @@ export async function hybridRecall(
 	// authorization so no alternate path can widen access.
 	const placeholders = topIds.map(() => "?").join(", ");
 
-	const rows = timings.time("hydrate_memory_rows", () =>
+	const rows: Array<{
+		id: string;
+		content: string;
+		source_id: string | null;
+		type: string;
+		tags: string | null;
+		pinned: number;
+		importance: number;
+		who: string;
+		project: string | null;
+		created_at: string;
+		visibility: string | null;
+		scope: string | null;
+		agent_id: string | null;
+	}> = timings.time("hydrate_memory_rows", () =>
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		getDbAccessor().withReadDb(
-			(db) =>
+			(db: import("./db-accessor").ReadDb) =>
 				db
 					.prepare(
 						`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
@@ -2505,16 +2546,32 @@ export async function hybridRecall(
 		),
 	);
 
-	const safeRows = getDbAccessor().withReadDb((db) =>
-		rows.filter((row) =>
-			isMemoryContentContextEligible(db, {
-				agentId: row.agent_id?.trim() || "default",
-				sourceKind: "memory",
-				sourceId: row.id,
-				content: row.content,
-			}),
-		),
-	);
+	const safeRows: Array<{
+		id: string;
+		content: string;
+		source_id: string | null;
+		type: string;
+		tags: string | null;
+		pinned: number;
+		importance: number;
+		who: string;
+		project: string | null;
+		created_at: string;
+		visibility: string | null;
+		scope: string | null;
+		agent_id: string | null;
+	}> =
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+			rows.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId: row.agent_id?.trim() || "default",
+					sourceKind: "memory",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			),
+		);
 	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
 	// injected after assembly and the array is capped to `limit` at that point.
@@ -2699,7 +2756,8 @@ export async function hybridRecall(
 	if (decisionIds.length > 0 && cfg.pipelineV2.graph.enabled) {
 		const rationaleStart = performance.now();
 		try {
-			const supplementary = getDbAccessor().withReadDb((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const supplementary = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 				// Find entities linked to decision memories
 				const dPlaceholders = decisionIds.map(() => "?").join(", ");
 				const entityIds = db
@@ -2796,7 +2854,8 @@ export async function hybridRecall(
 			if (queryTokens.length > 0) {
 				const agentId = params.agentId ?? "default";
 				const focal = getFocalEntities(agentId);
-				const ctx = getDbAccessor().withReadDb((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				const ctx = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 					if (focal.entityIds.length === 0) return null;
 
 					// Project/scope-constrained recall should not let broad focal
@@ -2902,7 +2961,10 @@ export async function hybridRecall(
 		try {
 			const agentId = params.agentId ?? "default";
 			const cap = Math.max(3, Math.ceil(limit * 0.3));
-			const blocks = getDbAccessor().withReadDb((db) => constructContextBlocks(db, agentId, focalEids, cap));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const blocks = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+				constructContextBlocks(db, agentId, focalEids, cap),
+			);
 			const now = new Date().toISOString();
 			const minReal = results.length > 0 ? Math.min(...results.map((r) => r.score)) : 0.5;
 			const maxConstructed = Math.max(0.01, minReal - 0.01);

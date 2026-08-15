@@ -52,7 +52,8 @@ function parseReadPolicy(value: unknown): AgentRosterReadPolicy {
 
 export function getAgentScope(agentId: string): AgentScope {
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const row = db.prepare("SELECT read_policy, policy_group FROM agents WHERE id = ?").get(agentId);
 			if (!row || typeof row !== "object") {
 				return {
@@ -77,7 +78,8 @@ export function ensureAgentRegistered(agentId: string, readPolicy: AgentRosterRe
 	const id = agentId.trim() || "default";
 	const now = new Date().toISOString();
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			db.prepare(
 				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
 				 VALUES (?, ?, ?, NULL, ?, ?)

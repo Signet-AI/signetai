@@ -1124,7 +1124,8 @@ interface McpInvocationRecord {
 function recordMcpInvocation(record: McpInvocationRecord): void {
 	try {
 		const id = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
 			db.prepare(
 				`INSERT INTO mcp_invocations (id, server_id, tool_name, agent_id, source, latency_ms, success, error_text, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,

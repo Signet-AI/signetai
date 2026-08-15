@@ -266,7 +266,8 @@ export function repairTelemetryIndexes(
 	let telemetryCheck: IntegrityCheckStatus;
 	let telemetryIndexes: readonly string[];
 	try {
-		const checks = accessor.withReadDb((db) => ({
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const checks = accessor.withReadDb((db: import("./db-accessor").ReadDb) => ({
 			quick: options?.quickCheck ?? check(db, "quick_check"),
 			telemetry: check(db, "integrity_check", "telemetry_events"),
 			indexes: listTelemetryIndexes(db),
@@ -299,11 +300,15 @@ export function repairTelemetryIndexes(
 
 	if (!telemetryCheck.ok) {
 		try {
-			accessor.withWriteTx((db) => {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 				for (const index of telemetryIndexes) db.exec(`REINDEX ${escapedIdentifier(index)}`);
 				audit?.(db, telemetryIndexes, telemetryCheck.messages);
 			});
-			const verifiedTelemetry = accessor.withReadDb((db) => check(db, "integrity_check", "telemetry_events"));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const verifiedTelemetry = accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+				check(db, "integrity_check", "telemetry_events"),
+			);
 			if (verifiedTelemetry.ok) {
 				latestStatus = statusWith("repaired", quickCheck, verifiedTelemetry, [...telemetryIndexes]);
 				return latestStatus;

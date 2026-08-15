@@ -100,7 +100,8 @@ export function startSchedulerWorker(db: DbAccessor): SchedulerHandle {
 	const activeProcesses = new Set<Promise<void>>();
 
 	// On startup, mark any leftover "running" runs as failed (daemon restart)
-	db.withWriteTx((wdb) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	db.withWriteTx((wdb: import("../db-accessor").WriteDb) => {
 		wdb
 			.prepare(
 				`UPDATE task_runs
@@ -117,7 +118,10 @@ export function startSchedulerWorker(db: DbAccessor): SchedulerHandle {
 		try {
 			// Find due tasks (enabled, next_run_at <= now, not already running)
 			const nowIso = new Date().toISOString();
-			const dueTasks = db.withReadDb((rdb) => selectDueTasks(rdb, nowIso, MAX_CONCURRENT - activeProcesses.size));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const dueTasks = db.withReadDb((rdb: import("../db-accessor").ReadDb) =>
+				selectDueTasks(rdb, nowIso, MAX_CONCURRENT - activeProcesses.size),
+			);
 
 			for (const task of dueTasks) {
 				if (activeProcesses.size >= MAX_CONCURRENT) break;
@@ -185,7 +189,8 @@ export async function executeTask(
 		return;
 	}
 
-	db.withWriteTx((wdb) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	db.withWriteTx((wdb: import("../db-accessor").WriteDb) => {
 		wdb
 			.prepare(
 				`INSERT INTO task_runs (id, task_id, status, started_at)
@@ -271,7 +276,8 @@ export async function executeTask(
 	const completedAt = new Date().toISOString();
 	const status = result.error !== null || (result.exitCode !== null && result.exitCode !== 0) ? "failed" : "completed";
 
-	db.withWriteTx((wdb) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	db.withWriteTx((wdb: import("../db-accessor").WriteDb) => {
 		wdb
 			.prepare(
 				`UPDATE task_runs

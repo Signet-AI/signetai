@@ -173,7 +173,8 @@ export function writeDreamingRunbook(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly passId: string; readonly entry: DreamingRunbookEntry },
 ): boolean {
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const result = db
 			.prepare(
 				`UPDATE dreaming_passes SET runbook_json = ?
@@ -214,7 +215,8 @@ export function recordDreamingEvidenceWindowInTx(
 /** Recent scoped pass state, including write outcomes, evidence windows, and unresolved quarantines. */
 export function readDreamingRunbook(accessor: DbAccessor, agentId: string, limit = 5): readonly DreamingRunbookPass[] {
 	const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 20);
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT id, mode, status, started_at AS startedAt, completed_at AS completedAt,

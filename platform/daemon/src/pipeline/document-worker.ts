@@ -215,7 +215,8 @@ function completeDocument(db: WriteDb, docId: string, chunkCount: number, memory
 // ---------------------------------------------------------------------------
 
 export function enqueueDocumentIngestJob(accessor: DbAccessor, documentId: string): string | null {
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const existing = db
 			.prepare(
 				`SELECT 1 FROM memory_jobs
@@ -255,7 +256,8 @@ async function processDocument(
 		throw new Error("document_ingest job missing document_id");
 	}
 
-	const doc = accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const doc = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
 	});
 
@@ -264,14 +266,16 @@ async function processDocument(
 	}
 
 	if (doc.status === "done" || doc.status === "deleted") {
-		accessor.withWriteTx((db) => completeJob(db, job.id));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => completeJob(db, job.id));
 		operation.skipped++;
 		return { accepted: 0, skipped: 1, failed: 0 };
 	}
 	const documentScope = readDocumentScope(doc);
 
 	// -- Step 1: Extract content --
-	accessor.withWriteTx((db) => updateDocumentStatus(db, docId, "extracting"));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => updateDocumentStatus(db, docId, "extracting"));
 
 	let content: string;
 	let title = doc.title;
@@ -293,7 +297,8 @@ async function processDocument(
 	}
 
 	let deletedAfterExtraction = false;
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		if (isDocumentDeleted(db, docId)) {
 			completeJob(db, job.id);
 			deletedAfterExtraction = true;
@@ -309,7 +314,8 @@ async function processDocument(
 		operation.operationClass = "extraction";
 		recordPipelineError("extraction", "EXTRACTION_PARSE_FAIL");
 		let deletedWhileEmpty = false;
-		accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 			if (isDocumentDeleted(db, docId)) {
 				completeJob(db, job.id);
 				deletedWhileEmpty = true;
@@ -346,7 +352,8 @@ async function processDocument(
 
 	// Update title if discovered
 	if (title && title !== doc.title) {
-		accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 			db.prepare("UPDATE documents SET title = ?, updated_at = ? WHERE id = ? AND status != 'deleted'").run(
 				title,
 				new Date().toISOString(),
@@ -356,11 +363,13 @@ async function processDocument(
 	}
 
 	// -- Step 2: Chunk --
-	accessor.withWriteTx((db) => updateDocumentStatus(db, docId, "chunking"));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => updateDocumentStatus(db, docId, "chunking"));
 
 	const chunks = chunkText(content, pipelineCfg.documents.chunkSize, pipelineCfg.documents.chunkOverlap);
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		db.prepare("UPDATE documents SET chunk_count = ?, updated_at = ? WHERE id = ? AND status != 'deleted'").run(
 			chunks.length,
 			new Date().toISOString(),
@@ -369,7 +378,8 @@ async function processDocument(
 	});
 
 	// -- Step 3: Embed + index each chunk --
-	accessor.withWriteTx((db) => updateDocumentStatus(db, docId, "embedding"));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => updateDocumentStatus(db, docId, "embedding"));
 
 	let memoriesCreated = 0;
 
@@ -391,7 +401,8 @@ async function processDocument(
 		});
 
 		// Each chunk's memory creation in its own transaction
-		accessor.withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 			if (isDocumentDeleted(db, docId)) {
 				completeJob(db, job.id);
 				aborted = true;
@@ -516,11 +527,13 @@ async function processDocument(
 	}
 
 	// -- Step 4: Finalize --
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		updateDocumentStatus(db, docId, "indexing");
 	});
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		if (isDocumentDeleted(db, docId)) {
 			completeJob(db, job.id);
 			aborted = true;
@@ -568,7 +581,8 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 	>();
 
 	function terminalStatus(jobId: string): string | null {
-		return deps.accessor.withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return deps.accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 			const row = db.prepare("SELECT status FROM memory_jobs WHERE id = ?").get(jobId) as
 				| { status?: string }
 				| undefined;
@@ -586,14 +600,16 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 	): void {
 		const { state } = operation;
 		if (job.document_id) {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const durable = deps.accessor.withReadDb(
-				(db) =>
+				(db: import("../db-accessor").ReadDb) =>
 					db.prepare("SELECT chunk_count, memory_count FROM documents WHERE id = ?").get(job.document_id) as
 						| { chunk_count?: number | null; memory_count?: number | null }
 						| undefined,
 			);
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const durableLinks = deps.accessor.withReadDb(
-				(db) =>
+				(db: import("../db-accessor").ReadDb) =>
 					db.prepare("SELECT COUNT(*) AS count FROM document_memories WHERE document_id = ?").get(job.document_id) as
 						| { count?: number | null }
 						| undefined,
@@ -639,7 +655,10 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 
 		try {
 			const leasedAt = Date.now();
-			const job = deps.accessor.withWriteTx((db) => leaseDocumentJob(db, deps.pipelineCfg.worker.maxRetries));
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+			const job = deps.accessor.withWriteTx((db: import("../db-accessor").WriteDb) =>
+				leaseDocumentJob(db, deps.pipelineCfg.worker.maxRetries),
+			);
 
 			if (!job) return;
 			const operation = operations.get(job.id) ?? {
@@ -664,7 +683,8 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 					error: msg,
 				});
 
-				deps.accessor.withWriteTx((db) => {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+				deps.accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 					if (job.document_id && isDocumentDeleted(db, job.document_id)) {
 						completeJob(db, job.id);
 						operation.state.skipped++;

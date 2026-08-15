@@ -19,7 +19,8 @@ export function registerConnector(accessor: DbAccessor, config: ConnectorConfig)
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		db.prepare(
 			`INSERT INTO connectors
 			 (id, provider, display_name, config_json, cursor_json, status,
@@ -38,7 +39,8 @@ export function registerConnector(accessor: DbAccessor, config: ConnectorConfig)
 export function updateConnectorStatus(accessor: DbAccessor, id: string, status: ConnectorStatus, error?: string): void {
 	const now = new Date().toISOString();
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		db.prepare(
 			`UPDATE connectors
 			 SET status = ?, last_error = ?, updated_at = ?
@@ -53,7 +55,8 @@ export function updateConnectorStatus(accessor: DbAccessor, id: string, status: 
 export function updateCursor(accessor: DbAccessor, id: string, cursor: SyncCursor): void {
 	const now = new Date().toISOString();
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		db.prepare(
 			`UPDATE connectors
 			 SET cursor_json = ?, last_sync_at = ?, updated_at = ?
@@ -67,14 +70,16 @@ export function updateCursor(accessor: DbAccessor, id: string, cursor: SyncCurso
  */
 export function removeConnector(accessor: DbAccessor, id: string): boolean {
 	// Count before delete — bun:sqlite .changes can be inflated by triggers.
-	const before = accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const before = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const row = db.prepare("SELECT COUNT(*) AS n FROM connectors WHERE id = ?").get(id) as { n: number } | undefined;
 		return row?.n ?? 0;
 	});
 
 	if (before === 0) return false;
 
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		db.prepare("DELETE FROM connectors WHERE id = ?").run(id);
 	});
 
@@ -89,7 +94,8 @@ export function removeConnector(accessor: DbAccessor, id: string): boolean {
  * Fetch a single connector by id. Returns undefined when not found.
  */
 export function getConnector(accessor: DbAccessor, id: string): ConnectorRow | undefined {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		return db.prepare("SELECT * FROM connectors WHERE id = ?").get(id) as ConnectorRow | undefined;
 	});
 }
@@ -98,7 +104,8 @@ export function getConnector(accessor: DbAccessor, id: string): ConnectorRow | u
  * Return all connectors, newest first.
  */
 export function listConnectors(accessor: DbAccessor): readonly ConnectorRow[] {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		return db.prepare("SELECT * FROM connectors ORDER BY created_at DESC").all() as ConnectorRow[];
 	});
 }
@@ -134,7 +141,8 @@ export function getConnectorDocumentCount(accessor: DbAccessor, connectorId: str
 
 	const prefix = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
 
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const result = db
 			.prepare(
 				`SELECT COUNT(*) AS n FROM documents

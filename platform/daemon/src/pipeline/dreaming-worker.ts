@@ -92,7 +92,8 @@ const AGENT_SCOPE_SNAPSHOT_REFRESH_MS = 30 * 60 * 1000; // 30 min
 
 /** Dreaming is deferrable work. Yield an entire sweep while live queues are under pressure. */
 export function shouldDeferDreamingSweep(accessor: DbAccessor): boolean {
-	return accessor.withReadDb((db) => getQueueHealth(db).status !== "healthy");
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => getQueueHealth(db).status !== "healthy");
 }
 
 function normalizeAgentId(agentId: string | undefined, fallback: string): string {
@@ -101,7 +102,8 @@ function normalizeAgentId(agentId: string | undefined, fallback: string): string
 }
 
 export function getDreamingWorkerAgentIds(accessor: DbAccessor, defaultAgentId: string): readonly string[] {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		// UNION ALL + app-side dedup instead of UNION: the caller collapses
 		// rows into a Set, so the cross-branch sort/merge UNION performs is
 		// pure waste. UNION ALL concatenates the per-table index scans
@@ -176,10 +178,14 @@ export async function selectDreamingCheckMode(
 	lastScheduled: DreamingPassFocus | null,
 ): Promise<DreamingMode> {
 	const hasPendingHygieneAttention = scopes.some((scope) =>
-		accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"])),
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		accessor.withReadDb((db: import("../db-accessor").ReadDb) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"])),
 	);
 	const hasPendingContentAttention = scopes.some((scope) =>
-		accessor.withReadDb((db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS)),
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
+			hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
+		),
 	);
 	const backlogs = await Promise.all(scopes.map((scope) => getDreamingEpisodicTokenBacklog(accessor, scope)));
 	const hasBacklog = backlogs.some((backlog) => backlog > 0);
@@ -268,7 +274,8 @@ export function startDreamingWorker(
 	// Sweep orphaned passes from unclean shutdown: any 'running' record
 	// was left by a crash or forced stop — mark it failed
 	// so the status API doesn't show a forever-running ghost pass.
-	accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
 		const orphaned = db
 			.prepare(
 				`UPDATE dreaming_passes

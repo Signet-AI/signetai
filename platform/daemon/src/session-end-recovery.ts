@@ -102,7 +102,8 @@ export function recoverMissingSessionEndOnClearStart(
 	try {
 		// Keep target selection and completion in one write transaction so
 		// parallel clear hooks cannot race a transcript back into the live set.
-		const result = getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const result = getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const target = getClearRecoveryTranscriptTarget(db, req, sessionKey, agentId);
 			if (!target) return { skipped: "no-stored-transcript" as const };
 			const completed = markSessionTranscriptCompletedInTx(db, target.sessionKey, agentId, completedAt);

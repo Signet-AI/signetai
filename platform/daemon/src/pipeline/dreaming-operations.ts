@@ -104,13 +104,18 @@ interface CitationResolution {
 function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown): CitationResolution {
 	const requested = citationRecord(citation);
 	if (requested === null) return { evidence: null, sourceAgentIds: [] };
-	const result = accessor.withReadDb((db) => {
-		const source = readEpisodicSource(db, { agentId, from: requested.sourceRef });
-		if (source !== null && (source.kind !== "transcript" || source.completed)) {
-			return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
-		}
-		return { evidence: [], sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef) };
-	});
+	const result: {
+		readonly evidence: readonly DreamingAgentEvidence[];
+		readonly sourceAgentIds: readonly string[];
+	} =
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+			const source = readEpisodicSource(db, { agentId, from: requested.sourceRef });
+			if (source !== null && (source.kind !== "transcript" || source.completed)) {
+				return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
+			}
+			return { evidence: [], sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef) };
+		});
 	return {
 		evidence:
 			result.evidence.find(
@@ -145,7 +150,8 @@ type ValidatedDreamingOperation = {
 
 function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalName: string): ReadonlySet<string> {
 	const placeholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const rows = db
 			.prepare(
 				`SELECT id FROM entities
@@ -468,7 +474,8 @@ function lookupString(db: ReadDb, sql: string, ...params: unknown[]): string | n
 }
 
 function lookupEntityName(accessor: DbAccessor, agentId: string, entityId: string): string | null {
-	return accessor.withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
 		lookupString(
 			db,
 			"SELECT name AS value FROM entities WHERE id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
@@ -479,7 +486,8 @@ function lookupEntityName(accessor: DbAccessor, agentId: string, entityId: strin
 }
 
 function lookupAspectName(accessor: DbAccessor, agentId: string, entityId: string, aspectId: string): string | null {
-	return accessor.withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
 		lookupString(
 			db,
 			"SELECT name AS value FROM entity_aspects WHERE id = ? AND entity_id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
@@ -491,7 +499,8 @@ function lookupAspectName(accessor: DbAccessor, agentId: string, entityId: strin
 }
 
 function lookupAspectEntityId(accessor: DbAccessor, agentId: string, aspectId: string): string | null {
-	return accessor.withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
 		lookupString(
 			db,
 			"SELECT entity_id AS value FROM entity_aspects WHERE id = ? AND agent_id = ? AND COALESCE(status,'active') = 'active'",
@@ -507,7 +516,8 @@ function lookupActiveClaimAttributeId(
 	aspectId: string,
 	claimKey: string,
 ): string | null {
-	return accessor.withReadDb((db) =>
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
 		lookupString(
 			db,
 			"SELECT id AS value FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND claim_key = ? AND status = 'active' ORDER BY created_at DESC, id ASC LIMIT 1",
@@ -678,7 +688,8 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 		if (operation.operation === DECLINE_ATTENTION_OP) {
 			const attentionId = stringField(operation.payload, "attentionId");
 			if (attentionId === null) return "decline_attention requires payload.attentionId";
-			const pending = params.accessor.withReadDb((db) =>
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			const pending = params.accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
 				db
 					.prepare(
 						`SELECT 1 FROM dreaming_attention

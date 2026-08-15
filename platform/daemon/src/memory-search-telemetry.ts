@@ -234,7 +234,8 @@ export function recordMemorySearchTelemetry(db: DbAccessor, input: MemorySearchT
 		const filters = buildFilters(input.params);
 		const top = input.response.results[0]?.score ?? null;
 
-		db.withWriteTx((w) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 			w.prepare(
 				`INSERT INTO memory_search_telemetry
 				 (id, created_at, route, agent_id, session_key, project, query,
@@ -309,6 +310,7 @@ export function listMemorySearchTelemetry(
 	const limit = query.limit ?? 100;
 	const offset = query.offset ?? 0;
 
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return db.withReadDb((r) => {
 		const rows = r
 			.prepare(

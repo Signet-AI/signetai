@@ -237,7 +237,8 @@ function readForeignKeys(db: ReadDb, table: string): readonly DatabaseForeignKey
 }
 
 export function readDatabaseSchema(accessor: DbAccessor): DatabaseSchemaResponse {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const tables = listTables(db).map((row) => {
 			const blocked = sampleBlockedReason(row);
 			return {
@@ -271,7 +272,8 @@ export function readTableSample(
 	limit: number,
 	offset: number,
 ): DatabaseTableSampleResponse | { readonly error: string; readonly status: 400 | 404 } {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 		const match = listTables(db).find((row) => row.name === table);
 		if (!match) return { error: "unknown table", status: 404 };
 		const blocked = sampleBlockedReason(match);

@@ -719,7 +719,8 @@ function readLegacyMarkdownImportState(filePath: string): {
 	readonly status: string;
 } | null {
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const row = db
 				.prepare(
 					`SELECT mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count, status
@@ -769,7 +770,8 @@ function writeLegacyMarkdownImportState(args: {
 }): void {
 	try {
 		const now = new Date().toISOString();
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			db.prepare(
 				`INSERT INTO legacy_markdown_imports
 				 (path, mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count,
@@ -807,7 +809,8 @@ function writeLegacyMarkdownImportState(args: {
 
 function legacyMarkdownChunkKnown(filePath: string, chunkHash: string): boolean {
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const row = db
 				.prepare("SELECT 1 FROM legacy_markdown_chunks WHERE file_path = ? AND chunk_hash = ?")
 				.get(filePath, chunkHash);
@@ -826,7 +829,8 @@ function recordLegacyMarkdownChunk(args: {
 	readonly sourceId: string;
 }): void {
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			db.prepare(
 				`INSERT INTO legacy_markdown_chunks
 				 (file_path, chunk_hash, chunk_index, memory_id, source_id, created_at)
@@ -1413,7 +1417,8 @@ function syncAgentRoster(agentsDir: string): void {
 
 	const db = getDbAccessor();
 	const now = new Date().toISOString();
-	db.withWriteTx((w) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	db.withWriteTx((w: import("./db-accessor").WriteDb) => {
 		const stmt = w.prepare(
 			`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?)
@@ -1493,7 +1498,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		}
 	}
 
-	const activeEmbeddingCfg = getDbAccessor().withReadDb((db) => resolveActiveEmbeddingConfig(db, memoryCfg.embedding));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const activeEmbeddingCfg = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+		resolveActiveEmbeddingConfig(db, memoryCfg.embedding),
+	);
 	configureLlmConcurrency(memoryCfg.pipelineV2.worker.maxLlmConcurrency);
 	logger.info("config", "Resolved embedding config", {
 		provider: memoryCfg.embedding.provider,
@@ -2163,7 +2171,8 @@ async function main() {
 				if (!telemetryRef) return;
 				try {
 					const liveCfg = loadMemoryConfig(AGENTS_DIR);
-					const memoryCount = getDbAccessor().withReadDb((db) => {
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					const memoryCount = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 						const row = db
 							.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
 							.get() as { cnt: number } | undefined;
@@ -2173,7 +2182,10 @@ async function main() {
 					let runtimePressure: ReturnType<typeof buildRuntimePressureEnvelope> | undefined;
 					let resourceTelemetry: ReturnType<typeof buildResourceUtilizationTelemetry> | undefined;
 					try {
-						const queue = getDbAccessor().withReadDb((db) => getQueuePressureSnapshot(db));
+						// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+						const queue = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+							getQueuePressureSnapshot(db),
+						);
 						const workers = getPipelineWorkerStatus();
 						const resources = getResourceSnapshot();
 						resourceTelemetry = buildResourceUtilizationTelemetry(

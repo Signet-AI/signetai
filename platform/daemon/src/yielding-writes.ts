@@ -82,6 +82,7 @@ async function writeBatch<Result>(accessor: DbAccessor, processBatch: (db: Write
 	if (accessor.withWriteTxAsync) {
 		return accessor.withWriteTxAsync(processBatch);
 	}
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return accessor.withWriteTx(processBatch);
 }
 
@@ -118,7 +119,8 @@ export async function drainWriteBatches<Item>(
 		// 1. Fetch next batch (read-only, non-blocking for WAL readers).
 		const remaining = maxTotal - processed;
 		const limit = Math.min(maxPerTx, remaining);
-		const batch = accessor.withReadDb((db) => fetchBatch(db, limit));
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const batch = accessor.withReadDb((db: import("./db-accessor").ReadDb) => fetchBatch(db, limit));
 		if (!batch || batch.length === 0) {
 			return { processed, batches, paused, stopped: "exhausted" };
 		}

@@ -55,7 +55,8 @@ function resolveMemoryHeadPath(agentsDir: string, agentId: string): string {
 
 function acquireHeadLease(agentId: string, owner: string, ttlMs: number): LeaseResult {
 	try {
-		return getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const table = db
 				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_md_heads'`)
 				.get();
@@ -123,7 +124,8 @@ function acquireHeadLease(agentId: string, owner: string, ttlMs: number): LeaseR
 
 function finalizeHeadWrite(agentId: string, token: string, content: string, revision: number): boolean {
 	try {
-		return getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const result = db
 				.prepare(
 					`UPDATE memory_md_heads
@@ -141,7 +143,8 @@ function finalizeHeadWrite(agentId: string, token: string, content: string, revi
 
 function releaseHeadLease(agentId: string, token: string): void {
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			db.prepare(
 				`UPDATE memory_md_heads
 				 SET lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL

@@ -47,7 +47,8 @@ export function createEmbeddingReranker(accessor: DbAccessor, queryVector: Float
 		const ids = candidates.map((c) => c.id);
 		const placeholders = ids.map(() => "?").join(", ");
 
-		const embMap = accessor.withReadDb((db) => {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const embMap = accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
 			const rows = db
 				.prepare(
 					`SELECT source_id, vector FROM embeddings
