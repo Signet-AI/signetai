@@ -3616,37 +3616,16 @@
     },
     {
       "path": "daemon.ts",
-      "line": 2204,
+      "line": 2208,
       "api": "withReadDb",
       "source": "const memoryCount = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2215,
+      "line": 2219,
       "api": "withReadDb",
       "source": "const queue = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "database-integrity.ts",
-      "line": 270,
-      "api": "withReadDb",
-      "source": "const checks = accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => ({",
-      "category": "hot-path"
-    },
-    {
-      "path": "database-integrity.ts",
-      "line": 304,
-      "api": "withWriteTx",
-      "source": "accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "database-integrity.ts",
-      "line": 309,
-      "api": "withReadDb",
-      "source": "const verifiedTelemetry = accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
       "category": "hot-path"
     },
     {
@@ -4235,13 +4214,6 @@
       "line": 186,
       "api": "withReadDb",
       "source": "accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "pipeline/dreaming-worker.ts",
-      "line": 278,
-      "api": "withWriteTx",
-      "source": "accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {
@@ -5047,41 +5019,6 @@
       "line": 179,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "startup-recovery.ts",
-      "line": 56,
-      "api": "withReadDb",
-      "source": "const batch = accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => fetchBatch(db, limit));",
-      "category": "hot-path"
-    },
-    {
-      "path": "startup-recovery.ts",
-      "line": 59,
-      "api": "withWriteTx",
-      "source": "accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => processBatch(db, batch));",
-      "category": "hot-path"
-    },
-    {
-      "path": "startup-recovery.ts",
-      "line": 102,
-      "api": "withWriteTx",
-      "source": "documentLeasesRecovered = accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "startup-recovery.ts",
-      "line": 170,
-      "api": "withReadDb",
-      "source": "const migrationInProgress = accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "startup-recovery.ts",
-      "line": 219,
-      "api": "withWriteTx",
-      "source": "orphanedPassesSwept = accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {
