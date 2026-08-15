@@ -207,11 +207,12 @@ has ingested data that should be preserved.
 
 ## Benchmark profiles
 
-The wrapper supports two explicit Signet profiles:
+The wrapper supports explicit Signet profiles:
 
 ```bash
 bun run bench -- --profile rules
 bun run bench -- --profile supermemory-parity
+bun run bench -- --profile dreaming-parity
 ```
 
 `rules` is the default. It uses the `signet` provider and follows the common
@@ -246,6 +247,39 @@ Keep results from these profiles separate. A `supermemory-parity` result answers
 "how does Signet perform when given Supermemory's adapter advantage?" A `rules`
 result answers "how does Signet perform under the harness contract we intend to
 publish?"
+
+### Dreaming parity profile
+
+`dreaming-parity` is an opt-in, higher-cost profile for measuring the canonical
+Dreaming pass with the production default configuration. It uses the same
+`signet-dreaming` provider as `dreaming`, but writes these production-equivalent
+values into the isolated workspace:
+
+| Setting | Default `dreaming` profile | `dreaming-parity` |
+| --- | ---: | ---: |
+| `memory.dreaming.tokenThreshold` | `1000000` | `100000` |
+| `memory.dreaming.maxInputTokens` | `64000` | `128000` |
+| `memory.dreaming.maxOutputTokens` | `32000` | `16000` |
+| `memory.pipelineV2.enabled` | `false` | `true` |
+| Graph and traversal defaults | reduced | production defaults |
+
+The parity profile still uses one explicit `mode: incremental` trigger after
+the fixture is ingested. This is deliberate: the benchmark needs a bounded,
+reproducible pass. Production runs reach the same pass through the periodic
+five-minute worker and `selectDreamingCheckMode`, so scheduler firing,
+alternating focus selection, and queue-pressure deferral remain a known delta
+outside this profile. The pass itself remains canonical:
+`triggerAsync` → `runPass` → `runDreamingAgentPass`.
+
+Because the profile raises the input budget and enables the production pipeline,
+it can consume more inference time and tokens. Keep `dreaming` as the default
+for fast local iteration, and label parity results separately from the cheaper
+bench profile. The profile requires the same explicit Dreaming model and
+endpoint configuration as `dreaming`. This profile addresses the bench realism
+concern in [#1543](https://github.com/Signet-AI/signetai/issues/1543) and is
+compatible with the deterministic Dreaming gate tracked in
+[#1326](https://github.com/Signet-AI/signetai/issues/1326) and
+[#1558](https://github.com/Signet-AI/signetai/issues/1558).
 
 ## Supermemory adapter contract violation
 

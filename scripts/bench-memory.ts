@@ -23,6 +23,12 @@ const memorybenchCommands = new Set([
 	"help",
 ]);
 
+export type BenchProfile = "rules" | "dreaming" | "dreaming-parity" | "supermemory-parity";
+
+function isBenchProfile(value: string | undefined): value is BenchProfile {
+	return value === "rules" || value === "dreaming" || value === "dreaming-parity" || value === "supermemory-parity";
+}
+
 interface ParsedArgs {
 	passthrough: string[];
 	build: boolean;
@@ -32,7 +38,7 @@ interface ParsedArgs {
 	keepWorkspace: boolean;
 	graph: "on" | "off";
 	port?: number;
-	profile: "rules" | "dreaming" | "supermemory-parity";
+	profile: BenchProfile;
 	reset: boolean;
 	workspace?: string;
 }
@@ -46,12 +52,14 @@ function parseArgs(raw: string[]): ParsedArgs {
 	let keepWorkspace = process.env.SIGNET_BENCH_KEEP_WORKSPACE === "1";
 	let graph: "on" | "off" = process.env.SIGNET_BENCH_GRAPH === "off" ? "off" : "on";
 	let port: number | undefined;
-	let profile: "rules" | "dreaming" | "supermemory-parity" =
+	let profile: BenchProfile =
 		process.env.SIGNET_BENCH_PROFILE === "supermemory-parity"
 			? "supermemory-parity"
-			: process.env.SIGNET_BENCH_PROFILE === "dreaming"
-				? "dreaming"
-				: "rules";
+			: process.env.SIGNET_BENCH_PROFILE === "dreaming-parity"
+				? "dreaming-parity"
+				: process.env.SIGNET_BENCH_PROFILE === "dreaming"
+					? "dreaming"
+					: "rules";
 	let reset = process.env.SIGNET_BENCH_RESUME !== "1";
 	let workspace: string | undefined;
 
@@ -85,8 +93,8 @@ function parseArgs(raw: string[]): ParsedArgs {
 			port = parsed;
 		} else if (arg === "--profile") {
 			const next = raw[++i];
-			if (next !== "rules" && next !== "dreaming" && next !== "supermemory-parity") {
-				throw new Error("--profile must be rules, dreaming, or supermemory-parity");
+			if (!isBenchProfile(next)) {
+				throw new Error("--profile must be rules, dreaming, dreaming-parity, or supermemory-parity");
 			}
 			profile = next;
 		} else if (arg === "--reset") {
@@ -220,9 +228,9 @@ function readPositiveIntEnv(name: string, fallback: number): number {
 	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function writeIsolatedWorkspace(
+export function writeIsolatedWorkspace(
 	dir: string,
-	profile: ParsedArgs["profile"],
+	profile: BenchProfile,
 	graph: ParsedArgs["graph"],
 	dreamingModel?: string,
 	dreamingEndpoint?: string,
@@ -240,17 +248,22 @@ function writeIsolatedWorkspace(
 	writeFileSync(join(dir, "MEMORY.md"), "# MemoryBench Working Memory\n\nNo production memory is mounted here.\n");
 
 	const embeddingProvider = process.env.SIGNET_BENCH_EMBEDDING_PROVIDER || "native";
-	const dreamingConfig =
-		profile === "dreaming"
-			? dreamingEndpoint
-				? dreamingCredentialRef
-					? `
+	const isDreamingProfile = profile === "dreaming" || profile === "dreaming-parity";
+	const isDreamingParity = profile === "dreaming-parity";
+	const dreamingTokenThreshold = isDreamingParity ? 100000 : 1000000;
+	const dreamingMaxInputTokens = isDreamingParity ? 128000 : 64000;
+	const dreamingOutputTokens = isDreamingParity ? 16000 : dreamingMaxOutputTokens;
+	const dreamingTimeout = isDreamingParity ? 1200000 : dreamingTimeoutMs;
+	const dreamingConfig = isDreamingProfile
+		? dreamingEndpoint
+			? dreamingCredentialRef
+				? `
   dreaming:
     enabled: true
-    tokenThreshold: 1000000
-    maxInputTokens: 64000
-    maxOutputTokens: ${dreamingMaxOutputTokens}
-    timeout: ${dreamingTimeoutMs}
+    tokenThreshold: ${dreamingTokenThreshold}
+    maxInputTokens: ${dreamingMaxInputTokens}
+    maxOutputTokens: ${dreamingOutputTokens}
+    timeout: ${dreamingTimeout}
 
 inference:
   defaultPolicy: memorybench-dreaming
@@ -279,13 +292,13 @@ inference:
     memoryExtraction:
       policy: memorybench-dreaming
 `
-					: `
+				: `
   dreaming:
     enabled: true
-    tokenThreshold: 1000000
-    maxInputTokens: 64000
-    maxOutputTokens: ${dreamingMaxOutputTokens}
-    timeout: ${dreamingTimeoutMs}
+    tokenThreshold: ${dreamingTokenThreshold}
+    maxInputTokens: ${dreamingMaxInputTokens}
+    maxOutputTokens: ${dreamingOutputTokens}
+    timeout: ${dreamingTimeout}
 
 inference:
   defaultPolicy: memorybench-dreaming
@@ -307,13 +320,13 @@ inference:
     memoryExtraction:
       policy: memorybench-dreaming
 `
-				: `
+			: `
   dreaming:
     enabled: true
-    tokenThreshold: 1000000
-    maxInputTokens: 64000
-    maxOutputTokens: ${dreamingMaxOutputTokens}
-    timeout: ${dreamingTimeoutMs}
+    tokenThreshold: ${dreamingTokenThreshold}
+    maxInputTokens: ${dreamingMaxInputTokens}
+    maxOutputTokens: ${dreamingOutputTokens}
+    timeout: ${dreamingTimeout}
 
 inference:
   defaultPolicy: memorybench-dreaming
@@ -340,10 +353,44 @@ inference:
     memoryExtraction:
       policy: memorybench-dreaming
 `
-			: "";
+		: "";
+	const pipelineConfig = isDreamingParity
+		? `  pipelineV2:
+    enabled: true
+    graph:
+      enabled: ${graph === "on"}
+    traversal:
+      enabled: ${graph === "on"}
+`
+		: `  pipelineV2:
+    enabled: false
+    graph:
+      enabled: ${graph === "on"}
+      extractionWritesEnabled: false
+    traversal:
+      enabled: ${graph === "on"}
+    structural:
+      enabled: false
+      synthesisEnabled: false
+      supersessionSweepEnabled: false
+    reranker:
+      enabled: false
+    autonomous:
+      enabled: false
+    procedural:
+      enabled: false
+    predictor:
+      enabled: false
+    hints:
+      enabled: true
+    guardrails:
+      maxContentChars: 100000
+      chunkTargetChars: 50000
+      recallTruncateChars: 20000
+`;
 	writeFileSync(
 		join(dir, "agent.yaml"),
-		`configVersion: 2\n\nagent:\n  name: memorybench\n\nauth:\n  mode: local\n\nembedding:\n  provider: ${embeddingProvider}\n  model: ${process.env.SIGNET_BENCH_EMBEDDING_MODEL || "nomic-embed-text-v1.5"}\n  dimensions: ${process.env.SIGNET_BENCH_EMBEDDING_DIMENSIONS || "768"}\n\nsearch:\n  alpha: 0.7\n  top_k: 20\n  min_score: 0.1\n  rehearsal_enabled: false\n\nmemory:\n  pipelineV2:\n    enabled: false\n    graph:\n      enabled: ${graph === "on"}\n      extractionWritesEnabled: false\n    traversal:\n      enabled: ${graph === "on"}\n    structural:\n      enabled: false\n      synthesisEnabled: false\n      supersessionSweepEnabled: false\n    reranker:\n      enabled: false\n    autonomous:\n      enabled: false\n    synthesis:\n      enabled: false\n    procedural:\n      enabled: false\n    predictor:\n      enabled: false\n    hints:\n      enabled: true\n    guardrails:\n      maxContentChars: 100000\n      chunkTargetChars: 50000\n      recallTruncateChars: 20000\n${dreamingConfig}`,
+		`configVersion: 2\n\nagent:\n  name: memorybench\n\nauth:\n  mode: local\n\nembedding:\n  provider: ${embeddingProvider}\n  model: ${process.env.SIGNET_BENCH_EMBEDDING_MODEL || "nomic-embed-text-v1.5"}\n  dimensions: ${process.env.SIGNET_BENCH_EMBEDDING_DIMENSIONS || "768"}\n\nsearch:\n  alpha: 0.7\n  top_k: 20\n  min_score: 0.1\n  rehearsal_enabled: false\n\nmemory:\n${pipelineConfig}${dreamingConfig}`,
 	);
 }
 
@@ -391,7 +438,7 @@ function buildMemoryBenchArgs(
 	const provider =
 		profile === "supermemory-parity"
 			? "signet-supermemory-parity"
-			: profile === "dreaming"
+			: profile === "dreaming" || profile === "dreaming-parity"
 				? "signet-dreaming"
 				: "signet";
 	const continuation = isContinuationCommand(command, args);
@@ -448,14 +495,15 @@ async function main(): Promise<void> {
 	const dreamingCredentialRef = process.env.SIGNET_BENCH_DREAMING_CREDENTIAL_REF?.trim();
 	const dreamingProviderFamily = process.env.SIGNET_BENCH_DREAMING_PROVIDER_FAMILY?.trim() || "openai-compatible";
 	const dreamingApiKey = process.env.SIGNET_BENCH_DREAMING_API_KEY?.trim();
-	if (parsed.profile === "dreaming" && !dreamingModel) {
+	const isDreamingProfile = parsed.profile === "dreaming" || parsed.profile === "dreaming-parity";
+	if (isDreamingProfile && !dreamingModel) {
 		throw new Error("Dreaming benchmark requires SIGNET_BENCH_DREAMING_MODEL (an OpenRouter model id)");
 	}
-	if (parsed.profile === "dreaming" && !dreamingEndpoint && !process.env.OPENROUTER_API_KEY?.trim()) {
+	if (isDreamingProfile && !dreamingEndpoint && !process.env.OPENROUTER_API_KEY?.trim()) {
 		throw new Error("Dreaming benchmark requires SIGNET_BENCH_DREAMING_ENDPOINT or OPENROUTER_API_KEY");
 	}
 	if (
-		parsed.profile === "dreaming" &&
+		isDreamingProfile &&
 		dreamingEndpoint &&
 		!isLocalEndpoint(dreamingEndpoint) &&
 		!dreamingApiKey &&
@@ -473,8 +521,11 @@ async function main(): Promise<void> {
 		dreamingEndpoint,
 		dreamingCredentialRef || (dreamingApiKey ? "SIGNET_BENCH_DREAMING_API_KEY" : undefined),
 		dreamingProviderFamily,
-		readPositiveIntEnv("SIGNET_BENCH_DREAMING_TIMEOUT_MS", 600_000),
-		readPositiveIntEnv("SIGNET_BENCH_DREAMING_MAX_OUTPUT_TOKENS", 32_000),
+		readPositiveIntEnv("SIGNET_BENCH_DREAMING_TIMEOUT_MS", parsed.profile === "dreaming-parity" ? 1_200_000 : 600_000),
+		readPositiveIntEnv(
+			"SIGNET_BENCH_DREAMING_MAX_OUTPUT_TOKENS",
+			parsed.profile === "dreaming-parity" ? 16_000 : 32_000,
+		),
 	);
 
 	const usesDefaultSample = defaultedDevSample(parsed.passthrough, parsed.full);
@@ -554,7 +605,9 @@ async function main(): Promise<void> {
 	}
 }
 
-main().catch((error) => {
-	console.error(error instanceof Error ? error.message : String(error));
-	process.exit(1);
-});
+if (import.meta.main) {
+	main().catch((error) => {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exit(1);
+	});
+}
