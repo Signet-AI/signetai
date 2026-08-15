@@ -55,7 +55,7 @@ export class BaseSessionStateStore implements BaseSessionState {
 	protected readonly pendingSessionContext = new Map<string, string>();
 	protected readonly pendingRecall = new Map<string, string[]>();
 	private readonly pendingSessionEnds = new Map<string, PendingSessionEnd>();
-	private pendingSessionSwitch: PendingSessionSwitch | undefined;
+	private readonly pendingSessionSwitches: PendingSessionSwitch[] = [];
 	private readonly endedSessions = new Map<string, number>();
 
 	private activeSessionId: string | undefined;
@@ -173,14 +173,14 @@ export class BaseSessionStateStore implements BaseSessionState {
 	}
 
 	queuePendingSessionSwitch(fromSessionId: string, toSessionId: string): void {
-		this.pendingSessionSwitch = { fromSessionId, toSessionId };
+		this.pendingSessionSwitches.push({ fromSessionId, toSessionId });
 	}
 
 	clearPendingSessionSwitch(): void {
-		this.pendingSessionSwitch = undefined;
+		this.pendingSessionSwitches.shift();
 	}
 
 	getPendingSessionSwitch(): PendingSessionSwitch | undefined {
-		return this.pendingSessionSwitch;
+		return this.pendingSessionSwitches[0];
 	}
 }

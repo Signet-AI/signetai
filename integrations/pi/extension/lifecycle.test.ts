@@ -28,14 +28,14 @@ afterEach(() => {
 	}
 });
 
-function createTestContext(sessionId: string, project = "/tmp/project") {
+function createTestContext(sessionId: string, project = "/tmp/project", sessionFile?: string) {
 	return {
 		cwd: project,
 		sessionManager: {
 			getBranch: () => [],
 			getEntries: () => [{ type: "message", message: { role: "user", content: "hello" } }],
 			getHeader: () => ({ id: sessionId, cwd: project }),
-			getSessionFile: () => undefined,
+			getSessionFile: () => sessionFile,
 			getSessionId: () => sessionId,
 		},
 	} as const;
@@ -75,6 +75,61 @@ describe("pi lifecycle session-end handling", () => {
 		const proof = assertLifecycleObservationInvariants(recorder.observations);
 		expect(proof.observations).toBe(5);
 	});
+
+	it("preserves multiple deferred session switches in queue order", async () => {
+		const recorder = new LifecycleObservationRecorder();
+		setLifecycleObservers({ observation: (observation: LifecycleObservationInput) => recorder.record(observation) });
+		let shouldSucceed = false;
+		const deps: LifecycleDeps = {
+			agentId: "agent-1",
+			client: {
+				async post<T>(_path: string, _body: unknown): Promise<T | null> {
+					return shouldSucceed ? ({} as T) : null;
+				},
+				async postResult<T>(_path: string, _body: unknown): Promise<{ ok: true; data: T }> {
+					return { ok: true, data: {} as T };
+				},
+			},
+			state: createSessionState(),
+			config: PI_LIFECYCLE_CONFIG,
+		};
+		const dir = mkdtempSync(join(tmpdir(), "pi-lifecycle-switch-queue-"));
+		tempDirs.push(dir);
+		const oldFile = join(dir, "old-session.jsonl");
+		const newFile = join(dir, "new-session.jsonl");
+		deps.state.setActiveSession("old-session", oldFile);
+
+		await endPreviousSession(deps, { previousSessionFile: oldFile }, "session_switch");
+		await refreshSessionStart(deps, createTestContext("new-session", "/tmp/project", newFile) as never);
+		expect(deps.state.getPendingSessionSwitch()).toEqual({
+			fromSessionId: "old-session",
+			toSessionId: "new-session",
+		});
+
+		await endPreviousSession(deps, { previousSessionFile: newFile }, "session_switch");
+		await refreshSessionStart(deps, createTestContext("third-session") as never);
+		// The second deferred rotation must not replace the first one.
+		expect(deps.state.getPendingSessionSwitch()).toEqual({
+			fromSessionId: "old-session",
+			toSessionId: "new-session",
+		});
+
+		writeFileSync(oldFile, JSON.stringify({ type: "session", id: "old-session", cwd: "/tmp/project" }));
+		writeFileSync(newFile, JSON.stringify({ type: "session", id: "new-session", cwd: "/tmp/project" }));
+		shouldSucceed = true;
+		await flushPendingSessionEnds(deps);
+
+		expect(
+			recorder.observations
+				.filter((observation) => observation.stage === "session-switch")
+				.map((observation) => [observation.fromSessionId, observation.toSessionId]),
+		).toEqual([
+			["old-session", "new-session"],
+			["new-session", "third-session"],
+		]);
+		expect(deps.state.getPendingSessionSwitch()).toBeUndefined();
+	});
+
 	it("defers marking a previous session ended until its session file can be reconstructed and submitted", async () => {
 		const calls: Array<{ path: string; body: unknown }> = [];
 		let shouldSucceed = false;

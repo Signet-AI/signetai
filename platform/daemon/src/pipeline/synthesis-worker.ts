@@ -345,6 +345,24 @@ export function startSynthesisWorker(
 		pendingQueue.push({ source, agentId: key, count: 1 });
 	}
 
+	function abandonPendingForceWork(): number {
+		let abandonedWork = 0;
+		for (const entry of pendingQueue) {
+			for (let count = 0; count < entry.count; count += 1) {
+				emitLifecycleObservation({
+					stage: "restart",
+					workId: `synthesis:${entry.agentId}`,
+					state: "abandoned",
+					sourceSessionId: "daemon",
+					targetSessionId: "daemon",
+				});
+				abandonedWork += 1;
+			}
+		}
+		pendingQueue.length = 0;
+		return abandonedWork;
+	}
+
 	function clearPendingForceFor(agentId?: string): void {
 		const key = normalizeAgentId(agentId);
 		let idx = pendingQueue.findIndex((entry) => entry.agentId === key);
@@ -520,28 +538,28 @@ export function startSynthesisWorker(
 		},
 		async drain() {
 			const startedAtMs = Date.now();
-			// Capture work at shutdown entry. The active run may clear its owner
+			// Capture the active owner at shutdown entry. It may clear its owner
 			// fields before the drain wait resolves, but it still counts toward the
-			// shutdown result. Queued forced work is scheduled work even if it has
-			// not started yet.
+			// shutdown result. Queued forced work is drained after the wait so work
+			// queued by an in-flight forced attempt is accounted for too.
 			const workIdAtShutdown = activeWorkId;
-			const pendingWorkAtShutdown = pendingQueue.reduce((sum, entry) => sum + entry.count, 0);
 			// Cancel any pending tick to prevent new synthesis starting
 			if (timer) {
 				clearTimeout(timer);
 				timer = null;
 			}
 			if (!isSynthesizing) {
-				if (pendingWorkAtShutdown === 0) return "completed";
+				const abandonedWork = abandonPendingForceWork();
+				if (abandonedWork === 0) return "completed";
 				const completedAtMs = Date.now();
 				emitLifecycleShutdown({
 					startedAtMs,
 					completedAtMs,
 					budgetMs: config.timeout + DRAIN_TIMEOUT_BUFFER_MS + 100,
-					startedWork: pendingWorkAtShutdown,
-					pendingWork: pendingWorkAtShutdown,
+					startedWork: abandonedWork,
+					pendingWork: 0,
 					completedWork: 0,
-					abandonedWork: 0,
+					abandonedWork,
 				});
 				return "completed";
 			}
@@ -562,6 +580,7 @@ export function startSynthesisWorker(
 					}),
 				]);
 				if (timedOut && activeRunState) activeRunState.abandoned = true;
+				const abandonedPendingWork = abandonPendingForceWork();
 				const completedAtMs = Date.now();
 				const workId = workIdAtShutdown;
 				if (workId) {
@@ -577,10 +596,10 @@ export function startSynthesisWorker(
 					startedAtMs,
 					completedAtMs,
 					budgetMs: config.timeout + DRAIN_TIMEOUT_BUFFER_MS + 100,
-					startedWork: (workId ? 1 : 0) + pendingWorkAtShutdown,
-					pendingWork: pendingWorkAtShutdown,
+					startedWork: (workId ? 1 : 0) + abandonedPendingWork,
+					pendingWork: 0,
 					completedWork: workId && !timedOut ? 1 : 0,
-					abandonedWork: workId && timedOut ? 1 : 0,
+					abandonedWork: (workId && timedOut ? 1 : 0) + abandonedPendingWork,
 				});
 				return timedOut ? "timeout" : "completed";
 			} finally {
@@ -608,7 +627,15 @@ export function startSynthesisWorker(
 			const lockToken = acquireWriteLock();
 			if (lockToken === null) {
 				if (opts?.force) {
+					const key = normalizeAgentId(opts.agentId);
 					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
+					emitLifecycleObservation({
+						stage: "restart",
+						workId: `synthesis:${key}`,
+						state: "queued",
+						sourceSessionId: "daemon",
+						targetSessionId: "daemon",
+					});
 					scheduleTick(FORCE_RETRY_MS);
 					return {
 						success: false,

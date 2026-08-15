@@ -137,17 +137,19 @@ export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<bool
 		deps.state.clearPendingSessionEnd(pending.sessionId);
 	}
 
-	const pendingSwitch = deps.state.getPendingSessionSwitch();
-	if (pendingSwitch && deps.state.sessionAlreadyEnded(pendingSwitch.fromSessionId)) {
+	let switchEmitted = false;
+	let pendingSwitch = deps.state.getPendingSessionSwitch();
+	while (pendingSwitch && deps.state.sessionAlreadyEnded(pendingSwitch.fromSessionId)) {
 		emitLifecycleObservation({
 			stage: "session-switch",
 			fromSessionId: pendingSwitch.fromSessionId,
 			toSessionId: pendingSwitch.toSessionId,
 		});
 		deps.state.clearPendingSessionSwitch();
-		return true;
+		switchEmitted = true;
+		pendingSwitch = deps.state.getPendingSessionSwitch();
 	}
-	return false;
+	return switchEmitted;
 }
 
 export async function refreshSessionStart(deps: LifecycleDeps, ctx: BaseExtensionContext): Promise<void> {

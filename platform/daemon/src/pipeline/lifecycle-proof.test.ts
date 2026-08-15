@@ -67,8 +67,12 @@ describe("daemon lifecycle proof integration", () => {
 	});
 
 	it("counts forced work that was scheduled but not started during shutdown", async () => {
+		const recorder = new LifecycleObservationRecorder();
 		const recorderShutdown: LifecycleShutdownWindow[] = [];
-		setLifecycleObservers({ shutdown: (window) => recorderShutdown.push(window) });
+		setLifecycleObservers({
+			observation: (observation: LifecycleObservationInput) => recorder.record(observation),
+			shutdown: (window) => recorderShutdown.push(window),
+		});
 		const worker = startSynthesisWorker(
 			{ timeout: 10, maxTokens: 100, idleGapMinutes: 15 },
 			{
@@ -92,9 +96,11 @@ describe("daemon lifecycle proof integration", () => {
 			const shutdown = recorderShutdown[0];
 			if (!shutdown) throw new Error("expected owner-emitted shutdown evidence");
 			expect(shutdown.startedWork).toBe(1);
-			expect(shutdown.pendingWork).toBe(1);
+			expect(shutdown.pendingWork).toBe(0);
 			expect(shutdown.completedWork).toBe(0);
-			expect(shutdown.abandonedWork).toBe(0);
+			expect(shutdown.abandonedWork).toBe(1);
+			const proof = assertLifecycleObservationInvariants(recorder.observations);
+			expect(proof.workStateCounts).toMatchObject({ queued: 1, abandoned: 1 });
 			assertShutdownInvariant(shutdown);
 		} finally {
 			setLifecycleObservers(undefined);
