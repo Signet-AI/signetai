@@ -289,6 +289,65 @@ describe("discord-source-provider", () => {
 		expect(tombstone?.source_meta_json).toContain('"deleted":true');
 	});
 
+	it("bounds and replaces Discord heartbeat timers", async () => {
+		const originalSetInterval = globalThis.setInterval;
+		const originalClearInterval = globalThis.clearInterval;
+		const timers: Array<{ readonly id: number; readonly timeout: number | undefined }> = [];
+		const cleared: unknown[] = [];
+		let nextTimerId = 0;
+		globalThis.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+			const timer = { id: ++nextTimerId, timeout };
+			timers.push(timer);
+			void handler;
+			void args;
+			return timer.id;
+		}) as unknown as typeof setInterval;
+		globalThis.clearInterval = ((handle?: string | number | Timer) => {
+			if (typeof handle !== "number") return;
+			const timer = timers.find((candidate) => candidate.id === handle);
+			if (timer) cleared.push(timer);
+		}) as typeof clearInterval;
+		try {
+			let shouldContinue = true;
+			setDiscordGatewaySocketFactoryForTest(
+				() =>
+					new FakeDiscordGatewaySocket(
+						() => {
+							shouldContinue = false;
+						},
+						60 * 60 * 1_000,
+						true,
+					),
+			);
+			const added = addDiscordSource(
+				{
+					guildIds: ["123456789012345678"],
+					tokenRef: "DISCORD_BOT_TOKEN",
+					syncMode: "gateway-tail",
+					now: "2026-01-01T00:00:00.000Z",
+				},
+				dir,
+			);
+			expect(added.ok).toBe(true);
+			if (added.ok === false) throw new Error(added.error);
+
+			const result = await discordSourceProvider.sync?.({
+				source: added.source,
+				agentsDir: dir,
+				agentId: "default",
+				shouldContinue: () => shouldContinue,
+			});
+
+			expect(result?.failures).toEqual([]);
+			const heartbeatTimers = timers.filter((timer) => timer.timeout !== 250);
+			expect(heartbeatTimers.map((timer) => timer.timeout)).toEqual([1_000, 1_000]);
+			expect(cleared).toEqual(expect.arrayContaining(heartbeatTimers));
+		} finally {
+			globalThis.setInterval = originalSetInterval;
+			globalThis.clearInterval = originalClearInterval;
+		}
+	});
+
 	it("records partial Discord failures without deleting existing source-owned rows", async () => {
 		const added = addDiscordSource(
 			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", now: "2026-01-01T00:00:00.000Z" },
@@ -1353,18 +1412,28 @@ class FakeDiscordGatewaySocket {
 	onclose: ((event: { readonly code?: number; readonly reason?: string }) => void) | null = null;
 	readonly sent: string[] = [];
 	private readonly stop: () => void;
+	private readonly heartbeatInterval: number;
+	private readonly repeatHello: boolean;
+	private repeatedHelloSent = false;
 
-	constructor(stop: () => void) {
+	constructor(stop: () => void, heartbeatInterval = 1_000, repeatHello = false) {
 		this.stop = stop;
+		this.heartbeatInterval = heartbeatInterval;
+		this.repeatHello = repeatHello;
 		queueMicrotask(() => {
 			this.onopen?.({});
-			this.onmessage?.({ data: JSON.stringify({ op: 10, d: { heartbeat_interval: 1_000 } }) });
+			this.sendHello();
 		});
 	}
 
 	send(data: string): void {
 		this.sent.push(data);
 		if (!data.includes('"op":2')) return;
+		if (this.repeatHello && !this.repeatedHelloSent) {
+			this.repeatedHelloSent = true;
+			this.sendHello();
+			return;
+		}
 		queueMicrotask(() => {
 			this.dispatch("CHANNEL_UPDATE", 1, {
 				id: "123456789012345679",
@@ -1409,6 +1478,10 @@ class FakeDiscordGatewaySocket {
 			this.stop();
 			this.close(1000, "test complete");
 		});
+	}
+
+	private sendHello(): void {
+		this.onmessage?.({ data: JSON.stringify({ op: 10, d: { heartbeat_interval: this.heartbeatInterval } }) });
 	}
 
 	close(code?: number, reason?: string): void {

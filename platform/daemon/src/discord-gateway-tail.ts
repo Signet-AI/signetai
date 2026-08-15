@@ -27,6 +27,10 @@ const DISCORD_GATEWAY_INTENTS =
 	32768; // MESSAGE_CONTENT
 const GATEWAY_RECONNECT_DELAY_MS = 1_000;
 const GATEWAY_SHOULD_CONTINUE_POLL_MS = 250;
+const DISCORD_GATEWAY_MIN_HEARTBEAT_INTERVAL_MS = 1_000;
+// Discord normally sends heartbeat intervals well below this five-minute ceiling. Cap gateway input to prevent an unbounded timer.
+const DISCORD_GATEWAY_MAX_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1_000;
+const DISCORD_GATEWAY_HEARTBEAT_TICK_MS = 1_000;
 
 type BivariantEventHandler<Event> = { bivarianceHack(event: Event): void }["bivarianceHack"];
 
@@ -203,10 +207,16 @@ async function runDiscordGatewayConnection(
 				if (typeof payload.s === "number") sequence = payload.s;
 				if (payload.op === DISCORD_GATEWAY_HELLO_OP) {
 					const heartbeatInterval = gatewayHeartbeatInterval(payload.d);
+					if (heartbeatTimer) clearInterval(heartbeatTimer);
+					heartbeatTimer = null;
 					if (heartbeatInterval !== null) {
+						let nextHeartbeatAt = Date.now() + heartbeatInterval;
 						heartbeatTimer = setInterval(() => {
+							const now = Date.now();
+							if (now < nextHeartbeatAt) return;
 							socket.send(JSON.stringify({ op: DISCORD_GATEWAY_HEARTBEAT_OP, d: sequence }));
-						}, heartbeatInterval);
+							nextHeartbeatAt = now + heartbeatInterval;
+						}, DISCORD_GATEWAY_HEARTBEAT_TICK_MS);
 					}
 					socket.send(
 						JSON.stringify({
@@ -341,7 +351,11 @@ function parseGatewayPayload(data: unknown): DiscordGatewayPayload | null {
 
 function gatewayHeartbeatInterval(data: unknown): number | null {
 	if (!isRecord(data) || typeof data.heartbeat_interval !== "number") return null;
-	return Math.max(1_000, data.heartbeat_interval);
+	if (!Number.isFinite(data.heartbeat_interval)) return null;
+	return Math.min(
+		DISCORD_GATEWAY_MAX_HEARTBEAT_INTERVAL_MS,
+		Math.max(DISCORD_GATEWAY_MIN_HEARTBEAT_INTERVAL_MS, data.heartbeat_interval),
+	);
 }
 
 function isFatalGatewayCloseCode(code: number | undefined): boolean {
