@@ -132,6 +132,10 @@ class IntegrityRepairTimeoutError extends Error {
 	}
 }
 
+const REPAIR_BUSY_TIMEOUT_MS = 5_000;
+const REPAIR_BUSY_RETRIES = 3;
+const REPAIR_BUSY_BACKOFF_MS = 50;
+
 const REPAIR_WORKER_SOURCE = `
 import { createRequire } from "node:module";
 const load = createRequire(process.env.SIGNET_DATABASE_INTEGRITY_REQUIRE_BASE || process.cwd() + "/package.json");
@@ -143,11 +147,35 @@ const dbPath = process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH;
 const indexes = JSON.parse(process.env.SIGNET_DATABASE_INTEGRITY_INDEXES || "[]");
 if (typeof dbPath !== "string" || !Array.isArray(indexes)) throw new Error("invalid integrity repair arguments");
 const escaped = (name) => '"' + String(name).replaceAll('"', '""') + '"';
-const database = new Database(dbPath);
+const database = typeof Bun === "undefined"
+  ? new Database(dbPath, { timeout: ${REPAIR_BUSY_TIMEOUT_MS} })
+  : new Database(dbPath);
+database.exec("PRAGMA busy_timeout = ${REPAIR_BUSY_TIMEOUT_MS}");
+const isBusyError = (error) => {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return code === "SQLITE_BUSY" || message.includes("SQLITE_BUSY") || message.includes("database is locked");
+};
+const wait = (milliseconds) => {
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(signal, 0, 0, milliseconds);
+};
+const repair = () => {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      for (const index of indexes) database.exec("REINDEX " + escaped(index));
+      database.exec("COMMIT");
+      return;
+    } catch (error) {
+      try { database.exec("ROLLBACK"); } catch {}
+      if (!isBusyError(error) || attempt >= ${REPAIR_BUSY_RETRIES}) throw error;
+      wait(${REPAIR_BUSY_BACKOFF_MS} * 2 ** attempt);
+    }
+  }
+};
 try {
-  database.exec("BEGIN IMMEDIATE");
-  for (const index of indexes) database.exec("REINDEX " + escaped(index));
-  database.exec("COMMIT");
+  repair();
   process.stdout.write(JSON.stringify({ ok: true }) + "\\n");
 } catch (error) {
   try { database.exec("ROLLBACK"); } catch {}
@@ -197,9 +225,14 @@ async function runKillableTelemetryRepair(
 				reject(new IntegrityRepairTimeoutError(timeoutMs));
 			}, timeoutMs);
 			let output = "";
+			let errorOutput = "";
 			child?.stdout?.setEncoding("utf8");
 			child?.stdout?.on("data", (chunk: string) => {
 				output += chunk;
+			});
+			child?.stderr?.setEncoding("utf8");
+			child?.stderr?.on("data", (chunk: string) => {
+				errorOutput += chunk;
 			});
 			child?.once("error", (error) => {
 				if (settled) return;
@@ -212,7 +245,12 @@ async function runKillableTelemetryRepair(
 				settled = true;
 				clearTimeout(timer);
 				if (code !== 0) {
-					reject(new Error(`telemetry index repair worker exited with code ${code ?? "unknown"}`));
+					const detail = errorOutput.trim();
+					reject(
+						new Error(
+							`telemetry index repair worker exited with code ${code ?? "unknown"}${detail.length > 0 ? `: ${detail}` : ""}`,
+						),
+					);
 					return;
 				}
 				try {

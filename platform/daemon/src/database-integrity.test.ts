@@ -136,6 +136,54 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("waits for a concurrent writer before repairing telemetry indexes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-repair-busy-"));
+		const dbPath = join(dir, "memory.db");
+		const database = new Database(dbPath);
+		database.exec(
+			"PRAGMA journal_mode = WAL; CREATE TABLE telemetry_events (event TEXT, queue TEXT, timestamp TEXT, unsent INTEGER); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event); CREATE INDEX idx_telemetry_events_queue ON telemetry_events(queue); CREATE INDEX idx_telemetry_events_timestamp ON telemetry_events(timestamp); CREATE INDEX idx_telemetry_events_unsent ON telemetry_events(unsent); BEGIN IMMEDIATE",
+		);
+		database.prepare("INSERT INTO telemetry_events VALUES (?, ?, ?, ?)").run("held", "queue", "now", 0);
+		const holdMs = 400;
+		const startedAt = Date.now();
+		const releaseTimer = setTimeout(() => {
+			database.exec("COMMIT");
+			database.close();
+		}, holdMs);
+
+		try {
+			const result = await repairTelemetryIndexes(
+				fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+				(db) => {
+					db.exec("INSERT INTO repair_audit VALUES (1)");
+				},
+				{
+					dbPath,
+					repairTimeoutMs: 5_000,
+					repairRuntimePath: "node",
+				},
+			);
+
+			expect(result.state).toBe("repaired");
+			expect(result.rebuiltIndexes).toHaveLength(4);
+			expect(Date.now() - startedAt).toBeGreaterThanOrEqual(holdMs - 50);
+			const verification = new Database(dbPath, { readonly: true });
+			expect(verification.prepare("PRAGMA integrity_check(telemetry_events)").all()).toEqual([
+				{ integrity_check: "ok" },
+			]);
+			verification.close();
+		} finally {
+			clearTimeout(releaseTimer);
+			try {
+				database.exec("ROLLBACK");
+			} catch {}
+			try {
+				database.close();
+			} catch {}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("audits the repair inside the write transaction", async () => {
 		const { accessor } = fakeAccessor({ telemetryMessage: "index mismatch" });
 		let auditedIndexes: readonly string[] = [];
