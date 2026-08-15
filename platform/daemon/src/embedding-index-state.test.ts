@@ -147,6 +147,25 @@ describe("embedding index state", () => {
 		expect(isActiveEmbeddingConfig(db, config)).toBe(false);
 	});
 
+	it("alternates the inactive projection slot across promotions", () => {
+		const raw = new Database(":memory:");
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(
+			"CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER)",
+		);
+		const db = raw as unknown as WriteDb;
+		ensureEmbeddingIndexState(db, config);
+		const first = beginEmbeddingIndexBuild(db, { ...config, provider: "ollama", model: "custom-a", dimensions: 3 });
+		expect(first.staging?.projectionSlot).toBe("staging");
+		raw
+			.prepare(
+				"UPDATE embedding_index_state SET active_profile_json = staging_profile_json, staging_profile_json = NULL, state = 'ready' WHERE id = 1",
+			)
+			.run();
+		const second = beginEmbeddingIndexBuild(db, { ...config, provider: "ollama", model: "custom-b", dimensions: 3 });
+		expect(second.active.projectionSlot).toBe("staging");
+		expect(second.staging?.projectionSlot).toBe("active");
+	});
 	it("normalizes malformed config before it becomes durable state", () => {
 		const raw = new Database(":memory:");
 		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);

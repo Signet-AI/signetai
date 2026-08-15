@@ -4,6 +4,7 @@ import { embeddingProfileFingerprint, recommendedEmbeddingProfileId } from "./em
 import type { EmbeddingConfig } from "./memory-config";
 
 export type EmbeddingIndexBuildState = "ready" | "building" | "failed";
+export type EmbeddingProjectionSlot = "active" | "staging";
 
 export interface PersistedEmbeddingProfile {
 	readonly fingerprint: string;
@@ -12,6 +13,8 @@ export interface PersistedEmbeddingProfile {
 	readonly dimensions: number;
 	readonly baseUrl: string;
 	readonly profile?: string;
+	/** Projection table containing vectors for this durable embedding slot. */
+	readonly projectionSlot?: EmbeddingProjectionSlot;
 	/** Set only while a promoted durable slot still needs its vec projection rebuilt. */
 	readonly projectionRebuild?: boolean;
 }
@@ -95,6 +98,9 @@ function parseProfile(value: string): PersistedEmbeddingProfile | null {
 			model: parsed.model,
 			dimensions,
 			baseUrl: parsed.baseUrl,
+			...(parsed.projectionSlot === "active" || parsed.projectionSlot === "staging"
+				? { projectionSlot: parsed.projectionSlot }
+				: {}),
 			...(typeof parsed.profile === "string" ? { profile: parsed.profile } : {}),
 			...(parsed.projectionRebuild === true ? { projectionRebuild: true } : {}),
 		};
@@ -109,7 +115,11 @@ function isEmbeddingProvider(value: unknown): value is EmbeddingConfig["provider
 
 function parseState(row: StateRow): EmbeddingIndexState | null {
 	const active = parseProfile(row.active_profile_json);
-	const staging = row.staging_profile_json === null ? null : parseProfile(row.staging_profile_json);
+	const parsedStaging = row.staging_profile_json === null ? null : parseProfile(row.staging_profile_json);
+	const staging =
+		parsedStaging && parsedStaging.projectionSlot === undefined
+			? { ...parsedStaging, projectionSlot: "staging" as const }
+			: parsedStaging;
 	if (!active || (row.staging_profile_json !== null && !staging)) return null;
 	if (row.state !== "ready" && row.state !== "building" && row.state !== "failed") return null;
 	return { active, staging, state: row.state, lastError: row.last_error };
@@ -164,7 +174,10 @@ export function beginEmbeddingIndexBuild(
 		...cfg,
 		profile: recommendedEmbeddingProfileId(cfg),
 	};
-	const staging = profileForStorage(stagingConfig);
+	const staging = {
+		...profileForStorage(stagingConfig),
+		projectionSlot: current.active.projectionSlot === "staging" ? ("active" as const) : ("staging" as const),
+	};
 	if (current.state === "building" && current.staging?.fingerprint === staging.fingerprint) return current;
 	if (current.active.fingerprint === staging.fingerprint) {
 		// The configured profile IS the active generation: nothing to build.

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import { findSqliteVecExtension } from "@signet/core";
+import { vectorSearch } from "../../core/src/search";
 import { up as embeddingIndexGenerations } from "../../core/src/migrations/091-embedding-index-generations";
 import { type DbAccessor, DbWriteQueueFullError, type ReadDb, type SqliteStatement, type WriteDb } from "./db-accessor";
 import {
@@ -360,6 +361,64 @@ describe("staging promotion", () => {
 		expect(raw.prepare("SELECT id FROM vec_embeddings_staging").get()).toEqual({ id: "old" });
 	});
 
+	it("keeps old recall through swap and rebuild initialization before publishing the new projection", async () => {
+		if (!VEC_EXTENSION) return;
+		const raw = new Database(":memory:");
+		raw.loadExtension(VEC_EXTENSION);
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(`
+			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT, type TEXT);
+			CREATE TABLE embeddings (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+			CREATE VIRTUAL TABLE vec_embeddings_staging USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+		`);
+		const db = raw as unknown as WriteDb;
+		const active = {
+			provider: "ollama",
+			model: "custom-a",
+			dimensions: 3,
+			base_url: "http://127.0.0.1:11434",
+		} as const;
+		const desired = { ...active, model: "custom-b" };
+		ensureEmbeddingIndexState(db, active);
+		beginEmbeddingIndexBuild(db, desired);
+		const vector = new Uint8Array(new Float32Array([1, 0, 0]).buffer);
+		const newVector = new Uint8Array(new Float32Array([0, 1, 0]).buffer);
+		raw.exec("INSERT INTO memories VALUES ('memory-old', 'custom-a', 'fact'), ('memory-new', 'custom-b', 'fact')");
+		raw
+			.prepare("INSERT INTO embeddings VALUES (?, ?, ?, 3, 'memory', ?, '2026-01-01', 'agent-a')")
+			.run("old", "old-hash", vector, "memory-old");
+		raw
+			.prepare("INSERT INTO embeddings_staging VALUES (?, ?, ?, 3, 'memory', ?, '2026-01-01', 'agent-a')")
+			.run("new", "old-hash", newVector, "memory-new");
+		raw.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run("old", new Float32Array([1, 0, 0]));
+		raw
+			.prepare("INSERT INTO vec_embeddings_staging (id, embedding) VALUES (?, ?)")
+			.run("new", new Float32Array([0, 1, 0]));
+
+		const searchDb = raw as unknown as Parameters<typeof vectorSearch>[0];
+		const oldQuery = new Float32Array([1, 0, 0]);
+		const newQuery = new Float32Array([0, 1, 0]);
+		const interleavings: Array<Array<{ id: string; score: number }>> = [];
+		let transactions = 0;
+		const accessor: DbAccessor = {
+			withWriteTxAsync: async (fn) => {
+				transactions++;
+				const result = testTransaction(raw, db, fn);
+				if (transactions === 1 || transactions === 2)
+					interleavings.push(vectorSearch(searchDb, oldQuery, { limit: 1 }));
+				return result;
+			},
+			withReadDbAsync: async (fn) => fn(raw as unknown as ReadDb),
+			close: () => undefined,
+		};
+
+		expect(await promoteStagingIndex(accessor)).toBe(true);
+		expect(interleavings).toEqual([[{ id: "memory-old", score: 1 }], [{ id: "memory-old", score: 1 }]]);
+		expect(vectorSearch(searchDb, newQuery, { limit: 1 })).toEqual([{ id: "memory-new", score: 1 }]);
+	});
+
 	it("chunks the virtual projection rebuild and preserves every agent-owned row", async () => {
 		if (!VEC_EXTENSION) return;
 		const raw = new Database(":memory:");
@@ -426,7 +485,7 @@ describe("staging promotion", () => {
 		expect(await promoteStagingIndex(accessor)).toBe(true);
 		expect(transactions).toBe(8);
 		expect(Math.max(...insertsPerTransaction)).toBe(50);
-		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings").get()).toEqual({ count: 205 });
+		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings_staging").get()).toEqual({ count: 205 });
 		expect(raw.prepare("SELECT agent_id FROM embeddings WHERE id = 'embedding-001'").get()).toEqual({
 			agent_id: "agent-b",
 		});
@@ -598,7 +657,7 @@ describe("staging promotion", () => {
 		).toBe(true);
 		expect(injectedFailure).toBe(true);
 		expect(readEmbeddingIndexState(raw as unknown as ReadDb)?.state).toBe("ready");
-		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings").get()).toEqual({ count: 2 });
+		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings_staging").get()).toEqual({ count: 2 });
 	});
 
 	it("retries an interrupted post-promotion projection on the next start", async () => {
@@ -667,8 +726,8 @@ describe("staging promotion", () => {
 		).toBeNull();
 		expect(promotions).toBe(1);
 		expect(readEmbeddingIndexState(raw as unknown as ReadDb)?.state).toBe("ready");
-		expect(raw.prepare("SELECT id FROM vec_embeddings").get()).toEqual({ id: "new" });
-		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings").get()).toEqual({ count: 1 });
+		expect(raw.prepare("SELECT id FROM vec_embeddings_staging").get()).toEqual({ id: "new" });
+		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings_staging").get()).toEqual({ count: 1 });
 	});
 	it("keeps the promoted sqlite-vec virtual table queryable", async () => {
 		if (!VEC_EXTENSION) return;
@@ -712,7 +771,7 @@ describe("staging promotion", () => {
 
 		expect(await promoteStagingIndex(accessor)).toBe(true);
 		const nearest = raw
-			.prepare("SELECT id FROM vec_embeddings WHERE embedding MATCH ? AND k = 1")
+			.prepare("SELECT id FROM vec_embeddings_staging WHERE embedding MATCH ? AND k = 1")
 			.get(new Float32Array([0, 1, 0]));
 		expect(nearest).toEqual({ id: "new" });
 	});

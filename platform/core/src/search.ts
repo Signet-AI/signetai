@@ -122,24 +122,37 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
 
 /**
  * Pure vector search using sqlite-vec
- * Uses the vec_embeddings virtual table for efficient similarity search
+ * Uses the active projection slot for efficient similarity search
  */
-function activeVectorEmbeddingsTable(db: SQLiteDatabase): "embeddings" | "embeddings_staging" {
+interface VectorSearchTables {
+	readonly projection: "vec_embeddings" | "vec_embeddings_staging";
+	readonly embeddings: "embeddings" | "embeddings_staging";
+}
+
+function activeVectorSearchTables(db: SQLiteDatabase): VectorSearchTables {
 	try {
-		const row = db.prepare("SELECT state, staging_profile_json FROM embedding_index_state WHERE id = 1").get() as
-			| { state?: unknown; staging_profile_json?: unknown }
-			| undefined;
-		if (row?.state !== "building" || typeof row.staging_profile_json !== "string") return "embeddings";
+		const row = db
+			.prepare("SELECT active_profile_json, state, staging_profile_json FROM embedding_index_state WHERE id = 1")
+			.get() as { active_profile_json?: unknown; state?: unknown; staging_profile_json?: unknown } | undefined;
+		if (!row) return { projection: "vec_embeddings", embeddings: "embeddings" };
+		const active =
+			typeof row.active_profile_json === "string"
+				? (JSON.parse(row.active_profile_json) as { projectionSlot?: unknown })
+				: {};
+		const activeProjection = active.projectionSlot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
+		if (row.state !== "building" || typeof row.staging_profile_json !== "string") {
+			return { projection: activeProjection, embeddings: "embeddings" };
+		}
 		const staging = JSON.parse(row.staging_profile_json) as { projectionRebuild?: unknown };
-		// During the post-swap projection rebuild, vec_embeddings still describes
-		// the former active generation. Join it to that generation's durable slot
-		// instead of the newly swapped embeddings table, which has different ids
-		// and may have different dimensions.
-		return staging.projectionRebuild === true ? "embeddings_staging" : "embeddings";
+		// During the post-swap projection rebuild, the old projection remains
+		// queryable in its old slot. Pair it with the former durable slot instead
+		// of joining a partial new projection to the new embeddings table.
+		if (staging.projectionRebuild === true) return { projection: activeProjection, embeddings: "embeddings_staging" };
+		return { projection: activeProjection, embeddings: "embeddings" };
 	} catch {
 		// Legacy/test databases without the generation-state table use the active
 		// embeddings table, matching the pre-generation search behavior.
-		return "embeddings";
+		return { projection: "vec_embeddings", embeddings: "embeddings" };
 	}
 }
 
@@ -150,7 +163,7 @@ export function vectorSearch(
 ): Array<{ id: string; score: number }> {
 	const limit = options?.limit ?? 20;
 	const results: Array<{ id: string; score: number }> = [];
-	const embeddingsTable = activeVectorEmbeddingsTable(db);
+	const searchTables = activeVectorSearchTables(db);
 
 	try {
 		// sqlite-vec uses MATCH syntax for vector search
@@ -179,8 +192,8 @@ export function vectorSearch(
       SELECT
         e.source_id,
         v.distance
-      FROM vec_embeddings v
-      JOIN ${embeddingsTable} e ON v.id = e.id
+      FROM ${searchTables.projection} v
+					JOIN ${searchTables.embeddings} e ON v.id = e.id
       JOIN memories m ON e.source_id = m.id
       WHERE v.embedding MATCH ? AND k = ?${typeFilter}
       ORDER BY v.distance
