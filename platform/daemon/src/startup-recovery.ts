@@ -1,22 +1,11 @@
 /**
  * Startup recovery: automatically clean accumulated crash-loop damage.
  *
- * Under the #1059 death spiral, a daemon that keeps getting SIGKILLed
- * accumulates state that makes the next restart worse: dead jobs pile up,
- * the embeddings_staging buffer grows without draining, and orphaned passes
- * linger. This module runs on every startup (after migrations, before workers
- * start) and cleans that damage automatically — no manual intervention.
- *
- * IMPORTANT: this module is fully synchronous. It must not yield to the event
- * loop (no await, no setTimeout). The reason: during boot, module-level plugin
- * initialization and route registration schedule async operations. If this
- * recovery yields between DB batches, those pending operations run and can
- * touch the DB, conflicting with the write connection and causing
- * "database is locked" crashes. There is nothing to yield TO during boot
- * (no HTTP server, no workers, no competing load).
+ * Recovery is scheduled without blocking daemon readiness. Each database batch
+ * is admitted through the async accessor and yields between batches, so a large
+ * backlog remains resumable while HTTP and worker traffic continue to run.
  */
 
-import { reconcileAcpDeliveries } from "./cross-agent";
 import type { DatabaseIntegrityStatus } from "./database-integrity";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
@@ -37,73 +26,129 @@ const DEAD_JOB_RETENTION_DAYS = 7;
 const BATCH_SIZE = 500;
 const JOB_MAX_TOTAL = 50_000;
 const STAGING_MAX_TOTAL = 200_000;
+const ACP_PENDING_GRACE_MS = 30_000;
+
+const PENDING_INTEGRITY: DatabaseIntegrityStatus = {
+	checkedAt: "",
+	state: "unknown",
+	phase: "pending",
+	quickCheck: { ok: false, messages: ["not checked"] },
+	telemetryCheck: { ok: false, messages: ["not checked"] },
+	rebuiltIndexes: [],
+	durationMs: 0,
+	repairGuidance: null,
+};
+
+let activeRecovery: Promise<StartupRecoveryReport> | null = null;
+
+function yieldToEventLoop(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function writeBatch<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
+	if (accessor.withWriteTxAsync) return accessor.withWriteTxAsync(processBatch);
+	return accessor.withWriteTx(processBatch);
+}
 
 /**
- * Synchronous bounded batch drain. No yielding, no pressure checks.
- * Used only during startup recovery where nothing competes for the event loop.
+ * Drain a bounded number of rows through async accessor jobs.
+ *
+ * The SQLite statements themselves remain short synchronous calls inside the
+ * accessor. The async queue and macrotask yield are the important boundary:
+ * no startup caller waits for the complete backlog, and no batch can starve
+ * the event loop indefinitely.
  */
-function drainBatchesSync<Item>(
+async function drainBatchesAsync<Item>(
 	accessor: DbAccessor,
 	fetchBatch: (db: ReadDb, limit: number) => readonly Item[] | null,
 	processBatch: (db: WriteDb, items: readonly Item[]) => void,
 	maxTotal: number,
-): number {
+	label: string,
+): Promise<number> {
 	let processed = 0;
+	let batches = 0;
 	while (processed < maxTotal) {
-		const remaining = maxTotal - processed;
-		const limit = Math.min(BATCH_SIZE, remaining);
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const batch = accessor.withReadDb((db: import("./db-accessor").ReadDb) => fetchBatch(db, limit));
-		if (!batch || batch.length === 0) break;
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		accessor.withWriteTx((db: import("./db-accessor").WriteDb) => processBatch(db, batch));
+		const limit = Math.min(BATCH_SIZE, maxTotal - processed);
+		const batch = await accessor.withReadDbAsync(async (db) => fetchBatch(db, limit));
+		if (!batch || batch.length === 0) return processed;
+		await writeBatch(accessor, (db) => processBatch(db, batch));
 		processed += batch.length;
+		batches++;
+		await yieldToEventLoop();
 	}
+	logger.warn("startup-recovery", `${label} reached its bounded startup cap`, {
+		processed,
+		maxTotal,
+		batches,
+	});
 	return processed;
 }
 
-/**
- * Run startup recovery. Called synchronously after migrations complete and
- * before background workers start. Safe to call on every boot — it is
- * idempotent (a clean workspace cleans nothing; a crash-damaged one heals).
- */
-export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport {
-	const startedAt = Date.now();
-	logger.info("startup-recovery", "Running startup recovery");
-	// The full-database quick_check is intentionally deferred until after the
-	// HTTP server is ready. Running it here monopolizes Bun's main thread on
-	// large databases and makes even /health/live unreachable (#1513).
-	const databaseIntegrity: DatabaseIntegrityStatus = {
-		checkedAt: "",
-		state: "unknown",
-		phase: "pending",
-		quickCheck: { ok: false, messages: ["not checked"] },
-		telemetryCheck: { ok: false, messages: ["not checked"] },
-		rebuiltIndexes: [],
+// cross-agent currently exposes only a synchronous helper. Keep this recovery
+// write on the async queue instead of reintroducing a synchronous bootstrap call.
+async function reconcileAcpDeliveriesAsync(accessor: DbAccessor, nowMs = Date.now()): Promise<number> {
+	const now = new Date(nowMs).toISOString();
+	const pendingCutoff = new Date(nowMs - ACP_PENDING_GRACE_MS).toISOString();
+	return writeBatch(
+		accessor,
+		(db) =>
+			db
+				.prepare(
+					`UPDATE cross_agent_messages
+				 SET delivery_state = 'indeterminate', delivery_status = 'queued',
+				     delivery_error = CASE
+				       WHEN delivery_state = 'in_flight' THEN 'ACP relay interrupted; remote outcome is unknown'
+				       ELSE 'ACP relay was queued but never started'
+				     END,
+				     delivery_lease_token = NULL, delivery_lease_expires_at = NULL,
+				     delivery_updated_at = ?
+				 WHERE delivery_path = 'acp'
+				   AND ((delivery_state = 'in_flight' AND delivery_lease_expires_at <= ?)
+				     OR (delivery_state = 'pending' AND delivery_updated_at <= ?))`,
+				)
+				.run(now, now, pendingCutoff).changes,
+	);
+}
+
+function pendingReport(): StartupRecoveryReport {
+	return {
+		walCheckpointed: false,
+		databaseIntegrity: PENDING_INTEGRITY,
+		documentLeasesRecovered: 0,
+		deadJobsPurged: 0,
+		stagingRowsCleaned: 0,
+		orphanedPassesSwept: 0,
+		acpDeliveriesReconciled: 0,
 		durationMs: 0,
-		repairGuidance: null,
 	};
+}
 
-	// NOTE: WAL checkpoint intentionally omitted. An explicit
-	// PRAGMA wal_checkpoint(TRUNCATE) during startup blocks the event loop for
-	// ~8 seconds on legacy databases and leaves the write connection in a
-	// locked state that causes "SQLiteError: database is locked" on every
-	// subsequent BEGIN IMMEDIATE. SQLite's built-in auto-checkpoint handles
-	// WAL management without blocking. The checkpointWal() method is kept on
-	// DbAccessor for post-startup callers but must not be called during boot.
+/**
+ * Run the complete recovery job and resolve when the bounded pass finishes.
+ * Tests and explicit lifecycle callers can await this function. The daemon
+ * uses runStartupRecovery() below so readiness never waits for the pass.
+ */
+export function runStartupRecoveryAsync(accessor: DbAccessor): Promise<StartupRecoveryReport> {
+	if (activeRecovery !== null) return activeRecovery;
+	const run = runStartupRecoveryInternal(accessor);
+	activeRecovery = run;
+	const clear = (): void => {
+		if (activeRecovery === run) activeRecovery = null;
+	};
+	run.then(clear, clear);
+	return run;
+}
 
-	// 1. Recover document leases stranded by a previous daemon process. This
-	// must not depend on autonomous maintenance: observe mode, disabled
-	// maintenance, and a frozen worker are all valid configurations.
+async function runStartupRecoveryInternal(accessor: DbAccessor): Promise<StartupRecoveryReport> {
+	const startedAt = Date.now();
+	logger.info("startup-recovery", "Running startup recovery asynchronously");
+
 	let documentLeasesRecovered = 0;
 	try {
 		const now = new Date().toISOString();
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		documentLeasesRecovered = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
-			// The daemon lock is held before this function runs, so every document
-			// lease belongs to a process that is no longer alive. Unlike maintenance,
-			// startup recovery must not wait for the lease timeout: a fresh lease can
-			// otherwise remain permanently invisible to the document worker.
+		documentLeasesRecovered = await writeBatch(accessor, (db) => {
+			// The daemon lock is held before recovery starts, so these leases belong
+			// to a process that is no longer alive.
 			const recovered = recoverStaleLeases(db, { now, jobType: "document_ingest" });
 			if (recovered.dead > 0) {
 				db.prepare(
@@ -134,13 +179,12 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 		});
 	}
 
-	// 2. Purge old dead jobs.
 	const cutoff = new Date(Date.now() - DEAD_JOB_RETENTION_DAYS * 86_400_000).toISOString();
 	let deadJobsPurged = 0;
 	try {
-		deadJobsPurged = drainBatchesSync(
+		deadJobsPurged = await drainBatchesAsync(
 			accessor,
-			(db: ReadDb, limit: number) =>
+			(db, limit) =>
 				db
 					.prepare(
 						`SELECT id FROM memory_jobs
@@ -148,12 +192,13 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 						 LIMIT ?`,
 					)
 					.all(cutoff, limit) as Array<{ id: string }>,
-			(db: WriteDb, batch: readonly { id: string }[]) => {
+			(db, batch) => {
 				if (batch.length === 0) return;
 				const placeholders = batch.map(() => "?").join(",");
-				db.prepare(`DELETE FROM memory_jobs WHERE id IN (${placeholders})`).run(...batch.map((b) => b.id));
+				db.prepare(`DELETE FROM memory_jobs WHERE id IN (${placeholders})`).run(...batch.map((item) => item.id));
 			},
 			JOB_MAX_TOTAL,
+			"Dead job purge",
 		);
 	} catch (err) {
 		logger.warn("startup-recovery", "Dead job purge failed", {
@@ -161,13 +206,9 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 		});
 	}
 
-	// 3. Clean stale embeddings_staging rows — but ONLY when no embedding
-	// index migration is in progress. During a 'building' state, staging rows
-	// are migration progress, not redundant data.
 	let stagingRowsCleaned = 0;
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const migrationInProgress = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+		const migrationInProgress = await accessor.withReadDbAsync(async (db) => {
 			const tableExists = db
 				.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'embedding_index_state'")
 				.get() as { n: number } | undefined;
@@ -179,11 +220,11 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 		});
 
 		if (migrationInProgress) {
-			logger.info("startup-recovery", "Skipping staging cleanup — embedding index migration in progress");
+			logger.info("startup-recovery", "Skipping staging cleanup, embedding index migration is in progress");
 		} else {
-			stagingRowsCleaned = drainBatchesSync(
+			stagingRowsCleaned = await drainBatchesAsync<{ id: string }>(
 				accessor,
-				(db: ReadDb, limit: number) => {
+				(db, limit) => {
 					const tableExists = db
 						.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'embeddings_staging'")
 						.get() as { n: number } | undefined;
@@ -198,12 +239,15 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 						)
 						.all(limit) as Array<{ id: string }>;
 				},
-				(db: WriteDb, batch: readonly { id: string }[]) => {
+				(db, batch) => {
 					if (batch.length === 0) return;
 					const placeholders = batch.map(() => "?").join(",");
-					db.prepare(`DELETE FROM embeddings_staging WHERE id IN (${placeholders})`).run(...batch.map((b) => b.id));
+					db.prepare(`DELETE FROM embeddings_staging WHERE id IN (${placeholders})`).run(
+						...batch.map((item) => item.id),
+					);
 				},
 				STAGING_MAX_TOTAL,
+				"Staging cleanup",
 			);
 		}
 	} catch (err) {
@@ -212,11 +256,9 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 		});
 	}
 
-	// 4. Sweep orphaned dreaming passes.
 	let orphanedPassesSwept = 0;
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		orphanedPassesSwept = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+		orphanedPassesSwept = await writeBatch(accessor, (db) => {
 			const tableExists = db
 				.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_passes'")
 				.get() as { n: number };
@@ -239,7 +281,7 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 
 	let acpDeliveriesReconciled = 0;
 	try {
-		acpDeliveriesReconciled = reconcileAcpDeliveries(accessor);
+		acpDeliveriesReconciled = await reconcileAcpDeliveriesAsync(accessor);
 	} catch (err) {
 		logger.warn("startup-recovery", "ACP delivery reconciliation failed", {
 			error: err instanceof Error ? err.message : String(err),
@@ -249,7 +291,7 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 	const durationMs = Date.now() - startedAt;
 	const report: StartupRecoveryReport = {
 		walCheckpointed: false,
-		databaseIntegrity,
+		databaseIntegrity: PENDING_INTEGRITY,
 		documentLeasesRecovered,
 		deadJobsPurged,
 		stagingRowsCleaned,
@@ -259,17 +301,27 @@ export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport 
 	};
 
 	const totalCleaned =
-		databaseIntegrity.rebuiltIndexes.length +
-		documentLeasesRecovered +
-		deadJobsPurged +
-		stagingRowsCleaned +
-		orphanedPassesSwept +
-		acpDeliveriesReconciled;
+		documentLeasesRecovered + deadJobsPurged + stagingRowsCleaned + orphanedPassesSwept + acpDeliveriesReconciled;
 	if (totalCleaned > 0) {
-		logger.info("startup-recovery", "Recovery complete", { ...report });
+		logger.info("startup-recovery", "Asynchronous recovery complete", { ...report });
 	} else {
-		logger.debug("startup-recovery", "Recovery complete (workspace was clean)", { durationMs });
+		logger.debug("startup-recovery", "Asynchronous recovery complete (workspace was clean)", { durationMs });
 	}
+	return report;
+}
 
+/**
+ * Schedule recovery and return immediately. This compatibility entrypoint is
+ * called during daemon boot, before the HTTP server binds, so it must never
+ * perform a database operation or await the backlog.
+ */
+export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport {
+	const report = pendingReport();
+	logger.info("startup-recovery", "Deferring startup recovery until the event loop can serve requests");
+	void runStartupRecoveryAsync(accessor).catch((err) => {
+		logger.warn("startup-recovery", "Asynchronous startup recovery failed", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	});
 	return report;
 }

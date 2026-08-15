@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ReadDb, WriteDb } from "./db-accessor";
+import type { WriteDb } from "./db-accessor";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { runStartupRecovery } from "./startup-recovery";
+import { runStartupRecovery, runStartupRecoveryAsync } from "./startup-recovery";
 
 const dbFiles = ["memories.db", "memories.db-shm", "memories.db-wal"];
 let agentsDir = "";
@@ -97,13 +97,13 @@ describe("runStartupRecovery", () => {
 			insertJob(db, "pending-1", "pending", recent);
 		});
 
-		const report = runStartupRecovery(getDbAccessor());
+		const report = await runStartupRecoveryAsync(getDbAccessor());
 
 		expect(report.deadJobsPurged).toBe(2);
 		expect(countRows("memory_jobs")).toBe(2); // dead-recent + pending-1
 	});
 
-	it("recovers every document lease during startup without touching other job types", () => {
+	it("recovers every document lease during startup without touching other job types", async () => {
 		const now = Date.now();
 		const createdAt = new Date(now - 20 * 60 * 1000).toISOString();
 		const staleAt = new Date(now - 10 * 60 * 1000).toISOString();
@@ -141,7 +141,7 @@ describe("runStartupRecovery", () => {
 			).run("other-stale", staleAt, createdAt, staleAt);
 		});
 
-		const report = runStartupRecovery(getDbAccessor());
+		const report = await runStartupRecoveryAsync(getDbAccessor());
 
 		expect(report.documentLeasesRecovered).toBe(3);
 		const statuses = getDbAccessor().withReadDb(
@@ -182,7 +182,7 @@ describe("runStartupRecovery", () => {
 			insertEmbedding(db, "stage-2", "hash-B", "embeddings_staging");
 		});
 
-		const report = runStartupRecovery(getDbAccessor());
+		const report = await runStartupRecoveryAsync(getDbAccessor());
 
 		expect(report.stagingRowsCleaned).toBe(1);
 		expect(countRows("embeddings_staging")).toBe(1); // only the new row remains
@@ -195,7 +195,7 @@ describe("runStartupRecovery", () => {
 			insertPass(db, "completed-1", "completed");
 		});
 
-		const report = runStartupRecovery(getDbAccessor());
+		const report = await runStartupRecoveryAsync(getDbAccessor());
 
 		expect(report.orphanedPassesSwept).toBe(2);
 		const failedCount = getDbAccessor().withReadDb(
@@ -207,7 +207,7 @@ describe("runStartupRecovery", () => {
 
 	it("is idempotent — a clean workspace cleans nothing", async () => {
 		// Run recovery on a fresh workspace with no damage.
-		const report1 = runStartupRecovery(getDbAccessor());
+		const report1 = await runStartupRecoveryAsync(getDbAccessor());
 		expect(report1.deadJobsPurged).toBe(0);
 		expect(report1.documentLeasesRecovered).toBe(0);
 		expect(report1.stagingRowsCleaned).toBe(0);
@@ -216,8 +216,31 @@ describe("runStartupRecovery", () => {
 		expect(report1.databaseIntegrity.quickCheck.messages).toEqual(["not checked"]);
 
 		// Run again — still nothing.
-		const report2 = runStartupRecovery(getDbAccessor());
+		const report2 = await runStartupRecoveryAsync(getDbAccessor());
 		expect(report2.deadJobsPurged).toBe(0);
 		expect(report2.stagingRowsCleaned).toBe(0);
+	});
+
+	it("returns before a large staging drain finishes and yields to liveness work", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			for (let index = 0; index < 1_000; index++) {
+				const hash = `backlog-hash-${index}`;
+				insertEmbedding(db, `emb-backlog-${index}`, hash, "embeddings");
+				insertEmbedding(db, `stage-backlog-${index}`, hash, "embeddings_staging");
+			}
+		});
+
+		let livenessAnswered = false;
+		setTimeout(() => {
+			livenessAnswered = true;
+		}, 0);
+		const immediate = runStartupRecovery(getDbAccessor());
+
+		expect(immediate.databaseIntegrity.phase).toBe("pending");
+		const report = await runStartupRecoveryAsync(getDbAccessor());
+
+		expect(livenessAnswered).toBe(true);
+		expect(report.stagingRowsCleaned).toBe(1_000);
+		expect(countRows("embeddings_staging")).toBe(0);
 	});
 });

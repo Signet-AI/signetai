@@ -12,78 +12,88 @@ function fakeAccessor(options: { readonly quickMessage?: string; readonly teleme
 } {
 	let repaired = false;
 	const reindexed: string[] = [];
+	const readDb: ReadDb = {
+		prepare(sql: string) {
+			return {
+				run(): { readonly changes: number } {
+					return { changes: 0 };
+				},
+				get(): undefined {
+					return undefined;
+				},
+				all<Row = unknown>(): Row[] {
+					if (sql === "PRAGMA quick_check") return [{ quick_check: options.quickMessage ?? "ok" }] as Row[];
+					if (sql === "PRAGMA integrity_check(telemetry_events)") {
+						return [{ integrity_check: repaired ? "ok" : (options.telemetryMessage ?? "ok") }] as Row[];
+					}
+					if (
+						sql ===
+						"SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'telemetry_events' AND sql IS NOT NULL ORDER BY name"
+					) {
+						return [
+							{ name: "idx_telemetry_events_event" },
+							{ name: "idx_telemetry_events_queue" },
+							{ name: "idx_telemetry_events_timestamp" },
+							{ name: "idx_telemetry_events_unsent" },
+						] as Row[];
+					}
+					throw new Error(`unexpected query: ${sql}`);
+				},
+			};
+		},
+	};
+	const writeDb: WriteDb = {
+		exec(sql: string): void {
+			repaired = true;
+			reindexed.push(sql);
+		},
+		prepare(_sql: string) {
+			return {
+				run(): { readonly changes: number } {
+					return { changes: 0 };
+				},
+				get(): undefined {
+					return undefined;
+				},
+				all<Row = unknown>(): Row[] {
+					return [] as Row[];
+				},
+			};
+		},
+	};
 	const accessor: DbAccessor = {
 		withReadDb<T>(fn: (db: ReadDb) => T): T {
-			return fn({
-				prepare(sql: string) {
-					return {
-						run(): { readonly changes: number } {
-							return { changes: 0 };
-						},
-						get(): undefined {
-							return undefined;
-						},
-						all(): unknown[] {
-							if (sql === "PRAGMA quick_check") {
-								return [{ quick_check: options.quickMessage ?? "ok" }];
-							}
-							if (sql === "PRAGMA integrity_check(telemetry_events)") {
-								return [{ integrity_check: repaired ? "ok" : (options.telemetryMessage ?? "ok") }];
-							}
-							if (
-								sql ===
-								"SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'telemetry_events' AND sql IS NOT NULL ORDER BY name"
-							) {
-								return [
-									{ name: "idx_telemetry_events_event" },
-									{ name: "idx_telemetry_events_queue" },
-									{ name: "idx_telemetry_events_timestamp" },
-									{ name: "idx_telemetry_events_unsent" },
-								];
-							}
-							throw new Error(`unexpected query: ${sql}`);
-						},
-					};
-				},
-			} as ReadDb);
+			return fn(readDb);
+		},
+		withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T> {
+			return fn(readDb);
 		},
 		withWriteTx<T>(fn: (db: WriteDb) => T): T {
-			return fn({
-				exec(sql: string): void {
-					repaired = true;
-					reindexed.push(sql);
-				},
-				prepare() {
-					return {
-						run(): { readonly changes: number } {
-							return { changes: 0 };
-						},
-						get(): undefined {
-							return undefined;
-						},
-						all(): unknown[] {
-							return [];
-						},
-					};
-				},
-			} as WriteDb);
+			return fn(writeDb);
+		},
+		withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
+			return Promise.resolve(fn(writeDb));
+		},
+		checkpointWal(): void {},
+		incrementalVacuum(): number {
+			return 0;
 		},
 		close(): void {},
 	};
 	return { accessor, reindexed };
 }
 
-afterEach(() => {
-	repairTelemetryIndexes(fakeAccessor({}).accessor);
+afterEach(async () => {
+	await repairTelemetryIndexes(fakeAccessor({}).accessor);
 });
 
 describe("telemetry database integrity recovery (#1360)", () => {
-	it("rebuilds disposable telemetry indexes after quick_check misses the mismatch", () => {
+	it("rebuilds disposable telemetry indexes after quick_check misses the mismatch", async () => {
 		const { accessor, reindexed } = fakeAccessor({
 			telemetryMessage: "row 111120 missing from index idx_telemetry_events_event",
 		});
 
-		const result = repairTelemetryIndexes(accessor);
+		const result = await repairTelemetryIndexes(accessor);
 
 		expect(result.state).toBe("repaired");
 		expect(result.quickCheck.ok).toBe(true);
@@ -96,12 +106,35 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		]);
 	});
 
-	it("audits the repair inside the write transaction", () => {
+	it("runs the production repair child and verifies its committed indexes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-repair-success-"));
+		const dbPath = join(dir, "memory.db");
+		const database = new Database(dbPath);
+		database.exec(
+			"CREATE TABLE telemetry_events (event TEXT, queue TEXT, timestamp TEXT, unsent INTEGER); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event); CREATE INDEX idx_telemetry_events_queue ON telemetry_events(queue); CREATE INDEX idx_telemetry_events_timestamp ON telemetry_events(timestamp); CREATE INDEX idx_telemetry_events_unsent ON telemetry_events(unsent)",
+		);
+		database.close();
+		const { accessor } = fakeAccessor({ telemetryMessage: "index mismatch" });
+
+		const result = await repairTelemetryIndexes(
+			accessor,
+			(db) => {
+				db.exec("INSERT INTO repair_audit VALUES (1)");
+			},
+			{ dbPath, repairTimeoutMs: 5_000 },
+		);
+
+		expect(result.state).toBe("repaired");
+		expect(result.rebuiltIndexes).toHaveLength(4);
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("audits the repair inside the write transaction", async () => {
 		const { accessor } = fakeAccessor({ telemetryMessage: "index mismatch" });
 		let auditedIndexes: readonly string[] = [];
 		let detectionMessages: readonly string[] = [];
 
-		const result = repairTelemetryIndexes(accessor, (_db, indexes, messages) => {
+		const result = await repairTelemetryIndexes(accessor, (_db, indexes, messages) => {
 			auditedIndexes = indexes;
 			detectionMessages = messages;
 		});
@@ -116,10 +149,10 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		expect(detectionMessages).toEqual(["index mismatch"]);
 	});
 
-	it("fails closed when the repair audit cannot be written", () => {
+	it("fails closed when the repair audit cannot be written", async () => {
 		const { accessor } = fakeAccessor({ telemetryMessage: "index mismatch" });
 
-		const result = repairTelemetryIndexes(accessor, () => {
+		const result = await repairTelemetryIndexes(accessor, () => {
 			throw new Error("memory_history unavailable");
 		});
 
@@ -128,13 +161,13 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		expect(result.telemetryCheck.messages).toContain("memory_history unavailable");
 	});
 
-	it("does not rewrite an unrelated database when quick_check fails", () => {
+	it("does not rewrite an unrelated database when quick_check fails", async () => {
 		const { accessor, reindexed } = fakeAccessor({
 			quickMessage: "database disk image is malformed",
 			telemetryMessage: "row 111120 missing from index idx_telemetry_events_event",
 		});
 
-		const result = repairTelemetryIndexes(accessor);
+		const result = await repairTelemetryIndexes(accessor);
 
 		expect(result.state).toBe("corrupt");
 		expect(result.quickCheck.ok).toBe(false);
@@ -237,5 +270,32 @@ describe("deferred database integrity recovery (#1513)", () => {
 		expect(result.state).toBe("unavailable");
 		expect(result.phase).toBe("timed_out");
 		expect(result.repairGuidance).toContain("back up the database");
+	});
+
+	it("kills a telemetry repair child at its deadline without corrupting the database", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-repair-timeout-"));
+		const dbPath = join(dir, "memory.db");
+		const workerPath = join(dir, "blocking-repair-worker.mjs");
+		const database = new Database(dbPath);
+		database.exec("CREATE TABLE repair_fixture (value TEXT)");
+		database.close();
+		writeFileSync(workerPath, 'process.stdout.write("started\\n"); setTimeout(() => {}, 1000);\n');
+
+		const result = await repairTelemetryIndexes(
+			fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+			undefined,
+			{
+				dbPath,
+				repairWorkerPath: workerPath,
+				repairTimeoutMs: 25,
+			},
+		);
+
+		expect(result.state).toBe("unavailable");
+		expect(result.phase).toBe("timed_out");
+		const verified = new Database(dbPath, { readonly: true });
+		expect(verified.prepare("SELECT COUNT(*) AS n FROM repair_fixture").get()).toEqual({ n: 0 });
+		verified.close();
+		rmSync(dir, { recursive: true, force: true });
 	});
 });

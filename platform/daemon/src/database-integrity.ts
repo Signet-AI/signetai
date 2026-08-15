@@ -9,8 +9,10 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
@@ -121,11 +123,111 @@ export interface DeferredIntegrityCheckOptions {
 const DEFAULT_INTEGRITY_TIMEOUT_MS = 30_000;
 let deferredIntegrityRun: Promise<DatabaseIntegrityStatus> | null = null;
 
+class IntegrityRepairTimeoutError extends Error {
+	readonly timedOut = true;
+
+	constructor(timeoutMs: number) {
+		super(`telemetry index repair exceeded ${timeoutMs}ms`);
+		this.name = "IntegrityRepairTimeoutError";
+	}
+}
+
+const REPAIR_WORKER_SOURCE = `
+const { createRequire } = require("node:module");
+const load = createRequire(process.cwd() + "/package.json");
+const Database = typeof Bun !== "undefined" ? load("bun:sqlite").Database : load("better-sqlite3");
+const dbPath = process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH;
+const indexes = JSON.parse(process.env.SIGNET_DATABASE_INTEGRITY_INDEXES || "[]");
+if (typeof dbPath !== "string" || !Array.isArray(indexes)) throw new Error("invalid integrity repair arguments");
+const escaped = (name) => '"' + String(name).replaceAll('"', '""') + '"';
+const database = new Database(dbPath);
+try {
+  database.exec("BEGIN IMMEDIATE");
+  for (const index of indexes) database.exec("REINDEX " + escaped(index));
+  database.exec("COMMIT");
+  process.stdout.write(JSON.stringify({ ok: true }) + "\\n");
+} catch (error) {
+  try { database.exec("ROLLBACK"); } catch {}
+  process.stderr.write(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+} finally {
+  database.close();
+}
+`;
+
 function workerPathFromModule(): string {
 	const moduleDir = dirname(fileURLToPath(import.meta.url));
 	const bundled = join(moduleDir, "database-integrity-worker.js");
 	if (existsSync(bundled)) return bundled;
 	return join(moduleDir, "database-integrity-worker.ts");
+}
+
+async function runKillableTelemetryRepair(
+	dbPath: string,
+	indexes: readonly string[],
+	timeoutMs: number,
+	workerPath?: string,
+): Promise<void> {
+	const dir = workerPath === undefined ? await mkdtemp(join(tmpdir(), "signet-integrity-repair-")) : null;
+	const scriptPath = workerPath ?? join(dir ?? tmpdir(), "repair.mjs");
+	if (workerPath === undefined) await writeFile(scriptPath, REPAIR_WORKER_SOURCE, "utf8");
+
+	let child: ChildProcess | undefined;
+	try {
+		child = spawn(process.execPath, [scriptPath], {
+			env: {
+				...process.env,
+				SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
+				SIGNET_DATABASE_INTEGRITY_INDEXES: JSON.stringify(indexes),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		await new Promise<void>((resolve, reject) => {
+			let settled = false;
+			const timer = setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				child?.kill("SIGKILL");
+				reject(new IntegrityRepairTimeoutError(timeoutMs));
+			}, timeoutMs);
+			let output = "";
+			child?.stdout?.setEncoding("utf8");
+			child?.stdout?.on("data", (chunk: string) => {
+				output += chunk;
+			});
+			child?.once("error", (error) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				reject(error);
+			});
+			child?.once("close", (code) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				if (code !== 0) {
+					reject(new Error(`telemetry index repair worker exited with code ${code ?? "unknown"}`));
+					return;
+				}
+				try {
+					const result = JSON.parse(output.trim()) as { ok?: unknown };
+					if (result.ok !== true) throw new Error("telemetry index repair worker returned an invalid result");
+					resolve();
+				} catch (error) {
+					reject(error);
+				}
+			});
+			child?.stderr?.resume();
+		});
+	} finally {
+		if (child !== undefined && child.exitCode === null) child.kill("SIGKILL");
+		if (dir !== null) await rm(dir, { recursive: true, force: true });
+	}
+}
+
+async function writeAsync<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
+	if (accessor.withWriteTxAsync) return accessor.withWriteTxAsync(processBatch);
+	return accessor.withWriteTx(processBatch);
 }
 
 /**
@@ -224,7 +326,11 @@ async function runDeferredIntegrityCheckInternal(
 			});
 			child.stderr.resume();
 		});
-		const databaseIntegrity = repairTelemetryIndexes(accessor, options.audit, { quickCheck: result.quickCheck });
+		const databaseIntegrity = await repairTelemetryIndexes(accessor, options.audit, {
+			quickCheck: result.quickCheck,
+			dbPath,
+			repairTimeoutMs: timeoutMs,
+		});
 		latestStatus = { ...databaseIntegrity, durationMs: Date.now() - startedAt };
 		logger.info("startup-recovery", "Deferred database integrity check complete", {
 			state: latestStatus.state,
@@ -253,21 +359,27 @@ async function runDeferredIntegrityCheckInternal(
 }
 
 /**
- * Check the database before background workers start and repair only the
- * disposable telemetry indexes when the targeted check identifies damage.
- * The optional audit runs inside the same write transaction as REINDEX.
+ * Check the database and repair only disposable telemetry indexes when the
+ * targeted check identifies damage. Production REINDEX work runs in a
+ * killable child with a real deadline. The audit is admitted through the
+ * bounded async writer queue after the child commits; test doubles without a
+ * database path use one queued transaction for both operations.
  */
-export function repairTelemetryIndexes(
+export async function repairTelemetryIndexes(
 	accessor: DbAccessor,
 	audit?: TelemetryIndexRepairAudit,
-	options?: { readonly quickCheck?: IntegrityCheckStatus },
-): DatabaseIntegrityStatus {
+	options?: {
+		readonly quickCheck?: IntegrityCheckStatus;
+		readonly dbPath?: string;
+		readonly repairTimeoutMs?: number;
+		readonly repairWorkerPath?: string;
+	},
+): Promise<DatabaseIntegrityStatus> {
 	let quickCheck: IntegrityCheckStatus;
 	let telemetryCheck: IntegrityCheckStatus;
 	let telemetryIndexes: readonly string[];
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const checks = accessor.withReadDb((db: import("./db-accessor").ReadDb) => ({
+		const checks = await accessor.withReadDbAsync(async (db) => ({
 			quick: options?.quickCheck ?? check(db, "quick_check"),
 			telemetry: check(db, "integrity_check", "telemetry_events"),
 			indexes: listTelemetryIndexes(db),
@@ -291,8 +403,7 @@ export function repairTelemetryIndexes(
 	}
 
 	// quick_check covers the whole database. A failed global check is not
-	// safely repairable by rebuilding a telemetry index, even if that index is
-	// also mentioned in the targeted failure.
+	// safely repairable by rebuilding a telemetry index.
 	if (!quickCheck.ok) {
 		latestStatus = statusWith("corrupt", quickCheck, telemetryCheck, []);
 		return latestStatus;
@@ -300,13 +411,24 @@ export function repairTelemetryIndexes(
 
 	if (!telemetryCheck.ok) {
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
-				for (const index of telemetryIndexes) db.exec(`REINDEX ${escapedIdentifier(index)}`);
-				audit?.(db, telemetryIndexes, telemetryCheck.messages);
-			});
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const verifiedTelemetry = accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+			if (options?.dbPath !== undefined) {
+				await runKillableTelemetryRepair(
+					options.dbPath,
+					telemetryIndexes,
+					options.repairTimeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS,
+					options.repairWorkerPath,
+				);
+				if (audit !== undefined) {
+					await writeAsync(accessor, (db) => audit(db, telemetryIndexes, telemetryCheck.messages));
+				}
+			} else {
+				await writeAsync(accessor, (db) => {
+					for (const index of telemetryIndexes) db.exec(`REINDEX ${escapedIdentifier(index)}`);
+					audit?.(db, telemetryIndexes, telemetryCheck.messages);
+				});
+			}
+
+			const verifiedTelemetry = await accessor.withReadDbAsync(async (db) =>
 				check(db, "integrity_check", "telemetry_events"),
 			);
 			if (verifiedTelemetry.ok) {
@@ -315,10 +437,12 @@ export function repairTelemetryIndexes(
 			}
 			telemetryCheck = verifiedTelemetry;
 		} catch (error) {
-			telemetryCheck = {
-				ok: false,
-				messages: [...telemetryCheck.messages, error instanceof Error ? error.message : String(error)],
-			};
+			const message = error instanceof Error ? error.message : String(error);
+			telemetryCheck = { ok: false, messages: [...telemetryCheck.messages, message] };
+			if (error instanceof IntegrityRepairTimeoutError) {
+				latestStatus = statusWith("unavailable", quickCheck, telemetryCheck, [], "timed_out", 0);
+				return latestStatus;
+			}
 		}
 	}
 
