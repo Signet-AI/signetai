@@ -135,6 +135,87 @@ describe("pi lifecycle session-end handling", () => {
 		expect(deps.state.getPendingSessionEnds()).toHaveLength(0);
 	});
 
+	it("records deferred session-end before session-switch when the previous file appears later", async () => {
+		const recorder = new LifecycleObservationRecorder();
+		setLifecycleObservers({ observation: (observation: LifecycleObservationInput) => recorder.record(observation) });
+		let shouldSucceed = false;
+		const deps: LifecycleDeps = {
+			agentId: "agent-1",
+			client: {
+				async post<T>(_path: string, _body: unknown): Promise<T | null> {
+					return shouldSucceed ? ({ ok: true } as T) : null;
+				},
+				async postResult() {
+					return { ok: false as const, reason: "offline" as const };
+				},
+			},
+			state: createSessionState(),
+			config: PI_LIFECYCLE_CONFIG,
+		};
+		const dir = mkdtempSync(join(tmpdir(), "pi-lifecycle-order-"));
+		tempDirs.push(dir);
+		const sessionFile = join(dir, "previous-session.jsonl");
+		deps.state.setActiveSession("prev-session", sessionFile);
+
+		await endPreviousSession(deps, { previousSessionFile: sessionFile }, "session_switch");
+		expect(deps.state.sessionAlreadyEnded("prev-session")).toBe(false);
+		await refreshSessionStart(deps, createTestContext("new-session") as never);
+		expect(recorder.observations.map((observation) => observation.stage)).toEqual(["startup", "session-start"]);
+
+		writeFileSync(
+			sessionFile,
+			[
+				JSON.stringify({ type: "session", id: "prev-session", cwd: "/tmp/project" }),
+				JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
+			].join("\n"),
+		);
+		shouldSucceed = true;
+		await flushPendingSessionEnds(deps);
+		expect(recorder.observations.map((observation) => observation.stage)).toEqual([
+			"startup",
+			"session-start",
+			"session-end",
+			"session-switch",
+		]);
+	});
+
+	it("records session-end before session-switch when a deferred submission initially fails", async () => {
+		const recorder = new LifecycleObservationRecorder();
+		setLifecycleObservers({ observation: (observation: LifecycleObservationInput) => recorder.record(observation) });
+		let shouldSucceed = false;
+		const deps: LifecycleDeps = {
+			agentId: "agent-1",
+			client: {
+				async post<T>(_path: string, _body: unknown): Promise<T | null> {
+					return shouldSucceed ? ({ ok: true } as T) : null;
+				},
+				async postResult() {
+					return { ok: false as const, reason: "offline" as const };
+				},
+			},
+			state: createSessionState(),
+			config: PI_LIFECYCLE_CONFIG,
+		};
+		const dir = mkdtempSync(join(tmpdir(), "pi-lifecycle-submit-"));
+		tempDirs.push(dir);
+		const sessionFile = join(dir, "previous-session.jsonl");
+		writeFileSync(sessionFile, JSON.stringify({ type: "session", id: "prev-session", cwd: "/tmp/project" }));
+		deps.state.setActiveSession("prev-session", sessionFile);
+
+		await endPreviousSession(deps, { previousSessionFile: sessionFile }, "session_switch");
+		await refreshSessionStart(deps, createTestContext("new-session") as never);
+		expect(recorder.observations.map((observation) => observation.stage)).toEqual(["startup", "session-start"]);
+
+		shouldSucceed = true;
+		await flushPendingSessionEnds(deps);
+		expect(recorder.observations.map((observation) => observation.stage)).toEqual([
+			"startup",
+			"session-start",
+			"session-end",
+			"session-switch",
+		]);
+	});
+
 	it("does not mark the current session ended when session-end submission fails", async () => {
 		const deps: LifecycleDeps = {
 			agentId: "agent-1",

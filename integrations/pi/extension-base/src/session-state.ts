@@ -22,6 +22,11 @@ export interface PendingSessionEnd {
 	readonly reason: string;
 }
 
+export interface PendingSessionSwitch {
+	readonly fromSessionId: string;
+	readonly toSessionId: string;
+}
+
 export interface BaseSessionState {
 	setActiveSession(sessionId: string | undefined, sessionFile: string | undefined): void;
 	getActiveSessionId(): string | undefined;
@@ -41,12 +46,16 @@ export interface BaseSessionState {
 	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void;
 	clearPendingSessionEnd(sessionId: string | undefined): void;
 	getPendingSessionEnds(): ReadonlyArray<PendingSessionEnd>;
+	queuePendingSessionSwitch(fromSessionId: string, toSessionId: string): void;
+	clearPendingSessionSwitch(): void;
+	getPendingSessionSwitch(): PendingSessionSwitch | undefined;
 }
 
 export class BaseSessionStateStore implements BaseSessionState {
 	protected readonly pendingSessionContext = new Map<string, string>();
 	protected readonly pendingRecall = new Map<string, string[]>();
 	private readonly pendingSessionEnds = new Map<string, PendingSessionEnd>();
+	private pendingSessionSwitch: PendingSessionSwitch | undefined;
 	private readonly endedSessions = new Map<string, number>();
 
 	private activeSessionId: string | undefined;
@@ -161,5 +170,17 @@ export class BaseSessionStateStore implements BaseSessionState {
 
 	getPendingSessionEnds(): ReadonlyArray<PendingSessionEnd> {
 		return Array.from(this.pendingSessionEnds.values());
+	}
+
+	queuePendingSessionSwitch(fromSessionId: string, toSessionId: string): void {
+		this.pendingSessionSwitch = { fromSessionId, toSessionId };
+	}
+
+	clearPendingSessionSwitch(): void {
+		this.pendingSessionSwitch = undefined;
+	}
+
+	getPendingSessionSwitch(): PendingSessionSwitch | undefined {
+		return this.pendingSessionSwitch;
 	}
 }

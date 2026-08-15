@@ -48,6 +48,7 @@ export {
 	BaseSessionStateStore,
 	type BaseSessionState,
 	type PendingSessionEnd,
+	type PendingSessionSwitch,
 	evictOldestKey,
 	MAX_ENDED_SESSIONS,
 	MAX_PENDING_PER_SESSION,

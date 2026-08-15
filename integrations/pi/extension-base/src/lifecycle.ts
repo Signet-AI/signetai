@@ -101,7 +101,7 @@ async function submitSessionEnd(deps: LifecycleDeps, payload: SessionEndPayload)
 	return result !== null;
 }
 
-export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<void> {
+export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<boolean> {
 	for (const pending of deps.state.getPendingSessionEnds()) {
 		if (deps.state.sessionAlreadyEnded(pending.sessionId)) {
 			deps.state.clearPendingSessionEnd(pending.sessionId);
@@ -136,19 +136,35 @@ export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<void
 		deps.state.clearPendingSessionData(pending.sessionId);
 		deps.state.clearPendingSessionEnd(pending.sessionId);
 	}
+
+	const pendingSwitch = deps.state.getPendingSessionSwitch();
+	if (pendingSwitch && deps.state.sessionAlreadyEnded(pendingSwitch.fromSessionId)) {
+		emitLifecycleObservation({
+			stage: "session-switch",
+			fromSessionId: pendingSwitch.fromSessionId,
+			toSessionId: pendingSwitch.toSessionId,
+		});
+		deps.state.clearPendingSessionSwitch();
+		return true;
+	}
+	return false;
 }
 
 export async function refreshSessionStart(deps: LifecycleDeps, ctx: BaseExtensionContext): Promise<void> {
-	await flushPendingSessionEnds(deps);
+	const previousSessionId = deps.state.getActiveSessionId();
+	const switchEmitted = await flushPendingSessionEnds(deps);
 
 	const session = currentSessionRef(ctx);
-	const previousSessionId = deps.state.getActiveSessionId();
 	if (previousSessionId && previousSessionId !== session.sessionId) {
-		emitLifecycleObservation({
-			stage: "session-switch",
-			fromSessionId: previousSessionId,
-			toSessionId: session.sessionId,
-		});
+		if (!switchEmitted && deps.state.sessionAlreadyEnded(previousSessionId)) {
+			emitLifecycleObservation({
+				stage: "session-switch",
+				fromSessionId: previousSessionId,
+				toSessionId: session.sessionId,
+			});
+		} else if (!deps.state.sessionAlreadyEnded(previousSessionId) && session.sessionId) {
+			deps.state.queuePendingSessionSwitch(previousSessionId, session.sessionId);
+		}
 	}
 	deps.state.setActiveSession(session.sessionId, session.sessionFile);
 	deps.state.clearSessionEnded(session.sessionId);
