@@ -175,6 +175,7 @@ async function rebuildActiveVectorIndex(
 				// SQLite projections, then swallow vec0's equivalent duplicate error.
 				const insert = db.prepare("INSERT OR IGNORE INTO vec_embeddings (id, embedding) VALUES (?, ?)");
 				const existing = db.prepare("SELECT 1 FROM vec_embeddings WHERE id = ?");
+				const canonical = db.prepare("SELECT 1 FROM embeddings WHERE id = ?");
 				for (const row of rows) {
 					const vector = new Float32Array(
 						row.vector.buffer,
@@ -183,7 +184,10 @@ async function rebuildActiveVectorIndex(
 					);
 					if (vector.length !== dimensions)
 						throw new Error(`Embedding ${row.id} has ${vector.length} dimensions, expected ${dimensions}`);
-					if (existing.get(row.id) != null) continue;
+					// The read batch can outlive a concurrent purge. Re-check the
+					// durable row in this write transaction before creating its
+					// projection so a deleted embedding is never resurrected.
+					if (canonical.get(row.id) == null || existing.get(row.id) != null) continue;
 					try {
 						insert.run(row.id, vector);
 					} catch (error) {
