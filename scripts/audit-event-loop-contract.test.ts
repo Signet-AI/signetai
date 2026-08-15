@@ -143,6 +143,38 @@ test("the CI boundary resolves computed compatibility requires", () => {
 	}
 });
 
+test("the CI boundary resolves computed compatibility requires with source extensions", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-boundary-"));
+	try {
+		writeFileSync(
+			join(root, "computed-ts-require.ts"),
+			['const moduleName = "../db-accessor-sync.ts";', "const sync = require(moduleName);"].join("\n"),
+		);
+		writeFileSync(
+			join(root, "computed-js-require.ts"),
+			['const moduleName = "../db-accessor-sync.js";', "const sync = require(moduleName);"].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.violations).toHaveLength(2);
+		const messages = result.violations.map((violation) => violation.message);
+		expect(messages).toContainEqual(expect.stringContaining("requires ../db-accessor-sync.ts"));
+		expect(messages).toContainEqual(expect.stringContaining("requires ../db-accessor-sync.js"));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the Obsidian embedding sync calls remain enumerated in the legacy ledger", () => {
+	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
+	const result = runAudit({ sourceRoot: resolve("platform/daemon/src"), baselineSites: baseline });
+	const baselineSites = baseline.filter((site) => site.path === "obsidian-source-embeddings.ts");
+	const liveSites = result.sites.filter((site) => site.path === "obsidian-source-embeddings.ts");
+	expect(baselineSites).toHaveLength(7);
+	expect(liveSites).toHaveLength(baselineSites.length);
+	expect(occurrenceKeys(liveSites)).toEqual(occurrenceKeys(baselineSites));
+	expect(result.violations.filter((violation) => violation.path === "obsidian-source-embeddings.ts")).toEqual([]);
+});
+
 test("bootstrap, CLI, and worker fixtures can use the explicit compatibility module", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-boundary-"));
 	try {

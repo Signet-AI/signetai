@@ -83,6 +83,7 @@ const DEFAULT_SOURCE_ROOT = "platform/daemon/src";
 const DEFAULT_BASELINE = "scripts/event-loop-contract-baseline.json";
 const DEFAULT_REPORT = "docs/event-loop-contract-audit.md";
 const SYNC_COMPAT_MODULE = "db-accessor-sync";
+const SOURCE_MODULE_EXTENSIONS = [".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".jsx", ".tsx"] as const;
 const LEGACY_MARKER = /@ts-expect-error LEGACY_SYNC_DB_ACCESS: (withReadDb|withWriteTx)/g;
 
 function isExcludedSource(path: string): boolean {
@@ -113,7 +114,11 @@ function lineNumber(sourceFile: ts.SourceFile, position: number): number {
 }
 
 function isSyncCompatModule(moduleName: string): boolean {
-	return moduleName === SYNC_COMPAT_MODULE || moduleName.endsWith(`/${SYNC_COMPAT_MODULE}`);
+	const normalized = SOURCE_MODULE_EXTENSIONS.reduce(
+		(current, extension) => (current.endsWith(extension) ? current.slice(0, -extension.length) : current),
+		moduleName,
+	);
+	return normalized === SYNC_COMPAT_MODULE || normalized.endsWith(`/${SYNC_COMPAT_MODULE}`);
 }
 
 function isAllowedSyncCompatImporter(relativePath: string, allowed: ReadonlySet<string>): boolean {

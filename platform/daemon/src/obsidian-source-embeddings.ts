@@ -266,7 +266,9 @@ export async function indexObsidianSourceEmbeddings(
 	// Source watchers outlive a config edit. Keep their writes compatible with
 	// active recall while the requested profile is built in the inactive slot.
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const embeddingConfig = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
+	const embeddingConfig = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+		resolveActiveEmbeddingConfig(db, input.embeddingConfig),
+	);
 	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
 	const failureKey = sourceEmbeddingFailureKey(input, embeddingConfig.model);
@@ -313,7 +315,9 @@ export async function indexObsidianSourceEmbeddings(
 			continue;
 		}
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const writeConfig = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig));
+		const writeConfig = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+			resolveActiveEmbeddingConfig(db, input.embeddingConfig),
+		);
 		let failureCause: PipelineCauseFamily = "provider_unavailable";
 		const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
 			usage: { source: "artifact-index", agentId: input.agentId },
