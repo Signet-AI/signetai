@@ -431,8 +431,8 @@ export function startVacuumConversionWorker(
 			});
 
 			try {
-				if (!accessor.vacuumConversion) throw new Error("VACUUM conversion operation is unavailable");
-				accessor.vacuumConversion();
+				if (!accessor.vacuumConversionAsync) throw new Error("VACUUM conversion operation is unavailable");
+				await accessor.vacuumConversionAsync();
 				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 				accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 					const state = stateFromRow(

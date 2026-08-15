@@ -170,8 +170,9 @@ export interface AsyncDbAccessor {
 	/** Admit incremental vacuum through the bounded async writer queue. */
 	incrementalVacuumAsync?(): Promise<number>;
 
-	/** Run the one-time legacy auto_vacuum conversion outside a transaction. */
-	vacuumConversion?(): boolean;
+	/** Admit the one-time legacy auto_vacuum conversion through the bounded
+	 *  async writer queue. */
+	vacuumConversionAsync?(): Promise<boolean>;
 
 	/** Return bounded local diagnostics for the writer admission path. */
 	getWritePressure?(): WritePressure;
@@ -181,17 +182,6 @@ export interface AsyncDbAccessor {
 	 *  long readers can breathe without starving other readers (the pool
 	 *  grows on demand up to the connection limit). */
 	withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T>;
-
-	/** Checkpoint the WAL into the main DB file on the write connection,
-	 *  outside any transaction. Safe to call periodically or on startup. */
-	checkpointWal(): void;
-
-	/**
-	 * Run PRAGMA incremental_vacuum on the write connection outside any
-	 * transaction, reclaiming free pages from DROP/DELETE operations (#1139).
-	 * Returns the number of free pages remaining after vacuum.
-	 */
-	incrementalVacuum(): number;
 
 	/** Close all held connections. Safe to call multiple times. */
 	close(): void;
@@ -214,6 +204,9 @@ export interface DbAccessor extends AsyncDbAccessor {}
 interface SyncDbAccessorRuntime {
 	withWriteTx<T>(fn: (db: WriteDb) => T): T;
 	withReadDb<T>(fn: (db: ReadDb) => T): T;
+	checkpointWal(): void;
+	incrementalVacuum(): number;
+	vacuumConversion(): boolean;
 }
 
 type RuntimeDbAccessor = DbAccessor & SyncDbAccessorRuntime;
@@ -1290,6 +1283,20 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			return enqueueWrite(runIncrementalVacuum);
 		},
 
+		vacuumConversionAsync(): Promise<boolean> {
+			return enqueueWrite(runVacuumConversion);
+		},
+
+		checkpointWal(): void {
+			if (closed) throw new Error("DbAccessor is closed");
+			runCheckpointWal();
+		},
+
+		incrementalVacuum(): number {
+			if (closed) throw new Error("DbAccessor is closed");
+			return runIncrementalVacuum();
+		},
+
 		vacuumConversion(): boolean {
 			if (closed) throw new Error("DbAccessor is closed");
 			return runVacuumConversion();
@@ -1327,16 +1334,6 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 				releaseRead(conn);
 				observeDbLatency(performance.now() - startedAt);
 			}
-		},
-
-		checkpointWal(): void {
-			if (closed) throw new Error("DbAccessor is closed");
-			runCheckpointWal();
-		},
-
-		incrementalVacuum(): number {
-			if (closed) throw new Error("DbAccessor is closed");
-			return runIncrementalVacuum();
 		},
 
 		close(): void {

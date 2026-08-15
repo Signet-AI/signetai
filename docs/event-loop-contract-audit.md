@@ -1,6 +1,6 @@
 # Event-loop synchronous contract audit
 
-This report is generated from the deterministic migration ledger in `scripts/event-loop-contract-baseline.json`. The ledger is a reporting surface, not a scanner-based gate. Phase A enforces the new type boundary: production code receives an async-only `DbAccessor`, and CI rejects production imports of the explicit sync compatibility module.
+This report is generated from the deterministic migration ledger in `scripts/event-loop-contract-baseline.json`. Phase A enforces the new type boundary: production code receives an async-only `DbAccessor`, CI rejects unallowlisted production imports of the explicit sync compatibility module, and new synchronous DB call sites fail closed even when marked `LEGACY_SYNC_DB_ACCESS`.
 
 ## Current inventory
 
@@ -16,10 +16,10 @@ The 1,060-site inventory excludes test, benchmark, generated, and `__tests__` fi
 
 ## Enforcement boundary
 
-- Production imports of `db-accessor-sync.ts` are rejected by the CI import-boundary check.
+- Production imports, CommonJS `require()`, dynamic imports, and re-exports of `db-accessor-sync.ts` are rejected unless the exact importer is allowlisted.
 - `DbAccessor` exports only asynchronous transaction and read primitives.
 - `db-accessor-sync.ts` is the explicit compatibility surface for test/bootstrap-only code. Its module documentation records the pre-readiness bootstrap, CLI, and isolated-worker rationale.
-- The ledger does not attempt alias tracking, call-site classification, or evasion detection. Those scanner rules were retired because the type boundary is the enforceable contract.
+- The migration ledger is an allowlist for existing synchronous DB callers. It may shrink, but a new synchronous DB call is a violation even when its type error is suppressed.
 
 ## Risk and follow-up
 

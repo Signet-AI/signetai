@@ -488,11 +488,8 @@ export function startMaintenanceWorker(
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const ratio = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getFreePageRatio(db));
 			if (ratio >= 0.2) {
-				if (accessor.incrementalVacuumAsync) {
-					await accessor.incrementalVacuumAsync();
-				} else {
-					accessor.incrementalVacuum();
-				}
+				if (!accessor.incrementalVacuumAsync) throw new Error("Incremental vacuum operation is unavailable");
+				await accessor.incrementalVacuumAsync();
 			}
 		} catch {
 			// Non-fatal — vacuum should never interrupt the maintenance cycle

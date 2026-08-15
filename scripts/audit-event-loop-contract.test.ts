@@ -11,7 +11,7 @@ test("the deterministic ledger retains the exact 1060-site inventory", () => {
 	expect(baseline.filter((site) => site.api === "withReadDb")).toHaveLength(346);
 });
 
-test("the ledger reports legacy DB markers without scanning new call sites", () => {
+test("the ledger reports legacy DB markers and rejects new call sites", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-ledger-"));
 	try {
 		writeFileSync(
@@ -23,10 +23,33 @@ test("the ledger reports legacy DB markers without scanning new call sites", () 
 				"getDbAccessor().withWriteTx((db) => db);",
 			].join("\n"),
 		);
-		writeFileSync(join(root, "new-call.ts"), "getDbAccessor().withReadDb((db) => db);\n");
-		const result = runAudit({ sourceRoot: root });
-		expect(result.legacyDbAccess).toEqual({ total: 2, withWriteTx: 1, withReadDb: 1 });
-		expect(result.violations).toEqual([]);
+		writeFileSync(
+			join(root, "new-call.ts"),
+			"// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site\ngetDbAccessor().withReadDb((db) => db);\n",
+		);
+		const result = runAudit({
+			sourceRoot: root,
+			baselineSites: [
+				{
+					path: "legacy.ts",
+					line: 2,
+					api: "withReadDb",
+					source: "getDbAccessor().withReadDb((db) => db);",
+					category: "hot-path",
+				},
+				{
+					path: "legacy.ts",
+					line: 4,
+					api: "withWriteTx",
+					source: "getDbAccessor().withWriteTx((db) => db);",
+					category: "hot-path",
+				},
+			],
+		});
+		expect(result.legacyDbAccess).toEqual({ total: 3, withWriteTx: 1, withReadDb: 2 });
+		expect(result.violations).toHaveLength(1);
+		expect(result.violations[0]?.path).toBe("new-call.ts");
+		expect(result.violations[0]?.message).toContain("cannot authorize new callers");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -38,12 +61,24 @@ test("the CI boundary rejects a production import of the sync compatibility modu
 		mkdirSync(join(root, "routes"));
 		writeFileSync(
 			join(root, "routes", "new-route.ts"),
-			'import { getSyncDbAccessor } from "../db-accessor-sync";\ngetSyncDbAccessor();\n',
+			[
+				'import { getSyncDbAccessor } from "../db-accessor-sync";',
+				'const sync = require("../db-accessor-sync");',
+				'void import("../db-accessor-sync");',
+				'export { getSyncDbAccessor } from "../db-accessor-sync";',
+				'export * from "../db-accessor-sync";',
+				"getSyncDbAccessor();",
+			].join("\n"),
 		);
 		const result = runAudit({ sourceRoot: root });
-		expect(result.violations).toHaveLength(1);
+		expect(result.violations).toHaveLength(5);
 		expect(result.violations[0]?.path).toBe("routes/new-route.ts");
-		expect(result.violations[0]?.message).toContain("only bootstrap, CLI, and isolated worker modules");
+		expect(result.violations.some((violation) => violation.message.includes("requires ../db-accessor-sync"))).toBe(
+			true,
+		);
+		expect(result.violations.some((violation) => violation.message.includes("re-exports ../db-accessor-sync"))).toBe(
+			true,
+		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -59,7 +94,12 @@ test("bootstrap, CLI, and worker fixtures can use the explicit compatibility mod
 				'import { getSyncDbAccessor } from "../db-accessor-sync";\ngetSyncDbAccessor();\n',
 			);
 		}
-		expect(runAudit({ sourceRoot: root }).violations).toEqual([]);
+		expect(
+			runAudit({
+				sourceRoot: root,
+				allowedSyncCompatImporters: ["bootstrap/entry.ts", "cli/entry.ts", "workers/entry.ts"],
+			}).violations,
+		).toEqual([]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -81,3 +121,6 @@ const syncAccessorType = readFileSync(resolve("platform/daemon/src/db-accessor-s
 expect(productionAccessorType).toContain("export interface DbAccessor extends AsyncDbAccessor {}");
 expect(productionAccessorType).not.toContain("export interface SyncDbAccessorCompat");
 expect(syncAccessorType).toContain("export interface SyncDbAccessor");
+expect(syncAccessorType).toContain("checkpointWal(): void");
+expect(syncAccessorType).toContain("incrementalVacuum(): number");
+expect(syncAccessorType).toContain("vacuumConversion(): boolean");

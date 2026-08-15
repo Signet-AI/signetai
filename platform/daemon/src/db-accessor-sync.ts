@@ -5,8 +5,11 @@
  * `db-accessor.ts` exposes only async primitives, and the event-loop contract
  * audit rejects production imports of this compatibility module.
  *
- * The two synchronous primitives remain available here for the narrowly-scoped
- * paths that cannot cross the async boundary yet:
+ * The synchronous primitives remain available here for narrowly-scoped test,
+ * bootstrap, CLI, and isolated-worker paths that cannot cross the async
+ * boundary yet. The production accessor exposes none of these methods:
+ * `withWriteTx`, `withReadDb`, `checkpointWal`, `incrementalVacuum`, and
+ * `vacuumConversion`.
  *
  * - pre-readiness bootstrap: initialise and repair the SQLite database before
  *   the daemon can serve requests;
@@ -25,6 +28,12 @@ export interface SyncDbAccessor {
 	withWriteTx<T>(fn: (db: WriteDb) => T): T;
 	/** @deprecated Use `withReadDbAsync` in production code. */
 	withReadDb<T>(fn: (db: ReadDb) => T): T;
+	/** @deprecated Use `checkpointWalAsync` in production code. */
+	checkpointWal(): void;
+	/** @deprecated Use `incrementalVacuumAsync` in production code. */
+	incrementalVacuum(): number;
+	/** @deprecated Use `vacuumConversionAsync` in production code. */
+	vacuumConversion(): boolean;
 }
 
 /** Return the compatibility surface for tests and explicitly approved bootstrap code. */

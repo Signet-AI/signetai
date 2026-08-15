@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { getSyncDbAccessor } from "./db-accessor-sync";
 import {
 	convertToIncrementalVacuum,
 	DbSpacePreflightError,
@@ -265,7 +266,7 @@ describe("deferred vacuum conversion (#1493)", () => {
 			state: "pending",
 			attempts: 0,
 		});
-		const mode = getDbAccessor().withReadDb((readDb) => {
+		const mode = getSyncDbAccessor().withReadDb((readDb) => {
 			return (readDb.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum;
 		});
 		expect(mode).toBe(0);
@@ -282,7 +283,7 @@ describe("deferred vacuum conversion (#1493)", () => {
 		expect(completed.attempts).toBe(1);
 		expect(await worker.run()).toMatchObject({ state: "completed", attempts: 1 });
 
-		const markerCount = getDbAccessor().withReadDb(
+		const markerCount = getSyncDbAccessor().withReadDb(
 			(readDb) =>
 				(readDb.prepare("SELECT COUNT(*) AS count FROM _signet_vacuum_converted").get() as { count: number }).count,
 		);
@@ -293,7 +294,7 @@ describe("deferred vacuum conversion (#1493)", () => {
 		const db = legacyDbPath();
 		dir = db.dir;
 		initDbAccessor(db.path);
-		getDbAccessor().withWriteTx((writeDb) => {
+		getSyncDbAccessor().withWriteTx((writeDb) => {
 			writeDb
 				.prepare(
 					"UPDATE _signet_vacuum_conversion SET state = 'running', attempts = 1, started_at = ?, updated_at = ? WHERE id = 1",
@@ -305,20 +306,20 @@ describe("deferred vacuum conversion (#1493)", () => {
 		expect(getVacuumConversionStatus(getDbAccessor())).toMatchObject({ state: "pending", attempts: 1 });
 
 		const accessor = getDbAccessor();
-		const originalConversion = accessor.vacuumConversion;
-		accessor.vacuumConversion = () => {
+		const originalConversion = accessor.vacuumConversionAsync;
+		accessor.vacuumConversionAsync = async () => {
 			throw new Error("simulated conversion failure");
 		};
 		const worker = startVacuumConversionWorker(accessor, { startImmediately: false });
 		const failed = await worker.run();
-		accessor.vacuumConversion = originalConversion;
+		accessor.vacuumConversionAsync = originalConversion;
 		expect(failed).toMatchObject({ state: "failed", attempts: 2, lastError: "simulated conversion failure" });
 
 		closeDbAccessor();
 		initDbAccessor(db.path);
 		expect(getVacuumConversionStatus(getDbAccessor())).toMatchObject({ state: "pending", attempts: 2 });
 
-		getDbAccessor().withWriteTx((writeDb) => {
+		getSyncDbAccessor().withWriteTx((writeDb) => {
 			writeDb.prepare("UPDATE _signet_vacuum_conversion SET state = 'running', attempts = 3 WHERE id = 1").run();
 		});
 		closeDbAccessor();

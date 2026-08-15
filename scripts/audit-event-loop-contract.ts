@@ -27,6 +27,8 @@ export const SYNC_APIS = [
 
 export type SyncApi = (typeof SYNC_APIS)[number];
 export type SiteCategory = "pre-readiness-bootstrap" | "cli-only" | "isolated-worker" | "hot-path";
+const LEGACY_DB_APIS = ["withWriteTx", "withReadDb"] as const;
+type LegacyDbApi = (typeof LEGACY_DB_APIS)[number];
 
 export interface AuditSite {
 	readonly path: string;
@@ -37,9 +39,18 @@ export interface AuditSite {
 }
 
 export interface ImportBoundaryViolation {
+	readonly kind: "import-boundary";
 	readonly path: string;
 	readonly line: number;
 	readonly moduleName: string;
+	readonly message: string;
+}
+
+export interface LegacyDbAccessViolation {
+	readonly kind: "new-legacy-db-access";
+	readonly path: string;
+	readonly line: number;
+	readonly api: LegacyDbApi;
 	readonly message: string;
 }
 
@@ -51,7 +62,7 @@ export interface LegacyDbAccessCounts {
 
 export interface AuditResult {
 	readonly sites: readonly AuditSite[];
-	readonly violations: readonly ImportBoundaryViolation[];
+	readonly violations: readonly (ImportBoundaryViolation | LegacyDbAccessViolation)[];
 	readonly legacyDbAccess: LegacyDbAccessCounts;
 }
 
@@ -64,6 +75,8 @@ interface BaselineFile {
 interface AuditOptions {
 	readonly sourceRoot: string;
 	readonly baselineSites?: readonly AuditSite[];
+	/** Exact compatibility importers. An omitted entry is a violation. */
+	readonly allowedSyncCompatImporters?: readonly string[];
 }
 
 const DEFAULT_SOURCE_ROOT = "platform/daemon/src";
@@ -103,48 +116,139 @@ function isSyncCompatModule(moduleName: string): boolean {
 	return moduleName === SYNC_COMPAT_MODULE || moduleName.endsWith(`/${SYNC_COMPAT_MODULE}`);
 }
 
-function isAllowedSyncCompatImporter(relativePath: string): boolean {
-	return /^(?:bootstrap|cli|workers)\//.test(relativePath);
+function isAllowedSyncCompatImporter(relativePath: string, allowed: ReadonlySet<string>): boolean {
+	return allowed.has(relativePath);
 }
 
-function findImportBoundaryViolations(sourceRoot: string): ImportBoundaryViolation[] {
+function findImportBoundaryViolations(
+	sourceRoot: string,
+	allowedSyncCompatImporters: ReadonlySet<string>,
+): ImportBoundaryViolation[] {
 	const violations: ImportBoundaryViolation[] = [];
 	for (const path of walk(sourceRoot)) {
 		const source = readFileSync(path, "utf8");
 		const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 		const relativePath = relative(sourceRoot, path).replaceAll("\\", "/");
-		if (isAllowedSyncCompatImporter(relativePath)) continue;
+		if (isAllowedSyncCompatImporter(relativePath, allowedSyncCompatImporters)) continue;
 		const visit = (node: ts.Node): void => {
+			const report = (moduleName: string, position: number, form: string): void => {
+				const line = lineNumber(sourceFile, position);
+				violations.push({
+					kind: "import-boundary",
+					path: relativePath,
+					line,
+					moduleName,
+					message: `${relativePath}:${line} ${form} ${moduleName}; sync compatibility imports must be explicitly allowlisted by exact call site`,
+				});
+			};
 			if (
 				ts.isImportDeclaration(node) &&
 				ts.isStringLiteral(node.moduleSpecifier) &&
 				isSyncCompatModule(node.moduleSpecifier.text)
 			) {
-				violations.push({
-					path: relativePath,
-					line: lineNumber(sourceFile, node.getStart(sourceFile)),
-					moduleName: node.moduleSpecifier.text,
-					message: `${relativePath}:${lineNumber(sourceFile, node.getStart(sourceFile))} imports ${node.moduleSpecifier.text}; only bootstrap, CLI, and isolated worker modules may use the sync compatibility surface`,
-				});
+				report(node.moduleSpecifier.text, node.getStart(sourceFile), "imports");
 			}
 			if (
-				(ts.isCallExpression(node) || ts.isImportEqualsDeclaration(node)) &&
+				ts.isCallExpression(node) &&
+				ts.isIdentifier(node.expression) &&
+				node.expression.text === "require" &&
+				node.arguments.length === 1 &&
+				ts.isStringLiteral(node.arguments[0]) &&
+				isSyncCompatModule(node.arguments[0].text)
+			) {
+				report(node.arguments[0].text, node.getStart(sourceFile), "requires");
+			}
+			if (
 				ts.isCallExpression(node) &&
 				node.expression.kind === ts.SyntaxKind.ImportKeyword &&
 				node.arguments.length === 1 &&
 				ts.isStringLiteral(node.arguments[0]) &&
 				isSyncCompatModule(node.arguments[0].text)
 			) {
-				violations.push({
-					path: relativePath,
-					line: lineNumber(sourceFile, node.getStart(sourceFile)),
-					moduleName: node.arguments[0].text,
-					message: `${relativePath}:${lineNumber(sourceFile, node.getStart(sourceFile))} dynamically imports ${node.arguments[0].text}; only bootstrap, CLI, and isolated worker modules may use the sync compatibility surface`,
-				});
+				report(node.arguments[0].text, node.getStart(sourceFile), "dynamically imports");
+			}
+			if (
+				ts.isImportEqualsDeclaration(node) &&
+				ts.isExternalModuleReference(node.moduleReference) &&
+				node.moduleReference.expression !== undefined &&
+				ts.isStringLiteral(node.moduleReference.expression) &&
+				isSyncCompatModule(node.moduleReference.expression.text)
+			) {
+				report(node.moduleReference.expression.text, node.getStart(sourceFile), "requires");
+			}
+			if (
+				ts.isExportDeclaration(node) &&
+				node.moduleSpecifier !== undefined &&
+				ts.isStringLiteral(node.moduleSpecifier) &&
+				isSyncCompatModule(node.moduleSpecifier.text)
+			) {
+				report(node.moduleSpecifier.text, node.getStart(sourceFile), "re-exports");
 			}
 			ts.forEachChild(node, visit);
 		};
 		visit(sourceFile);
+	}
+	return violations;
+}
+
+function findLegacyDbAccessSites(sourceRoot: string): AuditSite[] {
+	const sites: AuditSite[] = [];
+	for (const path of walk(sourceRoot)) {
+		const source = readFileSync(path, "utf8");
+		const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+		const lines = source.split("\n");
+		const relativePath = relative(sourceRoot, path).replaceAll("\\", "/");
+		const visit = (node: ts.Node): void => {
+			if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+				const api = node.expression.name.text;
+				if (LEGACY_DB_APIS.includes(api as LegacyDbApi)) {
+					const line = lineNumber(sourceFile, node.expression.name.getStart(sourceFile));
+					sites.push({
+						path: relativePath,
+						line,
+						api: api as LegacyDbApi,
+						source: lines[line - 1]?.trim() ?? "",
+						category: "hot-path",
+					});
+				}
+			}
+			ts.forEachChild(node, visit);
+		};
+		visit(sourceFile);
+	}
+	return sites;
+}
+
+function legacyDbCount(sites: readonly AuditSite[]): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const site of sites) {
+		if (!LEGACY_DB_APIS.includes(site.api as LegacyDbApi)) continue;
+		const key = `${site.path}\u0000${site.api}`;
+		counts.set(key, (counts.get(key) ?? 0) + 1);
+	}
+	return counts;
+}
+
+function findNewLegacyDbAccessViolations(
+	sites: readonly AuditSite[],
+	baselineSites: readonly AuditSite[],
+): LegacyDbAccessViolation[] {
+	const baselineCounts = legacyDbCount(baselineSites);
+	const seen = new Map<string, number>();
+	const violations: LegacyDbAccessViolation[] = [];
+	for (const site of sites) {
+		if (!LEGACY_DB_APIS.includes(site.api as LegacyDbApi)) continue;
+		const key = `${site.path}\u0000${site.api}`;
+		const occurrence = (seen.get(key) ?? 0) + 1;
+		seen.set(key, occurrence);
+		if (occurrence <= (baselineCounts.get(key) ?? 0)) continue;
+		violations.push({
+			kind: "new-legacy-db-access",
+			path: site.path,
+			line: site.line,
+			api: site.api as LegacyDbApi,
+			message: `${site.path}:${site.line} adds synchronous ${site.api}() beyond the committed legacy migration ledger; LEGACY_SYNC_DB_ACCESS cannot authorize new callers`,
+		});
 	}
 	return violations;
 }
@@ -163,9 +267,14 @@ function countLegacyDbAccess(sourceRoot: string): LegacyDbAccessCounts {
 }
 
 export function runAudit(options: AuditOptions): AuditResult {
+	const sites = findLegacyDbAccessSites(options.sourceRoot);
+	const baselineSites = options.baselineSites ?? [];
 	return {
-		sites: options.baselineSites ?? [],
-		violations: findImportBoundaryViolations(options.sourceRoot),
+		sites,
+		violations: [
+			...findImportBoundaryViolations(options.sourceRoot, new Set(options.allowedSyncCompatImporters ?? [])),
+			...findNewLegacyDbAccessViolations(sites, baselineSites),
+		],
 		legacyDbAccess: countLegacyDbAccess(options.sourceRoot),
 	};
 }
@@ -188,7 +297,7 @@ export function renderReport(baselineSites: readonly AuditSite[], legacyDbAccess
 		baselineSites.length - (counts.get("withReadDb") ?? 0) - (counts.get("withWriteTx") ?? 0);
 	return `# Event-loop synchronous contract audit
 
-This report is generated from the deterministic migration ledger in \`scripts/event-loop-contract-baseline.json\`. The ledger is a reporting surface, not a scanner-based gate. Phase A enforces the new type boundary: production code receives an async-only \`DbAccessor\`, and CI rejects production imports of the explicit sync compatibility module.
+This report is generated from the deterministic migration ledger in \`scripts/event-loop-contract-baseline.json\`. Phase A enforces the new type boundary: production code receives an async-only \`DbAccessor\`, CI rejects unallowlisted production imports of the explicit sync compatibility module, and new synchronous DB call sites fail closed even when marked \`LEGACY_SYNC_DB_ACCESS\`.
 
 ## Current inventory
 
@@ -204,10 +313,10 @@ The 1,060-site inventory excludes test, benchmark, generated, and \`__tests__\` 
 
 ## Enforcement boundary
 
-- Production imports of \`db-accessor-sync.ts\` are rejected by the CI import-boundary check.
+- Production imports, CommonJS \`require()\`, dynamic imports, and re-exports of \`db-accessor-sync.ts\` are rejected unless the exact importer is allowlisted.
 - \`DbAccessor\` exports only asynchronous transaction and read primitives.
 - \`db-accessor-sync.ts\` is the explicit compatibility surface for test/bootstrap-only code. Its module documentation records the pre-readiness bootstrap, CLI, and isolated-worker rationale.
-- The ledger does not attempt alias tracking, call-site classification, or evasion detection. Those scanner rules were retired because the type boundary is the enforceable contract.
+- The migration ledger is an allowlist for existing synchronous DB callers. It may shrink, but a new synchronous DB call is a violation even when its type error is suppressed.
 
 ## Risk and follow-up
 
