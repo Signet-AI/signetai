@@ -11,11 +11,11 @@ import {
 	renderReport,
 } from "./audit-event-loop-contract";
 
-test("the deterministic ledger retains the exact 1036-site inventory", () => {
+test("the deterministic ledger retains the exact 959-site inventory", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	expect(baseline).toHaveLength(1036);
-	expect(baseline.filter((site) => site.api === "withWriteTx")).toHaveLength(217);
-	expect(baseline.filter((site) => site.api === "withReadDb")).toHaveLength(335);
+	expect(baseline).toHaveLength(959);
+	expect(baseline.filter((site) => site.api === "withWriteTx")).toHaveLength(174);
+	expect(baseline.filter((site) => site.api === "withReadDb")).toHaveLength(301);
 });
 
 test("the ledger reports legacy DB markers and rejects new call sites", () => {
@@ -278,11 +278,14 @@ test("the production TypeScript project cannot import the compatibility module",
 
 test("the generated report describes the type boundary and transitional counts", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	const report = renderReport(baseline, { total: 552, withWriteTx: 217, withReadDb: 335 });
-	expect(report).toContain("Exact ledger inventory: 1,036 sites");
-	expect(report).toContain("217 synchronous writes and 335 synchronous reads");
+	const report = renderReport(baseline, { total: 475, withWriteTx: 174, withReadDb: 301 });
+	expect(report).toContain("Exact ledger inventory: 959 sites");
+	expect(report).toContain("174 synchronous writes and 301 synchronous reads");
+	expect(report).toContain(
+		"document-worker (18), dreaming (28), retention (6), repair-actions (31), and source-lifecycle-telemetry (8), for 91 sites total",
+	);
 	expect(report).toContain("type boundary");
-	expect(report).not.toContain("1047");
+	expect(report).not.toContain("960");
 });
 
 // Keep the production/public type distinction visible in source review. The
