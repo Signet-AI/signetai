@@ -12,6 +12,8 @@ export interface PersistedEmbeddingProfile {
 	readonly dimensions: number;
 	readonly baseUrl: string;
 	readonly profile?: string;
+	/** Set only while a promoted durable slot still needs its vec projection rebuilt. */
+	readonly projectionRebuild?: boolean;
 }
 
 export interface EmbeddingIndexState {
@@ -89,6 +91,7 @@ function parseProfile(value: string): PersistedEmbeddingProfile | null {
 			dimensions,
 			baseUrl: parsed.baseUrl,
 			...(typeof parsed.profile === "string" ? { profile: parsed.profile } : {}),
+			...(parsed.projectionRebuild === true ? { projectionRebuild: true } : {}),
 		};
 	} catch {
 		return null;

@@ -210,6 +210,36 @@ async function rebuildActiveVectorIndex(
 	}
 }
 
+async function completeProjectionRebuild(
+	accessor: DbAccessor,
+	profile: PersistedEmbeddingProfile,
+	batchSize?: number,
+	shouldContinue?: () => boolean,
+): Promise<void> {
+	await rebuildActiveVectorIndex(accessor, profile.dimensions, batchSize, shouldContinue);
+	const completed = await withQueuedWrite(accessor, (db) => {
+		const state = readEmbeddingIndexState(db);
+		if (
+			state?.state !== "building" ||
+			!state.staging?.projectionRebuild ||
+			state.staging.fingerprint !== profile.fingerprint
+		)
+			return false;
+		db.prepare(
+			`UPDATE memories SET embedding_model = ?
+			 WHERE id IN (SELECT source_id FROM embeddings WHERE source_type = 'memory')`,
+		).run(profile.model);
+		db.prepare(
+			`UPDATE embedding_index_state
+			 SET active_profile_json = ?, staging_profile_json = NULL,
+			     state = 'ready', last_error = NULL, updated_at = ?
+			 WHERE id = 1`,
+		).run(JSON.stringify({ ...profile, projectionRebuild: undefined }), new Date().toISOString());
+		return true;
+	});
+	if (!completed) throw new Error("Embedding vector rebuild state changed before completion");
+}
+
 export function stagingCoverage(
 	db: ReadDb,
 	dimensions: number,
@@ -422,13 +452,11 @@ export async function promoteStagingIndex(
 	const plan = await withQueuedWrite(accessor, (db) => {
 		const state = readEmbeddingIndexState(db);
 		if (state?.state !== "building" || !state.staging) return null;
+		if (state.staging.projectionRebuild) return null;
 		if (!stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint).ready) return null;
 		if (!tableExists(db, STAGING_VECTOR_TABLE)) return null;
 		let rebuildVectorIndex = false;
-		db.prepare(
-			`UPDATE memories SET embedding_model = ?
-			 WHERE id IN (SELECT source_id FROM embeddings_staging WHERE source_type = 'memory')`,
-		).run(state.staging.model);
+		const nextProfile = { ...state.staging, projectionRebuild: true } as const;
 
 		// Keep exactly two durable slots: after the swap the former active slot
 		// becomes the inactive/rollback slot, ready to be cleared for the next build.
@@ -440,22 +468,31 @@ export async function promoteStagingIndex(
 		// durable swap. Plain tables retain the inexpensive rename path.
 		if (isVecVirtualTable(db, "vec_embeddings") && isVecVirtualTable(db, STAGING_VECTOR_TABLE)) {
 			rebuildVectorIndex = true;
+			db.prepare(
+				`UPDATE embedding_index_state
+				 SET staging_profile_json = ?, state = 'building', last_error = NULL, updated_at = ?
+				 WHERE id = 1`,
+			).run(JSON.stringify(nextProfile), new Date().toISOString());
 		} else {
+			db.prepare(
+				`UPDATE memories SET embedding_model = ?
+				 WHERE id IN (SELECT source_id FROM embeddings WHERE source_type = 'memory')`,
+			).run(state.staging.model);
 			db.exec(`ALTER TABLE ${STAGING_VECTOR_TABLE} RENAME TO vec_embeddings_next`);
 			db.exec("ALTER TABLE vec_embeddings RENAME TO vec_embeddings_staging");
 			db.exec("ALTER TABLE vec_embeddings_next RENAME TO vec_embeddings");
+			db.prepare(
+				`UPDATE embedding_index_state
+				 SET active_profile_json = staging_profile_json, staging_profile_json = NULL,
+				     state = 'ready', last_error = NULL, updated_at = ?
+				 WHERE id = 1`,
+			).run(new Date().toISOString());
 		}
-		db.prepare(
-			`UPDATE embedding_index_state
-			 SET active_profile_json = staging_profile_json, staging_profile_json = NULL,
-			     state = 'ready', last_error = NULL, updated_at = ?
-			 WHERE id = 1`,
-		).run(new Date().toISOString());
-		return { dimensions: state.staging.dimensions, rebuildVectorIndex };
+		return { dimensions: state.staging.dimensions, profile: nextProfile, rebuildVectorIndex };
 	});
 	if (plan === null) return false;
 	if (plan.rebuildVectorIndex) {
-		await rebuildActiveVectorIndex(accessor, plan.dimensions, options?.vectorBatchSize, options?.shouldContinue);
+		await completeProjectionRebuild(accessor, plan.profile, options?.vectorBatchSize, options?.shouldContinue);
 	}
 	if (accessor.incrementalVacuumAsync) await accessor.incrementalVacuumAsync();
 	return true;
@@ -504,6 +541,17 @@ export async function startEmbeddingIndexMigration(input: {
 	const initial = await withQueuedWrite(input.accessor, (db) => beginEmbeddingIndexBuild(db, input.configured));
 	const staging = initial.staging;
 	if (initial.state !== "building" || !staging) return null;
+	if (staging.projectionRebuild) {
+		try {
+			await completeProjectionRebuild(input.accessor, staging);
+			if (input.accessor.incrementalVacuumAsync) await input.accessor.incrementalVacuumAsync();
+		} catch (error) {
+			logger.warn("embedding", "Interrupted vector projection rebuild remains queued for retry", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		return null;
+	}
 	const resumeExistingBuild = before?.state === "building" && before.staging?.fingerprint === staging.fingerprint;
 	try {
 		if (resumeExistingBuild) {
@@ -527,7 +575,21 @@ export async function startEmbeddingIndexMigration(input: {
 		try {
 			const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db));
 			if (state?.state !== "building" || !state.staging) return;
+			if (state.staging.projectionRebuild) {
+				try {
+					await completeProjectionRebuild(input.accessor, state.staging, undefined, () => running);
+					if (input.accessor.incrementalVacuumAsync) await input.accessor.incrementalVacuumAsync();
+					running = false;
+					input.onPromoted?.();
+				} catch (error) {
+					logger.warn("embedding", "Interrupted vector projection rebuild remains queued for retry", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+				return;
+			}
 			// The persisted staging profile can go stale when agent.yaml
+
 			// changes mid-build; the migration then spins failing the old
 			// provider forever (#1160). Re-begin against the LIVE config (re-read
 			// from disk each tick): a no-op when nothing changed, a restart when
@@ -581,6 +643,16 @@ export async function startEmbeddingIndexMigration(input: {
 			}
 			if (!running || (error instanceof Error && error.message === "DbAccessor is closed")) {
 				running = false;
+				return;
+			}
+			const pendingProjection = await input.accessor.withReadDbAsync(async (db) => {
+				const state = readEmbeddingIndexState(db);
+				return state?.state === "building" && state.staging?.projectionRebuild === true;
+			});
+			if (pendingProjection) {
+				logger.warn("embedding", "Vector projection rebuild remains queued for retry", {
+					error: error instanceof Error ? error.message : String(error),
+				});
 				return;
 			}
 			consecutiveFailures++;
