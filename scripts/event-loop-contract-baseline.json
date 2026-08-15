@@ -445,7 +445,7 @@
 		},
 		{
 			"path": "daemon.ts",
-			"line": 1421,
+			"line": 1434,
 			"api": "withWriteTx",
 			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
 			"category": "hot-path"
@@ -466,7 +466,7 @@
 		},
 		{
 			"path": "daemon.ts",
-			"line": 1502,
+			"line": 1515,
 			"api": "withReadDb",
 			"source": "const activeEmbeddingCfg = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
 			"category": "hot-path"
@@ -515,14 +515,14 @@
 		},
 		{
 			"path": "daemon.ts",
-			"line": 2175,
+			"line": 2188,
 			"api": "withReadDb",
 			"source": "const memoryCount = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
 			"category": "hot-path"
 		},
 		{
 			"path": "daemon.ts",
-			"line": 2186,
+			"line": 2199,
 			"api": "withReadDb",
 			"source": "const queue = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
 			"category": "hot-path"
@@ -1082,7 +1082,7 @@
 		},
 		{
 			"path": "hooks.ts",
-			"line": 459,
+			"line": 460,
 			"api": "withReadDb",
 			"source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
 			"category": "hot-path"
@@ -1096,7 +1096,7 @@
 		},
 		{
 			"path": "hooks.ts",
-			"line": 565,
+			"line": 566,
 			"api": "withReadDb",
 			"source": "getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
 			"category": "hot-path"
@@ -1110,21 +1110,21 @@
 		},
 		{
 			"path": "hooks.ts",
-			"line": 774,
+			"line": 775,
 			"api": "withReadDb",
 			"source": "const block = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
 			"category": "hot-path"
 		},
 		{
 			"path": "hooks.ts",
-			"line": 850,
+			"line": 851,
 			"api": "withReadDb",
 			"source": "const focal = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
 			"category": "hot-path"
 		},
 		{
 			"path": "hooks.ts",
-			"line": 864,
+			"line": 865,
 			"api": "withReadDb",
 			"source": "<T>(fn: (db: ReadDb) => T): T => getDbAccessor().withReadDb(fn),",
 			"category": "hot-path"
@@ -1818,14 +1818,14 @@
 		{
 			"path": "memory-head.ts",
 			"line": 165,
-			"api": "writeFileSync",
+			"api": "readFileSync",
 			"source": "writeFileSync(backup, readFileSync(path, \"utf-8\"));",
 			"category": "hot-path"
 		},
 		{
 			"path": "memory-head.ts",
 			"line": 165,
-			"api": "readFileSync",
+			"api": "writeFileSync",
 			"source": "writeFileSync(backup, readFileSync(path, \"utf-8\"));",
 			"category": "hot-path"
 		},
@@ -2034,6 +2034,13 @@
 		},
 		{
 			"path": "memory-lineage.ts",
+			"line": 2201,
+			"api": "rmSync",
+			"source": "rmSync(join(getAgentsDir(), path), { force: true });",
+			"category": "hot-path"
+		},
+		{
+			"path": "memory-lineage.ts",
 			"line": 2213,
 			"api": "withReadDb",
 			"source": "const rows: Array<{ source_path: string }> = getDbAccessor().withReadDb(",
@@ -2044,13 +2051,6 @@
 			"line": 2225,
 			"api": "withWriteTx",
 			"source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "memory-lineage.ts",
-			"line": 2201,
-			"api": "rmSync",
-			"source": "rmSync(join(getAgentsDir(), path), { force: true });",
 			"category": "hot-path"
 		},
 		{
@@ -2272,7 +2272,7 @@
 		},
 		{
 			"path": "native-memory-sources.ts",
-			"line": 964,
+			"line": 989,
 			"api": "withWriteTx",
 			"source": "const artifactRows = getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
 			"category": "hot-path"
@@ -2419,21 +2419,21 @@
 		},
 		{
 			"path": "obsidian-source-graph.ts",
-			"line": 471,
+			"line": 477,
 			"api": "withWriteTx",
 			"source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
 			"category": "hot-path"
 		},
 		{
 			"path": "obsidian-source-graph.ts",
-			"line": 690,
+			"line": 696,
 			"api": "withWriteTx",
 			"source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
 			"category": "hot-path"
 		},
 		{
 			"path": "obsidian-source-graph.ts",
-			"line": 702,
+			"line": 708,
 			"api": "withWriteTx",
 			"source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
 			"category": "hot-path"
@@ -3560,14 +3560,14 @@
 		},
 		{
 			"path": "pipeline/synthesis-worker.ts",
-			"line": 126,
+			"line": 127,
 			"api": "withReadDb",
 			"source": "const checkpointRow = deps.getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
 			"category": "hot-path"
 		},
 		{
 			"path": "pipeline/synthesis-worker.ts",
-			"line": 152,
+			"line": 153,
 			"api": "withReadDb",
 			"source": "const transcriptRow = deps.getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
 			"category": "hot-path"
