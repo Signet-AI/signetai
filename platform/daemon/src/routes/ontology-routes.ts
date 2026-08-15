@@ -882,7 +882,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (scoped.response) return scoped.response;
 		try {
 			return c.json(
-				rejectOntologyProposal(getDbAccessor(), {
+				await rejectOntologyProposal(getDbAccessor(), {
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
 					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",

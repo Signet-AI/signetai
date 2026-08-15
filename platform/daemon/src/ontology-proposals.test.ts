@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
 import { listEpistemicAssertions } from "./ontology-assertions";
@@ -26,6 +27,7 @@ import {
 	proposeDuplicateEntityMerges,
 	rejectOntologyProposal,
 } from "./ontology-proposals";
+import { registerOntologyRoutes } from "./routes/ontology-routes";
 import { txIngestEnvelope } from "./transactions";
 
 describe("ontology proposals", () => {
@@ -638,6 +640,47 @@ describe("ontology proposals", () => {
 				db.prepare("SELECT id FROM entities WHERE name = ?").get("Temporary Entity") as { id: string } | undefined,
 		);
 		expect(entity).toBeNull();
+	});
+
+	it("awaits failure status persistence before rethrowing an apply error", async () => {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
+			agentId: "default",
+			operation: "unsupported_operation",
+			payload: { unsupported: true },
+		});
+
+		await expect(
+			applyOntologyProposal(getDbAccessor(), {
+				agentId: "default",
+				id: proposal.id,
+				actor: "operator",
+			}),
+		).rejects.toThrow("Unsupported ontology proposal operation: unsupported_operation");
+
+		const failed = await getDbAccessor().withReadDbAsync(
+			async (db) =>
+				db.prepare("SELECT status FROM ontology_proposals WHERE id = ?").get(proposal.id) as { status: string },
+		);
+		expect(failed.status).toBe("failed");
+	});
+
+	it("returns the rejected proposal body from the HTTP route", async () => {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
+			agentId: "default",
+			operation: "create_entity",
+			payload: { name: "Route Rejection", entity_type: "project" },
+		});
+		const app = new Hono();
+		registerOntologyRoutes(app);
+
+		const response = await app.request(`/api/ontology/proposals/${proposal.id}/reject?agent_id=default`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ actor: "operator", reason: "route regression" }),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ id: proposal.id, status: "rejected" });
 	});
 
 	it("rejects empty proposal operations before storage", async () => {

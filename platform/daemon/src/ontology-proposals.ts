@@ -3044,7 +3044,15 @@ export async function applyOntologyProposal(
 		});
 	} catch (err) {
 		if (err instanceof OntologyProposalError && err.status !== 404 && err.status !== 409) {
-			markFailed(accessor, params.id, params.agentId, err);
+			try {
+				await markFailed(accessor, params.id, params.agentId, err);
+			} catch (markError) {
+				console.error("[ontology] failed to mark proposal as failed", {
+					proposalId: params.id,
+					agentId: params.agentId,
+					error: markError instanceof Error ? markError.message : String(markError),
+				});
+			}
 		}
 		throw err;
 	}

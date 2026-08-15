@@ -787,7 +787,7 @@ export async function getEntityAspectsByName(
 		if (!entity) return null;
 		return {
 			entity,
-			items: await getEntityAspectsWithCounts(accessor, entity.id, params.agentId),
+			items: readEntityAspectsWithCounts(db, entity.id, params.agentId),
 		};
 	});
 }
@@ -1312,38 +1312,40 @@ export async function getKnowledgeEntityDetail(
 	});
 }
 
+function readEntityAspectsWithCounts(db: ReadDb, entityId: string, agentId: string): readonly AspectWithCounts[] {
+	const rows = db
+		.prepare(
+			`SELECT
+				asp.*,
+				COUNT(DISTINCT CASE
+					WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
+				END) AS attribute_count,
+				COUNT(DISTINCT CASE
+					WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
+				END) AS constraint_count
+			 FROM entity_aspects asp
+			 LEFT JOIN entity_attributes attr
+			   ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
+			 WHERE asp.entity_id = ? AND asp.agent_id = ?
+			   AND COALESCE(asp.status, 'active') = 'active'
+			 GROUP BY asp.id
+			 ORDER BY asp.weight DESC, asp.name ASC`,
+		)
+		.all(entityId, agentId) as Array<Record<string, unknown>>;
+
+	return rows.map((row) => ({
+		aspect: rowToAspect(row),
+		attributeCount: Number(row.attribute_count ?? 0),
+		constraintCount: Number(row.constraint_count ?? 0),
+	}));
+}
+
 export async function getEntityAspectsWithCounts(
 	accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
 ): Promise<readonly AspectWithCounts[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT
-					asp.*,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
-					END) AS attribute_count,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
-					END) AS constraint_count
-				 FROM entity_aspects asp
-				 LEFT JOIN entity_attributes attr
-				   ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
-				 WHERE asp.entity_id = ? AND asp.agent_id = ?
-				   AND COALESCE(asp.status, 'active') = 'active'
-				 GROUP BY asp.id
-				 ORDER BY asp.weight DESC, asp.name ASC`,
-			)
-			.all(entityId, agentId) as Array<Record<string, unknown>>;
-
-		return rows.map((row) => ({
-			aspect: rowToAspect(row),
-			attributeCount: Number(row.attribute_count ?? 0),
-			constraintCount: Number(row.constraint_count ?? 0),
-		}));
-	});
+	return await accessor.withReadDbAsync(async (db) => readEntityAspectsWithCounts(db, entityId, agentId));
 }
 
 export async function getAttributesForAspectFiltered(

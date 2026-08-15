@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DbAccessor, ReadDb } from "./db-accessor";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	getEntityAspectsByName,
@@ -61,6 +62,22 @@ function seedAttribute(input: {
 			updatedAt,
 		);
 	});
+}
+
+function rejectNestedReads(accessor: DbAccessor): DbAccessor {
+	let active = false;
+	return {
+		...accessor,
+		async withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T> {
+			if (active) throw new Error("nested read connection acquisition");
+			active = true;
+			try {
+				return await accessor.withReadDbAsync(fn);
+			} finally {
+				active = false;
+			}
+		},
+	};
 }
 
 describe("knowledge graph navigation", () => {
@@ -154,6 +171,24 @@ describe("knowledge graph navigation", () => {
 			offset: 0,
 		});
 		expect(all?.items.map((item) => item.status)).toEqual(["active", "superseded"]);
+	});
+
+	test("holds one read connection while resolving entity aspects by name", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity();
+		seedAttribute({
+			id: "attr-favorite",
+			groupKey: "restaurants",
+			claimKey: "favorite_restaurant",
+			content: "Nicholai currently prefers Temaki Den.",
+		});
+
+		const result = await getEntityAspectsByName(rejectNestedReads(getDbAccessor()), {
+			agentId: "default",
+			entity: "Nicholai",
+		});
+		expect(result?.items[0]?.attributeCount).toBe(1);
 	});
 
 	test("returns a compact tree for agent-visible graph browsing", async () => {
