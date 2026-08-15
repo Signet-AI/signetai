@@ -155,6 +155,14 @@ describe("Sources routes", () => {
 		expect(source).not.toMatch(/\b(?:execSync|spawnSync)\b/);
 	});
 
+	it("tracks recurring lifecycle writes and awaits startup tombstone cleanup (#1590)", async () => {
+		const routeSource = await Bun.file(new URL("./sources-routes.ts", import.meta.url)).text();
+		const daemonSource = await Bun.file(new URL("../daemon.ts", import.meta.url)).text();
+		expect(routeSource).toContain("trackSourceLifecycleWrite(recordSourceReadiness(input.source, agentId))");
+		expect(routeSource).toContain("trackSourceLifecycleWrite(recordSourceFreshness(input.source, agentId))");
+		expect(daemonSource).toContain("await cleanupSourceDeletionTombstones(AGENTS_DIR)");
+	});
+
 	it("lists no configured sources by default", async () => {
 		const res = await makeApp().request("/api/sources");
 		expect(res.status).toBe(200);

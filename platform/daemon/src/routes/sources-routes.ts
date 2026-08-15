@@ -57,6 +57,7 @@ import {
 	sourceFailureClass,
 	sourceHasSearchableArtifacts,
 	sourceModeFor,
+	trackSourceLifecycleWrite,
 } from "../source-lifecycle-telemetry";
 import { getSourceProvider } from "../source-providers";
 import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
@@ -520,10 +521,12 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 					if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 					updateSourceIndexJobProgress(input.source.id, job.id, event);
 					const recurring = sourceModeFor(input.source) === "recurring";
-					if (recurring && event.currentPath !== "discord://gateway") void recordSourceReadiness(input.source, agentId);
+					if (recurring && event.currentPath !== "discord://gateway") {
+						void trackSourceLifecycleWrite(recordSourceReadiness(input.source, agentId));
+					}
 					if (recurring && Date.now() - lastRecurringFreshnessAt >= 5 * 60 * 1_000) {
 						lastRecurringFreshnessAt = Date.now();
-						void recordSourceFreshness(input.source, agentId);
+						void trackSourceLifecycleWrite(recordSourceFreshness(input.source, agentId));
 					}
 				},
 			});

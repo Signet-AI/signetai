@@ -2044,7 +2044,13 @@ async function main() {
 	// executes before DB init and crashed the daemon whenever a tombstone
 	// existed at boot (#1143). Failures are tolerated inside the cleanup;
 	// failed purges defer to the next boot.
-	cleanupSourceDeletionTombstones(AGENTS_DIR);
+	try {
+		await cleanupSourceDeletionTombstones(AGENTS_DIR);
+	} catch (err) {
+		logger.warn("daemon", "Source-deletion tombstone cleanup failed; continuing startup", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
