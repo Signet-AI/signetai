@@ -17,7 +17,7 @@
  */
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
-import { execFile, spawn as nodeSpawn } from "node:child_process";
+import { spawn as nodeSpawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
@@ -970,21 +970,69 @@ function acpxPsBinary(): string {
 }
 
 const MAX_DARWIN_CLEANUP_CANDIDATES = 128;
+const DARWIN_PS_SOFT_TIMEOUT_MS = 250;
+const DARWIN_PS_HARD_TIMEOUT_MS = 250;
+const DARWIN_CLEANUP_SWEEP_TIMEOUT_MS = 2_000;
 
 interface ProcessCaptureResult {
 	readonly stdout: string;
 	readonly succeeded: boolean;
 }
 
-function runProcessCapture(binary: string, args: readonly string[]): Promise<ProcessCaptureResult> {
+function runProcessCapture(binary: string, args: readonly string[], deadline: number): Promise<ProcessCaptureResult> {
+	const remainingMs = deadline - performance.now();
+	if (remainingMs <= 0) return Promise.resolve({ stdout: "", succeeded: false });
 	return new Promise((resolve) => {
-		execFile(binary, [...args], { timeout: 800, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-			if (error) {
-				resolve({ stdout: "", succeeded: false });
-				return;
+		let child: ReturnType<typeof nodeSpawn>;
+		try {
+			child = nodeSpawn(binary, [...args], {
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+		} catch {
+			resolve({ stdout: "", succeeded: false });
+			return;
+		}
+		let stdout = "";
+		let settled = false;
+		let softTimer: ReturnType<typeof setTimeout> | undefined;
+		let hardTimer: ReturnType<typeof setTimeout> | undefined;
+		const onData = (chunk: string | Buffer): void => {
+			stdout += String(chunk);
+		};
+		const clearTimers = (): void => {
+			if (softTimer) clearTimeout(softTimer);
+			if (hardTimer) clearTimeout(hardTimer);
+		};
+		const settle = (result: ProcessCaptureResult): void => {
+			if (settled) return;
+			settled = true;
+			clearTimers();
+			child.stdout?.removeListener("data", onData);
+			resolve(result);
+		};
+		const kill = (signal: "SIGTERM" | "SIGKILL"): void => {
+			try {
+				child.kill(signal);
+			} catch {
+				// The process may have exited between the timeout and the signal.
 			}
-			resolve({ stdout, succeeded: true });
-		});
+		};
+		const hardKill = (): void => {
+			kill("SIGKILL");
+			// Do not wait for close. A SIGTERM-resistant process can keep the
+			// stdio pipe open, but SIGKILL has already ended the ps child.
+			settle({ stdout: "", succeeded: false });
+		};
+		const softKill = (): void => {
+			kill("SIGTERM");
+			const hardRemainingMs = Math.min(DARWIN_PS_HARD_TIMEOUT_MS, Math.max(0, deadline - performance.now()));
+			hardTimer = setTimeout(hardKill, hardRemainingMs);
+		};
+		child.stdout?.setEncoding("utf8");
+		child.stdout?.on("data", onData);
+		child.on("error", () => settle({ stdout: "", succeeded: false }));
+		child.on("close", (code) => settle({ stdout, succeeded: code === 0 }));
+		softTimer = setTimeout(softKill, Math.min(DARWIN_PS_SOFT_TIMEOUT_MS, remainingMs));
 	});
 }
 
@@ -1014,7 +1062,8 @@ function psEnvironmentContainsRunId(stdout: string, runId: string): boolean {
  * same-named process from another run or a user tool.
  */
 async function darwinSweepCandidates(basenames: ReadonlySet<string>, runId: string): Promise<number[]> {
-	const listingResult = await runProcessCapture(acpxPsBinary(), ["-axo", "pid=,command="]);
+	const deadline = performance.now() + DARWIN_CLEANUP_SWEEP_TIMEOUT_MS;
+	const listingResult = await runProcessCapture(acpxPsBinary(), ["-axo", "pid=,command="], deadline);
 	if (!listingResult.succeeded) {
 		logger.warn("inference", "ACPX Darwin orphan sweep could not enumerate processes", {
 			mechanism: "ps",
@@ -1043,7 +1092,8 @@ async function darwinSweepCandidates(basenames: ReadonlySet<string>, runId: stri
 	const matched: number[] = [];
 	let environmentFailures = 0;
 	for (const pid of candidates) {
-		const environment = await runProcessCapture(acpxPsBinary(), ["-p", String(pid), "-E", "-o", "command="]);
+		if (performance.now() >= deadline) break;
+		const environment = await runProcessCapture(acpxPsBinary(), ["-p", String(pid), "-E", "-o", "command="], deadline);
 		if (!environment.succeeded) {
 			environmentFailures++;
 			continue;

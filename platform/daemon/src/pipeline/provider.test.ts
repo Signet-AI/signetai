@@ -949,6 +949,87 @@ printf 'ok\\n'
 		expect(killLog).toEqual([]);
 	});
 
+	it("hard-kills SIGTERM-resistant ps probes and bounds the total Darwin sweep", async () => {
+		const root = join(
+			tmpdir(),
+			`signet-acpx-darwin-sweep-deadline-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
+		mkdirSync(root, { recursive: true });
+		const candidateCount = 8;
+		const firstPid = 6000;
+		const fakePs = join(root, "ps");
+		const psPids = join(root, "ps-pids.txt");
+		const bin = join(root, "fake-acpx.sh");
+		const candidateLines = Array.from(
+			{ length: candidateCount },
+			(_, index) => `printf '%s\\n' "${firstPid + index} /usr/local/bin/codex-acp"`,
+		).join("\n");
+		writeFileSync(
+			fakePs,
+			`#!/usr/bin/env bash
+if [[ "$1" == "-axo" && "$2" == "pid=,command=" ]]; then
+${candidateLines}
+  exit 0
+fi
+if [[ "$1" == "-p" ]]; then
+  printf '%s\\n' "$$" >> ${JSON.stringify(psPids)}
+  trap '' TERM
+  while :; do :; done
+fi
+exit 1
+`,
+		);
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf 'ok\\n'
+`,
+		);
+		chmodSync(fakePs, 0o755);
+		chmodSync(bin, 0o755);
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousPs = process.env.SIGNET_ACPX_PS;
+		const startedAt = performance.now();
+		let elapsedMs = 0;
+		let spawnedPids: number[] = [];
+		const readSpawnedPids = (): number[] =>
+			existsSync(psPids)
+				? readFileSync(psPids, "utf-8")
+						.trim()
+						.split("\n")
+						.filter(Boolean)
+						.map(Number)
+						.filter((pid) => pid > 0)
+				: [];
+		process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "darwin";
+		process.env.SIGNET_ACPX_PS = fakePs;
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 5_000 })).resolves.toBe("ok");
+			elapsedMs = performance.now() - startedAt;
+			spawnedPids = readSpawnedPids();
+		} finally {
+			if (spawnedPids.length === 0) spawnedPids = readSpawnedPids();
+			for (const pid of spawnedPids) {
+				if (!(await waitForProcessExit(pid))) {
+					try {
+						process.kill(pid, "SIGKILL");
+					} catch {
+						// Already exited.
+					}
+				}
+			}
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			if (previousPs === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PS");
+			else process.env.SIGNET_ACPX_PS = previousPs;
+			rmSync(root, { recursive: true, force: true });
+		}
+		expect(spawnedPids.length).toBeGreaterThan(0);
+		expect(spawnedPids.length).toBeLessThan(candidateCount);
+		expect(elapsedMs).toBeLessThan(3_000);
+	});
+
 	it("treats an unreadable ACPX proc root as best-effort cleanup", async () => {
 		if (process.platform !== "linux") return;
 		const root = join(tmpdir(), `signet-acpx-missing-proc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
