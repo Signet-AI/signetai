@@ -1424,7 +1424,7 @@ export async function hybridRecall(
 			const source = lifecycleSourceResults.get(row.id);
 			return source ? [source] : [];
 		});
-		await recordFirstSourceRecall(params.agentId ?? "default", [...response.results, ...selectedLifecycleSources]);
+		recordFirstSourceRecall(params.agentId ?? "default", [...response.results, ...selectedLifecycleSources]);
 		if (recallTimings.totalMs >= RECALL_TIMING_LOG_THRESHOLD_MS) {
 			logger.warn("memory", "Recall stage timings", {
 				agentId: params.agentId ?? "default",
