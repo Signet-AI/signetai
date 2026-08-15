@@ -379,7 +379,7 @@ test("event-loop audit baseline is an exact, pinned, deterministic production in
 	// silently pass CI while the live scan reports fewer sites.
 	expect(occurrenceKeys(baseline.sites)).toEqual(occurrenceKeys(first.sites));
 	// The occurrence-accurate baseline was 1056 before the accessSync coverage and current-main inventory changes.
-	expect(first.sites).toHaveLength(1061);
+	expect(first.sites).toHaveLength(1060);
 	// Deterministic ordering and content: repeated runs of the full scan are byte-identical.
 	expect(JSON.stringify(second.sites)).toBe(JSON.stringify(first.sites));
 });
