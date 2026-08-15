@@ -184,7 +184,7 @@ export default defineConfig({
 							items: [
 								{ label: "Overview", slug: "harnesses" },
 								{ label: "Claude Code", slug: "harnesses/claude-code" },
-								{ label: "Kimi CLI", slug: "harnesses/kimi" },
+								{ label: "Kimi Code", slug: "harnesses/kimi" },
 								{ label: "Codex", slug: "harnesses/codex" },
 								{ label: "OpenCode", slug: "harnesses/opencode" },
 								{ label: "Oh My Pi", slug: "harnesses/oh-my-pi" },
