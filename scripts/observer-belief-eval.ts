@@ -2,14 +2,15 @@
 /**
  * Deterministic observer-scoped belief evaluation for #1317.
  *
- * Each agent ingests the same interleaved conversation with a different
- * directional assertion about the same named entity. The eval proves that
- * extraction preserves both observations and that the observer-scoped HTTP
- * query returns each agent's assertion separately.
+ * Both agents ingest the same raw interleaved conversation. A deterministic
+ * provider stand-in extracts the selected speaker's message through the
+ * ontology extraction pipeline, and the eval proves that the resulting
+ * directional assertions remain observer-scoped and queryable.
  */
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { LlmProvider } from "@signet/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db-accessor";
 import { extractOntologyProposals } from "../platform/daemon/src/ontology-extraction";
@@ -20,10 +21,22 @@ const NOW = "2026-08-14T00:00:00.000Z";
 const AGENT_A = "agent-a";
 const AGENT_B = "agent-b";
 const ENTITY_NAME = "Shared Person";
+const INTERLEAVED_CONVERSATION = [
+	"Alice: Shared Person prefers local-first memory.",
+	"Bob: Shared Person prefers hosted memory.",
+	"Alice: The two observations should remain attributed.",
+].join("\n");
 
 type EvalResult = {
 	readonly name: string;
 	readonly passed: boolean;
+};
+
+export type ObserverBeliefEvalResult = {
+	readonly eval: "observer-belief";
+	readonly passed: number;
+	readonly total: number;
+	readonly results: readonly EvalResult[];
 };
 
 type AssertionApiItem = {
@@ -39,6 +52,8 @@ type AssertionApiResponse = {
 	readonly count: number;
 };
 
+type Speaker = "Alice" | "Bob";
+
 function seedSubject(id: string, agentId: string): void {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
@@ -49,33 +64,43 @@ function seedSubject(id: string, agentId: string): void {
 	});
 }
 
-function seedInterleavedTranscript(agentId: string, sessionKey: string, content: string): void {
+function seedInterleavedTranscript(agentId: string, sessionKey: string): void {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO session_transcripts
 			 (session_key, content, harness, project, agent_id, created_at, updated_at, completed_at)
 			 VALUES (?, ?, 'eval', '/observer-eval', ?, ?, ?, ?)`,
-		).run(sessionKey, content, agentId, NOW, NOW, NOW);
+		).run(sessionKey, INTERLEAVED_CONVERSATION, agentId, NOW, NOW, NOW);
 	});
 }
 
-function conversationFor(content: string, speaker: string, sourceId: string): string {
-	return JSON.stringify({
-		messages: [
-			{ speaker: "Alice", text: "Shared Person prefers local-first memory." },
-			{ speaker: "Bob", text: "Shared Person prefers hosted memory." },
-			{ speaker: "Alice", text: "The two observations should remain attributed." },
-		],
-		assertions: [
-			{
-				entity: ENTITY_NAME,
-				predicate: "believes",
-				content,
-				speaker,
-				evidence: [{ source_kind: "transcript", source_id: sourceId, quote: content }],
-			},
-		],
-	});
+function messageForSpeaker(conversation: string, speaker: Speaker): string {
+	const line = conversation.split("\n").find((candidate) => candidate.startsWith(`${speaker}:`));
+	if (!line) throw new Error(`No message found for ${speaker}`);
+	return line.slice(speaker.length + 1).trim();
+}
+
+function providerForSpeaker(speaker: Speaker): LlmProvider {
+	return {
+		name: `observer-belief-eval-${speaker.toLowerCase()}`,
+		available: async (): Promise<boolean> => true,
+		generate: async (prompt: string): Promise<string> => {
+			const marker = "Source content:\n";
+			const sourceContent = prompt.slice(prompt.lastIndexOf(marker) + marker.length);
+			const content = messageForSpeaker(sourceContent, speaker);
+			return `Derived assertions:\n${JSON.stringify({
+				assertions: [
+					{
+						entity: ENTITY_NAME,
+						predicate: "believes",
+						content,
+						speaker,
+						evidence: [{ quote: content }],
+					},
+				],
+			})}`;
+		},
+	};
 }
 
 async function queryAssertions(app: Hono, agentId: string): Promise<AssertionApiResponse | null> {
@@ -89,38 +114,44 @@ async function queryAssertions(app: Hono, agentId: string): Promise<AssertionApi
 	return (await response.json()) as AssertionApiResponse;
 }
 
-async function main(): Promise<void> {
+export async function runObserverBeliefEval(): Promise<ObserverBeliefEvalResult> {
 	const dir = mkdtempSync(join(tmpdir(), "signet-observer-belief-eval-"));
 	mkdirSync(join(dir, "memory"), { recursive: true });
 	initDbAccessor(join(dir, "memory", "memories.db"));
 	const results: EvalResult[] = [];
-	let exitCode = 0;
 	try {
 		seedSubject("subject-a", AGENT_A);
 		seedSubject("subject-b", AGENT_B);
-
-		const contentA = "Shared Person prefers local-first memory.";
-		const contentB = "Shared Person prefers hosted memory.";
-		seedInterleavedTranscript(AGENT_A, "conversation-a", conversationFor(contentA, "Alice", "conversation-a"));
-		seedInterleavedTranscript(AGENT_B, "conversation-b", conversationFor(contentB, "Bob", "conversation-b"));
+		seedInterleavedTranscript(AGENT_A, "conversation-a");
+		seedInterleavedTranscript(AGENT_B, "conversation-b");
 
 		const extractedA = await extractOntologyProposals(getDbAccessor(), {
 			agentId: AGENT_A,
 			from: "conversation-a",
 			writeAssertions: true,
 			createdBy: "observer-belief-eval",
+			useProvider: true,
+			provider: providerForSpeaker("Alice"),
 		});
 		const extractedB = await extractOntologyProposals(getDbAccessor(), {
 			agentId: AGENT_B,
 			from: "conversation-b",
 			writeAssertions: true,
 			createdBy: "observer-belief-eval",
+			useProvider: true,
+			provider: providerForSpeaker("Bob"),
 		});
+		const contentA = messageForSpeaker(INTERLEAVED_CONVERSATION, "Alice");
+		const contentB = messageForSpeaker(INTERLEAVED_CONVERSATION, "Bob");
 		results.push({
-			name: "interleaved conversation extraction writes one assertion per agent",
+			name: "raw interleaved messages produce one provider-derived assertion per observer",
 			passed:
+				extractedA.providerName === "observer-belief-eval-alice" &&
+				extractedB.providerName === "observer-belief-eval-bob" &&
 				extractedA.writtenAssertionCount === 1 &&
 				extractedB.writtenAssertionCount === 1 &&
+				extractedA.assertionItems[0]?.content === contentA &&
+				extractedB.assertionItems[0]?.content === contentB &&
 				extractedA.assertionItems[0]?.subjectEntityName === ENTITY_NAME &&
 				extractedB.assertionItems[0]?.subjectEntityName === ENTITY_NAME,
 		});
@@ -130,7 +161,7 @@ async function main(): Promise<void> {
 		const agentA = await queryAssertions(app, AGENT_A);
 		const agentB = await queryAssertions(app, AGENT_B);
 		results.push({
-			name: "observer-scoped HTTP queries return separate directional observations",
+			name: "observer-scoped HTTP queries preserve separate directional observations",
 			passed:
 				agentA?.items.length === 1 &&
 				agentB?.items.length === 1 &&
@@ -158,16 +189,21 @@ async function main(): Promise<void> {
 		});
 
 		const passed = results.filter((result) => result.passed).length;
-		console.log(JSON.stringify({ eval: "observer-belief", passed, total: results.length, results }, null, 2));
-		if (passed !== results.length) exitCode = 1;
+		return { eval: "observer-belief", passed, total: results.length, results };
 	} finally {
 		closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 	}
-	process.exit(exitCode);
 }
 
-void main().catch((err: unknown) => {
-	console.error(err instanceof Error ? err.message : String(err));
-	process.exitCode = 1;
-});
+if (import.meta.main) {
+	void runObserverBeliefEval()
+		.then((result) => {
+			console.log(JSON.stringify(result, null, 2));
+			process.exit(result.passed === result.total ? 0 : 1);
+		})
+		.catch((err: unknown) => {
+			console.error(err instanceof Error ? err.message : String(err));
+			process.exitCode = 1;
+		});
+}
