@@ -69,6 +69,20 @@ function wrapDb(db: Database): DbAccessor {
 				throw error;
 			}
 		},
+		async withReadDbAsync<T>(fn: (database: Database) => Promise<T>): Promise<T> {
+			return fn(db);
+		},
+		async withWriteTxAsync<T>(fn: (database: Database) => T): Promise<T> {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const result = await fn(db);
+				db.exec("COMMIT");
+				return result;
+			} catch (error) {
+				db.exec("ROLLBACK");
+				throw error;
+			}
+		},
 	} as unknown as DbAccessor;
 }
 
