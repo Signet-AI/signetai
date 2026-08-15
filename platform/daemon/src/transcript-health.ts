@@ -93,7 +93,7 @@ export async function getTranscriptHealthReport(
 	agentId?: string | null,
 ): Promise<TranscriptHealthReport> {
 	const capture = await getTranscriptCaptureStatus(dbAccessor, agentId);
-	const sessionStore = dbAccessor.withReadDb((db) => {
+	const sessionStore = await dbAccessor.withReadDbAsync(async (db) => {
 		const where = agentId ? "WHERE agent_id = ?" : "";
 		const params = agentId ? [agentId] : [];
 		const row = db
@@ -108,7 +108,7 @@ export async function getTranscriptHealthReport(
 			newestUpdatedAt: asStringOrNull(row?.newest_updated_at),
 		};
 	});
-	const artifacts = dbAccessor.withReadDb((db) => {
+	const artifacts = await dbAccessor.withReadDbAsync(async (db) => {
 		const andAgent = agentId ? "AND agent_id = ?" : "";
 		const params = agentId ? [agentId] : [];
 		const countKind = (kind: string): number => {

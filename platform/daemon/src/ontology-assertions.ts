@@ -302,7 +302,8 @@ export function createEpistemicAssertion(
 	accessor: DbAccessor,
 	input: CreateEpistemicAssertionInput,
 ): EpistemicAssertion {
-	return accessor.withWriteTx((db) => insertAssertion(db, input));
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: WriteDb) => insertAssertion(db, input));
 }
 
 export function createEpistemicAssertionsInTx(
@@ -320,7 +321,8 @@ export function listEpistemicAssertions(
 ): ListEpistemicAssertionsResult {
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: ReadDb) => {
 		const observerId = validateEpistemicObserverScope(params.agentId, params.observerId);
 		const where = ["a.agent_id = ?"];
 		const args: unknown[] = [observerId];
@@ -385,7 +387,8 @@ export function getEpistemicAssertion(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string; readonly observerId?: string | null },
 ): EpistemicAssertion | null {
-	return accessor.withReadDb((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return accessor.withReadDb((db: ReadDb) => {
 		const observerId = validateEpistemicObserverScope(params.agentId, params.observerId);
 		const row = db
 			.prepare(
@@ -403,7 +406,8 @@ export function linkEpistemicAssertionClaim(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string; readonly attributeId: string },
 ): EpistemicAssertion {
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: WriteDb) => {
 		const assertion = db
 			.prepare("SELECT subject_entity_id FROM epistemic_assertions WHERE id = ? AND agent_id = ?")
 			.get(params.id, params.agentId) as { subject_entity_id: string } | undefined;
@@ -430,7 +434,8 @@ export function archiveEpistemicAssertion(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string; readonly actor: string; readonly reason?: string | null },
 ): EpistemicAssertion {
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: WriteDb) => {
 		const existing = db
 			.prepare("SELECT id FROM epistemic_assertions WHERE id = ? AND agent_id = ?")
 			.get(params.id, params.agentId) as { id: string } | undefined;
@@ -457,7 +462,8 @@ export function supersedeEpistemicAssertion(
 	accessor: DbAccessor,
 	input: CreateEpistemicAssertionInput & { readonly oldAssertionId: string },
 ): EpistemicAssertion {
-	return accessor.withWriteTx((db) => {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return accessor.withWriteTx((db: WriteDb) => {
 		const old = db
 			.prepare(
 				`SELECT a.*, e.name AS subject_entity_name

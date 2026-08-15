@@ -92,8 +92,8 @@ function qualityIssues(rows: readonly EntityRow[]): readonly DreamingQualityIssu
  * users inspect, while source-native topology is excluded from quality counts.
  */
 export async function getDreamingQualityReport(accessor: DbAccessor, agentId: string): Promise<DreamingQualityReport> {
-	const { claimPaths, entities, totalClaimValues, unaddressableClaimValues, structureQuality } = accessor.withReadDb(
-		(db) => {
+	const { claimPaths, entities, totalClaimValues, unaddressableClaimValues, structureQuality } =
+		await accessor.withReadDbAsync(async (db) => {
 			const topologyPlaceholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
 			const semanticFilter = `NOT (e.entity_type IN (${topologyPlaceholders}) OR (e.entity_type = 'source' AND e.source_root IS NOT NULL))`;
 			const claimPaths = db
@@ -174,8 +174,7 @@ export async function getDreamingQualityReport(accessor: DbAccessor, agentId: st
 							: Number(structure.genericAspects ?? 0) / Number(structure.totalAspects),
 				},
 			};
-		},
-	);
+		});
 
 	let valuesWithResolvedEpisodicQuote = 0;
 	let unresolvedClaimPaths = 0;

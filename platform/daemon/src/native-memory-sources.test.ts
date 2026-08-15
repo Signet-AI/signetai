@@ -508,7 +508,7 @@ describe("native memory sources", () => {
 		utimesSync(file, stamp, stamp);
 
 		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(true);
-		removeNativeMemoryFile(source, file, "agent-native");
+		await removeNativeMemoryFile(source, file, "agent-native");
 		writeFileSync(file, "Codex remembered the same recreated file.\n");
 		utimesSync(file, stamp, stamp);
 
@@ -527,7 +527,7 @@ describe("native memory sources", () => {
 		writeFileSync(file, "# Smoke\n\nCodex remembered a soft deleted native artifact.\n");
 
 		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(true);
-		removeNativeMemoryFile(source, file, "agent-native");
+		await removeNativeMemoryFile(source, file, "agent-native");
 
 		const row = getDbAccessor().withReadDb(
 			(db) =>
@@ -550,7 +550,7 @@ describe("native memory sources", () => {
 		writeFileSync(file, "# Smoke\n\nCodex remembered a restored native artifact.\n");
 
 		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(true);
-		removeNativeMemoryFile(source, file, "agent-native");
+		await removeNativeMemoryFile(source, file, "agent-native");
 		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(true);
 
 		const row = getDbAccessor().withReadDb(
@@ -1054,7 +1054,7 @@ describe("native memory sources", () => {
 		expect(before.entities).toBeGreaterThan(0);
 		expect(before.attrs).toBeGreaterThan(0);
 
-		removeNativeMemoryFile(source, file, "agent-native");
+		await removeNativeMemoryFile(source, file, "agent-native");
 
 		const after = getDbAccessor().withReadDb((db) => ({
 			artifacts: (
@@ -1261,7 +1261,7 @@ describe("native memory sources", () => {
 			true,
 		);
 
-		const purged = purgeNativeMemorySourceArtifacts(source, "agent-native");
+		const purged = await purgeNativeMemorySourceArtifacts(source, "agent-native");
 
 		expect(purged).toBeGreaterThanOrEqual(2);
 		const rows = getDbAccessor().withReadDb(
@@ -1290,7 +1290,7 @@ describe("native memory sources", () => {
 		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(true);
 		expect(await indexNativeMemoryFile(siblingSource, siblingFile, "agent-native")).toBe(true);
 
-		const purged = purgeNativeMemorySourceArtifacts(source, "agent-native");
+		const purged = await purgeNativeMemorySourceArtifacts(source, "agent-native");
 
 		expect(purged).toBeGreaterThanOrEqual(1);
 		const remaining = getDbAccessor().withReadDb(
@@ -1314,7 +1314,7 @@ describe("native memory sources", () => {
 		expect(await indexNativeMemoryFile(source, fileA, "agent-a")).toBe(true);
 		expect(await indexNativeMemoryFile(source, fileB, "agent-b")).toBe(true);
 
-		const purged = purgeNativeMemorySourceArtifacts(source);
+		const purged = await purgeNativeMemorySourceArtifacts(source);
 
 		expect(purged).toBeGreaterThanOrEqual(2);
 		const remaining = getDbAccessor().withReadDb(

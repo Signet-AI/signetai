@@ -866,7 +866,7 @@ export async function indexNativeMemoryFile(
 			const provenanceRoot = source.sourceRoot ?? source.root;
 			const externalId =
 				obsidian || source.harness === "codex" || hermes ? sourceRelativePath(provenanceRoot, filePath) : null;
-			indexExternalMemoryArtifact({
+			await indexExternalMemoryArtifact({
 				agentId,
 				sourcePath: filePath,
 				sourceKind: pattern.kind,

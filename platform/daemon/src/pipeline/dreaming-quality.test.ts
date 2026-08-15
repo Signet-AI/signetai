@@ -9,6 +9,9 @@ function wrapDb(db: Database): DbAccessor {
 		withReadDb<T>(fn: (db: Database) => T): T {
 			return fn(db);
 		},
+		withReadDbAsync<T>(fn: (db: Database) => Promise<T>): Promise<T> {
+			return fn(db);
+		},
 		withWriteTx<T>(fn: (db: Database) => T): T {
 			db.exec("BEGIN IMMEDIATE");
 			try {
@@ -18,6 +21,17 @@ function wrapDb(db: Database): DbAccessor {
 			} catch (error) {
 				db.exec("ROLLBACK");
 				throw error;
+			}
+		},
+		withWriteTxAsync<T>(fn: (db: Database) => T): Promise<T> {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const value = fn(db);
+				db.exec("COMMIT");
+				return Promise.resolve(value);
+			} catch (error) {
+				db.exec("ROLLBACK");
+				return Promise.reject(error);
 			}
 		},
 	} as unknown as DbAccessor;
@@ -35,7 +49,7 @@ describe("Dreaming quality report", () => {
 
 	afterEach(() => db.close());
 
-	it("measures resolved episodic citations and rejects source topology from entity garbage counts", () => {
+	it("measures resolved episodic citations and rejects source topology from entity garbage counts", async () => {
 		const now = new Date().toISOString();
 		const quote = "Signet stores source evidence before deriving semantic state.";
 		db.prepare(
@@ -63,7 +77,7 @@ describe("Dreaming quality report", () => {
 			 ('attr-uncited', 'asp-signet', 'agent-a', 'memory-evidence', 'attribute', 'An untraceable claim.', 'an untraceable claim', 1, 1, 'active', 'architecture', 'untraceable', '[]', ?, ?)`,
 		).run(quote, quote.toLowerCase(), JSON.stringify([{ memory_id: "memory-evidence", quote }]), now, now, now, now);
 
-		const report = getDreamingQualityReport(accessor, "agent-a");
+		const report = await getDreamingQualityReport(accessor, "agent-a");
 		expect(report.citationCoverage).toEqual({
 			totalClaimValues: 2,
 			valuesWithResolvedEpisodicQuote: 1,
