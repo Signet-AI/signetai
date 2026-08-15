@@ -18,10 +18,6 @@ The 959-site inventory excludes test, benchmark, generated, and `__tests__` fixt
 
 The converted async sites are distributed as follows: document-worker (18), dreaming (28), retention (6), repair-actions (31), and source-lifecycle-telemetry (8), for 91 sites total.
 
-## A3 Slice 2 migration notes
-
-The converted async sites are distributed as follows: document-worker (18), dreaming (28), retention (6), repair-actions (31), and source-lifecycle-telemetry (8), for 91 sites total.
-
 ## Enforcement boundary
 
 - Statically-resolved production imports of the compatibility module fail the daemon TypeScript project because the module is outside its source rootDir. The AST import scan remains a supplementary diagnostic for source-tree execution.
