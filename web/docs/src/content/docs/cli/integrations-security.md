@@ -21,8 +21,9 @@ signet sync
 
 ## `signet secret`
 
-Manage encrypted [Secrets](/secrets/) stored via the daemon, including 1Password
-service-account integration.
+Manage encrypted [Secrets](/secrets/). Local secret operations use the shared
+encrypted store directly and work without a running daemon. 1Password, Bitwarden,
+and daemon queue-status operations require the daemon.
 
 ```bash
 signet secret put OPENAI_API_KEY
@@ -47,6 +48,8 @@ Subcommands:
 | `signet secret list` | List all secret names (never values) |
 | `signet secret delete <name>` | Delete a secret (prompts for confirmation) |
 | `signet secret has <name>` | Check existence; exits 0 if found, 1 if not |
+| `signet secret exec --secret <name> <command>` | Inject selected local secrets and run a command; synchronous without the daemon, queued with the daemon |
+| `signet secret exec-status <job-id>` | Check an asynchronous daemon secret exec job; daemon required |
 | `signet secret onepassword connect [token]` | Save/validate a 1Password service account token |
 | `signet secret onepassword status` | Show 1Password connection and vault access status |
 | `signet secret onepassword vaults` | List accessible 1Password vaults |

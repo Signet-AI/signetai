@@ -10,7 +10,7 @@ import {
 	setBitwardenClientFactoryForTests,
 } from "./bitwarden.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index.js";
-import type { SecretKeyringAdapter, SecretKeyringResult } from "./secrets-keyring.js";
+import type { SecretKeyringAdapter, SecretKeyringResult } from "@signet/core";
 import {
 	__setSecretStoreWriteHookForTests,
 	deleteSecret,

@@ -1,34 +1,11 @@
 /**
- * Secrets management - encrypted storage for sensitive values.
+ * Daemon secrets provider integration and asynchronous exec queue.
  *
- * Secrets are encrypted at rest using libsodium secretbox (XSalsa20-Poly1305).
- * The master key is derived from a persisted machine identity so the encrypted
- * file is bound to the machine without requiring a user passphrase. The identity
- * is anchored on first use so transient platform lookup failures cannot rotate it.
- *
- * Agents never receive secret values directly. They can only request actions
- * that use secrets (e.g. exec_with_secrets), which injects values into a
- * subprocess environment that the agent cannot inspect.
+ * Encrypted local storage and command execution live in @signet/core so the
+ * CLI can use the same implementation when the daemon is offline.
  */
 
-import { execSync, spawn } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
-import {
-	chmodSync,
-	closeSync,
-	existsSync,
-	fsyncSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	readdirSync,
-	renameSync,
-	unlinkSync,
-	writeFileSync,
-} from "node:fs";
-import { hostname } from "node:os";
-import { join } from "node:path";
-import { resolveDefaultBasePath } from "@signet/core";
+import { randomUUID } from "node:crypto";
 import {
 	BITWARDEN_ACTIVE_PROVIDER_SECRET,
 	BITWARDEN_MANAGED_FOLDER_SECRET,
@@ -43,66 +20,76 @@ import {
 } from "./bitwarden.js";
 import { logger } from "./logger.js";
 import {
-	getSecretKeyring,
-	setSecretKeyringForTests,
+	deleteLocalSecret as deleteLocalSecretCore,
+	execWithSecrets,
+	getLocalSecretProviderHealth,
+	getLocalSecretValue,
+	hasLocalSecret,
+	listLocalSecretNames,
+	localSecretProvider,
+	normalizeSecretExecTimeoutMs,
+	parseLocalSecretName,
+	putLocalSecret,
+	SecretKeyringError,
+	setMachineIdResolverForTests,
+	setSecretEventRecorder,
+	setSecretKeyringAdapterForTests,
+	__setSecretStoreWriteHookForTests,
+	type ExecResult,
+	type SecretContextV1,
+	type SecretDescriptorV1,
+	type SecretExecOptions,
+	type SecretProviderHealthV1,
+	type SecretProviderV1,
+	type ResolvedSecretV1,
 	type SecretKeyringAdapter,
-	type SecretKeyringResult,
-	type SecretKeyringState,
-} from "./secrets-keyring.js";
+} from "@signet/core";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, isOnePasswordReference, readOnePasswordReference } from "./onepassword.js";
 import { recordPluginAuditEvent } from "./plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID } from "./plugins/bundled/secrets.js";
 
-// ---------------------------------------------------------------------------
-// Storage layout
-// ---------------------------------------------------------------------------
+export {
+	deleteLocalSecretCore as deleteLocalSecret,
+	execWithSecrets,
+	getLocalSecretProviderHealth,
+	getLocalSecretValue,
+	hasLocalSecret,
+	listLocalSecretNames,
+	localSecretProvider,
+	normalizeSecretExecTimeoutMs,
+	parseLocalSecretName,
+	putLocalSecret,
+	SecretKeyringError,
+	setMachineIdResolverForTests,
+	setSecretKeyringAdapterForTests,
+	__setSecretStoreWriteHookForTests,
+};
+export type {
+	ExecResult,
+	SecretContextV1,
+	SecretDescriptorV1,
+	SecretExecOptions,
+	SecretProviderHealthV1,
+	SecretProviderV1,
+	ResolvedSecretV1,
+};
+export type LocalSecretProviderV1 = SecretProviderV1;
+export type { SecretKeyringAdapter };
 
-function getAgentsDir(): string {
-	return resolveDefaultBasePath();
-}
-
-function getSecretsDir(): string {
-	return join(getAgentsDir(), ".secrets");
-}
-
-function getSecretsFile(): string {
-	return join(getSecretsDir(), "secrets.enc");
-}
-
-function getMachineIdFile(): string {
-	return join(getSecretsDir(), ".machine-id");
-}
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface SecretEntry {
-	ciphertext: string; // base64-encoded nonce+ciphertext
-	created: string;
-	updated: string;
-}
-
-interface SecretsStore {
-	version: 1 | 2;
-	provider?: "legacy-obfuscated" | "native-keyring";
-	secrets: Record<string, SecretEntry>;
-}
-
-export interface ExecResult {
-	stdout: string;
-	stderr: string;
-	code: number;
-	timedOut?: boolean;
-}
-
-export interface SecretExecOptions {
-	timeoutMs?: number;
-	maxOutputBytes?: number;
-}
+const BITWARDEN_DELETED_NAMES_SECRET = "BITWARDEN_DELETED_SECRET_NAMES";
+const SECRET_EXEC_JOB_TTL_MS = 60 * 60_000;
+const MAX_SECRET_EXEC_RUNNING_JOBS = 4;
+const MAX_SECRET_EXEC_QUEUED_JOBS = 64;
+const MAX_SECRET_EXEC_RETAINED_JOBS = MAX_SECRET_EXEC_RUNNING_JOBS + MAX_SECRET_EXEC_QUEUED_JOBS + 64;
+const secretExecJobs = new Map<string, SecretExecJob>();
+const pendingSecretExecJobs: string[] = [];
+const secretExecJobRequests = new Map<
+	string,
+	{ command: string; secretRefs: Record<string, string>; options: SecretExecOptions }
+>();
+let runningSecretExecJobs = 0;
 
 export type SecretExecJobStatus = "queued" | "running" | "completed" | "failed";
-
 export interface SecretExecJob {
 	id: string;
 	status: SecretExecJobStatus;
@@ -114,26 +101,6 @@ export interface SecretExecJob {
 	error?: string;
 }
 
-const DEFAULT_SECRET_EXEC_TIMEOUT_MS = 5 * 60_000;
-const MAX_SECRET_EXEC_TIMEOUT_MS = 30 * 60_000;
-const MIN_SECRET_EXEC_TIMEOUT_MS = 1_000;
-const DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
-const SECRET_EXEC_JOB_TTL_MS = 60 * 60_000;
-const MAX_SECRET_EXEC_RUNNING_JOBS = 4;
-const MAX_SECRET_EXEC_QUEUED_JOBS = 64;
-const MAX_SECRET_EXEC_RETAINED_JOBS = MAX_SECRET_EXEC_RUNNING_JOBS + MAX_SECRET_EXEC_QUEUED_JOBS + 64;
-
-const BITWARDEN_DELETED_NAMES_SECRET = "BITWARDEN_DELETED_SECRET_NAMES";
-const SECRET_STORE_TEMP_PREFIX = "secrets.enc.tmp-";
-
-const secretExecJobs = new Map<string, SecretExecJob>();
-const pendingSecretExecJobs: string[] = [];
-const secretExecJobRequests = new Map<
-	string,
-	{ command: string; secretRefs: Record<string, string>; options: SecretExecOptions }
->();
-let runningSecretExecJobs = 0;
-
 export class SecretExecQueueFullError extends Error {
 	constructor() {
 		super("secret exec queue is full");
@@ -141,489 +108,36 @@ export class SecretExecQueueFullError extends Error {
 	}
 }
 
-export interface SecretContextV1 {
-	readonly agentId?: string;
+export function hasSecret(name: string): boolean {
+	return hasLocalSecret(name);
 }
 
-export interface SecretDescriptorV1 {
-	readonly name: string;
-	readonly ref: string;
-	readonly providerId: string;
-	readonly created: string;
-	readonly updated: string;
+function isInternalSecretName(name: string): boolean {
+	return [
+		ONEPASSWORD_SERVICE_ACCOUNT_SECRET,
+		BITWARDEN_SESSION_SECRET,
+		BITWARDEN_ACTIVE_PROVIDER_SECRET,
+		BITWARDEN_MANAGED_FOLDER_SECRET,
+		BITWARDEN_DELETED_NAMES_SECRET,
+	].includes(name);
 }
 
-export interface ResolvedSecretV1 {
-	readonly ref: string;
-	readonly providerId: string;
-	readonly value: string;
-}
-
-export interface SecretProviderHealthV1 {
-	readonly status: "healthy" | "degraded" | "unhealthy";
-	readonly message?: string;
-	readonly checkedAt: string;
-}
-
-export interface SecretProviderV1 {
-	readonly id: string;
-	list(ctx: SecretContextV1): Promise<readonly SecretDescriptorV1[]>;
-	put(name: string, value: string, ctx: SecretContextV1): Promise<void>;
-	delete(name: string, ctx: SecretContextV1): Promise<boolean>;
-	resolve(ref: string, ctx: SecretContextV1): Promise<ResolvedSecretV1>;
-	health(ctx: SecretContextV1): Promise<SecretProviderHealthV1>;
-}
-
-// ---------------------------------------------------------------------------
-// Key derivation
-// ---------------------------------------------------------------------------
-
-type MachineIdResolver = () => string | undefined;
-type MachineIdSource = "persisted" | "resolved" | "fallback";
-
-interface MachineIdSelection {
-	readonly id: string;
-	readonly source: MachineIdSource;
-}
-
-/** Read a machine-specific identifier to bind the key to this host. */
-function resolveMachineId(): string | undefined {
-	const isWindows = process.platform === "win32";
-
-	if (!isWindows) {
-		// Linux: /etc/machine-id
-		const candidates = ["/etc/machine-id", "/var/lib/dbus/machine-id"];
-		for (const p of candidates) {
-			try {
-				const id = readFileSync(p, "utf-8").trim();
-				if (id) return id;
-			} catch {
-				// try next
-			}
-		}
-
-		// macOS fallback
-		try {
-			const out = execSync("ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID | awk '{print $3}'", {
-				timeout: 2000,
-			})
-				.toString()
-				.trim()
-				.replace(/"/g, "");
-			if (out) return out;
-		} catch {
-			// ignore
-		}
-	} else {
-		// Windows: use MachineGuid from registry
-		try {
-			const out = execSync('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid', {
-				encoding: "utf-8",
-				timeout: 2000,
-				windowsHide: true,
-			});
-			const match = out.match(/MachineGuid\s+REG_SZ\s+(\S+)/);
-			if (match?.[1]) return match[1];
-		} catch {
-			// ignore
-		}
-	}
-
-	return undefined;
-}
-
-let machineIdSelection: MachineIdSelection | null = null;
-let machineIdResolverForTests: MachineIdResolver | null = null;
-type SodiumModule = typeof import("libsodium-wrappers").default;
-let sodiumPromise: Promise<SodiumModule> | null = null;
-let degradedWarningEmitted = false;
-
-const NATIVE_STORE_VERSION = 2 as const;
-const DEGRADED_WARNING_FILE = ".degraded-warning";
-const KEYRING_ACCOUNT_SCOPE = "workspace";
-
-interface MasterKeyResolution {
-	readonly key: Uint8Array;
-	readonly provider: "legacy-obfuscated" | "native-keyring";
-}
-
-export class SecretKeyringError extends Error {
-	readonly state: SecretKeyringState;
-	readonly retryable: boolean;
-
-	constructor(result: SecretKeyringResult) {
-		super(result.message ?? `Secrets keyring is ${result.state}`);
-		this.name = "SecretKeyringError";
-		this.state = result.state;
-		this.retryable = result.state === "locked" || result.state === "unavailable";
-	}
-}
-
-function readPersistedMachineId(): string | undefined {
-	try {
-		const persisted = readFileSync(getMachineIdFile(), "utf-8").trim();
-		if (!persisted) throw new Error("persisted machine identity is empty");
-		return persisted;
-	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Failed to read persisted secrets machine identity: ${message}`);
-	}
-}
-
-function persistMachineId(machineId: string): string {
-	const file = getMachineIdFile();
-	try {
-		mkdirSync(getSecretsDir(), { recursive: true, mode: 0o700 });
-		chmodSync(getSecretsDir(), 0o700);
-		writeFileSync(file, `${machineId}\n`, { encoding: "utf-8", mode: 0o600, flag: "wx" });
-		chmodSync(file, 0o600);
-		return machineId;
-	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "EEXIST") {
-			const persisted = readPersistedMachineId();
-			if (persisted) return persisted;
-		}
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Failed to persist secrets machine identity: ${message}`);
-	}
-}
-
-/**
- * Resolve the durable identity used by the secrets key.
- *
- * Existing stores predate the identity anchor. Do not persist a newly selected
- * identity for one of those stores until its ciphertext has been verified with
- * that identity. A transient resolver failure must not make the old key
- * unrecoverable.
- */
-function getMachineId(): string {
-	const persisted = readPersistedMachineId();
-	if (persisted) {
-		machineIdSelection = { id: persisted, source: "persisted" };
-		return persisted;
-	}
-
-	if (!machineIdSelection) {
-		const resolved = (machineIdResolverForTests ?? resolveMachineId)()?.trim();
-		if (resolved) {
-			machineIdSelection = { id: resolved, source: "resolved" };
-		} else {
-			const username = process.env.USER?.trim() || process.env.USERNAME?.trim();
-			if (!username) {
-				throw new Error("Unable to derive stable secrets machine identity: USER and USERNAME are unset");
-			}
-
-			machineIdSelection = { id: `${hostname()}-${username}`, source: "fallback" };
-			logger.warn(
-				"secrets",
-				"Machine identifier unavailable; using a stable persisted fallback for secrets encryption",
-				{
-					fallback: "hostname-and-user",
-				},
-			);
-		}
-	}
-
-	if (!existsSync(getSecretsFile())) {
-		const persistedId = persistMachineId(machineIdSelection.id);
-		machineIdSelection = { id: persistedId, source: "persisted" };
-	}
-	return machineIdSelection.id;
-}
-
-export function setMachineIdResolverForTests(resolver: MachineIdResolver | null): void {
-	machineIdResolverForTests = resolver;
-	machineIdSelection = null;
-}
-
-export function setSecretKeyringAdapterForTests(adapter: SecretKeyringAdapter | null): void {
-	setSecretKeyringForTests(adapter);
-	degradedWarningEmitted = false;
-}
-
-async function getSodium(): Promise<SodiumModule> {
-	sodiumPromise ??= import("libsodium-wrappers").then(async (mod) => {
-		const sodium = mod.default;
-		await sodium.ready;
-		return sodium;
+function recordSecretEvent(event: string, data: Record<string, unknown>): void {
+	recordPluginAuditEvent({
+		event,
+		pluginId: SIGNET_SECRETS_PLUGIN_ID,
+		result: event === "secret.exec_completed" && data.code !== 0 ? "error" : "ok",
+		source: "secrets-provider",
+		data: { providerId: "local", ...data },
 	});
-	return sodiumPromise;
-}
-
-async function getLegacyMasterKey(): Promise<Uint8Array> {
-	const sodium = await getSodium();
-	const machineId = getMachineId();
-	const input = `signet:secrets:${machineId}`;
-	const inputBytes = new TextEncoder().encode(input);
-	return sodium.crypto_generichash(32, inputBytes, null);
-}
-
-function decodeKeyringValue(result: SecretKeyringResult): Uint8Array {
-	if (result.value === undefined)
-		throw new SecretKeyringError({ state: "corrupt", message: "Keyring returned no master key" });
-	try {
-		const key = Buffer.from(result.value, "base64");
-		if (key.length !== 32 || key.toString("base64") !== result.value) {
-			throw new Error("master key is not valid canonical base64");
-		}
-		return new Uint8Array(key);
-	} catch (error) {
-		throw new SecretKeyringError({ state: "corrupt", message: error instanceof Error ? error.message : String(error) });
-	}
-}
-
-function emitDegradedWarning(result: SecretKeyringResult): void {
-	if (degradedWarningEmitted) return;
-	degradedWarningEmitted = true;
-	logger.warn("secrets", "Using degraded machine-id secrets encryption because no native keyring is available", {
-		provider: "legacy-obfuscated",
-		keyringState: result.state,
-		message: "Configure a native user keyring and migrate the store to improve protection and portability",
+	logger.info("secrets", event, {
+		pluginId: SIGNET_SECRETS_PLUGIN_ID,
+		providerId: "local",
+		timestamp: new Date().toISOString(),
+		...data,
 	});
-	try {
-		mkdirSync(getSecretsDir(), { recursive: true, mode: 0o700 });
-		writeFileSync(join(getSecretsDir(), DEGRADED_WARNING_FILE), "legacy-obfuscated\n", {
-			encoding: "utf-8",
-			mode: 0o600,
-		});
-	} catch {
-		// The health response still reports degraded state if the marker cannot be written.
-	}
 }
-
-function clearDegradedWarning(): void {
-	try {
-		unlinkSync(join(getSecretsDir(), DEGRADED_WARNING_FILE));
-	} catch (error) {
-		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-	}
-}
-
-async function migrateLegacyStore(store: SecretsStore, legacyKey: Uint8Array, nativeKey: Uint8Array): Promise<void> {
-	const plaintexts = new Map<string, string>();
-	for (const [name, entry] of Object.entries(store.secrets)) {
-		plaintexts.set(name, await decryptWithKey(entry.ciphertext, legacyKey));
-	}
-	const migrated: SecretsStore = {
-		version: NATIVE_STORE_VERSION,
-		provider: "native-keyring",
-		secrets: {},
-	};
-	for (const [name, plaintext] of plaintexts) {
-		const entry = store.secrets[name];
-		if (!entry) continue;
-		migrated.secrets[name] = {
-			ciphertext: await encryptWithKey(plaintext, nativeKey),
-			created: entry.created,
-			updated: entry.updated,
-		};
-	}
-	store.version = migrated.version;
-	store.provider = migrated.provider;
-	store.secrets = migrated.secrets;
-	saveStore(store);
-	clearDegradedWarning();
-}
-
-async function resolveMasterKey(store: SecretsStore): Promise<MasterKeyResolution> {
-	const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
-	const result = await keyring.get();
-	if (store.version === NATIVE_STORE_VERSION || store.provider === "native-keyring") {
-		if (result.state !== "found") throw new SecretKeyringError(result);
-		return { key: decodeKeyringValue(result), provider: "native-keyring" };
-	}
-
-	if (result.state === "found") {
-		const nativeKey = decodeKeyringValue(result);
-		if (existsSync(getSecretsFile())) await migrateLegacyStore(store, await getLegacyMasterKey(), nativeKey);
-		return { key: nativeKey, provider: "native-keyring" };
-	}
-
-	if (result.state === "missing") {
-		const nativeKey = randomBytes(32);
-		const legacyKey = existsSync(getSecretsFile()) ? await getLegacyMasterKey() : undefined;
-		const saved = await keyring.set(Buffer.from(nativeKey).toString("base64"));
-		if (saved.state === "found") {
-			if (legacyKey) await migrateLegacyStore(store, legacyKey, nativeKey);
-			return { key: nativeKey, provider: "native-keyring" };
-		}
-		throw new SecretKeyringError(saved);
-	}
-
-	if (result.state === "locked") throw new SecretKeyringError(result);
-	if (result.state !== "unavailable" && result.state !== "unsupported") throw new SecretKeyringError(result);
-	emitDegradedWarning(result);
-	return { key: await getLegacyMasterKey(), provider: "legacy-obfuscated" };
-}
-
-// ---------------------------------------------------------------------------
-// Encrypt / decrypt
-// ---------------------------------------------------------------------------
-
-async function decryptWithKey(ciphertext: string, key: Uint8Array): Promise<string> {
-	const sodium = await getSodium();
-	let message: Uint8Array | false;
-	try {
-		const combined = sodium.from_base64(ciphertext, sodium.base64_variants.ORIGINAL);
-		const nonce = combined.slice(0, sodium.crypto_secretbox_NONCEBYTES);
-		const box = combined.slice(sodium.crypto_secretbox_NONCEBYTES);
-		message = sodium.crypto_secretbox_open_easy(box, nonce, key);
-	} catch {
-		throw new Error("Decryption failed - key mismatch or corrupted data");
-	}
-	if (!message) throw new Error("Decryption failed - key mismatch or corrupted data");
-	return new TextDecoder().decode(message);
-}
-
-async function anchorLegacyMachineIdAfterVerification(key: Uint8Array): Promise<void> {
-	if (
-		!machineIdSelection ||
-		machineIdSelection.source === "persisted" ||
-		existsSync(getMachineIdFile()) ||
-		!existsSync(getSecretsFile())
-	) {
-		return;
-	}
-	const store = loadStore();
-	for (const entry of Object.values(store.secrets)) await decryptWithKey(entry.ciphertext, key);
-	const persistedId = persistMachineId(machineIdSelection.id);
-	machineIdSelection = { id: persistedId, source: "persisted" };
-}
-
-async function encryptWithKey(plaintext: string, key: Uint8Array): Promise<string> {
-	const sodium = await getSodium();
-	const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
-	const message = new TextEncoder().encode(plaintext);
-	const box = sodium.crypto_secretbox_easy(message, nonce, key);
-	const combined = new Uint8Array(nonce.length + box.length);
-	combined.set(nonce);
-	combined.set(box, nonce.length);
-	return sodium.to_base64(combined, sodium.base64_variants.ORIGINAL);
-}
-
-// ---------------------------------------------------------------------------
-// Store I/O
-// ---------------------------------------------------------------------------
-
-function isSecretStoreTempProcessLive(name: string): boolean {
-	const pid = name.slice(SECRET_STORE_TEMP_PREFIX.length).split("-", 1)[0];
-	if (!/^\d+$/.test(pid)) return false;
-
-	try {
-		process.kill(Number(pid), 0);
-		return true;
-	} catch (error) {
-		return error instanceof Error && "code" in error && error.code === "EPERM";
-	}
-}
-
-function cleanupStaleSecretStoreTemps(): void {
-	const dir = getSecretsDir();
-	let names: string[];
-	try {
-		names = readdirSync(dir);
-	} catch {
-		return;
-	}
-
-	for (const name of names) {
-		if (!name.startsWith(SECRET_STORE_TEMP_PREFIX) || isSecretStoreTempProcessLive(name)) continue;
-		try {
-			unlinkSync(join(dir, name));
-		} catch {
-			// Best effort. Another process may have finished or removed the file.
-		}
-	}
-}
-
-function loadStore(): SecretsStore {
-	cleanupStaleSecretStoreTemps();
-	const file = getSecretsFile();
-	if (!existsSync(file)) {
-		return { version: 1, secrets: {} };
-	}
-	try {
-		return parseSecretsStore(JSON.parse(readFileSync(file, "utf-8")));
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to read secrets store: ${message}`);
-	}
-}
-
-type SecretStoreWriteStage = "after-write" | "before-close";
-type SecretStoreWriteHookForTests = (stage: SecretStoreWriteStage, fd?: number) => void;
-let secretStoreWriteHookForTests: SecretStoreWriteHookForTests | null = null;
-
-/** @internal Inject a failure or process kill while testing atomic store replacement. */
-export function __setSecretStoreWriteHookForTests(hook: SecretStoreWriteHookForTests | null): void {
-	secretStoreWriteHookForTests = hook;
-}
-
-function saveStore(store: SecretsStore): void {
-	const file = getSecretsFile();
-	const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
-	mkdirSync(getSecretsDir(), { recursive: true });
-
-	let fd: number | null = null;
-	try {
-		fd = openSync(tmp, "w", 0o600);
-		writeFileSync(fd, JSON.stringify(store, null, 2), "utf-8");
-		secretStoreWriteHookForTests?.("after-write");
-		fsyncSync(fd);
-		secretStoreWriteHookForTests?.("before-close", fd);
-		closeSync(fd);
-		fd = null;
-		renameSync(tmp, file);
-	} catch (error) {
-		if (fd !== null) {
-			try {
-				closeSync(fd);
-			} catch {
-				// Continue cleanup and preserve the original write error.
-			}
-		}
-		try {
-			unlinkSync(tmp);
-		} catch {
-			// Best effort cleanup. The existing store remains untouched if replacement did not happen.
-		}
-		throw error;
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-async function putLocalSecret(name: string, value: string): Promise<void> {
-	const localName = parseLocalSecretName(name);
-	const store = loadStore();
-	const resolution = await resolveMasterKey(store);
-	if (
-		resolution.provider === "legacy-obfuscated" &&
-		existsSync(getSecretsFile()) &&
-		!existsSync(getMachineIdFile()) &&
-		machineIdResolverForTests !== null &&
-		!machineIdResolverForTests()?.trim()
-	) {
-		throw new Error("Existing secrets store could not be verified: unable to resolve its machine identity");
-	}
-	await anchorLegacyMachineIdAfterVerification(resolution.key);
-	store.version = resolution.provider === "native-keyring" ? NATIVE_STORE_VERSION : 1;
-	store.provider = resolution.provider;
-	const now = new Date().toISOString();
-	const existing = store.secrets[localName];
-
-	store.secrets[localName] = {
-		ciphertext: await encryptWithKey(value, resolution.key),
-		created: existing?.created ?? now,
-		updated: now,
-	};
-
-	saveStore(store);
-	recordSecretEvent("secret.stored", { name: localName, providerId: resolution.provider });
-}
+setSecretEventRecorder(recordSecretEvent);
 
 export async function putSecret(name: string, value: string): Promise<void> {
 	invalidateSecretsCache();
@@ -633,10 +147,10 @@ export async function putSecret(name: string, value: string): Promise<void> {
 		return;
 	}
 
-	const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+	const session = await getLocalSecretValue(BITWARDEN_SESSION_SECRET);
 	let folderId: string | undefined;
 	try {
-		folderId = await getStoredSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
+		folderId = await getLocalSecretValue(BITWARDEN_MANAGED_FOLDER_SECRET);
 	} catch {
 		folderId = undefined;
 	}
@@ -645,23 +159,13 @@ export async function putSecret(name: string, value: string): Promise<void> {
 	recordSecretEvent("secret.stored", { name: localName, providerId: "bitwarden" });
 }
 
-async function getStoredSecret(name: string): Promise<string> {
-	const store = loadStore();
-	const resolution = await resolveMasterKey(store);
-	const entry = store.secrets[name];
-	if (!entry) throw new Error(`Secret '${name}' not found`);
-	const plaintext = await decryptWithKey(entry.ciphertext, resolution.key);
-	if (resolution.provider === "legacy-obfuscated") await anchorLegacyMachineIdAfterVerification(resolution.key);
-	return plaintext;
-}
-
 function canonicalBitwardenDeletedName(name: string): string {
 	return buildBitwardenManagedSecretName(parseLocalSecretName(name));
 }
 
 async function readBitwardenDeletedNames(): Promise<Set<string>> {
 	try {
-		const parsed = JSON.parse(await getStoredSecret(BITWARDEN_DELETED_NAMES_SECRET));
+		const parsed = JSON.parse(await getLocalSecretValue(BITWARDEN_DELETED_NAMES_SECRET));
 		return new Set(Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : []);
 	} catch {
 		return new Set();
@@ -670,7 +174,7 @@ async function readBitwardenDeletedNames(): Promise<Set<string>> {
 
 async function writeBitwardenDeletedNames(names: Set<string>): Promise<void> {
 	if (names.size === 0) {
-		deleteLocalSecret(BITWARDEN_DELETED_NAMES_SECRET);
+		deleteLocalSecretCore(BITWARDEN_DELETED_NAMES_SECRET);
 		return;
 	}
 	await putLocalSecret(BITWARDEN_DELETED_NAMES_SECRET, JSON.stringify(Array.from(names).sort()));
@@ -694,22 +198,22 @@ async function isBitwardenDeletedName(name: string): Promise<boolean> {
 
 export async function getSecret(name: string): Promise<string> {
 	if (isOnePasswordReference(name)) {
-		const token = await getStoredSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
+		const token = await getLocalSecretValue(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
 		return readOnePasswordReference(name, token);
 	}
 
 	if (isBitwardenReference(name)) {
-		const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+		const session = await getLocalSecretValue(BITWARDEN_SESSION_SECRET);
 		return readBitwardenReference(name, session);
 	}
 
 	const localName = parseLocalSecretName(name);
 	if (isInternalSecretName(localName)) {
-		return getStoredSecret(localName);
+		return getLocalSecretValue(localName);
 	}
 	if (await isBitwardenProviderActive()) {
 		try {
-			const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+			const session = await getLocalSecretValue(BITWARDEN_SESSION_SECRET);
 			return readBitwardenReference(
 				`bw://name/${encodeURIComponent(buildBitwardenManagedSecretName(localName))}`,
 				session,
@@ -719,22 +223,7 @@ export async function getSecret(name: string): Promise<string> {
 		}
 	}
 
-	return getStoredSecret(localName);
-}
-
-function hasLocalSecret(name: string): boolean {
-	const store = loadStore();
-	return parseLocalSecretName(name) in store.secrets;
-}
-
-export function hasSecret(name: string): boolean {
-	return hasLocalSecret(name);
-}
-
-export function listLocalSecretNames(options: { includeInternal?: boolean } = {}): string[] {
-	const names = Object.keys(loadStore().secrets).sort((a, b) => a.localeCompare(b));
-	if (options.includeInternal === true) return names;
-	return names.filter((name) => !isInternalSecretName(name));
+	return getLocalSecretValue(localName);
 }
 
 // TTL cache for listSecrets — avoids Bitwarden round-trips on every session start.
@@ -764,7 +253,7 @@ export async function listSecrets(): Promise<string[]> {
 	const deletedNames = await readBitwardenDeletedNames();
 	const visibleLocalNames = localNames.filter((name) => !deletedNames.has(canonicalBitwardenDeletedName(name)));
 	try {
-		const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+		const session = await getLocalSecretValue(BITWARDEN_SESSION_SECRET);
 		const bitwardenNames = await listBitwardenSecretNames(session);
 		const names = Array.from(new Set([...bitwardenNames, ...visibleLocalNames])).sort((a, b) => a.localeCompare(b));
 		recordSecretEvent("secret.listed", { count: names.length, providerId: "bitwarden" });
@@ -782,19 +271,9 @@ export async function listSecrets(): Promise<string[]> {
 	}
 }
 
-function deleteLocalSecret(name: string): boolean {
-	const store = loadStore();
-	const localName = parseLocalSecretName(name);
-	if (!(localName in store.secrets)) return false;
-	delete store.secrets[localName];
-	saveStore(store);
-	recordSecretEvent("secret.deleted", { name: localName });
-	return true;
-}
-
 export function deleteSecret(name: string): boolean {
 	invalidateSecretsCache();
-	return deleteLocalSecret(name);
+	return deleteLocalSecretCore(name);
 }
 
 export async function deleteSecretFromActiveProvider(name: string): Promise<boolean> {
@@ -802,10 +281,10 @@ export async function deleteSecretFromActiveProvider(name: string): Promise<bool
 	const explicitLocal = name.startsWith("local://");
 	const localName = parseLocalSecretName(name);
 	if (explicitLocal || isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
-		return deleteLocalSecret(localName);
+		return deleteLocalSecretCore(localName);
 	}
 
-	const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+	const session = await getLocalSecretValue(BITWARDEN_SESSION_SECRET);
 	const deletedFromBitwarden = await deleteBitwardenSecret(localName, session);
 	const localFallbackPreserved = hasLocalSecret(localName);
 	if (deletedFromBitwarden || localFallbackPreserved) {
@@ -821,17 +300,13 @@ export async function deleteSecretFromActiveProvider(name: string): Promise<bool
 	return deletedFromBitwarden || localFallbackPreserved;
 }
 
-export async function getLocalSecretValue(name: string): Promise<string> {
-	return getStoredSecret(parseLocalSecretName(name));
-}
-
 export function deleteLocalSecretForMigration(name: string): boolean {
-	return deleteLocalSecret(name);
+	return deleteLocalSecretCore(name);
 }
 
 export async function setActiveSecretProvider(provider: "local" | "bitwarden"): Promise<void> {
 	if (provider === "local") {
-		deleteLocalSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET);
+		deleteLocalSecretCore(BITWARDEN_ACTIVE_PROVIDER_SECRET);
 		return;
 	}
 	await putLocalSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET, "bitwarden");
@@ -843,314 +318,10 @@ export async function getActiveSecretProvider(): Promise<"local" | "bitwarden"> 
 
 async function isBitwardenProviderActive(): Promise<boolean> {
 	try {
-		return isBitwardenActiveProvider(await getStoredSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET));
+		return isBitwardenActiveProvider(await getLocalSecretValue(BITWARDEN_ACTIVE_PROVIDER_SECRET));
 	} catch {
 		return false;
 	}
-}
-
-function isInternalSecretName(name: string): boolean {
-	return [
-		ONEPASSWORD_SERVICE_ACCOUNT_SECRET,
-		BITWARDEN_SESSION_SECRET,
-		BITWARDEN_ACTIVE_PROVIDER_SECRET,
-		BITWARDEN_MANAGED_FOLDER_SECRET,
-		BITWARDEN_DELETED_NAMES_SECRET,
-	].includes(name);
-}
-
-export type LocalSecretProviderV1 = SecretProviderV1;
-
-export const localSecretProvider: LocalSecretProviderV1 = {
-	id: "local",
-	async list(_ctx) {
-		const store = loadStore();
-		const descriptors = Object.entries(store.secrets)
-			.map(([name, entry]) => ({
-				name,
-				ref: `local://${name}`,
-				providerId: "local" as const,
-				created: entry.created,
-				updated: entry.updated,
-			}))
-			.sort((a, b) => a.name.localeCompare(b.name));
-		recordSecretEvent("secret.listed", { count: descriptors.length });
-		return descriptors;
-	},
-	async put(name, value, _ctx) {
-		await putLocalSecret(name, value);
-	},
-	async delete(name, _ctx) {
-		return deleteLocalSecret(name);
-	},
-	async resolve(ref, _ctx) {
-		const name = parseLocalSecretName(ref);
-		return {
-			ref: `local://${name}`,
-			providerId: "local",
-			value: await getStoredSecret(name),
-		};
-	},
-	async health(_ctx) {
-		return getLocalSecretProviderHealth();
-	},
-};
-
-function healthForKeyringState(result: SecretKeyringResult): SecretProviderHealthV1 {
-	const checkedAt = new Date().toISOString();
-	const message = result.message ?? `Native secrets keyring is ${result.state}`;
-	if (
-		result.state === "missing" ||
-		result.state === "locked" ||
-		result.state === "unavailable" ||
-		result.state === "unsupported"
-	) {
-		return { status: "degraded", message, checkedAt };
-	}
-	if (result.state === "permission-denied" || result.state === "corrupt") {
-		return { status: "unhealthy", message, checkedAt };
-	}
-	return { status: "healthy", checkedAt };
-}
-
-export function getLocalSecretProviderHealth(): SecretProviderHealthV1 {
-	try {
-		const store = loadStore();
-		if (existsSync(join(getSecretsDir(), DEGRADED_WARNING_FILE))) {
-			return {
-				status: "degraded",
-				message: "Using legacy machine-id-obfuscated secrets encryption because no native keyring is available",
-				checkedAt: new Date().toISOString(),
-			};
-		}
-		if (store.version === NATIVE_STORE_VERSION || store.provider === "native-keyring") {
-			const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
-			const state = keyring.getStatus?.();
-			if (state && state.state !== "found") return healthForKeyringState(state);
-			if (state) {
-				try {
-					decodeKeyringValue(state);
-				} catch (error) {
-					return {
-						status: "degraded",
-						message: `Native secrets keyring is corrupt: ${error instanceof Error ? error.message : String(error)}`,
-						checkedAt: new Date().toISOString(),
-					};
-				}
-			}
-		}
-		return { status: "healthy", checkedAt: new Date().toISOString() };
-	} catch (err) {
-		return {
-			status: "unhealthy",
-			message: err instanceof Error ? err.message : String(err),
-			checkedAt: new Date().toISOString(),
-		};
-	}
-}
-
-// Belt-and-suspenders: reject obvious shell metacharacters even though
-// we no longer use sh -c. Catches injection attempts early with a
-// clear error message before argv parsing.
-const SHELL_META = /[;&|`$(){}[\]<>!\\]/;
-
-/**
- * Spawn a subprocess with one or more secrets injected as environment
- * variables. The agent only supplies references (env var names), never
- * the actual values.
- *
- * Uses direct argv execution (no shell) to eliminate glob/tilde/pipe
- * expansion. The command string is parsed into argv tokens.
- *
- * @param command  Command string to execute (parsed as argv, no shell)
- * @param secretRefs  Map of env var name → secret name, e.g. { OPENAI_API_KEY: "OPENAI_API_KEY" }
- */
-export async function execWithSecrets(
-	command: string,
-	secretRefs: Record<string, string>,
-	options: SecretExecOptions = {},
-): Promise<ExecResult> {
-	if (SHELL_META.test(command)) {
-		return { stdout: "", stderr: "command contains disallowed shell metacharacters", code: 1 };
-	}
-
-	// Parse command into argv — no shell, so no glob/tilde/pipe expansion
-	const argv = command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g);
-	if (!argv || argv.length === 0) {
-		return { stdout: "", stderr: "empty command", code: 1 };
-	}
-	const cmd = argv.map((a) => a.replace(/^["']|["']$/g, ""));
-	const timeoutMs = normalizeSecretExecTimeoutMs(options.timeoutMs);
-	const maxOutputBytes = normalizeSecretExecMaxOutputBytes(options.maxOutputBytes);
-
-	// Resolve all secret values up front so we can redact them from output
-	const resolved: Record<string, string> = {};
-	for (const [envVar, secretName] of Object.entries(secretRefs)) {
-		resolved[envVar] = await getSecret(secretName);
-	}
-	recordSecretEvent("secret.resolved_for_exec", {
-		secretCount: Object.keys(secretRefs).length,
-		envVars: Object.keys(secretRefs),
-	});
-
-	const secretValues = Object.values(resolved);
-
-	function redact(text: string): string {
-		let out = text;
-		for (const val of secretValues) {
-			if (val.length > 3) {
-				out = out.replaceAll(val, "[REDACTED]");
-			}
-		}
-		return out;
-	}
-
-	function createStreamingRedactor(): { push: (text: string) => string; finish: () => string } {
-		const longestSecret = Math.max(0, ...secretValues.filter((value) => value.length > 3).map((value) => value.length));
-		const overlap = Math.max(0, longestSecret * 2);
-		let pending = "";
-		return {
-			push(text: string): string {
-				if (overlap === 0) return text;
-				pending += text;
-				if (pending.length <= overlap) return "";
-				const emitLength = pending.length - overlap;
-				const emit = pending.slice(0, emitLength);
-				pending = pending.slice(emitLength);
-				return redact(emit);
-			},
-			finish(): string {
-				const emit = pending;
-				pending = "";
-				return redact(emit);
-			},
-		};
-	}
-
-	recordSecretEvent("secret.exec_started", {
-		secretCount: Object.keys(secretRefs).length,
-		envVars: Object.keys(secretRefs),
-		timeoutMs,
-	});
-
-	return new Promise((resolve, reject) => {
-		const useProcessGroup = process.platform !== "win32";
-		const proc = spawn(cmd[0], cmd.slice(1), {
-			detached: useProcessGroup,
-			env: { ...process.env, ...resolved },
-			stdio: "pipe",
-			windowsHide: true,
-		});
-
-		const stdoutRedactor = createStreamingRedactor();
-		const stderrRedactor = createStreamingRedactor();
-		let stdout = "";
-		let stderr = "";
-		let stdoutBytes = 0;
-		let stderrBytes = 0;
-		let stdoutTruncated = false;
-		let stderrTruncated = false;
-		let settled = false;
-		let timedOut = false;
-
-		function killSpawnedProcess(signal: NodeJS.Signals): void {
-			if (!proc.pid) return;
-			try {
-				if (useProcessGroup) process.kill(-proc.pid, signal);
-				else proc.kill(signal);
-			} catch {
-				try {
-					proc.kill(signal);
-				} catch {
-					// Already gone.
-				}
-			}
-		}
-
-		const timer = setTimeout(() => {
-			timedOut = true;
-			killSpawnedProcess("SIGTERM");
-			setTimeout(() => {
-				if (!settled && proc.exitCode === null) killSpawnedProcess("SIGKILL");
-			}, 2_000).unref();
-		}, timeoutMs);
-		timer.unref();
-
-		function appendRedactedOutput(
-			current: string,
-			bytes: number,
-			text: string,
-			stream: "stdout" | "stderr",
-		): [string, number] {
-			const chunk = Buffer.from(text);
-			if (bytes >= maxOutputBytes) {
-				if (chunk.length > 0) {
-					if (stream === "stdout") stdoutTruncated = true;
-					else stderrTruncated = true;
-				}
-				return [current, bytes + chunk.length];
-			}
-			const remaining = maxOutputBytes - bytes;
-			const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-			if (chunk.length > remaining) {
-				if (stream === "stdout") stdoutTruncated = true;
-				else stderrTruncated = true;
-			}
-			return [current + slice.toString(), bytes + chunk.length];
-		}
-
-		function zeroResolved(): void {
-			for (const key of Object.keys(resolved)) {
-				resolved[key] = "";
-			}
-		}
-
-		proc.stdout?.on("data", (d: Buffer) => {
-			[stdout, stdoutBytes] = appendRedactedOutput(stdout, stdoutBytes, stdoutRedactor.push(d.toString()), "stdout");
-		});
-		proc.stderr?.on("data", (d: Buffer) => {
-			[stderr, stderrBytes] = appendRedactedOutput(stderr, stderrBytes, stderrRedactor.push(d.toString()), "stderr");
-		});
-
-		proc.on("close", (code) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			zeroResolved();
-			const finalCode = timedOut ? 124 : (code ?? 1);
-			[stdout, stdoutBytes] = appendRedactedOutput(stdout, stdoutBytes, stdoutRedactor.finish(), "stdout");
-			[stderr, stderrBytes] = appendRedactedOutput(stderr, stderrBytes, stderrRedactor.finish(), "stderr");
-			if (stdoutTruncated) stdout += "\n[signet secret exec: stdout truncated]\n";
-			if (stderrTruncated) stderr += "\n[signet secret exec: stderr truncated]\n";
-			if (timedOut) stderr += `\n[signet secret exec: timed out after ${timeoutMs}ms]\n`;
-
-			recordSecretEvent("secret.exec_completed", {
-				code: finalCode,
-				secretCount: secretValues.length,
-				timedOut,
-			});
-
-			resolve({
-				stdout,
-				stderr,
-				code: finalCode,
-				...(timedOut ? { timedOut: true } : {}),
-			});
-		});
-
-		proc.on("error", (err) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			zeroResolved();
-			recordSecretEvent("secret.exec_completed", {
-				code: 1,
-				secretCount: secretValues.length,
-				error: err.message,
-			});
-			reject(err);
-		});
-	});
 }
 
 export function startSecretExecJob(
@@ -1225,16 +396,6 @@ export function resetSecretExecJobsForTests(): void {
 	runningSecretExecJobs = 0;
 }
 
-export function normalizeSecretExecTimeoutMs(value: unknown): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_SECRET_EXEC_TIMEOUT_MS;
-	return Math.min(MAX_SECRET_EXEC_TIMEOUT_MS, Math.max(MIN_SECRET_EXEC_TIMEOUT_MS, Math.trunc(value)));
-}
-
-function normalizeSecretExecMaxOutputBytes(value: unknown): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES;
-	return Math.min(DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES, Math.max(1024, Math.trunc(value)));
-}
-
 function pruneSecretExecJobs(now = Date.now()): void {
 	for (const [id, job] of secretExecJobs) {
 		const timestamp = Date.parse(job.completedAt ?? job.createdAt);
@@ -1260,84 +421,4 @@ function evictRetainedSecretExecResults(): void {
 		secretExecJobs.delete(jobId);
 		secretExecJobRequests.delete(jobId);
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-function validateName(name: string): void {
-	if (!NAME_RE.test(name)) {
-		throw new Error(`Invalid secret name '${name}'. Use letters, digits, and underscores only.`);
-	}
-}
-
-function recordSecretEvent(event: string, data: Record<string, unknown>): void {
-	recordPluginAuditEvent({
-		event,
-		pluginId: SIGNET_SECRETS_PLUGIN_ID,
-		result: event === "secret.exec_completed" && data.code !== 0 ? "error" : "ok",
-		source: "secrets-provider",
-		data: {
-			providerId: "local",
-			...data,
-		},
-	});
-	logger.info("secrets", event, {
-		pluginId: SIGNET_SECRETS_PLUGIN_ID,
-		providerId: "local",
-		timestamp: new Date().toISOString(),
-		...data,
-	});
-}
-
-export function parseLocalSecretName(ref: string): string {
-	const name = ref.startsWith("local://") ? ref.slice("local://".length) : ref;
-	validateName(name);
-	return name;
-}
-
-function parseSecretsStore(value: unknown): SecretsStore {
-	if (!isRecord(value)) {
-		throw new Error("store must be a JSON object");
-	}
-	if (value.version !== 1 && value.version !== NATIVE_STORE_VERSION) {
-		throw new Error("unsupported secrets store version");
-	}
-	if (value.version === NATIVE_STORE_VERSION && value.provider !== "native-keyring") {
-		throw new Error("native-keyring store is missing its provider marker");
-	}
-	if (!isRecord(value.secrets)) {
-		throw new Error("secrets field must be an object");
-	}
-	const secrets: Record<string, SecretEntry> = {};
-	for (const [name, entry] of Object.entries(value.secrets)) {
-		validateName(name);
-		if (!isRecord(entry)) {
-			throw new Error(`secret '${name}' must be an object`);
-		}
-		if (
-			typeof entry.ciphertext !== "string" ||
-			typeof entry.created !== "string" ||
-			typeof entry.updated !== "string"
-		) {
-			throw new Error(`secret '${name}' is missing required fields`);
-		}
-		secrets[name] = {
-			ciphertext: entry.ciphertext,
-			created: entry.created,
-			updated: entry.updated,
-		};
-	}
-	return {
-		version: value.version,
-		...(value.provider === "native-keyring" ? { provider: value.provider } : {}),
-		secrets,
-	};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

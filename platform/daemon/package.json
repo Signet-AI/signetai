@@ -43,7 +43,6 @@
 		"@hono/node-server": "^2.1.0",
 		"@huggingface/transformers": "^4.2.0",
 		"@modelcontextprotocol/sdk": "^1.30.0",
-		"@napi-rs/keyring": "1.3.0",
 		"@signet/core": "workspace:*",
 		"@signet/lifecycle-proof": "workspace:*",
 		"acpx": "0.13.0",
@@ -55,7 +54,6 @@
 		"graphology-types": "^0.24.8",
 		"hono": "^4.13.0",
 		"js-tiktoken": "^1.0.21",
-		"libsodium-wrappers": "^0.8.2",
 		"onnxruntime-node": "1.27.0",
 		"sharp": "^0.35.3",
 		"typebox": "1.3.7",
@@ -69,7 +67,6 @@
 	},
 	"devDependencies": {
 		"@types/better-sqlite3": "^7.6.0",
-		"@types/libsodium-wrappers": "^0.8.2",
 		"@types/yauzl": "^2.10.3",
 		"esbuild": "^0.25.0"
 	}

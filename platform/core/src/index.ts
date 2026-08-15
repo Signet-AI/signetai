@@ -5,6 +5,35 @@
 
 export { Signet } from "./signet";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
+export {
+	__setSecretStoreWriteHookForTests,
+	deleteLocalSecret,
+	execWithSecrets,
+	getLocalSecretProviderHealth,
+	getLocalSecretValue,
+	hasLocalSecret,
+	listLocalSecretNames,
+	localSecretProvider,
+	normalizeSecretExecTimeoutMs,
+	parseLocalSecretName,
+	putLocalSecret,
+	SecretKeyringError,
+	setMachineIdResolverForTests,
+	setSecretEventRecorder,
+	setSecretKeyringAdapterForTests,
+} from "./secrets";
+export type {
+	ExecResult,
+	SecretContextV1,
+	SecretDescriptorV1,
+	SecretEventRecorder,
+	SecretExecOptions,
+	SecretProviderHealthV1,
+	SecretProviderV1,
+	ResolvedSecretV1,
+} from "./secrets";
+export { getSecretKeyring, setSecretKeyringForTests } from "./secrets-keyring";
+export type { SecretKeyringAdapter, SecretKeyringResult, SecretKeyringState } from "./secrets-keyring";
 export { detectFilesystemType, isNetworkFilesystem, resolveSqliteJournalConfig } from "./sqlite-journal";
 export type { SqliteJournalConfig, SqliteJournalMode } from "./sqlite-journal";
 export {

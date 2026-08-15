@@ -204,6 +204,16 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 
 				const jobId = readString(data, "id");
 				const status = readString(data, "status") ?? "queued";
+				const result = readRecord(readRecord(data)?.result);
+				if (status === "completed" && result) {
+					const stdout = readString(result, "stdout");
+					const stderr = readString(result, "stderr");
+					const code = readNumber(result, "code") ?? 1;
+					if (stdout) process.stdout.write(stdout);
+					if (stderr) process.stderr.write(stderr);
+					process.exitCode = code;
+					return;
+				}
 				console.log(`Secret exec queued: ${chalk.cyan(jobId ?? "unknown")}`);
 				console.log(chalk.dim(`Status: ${status}`));
 				console.log(chalk.dim(`Poll with: signet secret exec-status ${jobId}`));

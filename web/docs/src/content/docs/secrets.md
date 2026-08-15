@@ -3,7 +3,7 @@ title: "Secrets"
 description: "Store and use sensitive values without writing them into configuration or prompts."
 ---
 
-Signet secrets are daemon-managed encrypted values. The CLI and API deliberately expose names and status, not raw stored values.
+Signet secrets use a shared encrypted store in `@signet/core`. Local read, put, list, has, and delete commands can access that store directly when the daemon is not running. The CLI and API deliberately expose names and status, not raw stored values.
 
 ## Basic commands
 
@@ -30,20 +30,22 @@ Do not place provider keys directly in YAML, shell history, screenshots, task pr
 
 ## Use a secret in a command
 
-`signet secret exec` queues a command with selected secrets injected into the child environment. The command must name each injected secret before the command token:
+`signet secret exec` injects selected secrets into the child environment. When the daemon is running, it keeps the existing asynchronous queue and returns a job id. When the daemon is not running, the CLI executes the command synchronously in-process and returns the command result. The command must name each injected secret before the command token:
 
 ```bash
 signet secret exec --secret OPENAI_API_KEY \
   curl https://api.openai.com/v1/models
 ```
 
-The CLI returns a job id. Inspect it with:
+With the daemon running, the CLI returns a job id. Inspect it with:
 
 ```bash
 signet secret exec-status <job-id>
 ```
 
 The command line is constructed so shell-level secret expansion is not used. Treat the child process, its output, and its working directory as sensitive anyway: a process that can read an injected environment variable can disclose it.
+
+1Password, Bitwarden, and daemon queue-status commands still require a running Signet daemon. If the daemon is unavailable, the CLI reports that requirement instead of silently changing provider behavior.
 
 ## External providers
 
