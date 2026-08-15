@@ -324,7 +324,7 @@ describe("MemoryBench Dreaming gate", () => {
 		);
 
 		expect(result).toMatchObject({ applied: corpus.scenarios.length, failed: 0 });
-		const calls = getDreamingToolCalls(accessor, "memorybench", result.passId);
+		const calls = await getDreamingToolCalls(accessor, "memorybench", result.passId);
 		for (const scenario of corpus.scenarios) {
 			for (const sourceSessionId of scenario.expected.sourceSessionIds) {
 				expect(
