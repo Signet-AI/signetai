@@ -397,7 +397,9 @@ describe("authorized ontology claim traces", () => {
 				claim: "editor",
 				sessionKey: "session-b",
 			}),
-		).rejects.toThrowError(new OntologyClaimTraceError("Claim trace premise crosses the authorized session boundary", 403));
+		).rejects.toThrowError(
+			new OntologyClaimTraceError("Claim trace premise crosses the authorized session boundary", 403),
+		);
 	});
 
 	it("serves the trace through the read-only HTTP route", async () => {
