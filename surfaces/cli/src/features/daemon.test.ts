@@ -435,6 +435,7 @@ describe("launchDashboard", () => {
 			stopDaemon: async () => true,
 			openUrl: async (url: string) => {
 				lines.push(`OPEN:${url}`);
+				return undefined;
 			},
 			...overrides,
 		};

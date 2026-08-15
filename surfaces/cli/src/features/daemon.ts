@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
@@ -58,7 +59,7 @@ interface Deps {
 	readonly fetch?: FetchLike;
 	readonly isInteractive?: () => boolean;
 	readonly syncTemplates?: (basePath: string) => Promise<void>;
-	readonly openUrl?: (url: string) => Promise<unknown>;
+	readonly openUrl?: (url: string) => Promise<ChildProcess | undefined>;
 }
 
 export async function launchDashboard(options: PathOptions, deps: Deps): Promise<void> {
