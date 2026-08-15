@@ -435,6 +435,58 @@ describe("staging promotion", () => {
 		});
 	});
 
+	it("does not resurrect a canonical embedding purged after the rebuild read", async () => {
+		if (!VEC_EXTENSION) return;
+		const raw = new Database(":memory:");
+		raw.loadExtension(VEC_EXTENSION);
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(`
+			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT);
+			CREATE TABLE embeddings (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+			CREATE VIRTUAL TABLE vec_embeddings_staging USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+		`);
+		const db = raw as unknown as WriteDb;
+		const active = {
+			provider: "ollama",
+			model: "custom-a",
+			dimensions: 3,
+			base_url: "http://127.0.0.1:11434",
+		} as const;
+		const desired = { ...active, model: "custom-b" };
+		ensureEmbeddingIndexState(db, active);
+		beginEmbeddingIndexBuild(db, desired);
+		const vector = new Uint8Array(new Float32Array([1, 0, 0]).buffer);
+		raw
+			.prepare("INSERT INTO embeddings VALUES (?, ?, ?, 3, 'memory', ?, ?, ?)")
+			.run("purged", "hash-purged", vector, "memory-purged", "2026-01-01", "agent-a");
+		raw
+			.prepare("INSERT INTO embeddings_staging VALUES (?, ?, ?, 3, 'memory', ?, ?, ?)")
+			.run("staged", "hash-purged", vector, "memory-purged", "2026-01-01", "agent-a");
+
+		let purged = false;
+		const accessor: DbAccessor = {
+			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
+			withReadDbAsync: async (fn) => {
+				const result = await fn(raw as unknown as ReadDb);
+				if (!purged) {
+					raw.prepare("DELETE FROM vec_embeddings WHERE id = ?").run("staged");
+					raw.prepare("DELETE FROM embeddings WHERE id = ?").run("staged");
+					purged = true;
+				}
+				return result;
+			},
+			close: () => undefined,
+		};
+
+		expect(await promoteStagingIndex(accessor)).toBe(true);
+		expect(purged).toBe(true);
+		expect(raw.prepare("SELECT COUNT(*) AS count FROM embeddings").get()).toEqual({ count: 0 });
+		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings").get()).toEqual({ count: 0 });
+		expect(readEmbeddingIndexState(raw as unknown as ReadDb)?.state).toBe("ready");
+	});
+
 	it("skips a concurrent writer's vec row instead of failing promotion", async () => {
 		if (!VEC_EXTENSION) return;
 		const raw = new Database(":memory:");
