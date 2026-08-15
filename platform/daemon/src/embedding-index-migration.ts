@@ -1,12 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { type DbAccessor, DbWriteQueueFullError, type ReadDb, type WriteDb } from "./db-accessor";
+import { yieldEvery } from "./async-yield";
 import { vectorToBlob } from "./db-helpers";
 import type { EmbeddingFetchOptions } from "./embedding-fetch";
-import {
-	type EmbeddingIndexState,
-	type PersistedEmbeddingProfile,
-	readEmbeddingIndexState,
-} from "./embedding-index-state";
+import { type PersistedEmbeddingProfile, readEmbeddingIndexState } from "./embedding-index-state";
 import { beginEmbeddingIndexBuild, failEmbeddingIndexBuild } from "./embedding-index-state";
 import type { EmbeddingRole } from "./embedding-profile";
 import { logger } from "./logger";
@@ -14,6 +11,7 @@ import type { EmbeddingConfig } from "./memory-config";
 import type { PipelineCauseFamily } from "./pipeline-operation";
 
 const STAGING_VECTOR_TABLE = "vec_embeddings_staging";
+const VECTOR_REBUILD_BATCH_SIZE = 100;
 
 // #1160: after this many consecutive provider-unavailable checks the build is
 // aborted (state='failed') instead of retrying forever; the daemon restarts
@@ -75,9 +73,9 @@ function tableExists(db: ReadDb, name: string): boolean {
 }
 
 async function withQueuedWrite<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
-	if (accessor.withWriteTxAsync) return accessor.withWriteTxAsync(fn);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx(fn);
+	const enqueue = accessor.withWriteTxAsync;
+	if (!enqueue) throw new Error("Async database writes are unavailable for embedding migration");
+	return enqueue(fn);
 }
 
 function isVecVirtualTable(db: ReadDb, name: string): boolean {
@@ -121,25 +119,49 @@ export function resetStagingVectorIndex(db: WriteDb, dimensions: number): void {
 	createVectorIndex(db, STAGING_VECTOR_TABLE, dimensions);
 }
 
-/** Rebuild the active sqlite-vec projection from its durable BLOB rows. */
-function rebuildActiveVectorIndex(db: WriteDb, dimensions: number): void {
-	db.exec("DROP TABLE IF EXISTS vec_embeddings_staging");
-	db.exec("DROP TABLE vec_embeddings");
-	createVectorIndex(db, "vec_embeddings", dimensions);
-	const rows = db.prepare("SELECT id, vector FROM embeddings ORDER BY id").all() as Array<{
-		id: string;
-		vector: Buffer;
-	}>;
-	const insert = db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)");
-	for (const row of rows) {
-		const vector = new Float32Array(
-			row.vector.buffer,
-			row.vector.byteOffset,
-			row.vector.byteLength / Float32Array.BYTES_PER_ELEMENT,
-		);
-		if (vector.length !== dimensions)
-			throw new Error(`Staged embedding ${row.id} has ${vector.length} dimensions, expected ${dimensions}`);
-		insert.run(row.id, vector);
+/** Rebuild the active sqlite-vec projection from durable BLOB rows in bounded transactions. */
+async function rebuildActiveVectorIndex(
+	accessor: DbAccessor,
+	dimensions: number,
+	batchSize = VECTOR_REBUILD_BATCH_SIZE,
+): Promise<void> {
+	await withQueuedWrite(accessor, (db) => {
+		db.exec("DROP TABLE IF EXISTS vec_embeddings_staging");
+		db.exec("DROP TABLE vec_embeddings");
+		createVectorIndex(db, "vec_embeddings", dimensions);
+	});
+
+	const limit = Math.max(1, Math.floor(batchSize));
+	let lastId: string | null = null;
+	const yieldAfterChunk = yieldEvery(1);
+	while (true) {
+		const rows = await accessor.withReadDbAsync(async (db) => {
+			const query =
+				lastId === null
+					? "SELECT id, vector FROM embeddings ORDER BY id LIMIT ?"
+					: "SELECT id, vector FROM embeddings WHERE id > ? ORDER BY id LIMIT ?";
+			return (lastId === null ? db.prepare(query).all(limit) : db.prepare(query).all(lastId, limit)) as Array<{
+				readonly id: string;
+				readonly vector: Uint8Array;
+			}>;
+		});
+		if (rows.length === 0) return;
+
+		await withQueuedWrite(accessor, (db) => {
+			const insert = db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)");
+			for (const row of rows) {
+				const vector = new Float32Array(
+					row.vector.buffer,
+					row.vector.byteOffset,
+					row.vector.byteLength / Float32Array.BYTES_PER_ELEMENT,
+				);
+				if (vector.length !== dimensions)
+					throw new Error(`Embedding ${row.id} has ${vector.length} dimensions, expected ${dimensions}`);
+				insert.run(row.id, vector);
+			}
+		});
+		lastId = rows[rows.length - 1]?.id ?? null;
+		await yieldAfterChunk();
 	}
 }
 
@@ -249,8 +271,7 @@ export async function stageEmbeddingBatch(input: {
 	) => Promise<number[] | null>;
 	readonly batchSize: number;
 }): Promise<{ staged: number; coverage: EmbeddingMigrationCoverage | null }> {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const state = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) => readEmbeddingIndexState(db));
+	const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db));
 	if (state?.state !== "building" || !state.staging) return { staged: 0, coverage: null };
 	const profile = state.staging;
 	const configured = input.readConfigured ? input.readConfigured() : input.configured;
@@ -258,8 +279,7 @@ export async function stageEmbeddingBatch(input: {
 	// Without this cleanup, an obsolete staging row would keep the count-based
 	// readiness gate false forever after its active counterpart disappears.
 	await pruneStagingRows(input.accessor);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const rows = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+	const rows = await input.accessor.withReadDbAsync(async (db) => {
 		if (!tableExists(db, STAGING_VECTOR_TABLE)) throw new Error("Staging vector index is unavailable");
 		const hasFailures = tableExists(db, "embedding_index_failures");
 		const failureFilter = hasFailures
@@ -339,41 +359,42 @@ export async function stageEmbeddingBatch(input: {
 		staged++;
 	}
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const coverage = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+	const coverage = await input.accessor.withReadDbAsync(async (db) =>
 		stagingCoverage(db, profile.dimensions, profile.fingerprint),
 	);
 	return { staged, coverage };
 }
 
 /**
- * Promotion runs in one IMMEDIATE transaction. The coverage recheck closes the
- * gap between an asynchronous batch and a concurrent memory/source write.
+ * Promotion swaps durable embedding slots in one short transaction. A virtual
+ * sqlite-vec projection is rebuilt after that transaction in bounded chunks so
+ * promotion never hides an all-row rebuild behind BEGIN IMMEDIATE.
  */
-export function promoteStagingIndex(accessor: DbAccessor): boolean {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+export async function promoteStagingIndex(
+	accessor: DbAccessor,
+	options?: { readonly vectorBatchSize?: number },
+): Promise<boolean> {
+	const plan = await withQueuedWrite(accessor, (db) => {
 		const state = readEmbeddingIndexState(db);
-		if (state?.state !== "building" || !state.staging) return false;
-		if (!stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint).ready) return false;
-		if (!tableExists(db, STAGING_VECTOR_TABLE)) return false;
+		if (state?.state !== "building" || !state.staging) return null;
+		if (!stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint).ready) return null;
+		if (!tableExists(db, STAGING_VECTOR_TABLE)) return null;
+		let rebuildVectorIndex = false;
 		db.prepare(
 			`UPDATE memories SET embedding_model = ?
 			 WHERE id IN (SELECT source_id FROM embeddings_staging WHERE source_type = 'memory')`,
 		).run(state.staging.model);
 
-		// Keep exactly two slots: after the swap the former active index becomes
-		// the inactive/rollback slot, ready to be cleared only for the next build.
+		// Keep exactly two durable slots: after the swap the former active slot
+		// becomes the inactive/rollback slot, ready to be cleared for the next build.
 		db.exec("ALTER TABLE embeddings_staging RENAME TO embeddings_next");
 		db.exec("ALTER TABLE embeddings RENAME TO embeddings_staging");
 		db.exec("ALTER TABLE embeddings_next RENAME TO embeddings");
 		// sqlite-vec virtual-table renames leave its backing tables associated
-		// with the old table name. Rebuild the projection after swapping the
-		// durable slots instead; the transaction keeps old recall visible until
-		// the complete new vec0 index is committed. Plain tables remain useful
-		// test doubles and retain the inexpensive rename path.
+		// with the old table name. Defer that projection rebuild until after the
+		// durable swap. Plain tables retain the inexpensive rename path.
 		if (isVecVirtualTable(db, "vec_embeddings") && isVecVirtualTable(db, STAGING_VECTOR_TABLE)) {
-			rebuildActiveVectorIndex(db, state.staging.dimensions);
+			rebuildVectorIndex = true;
 		} else {
 			db.exec(`ALTER TABLE ${STAGING_VECTOR_TABLE} RENAME TO vec_embeddings_next`);
 			db.exec("ALTER TABLE vec_embeddings RENAME TO vec_embeddings_staging");
@@ -385,11 +406,14 @@ export function promoteStagingIndex(accessor: DbAccessor): boolean {
 			     state = 'ready', last_error = NULL, updated_at = ?
 			 WHERE id = 1`,
 		).run(new Date().toISOString());
-		// Reclaim pages freed by the vec0 shadow table rebuild (#1139).
-		// incremental_vacuum is transactional and safe inside BEGIN IMMEDIATE.
-		db.exec("PRAGMA incremental_vacuum");
-		return true;
+		return { dimensions: state.staging.dimensions, rebuildVectorIndex };
 	});
+	if (plan === null) return false;
+	if (plan.rebuildVectorIndex) {
+		await rebuildActiveVectorIndex(accessor, plan.dimensions, options?.vectorBatchSize);
+	}
+	if (accessor.incrementalVacuumAsync) await accessor.incrementalVacuumAsync();
+	return true;
 }
 
 /**
@@ -397,7 +421,7 @@ export function promoteStagingIndex(accessor: DbAccessor): boolean {
  * is rechecked in the promotion transaction, so a write arriving during the
  * final batch simply postpones promotion until the next pass.
  */
-export function startEmbeddingIndexMigration(input: {
+export async function startEmbeddingIndexMigration(input: {
 	readonly accessor: DbAccessor;
 	readonly configured: EmbeddingConfig;
 	/** Live re-read of the current config; falls back to `configured` when unset (#1160). */
@@ -413,7 +437,7 @@ export function startEmbeddingIndexMigration(input: {
 	readonly batchSize: number;
 	/** Recreate active-model workers after an atomic promotion. */
 	readonly onPromoted?: () => void;
-}): EmbeddingIndexMigrationHandle | null {
+}): Promise<EmbeddingIndexMigrationHandle | null> {
 	// Unknown models still need an isolated rebuild. They use the identity
 	// formatter rather than being rejected solely because Signet does not know
 	// a model-specific retrieval prefix.
@@ -431,31 +455,22 @@ export function startEmbeddingIndexMigration(input: {
 	let nextDelayMs = input.pollMs;
 	let tickPromise: Promise<void> | null = null;
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const before = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) => readEmbeddingIndexState(db));
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	const initial = input.accessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
-		beginEmbeddingIndexBuild(db, input.configured),
-	);
+	const before = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db));
+	const initial = await withQueuedWrite(input.accessor, (db) => beginEmbeddingIndexBuild(db, input.configured));
 	const staging = initial.staging;
 	if (initial.state !== "building" || !staging) return null;
 	const resumeExistingBuild = before?.state === "building" && before.staging?.fingerprint === staging.fingerprint;
 	try {
 		if (resumeExistingBuild) {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const hasStagingVectorIndex = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+			const hasStagingVectorIndex = await input.accessor.withReadDbAsync(async (db) =>
 				tableExists(db, STAGING_VECTOR_TABLE),
 			);
 			if (!hasStagingVectorIndex) throw new Error("Staging vector index is unavailable while resuming a build");
 		} else {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			input.accessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
-				resetStagingVectorIndex(db, staging.dimensions),
-			);
+			await withQueuedWrite(input.accessor, (db) => resetStagingVectorIndex(db, staging.dimensions));
 		}
 	} catch (error) {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		input.accessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
+		await withQueuedWrite(input.accessor, (db) =>
 			failEmbeddingIndexBuild(db, error instanceof Error ? error.message : String(error)),
 		);
 		return null;
@@ -465,8 +480,7 @@ export function startEmbeddingIndexMigration(input: {
 		if (!running) return;
 		nextDelayMs = input.pollMs;
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const state = input.accessor.withReadDb((db: import("./db-accessor").ReadDb) => readEmbeddingIndexState(db));
+			const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db));
 			if (state?.state !== "building" || !state.staging) return;
 			// The persisted staging profile can go stale when agent.yaml
 			// changes mid-build; the migration then spins failing the old
@@ -510,7 +524,7 @@ export function startEmbeddingIndexMigration(input: {
 			const result = await stageEmbeddingBatch(input);
 			staged += result.staged;
 			coverage = result.coverage;
-			if (coverage?.ready && promoteStagingIndex(input.accessor)) {
+			if (coverage?.ready && (await promoteStagingIndex(input.accessor))) {
 				running = false;
 				input.onPromoted?.();
 			}

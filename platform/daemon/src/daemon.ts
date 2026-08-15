@@ -1650,7 +1650,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	}
 
 	if (!pipelinePaused) {
-		embeddingIndexMigrationHandle = startEmbeddingIndexMigration({
+		embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
 			accessor: getDbAccessor(),
 			configured: memoryCfg.embedding,
 			// Re-read agent.yaml each tick so a mid-build config edit restarts

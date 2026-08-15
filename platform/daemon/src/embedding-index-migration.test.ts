@@ -41,6 +41,30 @@ function failIndexStateUpdateOnce(raw: Database): WriteDb {
 	};
 }
 
+function testAccessor(raw: Database, db: WriteDb): DbAccessor {
+	return {
+		withWriteTx: (fn) => fn(db),
+		withWriteTxAsync: async (fn) => fn(db),
+		withReadDb: (fn) => fn(raw as unknown as ReadDb),
+		withReadDbAsync: async (fn) => fn(raw as unknown as ReadDb),
+		close: () => undefined,
+		checkpointWal: () => undefined,
+		incrementalVacuum: () => 0,
+	};
+}
+
+function testTransaction<T>(raw: Database, db: WriteDb, fn: (writeDb: WriteDb) => T): T {
+	raw.exec("BEGIN IMMEDIATE");
+	try {
+		const result = fn(db);
+		raw.exec("COMMIT");
+		return result;
+	} catch (error) {
+		raw.exec("ROLLBACK");
+		throw error;
+	}
+}
+
 describe("staging embedding coverage", () => {
 	it("requires every active row, including source chunks, at the staged dimensions", () => {
 		const raw = new Database(":memory:");
@@ -136,11 +160,7 @@ describe("staging embedding coverage", () => {
 		} as const;
 		ensureEmbeddingIndexState(db, config);
 		beginEmbeddingIndexBuild(db, { ...config, model: "qwen3-embedding:0.6b", dimensions: 4 });
-		const accessor: DbAccessor = {
-			withWriteTx: (fn) => fn(db),
-			withReadDb: (fn) => fn(raw as unknown as ReadDb),
-			close: () => undefined,
-		};
+		const accessor = testAccessor(raw, db);
 
 		const first = await stageEmbeddingBatch({
 			accessor,
@@ -196,11 +216,7 @@ describe("staging embedding coverage", () => {
 		} as const;
 		ensureEmbeddingIndexState(db, config);
 		beginEmbeddingIndexBuild(db, { ...config, model: "qwen3-embedding:0.6b", dimensions: 4 });
-		const accessor: DbAccessor = {
-			withWriteTx: (fn) => fn(db),
-			withReadDb: (fn) => fn(raw as unknown as ReadDb),
-			close: () => undefined,
-		};
+		const accessor = testAccessor(raw, db);
 
 		await expect(
 			stageEmbeddingBatch({
@@ -249,11 +265,7 @@ describe("staging embedding coverage", () => {
 		const desired = { ...active, model: "custom-b", dimensions: 4 };
 		ensureEmbeddingIndexState(db, active);
 		beginEmbeddingIndexBuild(db, desired);
-		const accessor: DbAccessor = {
-			withWriteTx: (fn) => fn(db),
-			withReadDb: (fn) => fn(raw as unknown as ReadDb),
-			close: () => undefined,
-		};
+		const accessor = testAccessor(raw, db);
 		let fetches = 0;
 		const first = await stageEmbeddingBatch({
 			accessor,
@@ -313,7 +325,7 @@ describe("staging embedding coverage", () => {
 });
 
 describe("staging promotion", () => {
-	it("swaps full index slots while retaining the previous active slot", () => {
+	it("swaps full index slots while retaining the previous active slot", async () => {
 		const raw = new Database(":memory:");
 		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
 		raw.exec(`
@@ -339,20 +351,91 @@ describe("staging promotion", () => {
 			INSERT INTO vec_embeddings VALUES ('old', X'00');
 			INSERT INTO vec_embeddings_staging VALUES ('new', X'01');
 		`);
-		const accessor: DbAccessor = {
-			withWriteTx: (fn) => fn(db),
-			withReadDb: (fn) => fn(raw as unknown as ReadDb),
-			close: () => undefined,
-		};
+		const accessor = testAccessor(raw, db);
 
-		expect(promoteStagingIndex(accessor)).toBe(true);
+		expect(await promoteStagingIndex(accessor)).toBe(true);
 		expect(raw.prepare("SELECT id, dimensions FROM embeddings").get()).toEqual({ id: "new", dimensions: 1024 });
 		expect(raw.prepare("SELECT id, dimensions FROM embeddings_staging").get()).toEqual({ id: "old", dimensions: 768 });
 		expect(raw.prepare("SELECT id FROM vec_embeddings").get()).toEqual({ id: "new" });
 		expect(raw.prepare("SELECT id FROM vec_embeddings_staging").get()).toEqual({ id: "old" });
 	});
 
-	it("keeps the promoted sqlite-vec virtual table queryable", () => {
+	it("chunks the virtual projection rebuild and preserves every agent-owned row", async () => {
+		if (!VEC_EXTENSION) return;
+		const raw = new Database(":memory:");
+		raw.loadExtension(VEC_EXTENSION);
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(`
+			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT);
+			CREATE TABLE embeddings (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+			CREATE VIRTUAL TABLE vec_embeddings_staging USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+		`);
+		const db = raw as unknown as WriteDb;
+		const active = {
+			provider: "ollama",
+			model: "custom-a",
+			dimensions: 3,
+			base_url: "http://127.0.0.1:11434",
+		} as const;
+		const desired = { ...active, model: "custom-b" };
+		ensureEmbeddingIndexState(db, active);
+		beginEmbeddingIndexBuild(db, desired);
+		const insertActive = raw.prepare("INSERT INTO embeddings VALUES (?, ?, ?, 3, 'memory', ?, ?, ?)");
+		const insertStaging = raw.prepare("INSERT INTO embeddings_staging VALUES (?, ?, ?, 3, 'memory', ?, ?, ?)");
+		for (let index = 0; index < 205; index++) {
+			const id = `embedding-${String(index).padStart(3, "0")}`;
+			const agentId = index % 2 === 0 ? "agent-a" : "agent-b";
+			const vector = new Uint8Array(new Float32Array([1, 0, 0]).buffer);
+			insertActive.run(id, `hash-${id}`, vector, `memory-${id}`, "2026-01-01", agentId);
+			insertStaging.run(id, `hash-${id}`, vector, `memory-${id}`, "2026-01-01", agentId);
+		}
+		let transactions = 0;
+		const insertsPerTransaction: number[] = [];
+		const accessor: DbAccessor = {
+			withWriteTx: (fn) => testTransaction(raw, db, fn),
+			withWriteTxAsync: async (fn) => {
+				transactions++;
+				let inserts = 0;
+				const tracked: WriteDb = {
+					exec: (sql) => db.exec(sql),
+					prepare: (sql) => {
+						const statement = db.prepare(sql);
+						return {
+							run: (...params) => {
+								if (sql.includes("INSERT INTO vec_embeddings")) inserts++;
+								return statement.run(...params);
+							},
+							get: (...params) => statement.get(...params),
+							all: (...params) => statement.all(...params),
+						};
+					},
+				};
+				const result = testTransaction(raw, tracked, fn);
+				insertsPerTransaction.push(inserts);
+				return result;
+			},
+			withReadDb: (fn) => fn(raw as unknown as ReadDb),
+			withReadDbAsync: async (fn) => fn(raw as unknown as ReadDb),
+			close: () => undefined,
+			checkpointWal: () => undefined,
+			incrementalVacuum: () => 0,
+		};
+
+		expect(await promoteStagingIndex(accessor, { vectorBatchSize: 50 })).toBe(true);
+		expect(transactions).toBe(7);
+		expect(Math.max(...insertsPerTransaction)).toBe(50);
+		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings").get()).toEqual({ count: 205 });
+		expect(raw.prepare("SELECT agent_id FROM embeddings WHERE id = 'embedding-001'").get()).toEqual({
+			agent_id: "agent-b",
+		});
+		expect(raw.prepare("SELECT agent_id FROM embeddings WHERE id = 'embedding-200'").get()).toEqual({
+			agent_id: "agent-a",
+		});
+	});
+
+	it("keeps the promoted sqlite-vec virtual table queryable", async () => {
 		if (!VEC_EXTENSION) return;
 		const raw = new Database(":memory:");
 		raw.loadExtension(VEC_EXTENSION);
@@ -383,29 +466,23 @@ describe("staging promotion", () => {
 			.prepare("INSERT INTO vec_embeddings_staging (id, embedding) VALUES (?, ?)")
 			.run("new", new Float32Array([0, 1, 0]));
 		const accessor: DbAccessor = {
-			withWriteTx: (fn) => {
-				raw.exec("BEGIN IMMEDIATE");
-				try {
-					const result = fn(db);
-					raw.exec("COMMIT");
-					return result;
-				} catch (error) {
-					raw.exec("ROLLBACK");
-					throw error;
-				}
-			},
+			withWriteTx: (fn) => testTransaction(raw, db, fn),
+			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
 			withReadDb: (fn) => fn(raw as unknown as ReadDb),
+			withReadDbAsync: async (fn) => fn(raw as unknown as ReadDb),
 			close: () => undefined,
+			checkpointWal: () => undefined,
+			incrementalVacuum: () => 0,
 		};
 
-		expect(promoteStagingIndex(accessor)).toBe(true);
+		expect(await promoteStagingIndex(accessor)).toBe(true);
 		const nearest = raw
 			.prepare("SELECT id FROM vec_embeddings WHERE embedding MATCH ? AND k = 1")
 			.get(new Float32Array([0, 1, 0]));
 		expect(nearest).toEqual({ id: "new" });
 	});
 
-	it("rolls back vec rebuild when index state commit fails after vector insertion", () => {
+	it("rolls back vec rebuild when index state commit fails after vector insertion", async () => {
 		if (!VEC_EXTENSION) return;
 		const raw = new Database(":memory:");
 		raw.loadExtension(VEC_EXTENSION);
@@ -439,22 +516,16 @@ describe("staging promotion", () => {
 
 		const failingDb = failIndexStateUpdateOnce(raw);
 		const accessor: DbAccessor = {
-			withWriteTx: (fn) => {
-				raw.exec("BEGIN IMMEDIATE");
-				try {
-					const result = fn(failingDb);
-					raw.exec("COMMIT");
-					return result;
-				} catch (error) {
-					raw.exec("ROLLBACK");
-					throw error;
-				}
-			},
+			withWriteTx: (fn) => testTransaction(raw, failingDb, fn),
+			withWriteTxAsync: async (fn) => testTransaction(raw, failingDb, fn),
 			withReadDb: (fn) => fn(raw as unknown as ReadDb),
+			withReadDbAsync: async (fn) => fn(raw as unknown as ReadDb),
 			close: () => undefined,
+			checkpointWal: () => undefined,
+			incrementalVacuum: () => 0,
 		};
 
-		expect(() => promoteStagingIndex(accessor)).toThrow("simulated index-state update failure");
+		await expect(promoteStagingIndex(accessor)).rejects.toThrow("simulated index-state update failure");
 		expect(readEmbeddingIndexState(raw as unknown as ReadDb)?.state).toBe("building");
 		expect(raw.prepare("SELECT id, content_hash FROM embeddings").get()).toEqual({
 			id: "old",
@@ -493,13 +564,9 @@ describe("staging migration lifecycle", () => {
 		const desired = { ...active, model: "custom-b" };
 		ensureEmbeddingIndexState(db, active);
 		beginEmbeddingIndexBuild(db, desired);
-		const accessor: DbAccessor = {
-			withWriteTx: (fn) => fn(db),
-			withReadDb: (fn) => fn(raw as unknown as ReadDb),
-			close: () => undefined,
-		};
+		const accessor = testAccessor(raw, db);
 
-		const handle = startEmbeddingIndexMigration({
+		const handle = await startEmbeddingIndexMigration({
 			accessor,
 			configured: desired,
 			fetchEmbedding: async () => [0, 0, 0],
@@ -535,12 +602,8 @@ describe("staging migration lifecycle", () => {
 		const desired = { ...active, model: "custom-b" };
 		ensureEmbeddingIndexState(db, active);
 		beginEmbeddingIndexBuild(db, desired);
-		const accessor: DbAccessor = {
-			withWriteTx: (fn) => fn(db),
-			withReadDb: (fn) => fn(raw as unknown as ReadDb),
-			close: () => undefined,
-		};
-		const handle = startEmbeddingIndexMigration({
+		const accessor = testAccessor(raw, db);
+		const handle = await startEmbeddingIndexMigration({
 			accessor,
 			configured: desired,
 			// null embeddings keep the coverage non-ready so the build stays
@@ -597,13 +660,9 @@ describe("staging migration lifecycle", () => {
 		const desired = { ...active, model: "custom-b" };
 		ensureEmbeddingIndexState(db, active);
 		beginEmbeddingIndexBuild(db, desired);
-		const accessor: DbAccessor = {
-			withWriteTx: (fn) => fn(db),
-			withReadDb: (fn) => fn(raw as unknown as ReadDb),
-			close: () => undefined,
-		};
+		const accessor = testAccessor(raw, db);
 		let providerChecks = 0;
-		const handle = startEmbeddingIndexMigration({
+		const handle = await startEmbeddingIndexMigration({
 			accessor,
 			configured: desired,
 			fetchEmbedding: async () => [0, 0, 0],
@@ -648,12 +707,8 @@ describe("staging migration lifecycle", () => {
 		// from the active profile, so begin with a distinct desired model first.
 		let live = { ...active, model: "custom-b" };
 		beginEmbeddingIndexBuild(db, live);
-		const accessor: DbAccessor = {
-			withWriteTx: (fn) => fn(db),
-			withReadDb: (fn) => fn(raw as unknown as ReadDb),
-			close: () => undefined,
-		};
-		const handle = startEmbeddingIndexMigration({
+		const accessor = testAccessor(raw, db);
+		const handle = await startEmbeddingIndexMigration({
 			accessor,
 			configured: live,
 			// The daemon passes a live re-read of agent.yaml here; the frozen
@@ -695,13 +750,21 @@ describe("staging migration lifecycle", () => {
 		const desired = { ...active, model: "custom-b" };
 		ensureEmbeddingIndexState(db, active);
 		beginEmbeddingIndexBuild(db, desired);
+		let writes = 0;
 		const accessor: DbAccessor = {
 			withWriteTx: (fn) => fn(db),
-			withWriteTxAsync: <T>(_fn: (writeDb: WriteDb) => T): Promise<T> => Promise.reject(new DbWriteQueueFullError()),
+			withWriteTxAsync: async (fn) => {
+				writes++;
+				if (writes > 1) throw new DbWriteQueueFullError();
+				return fn(db);
+			},
 			withReadDb: (fn) => fn(raw as unknown as ReadDb),
+			withReadDbAsync: async (fn) => fn(raw as unknown as ReadDb),
 			close: () => undefined,
+			checkpointWal: () => undefined,
+			incrementalVacuum: () => 0,
 		};
-		const handle = startEmbeddingIndexMigration({
+		const handle = await startEmbeddingIndexMigration({
 			accessor,
 			configured: desired,
 			fetchEmbedding: async () => [0, 0, 0],
