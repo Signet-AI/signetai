@@ -582,7 +582,7 @@ describe("auth guard co-location", () => {
 					timings: { totalMs: 1, stages: [] },
 				},
 			};
-			recordMemorySearchTelemetry(getDbAccessor(), {
+			await recordMemorySearchTelemetry(getDbAccessor(), {
 				route: "GET /api/memory/search",
 				agentId: "telemetry-agent-a",
 				sessionKey: "telemetry-session-a",
@@ -595,7 +595,7 @@ describe("auth guard co-location", () => {
 				response,
 				retentionDays: 90,
 			});
-			recordMemorySearchTelemetry(getDbAccessor(), {
+			await recordMemorySearchTelemetry(getDbAccessor(), {
 				route: "GET /api/memory/search",
 				agentId: "telemetry-agent-b",
 				sessionKey: "telemetry-session-b",

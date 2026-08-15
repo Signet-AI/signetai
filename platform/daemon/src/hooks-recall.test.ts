@@ -147,7 +147,7 @@ memory:
 			expect(resp.status).toBe(200);
 
 			await collector.flush();
-			const events = collector.query();
+			const events = await collector.query();
 			expect(
 				events.some((event) => event.event === "recall.attempted" && event.properties.surface === "tool_call"),
 			).toBeTrue();
@@ -187,7 +187,7 @@ memory:
 			expect(body.meta).toBeDefined();
 
 			await collector.flush();
-			const events = collector.query();
+			const events = await collector.query();
 			expect(
 				events.some((event) => event.event === "recall.attempted" && event.properties.surface === "tool_call"),
 			).toBeTrue();
@@ -242,7 +242,7 @@ memory:
 			expect(duplicate.status).toBe(200);
 
 			await collector.flush();
-			const events = collector.query();
+			const events = await collector.query();
 			const ends = events.filter((event) => event.event === "session.end");
 			expect(ends).toHaveLength(1);
 			expect(ends[0]?.properties.reason).toBe("session.deleted");

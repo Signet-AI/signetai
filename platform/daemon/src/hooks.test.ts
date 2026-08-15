@@ -2303,8 +2303,8 @@ memory:
 			await handleSessionEnd({ harness: "test", sessionKey: "sess-turn-b", reason: "session.idle" });
 			await collector.flush();
 
-			const turns = collector.query().filter((e) => e.event === "session.turn");
-			const ends = collector.query().filter((e) => e.event === "session.end");
+			const turns = (await collector.query()).filter((e) => e.event === "session.turn");
+			const ends = (await collector.query()).filter((e) => e.event === "session.end");
 			expect(turns).toHaveLength(3);
 			expect(ends).toHaveLength(0);
 			expect(turns[0]?.properties.harness).toBe("test");
@@ -2336,8 +2336,8 @@ memory:
 			await handleSessionEnd({ harness: "test", sessionKey: "sess-boundary-0", reason: "session.deleted" });
 			await collector.flush();
 
-			const ends = collector.query().filter((e) => e.event === "session.end");
-			const turns = collector.query().filter((e) => e.event === "session.turn");
+			const ends = (await collector.query()).filter((e) => e.event === "session.end");
+			const turns = (await collector.query()).filter((e) => e.event === "session.turn");
 			expect(ends).toHaveLength(reasons.length);
 			expect(ends.map((event) => event.properties.reason).sort()).toEqual([...reasons].sort());
 			expect(turns).toHaveLength(0);
@@ -2358,7 +2358,7 @@ memory:
 			await handleSessionEnd({ harness: "test", sessionKey: "sess-clear-a", reason: "clear" });
 			await collector.flush();
 
-			const ends = collector.query().filter((e) => e.event === "session.end");
+			const ends = (await collector.query()).filter((e) => e.event === "session.end");
 			expect(ends).toHaveLength(1);
 			expect(ends[0]?.properties.reason).toBe("clear");
 			expect(ends[0]?.properties.harness).toBe("test");
@@ -2366,13 +2366,13 @@ memory:
 			// A real session start opens a new lifetime — the next clear counts again.
 			await handleSessionStart({ harness: "test", sessionKey: "sess-clear-a" });
 			await collector.flush();
-			const starts = collector.query().filter((e) => e.event === "session.start");
+			const starts = (await collector.query()).filter((e) => e.event === "session.start");
 			expect(starts).toHaveLength(1);
 			expect(typeof starts[0]?.properties.sessionHash).toBe("string");
 
 			await handleSessionEnd({ harness: "test", sessionKey: "sess-clear-a", reason: "clear" });
 			await collector.flush();
-			expect(collector.query().filter((e) => e.event === "session.end")).toHaveLength(2);
+			expect((await collector.query()).filter((e) => e.event === "session.end")).toHaveLength(2);
 		} finally {
 			setActiveTelemetry(undefined);
 			resetSessionEndTelemetry();
@@ -3218,8 +3218,8 @@ describe("handleSessionStart multi-agent identity", () => {
 					});
 					await collector.flush();
 
-					const ends = collector.query().filter((event) => event.event === "session.end");
-					const turns = collector.query().filter((event) => event.event === "session.turn");
+					const ends = (await collector.query()).filter((event) => event.event === "session.end");
+					const turns = (await collector.query()).filter((event) => event.event === "session.turn");
 					expect(result.closed).toBe(50);
 					expect(result.totalMatching).toBe(50);
 					expect(ends).toHaveLength(50);

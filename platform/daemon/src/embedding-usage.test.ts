@@ -53,7 +53,7 @@ describe("embedding telemetry (issue #1181)", () => {
 		recordEmbeddingUsage({ provider: "ollama", tokens: 42, source: "dreaming" });
 		await collector.flush();
 
-		const embeddings = collector.query().filter((e) => e.event === "pipeline.embedding");
+		const embeddings = (await collector.query()).filter((e) => e.event === "pipeline.embedding");
 		expect(embeddings).toHaveLength(2);
 		const first = embeddings.find((e) => e.properties.provider === "native");
 		expect(first?.properties.tokens).toBe(128);

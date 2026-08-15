@@ -95,7 +95,7 @@ describe("dreaming telemetry", () => {
 		});
 		await collector.flush();
 
-		const passes = collector.query().filter((e) => e.event === "dreaming.pass");
+		const passes = (await collector.query()).filter((e) => e.event === "dreaming.pass");
 		expect(passes).toHaveLength(2);
 		const full = passes.find((e) => e.properties.mode === "agentic");
 		expect(full?.properties.tokensInput).toBe(384561);

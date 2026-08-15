@@ -561,7 +561,7 @@ function recordRecallQaTelemetry(input: {
 	readonly cfg: ResolvedMemoryConfig;
 }): void {
 	if (!input.cfg.pipelineV2.telemetry.memorySearchQaEnabled) return;
-	recordMemorySearchTelemetry(getDbAccessor(), {
+	void recordMemorySearchTelemetry(getDbAccessor(), {
 		route: input.route,
 		agentId: input.agentId,
 		sessionKey: input.sessionKey,

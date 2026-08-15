@@ -226,16 +226,23 @@ function rowToItem(row: MemorySearchTelemetryRow): MemorySearchTelemetryItem {
 	};
 }
 
-export function recordMemorySearchTelemetry(db: DbAccessor, input: MemorySearchTelemetryRecordInput): void {
-	try {
-		const createdAt = new Date().toISOString();
-		const cutoff = new Date(Date.now() - input.retentionDays * DAY_MS).toISOString();
-		const results = input.response.results.map(snapshotResult);
-		const filters = buildFilters(input.params);
-		const top = input.response.results[0]?.score ?? null;
+export async function recordMemorySearchTelemetry(
+	db: DbAccessor,
+	input: MemorySearchTelemetryRecordInput,
+): Promise<void> {
+	const withWriteTxAsync = db.withWriteTxAsync;
+	if (!withWriteTxAsync) {
+		logger.warn("memory", "Dropped memory search telemetry: async writer unavailable", { dropped: 1 });
+		return;
+	}
+	const createdAt = new Date().toISOString();
+	const cutoff = new Date(Date.now() - input.retentionDays * DAY_MS).toISOString();
+	const results = input.response.results.map(snapshotResult);
+	const filters = buildFilters(input.params);
+	const top = input.response.results[0]?.score ?? null;
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+	try {
+		await withWriteTxAsync((w) => {
 			w.prepare(
 				`INSERT INTO memory_search_telemetry
 				 (id, created_at, route, agent_id, session_key, project, query,
@@ -264,16 +271,17 @@ export function recordMemorySearchTelemetry(db: DbAccessor, input: MemorySearchT
 			w.prepare("DELETE FROM memory_search_telemetry WHERE created_at < ?").run(cutoff);
 		});
 	} catch (err) {
-		logger.warn("memory", "Failed to record memory search telemetry", {
+		logger.warn("memory", "Dropped memory search telemetry after async write failure", {
+			dropped: 1,
 			error: err instanceof Error ? err.message : String(err),
 		});
 	}
 }
 
-export function listMemorySearchTelemetry(
+export async function listMemorySearchTelemetry(
 	db: DbAccessor,
 	query: MemorySearchTelemetryQuery = {},
-): readonly MemorySearchTelemetryItem[] {
+): Promise<readonly MemorySearchTelemetryItem[]> {
 	const conditions: string[] = [];
 	const args: SQLQueryBindings[] = [];
 
@@ -310,8 +318,7 @@ export function listMemorySearchTelemetry(
 	const limit = query.limit ?? 100;
 	const offset = query.offset ?? 0;
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return db.withReadDb((r) => {
+	return db.withReadDbAsync(async (r) => {
 		const rows = r
 			.prepare(
 				`SELECT id, created_at, route, agent_id, session_key, project, query,

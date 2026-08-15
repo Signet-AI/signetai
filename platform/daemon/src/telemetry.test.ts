@@ -108,7 +108,10 @@ function fakeDbAccessor(): DbAccessor {
 	const stmt = { run: () => ({ changes: 1 }), get: () => undefined, all: () => [] };
 	return {
 		withWriteTx: (fn: (db: { prepare(sql: string): typeof stmt }) => unknown) => fn({ prepare: () => stmt }),
+		withWriteTxAsync: async (fn: (db: { prepare(sql: string): typeof stmt }) => unknown) => fn({ prepare: () => stmt }),
 		withReadDb: (fn: (db: { prepare(sql: string): typeof stmt }) => unknown) => fn({ prepare: () => stmt }),
+		withReadDbAsync: async (fn: (db: { prepare(sql: string): typeof stmt }) => Promise<unknown>) =>
+			fn({ prepare: () => stmt }),
 	} as unknown as DbAccessor;
 }
 
@@ -246,7 +249,7 @@ describe("telemetry collector", () => {
 				text: "ok",
 			});
 			await collector.flush();
-			const local = collector.query().find((event) => event.event === "llm.generate");
+			const local = (await collector.query()).find((event) => event.event === "llm.generate");
 			const outbound = captured
 				.flatMap((request) => request.body.batch)
 				.find((event) => event.event === "llm.generate");
@@ -437,11 +440,12 @@ describe("telemetry collector", () => {
 		// buffering its event for a later transaction let a crash permanently
 		// consume the milestone. The event must already be in the durable queue
 		// before the process can terminate.
-		const first = makeCollector();
+		const first = createTelemetryCollector(getDbAccessor(), { ...TELEMETRY_CONFIG, posthogHost: "" }, "0.0.0-test");
 		first.recordFirstUse("remember");
 		first.recordFirstUse("remember");
 		first.recordFirstUse("recall");
 		first.recordFirstUse("recall");
+		await first.flush();
 
 		const beforeRestart = getDbAccessor().withReadDb(
 			(db) =>
@@ -476,7 +480,9 @@ describe("telemetry collector", () => {
 		await restarted.flush();
 		await restarted.flush();
 
-		const delivered = captured.flatMap((request) => request.body.batch.map((event) => event.event));
+		const delivered = captured
+			.flatMap((request) => request.body.batch.map((event) => event.event))
+			.filter((event) => event.startsWith("first."));
 		expect(delivered).toEqual(["first.remember", "first.recall"]);
 		expect(
 			getDbAccessor().withReadDb((db) =>
@@ -695,9 +701,9 @@ describe("telemetry collector", () => {
 		const second = createTelemetryCollector(getDbAccessor(), TELEMETRY_CONFIG, "0.176.9");
 		await second.flush();
 
-		const observed = second.query({ event: "version.observed" })[0];
+		const observed = (await second.query({ event: "version.observed" }))[0];
 		expect(observed?.properties).toMatchObject({ from: "0.176.8", to: "0.176.9" });
-		expect(second.query({ event: "version.upgraded" })).toHaveLength(0);
+		expect(await second.query({ event: "version.upgraded" })).toHaveLength(0);
 	});
 
 	it("keeps an observed prior version raw when the deployment marker changes", async () => {
@@ -708,7 +714,7 @@ describe("telemetry collector", () => {
 		});
 		await second.flush();
 
-		expect(second.query({ event: "version.observed" })[0]?.properties).toMatchObject({
+		expect((await second.query({ event: "version.observed" }))[0]?.properties).toMatchObject({
 			from: "0.176.8",
 			to: "0.176.9-dev",
 		});
@@ -720,7 +726,7 @@ describe("telemetry collector", () => {
 		});
 		collector.record("version.upgraded", { from: "0.176.6", to: "0.176.8" });
 		await collector.flush();
-		const [event] = collector.query({ event: "version.upgraded" });
+		const [event] = await collector.query({ event: "version.upgraded" });
 		expect(event?.properties.from).toBe("0.176.6-dev");
 		expect(event?.properties.to).toBe("0.176.8-dev");
 	});
@@ -774,7 +780,7 @@ describe("telemetry collector", () => {
 		collector.record("daemon.heartbeat", { uptimeMs: 1 });
 		await collector.stop();
 
-		const health = collector.query({ event: "telemetry.health" })[0];
+		const health = (await collector.query({ event: "telemetry.health" }))[0];
 		expect(health).toBeDefined();
 		expect(health?.properties).toMatchObject({
 			queuedUnsentEventCount: 2,
@@ -1071,7 +1077,7 @@ describe("session economics (issue #1201)", () => {
 		collector.record("session.end", { sessionHash: "session-1" });
 		await collector.flush();
 
-		const end = collector.query({ event: "session.end" })[0];
+		const end = (await collector.query({ event: "session.end" }))[0];
 		expect(end?.properties.tokensInput).toBe(2_000_100);
 		expect(end?.properties.tokensOutput).toBe(20);
 		expect(end?.properties.tokensCacheRead).toBe(10);
@@ -1090,7 +1096,7 @@ describe("session economics (issue #1201)", () => {
 		collector.record("session.end", { sessionHash: "session-c" });
 		await collector.flush();
 
-		const ends = collector.query({ event: "session.end" });
+		const ends = await collector.query({ event: "session.end" });
 		const sessionA = ends.find((event) => event.properties.tokensInput === 100);
 		const sessionC = ends.find((event) => event.properties.tokensInput === 200);
 		expect(sessionA?.properties.cost).toBe(0.5);
@@ -1107,7 +1113,7 @@ describe("session economics (issue #1201)", () => {
 		collector.record("session.end", { sessionHash: "session-1" });
 		await collector.flush();
 
-		const ends = collector.query({ event: "session.end" });
+		const ends = await collector.query({ event: "session.end" });
 		const first = ends.find((event) => event.properties.tokensInput === 100);
 		const resumed = ends.find((event) => event.properties.tokensInput === 300);
 		expect(first?.properties.tokensInput).toBe(100);

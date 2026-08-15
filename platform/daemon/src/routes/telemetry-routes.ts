@@ -284,7 +284,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({ scores });
 	});
 
-	app.get("/api/telemetry/events", (c) => {
+	app.get("/api/telemetry/events", async (c) => {
 		if (!telemetryRef) {
 			return c.json({ events: [], enabled: false });
 		}
@@ -292,7 +292,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const since = c.req.query("since");
 		const until = c.req.query("until");
 		const limit = boundedTelemetryLimit(c.req.query("limit"), 100, 10_000);
-		const events = telemetryRef.query({ event, since, until, limit });
+		const events = await telemetryRef.query({ event, since, until, limit });
 		return c.json({ events, enabled: true });
 	});
 
@@ -301,7 +301,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({ enabled: true, ...telemetryRef.deliveryHealth() });
 	});
 
-	app.get("/api/telemetry/memory-search", (c) => {
+	app.get("/api/telemetry/memory-search", async (c) => {
 		const agent = resolveScopedAgentId(c, c.req.query("agent_id") ?? c.req.query("agentId"));
 		if (agent.error) return c.json({ error: agent.error }, 403);
 		const project = resolveScopedProject(c, c.req.query("project"));
@@ -310,7 +310,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const limitRaw = Number.parseInt(c.req.query("limit") ?? "100", 10);
 		const offsetRaw = Number.parseInt(c.req.query("offset") ?? "0", 10);
 		const noHitsRaw = c.req.query("no_hits");
-		const items = listMemorySearchTelemetry(getDbAccessor(), {
+		const items = await listMemorySearchTelemetry(getDbAccessor(), {
 			agentId: agent.agentId,
 			project: project.project,
 			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
@@ -329,12 +329,12 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({ items, count: items.length });
 	});
 
-	app.get("/api/telemetry/stats", (c) => {
+	app.get("/api/telemetry/stats", async (c) => {
 		if (!telemetryRef) {
 			return c.json({ enabled: false });
 		}
 		const since = c.req.query("since");
-		const events = telemetryRef.query({ since, limit: 10000 });
+		const events = await telemetryRef.query({ since, limit: 10000 });
 
 		let totalInputTokens = 0;
 		let totalOutputTokens = 0;
@@ -759,19 +759,19 @@ export function registerTelemetryRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/telemetry/export", (c) => {
+	app.get("/api/telemetry/export", async (c) => {
 		if (!telemetryRef) {
 			return c.text("telemetry not enabled", 404);
 		}
 		const since = c.req.query("since");
 		const limit = boundedTelemetryLimit(c.req.query("limit"), 10_000, 100_000);
-		const events = telemetryRef.query({ since, limit });
+		const events = await telemetryRef.query({ since, limit });
 
 		const lines = events.map((e) => JSON.stringify(e)).join("\n");
 		return c.text(lines, 200, { "Content-Type": "application/x-ndjson" });
 	});
 
-	app.get("/api/telemetry/memory-search/export", (c) => {
+	app.get("/api/telemetry/memory-search/export", async (c) => {
 		const agent = resolveScopedAgentId(c, c.req.query("agent_id") ?? c.req.query("agentId"));
 		if (agent.error) return c.json({ error: agent.error }, 403);
 		const project = resolveScopedProject(c, c.req.query("project"));
@@ -779,7 +779,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 
 		const limitRaw = Number.parseInt(c.req.query("limit") ?? "10000", 10);
 		const noHitsRaw = c.req.query("no_hits");
-		const items = listMemorySearchTelemetry(getDbAccessor(), {
+		const items = await listMemorySearchTelemetry(getDbAccessor(), {
 			agentId: agent.agentId,
 			project: project.project,
 			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),

@@ -53,12 +53,17 @@ function telemetryTestDb(): DbAccessor {
 			timestamp TEXT NOT NULL,
 			properties TEXT NOT NULL,
 			sent_to_posthog INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT NOT NULL
+			created_at TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'daemon',
+			claim_token TEXT,
+			claimed_at TEXT
 		)`,
 	);
 	return {
 		withWriteTx: (fn: (d: Database) => unknown) => fn(db),
+		withWriteTxAsync: async (fn: (d: Database) => unknown) => fn(db),
 		withReadDb: (fn: (d: Database) => unknown) => fn(db),
+		withReadDbAsync: async (fn: (d: Database) => Promise<unknown>) => fn(db),
 	} as unknown as DbAccessor;
 }
 
@@ -332,7 +337,7 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 				runStaleCleanup();
 				await collector.flush();
 
-				const ends = collector.query().filter((e) => e.event === "session.end");
+				const ends = (await collector.query()).filter((e) => e.event === "session.end");
 				expect(ends).toHaveLength(1);
 				expect(ends[0]?.properties.reason).toBe("expired");
 				expect(ends[0]?.properties.harness).toBe("claude-code");
@@ -344,7 +349,7 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 				_expireSessionForTest("sess-evict");
 				runStaleCleanup();
 				await collector.flush();
-				expect(collector.query().filter((e) => e.event === "session.end")).toHaveLength(1);
+				expect((await collector.query()).filter((e) => e.event === "session.end")).toHaveLength(1);
 			} finally {
 				setActiveTelemetry(undefined);
 			}
@@ -359,7 +364,7 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 				runStaleCleanup();
 				await collector.flush();
 
-				const ends = collector.query().filter((e) => e.event === "session.end");
+				const ends = (await collector.query()).filter((e) => e.event === "session.end");
 				expect(ends).toHaveLength(1);
 				expect(ends[0]?.properties.harness).toBeNull();
 			} finally {
@@ -379,7 +384,7 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 				runStaleCleanup();
 				await collector.flush();
 
-				const ends = collector.query().filter((e) => e.event === "session.end");
+				const ends = (await collector.query()).filter((e) => e.event === "session.end");
 				expect(ends).toHaveLength(1);
 				expect(ends[0]?.properties.harness).toBe("opencode");
 			} finally {
@@ -405,7 +410,7 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 				runStaleCleanup();
 				await collector.flush();
 
-				expect(collector.query().filter((e) => e.event === "session.end")).toHaveLength(0);
+				expect((await collector.query()).filter((e) => e.event === "session.end")).toHaveLength(0);
 			} finally {
 				setActiveTelemetry(undefined);
 			}
@@ -425,7 +430,7 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 				runStaleCleanup();
 				await collector.flush();
 
-				expect(collector.query().filter((e) => e.event === "session.end")).toHaveLength(0);
+				expect((await collector.query()).filter((e) => e.event === "session.end")).toHaveLength(0);
 
 				// And the anonymous hash is joinable across raw/normalized forms.
 				expect(hashSessionKey("session:abc")).toBe(hashSessionKey("abc"));

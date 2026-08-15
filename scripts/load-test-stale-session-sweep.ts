@@ -100,8 +100,9 @@ async function main(): Promise<void> {
 			await collector.flush();
 			clearInterval(probe);
 
-			const ends = collector.query().filter((event) => event.event === "session.end");
-			const turns = collector.query().filter((event) => event.event === "session.turn");
+			const events = await collector.query();
+			const ends = events.filter((event) => event.event === "session.end");
+			const turns = events.filter((event) => event.event === "session.turn");
 			const sortedLag = [...lagSamples].sort((a, b) => a - b);
 			const maxLagMs = Math.round(Math.max(...lagSamples, 0));
 			const p95LagMs = Math.round(percentile(sortedLag, 95));

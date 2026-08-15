@@ -370,7 +370,7 @@ export interface TelemetryCollector {
 		since?: string;
 		until?: string;
 		limit?: number;
-	}): readonly TelemetryEvent[];
+	}): Promise<readonly TelemetryEvent[]>;
 
 	readonly enabled: boolean;
 
@@ -488,8 +488,7 @@ function getOrCreateInstallId(
 	daemonVersion: string,
 ): { readonly id: string; readonly created: boolean; readonly previousVersion?: string } {
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		return db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+		return db.withWriteTx((w) => {
 			const existing = w
 				.prepare("SELECT id, last_seen_version FROM telemetry_install ORDER BY created_at ASC LIMIT 1")
 				.get() as { readonly id: string; readonly last_seen_version?: string | null } | null | undefined;
@@ -528,8 +527,7 @@ function getOrCreateInstallId(
 		// pre-117 telemetry_install shape. Preserve telemetry there without
 		// claiming a transition; the next normal migration adds the column.
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			return db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+			return db.withWriteTx((w) => {
 				const existing = w.prepare("SELECT id FROM telemetry_install ORDER BY created_at ASC LIMIT 1").get() as
 					| { readonly id: string }
 					| null
@@ -786,16 +784,29 @@ export function createTelemetryCollector(
 	let droppedEventCount = 0;
 	let pendingDroppedEventCount = 0;
 	let flushPromise: Promise<void> | null = null;
+	const pendingAsyncWrites = new Set<Promise<void>>();
 	let deliveryStatePersistenceFailed = false;
+	let deliveryState: TelemetryDeliveryState = {
+		windowStartedAt: new Date().toISOString(),
+		successCount: 0,
+		failureCount: 0,
+		consecutiveFailures: 0,
+		lastAttemptAt: null,
+		lastSuccessAt: null,
+		lastFailureCode: null,
+		droppedEventCount: 0,
+	};
+	let persistedQueueCount = 0;
+	let persistedOldestTimestamp: string | null = null;
+	let lastDaemonEventTimestamp: string | null = null;
 	const { id: installId, created: installActivated, previousVersion } = getOrCreateInstallId(db, daemonVersion);
 
 	const posthogConfigured = config.posthogHost.length > 0 && config.posthogApiKey.length > 0;
 
-	function readDeliveryState(): TelemetryDeliveryState {
+	async function readDeliveryState(): Promise<TelemetryDeliveryState> {
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const row = db.withReadDb(
-				(r: import("./db-accessor").ReadDb) =>
+			const row = await db.withReadDbAsync(
+				async (r) =>
 					r
 						.prepare(
 							`SELECT window_started_at AS windowStartedAt,
@@ -828,6 +839,44 @@ export function createTelemetryCollector(
 		};
 	}
 
+	async function refreshPersistedQueue(): Promise<void> {
+		try {
+			const queue = await db.withReadDbAsync(async (r) => {
+				const pending = r
+					.prepare(
+						`SELECT COUNT(*) AS count, MIN(timestamp) AS oldestTimestamp
+						 FROM telemetry_events WHERE source = 'daemon' AND sent_to_posthog = 0`,
+					)
+					.get() as { count?: number; oldestTimestamp?: string | null } | undefined;
+				const latest = r
+					.prepare(
+						"SELECT MAX(timestamp) AS timestamp FROM telemetry_events WHERE source = 'daemon' AND event <> 'telemetry.health'",
+					)
+					.get() as { timestamp?: string | null } | undefined;
+				return {
+					count: pending?.count ?? 0,
+					oldestTimestamp: pending?.oldestTimestamp ?? null,
+					lastTimestamp: latest?.timestamp ?? null,
+				};
+			});
+			persistedQueueCount = queue.count;
+			persistedOldestTimestamp = queue.oldestTimestamp;
+			lastDaemonEventTimestamp = queue.lastTimestamp;
+		} catch {
+			// Keep local in-memory health available when SQLite is unavailable.
+		}
+	}
+
+	function trackAsyncWrite(work: Promise<void>): void {
+		pendingAsyncWrites.add(work);
+		void work.finally(() => pendingAsyncWrites.delete(work));
+	}
+
+	async function awaitPendingAsyncWrites(): Promise<void> {
+		if (pendingAsyncWrites.size === 0) return;
+		await Promise.all([...pendingAsyncWrites]);
+	}
+
 	function recordDroppedEvents(count: number): void {
 		droppedEventCount += count;
 		pendingDroppedEventCount += count;
@@ -842,13 +891,14 @@ export function createTelemetryCollector(
 		pendingDroppedEventCount = 0;
 	}
 
-	const initialDeliveryState = readDeliveryState();
-	consecutiveFailures = initialDeliveryState.consecutiveFailures;
-	effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
-	const lastAttemptMs = initialDeliveryState.lastAttemptAt
-		? parseTelemetryTimestamp(initialDeliveryState.lastAttemptAt)
-		: Number.NaN;
-	if (Number.isFinite(lastAttemptMs)) nextAllowedFlushAt = lastAttemptMs + effectiveIntervalMs;
+	void readDeliveryState().then((state) => {
+		deliveryState = state;
+		consecutiveFailures = state.consecutiveFailures;
+		effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
+		const lastAttemptMs = state.lastAttemptAt ? parseTelemetryTimestamp(state.lastAttemptAt) : Number.NaN;
+		if (Number.isFinite(lastAttemptMs)) nextAllowedFlushAt = lastAttemptMs + effectiveIntervalMs;
+	});
+	void refreshPersistedQueue();
 
 	/**
 	 * Claim and persist a first-use event in one transaction. Only the first
@@ -861,7 +911,7 @@ export function createTelemetryCollector(
 	 * UPDATE matches no row and the milestone never fires. Telemetry is
 	 * degraded anyway.
 	 */
-	function persistFirstUse(kind: FirstUseKind): TelemetryEvent | null {
+	async function persistFirstUse(kind: FirstUseKind): Promise<TelemetryEvent | null> {
 		const event: TelemetryEvent = {
 			id: crypto.randomUUID(),
 			event: FIRST_USE_EVENTS[kind],
@@ -873,10 +923,11 @@ export function createTelemetryCollector(
 		};
 
 		try {
+			const withWriteTxAsync = db.withWriteTxAsync;
+			if (!withWriteTxAsync) return null;
 			const column = FIRST_USE_COLUMNS[kind];
 			let claimed = false;
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+			await withWriteTxAsync((w) => {
 				const result = w
 					.prepare(
 						`UPDATE telemetry_install SET ${column} = ?
@@ -919,11 +970,12 @@ export function createTelemetryCollector(
 		};
 	}
 
-	function writeToDb(events: readonly TelemetryEvent[]): boolean {
+	async function writeToDb(events: readonly TelemetryEvent[]): Promise<boolean> {
 		if (events.length === 0) return true;
+		const withWriteTxAsync = db.withWriteTxAsync;
+		if (!withWriteTxAsync) return false;
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+			await withWriteTxAsync((w) => {
 				const stmt = w.prepare(
 					`INSERT OR IGNORE INTO telemetry_events
 					 (id, event, timestamp, properties, sent_to_posthog, created_at, source)
@@ -974,12 +1026,13 @@ export function createTelemetryCollector(
 		}
 	}
 
-	function markSent(token: string): void {
+	async function markSent(token: string): Promise<void> {
 		const now = new Date().toISOString();
 		let stateUpdated = false;
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+			const withWriteTxAsync = db.withWriteTxAsync;
+			if (!withWriteTxAsync) throw new Error("async writer unavailable");
+			await withWriteTxAsync((w) => {
 				w.prepare(
 					"UPDATE telemetry_events SET sent_to_posthog = 1, sent_at = ?, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
 				).run(now, token);
@@ -1010,8 +1063,9 @@ export function createTelemetryCollector(
 			// Older/partially migrated workspaces still need the event marked sent
 			// after PostHog accepted it; otherwise the claim would be retried.
 			try {
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+				const withWriteTxAsync = db.withWriteTxAsync;
+				if (!withWriteTxAsync) throw new Error("async writer unavailable");
+				await withWriteTxAsync((w) => {
 					w.prepare(
 						"UPDATE telemetry_events SET sent_to_posthog = 1, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
 					).run(token);
@@ -1020,18 +1074,31 @@ export function createTelemetryCollector(
 				// best effort
 			}
 		}
+		const windowExpired =
+			Date.now() - parseTelemetryTimestamp(deliveryState.windowStartedAt) >= DELIVERY_HEALTH_WINDOW_MS;
+		deliveryState = {
+			...deliveryState,
+			windowStartedAt: windowExpired ? now : deliveryState.windowStartedAt,
+			successCount: windowExpired ? 1 : deliveryState.successCount + 1,
+			failureCount: windowExpired ? 0 : deliveryState.failureCount,
+			consecutiveFailures: 0,
+			lastAttemptAt: now,
+			lastSuccessAt: now,
+			lastFailureCode: null,
+		};
 		deliveryStatePersistenceFailed = !stateUpdated;
 		consecutiveFailures = 0;
 		effectiveIntervalMs = config.flushIntervalMs;
 		nextAllowedFlushAt = 0;
 	}
 
-	function releaseClaim(token: string, failureCode?: string): void {
+	async function releaseClaim(token: string, failureCode?: string): Promise<void> {
 		const now = new Date().toISOString();
 		let stateUpdated = false;
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+			const withWriteTxAsync = db.withWriteTxAsync;
+			if (!withWriteTxAsync) throw new Error("async writer unavailable");
+			await withWriteTxAsync((w) => {
 				w.prepare(
 					"UPDATE telemetry_events SET last_attempt_at = ?, last_failure_code = ?, claim_token = NULL, claimed_at = NULL WHERE claim_token = ?",
 				).run(now, failureCode?.slice(0, MAX_HEALTH_FAILURE_CODE_LENGTH) ?? "unknown", token);
@@ -1060,8 +1127,9 @@ export function createTelemetryCollector(
 			});
 		} catch {
 			try {
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+				const withWriteTxAsync = db.withWriteTxAsync;
+				if (!withWriteTxAsync) throw new Error("async writer unavailable");
+				await withWriteTxAsync((w) => {
 					w.prepare("UPDATE telemetry_events SET claim_token = NULL, claimed_at = NULL WHERE claim_token = ?").run(
 						token,
 					);
@@ -1070,19 +1138,32 @@ export function createTelemetryCollector(
 				// Stale claims remain recoverable on a later flush.
 			}
 		}
+		const code = failureCode?.slice(0, MAX_HEALTH_FAILURE_CODE_LENGTH) ?? "unknown";
+		const windowExpired =
+			Date.now() - parseTelemetryTimestamp(deliveryState.windowStartedAt) >= DELIVERY_HEALTH_WINDOW_MS;
+		deliveryState = {
+			...deliveryState,
+			windowStartedAt: windowExpired ? now : deliveryState.windowStartedAt,
+			failureCount: windowExpired ? 1 : deliveryState.failureCount + 1,
+			successCount: windowExpired ? 0 : deliveryState.successCount,
+			consecutiveFailures: consecutiveFailures + 1,
+			lastAttemptAt: now,
+			lastFailureCode: code,
+		};
 		deliveryStatePersistenceFailed = !stateUpdated;
 		consecutiveFailures++;
 		effectiveIntervalMs = nextFlushIntervalMs(config.flushIntervalMs, consecutiveFailures);
 		nextAllowedFlushAt = Date.now() + effectiveIntervalMs;
 	}
 
-	function claimUnsent(limit: number): ClaimedTelemetryEvents | null {
+	async function claimUnsent(limit: number): Promise<ClaimedTelemetryEvents | null> {
 		const token = crypto.randomUUID();
 		const now = new Date();
 		const staleBefore = new Date(now.getTime() - TELEMETRY_CLAIM_TIMEOUT_MS).toISOString();
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			return db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+			const withWriteTxAsync = db.withWriteTxAsync;
+			if (!withWriteTxAsync) return null;
+			return await withWriteTxAsync((w) => {
 				w.prepare(
 					`UPDATE telemetry_events
 					 SET claim_token = ?, claimed_at = ?
@@ -1125,13 +1206,13 @@ export function createTelemetryCollector(
 		}
 	}
 
-	function pruneOldEvents(): void {
+	async function pruneOldEvents(): Promise<void> {
 		const cutoff = new Date();
 		cutoff.setDate(cutoff.getDate() - config.retentionDays);
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			db.withWriteTx((w: import("./db-accessor").WriteDb) => {
-				// Never prune a row that is still waiting for remote delivery.
+			const withWriteTxAsync = db.withWriteTxAsync;
+			if (!withWriteTxAsync) return;
+			await withWriteTxAsync((w) => {
 				w.prepare("DELETE FROM telemetry_events WHERE timestamp < ? AND sent_to_posthog = 1").run(cutoff.toISOString());
 			});
 		} catch {
@@ -1146,41 +1227,17 @@ export function createTelemetryCollector(
 	}
 
 	function deliveryHealth(): TelemetryDeliveryHealth {
-		const state = readDeliveryState();
-		let queuedUnsentEventCount = buffer.length;
-		let oldestUnsentTimestamp: string | null = null;
-		let lastDaemonEventTimestamp: string | null = null;
-		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			db.withReadDb((r) => {
-				const queue = r
-					.prepare(
-						`SELECT COUNT(*) AS count, MIN(timestamp) AS oldestTimestamp
-						 FROM telemetry_events WHERE source = 'daemon' AND sent_to_posthog = 0`,
-					)
-					.get() as { count?: number; oldestTimestamp?: string | null } | undefined;
-				queuedUnsentEventCount += queue?.count ?? 0;
-				oldestUnsentTimestamp = queue?.oldestTimestamp ?? null;
-				const latest = r
-					.prepare(
-						"SELECT MAX(timestamp) AS timestamp FROM telemetry_events WHERE source = 'daemon' AND event <> 'telemetry.health'",
-					)
-					.get() as { timestamp?: string | null } | undefined;
-				lastDaemonEventTimestamp = latest?.timestamp ?? null;
-			});
-		} catch {
-			// Keep local in-memory health available when SQLite is unavailable.
-		}
+		const state = deliveryState;
+		let oldestUnsentTimestamp = persistedOldestTimestamp;
+		let latestEventTimestamp = lastDaemonEventTimestamp;
+		const queuedUnsentEventCount = buffer.length + persistedQueueCount;
 		const bufferedOldest = buffer[0]?.timestamp ?? null;
 		if (bufferedOldest && (oldestUnsentTimestamp === null || bufferedOldest.localeCompare(oldestUnsentTimestamp) < 0)) {
 			oldestUnsentTimestamp = bufferedOldest;
 		}
 		const bufferedLatest = buffer.at(-1)?.timestamp ?? null;
-		if (
-			bufferedLatest &&
-			(lastDaemonEventTimestamp === null || bufferedLatest.localeCompare(lastDaemonEventTimestamp) > 0)
-		) {
-			lastDaemonEventTimestamp = bufferedLatest;
+		if (bufferedLatest && (latestEventTimestamp === null || bufferedLatest.localeCompare(latestEventTimestamp) > 0)) {
+			latestEventTimestamp = bufferedLatest;
 		}
 		const windowExpired = Date.now() - parseTelemetryTimestamp(state.windowStartedAt) >= DELIVERY_HEALTH_WINDOW_MS;
 		const recentSuccesses = windowExpired ? 0 : state.successCount;
@@ -1200,7 +1257,7 @@ export function createTelemetryCollector(
 			bufferedEventCount: buffer.length,
 			queuedUnsentEventCount,
 			oldestUnsentEventAgeSec: oldestAge,
-			lastDaemonEventAgeSec: ageSec(lastDaemonEventTimestamp),
+			lastDaemonEventAgeSec: ageSec(latestEventTimestamp),
 			lastAttemptAgeSec: ageSec(state.lastAttemptAt),
 			lastSuccessfulDeliveryAgeSec: ageSec(state.lastSuccessAt),
 			recentDeliverySuccessCount: recentSuccesses,
@@ -1233,9 +1290,12 @@ export function createTelemetryCollector(
 		queueLogLine(next);
 	}
 
-	function drainBuffer(): void {
+	async function drainBuffer(): Promise<void> {
 		const pending = buffer.splice(0, buffer.length);
-		if (writeToDb(pending)) return;
+		if (await writeToDb(pending)) {
+			await refreshPersistedQueue();
+			return;
+		}
 		// Preserve events for a later attempt when SQLite is temporarily locked.
 		buffer.unshift(...pending);
 		if (buffer.length > MAX_BUFFER_EVENTS) {
@@ -1246,19 +1306,19 @@ export function createTelemetryCollector(
 	}
 
 	async function doFlush(emitHealth: boolean, allowRemote = true): Promise<void> {
+		await awaitPendingAsyncWrites();
 		flushCount++;
-		// Drain buffer to SQLite
-		drainBuffer();
+		await drainBuffer();
 		if (emitHealth) {
 			// Snapshot before adding this diagnostic event. Its local value must not
 			// depend on the success of the request that carries the snapshot.
 			appendBufferedEvent("telemetry.health", { ...deliveryHealth() });
-			drainBuffer();
+			await drainBuffer();
 		}
 
 		// Send to PostHog if configured
 		if (allowRemote && posthogConfigured) {
-			const claimed = claimUnsent(config.flushBatchSize);
+			const claimed = await claimUnsent(config.flushBatchSize);
 			if (claimed) {
 				const abortController = new AbortController();
 				flushAbortController = abortController;
@@ -1272,9 +1332,9 @@ export function createTelemetryCollector(
 						abortController.signal,
 					);
 					if (result.ok) {
-						markSent(claimed.token);
+						await markSent(claimed.token);
 					} else {
-						releaseClaim(claimed.token, result.failureCode);
+						await releaseClaim(claimed.token, result.failureCode);
 						if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
 							logger.warn("telemetry", "PostHog unreachable, backing off", {
 								intervalMs: effectiveIntervalMs,
@@ -1289,8 +1349,9 @@ export function createTelemetryCollector(
 
 		// Occasional pruning (every 10th flush, deterministic for tests)
 		if (flushCount % PRUNE_EVERY_N_FLUSHES === 0) {
-			pruneOldEvents();
+			await pruneOldEvents();
 		}
+		await refreshPersistedQueue();
 	}
 
 	function flushInternal(emitHealth: boolean, force = false): Promise<void> {
@@ -1410,11 +1471,20 @@ export function createTelemetryCollector(
 		},
 
 		recordFirstUse(kind): void {
-			const event = persistFirstUse(kind);
-			if (!event) return;
-			// The database row is durable before the open log mirror is written.
-			// A failed log write must not affect the claim or delivery queue.
-			queueLogLine(event);
+			const pending = persistFirstUse(kind)
+				.then((event) => {
+					if (!event) return;
+					// The database row is durable before the open log mirror is written.
+					// A failed log write must not affect the claim or delivery queue.
+					queueLogLine(event);
+				})
+				.catch((error) => {
+					logger.warn("telemetry", "Dropped first-use telemetry event", {
+						dropped: 1,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				});
+			trackAsyncWrite(pending);
 		},
 
 		async flush(): Promise<void> {
@@ -1470,8 +1540,9 @@ export function createTelemetryCollector(
 			flushAbortController?.abort();
 			if (flushPromise) await flushPromise;
 			try {
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				db.withWriteTx((w: import("./db-accessor").WriteDb) => {
+				const withWriteTxAsync = db.withWriteTxAsync;
+				if (!withWriteTxAsync) throw new Error("async writer unavailable");
+				await withWriteTxAsync((w) => {
 					w.prepare("DELETE FROM telemetry_events WHERE sent_to_posthog = 0").run();
 				});
 			} catch {
@@ -1480,10 +1551,9 @@ export function createTelemetryCollector(
 			logger.info("telemetry", "Telemetry collector disabled");
 		},
 
-		query(opts): readonly TelemetryEvent[] {
+		async query(opts): Promise<readonly TelemetryEvent[]> {
 			try {
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-				return db.withReadDb((r) => {
+				return await db.withReadDbAsync(async (r) => {
 					const conditions: string[] = [];
 					const params: unknown[] = [];
 

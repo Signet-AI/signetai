@@ -70,8 +70,8 @@ describe("memory search telemetry", () => {
 		};
 	}
 
-	it("stores query text, filters, timings, and result snapshots for QA", () => {
-		recordMemorySearchTelemetry(getDbAccessor(), {
+	it("stores query text, filters, timings, and result snapshots for QA", async () => {
+		await recordMemorySearchTelemetry(getDbAccessor(), {
 			route: "POST /api/memory/recall",
 			agentId: "ant",
 			sessionKey: "sess-1",
@@ -88,7 +88,7 @@ describe("memory search telemetry", () => {
 			retentionDays: 90,
 		});
 
-		const items = listMemorySearchTelemetry(getDbAccessor(), { agentId: "ant" });
+		const items = await listMemorySearchTelemetry(getDbAccessor(), { agentId: "ant" });
 
 		expect(items).toHaveLength(1);
 		expect(items[0]?.query).toBe("what did we decide about recall qa");
@@ -106,7 +106,7 @@ describe("memory search telemetry", () => {
 		expect(resolveMemorySearchTelemetryProject({})).toBeNull();
 	});
 
-	it("filters no-hit rows", () => {
+	it("filters no-hit rows", async () => {
 		const empty: RecallResponse = {
 			query: "nothing here",
 			method: "hybrid",
@@ -119,7 +119,7 @@ describe("memory search telemetry", () => {
 			},
 		};
 
-		recordMemorySearchTelemetry(getDbAccessor(), {
+		await recordMemorySearchTelemetry(getDbAccessor(), {
 			route: "GET /api/memory/search",
 			agentId: "ant",
 			sessionKey: null,
@@ -129,7 +129,7 @@ describe("memory search telemetry", () => {
 			retentionDays: 90,
 		});
 
-		expect(listMemorySearchTelemetry(getDbAccessor(), { noHits: true })).toHaveLength(1);
-		expect(listMemorySearchTelemetry(getDbAccessor(), { noHits: false })).toHaveLength(0);
+		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: true })).toHaveLength(1);
+		expect(await listMemorySearchTelemetry(getDbAccessor(), { noHits: false })).toHaveLength(0);
 	});
 });

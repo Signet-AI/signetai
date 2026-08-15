@@ -212,7 +212,7 @@ describe("event-loop wedge telemetry", () => {
 			reportEventLoopLag(1500, t0);
 			reportEventLoopLag(2000, t0 + 1_000); // within cooldown: suppressed
 			await collector.flush();
-			const events = collector.query().filter((e) => e.event === "error.occurred");
+			const events = (await collector.query()).filter((e) => e.event === "error.occurred");
 			expect(events).toHaveLength(1);
 			expect(events[0]?.properties.type).toBe("EventLoopLag");
 			expect(events[0]?.properties.lagMs).toBe(1500);
@@ -225,7 +225,7 @@ describe("event-loop wedge telemetry", () => {
 			// After the cooldown elapses, a new wedge is reported.
 			reportEventLoopLag(999, t0 + 601_000);
 			await collector.flush();
-			const after = collector.query().filter((e) => e.event === "error.occurred");
+			const after = (await collector.query()).filter((e) => e.event === "error.occurred");
 			expect(after).toHaveLength(2);
 		} finally {
 			setActiveTelemetry(undefined);

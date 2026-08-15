@@ -920,7 +920,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 		}
 	});
 
-	app.get("/api/inference/history", (c) => {
+	app.get("/api/inference/history", async (c) => {
 		const telemetry = getTelemetry(opts);
 		if (!telemetry?.enabled) {
 			return c.json({ enabled: false, events: [], summary: { total: 0, failures: 0, fallbacks: 0, cancelled: 0 } });
@@ -934,12 +934,13 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			);
 		}
 		const onlyProblems = c.req.query("failures") === "1" || c.req.query("problems") === "1";
-		const rows = telemetry
-			.query({
+		const rows = (
+			await telemetry.query({
 				since: c.req.query("since"),
 				until: c.req.query("until"),
 				limit: Math.min(Math.max(limit * 10, limit), MAX_HISTORY_SCAN_LIMIT),
 			})
+		)
 			.filter((event) => isInferenceTelemetryEvent(event.event))
 			.filter((event) => !eventFilter || event.event === eventFilter)
 			.filter((event) => !onlyProblems || isFailureOrFallback(event))

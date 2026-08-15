@@ -154,7 +154,7 @@ describe("durable session lifecycle claims (#1228)", () => {
 			expect(restorePersistedSessions()).toMatchObject({ active: 0, expired: 1, ended: 0 });
 			await collector.flush();
 
-			expect(collector.query().filter((event) => event.event === "session.end")).toHaveLength(1);
+			expect((await collector.query()).filter((event) => event.event === "session.end")).toHaveLength(1);
 		} finally {
 			setActiveTelemetry(undefined);
 		}

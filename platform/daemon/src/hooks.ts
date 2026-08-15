@@ -1491,7 +1491,7 @@ function recordUserPromptRecallTelemetry(input: {
 			},
 		},
 	};
-	recordMemorySearchTelemetry(getDbAccessor(), {
+	void recordMemorySearchTelemetry(getDbAccessor(), {
 		route: "POST /api/hooks/user-prompt-submit",
 		agentId: input.agentId,
 		sessionKey: input.sessionKey ?? null,
