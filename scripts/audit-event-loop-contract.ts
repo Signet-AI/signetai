@@ -120,6 +120,57 @@ function isAllowedSyncCompatImporter(relativePath: string, allowed: ReadonlySet<
 	return allowed.has(relativePath);
 }
 
+function unwrapStaticStringExpression(expression: ts.Expression): ts.Expression {
+	let current = expression;
+	while (
+		ts.isParenthesizedExpression(current) ||
+		ts.isAsExpression(current) ||
+		ts.isTypeAssertionExpression(current) ||
+		ts.isNonNullExpression(current)
+	) {
+		current = current.expression;
+	}
+	return current;
+}
+
+function staticStringValue(
+	expression: ts.Expression,
+	bindings: ReadonlyMap<string, ts.Expression>,
+	resolving = new Set<string>(),
+): string | null {
+	const unwrapped = unwrapStaticStringExpression(expression);
+	if (ts.isStringLiteral(unwrapped) || ts.isNoSubstitutionTemplateLiteral(unwrapped)) return unwrapped.text;
+	if (ts.isBinaryExpression(unwrapped) && unwrapped.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+		const left = staticStringValue(unwrapped.left, bindings, resolving);
+		const right = staticStringValue(unwrapped.right, bindings, resolving);
+		return left !== null && right !== null ? left + right : null;
+	}
+	if (!ts.isIdentifier(unwrapped) || resolving.has(unwrapped.text)) return null;
+	const initializer = bindings.get(unwrapped.text);
+	if (initializer === undefined) return null;
+	const nextResolving = new Set(resolving);
+	nextResolving.add(unwrapped.text);
+	return staticStringValue(initializer, bindings, nextResolving);
+}
+
+function staticStringBindings(sourceFile: ts.SourceFile): ReadonlyMap<string, ts.Expression> {
+	const bindings = new Map<string, ts.Expression>();
+	const visit = (node: ts.Node): void => {
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.initializer !== undefined &&
+			ts.isVariableDeclarationList(node.parent) &&
+			(node.parent.flags & ts.NodeFlags.Const) !== 0
+		) {
+			bindings.set(node.name.text, node.initializer);
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	return bindings;
+}
+
 function findImportBoundaryViolations(
 	sourceRoot: string,
 	allowedSyncCompatImporters: ReadonlySet<string>,
@@ -129,6 +180,7 @@ function findImportBoundaryViolations(
 		const source = readFileSync(path, "utf8");
 		const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 		const relativePath = relative(sourceRoot, path).replaceAll("\\", "/");
+		const bindings = staticStringBindings(sourceFile);
 		if (isAllowedSyncCompatImporter(relativePath, allowedSyncCompatImporters)) continue;
 		const visit = (node: ts.Node): void => {
 			const report = (moduleName: string, position: number, form: string): void => {
@@ -148,24 +200,19 @@ function findImportBoundaryViolations(
 			) {
 				report(node.moduleSpecifier.text, node.getStart(sourceFile), "imports");
 			}
-			if (
-				ts.isCallExpression(node) &&
-				ts.isIdentifier(node.expression) &&
-				node.expression.text === "require" &&
-				node.arguments.length === 1 &&
-				ts.isStringLiteral(node.arguments[0]) &&
-				isSyncCompatModule(node.arguments[0].text)
-			) {
-				report(node.arguments[0].text, node.getStart(sourceFile), "requires");
+			if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "require") {
+				const [argument] = node.arguments;
+				const moduleName = argument === undefined ? null : staticStringValue(argument, bindings);
+				if (moduleName !== null && isSyncCompatModule(moduleName)) {
+					report(moduleName, node.getStart(sourceFile), "requires");
+				}
 			}
-			if (
-				ts.isCallExpression(node) &&
-				node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-				node.arguments.length === 1 &&
-				ts.isStringLiteral(node.arguments[0]) &&
-				isSyncCompatModule(node.arguments[0].text)
-			) {
-				report(node.arguments[0].text, node.getStart(sourceFile), "dynamically imports");
+			if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+				const [argument] = node.arguments;
+				const moduleName = argument === undefined ? null : staticStringValue(argument, bindings);
+				if (moduleName !== null && isSyncCompatModule(moduleName)) {
+					report(moduleName, node.getStart(sourceFile), "dynamically imports");
+				}
 			}
 			if (
 				ts.isImportEqualsDeclaration(node) &&
@@ -199,10 +246,21 @@ function findLegacyDbAccessSites(sourceRoot: string): AuditSite[] {
 		const lines = source.split("\n");
 		const relativePath = relative(sourceRoot, path).replaceAll("\\", "/");
 		const visit = (node: ts.Node): void => {
-			if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-				const api = node.expression.name.text;
+			if (ts.isCallExpression(node)) {
+				const expression = node.expression;
+				const api = ts.isPropertyAccessExpression(expression)
+					? expression.name.text
+					: ts.isElementAccessExpression(expression) &&
+							expression.argumentExpression !== undefined &&
+							(ts.isStringLiteral(expression.argumentExpression) ||
+								ts.isNoSubstitutionTemplateLiteral(expression.argumentExpression))
+						? expression.argumentExpression.text
+						: null;
 				if (LEGACY_DB_APIS.includes(api as LegacyDbApi)) {
-					const line = lineNumber(sourceFile, node.expression.name.getStart(sourceFile));
+					const position = ts.isPropertyAccessExpression(expression)
+						? expression.name.getStart(sourceFile)
+						: expression.getStart(sourceFile);
+					const line = lineNumber(sourceFile, position);
 					sites.push({
 						path: relativePath,
 						line,
@@ -219,29 +277,50 @@ function findLegacyDbAccessSites(sourceRoot: string): AuditSite[] {
 	return sites;
 }
 
-function legacyDbCount(sites: readonly AuditSite[]): Map<string, number> {
-	const counts = new Map<string, number>();
+function siteKey(site: Pick<AuditSite, "path" | "api" | "source">): string {
+	return `${site.path}\u0000${site.api}\u0000${site.source}`;
+}
+
+export function occurrenceKeys(sites: readonly AuditSite[]): Set<string> {
+	const seen = new Map<string, number>();
+	const keys = new Set<string>();
 	for (const site of sites) {
-		if (!LEGACY_DB_APIS.includes(site.api as LegacyDbApi)) continue;
-		const key = `${site.path}\u0000${site.api}`;
-		counts.set(key, (counts.get(key) ?? 0) + 1);
+		const base = siteKey(site);
+		const occurrence = (seen.get(base) ?? 0) + 1;
+		seen.set(base, occurrence);
+		keys.add(`${base}\u0000${occurrence}`);
 	}
-	return counts;
+	return keys;
+}
+
+export function findStaleBaselineSites(
+	sites: readonly AuditSite[],
+	baselineSites: readonly AuditSite[],
+): readonly AuditSite[] {
+	const liveKeys = occurrenceKeys(sites);
+	const seen = new Map<string, number>();
+	return baselineSites.filter((site) => {
+		if (!LEGACY_DB_APIS.includes(site.api as LegacyDbApi)) return false;
+		const base = siteKey(site);
+		const occurrence = (seen.get(base) ?? 0) + 1;
+		seen.set(base, occurrence);
+		return !liveKeys.has(`${base}\u0000${occurrence}`);
+	});
 }
 
 function findNewLegacyDbAccessViolations(
 	sites: readonly AuditSite[],
 	baselineSites: readonly AuditSite[],
 ): LegacyDbAccessViolation[] {
-	const baselineCounts = legacyDbCount(baselineSites);
+	const baselineKeys = occurrenceKeys(baselineSites);
 	const seen = new Map<string, number>();
 	const violations: LegacyDbAccessViolation[] = [];
 	for (const site of sites) {
 		if (!LEGACY_DB_APIS.includes(site.api as LegacyDbApi)) continue;
-		const key = `${site.path}\u0000${site.api}`;
-		const occurrence = (seen.get(key) ?? 0) + 1;
-		seen.set(key, occurrence);
-		if (occurrence <= (baselineCounts.get(key) ?? 0)) continue;
+		const base = siteKey(site);
+		const occurrence = (seen.get(base) ?? 0) + 1;
+		seen.set(base, occurrence);
+		if (baselineKeys.has(`${base}\u0000${occurrence}`)) continue;
 		violations.push({
 			kind: "new-legacy-db-access",
 			path: site.path,
@@ -335,6 +414,17 @@ function main(): void {
 	);
 	if (result.violations.length > 0) {
 		for (const violation of result.violations) console.error(violation.message);
+		process.exitCode = 1;
+	}
+	const stale = findStaleBaselineSites(result.sites, baselineSites);
+	if (stale.length > 0) {
+		const preview = stale
+			.slice(0, 3)
+			.map((site) => `${site.path}:${site.line}:${site.api}`)
+			.join(", ");
+		console.error(
+			`event-loop baseline is stale: ${stale.length} baseline occurrence(s) no longer exist in the source (${preview}); run the deliberate baseline regeneration workflow`,
+		);
 		process.exitCode = 1;
 	}
 }

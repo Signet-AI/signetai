@@ -2,7 +2,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "bun:test";
-import { loadBaseline, runAudit, renderReport } from "./audit-event-loop-contract";
+import {
+	findStaleBaselineSites,
+	loadBaseline,
+	occurrenceKeys,
+	runAudit,
+	renderReport,
+} from "./audit-event-loop-contract";
 
 test("the deterministic ledger retains the exact 1060-site inventory", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
@@ -55,6 +61,43 @@ test("the ledger reports legacy DB markers and rejects new call sites", () => {
 	}
 });
 
+test("the ledger rejects a replacement call at the same path and API", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-ledger-"));
+	try {
+		const replacement = 'getDbAccessor().withReadDb((db) => db.prepare("SELECT 1"));';
+		writeFileSync(join(root, "legacy.ts"), `${replacement}\n`);
+		const baseline = [
+			{
+				path: "legacy.ts",
+				line: 1,
+				api: "withReadDb" as const,
+				source: "getDbAccessor().withReadDb((db) => db);",
+				category: "hot-path" as const,
+			},
+		];
+		const result = runAudit({ sourceRoot: root, baselineSites: baseline });
+		expect(result.violations).toHaveLength(1);
+		expect(result.violations[0]?.path).toBe("legacy.ts");
+		expect(occurrenceKeys(result.sites)).not.toEqual(occurrenceKeys(baseline));
+		expect(findStaleBaselineSites(result.sites, baseline)).toHaveLength(1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the scanner detects literal bracket access to legacy DB APIs", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-ledger-"));
+	try {
+		writeFileSync(join(root, "bracket.ts"), 'getDbAccessor()["withReadDb"]((db) => db);\n');
+		const result = runAudit({ sourceRoot: root });
+		expect(result.sites).toHaveLength(1);
+		expect(result.sites[0]?.api).toBe("withReadDb");
+		expect(result.violations).toHaveLength(1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("the CI boundary rejects a production import of the sync compatibility module", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-boundary-"));
 	try {
@@ -79,6 +122,21 @@ test("the CI boundary rejects a production import of the sync compatibility modu
 		expect(result.violations.some((violation) => violation.message.includes("re-exports ../db-accessor-sync"))).toBe(
 			true,
 		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the CI boundary resolves computed compatibility requires", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-boundary-"));
+	try {
+		writeFileSync(
+			join(root, "computed-require.ts"),
+			['const moduleName = "../db-accessor-sync";', "const sync = require(moduleName);"].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.violations).toHaveLength(1);
+		expect(result.violations[0]?.message).toContain("requires ../db-accessor-sync");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
