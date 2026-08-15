@@ -354,7 +354,7 @@ export async function runTranscriptRecoveryScan(
 				sessionKey: metadata.sessionKey,
 			});
 		}
-		const jobId = enqueueTranscriptCaptureJob(dbAccessor, {
+		const jobId = await enqueueTranscriptCaptureJob(dbAccessor, {
 			agentId,
 			harness: candidate.harness,
 			sessionKey: metadata.sessionKey,

@@ -166,7 +166,7 @@ describe("transcript recovery worker", () => {
 		writeSettled(path, raw);
 		const transcript = normalizeSessionTranscript("claude-code", raw);
 		const sessionId = deriveSessionEndFallbackId("same-session", path, transcript);
-		const hookJob = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const hookJob = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
 			harness: "claude-code",
 			sessionKey: "same-session",
@@ -178,7 +178,7 @@ describe("transcript recovery worker", () => {
 			capturedAt: "2026-07-20T12:00:00.000Z",
 			endedAt: "2026-07-20T12:00:00.000Z",
 		});
-		const retryJob = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const retryJob = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
 			harness: "claude-code",
 			sessionKey: "same-session",

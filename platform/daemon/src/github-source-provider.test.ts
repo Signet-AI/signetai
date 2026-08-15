@@ -529,7 +529,7 @@ describe("github-source-provider", () => {
 				maxItemsPerRepo: 5,
 			},
 		};
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "github",
 			sourceId: source.id,
@@ -614,7 +614,7 @@ describe("github-source-provider", () => {
 				maxItemsPerRepo: 5,
 			},
 		};
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "github",
 			sourceId: source.id,
@@ -707,7 +707,7 @@ describe("github-source-provider", () => {
 				maxItemsPerRepo: 5,
 			},
 		};
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "github",
 			sourceId: source.id,
@@ -822,8 +822,8 @@ describe("github-source-provider", () => {
 		expect(sourceRows(added.source.id).map((row) => row.source_kind)).toContain("source_github_failure");
 	});
 
-	it("purges source-owned GitHub artifacts through the provider", () => {
-		indexExternalMemoryArtifact({
+	it("purges source-owned GitHub artifacts through the provider", async () => {
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "github",
 			sourceId: "github:test",

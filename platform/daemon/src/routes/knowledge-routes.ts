@@ -46,7 +46,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
 
 		return c.json({
-			items: listKnowledgeEntities(getDbAccessor(), {
+			items: await listKnowledgeEntities(getDbAccessor(), {
 				agentId,
 				type: c.req.query("type") ?? undefined,
 				query: c.req.query("q") ?? undefined,
@@ -66,7 +66,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
 
 		return c.json({
-			items: listKnowledgeEntities(getDbAccessor(), {
+			items: await listKnowledgeEntities(getDbAccessor(), {
 				agentId,
 				type: c.req.query("type") ?? undefined,
 				query: c.req.query("q") ?? undefined,
@@ -107,7 +107,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const entity = c.req.query("entity")?.trim();
 		if (!entity) return c.json({ error: "entity is required" }, 400);
-		const result = getEntityAspectsByName(getDbAccessor(), { agentId, entity });
+		const result = await getEntityAspectsByName(getDbAccessor(), { agentId, entity });
 		if (!result) return c.json({ error: "Entity not found" }, 404);
 		return c.json(result);
 	});
@@ -118,7 +118,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const aspect = c.req.query("aspect")?.trim();
 		if (!entity) return c.json({ error: "entity is required" }, 400);
 		if (!aspect) return c.json({ error: "aspect is required" }, 400);
-		const result = listEntityGroups(getDbAccessor(), { agentId, entity, aspect });
+		const result = await listEntityGroups(getDbAccessor(), { agentId, entity, aspect });
 		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
 		return c.json(result);
 	});
@@ -131,7 +131,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		if (!entity) return c.json({ error: "entity is required" }, 400);
 		if (!aspect) return c.json({ error: "aspect is required" }, 400);
 		if (!group) return c.json({ error: "group is required" }, 400);
-		const result = listEntityClaims(getDbAccessor(), { agentId, entity, aspect, group });
+		const result = await listEntityClaims(getDbAccessor(), { agentId, entity, aspect, group });
 		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
 		return c.json(result);
 	});
@@ -287,7 +287,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				? directionQuery
 				: "both";
 		return c.json({
-			items: getEntityDependenciesDetailed(getDbAccessor(), {
+			items: await getEntityDependenciesDetailed(getDbAccessor(), {
 				entityId: c.req.param("id"),
 				agentId,
 				direction,
@@ -333,7 +333,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const accessor = getDbAccessor();
 		await getDreamingEpisodicTokenBacklog(accessor, agentId);
 		return c.json(
-			getKnowledgeGraphForConstellation(accessor, agentId, {
+			await getKnowledgeGraphForConstellation(accessor, agentId, {
 				limit: parseNavigationLimit(c.req.query("limit"), 150, 1000),
 				maxAspectsPerEntity: parseNavigationLimit(c.req.query("max_aspects_per_entity"), 6, 25),
 				maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 250),
@@ -588,23 +588,21 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entityName is required" }, 400);
 		}
 
-		return await getDbAccessor().withReadDbAsync(async (db) => {
+		const hasSessionSummaries = await getDbAccessor().withReadDbAsync(async (db) => {
 			const tbl = db
 				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
 				.get() as { name: string } | undefined;
-			if (!tbl) {
-				return c.json({ entityName, summaries: [], total: 0 });
-			}
+			return tbl !== undefined;
+		});
+		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
-			const entity = await resolveNamedEntity(getDbAccessor(), {
-				agentId,
-				name: entityName,
-			});
+		const entity = await resolveNamedEntity(getDbAccessor(), {
+			agentId,
+			name: entityName,
+		});
+		if (!entity) return c.json({ entityName, summaries: [], total: 0 });
 
-			if (!entity) {
-				return c.json({ entityName, summaries: [], total: 0 });
-			}
-
+		return await getDbAccessor().withReadDbAsync(async (db) => {
 			const conditions = ["ss.agent_id = ?", "ss.kind = 'session'", "COALESCE(ss.source_type, 'summary') = 'summary'"];
 			const args: Array<string | number> = [agentId];
 

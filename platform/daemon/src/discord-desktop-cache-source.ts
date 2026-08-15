@@ -198,7 +198,7 @@ export async function syncDiscordDesktopCacheSource(
 			cancelled = true;
 			break;
 		}
-		writeArtifact(options.source, options.agentId, artifact);
+		await writeArtifact(options.source, options.agentId, artifact);
 		indexed++;
 	}
 	if (!cancelled) purgeStaleDesktopCacheArtifacts(options.source.id, options.agentId, syncStartedAt);
@@ -443,8 +443,8 @@ function artifactsForSnapshot(
 	return artifacts;
 }
 
-function writeArtifact(source: SignetSourceEntry, agentId: string, artifact: CacheArtifact): void {
-	indexExternalMemoryArtifact({
+async function writeArtifact(source: SignetSourceEntry, agentId: string, artifact: CacheArtifact): Promise<void> {
+	await indexExternalMemoryArtifact({
 		agentId,
 		harness: DISCORD_HARNESS,
 		sourceId: source.id,

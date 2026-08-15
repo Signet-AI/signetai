@@ -125,7 +125,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 				phase: "guild",
 			});
 			failures.push(failure);
-			writeFailureArtifact(context.source, agentId, failure);
+			await writeFailureArtifact(context.source, agentId, failure);
 			indexed++;
 			scanned++;
 			continue;
@@ -133,37 +133,43 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 		if (!guild) {
 			const failure = failureState(context.source, `Discord guild unavailable or forbidden: ${guildId}`, { guildId });
 			failures.push(failure);
-			writeFailureArtifact(context.source, agentId, failure);
+			await writeFailureArtifact(context.source, agentId, failure);
 			indexed++;
 			scanned++;
 			continue;
 		}
 
-		indexed += writeArtifact(context.source, agentId, guildArtifact(context.source, guild));
+		indexed += await writeArtifact(context.source, agentId, guildArtifact(context.source, guild));
 		const channels = await fetchGuildChannels(fetchConfig, guildId);
-		indexed += writeFetchFailures(context.source, agentId, failures, channels.errors, { guildId, phase: "channels" });
+		indexed += await writeFetchFailures(context.source, agentId, failures, channels.errors, {
+			guildId,
+			phase: "channels",
+		});
 		const channelFilter = buildChannelFilter(settings.channelFilter);
 		const channelRows = applyChannelFilter(channels.data, channelFilter);
 		const filteredChannelIds = new Set(channelRows.map((channel) => channel.id));
 
 		for (const channel of channelRows) {
 			if (!context.shouldContinue()) break;
-			indexed += writeArtifact(context.source, agentId, channelArtifact(context.source, guild, channel));
+			indexed += await writeArtifact(context.source, agentId, channelArtifact(context.source, guild, channel));
 		}
 
 		if (settings.includeMembers) {
 			const members = await fetchGuildMembers(fetchConfig, guildId, DEFAULT_MAX_MEMBERS_PER_GUILD);
-			indexed += writeFetchFailures(context.source, agentId, failures, members.errors, { guildId, phase: "members" });
+			indexed += await writeFetchFailures(context.source, agentId, failures, members.errors, {
+				guildId,
+				phase: "members",
+			});
 			for (const member of members.data) {
 				if (!context.shouldContinue()) break;
-				indexed += writeArtifact(context.source, agentId, memberArtifact(guild, member));
+				indexed += await writeArtifact(context.source, agentId, memberArtifact(guild, member));
 			}
 		}
 
 		const threadMap = new Map<string, DiscordChannel>();
 		if (settings.includeThreads) {
 			const activeThreads = await fetchGuildActiveThreads(fetchConfig, guildId);
-			indexed += writeFetchFailures(context.source, agentId, failures, activeThreads.errors, {
+			indexed += await writeFetchFailures(context.source, agentId, failures, activeThreads.errors, {
 				guildId,
 				phase: "active_threads",
 			});
@@ -181,7 +187,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 						"public",
 						DEFAULT_MAX_THREADS_PER_PARENT,
 					);
-					indexed += writeFetchFailures(context.source, agentId, failures, archivedPublic.errors, {
+					indexed += await writeFetchFailures(context.source, agentId, failures, archivedPublic.errors, {
 						guildId,
 						channelId: channel.id,
 						phase: "archived_public_threads",
@@ -196,7 +202,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 							"private",
 							DEFAULT_MAX_THREADS_PER_PARENT,
 						);
-						indexed += writeFetchFailures(context.source, agentId, failures, archivedPrivate.errors, {
+						indexed += await writeFetchFailures(context.source, agentId, failures, archivedPrivate.errors, {
 							guildId,
 							channelId: channel.id,
 							phase: "archived_private_threads",
@@ -209,16 +215,16 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 			}
 			for (const thread of threadMap.values()) {
 				if (!context.shouldContinue()) break;
-				indexed += writeArtifact(context.source, agentId, channelArtifact(context.source, guild, thread));
+				indexed += await writeArtifact(context.source, agentId, channelArtifact(context.source, guild, thread));
 				if (settings.includeThreadMembers) {
 					const members = await fetchThreadMembers(fetchConfig, thread.id);
-					indexed += writeFetchFailures(context.source, agentId, failures, members.errors, {
+					indexed += await writeFetchFailures(context.source, agentId, failures, members.errors, {
 						guildId,
 						threadId: thread.id,
 						phase: "thread_members",
 					});
 					for (const member of members.data) {
-						indexed += writeArtifact(context.source, agentId, threadMemberArtifact(guild, thread, member));
+						indexed += await writeArtifact(context.source, agentId, threadMemberArtifact(guild, thread, member));
 					}
 				}
 			}
@@ -238,7 +244,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 				sinceId,
 				afterCursor,
 			);
-			indexed += writeFetchFailures(context.source, agentId, failures, messages.errors, {
+			indexed += await writeFetchFailures(context.source, agentId, failures, messages.errors, {
 				guildId,
 				channelId: channel.id,
 				phase: "messages",
@@ -252,7 +258,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 					? await fetchChannelMessages(fetchConfig, channel.id, backfillLimit, backfillCursor, sinceId)
 					: null;
 			if (backfill) {
-				indexed += writeFetchFailures(context.source, agentId, failures, backfill.errors, {
+				indexed += await writeFetchFailures(context.source, agentId, failures, backfill.errors, {
 					guildId,
 					channelId: channel.id,
 					phase: "message_backfill",
@@ -266,7 +272,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 				includeEmbeds: settings.includeEmbeds,
 				includePolls: settings.includePolls,
 			});
-			indexed += writeArtifact(
+			indexed += await writeArtifact(
 				context.source,
 				agentId,
 				checkpointArtifact(
@@ -323,74 +329,83 @@ async function syncDiscordGatewayTailSource(
 		guildIds,
 		shouldContinue: context.shouldContinue,
 		onProgress: context.onProgress,
-		recordFailure: (message, metadata, recoverable) => {
+		recordFailure: async (message, metadata, recoverable) => {
 			const failure = failureState(context.source, message, metadata, recoverable);
 			failures.push(failure);
-			writeFailureArtifact(context.source, agentId, failure);
+			await writeFailureArtifact(context.source, agentId, failure);
 			indexed++;
 		},
-		recordMessage: (guildId, channelId, messageId, message, gatewayEventType, sequence, payload) => {
+		recordMessage: async (guildId, channelId, messageId, message, gatewayEventType, sequence, payload) => {
 			if (message) {
 				const guild = gatewayGuild(guildId);
 				const channel = gatewayChannel(guildId, channelId);
-				indexed += writeArtifact(context.source, agentId, messageArtifact(guild, channel, message));
+				indexed += await writeArtifact(context.source, agentId, messageArtifact(guild, channel, message));
 				if (message.mentions && message.mentions.length > 0)
-					indexed += writeArtifact(context.source, agentId, mentionArtifact(guild, channel, message));
+					indexed += await writeArtifact(context.source, agentId, mentionArtifact(guild, channel, message));
 				for (const attachment of message.attachments ?? []) {
-					indexed += writeArtifact(context.source, agentId, attachmentArtifact(guild, channel, message, attachment));
+					indexed += await writeArtifact(
+						context.source,
+						agentId,
+						attachmentArtifact(guild, channel, message, attachment),
+					);
 				}
 				for (let index = 0; index < (message.embeds ?? []).length; index++) {
 					const embed = message.embeds?.[index];
 					if (embed)
-						indexed += writeArtifact(context.source, agentId, embedArtifact(guild, channel, message, embed, index));
+						indexed += await writeArtifact(
+							context.source,
+							agentId,
+							embedArtifact(guild, channel, message, embed, index),
+						);
 				}
-				if (message.poll) indexed += writeArtifact(context.source, agentId, pollArtifact(guild, channel, message));
+				if (message.poll)
+					indexed += await writeArtifact(context.source, agentId, pollArtifact(guild, channel, message));
 			} else if (gatewayEventType === "MESSAGE_UPDATE") {
 				const patched = patchedMessageArtifact(context.source, agentId, guildId, channelId, messageId, payload);
-				if (patched) indexed += writeArtifact(context.source, agentId, patched);
+				if (patched) indexed += await writeArtifact(context.source, agentId, patched);
 				purgeClearedPartialUpdateArtifacts(context.source, agentId, guildId, channelId, messageId, payload);
 			}
-			indexed += writeArtifact(
+			indexed += await writeArtifact(
 				context.source,
 				agentId,
 				messageEventArtifact(context.source, guildId, channelId, messageId, gatewayEventType, sequence, payload),
 			);
 			if (message)
-				indexed += writeArtifact(
+				indexed += await writeArtifact(
 					context.source,
 					agentId,
 					gatewayCheckpointArtifact(context.source, guildId, channelId, message.id, gatewayEventType),
 				);
 		},
-		recordMessageDelete: (guildId, channelId, messageId, sequence, payload) => {
-			indexed += writeArtifact(
+		recordMessageDelete: async (guildId, channelId, messageId, sequence, payload) => {
+			indexed += await writeArtifact(
 				context.source,
 				agentId,
 				messageTombstoneArtifact(guildId, channelId, messageId, sequence, payload),
 			);
-			indexed += writeArtifact(
+			indexed += await writeArtifact(
 				context.source,
 				agentId,
 				messageEventArtifact(context.source, guildId, channelId, messageId, "MESSAGE_DELETE", sequence, payload),
 			);
-			indexed += writeArtifact(
+			indexed += await writeArtifact(
 				context.source,
 				agentId,
 				gatewayCheckpointArtifact(context.source, guildId, channelId, messageId, "MESSAGE_DELETE"),
 			);
 		},
-		recordChannel: (guildId, channel) => {
-			indexed += writeArtifact(
+		recordChannel: async (guildId, channel) => {
+			indexed += await writeArtifact(
 				context.source,
 				agentId,
 				channelArtifact(context.source, gatewayGuild(guildId), channel),
 			);
 		},
-		recordMember: (guildId, member) => {
-			indexed += writeArtifact(context.source, agentId, memberArtifact(gatewayGuild(guildId), member));
+		recordMember: async (guildId, member) => {
+			indexed += await writeArtifact(context.source, agentId, memberArtifact(gatewayGuild(guildId), member));
 		},
-		recordMemberRemove: (guildId, userId, sequence, payload) => {
-			indexed += writeArtifact(
+		recordMemberRemove: async (guildId, userId, sequence, payload) => {
+			indexed += await writeArtifact(
 				context.source,
 				agentId,
 				memberEventArtifact(guildId, userId, "remove", sequence, payload),
@@ -400,8 +415,8 @@ async function syncDiscordGatewayTailSource(
 	return { indexed, scanned: result.indexedEvents, total, failures: result.canceled ? [] : failures };
 }
 
-function writeArtifact(source: SignetSourceEntry, agentId: string, artifact: DiscordArtifact): number {
-	indexExternalMemoryArtifact({
+async function writeArtifact(source: SignetSourceEntry, agentId: string, artifact: DiscordArtifact): Promise<number> {
+	await indexExternalMemoryArtifact({
 		agentId,
 		harness: DISCORD_HARNESS,
 		sourceId: source.id,
@@ -454,14 +469,14 @@ async function writeMessageArtifacts(
 	},
 ): Promise<number> {
 	if (messages.length === 0) return 0;
-	let indexed = writeArtifact(source, agentId, messageWindowArtifact(guild, channel, messages));
+	let indexed = await writeArtifact(source, agentId, messageWindowArtifact(guild, channel, messages));
 	for (const msg of messages) {
-		indexed += writeArtifact(source, agentId, messageArtifact(guild, channel, msg));
+		indexed += await writeArtifact(source, agentId, messageArtifact(guild, channel, msg));
 		if (msg.mentions && msg.mentions.length > 0)
-			indexed += writeArtifact(source, agentId, mentionArtifact(guild, channel, msg));
+			indexed += await writeArtifact(source, agentId, mentionArtifact(guild, channel, msg));
 		if (options.includeAttachments) {
 			for (const attachment of msg.attachments ?? []) {
-				indexed += writeArtifact(source, agentId, attachmentArtifact(guild, channel, msg, attachment));
+				indexed += await writeArtifact(source, agentId, attachmentArtifact(guild, channel, msg, attachment));
 				if (options.includeAttachmentText) {
 					const extracted = await attachmentTextArtifact(
 						guild,
@@ -471,7 +486,7 @@ async function writeMessageArtifacts(
 						options.maxAttachmentTextBytes,
 					);
 					if (extracted.ok) {
-						if (extracted.artifact) indexed += writeArtifact(source, agentId, extracted.artifact);
+						if (extracted.artifact) indexed += await writeArtifact(source, agentId, extracted.artifact);
 					} else {
 						const failure = failureState(source, extracted.error, {
 							guildId: guild.id,
@@ -481,7 +496,7 @@ async function writeMessageArtifacts(
 							phase: "attachment_text",
 						});
 						failures.push(failure);
-						writeFailureArtifact(source, agentId, failure);
+						await writeFailureArtifact(source, agentId, failure);
 						indexed++;
 					}
 				}
@@ -490,33 +505,38 @@ async function writeMessageArtifacts(
 		if (options.includeEmbeds) {
 			for (let index = 0; index < (msg.embeds ?? []).length; index++) {
 				const embed = msg.embeds?.[index];
-				if (embed) indexed += writeArtifact(source, agentId, embedArtifact(guild, channel, msg, embed, index));
+				if (embed) indexed += await writeArtifact(source, agentId, embedArtifact(guild, channel, msg, embed, index));
 			}
 		}
-		if (options.includePolls && msg.poll) indexed += writeArtifact(source, agentId, pollArtifact(guild, channel, msg));
+		if (options.includePolls && msg.poll)
+			indexed += await writeArtifact(source, agentId, pollArtifact(guild, channel, msg));
 	}
 	return indexed;
 }
 
-function writeFetchFailures(
+async function writeFetchFailures(
 	source: SignetSourceEntry,
 	agentId: string,
 	failures: SourceFailureState[],
 	errors: readonly DiscordFetchError[],
 	meta: Readonly<Record<string, unknown>>,
-): number {
+): Promise<number> {
 	let indexed = 0;
 	for (const error of errors) {
 		const failure = failureState(source, error.message, { ...meta, status: error.status }, error.retryable);
 		failures.push(failure);
-		writeFailureArtifact(source, agentId, failure);
+		await writeFailureArtifact(source, agentId, failure);
 		indexed++;
 	}
 	return indexed;
 }
 
-function writeFailureArtifact(source: SignetSourceEntry, agentId: string, failure: SourceFailureState): void {
-	writeArtifact(source, agentId, {
+async function writeFailureArtifact(
+	source: SignetSourceEntry,
+	agentId: string,
+	failure: SourceFailureState,
+): Promise<number> {
+	return writeArtifact(source, agentId, {
 		kind: "source_discord_failure",
 		externalId: `failure:${hashKey(failure.message)}:${failure.failedAt}`,
 		path: `discord://source/${source.id}/failure/${hashKey(failure.message)}`,

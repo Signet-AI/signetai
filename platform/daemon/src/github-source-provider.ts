@@ -102,7 +102,7 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 	}
 	if (context.shouldContinue()) purgeStaleGitHubFailureArtifacts(context.source.id, agentId, syncStartedAt);
 	for (const failure of failures) {
-		indexed += writeFailureArtifact(context.source, agentId, failure);
+		indexed += await writeFailureArtifact(context.source, agentId, failure);
 	}
 
 	return { indexed, scanned, total: repos.length, failures };
@@ -193,7 +193,7 @@ async function writeResourceWithComments(
 	remainingArtifactBudget: number,
 ): Promise<WrittenGitHubArtifacts> {
 	if (remainingArtifactBudget <= 0) return { count: 0, paths: [] };
-	const paths = [writeResourceArtifact(source, agentId, repo, resource)];
+	const paths = [await writeResourceArtifact(source, agentId, repo, resource)];
 	const remainingCommentBudget = remainingArtifactBudget - paths.length;
 	if (
 		!settings.includeComments ||
@@ -206,7 +206,7 @@ async function writeResourceWithComments(
 	try {
 		const comments = await fetchCommentsForResource(config, resource);
 		for (const comment of comments.slice(0, remainingCommentBudget)) {
-			paths.push(writeCommentArtifact(source, agentId, repo, resource, comment));
+			paths.push(await writeCommentArtifact(source, agentId, repo, resource, comment));
 		}
 	} catch (err) {
 		logGitHubFetchError(source.id, repo, `${resource.type}_comments`, err);
@@ -237,16 +237,16 @@ async function fetchCommentsForResource(
 	return [];
 }
 
-function writeResourceArtifact(
+async function writeResourceArtifact(
 	source: SignetSourceEntry,
 	agentId: string,
 	repo: string,
 	resource: GitHubResource,
-): string {
+): Promise<string> {
 	const path = resourcePath(repo, resource);
 	const sourceKind = `source_github_${resource.type}`;
 	const content = resourceContent(repo, resource);
-	indexExternalMemoryArtifact({
+	await indexExternalMemoryArtifact({
 		agentId,
 		harness: GITHUB_HARNESS,
 		sourceId: source.id,
@@ -288,19 +288,19 @@ function writeResourceArtifact(
 	return path;
 }
 
-function writeCommentArtifact(
+async function writeCommentArtifact(
 	source: SignetSourceEntry,
 	agentId: string,
 	repo: string,
 	resource: GitHubResource,
 	comment: GitHubComment,
-): string {
+): Promise<string> {
 	const author =
 		typeof comment.author === "string" ? comment.author : (comment.author?.login ?? comment.user?.login ?? null);
 	const commentId = String(comment.id);
 	const path = `${resourcePath(repo, resource)}#comment-${commentId}`;
 	const content = [`# Comment on ${resource.title}`, "", `Author: ${author ?? "unknown"}`, "", comment.body].join("\n");
-	indexExternalMemoryArtifact({
+	await indexExternalMemoryArtifact({
 		agentId,
 		harness: GITHUB_HARNESS,
 		sourceId: source.id,
@@ -349,8 +349,12 @@ function writeFetchFailures(
 	}
 }
 
-function writeFailureArtifact(source: SignetSourceEntry, agentId: string, failure: SourceFailureState): number {
-	indexExternalMemoryArtifact({
+async function writeFailureArtifact(
+	source: SignetSourceEntry,
+	agentId: string,
+	failure: SourceFailureState,
+): Promise<number> {
+	await indexExternalMemoryArtifact({
 		agentId,
 		harness: GITHUB_HARNESS,
 		sourceId: source.id,

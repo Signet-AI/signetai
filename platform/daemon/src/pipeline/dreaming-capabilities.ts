@@ -590,7 +590,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				const result: MutableCapabilityOutput = { ok: true };
 				if (name !== undefined) {
 					result.label = classifyEntityQuality(name, type);
-					result.duplicates = findDuplicateEntityMerges(accessor, { agentId: scopeId, name });
+					result.duplicates = await findDuplicateEntityMerges(accessor, { agentId: scopeId, name });
 				}
 				if (entityId !== undefined && aspectId !== undefined && value !== undefined) {
 					result.contradiction = (

@@ -47,13 +47,19 @@ export function setDiscordGatewaySocketFactoryForTest(factory: DiscordGatewaySoc
 	discordGatewaySocketFactory = factory ?? ((url) => new WebSocket(url));
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
 export interface DiscordGatewayTailHandlers {
 	readonly source: SignetSourceEntry;
 	readonly token: string;
 	readonly guildIds: readonly string[];
 	readonly shouldContinue: () => boolean;
 	readonly onProgress?: SourceProviderSyncContext["onProgress"];
-	readonly recordFailure: (message: string, metadata: Readonly<Record<string, unknown>>, recoverable: boolean) => void;
+	readonly recordFailure: (
+		message: string,
+		metadata: Readonly<Record<string, unknown>>,
+		recoverable: boolean,
+	) => MaybePromise<void>;
 	readonly recordMessage: (
 		guildId: string,
 		channelId: string,
@@ -62,17 +68,22 @@ export interface DiscordGatewayTailHandlers {
 		gatewayEventType: string,
 		sequence: number | null,
 		payload: unknown,
-	) => void;
+	) => MaybePromise<void>;
 	readonly recordMessageDelete: (
 		guildId: string,
 		channelId: string,
 		messageId: string,
 		sequence: number | null,
 		payload: unknown,
-	) => void;
-	readonly recordChannel: (guildId: string, channel: DiscordChannel) => void;
-	readonly recordMember: (guildId: string, member: DiscordGuildMember) => void;
-	readonly recordMemberRemove: (guildId: string, userId: string, sequence: number | null, payload: unknown) => void;
+	) => MaybePromise<void>;
+	readonly recordChannel: (guildId: string, channel: DiscordChannel) => MaybePromise<void>;
+	readonly recordMember: (guildId: string, member: DiscordGuildMember) => MaybePromise<void>;
+	readonly recordMemberRemove: (
+		guildId: string,
+		userId: string,
+		sequence: number | null,
+		payload: unknown,
+	) => MaybePromise<void>;
 }
 
 export async function syncDiscordGatewayTail(
@@ -85,9 +96,9 @@ export async function syncDiscordGatewayTail(
 		const result = await runDiscordGatewayConnection({
 			...input,
 			allowedGuilds,
-			recordFailure: (message, metadata, recoverable) => {
+			recordFailure: async (message, metadata, recoverable) => {
 				failures++;
-				input.recordFailure(message, metadata, recoverable);
+				await input.recordFailure(message, metadata, recoverable);
 			},
 			recordEvent: () => {
 				indexedEvents++;
@@ -105,7 +116,7 @@ async function runDiscordGatewayConnection(
 		readonly recordEvent: () => void;
 	},
 ): Promise<{ readonly retry: boolean }> {
-	return await new Promise((resolve) => {
+	return await new Promise((resolve, reject) => {
 		const socket = discordGatewaySocketFactory(DISCORD_GATEWAY_URL);
 		let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 		let continueTimer: ReturnType<typeof setInterval> | null = null;
@@ -113,6 +124,8 @@ async function runDiscordGatewayConnection(
 		let settled = false;
 		let closeFailureRecorded = false;
 		let reconnectRequested = false;
+		let settleRequested = false;
+		let eventQueue: Promise<void> = Promise.resolve();
 		const cleanup = (): void => {
 			if (heartbeatTimer) clearInterval(heartbeatTimer);
 			if (continueTimer) clearInterval(continueTimer);
@@ -120,10 +133,14 @@ async function runDiscordGatewayConnection(
 			continueTimer = null;
 		};
 		const settle = (retry: boolean): void => {
-			if (settled) return;
-			settled = true;
-			cleanup();
-			resolve({ retry });
+			if (settled || settleRequested) return;
+			settleRequested = true;
+			void eventQueue.then(() => {
+				if (settled) return;
+				settled = true;
+				cleanup();
+				resolve({ retry });
+			}, reject);
 		};
 		const closeForCancellation = (): void => {
 			try {
@@ -140,7 +157,9 @@ async function runDiscordGatewayConnection(
 		};
 		socket.onerror = () => {
 			closeFailureRecorded = true;
-			input.recordFailure("Discord gateway websocket error", { phase: "gateway_tail" }, true);
+			eventQueue = eventQueue.then(() =>
+				input.recordFailure("Discord gateway websocket error", { phase: "gateway_tail" }, true),
+			);
 			try {
 				socket.close(1011, "gateway websocket error");
 			} catch {
@@ -157,81 +176,87 @@ async function runDiscordGatewayConnection(
 				return;
 			}
 			if (isFatalGatewayCloseCode(event.code)) {
-				input.recordFailure(
-					`Discord gateway closed with non-retryable code ${event.code}${event.reason ? `: ${event.reason}` : ""}`,
-					{ phase: "gateway_tail", code: event.code ?? null },
-					false,
+				eventQueue = eventQueue.then(() =>
+					input.recordFailure(
+						`Discord gateway closed with non-retryable code ${event.code}${event.reason ? `: ${event.reason}` : ""}`,
+						{ phase: "gateway_tail", code: event.code ?? null },
+						false,
+					),
 				);
 				settle(false);
 				return;
 			}
 			if (!closeFailureRecorded)
-				input.recordFailure(
-					`Discord gateway closed unexpectedly${event.reason ? `: ${event.reason}` : ""}`,
-					{ phase: "gateway_tail", code: event.code ?? null },
-					true,
+				eventQueue = eventQueue.then(() =>
+					input.recordFailure(
+						`Discord gateway closed unexpectedly${event.reason ? `: ${event.reason}` : ""}`,
+						{ phase: "gateway_tail", code: event.code ?? null },
+						true,
+					),
 				);
 			settle(true);
 		};
 		socket.onmessage = (event) => {
-			const payload = parseGatewayPayload(event.data);
-			if (!payload) return;
-			if (typeof payload.s === "number") sequence = payload.s;
-			if (payload.op === DISCORD_GATEWAY_HELLO_OP) {
-				const heartbeatInterval = gatewayHeartbeatInterval(payload.d);
-				if (heartbeatInterval !== null) {
-					heartbeatTimer = setInterval(() => {
-						socket.send(JSON.stringify({ op: DISCORD_GATEWAY_HEARTBEAT_OP, d: sequence }));
-					}, heartbeatInterval);
+			eventQueue = eventQueue.then(async () => {
+				const payload = parseGatewayPayload(event.data);
+				if (!payload) return;
+				if (typeof payload.s === "number") sequence = payload.s;
+				if (payload.op === DISCORD_GATEWAY_HELLO_OP) {
+					const heartbeatInterval = gatewayHeartbeatInterval(payload.d);
+					if (heartbeatInterval !== null) {
+						heartbeatTimer = setInterval(() => {
+							socket.send(JSON.stringify({ op: DISCORD_GATEWAY_HEARTBEAT_OP, d: sequence }));
+						}, heartbeatInterval);
+					}
+					socket.send(
+						JSON.stringify({
+							op: DISCORD_GATEWAY_IDENTIFY_OP,
+							d: {
+								token: input.token,
+								intents: DISCORD_GATEWAY_INTENTS,
+								properties: { os: "linux", browser: "signet", device: "signet" },
+							},
+						}),
+					);
+					return;
 				}
-				socket.send(
-					JSON.stringify({
-						op: DISCORD_GATEWAY_IDENTIFY_OP,
-						d: {
-							token: input.token,
-							intents: DISCORD_GATEWAY_INTENTS,
-							properties: { os: "linux", browser: "signet", device: "signet" },
-						},
-					}),
-				);
-				return;
-			}
-			if (payload.op === DISCORD_GATEWAY_RECONNECT_OP || payload.op === DISCORD_GATEWAY_INVALID_SESSION_OP) {
-				reconnectRequested = true;
-				try {
-					socket.close(1012, "discord requested reconnect");
-				} catch {
-					settle(true);
+				if (payload.op === DISCORD_GATEWAY_RECONNECT_OP || payload.op === DISCORD_GATEWAY_INVALID_SESSION_OP) {
+					reconnectRequested = true;
+					try {
+						socket.close(1012, "discord requested reconnect");
+					} catch {
+						settle(true);
+					}
+					return;
 				}
-				return;
-			}
-			if (payload.op !== DISCORD_GATEWAY_DISPATCH_OP || typeof payload.t !== "string") return;
-			const eventResult = handleDiscordGatewayDispatch({
-				...input,
-				eventType: payload.t,
-				sequence,
-				data: payload.d,
-			});
-			if (!eventResult.indexed) return;
-			input.recordEvent();
-			input.onProgress?.({
-				scanned: 0,
-				total: input.allowedGuilds.size,
-				indexed: 0,
-				currentPath: eventResult.path,
+				if (payload.op !== DISCORD_GATEWAY_DISPATCH_OP || typeof payload.t !== "string") return;
+				const eventResult = await handleDiscordGatewayDispatch({
+					...input,
+					eventType: payload.t,
+					sequence,
+					data: payload.d,
+				});
+				if (!eventResult.indexed) return;
+				input.recordEvent();
+				input.onProgress?.({
+					scanned: 0,
+					total: input.allowedGuilds.size,
+					indexed: 0,
+					currentPath: eventResult.path,
+				});
 			});
 		};
 	});
 }
 
-function handleDiscordGatewayDispatch(
+async function handleDiscordGatewayDispatch(
 	input: DiscordGatewayTailHandlers & {
 		readonly allowedGuilds: ReadonlySet<string>;
 		readonly eventType: string;
 		readonly sequence: number | null;
 		readonly data: unknown;
 	},
-): { readonly indexed: boolean; readonly path: string } {
+): Promise<{ readonly indexed: boolean; readonly path: string }> {
 	if (!isRecord(input.data)) return { indexed: false, path: "discord://gateway" };
 	const guildId = readString(input.data, "guild_id");
 	if (!guildId || !input.allowedGuilds.has(guildId)) return { indexed: false, path: "discord://gateway" };
@@ -239,7 +264,7 @@ function handleDiscordGatewayDispatch(
 		const channelId = readString(input.data, "channel_id");
 		const messageId = readString(input.data, "id");
 		if (!channelId || !messageId) return { indexed: false, path: "discord://gateway" };
-		input.recordMessage(
+		await input.recordMessage(
 			guildId,
 			channelId,
 			messageId,
@@ -254,7 +279,7 @@ function handleDiscordGatewayDispatch(
 		const channelId = readString(input.data, "channel_id");
 		const messageId = readString(input.data, "id");
 		if (!channelId || !messageId) return { indexed: false, path: "discord://gateway" };
-		input.recordMessageDelete(guildId, channelId, messageId, input.sequence, input.data);
+		await input.recordMessageDelete(guildId, channelId, messageId, input.sequence, input.data);
 		return { indexed: true, path: `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}` };
 	}
 	if (
@@ -265,19 +290,19 @@ function handleDiscordGatewayDispatch(
 	) {
 		const channel = gatewayChannelFromEvent(input.data);
 		if (!channel) return { indexed: false, path: "discord://gateway" };
-		input.recordChannel(guildId, channel);
+		await input.recordChannel(guildId, channel);
 		return { indexed: true, path: `discord://guild/${guildId}/channel/${channel.id}` };
 	}
 	if (input.eventType === "GUILD_MEMBER_ADD" || input.eventType === "GUILD_MEMBER_UPDATE") {
 		const member = gatewayMember(input.data);
 		if (!member) return { indexed: false, path: "discord://gateway" };
-		input.recordMember(guildId, member);
+		await input.recordMember(guildId, member);
 		return { indexed: true, path: `discord://guild/${guildId}/member/${member.user?.id ?? "unknown"}` };
 	}
 	if (input.eventType === "GUILD_MEMBER_REMOVE") {
 		const user = gatewayUser(input.data.user);
 		if (!user) return { indexed: false, path: "discord://gateway" };
-		input.recordMemberRemove(guildId, user.id, input.sequence, input.data);
+		await input.recordMemberRemove(guildId, user.id, input.sequence, input.data);
 		return { indexed: true, path: `discord://guild/${guildId}/member/${user.id}` };
 	}
 	return { indexed: false, path: "discord://gateway" };

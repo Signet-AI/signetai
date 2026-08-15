@@ -370,7 +370,7 @@ describe("MemoryBench Dreaming gate", () => {
 			for (const { scenario, session, agentId } of capturedSessions) {
 				const transcript = session.messages.map((message) => message.content).join("\n");
 				expect(
-					enqueueTranscriptCaptureJob(getDbAccessor(), {
+					await enqueueTranscriptCaptureJob(getDbAccessor(), {
 						agentId,
 						harness: "memorybench",
 						sessionKey: session.id,

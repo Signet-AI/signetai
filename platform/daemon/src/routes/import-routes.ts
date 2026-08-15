@@ -180,7 +180,7 @@ export function registerImportRoutes(app: Hono): void {
 				const sourceKind = `source_import_${normalized.value.format}`;
 				const now = new Date().toISOString();
 
-				indexExternalMemoryArtifact({
+				await indexExternalMemoryArtifact({
 					agentId,
 					sourcePath,
 					sourceKind: normalized.value.format === "json" ? "source_import_json_projection" : sourceKind,
@@ -194,7 +194,7 @@ export function registerImportRoutes(app: Hono): void {
 					sourceMeta: normalized.value.sourceMeta,
 				});
 				if (normalized.value.format === "json") {
-					indexExternalMemoryArtifact({
+					await indexExternalMemoryArtifact({
 						agentId,
 						sourcePath: `${sourcePath}#canonical`,
 						sourceKind: "source_import_json_canonical",
@@ -234,7 +234,7 @@ export function registerImportRoutes(app: Hono): void {
 				for (const chunk of normalized.value.searchChunks) {
 					const rowStart = typeof chunk.sourceMeta.rowStart === "number" ? chunk.sourceMeta.rowStart : 0;
 					const rowEnd = typeof chunk.sourceMeta.rowEnd === "number" ? chunk.sourceMeta.rowEnd : rowStart;
-					indexExternalMemoryArtifact({
+					await indexExternalMemoryArtifact({
 						agentId,
 						sourcePath: `${sourcePath}#rows-${rowStart}-${rowEnd}`,
 						sourceKind: "source_import_csv_chunk",

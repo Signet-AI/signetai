@@ -182,7 +182,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (scoped.response) return scoped.response;
 		const operation = c.req.query("operation")?.trim() || undefined;
 		return c.json(
-			listOntologyProposals(getDbAccessor(), {
+			await listOntologyProposals(getDbAccessor(), {
 				agentId: scoped.agentId,
 				status,
 				operation,
@@ -300,7 +300,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (scoped.response) return scoped.response;
 		try {
 			return c.json(
-				createEntityMergePlan(getDbAccessor(), {
+				await createEntityMergePlan(getDbAccessor(), {
 					agentId: scoped.agentId,
 					targetEntity: readString(body, "target_entity") ?? readString(body, "target"),
 					targetEntityId: readString(body, "target_entity_id") ?? readString(body, "target_id"),
@@ -375,7 +375,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		try {
-			return c.json(getOntologyProposalEvidence(getDbAccessor(), c.req.param("id"), scoped.agentId));
+			return c.json(await getOntologyProposalEvidence(getDbAccessor(), c.req.param("id"), scoped.agentId));
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
@@ -398,7 +398,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (c.req.query("status") && !status) return c.json({ error: "status is invalid" }, 400);
 		try {
 			return c.json(
-				getOntologyClaimEvidence(getDbAccessor(), {
+				await getOntologyClaimEvidence(getDbAccessor(), {
 					agentId: scoped.agentId,
 					entity,
 					aspect,
@@ -521,7 +521,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		try {
-			return c.json(getOntologyLinkEvidence(getDbAccessor(), { agentId: scoped.agentId, id: c.req.param("id") }));
+			return c.json(await getOntologyLinkEvidence(getDbAccessor(), { agentId: scoped.agentId, id: c.req.param("id") }));
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
@@ -747,7 +747,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		const actor = readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator";
 		try {
 			return c.json(
-				applyOntologyOperationBatch(getDbAccessor(), {
+				await applyOntologyOperationBatch(getDbAccessor(), {
 					agentId: scoped.agentId,
 					actor,
 					writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
@@ -829,7 +829,7 @@ export function registerOntologyRoutes(app: Hono): void {
 
 		try {
 			return c.json(
-				createOntologyProposals(
+				await createOntologyProposals(
 					getDbAccessor(),
 					proposals.map((raw) => {
 						const proposal = asRecord(raw);
@@ -864,7 +864,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (scoped.response) return scoped.response;
 		try {
 			return c.json(
-				applyOntologyProposal(getDbAccessor(), {
+				await applyOntologyProposal(getDbAccessor(), {
 					agentId: scoped.agentId,
 					id: c.req.param("id"),
 					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",

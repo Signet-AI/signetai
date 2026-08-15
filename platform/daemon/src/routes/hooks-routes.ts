@@ -718,7 +718,7 @@ function registerSessionEnd(app: Hono): void {
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const jobId = c.req.param("jobId").trim();
 		if (!jobId) return c.json({ error: "jobId is required" }, 400);
-		const job = getTranscriptCaptureJobStatus(getDbAccessor(), scopedAgent.agentId, jobId);
+		const job = await getTranscriptCaptureJobStatus(getDbAccessor(), scopedAgent.agentId, jobId);
 		if (!job) return c.json({ error: "Transcript capture job not found" }, 404);
 		return c.json(job);
 	});

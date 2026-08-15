@@ -296,7 +296,7 @@ describe("discord-source-provider", () => {
 		);
 		expect(added.ok).toBe(true);
 		if (added.ok === false) throw new Error(added.error);
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "discord",
 			sourceId: added.source.id,
@@ -336,7 +336,7 @@ describe("discord-source-provider", () => {
 		);
 		expect(added.ok).toBe(true);
 		if (added.ok === false) throw new Error(added.error);
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "discord",
 			sourceId: added.source.id,
@@ -459,7 +459,7 @@ describe("discord-source-provider", () => {
 		expect(added.ok).toBe(true);
 		if (added.ok === false) throw new Error(added.error);
 		const stalePath = "discord-cache://guild/@me/channel/stale/messages/stale";
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "discord",
 			sourceId: added.source.id,
@@ -1093,7 +1093,7 @@ describe("discord-source-provider", () => {
 			agentId: "default",
 			shouldContinue: () => true,
 		});
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "discord",
 			sourceId: added.source.id,
@@ -1104,7 +1104,7 @@ describe("discord-source-provider", () => {
 			sourceMtimeMs: Date.parse("2025-01-01T00:00:00.000Z"),
 			content: "stale member row",
 		});
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "discord",
 			sourceId: added.source.id,
@@ -1115,7 +1115,7 @@ describe("discord-source-provider", () => {
 			sourceMtimeMs: Date.parse("2025-01-01T00:00:00.000Z"),
 			content: "stale removed channel message",
 		});
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "discord",
 			sourceId: added.source.id,
@@ -1300,7 +1300,7 @@ describe("discord-source-provider", () => {
 		);
 		expect(added.ok).toBe(true);
 		if (added.ok === false) throw new Error(added.error);
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			harness: "discord",
 			sourceId: added.source.id,
