@@ -1461,6 +1461,33 @@ describe("native memory sources", () => {
 		}
 	});
 
+	it("streams a large source path set without collecting all files first", async () => {
+		const root = join(dir, "large-vault");
+		mkdirSync(root, { recursive: true });
+		for (let index = 0; index < 128; index++) {
+			writeFileSync(join(root, `note-${index}.md`), `# Note ${index}\n\nStreaming source note ${index}.`);
+		}
+		let firstFileSeen = false;
+		let indexed = 0;
+		const handle = startNativeMemoryBridge([obsidianNativeMemorySource(root, "Large Vault", "obsidian:large-vault")], {
+			agentId: "agent-native",
+			pollIntervalMs: 0,
+			sourceFileDelayMs: 0,
+			sourceGraphEnabled: false,
+			onFileIndexed: () => {
+				firstFileSeen = true;
+				indexed++;
+			},
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(128);
+			expect(firstFileSeen).toBe(true);
+			expect(indexed).toBe(128);
+		} finally {
+			await handle.close();
+		}
+	}, 30_000);
+
 	it("coalesces overlapping source sync requests and runs one trailing resync", async () => {
 		const root = join(dir, "vault");
 		const file = join(root, "permanent", "Burst.md");

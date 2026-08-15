@@ -7,10 +7,9 @@
 import "./bun-socket-polyfill";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
-import { readFile as readFileAsync, unlink as unlinkAsync } from "node:fs/promises";
-import { readdir } from "node:fs/promises";
+import { opendir, readFile as readFileAsync, stat as statAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,7 +49,13 @@ import {
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
 import { runDeferredIntegrityCheck } from "./database-integrity";
-import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessorAsync } from "./db-accessor";
+import {
+	closeDbAccessor,
+	getDbAccessor,
+	getVectorRuntimeStatus,
+	initDbAccessorAsync,
+	type WriteDb,
+} from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum";
 import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
@@ -700,16 +705,22 @@ interface LegacyMarkdownFileState {
 	readonly size: number;
 }
 
-function legacyMarkdownFileState(filePath: string): LegacyMarkdownFileState | null {
+async function withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
+	const accessor = getDbAccessor();
+	if (!accessor.withWriteTxAsync) throw new Error("Async database writer is unavailable");
+	return accessor.withWriteTxAsync(fn);
+}
+
+async function legacyMarkdownFileState(filePath: string): Promise<LegacyMarkdownFileState | null> {
 	try {
-		const stat = statSync(filePath);
-		return { mtimeMs: Math.round(stat.mtimeMs), ctimeMs: Math.round(stat.ctimeMs), size: stat.size };
+		const fileStat = await statAsync(filePath);
+		return { mtimeMs: Math.round(fileStat.mtimeMs), ctimeMs: Math.round(fileStat.ctimeMs), size: fileStat.size };
 	} catch {
 		return null;
 	}
 }
 
-function readLegacyMarkdownImportState(filePath: string): {
+async function readLegacyMarkdownImportState(filePath: string): Promise<{
 	readonly mtime_ms: number;
 	readonly ctime_ms: number;
 	readonly size: number;
@@ -717,11 +728,9 @@ function readLegacyMarkdownImportState(filePath: string): {
 	readonly importer_version: number;
 	readonly chunk_count: number;
 	readonly status: string;
-} | null {
+} | null> {
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
 				.prepare(
 					`SELECT mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count, status
 					 FROM legacy_markdown_imports
@@ -747,7 +756,7 @@ function readLegacyMarkdownImportState(filePath: string): {
 }
 
 function legacyMarkdownImportIsCurrent(
-	row: ReturnType<typeof readLegacyMarkdownImportState>,
+	row: Awaited<ReturnType<typeof readLegacyMarkdownImportState>>,
 	state: LegacyMarkdownFileState,
 ): boolean {
 	return (
@@ -760,19 +769,17 @@ function legacyMarkdownImportIsCurrent(
 	);
 }
 
-function writeLegacyMarkdownImportState(args: {
+async function writeLegacyMarkdownImportState(args: {
 	readonly filePath: string;
 	readonly state: LegacyMarkdownFileState;
 	readonly contentHash: string;
 	readonly chunkCount: number;
 	readonly status: "imported" | "empty" | "failed";
 	readonly error?: string | null;
-}): void {
+}): Promise<void> {
 	try {
 		const now = new Date().toISOString();
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			db.prepare(
+		await withWriteTxAsync((db) => {			db.prepare(
 				`INSERT INTO legacy_markdown_imports
 				 (path, mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count,
 				  last_imported_at, last_seen_at, status, error)
@@ -807,31 +814,27 @@ function writeLegacyMarkdownImportState(args: {
 	}
 }
 
-function legacyMarkdownChunkKnown(filePath: string, chunkHash: string): boolean {
+async function legacyMarkdownChunkKnown(filePath: string, chunkHash: string): Promise<boolean> {
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
 				.prepare("SELECT 1 FROM legacy_markdown_chunks WHERE file_path = ? AND chunk_hash = ?")
 				.get(filePath, chunkHash);
-			return row !== undefined;
+			return row != null;
 		});
 	} catch {
 		return false;
 	}
 }
 
-function recordLegacyMarkdownChunk(args: {
+async function recordLegacyMarkdownChunk(args: {
 	readonly filePath: string;
 	readonly chunkHash: string;
 	readonly chunkIndex: number;
 	readonly memoryId: string | null;
 	readonly sourceId: string;
-}): void {
+}): Promise<void> {
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			db.prepare(
+		await withWriteTxAsync((db) => {			db.prepare(
 				`INSERT INTO legacy_markdown_chunks
 				 (file_path, chunk_hash, chunk_index, memory_id, source_id, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?)
@@ -858,15 +861,15 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 	const filenameWithExt = basename(filePath);
 	if (MEMORY_BACKUP_FILENAME_RE.test(filenameWithExt) || ARTIFACT_FILENAME_RE.test(filenameWithExt)) return 0;
 
-	const fileState = legacyMarkdownFileState(filePath);
+	const fileState = await legacyMarkdownFileState(filePath);
 	if (fileState === null) return 0;
 
-	const priorState = readLegacyMarkdownImportState(filePath);
+	const priorState = await readLegacyMarkdownImportState(filePath);
 	if (legacyMarkdownImportIsCurrent(priorState, fileState)) return 0;
 
 	let content: string;
 	try {
-		content = readFileSync(filePath, "utf-8");
+		content = await readFileAsync(filePath, "utf-8");
 	} catch (e) {
 		logger.error("watcher", "Failed to read memory file", undefined, {
 			path: filePath,
@@ -881,7 +884,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 		priorState.importer_version === LEGACY_MARKDOWN_IMPORTER_VERSION &&
 		(priorState.status === "imported" || priorState.status === "empty")
 	) {
-		writeLegacyMarkdownImportState({
+		await writeLegacyMarkdownImportState({
 			filePath,
 			state: fileState,
 			contentHash: hash,
@@ -892,7 +895,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 	}
 
 	if (!content.trim()) {
-		writeLegacyMarkdownImportState({
+		await writeLegacyMarkdownImportState({
 			filePath,
 			state: fileState,
 			contentHash: hash,
@@ -927,7 +930,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 
 		const chunkHash = createHash("sha256").update(chunk.text).digest("hex").slice(0, 16);
 		const chunkKey = `openclaw:${filename}:${chunkHash}`;
-		if (legacyMarkdownChunkKnown(filePath, chunkHash)) {
+		if (await legacyMarkdownChunkKnown(filePath, chunkHash)) {
 			imported++;
 			await yielder();
 			continue;
@@ -963,13 +966,13 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 				} catch {
 					memoryId = null;
 				}
-				recordLegacyMarkdownChunk({ filePath, chunkHash, chunkIndex: i, memoryId, sourceId: chunkKey });
+				await recordLegacyMarkdownChunk({ filePath, chunkHash, chunkIndex: i, memoryId, sourceId: chunkKey });
 				imported++;
 			} else if (response.status === 409) {
 				// Existing historical imports can predate this manifest table. A 409 still
 				// proves this deterministic chunk should not be posted again on every
 				// daemon restart, so persist a manifest row without a memory id.
-				recordLegacyMarkdownChunk({ filePath, chunkHash, chunkIndex: i, memoryId: null, sourceId: chunkKey });
+				await recordLegacyMarkdownChunk({ filePath, chunkHash, chunkIndex: i, memoryId: null, sourceId: chunkKey });
 				imported++;
 				logger.debug("watcher", "Legacy memory chunk already exists", { path: filePath, chunkIndex: i });
 			} else {
@@ -994,7 +997,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 
 	if (transientFailures > 0) {
 		ingestedMemoryFiles.delete(filePath);
-		writeLegacyMarkdownImportState({
+		await writeLegacyMarkdownImportState({
 			filePath,
 			state: fileState,
 			contentHash: hash,
@@ -1004,7 +1007,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 		});
 	} else {
 		ingestedMemoryFiles.set(filePath, hash);
-		writeLegacyMarkdownImportState({
+		await writeLegacyMarkdownImportState({
 			filePath,
 			state: fileState,
 			contentHash: hash,
@@ -1024,6 +1027,22 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 	return imported;
 }
 
+async function* legacyMarkdownFiles(memoryDir: string): AsyncGenerator<string> {
+	let directory: Awaited<ReturnType<typeof opendir>>;
+	try {
+		directory = await opendir(memoryDir);
+	} catch (error) {
+		const errDetails = error instanceof Error ? { message: error.message } : { error: String(error) };
+		logger.error("daemon", "Failed to read memory directory", undefined, errDetails);
+		return;
+	}
+	for await (const entry of directory) {
+		if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "MEMORY.md") continue;
+		if (ARTIFACT_FILENAME_RE.test(entry.name) || MEMORY_BACKUP_FILENAME_RE.test(entry.name)) continue;
+		yield join(memoryDir, entry.name);
+	}
+}
+
 async function importExistingMemoryFiles(): Promise<number> {
 	const memoryDir = join(AGENTS_DIR, "memory");
 	if (!existsSync(memoryDir)) {
@@ -1031,34 +1050,24 @@ async function importExistingMemoryFiles(): Promise<number> {
 		return 0;
 	}
 
-	let files: string[];
-	try {
-		files = (await readdir(memoryDir))
-			.filter((f) => f.endsWith(".md") && f !== "MEMORY.md")
-			.filter((f) => !ARTIFACT_FILENAME_RE.test(f) && !MEMORY_BACKUP_FILENAME_RE.test(f));
-	} catch (e) {
-		const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
-		logger.error("daemon", "Failed to read memory directory", undefined, errDetails);
-		return 0;
-	}
-
-	if (files.length === 0) {
-		logger.debug("daemon", "importExistingMemoryFiles: all files are artifacts/backups, skipping");
-		return 0;
-	}
-
 	let totalChunks = 0;
+	let fileCount = 0;
 	const yielder = yieldEvery(10);
-	for (const file of files) {
-		const count = await ingestMemoryMarkdown(join(memoryDir, file));
+	for await (const filePath of legacyMarkdownFiles(memoryDir)) {
+		fileCount++;
+		const count = await ingestMemoryMarkdown(filePath);
 		totalChunks += count;
 		await yielder();
 		if (count > 0) await sleep(MEMORY_IMPORT_FILE_DELAY_MS);
 	}
 
+	if (fileCount === 0) {
+		logger.debug("daemon", "importExistingMemoryFiles: all files are artifacts/backups, skipping");
+		return 0;
+	}
 	if (totalChunks > 0) {
 		logger.info("daemon", "Imported existing memory files", {
-			files: files.length,
+			files: fileCount,
 			chunks: totalChunks,
 		});
 	}

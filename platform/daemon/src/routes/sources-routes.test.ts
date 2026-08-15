@@ -149,6 +149,12 @@ describe("Sources routes", () => {
 		}
 	});
 
+	it("keeps directory picker process execution asynchronous (#1457)", async () => {
+		const source = await Bun.file(new URL("./sources-routes.ts", import.meta.url)).text();
+		expect(source).toContain("execFile");
+		expect(source).not.toMatch(/\b(?:execSync|spawnSync)\b/);
+	});
+
 	it("lists no configured sources by default", async () => {
 		const res = await makeApp().request("/api/sources");
 		expect(res.status).toBe(200);

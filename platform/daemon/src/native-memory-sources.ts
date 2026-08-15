@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, stat } from "node:fs/promises";
-import type { Dirent } from "node:fs";
+import { lstat, opendir, readFile, stat } from "node:fs/promises";
+
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import {
@@ -13,7 +13,7 @@ import {
 } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
-import { getDbAccessor } from "./db-accessor";
+import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
@@ -28,7 +28,6 @@ import {
 } from "./obsidian-source-embeddings";
 import {
 	type ObsidianMarkdownPathIndex,
-	buildObsidianMarkdownPathIndex,
 	indexObsidianSourceStructure,
 	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
@@ -197,6 +196,10 @@ export function resetNativeMemoryIndexCache(): void {
 	resetObsidianSourceEmbeddingBackoff();
 }
 const DEFAULT_OBSIDIAN_SOURCE_FILE_DELAY_MS = 250;
+/** A scan keeps at most one discovered file awaiting indexing. */
+export const NATIVE_MEMORY_FILE_QUEUE_CAP = 1;
+const NATIVE_MEMORY_DIRECTORY_YIELD_EVERY = 64;
+const NATIVE_MEMORY_MAX_FILES_PER_SCAN = 50_000;
 
 // Read failures that are not permanent (ENOENT) enter a per-path cooldown so
 // a failing file cannot monopolize the scan loop. ENOENT drops the path from
@@ -371,9 +374,9 @@ async function* walkNativeMemoryFiles(
 ): AsyncGenerator<string> {
 	if (!(await pathExists(dir, source, agentId))) return;
 	if (nativeMemoryReadBackoffActive(source, dir, agentId)) return;
-	let entries: readonly Dirent[];
+	let directory: Awaited<ReturnType<typeof opendir>>;
 	try {
-		entries = await readdir(dir, { withFileTypes: true });
+		directory = await opendir(dir);
 		clearNativeMemoryPermissionDenied(source, dir, agentId);
 	} catch (err) {
 		if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
@@ -381,13 +384,23 @@ async function* walkNativeMemoryFiles(
 		}
 		return;
 	}
-	for (const entry of entries) {
-		if (entry.name === ".git") continue;
-		const path = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			yield* walkNativeMemoryFiles(path, source, agentId);
-		} else if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".jsonl"))) {
-			yield path;
+	let entries = 0;
+	try {
+		for await (const entry of directory) {
+			entries++;
+			if (entries % NATIVE_MEMORY_DIRECTORY_YIELD_EVERY === 0)
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			if (entry.name === ".git") continue;
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				yield* walkNativeMemoryFiles(path, source, agentId);
+			} else if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".jsonl"))) {
+				yield path;
+			}
+		}
+	} catch (err) {
+		if (classifyNativeMemoryReadFailure(err) === "permission-denied") {
+			recordNativeMemoryPermissionDenied(source, dir, agentId);
 		}
 	}
 }
@@ -543,12 +556,16 @@ function sleep(ms: number): Promise<void> {
 	return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
-function nativeArtifactContentHash(filePath: string, agentId: string): string | null {
+async function withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
+	const accessor = getDbAccessor();
+	if (!accessor.withWriteTxAsync) throw new Error("Async database writer is unavailable");
+	return accessor.withWriteTxAsync(fn);
+}
+
+async function nativeArtifactContentHash(filePath: string, agentId: string): Promise<string | null> {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
 				.prepare(
 					"SELECT source_sha256 FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
 				)
@@ -560,12 +577,10 @@ function nativeArtifactContentHash(filePath: string, agentId: string): string | 
 	}
 }
 
-function nativeArtifactCapturedAt(filePath: string, agentId: string): string | null {
+async function nativeArtifactCapturedAt(filePath: string, agentId: string): Promise<string | null> {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
 				.prepare(
 					"SELECT captured_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
 				)
@@ -584,13 +599,16 @@ function nativeArtifactCapturedAt(filePath: string, agentId: string): string | n
  * indexes never mint sentinels (the memory-lineage clamp), so this only fires
  * once per legacy row (#1149).
  */
-function healSentinelCapturedAt(filePath: string, agentId: string, harness: string, capturedAt: string): void {
+async function healSentinelCapturedAt(
+	filePath: string,
+	agentId: string,
+	harness: string,
+	capturedAt: string,
+): Promise<void> {
 	if (timestampMillis(capturedAt) >= Date.parse(EPISODIC_CAPTURED_AT_FLOOR)) return;
 	try {
 		const stampedAt = new Date().toISOString();
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			db.prepare(
+		await withWriteTxAsync((db) => {			db.prepare(
 				`UPDATE memory_artifacts
 				 SET captured_at = ?, updated_at = ?
 				 WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0`,
@@ -609,11 +627,9 @@ function healSentinelCapturedAt(filePath: string, agentId: string, harness: stri
 	}
 }
 
-function obsidianGraphExists(agentId: string, sourceId: string, filePath: string): boolean {
+async function obsidianGraphExists(agentId: string, sourceId: string, filePath: string): Promise<boolean> {
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const row = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {			const row = db
 				.prepare(
 					`SELECT 1 FROM entities
 					 WHERE agent_id = ?
@@ -630,19 +646,17 @@ function obsidianGraphExists(agentId: string, sourceId: string, filePath: string
 	}
 }
 
-function obsidianEmbeddingsExist(input: {
+async function obsidianEmbeddingsExist(input: {
 	readonly agentId: string;
 	readonly sourceId: string;
 	readonly root: string;
 	readonly filePath: string;
 	readonly content: string;
-}): boolean {
+}): Promise<boolean> {
 	const chunks = buildObsidianSourceChunks(input);
 	if (chunks.length === 0) return true;
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const rows = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {			const rows = db
 				.prepare(
 					`SELECT source_id FROM embeddings
 					 WHERE agent_id = ?
@@ -664,12 +678,10 @@ function obsidianEmbeddingsExist(input: {
 	}
 }
 
-function activeNativeArtifactPaths(source: NativeMemorySource, agentId: string): string[] {
+async function activeNativeArtifactPaths(source: NativeMemorySource, agentId: string): Promise<string[]> {
 	const rootPrefix = `${normalizedRoot(source.root)}/`;
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const rows = db
+		return await getDbAccessor().withReadDbAsync(async (db) => {			const rows = db
 				.prepare(
 					`SELECT source_path FROM memory_artifacts
 					 WHERE agent_id = ?
@@ -798,7 +810,7 @@ export async function indexNativeMemoryFile(
 	}
 
 	const hash = contentFingerprint(content);
-	const persistedHash = nativeArtifactContentHash(filePath, agentId);
+	const persistedHash = await nativeArtifactContentHash(filePath, agentId);
 	const obsidian = source.harness === "obsidian" && pattern.kind === "source_obsidian_markdown";
 	const hermes = source.harness === "hermes-agent";
 	const sourceId = obsidian ? (source.sourceId ?? sourceIdForObsidianRoot(source.root)) : (source.sourceId ?? null);
@@ -808,17 +820,20 @@ export async function indexNativeMemoryFile(
 		options.embeddingConfig?.provider !== "none" &&
 		options.embeddingConfig !== undefined &&
 		options.fetchEmbedding !== undefined;
-	const semanticComplete =
-		!obsidian ||
-		((!graphRequested || obsidianGraphExists(agentId, sourceId ?? "", filePath)) &&
-			(!embeddingRequested ||
-				obsidianEmbeddingsExist({
-					agentId,
-					sourceId: sourceId ?? "",
-					root: source.root,
-					filePath,
-					content,
-				})));
+	let semanticComplete = true;
+	if (obsidian) {
+		const graphExists = !graphRequested || (await obsidianGraphExists(agentId, sourceId ?? "", filePath));
+		const embeddingsExist =
+			!embeddingRequested ||
+			(await obsidianEmbeddingsExist({
+				agentId,
+				sourceId: sourceId ?? "",
+				root: source.root,
+				filePath,
+				content,
+			}));
+		semanticComplete = graphExists && embeddingsExist;
+	}
 	const cached = indexed.get(key);
 	if (cached?.contentHash === hash) {
 		if (persistedHash === hash && semanticComplete) return false;
@@ -828,9 +843,9 @@ export async function indexNativeMemoryFile(
 		// One-shot heal for legacy rows with a corrupt pre-epoch captured_at:
 		// they stay permanently pending otherwise (no watermark can reach
 		// 1980), keeping content passes from ever early-exiting (#1149).
-		const persistedCapturedAt = nativeArtifactCapturedAt(filePath, agentId);
+		const persistedCapturedAt = await nativeArtifactCapturedAt(filePath, agentId);
 		if (persistedCapturedAt !== null) {
-			healSentinelCapturedAt(filePath, agentId, source.harness, persistedCapturedAt);
+			await healSentinelCapturedAt(filePath, agentId, source.harness, persistedCapturedAt);
 		}
 		indexed.set(key, { contentHash: hash });
 		return false;
@@ -1032,25 +1047,28 @@ export function startNativeMemoryBridge(
 			const current = new Set<string>();
 			const rootExists = await pathExists(source.root, source, agentId);
 			if (rootExists) {
-				const files: string[] = [];
-				for await (const file of walkNativeMemoryFiles(source.root, source, agentId)) {
-					if (!matchesPattern(source, file)) continue;
-					files.push(file);
-					await yielder();
-				}
-				const total = files.length;
 				const fileDelayMs = sourceFileDelayMs(source, options);
-				const markdownPathIndex =
-					source.harness === "obsidian" && (options.sourceGraphEnabled ?? true)
-						? buildObsidianMarkdownPathIndex(source.root, files)
-						: undefined;
-				for (const file of files) {
+				let total = 0;
+				for await (const file of walkNativeMemoryFiles(source.root, source, agentId)) {
+					if (matchesPattern(source, file)) total++;
+					if (total >= NATIVE_MEMORY_MAX_FILES_PER_SCAN) break;
+				}
+				// The generator plus awaited indexing below is a one-item bounded work queue.
+				for await (const file of walkNativeMemoryFiles(source.root, source, agentId)) {
+					if (scanned >= NATIVE_MEMORY_MAX_FILES_PER_SCAN) {
+						logger.warn("watcher", "Native memory scan reached its file budget", {
+							harness: source.harness,
+							root: source.root,
+							cap: NATIVE_MEMORY_MAX_FILES_PER_SCAN,
+						});
+						break;
+					}
+					if (!matchesPattern(source, file)) continue;
 					if (options.shouldContinue && !options.shouldContinue(source)) break;
 					scanned++;
 					let embeddingStatus: string | undefined;
 					const changed = await indexNativeMemoryFile(source, file, agentId, {
 						...options,
-						markdownPathIndex,
 						onEmbeddingStatus: (status) => {
 							embeddingStatus = status;
 							options.onEmbeddingStatus?.(status);
@@ -1076,7 +1094,7 @@ export function startNativeMemoryBridge(
 			}
 			if (sourceCleanupEnabledFor(source, options)) {
 				const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
-				for (const file of activeNativeArtifactPaths(source, agentId)) {
+				for (const file of await activeNativeArtifactPaths(source, agentId)) {
 					if (!currentPaths.has(file.replace(/\\/g, "/"))) removeNativeMemoryFile(source, file, agentId);
 				}
 			}
