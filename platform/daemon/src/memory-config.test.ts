@@ -201,7 +201,7 @@ describe("loadMemoryConfig", () => {
 		}
 	});
 
-	it("falls back to AGENT.yaml memory.embeddings when agent.yaml is missing", () => {
+	it("rejects retired memory.embeddings configuration with actionable guidance", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, "AGENT.yaml"),
@@ -213,13 +213,12 @@ describe("loadMemoryConfig", () => {
 `,
 		);
 
-		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.embedding.provider).toBe("openai");
-		expect(cfg.embedding.model).toBe("text-embedding-3-small");
-		expect(cfg.embedding.dimensions).toBe(1536);
+		expect(() => loadMemoryConfig(agentsDir)).toThrow(
+			"memory.embeddings is retired; configure provider, model, and dimensions under the canonical embedding block instead.",
+		);
 	});
 
-	it("falls back to config.yaml embeddings for older installs", () => {
+	it("rejects retired top-level embeddings configuration with actionable guidance", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, "config.yaml"),
@@ -230,10 +229,9 @@ describe("loadMemoryConfig", () => {
 `,
 		);
 
-		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.embedding.provider).toBe("openai");
-		expect(cfg.embedding.model).toBe("text-embedding-3-large");
-		expect(cfg.embedding.dimensions).toBe(3072);
+		expect(() => loadMemoryConfig(agentsDir)).toThrow(
+			"embeddings is retired; configure provider, model, and dimensions under the canonical embedding block instead.",
+		);
 	});
 
 	it("defaults to native provider when no config exists", () => {

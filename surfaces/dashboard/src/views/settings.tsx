@@ -955,19 +955,8 @@ function TargetEditor({
 	);
 }
 
-/** Resolve the live embeddings config path like the old store did:
- * `embedding` wins, legacy `memory.embeddings` respected, else canonical. */
-function resolveEmbPath(agent: Record<string, unknown>): readonly string[] {
-	if (agent["embedding"] != null) return ["embedding"];
-	const memory = agent["memory"];
-	if (
-		memory &&
-		typeof memory === "object" &&
-		!Array.isArray(memory) &&
-		(memory as Record<string, unknown>)["embeddings"] != null
-	) {
-		return ["memory", "embeddings"];
-	}
+/** Embeddings use the canonical top-level config block. */
+function resolveEmbPath(_agent: Record<string, unknown>): readonly string[] {
 	return ["embedding"];
 }
 

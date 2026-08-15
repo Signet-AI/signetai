@@ -19,8 +19,24 @@ type EmbeddingProvider = "native" | "llama-cpp" | "ollama" | "openai" | "none";
 
 const VALID_PROVIDERS: readonly EmbeddingProvider[] = ["native", "llama-cpp", "ollama", "openai", "none"];
 
+class RetiredEmbeddingConfigError extends Error {}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+function rejectRetiredEmbeddingConfig(parsed: Record<string, unknown>, path: string): void {
+	if (Object.hasOwn(parsed, "embeddings")) {
+		throw new RetiredEmbeddingConfigError(
+			`${path}: embeddings is retired; configure provider, model, and dimensions under the canonical embedding block instead.`,
+		);
+	}
+	const memory = parsed.memory;
+	if (isRecord(memory) && Object.hasOwn(memory, "embeddings")) {
+		throw new RetiredEmbeddingConfigError(
+			`${path}: memory.embeddings is retired; configure provider, model, and dimensions under the canonical embedding block instead.`,
+		);
+	}
 }
 
 export function embeddingProvider(basePath: string): EmbeddingProvider {
@@ -30,6 +46,7 @@ export function embeddingProvider(basePath: string): EmbeddingProvider {
 		try {
 			const parsed = parseSimpleYaml(readFileSync(path, "utf-8"));
 			if (!isRecord(parsed)) continue;
+			rejectRetiredEmbeddingConfig(parsed, path);
 			const direct = parsed.embedding;
 			if (isRecord(direct) && typeof direct.provider === "string") {
 				const provider = direct.provider;
@@ -37,24 +54,8 @@ export function embeddingProvider(basePath: string): EmbeddingProvider {
 					return provider as EmbeddingProvider;
 				}
 			}
-			const mem = parsed.memory;
-			if (isRecord(mem)) {
-				const nested = mem.embeddings;
-				if (isRecord(nested) && typeof nested.provider === "string") {
-					const provider = nested.provider;
-					if ((VALID_PROVIDERS as readonly string[]).includes(provider)) {
-						return provider as EmbeddingProvider;
-					}
-				}
-			}
-			const legacy = parsed.embeddings;
-			if (isRecord(legacy) && typeof legacy.provider === "string") {
-				const provider = legacy.provider;
-				if ((VALID_PROVIDERS as readonly string[]).includes(provider)) {
-					return provider as EmbeddingProvider;
-				}
-			}
-		} catch {
+		} catch (error) {
+			if (error instanceof RetiredEmbeddingConfigError) throw error;
 			// Malformed config — keep scanning fallbacks.
 		}
 	}

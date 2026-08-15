@@ -62,22 +62,22 @@ describe("embeddingProvider", () => {
 		expect(embeddingProvider(root)).toBe("llama-cpp");
 	});
 
-	it("reads from memory.embeddings.provider (nested path)", () => {
+	it("rejects retired memory.embeddings configuration", () => {
 		root = mkdtempSync(join(tmpdir(), "embed-provider-"));
 		writeFileSync(join(root, "agent.yaml"), "memory:\n  embeddings:\n    provider: openai\n");
-		expect(embeddingProvider(root)).toBe("openai");
+		expect(() => embeddingProvider(root)).toThrow("memory.embeddings is retired");
 	});
 
-	it("reads from embeddings.provider (legacy path)", () => {
+	it("rejects retired top-level embeddings configuration", () => {
 		root = mkdtempSync(join(tmpdir(), "embed-provider-"));
 		writeFileSync(join(root, "agent.yaml"), "embeddings:\n  provider: ollama\n");
-		expect(embeddingProvider(root)).toBe("ollama");
+		expect(() => embeddingProvider(root)).toThrow("embeddings is retired");
 	});
 
-	it("prefers embedding.provider over legacy paths", () => {
+	it("rejects retired configuration even when the canonical provider is present", () => {
 		root = mkdtempSync(join(tmpdir(), "embed-provider-"));
 		writeFileSync(join(root, "agent.yaml"), "embedding:\n  provider: native\nembeddings:\n  provider: ollama\n");
-		expect(embeddingProvider(root)).toBe("native");
+		expect(() => embeddingProvider(root)).toThrow("embeddings is retired");
 	});
 
 	it("returns 'native' for unrecognized provider value", () => {

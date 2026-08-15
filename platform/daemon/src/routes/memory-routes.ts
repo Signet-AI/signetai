@@ -87,7 +87,6 @@ import {
 	checkEmbeddingProvider,
 	chunkBySentence,
 	inferType,
-	isMissingEmbeddingsTableError,
 	loadForgetCandidates,
 	loadForgetCandidatesByIds,
 	parseBoundedInt,
@@ -106,7 +105,6 @@ import {
 	resolveMutationActor,
 	resolveScopedAgentId,
 	resolveScopedProject,
-	runLegacyEmbeddingsExport,
 	shouldEnforceAuthScope,
 	toRecord,
 	validateSessionAgentBinding,
@@ -3703,19 +3701,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				hasMore: offset + embeddings.length < total,
 			});
 		} catch (e) {
-			if (isMissingEmbeddingsTableError(e)) {
-				const legacy = await runLegacyEmbeddingsExport(withVectors, limit, offset, AGENTS_DIR);
-				if (legacy) {
-					if (legacy.error) {
-						logger.warn("memory", "Legacy embeddings export failed", {
-							error: legacy.error,
-						});
-						return c.json(legacy, 500);
-					}
-					return c.json(legacy);
-				}
-			}
-
 			return c.json({
 				error: (e as Error).message,
 				embeddings: [],

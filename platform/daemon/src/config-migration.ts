@@ -682,7 +682,7 @@ function migrateV8(agentsDir: string): void {
 	}
 
 	const mutations: string[] = [];
-	for (const pathParts of [["embedding"], ["memory", "embeddings"]] as const) {
+	for (const pathParts of [["embedding"]] as const) {
 		const block = doc.getIn(pathParts, true);
 		if (!isMap(block) || !block.has("baseUrl")) continue;
 

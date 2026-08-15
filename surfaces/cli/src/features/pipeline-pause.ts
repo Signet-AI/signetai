@@ -87,7 +87,7 @@ function addTarget(
 }
 
 export function readOllamaReleaseTargets(dir: string): readonly OllamaReleaseTarget[] {
-	const { root, memory } = readPipelineConfigData(dir);
+	const { root } = readPipelineConfigData(dir);
 	if (root === null) return [];
 
 	const out: OllamaReleaseTarget[] = [];
@@ -113,13 +113,7 @@ export function readOllamaReleaseTargets(dir: string): readonly OllamaReleaseTar
 		}
 	}
 
-	const embedding = isObject(root.embedding)
-		? root.embedding
-		: memory && isObject(memory.embeddings)
-			? memory.embeddings
-			: isObject(root.embeddings)
-				? root.embeddings
-				: null;
+	const embedding = isObject(root.embedding) ? root.embedding : null;
 	if (embedding?.provider === "ollama") {
 		addTarget(
 			out,

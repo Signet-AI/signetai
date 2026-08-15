@@ -345,6 +345,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function rejectRetiredEmbeddingConfig(yaml: Record<string, unknown>): void {
+	if (Object.hasOwn(yaml, "embeddings")) {
+		throw new MemoryConfigValidationError(
+			"embeddings is retired; configure provider, model, and dimensions under the canonical embedding block instead.",
+		);
+	}
+	const memory = yaml.memory;
+	if (isRecord(memory) && Object.hasOwn(memory, "embeddings")) {
+		throw new MemoryConfigValidationError(
+			"memory.embeddings is retired; configure provider, model, and dimensions under the canonical embedding block instead.",
+		);
+	}
+}
+
 function parseRateLimitConfig(raw: unknown): PipelineV2Config["extraction"]["rateLimit"] | undefined {
 	if (!isRecord(raw)) return undefined;
 	const maxCallsPerHour = parseOptionalPositive(raw.maxCallsPerHour, 0, 10000);
@@ -976,11 +990,8 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 		if (!existsSync(path)) continue;
 		try {
 			const yaml = parseSimpleYaml(readFileSync(path, "utf-8"));
-			const emb =
-				(yaml.embedding as Record<string, unknown> | undefined) ??
-				((yaml.memory as Record<string, unknown> | undefined)?.embeddings as Record<string, unknown> | undefined) ??
-				(yaml.embeddings as Record<string, unknown> | undefined) ??
-				{};
+			if (isRecord(yaml)) rejectRetiredEmbeddingConfig(yaml);
+			const emb = (yaml.embedding as Record<string, unknown> | undefined) ?? {};
 			const configuredCostRates = parseEmbeddingCostRates(emb.costRates ?? emb.cost_rates);
 			if (configuredCostRates) defaults.embedding.costRates = configuredCostRates;
 			const srch = (yaml.search as Record<string, unknown> | undefined) ?? {};

@@ -243,7 +243,7 @@ embedding:
 		}
 	});
 
-	it("canonicalizes the legacy memory.embeddings block", () => {
+	it("leaves retired memory.embeddings configuration for validation", () => {
 		const dir = setupDir();
 		try {
 			writeFileSync(
@@ -256,8 +256,9 @@ embedding:
 			);
 			migrateEmbeddingBaseUrl(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
-			expect(after).toContain("base_url: http://192.168.1.10:11434");
-			expect(after).not.toContain("baseUrl:");
+			expect(after).toContain("memory:");
+			expect(after).toContain("embeddings:");
+			expect(after).toContain("baseUrl: http://192.168.1.10:11434");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
