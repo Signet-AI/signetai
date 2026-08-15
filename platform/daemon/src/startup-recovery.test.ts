@@ -8,8 +8,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DreamingConfig } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { startDreamingWorker } from "./pipeline/dreaming-worker";
 import { getStartupRecoveryCompletion, runStartupRecovery, runStartupRecoveryAsync } from "./startup-recovery";
 
 const dbFiles = ["memories.db", "memories.db-shm", "memories.db-wal"];
@@ -64,6 +66,18 @@ function insertPass(db: WriteDb, id: string, status: string): void {
 	db.prepare(
 		"INSERT INTO dreaming_passes (id, agent_id, status, started_at) VALUES (?, 'default', ?, datetime('now'))",
 	).run(id, status);
+}
+
+function dreamingConfig(): DreamingConfig {
+	return {
+		enabled: true,
+		tokenThreshold: 100_000,
+		maxInterval: 6 * 60 * 60 * 1_000,
+		maxInputTokens: 32_000,
+		maxOutputTokens: 16_000,
+		timeout: 300_000,
+		backfillOnFirstRun: false,
+	};
 }
 
 function countRows(table: string): number {
@@ -217,6 +231,23 @@ describe("runStartupRecovery", () => {
 		const completed = await getStartupRecoveryCompletion();
 		expect(completed.recoveryPhase).toBe("complete");
 		expect(completed.orphanedPassesSwept).toBe(1);
+	});
+
+	it("keeps orphan telemetry countable when the dreaming worker starts during recovery", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			insertPass(db, "running-worker-start", "running");
+		});
+
+		const immediate = runStartupRecovery(getDbAccessor());
+		const worker = startDreamingWorker(getDbAccessor(), dreamingConfig(), agentsDir, "default");
+		try {
+			expect(immediate.recoveryPhase).toBe("draining");
+			const completed = await getStartupRecoveryCompletion();
+			expect(completed.recoveryPhase).toBe("complete");
+			expect(completed.orphanedPassesSwept).toBe(1);
+		} finally {
+			worker.stop();
+		}
 	});
 
 	it("is idempotent — a clean workspace cleans nothing", async () => {

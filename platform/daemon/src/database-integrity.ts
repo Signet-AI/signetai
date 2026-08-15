@@ -229,8 +229,7 @@ async function runKillableTelemetryRepair(
 }
 
 async function writeAsync<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
-	if (accessor.withWriteTxAsync) return accessor.withWriteTxAsync(processBatch);
-	return accessor.withWriteTx(processBatch);
+	return accessor.withWriteTxAsync(processBatch);
 }
 
 /**

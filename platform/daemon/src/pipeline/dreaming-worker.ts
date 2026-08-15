@@ -271,25 +271,6 @@ export function startDreamingWorker(
 		};
 	};
 
-	// Sweep orphaned passes from unclean shutdown: any 'running' record
-	// was left by a crash or forced stop — mark it failed
-	// so the status API doesn't show a forever-running ghost pass.
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
-		const orphaned = db
-			.prepare(
-				`UPDATE dreaming_passes
-				 SET status = 'failed',
-				     completed_at = datetime('now'),
-				     error = 'Orphaned by daemon restart'
-				 WHERE status = 'running'`,
-			)
-			.run();
-		if (orphaned.changes > 0) {
-			logger.warn("dreaming-worker", `Swept ${orphaned.changes} orphaned running pass(es) from prior shutdown`);
-		}
-	});
-
 	async function runPass(
 		runAgentId: string,
 		mode: DreamingMode,
