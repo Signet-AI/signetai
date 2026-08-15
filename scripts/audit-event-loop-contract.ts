@@ -145,6 +145,15 @@ function staticStringValue(
 ): string | null {
 	const unwrapped = unwrapStaticStringExpression(expression);
 	if (ts.isStringLiteral(unwrapped) || ts.isNoSubstitutionTemplateLiteral(unwrapped)) return unwrapped.text;
+	if (ts.isTemplateExpression(unwrapped)) {
+		let value = unwrapped.head.text;
+		for (const span of unwrapped.templateSpans) {
+			const expressionValue = staticStringValue(span.expression, bindings, resolving);
+			if (expressionValue === null) return null;
+			value += expressionValue + span.literal.text;
+		}
+		return value;
+	}
 	if (ts.isBinaryExpression(unwrapped) && unwrapped.operatorToken.kind === ts.SyntaxKind.PlusToken) {
 		const left = staticStringValue(unwrapped.left, bindings, resolving);
 		const right = staticStringValue(unwrapped.right, bindings, resolving);
@@ -198,6 +207,17 @@ function findImportBoundaryViolations(
 					message: `${relativePath}:${line} ${form} ${moduleName}; sync compatibility imports must be explicitly allowlisted by exact call site`,
 				});
 			};
+			const reportDynamicTemplate = (argument: ts.Expression, position: number, form: string): void => {
+				const line = lineNumber(sourceFile, position);
+				const moduleName = argument.getText(sourceFile);
+				violations.push({
+					kind: "import-boundary",
+					path: relativePath,
+					line,
+					moduleName,
+					message: `${relativePath}:${line} ${form} ${moduleName}; dynamic template module specifiers are rejected in production files, use a literal import`,
+				});
+			};
 			if (
 				ts.isImportDeclaration(node) &&
 				ts.isStringLiteral(node.moduleSpecifier) &&
@@ -210,6 +230,12 @@ function findImportBoundaryViolations(
 				const moduleName = argument === undefined ? null : staticStringValue(argument, bindings);
 				if (moduleName !== null && isSyncCompatModule(moduleName)) {
 					report(moduleName, node.getStart(sourceFile), "requires");
+				} else if (
+					moduleName === null &&
+					argument !== undefined &&
+					ts.isTemplateExpression(unwrapStaticStringExpression(argument))
+				) {
+					reportDynamicTemplate(argument, node.getStart(sourceFile), "requires");
 				}
 			}
 			if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
@@ -217,6 +243,12 @@ function findImportBoundaryViolations(
 				const moduleName = argument === undefined ? null : staticStringValue(argument, bindings);
 				if (moduleName !== null && isSyncCompatModule(moduleName)) {
 					report(moduleName, node.getStart(sourceFile), "dynamically imports");
+				} else if (
+					moduleName === null &&
+					argument !== undefined &&
+					ts.isTemplateExpression(unwrapStaticStringExpression(argument))
+				) {
+					reportDynamicTemplate(argument, node.getStart(sourceFile), "dynamically imports");
 				}
 			}
 			if (

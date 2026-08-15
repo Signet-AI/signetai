@@ -164,6 +164,42 @@ test("the CI boundary resolves computed compatibility requires with source exten
 	}
 });
 
+test("the CI boundary resolves interpolated compatibility requires and rejects dynamic templates", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-boundary-"));
+	try {
+		writeFileSync(
+			join(root, "interpolated-require.ts"),
+			[
+				'const moduleName = "../db-accessor";',
+				`const sync = require(\`\${moduleName}-\${'sync'}\`);`,
+				`const async = require(\`../db-accessor-\${'async'}\`);`,
+				`const dynamic = require(\`../db-accessor-\${runtimeName}\`);`,
+			].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.violations).toHaveLength(2);
+		expect(result.violations[0]?.message).toContain("requires ../db-accessor-sync");
+		expect(result.violations[1]?.message).toContain("dynamic template module specifiers are rejected");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the CI boundary resolves interpolated compatibility imports", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-boundary-"));
+	try {
+		writeFileSync(
+			join(root, "interpolated-import.ts"),
+			['const moduleName = "../db-accessor";', `void import(\`\${moduleName}-\${'sync'}\`);`].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.violations).toHaveLength(1);
+		expect(result.violations[0]?.message).toContain("dynamically imports ../db-accessor-sync");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("the Obsidian embedding sync calls remain enumerated in the legacy ledger", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const result = runAudit({ sourceRoot: resolve("platform/daemon/src"), baselineSites: baseline });
