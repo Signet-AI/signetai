@@ -976,7 +976,7 @@ const daemonDeps = {
 	getDaemonStatus,
 	hasDaemonProcess,
 	isDaemonRunning,
-	isLaunchdDaemonLoaded: () => Promise.resolve(isLaunchdDaemonLoaded()),
+	isLaunchdDaemonLoaded: (agentsDir = AGENTS_DIR) => Promise.resolve(isLaunchdDaemonLoaded(agentsDir)),
 	normalizeAgentPath,
 	signetLogo,
 	sleep,

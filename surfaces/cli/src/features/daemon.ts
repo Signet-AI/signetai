@@ -54,7 +54,7 @@ interface Deps {
 	readonly sleep: (ms: number) => Promise<void>;
 	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly stopDaemon: (agentsDir?: string) => Promise<boolean>;
-	readonly isLaunchdDaemonLoaded?: () => Promise<boolean>;
+	readonly isLaunchdDaemonLoaded?: (agentsDir?: string) => Promise<boolean>;
 	readonly confirmRestartSync?: () => Promise<boolean>;
 	readonly fetch?: FetchLike;
 	readonly isInteractive?: () => boolean;
@@ -233,7 +233,7 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 	// Under launchd KeepAlive the daemon respawns on exit, so an unhealthy
 	// daemon still counts as managed: `stop` must boot the job out or the
 	// reported "stop" is silently undone moments later (#1074).
-	const launchdManaged = running ? false : await (deps.isLaunchdDaemonLoaded?.() ?? Promise.resolve(false));
+	const launchdManaged = running ? false : await (deps.isLaunchdDaemonLoaded?.(basePath) ?? Promise.resolve(false));
 	if (!running && !stale && !launchdManaged) {
 		console.log(chalk.yellow("  Daemon is not running"));
 		return;

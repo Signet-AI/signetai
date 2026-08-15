@@ -12,6 +12,7 @@ import {
 	didLaunchdDaemonStart,
 	didSystemdDaemonStart,
 	getDaemonStatus,
+	getLaunchdDaemonLoadState,
 	isDaemonEntrypointEnvironment,
 	isDaemonRunning,
 	isLaunchdDaemonLoaded,
@@ -371,15 +372,16 @@ describe("resolveLaunchdDaemonMigration", () => {
 		expect(migration.warning).toContain("separate per-workspace job");
 	});
 
-	it("replaces an unreadable legacy plist instead of risking duplicate jobs", () => {
+	it("warns and preserves an unreadable legacy plist instead of risking displacement", () => {
 		const migration = resolveLaunchdDaemonMigration("/Users/user/.agents", legacyHome, {
 			existsSync: (path) => path === legacyPlistPath,
 			readFileSync: () => "<plist></plist>",
 		});
 
-		expect(migration.action).toBe("migrate");
+		expect(migration.action).toBe("preserve");
 		expect(migration.legacyWorkspace).toBeNull();
-		expect(migration.warning).toContain("no readable SIGNET_PATH");
+		expect(migration.warning).toContain("no confirmable SIGNET_PATH");
+		expect(migration.warning).toContain("left untouched");
 	});
 });
 
@@ -884,5 +886,27 @@ describe("isLaunchdDaemonLoaded", () => {
 			spawnSync: () => ({ status: 3 }),
 		});
 		expect(loaded).toBe(false);
+	});
+
+	it("keeps probe errors distinct from a confirmed missing job", () => {
+		const label = launchdDaemonLabel("/Users/user/.agents");
+		expect(
+			getLaunchdDaemonLoadState(label, {
+				platform: "darwin",
+				spawnSync: () => ({ status: null, error: new Error("launchctl timed out") }),
+			}),
+		).toBe("unknown");
+		expect(
+			getLaunchdDaemonLoadState(label, {
+				platform: "darwin",
+				spawnSync: () => ({ status: 1 }),
+			}),
+		).toBe("unknown");
+		expect(
+			getLaunchdDaemonLoadState(label, {
+				platform: "darwin",
+				spawnSync: () => ({ status: 3 }),
+			}),
+		).toBe("not-loaded");
 	});
 });

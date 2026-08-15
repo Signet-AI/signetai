@@ -1225,15 +1225,23 @@ interface LaunchdDaemonLoadDeps {
 	readonly spawnSync?: LaunchctlProbeSpawnSync;
 }
 
-function isLaunchdJobLoaded(label: string, deps: LaunchdDaemonLoadDeps = {}): boolean {
-	if ((deps.platform ?? process.platform) !== "darwin") return false;
+export type LaunchdDaemonLoadState = "loaded" | "not-loaded" | "unknown";
+
+export function getLaunchdDaemonLoadState(label: string, deps: LaunchdDaemonLoadDeps = {}): LaunchdDaemonLoadState {
+	if ((deps.platform ?? process.platform) !== "darwin") return "not-loaded";
 	const spawn = deps.spawnSync ?? spawnSync;
-	const result = spawn("launchctl", ["print", `${currentLaunchdDomain()}/${label}`], {
-		stdio: "ignore",
-		windowsHide: true,
-		timeout: 3000,
-	});
-	return result.status === 0;
+	try {
+		const result = spawn("launchctl", ["print", `${currentLaunchdDomain()}/${label}`], {
+			stdio: "ignore",
+			windowsHide: true,
+			timeout: 3000,
+		});
+		if (result.status === 0) return "loaded";
+		if (result.status === 3) return "not-loaded";
+		return "unknown";
+	} catch {
+		return "unknown";
+	}
 }
 
 interface LaunchdDaemonMigrationDeps {
@@ -1298,14 +1306,20 @@ export function resolveLaunchdDaemonMigration(
 		};
 	}
 
+	if (legacyWorkspace === null) {
+		return {
+			action: "preserve",
+			legacyPlistPath,
+			legacyWorkspace: null,
+			warning: `Existing legacy launchd daemon plist ${legacyPlistPath} has no confirmable SIGNET_PATH. It will be left untouched while starting the separate per-workspace job for ${agentsDir}.`,
+		};
+	}
+
 	return {
 		action: "migrate",
 		legacyPlistPath,
 		legacyWorkspace,
-		warning:
-			legacyWorkspace === null
-				? `Existing legacy launchd daemon plist ${legacyPlistPath} has no readable SIGNET_PATH. It will be replaced by the per-workspace job for ${agentsDir}.`
-				: null,
+		warning: null,
 	};
 }
 
@@ -1367,7 +1381,7 @@ export function isLaunchdDaemonLoaded(
 ): boolean {
 	const agentsDir = typeof agentsDirOrDeps === "string" ? agentsDirOrDeps : AGENTS_DIR;
 	const deps = typeof agentsDirOrDeps === "string" ? maybeDeps : agentsDirOrDeps;
-	return isLaunchdJobLoaded(launchdDaemonLabel(agentsDir), deps);
+	return getLaunchdDaemonLoadState(launchdDaemonLabel(agentsDir), deps) === "loaded";
 }
 
 export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "status" | "signal" | "error">): boolean {
@@ -1504,7 +1518,17 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 		const migration = resolveLaunchdDaemonMigration(agentsDir);
 		if (migration.warning) console.warn(chalk.yellow(`  Warning: ${migration.warning}`));
 		if (migration.action === "migrate") {
-			if (isLaunchdJobLoaded(LAUNCHD_DAEMON_LABEL)) {
+			const legacyState = getLaunchdDaemonLoadState(LAUNCHD_DAEMON_LABEL);
+			if (legacyState === "unknown") {
+				console.error(
+					chalk.red(
+						"Could not determine whether the legacy global launchd daemon is loaded. Leaving it in place and aborting migration.",
+					),
+				);
+				if (stderrFd !== null) closeSync(stderrFd);
+				return false;
+			}
+			if (legacyState === "loaded") {
 				const legacyBootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(LAUNCHD_DAEMON_LABEL), {
 					stdio: ["ignore", "ignore", stderrTarget],
 					windowsHide: true,

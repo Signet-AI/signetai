@@ -164,6 +164,29 @@ describe("daemon lifecycle recovery", () => {
 		expect(stopped).toBe(true);
 	});
 
+	it("checks and stops the launchd job for the resolved --path workspace", async () => {
+		let loadedPath: string | undefined;
+		let stoppedPath: string | undefined;
+		const deps = makeDeps({
+			extractPathOption: () => "/tmp/workspace-b",
+			isDaemonRunning: async () => false,
+			hasDaemonProcess: async () => false,
+			isLaunchdDaemonLoaded: async (agentsDir) => {
+				loadedPath = agentsDir;
+				return true;
+			},
+			stopDaemon: async (agentsDir) => {
+				stoppedPath = agentsDir;
+				return true;
+			},
+		});
+
+		await doStop({ path: "/tmp/workspace-b" }, deps);
+
+		expect(loadedPath).toBe("/tmp/workspace-b");
+		expect(stoppedPath).toBe("/tmp/workspace-b");
+	});
+
 	it("stop reports not running when nothing is alive and no launchd agent is loaded", async () => {
 		let stopped = false;
 		const deps = makeDeps({
