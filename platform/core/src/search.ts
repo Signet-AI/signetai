@@ -124,6 +124,25 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
  * Pure vector search using sqlite-vec
  * Uses the vec_embeddings virtual table for efficient similarity search
  */
+function activeVectorEmbeddingsTable(db: SQLiteDatabase): "embeddings" | "embeddings_staging" {
+	try {
+		const row = db.prepare("SELECT state, staging_profile_json FROM embedding_index_state WHERE id = 1").get() as
+			| { state?: unknown; staging_profile_json?: unknown }
+			| undefined;
+		if (row?.state !== "building" || typeof row.staging_profile_json !== "string") return "embeddings";
+		const staging = JSON.parse(row.staging_profile_json) as { projectionRebuild?: unknown };
+		// During the post-swap projection rebuild, vec_embeddings still describes
+		// the former active generation. Join it to that generation's durable slot
+		// instead of the newly swapped embeddings table, which has different ids
+		// and may have different dimensions.
+		return staging.projectionRebuild === true ? "embeddings_staging" : "embeddings";
+	} catch {
+		// Legacy/test databases without the generation-state table use the active
+		// embeddings table, matching the pre-generation search behavior.
+		return "embeddings";
+	}
+}
+
 export function vectorSearch(
 	db: SQLiteDatabase,
 	queryVector: Float32Array,
@@ -131,6 +150,7 @@ export function vectorSearch(
 ): Array<{ id: string; score: number }> {
 	const limit = options?.limit ?? 20;
 	const results: Array<{ id: string; score: number }> = [];
+	const embeddingsTable = activeVectorEmbeddingsTable(db);
 
 	try {
 		// sqlite-vec uses MATCH syntax for vector search
@@ -160,7 +180,7 @@ export function vectorSearch(
         e.source_id,
         v.distance
       FROM vec_embeddings v
-      JOIN embeddings e ON v.id = e.id
+      JOIN ${embeddingsTable} e ON v.id = e.id
       JOIN memories m ON e.source_id = m.id
       WHERE v.embedding MATCH ? AND k = ?${typeFilter}
       ORDER BY v.distance
