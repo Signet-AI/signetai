@@ -199,6 +199,48 @@ test("event-loop audit rejects a helper shared by bootstrap and request paths", 
 	}
 });
 
+test("event-loop audit does not let a baseline category authorize a hot-path call", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		const source = [
+			"function initDbAccessor() { return existsSync('/tmp/signet-bootstrap'); }",
+			"export function requestPath() { return existsSync('/tmp/signet-request'); }",
+			"",
+		].join("\n");
+		writeFileSync(join(root, "db-accessor.ts"), source);
+		const result = runAudit({
+			sourceRoot: root,
+			baselineSites: [
+				{
+					path: "db-accessor.ts",
+					line: 2,
+					api: "existsSync",
+					source: source.split("\n")[1] ?? "",
+					category: "pre-readiness-bootstrap",
+				},
+			],
+		});
+		expect(result.sites[1]?.category).toBe("hot-path");
+		expect(result.violations).toHaveLength(2);
+		expect(result.violations[1]?.line).toBe(2);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("event-loop audit detects destructured DbAccessor sync methods", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-audit-"));
+	try {
+		writeFileSync(join(root, "destructured.ts"), "const { withReadDb } = getDbAccessor();\nwithReadDb((db) => db);\n");
+		const result = runAudit({ sourceRoot: root });
+		expect(result.sites).toHaveLength(1);
+		expect(result.sites[0]?.api).toBe("withReadDb");
+		expect(result.violations).toHaveLength(1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("event-loop audit baseline is an exact, pinned, deterministic production inventory", () => {
 	const productionSourceRoot = resolve(import.meta.dir, "..", "platform/daemon/src");
 	const baseline = JSON.parse(readFileSync(resolve(import.meta.dir, "event-loop-contract-baseline.json"), "utf8")) as {

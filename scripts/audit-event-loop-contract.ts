@@ -173,6 +173,33 @@ function calledFunctionName(expression: ts.Expression): string | null {
 	return null;
 }
 
+function destructuredSyncApis(sourceFile: ts.SourceFile): ReadonlyMap<string, SyncApi> {
+	const aliases = new Map<string, SyncApi>();
+	const visit = (node: ts.Node): void => {
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isObjectBindingPattern(node.name) &&
+			node.initializer &&
+			ts.isCallExpression(node.initializer) &&
+			ts.isIdentifier(node.initializer.expression) &&
+			node.initializer.expression.text === "getDbAccessor"
+		) {
+			for (const element of node.name.elements) {
+				if (!ts.isIdentifier(element.name)) continue;
+				const property = element.propertyName;
+				const propertyName =
+					property && (ts.isIdentifier(property) || ts.isStringLiteral(property)) ? property.text : element.name.text;
+				if (propertyName === "withReadDb" || propertyName === "withWriteTx") {
+					aliases.set(element.name.text, propertyName);
+				}
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	return aliases;
+}
+
 function functionBody(node: ts.Node): ts.Node | null {
 	if (
 		ts.isFunctionDeclaration(node) ||
@@ -317,12 +344,13 @@ function findSites(root: string): AuditSite[] {
 		const graph = functionGraph(sourceFile);
 		const bootstrapNames = bootstrapFunctionNames(graph);
 		const bootstrapOnlyNames = bootstrapOnlyFunctionNames(graph, bootstrapNames);
+		const destructuredApis = destructuredSyncApis(sourceFile);
 		const functionStack: string[] = [];
 		const visit = (node: ts.Node): void => {
 			const name = functionName(node);
 			if (name !== null) functionStack.push(name);
 			if (ts.isCallExpression(node)) {
-				const call = calledSyncApi(node.expression);
+				const call = calledSyncApi(node.expression, destructuredApis);
 				if (call) {
 					const line = sourceFile.getLineAndCharacterOfPosition(call.position).line;
 					const source = lines[line]?.replace(/\/\/.*$/u, "").trim() ?? "";
@@ -343,7 +371,10 @@ function findSites(root: string): AuditSite[] {
 	return sites;
 }
 
-function calledSyncApi(expression: ts.Expression): { readonly api: SyncApi; readonly position: number } | null {
+function calledSyncApi(
+	expression: ts.Expression,
+	destructuredApis: ReadonlyMap<string, SyncApi>,
+): { readonly api: SyncApi; readonly position: number } | null {
 	if (ts.isPropertyAccessExpression(expression)) {
 		const api = expression.name.text;
 		if (!SYNC_APIS.includes(api as SyncApi)) return null;
@@ -352,13 +383,15 @@ function calledSyncApi(expression: ts.Expression): { readonly api: SyncApi; read
 	if (!ts.isIdentifier(expression)) {
 		return null;
 	}
+	const destructuredApi = destructuredApis.get(expression.text);
+	if (destructuredApi !== undefined) return { api: destructuredApi, position: expression.getStart() };
 	if (expression.text === "withWriteTx" || expression.text === "withReadDb") return null;
 	if (!SYNC_APIS.includes(expression.text as SyncApi)) return null;
 	return { api: expression.text as SyncApi, position: expression.getStart() };
 }
 
-function siteKey(site: Pick<AuditSite, "path" | "api" | "source">): string {
-	return `${site.path}\u0000${site.api}\u0000${site.source}`;
+function siteKey(site: Pick<AuditSite, "path" | "api" | "source" | "category">): string {
+	return `${site.path}\u0000${site.api}\u0000${site.category}\u0000${site.source}`;
 }
 
 export function occurrenceKeys(sites: readonly AuditSite[]): Set<string> {
