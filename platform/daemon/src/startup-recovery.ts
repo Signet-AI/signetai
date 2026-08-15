@@ -12,6 +12,7 @@ import { logger } from "./logger";
 import { recoverStaleLeases } from "./pipeline/stale-leases";
 
 export interface StartupRecoveryReport {
+	readonly recoveryPhase: "draining" | "complete";
 	readonly walCheckpointed: boolean;
 	readonly databaseIntegrity: DatabaseIntegrityStatus;
 	readonly documentLeasesRecovered: number;
@@ -40,6 +41,7 @@ const PENDING_INTEGRITY: DatabaseIntegrityStatus = {
 };
 
 let activeRecovery: Promise<StartupRecoveryReport> | null = null;
+let lastCompletedRecovery: StartupRecoveryReport | null = null;
 
 function yieldToEventLoop(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
@@ -112,6 +114,7 @@ async function reconcileAcpDeliveriesAsync(accessor: DbAccessor, nowMs = Date.no
 
 function pendingReport(): StartupRecoveryReport {
 	return {
+		recoveryPhase: "draining",
 		walCheckpointed: false,
 		databaseIntegrity: PENDING_INTEGRITY,
 		documentLeasesRecovered: 0,
@@ -131,12 +134,22 @@ function pendingReport(): StartupRecoveryReport {
 export function runStartupRecoveryAsync(accessor: DbAccessor): Promise<StartupRecoveryReport> {
 	if (activeRecovery !== null) return activeRecovery;
 	const run = runStartupRecoveryInternal(accessor);
-	activeRecovery = run;
+	const trackedRun = run.then((report) => {
+		lastCompletedRecovery = report;
+		return report;
+	});
+	activeRecovery = trackedRun;
 	const clear = (): void => {
-		if (activeRecovery === run) activeRecovery = null;
+		if (activeRecovery === trackedRun) activeRecovery = null;
 	};
-	run.then(clear, clear);
-	return run;
+	trackedRun.then(clear, clear);
+	return trackedRun;
+}
+
+/** Return the current startup drain without starting a second recovery pass. */
+export function getStartupRecoveryCompletion(): Promise<StartupRecoveryReport> {
+	if (activeRecovery !== null) return activeRecovery;
+	return Promise.resolve(lastCompletedRecovery ?? pendingReport());
 }
 
 async function runStartupRecoveryInternal(accessor: DbAccessor): Promise<StartupRecoveryReport> {
@@ -290,6 +303,7 @@ async function runStartupRecoveryInternal(accessor: DbAccessor): Promise<Startup
 
 	const durationMs = Date.now() - startedAt;
 	const report: StartupRecoveryReport = {
+		recoveryPhase: "complete",
 		walCheckpointed: false,
 		databaseIntegrity: PENDING_INTEGRITY,
 		documentLeasesRecovered,
@@ -318,10 +332,12 @@ async function runStartupRecoveryInternal(accessor: DbAccessor): Promise<Startup
 export function runStartupRecovery(accessor: DbAccessor): StartupRecoveryReport {
 	const report = pendingReport();
 	logger.info("startup-recovery", "Deferring startup recovery until the event loop can serve requests");
-	void runStartupRecoveryAsync(accessor).catch((err) => {
-		logger.warn("startup-recovery", "Asynchronous startup recovery failed", {
-			error: err instanceof Error ? err.message : String(err),
+	void runStartupRecoveryAsync(accessor)
+		.then((completed) => Object.assign(report, completed))
+		.catch((err) => {
+			logger.warn("startup-recovery", "Asynchronous startup recovery failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
 		});
-	});
 	return report;
 }

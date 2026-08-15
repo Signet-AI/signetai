@@ -133,8 +133,8 @@ class IntegrityRepairTimeoutError extends Error {
 }
 
 const REPAIR_WORKER_SOURCE = `
-const { createRequire } = require("node:module");
-const load = createRequire(process.cwd() + "/package.json");
+import { createRequire } from "node:module";
+const load = createRequire(process.env.SIGNET_DATABASE_INTEGRITY_REQUIRE_BASE || process.cwd() + "/package.json");
 const Database = typeof Bun !== "undefined" ? load("bun:sqlite").Database : load("better-sqlite3");
 const dbPath = process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH;
 const indexes = JSON.parse(process.env.SIGNET_DATABASE_INTEGRITY_INDEXES || "[]");
@@ -167,6 +167,8 @@ async function runKillableTelemetryRepair(
 	indexes: readonly string[],
 	timeoutMs: number,
 	workerPath?: string,
+	runtimePath?: string,
+	requireBase?: string,
 ): Promise<void> {
 	const dir = workerPath === undefined ? await mkdtemp(join(tmpdir(), "signet-integrity-repair-")) : null;
 	const scriptPath = workerPath ?? join(dir ?? tmpdir(), "repair.mjs");
@@ -174,11 +176,12 @@ async function runKillableTelemetryRepair(
 
 	let child: ChildProcess | undefined;
 	try {
-		child = spawn(process.execPath, [scriptPath], {
+		child = spawn(runtimePath ?? process.execPath, [scriptPath], {
 			env: {
 				...process.env,
 				SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
 				SIGNET_DATABASE_INTEGRITY_INDEXES: JSON.stringify(indexes),
+				SIGNET_DATABASE_INTEGRITY_REQUIRE_BASE: requireBase ?? fileURLToPath(import.meta.url),
 			},
 			stdio: ["ignore", "pipe", "pipe"],
 		});
@@ -361,9 +364,10 @@ async function runDeferredIntegrityCheckInternal(
 /**
  * Check the database and repair only disposable telemetry indexes when the
  * targeted check identifies damage. Production REINDEX work runs in a
- * killable child with a real deadline. The audit is admitted through the
- * bounded async writer queue after the child commits; test doubles without a
- * database path use one queued transaction for both operations.
+ * killable child with a real deadline. Production audits are admitted through
+ * the bounded async writer queue before the child can commit its repair; test
+ * doubles without a database path use one queued transaction for both
+ * operations.
  */
 export async function repairTelemetryIndexes(
 	accessor: DbAccessor,
@@ -373,6 +377,8 @@ export async function repairTelemetryIndexes(
 		readonly dbPath?: string;
 		readonly repairTimeoutMs?: number;
 		readonly repairWorkerPath?: string;
+		readonly repairRuntimePath?: string;
+		readonly repairRequireBase?: string;
 	},
 ): Promise<DatabaseIntegrityStatus> {
 	let quickCheck: IntegrityCheckStatus;
@@ -412,15 +418,17 @@ export async function repairTelemetryIndexes(
 	if (!telemetryCheck.ok) {
 		try {
 			if (options?.dbPath !== undefined) {
+				if (audit !== undefined) {
+					await writeAsync(accessor, (db) => audit(db, telemetryIndexes, telemetryCheck.messages));
+				}
 				await runKillableTelemetryRepair(
 					options.dbPath,
 					telemetryIndexes,
 					options.repairTimeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS,
 					options.repairWorkerPath,
+					options.repairRuntimePath,
+					options.repairRequireBase,
 				);
-				if (audit !== undefined) {
-					await writeAsync(accessor, (db) => audit(db, telemetryIndexes, telemetryCheck.messages));
-				}
 			} else {
 				await writeAsync(accessor, (db) => {
 					for (const index of telemetryIndexes) db.exec(`REINDEX ${escapedIdentifier(index)}`);

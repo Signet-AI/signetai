@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WriteDb } from "./db-accessor";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { runStartupRecovery, runStartupRecoveryAsync } from "./startup-recovery";
+import { getStartupRecoveryCompletion, runStartupRecovery, runStartupRecoveryAsync } from "./startup-recovery";
 
 const dbFiles = ["memories.db", "memories.db-shm", "memories.db-wal"];
 let agentsDir = "";
@@ -203,6 +203,20 @@ describe("runStartupRecovery", () => {
 				(db.prepare("SELECT COUNT(*) AS n FROM dreaming_passes WHERE status = 'failed'").get() as { n: number }).n,
 		);
 		expect(failedCount).toBe(2);
+	});
+
+	it("keeps the immediate report in draining state until orphan telemetry is countable", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			insertPass(db, "running-draining", "running");
+		});
+
+		const immediate = runStartupRecovery(getDbAccessor());
+		expect(immediate.recoveryPhase).toBe("draining");
+		expect(immediate.orphanedPassesSwept).toBe(0);
+
+		const completed = await getStartupRecoveryCompletion();
+		expect(completed.recoveryPhase).toBe("complete");
+		expect(completed.orphanedPassesSwept).toBe(1);
 	});
 
 	it("is idempotent — a clean workspace cleans nothing", async () => {

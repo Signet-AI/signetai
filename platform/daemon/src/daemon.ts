@@ -183,7 +183,7 @@ import {
 	sourceFailureClass,
 	trackSourceLifecycleWrite,
 } from "./source-lifecycle-telemetry";
-import { runStartupRecovery } from "./startup-recovery";
+import { getStartupRecoveryCompletion, runStartupRecovery } from "./startup-recovery";
 import { getPressureRecoveryOutcome, getSystemPressure, reportStartupGrace } from "./system-pressure";
 import {
 	type TelemetryCollector,
@@ -2036,7 +2036,7 @@ async function main() {
 	// WAL bloat) before any worker starts. Integrity scanning is deliberately
 	// not part of this synchronous phase. The full-database quick_check runs in
 	// a bounded worker after the HTTP server is ready (#1513).
-	const startupRecovery = runStartupRecovery(getDbAccessor());
+	runStartupRecovery(getDbAccessor());
 
 	// Purge artifacts of sources deleted while the daemon was down (e.g.
 	// crash-loop-disabled sources). This needs the DB accessor, so it runs
@@ -2164,29 +2164,33 @@ async function main() {
 			platform: process.platform,
 			uptimeMs: 0,
 		});
-		// A daemon restart turns any still-running pass into a failed pass. Emit
-		// a bounded, content-free outcome once telemetry is initialized so those
-		// failures are not silently lost at the recovery boundary.
-		for (let index = 0; index < Math.min(startupRecovery.orphanedPassesSwept, 100); index++) {
-			recordDreamingPassTelemetry({
-				mode: "startup-recovery",
-				outcome: "failed",
-				outcomeCode: "error",
-				effects: {
-					artifactsConsidered: 0,
-					memoriesCreated: 0,
-					memoriesUpdated: 0,
-					memoriesSuperseded: 0,
-					memoriesRetired: 0,
-					claimsChanged: 0,
-					relationshipsChanged: 0,
-					provenanceLinksChanged: 0,
-					toolCalls: 0,
-					durationMs: startupRecovery.durationMs,
-				},
-				usage: null,
-			});
-		}
+		// A daemon restart turns any still-running pass into a failed pass. Wait
+		// for the bounded drain to finish before emitting telemetry. The immediate
+		// compatibility report is deliberately marked "draining" and has no final
+		// orphan count yet.
+		void getStartupRecoveryCompletion().then((recovery) => {
+			if (recovery.recoveryPhase !== "complete") return;
+			for (let index = 0; index < Math.min(recovery.orphanedPassesSwept, 100); index++) {
+				recordDreamingPassTelemetry({
+					mode: "startup-recovery",
+					outcome: "failed",
+					outcomeCode: "error",
+					effects: {
+						artifactsConsidered: 0,
+						memoriesCreated: 0,
+						memoriesUpdated: 0,
+						memoriesSuperseded: 0,
+						memoriesRetired: 0,
+						claimsChanged: 0,
+						relationshipsChanged: 0,
+						provenanceLinksChanged: 0,
+						toolCalls: 0,
+						durationMs: recovery.durationMs,
+					},
+					usage: null,
+				});
+			}
+		});
 		for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
 			if (source.enabled) {
 				// Server readiness must not wait on best-effort telemetry, but shutdown must drain it.

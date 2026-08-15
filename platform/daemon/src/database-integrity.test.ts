@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairTelemetryIndexes, runDeferredIntegrityCheck } from "./database-integrity";
@@ -106,9 +106,15 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		]);
 	});
 
-	it("runs the production repair child and verifies its committed indexes", async () => {
+	it("runs the production repair child under Node ESM and verifies its committed indexes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "integrity-repair-success-"));
 		const dbPath = join(dir, "memory.db");
+		const requireBase = join(dir, "package.json");
+		const sqliteModule = join(dir, "node_modules", "better-sqlite3");
+		writeFileSync(requireBase, "{}\n");
+		mkdirSync(sqliteModule, { recursive: true });
+		writeFileSync(join(sqliteModule, "package.json"), '{"main":"index.cjs"}\n');
+		writeFileSync(join(sqliteModule, "index.cjs"), "module.exports = class Database { exec() {} close() {} };\n");
 		const database = new Database(dbPath);
 		database.exec(
 			"CREATE TABLE telemetry_events (event TEXT, queue TEXT, timestamp TEXT, unsent INTEGER); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event); CREATE INDEX idx_telemetry_events_queue ON telemetry_events(queue); CREATE INDEX idx_telemetry_events_timestamp ON telemetry_events(timestamp); CREATE INDEX idx_telemetry_events_unsent ON telemetry_events(unsent)",
@@ -121,7 +127,7 @@ describe("telemetry database integrity recovery (#1360)", () => {
 			(db) => {
 				db.exec("INSERT INTO repair_audit VALUES (1)");
 			},
-			{ dbPath, repairTimeoutMs: 5_000 },
+			{ dbPath, repairTimeoutMs: 5_000, repairRuntimePath: "node", repairRequireBase: requireBase },
 		);
 
 		expect(result.state).toBe("repaired");
@@ -159,6 +165,35 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		expect(result.state).toBe("corrupt");
 		expect(result.rebuiltIndexes).toEqual([]);
 		expect(result.telemetryCheck.messages).toContain("memory_history unavailable");
+	});
+
+	it("does not start a production repair child when the audit fails", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-repair-audit-failure-"));
+		const dbPath = join(dir, "memory.db");
+		const markerPath = join(dir, "child-started");
+		const workerPath = join(dir, "marker-worker.mjs");
+		const database = new Database(dbPath);
+		database.exec(
+			"CREATE TABLE telemetry_events (event TEXT); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event)",
+		);
+		database.close();
+		writeFileSync(
+			workerPath,
+			`import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(markerPath)}, "started");\n`,
+		);
+
+		const result = await repairTelemetryIndexes(
+			fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+			() => {
+				throw new Error("audit unavailable");
+			},
+			{ dbPath, repairWorkerPath: workerPath, repairRuntimePath: "node", repairTimeoutMs: 5_000 },
+		);
+
+		expect(result.state).toBe("corrupt");
+		expect(result.telemetryCheck.messages).toContain("audit unavailable");
+		expect(existsSync(markerPath)).toBe(false);
+		rmSync(dir, { recursive: true, force: true });
 	});
 
 	it("does not rewrite an unrelated database when quick_check fails", async () => {
