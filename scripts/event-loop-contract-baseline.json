@@ -2061,20 +2061,6 @@
 			"category": "hot-path"
 		},
 		{
-			"path": "memory-search-telemetry.ts",
-			"line": 238,
-			"api": "withWriteTx",
-			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "memory-search-telemetry.ts",
-			"line": 314,
-			"api": "withReadDb",
-			"source": "return db.withReadDb((r) => {",
-			"category": "hot-path"
-		},
-		{
 			"path": "memory-search.ts",
 			"line": 611,
 			"api": "withReadDb",
@@ -6643,90 +6629,6 @@
 			"line": 532,
 			"api": "withWriteTx",
 			"source": "return db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 797,
-			"api": "withReadDb",
-			"source": "const row = db.withReadDb(",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 879,
-			"api": "withWriteTx",
-			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 926,
-			"api": "withWriteTx",
-			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 982,
-			"api": "withWriteTx",
-			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 1014,
-			"api": "withWriteTx",
-			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 1034,
-			"api": "withWriteTx",
-			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 1064,
-			"api": "withWriteTx",
-			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 1085,
-			"api": "withWriteTx",
-			"source": "return db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 1133,
-			"api": "withWriteTx",
-			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 1155,
-			"api": "withReadDb",
-			"source": "db.withReadDb((r) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 1474,
-			"api": "withWriteTx",
-			"source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-			"category": "hot-path"
-		},
-		{
-			"path": "telemetry.ts",
-			"line": 1486,
-			"api": "withReadDb",
-			"source": "return db.withReadDb((r) => {",
 			"category": "hot-path"
 		},
 		{
