@@ -986,6 +986,57 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-write-failure")).toBeTruthy();
 	});
 
+	it("resolves the active profile before writing, instead of comparing the raw configured fingerprint", async () => {
+		// Regression: a prior --model-mismatch migration promotes the durable
+		// active generation with a *named* profile (e.g. "nomic-embed-text-v1.5"),
+		// persisted in embedding_index_state.active_profile_json. The route's
+		// raw `embeddingCfg` (loaded straight from agent.yaml) carries no
+		// `profile` field. Before the fix, isActiveEmbeddingConfig compared the
+		// raw config's identity fingerprint against that named-profile
+		// fingerprint on every batch — a permanent mismatch, not a race — so
+		// `signet embed backfill` failed 100% of the time with "embedding
+		// profile changed during provider work", even though nothing changed
+		// concurrently.
+		insertMemory(db, "mem-named-profile");
+		const rawCfg: EmbeddingConfig = { ...TEST_EMBEDDING_CFG, model: "nomic-embed-text:v1.5" };
+		accessor.withWriteTx((writeDb) => {
+			ensureEmbeddingIndexState(writeDb, rawCfg);
+			const namedProfile = {
+				fingerprint: embeddingProfileFingerprint({ ...rawCfg, profile: "nomic-embed-text-v1.5" }),
+				provider: rawCfg.provider,
+				model: rawCfg.model,
+				dimensions: rawCfg.dimensions,
+				baseUrl: rawCfg.base_url,
+				profile: "nomic-embed-text-v1.5",
+			};
+			writeDb
+				.prepare("UPDATE embedding_index_state SET active_profile_json = ? WHERE id = 1")
+				.run(JSON.stringify(namedProfile));
+		});
+
+		const seenCfgs: EmbeddingConfig[] = [];
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async (_content, cfg) => {
+				seenCfgs.push(cfg);
+				return [0.1, 0.2, 0.3];
+			},
+			rawCfg,
+			10,
+			false,
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = 'mem-named-profile'").get()).toBeTruthy();
+		// The embedding call must use the resolved (named) profile, not the raw
+		// identity config, so its formatting matches the rest of the active index.
+		expect(seenCfgs[0]?.profile).toBe("nomic-embed-text-v1.5");
+	});
+
 	it("reconciles canonical embedding state after a mid-write vector-index failure", async () => {
 		// Proof for #1325: the canonical embedding write and the derived vec
 		// index update are separate failure boundaries. If vec insertion fails

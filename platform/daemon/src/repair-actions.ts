@@ -34,7 +34,11 @@ import {
 	listUnembeddedMemories,
 } from "./embedding-coverage";
 import { type EmbeddingMigrationCoverage, stagingCoverage } from "./embedding-index-migration";
-import { isActiveEmbeddingConfig, readEmbeddingIndexState } from "./embedding-index-state";
+import {
+	isActiveEmbeddingConfig,
+	readEmbeddingIndexState,
+	resolveActiveEmbeddingConfig,
+} from "./embedding-index-state";
 import { type EmbeddingRepairState, readEmbeddingRepairState } from "./embedding-repair-state";
 import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
@@ -928,6 +932,20 @@ export async function reembedMissingMemories(
 	const normalizedBatchSize =
 		Number.isFinite(batchSize) && batchSize > 0 ? Math.max(1, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
 
+	// `embeddingCfg` is the raw configured value (e.g. from agent.yaml), which
+	// carries no `profile`. The durable active generation may have been
+	// promoted with a named profile (e.g. by a prior --model-mismatch
+	// migration), so its persisted fingerprint includes that profile id.
+	// Comparing the raw config's identity fingerprint against that persisted
+	// fingerprint in isActiveEmbeddingConfig always mismatches — not a race,
+	// a permanent false positive that fails every batch with "embedding
+	// profile changed during provider work" (issue: reembed never resolves
+	// the active profile before writing). Resolve once, matching the same
+	// profile the durable index actually owns, before doing any work.
+	const resolvedEmbeddingCfg = await accessor.withReadDbAsync(async (db) =>
+		resolveActiveEmbeddingConfig(db, embeddingCfg),
+	);
+
 	const initialStats = await getEmbeddingGapStats(accessor, agentId);
 	if (initialStats.unembedded === 0) {
 		return {
@@ -969,7 +987,7 @@ export async function reembedMissingMemories(
 			const outcome = await reembedMissingMemoriesBatch(
 				accessor,
 				embeddingFn,
-				embeddingCfg,
+				resolvedEmbeddingCfg,
 				normalizedBatchSize,
 				agentId,
 			);
