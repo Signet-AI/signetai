@@ -401,7 +401,7 @@ The 1,060-site inventory excludes test, benchmark, generated, and \`__tests__\` 
 
 The structural boundary makes statically-resolved imports from the production source tree impossible: TypeScript reports TS6059 before aliases or computed member calls can use the compatibility type. The production bundle also only starts from source entrypoints, so this compatibility module is not a shipped production artifact.
 
-A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. The remaining synchronous DB operations also still rely on the exact migration ledger and the 576 legacy markers. The next migration wave removes the 230 write and 346 read markers.
+A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 576 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 230 write and 346 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.
 `;
 }
 
