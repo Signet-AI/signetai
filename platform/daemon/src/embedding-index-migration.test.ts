@@ -404,7 +404,7 @@ describe("staging promotion", () => {
 						const statement = db.prepare(sql);
 						return {
 							run: (...params) => {
-								if (sql.includes("INSERT INTO vec_embeddings")) inserts++;
+								if (sql.includes("INTO vec_embeddings")) inserts++;
 								return statement.run(...params);
 							},
 							get: (...params) => statement.get(...params),
@@ -423,7 +423,7 @@ describe("staging promotion", () => {
 			incrementalVacuum: () => 0,
 		};
 
-		expect(await promoteStagingIndex(accessor, { vectorBatchSize: 50 })).toBe(true);
+		expect(await promoteStagingIndex(accessor)).toBe(true);
 		expect(transactions).toBe(7);
 		expect(Math.max(...insertsPerTransaction)).toBe(50);
 		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings").get()).toEqual({ count: 205 });
@@ -433,6 +433,120 @@ describe("staging promotion", () => {
 		expect(raw.prepare("SELECT agent_id FROM embeddings WHERE id = 'embedding-200'").get()).toEqual({
 			agent_id: "agent-a",
 		});
+	});
+
+	it("skips a concurrent writer's vec row instead of failing promotion", async () => {
+		if (!VEC_EXTENSION) return;
+		const raw = new Database(":memory:");
+		raw.loadExtension(VEC_EXTENSION);
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(`
+			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT);
+			CREATE TABLE embeddings (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+			CREATE VIRTUAL TABLE vec_embeddings_staging USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+		`);
+		const db = raw as unknown as WriteDb;
+		const active = {
+			provider: "ollama",
+			model: "custom-a",
+			dimensions: 3,
+			base_url: "http://127.0.0.1:11434",
+		} as const;
+		ensureEmbeddingIndexState(db, active);
+		beginEmbeddingIndexBuild(db, { ...active, model: "custom-b" });
+		const vector = new Uint8Array(new Float32Array([1, 0, 0]).buffer);
+		raw
+			.prepare("INSERT INTO embeddings VALUES (?, ?, ?, 3, 'memory', ?, ?, ?)")
+			.run("embedding-a", "hash-a", vector, "memory-a", "2026-01-01", "agent-a");
+		raw
+			.prepare("INSERT INTO embeddings_staging VALUES (?, ?, ?, 3, 'memory', ?, ?, ?)")
+			.run("embedding-a", "hash-a", vector, "memory-a", "2026-01-01", "agent-a");
+
+		let injected = false;
+		const accessor: DbAccessor = {
+			withWriteTx: (fn) => testTransaction(raw, db, fn),
+			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
+			withReadDb: (fn) => fn(raw as unknown as ReadDb),
+			withReadDbAsync: async (fn) => {
+				const result = await fn(raw as unknown as ReadDb);
+				if (!injected) {
+					raw
+						.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)")
+						.run("embedding-a", new Float32Array([1, 0, 0]));
+					injected = true;
+				}
+				return result;
+			},
+			close: () => undefined,
+			checkpointWal: () => undefined,
+			incrementalVacuum: () => 0,
+		};
+
+		expect(await promoteStagingIndex(accessor, { vectorBatchSize: 1 })).toBe(true);
+		expect(injected).toBe(true);
+		expect(readEmbeddingIndexState(raw as unknown as ReadDb)?.state).toBe("ready");
+		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings").get()).toEqual({ count: 1 });
+	});
+
+	it("retries a failed projection chunk without leaving promotion terminally failed", async () => {
+		if (!VEC_EXTENSION) return;
+		const raw = new Database(":memory:");
+		raw.loadExtension(VEC_EXTENSION);
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(`
+			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT);
+			CREATE TABLE embeddings (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT, agent_id TEXT);
+			CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+			CREATE VIRTUAL TABLE vec_embeddings_staging USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+		`);
+		const db = raw as unknown as WriteDb;
+		const active = {
+			provider: "ollama",
+			model: "custom-a",
+			dimensions: 3,
+			base_url: "http://127.0.0.1:11434",
+		} as const;
+		ensureEmbeddingIndexState(db, active);
+		beginEmbeddingIndexBuild(db, { ...active, model: "custom-b" });
+		const vector = new Uint8Array(new Float32Array([1, 0, 0]).buffer);
+		const insert = raw.prepare("INSERT INTO embeddings VALUES (?, ?, ?, 3, 'memory', ?, ?, ?)");
+		const insertStaging = raw.prepare("INSERT INTO embeddings_staging VALUES (?, ?, ?, 3, 'memory', ?, ?, ?)");
+		for (const id of ["embedding-a", "embedding-b"]) {
+			insert.run(id, `hash-${id}`, vector, `memory-${id}`, "2026-01-01", "agent-a");
+			insertStaging.run(id, `hash-${id}`, vector, `memory-${id}`, "2026-01-01", "agent-a");
+		}
+
+		let writes = 0;
+		let injectedFailure = false;
+		const accessor: DbAccessor = {
+			withWriteTx: (fn) => testTransaction(raw, db, fn),
+			withWriteTxAsync: async (fn) => {
+				writes++;
+				if (writes === 3 && !injectedFailure) {
+					injectedFailure = true;
+					throw new Error("transient rebuild write failure");
+				}
+				return testTransaction(raw, db, fn);
+			},
+			withReadDb: (fn) => fn(raw as unknown as ReadDb),
+			withReadDbAsync: async (fn) => fn(raw as unknown as ReadDb),
+			close: () => undefined,
+			checkpointWal: () => undefined,
+			incrementalVacuum: () => 0,
+		};
+
+		expect(
+			await promoteStagingIndex(accessor, {
+				vectorBatchSize: 1,
+				shouldContinue: () => true,
+			}),
+		).toBe(true);
+		expect(injectedFailure).toBe(true);
+		expect(readEmbeddingIndexState(raw as unknown as ReadDb)?.state).toBe("ready");
+		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings").get()).toEqual({ count: 2 });
 	});
 
 	it("keeps the promoted sqlite-vec virtual table queryable", async () => {
