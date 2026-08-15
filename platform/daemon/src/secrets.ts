@@ -925,6 +925,17 @@ export function getLocalSecretProviderHealth(): SecretProviderHealthV1 {
 			const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
 			const state = keyring.getStatus?.();
 			if (state && state.state !== "found") return healthForKeyringState(state);
+			if (state) {
+				try {
+					decodeKeyringValue(state);
+				} catch (error) {
+					return {
+						status: "degraded",
+						message: `Native secrets keyring is corrupt: ${error instanceof Error ? error.message : String(error)}`,
+						checkedAt: new Date().toISOString(),
+					};
+				}
+			}
 		}
 		return { status: "healthy", checkedAt: new Date().toISOString() };
 	} catch (err) {
