@@ -162,7 +162,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		dbPath = "";
 	});
 
-	test("returns entities in the documented order (pinned, pinned_at, mentions, updated_at, name)", () => {
+	test("returns entities in the documented order (pinned, pinned_at, mentions, updated_at, name)", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -175,7 +175,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			updatedAt: "2026-01-10T00:00:00Z",
 		});
 
-		const result = listKnowledgeEntities(getDbAccessor(), {
+		const result = await listKnowledgeEntities(getDbAccessor(), {
 			agentId: "default",
 			limit: 10,
 			offset: 0,
@@ -184,7 +184,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(result.map((r) => r.entity.id)).toEqual(["e-gamma", "e-beta", "e-alpha"]);
 	});
 
-	test("counts aspects, attributes, constraints, and dependencies (incoming + outgoing) per entity", () => {
+	test("counts aspects, attributes, constraints, and dependencies (incoming + outgoing) per entity", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -202,7 +202,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		// Dependency where hub is target (inbound) — should also count
 		seedDependency("dep-2", "e-leaf", "e-hub");
 
-		const result = listKnowledgeEntities(getDbAccessor(), {
+		const result = await listKnowledgeEntities(getDbAccessor(), {
 			agentId: "default",
 			limit: 10,
 			offset: 0,
@@ -216,7 +216,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(hub?.dependencyCount).toBe(2);
 	});
 
-	test("excludes archived graph rows from default list counts", () => {
+	test("excludes archived graph rows from default list counts", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -232,7 +232,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			db.prepare("UPDATE entity_aspects SET status = 'archived' WHERE id = ?").run("asp-archived");
 		});
 
-		const result = listKnowledgeEntities(getDbAccessor(), {
+		const result = await listKnowledgeEntities(getDbAccessor(), {
 			agentId: "default",
 			limit: 10,
 			offset: 0,
@@ -245,7 +245,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(result[0]?.dependencyCount).toBe(0);
 	});
 
-	test("dependency reads hide edges attached to archived endpoint entities", () => {
+	test("dependency reads hide edges attached to archived endpoint entities", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -260,27 +260,29 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			db.prepare("UPDATE entities SET status = 'archived' WHERE id = ?").run("e-archived");
 		});
 
-		expect(getDependenciesFrom(getDbAccessor(), "e-active", "default").map((dep) => dep.id)).toEqual([
+		expect((await getDependenciesFrom(getDbAccessor(), "e-active", "default")).map((dep) => dep.id)).toEqual([
 			"dep-visible-out",
 		]);
-		expect(getDependenciesTo(getDbAccessor(), "e-active", "default").map((dep) => dep.id)).toEqual(["dep-visible-in"]);
+		expect((await getDependenciesTo(getDbAccessor(), "e-active", "default")).map((dep) => dep.id)).toEqual([
+			"dep-visible-in",
+		]);
 	});
 
-	test("respects limit and offset pagination", () => {
+	test("respects limit and offset pagination", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 		for (let i = 0; i < 5; i++) {
 			seedEntity(`e-${i}`, `Name-${i}`, { mentions: 10 - i, updatedAt: "2026-01-01T00:00:00Z" });
 		}
 
-		const page1 = listKnowledgeEntities(getDbAccessor(), { agentId: "default", limit: 2, offset: 0 });
-		const page2 = listKnowledgeEntities(getDbAccessor(), { agentId: "default", limit: 2, offset: 2 });
+		const page1 = await listKnowledgeEntities(getDbAccessor(), { agentId: "default", limit: 2, offset: 0 });
+		const page2 = await listKnowledgeEntities(getDbAccessor(), { agentId: "default", limit: 2, offset: 2 });
 
 		expect(page1.map((r) => r.entity.id)).toEqual(["e-0", "e-1"]);
 		expect(page2.map((r) => r.entity.id)).toEqual(["e-2", "e-3"]);
 	});
 
-	test("filters by type and query (canonical_name LIKE)", () => {
+	test("filters by type and query (canonical_name LIKE)", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -288,7 +290,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedEntity("e-proj-2", "XLNT", { entityType: "project" });
 		seedEntity("e-concept-1", "Muse Pipeline", { entityType: "concept" });
 
-		const projectsOnly = listKnowledgeEntities(getDbAccessor(), {
+		const projectsOnly = await listKnowledgeEntities(getDbAccessor(), {
 			agentId: "default",
 			type: "project",
 			limit: 10,
@@ -296,7 +298,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		});
 		expect(projectsOnly.map((r) => r.entity.id).sort()).toEqual(["e-proj-1", "e-proj-2"]);
 
-		const museMatches = listKnowledgeEntities(getDbAccessor(), {
+		const museMatches = await listKnowledgeEntities(getDbAccessor(), {
 			agentId: "default",
 			query: "muse",
 			limit: 10,
@@ -305,27 +307,27 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(museMatches.map((r) => r.entity.id).sort()).toEqual(["e-concept-1", "e-proj-1"]);
 	});
 
-	test("agent scoping isolates entities across agent_id values", () => {
+	test("agent scoping isolates entities across agent_id values", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
 		seedEntity("e-main", "Main-scoped", { agentId: "main" });
 		seedEntity("e-def", "Default-scoped", { agentId: "default" });
 
-		const mainScope = listKnowledgeEntities(getDbAccessor(), { agentId: "main", limit: 10, offset: 0 });
-		const defaultScope = listKnowledgeEntities(getDbAccessor(), { agentId: "default", limit: 10, offset: 0 });
+		const mainScope = await listKnowledgeEntities(getDbAccessor(), { agentId: "main", limit: 10, offset: 0 });
+		const defaultScope = await listKnowledgeEntities(getDbAccessor(), { agentId: "default", limit: 10, offset: 0 });
 
 		expect(mainScope.map((r) => r.entity.id)).toEqual(["e-main"]);
 		expect(defaultScope.map((r) => r.entity.id)).toEqual(["e-def"]);
 	});
 
-	test("entity alias archive is scoped to the owning entity", () => {
+	test("entity alias archive is scoped to the owning entity", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
 		seedEntity("e-signet", "Signet");
 		seedEntity("e-other", "Other");
-		const created = applyOntologyOperation(getDbAccessor(), {
+		const created = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "default",
 			actor: "test",
 			operation: "create_entity_alias",
@@ -334,24 +336,24 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		const aliasId = created.result?.aliasId as string;
 		expect(aliasId).toBeTruthy();
 
-		expect(() =>
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "default",
 				actor: "test",
 				operation: "archive_entity_alias",
 				payload: { entity_id: "e-other", alias_id: aliasId },
 			}),
-		).toThrow();
-		expect(listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(1);
+		).rejects.toThrow();
+		expect(await listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(1);
 
-		const archived = applyOntologyOperation(getDbAccessor(), {
+		const archived = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "default",
 			actor: "test",
 			operation: "archive_entity_alias",
 			payload: { entity_id: "e-signet", alias_id: aliasId },
 		});
 		expect(archived.result?.archived).toBe(true);
-		expect(listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(0);
+		expect(await listEntityAliases(getDbAccessor(), { agentId: "default", entityId: "e-signet" })).toHaveLength(0);
 	});
 
 	test("builds a bounded constellation graph without loading every graph row", async () => {
@@ -456,7 +458,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 				})[0],
 		);
 		if (source === undefined) throw new Error("test fixture did not create an episodic source");
-		const graph = getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
+		const graph = await getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
 			limit: 2,
 			maxAspectsPerEntity: 1,
 			maxAttributesPerAspect: 1,
@@ -479,7 +481,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(graph.metadata.dreaming.latestPass?.mutationsApplied).toBe(3);
 	});
 
-	test("includes zero-mention semantic entities regardless of their entity type", () => {
+	test("includes zero-mention semantic entities regardless of their entity type", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -489,14 +491,14 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedAspect("asp-source", "e-source", "source metadata");
 		seedAttribute("attr-artifact", "asp-artifact", { content: "The report supports the current plan." });
 
-		const graph = getKnowledgeGraphForConstellation(getDbAccessor(), "default");
+		const graph = await getKnowledgeGraphForConstellation(getDbAccessor(), "default");
 
 		expect(graph.entities).toHaveLength(1);
 		expect(graph.entities[0]).toMatchObject({ id: "e-artifact", entityType: "artifact" });
 		expect(graph.entities[0]?.aspects[0]?.attributes[0]?.content).toBe("The report supports the current plan.");
 	});
 
-	test("constellation includes shared-agent graph rows for the current view", () => {
+	test("constellation includes shared-agent graph rows for the current view", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -510,7 +512,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedAttribute("attr-noam", "asp-noam", { agentId: "noam", content: "shared attribute" });
 		seedDependency("dep-shared", "e-default", "e-noam", { agentId: "noam", strength: 0.9 });
 
-		const graph = getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
+		const graph = await getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
 			limit: 10,
 			maxAspectsPerEntity: 2,
 			maxAttributesPerAspect: 2,
@@ -537,7 +539,7 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		dbPath = "";
 	});
 
-	test("returns incoming + outgoing dependency counts independently", () => {
+	test("returns incoming + outgoing dependency counts independently", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -549,18 +551,18 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		seedDependency("dep-out-2", "e-hub", "e-b");
 		seedDependency("dep-in-1", "e-c", "e-hub");
 
-		const detail = getKnowledgeEntityDetail(getDbAccessor(), "e-hub", "default");
+		const detail = await getKnowledgeEntityDetail(getDbAccessor(), "e-hub", "default");
 		expect(detail).not.toBeNull();
 		expect(detail?.outgoingDependencyCount).toBe(2);
 		expect(detail?.incomingDependencyCount).toBe(1);
 		expect(detail?.dependencyCount).toBe(3);
 	});
 
-	test("returns null for unknown entity id", () => {
+	test("returns null for unknown entity id", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
-		const detail = getKnowledgeEntityDetail(getDbAccessor(), "does-not-exist", "default");
+		const detail = await getKnowledgeEntityDetail(getDbAccessor(), "does-not-exist", "default");
 		expect(detail).toBeNull();
 	});
 });
@@ -577,7 +579,7 @@ describe("getKnowledgeStats (issue #515)", () => {
 		dbPath = "";
 	});
 
-	test("counts memories linked to agent-scoped entities via memory_entity_mentions", () => {
+	test("counts memories linked to agent-scoped entities via memory_entity_mentions", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -593,16 +595,16 @@ describe("getKnowledgeStats (issue #515)", () => {
 		seedMention("m2", "e-def-2");
 		seedMention("m3", "e-main");
 
-		const defaultStats = getKnowledgeStats(getDbAccessor(), "default");
+		const defaultStats = await getKnowledgeStats(getDbAccessor(), "default");
 		expect(defaultStats.entityCount).toBe(2);
 		expect(defaultStats.unassignedMemoryCount).toBe(2);
 
-		const mainStats = getKnowledgeStats(getDbAccessor(), "main");
+		const mainStats = await getKnowledgeStats(getDbAccessor(), "main");
 		expect(mainStats.entityCount).toBe(1);
 		expect(mainStats.unassignedMemoryCount).toBe(1);
 	});
 
-	test("ignores soft-deleted memories", () => {
+	test("ignores soft-deleted memories", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -614,11 +616,11 @@ describe("getKnowledgeStats (issue #515)", () => {
 			db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = ?").run("m1");
 		});
 
-		const stats = getKnowledgeStats(getDbAccessor(), "default");
+		const stats = await getKnowledgeStats(getDbAccessor(), "default");
 		expect(stats.unassignedMemoryCount).toBe(0);
 	});
 
-	test("excludes archived graph rows from stats and coverage", () => {
+	test("excludes archived graph rows from stats and coverage", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -638,7 +640,7 @@ describe("getKnowledgeStats (issue #515)", () => {
 			db.prepare("UPDATE entity_aspects SET status = 'archived' WHERE id = ?").run("asp-archived");
 		});
 
-		const stats = getKnowledgeStats(getDbAccessor(), "default");
+		const stats = await getKnowledgeStats(getDbAccessor(), "default");
 		expect(stats.entityCount).toBe(1);
 		expect(stats.aspectCount).toBe(1);
 		expect(stats.attributeCount).toBe(1);

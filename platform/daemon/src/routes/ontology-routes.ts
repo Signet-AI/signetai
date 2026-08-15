@@ -175,7 +175,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		return requirePermission("recall", authConfig)(c, next);
 	});
 
-	app.get("/api/ontology/proposals", (c) => {
+	app.get("/api/ontology/proposals", async (c) => {
 		const status = parseOntologyProposalStatus(c.req.query("status"));
 		if (c.req.query("status") && !status) return c.json({ error: "status is invalid" }, 400);
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
@@ -192,14 +192,14 @@ export function registerOntologyRoutes(app: Hono): void {
 		);
 	});
 
-	app.get("/api/ontology/entities/:id/aliases", (c) => {
+	app.get("/api/ontology/entities/:id/aliases", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		const status = c.req.query("status");
 		const parsedStatus = status === "active" || status === "archived" || status === "all" ? status : undefined;
 		if (status && !parsedStatus) return c.json({ error: "status is invalid" }, 400);
 		return c.json({
-			items: listEntityAliases(getDbAccessor(), {
+			items: await listEntityAliases(getDbAccessor(), {
 				agentId: scoped.agentId,
 				entityId: c.req.param("id"),
 				status: parsedStatus,
@@ -214,7 +214,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		const alias = readString(body, "alias");
 		if (!alias) return c.json({ error: "alias is required" }, 400);
 		try {
-			const { result } = applyOntologyOperation(getDbAccessor(), {
+			const { result } = await applyOntologyOperation(getDbAccessor(), {
 				agentId: scoped.agentId,
 				actor: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
 				operation: "create_entity_alias",
@@ -225,11 +225,12 @@ export function registerOntologyRoutes(app: Hono): void {
 					source: readString(body, "source") ?? null,
 				},
 			});
-			const item = listEntityAliases(getDbAccessor(), {
+			const aliases = await listEntityAliases(getDbAccessor(), {
 				agentId: scoped.agentId,
 				entityId: c.req.param("id"),
 				status: "all",
-			}).find((row) => row.id === result?.aliasId);
+			});
+			const item = aliases.find((row) => row.id === result?.aliasId);
 			return c.json({ item }, 201);
 		} catch (err) {
 			const message = messageForError(err);
@@ -238,11 +239,11 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
-	app.delete("/api/ontology/entities/:id/aliases/:aliasId", (c) => {
+	app.delete("/api/ontology/entities/:id/aliases/:aliasId", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		try {
-			applyOntologyOperation(getDbAccessor(), {
+			await applyOntologyOperation(getDbAccessor(), {
 				agentId: scoped.agentId,
 				actor: c.req.header("x-signet-actor") ?? "operator",
 				operation: "archive_entity_alias",
@@ -255,19 +256,20 @@ export function registerOntologyRoutes(app: Hono): void {
 			if (err instanceof OntologyProposalError && err.status === 404) return c.json({ error: "Alias not found" }, 404);
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
-		const item = listEntityAliases(getDbAccessor(), {
+		const aliases = await listEntityAliases(getDbAccessor(), {
 			agentId: scoped.agentId,
 			entityId: c.req.param("id"),
 			status: "all",
-		}).find((row) => row.id === c.req.param("aliasId"));
+		});
+		const item = aliases.find((row) => row.id === c.req.param("aliasId"));
 		return c.json({ item });
 	});
 
-	app.get("/api/ontology/proposals/conflicts", (c) => {
+	app.get("/api/ontology/proposals/conflicts", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		return c.json(
-			listOntologyProposalConflicts(getDbAccessor(), {
+			await listOntologyProposalConflicts(getDbAccessor(), {
 				agentId: scoped.agentId,
 				limit: parseBoundedInt(c.req.query("limit"), 500, 1, 1000),
 			}),
@@ -280,7 +282,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (scoped.response) return scoped.response;
 		try {
 			return c.json(
-				proposeDuplicateEntityMerges(getDbAccessor(), {
+				await proposeDuplicateEntityMerges(getDbAccessor(), {
 					agentId: scoped.agentId,
 					limit: readNumber(body, "limit"),
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
@@ -369,7 +371,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
-	app.get("/api/ontology/proposals/:id/evidence", (c) => {
+	app.get("/api/ontology/proposals/:id/evidence", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		try {
@@ -379,7 +381,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
-	app.get("/api/ontology/claims/evidence", (c) => {
+	app.get("/api/ontology/claims/evidence", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		const entity = c.req.query("entity")?.trim();
@@ -413,7 +415,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
-	app.get("/api/ontology/claims/versions", (c) => {
+	app.get("/api/ontology/claims/versions", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		const entity = c.req.query("entity")?.trim();
@@ -428,14 +430,14 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
 		try {
 			return c.json(
-				listClaimVersions(getDbAccessor(), { agentId: scoped.agentId, entity, aspect, group, claim, kind }),
+				await listClaimVersions(getDbAccessor(), { agentId: scoped.agentId, entity, aspect, group, claim, kind }),
 			);
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
 	});
 
-	app.get("/api/ontology/claims/explain", (c) => {
+	app.get("/api/ontology/claims/explain", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		const entity = c.req.query("entity")?.trim();
@@ -463,7 +465,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		const project = claims?.role === "admin" ? null : (claims?.scope?.project ?? null);
 		try {
 			return c.json(
-				explainOntologyClaim(getDbAccessor(), {
+				await explainOntologyClaim(getDbAccessor(), {
 					agentId: scoped.agentId,
 					entity,
 					aspect,
@@ -483,7 +485,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
-	app.get("/api/ontology/claims/version", (c) => {
+	app.get("/api/ontology/claims/version", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		const entity = c.req.query("entity")?.trim();
@@ -499,7 +501,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		const kind = parseOntologyClaimAttributeKind(c.req.query("kind"));
 		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
 		try {
-			const item = getClaimVersion(getDbAccessor(), {
+			const item = await getClaimVersion(getDbAccessor(), {
 				agentId: scoped.agentId,
 				entity,
 				aspect,
@@ -515,7 +517,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
-	app.get("/api/ontology/links/:id/evidence", (c) => {
+	app.get("/api/ontology/links/:id/evidence", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		try {
@@ -525,7 +527,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
-	app.get("/api/ontology/assertions", (c) => {
+	app.get("/api/ontology/assertions", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		try {
@@ -555,7 +557,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		);
 	});
 
-	app.get("/api/ontology/contradictions", (c) => {
+	app.get("/api/ontology/contradictions", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		const status = parseOntologyContradictionStatus(c.req.query("status"));
@@ -576,7 +578,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		);
 	});
 
-	app.get("/api/ontology/contradictions/:id", (c) => {
+	app.get("/api/ontology/contradictions/:id", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		const contradiction = getOntologyContradiction(getDbAccessor(), {
@@ -587,7 +589,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		return c.json(contradiction);
 	});
 
-	app.get("/api/ontology/assertions/:id", (c) => {
+	app.get("/api/ontology/assertions/:id", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		try {
@@ -713,7 +715,7 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (Object.keys(payload).length === 0) return c.json({ error: "payload object is required" }, 400);
 		try {
 			return c.json(
-				applyOntologyOperation(getDbAccessor(), {
+				await applyOntologyOperation(getDbAccessor(), {
 					agentId: scoped.agentId,
 					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",
 					writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
@@ -773,10 +775,10 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
-	app.get("/api/ontology/proposals/:id", (c) => {
+	app.get("/api/ontology/proposals/:id", async (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
-		const proposal = getOntologyProposal(getDbAccessor(), c.req.param("id"), scoped.agentId);
+		const proposal = await getOntologyProposal(getDbAccessor(), c.req.param("id"), scoped.agentId);
 		if (proposal === null) return c.json({ error: "Proposal not found" }, 404);
 		return c.json(proposal);
 	});
@@ -793,7 +795,7 @@ export function registerOntologyRoutes(app: Hono): void {
 
 		try {
 			return c.json(
-				createOntologyProposal(getDbAccessor(), {
+				await createOntologyProposal(getDbAccessor(), {
 					agentId: scoped.agentId,
 					operation,
 					payload,

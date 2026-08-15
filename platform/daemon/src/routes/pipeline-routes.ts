@@ -259,19 +259,19 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.use("/api/diagnostics/*", async (c, next) => {
 		return requirePermission("diagnostics", authConfig)(c, next);
 	});
-	app.get("/api/diagnostics/transcripts", (c) => {
+	app.get("/api/diagnostics/transcripts", async (c) => {
 		const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
 		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
 		}
 		const agentId = resolveAgentId({ agentId: scopedAgent.agentId });
-		return c.json(getTranscriptHealthReport(getDbAccessor(), AGENTS_DIR, agentId));
+		return c.json(await getTranscriptHealthReport(getDbAccessor(), AGENTS_DIR, agentId));
 	});
 
 	app.get("/api/diagnostics/workloads", (c) => workloadDiagnostics(c));
 
-	app.get("/api/status", (c) => {
+	app.get("/api/status", async (c) => {
 		const config = loadMemoryConfig(AGENTS_DIR);
 		const extractionWorkload = getExtractionWorkloadState({
 			enabled: false,
@@ -316,7 +316,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			  }
 			| undefined;
 		try {
-			const capture = getTranscriptCaptureStatus(getDbAccessor(), resolveDaemonAgentId());
+			const capture = await getTranscriptCaptureStatus(getDbAccessor(), resolveDaemonAgentId());
 			transcriptCapture = {
 				pending: capture.pending,
 				failed: capture.failed,
@@ -734,10 +734,10 @@ export function registerPipelineRoutes(app: Hono): void {
 	});
 
 	/** Deterministic semantic-quality measurements for the scoped Dreaming graph. */
-	app.get("/api/dream/quality", (c) => {
+	app.get("/api/dream/quality", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		return c.json(getDreamingQualityReport(getDbAccessor(), scopedAgent.agentId));
+		return c.json(await getDreamingQualityReport(getDbAccessor(), scopedAgent.agentId));
 	});
 
 	app.post("/api/dream/exclusions/requeue", async (c) => {

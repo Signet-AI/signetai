@@ -178,7 +178,7 @@ function boundedInt(value: number | undefined, fallback: number, min: number, ma
 
 function buildPrompt(
 	proposals: readonly OntologyProposal[],
-	conflicts: ReturnType<typeof listOntologyProposalConflicts>,
+	conflicts: Awaited<ReturnType<typeof listOntologyProposalConflicts>>,
 ): string {
 	const compact = proposals.map((proposal) => ({
 		id: proposal.id,
@@ -240,7 +240,7 @@ ${JSON.stringify(conflicts.items, null, 2)}`;
 
 async function providerConsolidate(
 	proposals: readonly OntologyProposal[],
-	conflicts: ReturnType<typeof listOntologyProposalConflicts>,
+	conflicts: Awaited<ReturnType<typeof listOntologyProposalConflicts>>,
 	params: Pick<ConsolidateOntologyParams, "provider" | "providerTimeoutMs" | "providerMaxTokens">,
 ): Promise<{
 	readonly proposals: readonly ProposalDraft[];
@@ -294,12 +294,12 @@ export async function consolidateOntologyProposals(
 	const agentId = params.agentId.trim();
 	if (!agentId) throw new OntologyConsolidationError("agentId is required", 400);
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
-	const source = listOntologyProposals(accessor, {
+	const source = await listOntologyProposals(accessor, {
 		agentId,
 		status: params.status ?? "pending",
 		limit,
 	});
-	const conflicts = listOntologyProposalConflicts(accessor, { agentId, limit: Math.max(limit, 50) });
+	const conflicts = await listOntologyProposalConflicts(accessor, { agentId, limit: Math.max(limit, 50) });
 	const warnings: string[] = [];
 	let summary: string | null = null;
 	let rejections: readonly unknown[] = [];
@@ -339,7 +339,7 @@ export async function consolidateOntologyProposals(
 		};
 	}
 
-	const written = createOntologyProposals(
+	const written = await createOntologyProposals(
 		accessor,
 		proposals.map((proposal) => ({
 			agentId,

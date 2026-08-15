@@ -58,21 +58,21 @@ describe("knowledge feedback", () => {
 		dbPath = "";
 	});
 
-	test("pinning updates entity state and focal resolution unions pinned entities", () => {
+	test("pinning updates entity state and focal resolution unions pinned entities", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
 		insertEntity("entity-pinned", "Pinned Project", "project");
 		insertEntity("entity-project", "other-project", "project");
 
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "default",
 			actor: "test",
 			operation: "pin_entity",
 			payload: { id: "entity-pinned" },
 		});
 
-		const pinned = getPinnedEntities(getDbAccessor(), "default");
+		const pinned = await getPinnedEntities(getDbAccessor(), "default");
 		expect(pinned).toHaveLength(1);
 		expect(pinned[0]?.id).toBe("entity-pinned");
 
@@ -86,21 +86,21 @@ describe("knowledge feedback", () => {
 		expect(resolved.entityIds).toContain("entity-project");
 		expect(resolved.source).toBe("project");
 
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "default",
 			actor: "test",
 			operation: "unpin_entity",
 			payload: { id: "entity-pinned" },
 		});
-		expect(getPinnedEntities(getDbAccessor(), "default")).toHaveLength(0);
+		expect(await getPinnedEntities(getDbAccessor(), "default")).toHaveLength(0);
 	});
 
-	test("focal source falls back to session_key even when project is present but unresolved", () => {
+	test("focal source falls back to session_key even when project is present but unresolved", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
 		insertEntity("entity-pinned", "Pinned Project", "project");
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "default",
 			actor: "test",
 			operation: "pin_entity",
@@ -118,7 +118,7 @@ describe("knowledge feedback", () => {
 		expect(resolved.entityIds).toEqual(["entity-pinned"]);
 	});
 
-	test("entity health is empty after predictor comparison table retirement", () => {
+	test("entity health is empty after predictor comparison table retirement", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -126,7 +126,7 @@ describe("knowledge feedback", () => {
 			db.exec("DROP TABLE IF EXISTS predictor_comparisons");
 		});
 
-		expect(getEntityHealth(getDbAccessor(), "default")).toEqual([]);
+		expect(await getEntityHealth(getDbAccessor(), "default")).toEqual([]);
 	});
 
 	test("fts overlap feedback raises aspect weights and decay respects the floor", () => {

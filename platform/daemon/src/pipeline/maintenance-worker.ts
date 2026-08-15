@@ -128,9 +128,8 @@ function buildRecommendations(
 	return recs;
 }
 
-function getGraphAgentIds(accessor: DbAccessor): readonly string[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+async function getGraphAgentIds(accessor: DbAccessor): Promise<readonly string[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT agent_id FROM entity_aspects
@@ -329,12 +328,10 @@ export function startMaintenanceWorker(
 
 	async function doTick(): Promise<MaintenanceCycleResult> {
 		if (isSystemPressureHigh()) {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const report = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getDiagnostics(db, tracker));
+			const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker));
 			return { report, recommendations: [], executed: [], feedbackDecayedAspects: 0, feedbackPropagatedAttributes: 0 };
 		}
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const report = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getDiagnostics(db, tracker));
+		const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker));
 
 		const embeddingStats = deps.embedding
 			? await getEmbeddingRepairStats(accessor, deps.embedding.cfg, deps.embedding.agentId)
@@ -347,15 +344,15 @@ export function startMaintenanceWorker(
 		if (recommendations.length === 0) {
 			haltTracker.reset();
 			if (cfg.graph.enabled && cfg.feedback?.enabled) {
-				for (const agentId of getGraphAgentIds(accessor)) {
+				for (const agentId of await getGraphAgentIds(accessor)) {
 					if (cfg.feedback.decayEnabled) {
-						feedbackDecayedAspects += decayAspectWeights(accessor, agentId, {
+						feedbackDecayedAspects += await decayAspectWeights(accessor, agentId, {
 							decayRate: cfg.feedback.decayRate,
 							minWeight: cfg.feedback.minAspectWeight,
 							staleDays: cfg.feedback.staleDays,
 						});
 					}
-					feedbackPropagatedAttributes += propagateMemoryStatus(accessor, agentId);
+					feedbackPropagatedAttributes += await propagateMemoryStatus(accessor, agentId);
 				}
 				recordFeedbackTelemetry({
 					feedbackDecayedAspects,
@@ -410,8 +407,7 @@ export function startMaintenanceWorker(
 
 		// Re-check health to evaluate improvement
 		if (executed.length > 0) {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const postReport = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getDiagnostics(db, tracker));
+			const postReport = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker));
 			const improved = postReport.composite.score > preScore;
 
 			for (const exec of executed) {
@@ -427,15 +423,15 @@ export function startMaintenanceWorker(
 		}
 
 		if (cfg.graph.enabled && cfg.feedback?.enabled) {
-			for (const agentId of getGraphAgentIds(accessor)) {
+			for (const agentId of await getGraphAgentIds(accessor)) {
 				if (cfg.feedback.decayEnabled) {
-					feedbackDecayedAspects += decayAspectWeights(accessor, agentId, {
+					feedbackDecayedAspects += await decayAspectWeights(accessor, agentId, {
 						decayRate: cfg.feedback.decayRate,
 						minWeight: cfg.feedback.minAspectWeight,
 						staleDays: cfg.feedback.staleDays,
 					});
 				}
-				feedbackPropagatedAttributes += propagateMemoryStatus(accessor, agentId);
+				feedbackPropagatedAttributes += await propagateMemoryStatus(accessor, agentId);
 			}
 			recordFeedbackTelemetry({
 				feedbackDecayedAspects,
@@ -453,9 +449,8 @@ export function startMaintenanceWorker(
 		// Dead memory hygiene: warn when stale/low-confidence memories accumulate.
 		// No auto-deletion — use GET /api/repair/dead-memories to review and act.
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const count = accessor.withReadDb(
-				(db: import("../db-accessor").ReadDb) =>
+			const count = await accessor.withReadDbAsync(
+				async (db) =>
 					(
 						db
 							.prepare(
@@ -485,11 +480,13 @@ export function startMaintenanceWorker(
 		// Reclaim free pages from DROP/DELETE/promotion operations (#1139).
 		// Only run when the free-page ratio is high and the system is not under pressure.
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const ratio = accessor.withReadDb((db: import("../db-accessor").ReadDb) => getFreePageRatio(db));
+			const ratio = await accessor.withReadDbAsync(async (db) => getFreePageRatio(db));
 			if (ratio >= 0.2) {
-				if (!accessor.incrementalVacuumAsync) throw new Error("Incremental vacuum operation is unavailable");
-				await accessor.incrementalVacuumAsync();
+				if (accessor.incrementalVacuumAsync) {
+					await accessor.incrementalVacuumAsync();
+				} else {
+					accessor.incrementalVacuum();
+				}
 			}
 		} catch {
 			// Non-fatal — vacuum should never interrupt the maintenance cycle

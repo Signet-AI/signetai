@@ -75,7 +75,7 @@ describe("knowledge graph navigation", () => {
 		dbPath = "";
 	});
 
-	test("walks entity -> aspect -> group -> claim -> attributes", () => {
+	test("walks entity -> aspect -> group -> claim -> attributes", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 		seedEntity();
@@ -107,10 +107,10 @@ describe("knowledge graph navigation", () => {
 			content: "Nicholai has no known shellfish allergy.",
 		});
 
-		const aspects = getEntityAspectsByName(getDbAccessor(), { agentId: "default", entity: "Nicholai" });
+		const aspects = await getEntityAspectsByName(getDbAccessor(), { agentId: "default", entity: "Nicholai" });
 		expect(aspects?.items.map((item) => item.aspect.canonicalName)).toEqual(["food"]);
 
-		const groups = listEntityGroups(getDbAccessor(), {
+		const groups = await listEntityGroups(getDbAccessor(), {
 			agentId: "default",
 			entity: "Nicholai",
 			aspect: "food",
@@ -118,7 +118,7 @@ describe("knowledge graph navigation", () => {
 		expect(groups?.items.map((item) => item.groupKey)).toEqual(["restaurants", "dietary_constraints"]);
 		expect(groups?.items[0]?.claimCount).toBe(2);
 
-		const claims = listEntityClaims(getDbAccessor(), {
+		const claims = await listEntityClaims(getDbAccessor(), {
 			agentId: "default",
 			entity: "Nicholai",
 			aspect: "food",
@@ -132,7 +132,7 @@ describe("knowledge graph navigation", () => {
 		expect(claims?.items[0]?.supersededCount).toBe(1);
 		expect(claims?.items[0]?.preview).toBe("Nicholai currently prefers Temaki Den.");
 
-		const active = listEntityAttributesByPath(getDbAccessor(), {
+		const active = await listEntityAttributesByPath(getDbAccessor(), {
 			agentId: "default",
 			entity: "Nicholai",
 			aspect: "food",
@@ -143,7 +143,7 @@ describe("knowledge graph navigation", () => {
 		});
 		expect(active?.items.map((item) => item.content)).toEqual(["Nicholai currently prefers Temaki Den."]);
 
-		const all = listEntityAttributesByPath(getDbAccessor(), {
+		const all = await listEntityAttributesByPath(getDbAccessor(), {
 			agentId: "default",
 			entity: "Nicholai",
 			aspect: "food",
@@ -156,7 +156,7 @@ describe("knowledge graph navigation", () => {
 		expect(all?.items.map((item) => item.status)).toEqual(["active", "superseded"]);
 	});
 
-	test("returns a compact tree for agent-visible graph browsing", () => {
+	test("returns a compact tree for agent-visible graph browsing", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 		seedEntity();
@@ -173,7 +173,7 @@ describe("knowledge graph navigation", () => {
 			content: "Nicholai has tried four Korean restaurants.",
 		});
 
-		const tree = getEntityKnowledgeTree(getDbAccessor(), {
+		const tree = await getEntityKnowledgeTree(getDbAccessor(), {
 			agentId: "default",
 			entity: "Nicholai",
 			maxAspects: 20,
@@ -193,7 +193,7 @@ describe("knowledge graph navigation", () => {
 		expect(tree?.items[0]?.groups[0]?.claims[0]?.preview).toBe("Nicholai currently prefers Temaki Den.");
 	});
 
-	test("tree depth can stop before claims", () => {
+	test("tree depth can stop before claims", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 		seedEntity();
@@ -204,7 +204,7 @@ describe("knowledge graph navigation", () => {
 			content: "Nicholai currently prefers Temaki Den.",
 		});
 
-		const tree = getEntityKnowledgeTree(getDbAccessor(), {
+		const tree = await getEntityKnowledgeTree(getDbAccessor(), {
 			agentId: "default",
 			entity: "Nicholai",
 			maxAspects: 20,

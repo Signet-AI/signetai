@@ -130,13 +130,13 @@ function attributeEvidenceRefs(attribute: EntityAttribute): OntologyEvidenceRef[
 	return uniqueOntologyEvidenceRefs(refs);
 }
 
-export function getOntologyClaimEvidence(
+export async function getOntologyClaimEvidence(
 	accessor: DbAccessor,
 	params: GetOntologyClaimEvidenceParams,
-): OntologyClaimEvidenceResult {
+): Promise<OntologyClaimEvidenceResult> {
 	const limit = Math.min(Math.max(params.limit ?? 20, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	const result = listEntityAttributesByPath(accessor, {
+	const result = await listEntityAttributesByPath(accessor, {
 		agentId: params.agentId,
 		entity: params.entity,
 		aspect: params.aspect,

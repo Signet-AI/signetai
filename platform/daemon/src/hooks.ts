@@ -452,12 +452,11 @@ function buildPluginPromptContributionSection(target: PluginPromptTargetV1, log:
 }
 
 /** Build a brief "since your last session" summary */
-function getSessionGapSummary(): string | undefined {
+async function getSessionGapSummary(): Promise<string | undefined> {
 	if (!existsSync(getMemoryDbPath())) return undefined;
 
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		return await getDbAccessor().withReadDbAsync(async (db) => {
 			// The completion marker covers explicit ends and daemon recovery/TTL
 			// boundaries; all are settled session activity for this brief.
 			const lastSession = db.prepare("SELECT MAX(completed_at) as last_end FROM session_transcripts").get() as
@@ -541,33 +540,27 @@ function loadHooksConfigForHarness(harness: string) {
 // Memory Queries
 // ============================================================================
 
-function getRecentMemories(
+async function getRecentMemories(
 	limit: number,
 	recencyBias = 0.7,
 	agentScope?: { agentId: string; readPolicy: AgentRosterReadPolicy; policyGroup: string | null },
-): Array<{
-	id: string;
-	content: string;
-	type: string;
-	importance: number;
-	created_at: string;
-}> {
+): Promise<
+	Array<{
+		id: string;
+		content: string;
+		type: string;
+		importance: number;
+		created_at: string;
+	}>
+> {
 	if (!existsSync(getMemoryDbPath())) return [];
 
 	try {
-		const rows: Array<{
-			id: string;
-			content: string;
-			type: string;
-			importance: number;
-			created_at: string;
-		}> =
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-				const scope = agentScope
-					? buildAgentScopeClause(agentScope.agentId, agentScope.readPolicy, agentScope.policyGroup)
-					: { sql: " AND m.visibility != 'archived'", args: [] };
-				const query = `
+		const rows = await getDbAccessor().withReadDbAsync(async (db) => {
+			const scope = agentScope
+				? buildAgentScopeClause(agentScope.agentId, agentScope.readPolicy, agentScope.policyGroup)
+				: { sql: " AND m.visibility != 'archived'", args: [] };
+			const query = `
         SELECT
           m.id, m.content, m.type, m.importance, m.created_at,
           (julianday('now') - julianday(m.created_at)) as age_days
@@ -580,22 +573,22 @@ function getRecentMemories(
         LIMIT ?
       `;
 
-				const queried = db.prepare(query).all(...scope.args, limit) as Array<{
-					id: string;
-					content: string;
-					type: string;
-					importance: number;
-					created_at: string;
-				}>;
-				return queried.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId: agentScope?.agentId ?? "default",
-						sourceKind: "memory",
-						sourceId: row.id,
-						content: row.content,
-					}),
-				);
-			});
+			const rows = db.prepare(query).all(...scope.args, limit) as Array<{
+				id: string;
+				content: string;
+				type: string;
+				importance: number;
+				created_at: string;
+			}>;
+			return rows.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId: agentScope?.agentId ?? "default",
+					sourceKind: "memory",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
+		});
 
 		return rows.map((r) => ({
 			id: r.id,
@@ -771,8 +764,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	if (req.sessionKey && existsSync(getMemoryDbPath())) {
 		try {
 			const subagentCfg = memoryCfg.pipelineV2.subagents ?? { inheritContext: true, tailChars: 3000 };
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const block = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+			const block = await getDbAccessor().withReadDbAsync(async (db) => {
 				const parent = resolveParentSession(db, {
 					harness: req.harness,
 					project: req.project,
@@ -847,8 +839,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	if (traversalEnabled) {
 		const _traversalStart = Date.now();
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const focal = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+			const focal = await getDbAccessor().withReadDbAsync(async (db) =>
 				resolveFocalEntities(db, traversalAgentId, {
 					project: req.project,
 					sessionKey: req.sessionKey,
@@ -859,12 +850,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			traversalEntityNames = focal.entityNames;
 
 			if (focal.entityIds.length > 0) {
-				const traversalResult = await traverseKnowledgeGraph(
-					focal.entityIds,
-					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-					<T>(fn: (db: ReadDb) => T): T => getDbAccessor().withReadDb(fn),
-					traversalAgentId,
-					traversalRuntimeCfg,
+				const traversalResult = await getDbAccessor().withReadDbAsync(async (db) =>
+					traverseKnowledgeGraph(focal.entityIds, db, traversalAgentId, traversalRuntimeCfg),
 				);
 				traversalTimedOut = traversalResult.timedOut;
 				traversalTraversedEntities = traversalResult.entityCount;
@@ -940,7 +927,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const dbAcc = loadDbAccessor();
 	const candidateIdsForFeatures = mergedCandidates.map((c) => c.id);
 	const structuralById = dbAcc
-		? getStructuralFeatures(dbAcc, candidateIdsForFeatures, agentId, structuralCandidateSourceById)
+		? await getStructuralFeatures(dbAcc, candidateIdsForFeatures, agentId, structuralCandidateSourceById)
 		: new Map<string, StructuralFeatures>();
 	const sortedCandidates = [...mergedCandidates].sort((a, b) => {
 		if (req.project) {
@@ -1026,7 +1013,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// Re-fetch structural features for any predicted memories not in the first batch
 	const fullStructuralById =
 		allCandidateIdsForRecording.length > candidateIdsForFeatures.length && dbAcc
-			? getStructuralFeatures(dbAcc, allCandidateIdsForRecording, agentId, structuralCandidateSourceById)
+			? await getStructuralFeatures(dbAcc, allCandidateIdsForRecording, agentId, structuralCandidateSourceById)
 			: structuralById;
 
 	const candidatesForRecording = [
@@ -1078,7 +1065,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	dynamicParts.push("[memory active | /remember | /recall]");
 
 	// Inject session gap summary for temporal awareness
-	const gapSummary = getSessionGapSummary();
+	const gapSummary = await getSessionGapSummary();
 	if (gapSummary) {
 		dynamicParts.push(gapSummary);
 	}
@@ -1291,7 +1278,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 }
 
-export function handlePreCompaction(req: PreCompactionRequest): PreCompactionResponse {
+export async function handlePreCompaction(req: PreCompactionRequest): Promise<PreCompactionResponse> {
 	const config = loadHooksConfig().preCompaction || {};
 
 	logger.info("hooks", "Pre-compaction hook", {
@@ -1313,7 +1300,7 @@ ${guidelines}
 		const configuredLimit =
 			typeof config.memoryLimit === "number" && Number.isFinite(config.memoryLimit) ? config.memoryLimit : 5;
 		const memoryLimit = Math.max(0, Math.min(50, Math.trunc(configuredLimit)));
-		const recentMemories = getRecentMemories(memoryLimit, 0.9, { agentId, ...agentScope });
+		const recentMemories = await getRecentMemories(memoryLimit, 0.9, { agentId, ...agentScope });
 		if (recentMemories.length > 0) {
 			summaryPrompt += "\nRecent memories for reference:\n";
 			for (const mem of recentMemories) {
@@ -2093,7 +2080,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		}
 	}
 	if (transcriptRetained && sessionKey) {
-		const completed = markSessionTranscriptCompleted(sessionKey, agentId, endedAt);
+		const completed = await markSessionTranscriptCompleted(sessionKey, agentId, endedAt);
 		if (!completed) {
 			logger.warn("hooks", "Session-end transcript completion marker was not written", {
 				sessionKey,
@@ -2105,7 +2092,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	let transcriptCaptureJobId: string | null = null;
 	if (retainedTranscript.trim().length > 0 || rawTranscript.trim().length > 0) {
 		try {
-			transcriptCaptureJobId = enqueueTranscriptCaptureJob(getDbAccessor(), {
+			transcriptCaptureJobId = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 				agentId,
 				harness: req.harness,
 				sessionKey: sessionKey ?? null,
@@ -2157,7 +2144,7 @@ async function waitForCurrentDeferredSessionEndWork(): Promise<void> {
 	await Promise.allSettled(pending);
 }
 
-function shouldDeferStaleSessionSweep(): boolean {
+async function shouldDeferStaleSessionSweep(): Promise<boolean> {
 	if (deferredSessionEndWork.size > 0) {
 		logger.debug("hooks", "Stale session-end sweep deferred while session-end work is pending", {
 			deferredWork: deferredSessionEndWork.size,
@@ -2167,7 +2154,7 @@ function shouldDeferStaleSessionSweep(): boolean {
 	const dbAccessor = loadDbAccessor();
 	if (!dbAccessor) return true;
 	try {
-		const capture = getTranscriptCaptureStatus(dbAccessor);
+		const capture = await getTranscriptCaptureStatus(dbAccessor);
 		const downstreamBacklog = capture.pending + capture.processing;
 		if (downstreamBacklog < STALE_SESSION_SWEEP_MAX_DOWNSTREAM_BACKLOG) return false;
 		logger.debug("hooks", "Stale session-end sweep deferred while downstream work is backlogged", {
@@ -2188,7 +2175,7 @@ async function runStaleSessionSweep(options: {
 	staleOlderThanMs: number;
 	limit?: number;
 }): Promise<StaleSessionSweepResult> {
-	if (shouldDeferStaleSessionSweep()) return { closed: 0, skipped: 0, totalMatching: 0 };
+	if (await shouldDeferStaleSessionSweep()) return { closed: 0, skipped: 0, totalMatching: 0 };
 
 	const requestedLimit = options.limit ?? STALE_SESSION_SWEEP_DEFAULT_LIMIT;
 	const limit = Number.isFinite(requestedLimit)
@@ -2255,7 +2242,7 @@ async function deferSessionEndWork(params: {
 	const pipelineActive = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
 	if (sessionKey && pipelineActive && memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.feedback.enabled) {
 		try {
-			const feedbackPropagatedAttributes = propagateMemoryStatus(getDbAccessor(), agentId);
+			const feedbackPropagatedAttributes = await propagateMemoryStatus(getDbAccessor(), agentId);
 			if (feedbackPropagatedAttributes > 0) {
 				invalidateTraversalCache();
 			}

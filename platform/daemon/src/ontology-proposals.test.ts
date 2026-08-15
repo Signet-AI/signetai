@@ -70,8 +70,8 @@ describe("ontology proposals", () => {
 		});
 	}
 
-	it("applies an add_claim_value proposal into a grouped claim slot with provenance", () => {
-		const proposal = createOntologyProposal(getDbAccessor(), {
+	it("applies an add_claim_value proposal into a grouped claim slot with provenance", async () => {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -93,7 +93,7 @@ describe("ontology proposals", () => {
 
 		expect(proposal.status).toBe("pending");
 
-		const applied = applyOntologyProposal(getDbAccessor(), {
+		const applied = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: proposal.id,
 			actor: "ant",
@@ -178,7 +178,7 @@ describe("ontology proposals", () => {
 		expect(JSON.parse(row?.proposal_evidence ?? "[]")).toEqual([{ source: "transcript:test", message_ids: ["m1"] }]);
 	});
 
-	it("records canonical episodic lineage and stales aggregate snapshots when a claim changes", () => {
+	it("records canonical episodic lineage and stales aggregate snapshots when a claim changes", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memories
@@ -186,7 +186,7 @@ describe("ontology proposals", () => {
 				 VALUES ('episodic-source', 'Signet is a local-first memory system.', 'fact', 'ant', 'global', 'episodic', ?, ?)`,
 			).run("2026-08-04T00:00:00.000Z", "2026-08-04T00:00:00.000Z");
 		});
-		const initial = applyOntologyOperation(getDbAccessor(), {
+		const initial = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -248,7 +248,7 @@ describe("ontology proposals", () => {
 		);
 		expect(lineage).toEqual([{ source_kind: "memory", source_id: "episodic-source" }]);
 
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -279,7 +279,7 @@ describe("ontology proposals", () => {
 		).toMatchObject({ stale_at: expect.any(String) });
 	});
 
-	it("rejects invalid proposal source_refs before creating proposals or semantic memory provenance (#1343)", () => {
+	it("rejects invalid proposal source_refs before creating proposals or semantic memory provenance (#1343)", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memories
@@ -318,7 +318,7 @@ describe("ontology proposals", () => {
 						.get() as { proposals: number; attributes: number; derived: number; links: number },
 			);
 
-		const valid = applyOntologyOperation(getDbAccessor(), {
+		const valid = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -335,7 +335,7 @@ describe("ontology proposals", () => {
 			),
 		).toEqual({ source_kind: "memory", source_id: "valid-source" });
 
-		const deduped = applyOntologyOperation(getDbAccessor(), {
+		const deduped = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -347,23 +347,23 @@ describe("ontology proposals", () => {
 		expect(counts()).toEqual({ proposals: 2, attributes: 1, derived: 1, links: 1 });
 
 		const beforeRejectedWrites = counts();
-		expect(() =>
+		await expect(
 			createOntologyProposal(getDbAccessor(), {
 				agentId: "ant",
 				operation: "set_claim_value",
 				payload: payload("missing"),
 				evidence: [{ source_ref: "memory:missing-source" }],
 			}),
-		).toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:missing-source", 409));
-		expect(() =>
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:missing-source", 409));
+		await expect(
 			createOntologyProposal(getDbAccessor(), {
 				agentId: "ant",
 				operation: "set_claim_value",
 				payload: payload("cross_scope"),
 				evidence: [{ source_ref: "memory:other-source" }],
 			}),
-		).toThrow(new OntologyProposalError("Evidence source_ref crosses the authorized agent scope", 409));
-		expect(() =>
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref crosses the authorized agent scope", 409));
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
@@ -372,8 +372,8 @@ describe("ontology proposals", () => {
 				evidence: [{ source_ref: "memory:" }],
 				propose: true,
 			}),
-		).toThrow(new OntologyProposalError("Evidence source_ref must name a canonical episodic source", 409));
-		expect(() =>
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref must name a canonical episodic source", 409));
+		await expect(
 			applyOntologyOperationBatch(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
@@ -391,8 +391,8 @@ describe("ontology proposals", () => {
 					},
 				],
 			}),
-		).toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:missing-source", 409));
-		expect(() =>
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:missing-source", 409));
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
@@ -400,10 +400,10 @@ describe("ontology proposals", () => {
 				payload: payload("direct_missing"),
 				evidence: [{ source_ref: "memory:missing-source" }],
 			}),
-		).toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:missing-source", 409));
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:missing-source", 409));
 		expect(counts()).toEqual(beforeRejectedWrites);
 
-		const pending = createOntologyProposal(getDbAccessor(), {
+		const pending = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "set_claim_value",
 			payload: payload("deleted_before_apply"),
@@ -413,14 +413,14 @@ describe("ontology proposals", () => {
 			db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = ? AND agent_id = ?").run("pending-source", "ant");
 		});
 		const beforeDeletedSourceApply = counts();
-		expect(() => applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" })).toThrow(
-			new OntologyProposalError("Evidence source_ref was not found: memory:pending-source", 409),
-		);
+		await expect(
+			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" }),
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:pending-source", 409));
 		expect(counts()).toEqual(beforeDeletedSourceApply);
-		expect(getOntologyProposal(getDbAccessor(), pending.id, "ant")?.status).toBe("pending");
+		expect((await getOntologyProposal(getDbAccessor(), pending.id, "ant"))?.status).toBe("pending");
 	});
 
-	it("rejects fabricated and cross-agent semantic premise links before persistence (#1343)", () => {
+	it("rejects fabricated and cross-agent semantic premise links before persistence (#1343)", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO entities
@@ -457,7 +457,7 @@ describe("ontology proposals", () => {
 		);
 	});
 
-	it("rejects a deduped claim apply whose evidence source disappeared after creation", () => {
+	it("rejects a deduped claim apply whose evidence source disappeared after creation", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memories
@@ -480,7 +480,7 @@ describe("ontology proposals", () => {
 			value: "Deduped applies must still revalidate their evidence.",
 		};
 
-		const first = applyOntologyOperation(getDbAccessor(), {
+		const first = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -490,7 +490,7 @@ describe("ontology proposals", () => {
 		expect(first.proposal.status).toBe("applied");
 		expect(first.result?.attributeId).toBeTypeOf("string");
 
-		const pending = createOntologyProposal(getDbAccessor(), {
+		const pending = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "set_claim_value",
 			payload,
@@ -513,9 +513,9 @@ describe("ontology proposals", () => {
 		});
 
 		// The dedupe early-return used to apply without revalidating evidence.
-		expect(() => applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" })).toThrow(
-			new OntologyProposalError("Evidence source_ref was not found: memory:dedupe-gone", 409),
-		);
+		await expect(
+			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" }),
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:dedupe-gone", 409));
 
 		const after = getDbAccessor().withReadDb((db) => {
 			const attributeCount = (
@@ -529,10 +529,10 @@ describe("ontology proposals", () => {
 			return { attributeCount, derivedCount };
 		});
 		expect(after).toEqual(before);
-		expect(getOntologyProposal(getDbAccessor(), pending.id, "ant")?.status).toBe("pending");
+		expect((await getOntologyProposal(getDbAccessor(), pending.id, "ant"))?.status).toBe("pending");
 	});
 
-	it("rejects a non-materializing apply whose evidence source disappeared after creation", () => {
+	it("rejects a non-materializing apply whose evidence source disappeared after creation", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memories
@@ -541,7 +541,7 @@ describe("ontology proposals", () => {
 			).run("2026-08-04T00:00:00.000Z", "2026-08-04T00:00:00.000Z");
 		});
 
-		const pending = createOntologyProposal(getDbAccessor(), {
+		const pending = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "create_entity",
 			payload: { name: "Orphaned Evidence Entity", entity_type: "concept" },
@@ -553,9 +553,9 @@ describe("ontology proposals", () => {
 
 		// create_entity never materializes attribute memory, so apply-time
 		// revalidation has to happen at the shared seam, not the materializer.
-		expect(() => applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" })).toThrow(
-			new OntologyProposalError("Evidence source_ref was not found: memory:entity-gone", 409),
-		);
+		await expect(
+			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" }),
+		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:entity-gone", 409));
 		expect(
 			getDbAccessor().withReadDb(
 				(db) =>
@@ -564,18 +564,18 @@ describe("ontology proposals", () => {
 						.get("ant", "Orphaned Evidence Entity") as { c: number },
 			),
 		).toEqual({ c: 0 });
-		expect(getOntologyProposal(getDbAccessor(), pending.id, "ant")?.status).toBe("pending");
+		expect((await getOntologyProposal(getDbAccessor(), pending.id, "ant"))?.status).toBe("pending");
 	});
 
-	it("rejects generic entity labels before creating ontology entities", () => {
-		expect(() =>
+	it("rejects generic entity labels before creating ontology entities", async () => {
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
 				operation: "create_entity",
 				payload: { name: "the", entity_type: "project" },
 			}),
-		).toThrow("Entity name rejected: generic_or_scaffolding_name");
+		).rejects.toThrow("Entity name rejected: generic_or_scaffolding_name");
 		expect(
 			getDbAccessor().withReadDb(
 				(db) => db.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ?").get("ant") as { count: number },
@@ -583,8 +583,8 @@ describe("ontology proposals", () => {
 		).toEqual({ count: 0 });
 	});
 
-	it("does not archive an aspect that has an active constraint without force", () => {
-		applyOntologyOperation(getDbAccessor(), {
+	it("does not archive an aspect that has an active constraint without force", async () => {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "set_claim_value",
@@ -598,15 +598,15 @@ describe("ontology proposals", () => {
 			},
 		});
 
-		expect(() =>
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
 				operation: "archive_aspect",
 				payload: { entity: "Constraint Guard", selector: "retention" },
 			}),
-		).toThrow("Refusing to archive aspect with active constraint attributes without force");
-		const applied = applyOntologyOperation(getDbAccessor(), {
+		).rejects.toThrow("Refusing to archive aspect with active constraint attributes without force");
+		const applied = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "archive_aspect",
@@ -615,15 +615,15 @@ describe("ontology proposals", () => {
 		expect(applied.proposal.status).toBe("applied");
 	});
 
-	it("rejects a pending proposal without mutating graph state", () => {
-		const proposal = createOntologyProposal(getDbAccessor(), {
+	it("rejects a pending proposal without mutating graph state", async () => {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
 			agentId: "default",
 			operation: "create_entity",
 			payload: { name: "Temporary Entity", entity_type: "concept" },
 			rationale: "Low confidence extraction.",
 		});
 
-		const rejected = rejectOntologyProposal(getDbAccessor(), {
+		const rejected = await rejectOntologyProposal(getDbAccessor(), {
 			agentId: "default",
 			id: proposal.id,
 			actor: "operator",
@@ -640,18 +640,18 @@ describe("ontology proposals", () => {
 		expect(entity).toBeNull();
 	});
 
-	it("rejects empty proposal operations before storage", () => {
-		expect(() =>
+	it("rejects empty proposal operations before storage", async () => {
+		await expect(
 			createOntologyProposal(getDbAccessor(), {
 				agentId: "default",
 				operation: "   ",
 				payload: { name: "Missing Operation" },
 			}),
-		).toThrow(OntologyProposalError);
+		).rejects.toThrow(OntologyProposalError);
 	});
 
-	it("creates proposal batches atomically in one agent scope", () => {
-		const batch = createOntologyProposals(getDbAccessor(), [
+	it("creates proposal batches atomically in one agent scope", async () => {
+		const batch = await createOntologyProposals(getDbAccessor(), [
 			{
 				agentId: "ant",
 				operation: "create_entity",
@@ -682,7 +682,7 @@ describe("ontology proposals", () => {
 		expect(batch.items.every((item) => item.agentId === "ant")).toBe(true);
 		expect(batch.items[1]?.evidence).toHaveLength(1);
 
-		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "add_claim_value" });
+		const listed = await listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "add_claim_value" });
 		expect(listed.items).toHaveLength(1);
 		expect(listed.items[0]?.createdBy).toBe("importer");
 		expect(listed.items[0]?.sourceKind).toBe("transcript");
@@ -840,8 +840,8 @@ describe("ontology proposals", () => {
 			}),
 		).rejects.toThrow("predicate is invalid");
 
-		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
-		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "ant", status: "all" }).items).toHaveLength(0);
+		expect((await listOntologyProposals(getDbAccessor(), { agentId: "ant" })).items).toHaveLength(0);
+		expect((await listEpistemicAssertions(getDbAccessor(), { agentId: "ant", status: "all" })).items).toHaveLength(0);
 	});
 
 	it("mechanically extracts conservative proposals from plain transcript text", async () => {
@@ -936,7 +936,7 @@ describe("ontology proposals", () => {
 	});
 
 	it("consolidates pending proposals through an inference provider without direct mutation", async () => {
-		createOntologyProposal(getDbAccessor(), {
+		await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -949,7 +949,7 @@ describe("ontology proposals", () => {
 			confidence: 0.72,
 			rationale: "Raw extraction candidate.",
 		});
-		createOntologyProposal(getDbAccessor(), {
+		await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1037,7 +1037,7 @@ describe("ontology proposals", () => {
 		expect(written.items[0]?.sourceKind).toBe("ontology_consolidation");
 	});
 
-	it("resolves proposal evidence from transcripts and indexed artifacts", () => {
+	it("resolves proposal evidence from transcripts and indexed artifacts", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO session_transcripts
@@ -1071,7 +1071,7 @@ describe("ontology proposals", () => {
 				"2026-05-06T00:01:00.000Z",
 			);
 		});
-		const proposal = createOntologyProposal(getDbAccessor(), {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1091,7 +1091,7 @@ describe("ontology proposals", () => {
 			sourcePath: "memory/codex/transcripts/transcript.jsonl",
 		});
 
-		const evidence = getOntologyProposalEvidence(getDbAccessor(), proposal.id, "ant");
+		const evidence = await getOntologyProposalEvidence(getDbAccessor(), proposal.id, "ant");
 
 		expect(evidence.count).toBe(2);
 		expect(evidence.items[0]?.kind).toBe("session_transcript");
@@ -1100,7 +1100,7 @@ describe("ontology proposals", () => {
 		expect(evidence.items[1]?.excerpt).toContain("preserve lineage");
 	});
 
-	it("resolves applied claim evidence from stored attribute provenance", () => {
+	it("resolves applied claim evidence from stored attribute provenance", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO session_transcripts
@@ -1134,7 +1134,7 @@ describe("ontology proposals", () => {
 				"2026-05-06T00:01:00.000Z",
 			);
 		});
-		const proposal = createOntologyProposal(getDbAccessor(), {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1150,9 +1150,9 @@ describe("ontology proposals", () => {
 			sourceId: "transcript:claim",
 			sourcePath: "memory/codex/transcripts/claim.jsonl",
 		});
-		applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "ant" });
+		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "ant" });
 
-		const evidence = getOntologyClaimEvidence(getDbAccessor(), {
+		const evidence = await getOntologyClaimEvidence(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
 			aspect: "architecture",
@@ -1175,23 +1175,23 @@ describe("ontology proposals", () => {
 		expect(evidence.items[0]?.evidence[2]?.excerpt).toContain("auditable lineage");
 	});
 
-	it("falls back to embedded quotes when source rows are not present", () => {
-		const proposal = createOntologyProposal(getDbAccessor(), {
+	it("falls back to embedded quotes when source rows are not present", async () => {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
 			agentId: "default",
 			operation: "create_entity",
 			payload: { name: "Quoted Evidence" },
 			evidence: [{ transcript_id: "missing", quote: "This quote still explains the proposal." }],
 		});
 
-		const evidence = getOntologyProposalEvidence(getDbAccessor(), proposal.id, "default");
+		const evidence = await getOntologyProposalEvidence(getDbAccessor(), proposal.id, "default");
 
 		expect(evidence.items).toHaveLength(1);
 		expect(evidence.items[0]?.kind).toBe("provided_quote");
 		expect(evidence.items[0]?.excerpt).toBe("This quote still explains the proposal.");
 	});
 
-	it("applies supersede_claim_value by preserving old values and adding replacements", () => {
-		const initial = createOntologyProposal(getDbAccessor(), {
+	it("applies supersede_claim_value by preserving old values and adding replacements", async () => {
+		const initial = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1204,7 +1204,7 @@ describe("ontology proposals", () => {
 			},
 			confidence: 0.4,
 		});
-		const initialApplied = applyOntologyProposal(getDbAccessor(), {
+		const initialApplied = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: initial.id,
 			actor: "test",
@@ -1212,7 +1212,7 @@ describe("ontology proposals", () => {
 		const oldId = initialApplied.result?.attributeId;
 		if (typeof oldId !== "string") throw new Error("initial attribute id was not returned");
 
-		const supersede = createOntologyProposal(getDbAccessor(), {
+		const supersede = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "supersede_claim_value",
 			payload: {
@@ -1228,7 +1228,7 @@ describe("ontology proposals", () => {
 			sourceId: "transcript:proposal-loop",
 		});
 
-		const applied = applyOntologyProposal(getDbAccessor(), {
+		const applied = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: supersede.id,
 			actor: "test",
@@ -1282,8 +1282,8 @@ describe("ontology proposals", () => {
 		});
 	});
 
-	it("applies semantic create_link proposal roles from ontology extraction", () => {
-		const proposal = createOntologyProposal(getDbAccessor(), {
+	it("applies semantic create_link proposal roles from ontology extraction", async () => {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "create_link",
 			payload: {
@@ -1299,7 +1299,7 @@ describe("ontology proposals", () => {
 			sourceId: "transcript:semantic-link",
 		});
 
-		const applied = applyOntologyProposal(getDbAccessor(), {
+		const applied = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: proposal.id,
 			actor: "test",
@@ -1340,7 +1340,7 @@ describe("ontology proposals", () => {
 		expect(row?.target_type).toBe("concept");
 	});
 
-	it("resolves applied link evidence from stored dependency provenance", () => {
+	it("resolves applied link evidence from stored dependency provenance", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO session_transcripts
@@ -1374,7 +1374,7 @@ describe("ontology proposals", () => {
 				"2026-05-06T00:01:00.000Z",
 			);
 		});
-		const proposal = createOntologyProposal(getDbAccessor(), {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "create_link",
 			payload: {
@@ -1389,11 +1389,11 @@ describe("ontology proposals", () => {
 			sourceId: "transcript:link",
 			sourcePath: "memory/codex/transcripts/link.jsonl",
 		});
-		const applied = applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "test" });
 		const dependencyId = applied.result?.dependencyId;
 		expect(typeof dependencyId).toBe("string");
 
-		const evidence = getOntologyLinkEvidence(getDbAccessor(), {
+		const evidence = await getOntologyLinkEvidence(getDbAccessor(), {
 			agentId: "ant",
 			id: dependencyId as string,
 		});
@@ -1410,8 +1410,8 @@ describe("ontology proposals", () => {
 		expect(evidence.items[2]?.excerpt).toContain("supports the proposal-loop claim");
 	});
 
-	it("groups pending add_claim_value conflicts by claim slot", () => {
-		createOntologyProposals(getDbAccessor(), [
+	it("groups pending add_claim_value conflicts by claim slot", async () => {
+		await createOntologyProposals(getDbAccessor(), [
 			{
 				agentId: "ant",
 				operation: "add_claim_value",
@@ -1449,8 +1449,8 @@ describe("ontology proposals", () => {
 			},
 		]);
 
-		const conflicts = listOntologyProposalConflicts(getDbAccessor(), { agentId: "ant" });
-		const other = listOntologyProposalConflicts(getDbAccessor(), { agentId: "dot" });
+		const conflicts = await listOntologyProposalConflicts(getDbAccessor(), { agentId: "ant" });
+		const other = await listOntologyProposalConflicts(getDbAccessor(), { agentId: "dot" });
 
 		expect(conflicts.count).toBe(1);
 		expect(conflicts.items[0]?.entity).toBe("Signet");
@@ -1459,8 +1459,8 @@ describe("ontology proposals", () => {
 		expect(other.count).toBe(0);
 	});
 
-	it("applies merge_entities by moving aspects and deleting duplicate sources", () => {
-		const target = createOntologyProposal(getDbAccessor(), {
+	it("applies merge_entities by moving aspects and deleting duplicate sources", async () => {
+		const target = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1472,9 +1472,9 @@ describe("ontology proposals", () => {
 				value: "Agent-first ontology",
 			},
 		});
-		applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: target.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: target.id, actor: "test" });
 
-		const duplicate = createOntologyProposal(getDbAccessor(), {
+		const duplicate = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1486,9 +1486,9 @@ describe("ontology proposals", () => {
 				value: "Proposal-first mutation loop",
 			},
 		});
-		applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: duplicate.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: duplicate.id, actor: "test" });
 
-		const merge = createOntologyProposal(getDbAccessor(), {
+		const merge = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1498,7 +1498,7 @@ describe("ontology proposals", () => {
 			rationale: "Both names refer to the same product entity.",
 		});
 
-		const applied = applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" });
 
 		expect(applied.status).toBe("applied");
 		expect(applied.result?.mergedEntities).toHaveLength(1);
@@ -1527,8 +1527,8 @@ describe("ontology proposals", () => {
 		expect(rows.map((row) => row.content)).toContain("Proposal-first mutation loop");
 	});
 
-	it("applies ID-first merge_entities when entity names are ambiguous", () => {
-		const target = createOntologyProposal(getDbAccessor(), {
+	it("applies ID-first merge_entities when entity names are ambiguous", async () => {
+		const target = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1540,9 +1540,9 @@ describe("ontology proposals", () => {
 				value: "Context substrate",
 			},
 		});
-		applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: target.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: target.id, actor: "test" });
 
-		const source = createOntologyProposal(getDbAccessor(), {
+		const source = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -1554,7 +1554,7 @@ describe("ontology proposals", () => {
 				value: "Proposal-first maintenance.",
 			},
 		});
-		applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: source.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: source.id, actor: "test" });
 
 		const ids = getDbAccessor().withWriteTx((db) => {
 			const targetRow = db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Signet") as {
@@ -1580,7 +1580,7 @@ describe("ontology proposals", () => {
 			return { targetId: targetRow.id, sourceId: sourceRow.id };
 		});
 
-		const merge = createOntologyProposal(getDbAccessor(), {
+		const merge = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1591,14 +1591,14 @@ describe("ontology proposals", () => {
 			},
 		});
 
-		const applied = applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" });
 
 		expect(applied.status).toBe("applied");
 		expect(applied.result?.targetEntityId).toBe(ids.targetId);
 		expect(applied.result?.mergedEntities).toEqual([{ name: "Signet Alias", entityId: ids.sourceId, movedAspects: 1 }]);
 	});
 
-	it("deduplicates dependency edges while merging entities", () => {
+	it("deduplicates dependency edges while merging entities", async () => {
 		insertEntity("entity-target", "Target", "target", "ant", 8);
 		insertEntity("entity-source", "Source", "source", "ant", 4);
 		insertEntity("entity-dependency-target", "Dependency Target", "dependency target", "ant", 2);
@@ -1630,7 +1630,7 @@ describe("ontology proposals", () => {
 			);
 		});
 
-		const proposal = createOntologyProposal(getDbAccessor(), {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1638,7 +1638,7 @@ describe("ontology proposals", () => {
 				source_entity_ids: ["entity-source"],
 			},
 		});
-		const applied = applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "test" });
 
 		expect(applied.status).toBe("applied");
 		const edges = getDbAccessor().withReadDb(
@@ -1660,10 +1660,10 @@ describe("ontology proposals", () => {
 		]);
 	});
 
-	it("treats a merge proposal as applied when its source was already merged", () => {
+	it("treats a merge proposal as applied when its source was already merged", async () => {
 		insertEntity("entity-target", "Target", "target", "ant", 8);
 		insertEntity("entity-source", "Source", "source", "ant", 4);
-		const first = createOntologyProposal(getDbAccessor(), {
+		const first = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1672,9 +1672,9 @@ describe("ontology proposals", () => {
 				source_entity_ids: ["entity-source"],
 			},
 		});
-		applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: first.id, actor: "test" });
+		await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: first.id, actor: "test" });
 
-		const retry = createOntologyProposal(getDbAccessor(), {
+		const retry = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1683,13 +1683,13 @@ describe("ontology proposals", () => {
 				source_entity_ids: ["entity-source"],
 			},
 		});
-		const applied = applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: retry.id, actor: "test" });
+		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: retry.id, actor: "test" });
 
 		expect(applied.status).toBe("applied");
 		expect(applied.result?.mergedEntities).toEqual([]);
 		expect(applied.result?.alreadyMergedEntities).toEqual(["Source"]);
 
-		const nameOnlyRetry = createOntologyProposal(getDbAccessor(), {
+		const nameOnlyRetry = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1697,7 +1697,7 @@ describe("ontology proposals", () => {
 				source_entities: ["Source"],
 			},
 		});
-		const nameOnlyApplied = applyOntologyProposal(getDbAccessor(), {
+		const nameOnlyApplied = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: nameOnlyRetry.id,
 			actor: "test",
@@ -1708,12 +1708,12 @@ describe("ontology proposals", () => {
 		expect(nameOnlyApplied.result?.alreadyMergedEntities).toEqual(["Source"]);
 	});
 
-	it("rejects merge_entities when supplied IDs and names disagree", () => {
+	it("rejects merge_entities when supplied IDs and names disagree", async () => {
 		insertEntity("entity-signet", "Signet", "signet", "ant", 8);
 		insertEntity("entity-other", "Other", "other", "ant", 4);
 		insertEntity("entity-alias", "Signet Alias", "signet alias", "ant", 1);
 
-		const merge = createOntologyProposal(getDbAccessor(), {
+		const merge = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "merge_entities",
 			payload: {
@@ -1723,18 +1723,18 @@ describe("ontology proposals", () => {
 			},
 		});
 
-		expect(() => applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" })).toThrow(
-			OntologyProposalError,
-		);
+		await expect(
+			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" }),
+		).rejects.toThrow(OntologyProposalError);
 	});
 
-	it("dry-runs duplicate entity repair candidates without creating proposals", () => {
+	it("dry-runs duplicate entity repair candidates without creating proposals", async () => {
 		insertEntity("entity-signet", "Signet", "signet", "ant", 8, true);
 		insertEntity("entity-signet-upper", "SIGNET", "signet", "ant", 3);
 		insertEntity("entity-signet-ai", "signet.ai", "signet", "ant", 1);
 		insertEntity("entity-other", "Other Project", "other project", "ant", 4);
 
-		const result = proposeDuplicateEntityMerges(getDbAccessor(), {
+		const result = await proposeDuplicateEntityMerges(getDbAccessor(), {
 			agentId: "ant",
 			limit: 10,
 		});
@@ -1747,15 +1747,15 @@ describe("ontology proposals", () => {
 		expect(result.items[0]?.target.name).toBe("Signet");
 		expect(result.items[0]?.sources.map((source) => source.name).sort()).toEqual(["SIGNET", "signet.ai"]);
 
-		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
+		const listed = await listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
 		expect(listed.items).toHaveLength(0);
 	});
 
-	it("blocks mixed-type duplicate entity repair proposals by default", () => {
+	it("blocks mixed-type duplicate entity repair proposals by default", async () => {
 		insertEntity("entity-signet", "Signet", "signet", "ant", 8, true, "project");
 		insertEntity("entity-signet-skill", "signet", "signet", "ant", 3, false, "skill");
 
-		const result = proposeDuplicateEntityMerges(getDbAccessor(), {
+		const result = await proposeDuplicateEntityMerges(getDbAccessor(), {
 			agentId: "ant",
 			limit: 10,
 			writeProposals: true,
@@ -1767,21 +1767,21 @@ describe("ontology proposals", () => {
 		expect(result.skippedCount).toBe(1);
 		expect(result.items[0]?.blocked).toBe(true);
 		expect(result.items[0]?.warnings.join("\n")).toContain("differs from target type");
-		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
+		const listed = await listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
 		expect(listed.items).toHaveLength(0);
 	});
 
-	it("writes duplicate entity repair candidates as pending merge proposals only once", () => {
+	it("writes duplicate entity repair candidates as pending merge proposals only once", async () => {
 		insertEntity("entity-signet", "Signet", "signet", "ant", 8, true);
 		insertEntity("entity-signet-upper", "SIGNET", "signet", "ant", 3);
 
-		const result = proposeDuplicateEntityMerges(getDbAccessor(), {
+		const result = await proposeDuplicateEntityMerges(getDbAccessor(), {
 			agentId: "ant",
 			limit: 10,
 			writeProposals: true,
 			createdBy: "repair-test",
 		});
-		const second = proposeDuplicateEntityMerges(getDbAccessor(), {
+		const second = await proposeDuplicateEntityMerges(getDbAccessor(), {
 			agentId: "ant",
 			limit: 10,
 			writeProposals: true,
@@ -1798,15 +1798,15 @@ describe("ontology proposals", () => {
 		expect(second.count).toBe(0);
 		expect(second.writtenCount).toBe(0);
 
-		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
+		const listed = await listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
 		expect(listed.items).toHaveLength(1);
 	});
 
-	it("previews and writes manual entity merge plans with ID-first payloads", () => {
+	it("previews and writes manual entity merge plans with ID-first payloads", async () => {
 		insertEntity("entity-signet", "Signet", "signet", "ant", 8);
 		insertEntity("entity-alias", "Signet Alias", "signet alias", "ant", 2);
 
-		const preview = createEntityMergePlan(getDbAccessor(), {
+		const preview = await createEntityMergePlan(getDbAccessor(), {
 			agentId: "ant",
 			targetEntityId: "entity-signet",
 			sourceEntityIds: ["entity-alias"],
@@ -1817,7 +1817,7 @@ describe("ontology proposals", () => {
 		expect(preview.payload.target_entity_id).toBe("entity-signet");
 		expect(preview.payload.source_entity_ids).toEqual(["entity-alias"]);
 
-		const written = createEntityMergePlan(getDbAccessor(), {
+		const written = await createEntityMergePlan(getDbAccessor(), {
 			agentId: "ant",
 			targetEntityId: "entity-signet",
 			sourceEntityIds: ["entity-alias"],
@@ -1831,11 +1831,11 @@ describe("ontology proposals", () => {
 		expect(written.proposal?.payload.target_entity_id).toBe("entity-signet");
 	});
 
-	it("keeps blocked manual merge-plan writes reported as dry-runs", () => {
+	it("keeps blocked manual merge-plan writes reported as dry-runs", async () => {
 		insertEntity("entity-signet", "Signet", "signet", "ant", 8, false, "project");
 		insertEntity("entity-signet-skill", "signet", "signet", "ant", 2, false, "skill");
 
-		const result = createEntityMergePlan(getDbAccessor(), {
+		const result = await createEntityMergePlan(getDbAccessor(), {
 			agentId: "ant",
 			targetEntityId: "entity-signet",
 			sourceEntityIds: ["entity-signet-skill"],
@@ -1846,36 +1846,36 @@ describe("ontology proposals", () => {
 		expect(result.blocked).toBe(true);
 		expect(result.dryRun).toBe(true);
 		expect(result.proposal).toBeUndefined();
-		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
+		const listed = await listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
 		expect(listed.items).toHaveLength(0);
 	});
 
-	it("rejects invalid proposal batches without partial writes", () => {
-		expect(() =>
+	it("rejects invalid proposal batches without partial writes", async () => {
+		await expect(
 			createOntologyProposals(getDbAccessor(), [
 				{ agentId: "default", operation: "create_entity", payload: { name: "Valid" } },
 				{ agentId: "default", operation: " ", payload: { name: "Invalid" } },
 			]),
-		).toThrow(OntologyProposalError);
+		).rejects.toThrow(OntologyProposalError);
 
-		const listed = listOntologyProposals(getDbAccessor(), { agentId: "default" });
+		const listed = await listOntologyProposals(getDbAccessor(), { agentId: "default" });
 		expect(listed.items).toHaveLength(0);
 	});
 
-	it("keeps proposal listing scoped to agent_id", () => {
-		createOntologyProposal(getDbAccessor(), {
+	it("keeps proposal listing scoped to agent_id", async () => {
+		await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "create_entity",
 			payload: { name: "Ant Project" },
 		});
-		createOntologyProposal(getDbAccessor(), {
+		await createOntologyProposal(getDbAccessor(), {
 			agentId: "dot",
 			operation: "create_entity",
 			payload: { name: "Dot Project" },
 		});
 
-		const ant = listOntologyProposals(getDbAccessor(), { agentId: "ant" });
-		const dot = listOntologyProposals(getDbAccessor(), { agentId: "dot" });
+		const ant = await listOntologyProposals(getDbAccessor(), { agentId: "ant" });
+		const dot = await listOntologyProposals(getDbAccessor(), { agentId: "dot" });
 
 		expect(ant.items).toHaveLength(1);
 		expect(dot.items).toHaveLength(1);
@@ -1883,8 +1883,8 @@ describe("ontology proposals", () => {
 		expect(dot.items[0]?.payload.name).toBe("Dot Project");
 	});
 
-	it("applies policy, action, and interface operations through existing graph primitives", () => {
-		const policy = applyOntologyOperation(getDbAccessor(), {
+	it("applies policy, action, and interface operations through existing graph primitives", async () => {
+		const policy = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "default",
 			actor: "operator",
 			operation: "create_policy",
@@ -1895,19 +1895,19 @@ describe("ontology proposals", () => {
 			},
 		});
 		expect(policy.proposal.status).toBe("applied");
-		const action = applyOntologyOperation(getDbAccessor(), {
+		const action = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "default",
 			actor: "operator",
 			operation: "create_action_type",
 			payload: { action_type: "Deploy release" },
 		});
-		const iface = applyOntologyOperation(getDbAccessor(), {
+		const iface = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "default",
 			actor: "operator",
 			operation: "create_interface",
 			payload: { name: "Memory provider" },
 		});
-		const attachment = applyOntologyOperation(getDbAccessor(), {
+		const attachment = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "default",
 			actor: "operator",
 			operation: "attach_interface",
@@ -1940,8 +1940,8 @@ describe("ontology proposals", () => {
 		expect(graph.link).toMatchObject({ dependency_type: "implements" });
 	});
 
-	it("applies direct operations by creating an applied proposal and graph mutation atomically", () => {
-		const result = applyOntologyOperation(getDbAccessor(), {
+	it("applies direct operations by creating an applied proposal and graph mutation atomically", async () => {
+		const result = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -1964,7 +1964,7 @@ describe("ontology proposals", () => {
 		expect(result.proposal.appliedBy).toBe("operator");
 		expect(result.result?.version).toBe(1);
 
-		const attrs = listClaimVersions(getDbAccessor(), {
+		const attrs = await listClaimVersions(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
 			aspect: "architecture",
@@ -1976,8 +1976,8 @@ describe("ontology proposals", () => {
 		expect(attrs.items[0]?.content).toContain("audited");
 	});
 
-	it("dry-runs direct operations without writing proposals or graph state", () => {
-		const result = applyOntologyOperation(getDbAccessor(), {
+	it("dry-runs direct operations without writing proposals or graph state", async () => {
+		const result = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_entity",
@@ -1987,7 +1987,7 @@ describe("ontology proposals", () => {
 
 		expect(result.dryRun).toBe(true);
 		expect(result.proposal.status).toBe("applied");
-		const proposal = getOntologyProposal(getDbAccessor(), result.proposal.id, "ant");
+		const proposal = await getOntologyProposal(getDbAccessor(), result.proposal.id, "ant");
 		const entity = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Dry Run Entity") as
@@ -1998,7 +1998,7 @@ describe("ontology proposals", () => {
 		expect(entity).toBeNull();
 	});
 
-	it("exercises dry-run, apply, propose, reject, evidence, and immutable source artifacts end to end", () => {
+	it("exercises dry-run, apply, propose, reject, evidence, and immutable source artifacts end to end", async () => {
 		const sourcePath = "memory/codex/transcripts/control-plane-e2e.jsonl";
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -2035,16 +2035,16 @@ describe("ontology proposals", () => {
 			claim_key: "control_plane_e2e",
 			value: "Ontology control-plane mutations apply first with provenance.",
 		};
-		const dryRun = applyOntologyOperationBatch(getDbAccessor(), {
+		const dryRun = await applyOntologyOperationBatch(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			dryRun: true,
 			operations: [{ operation: "set_claim_value", payload }],
 		});
 		expect(dryRun.dryRun).toBe(true);
-		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+		expect((await listOntologyProposals(getDbAccessor(), { agentId: "ant" })).items).toHaveLength(0);
 
-		const applied = applyOntologyOperation(getDbAccessor(), {
+		const applied = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2054,20 +2054,20 @@ describe("ontology proposals", () => {
 			sourcePath,
 			evidence: [{ source_kind: "memory_artifact", source_path: sourcePath, quote: "apply first with provenance" }],
 		});
-		const proposed = applyOntologyOperation(getDbAccessor(), {
+		const proposed = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_entity",
 			payload: { name: "Rejected Candidate", entity_type: "project" },
 			propose: true,
 		});
-		const rejected = rejectOntologyProposal(getDbAccessor(), {
+		const rejected = await rejectOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: proposed.proposal.id,
 			actor: "operator",
 			reason: "proposal review rejected this candidate",
 		});
-		const evidence = getOntologyClaimEvidence(getDbAccessor(), {
+		const evidence = await getOntologyClaimEvidence(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
 			aspect: "architecture",
@@ -2088,8 +2088,8 @@ describe("ontology proposals", () => {
 		expect(sourceAfter?.content).toBe(sourceBefore?.content);
 	});
 
-	it("proposes direct operations without mutating graph state", () => {
-		const result = applyOntologyOperation(getDbAccessor(), {
+	it("proposes direct operations without mutating graph state", async () => {
+		const result = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_entity",
@@ -2108,7 +2108,7 @@ describe("ontology proposals", () => {
 		expect(entity).toBeNull();
 	});
 
-	it("set_claim_value creates queryable version chains and restore switches the active version", () => {
+	it("set_claim_value creates queryable version chains and restore switches the active version", async () => {
 		const payload = {
 			entity: "Signet",
 			entity_type: "project",
@@ -2116,19 +2116,19 @@ describe("ontology proposals", () => {
 			group_key: "ontology",
 			claim_key: "versioned_claim",
 		};
-		const v1 = applyOntologyOperation(getDbAccessor(), {
+		const v1 = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
 			payload: { ...payload, value: "Version one." },
 		});
-		const v2 = applyOntologyOperation(getDbAccessor(), {
+		const v2 = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
 			payload: { ...payload, value: "Version two." },
 		});
-		const v3 = applyOntologyOperation(getDbAccessor(), {
+		const v3 = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2138,7 +2138,7 @@ describe("ontology proposals", () => {
 		expect(v1.result?.version).toBe(1);
 		expect(v2.result?.version).toBe(2);
 		expect(v3.result?.version).toBe(3);
-		const versions = listClaimVersions(getDbAccessor(), {
+		const versions = await listClaimVersions(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
 			aspect: "architecture",
@@ -2148,7 +2148,7 @@ describe("ontology proposals", () => {
 		expect(versions.items.map((item) => item.version)).toEqual([3, 2, 1]);
 		expect(versions.items.map((item) => item.status)).toEqual(["active", "superseded", "superseded"]);
 
-		const shown = getClaimVersion(getDbAccessor(), {
+		const shown = await getClaimVersion(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
 			aspect: "architecture",
@@ -2158,13 +2158,13 @@ describe("ontology proposals", () => {
 		});
 		expect(shown?.content).toBe("Version two.");
 
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "restore_claim_version",
 			payload: { attribute_id: shown?.id },
 		});
-		const restored = listClaimVersions(getDbAccessor(), {
+		const restored = await listClaimVersions(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
 			aspect: "architecture",
@@ -2190,8 +2190,8 @@ describe("ontology proposals", () => {
 		expect(restoredMemoryState.find((memory) => memory.id === v3.result?.attributeId)?.superseded_by).toBe(shown?.id);
 	});
 
-	it("archives claim values and hides them from default active reads", () => {
-		const applied = applyOntologyOperation(getDbAccessor(), {
+	it("archives claim values and hides them from default active reads", async () => {
+		const applied = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2205,7 +2205,7 @@ describe("ontology proposals", () => {
 			},
 		});
 		const attributeId = applied.result?.attributeId as string;
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_claim_value",
@@ -2218,7 +2218,7 @@ describe("ontology proposals", () => {
 					.prepare("SELECT COUNT(*) AS n FROM entity_attributes WHERE id = ? AND status = 'active'")
 					.get(attributeId) as { n: number },
 		);
-		const versions = listClaimVersions(getDbAccessor(), {
+		const versions = await listClaimVersions(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
 			aspect: "architecture",
@@ -2236,8 +2236,8 @@ describe("ontology proposals", () => {
 		expect(memory?.is_deleted).toBe(1);
 	});
 
-	it("restores an archived semantic claim memory and honors an explicit force", () => {
-		const applied = applyOntologyOperation(getDbAccessor(), {
+	it("restores an archived semantic claim memory and honors an explicit force", async () => {
+		const applied = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2254,13 +2254,13 @@ describe("ontology proposals", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE memories SET pinned = 1 WHERE id = ?").run(attributeId);
 		});
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_claim_value",
 			payload: { attribute_id: attributeId, force: true },
 		});
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "restore_claim_version",
@@ -2279,7 +2279,7 @@ describe("ontology proposals", () => {
 		expect(restored).toEqual({ status: "active", is_deleted: 0, superseded_by: null });
 	});
 
-	it("continues claim version chains after the active value is archived", () => {
+	it("continues claim version chains after the active value is archived", async () => {
 		const payload = {
 			entity: "Archive Version Chain",
 			entity_type: "project",
@@ -2287,26 +2287,26 @@ describe("ontology proposals", () => {
 			group_key: "ontology",
 			claim_key: "archived_chain",
 		};
-		const first = applyOntologyOperation(getDbAccessor(), {
+		const first = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
 			payload: { ...payload, value: "Archived first version." },
 		});
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_claim_value",
 			payload: { attribute_id: first.result?.attributeId, reason: "retired" },
 		});
-		const second = applyOntologyOperation(getDbAccessor(), {
+		const second = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
 			payload: { ...payload, value: "Replacement after archive." },
 		});
 
-		const versions = listClaimVersions(getDbAccessor(), {
+		const versions = await listClaimVersions(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Archive Version Chain",
 			aspect: "architecture",
@@ -2321,8 +2321,8 @@ describe("ontology proposals", () => {
 		expect(versions.items.map((item) => item.status)).toEqual(["active", "deleted"]);
 	});
 
-	it("preserves original claim provenance when repeated writes dedupe", () => {
-		const first = createOntologyProposal(getDbAccessor(), {
+	it("preserves original claim provenance when repeated writes dedupe", async () => {
+		const first = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "set_claim_value",
 			payload: {
@@ -2336,12 +2336,12 @@ describe("ontology proposals", () => {
 			evidence: [{ source: "transcript:first", message_ids: ["m1"] }],
 			createdBy: "first",
 		});
-		const applied = applyOntologyProposal(getDbAccessor(), {
+		const applied = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: first.id,
 			actor: "operator",
 		});
-		const repeated = createOntologyProposal(getDbAccessor(), {
+		const repeated = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "set_claim_value",
 			payload: {
@@ -2356,7 +2356,7 @@ describe("ontology proposals", () => {
 			createdBy: "repeat",
 		});
 
-		const second = applyOntologyProposal(getDbAccessor(), {
+		const second = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: repeated.id,
 			actor: "operator",
@@ -2376,8 +2376,8 @@ describe("ontology proposals", () => {
 		expect(JSON.parse(row?.proposal_evidence ?? "[]")).toEqual([{ source: "transcript:first", message_ids: ["m1"] }]);
 	});
 
-	it("preserves original additive claim provenance when repeated values dedupe", () => {
-		const first = createOntologyProposal(getDbAccessor(), {
+	it("preserves original additive claim provenance when repeated values dedupe", async () => {
+		const first = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -2391,12 +2391,12 @@ describe("ontology proposals", () => {
 			evidence: [{ source: "transcript:first-add", message_ids: ["m1"] }],
 			createdBy: "first",
 		});
-		const applied = applyOntologyProposal(getDbAccessor(), {
+		const applied = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: first.id,
 			actor: "operator",
 		});
-		const repeated = createOntologyProposal(getDbAccessor(), {
+		const repeated = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			operation: "add_claim_value",
 			payload: {
@@ -2411,7 +2411,7 @@ describe("ontology proposals", () => {
 			createdBy: "repeat",
 		});
 
-		const second = applyOntologyProposal(getDbAccessor(), {
+		const second = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
 			id: repeated.id,
 			actor: "operator",
@@ -2433,14 +2433,14 @@ describe("ontology proposals", () => {
 		]);
 	});
 
-	it("records the applying actor when pending archive proposals are applied", () => {
-		const entity = applyOntologyOperation(getDbAccessor(), {
+	it("records the applying actor when pending archive proposals are applied", async () => {
+		const entity = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "creator",
 			operation: "create_entity",
 			payload: { name: "Archive Actor Entity", entity_type: "project" },
 		});
-		const claim = applyOntologyOperation(getDbAccessor(), {
+		const claim = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "creator",
 			operation: "set_claim_value",
@@ -2453,7 +2453,7 @@ describe("ontology proposals", () => {
 				value: "Archive me.",
 			},
 		});
-		const link = applyOntologyOperation(getDbAccessor(), {
+		const link = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "creator",
 			operation: "create_link",
@@ -2466,7 +2466,7 @@ describe("ontology proposals", () => {
 				reason: "Audit actor fixture.",
 			},
 		});
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "creator",
 			operation: "set_claim_value",
@@ -2480,7 +2480,7 @@ describe("ontology proposals", () => {
 			},
 		});
 
-		const proposals = createOntologyProposals(getDbAccessor(), [
+		const proposals = await createOntologyProposals(getDbAccessor(), [
 			{
 				agentId: "ant",
 				operation: "archive_entity",
@@ -2508,7 +2508,7 @@ describe("ontology proposals", () => {
 		]);
 
 		for (const proposal of proposals.items) {
-			applyOntologyProposal(getDbAccessor(), {
+			await applyOntologyProposal(getDbAccessor(), {
 				agentId: "ant",
 				id: proposal.id,
 				actor: "reviewer",
@@ -2560,8 +2560,8 @@ describe("ontology proposals", () => {
 		});
 	});
 
-	it("reactivates archived aspects when creating claims for the same aspect slot", () => {
-		applyOntologyOperation(getDbAccessor(), {
+	it("reactivates archived aspects when creating claims for the same aspect slot", async () => {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2574,13 +2574,13 @@ describe("ontology proposals", () => {
 				value: "Before archive.",
 			},
 		});
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_aspect",
 			payload: { entity: "Aspect Restore", selector: "architecture", reason: "retired" },
 		});
-		const recreated = applyOntologyOperation(getDbAccessor(), {
+		const recreated = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2612,8 +2612,8 @@ describe("ontology proposals", () => {
 		expect(row?.claim_status).toBe("active");
 	});
 
-	it("reactivates archived links when creating the same link again", () => {
-		const created = applyOntologyOperation(getDbAccessor(), {
+	it("reactivates archived links when creating the same link again", async () => {
+		const created = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_link",
@@ -2626,13 +2626,13 @@ describe("ontology proposals", () => {
 				reason: "Initial relationship.",
 			},
 		});
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_link",
 			payload: { id: created.result?.dependencyId, reason: "retired" },
 		});
-		const recreated = applyOntologyOperation(getDbAccessor(), {
+		const recreated = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "create_link",
@@ -2663,8 +2663,8 @@ describe("ontology proposals", () => {
 		expect(row?.strength).toBeCloseTo(0.9);
 	});
 
-	it("keeps claim version history readable after archiving its parent entity", () => {
-		applyOntologyOperation(getDbAccessor(), {
+	it("keeps claim version history readable after archiving its parent entity", async () => {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "set_claim_value",
@@ -2677,21 +2677,21 @@ describe("ontology proposals", () => {
 				value: "History survives entity archival.",
 			},
 		});
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			operation: "archive_entity",
 			payload: { selector: "Signet", reason: "retired" },
 		});
 
-		const versions = listClaimVersions(getDbAccessor(), {
+		const versions = await listClaimVersions(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
 			aspect: "architecture",
 			group: "ontology",
 			claim: "archived_parent_history",
 		});
-		const version = getClaimVersion(getDbAccessor(), {
+		const version = await getClaimVersion(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Signet",
 			aspect: "architecture",
@@ -2703,7 +2703,7 @@ describe("ontology proposals", () => {
 		expect(version?.content).toBe("History survives entity archival.");
 	});
 
-	it("requires strict claim-version entity selectors across archived duplicates", () => {
+	it("requires strict claim-version entity selectors across archived duplicates", async () => {
 		insertEntity("archived-history", "Duplicate History A", "duplicate history", "ant", 1);
 		insertEntity("active-history", "Duplicate History B", "duplicate history", "ant", 2);
 		getDbAccessor().withWriteTx((db) => {
@@ -2752,7 +2752,7 @@ describe("ontology proposals", () => {
 			);
 		});
 
-		expect(() =>
+		await expect(
 			listClaimVersions(getDbAccessor(), {
 				agentId: "ant",
 				entity: "duplicate history",
@@ -2760,15 +2760,15 @@ describe("ontology proposals", () => {
 				group: "ontology",
 				claim: "lineage",
 			}),
-		).toThrow("ambiguous");
-		const archivedVersions = listClaimVersions(getDbAccessor(), {
+		).rejects.toThrow("ambiguous");
+		const archivedVersions = await listClaimVersions(getDbAccessor(), {
 			agentId: "ant",
 			entity: "archived-history",
 			aspect: "archived-history-aspect",
 			group: "ontology",
 			claim: "lineage",
 		});
-		const activeVersions = listClaimVersions(getDbAccessor(), {
+		const activeVersions = await listClaimVersions(getDbAccessor(), {
 			agentId: "ant",
 			entity: "active-history",
 			aspect: "active-history-aspect",
@@ -2779,8 +2779,8 @@ describe("ontology proposals", () => {
 		expect(activeVersions.items.map((item) => item.content)).toEqual(["Active entity history."]);
 	});
 
-	it("rolls back an operation batch when one operation is invalid", () => {
-		expect(() =>
+	it("rolls back an operation batch when one operation is invalid", async () => {
+		await expect(
 			applyOntologyOperationBatch(getDbAccessor(), {
 				agentId: "ant",
 				actor: "operator",
@@ -2789,7 +2789,7 @@ describe("ontology proposals", () => {
 					{ operation: "rename_entity", payload: { selector: "Missing", new_name: "Nope" } },
 				],
 			}),
-		).toThrow(OntologyProposalError);
+		).rejects.toThrow(OntologyProposalError);
 		const count = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Batch Good") as {
@@ -2797,11 +2797,11 @@ describe("ontology proposals", () => {
 				},
 		);
 		expect(count.n).toBe(0);
-		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+		expect((await listOntologyProposals(getDbAccessor(), { agentId: "ant" })).items).toHaveLength(0);
 	});
 
-	it("returns per-line dry-run batch validation errors without writing", () => {
-		const result = applyOntologyOperationBatch(getDbAccessor(), {
+	it("returns per-line dry-run batch validation errors without writing", async () => {
+		const result = await applyOntologyOperationBatch(getDbAccessor(), {
 			agentId: "ant",
 			actor: "operator",
 			dryRun: true,
@@ -2831,25 +2831,25 @@ describe("ontology proposals", () => {
 			},
 		]);
 		expect(count.n).toBe(0);
-		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+		expect((await listOntologyProposals(getDbAccessor(), { agentId: "ant" })).items).toHaveLength(0);
 	});
 
-	it("rejects ambiguous same-agent entity selectors", () => {
+	it("rejects ambiguous same-agent entity selectors", async () => {
 		insertEntity("one", "Signet A", "signet", "ant", 1);
 		insertEntity("two", "Signet B", "signet", "ant", 2);
 
-		expect(() =>
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "operator",
 				operation: "rename_entity",
 				payload: { selector: "signet", new_name: "Signet" },
 			}),
-		).toThrow("ambiguous");
+		).rejects.toThrow("ambiguous");
 	});
 
 	// #1138: write-gate aspect/attribute caps that force supersession and consolidation
-	it("rejects add_claim_value past the attribute cap with a teaching error", () => {
+	it("rejects add_claim_value past the attribute cap with a teaching error", async () => {
 		const cap = { maxAspectsPerEntity: 10, maxAttributesPerAspect: 2 };
 		const common = {
 			agentId: "ant",
@@ -2858,7 +2858,7 @@ describe("ontology proposals", () => {
 		} as const;
 
 		for (let i = 0; i < 2; i++) {
-			applyOntologyOperation(getDbAccessor(), {
+			await applyOntologyOperation(getDbAccessor(), {
 				...common,
 				payload: {
 					entity: "Capped",
@@ -2871,7 +2871,7 @@ describe("ontology proposals", () => {
 			});
 		}
 
-		expect(() =>
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				...common,
 				payload: {
@@ -2883,12 +2883,12 @@ describe("ontology proposals", () => {
 				},
 				writeCaps: cap,
 			}),
-		).toThrow(/attribute cap \(2\/2\).*supersede or expire/);
+		).rejects.toThrow(/attribute cap \(2\/2\).*supersede or expire/);
 	});
 
-	it("does not enforce attribute cap when writeCaps is omitted (backward compat)", () => {
+	it("does not enforce attribute cap when writeCaps is omitted (backward compat)", async () => {
 		for (let i = 0; i < 5; i++) {
-			applyOntologyOperation(getDbAccessor(), {
+			await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
 				operation: "add_claim_value",
@@ -2911,11 +2911,11 @@ describe("ontology proposals", () => {
 		expect(count.c).toBe(5);
 	});
 
-	it("rejects create_aspect past the aspect cap with a teaching error", () => {
+	it("rejects create_aspect past the aspect cap with a teaching error", async () => {
 		const cap = { maxAspectsPerEntity: 2, maxAttributesPerAspect: 25 };
 
 		// create_entity first so create_aspect can resolve it
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
@@ -2923,7 +2923,7 @@ describe("ontology proposals", () => {
 		});
 
 		for (let i = 0; i < 2; i++) {
-			applyOntologyOperation(getDbAccessor(), {
+			await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
 				operation: "create_aspect",
@@ -2932,7 +2932,7 @@ describe("ontology proposals", () => {
 			});
 		}
 
-		expect(() =>
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
@@ -2940,20 +2940,20 @@ describe("ontology proposals", () => {
 				payload: { entity: "CappedEnt", entity_type: "project", name: "overflow_aspect" },
 				writeCaps: cap,
 			}),
-		).toThrow(/aspect cap \(2\/2\).*consolidate or archive/);
+		).rejects.toThrow(/aspect cap \(2\/2\).*consolidate or archive/);
 	});
 
-	it("allows adding to an existing aspect that already exists past the cap (idempotent resolve)", () => {
+	it("allows adding to an existing aspect that already exists past the cap (idempotent resolve)", async () => {
 		const cap = { maxAspectsPerEntity: 1, maxAttributesPerAspect: 25 };
 
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
 			payload: { name: "Single", entity_type: "project" },
 		});
 
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "create_aspect",
@@ -2962,21 +2962,19 @@ describe("ontology proposals", () => {
 		});
 
 		// Re-creating the same aspect should not trigger the cap
-		expect(() =>
-			applyOntologyOperation(getDbAccessor(), {
-				agentId: "ant",
-				actor: "test",
-				operation: "create_aspect",
-				payload: { entity: "Single", entity_type: "project", name: "only_aspect" },
-				writeCaps: cap,
-			}),
-		).not.toThrow();
+		await applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "test",
+			operation: "create_aspect",
+			payload: { entity: "Single", entity_type: "project", name: "only_aspect" },
+			writeCaps: cap,
+		});
 	});
 
-	it("deduplicates exact-value claims before enforcing the attribute cap", () => {
+	it("deduplicates exact-value claims before enforcing the attribute cap", async () => {
 		const cap = { maxAspectsPerEntity: 10, maxAttributesPerAspect: 1 };
 
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "add_claim_value",
@@ -2991,7 +2989,7 @@ describe("ontology proposals", () => {
 		});
 
 		// Adding the exact same value+key should dedup, not hit the cap
-		const result = applyOntologyOperation(getDbAccessor(), {
+		const result = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "add_claim_value",
@@ -3008,9 +3006,9 @@ describe("ontology proposals", () => {
 	});
 
 	// #1138: merge_aspects — consolidation must be possible regardless of caps
-	function seedAspectClaims(entity: string, aspect: string, count: number): void {
+	async function seedAspectClaims(entity: string, aspect: string, count: number): Promise<void> {
 		for (let i = 0; i < count; i++) {
-			applyOntologyOperation(getDbAccessor(), {
+			await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
 				operation: "add_claim_value",
@@ -3045,17 +3043,17 @@ describe("ontology proposals", () => {
 		});
 	}
 
-	it("merges aspects by moving attributes into the target and archiving sources", () => {
-		applyOntologyOperation(getDbAccessor(), {
+	it("merges aspects by moving attributes into the target and archiving sources", async () => {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
 			payload: { name: "MergeEnt", entity_type: "project" },
 		});
-		seedAspectClaims("MergeEnt", "status_history", 3);
-		seedAspectClaims("MergeEnt", "changelog", 4);
+		await seedAspectClaims("MergeEnt", "status_history", 3);
+		await seedAspectClaims("MergeEnt", "changelog", 4);
 
-		const result = applyOntologyOperation(getDbAccessor(), {
+		const result = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "merge_aspects",
@@ -3078,21 +3076,21 @@ describe("ontology proposals", () => {
 		expect(sourceStatus).toEqual({ status: "archived" });
 	});
 
-	it("lets the merged aspect exceed the attribute cap (consolidation is exempt)", () => {
+	it("lets the merged aspect exceed the attribute cap (consolidation is exempt)", async () => {
 		const cap = { maxAspectsPerEntity: 10, maxAttributesPerAspect: 5 };
 
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
 			payload: { name: "FatEnt", entity_type: "project" },
 		});
-		seedAspectClaims("FatEnt", "a", 5);
-		seedAspectClaims("FatEnt", "b", 5);
+		await seedAspectClaims("FatEnt", "a", 5);
+		await seedAspectClaims("FatEnt", "b", 5);
 
 		// Two at-cap aspects merged into one: 10 attributes on the target, cap is 5.
 		// Merging is the consolidation remedy, so it must not be blocked.
-		const result = applyOntologyOperation(getDbAccessor(), {
+		const result = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "merge_aspects",
@@ -3103,28 +3101,28 @@ describe("ontology proposals", () => {
 		expect(aspectRowCount("a")).toBe(10);
 	});
 
-	it("rejects merge_aspects without entity, target, or sources", () => {
-		expect(() =>
+	it("rejects merge_aspects without entity, target, or sources", async () => {
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
 				operation: "merge_aspects",
 				payload: { entity: "Whatever", target: "x", sources: [] },
 			}),
-		).toThrow(/sources is required/);
+		).rejects.toThrow(/sources is required/);
 	});
 
 	// #1147 adversarial review: cap bypasses via other write ops.
-	it("does not bypass the aspect cap via add_claim_value with a new aspect name (E1)", () => {
+	it("does not bypass the aspect cap via add_claim_value with a new aspect name (E1)", async () => {
 		const cap = { maxAspectsPerEntity: 2, maxAttributesPerAspect: 25 };
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
 			payload: { name: "E1Ent", entity_type: "project" },
 		});
 		for (let i = 0; i < 2; i++) {
-			applyOntologyOperation(getDbAccessor(), {
+			await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
 				operation: "create_aspect",
@@ -3133,7 +3131,7 @@ describe("ontology proposals", () => {
 			});
 		}
 		// add_claim_value with a THIRD new aspect name must hit the aspect cap.
-		expect(() =>
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
@@ -3146,19 +3144,19 @@ describe("ontology proposals", () => {
 				},
 				writeCaps: cap,
 			}),
-		).toThrow(/aspect cap \(2\/2\)/);
+		).rejects.toThrow(/aspect cap \(2\/2\)/);
 	});
 
-	it("does not bypass the attribute cap via set_claim_value with a new claim_key (E2)", () => {
+	it("does not bypass the attribute cap via set_claim_value with a new claim_key (E2)", async () => {
 		const cap = { maxAspectsPerEntity: 10, maxAttributesPerAspect: 2 };
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
 			payload: { name: "E2Ent", entity_type: "project" },
 		});
 		for (let i = 0; i < 2; i++) {
-			applyOntologyOperation(getDbAccessor(), {
+			await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
 				operation: "set_claim_value",
@@ -3166,7 +3164,7 @@ describe("ontology proposals", () => {
 				writeCaps: cap,
 			});
 		}
-		expect(() =>
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
@@ -3174,19 +3172,19 @@ describe("ontology proposals", () => {
 				payload: { entity: "E2Ent", aspect: "facts", claim_key: "k_overflow", value: "v overflow" },
 				writeCaps: cap,
 			}),
-		).toThrow(/attribute cap \(2\/2\)/);
+		).rejects.toThrow(/attribute cap \(2\/2\)/);
 	});
 
-	it("allows reactivating an archived aspect within cap but rejects a new aspect at cap (E3)", () => {
+	it("allows reactivating an archived aspect within cap but rejects a new aspect at cap (E3)", async () => {
 		const cap = { maxAspectsPerEntity: 2, maxAttributesPerAspect: 25 };
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "create_entity",
 			payload: { name: "E3Ent", entity_type: "project" },
 		});
 		for (let i = 0; i < 2; i++) {
-			applyOntologyOperation(getDbAccessor(), {
+			await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
 				operation: "create_aspect",
@@ -3197,7 +3195,7 @@ describe("ontology proposals", () => {
 		const aspect = getDbAccessor().withReadDb((db) =>
 			db.prepare("SELECT id FROM entity_aspects WHERE agent_id = ? AND name = ?").get("ant", "aspect_1"),
 		) as { id: string };
-		applyOntologyOperation(getDbAccessor(), {
+		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
 			operation: "archive_aspect",
@@ -3206,17 +3204,15 @@ describe("ontology proposals", () => {
 		// Reactivating the archived aspect keeps the active count at 2 (cap)
 		// — the new helper only skips the cap when an ACTIVE row exists, and
 		// the count after reactivation is 2/2, so this is allowed.
-		expect(() =>
-			applyOntologyOperation(getDbAccessor(), {
-				agentId: "ant",
-				actor: "test",
-				operation: "create_aspect",
-				payload: { entity: "E3Ent", name: "aspect_1" },
-				writeCaps: cap,
-			}),
-		).not.toThrow();
+		await applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "test",
+			operation: "create_aspect",
+			payload: { entity: "E3Ent", name: "aspect_1" },
+			writeCaps: cap,
+		});
 		// But a genuinely new third aspect is still rejected at cap.
-		expect(() =>
+		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "test",
@@ -3224,6 +3220,6 @@ describe("ontology proposals", () => {
 				payload: { entity: "E3Ent", name: "aspect_new" },
 				writeCaps: cap,
 			}),
-		).toThrow(/aspect cap \(2\/2\)/);
+		).rejects.toThrow(/aspect cap \(2\/2\)/);
 	});
 });

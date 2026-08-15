@@ -34,7 +34,7 @@ export interface SourceProviderAdapter {
 	readonly kind: SignetSourceKind;
 	readonly toNativeSource?: (source: SignetSourceEntry) => NativeMemorySource;
 	readonly sync?: (context: SourceProviderSyncContext) => Promise<SourceProviderSyncResult>;
-	readonly purge: (source: SignetSourceEntry, agentId: string | undefined) => number;
+	readonly purge: (source: SignetSourceEntry, agentId: string | undefined) => number | Promise<number>;
 }
 
 const additionalProviders = new Map<SignetSourceKind, SourceProviderAdapter>();

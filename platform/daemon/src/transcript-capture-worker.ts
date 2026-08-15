@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DbAccessor, WriteDb } from "./db-accessor";
+import { runWriteTxAsync } from "./db-accessor";
 import { logger } from "./logger";
 import { indexCanonicalTranscriptJsonl, writeTranscriptArtifact } from "./memory-lineage";
 import { isNoiseSession } from "./session-noise";
@@ -95,14 +96,16 @@ export function transcriptCaptureJobId(input: TranscriptCaptureJobInput): string
 	return `tcj_${hash.digest("hex").slice(0, 32)}`;
 }
 
-export function enqueueTranscriptCaptureJob(dbAccessor: DbAccessor, input: TranscriptCaptureJobInput): string | null {
+export async function enqueueTranscriptCaptureJob(
+	dbAccessor: DbAccessor,
+	input: TranscriptCaptureJobInput,
+): Promise<string | null> {
 	if (input.transcript.trim().length === 0 && input.rawTranscript.trim().length === 0) return null;
 	const id = transcriptCaptureJobId(input);
 	const createdAt = nowIso();
 	const maxAttempts = normalizeMaxAttempts(input.maxAttempts);
 	let resolvedId = id;
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	await runWriteTxAsync(dbAccessor, (db) => {
 		// capturedAt is delivery time for hooks but file mtime for recovery scans.
 		// Treat the stable snapshot identity + content as authoritative so a
 		// hook/recovery race cannot create two jobs for the same snapshot.
@@ -177,10 +180,9 @@ function resetInterruptedJobs(db: WriteDb): void {
 	).run(nowIso());
 }
 
-function leaseJob(dbAccessor: DbAccessor): TranscriptCaptureJobRow | null {
+async function leaseJob(dbAccessor: DbAccessor): Promise<TranscriptCaptureJobRow | null> {
 	let leased: TranscriptCaptureJobRow | null = null;
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	await runWriteTxAsync(dbAccessor, (db) => {
 		const row = db
 			.prepare(
 				`SELECT * FROM transcript_capture_jobs
@@ -276,7 +278,7 @@ async function processTranscriptCaptureJob(basePath: string, job: TranscriptCapt
 		transcript: job.transcript,
 		summaryStatus: job.summaryStatus,
 	});
-	indexCanonicalTranscriptJsonl({
+	await indexCanonicalTranscriptJsonl({
 		agentId: job.agentId,
 		sessionId: job.sessionId,
 		sessionKey: job.sessionKey,
@@ -297,9 +299,8 @@ async function processTranscriptCaptureJob(basePath: string, job: TranscriptCapt
 	});
 }
 
-function markDone(dbAccessor: DbAccessor, id: string): void {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+async function markDone(dbAccessor: DbAccessor, id: string): Promise<void> {
+	await runWriteTxAsync(dbAccessor, (db) => {
 		db.prepare(
 			`UPDATE transcript_capture_jobs
 			 SET status = 'completed', completed_at = ?, updated_at = ?, error = NULL
@@ -308,11 +309,10 @@ function markDone(dbAccessor: DbAccessor, id: string): void {
 	});
 }
 
-function markFailed(dbAccessor: DbAccessor, job: TranscriptCaptureJobRow, error: unknown): void {
+async function markFailed(dbAccessor: DbAccessor, job: TranscriptCaptureJobRow, error: unknown): Promise<void> {
 	const message = error instanceof Error ? error.message : String(error);
 	const status: TranscriptCaptureJobStatus = job.attempts >= job.maxAttempts ? "dead" : "failed";
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	await runWriteTxAsync(dbAccessor, (db) => {
 		db.prepare(
 			`UPDATE transcript_capture_jobs
 			 SET status = ?, error = ?, updated_at = ?
@@ -322,13 +322,13 @@ function markFailed(dbAccessor: DbAccessor, job: TranscriptCaptureJobRow, error:
 }
 
 async function runTranscriptCaptureOnceInternal(dbAccessor: DbAccessor, basePath: string): Promise<boolean> {
-	const job = leaseJob(dbAccessor);
+	const job = await leaseJob(dbAccessor);
 	if (!job) return false;
 	try {
 		await processTranscriptCaptureJob(basePath, job);
-		markDone(dbAccessor, job.id);
+		await markDone(dbAccessor, job.id);
 	} catch (error) {
-		markFailed(dbAccessor, job, error);
+		await markFailed(dbAccessor, job, error);
 		throw error;
 	}
 	return true;
@@ -343,13 +343,15 @@ export function runTranscriptCaptureOnce(dbAccessor: DbAccessor, basePath: strin
 	return run;
 }
 
-export function startTranscriptCaptureWorker(dbAccessor: DbAccessor, basePath: string): TranscriptCaptureWorkerHandle {
+export async function startTranscriptCaptureWorker(
+	dbAccessor: DbAccessor,
+	basePath: string,
+): Promise<TranscriptCaptureWorkerHandle> {
 	let stopped = false;
 	let running = false;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	dbAccessor.withWriteTx(resetInterruptedJobs);
+	await runWriteTxAsync(dbAccessor, resetInterruptedJobs);
 
 	const schedule = (delayMs: number): void => {
 		if (stopped || timer) return;
@@ -406,12 +408,11 @@ export function startTranscriptCaptureWorker(dbAccessor: DbAccessor, basePath: s
 	};
 }
 
-export function getTranscriptCaptureStatus(
+export async function getTranscriptCaptureStatus(
 	dbAccessor: DbAccessor,
 	agentId?: string | null,
-): TranscriptCaptureStatusSummary {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<TranscriptCaptureStatusSummary> {
+	return await dbAccessor.withReadDbAsync(async (db) => {
 		const where = agentId ? "WHERE agent_id = ?" : "";
 		const params = agentId ? [agentId] : [];
 		const rows = db
@@ -449,13 +450,12 @@ export function getTranscriptCaptureStatus(
 }
 
 /** Read one agent-scoped capture receipt without exposing transcript content. */
-export function getTranscriptCaptureJobStatus(
+export async function getTranscriptCaptureJobStatus(
 	dbAccessor: DbAccessor,
 	agentId: string,
 	id: string,
-): TranscriptCaptureJobReceipt | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<TranscriptCaptureJobReceipt | null> {
+	return await dbAccessor.withReadDbAsync(async (db) => {
 		const row = db
 			.prepare(
 				`SELECT id, status, error

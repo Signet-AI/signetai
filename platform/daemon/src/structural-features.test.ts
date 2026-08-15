@@ -94,8 +94,8 @@ afterEach(() => {
 });
 
 describe("getStructuralFeatures", () => {
-	it("returns structural slots and density for assigned memories", () => {
-		const features = getStructuralFeatures(
+	it("returns structural slots and density for assigned memories", async () => {
+		const features = await getStructuralFeatures(
 			getDbAccessor(),
 			["mem-1", "mem-2"],
 			"default",
@@ -117,16 +117,16 @@ describe("getStructuralFeatures", () => {
 		expect(constraintFeatures?.candidateSource).toBe("effective");
 	});
 
-	it("returns null for unassigned memories", () => {
-		const features = getStructuralFeatures(getDbAccessor(), ["mem-3"], "default");
+	it("returns null for unassigned memories", async () => {
+		const features = await getStructuralFeatures(getDbAccessor(), ["mem-3"], "default");
 		expect(features.get("mem-3")).toBeNull();
 	});
 });
 
 describe("buildCandidateFeatures", () => {
-	it("builds 17-element feature vectors with structural signals", () => {
+	it("builds 17-element feature vectors with structural signals", async () => {
 		const now = new Date().toISOString();
-		const vectors = buildCandidateFeatures(
+		const vectors = await buildCandidateFeatures(
 			getDbAccessor(),
 			[
 				{
@@ -170,9 +170,9 @@ describe("buildCandidateFeatures", () => {
 		expect(vectors[1][15]).toBe(0);
 	});
 
-	it("clamps negative session gap days before log transform", () => {
+	it("clamps negative session gap days before log transform", async () => {
 		const now = new Date().toISOString();
-		const [vector] = buildCandidateFeatures(
+		const [vector] = await buildCandidateFeatures(
 			getDbAccessor(),
 			[
 				{

@@ -83,14 +83,13 @@ function linkEvidenceRefs(dependency: EntityDependency): OntologyEvidenceRef[] {
 	return uniqueOntologyEvidenceRefs(refs);
 }
 
-export function getOntologyLinkEvidence(
+export async function getOntologyLinkEvidence(
 	accessor: DbAccessor,
 	params: GetOntologyLinkEvidenceParams,
-): OntologyLinkEvidenceResult {
-	const dependency = getEntityDependencyById(accessor, params);
+): Promise<OntologyLinkEvidenceResult> {
+	const dependency = await getEntityDependencyById(accessor, params);
 	if (dependency === null) throw new OntologyLinkEvidenceError("Link not found", 404);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const items = accessor.withReadDb((db: import("./db-accessor").ReadDb) =>
+	const items = await accessor.withReadDbAsync(async (db) =>
 		linkEvidenceRefs(dependency).map((ref) => resolveOntologyEvidenceRef(db, params.agentId, ref)),
 	);
 	return {

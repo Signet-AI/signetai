@@ -1034,7 +1034,10 @@ function readReverse(
 	return { items, truncated, maxDepthReached };
 }
 
-export function explainOntologyClaim(accessor: DbAccessor, params: ExplainClaimParams): ClaimTraceResult {
+export async function explainOntologyClaim(
+	accessor: DbAccessor,
+	params: ExplainClaimParams,
+): Promise<ClaimTraceResult> {
 	const started = performance.now();
 	const versionLimit = boundedInteger(params.versionLimit, 20, MAX_VERSION_LIMIT, "versionLimit");
 	const premiseLimit = boundedInteger(params.premiseLimit, 50, MAX_PREMISE_LIMIT, "premiseLimit");
@@ -1042,7 +1045,7 @@ export function explainOntologyClaim(accessor: DbAccessor, params: ExplainClaimP
 	const maxDepth = boundedDepth(params.maxDepth);
 	const sessionKey = params.sessionKey?.trim() || null;
 	const project = params.project?.trim() || null;
-	const result = listEntityAttributesByPath(accessor, {
+	const result = await listEntityAttributesByPath(accessor, {
 		agentId: params.agentId,
 		entity: params.entity,
 		aspect: params.aspect,

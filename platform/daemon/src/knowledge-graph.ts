@@ -22,6 +22,7 @@ import type {
 } from "@signet/core";
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor, ReadDb } from "./db-accessor";
+import { runWriteTxAsync } from "./db-accessor";
 import { getDreamingEpisodicTokenBacklogCached } from "./pipeline/dreaming";
 
 // ---------------------------------------------------------------------------
@@ -182,9 +183,12 @@ function rowToTaskMeta(r: Record<string, unknown>): TaskMeta {
 // Aspects
 // ---------------------------------------------------------------------------
 
-export function getAspectsForEntity(accessor: DbAccessor, entityId: string, agentId: string): readonly EntityAspect[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+export async function getAspectsForEntity(
+	accessor: DbAccessor,
+	entityId: string,
+	agentId: string,
+): Promise<readonly EntityAspect[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT * FROM entity_aspects
@@ -201,13 +205,12 @@ export function getAspectsForEntity(accessor: DbAccessor, entityId: string, agen
 // Attributes
 // ---------------------------------------------------------------------------
 
-export function getAttributesForAspect(
+export async function getAttributesForAspect(
 	accessor: DbAccessor,
 	aspectId: string,
 	agentId: string,
-): readonly EntityAttribute[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<readonly EntityAttribute[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT * FROM entity_attributes
@@ -224,13 +227,12 @@ export function getAttributesForAspect(
  * Joins through entity_aspects to collect kind='constraint' rows.
  * This is the query that enforces the "constraints always surface" invariant.
  */
-export function getConstraintsForEntity(
+export async function getConstraintsForEntity(
 	accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
-): readonly EntityAttribute[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<readonly EntityAttribute[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT ea.* FROM entity_attributes ea
@@ -251,12 +253,11 @@ export function getConstraintsForEntity(
 // Dependencies
 // ---------------------------------------------------------------------------
 
-export function getEntityDependencyById(
+export async function getEntityDependencyById(
 	accessor: DbAccessor,
 	params: { readonly id: string; readonly agentId: string },
-): EntityDependency | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<EntityDependency | null> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const row = db
 			.prepare("SELECT * FROM entity_dependencies WHERE id = ? AND agent_id = ?")
 			.get(params.id, params.agentId) as Record<string, unknown> | undefined;
@@ -264,13 +265,12 @@ export function getEntityDependencyById(
 	});
 }
 
-export function getDependenciesFrom(
+export async function getDependenciesFrom(
 	accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
-): readonly EntityDependency[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<readonly EntityDependency[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT dep.*
@@ -287,13 +287,12 @@ export function getDependenciesFrom(
 	});
 }
 
-export function getDependenciesTo(
+export async function getDependenciesTo(
 	accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
-): readonly EntityDependency[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<readonly EntityDependency[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT dep.*
@@ -314,9 +313,11 @@ export function getDependenciesTo(
 // Entity pinning
 // ---------------------------------------------------------------------------
 
-export function getPinnedEntities(accessor: DbAccessor, agentId: string): ReadonlyArray<PinnedEntitySummary> {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+export async function getPinnedEntities(
+	accessor: DbAccessor,
+	agentId: string,
+): Promise<ReadonlyArray<PinnedEntitySummary>> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT id, name, pinned_at
@@ -354,13 +355,12 @@ export interface UpsertTaskMetaParams {
 	readonly retentionUntil?: string;
 }
 
-export function upsertTaskMeta(accessor: DbAccessor, params: UpsertTaskMetaParams): TaskMeta {
+export async function upsertTaskMeta(accessor: DbAccessor, params: UpsertTaskMetaParams): Promise<TaskMeta> {
 	const ts = now();
 
 	const completedAt = params.status === "done" || params.status === "cancelled" ? ts : null;
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	return await runWriteTxAsync(accessor, (db) => {
 		// entity_id is PRIMARY KEY, so ON CONFLICT handles the upsert
 		db.prepare(
 			`INSERT INTO task_meta
@@ -395,9 +395,8 @@ export function upsertTaskMeta(accessor: DbAccessor, params: UpsertTaskMetaParam
 	});
 }
 
-export function getTaskMeta(accessor: DbAccessor, entityId: string, agentId: string): TaskMeta | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+export async function getTaskMeta(accessor: DbAccessor, entityId: string, agentId: string): Promise<TaskMeta | null> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const row = db.prepare("SELECT * FROM task_meta WHERE entity_id = ? AND agent_id = ?").get(entityId, agentId) as
 			| Record<string, unknown>
 			| undefined;
@@ -405,10 +404,14 @@ export function getTaskMeta(accessor: DbAccessor, entityId: string, agentId: str
 	});
 }
 
-export function updateTaskStatus(accessor: DbAccessor, entityId: string, agentId: string, status: TaskStatus): void {
+export async function updateTaskStatus(
+	accessor: DbAccessor,
+	entityId: string,
+	agentId: string,
+	status: TaskStatus,
+): Promise<void> {
 	const ts = now();
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	await runWriteTxAsync(accessor, (db) => {
 		db.prepare(
 			`UPDATE task_meta
 			 SET status = ?, completed_at = ?, updated_at = ?
@@ -563,18 +566,17 @@ export interface EntityKnowledgeTree {
 	};
 }
 
-export function resolveNamedEntity(
+export async function resolveNamedEntity(
 	accessor: DbAccessor,
 	input: {
 		readonly agentId: string;
 		readonly name: string;
 	},
-): ResolvedNamedEntity | null {
+): Promise<ResolvedNamedEntity | null> {
 	const canonical = toCanonicalName(input.name);
 	if (canonical.length === 0) return null;
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+	return await accessor.withReadDbAsync(async (db) => {
 		const escaped = canonical.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
 		const starts = `${escaped}%`;
 		const contains = `%${escaped}%`;
@@ -671,7 +673,7 @@ function resolveAspectByName(
 	return row ? rowToAspect(row) : null;
 }
 
-function resolveEntityRecordByName(
+export function resolveEntityRecordByName(
 	db: ReadDb,
 	params: {
 		readonly agentId: string;
@@ -730,27 +732,26 @@ function resolveEntityRecordByName(
 	return row ? rowToEntity(row) : null;
 }
 
-export function getKnowledgeEntityByName(
+export async function getKnowledgeEntityByName(
 	accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
 		readonly name: string;
 	},
-): KnowledgeEntityDetail | null {
-	const resolved = resolveNamedEntity(accessor, params);
-	return resolved ? getKnowledgeEntityDetail(accessor, resolved.id, params.agentId) : null;
+): Promise<KnowledgeEntityDetail | null> {
+	const resolved = await resolveNamedEntity(accessor, params);
+	return resolved ? await getKnowledgeEntityDetail(accessor, resolved.id, params.agentId) : null;
 }
 
-export function listEntityAliases(
+export async function listEntityAliases(
 	accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
 		readonly entityId: string;
 		readonly status?: "active" | "archived" | "all";
 	},
-): readonly EntityAlias[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<readonly EntityAlias[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const conditions = ["entity_id = ?", "agent_id = ?"];
 		const args: string[] = [params.entityId, params.agentId];
 		if (params.status && params.status !== "all") {
@@ -771,15 +772,14 @@ export function listEntityAliases(
 	});
 }
 
-export function getEntityAspectsByName(
+export async function getEntityAspectsByName(
 	accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
 		readonly entity: string;
 	},
-): { readonly entity: Entity; readonly items: readonly AspectWithCounts[] } | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<{ readonly entity: Entity; readonly items: readonly AspectWithCounts[] } | null> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const entity = resolveEntityRecordByName(db, {
 			agentId: params.agentId,
 			name: params.entity,
@@ -787,12 +787,12 @@ export function getEntityAspectsByName(
 		if (!entity) return null;
 		return {
 			entity,
-			items: getEntityAspectsWithCounts(accessor, entity.id, params.agentId),
+			items: await getEntityAspectsWithCounts(accessor, entity.id, params.agentId),
 		};
 	});
 }
 
-export function getEntityKnowledgeTree(
+export async function getEntityKnowledgeTree(
 	accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
@@ -802,9 +802,8 @@ export function getEntityKnowledgeTree(
 		readonly maxClaims: number;
 		readonly depth: number;
 	},
-): EntityKnowledgeTree | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<EntityKnowledgeTree | null> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const entity = resolveEntityRecordByName(db, {
 			agentId: params.agentId,
 			name: params.entity,
@@ -942,16 +941,19 @@ export function getEntityKnowledgeTree(
 	});
 }
 
-export function listEntityGroups(
+export async function listEntityGroups(
 	accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
 		readonly entity: string;
 		readonly aspect: string;
 	},
-): { readonly entity: Entity; readonly aspect: EntityAspect; readonly items: readonly EntityGroupSummary[] } | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<{
+	readonly entity: Entity;
+	readonly aspect: EntityAspect;
+	readonly items: readonly EntityGroupSummary[];
+} | null> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const entity = resolveEntityRecordByName(db, {
 			agentId: params.agentId,
 			name: params.entity,
@@ -999,7 +1001,7 @@ export function listEntityGroups(
 	});
 }
 
-export function listEntityClaims(
+export async function listEntityClaims(
 	accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
@@ -1007,9 +1009,12 @@ export function listEntityClaims(
 		readonly aspect: string;
 		readonly group: string;
 	},
-): { readonly entity: Entity; readonly aspect: EntityAspect; readonly items: readonly EntityClaimSummary[] } | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<{
+	readonly entity: Entity;
+	readonly aspect: EntityAspect;
+	readonly items: readonly EntityClaimSummary[];
+} | null> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const entity = resolveEntityRecordByName(db, {
 			agentId: params.agentId,
 			name: params.entity,
@@ -1070,7 +1075,7 @@ export function listEntityClaims(
 	});
 }
 
-export function listEntityAttributesByPath(
+export async function listEntityAttributesByPath(
 	accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
@@ -1083,9 +1088,12 @@ export function listEntityAttributesByPath(
 		readonly limit: number;
 		readonly offset: number;
 	},
-): { readonly entity: Entity; readonly aspect: EntityAspect; readonly items: readonly EntityAttribute[] } | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<{
+	readonly entity: Entity;
+	readonly aspect: EntityAspect;
+	readonly items: readonly EntityAttribute[];
+} | null> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const entity = resolveEntityRecordByName(db, {
 			agentId: params.agentId,
 			name: params.entity,
@@ -1136,7 +1144,7 @@ export function listEntityAttributesByPath(
 	});
 }
 
-export function listKnowledgeEntities(
+export async function listKnowledgeEntities(
 	accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
@@ -1145,9 +1153,8 @@ export function listKnowledgeEntities(
 		readonly limit: number;
 		readonly offset: number;
 	},
-): readonly KnowledgeEntityListItem[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<readonly KnowledgeEntityListItem[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const conditions = ["e.agent_id = ?"];
 		const args: Array<string | number> = [params.agentId];
 		conditions.push("COALESCE(e.status, 'active') = 'active'");
@@ -1226,13 +1233,12 @@ export function listKnowledgeEntities(
 	});
 }
 
-export function getKnowledgeEntityDetail(
+export async function getKnowledgeEntityDetail(
 	accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
-): KnowledgeEntityDetail | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<KnowledgeEntityDetail | null> {
+	return await accessor.withReadDbAsync(async (db) => {
 		// Scalar subqueries per count avoid GROUP BY materialization across
 		// the (LEFT JOIN aspects x attributes x dependencies) cartesian, which
 		// produces the same pathological shape as listKnowledgeEntities even
@@ -1289,7 +1295,7 @@ export function getKnowledgeEntityDetail(
 			.get(entityId, agentId) as Record<string, unknown> | undefined;
 
 		if (!row) return null;
-		const structuralDensity = getStructuralDensity(accessor, entityId, agentId);
+		const structuralDensity = await getStructuralDensity(accessor, entityId, agentId);
 		const incomingDependencyCount = Number(row.incoming_dependency_count ?? 0);
 		const outgoingDependencyCount = Number(row.outgoing_dependency_count ?? 0);
 
@@ -1306,13 +1312,12 @@ export function getKnowledgeEntityDetail(
 	});
 }
 
-export function getEntityAspectsWithCounts(
+export async function getEntityAspectsWithCounts(
 	accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
-): readonly AspectWithCounts[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<readonly AspectWithCounts[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT
@@ -1341,7 +1346,7 @@ export function getEntityAspectsWithCounts(
 	});
 }
 
-export function getAttributesForAspectFiltered(
+export async function getAttributesForAspectFiltered(
 	accessor: DbAccessor,
 	params: {
 		readonly entityId: string;
@@ -1352,9 +1357,8 @@ export function getAttributesForAspectFiltered(
 		readonly limit: number;
 		readonly offset: number;
 	},
-): readonly EntityAttribute[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<readonly EntityAttribute[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const conditions = [
 			"asp.entity_id = ?",
 			"asp.id = ?",
@@ -1388,16 +1392,15 @@ export function getAttributesForAspectFiltered(
 	});
 }
 
-export function getEntityDependenciesDetailed(
+export async function getEntityDependenciesDetailed(
 	accessor: DbAccessor,
 	params: {
 		readonly entityId: string;
 		readonly agentId: string;
 		readonly direction: "incoming" | "outgoing" | "both";
 	},
-): readonly KnowledgeDependencyEdge[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<readonly KnowledgeDependencyEdge[]> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const directionClauses: string[] = [];
 		if (params.direction === "incoming" || params.direction === "both") {
 			directionClauses.push("dep.target_entity_id = ?");
@@ -1444,9 +1447,8 @@ export function getEntityDependenciesDetailed(
 	});
 }
 
-export function getKnowledgeStats(accessor: DbAccessor, agentId: string): KnowledgeStats {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+export async function getKnowledgeStats(accessor: DbAccessor, agentId: string): Promise<KnowledgeStats> {
+	return await accessor.withReadDbAsync(async (db) => {
 		// Drive the join from the (narrower) agent-scoped entities side rather
 		// than scanning every memory with a correlated EXISTS. Same result,
 		// dramatically smaller search space on large corpora.
@@ -1567,14 +1569,13 @@ export function getKnowledgeStats(accessor: DbAccessor, agentId: string): Knowle
 	});
 }
 
-export function getEntityHealth(
+export async function getEntityHealth(
 	accessor: DbAccessor,
 	agentId: string,
 	since?: string,
 	minComparisons = 3,
-): ReadonlyArray<EntityHealth> {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<ReadonlyArray<EntityHealth>> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const predictorTable = db
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'predictor_comparisons'")
 			.get() as { name: string } | undefined;
@@ -1658,9 +1659,8 @@ export function getEntityHealth(
 	});
 }
 
-export function propagateMemoryStatus(accessor: DbAccessor, agentId: string): number {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+export async function propagateMemoryStatus(accessor: DbAccessor, agentId: string): Promise<number> {
+	return await runWriteTxAsync(accessor, (db) => {
 		const stale = db
 			.prepare(
 				`SELECT id
@@ -1944,18 +1944,17 @@ function getConstellationProposalSummary(db: ReadDb, agentId: string): Constella
 	};
 }
 
-export function getKnowledgeGraphForConstellation(
+export async function getKnowledgeGraphForConstellation(
 	accessor: DbAccessor,
 	agentId: string,
 	options: ConstellationGraphOptions = {},
-): ConstellationGraph {
+): Promise<ConstellationGraph> {
 	const limit = boundedInteger(options.limit, 150, 1, 300);
 	const maxAspectsPerEntity = boundedInteger(options.maxAspectsPerEntity, 6, 1, 25);
 	const maxAttributesPerAspect = boundedInteger(options.maxAttributesPerAspect, 4, 1, 250);
 	const dependencyLimit = boundedInteger(options.dependencyLimit, 500, 1, 2000);
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+	return await accessor.withReadDbAsync(async (db) => {
 		const visibleAgentIds = getConstellationVisibleAgentIds(db, agentId);
 		const agentPlaceholders = placeholders(visibleAgentIds.length);
 		const topologyPlaceholders = placeholders(SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.length);
@@ -2199,9 +2198,12 @@ export function getKnowledgeGraphForConstellation(
 	});
 }
 
-export function getStructuralDensity(accessor: DbAccessor, entityId: string, agentId: string): StructuralDensity {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+export async function getStructuralDensity(
+	accessor: DbAccessor,
+	entityId: string,
+	agentId: string,
+): Promise<StructuralDensity> {
+	return await accessor.withReadDbAsync(async (db) => {
 		const aspects = db
 			.prepare(
 				`SELECT COUNT(*) as n FROM entity_aspects

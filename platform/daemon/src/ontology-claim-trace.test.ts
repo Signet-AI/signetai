@@ -160,7 +160,7 @@ describe("authorized ontology claim traces", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("returns current truth, history, exact premises, assertions, and bounded reverse lineage", () => {
+	it("returns current truth, history, exact premises, assertions, and bounded reverse lineage", async () => {
 		const assertion = createEpistemicAssertion(getDbAccessor(), {
 			agentId: "ant",
 			entityId: "entity-1",
@@ -174,7 +174,7 @@ describe("authorized ontology claim traces", () => {
 			attributeId: "attr-current",
 		});
 
-		const trace = explainOntologyClaim(getDbAccessor(), {
+		const trace = await explainOntologyClaim(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Editor",
 			aspect: "preferences",
@@ -210,7 +210,7 @@ describe("authorized ontology claim traces", () => {
 		expect(trace.traversal.limits.maxDepth).toBe(2);
 	});
 
-	it("keeps project-scoped reverse lineage within the authorized project", () => {
+	it("keeps project-scoped reverse lineage within the authorized project", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				"UPDATE memories SET project = 'project-a' WHERE id IN ('source-a', 'derived-old', 'derived-current')",
@@ -218,7 +218,7 @@ describe("authorized ontology claim traces", () => {
 			db.prepare("UPDATE memories SET project = 'project-b' WHERE id = 'derived-dependent'").run();
 		});
 
-		const trace = explainOntologyClaim(getDbAccessor(), {
+		const trace = await explainOntologyClaim(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Editor",
 			aspect: "preferences",
@@ -229,11 +229,11 @@ describe("authorized ontology claim traces", () => {
 		expect(trace.reverse.items).toHaveLength(0);
 	});
 
-	it("rejects a project-scoped claim whose semantic memory is outside the project", () => {
+	it("rejects a project-scoped claim whose semantic memory is outside the project", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE memories SET project = 'project-b' WHERE id = 'derived-current'").run();
 		});
-		expect(() =>
+		await expect(
 			explainOntologyClaim(getDbAccessor(), {
 				agentId: "ant",
 				entity: "Editor",
@@ -242,10 +242,10 @@ describe("authorized ontology claim traces", () => {
 				claim: "editor",
 				project: "project-a",
 			}),
-		).toThrowError(new OntologyClaimTraceError("Claim is outside the authorized project scope", 403));
+		).rejects.toThrowError(new OntologyClaimTraceError("Claim is outside the authorized project scope", 403));
 	});
 
-	it("resolves exact artifact spans without returning artifact session tokens", () => {
+	it("resolves exact artifact spans without returning artifact session tokens", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				"DELETE FROM derived_memory_sources WHERE derived_memory_id IN ('derived-old', 'derived-current')",
@@ -273,7 +273,7 @@ describe("authorized ontology claim traces", () => {
 			).run(now, now);
 		});
 
-		const trace = explainOntologyClaim(getDbAccessor(), {
+		const trace = await explainOntologyClaim(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Editor",
 			aspect: "preferences",
@@ -290,7 +290,7 @@ describe("authorized ontology claim traces", () => {
 		});
 	});
 
-	it("does not treat legacy noncanonical lineage metadata as source evidence", () => {
+	it("does not treat legacy noncanonical lineage metadata as source evidence", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				"DELETE FROM derived_memory_sources WHERE derived_memory_id IN ('derived-old', 'derived-current')",
@@ -301,7 +301,7 @@ describe("authorized ontology claim traces", () => {
 			linkSource(db, "derived-current", "ontology_claim", "attr-old");
 		});
 
-		const trace = explainOntologyClaim(getDbAccessor(), {
+		const trace = await explainOntologyClaim(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Editor",
 			aspect: "preferences",
@@ -312,12 +312,12 @@ describe("authorized ontology claim traces", () => {
 		expect(trace.integrity.status).toBe("unverified");
 	});
 
-	it("rejects fabricated and cross-agent premise ids", () => {
+	it("rejects fabricated and cross-agent premise ids", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("DELETE FROM derived_memory_sources WHERE derived_memory_id = 'derived-current'").run();
 			linkSource(db, "derived-current", "memory", "missing-source");
 		});
-		expect(() =>
+		await expect(
 			explainOntologyClaim(getDbAccessor(), {
 				agentId: "ant",
 				entity: "Editor",
@@ -325,7 +325,7 @@ describe("authorized ontology claim traces", () => {
 				group: "preferences",
 				claim: "editor",
 			}),
-		).toThrowError(new OntologyClaimTraceError("Claim premise 'memory:missing-source' was not found", 409));
+		).rejects.toThrowError(new OntologyClaimTraceError("Claim premise 'memory:missing-source' was not found", 409));
 
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("DELETE FROM derived_memory_sources WHERE derived_memory_id = 'derived-current'").run();
@@ -337,7 +337,7 @@ describe("authorized ontology claim traces", () => {
 			});
 			linkSource(db, "derived-current", "memory", "shared-id");
 		});
-		expect(() =>
+		await expect(
 			explainOntologyClaim(getDbAccessor(), {
 				agentId: "ant",
 				entity: "Editor",
@@ -345,16 +345,16 @@ describe("authorized ontology claim traces", () => {
 				group: "preferences",
 				claim: "editor",
 			}),
-		).toThrowError(new OntologyClaimTraceError("Claim premise crosses the authorized agent scope", 403));
+		).rejects.toThrowError(new OntologyClaimTraceError("Claim premise crosses the authorized agent scope", 403));
 	});
 
-	it("rejects an exact-quote claim that is not present in the source", () => {
+	it("rejects an exact-quote claim that is not present in the source", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE entity_attributes SET proposal_evidence = ? WHERE id = 'attr-current'").run(
 				JSON.stringify([{ source_ref: "memory:source-a", quote: "This sentence was never recorded." }]),
 			);
 		});
-		expect(() =>
+		await expect(
 			explainOntologyClaim(getDbAccessor(), {
 				agentId: "ant",
 				entity: "Editor",
@@ -362,14 +362,14 @@ describe("authorized ontology claim traces", () => {
 				group: "preferences",
 				claim: "editor",
 			}),
-		).toThrowError(new OntologyClaimTraceError("Claim premise quote does not match the immutable source", 409));
+		).rejects.toThrowError(new OntologyClaimTraceError("Claim premise quote does not match the immutable source", 409));
 	});
 
-	it("reports deleted evidence as invalidated and rejects a session boundary crossing", () => {
+	it("reports deleted evidence as invalidated and rejects a session boundary crossing", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = 'source-a'").run();
 		});
-		const invalidated = explainOntologyClaim(getDbAccessor(), {
+		const invalidated = await explainOntologyClaim(getDbAccessor(), {
 			agentId: "ant",
 			entity: "Editor",
 			aspect: "preferences",
@@ -388,7 +388,7 @@ describe("authorized ontology claim traces", () => {
 			).run(now, now, now);
 			linkSource(db, "derived-current", "transcript", "session-a");
 		});
-		expect(() =>
+		await expect(
 			explainOntologyClaim(getDbAccessor(), {
 				agentId: "ant",
 				entity: "Editor",
@@ -397,7 +397,7 @@ describe("authorized ontology claim traces", () => {
 				claim: "editor",
 				sessionKey: "session-b",
 			}),
-		).toThrowError(new OntologyClaimTraceError("Claim trace premise crosses the authorized session boundary", 403));
+		).rejects.toThrowError(new OntologyClaimTraceError("Claim trace premise crosses the authorized session boundary", 403));
 	});
 
 	it("serves the trace through the read-only HTTP route", async () => {

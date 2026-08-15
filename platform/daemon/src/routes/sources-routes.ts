@@ -463,7 +463,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		await removeSourceLifecycleState(result.source, sourceAgentId);
 		recordSourceDeletionTombstone(result.source, sourceAgentId, agentsDir);
 		const provider = getSourceProvider(result.source.kind);
-		const purged = provider ? purgeSource(provider, result.source, sourceAgentId, purgeNativeSource) : 0;
+		const purged = provider ? await purgeSource(provider, result.source, sourceAgentId, purgeNativeSource) : 0;
 		if (!isSourceIndexInFlight(result.source.id))
 			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
@@ -617,7 +617,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		await bridge?.close().catch(() => undefined);
 		if (consumeCanceledSourceIndexJob(job.id) && !sourceIndexStopping) {
 			const provider = getSourceProvider(input.source.kind);
-			if (provider) purgeSource(provider, input.source, resolveDaemonAgentId(), input.purgeNativeSource);
+			if (provider) await purgeSource(provider, input.source, resolveDaemonAgentId(), input.purgeNativeSource);
 			clearSourceDeletionTombstone(input.source.id, resolveDaemonAgentId(), input.agentsDir);
 		}
 		clearSourceIndexInFlight(input.source.id);
@@ -664,7 +664,7 @@ export async function cleanupSourceDeletionTombstones(
 		const provider = getSourceProvider(tombstone.source.kind);
 		if (!provider) continue;
 		try {
-			purgeSource(provider, tombstone.source, tombstone.agentId, purgeNativeSource);
+			await purgeSource(provider, tombstone.source, tombstone.agentId, purgeNativeSource);
 		} catch (err) {
 			remaining.push(tombstone);
 			logger.warn(
@@ -682,9 +682,9 @@ function purgeSource(
 	source: SignetSourceEntry,
 	agentId: string,
 	purgeNativeSource: typeof purgeNativeMemorySourceArtifacts,
-): number {
+): Promise<number> {
 	if (provider.toNativeSource) return purgeNativeSource(provider.toNativeSource(source), agentId);
-	return provider.purge(source, agentId);
+	return Promise.resolve(provider.purge(source, agentId));
 }
 
 function recordSourceDeletionTombstone(source: SignetSourceEntry, agentId: string, agentsDir: string): void {

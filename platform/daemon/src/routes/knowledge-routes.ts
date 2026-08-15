@@ -38,7 +38,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), max) : fallback;
 	};
 
-	app.get("/api/knowledge/entities", (c) => {
+	app.get("/api/knowledge/entities", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
 		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
@@ -58,7 +58,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/knowledge/navigation/entities", (c) => {
+	app.get("/api/knowledge/navigation/entities", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
 		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
@@ -78,20 +78,20 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/knowledge/navigation/entity", (c) => {
+	app.get("/api/knowledge/navigation/entity", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const name = c.req.query("name")?.trim();
 		if (!name) return c.json({ error: "name is required" }, 400);
-		const entity = getKnowledgeEntityByName(getDbAccessor(), { agentId, name });
+		const entity = await getKnowledgeEntityByName(getDbAccessor(), { agentId, name });
 		if (!entity) return c.json({ error: "Entity not found" }, 404);
 		return c.json(entity);
 	});
 
-	app.get("/api/knowledge/navigation/tree", (c) => {
+	app.get("/api/knowledge/navigation/tree", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const entity = c.req.query("entity")?.trim();
 		if (!entity) return c.json({ error: "entity is required" }, 400);
-		const result = getEntityKnowledgeTree(getDbAccessor(), {
+		const result = await getEntityKnowledgeTree(getDbAccessor(), {
 			agentId,
 			entity,
 			maxAspects: parseNavigationLimit(c.req.query("max_aspects"), 20, 100),
@@ -103,7 +103,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		return c.json(result);
 	});
 
-	app.get("/api/knowledge/navigation/aspects", (c) => {
+	app.get("/api/knowledge/navigation/aspects", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const entity = c.req.query("entity")?.trim();
 		if (!entity) return c.json({ error: "entity is required" }, 400);
@@ -112,7 +112,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		return c.json(result);
 	});
 
-	app.get("/api/knowledge/navigation/groups", (c) => {
+	app.get("/api/knowledge/navigation/groups", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
@@ -123,7 +123,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		return c.json(result);
 	});
 
-	app.get("/api/knowledge/navigation/claims", (c) => {
+	app.get("/api/knowledge/navigation/claims", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
@@ -136,7 +136,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		return c.json(result);
 	});
 
-	app.get("/api/knowledge/navigation/attributes", (c) => {
+	app.get("/api/knowledge/navigation/attributes", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const entity = c.req.query("entity")?.trim();
 		const aspect = c.req.query("aspect")?.trim();
@@ -157,7 +157,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			statusQuery === "active" || statusQuery === "superseded" || statusQuery === "deleted" || statusQuery === "all"
 				? statusQuery
 				: undefined;
-		const result = listEntityAttributesByPath(getDbAccessor(), {
+		const result = await listEntityAttributesByPath(getDbAccessor(), {
 			agentId,
 			entity,
 			aspect,
@@ -178,7 +178,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const agentId = c.req.query("agent_id") ?? "default";
 		try {
-			const { result } = applyOntologyOperation(getDbAccessor(), {
+			const { result } = await applyOntologyOperation(getDbAccessor(), {
 				agentId,
 				actor: c.req.header("x-signet-actor") ?? "operator",
 				operation: "pin_entity",
@@ -197,7 +197,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const agentId = c.req.query("agent_id") ?? "default";
 		try {
-			applyOntologyOperation(getDbAccessor(), {
+			await applyOntologyOperation(getDbAccessor(), {
 				agentId,
 				actor: c.req.header("x-signet-actor") ?? "operator",
 				operation: "unpin_entity",
@@ -210,16 +210,16 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		return c.json({ pinned: false });
 	});
 
-	app.get("/api/knowledge/entities/pinned", (c) => {
+	app.get("/api/knowledge/entities/pinned", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
-		return c.json(getPinnedEntities(getDbAccessor(), agentId));
+		return c.json(await getPinnedEntities(getDbAccessor(), agentId));
 	});
 
-	app.get("/api/knowledge/entities/health", (c) => {
+	app.get("/api/knowledge/entities/health", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const minComparisonsParam = Number.parseInt(c.req.query("min_comparisons") ?? "3", 10);
 		return c.json(
-			getEntityHealth(
+			await getEntityHealth(
 				getDbAccessor(),
 				agentId,
 				c.req.query("since") ?? undefined,
@@ -228,10 +228,10 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		);
 	});
 
-	app.get("/api/knowledge/hygiene", (c) => {
+	app.get("/api/knowledge/hygiene", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		return c.json(
-			getKnowledgeHygieneReport(getDbAccessor(), {
+			await getKnowledgeHygieneReport(getDbAccessor(), {
 				agentId,
 				limit: parseNavigationLimit(c.req.query("limit"), 50, 500),
 				memoryLimit: parseNavigationLimit(c.req.query("memory_limit"), 200, 1000),
@@ -239,23 +239,23 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		);
 	});
 
-	app.get("/api/knowledge/entities/:id", (c) => {
+	app.get("/api/knowledge/entities/:id", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
-		const entity = getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
+		const entity = await getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
 		if (!entity) {
 			return c.json({ error: "Entity not found" }, 404);
 		}
 		return c.json(entity);
 	});
 
-	app.get("/api/knowledge/entities/:id/aspects", (c) => {
+	app.get("/api/knowledge/entities/:id/aspects", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		return c.json({
-			items: getEntityAspectsWithCounts(getDbAccessor(), c.req.param("id"), agentId),
+			items: await getEntityAspectsWithCounts(getDbAccessor(), c.req.param("id"), agentId),
 		});
 	});
 
-	app.get("/api/knowledge/entities/:id/aspects/:aspectId/attributes", (c) => {
+	app.get("/api/knowledge/entities/:id/aspects/:aspectId/attributes", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
 		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
@@ -265,7 +265,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const status = c.req.query("status");
 
 		return c.json({
-			items: getAttributesForAspectFiltered(getDbAccessor(), {
+			items: await getAttributesForAspectFiltered(getDbAccessor(), {
 				entityId: c.req.param("id"),
 				aspectId: c.req.param("aspectId"),
 				agentId,
@@ -279,7 +279,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/knowledge/entities/:id/dependencies", (c) => {
+	app.get("/api/knowledge/entities/:id/dependencies", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const directionQuery = c.req.query("direction");
 		const direction =
@@ -295,15 +295,14 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/knowledge/stats", (c) => {
+	app.get("/api/knowledge/stats", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
-		return c.json(getKnowledgeStats(getDbAccessor(), agentId));
+		return c.json(await getKnowledgeStats(getDbAccessor(), agentId));
 	});
 
-	app.get("/api/knowledge/communities", (c) => {
+	app.get("/api/knowledge/communities", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const rows = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+		const rows = await getDbAccessor().withReadDbAsync(async (db) => {
 			return db
 				.prepare(
 					`SELECT id, name, cohesion, member_count, created_at, updated_at
@@ -323,7 +322,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		return c.json({ items: rows, count: rows.length });
 	});
 
-	app.get("/api/knowledge/traversal/status", (c) => {
+	app.get("/api/knowledge/traversal/status", async (c) => {
 		return c.json({
 			status: getTraversalStatus(),
 		});
@@ -359,7 +358,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		}
 
 		const agentId = scopedAgent.agentId;
-		const resolved = resolveNamedEntity(getDbAccessor(), {
+		const resolved = await resolveNamedEntity(getDbAccessor(), {
 			agentId,
 			name: entityName,
 		});
@@ -368,8 +367,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				? {
 						entityIds: [resolved.id],
 					}
-				: // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-					getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+				: await getDbAccessor().withReadDbAsync(async (db) =>
 						resolveFocalEntities(db, agentId, {
 							queryTokens: entityName.split(/\s+/),
 						}),
@@ -404,12 +402,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const primaryEntityId = focal.entityIds[0];
 
-		const traversal = await traverseKnowledgeGraph(
-			focal.entityIds,
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			<T>(fn: (db: ReadDb) => T): T => getDbAccessor().withReadDb(fn),
-			agentId,
-			{
+		const traversal = await getDbAccessor().withReadDbAsync(async (db) =>
+			traverseKnowledgeGraph(focal.entityIds, db, agentId, {
 				maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
 				maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
 				maxDependencyHops: traversalCfg.maxDependencyHops,
@@ -419,11 +413,10 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				minConfidence: traversalCfg.minConfidence,
 				timeoutMs: traversalCfg.timeoutMs,
 				aspectFilter: aspectFilter || undefined,
-			},
+			}),
 		);
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+		return await getDbAccessor().withReadDbAsync(async (db) => {
 			const entityRow = db
 				.prepare(
 					`SELECT id, name, entity_type, description
@@ -595,8 +588,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entityName is required" }, 400);
 		}
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+		return await getDbAccessor().withReadDbAsync(async (db) => {
 			const tbl = db
 				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
 				.get() as { name: string } | undefined;
@@ -604,7 +596,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				return c.json({ entityName, summaries: [], total: 0 });
 			}
 
-			const entity = resolveNamedEntity(getDbAccessor(), {
+			const entity = await resolveNamedEntity(getDbAccessor(), {
 				agentId,
 				name: entityName,
 			});
@@ -710,8 +702,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entityId is required" }, 400);
 		}
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const result = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+		const result = await getDbAccessor().withReadDbAsync(async (db) =>
 			walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
 		);
 		return c.json(result);

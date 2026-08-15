@@ -91,10 +91,9 @@ function qualityIssues(rows: readonly EntityRow[]): readonly DreamingQualityIssu
  * semantic reader. Claim evidence is resolved through the same API surface
  * users inspect, while source-native topology is excluded from quality counts.
  */
-export function getDreamingQualityReport(accessor: DbAccessor, agentId: string): DreamingQualityReport {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+export async function getDreamingQualityReport(accessor: DbAccessor, agentId: string): Promise<DreamingQualityReport> {
 	const { claimPaths, entities, totalClaimValues, unaddressableClaimValues, structureQuality } = accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) => {
+		(db) => {
 			const topologyPlaceholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
 			const semanticFilter = `NOT (e.entity_type IN (${topologyPlaceholders}) OR (e.entity_type = 'source' AND e.source_root IS NOT NULL))`;
 			const claimPaths = db
@@ -183,7 +182,7 @@ export function getDreamingQualityReport(accessor: DbAccessor, agentId: string):
 	for (const path of claimPaths) {
 		for (let offset = 0; ; offset += 200) {
 			try {
-				const claimEvidence = getOntologyClaimEvidence(accessor, {
+				const claimEvidence = await getOntologyClaimEvidence(accessor, {
 					agentId,
 					entity: path.entity,
 					aspect: path.aspect,

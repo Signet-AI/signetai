@@ -53,13 +53,12 @@ function boundedText(value: string | undefined, maxChars: number): string | unde
 	return value.slice(0, maxChars);
 }
 
-function filterDreamingAttributes(
+async function filterDreamingAttributes(
 	accessor: DbAccessor,
 	agentId: string,
 	attributes: readonly EntityAttribute[],
-): readonly EntityAttribute[] {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) =>
+): Promise<readonly EntityAttribute[]> {
+	return await accessor.withReadDbAsync(async (db) =>
 		attributes.filter((attribute) => {
 			if (attribute.memoryId) {
 				return isMemoryContentContextEligible(db, {
@@ -334,13 +333,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 			async ({ agentId: scopeId, query, type, limit, offset }) => ({
 				ok: true,
-				items: listKnowledgeEntities(accessor, {
-					agentId: scopeId,
-					query,
-					type,
-					limit: bounded(limit, 20, 100),
-					offset: Math.max(0, Math.floor(offset ?? 0)),
-				}).map((item) => ({
+				items: (
+					await listKnowledgeEntities(accessor, {
+						agentId: scopeId,
+						query,
+						type,
+						limit: bounded(limit, 20, 100),
+						offset: Math.max(0, Math.floor(offset ?? 0)),
+					})
+				).map((item) => ({
 					id: item.entity.id,
 					name: item.entity.name,
 					entityType: item.entity.entityType,
@@ -366,7 +367,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				offset: z.number().finite().optional(),
 			}),
 			async ({ agentId: scopeId, entityId, include, direction, limit, offset }) => {
-				const detail = getKnowledgeEntityDetail(accessor, entityId, scopeId);
+				const detail = await getKnowledgeEntityDetail(accessor, entityId, scopeId);
 				if (!detail) return { ok: false, error: "Entity not found" };
 				const hydrationLimit = bounded(limit, 50, MAX_HYDRATED_ITEMS);
 				const hydrationOffset = Math.max(0, Math.floor(offset ?? 0));
@@ -380,7 +381,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					dependencyCount: detail.dependencyCount,
 				};
 				if (include?.includes("aspects")) {
-					const aspects = getEntityAspectsWithCounts(accessor, entityId, scopeId);
+					const aspects = await getEntityAspectsWithCounts(accessor, entityId, scopeId);
 					const hydratedAspects = aspects.slice(hydrationOffset, hydrationOffset + hydrationLimit).map((aspect) => ({
 						id: aspect.aspect.id,
 						name: boundedText(aspect.aspect.name, MAX_ENTITY_TEXT_CHARS),
@@ -392,7 +393,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					result.aspectsTruncated = hydrationOffset + hydratedAspects.length < aspects.length;
 				}
 				if (include?.includes("links")) {
-					const links = getEntityDependenciesDetailed(accessor, {
+					const links = await getEntityDependenciesDetailed(accessor, {
 						entityId,
 						agentId: scopeId,
 						direction: direction ?? "both",
@@ -416,10 +417,10 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			z.object({ agentId: z.string().min(1), entityId: z.string().min(1), aspectId: z.string().min(1), ...pagination }),
 			async ({ agentId: scopeId, entityId, aspectId, limit, offset }) => ({
 				ok: true,
-				items: filterDreamingAttributes(
+				items: await filterDreamingAttributes(
 					accessor,
 					scopeId,
-					getAttributesForAspectFiltered(accessor, {
+					await getAttributesForAspectFiltered(accessor, {
 						entityId,
 						aspectId,
 						agentId: scopeId,
@@ -443,7 +444,11 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 			async ({ agentId: scopeId, entityId, direction }) => ({
 				ok: true,
-				items: getEntityDependenciesDetailed(accessor, { entityId, agentId: scopeId, direction: direction ?? "both" }),
+				items: await getEntityDependenciesDetailed(accessor, {
+					entityId,
+					agentId: scopeId,
+					direction: direction ?? "both",
+				}),
 			}),
 		),
 		capability(
@@ -472,15 +477,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					// Accept stable ids as well as names for the claim path:
 					// search results surface ids, and the path resolver is
 					// name-based.
-					const detail = getKnowledgeEntityDetail(accessor, ref.entity, scopeId);
+					const detail = await getKnowledgeEntityDetail(accessor, ref.entity, scopeId);
 					if (detail) {
 						entityName = detail.entity.name;
-						const aspect = getEntityAspectsWithCounts(accessor, ref.entity, scopeId).find(
+						const aspect = (await getEntityAspectsWithCounts(accessor, ref.entity, scopeId)).find(
 							(candidate) => candidate.aspect.id === ref.aspect || candidate.aspect.name === ref.aspect,
 						);
 						if (aspect) aspectName = aspect.aspect.name;
 					}
-					const result = getOntologyClaimEvidence(accessor, {
+					const result = await getOntologyClaimEvidence(accessor, {
 						agentId: scopeId,
 						entity: entityName,
 						aspect: aspectName,
@@ -490,16 +495,18 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						offset,
 					});
 					const safeIds = new Set(
-						filterDreamingAttributes(
-							accessor,
-							scopeId,
-							result.items.map((item) => item.attribute),
+						(
+							await filterDreamingAttributes(
+								accessor,
+								scopeId,
+								result.items.map((item) => item.attribute),
+							)
 						).map((attribute) => attribute.id),
 					);
 					const items = result.items.filter((item) => safeIds.has(item.attribute.id));
 					return { ok: true, result: { ...result, items, count: items.length } };
 				}
-				return { ok: true, result: getOntologyLinkEvidence(accessor, { agentId: scopeId, id: ref.id }) };
+				return { ok: true, result: await getOntologyLinkEvidence(accessor, { agentId: scopeId, id: ref.id }) };
 			},
 		),
 		capability(
@@ -519,8 +526,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				chunkSize: z.number().finite().optional(),
 			}),
 			async ({ agentId: scopeId, query, since, before, kind, limit, sourceRef, offset, chunkSize }) =>
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-				accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
+				await accessor.withReadDbAsync(async (db) => {
 					if (sourceRef !== undefined) {
 						const source = readEpisodicSource(db, { agentId: scopeId, from: sourceRef });
 						if (source === null) return { ok: false, error: "Evidence source not found" };
@@ -587,18 +593,20 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					result.duplicates = findDuplicateEntityMerges(accessor, { agentId: scopeId, name });
 				}
 				if (entityId !== undefined && aspectId !== undefined && value !== undefined) {
-					result.contradiction = filterDreamingAttributes(
-						accessor,
-						scopeId,
-						getAttributesForAspectFiltered(accessor, {
-							entityId,
-							aspectId,
-							agentId: scopeId,
-							kind: "attribute",
-							status: "active",
-							limit: 200,
-							offset: 0,
-						}),
+					result.contradiction = (
+						await filterDreamingAttributes(
+							accessor,
+							scopeId,
+							await getAttributesForAspectFiltered(accessor, {
+								entityId,
+								aspectId,
+								agentId: scopeId,
+								kind: "attribute",
+								status: "active",
+								limit: 200,
+								offset: 0,
+							}),
+						)
 					).map((attribute) => ({
 						attributeId: attribute.id,
 						content: attribute.content,
@@ -690,14 +698,12 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			async ({ agentId: scopeId, kind, status, limit }) => {
 				if (kind === "review_due") {
 					if (status === "resolved") return { ok: true, items: [] };
-					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-					const due: ReturnType<typeof collectReviewDueClaims> = accessor.withReadDb(
-						(db: import("../db-accessor").ReadDb) =>
-							collectReviewDueClaims(
-								{ all: <T>(sql: string, ...params: unknown[]) => db.prepare(sql).all(...params) as T[] },
-								new Date(),
-								{ agentId: scopeId, limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200) },
-							),
+					const due = await accessor.withReadDbAsync(async (db) =>
+						collectReviewDueClaims(
+							{ all: <T>(sql: string, ...params: unknown[]) => db.prepare(sql).all(...params) as T[] },
+							new Date(),
+							{ agentId: scopeId, limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200) },
+						),
 					);
 					return {
 						ok: true,

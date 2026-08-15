@@ -20,7 +20,7 @@ function manifestValue(path: string, key: string): string | null {
 	const match = readFileSync(path, "utf8").match(new RegExp(`^${key}:\\s*(.*)$`, "m"));
 	if (!match) return null;
 	const raw = (match[1] ?? "").trim();
-	return raw && raw !== "null" ? raw.replace(/^['\"]|['\"]$/g, "") : null;
+	return raw && raw !== "null" ? raw.replace(/^['"]|['"]$/g, "") : null;
 }
 
 describe("transcript capture worker", () => {
@@ -39,7 +39,7 @@ describe("transcript capture worker", () => {
 	});
 
 	it("writes canonical and per-session artifacts from a durable job", async () => {
-		const id = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
 			harness: "pi",
 			sessionKey: "session-1",
@@ -55,7 +55,7 @@ describe("transcript capture worker", () => {
 		expect(id).toBeTruthy();
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
 
-		const status = getTranscriptCaptureStatus(getDbAccessor(), "agent-a");
+		const status = await getTranscriptCaptureStatus(getDbAccessor(), "agent-a");
 		expect(status.completed).toBe(1);
 		expect(status.pending).toBe(0);
 
@@ -78,7 +78,7 @@ describe("transcript capture worker", () => {
 	});
 
 	it("keeps raw audit logs when normalized transcript has no conversation turns", async () => {
-		const id = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
 			harness: "pi",
 			sessionKey: "session-raw",
@@ -92,7 +92,7 @@ describe("transcript capture worker", () => {
 
 		expect(id).toBeTruthy();
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
-		expect(getTranscriptCaptureStatus(getDbAccessor(), "agent-a").completed).toBe(1);
+		expect((await getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).completed).toBe(1);
 		const auditFiles = readdirSync(join(dir, ".daemon", "logs", "transcripts"));
 		// #1163: the capture archives the rolling latest by renaming it to the
 		// dated raw-transcript file, so the same content is never written twice.
@@ -101,7 +101,7 @@ describe("transcript capture worker", () => {
 		expect(existsSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"))).toBe(false);
 	});
 
-	it("resets attempts when reviving a dead capture job", () => {
+	it("resets attempts when reviving a dead capture job", async () => {
 		const input = {
 			agentId: "agent-a",
 			harness: "pi",
@@ -113,7 +113,7 @@ describe("transcript capture worker", () => {
 			capturedAt: "2026-06-20T10:00:00.000Z",
 			endedAt: "2026-06-20T10:00:00.000Z",
 		} as const;
-		const id = enqueueTranscriptCaptureJob(getDbAccessor(), input);
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), input);
 		expect(id).toBeTruthy();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -121,15 +121,15 @@ describe("transcript capture worker", () => {
 			).run(id);
 		});
 
-		expect(enqueueTranscriptCaptureJob(getDbAccessor(), input)).toBe(id);
+		expect(await enqueueTranscriptCaptureJob(getDbAccessor(), input)).toBe(id);
 		const row = getDbAccessor().withReadDb((db) =>
 			db.prepare("SELECT status, attempts, error FROM transcript_capture_jobs WHERE id = ?").get(id),
 		) as { status: string; attempts: number; error: string | null } | undefined;
 		expect(row).toEqual({ status: "pending", attempts: 0, error: null });
 	});
 
-	it("returns only the requesting agent's capture receipt", () => {
-		const id = enqueueTranscriptCaptureJob(getDbAccessor(), {
+	it("returns only the requesting agent's capture receipt", async () => {
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
 			harness: "pi",
 			sessionKey: "session-receipt",
@@ -141,16 +141,16 @@ describe("transcript capture worker", () => {
 			endedAt: "2026-06-20T10:00:00.000Z",
 		});
 
-		expect(id).toBeTruthy();
-		expect(getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id ?? "")).toEqual({
+		if (!id) throw new Error("expected capture receipt");
+		expect(await getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id)).toEqual({
 			id,
 			status: "pending",
 			error: null,
 		});
-		expect(getTranscriptCaptureJobStatus(getDbAccessor(), "agent-b", id ?? "")).toBeNull();
+		expect(await getTranscriptCaptureJobStatus(getDbAccessor(), "agent-b", id ?? "")).toBeNull();
 	});
 
-	it("deduplicates stable session snapshots across delivery timestamps", () => {
+	it("deduplicates stable session snapshots across delivery timestamps", async () => {
 		const base = {
 			agentId: "agent-a",
 			harness: "claude-code",
@@ -162,11 +162,11 @@ describe("transcript capture worker", () => {
 			transcriptPath: "/tmp/session-stable.jsonl",
 			endedAt: "2026-06-20T10:00:00.000Z",
 		} as const;
-		const first = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const first = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			...base,
 			capturedAt: "2026-06-20T10:00:00.000Z",
 		});
-		const second = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const second = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			...base,
 			capturedAt: "2026-06-20T10:05:00.000Z",
 		});
@@ -186,13 +186,13 @@ describe("transcript capture worker", () => {
 			rawTranscript: "snapshot",
 			endedAt: "2026-06-20T10:00:00.000Z",
 		} as const;
-		const newerCapture = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const newerCapture = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			...base,
 			sessionId: "snapshot-ordered-newer",
 			transcript: "User: later turn arrived first",
 			capturedAt: "2026-06-20T10:01:00.000Z",
 		});
-		const olderCapture = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const olderCapture = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			...base,
 			sessionId: "snapshot-ordered-older",
 			transcript: "User: earlier turn arrived later",
@@ -222,11 +222,11 @@ describe("transcript capture worker", () => {
 		]);
 
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
-		expect(getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 2, pending: 0 });
+		expect(await getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 2, pending: 0 });
 	});
 
 	it("concurrent workers claim one snapshot once", async () => {
-		const id = enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
 			harness: "pi",
 			sessionKey: "session-concurrent",
@@ -244,7 +244,7 @@ describe("transcript capture worker", () => {
 			runTranscriptCaptureOnce(getDbAccessor(), dir),
 		]);
 		expect(results.sort()).toEqual([false, true]);
-		expect(getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 1, pending: 0 });
+		expect(await getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 1, pending: 0 });
 		expect(
 			getDbAccessor().withReadDb((db) =>
 				db.prepare("SELECT attempts FROM transcript_capture_jobs WHERE id = ?").get(id),
@@ -264,14 +264,14 @@ describe("transcript capture worker", () => {
 			capturedAt: "2026-06-20T10:00:00.000Z",
 			endedAt: "2026-06-20T10:00:00.000Z",
 		} as const;
-		const id = enqueueTranscriptCaptureJob(getDbAccessor(), capture);
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), capture);
 		if (!id) throw new Error("expected restart capture job");
 
 		// Model the real crash window after the canonical file, immutable artifact,
 		// and indexed provenance have committed but before markDone updates the job.
 		await writeCanonicalTranscriptFromSnapshot({ basePath: dir, ...capture });
 		const artifact = await writeTranscriptArtifact({ ...capture, startedAt: null, summaryStatus: "not_requested" });
-		indexCanonicalTranscriptJsonl({ ...capture, startedAt: null, manifestPath: artifact.manifestPath });
+		await indexCanonicalTranscriptJsonl({ ...capture, startedAt: null, manifestPath: artifact.manifestPath });
 		const beforeRecovery = getDbAccessor().withReadDb((db) =>
 			db
 				.prepare(
@@ -286,11 +286,11 @@ describe("transcript capture worker", () => {
 			db.prepare("UPDATE transcript_capture_jobs SET status = 'processing', attempts = 1 WHERE id = ?").run(id);
 		});
 
-		const worker = startTranscriptCaptureWorker(getDbAccessor(), dir);
+		const worker = await startTranscriptCaptureWorker(getDbAccessor(), dir);
 		try {
 			const deadline = Date.now() + 2_000;
 			while (Date.now() < deadline) {
-				const status = getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id);
+				const status = await getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id);
 				if (status?.status === "completed") break;
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
@@ -298,12 +298,12 @@ describe("transcript capture worker", () => {
 			worker.stop();
 		}
 
-		expect(getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id)).toEqual({
+		expect(await getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id)).toEqual({
 			id,
 			status: "completed",
 			error: null,
 		});
-		expect(getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 1, processing: 0 });
+		expect(await getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 1, processing: 0 });
 		expect(
 			getDbAccessor().withReadDb((db) =>
 				db

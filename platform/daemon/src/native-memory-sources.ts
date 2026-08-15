@@ -13,7 +13,7 @@ import {
 } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
-import { getDbAccessor, type WriteDb } from "./db-accessor";
+import { getDbAccessor, runWriteTxAsync, type WriteDb } from "./db-accessor";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
@@ -565,7 +565,6 @@ async function withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
 	if (!accessor.withWriteTxAsync) throw new Error("Async database writer is unavailable");
 	return accessor.withWriteTxAsync(fn);
 }
-
 async function nativeArtifactContentHash(filePath: string, agentId: string): Promise<string | null> {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
@@ -765,7 +764,7 @@ export async function indexNativeMemoryFile(
 			// artifact rows that desync the FTS index (#1142).
 			readFailureBackoffUntil.delete(key);
 			permissionDeniedPaths.delete(key);
-			removeNativeMemoryFile(source, filePath, agentId);
+			await removeNativeMemoryFile(source, filePath, agentId);
 			logger.debug("watcher", "Dropped vanished native memory artifact", {
 				harness: source.harness,
 				path: filePath,
@@ -815,7 +814,7 @@ export async function indexNativeMemoryFile(
 	readFailureBackoffUntil.delete(key);
 	permissionDeniedPaths.delete(key);
 	if (!content.trim()) {
-		removeNativeMemoryFile(source, filePath, agentId);
+		await removeNativeMemoryFile(source, filePath, agentId);
 		return false;
 	}
 
@@ -947,22 +946,22 @@ export async function indexNativeMemoryFile(
 	}
 }
 
-export function removeNativeMemoryFile(
+export async function removeNativeMemoryFile(
 	source: NativeMemorySource,
 	filePath: string,
 	agentId = resolveDaemonAgentId(),
-): void {
+): Promise<void> {
 	indexed.delete(fingerprintKey(source, filePath, agentId));
-	softDeleteArtifactRowsForPath(filePath, agentId);
+	await softDeleteArtifactRowsForPath(filePath, agentId);
 	if (source.harness === "obsidian") {
 		const sourceId = source.sourceId ?? sourceIdForObsidianRoot(source.root);
-		purgeObsidianSourceFileEmbeddings({
+		await purgeObsidianSourceFileEmbeddings({
 			sourceId,
 			agentId,
 			root: source.root,
 			filePath,
 		});
-		purgeObsidianSourceFileStructure({
+		await purgeObsidianSourceFileStructure({
 			agentId,
 			sourceId,
 			root: source.root,
@@ -971,7 +970,7 @@ export function removeNativeMemoryFile(
 	}
 }
 
-export function purgeNativeMemorySourceArtifacts(source: NativeMemorySource, agentId?: string): number {
+export async function purgeNativeMemorySourceArtifacts(source: NativeMemorySource, agentId?: string): Promise<number> {
 	const rootPrefix = `${normalizedRoot(source.root)}/`;
 	for (const key of indexed.keys()) {
 		const parts = key.split(":");
@@ -985,8 +984,7 @@ export function purgeNativeMemorySourceArtifacts(source: NativeMemorySource, age
 		)
 			indexed.delete(key);
 	}
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	const artifactRows = getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	const artifactRows = await runWriteTxAsync(getDbAccessor(), (db) => {
 		const agentWhere = agentId ? "agent_id = ? AND " : "";
 		const rootUpperBound = prefixUpperBound(rootPrefix);
 		const params = agentId
@@ -1124,13 +1122,13 @@ export function startNativeMemoryBridge(
 			if (cleanupAllowed) {
 				const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
 				for (const file of await activeNativeArtifactPaths(source, agentId)) {
-					if (!currentPaths.has(file.replace(/\\/g, "/"))) removeNativeMemoryFile(source, file, agentId);
+					if (!currentPaths.has(file.replace(/\\/g, "/"))) await removeNativeMemoryFile(source, file, agentId);
 				}
 			}
 			const previous = known.get(key);
 			if (previous && cleanupAllowed) {
 				for (const file of previous) {
-					if (!current.has(file)) removeNativeMemoryFile(source, file, agentId);
+					if (!current.has(file)) await removeNativeMemoryFile(source, file, agentId);
 				}
 			}
 			known.set(key, current);

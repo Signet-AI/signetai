@@ -1352,6 +1352,12 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 // Public helpers
 // ---------------------------------------------------------------------------
 
+/** Queue a write transaction when supported, with a sync fallback for test doubles. */
+export async function runWriteTxAsync<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
+	if (accessor.withWriteTxAsync) return accessor.withWriteTxAsync(fn);
+	return accessor.withWriteTx(fn);
+}
+
 /** Get the initialised accessor. Throws if `initDbAccessor` hasn't been called. */
 export function getDbAccessor(): DbAccessor {
 	if (!accessor) {

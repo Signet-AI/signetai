@@ -1,7 +1,7 @@
 import type { EpistemicAssertion, EpistemicAssertionPredicate, EpistemicAssertionStatus } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { validateDerivedMemorySourceInTx } from "./derived-memory-provenance";
-import { resolveNamedEntity } from "./knowledge-graph";
+import { resolveEntityRecordByName } from "./knowledge-graph";
 
 export class OntologyAssertionError extends Error {
 	constructor(
@@ -167,7 +167,6 @@ function readEntityById(
 }
 
 function resolveSubject(
-	accessor: DbAccessor,
 	db: ReadDb | WriteDb,
 	input: Pick<CreateEpistemicAssertionInput, "agentId" | "entity" | "entityId">,
 ): { readonly id: string; readonly name: string } {
@@ -179,7 +178,7 @@ function resolveSubject(
 	}
 	const entity = trim(input.entity);
 	if (entity === null) throw new OntologyAssertionError("entity or entity_id is required", 400);
-	const resolved = resolveNamedEntity(accessor, { agentId: input.agentId, name: entity });
+	const resolved = resolveEntityRecordByName(db, { agentId: input.agentId, name: entity });
 	if (resolved === null) throw new OntologyAssertionError("entity was not found", 404);
 	return { id: resolved.id, name: resolved.name };
 }
@@ -225,9 +224,9 @@ function validateClaimAttribute(
 	return attributeId;
 }
 
-function insertAssertion(accessor: DbAccessor, db: WriteDb, input: CreateEpistemicAssertionInput): EpistemicAssertion {
+function insertAssertion(db: WriteDb, input: CreateEpistemicAssertionInput): EpistemicAssertion {
 	validateEpistemicObserverScope(input.agentId, input.observerId);
-	const subject = resolveSubject(accessor, db, input);
+	const subject = resolveSubject(db, input);
 	const content = trim(input.content);
 	if (content === null) throw new OntologyAssertionError("content is required", 400);
 	const predicate = parsePredicate(input.predicate);
@@ -303,8 +302,7 @@ export function createEpistemicAssertion(
 	accessor: DbAccessor,
 	input: CreateEpistemicAssertionInput,
 ): EpistemicAssertion {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => insertAssertion(accessor, db, input));
+	return accessor.withWriteTx((db) => insertAssertion(db, input));
 }
 
 export function createEpistemicAssertionsInTx(
@@ -313,7 +311,7 @@ export function createEpistemicAssertionsInTx(
 	inputs: readonly CreateEpistemicAssertionInput[],
 ): readonly EpistemicAssertion[] {
 	if (inputs.length > 500) throw new OntologyAssertionError("cannot create more than 500 assertions at once", 400);
-	return inputs.map((input) => insertAssertion(accessor, db, input));
+	return inputs.map((input) => insertAssertion(db, input));
 }
 
 export function listEpistemicAssertions(
@@ -322,8 +320,7 @@ export function listEpistemicAssertions(
 ): ListEpistemicAssertionsResult {
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+	return accessor.withReadDb((db) => {
 		const observerId = validateEpistemicObserverScope(params.agentId, params.observerId);
 		const where = ["a.agent_id = ?"];
 		const args: unknown[] = [observerId];
@@ -332,7 +329,7 @@ export function listEpistemicAssertions(
 			where.push("a.subject_entity_id = ?");
 			args.push(entityId);
 		} else if (trim(params.entity) !== null) {
-			const resolved = resolveNamedEntity(accessor, { agentId: params.agentId, name: params.entity ?? "" });
+			const resolved = resolveEntityRecordByName(db, { agentId: params.agentId, name: params.entity ?? "" });
 			if (resolved === null) return { items: [], count: 0 };
 			where.push("a.subject_entity_id = ?");
 			args.push(resolved.id);
@@ -388,8 +385,7 @@ export function getEpistemicAssertion(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string; readonly observerId?: string | null },
 ): EpistemicAssertion | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+	return accessor.withReadDb((db) => {
 		const observerId = validateEpistemicObserverScope(params.agentId, params.observerId);
 		const row = db
 			.prepare(
@@ -407,8 +403,7 @@ export function linkEpistemicAssertionClaim(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string; readonly attributeId: string },
 ): EpistemicAssertion {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	return accessor.withWriteTx((db) => {
 		const assertion = db
 			.prepare("SELECT subject_entity_id FROM epistemic_assertions WHERE id = ? AND agent_id = ?")
 			.get(params.id, params.agentId) as { subject_entity_id: string } | undefined;
@@ -435,8 +430,7 @@ export function archiveEpistemicAssertion(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string; readonly actor: string; readonly reason?: string | null },
 ): EpistemicAssertion {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	return accessor.withWriteTx((db) => {
 		const existing = db
 			.prepare("SELECT id FROM epistemic_assertions WHERE id = ? AND agent_id = ?")
 			.get(params.id, params.agentId) as { id: string } | undefined;
@@ -463,8 +457,7 @@ export function supersedeEpistemicAssertion(
 	accessor: DbAccessor,
 	input: CreateEpistemicAssertionInput & { readonly oldAssertionId: string },
 ): EpistemicAssertion {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
+	return accessor.withWriteTx((db) => {
 		const old = db
 			.prepare(
 				`SELECT a.*, e.name AS subject_entity_name
@@ -475,12 +468,12 @@ export function supersedeEpistemicAssertion(
 			.get(input.oldAssertionId, input.agentId) as Record<string, unknown> | undefined;
 		if (!old) throw new OntologyAssertionError("assertion was not found", 404);
 		if (trim(input.entityId) !== null || trim(input.entity) !== null) {
-			const subject = resolveSubject(accessor, db, input);
+			const subject = resolveSubject(db, input);
 			if (subject.id !== old.subject_entity_id) {
 				throw new OntologyAssertionError("supersede cannot change assertion subject entity", 409);
 			}
 		}
-		const next = insertAssertion(accessor, db, {
+		const next = insertAssertion(db, {
 			...input,
 			entityId: old.subject_entity_id as string,
 			predicate: input.predicate || (old.predicate as string),

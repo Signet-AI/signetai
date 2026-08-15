@@ -1530,7 +1530,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	reloadAuthState(AGENTS_DIR);
 	if (!transcriptCaptureWorkerHandle) {
-		transcriptCaptureWorkerHandle = startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
+		transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
 	}
 
 	const router = getOrCreateInferenceRouter(AGENTS_DIR);
@@ -2284,7 +2284,7 @@ async function main() {
 
 	schedulerHandle = startSchedulerWorker(getDbAccessor());
 	if (!transcriptCaptureWorkerHandle) {
-		transcriptCaptureWorkerHandle = startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
+		transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
 	}
 	if (!transcriptRecoveryWorkerHandle) {
 		transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(getDbAccessor(), AGENTS_DIR, resolveDaemonAgentId());

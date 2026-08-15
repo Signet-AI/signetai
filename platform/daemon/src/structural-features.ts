@@ -62,12 +62,12 @@ function choosePrimaryRow(
 	return next.created_at < current.created_at ? next : current;
 }
 
-export function getStructuralFeatures(
+export async function getStructuralFeatures(
 	accessor: DbAccessor,
 	memoryIds: ReadonlyArray<string>,
 	agentId: string,
 	sourceById?: ReadonlyMap<string, StructuralCandidateSource>,
-): Map<string, StructuralFeatures | null> {
+): Promise<Map<string, StructuralFeatures | null>> {
 	const featuresByMemoryId = new Map<string, StructuralFeatures | null>();
 	for (const memoryId of memoryIds) {
 		featuresByMemoryId.set(memoryId, null);
@@ -75,8 +75,7 @@ export function getStructuralFeatures(
 
 	if (memoryIds.length === 0) return featuresByMemoryId;
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const primaryRows = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+	const primaryRows = await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT
@@ -109,7 +108,7 @@ export function getStructuralFeatures(
 	for (const [memoryId, row] of primaryRows) {
 		let density = densityCache.get(row.entity_id);
 		if (density === undefined) {
-			const structuralDensity = getStructuralDensity(accessor, row.entity_id, agentId);
+			const structuralDensity = await getStructuralDensity(accessor, row.entity_id, agentId);
 			density = structuralDensity.aspectCount + structuralDensity.attributeCount;
 			densityCache.set(row.entity_id, density);
 		}
@@ -126,7 +125,7 @@ export function getStructuralFeatures(
 	return featuresByMemoryId;
 }
 
-export function buildCandidateFeatures(
+export async function buildCandidateFeatures(
 	accessor: DbAccessor,
 	candidates: ReadonlyArray<{
 		readonly id: string;
@@ -146,7 +145,7 @@ export function buildCandidateFeatures(
 		readonly monthOfYear: number;
 		readonly sessionGapDays: number;
 	},
-): ReadonlyArray<ReadonlyArray<number>> {
+): Promise<ReadonlyArray<ReadonlyArray<number>>> {
 	if (candidates.length === 0) return [];
 
 	void sessionContext.projectSlot;
@@ -158,9 +157,8 @@ export function buildCandidateFeatures(
 			sourceById.set(candidate.id, candidate.source);
 		}
 	}
-	const structuralById = getStructuralFeatures(accessor, candidateIds, agentId, sourceById);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const embeddedIds = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+	const structuralById = await getStructuralFeatures(accessor, candidateIds, agentId, sourceById);
+	const embeddedIds = await accessor.withReadDbAsync(async (db) => {
 		const rows = db
 			.prepare(
 				`SELECT DISTINCT source_id

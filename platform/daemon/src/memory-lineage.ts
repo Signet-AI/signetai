@@ -14,6 +14,7 @@ import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { getAgentScope } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import type { WriteDb } from "./db-accessor";
+import { runWriteTxAsync } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
@@ -723,20 +724,19 @@ function upsertArtifactRowInTx(
 	);
 }
 
-function upsertArtifactRow(
+async function upsertArtifactRow(
 	path: string,
 	frontmatter: Record<string, unknown>,
 	body: string,
 	sourceMtimeMs = statSync(path).mtimeMs,
 	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
-): void {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+): Promise<void> {
+	await runWriteTxAsync(getDbAccessor(), (db) => {
 		upsertArtifactRowInTx(db as WriteDb as Database, path, frontmatter, body, sourceMtimeMs, options);
 	});
 }
 
-export function indexExternalMemoryArtifact(input: {
+export async function indexExternalMemoryArtifact(input: {
 	readonly agentId?: string;
 	readonly sourcePath: string;
 	readonly sourceKind: string;
@@ -750,11 +750,11 @@ export function indexExternalMemoryArtifact(input: {
 	readonly sourceExternalId?: string | null;
 	readonly sourceParentPath?: string | null;
 	readonly sourceMeta?: Readonly<Record<string, unknown>>;
-}): void {
+}): Promise<void> {
 	const capturedAt =
 		input.capturedAt ??
 		(Number.isFinite(input.sourceMtimeMs) ? new Date(input.sourceMtimeMs).toISOString() : new Date().toISOString());
-	upsertArtifactRow(
+	await upsertArtifactRow(
 		input.sourcePath,
 		{
 			agent_id: input.agentId?.trim() || "default",
@@ -784,7 +784,7 @@ export function indexExternalMemoryArtifact(input: {
 	);
 }
 
-export function indexCanonicalTranscriptJsonl(input: {
+export async function indexCanonicalTranscriptJsonl(input: {
 	readonly agentId: string;
 	readonly sessionId: string;
 	readonly sessionKey: string | null;
@@ -795,12 +795,12 @@ export function indexCanonicalTranscriptJsonl(input: {
 	readonly endedAt: string | null;
 	readonly transcript: string;
 	readonly manifestPath: string;
-}): void {
+}): Promise<void> {
 	const transcriptPath = canonicalTranscriptRelativePath(input.harness);
 	const sessionToken = deriveSessionToken(input.agentId, input.sessionId);
 	const content = normalizeMarkdownBody(input.transcript);
 	const path = join(getAgentsDir(), transcriptPath);
-	upsertArtifactRow(
+	await upsertArtifactRow(
 		path,
 		{
 			agent_id: input.agentId,
@@ -839,15 +839,14 @@ async function listCanonicalFiles(): Promise<string[]> {
 		.sort();
 }
 
-export function softDeleteArtifactRowsForPath(
+export async function softDeleteArtifactRowsForPath(
 	path: string,
 	agentId: string | null,
 	deletedAt = new Date().toISOString(),
-): void {
+): Promise<void> {
 	const sourcePath = relativePath(path);
 	const absolutePath = path.replace(/\\/g, "/");
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	await runWriteTxAsync(getDbAccessor(), (db) => {
 		const markDeleted = db.prepare(
 			`UPDATE memory_artifacts
 			 SET is_deleted = 1, deleted_at = ?, updated_at = ?
@@ -880,9 +879,8 @@ function deleteArtifactRowsForPathInTx(db: Database, path: string, agentId: stri
 	db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(absolutePath);
 }
 
-export function deleteArtifactRowsForPath(path: string, agentId: string | null): void {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+export async function deleteArtifactRowsForPath(path: string, agentId: string | null): Promise<void> {
+	await runWriteTxAsync(getDbAccessor(), (db) => {
 		deleteArtifactRowsForPathInTx(db as WriteDb as Database, path, agentId);
 	});
 }
@@ -947,11 +945,10 @@ async function doReindex(agentId?: string): Promise<void> {
 			if (item.markChanged) changedPaths.add(item.path);
 		}
 	};
-	const flushUpsertBatch = (): boolean => {
+	const flushUpsertBatch = async (): Promise<boolean> => {
 		if (pendingUpserts.length === 0) return false;
 		const batch = [...pendingUpserts];
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await runWriteTxAsync(getDbAccessor(), (db) => {
 			for (const item of batch) {
 				upsertArtifactRowInTx(db as WriteDb as Database, item.path, item.frontmatter, item.body, item.mtime);
 			}
@@ -960,11 +957,10 @@ async function doReindex(agentId?: string): Promise<void> {
 		commitBatchCacheUpserts(batch);
 		return true;
 	};
-	const flushDeleteBatch = (): boolean => {
+	const flushDeleteBatch = async (): Promise<boolean> => {
 		if (pendingDeletes.length === 0) return false;
 		const batch = [...pendingDeletes];
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await runWriteTxAsync(getDbAccessor(), (db) => {
 			for (const item of batch) {
 				deleteArtifactRowsForPathInTx(db as WriteDb as Database, item.path, scope);
 			}
@@ -976,8 +972,7 @@ async function doReindex(agentId?: string): Promise<void> {
 	lastChangedManifestsByAgent.delete(cacheKey);
 
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const ready = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		const ready = await getDbAccessor().withReadDbAsync(async (db) => {
 			const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifacts'`).get();
 			return row !== undefined;
 		});
@@ -993,8 +988,7 @@ async function doReindex(agentId?: string): Promise<void> {
 	if (cache.size === 0) {
 		// Seed from DB state too so files deleted while daemon was down get
 		// detected, while unchanged files can skip a full reread on restart.
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const dbPaths = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		const dbPaths = await getDbAccessor().withReadDbAsync(async (db) => {
 			const rows = scope
 				? (db
 						.prepare("SELECT source_path, source_mtime_ms FROM memory_artifacts WHERE agent_id = ?")
@@ -1023,8 +1017,7 @@ async function doReindex(agentId?: string): Promise<void> {
 		}
 	}
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const tombstones = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+	const tombstones = await getDbAccessor().withReadDbAsync(async (db) => {
 		const table = db
 			.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifact_tombstones'`)
 			.get();
@@ -1067,7 +1060,7 @@ async function doReindex(agentId?: string): Promise<void> {
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
 		if (scope && nextAgent !== scope) {
 			pendingDeletes.push({ path, statKey, markChanged: false });
-			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
+			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && (await flushDeleteBatch())) {
 				await yielder();
 			}
 			continue;
@@ -1076,7 +1069,7 @@ async function doReindex(agentId?: string): Promise<void> {
 		const sessionToken = match?.[1];
 		if (sessionToken && tombstones.has(sessionToken)) {
 			pendingDeletes.push({ path, statKey, markChanged: true });
-			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
+			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && (await flushDeleteBatch())) {
 				await yielder();
 			}
 			continue;
@@ -1084,13 +1077,13 @@ async function doReindex(agentId?: string): Promise<void> {
 		const body = normalizeMarkdownBody(parsed.body);
 		if (!isValidArtifact(path, parsed.frontmatter, body)) {
 			pendingDeletes.push({ path, statKey, markChanged: true });
-			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
+			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && (await flushDeleteBatch())) {
 				await yielder();
 			}
 			continue;
 		}
 		pendingUpserts.push({ path, frontmatter: parsed.frontmatter, body, mtime, statKey, markChanged: true });
-		if (pendingUpserts.length >= REINDEX_BATCH_SIZE && flushUpsertBatch()) {
+		if (pendingUpserts.length >= REINDEX_BATCH_SIZE && (await flushUpsertBatch())) {
 			await yielder();
 		}
 	}
@@ -1099,15 +1092,15 @@ async function doReindex(agentId?: string): Promise<void> {
 		if (fileSet.has(path)) continue;
 		if (path.includes(".jsonl#")) continue;
 		pendingDeletes.push({ path, statKey: null, markChanged: true });
-		if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
+		if (pendingDeletes.length >= REINDEX_BATCH_SIZE && (await flushDeleteBatch())) {
 			await yielder();
 		}
 	}
 
-	if (flushUpsertBatch()) {
+	if (await flushUpsertBatch()) {
 		await yielder();
 	}
-	if (flushDeleteBatch()) {
+	if (await flushDeleteBatch()) {
 		await yielder();
 	}
 	// Commit cache-only items (no DB dependency — safe to apply unconditionally).
@@ -1158,7 +1151,7 @@ function isValidArtifact(path: string, frontmatter: Record<string, unknown>, bod
 	return rel.startsWith("memory/") && rel.endsWith(`--${kind}.md`);
 }
 
-function ensureManifestRecord(seed: {
+async function ensureManifestRecord(seed: {
 	readonly agentId: string;
 	readonly sessionId: string;
 	readonly sessionKey: string | null;
@@ -1168,7 +1161,7 @@ function ensureManifestRecord(seed: {
 	readonly startedAt: string | null;
 	readonly endedAt: string | null;
 	readonly sessionToken: string;
-}): ManifestState {
+}): Promise<ManifestState> {
 	const path = artifactPath(seed.capturedAt, seed.sessionToken, "manifest");
 	const transcriptPath = relativeArtifactPath(seed.capturedAt, seed.sessionToken, "transcript");
 	const canonicalPath = seed.harness ? canonicalTranscriptRelativePath(seed.harness) : null;
@@ -1202,7 +1195,7 @@ function ensureManifestRecord(seed: {
 	if (!manifest) {
 		throw new Error(`Failed to create manifest ${path}`);
 	}
-	upsertArtifactRow(path, manifest.frontmatter, manifest.body);
+	await upsertArtifactRow(path, manifest.frontmatter, manifest.body);
 	return manifest;
 }
 
@@ -1231,11 +1224,11 @@ async function saveManifestAsyncUnlocked(
 	try {
 		sourceMtimeMs = (await stat(path)).mtimeMs;
 	} catch {}
-	upsertArtifactRow(path, manifest.frontmatter, manifest.body, sourceMtimeMs);
+	await upsertArtifactRow(path, manifest.frontmatter, manifest.body, sourceMtimeMs);
 	return manifest;
 }
 
-function findExistingManifest(agentId: string, sessionId: string): ManifestState | null {
+async function findExistingManifest(agentId: string, sessionId: string): Promise<ManifestState | null> {
 	try {
 		// Pre-fix rows stored session_id verbatim from the caller (equal to
 		// session_key). New rows use a derived session_id (e.g. "session-end:
@@ -1243,9 +1236,8 @@ function findExistingManifest(agentId: string, sessionId: string): ManifestState
 		// a separate session_key fallback is unnecessary because pre-fix rows
 		// match on session_id directly (it was persisted as the session_key
 		// value) and new rows have a unique derived session_id.
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const row = getDbAccessor().withReadDb(
-			(db: import("./db-accessor").ReadDb) =>
+		const row = await getDbAccessor().withReadDbAsync(
+			async (db) =>
 				db
 					.prepare(
 						`SELECT source_path
@@ -1268,7 +1260,7 @@ function manifestValue(frontmatter: Record<string, unknown>, key: string): strin
 	return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-export function ensureCanonicalManifest(seed: {
+export async function ensureCanonicalManifest(seed: {
 	readonly agentId: string;
 	readonly sessionId: string;
 	readonly sessionKey: string | null;
@@ -1277,10 +1269,10 @@ export function ensureCanonicalManifest(seed: {
 	readonly capturedAt: string;
 	readonly startedAt: string | null;
 	readonly endedAt: string | null;
-}): ManifestState {
-	const existing = findExistingManifest(seed.agentId, seed.sessionId);
+}): Promise<ManifestState> {
+	const existing = await findExistingManifest(seed.agentId, seed.sessionId);
 	if (existing) return existing;
-	return ensureManifestRecord({
+	return await ensureManifestRecord({
 		...seed,
 		sessionToken: deriveSessionToken(seed.agentId, seed.sessionId),
 	});
@@ -1477,7 +1469,7 @@ export async function writeTranscriptArtifact(params: {
 	readonly transcript: string;
 	readonly summaryStatus?: "pending" | "skipped" | "not_requested";
 }): Promise<{ readonly manifestPath: string; readonly transcriptPath: string }> {
-	const manifest = ensureCanonicalManifest(params);
+	const manifest = await ensureCanonicalManifest(params);
 	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = sanitizeTranscriptV1(params.transcript);
 	const sentence = {
@@ -1502,7 +1494,7 @@ export async function writeTranscriptArtifact(params: {
 		body,
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-	upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
 	await updateManifest(manifest.path, (frontmatter) => {
 		const existingSummaryStatus = manifestValue(frontmatter, "summary_status");
 		const terminalSummaryStatus =
@@ -1541,7 +1533,7 @@ export async function writeSummaryArtifact(params: {
 	readonly summary: string;
 	readonly provider?: LlmProvider | null;
 }): Promise<{ readonly manifestPath: string; readonly summaryPath: string }> {
-	const manifest = ensureCanonicalManifest(params);
+	const manifest = await ensureCanonicalManifest(params);
 	const capturedAt = manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt;
 	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = normalizeMarkdownBody(params.summary);
@@ -1563,7 +1555,7 @@ export async function writeSummaryArtifact(params: {
 		body,
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-	upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
 	await updateManifest(manifest.path, (frontmatter) => ({
 		...frontmatter,
 		summary_path: relativePath(fullPath),
@@ -1587,7 +1579,7 @@ export async function writeCompactionArtifact(params: {
 	readonly summary: string;
 	readonly provider?: LlmProvider | null;
 }): Promise<{ readonly manifestPath: string; readonly compactionPath: string }> {
-	const manifest = ensureCanonicalManifest(params);
+	const manifest = await ensureCanonicalManifest(params);
 	// A compaction is a new immutable event even when it belongs to an existing
 	// session. Its path must use this event's capture time, not the session
 	// manifest's original capture time, or a later compaction would attempt to
@@ -1613,7 +1605,7 @@ export async function writeCompactionArtifact(params: {
 		body,
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-	upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
 	await updateManifest(manifest.path, (frontmatter) => ({
 		...frontmatter,
 		compaction_path: relativePath(fullPath),
@@ -1649,56 +1641,47 @@ function buildTemporalIndex(
 	});
 }
 
-function readThreadHeads(agentId: string): ReadonlyArray<{
-	readonly label: string;
-	readonly source_type: string;
-	readonly latest_at: string;
-	readonly sample: string;
-	readonly node_id: string;
-	readonly project: string | null;
-	readonly session_key: string | null;
-	readonly harness: string | null;
-}> {
+async function readThreadHeads(agentId: string): Promise<
+	ReadonlyArray<{
+		readonly label: string;
+		readonly source_type: string;
+		readonly latest_at: string;
+		readonly sample: string;
+		readonly node_id: string;
+		readonly project: string | null;
+		readonly session_key: string | null;
+		readonly harness: string | null;
+	}>
+> {
 	try {
-		const rows: Array<{
-			label: string;
-			source_type: string;
-			latest_at: string;
-			sample: string;
-			node_id: string;
-			project: string | null;
-			session_key: string | null;
-			harness: string | null;
-		}> =
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-				const queried = db
-					.prepare(
-						`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
+		const rows = await getDbAccessor().withReadDbAsync(async (db) => {
+			const queried = db
+				.prepare(
+					`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
 				 FROM memory_thread_heads
 				 WHERE agent_id = ?
 				 ORDER BY latest_at DESC
 				 LIMIT 12`,
-					)
-					.all(agentId) as Array<{
-					label: string;
-					source_type: string;
-					latest_at: string;
-					sample: string;
-					node_id: string;
-					project: string | null;
-					session_key: string | null;
-					harness: string | null;
-				}>;
-				return queried.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "summary",
-						sourceId: row.node_id,
-						content: row.sample,
-					}),
-				);
-			});
+				)
+				.all(agentId) as Array<{
+				label: string;
+				source_type: string;
+				latest_at: string;
+				sample: string;
+				node_id: string;
+				project: string | null;
+				session_key: string | null;
+				harness: string | null;
+			}>;
+			return queried.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "summary",
+					sourceId: row.node_id,
+					content: row.sample,
+				}),
+			);
+		});
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1713,102 +1696,92 @@ function readThreadHeads(agentId: string): ReadonlyArray<{
 	}
 }
 
-function readTopMemories(agentId: string): ReadonlyArray<{
-	readonly content: string;
-	readonly type: string;
-	readonly importance: number;
-	readonly project: string | null;
-}> {
+async function readTopMemories(agentId: string): Promise<
+	ReadonlyArray<{
+		readonly content: string;
+		readonly type: string;
+		readonly importance: number;
+		readonly project: string | null;
+	}>
+> {
 	try {
 		const scope = getAgentScope(agentId);
 		const clause = buildAgentScopeClause(agentId, scope.readPolicy, scope.policyGroup);
-		const rows: Array<{ id: string; content: string; type: string; importance: number; project: string | null }> =
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-				const queried = db
-					.prepare(
-						`SELECT m.id, m.content, m.type, m.importance, m.project
+		const rows = await getDbAccessor().withReadDbAsync(async (db) => {
+			const queried = db
+				.prepare(
+					`SELECT m.id, m.content, m.type, m.importance, m.project
 				 FROM memories m
 				 WHERE m.is_deleted = 0${clause.sql}
 				 ORDER BY m.pinned DESC, m.importance DESC, m.created_at DESC
 				 LIMIT 32`,
-					)
-					.all(...clause.args) as Array<{
-					id: string;
-					content: string;
-					type: string;
-					importance: number;
-					project: string | null;
-				}>;
-				return queried.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "memory",
-						sourceId: row.id,
-						content: row.content,
-					}),
-				);
-			});
+				)
+				.all(...clause.args) as Array<{
+				id: string;
+				content: string;
+				type: string;
+				importance: number;
+				project: string | null;
+			}>;
+			return queried.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "memory",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
+		});
 		return rows.filter((row) => !isNoiseSession({ project: row.project })).slice(0, 8);
 	} catch {
 		return [];
 	}
 }
 
-function readTemporalNodes(agentId: string): ReadonlyArray<{
-	readonly id: string;
-	readonly kind: string;
-	readonly source_type: string;
-	readonly depth: number;
-	readonly latest_at: string;
-	readonly project: string | null;
-	readonly session_key: string | null;
-	readonly source_ref: string | null;
-	readonly content: string;
-}> {
+async function readTemporalNodes(agentId: string): Promise<
+	ReadonlyArray<{
+		readonly id: string;
+		readonly kind: string;
+		readonly source_type: string;
+		readonly depth: number;
+		readonly latest_at: string;
+		readonly project: string | null;
+		readonly session_key: string | null;
+		readonly source_ref: string | null;
+		readonly content: string;
+	}>
+> {
 	try {
-		const rows: Array<{
-			id: string;
-			kind: string;
-			source_type: string;
-			depth: number;
-			latest_at: string;
-			project: string | null;
-			session_key: string | null;
-			source_ref: string | null;
-			content: string;
-		}> =
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-				const queried = db
-					.prepare(
-						`SELECT id, kind, COALESCE(source_type, kind) AS source_type, depth, latest_at,
+		const rows = await getDbAccessor().withReadDbAsync(async (db) => {
+			const queried = db
+				.prepare(
+					`SELECT id, kind, COALESCE(source_type, kind) AS source_type, depth, latest_at,
 				        project, session_key, source_ref, content
 				 FROM session_summaries
 				 WHERE agent_id = ?
 				 ORDER BY latest_at DESC
 				 LIMIT 20`,
-					)
-					.all(agentId) as Array<{
-					id: string;
-					kind: string;
-					source_type: string;
-					depth: number;
-					latest_at: string;
-					project: string | null;
-					session_key: string | null;
-					source_ref: string | null;
-					content: string;
-				}>;
-				return queried.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "summary",
-						sourceId: row.id,
-						content: row.content,
-					}),
-				);
-			});
+				)
+				.all(agentId) as Array<{
+				id: string;
+				kind: string;
+				source_type: string;
+				depth: number;
+				latest_at: string;
+				project: string | null;
+				session_key: string | null;
+				source_ref: string | null;
+				content: string;
+			}>;
+			return queried.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId,
+					sourceKind: "summary",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			);
+		});
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1862,13 +1835,12 @@ function membershipTs(rows: ReadonlyArray<ArtifactRow>): string {
 	return picked.ended_at ?? picked.captured_at;
 }
 
-function buildLedger(agentId: string): ReadonlyArray<LedgerSession> {
+async function buildLedger(agentId: string): Promise<ReadonlyArray<LedgerSession>> {
 	const now = Date.now();
 	const floor = now - 30 * 24 * 60 * 60 * 1000;
 	let rows: ArtifactRow[] = [];
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		rows = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
+		rows = await getDbAccessor().withReadDbAsync(async (db) =>
 			(
 				db
 					.prepare(
@@ -2138,10 +2110,10 @@ export async function renderMemoryProjection(agentId = "default"): Promise<{
 	await reindexMemoryArtifacts(agentId);
 	const changedManifests = lastChangedManifestsByAgent.get(agentId);
 	lastChangedManifestsByAgent.delete(agentId);
-	const memories = readTopMemories(agentId);
-	const threadHeads = readThreadHeads(agentId);
-	const nodes = readTemporalNodes(agentId);
-	const ledger = buildLedger(agentId);
+	const memories = await readTopMemories(agentId);
+	const threadHeads = await readThreadHeads(agentId);
+	const nodes = await readTemporalNodes(agentId);
+	const ledger = await buildLedger(agentId);
 	const indexBlock = buildTemporalIndex(nodes);
 
 	const globalLines =
@@ -2208,10 +2180,9 @@ export function appendSynthesisIndexBlock(content: string, indexBlock: string): 
 	return `${trimmed}\n\n${indexBlock.trim()}`;
 }
 
-export function removeCanonicalSession(agentId: string, sessionToken: string, reason: string): void {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const rows: Array<{ source_path: string }> = getDbAccessor().withReadDb(
-		(db: import("./db-accessor").ReadDb) =>
+export async function removeCanonicalSession(agentId: string, sessionToken: string, reason: string): Promise<void> {
+	const rows = await getDbAccessor().withReadDbAsync(
+		async (db) =>
 			db
 				.prepare(
 					`SELECT source_path
@@ -2221,8 +2192,7 @@ export function removeCanonicalSession(agentId: string, sessionToken: string, re
 				.all(agentId, sessionToken) as Array<{ source_path: string }>,
 	);
 	const paths = rows.map((row) => row.source_path);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	await runWriteTxAsync(getDbAccessor(), (db) => {
 		db.prepare(
 			`INSERT INTO memory_artifact_tombstones (
 				agent_id, session_token, removed_at, reason, removed_paths
@@ -2265,10 +2235,9 @@ function isNoiseArtifactGroup(
 	);
 }
 
-export function purgeCanonicalNoiseSessions(agentId: string, reason: string): number {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const rows = getDbAccessor().withReadDb(
-		(db: import("./db-accessor").ReadDb) =>
+export async function purgeCanonicalNoiseSessions(agentId: string, reason: string): Promise<number> {
+	const rows = await getDbAccessor().withReadDbAsync(
+		async (db) =>
 			db
 				.prepare(
 					`SELECT session_token, session_id, session_key, project, harness
@@ -2305,7 +2274,7 @@ export function purgeCanonicalNoiseSessions(agentId: string, reason: string): nu
 	let count = 0;
 	for (const [sessionToken, group] of groups) {
 		if (!isNoiseArtifactGroup(group)) continue;
-		removeCanonicalSession(agentId, sessionToken, reason);
+		await removeCanonicalSession(agentId, sessionToken, reason);
 		count++;
 	}
 	return count;
@@ -2315,10 +2284,10 @@ function purgeScope(agentId: string): string {
 	return `${getAgentsDir()}\u0000${agentId}`;
 }
 
-export function purgeCanonicalNoiseSessionsOnce(agentId: string, reason: string): number {
+export async function purgeCanonicalNoiseSessionsOnce(agentId: string, reason: string): Promise<number> {
 	const key = purgeScope(agentId);
 	if (purgeSeen.has(key)) return 0;
-	const count = purgeCanonicalNoiseSessions(agentId, reason);
+	const count = await purgeCanonicalNoiseSessions(agentId, reason);
 	purgeSeen.add(key);
 	return count;
 }

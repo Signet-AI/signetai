@@ -4,7 +4,7 @@ import { parseSimpleYaml } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
-import { getDbAccessor } from "../db-accessor.js";
+import { getDbAccessor, runWriteTxAsync } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { loadPipelineConfig } from "../memory-config.js";
 import {
@@ -202,10 +202,9 @@ export function registerMiscRoutes(app: Hono): void {
 		);
 	});
 
-	app.get("/api/agents", (c) => {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const agents = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+	app.get("/api/agents", async (c) => {
+		const agents = await getDbAccessor().withReadDbAsync(
+			async (db) =>
 				db
 					.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents ORDER BY name")
 					.all() as AgentRow[],
@@ -213,11 +212,10 @@ export function registerMiscRoutes(app: Hono): void {
 		return c.json({ agents });
 	});
 
-	app.get("/api/agents/:name", (c) => {
+	app.get("/api/agents/:name", async (c) => {
 		const name = c.req.param("name");
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const agent = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+		const agent = await getDbAccessor().withReadDbAsync(
+			async (db) =>
 				db
 					.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE name = ?")
 					.get(name) as AgentRow | undefined,
@@ -234,16 +232,14 @@ export function registerMiscRoutes(app: Hono): void {
 		const readPolicy = parseOptionalString(body.read_policy) ?? "isolated";
 		const group = parseOptionalString(body.policy_group) ?? null;
 		const now = new Date().toISOString();
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+		await runWriteTxAsync(getDbAccessor(), (db) => {
 			db.prepare(
 				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?)`,
 			).run(name, name, readPolicy, group, now, now);
 		});
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const created = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
+		const created = await getDbAccessor().withReadDbAsync(
+			async (db) =>
 				db
 					.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE id = ?")
 					.get(name) as unknown as AgentRow,
@@ -251,18 +247,15 @@ export function registerMiscRoutes(app: Hono): void {
 		return c.json(created, 201);
 	});
 
-	app.delete("/api/agents/:name", (c) => {
+	app.delete("/api/agents/:name", async (c) => {
 		const name = c.req.param("name");
 		if (name === "default") return c.json({ error: "Cannot remove the default agent" }, 400);
 		const purge = c.req.query("purge") === "true";
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const agent = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
-				db.prepare("SELECT id FROM agents WHERE name = ?").get(name) as { id: string } | undefined,
+		const agent = await getDbAccessor().withReadDbAsync(
+			async (db) => db.prepare("SELECT id FROM agents WHERE name = ?").get(name) as { id: string } | undefined,
 		);
 		if (!agent) return c.json({ error: "Agent not found" }, 404);
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+		await runWriteTxAsync(getDbAccessor(), (db) => {
 			if (purge) {
 				db.prepare("DELETE FROM memories WHERE agent_id = ?").run(name);
 			} else {
@@ -417,11 +410,10 @@ export function registerMiscRoutes(app: Hono): void {
 		return c.json(result);
 	});
 
-	app.get("/api/tasks/:id/stream", (c) => {
+	app.get("/api/tasks/:id/stream", async (c) => {
 		const taskId = c.req.param("id");
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const taskExists = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+		const taskExists = await getDbAccessor().withReadDbAsync(async (db) =>
 			db.prepare("SELECT 1 FROM scheduled_tasks WHERE id = ?").get(taskId),
 		);
 
@@ -516,9 +508,8 @@ export function registerMiscRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/tasks", (c) => {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const tasks = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+	app.get("/api/tasks", async (c) => {
+		const tasks = await getDbAccessor().withReadDbAsync(async (db) =>
 			db
 				.prepare(
 					`SELECT t.*,
@@ -579,8 +570,7 @@ export function registerMiscRoutes(app: Hono): void {
 		const now = new Date().toISOString();
 		const nextRunAt = computeNextRun(cronExpression);
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+		await runWriteTxAsync(getDbAccessor(), (db) => {
 			db.prepare(
 				`INSERT INTO scheduled_tasks
 				 (id, name, prompt, cron_expression, harness, working_directory,
@@ -610,11 +600,10 @@ export function registerMiscRoutes(app: Hono): void {
 		return c.json({ id, nextRunAt }, 201);
 	});
 
-	app.get("/api/tasks/:id", (c) => {
+	app.get("/api/tasks/:id", async (c) => {
 		const taskId = c.req.param("id");
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const task = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+		const task = await getDbAccessor().withReadDbAsync(async (db) =>
 			db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
 		);
 
@@ -622,8 +611,7 @@ export function registerMiscRoutes(app: Hono): void {
 			return c.json({ error: "Task not found" }, 404);
 		}
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const runs = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+		const runs = await getDbAccessor().withReadDbAsync(async (db) =>
 			db
 				.prepare(
 					`SELECT * FROM task_runs
@@ -641,10 +629,9 @@ export function registerMiscRoutes(app: Hono): void {
 		const taskId = c.req.param("id");
 		const body = await c.req.json();
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const existing = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+		const existing = (await getDbAccessor().withReadDbAsync(async (db) =>
 			db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
-		) as Record<string, unknown> | undefined;
+		)) as Record<string, unknown> | undefined;
 
 		if (!existing) {
 			return c.json({ error: "Task not found" }, 404);
@@ -675,8 +662,7 @@ export function registerMiscRoutes(app: Hono): void {
 			return c.json({ error: "skillMode must be 'inject' or 'slash' when skillName is set" }, 400);
 		}
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+		await runWriteTxAsync(getDbAccessor(), (db) => {
 			db.prepare(
 				`UPDATE scheduled_tasks SET
 				 name = ?, prompt = ?, cron_expression = ?, harness = ?,
@@ -701,11 +687,10 @@ export function registerMiscRoutes(app: Hono): void {
 		return c.json({ success: true });
 	});
 
-	app.delete("/api/tasks/:id", (c) => {
+	app.delete("/api/tasks/:id", async (c) => {
 		const taskId = c.req.param("id");
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		const result = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+		const result = await runWriteTxAsync(getDbAccessor(), (db) => {
 			const info = db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(taskId);
 			return info;
 		});
@@ -718,8 +703,7 @@ export function registerMiscRoutes(app: Hono): void {
 		const scoped = resolveScopedAgentId(c, c.req.query("agent_id"));
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const task = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+		const task = await getDbAccessor().withReadDbAsync(async (db) =>
 			readScopedTask(db, taskId, scoped.agentId, shouldEnforceAuthScope(c)),
 		);
 
@@ -727,8 +711,7 @@ export function registerMiscRoutes(app: Hono): void {
 			return c.json({ error: "Task not found" }, 404);
 		}
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const running = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+		const running = await getDbAccessor().withReadDbAsync(async (db) =>
 			db.prepare("SELECT 1 FROM task_runs WHERE task_id = ? AND status = 'running' LIMIT 1").get(taskId),
 		);
 
@@ -739,8 +722,7 @@ export function registerMiscRoutes(app: Hono): void {
 		const runId = crypto.randomUUID();
 		const now = new Date().toISOString();
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+		await runWriteTxAsync(getDbAccessor(), (db) => {
 			db.prepare(
 				`INSERT INTO task_runs (id, task_id, status, started_at)
 				 VALUES (?, ?, 'running', ?)`,
@@ -804,13 +786,12 @@ export function registerMiscRoutes(app: Hono): void {
 					},
 					taskModel,
 				)
-				.then((result) => {
+				.then(async (result) => {
 					const completedAt = new Date().toISOString();
 					const status =
 						result.error !== null || (result.exitCode !== null && result.exitCode !== 0) ? "failed" : "completed";
 
-					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-					getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+					await runWriteTxAsync(getDbAccessor(), (db) => {
 						db.prepare(
 							`UPDATE task_runs
 						 SET status = ?, completed_at = ?, exit_code = ?,
@@ -848,13 +829,12 @@ export function registerMiscRoutes(app: Hono): void {
 		return c.json({ runId, status: "running" }, 202);
 	});
 
-	app.get("/api/tasks/:id/runs", (c) => {
+	app.get("/api/tasks/:id/runs", async (c) => {
 		const taskId = c.req.param("id");
 		const limit = Number(c.req.query("limit") ?? 20);
 		const offset = Number(c.req.query("offset") ?? 0);
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const runs = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) =>
+		const runs = await getDbAccessor().withReadDbAsync(async (db) =>
 			db
 				.prepare(
 					`SELECT * FROM task_runs
@@ -865,8 +845,7 @@ export function registerMiscRoutes(app: Hono): void {
 				.all(taskId, limit, offset),
 		);
 
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const total = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
+		const total = await getDbAccessor().withReadDbAsync(async (db) => {
 			const row = db.prepare("SELECT COUNT(*) as count FROM task_runs WHERE task_id = ?").get(taskId) as {
 				count: number;
 			};

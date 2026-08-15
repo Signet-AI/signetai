@@ -81,20 +81,19 @@ function readManifestValue(path: string, key: string): string | null {
 		if (!match) return null;
 		const raw = (match[1] ?? "").trim();
 		if (!raw || raw === "null" || raw === "~") return null;
-		return raw.replace(/^['\"]|['\"]$/g, "");
+		return raw.replace(/^['"]|['"]$/g, "");
 	} catch {
 		return null;
 	}
 }
 
-export function getTranscriptHealthReport(
+export async function getTranscriptHealthReport(
 	dbAccessor: DbAccessor,
 	basePath: string,
 	agentId?: string | null,
-): TranscriptHealthReport {
-	const capture = getTranscriptCaptureStatus(dbAccessor, agentId);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const sessionStore = dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+): Promise<TranscriptHealthReport> {
+	const capture = await getTranscriptCaptureStatus(dbAccessor, agentId);
+	const sessionStore = dbAccessor.withReadDb((db) => {
 		const where = agentId ? "WHERE agent_id = ?" : "";
 		const params = agentId ? [agentId] : [];
 		const row = db
@@ -109,8 +108,7 @@ export function getTranscriptHealthReport(
 			newestUpdatedAt: asStringOrNull(row?.newest_updated_at),
 		};
 	});
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const artifacts = dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+	const artifacts = dbAccessor.withReadDb((db) => {
 		const andAgent = agentId ? "AND agent_id = ?" : "";
 		const params = agentId ? [agentId] : [];
 		const countKind = (kind: string): number => {
