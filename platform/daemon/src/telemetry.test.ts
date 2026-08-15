@@ -23,7 +23,14 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { parseRoutingConfig } from "@signet/core";
-import { type DbAccessor, type ReadDb, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import {
+	type DbAccessor,
+	type ReadDb,
+	type WriteDb,
+	closeDbAccessor,
+	getDbAccessor,
+	initDbAccessor,
+} from "./db-accessor";
 import { createRoutingProvider } from "./inference-provider-factory";
 import { generateWithTracking } from "./pipeline/provider";
 import {
@@ -112,6 +119,22 @@ function delayAsyncReads(gate: Promise<void>, started: () => void): DbAccessor {
 				await gate;
 			}
 			return base.withReadDbAsync(fn);
+		},
+	};
+}
+
+function delayAsyncWrites(gate: Promise<void>, started: () => void): DbAccessor {
+	const base = getDbAccessor();
+	let firstWrite = true;
+	return {
+		...base,
+		async withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
+			if (firstWrite) {
+				firstWrite = false;
+				started();
+				await gate;
+			}
+			return base.withWriteTxAsync(fn);
 		},
 	};
 }
@@ -555,6 +578,42 @@ describe("telemetry collector", () => {
 		collector.record("daemon.heartbeat", { uptimeMs: 2 });
 		expect(captured).toHaveLength(0);
 		expect(unsentCount()).toBe(0);
+	});
+
+	it("waits for an in-flight first-use write before completing telemetry opt-out", async () => {
+		let releaseWrite: (() => void) | undefined;
+		const writeGate = new Promise<void>((resolve) => {
+			releaseWrite = resolve;
+		});
+		let signalWriteStarted: (() => void) | undefined;
+		const writeStarted = new Promise<void>((resolve) => {
+			signalWriteStarted = resolve;
+		});
+		const collector = createTelemetryCollector(
+			delayAsyncWrites(writeGate, () => signalWriteStarted?.()),
+			{ ...TELEMETRY_CONFIG, posthogHost: "" },
+			"0.0.0-test",
+		);
+
+		collector.recordFirstUse("remember");
+		await writeStarted;
+
+		let discardResolved = false;
+		const discard = collector.discardPending?.().then(() => {
+			discardResolved = true;
+		});
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(discardResolved).toBe(false);
+
+		releaseWrite?.();
+		await discard;
+		const row = await getDbAccessor().withReadDbAsync(
+			async (db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM telemetry_events WHERE event = 'first.remember'").get() as {
+					readonly count: number;
+				},
+		);
+		expect(row.count).toBe(0);
 	});
 
 	it("emits one config snapshot alongside install activation", async () => {

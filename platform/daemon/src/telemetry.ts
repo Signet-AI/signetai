@@ -1479,6 +1479,7 @@ export function createTelemetryCollector(
 		},
 
 		recordFirstUse(kind): void {
+			if (recordingStopped) return;
 			const pending = persistFirstUse(kind)
 				.then((event) => {
 					if (!event) return;
@@ -1547,6 +1548,7 @@ export function createTelemetryCollector(
 			buffer.splice(0, buffer.length);
 			flushAbortController?.abort();
 			if (flushPromise) await flushPromise;
+			await awaitPendingAsyncWrites();
 			try {
 				const withWriteTxAsync = db.withWriteTxAsync;
 				if (!withWriteTxAsync) throw new Error("async writer unavailable");
