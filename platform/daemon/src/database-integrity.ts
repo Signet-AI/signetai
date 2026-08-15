@@ -135,7 +135,10 @@ class IntegrityRepairTimeoutError extends Error {
 const REPAIR_WORKER_SOURCE = `
 import { createRequire } from "node:module";
 const load = createRequire(process.env.SIGNET_DATABASE_INTEGRITY_REQUIRE_BASE || process.cwd() + "/package.json");
-const Database = typeof Bun !== "undefined" ? load("bun:sqlite").Database : load("better-sqlite3");
+const Database = (() => {
+  if (typeof Bun !== "undefined") return load("bun:sqlite").Database;
+  try { return load("node:sqlite").DatabaseSync; } catch { return load("better-sqlite3"); }
+})();
 const dbPath = process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH;
 const indexes = JSON.parse(process.env.SIGNET_DATABASE_INTEGRITY_INDEXES || "[]");
 if (typeof dbPath !== "string" || !Array.isArray(indexes)) throw new Error("invalid integrity repair arguments");
