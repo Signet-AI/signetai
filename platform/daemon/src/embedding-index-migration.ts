@@ -11,6 +11,7 @@ import type { EmbeddingConfig } from "./memory-config";
 import type { PipelineCauseFamily } from "./pipeline-operation";
 
 const STAGING_VECTOR_TABLE = "vec_embeddings_staging";
+const ACTIVE_VECTOR_TABLE = "vec_embeddings";
 const VECTOR_REBUILD_BATCH_SIZE = 50;
 const VECTOR_REBUILD_RETRY_DELAY_MS = 100;
 const MAX_VECTOR_REBUILD_RETRIES_WITHOUT_CANCELLATION = 3;
@@ -96,6 +97,10 @@ function createVectorIndex(db: WriteDb, table: string, dimensions: number): void
 	`);
 }
 
+function vectorTableForSlot(slot: "active" | "staging" | undefined): "vec_embeddings" | "vec_embeddings_staging" {
+	return slot === "staging" ? STAGING_VECTOR_TABLE : ACTIVE_VECTOR_TABLE;
+}
+
 function isTerminalMigrationFailure(
 	cause: PipelineCauseFamily | undefined,
 ): cause is "context_limit" | "invalid_input" {
@@ -116,9 +121,10 @@ function migrationFailureCount(db: ReadDb, targetFingerprint: string | undefined
 }
 
 /** Creates a dimension-safe inactive vec0 table without touching active recall. */
-export function resetStagingVectorIndex(db: WriteDb, dimensions: number): void {
-	db.exec(`DROP TABLE IF EXISTS ${STAGING_VECTOR_TABLE}`);
-	createVectorIndex(db, STAGING_VECTOR_TABLE, dimensions);
+export function resetStagingVectorIndex(db: WriteDb, dimensions: number, projectionSlot?: "active" | "staging"): void {
+	const projectionTable = vectorTableForSlot(projectionSlot);
+	db.exec(`DROP TABLE IF EXISTS ${projectionTable}`);
+	createVectorIndex(db, projectionTable, dimensions);
 }
 
 function isDuplicateVectorProjectionRow(error: unknown): boolean {
@@ -126,13 +132,14 @@ function isDuplicateVectorProjectionRow(error: unknown): boolean {
 }
 
 /**
- * Rebuild the active sqlite-vec projection from durable BLOB rows in bounded
+ * Rebuild the inactive sqlite-vec projection from durable BLOB rows in bounded
  * transactions. The projection is allowed to lag while active writers run, so
  * duplicate ids are intentionally ignored. A failed chunk keeps its keyset
  * cursor and retries until the caller stops the migration.
  */
-async function rebuildActiveVectorIndex(
+async function rebuildVectorIndex(
 	accessor: DbAccessor,
+	projectionSlot: "active" | "staging" | undefined,
 	dimensions: number,
 	batchSize = VECTOR_REBUILD_BATCH_SIZE,
 	shouldContinue?: () => boolean,
@@ -150,9 +157,9 @@ async function rebuildActiveVectorIndex(
 		try {
 			if (!initialized) {
 				await withQueuedWrite(accessor, (db) => {
-					db.exec("DROP TABLE IF EXISTS vec_embeddings_staging");
-					db.exec("DROP TABLE vec_embeddings");
-					createVectorIndex(db, "vec_embeddings", dimensions);
+					const projectionTable = vectorTableForSlot(projectionSlot);
+					db.exec(`DROP TABLE IF EXISTS ${projectionTable}`);
+					createVectorIndex(db, projectionTable, dimensions);
 				});
 				initialized = true;
 			}
@@ -173,8 +180,9 @@ async function rebuildActiveVectorIndex(
 				// sqlite-vec does not implement SQLite's conflict algorithms for
 				// virtual tables. Keep the explicit OR IGNORE contract for normal
 				// SQLite projections, then swallow vec0's equivalent duplicate error.
-				const insert = db.prepare("INSERT OR IGNORE INTO vec_embeddings (id, embedding) VALUES (?, ?)");
-				const existing = db.prepare("SELECT 1 FROM vec_embeddings WHERE id = ?");
+				const projectionTable = vectorTableForSlot(projectionSlot);
+				const insert = db.prepare(`INSERT OR IGNORE INTO ${projectionTable} (id, embedding) VALUES (?, ?)`);
+				const existing = db.prepare(`SELECT 1 FROM ${projectionTable} WHERE id = ?`);
 				const canonical = db.prepare("SELECT 1 FROM embeddings WHERE id = ?");
 				for (const row of rows) {
 					const vector = new Float32Array(
@@ -220,7 +228,7 @@ async function completeProjectionRebuild(
 	batchSize?: number,
 	shouldContinue?: () => boolean,
 ): Promise<void> {
-	await rebuildActiveVectorIndex(accessor, profile.dimensions, batchSize, shouldContinue);
+	await rebuildVectorIndex(accessor, profile.projectionSlot, profile.dimensions, batchSize, shouldContinue);
 	const completed = await withQueuedWrite(accessor, (db) => {
 		const state = readEmbeddingIndexState(db);
 		if (
@@ -286,6 +294,8 @@ export function stagingCoverage(
 /** Remove rows whose active source was deleted or changed while staging ran. */
 async function pruneStagingRows(accessor: DbAccessor): Promise<void> {
 	await withQueuedWrite(accessor, (db) => {
+		const state = readEmbeddingIndexState(db);
+		const vectorTable = vectorTableForSlot(state?.staging?.projectionSlot);
 		const stale = db
 			.prepare(
 				`SELECT s.id FROM embeddings_staging s
@@ -294,7 +304,7 @@ async function pruneStagingRows(accessor: DbAccessor): Promise<void> {
 			)
 			.all() as Array<{ id: string }>;
 		if (stale.length === 0) return;
-		const deleteVector = db.prepare(`DELETE FROM ${STAGING_VECTOR_TABLE} WHERE id = ?`);
+		const deleteVector = db.prepare(`DELETE FROM ${vectorTable} WHERE id = ?`);
 		const deleteEmbedding = db.prepare("DELETE FROM embeddings_staging WHERE id = ?");
 		for (const { id } of stale) {
 			deleteVector.run(id);
@@ -353,13 +363,14 @@ export async function stageEmbeddingBatch(input: {
 	const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db));
 	if (state?.state !== "building" || !state.staging) return { staged: 0, coverage: null };
 	const profile = state.staging;
+	const vectorTable = vectorTableForSlot(profile.projectionSlot);
 	const configured = input.readConfigured ? input.readConfigured() : input.configured;
 	// Writes and source purges continue against the active slot during a build.
 	// Without this cleanup, an obsolete staging row would keep the count-based
 	// readiness gate false forever after its active counterpart disappears.
 	await pruneStagingRows(input.accessor);
 	const rows = await input.accessor.withReadDbAsync(async (db) => {
-		if (!tableExists(db, STAGING_VECTOR_TABLE)) throw new Error("Staging vector index is unavailable");
+		if (!tableExists(db, vectorTable)) throw new Error("Staging vector index is unavailable");
 		const hasFailures = tableExists(db, "embedding_index_failures");
 		const failureFilter = hasFailures
 			? ` AND NOT EXISTS (
@@ -430,7 +441,7 @@ export async function stageEmbeddingBatch(input: {
 				| { id: string }
 				| undefined;
 			if (stored)
-				db.prepare(`INSERT OR REPLACE INTO ${STAGING_VECTOR_TABLE} (id, embedding) VALUES (?, ?)`).run(
+				db.prepare(`INSERT OR REPLACE INTO ${vectorTable} (id, embedding) VALUES (?, ?)`).run(
 					stored.id,
 					new Float32Array(vector),
 				);
@@ -446,8 +457,8 @@ export async function stageEmbeddingBatch(input: {
 
 /**
  * Promotion swaps durable embedding slots in one short transaction. A virtual
- * sqlite-vec projection is rebuilt after that transaction in bounded chunks so
- * promotion never hides an all-row rebuild behind BEGIN IMMEDIATE.
+ * sqlite-vec projection is rebuilt in the inactive projection slot after that
+ * transaction in bounded chunks, while search keeps serving the old slot.
  */
 export async function promoteStagingIndex(
 	accessor: DbAccessor,
@@ -458,19 +469,21 @@ export async function promoteStagingIndex(
 		if (state?.state !== "building" || !state.staging) return null;
 		if (state.staging.projectionRebuild) return null;
 		if (!stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint).ready) return null;
-		if (!tableExists(db, STAGING_VECTOR_TABLE)) return null;
+		if (!tableExists(db, vectorTableForSlot(state.staging.projectionSlot))) return null;
 		let rebuildVectorIndex = false;
 		const nextProfile = { ...state.staging, projectionRebuild: true } as const;
+		const stagingVectorTable = vectorTableForSlot(state.staging.projectionSlot);
+		const activeVectorTable = vectorTableForSlot(state.active.projectionSlot);
 
 		// Keep exactly two durable slots: after the swap the former active slot
 		// becomes the inactive/rollback slot, ready to be cleared for the next build.
 		db.exec("ALTER TABLE embeddings_staging RENAME TO embeddings_next");
 		db.exec("ALTER TABLE embeddings RENAME TO embeddings_staging");
 		db.exec("ALTER TABLE embeddings_next RENAME TO embeddings");
-		// sqlite-vec virtual-table renames leave its backing tables associated
-		// with the old table name. Defer that projection rebuild until after the
-		// durable swap. Plain tables retain the inexpensive rename path.
-		if (isVecVirtualTable(db, "vec_embeddings") && isVecVirtualTable(db, STAGING_VECTOR_TABLE)) {
+		// Keep the old projection in place while the new projection is rebuilt in
+		// the inactive table. Search pairs this old projection with the old durable
+		// slot until the final state transaction publishes the new projection.
+		if (isVecVirtualTable(db, activeVectorTable) && isVecVirtualTable(db, stagingVectorTable)) {
 			rebuildVectorIndex = true;
 			db.prepare(
 				`UPDATE embedding_index_state
@@ -482,15 +495,16 @@ export async function promoteStagingIndex(
 				`UPDATE memories SET embedding_model = ?
 				 WHERE id IN (SELECT source_id FROM embeddings WHERE source_type = 'memory')`,
 			).run(state.staging.model);
-			db.exec(`ALTER TABLE ${STAGING_VECTOR_TABLE} RENAME TO vec_embeddings_next`);
-			db.exec("ALTER TABLE vec_embeddings RENAME TO vec_embeddings_staging");
+			db.exec(`ALTER TABLE ${stagingVectorTable} RENAME TO vec_embeddings_next`);
+			db.exec(`ALTER TABLE ${activeVectorTable} RENAME TO vec_embeddings_old`);
 			db.exec("ALTER TABLE vec_embeddings_next RENAME TO vec_embeddings");
+			db.exec("ALTER TABLE vec_embeddings_old RENAME TO vec_embeddings_staging");
 			db.prepare(
 				`UPDATE embedding_index_state
-				 SET active_profile_json = staging_profile_json, staging_profile_json = NULL,
+				 SET active_profile_json = ?, staging_profile_json = NULL,
 				     state = 'ready', last_error = NULL, updated_at = ?
 				 WHERE id = 1`,
-			).run(new Date().toISOString());
+			).run(JSON.stringify({ ...state.staging, projectionSlot: "active" }), new Date().toISOString());
 		}
 		return { dimensions: state.staging.dimensions, profile: nextProfile, rebuildVectorIndex };
 	});
@@ -561,11 +575,13 @@ export async function startEmbeddingIndexMigration(input: {
 	try {
 		if (resumeExistingBuild) {
 			const hasStagingVectorIndex = await input.accessor.withReadDbAsync(async (db) =>
-				tableExists(db, STAGING_VECTOR_TABLE),
+				tableExists(db, vectorTableForSlot(staging.projectionSlot)),
 			);
 			if (!hasStagingVectorIndex) throw new Error("Staging vector index is unavailable while resuming a build");
 		} else {
-			await withQueuedWrite(input.accessor, (db) => resetStagingVectorIndex(db, staging.dimensions));
+			await withQueuedWrite(input.accessor, (db) =>
+				resetStagingVectorIndex(db, staging.dimensions, staging.projectionSlot),
+			);
 		}
 	} catch (error) {
 		await withQueuedWrite(input.accessor, (db) =>
@@ -614,7 +630,9 @@ export async function startEmbeddingIndexMigration(input: {
 					"embedding",
 					"Embedding config changed during migration; restarting the staging build with the current profile",
 				);
-				await withQueuedWrite(input.accessor, (db) => resetStagingVectorIndex(db, currentStaging.dimensions));
+				await withQueuedWrite(input.accessor, (db) =>
+					resetStagingVectorIndex(db, currentStaging.dimensions, currentStaging.projectionSlot),
+				);
 				consecutiveFailures = 0;
 				return;
 			}
