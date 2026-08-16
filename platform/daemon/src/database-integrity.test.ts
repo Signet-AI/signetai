@@ -438,7 +438,7 @@ describe("deferred database integrity recovery (#1513)", () => {
 		for (const key of keys) process.env[key] = `test-${key}`;
 		try {
 			const result = await repairTelemetryIndexes(
-				fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+				fakeAccessor({ telemetryMessage: "index mismatch", repairAfterFirstTelemetryCheck: true }).accessor,
 				(db) => db.exec("audit"),
 				{
 					dbPath,

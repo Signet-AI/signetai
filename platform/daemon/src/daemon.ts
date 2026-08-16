@@ -64,6 +64,7 @@ import {
 	ownerRunStatement,
 	registerDbOwnerMaintenance,
 } from "./db-owner-maintenance";
+import { createDeferredRuntimeGate } from "./deferred-runtime-gate";
 import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
@@ -2322,10 +2323,13 @@ async function main() {
 		setHeartbeatTimer(heartbeatTimer);
 	}
 
+	const deferredRuntimeGate = createDeferredRuntimeGate();
+
 	// Grace period: defer all background workers for 10s after startup so the
 	// event-loop monitor can calibrate and migrations can settle before any
 	// background write work piles on (#1059 thundering-herd prevention).
 	const startPostReadyRuntime = async (): Promise<void> => {
+		await deferredRuntimeGate.waitForIntegrity();
 		reportStartupGrace();
 		await startPipelineRuntime(memoryCfg, telemetryCollector);
 		logFdSnapshot("post-pipeline");
@@ -2440,6 +2444,12 @@ async function main() {
 
 	const BIND_MAX_DELAY_MS = 30_000;
 	const BIND_RETRY_BASE_MS = 1000;
+	// A whole-database quick_check can legitimately exceed the ordinary job
+	// budget on an existing workspace. Run it in the killable child with a
+	// bounded scan budget, while keeping each owner maintenance request on the
+	// ordinary 30s runaway-job deadline and preventing pipeline contention.
+	const DEFERRED_INTEGRITY_TIMEOUT_MS = 90_000;
+	const DEFERRED_INTEGRITY_OWNER_TIMEOUT_MS = 30_000;
 
 	const onListening = (info: { address: string; port: number }): void => {
 		logger.info("daemon", "Server listening", {
@@ -2452,7 +2462,8 @@ async function main() {
 			writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
 			vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor());
 			void runDeferredIntegrityCheck(getDbAccessor(), MEMORY_DB, {
-				timeoutMs: 30_000,
+				timeoutMs: DEFERRED_INTEGRITY_TIMEOUT_MS,
+				ownerTimeoutMs: DEFERRED_INTEGRITY_OWNER_TIMEOUT_MS,
 				owner: dbOwnerClient ?? undefined,
 				ownerAudit: (indexes, detectionMessages) => {
 					const auditId = createHash("sha256")
@@ -2515,6 +2526,9 @@ async function main() {
 				})
 				.catch((error) => {
 					logger.error("startup-recovery", "Deferred database integrity check rejected", error);
+				})
+				.finally(() => {
+					deferredRuntimeGate.completeIntegrity();
 				});
 
 			const healthStampPath = join(DAEMON_DIR, "last-healthy-start");

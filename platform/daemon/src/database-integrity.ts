@@ -151,6 +151,7 @@ function ownerCheck(rows: readonly Record<string, unknown>[], key: string): Inte
 export interface DeferredIntegrityCheckOptions {
 	readonly workerPath?: string;
 	readonly timeoutMs?: number;
+	readonly ownerTimeoutMs?: number;
 	readonly audit?: TelemetryIndexRepairAudit;
 	readonly onWorkerStarted?: () => void;
 	readonly owner?: DbOwnerClient;
@@ -169,6 +170,93 @@ class IntegrityRepairTimeoutError extends Error {
 	constructor(timeoutMs: number) {
 		super(`telemetry index repair exceeded ${timeoutMs}ms`);
 		this.name = "IntegrityRepairTimeoutError";
+	}
+}
+
+class IntegrityCheckTimeoutError extends Error {
+	readonly timedOut = true;
+
+	constructor(timeoutMs: number) {
+		super(`database integrity check exceeded ${timeoutMs}ms`);
+		this.name = "IntegrityCheckTimeoutError";
+	}
+}
+
+async function runIntegrityWorkerCheck(
+	dbPath: string,
+	timeoutMs: number,
+	options: Partial<DeferredIntegrityCheckOptions>,
+): Promise<DatabaseIntegrityWorkerResult> {
+	const startedAt = Date.now();
+	const embeddedWorkerPath = resolveEmbeddedWorkerPath("database-integrity-worker");
+	const workerPath = options.workerPath ?? embeddedWorkerPath ?? workerPathFromModule();
+	const workerArgs = options.workerPath === undefined && embeddedWorkerPath !== null ? [] : [workerPath];
+	let worker: ChildProcess | undefined;
+	let progressTimer: ReturnType<typeof setInterval> | undefined;
+	try {
+		// The integrity child must not inherit the daemon's inspector or
+		// profiler settings. In the profiling runbook BUN_INSPECT points at the
+		// daemon's private inspector port. The child then tries to bind the same
+		// port and exits before it can report its quick_check result.
+		const workerEnv = integrityChildEnv({
+			SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
+		});
+		const child = spawn(process.execPath, workerArgs, {
+			env: workerEnv,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		worker = child;
+		return await new Promise<DatabaseIntegrityWorkerResult>((resolve, reject) => {
+			const timer = setTimeout(() => {
+				child.kill("SIGKILL");
+				reject(new IntegrityCheckTimeoutError(timeoutMs));
+			}, timeoutMs);
+			let output = "";
+			child.stdout.setEncoding("utf8");
+			child.stdout.on("data", (chunk: string) => {
+				for (const line of `${output}${chunk}`.split("\n").slice(0, -1)) {
+					if (line === "started") {
+						options.onWorkerStarted?.();
+						continue;
+					}
+					if (line.length > 0) {
+						try {
+							const message = JSON.parse(line) as DatabaseIntegrityWorkerMessage;
+							if (message.type === "result") {
+								clearTimeout(timer);
+								resolve(message.result);
+							}
+						} catch {
+							// The close handler reports a malformed or incomplete response.
+						}
+					}
+				}
+				output = `${output}${chunk}`.split("\n").at(-1) ?? "";
+			});
+			progressTimer = setInterval(() => {
+				logger.info("startup-recovery", "Database integrity check in progress", {
+					elapsedMs: Date.now() - startedAt,
+					budgetMs: timeoutMs,
+				});
+			}, 1000);
+			child.once("error", (error) => {
+				clearTimeout(timer);
+				reject(error);
+			});
+			child.once("close", (code) => {
+				if (code !== 0) {
+					clearTimeout(timer);
+					reject(new Error(`database integrity worker exited with code ${code ?? "unknown"}`));
+				} else {
+					clearTimeout(timer);
+					reject(new Error("database integrity worker exited without a result"));
+				}
+			});
+			child.stderr.resume();
+		});
+	} finally {
+		if (progressTimer !== undefined) clearInterval(progressTimer);
+		if (worker !== undefined && worker.exitCode === null) worker.kill("SIGKILL");
 	}
 }
 
@@ -341,23 +429,28 @@ async function runOwnerDeferredIntegrityCheck(
 	const owner = options.owner;
 	if (owner === undefined) throw new Error("owner integrity check requires a DB owner");
 	const timeoutMs = options.timeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS;
+	const ownerTimeoutMs = options.ownerTimeoutMs ?? Math.min(timeoutMs, DEFAULT_INTEGRITY_TIMEOUT_MS);
 	const startedAt = Date.now();
 	latestStatus = statusWith("unknown", UNKNOWN_CHECK, UNKNOWN_CHECK, [], "running", 0, null, owner);
-	logger.info("startup-recovery", "Deferred database integrity check started through the DB owner", { timeoutMs });
+	logger.info("startup-recovery", "Deferred database integrity check started through the DB owner", {
+		timeoutMs,
+		ownerTimeoutMs,
+	});
 	const progressTimer = setInterval(() => {
 		const health = owner.health();
 		logger.info("startup-recovery", "Database integrity owner work in progress", {
 			elapsedMs: Date.now() - startedAt,
-			budgetMs: timeoutMs,
+			budgetMs: ownerTimeoutMs,
 			ownerState: health.state,
 			ownerGeneration: health.generation,
 			deadlineKills: health.deadlineKills,
 		});
 	}, 1_000);
 	try {
+		const result = await runIntegrityWorkerCheck(dbPath, timeoutMs, options);
 		const status = await repairTelemetryIndexes(accessor, options.audit, {
-			dbPath,
-			repairTimeoutMs: timeoutMs,
+			quickCheck: result.quickCheck,
+			repairTimeoutMs: ownerTimeoutMs,
 			owner,
 			ownerAudit: options.ownerAudit,
 		});
@@ -372,7 +465,7 @@ async function runOwnerDeferredIntegrityCheck(
 		return latestStatus;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		const timedOut = error instanceof DbOwnerDeadlineError;
+		const timedOut = error instanceof DbOwnerDeadlineError || error instanceof IntegrityCheckTimeoutError;
 		latestStatus = statusWith(
 			"unavailable",
 			{ ok: false, messages: [message] },
@@ -405,76 +498,8 @@ async function runDeferredIntegrityCheckInternal(
 	const startedAt = Date.now();
 	latestStatus = statusWith("unknown", UNKNOWN_CHECK, UNKNOWN_CHECK, [], "running", 0);
 	logger.info("startup-recovery", "Deferred database integrity check started", { timeoutMs });
-	const embeddedWorkerPath = resolveEmbeddedWorkerPath("database-integrity-worker");
-	const workerPath = options.workerPath ?? embeddedWorkerPath ?? workerPathFromModule();
-	const workerArgs = options.workerPath === undefined && embeddedWorkerPath !== null ? [] : [workerPath];
-	let worker: ChildProcess | undefined;
-	let timedOut = false;
-	let progressTimer: ReturnType<typeof setInterval> | undefined;
-
 	try {
-		// The integrity child must not inherit the daemon's inspector or
-		// profiler settings. In the profiling runbook BUN_INSPECT points at the
-		// daemon's private inspector port. The child then tries to bind the same
-		// port and exits before it can report its quick_check result.
-		const workerEnv = integrityChildEnv({
-			SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
-		});
-		const child = spawn(process.execPath, workerArgs, {
-			env: workerEnv,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		worker = child;
-		const result = await new Promise<DatabaseIntegrityWorkerResult>((resolve, reject) => {
-			const timer = setTimeout(() => {
-				timedOut = true;
-				child.kill("SIGKILL");
-				reject(new Error(`database integrity check exceeded ${timeoutMs}ms`));
-			}, timeoutMs);
-			let output = "";
-			child.stdout.setEncoding("utf8");
-			child.stdout.on("data", (chunk: string) => {
-				for (const line of `${output}${chunk}`.split("\n").slice(0, -1)) {
-					if (line === "started") {
-						options.onWorkerStarted?.();
-						continue;
-					}
-					if (line.length > 0) {
-						try {
-							const message = JSON.parse(line) as DatabaseIntegrityWorkerMessage;
-							if (message.type === "result") {
-								clearTimeout(timer);
-								resolve(message.result);
-							}
-						} catch {
-							// The close handler reports a malformed or incomplete response.
-						}
-					}
-				}
-				output = `${output}${chunk}`.split("\n").at(-1) ?? "";
-			});
-			progressTimer = setInterval(() => {
-				logger.info("startup-recovery", "Database integrity check in progress", {
-					elapsedMs: Date.now() - startedAt,
-					budgetMs: timeoutMs,
-				});
-			}, 1000);
-			child.once("error", (error) => {
-				clearTimeout(timer);
-				reject(error);
-			});
-			child.once("close", (code) => {
-				if (timedOut) return;
-				if (code !== 0) {
-					clearTimeout(timer);
-					reject(new Error(`database integrity worker exited with code ${code ?? "unknown"}`));
-				} else {
-					clearTimeout(timer);
-					reject(new Error("database integrity worker exited without a result"));
-				}
-			});
-			child.stderr.resume();
-		});
+		const result = await runIntegrityWorkerCheck(dbPath, timeoutMs, options);
 		const databaseIntegrity = await repairTelemetryIndexes(accessor, options.audit, {
 			quickCheck: result.quickCheck,
 			dbPath,
@@ -492,7 +517,7 @@ async function runDeferredIntegrityCheckInternal(
 			{ ok: false, messages: [error instanceof Error ? error.message : String(error)] },
 			UNKNOWN_CHECK,
 			[],
-			timedOut ? "timed_out" : "complete",
+			error instanceof IntegrityCheckTimeoutError ? "timed_out" : "complete",
 			Date.now() - startedAt,
 			REPAIR_GUIDANCE,
 		);
@@ -501,9 +526,6 @@ async function runDeferredIntegrityCheckInternal(
 			durationMs: latestStatus.durationMs,
 		});
 		return latestStatus;
-	} finally {
-		if (progressTimer !== undefined) clearInterval(progressTimer);
-		if (worker !== undefined && worker.exitCode === null) worker.kill("SIGKILL");
 	}
 }
 
