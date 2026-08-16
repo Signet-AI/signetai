@@ -13,9 +13,11 @@ import {
 	classifyRecallTelemetry,
 	expandRecallKeywordQuery,
 	hybridRecall,
+	MAX_LEXICAL_FALLBACK_SCAN_ROWS,
 	transcriptExcerpt,
 } from "./memory-search";
 import type { RecallResult } from "./memory-search";
+import { setActiveTelemetry } from "./telemetry";
 
 describe("hybridRecall", () => {
 	let dir = "";
@@ -31,6 +33,7 @@ describe("hybridRecall", () => {
 	});
 
 	afterEach(() => {
+		setActiveTelemetry(undefined);
 		closeDbAccessor();
 		if (prevSignetPath === undefined) {
 			process.env.SIGNET_PATH = undefined;
@@ -358,6 +361,11 @@ describe("hybridRecall", () => {
 	});
 
 	it("supplements partial FTS results and reports degraded lexical coverage", async () => {
+		const events: Array<{ event: string; properties: Record<string, unknown> }> = [];
+		setActiveTelemetry({
+			record: (event: string, properties: Readonly<Record<string, string | number | boolean | null>>) =>
+				events.push({ event, properties: { ...properties } }),
+		} as never);
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -393,6 +401,45 @@ describe("hybridRecall", () => {
 			expect.arrayContaining(["indexed-fts-memory", "deferred-fts-memory-2"]),
 		);
 		expect(result.meta.partial).toBe(true);
+		expect(events).toContainEqual({
+			event: "recall.performed",
+			properties: expect.objectContaining({ partial: true, degradation: "fts_incomplete" }),
+		});
+	});
+
+	it("caps the synchronous lexical fallback scan at the DB-owner work budget", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', 'global', ?, ?, 'test')`,
+			).run("old-fallback-target", "bounded fallback target only", now, now);
+			const insert = db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, 'unrelated filler row', 'fact', 'default', 'global', ?, ?, 'test')`,
+			);
+			for (let index = 0; index < MAX_LEXICAL_FALLBACK_SCAN_ROWS + 1; index++) {
+				insert.run(`fallback-filler-${index}`, now, now);
+			}
+			db.exec("DELETE FROM memories_fts");
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "bounded fallback target only",
+				keywordQuery: "bounded fallback target only",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.meta.partial).toBe(true);
+		expect(result.results.map((row) => row.id)).not.toContain("old-fallback-target");
 	});
 
 	it("returns source-provenanced ontology claims as first-class recall results", async () => {

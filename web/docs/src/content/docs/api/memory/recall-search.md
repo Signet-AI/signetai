@@ -143,6 +143,13 @@ this call.
 is `true` when the response includes supporting context such as an LLM summary
 card or linked rationale context. `meta.noHits` is `true` when recall completed
 normally but found no matching results.
+`meta.partial` is `true` when the memory FTS index is known to be incomplete and
+the daemon used the bounded lexical bridge to supplement indexed results. This
+is an honest partial-coverage signal, not an HTTP failure: the response remains
+`200` and can contain useful results. Consumers should treat the result set as
+incomplete and retry after indexing recovery. This differs from
+`aggregate.partial`, which means aggregate planning or synthesis stopped after
+retrieving only partial evidence.
 `meta.timings`, when present, reports daemon-side stage timings in
 milliseconds. Aggregate recall fills the same field with aggregate-specific
 stages such as `aggregate_planning`, `aggregate_followup_recalls`, and

@@ -1021,7 +1021,7 @@ function registerRecall(app: Hono): void {
 								embedFn,
 							})
 						: await hybridRecall(params, cfg, embedFn);
-				if (result.aggregate?.partial === true || embeddingDegraded) {
+				if (result.meta.partial === true || result.aggregate?.partial === true || embeddingDegraded) {
 					c.header("x-signet-operation-degraded", "1");
 					if (!embeddingCause && result.aggregate?.stoppedReason === "router_unavailable") {
 						embeddingCause = "provider_unavailable";

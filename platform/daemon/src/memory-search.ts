@@ -27,6 +27,7 @@ import {
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { type ReadDb, getDbAccessor, runWriteTxAsync, prepareTypedStatement } from "./db-accessor";
+import { DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
 import type { EmbeddingRole } from "./embedding-profile";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
@@ -139,7 +140,12 @@ export interface RecallResponse {
 		totalReturned: number;
 		hasSupplementary: boolean;
 		noHits: boolean;
-		/** True when the lexical result set used a known-incomplete FTS index. */
+		/**
+		 * True when lexical coverage is known incomplete because FTS rows are
+		 * missing. The response remains successful and may contain bounded bridge
+		 * results. This is distinct from aggregate.partial, which describes
+		 * incomplete aggregate planning or synthesis.
+		 */
 		partial?: boolean;
 		timings: RecallTimings;
 		temporal?: RecallTemporalMeta;
@@ -153,6 +159,7 @@ export interface RecallResponse {
 		queries: readonly string[];
 		sourceMemoryIds: readonly string[];
 		stoppedReason: "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
+		/** True when aggregate planning or synthesis stopped after partial evidence. */
 		partial?: boolean;
 		message?: string;
 		usage?: AggregateRecallUsage;
@@ -698,6 +705,9 @@ function lexicalFallbackTerms(keywordQuery: string): string[] {
 	];
 }
 
+/** Keep synchronous lexical fallback within the DB-owner work budget. */
+export const MAX_LEXICAL_FALLBACK_SCAN_ROWS = DB_OWNER_MAX_WORK_UNITS;
+
 function ftsIndexIsIncomplete(db: ReadDb): boolean {
 	try {
 		const row = db
@@ -719,7 +729,7 @@ function readLexicalFallback(
 	db: ReadDb,
 	keywordQuery: string,
 	filter: FilterClause,
-	limit: number,
+	resultLimit: number,
 ): Array<{ id: string; matches: number }> {
 	const terms = lexicalFallbackTerms(keywordQuery);
 	if (terms.length === 0) return [];
@@ -729,14 +739,20 @@ function readLexicalFallback(
 	const match = terms.length <= 3 ? like.join(" AND ") : like.join(" OR ");
 	return prepareTypedStatement<{ id: string; matches: number }>(
 		db,
-		`SELECT m.id, (${score.join(" + ")}) AS matches
-		 FROM memories m
+		`WITH fallback_scan AS MATERIALIZED (
+			SELECT m.*
+			FROM memories m
+			ORDER BY m.rowid DESC
+			LIMIT ?
+		)
+		 SELECT m.id, (${score.join(" + ")}) AS matches
+		 FROM fallback_scan m
 		 WHERE (${match})
 		   AND m.is_deleted = 0
 		   ${memorySupersessionSql(db)}${filter.sql}
 		 ORDER BY matches DESC
 		 LIMIT ?`,
-	).all(...args, ...args, ...filter.args, limit);
+	).all(MAX_LEXICAL_FALLBACK_SCAN_ROWS, ...args, ...args, ...filter.args, resultLimit);
 }
 
 /**
@@ -1467,6 +1483,8 @@ export async function hybridRecall(
 			results: response.results.length,
 			latencyMs: recallTimings.totalMs,
 			truncated: response.results.length >= limit,
+			partial: lexicalSearchPartial,
+			...(lexicalSearchPartial ? { degradation: "fts_incomplete" } : {}),
 		});
 		const selectedLifecycleSources = response.results.flatMap((row) => {
 			const source = lifecycleSourceResults.get(row.id);
@@ -1604,7 +1622,7 @@ export async function hybridRecall(
 					lexicalFallbackAttempted = true;
 					logger.warn("memory", "FTS index incomplete; using bounded LIKE lexical fallback");
 					addFtsScores(ftsRows);
-					const fallbackRows = readLexicalFallback(db, keywordQuery, filter, cfg.search.top_k);
+					const fallbackRows = readLexicalFallback(db, keywordQuery, filter, limit);
 					const fallbackTermCount = Math.max(1, lexicalFallbackTerms(keywordQuery).length);
 					for (const row of fallbackRows) {
 						const score = row.matches / fallbackTermCount;

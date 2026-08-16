@@ -819,8 +819,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			throw error;
 		}
 		const status = c.res.status;
+		const degraded = c.res.headers.get("x-signet-operation-degraded") === "1";
 		if (c.res.headers.get("x-signet-operation-recorded") === "1") {
 			c.res.headers.delete("x-signet-operation-recorded");
+			c.res.headers.delete("x-signet-operation-degraded");
 			routeOperationFailures.delete(c);
 			return c.res;
 		}
@@ -831,7 +833,16 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? 1
 				: 0;
 		const failed = failures.length > 0 ? failures.length : status >= 400 && skipped === 0 ? 1 : 0;
-		const outcome = skipped > 0 ? "skipped" : failed > 0 ? (status >= 400 ? "failed" : "partial") : "completed";
+		const outcome =
+			skipped > 0
+				? "skipped"
+				: failed > 0
+					? status >= 400
+						? "failed"
+						: "partial"
+					: degraded
+						? "partial"
+						: "completed";
 		const accepted = outcome === "completed" || outcome === "partial" ? (responseSummary?.accepted ?? 1) : 0;
 		recordPipelineOperation({
 			operationClass,
@@ -845,6 +856,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			causeFamily: failed > 0 ? (failures[0] ?? normalizeRouteFailure(status)) : undefined,
 		});
 		c.res.headers.delete("x-signet-operation-skipped");
+		c.res.headers.delete("x-signet-operation-degraded");
 		if (c.req.header("x-signet-operation-forwarded") === "1") {
 			c.header("x-signet-operation-recorded", "1");
 		} else {
@@ -3441,6 +3453,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				truncated: returnedResult.results.length >= recallLimit,
 				delivery: "returned",
 			});
+			if (returnedResult.meta.partial === true) c.header("x-signet-operation-degraded", "1");
 			recordFirstUseTelemetry("recall");
 			return c.json(returnedResult);
 		} catch (e) {
@@ -3526,6 +3539,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				truncated: result.results.length >= limit,
 				delivery: "returned",
 			});
+			if (result.meta.partial === true) c.header("x-signet-operation-degraded", "1");
 			return c.json(result);
 		} catch (e) {
 			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });

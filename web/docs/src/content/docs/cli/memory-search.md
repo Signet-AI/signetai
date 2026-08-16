@@ -96,6 +96,12 @@ Advanced controls:
 | `--no-save-aggregate` | Return the aggregate answer without saving it as a memory; saving requires `remember` permission |
 | `--json` | Print the recall response as JSON |
 
+JSON recall responses may include `meta.partial: true` when the daemon is
+serving bounded lexical-bridge results while the memory FTS index is incomplete.
+This is a successful `200` response with incomplete lexical coverage, not the
+aggregate-recall `aggregate.partial` flag. Treat the results as partial and
+retry after indexing recovery.
+
 ---
 
 ## `signet session search`
