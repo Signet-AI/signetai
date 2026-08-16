@@ -827,20 +827,12 @@ export async function getLocalSecretValue(name: string): Promise<string> {
 		return readSecretValue(initialStore, name, resolution);
 	}
 
-	const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
-	const keyringResult = await keyring.get();
-	if (keyringResult.state === "unavailable" || keyringResult.state === "unsupported") {
-		emitDegradedWarning(keyringResult);
-		const resolution: MasterKeyResolution = { key: await getLegacyMasterKey(), provider: "legacy-obfuscated" };
-		const plaintext = await readSecretValue(initialStore, name, resolution);
-		await withSecretStoreLock(() => anchorLegacyMachineIdAfterVerification(resolution.key));
-		return plaintext;
-	}
-
 	return withSecretStoreLock(async () => {
 		const store = loadStore();
 		const resolution = await resolveMasterKey(store);
-		return readSecretValue(store, name, resolution);
+		const plaintext = await readSecretValue(store, name, resolution);
+		if (resolution.provider === "legacy-obfuscated") await anchorLegacyMachineIdAfterVerification(resolution.key);
+		return plaintext;
 	});
 }
 

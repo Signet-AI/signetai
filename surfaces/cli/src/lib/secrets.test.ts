@@ -3,7 +3,12 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { __setSecretStoreLockHookForTests, getLocalSecretValue, setSecretKeyringAdapterForTests } from "@signet/core";
+import {
+	__setSecretStoreLockHookForTests,
+	getLocalSecretValue,
+	setMachineIdResolverForTests,
+	setSecretKeyringAdapterForTests,
+} from "@signet/core";
 import { createOfflineSecretApiCall, createSecretCommandApiCall } from "./secrets.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -80,12 +85,17 @@ function writeMigrationRaceScript(path: string): void {
 		path,
 		[
 			'import { existsSync, writeFileSync } from "node:fs";',
-			'import { __setSecretStoreLockHookForTests, __setSecretStoreWriteHookForTests, getLocalSecretValue, putLocalSecret, setSecretKeyringAdapterForTests } from "@signet/core";',
+			'import { __setSecretStoreLockHookForTests, __setSecretStoreWriteHookForTests, getLocalSecretValue, putLocalSecret, setMachineIdResolverForTests, setSecretKeyringAdapterForTests } from "@signet/core";',
 			'const nativeKey = process.env.SIGNET_NATIVE_KEY ?? "";',
-			'const keyring = process.env.SIGNET_KEYRING === "found" ? { platform: "test", service: "test", account: "test", async get() { return { state: "found", value: nativeKey }; }, async set(value) { return { state: "found", value }; } } : { platform: "test", service: "test", account: "test", async get() { return { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } };',
+			"if (process.env.SIGNET_MACHINE_ID) setMachineIdResolverForTests(() => process.env.SIGNET_MACHINE_ID);",
+			'const foundKeyring = { platform: "test", service: "test", account: "test", async get() { return { state: "found", value: nativeKey }; }, async set(value) { return { state: "found", value }; } };',
+			'const dynamicReadKeyring = { platform: "test", service: "test", account: "test", async get() { return existsSync(process.env.SIGNET_READ_LOCK_READY ?? "") ? { state: "found", value: nativeKey } : { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } };',
+			'const unavailableKeyring = { platform: "test", service: "test", account: "test", async get() { return { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } };',
+			'const keyring = process.env.SIGNET_KEYRING === "found" ? foundKeyring : process.env.SIGNET_READ_DYNAMIC ? dynamicReadKeyring : unavailableKeyring;',
 			"setSecretKeyringAdapterForTests(keyring);",
 			'if (process.env.SIGNET_MIGRATION_READY && process.env.SIGNET_MIGRATION_GO) __setSecretStoreWriteHookForTests((stage) => { if (stage !== "after-write") return; writeFileSync(process.env.SIGNET_MIGRATION_READY, "ready"); while (!existsSync(process.env.SIGNET_MIGRATION_GO)) {} });',
 			'if (process.env.SIGNET_WRITER_LOCK_READY && process.env.SIGNET_WRITER_LOCK_GO) __setSecretStoreLockHookForTests((stage) => { if (stage !== "after-acquire") return; writeFileSync(process.env.SIGNET_WRITER_LOCK_READY, "ready"); while (!existsSync(process.env.SIGNET_WRITER_LOCK_GO)) {} });',
+			'if (process.env.SIGNET_READ_LOCK_READY && process.env.SIGNET_READ_LOCK_GO) __setSecretStoreLockHookForTests((stage) => { if (stage !== "after-acquire") return; writeFileSync(process.env.SIGNET_READ_LOCK_READY, "ready"); while (!existsSync(process.env.SIGNET_READ_LOCK_GO)) {} });',
 			'if (process.env.SIGNET_WRITER_STARTED) writeFileSync(process.env.SIGNET_WRITER_STARTED, "started");',
 			'if (process.argv[2] === "read") await getLocalSecretValue("BASE"); else await putLocalSecret("WRITER", "writer-value");',
 			'if (process.env.SIGNET_WRITER_DONE) writeFileSync(process.env.SIGNET_WRITER_DONE, "done");',
@@ -319,6 +329,50 @@ describe("daemonless secret API", () => {
 		setSecretKeyringAdapterForTests(nativeKeyring(nativeKey));
 		expect(await getLocalSecretValue("BASE")).toBe("base-value");
 		expect(await getLocalSecretValue("WRITER")).toBe("writer-value");
+	});
+
+	test("serializes a legacy read behind concurrent keyring migration", async () => {
+		workspace = mkdtempSync(join(tmpdir(), "signet-migration-read-race-"));
+		process.env.SIGNET_PATH = workspace;
+		const script = join(import.meta.dir, `.secret-migration-read-race-${process.pid}.mjs`);
+		writerScript = script;
+		writeMigrationRaceScript(script);
+		setSecretKeyringAdapterForTests(unavailableKeyring());
+		setMachineIdResolverForTests(() => "legacy-machine-id");
+		await createOfflineSecretApiCall()("POST", "/api/secrets/BASE", { value: "base-value" });
+		rmSync(join(workspace, ".secrets", ".machine-id"));
+		setMachineIdResolverForTests(null);
+
+		const nativeKey = Buffer.alloc(32, 8).toString("base64");
+		const migrationReady = join(workspace, "migration-read-ready");
+		const migrationGo = join(workspace, "migration-read-go");
+		const readLockReady = join(workspace, "read-lock-ready");
+		const readLockGo = join(workspace, "read-lock-go");
+		const migration = runSecretProcess(script, ["read"], {
+			SIGNET_KEYRING: "found",
+			SIGNET_MACHINE_ID: "legacy-machine-id",
+			SIGNET_NATIVE_KEY: nativeKey,
+			SIGNET_MIGRATION_READY: migrationReady,
+			SIGNET_MIGRATION_GO: migrationGo,
+		});
+		await waitForFile(migrationReady);
+
+		const read = runSecretProcess(script, ["read"], {
+			SIGNET_MACHINE_ID: "reader-machine-id",
+			SIGNET_NATIVE_KEY: nativeKey,
+			SIGNET_READ_DYNAMIC: "1",
+			SIGNET_READ_LOCK_READY: readLockReady,
+			SIGNET_READ_LOCK_GO: readLockGo,
+		});
+		expect(await waitForFileWithin(readLockReady, 200)).toBe(false);
+
+		writeFileSync(migrationGo, "go");
+		const readAcquiredAfterMigration = await waitForFileWithin(readLockReady, 500);
+		if (readAcquiredAfterMigration) writeFileSync(readLockGo, "go");
+		expect(await Promise.all([migration, read])).toEqual([0, 0]);
+		expect(readAcquiredAfterMigration).toBe(true);
+		setSecretKeyringAdapterForTests(nativeKeyring(nativeKey));
+		expect(await getLocalSecretValue("BASE")).toBe("base-value");
 	});
 
 	test("keeps both secrets when migration completes before a writer starts", async () => {
