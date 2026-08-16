@@ -341,6 +341,9 @@ handoffInspectorParent();
 if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PROXY_TARGET) {
 	const { runInspectorProxyFromEnvironment } = await import("../surfaces/cli/src/lib/inspector-proxy");
 	await runInspectorProxyFromEnvironment();
+} else if (process.env.SIGNET_DB_OWNER_DB_PATH) {
+	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
+	runDbOwnerWorker();
 } else if (process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH) {
 	const { runDatabaseIntegrityWorker } = await import("../platform/daemon/src/database-integrity-worker");
 	runDatabaseIntegrityWorker();

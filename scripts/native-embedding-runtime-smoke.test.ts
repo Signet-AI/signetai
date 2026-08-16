@@ -85,6 +85,27 @@ async function waitForHealth(origin: string, child: ChildProcessWithoutNullStrea
 	throw new Error("native daemon did not become healthy within 30 seconds");
 }
 
+async function waitForJsonEvent(
+	output: () => string,
+	predicate: (event: Record<string, unknown>) => boolean,
+	timeoutMs = 5_000,
+): Promise<Record<string, unknown>> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		for (const line of output().split("\n")) {
+			if (line.length === 0) continue;
+			try {
+				const event = JSON.parse(line) as unknown;
+				if (typeof event === "object" && event !== null && predicate(event as Record<string, unknown>)) {
+					return event as Record<string, unknown>;
+				}
+			} catch {}
+		}
+		await Bun.sleep(10);
+	}
+	throw new Error(`native DB owner event did not arrive within ${timeoutMs}ms`);
+}
+
 function floatVector(value: unknown): Float32Array {
 	if (!(value instanceof Uint8Array)) throw new Error("embedding vector was not stored as bytes");
 	return new Float32Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
@@ -223,6 +244,68 @@ describe("native embedding smoke teardown", () => {
 
 describe("compiled native embedding runtime", () => {
 	const smoke = enabled ? test : test.skip;
+
+	smoke(
+		"dispatches the embedded DB owner through the compiled binary",
+		async () => {
+			const binary = nativeSmokeBinary();
+			if (!existsSync(binary)) {
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+			}
+			const directory = tempDir();
+			const dbPath = join(directory, "memory.db");
+			const database = new Database(dbPath);
+			database.close();
+			const child = spawn(binary, [], {
+				env: { ...process.env, SIGNET_DB_OWNER_DB_PATH: dbPath, SIGNET_TELEMETRY_OPTOUT: "1" },
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			children.push(child);
+			let output = "";
+			child.stdout.setEncoding("utf8");
+			child.stdout.on("data", (chunk: string) => {
+				output += chunk;
+			});
+			child.stderr.resume();
+
+			await waitForJsonEvent(outputText, (event) => event.type === "ready");
+			const now = Date.now();
+			child.stdin.write(
+				`${JSON.stringify({
+					type: "submit",
+					job: {
+						id: "native-db-owner-smoke",
+						operation: "smoke.read",
+						lane: "read",
+						enqueuedAt: now,
+						deadlineAt: now + 5_000,
+						estimatedWorkUnits: 1,
+						cancellation: "pending",
+						request: { kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+					},
+				})}\n`,
+			);
+			const result = await waitForJsonEvent(
+				outputText,
+				(event) => event.type === "result" && event.jobId === "native-db-owner-smoke",
+			);
+			expect(result).toMatchObject({
+				type: "result",
+				jobId: "native-db-owner-smoke",
+				outcome: "completed",
+				result: [{ value: 1 }],
+			});
+
+			const closed = new Promise<number | null>((resolve) => child.once("close", resolve));
+			child.stdin.write('{"type":"shutdown"}\n');
+			expect(await closed).toBe(0);
+
+			function outputText(): string {
+				return output;
+			}
+		},
+		60_000,
+	);
 
 	smoke(
 		"serves embedded dashboard assets, connector assets, and fresh workspace migrations",

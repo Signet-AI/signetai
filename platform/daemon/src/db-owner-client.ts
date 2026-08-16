@@ -111,12 +111,17 @@ export interface DbOwnerClientOptions {
 	readonly startupTimeoutMs?: number;
 }
 
-function defaultWorkerPath(): string {
-	const embedded = resolveEmbeddedWorkerPath("db-owner-worker");
-	if (embedded !== null) return embedded;
+function workerArguments(workerPath: string | undefined): readonly string[] {
+	if (workerPath !== undefined) return [workerPath];
+	if (resolveEmbeddedWorkerPath("db-owner-worker") !== null) {
+		// Compiled native binaries dispatch embedded workers through cli-native.ts.
+		// Passing the materialized .mjs path would make the binary treat it as a
+		// CLI command instead of entering the worker dispatcher.
+		return [];
+	}
 	const directory = dirname(fileURLToPath(import.meta.url));
 	const bundled = join(directory, "db-owner-worker.js");
-	return existsSync(bundled) ? bundled : join(directory, "db-owner-worker.ts");
+	return [existsSync(bundled) ? bundled : join(directory, "db-owner-worker.ts")];
 }
 
 function messageFromError(error: DbOwnerSerializedError): Error {
@@ -261,7 +266,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		startPromise = new Promise<void>((resolve, reject) => {
 			startupResolve = resolve;
 			startupReject = reject;
-			const owner = spawn(process.execPath, [options.workerPath ?? defaultWorkerPath()], {
+			const owner = spawn(process.execPath, workerArguments(options.workerPath), {
 				env: { ...process.env, SIGNET_DB_OWNER_DB_PATH: options.dbPath },
 				stdio: ["pipe", "pipe", "pipe"],
 			});
