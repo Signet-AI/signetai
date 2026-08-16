@@ -222,6 +222,14 @@ describe("GET /health (back-compat)", () => {
 		expect(typeof dbWriter.maxQueue).toBe("number");
 		expect(dbWriter.oldestWaitMs === null || typeof dbWriter.oldestWaitMs === "number").toBe(true);
 		expect(dbWriter.lastDurationMs === null || typeof dbWriter.lastDurationMs === "number").toBe(true);
+		const dbReader = body.dbReader as Record<string, unknown>;
+		expect(typeof dbReader.activeLeases).toBe("number");
+		expect(typeof dbReader.maxConnections).toBe("number");
+		expect(typeof dbReader.rejected).toBe("number");
+		expect(typeof dbReader.syncRejected).toBe("number");
+		const dbRuntime = body.dbRuntime as Record<string, unknown>;
+		expect(dbRuntime.queue).toBeDefined();
+		expect(dbRuntime.eventLoopLag).toBeDefined();
 		const resources = body.resources as Record<string, unknown>;
 		expect(typeof resources.rss).toBe("number");
 		expect(typeof resources.heapUsed).toBe("number");

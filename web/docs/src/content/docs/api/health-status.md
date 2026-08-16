@@ -38,6 +38,18 @@ and `GET /health/ready` for readiness.
     "timedOut": 0,
     "lastQueueWaitMs": 0
   },
+  "dbReader": {
+    "activeLeases": 2,
+    "maxConnections": 16,
+    "queued": 0,
+    "maxQueue": 64,
+    "oldestWaitMs": null,
+    "lastWaitMs": 0.4,
+    "rejected": 0,
+    "syncRejected": 0,
+    "cancelled": 0,
+    "timedOut": 0
+  },
   "dbRuntime": {
     "operations": {
       "read": { "count": 10, "p50Ms": 1.2, "p95Ms": 4.5, "p99Ms": 5.1, "maxMs": 5.1 },
@@ -51,7 +63,24 @@ and `GET /health/ready` for readiness.
     "rejected": 0,
     "timedOut": 0,
     "failed": 0,
-    "completed": 14
+    "completed": 14,
+    "eventLoopLag": {
+      "count": 20,
+      "p50Ms": 1.1,
+      "p95Ms": 3.2,
+      "p99Ms": 8.0,
+      "maxMs": 8.0
+    },
+    "queue": {
+      "readDepth": 0,
+      "readMaxDepth": 64,
+      "readOldestAgeMs": null,
+      "readActiveLeases": 2,
+      "writeDepth": 0,
+      "writeMaxDepth": 64,
+      "writeOldestAgeMs": null,
+      "writeActive": false
+    }
   },
   "shuttingDown": false,
   "updateAvailable": false,
@@ -71,6 +100,12 @@ and `GET /health/ready` for readiness.
   }
 }
 ```
+
+`dbReader` reports active read leases, FIFO waiter depth and age, bounded
+admission limits, and cancellation/rejection counts. `syncRejected` counts
+legacy synchronous read attempts rejected at the hard connection cap. The
+`dbRuntime.queue` snapshot reports current read/write depth, queue age, and
+active leases; `eventLoopLag` is the bounded independent event-loop sample.
 
 Memory resource values are MiB. On macOS, `physicalFootprint` and
 `peakPhysicalFootprint` come from `proc_pid_rusage` and include compressed
@@ -137,6 +172,30 @@ with a human-readable `reasons` list. Gates:
   "shuttingDown": false,
   "checks": {
     "db": true,
+    "dbReader": {
+      "activeLeases": 1,
+      "maxConnections": 16,
+      "queued": 0,
+      "maxQueue": 64,
+      "oldestWaitMs": null,
+      "lastWaitMs": 0.4,
+      "rejected": 0,
+      "syncRejected": 0,
+      "cancelled": 0,
+      "timedOut": 0
+    },
+    "dbRuntime": {
+      "queue": {
+        "readDepth": 0,
+        "readMaxDepth": 64,
+        "readOldestAgeMs": null,
+        "readActiveLeases": 1,
+        "writeDepth": 0,
+        "writeMaxDepth": 64,
+        "writeOldestAgeMs": null,
+        "writeActive": false
+      }
+    },
     "migrations": true,
     "embedding": {
       "provider": "ollama",

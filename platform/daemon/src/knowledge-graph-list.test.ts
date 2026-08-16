@@ -12,7 +12,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, getDbAccessor, initDbAccessor, MAX_READ_CONNECTIONS } from "./db-accessor";
 import {
 	getDependenciesFrom,
 	getDependenciesTo,
@@ -556,6 +556,28 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		expect(detail?.outgoingDependencyCount).toBe(2);
 		expect(detail?.incomingDependencyCount).toBe(1);
 		expect(detail?.dependencyCount).toBe(3);
+	});
+
+	test("releases the detail lease before nested structural reads", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity("e-hub", "Hub");
+
+		const requests = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
+			getKnowledgeEntityDetail(getDbAccessor(), "e-hub", "default"),
+		);
+		const completed = await Promise.race([
+			Promise.all(requests).then(
+				() => true,
+				() => false,
+			),
+			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+		]);
+		if (!completed) {
+			closeDbAccessor();
+			await Promise.allSettled(requests);
+		}
+		expect(completed).toBe(true);
 	});
 
 	test("returns null for unknown entity id", async () => {

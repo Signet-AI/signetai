@@ -1238,12 +1238,12 @@ export async function getKnowledgeEntityDetail(
 	entityId: string,
 	agentId: string,
 ): Promise<KnowledgeEntityDetail | null> {
-	return await accessor.withReadDbAsync(async (db) => {
+	const row = await accessor.withReadDbAsync((db) => {
 		// Scalar subqueries per count avoid GROUP BY materialization across
 		// the (LEFT JOIN aspects x attributes x dependencies) cartesian, which
 		// produces the same pathological shape as listKnowledgeEntities even
 		// when filtered to a single entity id. See Signet-AI/signetai#515.
-		const row = db
+		return db
 			.prepare(
 				`SELECT
 					e.*,
@@ -1293,23 +1293,23 @@ export async function getKnowledgeEntityDetail(
 				   AND COALESCE(e.status, 'active') = 'active'`,
 			)
 			.get(entityId, agentId) as Record<string, unknown> | undefined;
-
-		if (!row) return null;
-		const structuralDensity = await getStructuralDensity(accessor, entityId, agentId);
-		const incomingDependencyCount = Number(row.incoming_dependency_count ?? 0);
-		const outgoingDependencyCount = Number(row.outgoing_dependency_count ?? 0);
-
-		return {
-			entity: rowToEntity(row),
-			aspectCount: Number(row.aspect_count ?? 0),
-			attributeCount: Number(row.attribute_count ?? 0),
-			constraintCount: Number(row.constraint_count ?? 0),
-			dependencyCount: incomingDependencyCount + outgoingDependencyCount,
-			structuralDensity,
-			incomingDependencyCount,
-			outgoingDependencyCount,
-		};
 	});
+
+	if (!row) return null;
+	const structuralDensity = await getStructuralDensity(accessor, entityId, agentId);
+	const incomingDependencyCount = Number(row.incoming_dependency_count ?? 0);
+	const outgoingDependencyCount = Number(row.outgoing_dependency_count ?? 0);
+
+	return {
+		entity: rowToEntity(row),
+		aspectCount: Number(row.aspect_count ?? 0),
+		attributeCount: Number(row.attribute_count ?? 0),
+		constraintCount: Number(row.constraint_count ?? 0),
+		dependencyCount: incomingDependencyCount + outgoingDependencyCount,
+		structuralDensity,
+		incomingDependencyCount,
+		outgoingDependencyCount,
+	};
 }
 
 function readEntityAspectsWithCounts(db: ReadDb, entityId: string, agentId: string): readonly AspectWithCounts[] {
@@ -2205,7 +2205,7 @@ export async function getStructuralDensity(
 	entityId: string,
 	agentId: string,
 ): Promise<StructuralDensity> {
-	return await accessor.withReadDbAsync(async (db) => {
+	return await accessor.withReadDbAsync((db) => {
 		const aspects = db
 			.prepare(
 				`SELECT COUNT(*) as n FROM entity_aspects

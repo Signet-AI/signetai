@@ -178,6 +178,8 @@ export interface ReadPressure {
 	/** Most recent read lease wait. */
 	readonly lastWaitMs: number | null;
 	readonly rejected: number;
+	/** Number of synchronous legacy reads rejected at the connection cap. */
+	readonly syncRejected: number;
 	readonly cancelled: number;
 	readonly timedOut: number;
 }
@@ -223,6 +225,15 @@ export class DbReadQueueFullError extends Error {
 	constructor() {
 		super("Database read admission queue is full; retry after read pressure clears");
 		this.name = "DbReadQueueFullError";
+	}
+}
+
+export class DbReadAdmissionRejectedError extends Error {
+	readonly code = "DB_READ_ADMISSION_REJECTED" as const;
+
+	constructor(operation: string) {
+		super(`Database read admission rejected for ${operation}; retry after read pressure clears`);
+		this.name = "DbReadAdmissionRejectedError";
 	}
 }
 
@@ -293,8 +304,10 @@ export interface AsyncDbAccessor {
 	getDbRuntimePressure?(): DbRuntimePressure;
 
 	/** Async variant of withReadDb. The connection is held only for the
-	 * callback's database work and is admitted through a FIFO lease queue. */
-	withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>, options?: ReadAdmissionOptions): Promise<T>;
+	 * callback's database work and is admitted through a FIFO lease queue.
+	 * Callbacks that need unrelated async work must return their database result
+	 * first, then await that work after this method resolves. */
+	withReadDbAsync<T>(fn: (db: ReadDb) => T | Promise<T>, options?: ReadAdmissionOptions): Promise<T>;
 
 	/** Close all held connections. Safe to call multiple times. */
 	close(): void;
@@ -1292,6 +1305,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 	const readWaiters: ReadWaiter[] = [];
 	let lastReadWaitMs: number | null = null;
 	let readRejected = 0;
+	let readSyncRejected = 0;
 	let readCancelled = 0;
 	let readTimedOut = 0;
 
@@ -1329,6 +1343,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 		}
 		if (readInUse.size >= MAX_READ_CONNECTIONS) {
 			readRejected++;
+			readSyncRejected++;
 			recordDbOperation({
 				owner: "read",
 				operation,
@@ -1339,7 +1354,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 				estimatedWorkUnits: null,
 				outcome: "rejected",
 			});
-			throw new DbReadQueueFullError();
+			throw new DbReadAdmissionRejectedError(operation);
 		}
 		return openReadConnection();
 	}
@@ -1738,6 +1753,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 				oldestWaitMs: oldest ? Math.max(0, performance.now() - oldest.enqueuedAt) : null,
 				lastWaitMs: lastReadWaitMs,
 				rejected: readRejected,
+				syncRejected: readSyncRejected,
 				cancelled: readCancelled,
 				timedOut: readTimedOut,
 			};
@@ -1776,7 +1792,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			}
 		},
 
-		async withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>, options?: ReadAdmissionOptions): Promise<T> {
+		async withReadDbAsync<T>(fn: (db: ReadDb) => T | Promise<T>, options?: ReadAdmissionOptions): Promise<T> {
 			if (closed) throw new Error("DbAccessor is closed");
 			const startedAt = performance.now();
 			const lease = await acquireRead(options);

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import {
 	DbSpacePreflightError,
 	DbReadAdmissionCancelledError,
+	DbReadAdmissionRejectedError,
 	DbReadAdmissionTimeoutError,
 	DbWriteQueueFullError,
 	MAX_READ_CONNECTIONS,
@@ -244,6 +245,32 @@ describe("DbAccessor", () => {
 		releaseReaders();
 		await Promise.all(heldReaders);
 		expect(acc.getReadPressure?.().activeLeases).toBe(0);
+	});
+
+	test("synchronous legacy reads expose structured admission rejection at the cap", async () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		initDbAccessor(dbPath);
+		const acc = getDbAccessor();
+		const sync = acc as unknown as {
+			withReadDb<T>(fn: (db: import("./db-accessor").ReadDb) => T): T;
+		};
+		let releaseReaders: () => void = () => undefined;
+		const readersReleased = new Promise<void>((resolve) => {
+			releaseReaders = resolve;
+		});
+		const heldReaders = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
+			acc.withReadDbAsync(async () => {
+				await readersReleased;
+			}),
+		);
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(() => sync.withReadDb(() => undefined)).toThrow(DbReadAdmissionRejectedError);
+		expect(acc.getReadPressure?.()).toMatchObject({ rejected: 1, syncRejected: 1 });
+
+		releaseReaders();
+		await Promise.all(heldReaders);
 	});
 
 	test("close rejects queued async writes", async () => {

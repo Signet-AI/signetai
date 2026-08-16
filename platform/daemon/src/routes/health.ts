@@ -2,7 +2,7 @@ import type { SQLQueryBindings } from "bun:sqlite";
 import { type MigrationDb, hasPendingMigrations } from "@signet/core";
 import type { Hono } from "hono";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
-import { type ReadDb, type WritePressure, getDbAccessor } from "../db-accessor";
+import { type ReadDb, type ReadPressure, type WritePressure, getDbAccessor } from "../db-accessor";
 import { getDbRuntimeMetrics, getEventLoopLiveness } from "../db-observability";
 import {
 	QUEUE_MAX_DEAD_RATE,
@@ -182,15 +182,21 @@ export function mountHealthRoutes(app: Hono): void {
 		const us = getUpdateState();
 		let dbOk = false;
 		let dbWriter: WritePressure | null = null;
+		let dbReader: ReadPressure | null = null;
 		let dbRuntime = getDbRuntimeMetrics();
 		try {
 			const accessor = getDbAccessor();
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-				db.prepare("SELECT 1").get();
-				dbOk = true;
-			});
+			try {
+				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+				accessor.withReadDb((db: ReadDb) => {
+					db.prepare("SELECT 1").get();
+					dbOk = true;
+				});
+			} catch {
+				// Keep the structured admission outcome visible below.
+			}
 			dbWriter = accessor.getWritePressure?.() ?? null;
+			dbReader = accessor.getReadPressure?.() ?? null;
 			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
 		} catch {}
 
@@ -208,6 +214,7 @@ export function mountHealthRoutes(app: Hono): void {
 			agentsDir: AGENTS_DIR,
 			db: dbOk,
 			dbWriter,
+			dbReader,
 			dbRuntime,
 			databaseIntegrity,
 			shuttingDown,
@@ -236,17 +243,31 @@ export function mountHealthRoutes(app: Hono): void {
 
 		// db, migrations, and queue share one readonly connection.
 		let dbResult: { readonly migrationsOk: boolean; readonly queueHealth: QueueHealth } | null = null;
+		let dbReader: ReadPressure | null = null;
+		let dbRuntime = getDbRuntimeMetrics();
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			dbResult = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-				db.prepare("SELECT 1").get();
-				return {
-					migrationsOk: !hasPendingMigrations(readDbAsMigrationDb(db)),
-					queueHealth: getQueueHealth(db),
-				};
-			});
+			const accessor = getDbAccessor();
+			dbResult = await accessor.withReadDbAsync(
+				(db: ReadDb) => {
+					db.prepare("SELECT 1").get();
+					return {
+						migrationsOk: !hasPendingMigrations(readDbAsMigrationDb(db)),
+						queueHealth: getQueueHealth(db),
+					};
+				},
+				{ operation: "health.ready" },
+			);
+			dbReader = accessor.getReadPressure?.() ?? null;
+			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
 		} catch (err) {
 			reasons.push(`database unavailable: ${err instanceof Error ? err.message : String(err)}`);
+			try {
+				const accessor = getDbAccessor();
+				dbReader = accessor.getReadPressure?.() ?? null;
+				dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
+			} catch {
+				// The accessor may be unavailable while the database check fails.
+			}
 		}
 		const dbOk = dbResult !== null;
 		const migrationsOk = dbResult?.migrationsOk ?? false;
@@ -292,6 +313,8 @@ export function mountHealthRoutes(app: Hono): void {
 				shuttingDown,
 				checks: {
 					db: dbOk,
+					dbReader,
+					dbRuntime,
 					migrations: migrationsOk,
 					databaseIntegrity,
 					embedding: embedding.detail,
