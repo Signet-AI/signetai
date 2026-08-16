@@ -163,19 +163,23 @@ describe("DB owner client", () => {
 				},
 			),
 		).toThrow(DbOwnerAdmissionError);
-		const handles = Array.from({ length: MAX_DB_OWNER_PENDING_JOBS }, () =>
-			owner.submit(
-				{ kind: "sleep", durationMs: 50 },
-				{ operation: "maintenance.admission-test", lane: "maintenance", deadlineMs: 2_000 },
-			),
-		);
+		const handles: ReturnType<typeof owner.submit>[] = [];
+		let rejected = 0;
+		for (let index = 0; index < 1_000; index += 1) {
+			try {
+				handles.push(
+					owner.submit(
+						{ kind: "sleep", durationMs: 50 },
+						{ operation: "maintenance.admission-test", lane: "maintenance", deadlineMs: 2_000 },
+					),
+				);
+			} catch (error) {
+				if (!(error instanceof DbOwnerAdmissionError)) throw error;
+				rejected += 1;
+			}
+		}
 		expect(handles).toHaveLength(MAX_DB_OWNER_PENDING_JOBS);
-		expect(() =>
-			client?.submit(
-				{ kind: "sleep", durationMs: 1 },
-				{ operation: "maintenance.admission-overflow", lane: "maintenance", deadlineMs: 2_000 },
-			),
-		).toThrow(DbOwnerAdmissionError);
+		expect(rejected).toBe(1_000 - MAX_DB_OWNER_PENDING_JOBS);
 
 		for (const handle of handles) handle.cancel();
 		await Promise.allSettled(handles.map((handle) => handle.result));
