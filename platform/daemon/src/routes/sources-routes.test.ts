@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { addDiscordSource, addImportedSource, addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { dbOwnerBatch, ownerStatement } from "../db-owner-runtime";
 import { hashNormalizedBody } from "../memory-lineage";
 import type { NativeMemoryBridgeHandle, NativeMemoryBridgeOptions, NativeMemorySource } from "../native-memory-sources";
 import { indexSourceArtifactStructure } from "../source-artifact-graph";
@@ -21,7 +22,7 @@ import {
 import { registerImportRoutes } from "./import-routes";
 import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./sources-routes";
 import { setActiveTelemetry, type TelemetryCollector } from "../telemetry";
-import type { SourceIndexTelemetryInput } from "../source-lifecycle-telemetry";
+import { recordSourceConnected, type SourceIndexTelemetryInput } from "../source-lifecycle-telemetry";
 
 const originalFetch = globalThis.fetch;
 
@@ -1514,6 +1515,45 @@ describe("Sources routes", () => {
 		expect(body.source.id).toBe(added.source.id);
 		expect(body.purged).toBe(9);
 		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+	});
+
+	it("resumes deletion after a lifecycle owner failure without stranding source artifacts", async () => {
+		const added = addObsidianSource({ root: vault, name: "Retryable Vault" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		setActiveTelemetry({ enabled: true, record: () => {} } as unknown as TelemetryCollector);
+		await recordSourceConnected(added.source, "default");
+		setActiveTelemetry(undefined);
+		await dbOwnerBatch(
+			[
+				ownerStatement(
+					"CREATE TRIGGER reject_source_lifecycle_delete BEFORE DELETE ON source_lifecycle_state BEGIN SELECT RAISE(ABORT, 'injected lifecycle owner failure'); END",
+				),
+			],
+			{ operation: "test.create-source-lifecycle-trigger", lane: "write" },
+		);
+
+		const app = makeApp({ purged: 11 });
+		const first = await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, { method: "DELETE" });
+		expect(first.status).toBe(500);
+		expect(loadSourcesConfig(dir).sources).toHaveLength(1);
+		expect(JSON.parse(readFileSync(join(dir, ".daemon", "source-deletion-tombstones.json"), "utf8"))).toHaveLength(1);
+
+		await dbOwnerBatch([ownerStatement("DROP TRIGGER reject_source_lifecycle_delete")], {
+			operation: "test.drop-source-lifecycle-trigger",
+			lane: "write",
+		});
+		const retry = await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, { method: "DELETE" });
+		expect(retry.status).toBe(200);
+		const retryBody = (await retry.json()) as { purged: number; source: { id: string } };
+		expect(retryBody).toMatchObject({ purged: 11, source: { id: added.source.id } });
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+		expect(JSON.parse(readFileSync(join(dir, ".daemon", "source-deletion-tombstones.json"), "utf8"))).toHaveLength(0);
+		expect(
+			getDbAccessor().withReadDb(
+				(db) => db.prepare("SELECT COUNT(*) AS count FROM source_lifecycle_state").get() as { count: number },
+			).count,
+		).toBe(0);
 	});
 
 	it("returns a clear 404 for disconnecting an unknown source", async () => {

@@ -463,16 +463,17 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const sourceAgentId = resolveDaemonAgentId();
 		if (source.kind === "import" && source.providerSettings?.agentId !== sourceAgentId)
 			return c.json({ error: "Source not found" }, 404);
+		// Keep the configured source until lifecycle state and provider artifacts
+		// are gone. The config is the durable retry handle when an owner or purge
+		// operation fails partway through deletion.
+		cancelSourceIndexJob(source.id);
+		recordSourceDeletionTombstone(source, sourceAgentId, agentsDir);
+		await removeSourceLifecycleState(source, sourceAgentId);
+		const provider = getSourceProvider(source.kind);
+		const purged = provider ? await purgeSource(provider, source, sourceAgentId, purgeNativeSource) : 0;
 		const result = removeSource(sourceId, agentsDir);
-		if (result.ok === false) return c.json({ error: result.error }, 404);
-		cancelSourceIndexJob(result.source.id);
-
-		await removeSourceLifecycleState(result.source, sourceAgentId);
-		recordSourceDeletionTombstone(result.source, sourceAgentId, agentsDir);
-		const provider = getSourceProvider(result.source.kind);
-		const purged = provider ? await purgeSource(provider, result.source, sourceAgentId, purgeNativeSource) : 0;
-		if (!isSourceIndexInFlight(result.source.id))
-			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
+		if (result.ok === false) return c.json({ error: result.error }, 500);
+		if (!isSourceIndexInFlight(source.id)) clearSourceDeletionTombstone(source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
 	});
 }
@@ -679,8 +680,8 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
  * not trigger this — the old placement crashed the daemon with "DbAccessor not
  * initialised" whenever a tombstone existed at boot.
  *
- * A failed purge is logged and its tombstone is kept for the next boot:
- * tombstone processing must never brick startup.
+ * A failed lifecycle cleanup or purge is logged and its tombstone is kept for
+ * the next boot: tombstone processing must never brick startup.
  */
 export async function cleanupSourceDeletionTombstones(
 	agentsDir = process.env.SIGNET_PATH ?? `${homedir()}/.agents`,
@@ -692,16 +693,15 @@ export async function cleanupSourceDeletionTombstones(
 	const remaining: SourceDeletionTombstone[] = [];
 	for (const tombstone of tombstones) {
 		if (configuredIds.has(tombstone.source.id)) continue;
-		await removeSourceLifecycleState(tombstone.source, tombstone.agentId);
 		const provider = getSourceProvider(tombstone.source.kind);
-		if (!provider) continue;
 		try {
-			await purgeSource(provider, tombstone.source, tombstone.agentId, purgeNativeSource);
+			await removeSourceLifecycleState(tombstone.source, tombstone.agentId);
+			if (provider) await purgeSource(provider, tombstone.source, tombstone.agentId, purgeNativeSource);
 		} catch (err) {
 			remaining.push(tombstone);
 			logger.warn(
 				"system",
-				`Source-deletion tombstone purge failed for source ${tombstone.source.id}; deferring to next boot`,
+				`Source-deletion tombstone cleanup failed for source ${tombstone.source.id}; deferring to next boot`,
 				{ error: err instanceof Error ? err.message : String(err) },
 			);
 		}
