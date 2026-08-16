@@ -90,6 +90,38 @@ export interface DbOwnerSourceGraphPurge {
 	readonly root: string;
 }
 
+export interface DbOwnerSourceArtifactFields {
+	readonly agentId: string;
+	readonly sourcePath: string;
+	readonly sourceSha256: string;
+	readonly sourceKind: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly sessionToken: string;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+	readonly manifestPath: string | null;
+	readonly sourceNodeId: string | null;
+	readonly memorySentence: string | null;
+	readonly memorySentenceQuality: string | null;
+	readonly content: string;
+	readonly updatedAt: string;
+	readonly sourceMtimeMs: number | null;
+	readonly sourceId: string | null;
+	readonly sourceRoot: string | null;
+	readonly sourceExternalId: string | null;
+	readonly sourceParentPath: string | null;
+	readonly sourceMetaJson: string | null;
+}
+
+export interface DbOwnerSourceArtifactUpsert {
+	readonly fields: DbOwnerSourceArtifactFields;
+	readonly conflictGuardSourceId?: boolean;
+}
+
 export type DbOwnerRequest =
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
 	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
@@ -108,6 +140,8 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_index"; readonly input: DbOwnerSourceGraphIndex }
 	| { readonly kind: "source_graph_file_purge"; readonly input: DbOwnerSourceGraphFilePurge }
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
+	| { readonly kind: "source_artifact_upsert"; readonly input: DbOwnerSourceArtifactUpsert }
+	| { readonly kind: "source_artifact_upsert_batch"; readonly input: readonly DbOwnerSourceArtifactUpsert[] }
 	| { readonly kind: "sleep"; readonly durationMs: number };
 
 export interface DbOwnerRecallPayload {

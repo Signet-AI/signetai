@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
@@ -70,6 +70,22 @@ describe("native memory sources", () => {
 		expect(row.source_kind).toBe("native_rollout_summary");
 		expect(row.harness).toBe("codex");
 		expect(row.content).toContain("Hermes bridge decision");
+	});
+
+	it("does not flatten owner read failures into legacy indexing", () => {
+		const source = readFileSync(new URL("./native-memory-sources.ts", import.meta.url), "utf8");
+		expect(source).toContain("Owner read failed for native artifact hash");
+		expect(source).toContain("Owner read failed for source graph existence");
+		expect(source).toContain("Owner read failed for source embedding existence");
+		expect(source).toContain("Owner read failed while listing native memory artifacts");
+		expect(source).toContain("throw err;");
+	});
+
+	it("keeps production native bridges graph-enabled", () => {
+		const daemon = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+		const routes = readFileSync(new URL("./routes/sources-routes.ts", import.meta.url), "utf8");
+		expect(daemon).toContain("sourceGraphEnabled: true");
+		expect(routes).toContain("sourceGraphEnabled: true");
 	});
 
 	it("heals legacy pre-epoch captured_at rows on rescan (#1149)", async () => {

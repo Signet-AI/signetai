@@ -2584,7 +2584,7 @@ async function main() {
 						pollIntervalMs: 10_000,
 						sourceCleanupEnabled: true,
 						shouldCleanupSource: (source) => source.harness !== "obsidian",
-						sourceGraphEnabled: false,
+						sourceGraphEnabled: true,
 						...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
 						onFileIndexed: (event) => {
 							const sourceId = event.source.sourceId;

@@ -16,7 +16,13 @@ import { yieldEvery } from "./async-yield";
 import type { WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
-import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import {
+	dbOwnerBatch,
+	dbOwnerQuery,
+	dbOwnerSourceArtifactUpsert,
+	dbOwnerSourceArtifactUpsertBatch,
+	ownerStatement,
+} from "./db-owner-runtime";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
 import { isMemoryContentContextEligible, upsertMemoryContentSafetyInTx } from "./memory-content-safety";
@@ -648,14 +654,13 @@ export function upsertMemoryArtifactInTx(
 	});
 }
 
-function upsertArtifactRowInTx(
-	db: Database,
+function artifactFieldsFromFrontmatter(
 	path: string,
 	frontmatter: Record<string, unknown>,
 	body: string,
 	sourceMtimeMs = statSync(path).mtimeMs,
 	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
-): void {
+): MemoryArtifactUpsertFields {
 	const agentId = typeof frontmatter.agent_id === "string" ? frontmatter.agent_id : "default";
 	const sourcePath =
 		options.trustSourcePath && typeof frontmatter.source_path === "string"
@@ -665,64 +670,54 @@ function upsertArtifactRowInTx(
 	const sessionId = typeof frontmatter.session_id === "string" ? frontmatter.session_id : sourcePath;
 	const sessionKey = typeof frontmatter.session_key === "string" ? frontmatter.session_key : null;
 	const sessionToken = sourcePath.match(/--([a-z2-7]{16})--/)?.[1] ?? deriveSessionToken(agentId, sessionId);
-	const project = typeof frontmatter.project === "string" ? frontmatter.project : null;
-	const harness = typeof frontmatter.harness === "string" ? frontmatter.harness : null;
-	// Corrupt pre-epoch timestamps (the DOS epoch 1980 sentinel from
-	// timestamp-stripping filesystems/sync layers) are stamped as the index
-	// time instead: a rolling `since` watermark can never reach 1980, so a
-	// captured_at below the floor would make the row invisible to Dreaming
-	// forever (#1149). The raw mtime still lands in source_mtime_ms.
 	const capturedAt =
 		typeof frontmatter.captured_at === "string" &&
 		timestampMillis(frontmatter.captured_at) >= Date.parse(EPISODIC_CAPTURED_AT_FLOOR)
 			? frontmatter.captured_at
 			: new Date().toISOString();
-	const startedAt = typeof frontmatter.started_at === "string" ? frontmatter.started_at : null;
-	const endedAt = typeof frontmatter.ended_at === "string" ? frontmatter.ended_at : null;
-	const manifestPath = typeof frontmatter.manifest_path === "string" ? frontmatter.manifest_path : null;
 	const rawSourceNodeId = typeof frontmatter.source_node_id === "string" ? frontmatter.source_node_id : null;
-	const sourceNodeId =
-		rawSourceNodeId === NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID && !options.trustNativeMarker ? null : rawSourceNodeId;
-	const sourceId = typeof frontmatter.source_id === "string" ? frontmatter.source_id : null;
-	const sourceRoot = typeof frontmatter.source_root === "string" ? frontmatter.source_root : null;
-	const sourceExternalId = typeof frontmatter.source_external_id === "string" ? frontmatter.source_external_id : null;
-	const sourceParentPath = typeof frontmatter.source_parent_path === "string" ? frontmatter.source_parent_path : null;
-	const sourceMetaJson = typeof frontmatter.source_meta_json === "string" ? frontmatter.source_meta_json : null;
-	const memorySentence = typeof frontmatter.memory_sentence === "string" ? frontmatter.memory_sentence : null;
-	const quality = typeof frontmatter.memory_sentence_quality === "string" ? frontmatter.memory_sentence_quality : null;
-	const sourceSha =
-		typeof frontmatter.content_sha256 === "string" ? frontmatter.content_sha256 : hashNormalizedBody(body);
-	const updatedAt = typeof frontmatter.updated_at === "string" ? frontmatter.updated_at : new Date().toISOString();
-	upsertMemoryArtifactInTx(
-		db,
-		{
-			agentId,
-			sourcePath,
-			sourceSha256: sourceSha,
-			sourceKind,
-			sessionId,
-			sessionKey,
-			sessionToken,
-			project,
-			harness,
-			capturedAt,
-			startedAt,
-			endedAt,
-			manifestPath,
-			sourceNodeId,
-			memorySentence,
-			memorySentenceQuality: quality,
-			content: body,
-			updatedAt,
-			sourceMtimeMs,
-			sourceId,
-			sourceRoot,
-			sourceExternalId,
-			sourceParentPath,
-			sourceMetaJson,
-		},
-		{ conflictGuardSourceId: false },
-	);
+	return {
+		agentId,
+		sourcePath,
+		sourceSha256:
+			typeof frontmatter.content_sha256 === "string" ? frontmatter.content_sha256 : hashNormalizedBody(body),
+		sourceKind,
+		sessionId,
+		sessionKey,
+		sessionToken,
+		project: typeof frontmatter.project === "string" ? frontmatter.project : null,
+		harness: typeof frontmatter.harness === "string" ? frontmatter.harness : null,
+		capturedAt,
+		startedAt: typeof frontmatter.started_at === "string" ? frontmatter.started_at : null,
+		endedAt: typeof frontmatter.ended_at === "string" ? frontmatter.ended_at : null,
+		manifestPath: typeof frontmatter.manifest_path === "string" ? frontmatter.manifest_path : null,
+		sourceNodeId:
+			rawSourceNodeId === NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID && !options.trustNativeMarker ? null : rawSourceNodeId,
+		memorySentence: typeof frontmatter.memory_sentence === "string" ? frontmatter.memory_sentence : null,
+		memorySentenceQuality:
+			typeof frontmatter.memory_sentence_quality === "string" ? frontmatter.memory_sentence_quality : null,
+		content: body,
+		updatedAt: typeof frontmatter.updated_at === "string" ? frontmatter.updated_at : new Date().toISOString(),
+		sourceMtimeMs,
+		sourceId: typeof frontmatter.source_id === "string" ? frontmatter.source_id : null,
+		sourceRoot: typeof frontmatter.source_root === "string" ? frontmatter.source_root : null,
+		sourceExternalId: typeof frontmatter.source_external_id === "string" ? frontmatter.source_external_id : null,
+		sourceParentPath: typeof frontmatter.source_parent_path === "string" ? frontmatter.source_parent_path : null,
+		sourceMetaJson: typeof frontmatter.source_meta_json === "string" ? frontmatter.source_meta_json : null,
+	};
+}
+
+function upsertArtifactRowInTx(
+	db: Database,
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	sourceMtimeMs = statSync(path).mtimeMs,
+	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
+): void {
+	upsertMemoryArtifactInTx(db, artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options), {
+		conflictGuardSourceId: false,
+	});
 }
 
 async function upsertArtifactRow(
@@ -735,6 +730,19 @@ async function upsertArtifactRow(
 	await runWriteTxAsync(getDbAccessor(), (db) => {
 		upsertArtifactRowInTx(db as WriteDb as Database, path, frontmatter, body, sourceMtimeMs, options);
 	});
+}
+
+async function upsertSourceArtifactRow(
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	sourceMtimeMs = statSync(path).mtimeMs,
+	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
+): Promise<void> {
+	await dbOwnerSourceArtifactUpsert(
+		{ fields: artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options) },
+		{ operation: "sources.artifacts.upsert", lane: "write", estimatedWorkUnits: 2 },
+	);
 }
 
 export async function indexExternalMemoryArtifact(input: {
@@ -755,7 +763,7 @@ export async function indexExternalMemoryArtifact(input: {
 	const capturedAt =
 		input.capturedAt ??
 		(Number.isFinite(input.sourceMtimeMs) ? new Date(input.sourceMtimeMs).toISOString() : new Date().toISOString());
-	await upsertArtifactRow(
+	await upsertSourceArtifactRow(
 		input.sourcePath,
 		{
 			agent_id: input.agentId?.trim() || "default",
@@ -801,7 +809,7 @@ export async function indexCanonicalTranscriptJsonl(input: {
 	const sessionToken = deriveSessionToken(input.agentId, input.sessionId);
 	const content = normalizeMarkdownBody(input.transcript);
 	const path = join(getAgentsDir(), transcriptPath);
-	await upsertArtifactRow(
+	await upsertSourceArtifactRow(
 		path,
 		{
 			agent_id: input.agentId,
@@ -847,43 +855,48 @@ export async function softDeleteArtifactRowsForPath(
 ): Promise<void> {
 	const sourcePath = relativePath(path);
 	const absolutePath = path.replace(/\\/g, "/");
-	await runWriteTxAsync(getDbAccessor(), (db) => {
-		const markDeleted = db.prepare(
-			`UPDATE memory_artifacts
-			 SET is_deleted = 1, deleted_at = ?, updated_at = ?
-			 WHERE source_path = ? AND COALESCE(is_deleted, 0) = 0`,
-		);
-		const markDeletedForAgent = db.prepare(
-			`UPDATE memory_artifacts
-			 SET is_deleted = 1, deleted_at = ?, updated_at = ?
-			 WHERE source_path = ? AND agent_id = ? AND COALESCE(is_deleted, 0) = 0`,
-		);
-		if (agentId) {
-			markDeletedForAgent.run(deletedAt, deletedAt, sourcePath, agentId);
-			markDeletedForAgent.run(deletedAt, deletedAt, absolutePath, agentId);
-			return;
-		}
-		markDeleted.run(deletedAt, deletedAt, sourcePath);
-		markDeleted.run(deletedAt, deletedAt, absolutePath);
-	});
-}
-
-function deleteArtifactRowsForPathInTx(db: Database, path: string, agentId: string | null): void {
-	const sourcePath = relativePath(path);
-	const absolutePath = path.replace(/\\/g, "/");
-	if (agentId) {
-		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(sourcePath, agentId);
-		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(absolutePath, agentId);
-		return;
-	}
-	db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(sourcePath);
-	db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(absolutePath);
+	const statements = agentId
+		? [
+				ownerStatement(
+					`UPDATE memory_artifacts
+					 SET is_deleted = 1, deleted_at = ?, updated_at = ?
+					 WHERE source_path = ? AND agent_id = ? AND COALESCE(is_deleted, 0) = 0`,
+					[deletedAt, deletedAt, sourcePath, agentId],
+				),
+				ownerStatement(
+					`UPDATE memory_artifacts
+					 SET is_deleted = 1, deleted_at = ?, updated_at = ?
+					 WHERE source_path = ? AND agent_id = ? AND COALESCE(is_deleted, 0) = 0`,
+					[deletedAt, deletedAt, absolutePath, agentId],
+				),
+			]
+		: [
+				ownerStatement(
+					`UPDATE memory_artifacts
+					 SET is_deleted = 1, deleted_at = ?, updated_at = ?
+					 WHERE source_path = ? AND COALESCE(is_deleted, 0) = 0`,
+					[deletedAt, deletedAt, sourcePath],
+				),
+				ownerStatement(
+					`UPDATE memory_artifacts
+					 SET is_deleted = 1, deleted_at = ?, updated_at = ?
+					 WHERE source_path = ? AND COALESCE(is_deleted, 0) = 0`,
+					[deletedAt, deletedAt, absolutePath],
+				),
+			];
+	await dbOwnerBatch(statements, { operation: "sources.artifacts.soft-delete", lane: "write", estimatedWorkUnits: 2 });
 }
 
 export async function deleteArtifactRowsForPath(path: string, agentId: string | null): Promise<void> {
-	await runWriteTxAsync(getDbAccessor(), (db) => {
-		deleteArtifactRowsForPathInTx(db as WriteDb as Database, path, agentId);
-	});
+	const sourcePath = relativePath(path);
+	const absolutePath = path.replace(/\\/g, "/");
+	const paths = [sourcePath, absolutePath];
+	const statements = paths.map((value) =>
+		agentId
+			? ownerStatement("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?", [value, agentId])
+			: ownerStatement("DELETE FROM memory_artifacts WHERE source_path = ?", [value]),
+	);
+	await dbOwnerBatch(statements, { operation: "sources.artifacts.delete", lane: "write", estimatedWorkUnits: 2 });
 }
 
 // Coalesce duplicate scoped reindexes, but serialize all scopes. A global
@@ -949,11 +962,12 @@ async function doReindex(agentId?: string): Promise<void> {
 	const flushUpsertBatch = async (): Promise<boolean> => {
 		if (pendingUpserts.length === 0) return false;
 		const batch = [...pendingUpserts];
-		await runWriteTxAsync(getDbAccessor(), (db) => {
-			for (const item of batch) {
-				upsertArtifactRowInTx(db as WriteDb as Database, item.path, item.frontmatter, item.body, item.mtime);
-			}
-		});
+		await dbOwnerSourceArtifactUpsertBatch(
+			batch.map((item) => ({
+				fields: artifactFieldsFromFrontmatter(item.path, item.frontmatter, item.body, item.mtime),
+			})),
+			{ operation: "sources.reindex.artifacts-upsert", lane: "write", estimatedWorkUnits: batch.length * 2 },
+		);
 		pendingUpserts.length = 0;
 		commitBatchCacheUpserts(batch);
 		return true;
@@ -961,10 +975,19 @@ async function doReindex(agentId?: string): Promise<void> {
 	const flushDeleteBatch = async (): Promise<boolean> => {
 		if (pendingDeletes.length === 0) return false;
 		const batch = [...pendingDeletes];
-		await runWriteTxAsync(getDbAccessor(), (db) => {
-			for (const item of batch) {
-				deleteArtifactRowsForPathInTx(db as WriteDb as Database, item.path, scope);
-			}
+		const statements = batch.flatMap((item) => {
+			const sourcePath = relativePath(item.path);
+			const absolutePath = item.path.replace(/\\/g, "/");
+			return [sourcePath, absolutePath].map((value) =>
+				scope
+					? ownerStatement("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?", [value, scope])
+					: ownerStatement("DELETE FROM memory_artifacts WHERE source_path = ?", [value]),
+			);
+		});
+		await dbOwnerBatch(statements, {
+			operation: "sources.reindex.artifacts-delete",
+			lane: "write",
+			estimatedWorkUnits: batch.length * 2,
 		});
 		pendingDeletes.length = 0;
 		commitBatchCacheDeletes(batch);

@@ -572,7 +572,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 			agentsDir: input.agentsDir,
 			yieldEveryFiles: 1,
 			sourceCleanupEnabled: false,
-			sourceGraphEnabled: false,
+			sourceGraphEnabled: true,
 			...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
 			onFileIndexed: (event) => {
 				if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;

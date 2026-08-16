@@ -104,6 +104,24 @@ describe("memory-lineage", () => {
 		expect(tok.encode(rendered).length).toBeLessThanOrEqual(MEMORY_PROJECTION_MAX_TOKENS);
 	});
 
+	it("routes active artifact indexing and deletion writes through the owner", () => {
+		const source = readFileSync(new URL("./memory-lineage.ts", import.meta.url), "utf8");
+		const indexing = source.slice(
+			source.indexOf("export async function indexExternalMemoryArtifact"),
+			source.indexOf("export async function indexCanonicalTranscriptJsonl"),
+		);
+		const deletion = source.slice(
+			source.indexOf("export async function softDeleteArtifactRowsForPath"),
+			source.indexOf("// Coalesce duplicate scoped reindexes"),
+		);
+		expect(source).toContain("dbOwnerSourceArtifactUpsert");
+		expect(indexing).not.toContain("runWriteTxAsync");
+		expect(deletion).toContain("dbOwnerBatch");
+		expect(deletion).not.toContain("getDbAccessor");
+		expect(source).toContain("dbOwnerSourceArtifactUpsertBatch");
+		expect(source).toContain('operation: "sources.reindex.artifacts-delete"');
+	});
+
 	it("runs projection purge at most once per workspace state", async () => {
 		await addSummary({
 			sessionId: "drop-once",

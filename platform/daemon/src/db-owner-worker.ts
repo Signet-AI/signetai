@@ -7,6 +7,7 @@ import {
 	buildObsidianMarkdownPathIndex,
 	purgeObsidianSourceFileStructureInTx,
 } from "./obsidian-source-graph";
+import { upsertMemoryArtifactInTx } from "./memory-lineage";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
 import type {
 	DbOwnerCommand,
@@ -213,6 +214,33 @@ export function runDbOwnerWorker(): void {
 		}
 	}
 
+	function executeSourceArtifactUpsert(
+		request: Extract<
+			DbOwnerJob["request"],
+			{ readonly kind: "source_artifact_upsert" | "source_artifact_upsert_batch" }
+		>,
+	): { readonly upserted: number } {
+		const inputs = request.kind === "source_artifact_upsert" ? [request.input] : request.input;
+		if (inputs.length === 0 || inputs.length > 50) throw new Error("DB owner artifact batch must contain 1 to 50 rows");
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			for (const input of inputs) {
+				upsertMemoryArtifactInTx(db as unknown as BunDatabase, input.fields, {
+					conflictGuardSourceId: input.conflictGuardSourceId,
+				});
+			}
+			db.exec("COMMIT");
+			return { upserted: inputs.length };
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				// The original error is the actionable failure.
+			}
+			throw error;
+		}
+	}
+
 	function executeSourceGraph(
 		request: Extract<
 			DbOwnerJob["request"],
@@ -315,6 +343,8 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements);
 		if (job.request.kind === "batch") return executeBatch(job.request.statements, job.request.requireChanges === true);
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request);
+		if (job.request.kind === "source_artifact_upsert" || job.request.kind === "source_artifact_upsert_batch")
+			return executeSourceArtifactUpsert(job.request);
 		if (
 			job.request.kind === "source_graph_index" ||
 			job.request.kind === "source_graph_file_purge" ||

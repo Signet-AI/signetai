@@ -576,8 +576,11 @@ async function nativeArtifactContentHash(filePath: string, agentId: string): Pro
 			{ operation: "sources.artifact-hash", lane: "read" },
 		);
 		return row?.source_sha256 ?? null;
-	} catch {
-		return null;
+	} catch (error) {
+		throw new Error(
+			`Owner read failed for native artifact hash at ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
+		);
 	}
 }
 
@@ -593,8 +596,11 @@ async function nativeArtifactCapturedAt(filePath: string, agentId: string): Prom
 			{ operation: "sources.artifact-captured-at", lane: "read" },
 		);
 		return row?.captured_at ?? null;
-	} catch {
-		return null;
+	} catch (error) {
+		throw new Error(
+			`Owner read failed for native artifact timestamp at ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
+		);
 	}
 }
 
@@ -631,10 +637,15 @@ async function healSentinelCapturedAt(
 			was: capturedAt,
 		});
 	} catch (err) {
-		logger.warn("watcher", "Could not heal pre-epoch captured_at", {
-			path: filePath,
-			error: err instanceof Error ? err.message : String(err),
-		});
+		logger.error(
+			"watcher",
+			"Could not heal pre-epoch captured_at",
+			err instanceof Error ? err : new Error(String(err)),
+			{
+				path: filePath,
+			},
+		);
+		throw err;
 	}
 }
 
@@ -653,9 +664,12 @@ async function obsidianGraphExists(agentId: string, sourceId: string, filePath: 
 			),
 			{ operation: "sources.graph-exists", lane: "read" },
 		);
-		return row !== null;
-	} catch {
-		return false;
+		return row != null;
+	} catch (error) {
+		throw new Error(
+			`Owner read failed for source graph existence at ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
+		);
 	}
 }
 
@@ -686,8 +700,11 @@ async function obsidianEmbeddingsExist(input: {
 			{ operation: "sources.embeddings-exists", lane: "read" },
 		);
 		return new Set(rows.map((row) => row.source_id)).size === chunks.length;
-	} catch {
-		return false;
+	} catch (error) {
+		throw new Error(
+			`Owner read failed for source embedding existence at ${input.filePath}: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
+		);
 	}
 }
 
@@ -718,13 +735,11 @@ async function activeNativeArtifactPaths(source: NativeMemorySource, agentId: st
 			{ operation: "sources.active-artifact-paths", lane: "read" },
 		);
 		return rows.map((row) => row.source_path);
-	} catch (err) {
-		logger.warn("watcher", "Failed listing active native memory artifacts", {
-			harness: source.harness,
-			root: source.root,
-			error: err instanceof Error ? err.message : String(err),
-		});
-		return [];
+	} catch (error) {
+		throw new Error(
+			`Owner read failed while listing native memory artifacts for ${source.harness}: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
+		);
 	}
 }
 
@@ -946,12 +961,16 @@ export async function indexNativeMemoryFile(
 		}
 		return artifactChanged || semanticIndexed;
 	} catch (err) {
-		logger.warn("watcher", "Failed indexing native memory artifact", {
-			harness: source.harness,
-			path: filePath,
-			error: err instanceof Error ? err.message : String(err),
-		});
-		return false;
+		logger.error(
+			"watcher",
+			"Failed indexing native memory artifact",
+			err instanceof Error ? err : new Error(String(err)),
+			{
+				harness: source.harness,
+				path: filePath,
+			},
+		);
+		throw err;
 	}
 }
 

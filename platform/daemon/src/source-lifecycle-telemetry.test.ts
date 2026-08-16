@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
 	flushPendingSourceLifecycleTelemetry,
 	sourceClassForKind,
@@ -58,5 +59,16 @@ describe("source lifecycle telemetry contract", () => {
 		await drain;
 		expect(settled).toBe(true);
 		expect(flushed).toBe(true);
+	});
+
+	it("keeps lifecycle persistence on the owner and does not swallow failures", () => {
+		const source = readFileSync(new URL("./source-lifecycle-telemetry.ts", import.meta.url), "utf8");
+		expect(source).toContain("dbOwnerBatch");
+		expect(source).toContain("dbOwnerQuery");
+		expect(source).not.toContain("getDbAccessor");
+		expect(source).not.toContain("withWriteTxAsync");
+		expect(source).not.toContain("withReadDbAsync");
+		expect(source).not.toContain("catch {\n		// Best effort");
+		expect(source).toContain("rethrowLifecycleFailure");
 	});
 });

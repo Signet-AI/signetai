@@ -14,6 +14,7 @@ import type {
 	DbOwnerSourceGraphIndex,
 	DbOwnerSourceGraphPurge,
 	DbOwnerSourceSnapshotImport,
+	DbOwnerSourceArtifactUpsert,
 	DbOwnerStatement,
 } from "./db-owner-protocol";
 
@@ -145,6 +146,30 @@ export async function dbOwnerSourceSnapshotImport(
 		owner,
 		{ kind: "source_snapshot_import", input },
 		{ ...options, lane: options.lane ?? "write" },
+	);
+}
+
+export async function dbOwnerSourceArtifactUpsert(
+	input: DbOwnerSourceArtifactUpsert,
+	options: DbOwnerSqlOptions,
+): Promise<{ readonly upserted: number }> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission<{ readonly upserted: number }>(
+		owner,
+		{ kind: "source_artifact_upsert", input },
+		{ ...options, lane: options.lane ?? "write" },
+	);
+}
+
+export async function dbOwnerSourceArtifactUpsertBatch(
+	input: readonly DbOwnerSourceArtifactUpsert[],
+	options: DbOwnerSqlOptions,
+): Promise<{ readonly upserted: number }> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission<{ readonly upserted: number }>(
+		owner,
+		{ kind: "source_artifact_upsert_batch", input },
+		{ ...options, lane: options.lane ?? "write", estimatedWorkUnits: options.estimatedWorkUnits ?? input.length },
 	);
 }
 

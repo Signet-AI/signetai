@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SignetSourceEntry, SignetSourceKind } from "@signet/core";
-import { getDbAccessor } from "./db-accessor";
-import type { WriteDb } from "./db-accessor";
+import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { logger } from "./logger";
 import { getActiveTelemetry } from "./telemetry";
 
 export const SOURCE_LIFECYCLE_EVENT = "source.lifecycle" as const;
@@ -120,10 +120,17 @@ export async function flushPendingSourceLifecycleTelemetry(): Promise<void> {
 	}
 }
 
-async function writeTx<T>(fn: (db: WriteDb) => T): Promise<T> {
-	const writer = getDbAccessor().withWriteTxAsync;
-	if (!writer) throw new Error("async write API is unavailable");
-	return writer(fn);
+async function writeBatch(
+	statements: readonly ReturnType<typeof ownerStatement>[],
+	operation: string,
+): Promise<readonly unknown[]> {
+	return await dbOwnerBatch(statements, { operation, lane: "write", estimatedWorkUnits: statements.length });
+}
+
+function rethrowLifecycleFailure(operation: string, error: unknown): never {
+	const failure = error instanceof Error ? error : new Error(String(error));
+	logger.error("telemetry", `Source lifecycle ${operation} failed`, failure);
+	throw failure;
 }
 
 function boundedCount(value: number): number {
@@ -234,19 +241,7 @@ function emit(properties: Readonly<Record<string, string | number | boolean | nu
 	getActiveTelemetry()?.record(SOURCE_LIFECYCLE_EVENT, properties);
 }
 
-function readState(
-	db: { prepare: (sql: string) => { get: (...args: unknown[]) => unknown } },
-	agentId: string,
-	key: string,
-): SourceLifecycleState | null {
-	const row = db
-		.prepare(`
-		SELECT source_key, source_class, mode, connected_at, first_indexed_at,
-			first_searchable_at, first_recall_at, last_success_at,
-			last_freshness_state, last_freshness_event_at
-		FROM source_lifecycle_state WHERE agent_id = ? AND source_key = ?
-	`)
-		.get(agentId, key) as Record<string, unknown> | undefined;
+function readState(row: Record<string, unknown> | null | undefined): SourceLifecycleState | null {
 	if (!row) return null;
 	return {
 		sourceKey: String(row.source_key),
@@ -267,21 +262,19 @@ function readState(
 	};
 }
 
-function ensureState(
-	db: { prepare: (sql: string) => { run: (...args: unknown[]) => { changes?: number } } },
-	agentId: string,
-	source: SourceLifecycleSource,
-	mode: SourceMode,
-): { readonly key: string; readonly inserted: boolean } {
-	const key = sourceKey(sourceIdentity(source));
-	const result = db
-		.prepare(`
-			INSERT OR IGNORE INTO source_lifecycle_state
-			(agent_id, source_key, source_class, mode, connected_at)
-			VALUES (?, ?, ?, ?, NULL)
-		`)
-		.run(agentId, key, sourceClassForKind(String(source.kind)), mode);
-	return { key, inserted: (result.changes ?? 0) > 0 };
+async function readLifecycleState(agentId: string, key: string): Promise<SourceLifecycleState | null> {
+	const row = await dbOwnerQuery<Record<string, unknown> | null>(
+		ownerStatement(
+			`SELECT source_key, source_class, mode, connected_at, first_indexed_at,
+				first_searchable_at, first_recall_at, last_success_at,
+				last_freshness_state, last_freshness_event_at
+			 FROM source_lifecycle_state WHERE agent_id = ? AND source_key = ?`,
+			[agentId, key],
+			"get",
+		),
+		{ operation: "sources.lifecycle.state-read", lane: "read" },
+	);
+	return readState(row);
 }
 
 export async function recordSourceConnected(
@@ -291,23 +284,29 @@ export async function recordSourceConnected(
 ): Promise<void> {
 	if (!getActiveTelemetry()?.enabled) return;
 	const now = new Date().toISOString();
+	const key = sourceKey(sourceIdentity(source));
 	try {
-		let claimed = false;
-		await writeTx((db) => {
-			const state = ensureState(db, agentId, source, mode);
-			const result = db
-				.prepare(`
-				UPDATE source_lifecycle_state SET connected_at = ?, mode = ?
-				WHERE agent_id = ? AND source_key = ? AND connected_at IS NULL
-			`)
-				.run(now, mode, agentId, state.key);
-			claimed = (result.changes ?? 0) > 0;
-		});
-		if (claimed) {
+		const results = await writeBatch(
+			[
+				ownerStatement(
+					`INSERT OR IGNORE INTO source_lifecycle_state
+					 (agent_id, source_key, source_class, mode, connected_at)
+					 VALUES (?, ?, ?, ?, NULL)`,
+					[agentId, key, sourceClassForKind(String(source.kind)), mode],
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET connected_at = ?, mode = ?
+					 WHERE agent_id = ? AND source_key = ? AND connected_at IS NULL`,
+					[now, mode, agentId, key],
+				),
+			],
+			"sources.lifecycle.connected",
+		);
+		const claimed = Number((results[1] as { readonly changes?: number }).changes ?? 0) > 0;
+		if (claimed)
 			emit({ phase: "connect", outcome: "success", sourceClass: sourceClassForKind(String(source.kind)), mode });
-		}
-	} catch {
-		// Telemetry is best effort and must not affect source configuration.
+	} catch (error) {
+		rethrowLifecycleFailure("connected", error);
 	}
 }
 
@@ -327,61 +326,53 @@ export function recordSourceConnectionFailure(kind: string, error: unknown, mode
 }
 
 async function sourceSizeBytes(source: SourceLifecycleSource, agentId: string): Promise<number | undefined> {
+	const rootPrefix = `${(source.root ?? "").replace(/\\/g, "/").replace(/\/$/, "")}/`;
+	const legacyObsidianClause =
+		source.kind === "obsidian"
+			? "OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?)"
+			: "";
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const rootPrefix = `${(source.root ?? "").replace(/\\/g, "/").replace(/\/$/, "")}/`;
-			const legacyObsidianClause =
-				source.kind === "obsidian"
-					? "OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?)"
-					: "";
-			const row = db
-				.prepare(`
-				SELECT SUM(length(content)) AS bytes
-				FROM memory_artifacts
-				WHERE agent_id = ?
-				  AND (
-					source_id = ?
-					${legacyObsidianClause}
-				  )
-				  AND COALESCE(is_deleted, 0) = 0
-			`)
-				.get(agentId, source.id, ...(source.kind === "obsidian" ? [rootPrefix, `${rootPrefix}\uffff`] : [])) as
-				| { bytes?: unknown }
-				| undefined;
-			return typeof row?.bytes === "number" && Number.isFinite(row.bytes) ? row.bytes : undefined;
-		});
-	} catch {
-		return undefined;
+		const row = await dbOwnerQuery<{ readonly bytes?: unknown } | null>(
+			ownerStatement(
+				`SELECT SUM(length(content)) AS bytes
+				 FROM memory_artifacts
+				 WHERE agent_id = ? AND (source_id = ? ${legacyObsidianClause})
+				   AND COALESCE(is_deleted, 0) = 0`,
+				[agentId, source.id, ...(source.kind === "obsidian" ? [rootPrefix, `${rootPrefix}\\uffff`] : [])],
+				"get",
+			),
+			{ operation: "sources.lifecycle.size-read", lane: "read" },
+		);
+		return typeof row?.bytes === "number" && Number.isFinite(row.bytes) ? row.bytes : undefined;
+	} catch (error) {
+		rethrowLifecycleFailure("size-read", error);
 	}
 }
 
 export async function sourceHasSearchableArtifacts(source: SignetSourceEntry, agentId: string): Promise<boolean> {
 	if (!getActiveTelemetry()?.enabled) return false;
+	const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
+	const legacyObsidianClause =
+		source.kind === "obsidian"
+			? "OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?)"
+			: "";
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
-			const legacyObsidianClause =
-				source.kind === "obsidian"
-					? "OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?)"
-					: "";
-			const row = db
-				.prepare(
-					`SELECT 1 AS n FROM memory_artifacts
-					 WHERE agent_id = ?
-					   AND (
-						 source_id = ?
-						 ${legacyObsidianClause}
-					   )
-					   AND COALESCE(is_deleted, 0) = 0
-					   AND COALESCE(source_kind, '') NOT LIKE 'source_%_failure'
-					   AND COALESCE(source_kind, '') NOT LIKE 'source_%_checkpoint'
-					 LIMIT 1`,
-				)
-				.get(agentId, source.id, ...(source.kind === "obsidian" ? [rootPrefix, `${rootPrefix}\uffff`] : []));
-			return Boolean(row);
-		});
-	} catch {
-		return false;
+		const row = await dbOwnerQuery<Record<string, unknown> | null>(
+			ownerStatement(
+				`SELECT 1 AS n FROM memory_artifacts
+				 WHERE agent_id = ? AND (source_id = ? ${legacyObsidianClause})
+				   AND COALESCE(is_deleted, 0) = 0
+				   AND COALESCE(source_kind, '') NOT LIKE 'source_%_failure'
+				   AND COALESCE(source_kind, '') NOT LIKE 'source_%_checkpoint'
+				 LIMIT 1`,
+				[agentId, source.id, ...(source.kind === "obsidian" ? [rootPrefix, `${rootPrefix}\\uffff`] : [])],
+				"get",
+			),
+			{ operation: "sources.lifecycle.searchable-read", lane: "read" },
+		);
+		return row != null;
+	} catch (error) {
+		rethrowLifecycleFailure("searchable-read", error);
 	}
 }
 
@@ -413,48 +404,58 @@ export async function recordSourceIndexOperation(input: SourceIndexTelemetryInpu
 	let freshness: { readonly state: SourceFreshnessState; readonly lag: SourceLagBucket } | null = null;
 
 	try {
-		await writeTx((db) => {
-			const ensured = ensureState(db, input.agentId, input.source, mode);
-			const before = readState(db, input.agentId, ensured.key);
-			if (accepted > 0 && !before?.firstIndexedAt) firstIndexed = true;
-			if (searchable && !before?.firstSearchableAt) firstSearchable = true;
-			const success = input.outcome === "success" && input.updateFreshness !== false;
-			const nextSuccessAt = success ? nowIso : (before?.lastSuccessAt ?? null);
-			const freshnessState: SourceFreshnessState = success ? "healthy" : before?.lastSuccessAt ? "stale" : "unknown";
-			const lagMs = before?.lastSuccessAt ? now.getTime() - Date.parse(before.lastSuccessAt) : null;
-			if (
-				mode === "recurring" &&
-				input.updateFreshness !== false &&
-				freshnessEventNeeded(before, freshnessState, now.getTime())
-			) {
-				freshness = { state: freshnessState, lag: sourceLagBucket(success ? 0 : lagMs) };
-			}
-			db.prepare(`
-				UPDATE source_lifecycle_state SET
-					mode = ?,
-					first_indexed_at = CASE WHEN ? = 1 AND first_indexed_at IS NULL THEN ? ELSE first_indexed_at END,
-					first_searchable_at = CASE WHEN ? = 1 AND first_searchable_at IS NULL THEN ? ELSE first_searchable_at END,
-					last_success_at = ?,
-					last_freshness_state = CASE WHEN ? = 'recurring' THEN ? ELSE last_freshness_state END,
-					last_freshness_event_at = CASE WHEN ? = 1 THEN ? ELSE last_freshness_event_at END
-				WHERE agent_id = ? AND source_key = ?
-			`).run(
-				mode,
-				firstIndexed ? 1 : 0,
-				nowIso,
-				firstSearchable ? 1 : 0,
-				nowIso,
-				nextSuccessAt,
-				mode,
-				freshness?.state ?? before?.lastFreshnessState ?? null,
-				freshness ? 1 : 0,
-				freshness ? nowIso : null,
-				input.agentId,
-				ensured.key,
-			);
-		});
-	} catch {
-		// A missing or unavailable DB must not turn a completed source sync into a failure.
+		const key = sourceKey(sourceIdentity(input.source));
+		const before = await readLifecycleState(input.agentId, key);
+		if (accepted > 0 && !before?.firstIndexedAt) firstIndexed = true;
+		if (searchable && !before?.firstSearchableAt) firstSearchable = true;
+		const success = input.outcome === "success" && input.updateFreshness !== false;
+		const nextSuccessAt = success ? nowIso : (before?.lastSuccessAt ?? null);
+		const freshnessState: SourceFreshnessState = success ? "healthy" : before?.lastSuccessAt ? "stale" : "unknown";
+		const lagMs = before?.lastSuccessAt ? now.getTime() - Date.parse(before.lastSuccessAt) : null;
+		if (
+			mode === "recurring" &&
+			input.updateFreshness !== false &&
+			freshnessEventNeeded(before, freshnessState, now.getTime())
+		) {
+			freshness = { state: freshnessState, lag: sourceLagBucket(success ? 0 : lagMs) };
+		}
+		await writeBatch(
+			[
+				ownerStatement(
+					`INSERT OR IGNORE INTO source_lifecycle_state
+					 (agent_id, source_key, source_class, mode, connected_at)
+					 VALUES (?, ?, ?, ?, NULL)`,
+					[input.agentId, key, sourceClass, mode],
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET
+					 mode = ?,
+					 first_indexed_at = CASE WHEN ? = 1 AND first_indexed_at IS NULL THEN ? ELSE first_indexed_at END,
+					 first_searchable_at = CASE WHEN ? = 1 AND first_searchable_at IS NULL THEN ? ELSE first_searchable_at END,
+					 last_success_at = ?,
+					 last_freshness_state = CASE WHEN ? = 'recurring' THEN ? ELSE last_freshness_state END,
+					 last_freshness_event_at = CASE WHEN ? = 1 THEN ? ELSE last_freshness_event_at END
+					 WHERE agent_id = ? AND source_key = ?`,
+					[
+						mode,
+						firstIndexed ? 1 : 0,
+						nowIso,
+						firstSearchable ? 1 : 0,
+						nowIso,
+						nextSuccessAt,
+						mode,
+						freshness?.state ?? before?.lastFreshnessState ?? null,
+						freshness ? 1 : 0,
+						freshness ? nowIso : null,
+						input.agentId,
+						key,
+					],
+				),
+			],
+			"sources.lifecycle.index",
+		);
+	} catch (error) {
+		rethrowLifecycleFailure("index", error);
 	}
 
 	emit({
@@ -534,26 +535,37 @@ export async function recordSourceFreshness(source: SignetSourceEntry, agentId: 
 	let lag: SourceLagBucket = "unknown";
 	let suppressed = false;
 	try {
-		await writeTx((db) => {
-			const ensured = ensureState(db, agentId, source, "recurring");
-			const state = readState(db, agentId, ensured.key);
-			if (state?.lastFreshnessEventAt) {
-				const lastEvent = Date.parse(state.lastFreshnessEventAt);
-				if (Number.isFinite(lastEvent) && now.getTime() - lastEvent < FRESHNESS_EVENT_INTERVAL_MS) {
-					suppressed = true;
-					return;
-				}
+		const key = sourceKey(sourceIdentity(source));
+		const state = await readLifecycleState(agentId, key);
+		if (state?.lastFreshnessEventAt) {
+			const lastEvent = Date.parse(state.lastFreshnessEventAt);
+			if (Number.isFinite(lastEvent) && now.getTime() - lastEvent < FRESHNESS_EVENT_INTERVAL_MS) {
+				suppressed = true;
 			}
+		}
+		if (!suppressed) {
 			const previous = state?.lastSuccessAt ? Date.parse(state.lastSuccessAt) : Number.NaN;
 			lag = sourceLagBucket(Number.isFinite(previous) ? now.getTime() - previous : null);
-			db.prepare(`
-				UPDATE source_lifecycle_state
-				SET mode = 'recurring', last_success_at = ?, last_freshness_state = 'healthy', last_freshness_event_at = ?
-				WHERE agent_id = ? AND source_key = ?
-			`).run(nowIso, nowIso, agentId, ensured.key);
-		});
-	} catch {
-		// Best effort.
+			await writeBatch(
+				[
+					ownerStatement(
+						`INSERT OR IGNORE INTO source_lifecycle_state
+							 (agent_id, source_key, source_class, mode, connected_at)
+							 VALUES (?, ?, ?, 'recurring', NULL)`,
+						[agentId, key, sourceClassForKind(String(source.kind))],
+					),
+					ownerStatement(
+						`UPDATE source_lifecycle_state
+							 SET mode = 'recurring', last_success_at = ?, last_freshness_state = 'healthy', last_freshness_event_at = ?
+							 WHERE agent_id = ? AND source_key = ?`,
+						[nowIso, nowIso, agentId, key],
+					),
+				],
+				"sources.lifecycle.freshness",
+			);
+		}
+	} catch (error) {
+		rethrowLifecycleFailure("freshness", error);
 	}
 	if (suppressed) return;
 	emit({
@@ -574,25 +586,35 @@ export async function recordSourceReadiness(source: SignetSourceEntry, agentId: 
 	let firstIndexed = false;
 	let firstSearchable = false;
 	try {
-		await writeTx((db) => {
-			const ensured = ensureState(db, agentId, source, "recurring");
-			const state = readState(db, agentId, ensured.key);
-			if (state?.firstIndexedAt && state.firstSearchableAt) {
-				readinessClaimedInProcess.add(processKey);
-				return;
-			}
-			firstIndexed = !state?.firstIndexedAt;
-			firstSearchable = !state?.firstSearchableAt;
-			db.prepare(`
-				UPDATE source_lifecycle_state SET
-					mode = 'recurring',
-					first_indexed_at = COALESCE(first_indexed_at, ?),
-					first_searchable_at = COALESCE(first_searchable_at, ?)
-				WHERE agent_id = ? AND source_key = ?
-			`).run(now, now, agentId, ensured.key);
-		});
-	} catch {
-		return;
+		const key = sourceKey(sourceIdentity(source));
+		const state = await readLifecycleState(agentId, key);
+		if (state?.firstIndexedAt && state.firstSearchableAt) {
+			readinessClaimedInProcess.add(processKey);
+			return;
+		}
+		firstIndexed = !state?.firstIndexedAt;
+		firstSearchable = !state?.firstSearchableAt;
+		await writeBatch(
+			[
+				ownerStatement(
+					`INSERT OR IGNORE INTO source_lifecycle_state
+					 (agent_id, source_key, source_class, mode, connected_at)
+					 VALUES (?, ?, ?, 'recurring', NULL)`,
+					[agentId, key, sourceClassForKind(String(source.kind))],
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET
+					 mode = 'recurring',
+					 first_indexed_at = COALESCE(first_indexed_at, ?),
+					 first_searchable_at = COALESCE(first_searchable_at, ?)
+					 WHERE agent_id = ? AND source_key = ?`,
+					[now, now, agentId, key],
+				),
+			],
+			"sources.lifecycle.readiness",
+		);
+	} catch (error) {
+		rethrowLifecycleFailure("readiness", error);
 	}
 	readinessClaimedInProcess.add(processKey);
 	const sourceClass = sourceClassForKind(String(source.kind));
@@ -606,14 +628,17 @@ export async function removeSourceLifecycleState(source: SignetSourceEntry, agen
 	const processKey = `${agentId}:${sourceKey(sourceIdentity(source))}`;
 	readinessClaimedInProcess.delete(processKey);
 	try {
-		await writeTx((db) => {
-			db.prepare("DELETE FROM source_lifecycle_state WHERE agent_id = ? AND source_key = ?").run(
-				agentId,
-				sourceKey(sourceIdentity(source)),
-			);
-		});
-	} catch {
-		// Best effort; source deletion must not depend on telemetry state.
+		await writeBatch(
+			[
+				ownerStatement("DELETE FROM source_lifecycle_state WHERE agent_id = ? AND source_key = ?", [
+					agentId,
+					sourceKey(sourceIdentity(source)),
+				]),
+			],
+			"sources.lifecycle.remove",
+		);
+	} catch (error) {
+		rethrowLifecycleFailure("remove", error);
 	}
 }
 
@@ -623,32 +648,39 @@ async function claimFirstSourceRecall(
 	candidateIds: readonly string[],
 ): Promise<void> {
 	try {
-		const claimed: SourceLifecycleState[] = [];
-		await writeTx((db) => {
-			const keys = candidateIds.map(sourceKey);
-			if (keys.length === 0) return;
-			const rows = db
-				.prepare(`
-					SELECT source_key, source_class, mode, connected_at, first_indexed_at, first_searchable_at,
-						first_recall_at, last_success_at, last_freshness_state, last_freshness_event_at
-					FROM source_lifecycle_state
-					WHERE agent_id = ? AND source_class = ? AND first_searchable_at IS NOT NULL
-						AND first_recall_at IS NULL AND source_key IN (${keys.map(() => "?").join(",")})
-					ORDER BY first_searchable_at ASC LIMIT 20
-				`)
-				.all(agentId, sourceClass, ...keys) as Array<Record<string, unknown>>;
-			for (const row of rows) {
-				const state = readState(db, agentId, String(row.source_key));
-				if (!state) continue;
-				const result = db
-					.prepare(`
-				UPDATE source_lifecycle_state SET first_recall_at = ?
-				WHERE agent_id = ? AND source_key = ? AND first_recall_at IS NULL
-			`)
-					.run(new Date().toISOString(), agentId, state.sourceKey);
-				if ((result.changes ?? 0) > 0) claimed.push(state);
-			}
-		});
+		const keys = candidateIds.map(sourceKey);
+		if (keys.length === 0) return;
+		const rows = await dbOwnerQuery<readonly Record<string, unknown>[]>(
+			ownerStatement(
+				`SELECT source_key, source_class, mode, connected_at, first_indexed_at, first_searchable_at,
+					first_recall_at, last_success_at, last_freshness_state, last_freshness_event_at
+				 FROM source_lifecycle_state
+				 WHERE agent_id = ? AND source_class = ? AND first_searchable_at IS NOT NULL
+					AND first_recall_at IS NULL AND source_key IN (${keys.map(() => "?").join(",")})
+				 ORDER BY first_searchable_at ASC LIMIT 20`,
+				[agentId, sourceClass, ...keys],
+				"all",
+			),
+			{ operation: "sources.lifecycle.recall-read", lane: "read" },
+		);
+		const states = rows.map(readState).filter((state): state is SourceLifecycleState => state !== null);
+		const claimedAt = new Date().toISOString();
+		const results =
+			states.length > 0
+				? await writeBatch(
+						states.map((state) =>
+							ownerStatement(
+								`UPDATE source_lifecycle_state SET first_recall_at = ?
+								 WHERE agent_id = ? AND source_key = ? AND first_recall_at IS NULL`,
+								[claimedAt, agentId, state.sourceKey],
+							),
+						),
+						"sources.lifecycle.first-recall",
+					)
+				: [];
+		const claimed = states.filter(
+			(_, index) => Number((results[index] as { readonly changes?: number }).changes ?? 0) > 0,
+		);
 		for (const state of claimed) {
 			const searchableAt = state.firstSearchableAt ? Date.parse(state.firstSearchableAt) : Number.NaN;
 			emit({
@@ -659,7 +691,7 @@ async function claimFirstSourceRecall(
 				latencyBucket: sourceDurationBucket(Number.isFinite(searchableAt) ? Date.now() - searchableAt : 0),
 			});
 		}
-	} catch {
-		// Best effort; recall itself must never depend on telemetry state.
+	} catch (error) {
+		rethrowLifecycleFailure("first-recall", error);
 	}
 }
