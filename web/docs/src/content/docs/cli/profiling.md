@@ -10,31 +10,30 @@ stopped daemon and run this single profile-enabled headless launch:
 ```bash
 profile_dir=$(mktemp -d)
 BUN_OPTIONS="--cpu-prof --cpu-prof-dir=$profile_dir" \
-  BUN_INSPECT=127.0.0.1:9229/json \
-  signet daemon start
+  SIGNET_INSPECTOR_PUBLIC=127.0.0.1:9229/json \
+  signet daemon restart --no-sync
 ```
 
-`signet daemon start` keeps `127.0.0.1:9229` as the public inspector endpoint,
-then gives the daemon a private Bun inspector endpoint and runs a local
-discovery proxy. The proxy is what makes this work across the daemon's
+`SIGNET_INSPECTOR_PUBLIC` keeps `127.0.0.1:9229` as the public inspector
+endpoint, then gives the daemon a private Bun inspector endpoint and runs a
+local discovery proxy. The proxy is what makes this work across the daemon's
 systemd-run boundary and across the daemon's detached launch. It also supplies
 the discovery routes that are missing from the Bun inspector in the current
-runtime.
+runtime. `restart --no-sync` makes the profile-enabled invocation replace any
+stale daemon without running an unrelated workspace sync.
 
-Do not use `BUN_INSPECT=127.0.0.1:9229` without `/json`. The `/json` suffix is
-the endpoint form expected by Bun's inspector protocol and by the discovery
-proxy.
+Keep the `/json` suffix. It is the endpoint form expected by Bun's inspector
+protocol and by the discovery proxy.
 
 ## Verify the launch
 
-`signet daemon start` waits for `/health/live`, but the public proxy and the
-private Bun inspector become ready independently. Poll health first, then poll
-all public inspector discovery endpoints. Do not continue to the attach step
-until both checks succeed:
+The daemon and public inspector become ready independently. Poll the daemon's
+health endpoint first, then poll all public inspector discovery endpoints. Do
+not continue to the attach step until both checks succeed:
 
 ```bash
 ready=0
-for attempt in $(seq 1 60); do
+for attempt in $(seq 1 180); do
   if curl -fsS --max-time 2 http://127.0.0.1:3850/health/live >/dev/null; then
     if curl -fsS --max-time 2 http://127.0.0.1:9229/json/version >/dev/null && \
        curl -fsS --max-time 2 http://127.0.0.1:9229/json >/dev/null && \
@@ -47,7 +46,7 @@ for attempt in $(seq 1 60); do
   sleep 1
 done
 if [ "$ready" -ne 1 ]; then
-  echo "daemon and inspector did not become ready within 60 seconds" >&2
+  echo "daemon and inspector did not become ready within 180 seconds" >&2
   exit 1
 fi
 ```
@@ -106,18 +105,21 @@ echo "daemon stopped and profile flushed"
 ## Why the environment and service manager matter
 
 Bun binds `BUN_INSPECT` before application code runs. A Bun CLI process cannot
-also bind a public discovery proxy on that same port, so the CLI re-execs once
-with the automatic inspector released. The re-exec preserves the user command
-arguments, including the compiled-binary argument layout, and records the
-public endpoint in `SIGNET_INSPECTOR_PUBLIC`.
+also bind a public discovery proxy on that same port. The compiled CLI's outer
+process can therefore exit during the inspector handoff before `daemon start`
+has a chance to report a useful error. Set the public endpoint with
+`SIGNET_INSPECTOR_PUBLIC` instead. The daemon runtime then reserves a private
+inspector port and starts the public discovery proxy without relying on that
+outer handoff.
 
 On Linux, the daemon is started in a transient `systemd-run --user` unit. The
 CLI forwards the private inspector endpoint as `BUN_INSPECT` through that unit
 and keeps the public proxy outside the unit. This is why setting
 `systemctl --user set-environment BUN_INSPECT=...` is not the canonical launch:
-that manager environment is not the source environment of the already-running
-CLI handoff, and service-manager delegation can drop or replace it. Put
-`BUN_INSPECT` on the `signet daemon start` command itself.
+that manager environment is not the source environment of the daemon runtime,
+and service-manager delegation can drop or replace it. Put
+`SIGNET_INSPECTOR_PUBLIC` on the `signet daemon restart --no-sync` command
+itself.
 
 The same public/private split avoids the parent-child `EADDRINUSE` failure.
 The daemon owns the private Bun inspector, while the proxy owns the public
