@@ -31,7 +31,7 @@ export function recordPipelineError(...pair: PipelineErrorPair): void {
 type Assert<T extends true> = T;
 type IsAssignable<From, To> = [From] extends [To] ? true : false;
 type PipelineErrorParameters = Parameters<typeof recordPipelineError>;
-type MismatchedPipelineErrorPairIsRejected = Assert<
+export type MismatchedPipelineErrorPairIsRejected = Assert<
 	IsAssignable<["embedding", "DECISION_TIMEOUT"], PipelineErrorParameters> extends false ? true : false
 >;
 
