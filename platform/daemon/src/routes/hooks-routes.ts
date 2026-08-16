@@ -51,7 +51,7 @@ import {
 import { getInferenceRouterOrNull } from "../inference-router";
 import { fetchInternal } from "../internal-fetch.js";
 import { logger } from "../logger";
-import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { type EmbeddingConfig, loadMemoryConfig } from "../memory-config";
 import { upsertMemoryContentSafetyInTx } from "../memory-content-safety";
 import { normalizeMarkdownBody, writeCompactionArtifact } from "../memory-lineage.js";
 import { type RecallParams, hybridRecall } from "../memory-search";
@@ -111,6 +111,15 @@ export function stampHarness(harness: string | undefined): void {
 	if (harness) {
 		harnessLastSeen.set(harness, new Date().toISOString());
 	}
+}
+
+/** Provider outages are the 503-class cause and dominate compound hook degradation. */
+export function preferHookRecallCause(
+	current: PipelineCauseFamily | undefined,
+	candidate: PipelineCauseFamily,
+): PipelineCauseFamily {
+	if (candidate === "provider_unavailable") return candidate;
+	return current ?? candidate;
 }
 
 async function recordHookRecallOperation(handler: () => Promise<Response>): Promise<Response> {
@@ -1009,7 +1018,7 @@ function registerRecall(app: Hono): void {
 				const embedFn = async (text: string, embeddingConfig: EmbeddingConfig, role?: EmbeddingRole) => {
 					const embedding = await recallAttributedEmbedFn(fetchEmbedding, agentId, (causeFamily) => {
 						embeddingDegraded = true;
-						embeddingCause ??= causeFamily;
+						embeddingCause = preferHookRecallCause(embeddingCause, causeFamily);
 					})(text, embeddingConfig, role);
 					if (embedding === null && embeddingConfig.provider !== "none") embeddingDegraded = true;
 					return embedding;
@@ -1024,13 +1033,13 @@ function registerRecall(app: Hono): void {
 				if (result.meta.partial === true || result.aggregate?.partial === true || embeddingDegraded) {
 					c.header("x-signet-operation-degraded", "1");
 					if (result.meta.partial === true) {
-						embeddingCause = "fts_index_incomplete";
+						embeddingCause = preferHookRecallCause(embeddingCause, "fts_index_incomplete");
 					}
-					if (!embeddingCause && result.aggregate?.stoppedReason === "router_unavailable") {
-						embeddingCause = "provider_unavailable";
+					if (result.aggregate?.stoppedReason === "router_unavailable") {
+						embeddingCause = preferHookRecallCause(embeddingCause, "provider_unavailable");
 					}
-					if (!embeddingCause && result.aggregate?.stoppedReason === "synthesis_failed") {
-						embeddingCause = "internal_error";
+					if (result.aggregate?.stoppedReason === "synthesis_failed") {
+						embeddingCause = preferHookRecallCause(embeddingCause, "internal_error");
 					}
 					if (embeddingCause) c.header("x-signet-operation-cause", embeddingCause);
 				}

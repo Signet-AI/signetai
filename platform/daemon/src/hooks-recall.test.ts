@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { setFtsIndexIncomplete } from "./fts-index-state";
-import { __setPromptSubmitAdmissionForTests, createPromptSubmitAdmission } from "./routes/hooks-routes";
+import {
+	__setPromptSubmitAdmissionForTests,
+	createPromptSubmitAdmission,
+	preferHookRecallCause,
+} from "./routes/hooks-routes";
 import { resetSessionEndTelemetry } from "./session-end-state";
 import { createTelemetryCollector, setActiveTelemetry } from "./telemetry";
 
@@ -135,6 +139,11 @@ memory:
 		} finally {
 			setFtsIndexIncomplete(false);
 		}
+	});
+
+	it("keeps provider_unavailable when FTS and provider degradation coexist", () => {
+		expect(preferHookRecallCause("fts_index_incomplete", "provider_unavailable")).toBe("provider_unavailable");
+		expect(preferHookRecallCause("provider_unavailable", "fts_index_incomplete")).toBe("provider_unavailable");
 	});
 
 	it("records recall attempt and outcome telemetry at the hook boundary", async () => {
