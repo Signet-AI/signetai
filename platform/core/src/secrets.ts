@@ -813,16 +813,34 @@ export async function putLocalSecret(name: string, value: string): Promise<void>
 	});
 }
 
+async function readSecretValue(store: SecretsStore, name: string, resolution: MasterKeyResolution): Promise<string> {
+	const localName = parseLocalSecretName(name);
+	const entry = store.secrets[localName];
+	if (!entry) throw new Error(`Secret '${localName}' not found`);
+	return decryptWithKey(entry.ciphertext, resolution.key);
+}
+
 export async function getLocalSecretValue(name: string): Promise<string> {
+	const initialStore = loadStore();
+	if (initialStore.version === NATIVE_STORE_VERSION || initialStore.provider === "native-keyring") {
+		const resolution = await resolveMasterKey(initialStore);
+		return readSecretValue(initialStore, name, resolution);
+	}
+
+	const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
+	const keyringResult = await keyring.get();
+	if (keyringResult.state === "unavailable" || keyringResult.state === "unsupported") {
+		emitDegradedWarning(keyringResult);
+		const resolution: MasterKeyResolution = { key: await getLegacyMasterKey(), provider: "legacy-obfuscated" };
+		const plaintext = await readSecretValue(initialStore, name, resolution);
+		await withSecretStoreLock(() => anchorLegacyMachineIdAfterVerification(resolution.key));
+		return plaintext;
+	}
+
 	return withSecretStoreLock(async () => {
 		const store = loadStore();
 		const resolution = await resolveMasterKey(store);
-		const localName = parseLocalSecretName(name);
-		const entry = store.secrets[localName];
-		if (!entry) throw new Error(`Secret '${localName}' not found`);
-		const plaintext = await decryptWithKey(entry.ciphertext, resolution.key);
-		if (resolution.provider === "legacy-obfuscated") await anchorLegacyMachineIdAfterVerification(resolution.key);
-		return plaintext;
+		return readSecretValue(store, name, resolution);
 	});
 }
 

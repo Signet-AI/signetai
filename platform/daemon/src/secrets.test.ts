@@ -461,6 +461,7 @@ describe("local secrets provider", () => {
 		const script = join(agentsDir, "queued-secret.mjs");
 		writeFileSync(script, "setTimeout(() => process.stdout.write(process.env.OPENAI_API_KEY), 200);\n");
 
+		const startedAt = performance.now();
 		const jobs = Array.from({ length: 6 }, () =>
 			startSecretExecJob(`bun ${script}`, { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 }),
 		);
@@ -469,6 +470,15 @@ describe("local secrets provider", () => {
 
 		expect(statuses.filter((status) => status === "running")).toHaveLength(4);
 		expect(statuses.filter((status) => status === "queued")).toHaveLength(2);
+
+		let finished = jobs.map((job) => getSecretExecJob(job.id));
+		for (let i = 0; i < 80 && finished.some((job) => job?.status !== "completed"); i++) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			finished = jobs.map((job) => getSecretExecJob(job.id));
+		}
+
+		expect(finished.every((job) => job?.status === "completed")).toBe(true);
+		expect(performance.now() - startedAt).toBeLessThan(900);
 	});
 
 	test("startSecretExecJob evicts retained completed job results instead of blocking new work", async () => {
