@@ -2186,6 +2186,10 @@ export async function hybridRecall(
 			}
 			scored.sort((a, b) => b.score - a.score);
 		} catch (e) {
+			if (cfg.pipelineV2.reranker.useExtractionModel) {
+				logger.error("memory", "Reranker failed (fatal)", e as Error);
+				throw e;
+			}
 			logger.warn("memory", "Reranker failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});

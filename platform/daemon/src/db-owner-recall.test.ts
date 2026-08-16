@@ -193,4 +193,85 @@ inference:
 			await client.close();
 		}
 	});
+
+	test("fails loudly instead of returning unreranked results when extraction reranking provider fails", async () => {
+		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-reranker-failure-"));
+		previousSignetPath = process.env.SIGNET_PATH;
+		mkdirSync(join(directory, "memory"), { recursive: true });
+		const server = Bun.serve({
+			port: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname.endsWith("/models")) {
+					return new Response(JSON.stringify({ data: [] }), { headers: { "content-type": "application/json" } });
+				}
+				return new Response(JSON.stringify({ error: "provider unavailable" }), {
+					status: 503,
+					headers: { "content-type": "application/json" },
+				});
+			},
+		});
+		stopInferenceServer = () => server.stop();
+		writeFileSync(
+			join(directory, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    reranker:
+      enabled: true
+      useExtractionModel: true
+      topN: 2
+      timeoutMs: 2000
+inference:
+  defaultPolicy: recall
+  targets:
+    local:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:${server.port}/v1
+      models:
+        default:
+          model: test-model
+  policies:
+    recall:
+      mode: strict
+      defaultTargets:
+        - local/default
+  workloads:
+    memoryExtraction:
+      policy: recall
+`,
+		);
+		process.env.SIGNET_PATH = directory;
+		const databasePath = join(directory, "memory", "memories.db");
+		initDbAccessor(databasePath);
+		seedFacts();
+		const cfg = testConfig(directory);
+		const reranker = {
+			...cfg.pipelineV2.reranker,
+			enabled: true,
+			useExtractionModel: true,
+			topN: 2,
+			timeoutMs: 2000,
+		};
+		const params = {
+			query: "owner recall fixture",
+			keywordQuery: "owner recall fixture",
+			limit: 2,
+			agentId: "agent-a",
+			readPolicy: "isolated" as const,
+			trackRecallAccess: false,
+			claimRecallResults: false,
+		};
+		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
+		try {
+			await expect(
+				hybridRecallThroughDbOwner(
+					client,
+					params,
+					{ ...cfg, pipelineV2: { ...cfg.pipelineV2, reranker } },
+					{ queryEmbedding: null },
+				),
+			).rejects.toThrow();
+		} finally {
+			await client.close();
+		}
+	});
 });
