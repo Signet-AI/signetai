@@ -76,9 +76,12 @@ export type DbOwnerCommand =
 	| { readonly type: "cancel"; readonly jobId: string }
 	| { readonly type: "shutdown" };
 
+export type DbOwnerFailureCause = "provider_unavailable" | "internal_error";
+
 export interface DbOwnerSerializedError {
 	readonly name: string;
 	readonly message: string;
+	readonly causeFamily?: DbOwnerFailureCause;
 }
 
 export type DbOwnerEvent =
@@ -92,9 +95,18 @@ export type DbOwnerEvent =
 	  }
 	| { readonly type: "fatal"; readonly error: DbOwnerSerializedError };
 
+function serializedCauseFamily(error: unknown): DbOwnerFailureCause | undefined {
+	if (typeof error !== "object" || error === null) return undefined;
+	const causeFamily = (error as Record<string, unknown>).causeFamily;
+	if (causeFamily === "provider_unavailable" || causeFamily === "internal_error") return causeFamily;
+	return undefined;
+}
+
 export function serializeError(error: unknown): DbOwnerSerializedError {
+	const causeFamily = serializedCauseFamily(error);
 	return {
 		name: error instanceof Error ? error.name : "Error",
 		message: error instanceof Error ? error.message : String(error),
+		...(causeFamily === undefined ? {} : { causeFamily }),
 	};
 }

@@ -10,6 +10,7 @@ import type {
 	DbOwnerLane,
 	DbOwnerRequest,
 	DbOwnerSerializedError,
+	DbOwnerFailureCause,
 } from "./db-owner-protocol";
 import {
 	DB_OWNER_MAX_DEADLINE_MS,
@@ -63,11 +64,13 @@ export interface DbOwnerClient {
 
 export class DbOwnerError extends Error {
 	readonly code: string;
+	readonly causeFamily?: DbOwnerFailureCause;
 
-	constructor(code: string, message: string) {
+	constructor(code: string, message: string, causeFamily?: DbOwnerFailureCause) {
 		super(message);
 		this.name = "DbOwnerError";
 		this.code = code;
+		this.causeFamily = causeFamily;
 	}
 }
 
@@ -142,7 +145,7 @@ function ownerIsDead(owner: ChildProcess): boolean {
 }
 
 function messageFromError(error: DbOwnerSerializedError): Error {
-	return new DbOwnerError(error.name, error.message);
+	return new DbOwnerError(error.name, error.message, error.causeFamily);
 }
 
 function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient {

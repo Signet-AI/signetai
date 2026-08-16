@@ -47,6 +47,7 @@ import {
 	SemaphoreTimeoutError,
 } from "./pipeline/provider";
 import { getSecret } from "./secrets";
+import { type PipelineCauseFamily, normalizePipelineCause } from "./pipeline-operation";
 
 const SNAPSHOT_TTL_MS = 15_000;
 const OBSERVED_RATE_LIMIT_TTL_MS = 60_000;
@@ -80,7 +81,20 @@ export interface InferenceExecutionAttempt {
 	readonly ok: boolean;
 	readonly durationMs: number;
 	readonly error?: string;
+	readonly causeFamily?: PipelineCauseFamily;
 	readonly usage?: LlmUsage | null;
+}
+
+export type RoutedInferenceFailureCause = "provider_unavailable" | "internal_error";
+
+export class InferenceExecutionError extends Error {
+	readonly causeFamily: RoutedInferenceFailureCause;
+
+	constructor(message: string, causeFamily: RoutedInferenceFailureCause) {
+		super(message);
+		this.name = "InferenceExecutionError";
+		this.causeFamily = causeFamily;
+	}
 }
 
 export interface InferenceExecutionResult {
@@ -1277,11 +1291,13 @@ export class InferenceRouter {
 			const startedAt = Date.now();
 			const observed = this.observedRuntimeStateForTarget(loaded.value, targetRef);
 			if (observed && isRuntimeBlocked(observed)) {
+				const reason = observed.unavailableReason ?? `account state ${observed.accountState}`;
 				attempts.push({
 					targetRef,
 					ok: false,
 					durationMs: 0,
-					error: observed.unavailableReason ?? `account state ${observed.accountState}`,
+					error: reason,
+					causeFamily: normalizePipelineCause(reason),
 				});
 				continue;
 			}
@@ -1319,6 +1335,7 @@ export class InferenceRouter {
 				};
 			} catch (error) {
 				const message = formatExecutionError(error);
+				const causeFamily = normalizePipelineCause(error);
 				logger.warn("inference", `Inference target ${targetRef} failed`, {
 					targetRef,
 					error: message.slice(0, 200),
@@ -1329,16 +1346,22 @@ export class InferenceRouter {
 					ok: false,
 					durationMs: Date.now() - startedAt,
 					error: message,
+					causeFamily,
 				});
 				if (opts?.signal?.aborted || error instanceof PiProviderDeadlineError) break;
 			}
 		}
+		const causeFamily: RoutedInferenceFailureCause = attempts.some(
+			(attempt) => attempt.causeFamily === "provider_unavailable",
+		)
+			? "provider_unavailable"
+			: "internal_error";
 		return {
 			ok: false,
 			error: {
 				code: "execution-failed",
 				message: "All routed targets failed.",
-				details: { attempts },
+				details: { attempts, causeFamily },
 			},
 		};
 	}
@@ -1566,7 +1589,9 @@ export class InferenceRouter {
 					opts,
 				);
 				if (!result.ok) {
-					throw new Error(result.error.message);
+					const causeFamily =
+						result.error.details?.causeFamily === "provider_unavailable" ? "provider_unavailable" : "internal_error";
+					throw new InferenceExecutionError(result.error.message, causeFamily);
 				}
 				return result.value.text;
 			},
@@ -1581,7 +1606,9 @@ export class InferenceRouter {
 					opts,
 				);
 				if (!result.ok) {
-					throw new Error(result.error.message);
+					const causeFamily =
+						result.error.details?.causeFamily === "provider_unavailable" ? "provider_unavailable" : "internal_error";
+					throw new InferenceExecutionError(result.error.message, causeFamily);
 				}
 				return { text: result.value.text, usage: result.value.usage };
 			},

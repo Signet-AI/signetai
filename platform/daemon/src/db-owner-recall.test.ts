@@ -262,14 +262,18 @@ inference:
 		};
 		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
 		try {
-			await expect(
-				hybridRecallThroughDbOwner(
+			let failure: unknown;
+			try {
+				await hybridRecallThroughDbOwner(
 					client,
 					params,
 					{ ...cfg, pipelineV2: { ...cfg.pipelineV2, reranker } },
 					{ queryEmbedding: null },
-				),
-			).rejects.toThrow();
+				);
+			} catch (error) {
+				failure = error;
+			}
+			expect(failure).toMatchObject({ causeFamily: "provider_unavailable" });
 		} finally {
 			await client.close();
 		}

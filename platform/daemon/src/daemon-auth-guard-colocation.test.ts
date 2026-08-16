@@ -154,26 +154,94 @@ describe("auth guard co-location", () => {
 			const state = await import("./routes/state.js");
 			const { Hono } = await import("hono");
 			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { getOrCreateInferenceRouter } = await import("./inference-router");
 			const { registerMemoryRoutes } = await import("./routes/memory-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode recall test");
 			const token = createToken(secret, { sub: "reranker-recall", role: "readonly", scope: {} }, 60);
+			const server = Bun.serve({
+				port: 0,
+				fetch(request) {
+					if (new URL(request.url).pathname.endsWith("/models")) {
+						return new Response(JSON.stringify({ data: [] }), { status: 200 });
+					}
+					return new Response(JSON.stringify({ error: "provider unavailable" }), { status: 503 });
+				},
+			});
+			try {
+				writeFileSync(
+					join(tmpDir, "agent.yaml"),
+					`${readFileSync(join(tmpDir, "agent.yaml"), "utf8")}
+inference:
+  defaultPolicy: recall
+  targets:
+    local:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:${server.port}/v1
+      models:
+        default:
+          model: test-model
+  policies:
+    recall:
+      mode: strict
+      defaultTargets:
+        - local/default
+  workloads:
+    memoryExtraction:
+      policy: recall
+`,
+				);
+				const router = getOrCreateInferenceRouter(tmpDir);
+				const provider = router.createWorkloadProvider("memory_extraction", "default");
+				if (!provider.generateWithUsage) throw new Error("expected routed provider usage generation");
+				let routedFailure: unknown;
+				try {
+					await provider.generateWithUsage("production-shaped reranker request");
+				} catch (error) {
+					routedFailure = error;
+				}
+				if (!(routedFailure instanceof Error)) throw new Error("expected routed provider failure");
 
+				const app = new Hono();
+				app.use("*", createAuthMiddleware(state.authConfig, secret));
+				registerMemoryRoutes(app, { recallOwner: rejectingRecallOwner(routedFailure) });
+				const response = await app.request("/api/memory/recall", {
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${token}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ query: "provider down" }),
+				});
+
+				expect(response.status).toBe(503);
+				expect(await response.json()).toEqual({ error: "Recall failed", results: [] });
+			} finally {
+				server.stop();
+			}
+		});
+
+		it("keeps generic recall failures at HTTP 500", async () => {
+			const state = await import("./routes/state.js");
+			const { Hono } = await import("hono");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode recall test");
+			const token = createToken(secret, { sub: "internal-recall", role: "readonly", scope: {} }, 60);
 			const app = new Hono();
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
-			registerMemoryRoutes(app, {
-				recallOwner: rejectingRecallOwner(new Error("configured reranker provider unavailable")),
-			});
+			registerMemoryRoutes(app, { recallOwner: rejectingRecallOwner(new Error("database read failed")) });
 			const response = await app.request("/api/memory/recall", {
 				method: "POST",
 				headers: {
 					authorization: `Bearer ${token}`,
 					"content-type": "application/json",
 				},
-				body: JSON.stringify({ query: "provider down" }),
+				body: JSON.stringify({ query: "internal failure" }),
 			});
 
-			expect(response.status).toBe(503);
+			expect(response.status).toBe(500);
 			expect(await response.json()).toEqual({ error: "Recall failed", results: [] });
 		});
 

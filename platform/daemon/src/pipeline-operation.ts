@@ -29,7 +29,10 @@ export const PIPELINE_CAUSE_FAMILIES = [
 
 export type PipelineCauseFamily = (typeof PIPELINE_CAUSE_FAMILIES)[number];
 
-function pipelineErrorDetails(error: unknown, depth = 0): { readonly status?: number; readonly text: string } {
+function pipelineErrorDetails(
+	error: unknown,
+	depth = 0,
+): { readonly status?: number; readonly text: string; readonly causeFamily?: unknown } {
 	if (depth > 2) return { text: String(error) };
 	if (typeof error !== "object" || error === null) return { text: String(error) };
 	const record = error as Record<string, unknown>;
@@ -40,6 +43,11 @@ function pipelineErrorDetails(error: unknown, depth = 0): { readonly status?: nu
 			: nested?.status !== undefined
 				? { status: nested.status }
 				: {}),
+		...(record.causeFamily !== undefined
+			? { causeFamily: record.causeFamily }
+			: nested?.causeFamily !== undefined
+				? { causeFamily: nested.causeFamily }
+				: {}),
 		text: [
 			typeof record.message === "string" ? record.message : "",
 			typeof record.code === "string" ? record.code : "",
@@ -48,6 +56,11 @@ function pipelineErrorDetails(error: unknown, depth = 0): { readonly status?: nu
 			.filter(Boolean)
 			.join(" "),
 	};
+}
+
+function asPipelineCauseFamily(value: unknown): PipelineCauseFamily | undefined {
+	if (typeof value !== "string") return undefined;
+	return PIPELINE_CAUSE_FAMILIES.find((candidate) => candidate === value);
 }
 
 export function bucketDurationMs(durationMs: number): string {
@@ -71,6 +84,8 @@ export function bucketQueueAgeMs(queueAgeMs: number): string {
 
 export function normalizePipelineCause(error: unknown): PipelineCauseFamily {
 	const details = pipelineErrorDetails(error);
+	const causeFamily = asPipelineCauseFamily(details.causeFamily);
+	if (causeFamily) return causeFamily;
 	const status = details.status;
 	const text = details.text.toLowerCase();
 
