@@ -16,6 +16,7 @@ import { normalizeAndHashContent } from "./content-normalization";
 import type { IntegrityCheckStatus } from "./database-integrity";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { toFtsSchemaQueryDb } from "./db-accessor";
+import { getDbOwnerMaintenance, type DbOwnerMaintenance } from "./db-owner-maintenance";
 import {
 	countChanges,
 	readLiveVecDimensions,
@@ -396,6 +397,7 @@ export async function checkFtsConsistency(
 	ctx: RepairContext,
 	limiter: RateLimiter,
 	repair = false,
+	ownerMaintenance: DbOwnerMaintenance | null = getDbOwnerMaintenance(),
 ): Promise<RepairResult> {
 	const action = "checkFtsConsistency";
 	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.reembedCooldownMs, FTS_HOURLY_BUDGET);
@@ -462,12 +464,28 @@ export async function checkFtsConsistency(
 				};
 			}
 			ftsRebuildInFlight = true;
-			await withRepairWriteTx(accessor, (db) => {
-				recreateMemoriesFts(db);
-				writeRepairAudit(db, action, ctx, 1, "FTS recreated with unicode61 tokenizer");
-			}).finally(() => {
+			try {
+				if (ownerMaintenance) {
+					await ownerMaintenance.rebuildFts({
+						checkpointKey: "fts.memories.repair",
+						audit: {
+							action,
+							actor: ctx.actor,
+							reason: ctx.reason,
+							actorType: ctx.actorType,
+							requestId: ctx.requestId,
+							message: "FTS recreated with unicode61 tokenizer",
+						},
+					});
+				} else {
+					await withRepairWriteTx(accessor, (db) => {
+						recreateMemoriesFts(db);
+						writeRepairAudit(db, action, ctx, 1, "FTS recreated with unicode61 tokenizer");
+					});
+				}
+			} finally {
 				ftsRebuildInFlight = false;
-			});
+			}
 			// The recreate is itself a full rebuild; any prior mismatch is moot.
 			ftsMismatchPendingRebuild = false;
 		}
@@ -512,12 +530,28 @@ export async function checkFtsConsistency(
 				};
 			}
 			ftsRebuildInFlight = true;
-			await withRepairWriteTx(accessor, (db) => {
-				db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run();
-				writeRepairAudit(db, action, ctx, 1, `FTS rebuilt: ${memCount} canonical vs ${ftsCount} indexed rows`);
-			}).finally(() => {
+			try {
+				if (ownerMaintenance) {
+					await ownerMaintenance.rebuildFts({
+						checkpointKey: "fts.memories.repair",
+						audit: {
+							action,
+							actor: ctx.actor,
+							reason: ctx.reason,
+							actorType: ctx.actorType,
+							requestId: ctx.requestId,
+							message: `FTS rebuilt: ${memCount} canonical vs ${ftsCount} indexed rows`,
+						},
+					});
+				} else {
+					await withRepairWriteTx(accessor, (db) => {
+						db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run();
+						writeRepairAudit(db, action, ctx, 1, `FTS rebuilt: ${memCount} canonical vs ${ftsCount} indexed rows`);
+					});
+				}
+			} finally {
 				ftsRebuildInFlight = false;
-			});
+			}
 			ftsMismatchPendingRebuild = false;
 			rebuilt = true;
 		} else {

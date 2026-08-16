@@ -661,7 +661,12 @@ describe("sqlite runtime ordering", () => {
 			}
 		}
 
-		expect(hits).toEqual(["db-accessor.ts"]);
+		expect(hits).toEqual([
+			"db-owner-worker.ts",
+			"database-integrity-worker.ts",
+			"db-accessor.ts",
+			"database-integrity.ts",
+		]);
 	});
 });
 

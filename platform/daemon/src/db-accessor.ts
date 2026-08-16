@@ -28,6 +28,7 @@ import {
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsSql,
 	recreateMemoriesFts,
+	recreateMemoriesFtsSchema,
 	resolveSqliteJournalConfig,
 	runMigrations,
 } from "@signet/core";
@@ -996,7 +997,7 @@ function finishDbAccessorInit(
 
 	// Ensure FTS5 virtual table exists — may be missing on upgrades from
 	// older installs where the table was dropped or never created.
-	ensureFtsTable(writeConn);
+	ensureFtsTable(writeConn, { deferBackfill: true });
 	const configuredEmbedding = loadMemoryConfig(opts?.agentsDir ?? resolveSqliteAgentsDir()).embedding;
 	const legacyVecSql = writeConn
 		.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'")
@@ -1070,16 +1071,18 @@ export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string
  * tokenizer. Older installs can carry a legacy porter-tokenized table,
  * which silently harms lexical recall quality for conversational cues.
  */
-export function ensureFtsTable(db: SqliteDatabase): void {
+export function ensureFtsTable(db: SqliteDatabase, options: { readonly deferBackfill?: boolean } = {}): void {
 	const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 
 	if (sql === null) {
 		console.log("[db-accessor] memories_fts missing — recreating FTS5 table");
 		createMemoriesFts(db);
-		const backfilled = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
-		if (backfilled.n > 0) {
-			db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
-			console.log(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
+		if (options.deferBackfill !== true) {
+			const backfilled = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
+			if (backfilled.n > 0) {
+				db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
+				console.log(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
+			}
 		}
 		return;
 	}
@@ -1087,7 +1090,8 @@ export function ensureFtsTable(db: SqliteDatabase): void {
 	if (!memoriesFtsNeedsTokenizerRepair(sql)) return;
 
 	console.log("[db-accessor] memories_fts tokenizer drift detected — recreating FTS5 table");
-	recreateMemoriesFts(db);
+	if (options.deferBackfill === true) recreateMemoriesFtsSchema(db);
+	else recreateMemoriesFts(db);
 }
 
 // ---------------------------------------------------------------------------

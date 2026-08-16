@@ -6,6 +6,7 @@
 
 import type { DreamingConfig } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
+import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { getQueueHealth } from "../diagnostics";
 import { getOrCreateInferenceRouter } from "../inference-router";
 import type { GraphHygieneCaps } from "../knowledge-graph-hygiene";
@@ -85,6 +86,8 @@ export interface DreamingWorkerOptions {
 	};
 	/** Repair-aware automatic evidence requeue policy. */
 	readonly evidenceRetry?: DreamingEvidenceRetryPolicy;
+	/** Owner-routed queue gate for scheduled Dreaming sweeps. */
+	readonly ownerMaintenance?: DbOwnerMaintenance;
 }
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 min
@@ -94,6 +97,14 @@ const AGENT_SCOPE_SNAPSHOT_REFRESH_MS = 30 * 60 * 1000; // 30 min
 export function shouldDeferDreamingSweep(accessor: DbAccessor): boolean {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => getQueueHealth(db).status !== "healthy");
+}
+
+export async function shouldDeferDreamingSweepAsync(
+	accessor: DbAccessor,
+	ownerMaintenance?: DbOwnerMaintenance,
+): Promise<boolean> {
+	if (ownerMaintenance) return !(await ownerMaintenance.queueIsHealthy());
+	return shouldDeferDreamingSweep(accessor);
 }
 
 function normalizeAgentId(agentId: string | undefined, fallback: string): string {
@@ -316,7 +327,7 @@ export function startDreamingWorker(
 			scheduler = { status: "deferred", reason: "system_pressure", checkedAt };
 			return;
 		}
-		if (shouldDeferDreamingSweep(accessor)) {
+		if (await shouldDeferDreamingSweepAsync(accessor, options.ownerMaintenance)) {
 			scheduler = { status: "deferred", reason: "queue_pressure", checkedAt };
 			logger.info("dreaming-worker", "Deferring dreaming sweep while queues are under pressure");
 			return;

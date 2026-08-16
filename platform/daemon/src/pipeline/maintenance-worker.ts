@@ -10,6 +10,7 @@
  */
 
 import type { DbAccessor } from "../db-accessor";
+import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { getFreePageRatio } from "../db-vacuum";
 import type { DiagnosticsReport, ProviderTracker } from "../diagnostics";
 import { getDiagnostics } from "../diagnostics";
@@ -156,6 +157,7 @@ interface ExecutionDeps {
 	limiter: RateLimiter;
 	retentionHandle: { sweep(): Promise<unknown> } | null;
 	embedding: EmbeddingRepairDeps | null;
+	ownerMaintenance: DbOwnerMaintenance | null;
 }
 
 export interface EmbeddingRepairDeps {
@@ -178,7 +180,7 @@ async function executeRecommendation(
 		case "releaseStaleLeases":
 			return await releaseStaleLeases(deps.accessor, deps.cfg, ctx, deps.limiter);
 		case "checkFtsConsistency":
-			return await checkFtsConsistency(deps.accessor, deps.cfg, ctx, deps.limiter, true);
+			return await checkFtsConsistency(deps.accessor, deps.cfg, ctx, deps.limiter, true, deps.ownerMaintenance);
 		case "triggerRetentionSweep":
 			if (deps.retentionHandle) {
 				return await triggerRetentionSweep(deps.cfg, ctx, deps.limiter, deps.retentionHandle);
@@ -308,6 +310,7 @@ export function startMaintenanceWorker(
 	tracker: ProviderTracker,
 	retentionHandle: { sweep(): Promise<unknown> } | null,
 	embedding?: EmbeddingRepairDeps,
+	ownerMaintenance?: DbOwnerMaintenance,
 ): MaintenanceHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
@@ -324,6 +327,7 @@ export function startMaintenanceWorker(
 		limiter,
 		retentionHandle,
 		embedding: embedding ?? null,
+		ownerMaintenance: ownerMaintenance ?? null,
 	};
 
 	async function doTick(): Promise<MaintenanceCycleResult> {

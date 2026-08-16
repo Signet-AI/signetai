@@ -42,12 +42,16 @@ export function createMemoriesFts(db: FtsSchemaExecDb): void {
 	`);
 }
 
-export function recreateMemoriesFts(db: FtsSchemaExecDb): void {
+export function recreateMemoriesFtsSchema(db: FtsSchemaExecDb): void {
 	db.exec("DROP TRIGGER IF EXISTS memories_ai");
 	db.exec("DROP TRIGGER IF EXISTS memories_ad");
 	db.exec("DROP TRIGGER IF EXISTS memories_au");
 	db.exec("DROP TABLE IF EXISTS memories_fts");
 	createMemoriesFts(db);
+}
+
+export function recreateMemoriesFts(db: FtsSchemaExecDb): void {
+	recreateMemoriesFtsSchema(db);
 	db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
 }
 

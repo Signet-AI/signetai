@@ -264,6 +264,7 @@ export {
 	readMemoriesFtsIndexRowCount,
 	readMemoriesFtsSql,
 	recreateMemoriesFts,
+	recreateMemoriesFtsSchema,
 } from "./fts-schema";
 export { migrate } from "./migrate";
 export type { MigrationSource } from "./migrate";

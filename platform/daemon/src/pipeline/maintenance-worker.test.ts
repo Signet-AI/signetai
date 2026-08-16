@@ -160,8 +160,8 @@ describe("maintenance-worker", () => {
 				details: expect.objectContaining({ delegatedAction: "reembedMissingMemories" }),
 			}),
 		);
-		expect(getEmbeddingGapStats(accessor).unembedded).toBe(1);
-		expect(getEmbeddingGapStats(accessor).repair).toMatchObject({ batchesStarted: 1, lastAffected: 1 });
+		expect((await getEmbeddingGapStats(accessor)).unembedded).toBe(1);
+		expect(await getEmbeddingGapStats(accessor)).toMatchObject({ repair: { batchesStarted: 1, lastAffected: 1 } });
 		const capped = await handle.tick();
 		expect(capped.executed).toContainEqual(
 			expect.objectContaining({ action: "repairEmbeddingIndex", success: false, affected: 0 }),
@@ -204,8 +204,8 @@ describe("maintenance-worker", () => {
 				affected: 1,
 			}),
 		);
-		expect(getEmbeddingGapStats(accessor, "agent-a").unembedded).toBe(0);
-		expect(getEmbeddingGapStats(accessor, "agent-b").unembedded).toBe(1);
+		expect((await getEmbeddingGapStats(accessor, "agent-a")).unembedded).toBe(0);
+		expect((await getEmbeddingGapStats(accessor, "agent-b")).unembedded).toBe(1);
 		expect(
 			(
 				db.prepare("SELECT source_id FROM embeddings WHERE source_type = 'memory'").all() as Array<{
@@ -290,13 +290,13 @@ describe("maintenance-worker", () => {
 		for (let i = 0; i < 10; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, completed_at, created_at, updated_at)
-				 VALUES (?, ?, 'extract', 'completed', 1, 3, ?, ?, ?)`,
+				 VALUES (?, ?, 'repair', 'completed', 1, 3, ?, ?, ?)`,
 			).run(`comp-${i}`, `mem-${i}`, now, now, now);
 		}
 		for (let i = 0; i < 5; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
-				 VALUES (?, ?, 'extract', 'dead', 3, 3, ?, ?, ?)`,
+				 VALUES (?, ?, 'repair', 'dead', 3, 3, ?, ?, ?)`,
 			).run(`dead-${i}`, `mem-dead-${i}`, now, now, now);
 		}
 
@@ -318,12 +318,12 @@ describe("maintenance-worker", () => {
 		for (let i = 0; i < 2; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
-				 VALUES (?, ?, 'extract', 'dead', 3, 3, ?, ?, ?)`,
+				 VALUES (?, ?, 'repair', 'dead', 3, 3, ?, ?, ?)`,
 			).run(`dead-exec-${i}`, `mem-exec-${i}`, now, now, now);
 		}
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, completed_at, created_at, updated_at)
-			 VALUES (?, ?, 'extract', 'completed', 1, 3, ?, ?, ?)`,
+			 VALUES (?, ?, 'repair', 'completed', 1, 3, ?, ?, ?)`,
 		).run("comp-exec-1", "mem-comp-1", now, now, now);
 
 		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
@@ -352,12 +352,12 @@ describe("maintenance-worker", () => {
 		for (let i = 0; i < 3; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
-				 VALUES (?, ?, 'extract', 'dead', 3, 3, ?, ?, ?)`,
+				 VALUES (?, ?, 'repair', 'dead', 3, 3, ?, ?, ?)`,
 			).run(`dead-obs-${i}`, `mem-obs-${i}`, now, now, now);
 		}
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, completed_at, created_at, updated_at)
-			 VALUES (?, ?, 'extract', 'completed', 1, 3, ?, ?, ?)`,
+			 VALUES (?, ?, 'repair', 'completed', 1, 3, ?, ?, ?)`,
 		).run("comp-obs", "mem-comp-obs", now, now, now);
 
 		const handle = startMaintenanceWorker(accessor, observeCfg, tracker, null);
@@ -408,7 +408,7 @@ describe("maintenance-worker", () => {
 		}
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, completed_at, created_at, updated_at)
-			 VALUES (?, ?, 'extract', 'completed', 1, 3, ?, ?, ?)`,
+			 VALUES (?, ?, 'repair', 'completed', 1, 3, ?, ?, ?)`,
 		).run("comp-single-flight", "mem-comp-single-flight", now, now, now);
 
 		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
@@ -433,7 +433,7 @@ describe("maintenance-worker", () => {
 		const oldLease = new Date(Date.now() - 20 * 60 * 1000).toISOString();
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, leased_at, created_at, updated_at)
-			 VALUES (?, ?, 'extract', 'leased', 1, 3, ?, ?, ?)`,
+			 VALUES (?, ?, 'repair', 'leased', 1, 3, ?, ?, ?)`,
 		).run("stale-lease-1", "mem-stale-1", oldLease, oldLease, now);
 
 		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
@@ -491,7 +491,7 @@ describe("maintenance-worker", () => {
 		for (let i = 0; i < 2; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
-				 VALUES (?, ?, 'extract', 'dead', 3, 3, ?, ?, ?)`,
+				 VALUES (?, ?, 'repair', 'dead', 3, 3, ?, ?, ?)`,
 			).run(`dead-noprovider-${i}`, `mem-noprovider-${i}`, now, now, now);
 		}
 

@@ -11,6 +11,7 @@
 
 import type { AnalyticsCollector } from "../analytics";
 import type { DbAccessor } from "../db-accessor";
+import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import type { ProviderTracker } from "../diagnostics";
 import type { EmbeddingRole } from "../embedding-profile";
 import { getLlmProvider } from "../llm";
@@ -166,6 +167,7 @@ export function startPipeline(
 	providerTracker?: ProviderTracker,
 	_analytics?: AnalyticsCollector,
 	_telemetry?: TelemetryCollector,
+	ownerMaintenance?: DbOwnerMaintenance,
 ): void {
 	if (retentionHandle || documentWorkerHandle || synthesisWorkerHandle) {
 		logger.warn("pipeline", "Pipeline already running, skipping start");
@@ -202,6 +204,7 @@ export function startPipeline(
 						agentId,
 						batchSize: pipelineCfg.embeddingTracker.batchSize,
 					},
+			ownerMaintenance,
 		);
 	}
 

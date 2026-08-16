@@ -58,7 +58,12 @@ import {
 } from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum";
 import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
-import { ownerRunStatement } from "./db-owner-maintenance";
+import {
+	type DbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	ownerRunStatement,
+	registerDbOwnerMaintenance,
+} from "./db-owner-maintenance";
 import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
@@ -266,6 +271,7 @@ const __dirname = dirname(__filename);
 
 let httpServer: import("node:net").Server | null = null;
 let dbOwnerClient: DbOwnerClient | null = null;
+let dbOwnerMaintenanceHandle: DbOwnerMaintenance | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
@@ -1609,6 +1615,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		default: await router.hasWorkload("default"),
 	});
 
+	if (dbOwnerMaintenanceHandle === null) {
+		dbOwnerMaintenanceHandle = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient ?? undefined });
+		registerDbOwnerMaintenance(dbOwnerMaintenanceHandle);
+	}
+
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
 		startPipeline(
 			getDbAccessor(),
@@ -1637,7 +1648,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			});
 		}
 	} else {
-		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
+		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);
 	}
 
 	if (activeEmbeddingCfg.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
@@ -1798,6 +1809,12 @@ async function cleanup() {
 	} catch {}
 
 	await stopPipelineRuntime();
+
+	if (dbOwnerMaintenanceHandle !== null) {
+		await dbOwnerMaintenanceHandle.close().catch(() => {});
+		dbOwnerMaintenanceHandle = null;
+		registerDbOwnerMaintenance(null);
+	}
 
 	try {
 		const { shutdownNativeProvider } = await import("./native-embedding");
@@ -2042,6 +2059,19 @@ async function main() {
 	startFdPollMonitor();
 
 	dbOwnerClient = createDbOwnerClient({ dbPath: MEMORY_DB });
+	dbOwnerMaintenanceHandle = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient });
+	registerDbOwnerMaintenance(dbOwnerMaintenanceHandle);
+	// FTS recovery is intentionally handed to the killable DB owner. Startup
+	// only creates the schema above, so a large legacy index cannot block the
+	// daemon's event loop before it can serve degraded lexical recall.
+	void dbOwnerMaintenanceHandle
+		.backfillFts({ checkpointKey: "fts.memories.startup" })
+		.then((result) => logger.info("daemon", "FTS startup maintenance finished", { ...result }))
+		.catch((error) =>
+			logger.warn("daemon", "FTS startup maintenance deferred after owner failure", {
+				error: error instanceof Error ? error.message : String(error),
+			}),
+		);
 	// Clean accumulated crash-loop damage through the owner. This remains a
 	// deferred call, so owner startup and the bounded drain never delay readiness.
 	runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
