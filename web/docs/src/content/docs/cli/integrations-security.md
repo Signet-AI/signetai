@@ -21,9 +21,11 @@ signet sync
 
 ## `signet secret`
 
-Manage encrypted [Secrets](/secrets/). Local secret operations use the shared
-encrypted store directly and work without a running daemon. 1Password, Bitwarden,
-and daemon queue-status operations require the daemon.
+Manage encrypted [Secrets](/secrets/). Local secret operations prefer the daemon
+and native keyring when available, then use the shared encrypted store directly
+when the daemon or keyring is unavailable. This keeps local exec usable in
+headless cron and systemd sessions without bypassing locked or corrupt keyrings.
+1Password, Bitwarden, and daemon queue-status operations require the daemon.
 
 ```bash
 signet secret put OPENAI_API_KEY

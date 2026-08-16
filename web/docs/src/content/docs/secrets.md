@@ -30,7 +30,7 @@ Do not place provider keys directly in YAML, shell history, screenshots, task pr
 
 ## Use a secret in a command
 
-`signet secret exec` injects selected secrets into the child environment. When the daemon is running, it keeps the existing asynchronous queue and returns a job id. When the daemon is not running, the CLI executes the command synchronously in-process and returns the command result. The command must name each injected secret before the command token:
+`signet secret exec` injects selected secrets into the child environment. When the daemon and native keyring are available, it keeps the existing asynchronous queue and returns a job id. When the daemon or the native keyring is unavailable, local commands use the same encrypted store directly, execute synchronously in-process, and return the command result. This fallback is intended for headless cron and systemd sessions and does not bypass locked, corrupt, or permission-denied keyrings. The command must name each injected secret before the command token:
 
 ```bash
 signet secret exec --secret OPENAI_API_KEY \

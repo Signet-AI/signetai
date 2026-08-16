@@ -4,9 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { __setSecretStoreLockHookForTests, getLocalSecretValue, setSecretKeyringAdapterForTests } from "@signet/core";
-import { createOfflineSecretApiCall } from "./secrets.js";
+import { createOfflineSecretApiCall, createSecretCommandApiCall } from "./secrets.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
+const originalDbusSessionBusAddress = process.env.DBUS_SESSION_BUS_ADDRESS;
 let workspace = "";
 let writerScript = "";
 
@@ -53,6 +54,8 @@ afterEach(() => {
 	setSecretKeyringAdapterForTests(null);
 	if (originalSignetPath === undefined) delete process.env.SIGNET_PATH;
 	else process.env.SIGNET_PATH = originalSignetPath;
+	if (originalDbusSessionBusAddress === undefined) delete process.env.DBUS_SESSION_BUS_ADDRESS;
+	else process.env.DBUS_SESSION_BUS_ADDRESS = originalDbusSessionBusAddress;
 	if (workspace) rmSync(workspace, { recursive: true, force: true });
 	workspace = "";
 	if (writerScript) rmSync(writerScript, { force: true });
@@ -119,6 +122,70 @@ describe("daemonless secret API", () => {
 		if (!response.ok) return;
 		expect(response.data.result.stdout).not.toContain("x");
 		expect(response.data.result.stdout).toBe("[REDACTED]");
+	});
+
+	test("falls back to synchronous encrypted-store exec when D-Bus is absent", async () => {
+		workspace = mkdtempSync(join(tmpdir(), "signet-headless-secret-exec-"));
+		process.env.SIGNET_PATH = workspace;
+		delete process.env.DBUS_SESSION_BUS_ADDRESS;
+		const offline = createOfflineSecretApiCall();
+		await offline("POST", "/api/secrets/HEADLESS_KEY", { value: "headless-value" });
+		const script = join(workspace, "print-headless-secret.mjs");
+		writeFileSync(script, "process.stdout.write(process.env.HEADLESS_KEY ?? '');\n");
+		let daemonCalls = 0;
+		const api = createSecretCommandApiCall({
+			daemonApiCall: async () => {
+				daemonCalls += 1;
+				return { ok: true, data: { daemon: true } };
+			},
+			offlineApiCall: offline,
+			isDaemonRunning: async () => true,
+			agentsDir: workspace,
+		});
+
+		const response = await api("POST", "/api/secrets/exec", {
+			command: `bun ${script}`,
+			secrets: { HEADLESS_KEY: "HEADLESS_KEY" },
+		});
+
+		expect(daemonCalls).toBe(0);
+		expect(response.ok).toBe(true);
+		if (!response.ok) return;
+		expect(response.data.result.stdout).toBe("[REDACTED]");
+		expect(response.data.result.stdout).not.toContain("headless-value");
+	});
+
+	test("keeps daemon keyring preference and fail-closed keyring classifications", async () => {
+		workspace = mkdtempSync(join(tmpdir(), "signet-keyring-preference-"));
+		const offline = createOfflineSecretApiCall();
+		let daemonCalls = 0;
+		const daemon = async () => {
+			daemonCalls += 1;
+			return { ok: true, data: { daemon: true } };
+		};
+
+		const foundApi = createSecretCommandApiCall({
+			daemonApiCall: daemon,
+			offlineApiCall: offline,
+			isDaemonRunning: async () => true,
+			agentsDir: workspace,
+			readKeyring: async () => ({ state: "found", value: "not-used-by-test" }),
+		});
+		expect(await foundApi("GET", "/api/secrets")).toEqual({ ok: true, data: { daemon: true } });
+		expect(daemonCalls).toBe(1);
+
+		const lockedApi = createSecretCommandApiCall({
+			daemonApiCall: daemon,
+			offlineApiCall: offline,
+			isDaemonRunning: async () => true,
+			agentsDir: workspace,
+			readKeyring: async () => ({ state: "locked", message: "keyring is locked" }),
+		});
+		expect(await lockedApi("POST", "/api/secrets/exec", { command: "true", secrets: { X: "X" } })).toEqual({
+			ok: true,
+			data: { daemon: true },
+		});
+		expect(daemonCalls).toBe(2);
 	});
 
 	test("serializes racing CLI and daemon store writers", async () => {

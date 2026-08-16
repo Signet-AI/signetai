@@ -106,7 +106,7 @@ import { copyDirRecursive, syncBuiltinSkills, syncTemplates } from "./features/s
 import { flushCliTelemetry, recordCommandInvoked } from "./features/telemetry.js";
 import { signetBanner } from "./lib/banner.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
-import { createOfflineSecretApiCall } from "./lib/secrets.js";
+import { createOfflineSecretApiCall, createSecretCommandApiCall } from "./lib/secrets.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
 import {
 	acquireNativeSyncLock,
@@ -1084,15 +1084,12 @@ const { fetchFromDaemon, fetchDaemonResult, fetchDaemonStream, secretApiCall } =
 	AGENTS_DIR,
 );
 const offlineSecretApiCall = createOfflineSecretApiCall();
-const secretCommandApiCall = async (
-	method: string,
-	path: string,
-	body?: unknown,
-	timeoutMs?: number,
-): Promise<{ readonly ok: boolean; readonly data: unknown }> =>
-	(await isDaemonRunning())
-		? secretApiCall(method, path, body, timeoutMs)
-		: offlineSecretApiCall(method, path, body, timeoutMs);
+const secretCommandApiCall = createSecretCommandApiCall({
+	daemonApiCall: secretApiCall,
+	offlineApiCall: offlineSecretApiCall,
+	isDaemonRunning,
+	agentsDir: AGENTS_DIR,
+});
 const SKILLS_DIR = join(AGENTS_DIR, "skills");
 
 registerRepairQueueCommands(program, {
