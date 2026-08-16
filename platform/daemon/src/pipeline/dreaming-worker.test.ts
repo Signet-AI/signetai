@@ -166,6 +166,22 @@ describe("dreaming worker agent scope", () => {
 		expect(resolves).toBe(2);
 	});
 
+	it("does not schedule a blocking agent-scope warm-up", () => {
+		const originalSetTimeout = globalThis.setTimeout;
+		const delays: number[] = [];
+		globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+			if (timeout !== undefined) delays.push(timeout);
+			return originalSetTimeout(handler, timeout, ...args);
+		}) as typeof setTimeout;
+		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", { checkIntervalMs: 60_000 });
+		try {
+			expect(delays).not.toContain(15_000);
+		} finally {
+			worker.stop();
+			globalThis.setTimeout = originalSetTimeout;
+		}
+	});
+
 	it("defers a sweep while the shared queue health watermark is exceeded", () => {
 		const now = new Date().toISOString();
 		for (let index = 0; index <= 50; index += 1) {

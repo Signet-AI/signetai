@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairTelemetryIndexes, runDeferredIntegrityCheck } from "./database-integrity";
@@ -367,6 +367,44 @@ describe("deferred database integrity recovery (#1513)", () => {
 		expect(result.state).toBe("unavailable");
 		expect(result.phase).toBe("complete");
 		expect(result.repairGuidance).toContain("back up the database");
+	});
+
+	it("does not pass profiler or inspector env to the integrity child", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-worker-env-"));
+		const markerPath = join(dir, "worker-env.json");
+		const workerPath = join(dir, "env-worker.mjs");
+		writeFileSync(
+			workerPath,
+			[
+				'import { writeFileSync } from "node:fs";',
+				`writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ bunInspect: process.env.BUN_INSPECT, bunOptions: process.env.BUN_OPTIONS, handoff: process.env.SIGNET_INSPECTOR_HANDOFF, public: process.env.SIGNET_INSPECTOR_PUBLIC, proxyPublic: process.env.SIGNET_INSPECTOR_PROXY_PUBLIC, proxyTarget: process.env.SIGNET_INSPECTOR_PROXY_TARGET }));`,
+				'process.stdout.write(JSON.stringify({ type: "result", result: { quickCheck: { ok: true, messages: [] } } }) + "\\n");',
+			].join("\n"),
+		);
+		const keys = [
+			"BUN_INSPECT",
+			"BUN_OPTIONS",
+			"SIGNET_INSPECTOR_HANDOFF",
+			"SIGNET_INSPECTOR_PUBLIC",
+			"SIGNET_INSPECTOR_PROXY_PUBLIC",
+			"SIGNET_INSPECTOR_PROXY_TARGET",
+		] as const;
+		const previous = keys.map((key) => [key, process.env[key]] as const);
+		for (const key of keys) process.env[key] = `test-${key}`;
+		try {
+			const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, "/tmp/not-used.db", {
+				workerPath,
+				timeoutMs: 1000,
+			});
+			expect(result.state).toBe("healthy");
+			expect(JSON.parse(readFileSync(markerPath, "utf8"))).toEqual({});
+		} finally {
+			for (const [key, value] of previous) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("kills a synchronous scan at the deadline on a large fixture", async () => {

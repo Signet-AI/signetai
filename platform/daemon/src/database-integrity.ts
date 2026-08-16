@@ -399,11 +399,22 @@ async function runDeferredIntegrityCheckInternal(
 	let progressTimer: ReturnType<typeof setInterval> | undefined;
 
 	try {
+		const workerEnv: NodeJS.ProcessEnv = {
+			...process.env,
+			SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
+		};
+		// The integrity child must not inherit the daemon's inspector or
+		// profiler settings. In the profiling runbook BUN_INSPECT points at the
+		// daemon's private inspector port. The child then tries to bind the same
+		// port and exits before it can report its quick_check result.
+		delete workerEnv.BUN_INSPECT;
+		delete workerEnv.BUN_OPTIONS;
+		delete workerEnv.SIGNET_INSPECTOR_HANDOFF;
+		delete workerEnv.SIGNET_INSPECTOR_PUBLIC;
+		delete workerEnv.SIGNET_INSPECTOR_PROXY_PUBLIC;
+		delete workerEnv.SIGNET_INSPECTOR_PROXY_TARGET;
 		const child = spawn(process.execPath, workerArgs, {
-			env: {
-				...process.env,
-				SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
-			},
+			env: workerEnv,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		worker = child;

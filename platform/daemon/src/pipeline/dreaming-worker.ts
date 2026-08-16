@@ -430,24 +430,6 @@ export function startDreamingWorker(
 	// server binds, making the daemon appear to fail to start.
 	schedule();
 
-	// Warm the agent-scope snapshot shortly after startup instead of letting
-	// the first check (5 min out) resolve it cold on the main loop
-	// (#1094). The union itself is index-fast; the warm-up moves first
-	// resolution off the sweep, surfaces DB problems before the first
-	// check, and the delay lands after the HTTP server binds.
-	let warmupTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-		warmupTimer = null;
-		if (stopped) return;
-		try {
-			const scopes = getAgentScopes();
-			logger.info("dreaming-worker", "Agent scope snapshot primed", { scopes: scopes.length });
-		} catch (e) {
-			logger.warn("dreaming-worker", "Agent scope snapshot warm-up failed; first check will retry", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		}
-	}, 15_000);
-
 	logger.info("dreaming-worker", "Dreaming worker started", {
 		threshold: cfg.tokenThreshold,
 	});
@@ -461,10 +443,6 @@ export function startDreamingWorker(
 			if (timer) {
 				clearTimeout(timer);
 				timer = null;
-			}
-			if (warmupTimer) {
-				clearTimeout(warmupTimer);
-				warmupTimer = null;
 			}
 		},
 
