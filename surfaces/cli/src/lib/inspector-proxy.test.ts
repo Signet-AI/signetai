@@ -9,6 +9,7 @@ import {
 	createInspectorProxy,
 	formatInspectorEndpoint,
 	parseInspectorEndpoint,
+	resolveInspectorHandoffArgs,
 	resolveInspectorParentHandoff,
 } from "./inspector-proxy.js";
 
@@ -95,6 +96,15 @@ describe("inspector discovery proxy", () => {
 		expect(handoff?.environment.SIGNET_INSPECTOR_PUBLIC).toBe("127.0.0.1:9230");
 		expect(handoff?.environment.SIGNET_INSPECTOR_HANDOFF).toBe("1");
 		expect(resolveInspectorParentHandoff({ BUN_INSPECT: "127.0.0.1:9230", SIGNET_INSPECTOR_HANDOFF: "1" })).toBeNull();
+	});
+
+	it("drops Bun's compiled entrypoint from the re-exec argument list", () => {
+		expect(resolveInspectorHandoffArgs(["bun", "/$bunfs/root/signet", "daemon", "start"])).toEqual(["daemon", "start"]);
+		expect(resolveInspectorHandoffArgs(["bun", "/tmp/cli.ts", "daemon", "start"])).toEqual([
+			"/tmp/cli.ts",
+			"daemon",
+			"start",
+		]);
 	});
 
 	it("exercises native parent re-exec and proxy discovery", async () => {

@@ -130,6 +130,7 @@ export default defineConfig({
 								{ label: "Install and configure", slug: "cli/getting-started" },
 								{ label: "Memory and search", slug: "cli/memory-search" },
 								{ label: "Runtime operations", slug: "cli/operations" },
+								{ label: "Profile the daemon", slug: "cli/profiling" },
 								{ label: "Data and portability", slug: "cli/data-portability" },
 								{ label: "Integrations and security", slug: "cli/integrations-security" },
 								{ label: "Environment and exit codes", slug: "cli/environment" },
