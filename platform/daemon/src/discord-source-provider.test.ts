@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { addDiscordSource } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { DISCORD_CHANNEL_TYPES } from "./discord-source-fetch";
+import { syncDiscordGatewayTail } from "./discord-gateway-tail";
 import { discordSourceProvider, setDiscordGatewaySocketFactoryForTest } from "./discord-source-provider";
 import { nativeMemorySourcePermissionHealth, resetNativeMemoryIndexCache } from "./native-memory-sources";
 import { syncDiscordDesktopCacheSource } from "./discord-desktop-cache-source";
@@ -343,6 +344,59 @@ describe("discord-source-provider", () => {
 			expect(heartbeatTimers.map((timer) => timer.timeout)).toEqual([1_000, 1_000]);
 			expect(cleared).toEqual(expect.arrayContaining(heartbeatTimers));
 		} finally {
+			globalThis.setInterval = originalSetInterval;
+			globalThis.clearInterval = originalClearInterval;
+		}
+	});
+
+	it("cleans gateway timers when an async event write rejects", async () => {
+		const originalSetInterval = globalThis.setInterval;
+		const originalClearInterval = globalThis.clearInterval;
+		const active = new Set<unknown>();
+		globalThis.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+			const handle = originalSetInterval(handler, timeout, ...args);
+			active.add(handle);
+			return handle;
+		}) as typeof setInterval;
+		globalThis.clearInterval = ((handle: unknown) => {
+			active.delete(handle);
+			return originalClearInterval(handle as Parameters<typeof clearInterval>[0]);
+		}) as typeof clearInterval;
+
+		let shouldContinue = true;
+		setDiscordGatewaySocketFactoryForTest(
+			() =>
+				new RejectingDiscordGatewaySocket(() => {
+					shouldContinue = false;
+				}),
+		);
+		try {
+			const result = await Promise.race([
+				syncDiscordGatewayTail({
+					source: {} as never,
+					token: "token",
+					guildIds: ["g"],
+					shouldContinue: () => shouldContinue,
+					recordFailure: async () => {},
+					recordMessage: async () => {
+						throw new Error("db failed");
+					},
+					recordMessageDelete: async () => {},
+					recordChannel: async () => {},
+					recordMember: async () => {},
+					recordMemberRemove: async () => {},
+				}).then(
+					(value) => ({ status: "resolved" as const, value }),
+					(error: unknown) => ({ status: "rejected" as const, error: String(error) }),
+				),
+				Bun.sleep(300).then(() => ({ status: "timeout" as const })),
+			]);
+
+			expect(result.status).toBe("rejected");
+			if (result.status === "rejected") expect(result.error).toContain("db failed");
+			expect(active).toHaveLength(0);
+		} finally {
+			for (const handle of active) originalClearInterval(handle as Parameters<typeof clearInterval>[0]);
 			globalThis.setInterval = originalSetInterval;
 			globalThis.clearInterval = originalClearInterval;
 		}
@@ -1404,6 +1458,52 @@ describe("discord-source-provider", () => {
 		).toBe(0);
 	});
 });
+
+class RejectingDiscordGatewaySocket {
+	onopen: ((event: unknown) => void) | null = null;
+	onmessage: ((event: { readonly data: unknown }) => void) | null = null;
+	onerror: ((event: unknown) => void) | null = null;
+	onclose: ((event: { readonly code?: number; readonly reason?: string }) => void) | null = null;
+	private readonly stop: () => void;
+	private closed = false;
+
+	constructor(stop: () => void) {
+		this.stop = stop;
+		queueMicrotask(() => {
+			this.onopen?.({});
+			this.onmessage?.({ data: JSON.stringify({ op: 10, d: { heartbeat_interval: 1_000 } }) });
+		});
+	}
+
+	send(data: string): void {
+		if ((JSON.parse(data) as { op: number }).op !== 2) return;
+		queueMicrotask(() => {
+			this.onmessage?.({
+				data: JSON.stringify({
+					op: 0,
+					t: "MESSAGE_CREATE",
+					s: 1,
+					d: {
+						guild_id: "g",
+						channel_id: "c",
+						id: "m",
+						content: "x",
+						timestamp: "2026-01-01T00:00:00.000Z",
+						author: { id: "u", username: "u" },
+					},
+				}),
+			});
+			this.close(1000, "probe complete");
+		});
+	}
+
+	close(code = 1000, reason = ""): void {
+		if (this.closed) return;
+		this.closed = true;
+		this.stop();
+		this.onclose?.({ code, reason });
+	}
+}
 
 class FakeDiscordGatewaySocket {
 	onopen: ((event: unknown) => void) | null = null;

@@ -139,12 +139,20 @@ async function runDiscordGatewayConnection(
 		const settle = (retry: boolean): void => {
 			if (settled || settleRequested) return;
 			settleRequested = true;
-			void eventQueue.then(() => {
-				if (settled) return;
-				settled = true;
-				cleanup();
-				resolve({ retry });
-			}, reject);
+			void eventQueue.then(
+				() => {
+					if (settled) return;
+					settled = true;
+					cleanup();
+					resolve({ retry });
+				},
+				(error: unknown) => {
+					if (settled) return;
+					settled = true;
+					cleanup();
+					reject(error);
+				},
+			);
 		};
 		const closeForCancellation = (): void => {
 			try {
