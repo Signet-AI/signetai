@@ -13,7 +13,13 @@ import {
 } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
-import { getDbAccessor, runWriteTxAsync, type WriteDb } from "./db-accessor";
+import {
+	dbOwnerQuery,
+	dbOwnerSourceGraphFilePurge,
+	dbOwnerSourceGraphIndex,
+	dbOwnerSourceGraphPurge,
+	ownerStatement,
+} from "./db-owner-runtime";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
@@ -21,18 +27,15 @@ import { hashNormalizedBody, indexExternalMemoryArtifact, softDeleteArtifactRows
 import {
 	type SourceEmbeddingFetch,
 	buildObsidianSourceChunks,
-	indexObsidianSourceEmbeddings,
-	purgeObsidianSourceEmbeddings,
-	purgeObsidianSourceFileEmbeddings,
+	indexObsidianSourceEmbeddingsViaOwner,
+	purgeObsidianSourceEmbeddingsViaOwner,
+	purgeObsidianSourceFileEmbeddingsViaOwner,
 	resetObsidianSourceEmbeddingBackoff,
 } from "./obsidian-source-embeddings";
 import {
 	type ObsidianMarkdownPathIndex,
 	addObsidianMarkdownPathIndex,
 	buildObsidianMarkdownPathIndex,
-	indexObsidianSourceStructure,
-	purgeObsidianSourceFileStructure,
-	purgeObsidianSourceStructure,
 	sourceIdForObsidianRoot,
 } from "./obsidian-source-graph";
 
@@ -888,19 +891,24 @@ export async function indexNativeMemoryFile(
 		let semanticIndexed = false;
 		if (obsidian && sourceId) {
 			if (options.sourceGraphEnabled ?? true) {
-				indexObsidianSourceStructure({
-					agentId,
-					sourceId,
-					sourceName: source.displayName,
-					root: source.root,
-					filePath,
-					content,
-					markdownPathIndex: options.markdownPathIndex,
-				});
+				await dbOwnerSourceGraphIndex(
+					{
+						agentId,
+						sourceId,
+						sourceName: source.displayName,
+						root: source.root,
+						filePath,
+						content,
+						...(options.markdownPathIndex === undefined
+							? {}
+							: { markdownPaths: [...options.markdownPathIndex.byRel.values()] }),
+					},
+					{ operation: "sources.graph.owner.index", lane: "write", estimatedWorkUnits: 10 },
+				);
 				semanticIndexed = true;
 			}
 			if (options.embeddingConfig && options.fetchEmbedding) {
-				const embeddingResult = await indexObsidianSourceEmbeddings({
+				const embeddingResult = await indexObsidianSourceEmbeddingsViaOwner({
 					agentId,
 					sourceId,
 					root: source.root,
@@ -955,18 +963,21 @@ export async function removeNativeMemoryFile(
 	await softDeleteArtifactRowsForPath(filePath, agentId);
 	if (source.harness === "obsidian") {
 		const sourceId = source.sourceId ?? sourceIdForObsidianRoot(source.root);
-		await purgeObsidianSourceFileEmbeddings({
+		await purgeObsidianSourceFileEmbeddingsViaOwner({
 			sourceId,
 			agentId,
 			root: source.root,
 			filePath,
 		});
-		await purgeObsidianSourceFileStructure({
-			agentId,
-			sourceId,
-			root: source.root,
-			filePath,
-		});
+		await dbOwnerSourceGraphFilePurge(
+			{
+				agentId,
+				sourceId,
+				root: source.root,
+				filePath,
+			},
+			{ operation: "sources.graph.owner.file-purge", lane: "write", estimatedWorkUnits: 6 },
+		);
 	}
 }
 
@@ -1012,15 +1023,18 @@ export async function purgeNativeMemorySourceArtifacts(source: NativeMemorySourc
 	});
 	let embeddingRows = 0;
 	if (source.harness === "obsidian") {
-		embeddingRows = purgeObsidianSourceEmbeddings({
+		embeddingRows = await purgeObsidianSourceEmbeddingsViaOwner({
 			sourceId: source.sourceId ?? sourceIdForObsidianRoot(source.root),
 			agentId: agentId ?? undefined,
 		});
-		purgeObsidianSourceStructure({
-			agentId,
-			sourceId: source.sourceId ?? sourceIdForObsidianRoot(source.root),
-			root: source.root,
-		});
+		await dbOwnerSourceGraphPurge(
+			{
+				agentId,
+				sourceId: source.sourceId ?? sourceIdForObsidianRoot(source.root),
+				root: source.root,
+			},
+			{ operation: "sources.graph.owner.purge", lane: "write", estimatedWorkUnits: 10 },
+		);
 	}
 	return artifactRows + embeddingRows;
 }

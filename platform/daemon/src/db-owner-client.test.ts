@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,8 @@ import {
 	MAX_DB_OWNER_PENDING_JOBS,
 	MAX_DB_OWNER_WORK_UNITS,
 } from "./db-owner-client";
+import { findSqliteVecExtension } from "@signet/core";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { recallThroughDbOwner } from "./db-owner-recall";
 
 function makeDb(): { readonly directory: string; readonly path: string } {
@@ -21,6 +23,20 @@ function makeDb(): { readonly directory: string; readonly path: string } {
 	db.exec("CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT NOT NULL)");
 	db.prepare("INSERT INTO memories (id, content) VALUES (?, ?)").run("m1", "owner-routed recall");
 	db.close();
+	return { directory, path };
+}
+
+function makeMigratedDb(): { readonly directory: string; readonly path: string } {
+	const directory = mkdtempSync(join(tmpdir(), "signet-db-owner-migrated-"));
+	const path = join(directory, "memory.db");
+	const previousPath = process.env.SIGNET_PATH;
+	process.env.SIGNET_PATH = directory;
+	mkdirSync(join(directory, "memory"), { recursive: true });
+	closeDbAccessor();
+	initDbAccessor(path);
+	closeDbAccessor();
+	if (previousPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+	else process.env.SIGNET_PATH = previousPath;
 	return { directory, path };
 }
 
@@ -41,6 +57,83 @@ describe("DB owner client", () => {
 		client = null;
 		if (directory !== null) rmSync(directory, { recursive: true, force: true });
 		directory = null;
+	});
+
+	test("loads sqlite-vec for legacy snapshot import and preserves KNN rows", async () => {
+		const extension = findSqliteVecExtension();
+		if (extension === null) throw new Error("sqlite-vec extension is required for this regression");
+		const database = makeMigratedDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		const vectorValues = new Float32Array(768);
+		vectorValues[0] = 1;
+		const vector = Buffer.from(vectorValues.buffer);
+		await client.submit(
+			{
+				kind: "batch",
+				statements: [
+					{ sql: "CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(embedding float[3])", result: "run" },
+					{
+						sql: "INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+						params: [
+							"vec-import-test",
+							"hash-import-test",
+							{ type: "bytes", base64: vector.toString("base64") },
+							3,
+							"source_chunk",
+							"other-source:note#1",
+							"knn import test",
+							"2026-01-01T00:00:00.000Z",
+							"import-agent",
+						],
+						result: "run",
+					},
+					{
+						sql: "INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)",
+						params: ["vec-import-test", { type: "bytes", base64: vector.toString("base64") }],
+						result: "run",
+					},
+				],
+			},
+			{ operation: "source-snapshot-vec-setup", lane: "write", deadlineMs: 5_000 },
+		).result;
+		const before = await client.submit<readonly { readonly id: string }[]>(
+			{
+				kind: "query",
+				statement: {
+					sql: "SELECT id FROM vec_embeddings WHERE embedding MATCH ? AND k = 1",
+					params: [{ type: "bytes", base64: vector.toString("base64") }],
+					result: "all",
+				},
+			},
+			{ operation: "source-snapshot-vec-knn-before", lane: "read", deadlineMs: 5_000 },
+		).result;
+		expect(before).toEqual([{ id: "vec-import-test" }]);
+		await client.submit(
+			{
+				kind: "source_snapshot_import",
+				input: {
+					agentId: "import-agent",
+					sourceId: "import-source",
+					sourceRoot: "/tmp/import",
+					includeLocalDiscord: true,
+					artifacts: [],
+				},
+			},
+			{ operation: "source-snapshot-vec-import", lane: "write", deadlineMs: 5_000 },
+		).result;
+		const after = await client.submit<readonly { readonly id: string }[]>(
+			{
+				kind: "query",
+				statement: {
+					sql: "SELECT id FROM vec_embeddings WHERE embedding MATCH ? AND k = 1",
+					params: [{ type: "bytes", base64: vector.toString("base64") }],
+					result: "all",
+				},
+			},
+			{ operation: "source-snapshot-vec-knn-after", lane: "read", deadlineMs: 5_000 },
+		).result;
+		expect(after).toEqual([{ id: "vec-import-test" }]);
 	});
 
 	test("routes a recall read through a separate owner process", async () => {

@@ -1017,18 +1017,36 @@ async function doReindex(agentId?: string): Promise<void> {
 		}
 	}
 
-	const tombstones = await getDbAccessor().withReadDbAsync(async (db) => {
-		const table = db
-			.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifact_tombstones'`)
-			.get();
-		if (!table) return new Set<string>();
-		const rows = scope
-			? (db.prepare("SELECT session_token FROM memory_artifact_tombstones WHERE agent_id = ?").all(scope) as Array<{
-					session_token: string;
-				}>)
-			: (db.prepare("SELECT session_token FROM memory_artifact_tombstones").all() as Array<{ session_token: string }>);
-		return new Set(rows.map((row) => row.session_token));
-	});
+	const tombstones = new Set<string>();
+	const table = await dbOwnerQuery<unknown>(
+		ownerStatement(
+			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifact_tombstones'",
+			[],
+			"get",
+		),
+		{ operation: "sources.reindex.tombstones.ready", lane: "read" },
+	);
+	if (table) {
+		const rows = await dbOwnerQuery<readonly { readonly session_token: string }[]>(
+			ownerStatement(
+				scope
+					? "SELECT session_token FROM memory_artifact_tombstones WHERE agent_id = ?"
+					: "SELECT session_token FROM memory_artifact_tombstones",
+				scope ? [scope] : [],
+				"all",
+			),
+			{ operation: "sources.reindex.tombstones", lane: "read" },
+		);
+		for (const row of rows) tombstones.add(row.session_token);
+	} else {
+		logger.warn(
+			"watcher",
+			"Tombstone table missing during native source reindex; proceeding without tombstone filter",
+			{
+				operation: "sources.reindex.tombstones",
+			},
+		);
+	}
 
 	const fileSet = new Set(files);
 	const yielder = yieldEvery(REINDEX_BATCH_SIZE);
