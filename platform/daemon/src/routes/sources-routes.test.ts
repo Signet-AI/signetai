@@ -20,6 +20,8 @@ import {
 } from "../source-index-progress";
 import { registerImportRoutes } from "./import-routes";
 import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./sources-routes";
+import { setActiveTelemetry, type TelemetryCollector } from "../telemetry";
+import type { SourceIndexTelemetryInput } from "../source-lifecycle-telemetry";
 
 const originalFetch = globalThis.fetch;
 
@@ -46,6 +48,7 @@ describe("Sources routes", () => {
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		setActiveTelemetry(undefined);
 		clearSourceIndexProgressForTests();
 		closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -60,6 +63,8 @@ describe("Sources routes", () => {
 			indexed?: number;
 			purged?: number;
 			syncGate?: Promise<void>;
+			syncError?: unknown;
+			recordIndexOperation?: (input: SourceIndexTelemetryInput) => Promise<void>;
 			onPurge?: () => void;
 			onSyncStart?: () => void;
 			pickerExecFile?: (
@@ -81,11 +86,12 @@ describe("Sources routes", () => {
 				expect(bridgeOptions.embeddingConfig?.provider).toBe("native");
 				expect(bridgeOptions.fetchEmbedding).toBeDefined();
 				expect(bridgeOptions.sourceCleanupEnabled).toBe(false);
-				expect(bridgeOptions.sourceGraphEnabled).toBe(false);
+				expect(bridgeOptions.sourceGraphEnabled).toBe(true);
 				return {
 					syncExisting: async () => {
 						options.onSyncStart?.();
 						if (options.syncGate) await options.syncGate;
+						if (options.syncError !== undefined) throw options.syncError;
 						bridgeOptions.onFileIndexed?.({
 							source: sources[0] as NativeMemorySource,
 							filePath: join(vault, "permanent", "Note.md"),
@@ -107,6 +113,7 @@ describe("Sources routes", () => {
 			},
 			pickerExecFile: options.pickerExecFile,
 			pickerPlatform: options.pickerPlatform,
+			recordIndexOperation: options.recordIndexOperation,
 		});
 		return app;
 	}
@@ -190,6 +197,41 @@ describe("Sources routes", () => {
 
 		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
 		expect(loadSourcesConfig(dir).sources[0]?.id).toBe(body.source.id);
+	});
+
+	it("finalizes a failed index job before lifecycle telemetry failure can reject the job", async () => {
+		let releaseSync: (() => void) | undefined;
+		const syncGate = new Promise<void>((resolve) => {
+			releaseSync = resolve;
+		});
+		const events: Array<{ readonly event: string; readonly properties: Readonly<Record<string, unknown>> }> = [];
+		const collector = {
+			enabled: true,
+			record: (event: string, properties: Readonly<Record<string, unknown>>) => events.push({ event, properties }),
+		} as unknown as TelemetryCollector;
+		const app = makeApp({
+			syncGate,
+			syncError: new Error("source sync failed"),
+			recordIndexOperation: async () => {
+				throw new Error("telemetry persistence failed");
+			},
+		});
+		const response = await app.request("/api/sources/obsidian", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ path: vault, name: "Telemetry failure vault" }),
+		});
+		expect(response.status).toBe(202);
+		const body = (await response.json()) as { source: { id: string } };
+		setActiveTelemetry(collector);
+		releaseSync?.();
+		await waitFor(() => getSourceIndexJob(body.source.id)?.status === "error");
+		expect(getSourceIndexJob(body.source.id)?.status).toBe("error");
+		expect(
+			events.some(
+				({ event, properties }) => event === "error.occurred" && properties.type === "SourceLifecycleTelemetryFailure",
+			),
+		).toBe(true);
 	});
 
 	it("connects a Discord source through provider-neutral source config", async () => {

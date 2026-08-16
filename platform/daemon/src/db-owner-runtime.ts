@@ -137,6 +137,22 @@ export async function dbOwnerBatch(
 	return await submitWithAdmission<readonly unknown[]>(owner, { kind: "batch", statements }, options);
 }
 
+/** Execute read-modify-write statements atomically on the serialized owner. */
+export async function dbOwnerTransaction(
+	statements: readonly DbOwnerStatement[],
+	options: DbOwnerSqlOptions,
+): Promise<readonly unknown[]> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission<readonly unknown[]>(
+		owner,
+		{ kind: "transaction", transaction: { statements } },
+		{
+			...options,
+			lane: options.lane ?? "write",
+		},
+	);
+}
+
 export async function dbOwnerSourceSnapshotImport(
 	input: DbOwnerSourceSnapshotImport,
 	options: DbOwnerSqlOptions,

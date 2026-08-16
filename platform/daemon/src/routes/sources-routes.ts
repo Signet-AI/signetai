@@ -31,6 +31,7 @@ import {
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
 import { sourceHasEligibleUnconsumedEvidence } from "../pipeline/dreaming-evidence-consumption";
+import { getActiveTelemetry } from "../telemetry";
 import {
 	type SourceIndexJob,
 	beginSourceIndexJob,
@@ -67,6 +68,7 @@ interface SourceIndexJobInput {
 	readonly agentsDir: string;
 	readonly startBridge: typeof startNativeMemoryBridge;
 	readonly purgeNativeSource: typeof purgeNativeMemorySourceArtifacts;
+	readonly recordIndexOperation: typeof recordSourceIndexOperation;
 }
 
 interface SourceDeletionTombstone {
@@ -138,6 +140,7 @@ export interface RegisterSourcesRoutesDeps {
 	readonly purgeNativeSource?: typeof purgeNativeMemorySourceArtifacts;
 	readonly pickerExecFile?: PickerExecFile;
 	readonly pickerPlatform?: NodeJS.Platform;
+	readonly recordIndexOperation?: typeof recordSourceIndexOperation;
 }
 
 const sourceIndexRuns = new Set<{ readonly sourceId: string; readonly jobId: string; readonly run: Promise<void> }>();
@@ -174,6 +177,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const agentsDir = deps.agentsDir ?? process.env.SIGNET_PATH ?? `${homedir()}/.agents`;
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
+	const recordIndexOperation = deps.recordIndexOperation ?? recordSourceIndexOperation;
 	const pickerExecFile = deps.pickerExecFile ?? execFileAsync;
 	const pickerPlatform = deps.pickerPlatform ?? process.platform;
 	app.get("/api/sources", (c) => {
@@ -247,6 +251,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			agentsDir,
 			startBridge,
 			purgeNativeSource,
+			recordIndexOperation,
 		});
 
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
@@ -306,6 +311,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			agentsDir,
 			startBridge,
 			purgeNativeSource,
+			recordIndexOperation,
 		});
 
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
@@ -444,6 +450,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			agentsDir,
 			startBridge,
 			purgeNativeSource,
+			recordIndexOperation,
 		});
 
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
@@ -492,6 +499,31 @@ function enqueueSourceIndexJob(input: SourceIndexJobInput): SourceIndexJob {
 	return job;
 }
 
+async function recordSourceIndexTelemetryBestEffort(
+	recordIndexOperation: typeof recordSourceIndexOperation,
+	input: Parameters<typeof recordSourceIndexOperation>[0],
+): Promise<void> {
+	try {
+		await recordIndexOperation(input);
+	} catch (error) {
+		const failure = error instanceof Error ? error : new Error(String(error));
+		logger.error("telemetry", "Source index lifecycle telemetry persistence failed", failure);
+		const telemetry = getActiveTelemetry();
+		if (!telemetry) return;
+		try {
+			const properties = { type: "SourceLifecycleTelemetryFailure", operation: "source-index" } as const;
+			if (telemetry.recordDeferred) telemetry.recordDeferred("error.occurred", properties);
+			else telemetry.record("error.occurred", properties);
+		} catch (signalError) {
+			logger.error(
+				"telemetry",
+				"Failed to signal source index lifecycle telemetry failure",
+				signalError instanceof Error ? signalError : new Error(String(signalError)),
+			);
+		}
+	}
+}
+
 async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob): Promise<void> {
 	const startedAt = Date.now();
 	const agentId = resolveDaemonAgentId();
@@ -534,7 +566,12 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 			if (result.failures.length > 0) {
 				const accepted = Math.max(0, result.indexed - result.failures.length);
 				const discovered = Math.max(result.scanned, result.indexed);
-				await recordSourceIndexOperation({
+				failSourceIndexJob(
+					input.source.id,
+					job.id,
+					`${input.source.kind} source sync completed with ${result.failures.length} failure(s)`,
+				);
+				await recordSourceIndexTelemetryBestEffort(input.recordIndexOperation, {
 					source: input.source,
 					agentId,
 					discovered,
@@ -545,15 +582,11 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 					failureClass: sourceFailureClass(result.failures[0]),
 					searchable: accepted > 0,
 				});
-				failSourceIndexJob(
-					input.source.id,
-					job.id,
-					`${input.source.kind} source sync completed with ${result.failures.length} failure(s)`,
-				);
 			} else {
 				const discovered = Math.max(result.scanned, result.indexed);
 				markSourceIndexed(input.source.id, undefined, input.agentsDir);
-				await recordSourceIndexOperation({
+				completeSourceIndexJob(input.source.id, job.id, result.indexed);
+				await recordSourceIndexTelemetryBestEffort(input.recordIndexOperation, {
 					source: input.source,
 					agentId,
 					discovered,
@@ -561,7 +594,6 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 					durationMs: Date.now() - startedAt,
 					outcome: "success",
 				});
-				completeSourceIndexJob(input.source.id, job.id, result.indexed);
 			}
 			return;
 		}
@@ -590,7 +622,8 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		markSourceIndexed(input.source.id, undefined, input.agentsDir);
 		const progress = getSourceIndexJob(input.source.id);
-		await recordSourceIndexOperation({
+		completeSourceIndexJob(input.source.id, job.id, indexed);
+		await recordSourceIndexTelemetryBestEffort(input.recordIndexOperation, {
 			source: input.source,
 			agentId,
 			discovered: progress?.scanned ?? indexed,
@@ -598,10 +631,10 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 			durationMs: Date.now() - startedAt,
 			outcome: "success",
 		});
-		completeSourceIndexJob(input.source.id, job.id, indexed);
 	} catch (err) {
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
-		await recordSourceIndexOperation({
+		failSourceIndexJob(input.source.id, job.id, err);
+		await recordSourceIndexTelemetryBestEffort(input.recordIndexOperation, {
 			source: input.source,
 			agentId,
 			discovered: getSourceIndexJob(input.source.id)?.scanned ?? 0,
@@ -612,7 +645,6 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 			failureClass: sourceFailureClass(err),
 			searchable: false,
 		});
-		failSourceIndexJob(input.source.id, job.id, err);
 	} finally {
 		await bridge?.close().catch(() => undefined);
 		if (consumeCanceledSourceIndexJob(job.id) && !sourceIndexStopping) {

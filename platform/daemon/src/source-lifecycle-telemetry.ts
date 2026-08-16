@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SignetSourceEntry, SignetSourceKind } from "@signet/core";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { dbOwnerBatch, dbOwnerQuery, dbOwnerTransaction, ownerStatement } from "./db-owner-runtime";
 import { logger } from "./logger";
 import { getActiveTelemetry } from "./telemetry";
 
@@ -44,26 +44,11 @@ export type SourceDurationBucket = (typeof SOURCE_DURATION_BUCKETS)[number];
 export const SOURCE_LAG_BUCKETS = ["unknown", "lt_1h", "1_6h", "6_24h", "1_7d", "7d_plus"] as const;
 export type SourceLagBucket = (typeof SOURCE_LAG_BUCKETS)[number];
 
-type SourceLifecyclePhase = "connect" | "index" | "readiness" | "first_recall" | "freshness";
-
 interface SourceLifecycleSource {
 	readonly id: string;
 	readonly kind: SignetSourceKind | string;
 	readonly root?: string;
 	readonly providerSettings?: Readonly<Record<string, unknown>>;
-}
-
-interface SourceLifecycleState {
-	readonly sourceKey: string;
-	readonly sourceClass: SourceClass;
-	readonly mode: SourceMode;
-	readonly connectedAt: string | null;
-	readonly firstIndexedAt: string | null;
-	readonly firstSearchableAt: string | null;
-	readonly firstRecallAt: string | null;
-	readonly lastSuccessAt: string | null;
-	readonly lastFreshnessState: SourceFreshnessState | null;
-	readonly lastFreshnessEventAt: string | null;
 }
 
 export interface SourceIndexTelemetryInput {
@@ -125,6 +110,13 @@ async function writeBatch(
 	operation: string,
 ): Promise<readonly unknown[]> {
 	return await dbOwnerBatch(statements, { operation, lane: "write", estimatedWorkUnits: statements.length });
+}
+
+async function writeTransaction(
+	statements: readonly ReturnType<typeof ownerStatement>[],
+	operation: string,
+): Promise<readonly unknown[]> {
+	return await dbOwnerTransaction(statements, { operation, lane: "write", estimatedWorkUnits: statements.length });
 }
 
 function rethrowLifecycleFailure(operation: string, error: unknown): never {
@@ -241,42 +233,6 @@ function emit(properties: Readonly<Record<string, string | number | boolean | nu
 	getActiveTelemetry()?.record(SOURCE_LIFECYCLE_EVENT, properties);
 }
 
-function readState(row: Record<string, unknown> | null | undefined): SourceLifecycleState | null {
-	if (!row) return null;
-	return {
-		sourceKey: String(row.source_key),
-		sourceClass: sourceClassForKind(String(row.source_class)),
-		mode: row.mode === "recurring" ? "recurring" : "one_shot",
-		connectedAt: typeof row.connected_at === "string" ? row.connected_at : null,
-		firstIndexedAt: typeof row.first_indexed_at === "string" ? row.first_indexed_at : null,
-		firstSearchableAt: typeof row.first_searchable_at === "string" ? row.first_searchable_at : null,
-		firstRecallAt: typeof row.first_recall_at === "string" ? row.first_recall_at : null,
-		lastSuccessAt: typeof row.last_success_at === "string" ? row.last_success_at : null,
-		lastFreshnessState:
-			row.last_freshness_state === "healthy" ||
-			row.last_freshness_state === "stale" ||
-			row.last_freshness_state === "unknown"
-				? row.last_freshness_state
-				: null,
-		lastFreshnessEventAt: typeof row.last_freshness_event_at === "string" ? row.last_freshness_event_at : null,
-	};
-}
-
-async function readLifecycleState(agentId: string, key: string): Promise<SourceLifecycleState | null> {
-	const row = await dbOwnerQuery<Record<string, unknown> | null>(
-		ownerStatement(
-			`SELECT source_key, source_class, mode, connected_at, first_indexed_at,
-				first_searchable_at, first_recall_at, last_success_at,
-				last_freshness_state, last_freshness_event_at
-			 FROM source_lifecycle_state WHERE agent_id = ? AND source_key = ?`,
-			[agentId, key],
-			"get",
-		),
-		{ operation: "sources.lifecycle.state-read", lane: "read" },
-	);
-	return readState(row);
-}
-
 export async function recordSourceConnected(
 	source: SignetSourceEntry,
 	agentId: string,
@@ -376,16 +332,6 @@ export async function sourceHasSearchableArtifacts(source: SignetSourceEntry, ag
 	}
 }
 
-function freshnessEventNeeded(
-	state: SourceLifecycleState | null,
-	freshness: SourceFreshnessState,
-	nowMs: number,
-): boolean {
-	if (!state || state.lastFreshnessState !== freshness || !state.lastFreshnessEventAt) return true;
-	const last = Date.parse(state.lastFreshnessEventAt);
-	return !Number.isFinite(last) || nowMs - last >= FRESHNESS_EVENT_INTERVAL_MS;
-}
-
 export async function recordSourceIndexOperation(input: SourceIndexTelemetryInput): Promise<void> {
 	if (!getActiveTelemetry()?.enabled) return;
 	const mode = input.mode ?? sourceModeFor(input.source);
@@ -405,21 +351,8 @@ export async function recordSourceIndexOperation(input: SourceIndexTelemetryInpu
 
 	try {
 		const key = sourceKey(sourceIdentity(input.source));
-		const before = await readLifecycleState(input.agentId, key);
-		if (accepted > 0 && !before?.firstIndexedAt) firstIndexed = true;
-		if (searchable && !before?.firstSearchableAt) firstSearchable = true;
 		const success = input.outcome === "success" && input.updateFreshness !== false;
-		const nextSuccessAt = success ? nowIso : (before?.lastSuccessAt ?? null);
-		const freshnessState: SourceFreshnessState = success ? "healthy" : before?.lastSuccessAt ? "stale" : "unknown";
-		const lagMs = before?.lastSuccessAt ? now.getTime() - Date.parse(before.lastSuccessAt) : null;
-		if (
-			mode === "recurring" &&
-			input.updateFreshness !== false &&
-			freshnessEventNeeded(before, freshnessState, now.getTime())
-		) {
-			freshness = { state: freshnessState, lag: sourceLagBucket(success ? 0 : lagMs) };
-		}
-		await writeBatch(
+		const results = await writeTransaction(
 			[
 				ownerStatement(
 					`INSERT OR IGNORE INTO source_lifecycle_state
@@ -428,32 +361,69 @@ export async function recordSourceIndexOperation(input: SourceIndexTelemetryInpu
 					[input.agentId, key, sourceClass, mode],
 				),
 				ownerStatement(
-					`UPDATE source_lifecycle_state SET
-					 mode = ?,
-					 first_indexed_at = CASE WHEN ? = 1 AND first_indexed_at IS NULL THEN ? ELSE first_indexed_at END,
-					 first_searchable_at = CASE WHEN ? = 1 AND first_searchable_at IS NULL THEN ? ELSE first_searchable_at END,
-					 last_success_at = ?,
-					 last_freshness_state = CASE WHEN ? = 'recurring' THEN ? ELSE last_freshness_state END,
-					 last_freshness_event_at = CASE WHEN ? = 1 THEN ? ELSE last_freshness_event_at END
+					`UPDATE source_lifecycle_state SET mode = ?
 					 WHERE agent_id = ? AND source_key = ?`,
+					[mode, input.agentId, key],
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET first_indexed_at = ?
+					 WHERE agent_id = ? AND source_key = ? AND ? = 1 AND first_indexed_at IS NULL
+					 RETURNING first_indexed_at`,
+					[nowIso, input.agentId, key, accepted > 0 ? 1 : 0],
+					"all",
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET first_searchable_at = ?
+					 WHERE agent_id = ? AND source_key = ? AND ? = 1 AND first_searchable_at IS NULL
+					 RETURNING first_searchable_at`,
+					[nowIso, input.agentId, key, searchable ? 1 : 0],
+					"all",
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET
+						last_freshness_state = CASE WHEN ? = 1 THEN 'healthy' ELSE CASE WHEN last_success_at IS NULL THEN 'unknown' ELSE 'stale' END END,
+						last_freshness_event_at = ?
+					 WHERE agent_id = ? AND source_key = ? AND mode = 'recurring' AND ? = 1
+					   AND (
+						 last_freshness_state IS NULL OR
+						 last_freshness_state != CASE WHEN ? = 1 THEN 'healthy' ELSE CASE WHEN last_success_at IS NULL THEN 'unknown' ELSE 'stale' END END OR
+						 last_freshness_event_at IS NULL OR
+						 julianday(?) - julianday(last_freshness_event_at) >= ? / 86400000.0
+					   )
+					 RETURNING last_success_at`,
 					[
-						mode,
-						firstIndexed ? 1 : 0,
+						success ? 1 : 0,
 						nowIso,
-						firstSearchable ? 1 : 0,
-						nowIso,
-						nextSuccessAt,
-						mode,
-						freshness?.state ?? before?.lastFreshnessState ?? null,
-						freshness ? 1 : 0,
-						freshness ? nowIso : null,
 						input.agentId,
 						key,
+						input.updateFreshness !== false ? 1 : 0,
+						success ? 1 : 0,
+						nowIso,
+						FRESHNESS_EVENT_INTERVAL_MS,
 					],
+					"all",
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET
+						mode = ?,
+						last_success_at = CASE WHEN ? = 1 AND (last_success_at IS NULL OR last_success_at < ?) THEN ? ELSE last_success_at END
+					 WHERE agent_id = ? AND source_key = ?`,
+					[mode, success ? 1 : 0, nowIso, nowIso, input.agentId, key],
 				),
 			],
-			"sources.lifecycle.index",
+			"sources.lifecycle.index-atomic",
 		);
+		firstIndexed = Array.isArray(results[2]) && results[2].length > 0;
+		firstSearchable = Array.isArray(results[3]) && results[3].length > 0;
+		const freshnessRows = results[4];
+		if (Array.isArray(freshnessRows) && freshnessRows.length > 0) {
+			const row = freshnessRows[0] as { readonly last_success_at?: unknown };
+			const previous = typeof row.last_success_at === "string" ? Date.parse(row.last_success_at) : Number.NaN;
+			freshness = {
+				state: success ? "healthy" : Number.isFinite(previous) ? "stale" : "unknown",
+				lag: sourceLagBucket(success ? 0 : Number.isFinite(previous) ? now.getTime() - previous : null),
+			};
+		}
 	} catch (error) {
 		rethrowLifecycleFailure("index", error);
 	}
@@ -474,12 +444,11 @@ export async function recordSourceIndexOperation(input: SourceIndexTelemetryInpu
 	});
 	if (firstIndexed) emit({ phase: "readiness", readiness: "indexed", outcome: "success", sourceClass, mode });
 	if (firstSearchable) emit({ phase: "readiness", readiness: "searchable", outcome: "success", sourceClass, mode });
-	const freshnessEvent = freshness as { readonly state: SourceFreshnessState; readonly lag: SourceLagBucket } | null;
-	if (freshnessEvent)
+	if (freshness)
 		emit({
 			phase: "freshness",
-			freshness: freshnessEvent.state,
-			lagBucket: freshnessEvent.lag,
+			freshness: freshness.state,
+			lagBucket: freshness.lag,
 			outcome: input.outcome,
 			sourceClass,
 			mode,
@@ -533,41 +502,44 @@ export async function recordSourceFreshness(source: SignetSourceEntry, agentId: 
 	const now = new Date();
 	const nowIso = now.toISOString();
 	let lag: SourceLagBucket = "unknown";
-	let suppressed = false;
+	let claimed = false;
 	try {
 		const key = sourceKey(sourceIdentity(source));
-		const state = await readLifecycleState(agentId, key);
-		if (state?.lastFreshnessEventAt) {
-			const lastEvent = Date.parse(state.lastFreshnessEventAt);
-			if (Number.isFinite(lastEvent) && now.getTime() - lastEvent < FRESHNESS_EVENT_INTERVAL_MS) {
-				suppressed = true;
-			}
-		}
-		if (!suppressed) {
-			const previous = state?.lastSuccessAt ? Date.parse(state.lastSuccessAt) : Number.NaN;
+		const results = await writeTransaction(
+			[
+				ownerStatement(
+					`INSERT OR IGNORE INTO source_lifecycle_state
+					 (agent_id, source_key, source_class, mode, connected_at)
+					 VALUES (?, ?, ?, 'recurring', NULL)`,
+					[agentId, key, sourceClassForKind(String(source.kind))],
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET mode = 'recurring', last_freshness_state = 'healthy', last_freshness_event_at = ?
+					 WHERE agent_id = ? AND source_key = ?
+					   AND (last_freshness_event_at IS NULL OR julianday(?) - julianday(last_freshness_event_at) >= ? / 86400000.0)
+					 RETURNING last_success_at`,
+					[nowIso, agentId, key, nowIso, FRESHNESS_EVENT_INTERVAL_MS],
+					"all",
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET last_success_at = ?
+					 WHERE agent_id = ? AND source_key = ? AND last_freshness_event_at = ?`,
+					[nowIso, agentId, key, nowIso],
+				),
+			],
+			"sources.lifecycle.freshness-atomic",
+		);
+		const rows = Array.isArray(results[1]) ? (results[1] as readonly { readonly last_success_at?: unknown }[]) : [];
+		claimed = rows.length > 0;
+		if (claimed) {
+			const row = rows[0];
+			const previous = typeof row.last_success_at === "string" ? Date.parse(row.last_success_at) : Number.NaN;
 			lag = sourceLagBucket(Number.isFinite(previous) ? now.getTime() - previous : null);
-			await writeBatch(
-				[
-					ownerStatement(
-						`INSERT OR IGNORE INTO source_lifecycle_state
-							 (agent_id, source_key, source_class, mode, connected_at)
-							 VALUES (?, ?, ?, 'recurring', NULL)`,
-						[agentId, key, sourceClassForKind(String(source.kind))],
-					),
-					ownerStatement(
-						`UPDATE source_lifecycle_state
-							 SET mode = 'recurring', last_success_at = ?, last_freshness_state = 'healthy', last_freshness_event_at = ?
-							 WHERE agent_id = ? AND source_key = ?`,
-						[nowIso, nowIso, agentId, key],
-					),
-				],
-				"sources.lifecycle.freshness",
-			);
 		}
 	} catch (error) {
 		rethrowLifecycleFailure("freshness", error);
 	}
-	if (suppressed) return;
+	if (!claimed) return;
 	emit({
 		phase: "freshness",
 		freshness: "healthy",
@@ -587,14 +559,7 @@ export async function recordSourceReadiness(source: SignetSourceEntry, agentId: 
 	let firstSearchable = false;
 	try {
 		const key = sourceKey(sourceIdentity(source));
-		const state = await readLifecycleState(agentId, key);
-		if (state?.firstIndexedAt && state.firstSearchableAt) {
-			readinessClaimedInProcess.add(processKey);
-			return;
-		}
-		firstIndexed = !state?.firstIndexedAt;
-		firstSearchable = !state?.firstSearchableAt;
-		await writeBatch(
+		const results = await writeTransaction(
 			[
 				ownerStatement(
 					`INSERT OR IGNORE INTO source_lifecycle_state
@@ -603,16 +568,24 @@ export async function recordSourceReadiness(source: SignetSourceEntry, agentId: 
 					[agentId, key, sourceClassForKind(String(source.kind))],
 				),
 				ownerStatement(
-					`UPDATE source_lifecycle_state SET
-					 mode = 'recurring',
-					 first_indexed_at = COALESCE(first_indexed_at, ?),
-					 first_searchable_at = COALESCE(first_searchable_at, ?)
-					 WHERE agent_id = ? AND source_key = ?`,
-					[now, now, agentId, key],
+					`UPDATE source_lifecycle_state SET mode = 'recurring', first_indexed_at = ?
+					 WHERE agent_id = ? AND source_key = ? AND first_indexed_at IS NULL
+					 RETURNING first_indexed_at`,
+					[now, agentId, key],
+					"all",
+				),
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET mode = 'recurring', first_searchable_at = ?
+					 WHERE agent_id = ? AND source_key = ? AND first_searchable_at IS NULL
+					 RETURNING first_searchable_at`,
+					[now, agentId, key],
+					"all",
 				),
 			],
-			"sources.lifecycle.readiness",
+			"sources.lifecycle.readiness-atomic",
 		);
+		firstIndexed = Array.isArray(results[1]) && results[1].length > 0;
+		firstSearchable = Array.isArray(results[2]) && results[2].length > 0;
 	} catch (error) {
 		rethrowLifecycleFailure("readiness", error);
 	}
@@ -650,44 +623,31 @@ async function claimFirstSourceRecall(
 	try {
 		const keys = candidateIds.map(sourceKey);
 		if (keys.length === 0) return;
-		const rows = await dbOwnerQuery<readonly Record<string, unknown>[]>(
-			ownerStatement(
-				`SELECT source_key, source_class, mode, connected_at, first_indexed_at, first_searchable_at,
-					first_recall_at, last_success_at, last_freshness_state, last_freshness_event_at
-				 FROM source_lifecycle_state
-				 WHERE agent_id = ? AND source_class = ? AND first_searchable_at IS NOT NULL
-					AND first_recall_at IS NULL AND source_key IN (${keys.map(() => "?").join(",")})
-				 ORDER BY first_searchable_at ASC LIMIT 20`,
-				[agentId, sourceClass, ...keys],
-				"all",
-			),
-			{ operation: "sources.lifecycle.recall-read", lane: "read" },
-		);
-		const states = rows.map(readState).filter((state): state is SourceLifecycleState => state !== null);
 		const claimedAt = new Date().toISOString();
-		const results =
-			states.length > 0
-				? await writeBatch(
-						states.map((state) =>
-							ownerStatement(
-								`UPDATE source_lifecycle_state SET first_recall_at = ?
-								 WHERE agent_id = ? AND source_key = ? AND first_recall_at IS NULL`,
-								[claimedAt, agentId, state.sourceKey],
-							),
-						),
-						"sources.lifecycle.first-recall",
-					)
-				: [];
-		const claimed = states.filter(
-			(_, index) => Number((results[index] as { readonly changes?: number }).changes ?? 0) > 0,
+		const results = await writeTransaction(
+			[
+				ownerStatement(
+					`UPDATE source_lifecycle_state SET first_recall_at = ?
+					 WHERE agent_id = ? AND source_class = ? AND first_searchable_at IS NOT NULL
+					   AND first_recall_at IS NULL AND source_key IN (${keys.map(() => "?").join(",")})
+					 RETURNING mode, first_searchable_at`,
+					[claimedAt, agentId, sourceClass, ...keys],
+					"all",
+				),
+			],
+			"sources.lifecycle.first-recall-atomic",
 		);
+		const claimed = Array.isArray(results[0])
+			? (results[0] as readonly { readonly mode?: unknown; readonly first_searchable_at?: unknown }[])
+			: [];
 		for (const state of claimed) {
-			const searchableAt = state.firstSearchableAt ? Date.parse(state.firstSearchableAt) : Number.NaN;
+			const searchableAt =
+				typeof state.first_searchable_at === "string" ? Date.parse(state.first_searchable_at) : Number.NaN;
 			emit({
 				phase: "first_recall",
 				outcome: "success",
 				sourceClass,
-				mode: state.mode,
+				mode: state.mode === "recurring" ? "recurring" : "one_shot",
 				latencyBucket: sourceDurationBucket(Number.isFinite(searchableAt) ? Date.now() - searchableAt : 0),
 			});
 		}
