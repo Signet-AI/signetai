@@ -8,7 +8,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DbSpacePreflightError,
+	DbReadAdmissionCancelledError,
+	DbReadAdmissionTimeoutError,
 	DbWriteQueueFullError,
+	MAX_READ_CONNECTIONS,
 	MAX_WRITE_QUEUE,
 	backupBeforeMigration,
 	closeDbAccessor,
@@ -207,6 +210,40 @@ describe("DbAccessor", () => {
 		const rejected = enqueue(() => undefined);
 		await expect(rejected).rejects.toBeInstanceOf(DbWriteQueueFullError);
 		await Promise.all(pending);
+	});
+
+	test("read admission waits FIFO and records timeout/cancellation pressure", async () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		initDbAccessor(dbPath);
+		const acc = getDbAccessor();
+		let releaseReaders: () => void = () => undefined;
+		const readersReleased = new Promise<void>((resolve) => {
+			releaseReaders = resolve;
+		});
+		const heldReaders = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
+			acc.withReadDbAsync(async () => {
+				await readersReleased;
+			}),
+		);
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const timedOut = acc.withReadDbAsync(async () => undefined, { timeoutMs: 25, operation: "test.timeout" });
+		await expect(timedOut).rejects.toBeInstanceOf(DbReadAdmissionTimeoutError);
+		expect(acc.getReadPressure?.().timedOut).toBe(1);
+
+		const controller = new AbortController();
+		const cancelled = acc.withReadDbAsync(async () => undefined, {
+			signal: controller.signal,
+			operation: "test.cancel",
+		});
+		controller.abort();
+		await expect(cancelled).rejects.toBeInstanceOf(DbReadAdmissionCancelledError);
+		expect(acc.getReadPressure?.().cancelled).toBe(1);
+
+		releaseReaders();
+		await Promise.all(heldReaders);
+		expect(acc.getReadPressure?.().activeLeases).toBe(0);
 	});
 
 	test("close rejects queued async writes", async () => {

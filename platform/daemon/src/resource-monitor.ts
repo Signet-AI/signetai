@@ -5,6 +5,7 @@ import { dlopen, ptr, read } from "bun:ffi";
 import { readdirSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { recordEventLoopLag } from "./db-observability";
 import { logger } from "./logger";
 import { reportEventLoopLag, tickPressureState } from "./system-pressure";
 
@@ -387,6 +388,7 @@ export function startEventLoopMonitor(intervalMs = 2000): void {
 		const lag = now - lastTick - intervalMs;
 		// Feed the pressure signal so background write loops can yield/pause.
 		reportEventLoopLag(lag);
+		recordEventLoopLag(lag);
 		// Advance the pressure state machine on the monitor's own cadence so
 		// reads (isSystemPressureHigh) stay pure and never clear the signal.
 		tickPressureState();

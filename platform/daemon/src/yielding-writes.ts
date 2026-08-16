@@ -34,6 +34,12 @@ export interface DrainOptions {
 	readonly label: string;
 	/** Maximum items processed per write transaction. Default 50. */
 	readonly maxPerTx?: number;
+	/** Maximum rows/items in one checkpoint. Defaults to maxPerTx. */
+	readonly maxRows?: number;
+	/** Maximum estimated bytes in one checkpoint. The first item is always admitted. */
+	readonly maxBytes?: number;
+	/** Estimate an item's contribution to the checkpoint byte budget. */
+	readonly estimateBytes?: (item: unknown) => number;
 	/**
 	 * Yield after every N batches even when pressure is normal, so long
 	 * drains don't starve lower-priority work. Default 1 (yield every batch).
@@ -44,6 +50,16 @@ export interface DrainOptions {
 	/** Skip pressure checks entirely (for startup recovery where no workers
 	 *  or HTTP handlers are running to compete with). Default false. */
 	readonly skipPressure?: boolean;
+	/** Called after each committed checkpoint. */
+	readonly checkpoint?: (state: BatchCheckpoint) => void;
+}
+
+export interface BatchCheckpoint {
+	readonly processed: number;
+	readonly batches: number;
+	readonly rows: number;
+	readonly bytes: number;
+	readonly elapsedMs: number;
 }
 
 export interface DrainResult {
@@ -58,6 +74,12 @@ export interface RunWriteOptions {
 	readonly label: string;
 	/** Maximum items processed per write transaction. Default 50. */
 	readonly maxPerTx?: number;
+	/** Maximum rows/items in one checkpoint. Defaults to maxPerTx. */
+	readonly maxRows?: number;
+	/** Maximum estimated bytes in one checkpoint. The first item is always admitted. */
+	readonly maxBytes?: number;
+	/** Estimate an item's contribution to the checkpoint byte budget. */
+	readonly estimateBytes?: (item: unknown) => number;
 	/** Stop adding items to a transaction after this processing budget. */
 	readonly maxTxDurationMs?: number;
 	/** Yield after every N transactions. Default 1. */
@@ -66,6 +88,8 @@ export interface RunWriteOptions {
 	readonly maxTotal?: number;
 	/** Skip pressure checks entirely. Default false. */
 	readonly skipPressure?: boolean;
+	/** Called after each committed checkpoint. */
+	readonly checkpoint?: (state: BatchCheckpoint) => void;
 }
 
 export interface RunWriteResult<Result> {
@@ -78,9 +102,14 @@ export interface RunWriteResult<Result> {
 	readonly error?: string;
 }
 
-async function writeBatch<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
+async function writeBatch<Result>(
+	accessor: DbAccessor,
+	processBatch: (db: WriteDb) => Result,
+	label: string,
+	estimatedWorkUnits: number,
+): Promise<Result> {
 	if (accessor.withWriteTxAsync) {
-		return accessor.withWriteTxAsync(processBatch);
+		return accessor.withWriteTxAsync(processBatch, { operation: `db.batch.${label}`, estimatedWorkUnits });
 	}
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return accessor.withWriteTx(processBatch);
@@ -108,22 +137,35 @@ export async function drainWriteBatches<Item>(
 	options: DrainOptions,
 ): Promise<DrainResult> {
 	const maxPerTx = options.maxPerTx ?? 50;
+	const maxRows = options.maxRows ?? maxPerTx;
+	const maxBytes = options.maxBytes ?? Number.POSITIVE_INFINITY;
 	const yieldEvery = options.yieldEvery ?? 1;
 	const maxTotal = options.maxTotal ?? 10_000;
 
 	let processed = 0;
 	let batches = 0;
 	let paused = 0;
+	const startedAt = performance.now();
 
 	while (processed < maxTotal) {
 		// 1. Fetch next batch (read-only, non-blocking for WAL readers).
 		const remaining = maxTotal - processed;
-		const limit = Math.min(maxPerTx, remaining);
+		const limit = Math.min(maxPerTx, maxRows, remaining);
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const batch = accessor.withReadDb((db: import("./db-accessor").ReadDb) => fetchBatch(db, limit));
 		if (!batch || batch.length === 0) {
 			return { processed, batches, paused, stopped: "exhausted" };
 		}
+		const checkpointBatch: Item[] = [];
+		let checkpointBytes = 0;
+		for (const item of batch) {
+			const estimatedBytes = options.estimateBytes?.(item) ?? 0;
+			const bytes = Number.isFinite(estimatedBytes) ? Math.max(0, estimatedBytes) : 0;
+			if (checkpointBatch.length > 0 && checkpointBytes + bytes > maxBytes) break;
+			checkpointBatch.push(item);
+			checkpointBytes += bytes;
+		}
+		if (checkpointBatch.length === 0) checkpointBatch.push(batch[0] as Item);
 
 		// 2. Check pressure — pause background work if the event loop is degraded.
 		if (!options.skipPressure && isSystemPressureHigh()) {
@@ -132,10 +174,17 @@ export async function drainWriteBatches<Item>(
 		}
 
 		// 3. Process in one short transaction through bounded writer admission.
-		await writeBatch(accessor, (db) => processBatch(db, batch));
+		await writeBatch(accessor, (db) => processBatch(db, checkpointBatch), options.label, checkpointBatch.length);
 
-		processed += batch.length;
+		processed += checkpointBatch.length;
 		batches++;
+		options.checkpoint?.({
+			processed,
+			batches,
+			rows: checkpointBatch.length,
+			bytes: checkpointBytes,
+			elapsedMs: performance.now() - startedAt,
+		});
 
 		// 4. Yield between batches so HTTP handlers and the event-loop monitor run.
 		if (batches % yieldEvery === 0) {
@@ -167,6 +216,14 @@ export async function runWriteBatches<Item, Result>(
 		typeof options.maxPerTx === "number" && Number.isFinite(options.maxPerTx)
 			? Math.max(1, Math.floor(options.maxPerTx))
 			: 50;
+	const maxRows =
+		typeof options.maxRows === "number" && Number.isFinite(options.maxRows)
+			? Math.max(1, Math.floor(options.maxRows))
+			: maxPerTx;
+	const maxBytes =
+		typeof options.maxBytes === "number" && Number.isFinite(options.maxBytes)
+			? Math.max(1, options.maxBytes)
+			: Number.POSITIVE_INFINITY;
 	const maxTxDurationMs =
 		typeof options.maxTxDurationMs === "number" && Number.isFinite(options.maxTxDurationMs)
 			? Math.max(1, options.maxTxDurationMs)
@@ -186,6 +243,7 @@ export async function runWriteBatches<Item, Result>(
 	let processed = 0;
 	let batches = 0;
 	let paused = 0;
+	const startedAt = performance.now();
 
 	while (processed < maxTotal) {
 		if (!options.skipPressure && isSystemPressureHigh()) {
@@ -194,17 +252,30 @@ export async function runWriteBatches<Item, Result>(
 		}
 
 		let batch: readonly Result[];
+		let batchBytes = 0;
 		try {
-			batch = await writeBatch(accessor, (db) => {
-				const startedAt = performance.now();
-				const batchResults: Result[] = [];
-				for (const item of items.slice(processed, maxTotal)) {
-					batchResults.push(processItem(db, item));
-					if (batchResults.length >= maxPerTx) break;
-					if (performance.now() - startedAt >= maxTxDurationMs) break;
-				}
-				return batchResults;
-			});
+			const committed = await writeBatch(
+				accessor,
+				(db) => {
+					const startedAt = performance.now();
+					const batchResults: Result[] = [];
+					let bytes = 0;
+					for (const item of items.slice(processed, maxTotal)) {
+						const estimatedBytes = options.estimateBytes?.(item) ?? 0;
+						const itemBytes = Number.isFinite(estimatedBytes) ? Math.max(0, estimatedBytes) : 0;
+						if (batchResults.length > 0 && bytes + itemBytes > maxBytes) break;
+						batchResults.push(processItem(db, item));
+						bytes += itemBytes;
+						if (batchResults.length >= Math.min(maxPerTx, maxRows)) break;
+						if (performance.now() - startedAt >= maxTxDurationMs) break;
+					}
+					return { results: batchResults, bytes };
+				},
+				options.label,
+				Math.min(maxPerTx, maxRows),
+			);
+			batch = committed.results;
+			batchBytes = committed.bytes;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn("yielding-writes", `${options.label}: write batch failed after ${processed} committed items`, {
@@ -219,6 +290,13 @@ export async function runWriteBatches<Item, Result>(
 		results.push(...batch);
 		processed += batch.length;
 		batches++;
+		options.checkpoint?.({
+			processed,
+			batches,
+			rows: batch.length,
+			bytes: batchBytes,
+			elapsedMs: performance.now() - startedAt,
+		});
 
 		if (batches % yieldEvery === 0) await yieldToEventLoop();
 	}

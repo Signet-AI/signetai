@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import {
+	DbReadAdmissionTimeoutError,
+	MAX_READ_CONNECTIONS,
+	closeDbAccessor,
+	getDbAccessor,
+	initDbAccessor,
+} from "../db-accessor";
 import { mountHealthRoutes } from "./health";
 
 /**
@@ -80,6 +86,28 @@ describe("GET /health/live", () => {
 		expect(typeof body.uptime).toBe("number");
 		expect(typeof body.pid).toBe("number");
 		expect(typeof body.version).toBe("string");
+	});
+
+	test("stays responsive while the read lease pool is saturated", async () => {
+		let releaseReaders: () => void = () => undefined;
+		const readersReleased = new Promise<void>((resolve) => {
+			releaseReaders = resolve;
+		});
+		const heldReaders = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
+			getDbAccessor().withReadDbAsync(async () => {
+				await readersReleased;
+			}),
+		);
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const app = makeApp();
+		const liveResponse = await app.request("http://localhost/health/live");
+		expect(liveResponse.status).toBe(200);
+
+		const timedOutRead = getDbAccessor().withReadDbAsync(async () => undefined, { timeoutMs: 25 });
+		await expect(timedOutRead).rejects.toBeInstanceOf(DbReadAdmissionTimeoutError);
+		releaseReaders();
+		await Promise.all(heldReaders);
 	});
 });
 

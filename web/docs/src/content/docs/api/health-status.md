@@ -30,7 +30,28 @@ and `GET /health/ready` for readiness.
     "queued": 0,
     "maxQueue": 64,
     "oldestWaitMs": null,
-    "lastDurationMs": 2.1
+    "lastDurationMs": 2.1,
+    "active": false,
+    "oldestOperation": null,
+    "rejected": 0,
+    "cancelled": 0,
+    "timedOut": 0,
+    "lastQueueWaitMs": 0
+  },
+  "dbRuntime": {
+    "operations": {
+      "read": { "count": 10, "p50Ms": 1.2, "p95Ms": 4.5, "p99Ms": 5.1, "maxMs": 5.1 },
+      "write": { "count": 4, "p50Ms": 2.1, "p95Ms": 8.0, "p99Ms": 8.0, "maxMs": 8.0 }
+    },
+    "queueWait": {
+      "read": { "count": 10, "p50Ms": 0, "p95Ms": 12, "p99Ms": 12, "maxMs": 12 },
+      "write": { "count": 4, "p50Ms": 0, "p95Ms": 25, "p99Ms": 25, "maxMs": 25 }
+    },
+    "cancelled": 0,
+    "rejected": 0,
+    "timedOut": 0,
+    "failed": 0,
+    "completed": 14
   },
   "shuttingDown": false,
   "updateAvailable": false,
@@ -71,11 +92,19 @@ subsystem, and always returns 200 while the process is alive.
   "pid": 12345,
   "version": "0.124.5",
   "port": 3850,
-  "shuttingDown": false
+  "shuttingDown": false,
+  "eventLoop": {
+    "status": "healthy",
+    "lagP95Ms": 3,
+    "lagP99Ms": 8
+  }
 }
 ```
 
-`status` is `"healthy"`, or `"shutting_down"` once shutdown has begun.
+`status` is `"healthy"`, or `"shutting_down"` once shutdown has begun. The
+`eventLoop` block is diagnostic only and does not make this independent probe
+depend on database availability. It reports bounded event-loop lag samples and
+may report `"degraded"` while the process still returns 200.
 
 The `@signet/daemon` service-management API uses this liveness endpoint for
 `getDaemonStatus()` with a 1.2-second deadline. Its returned `status` is

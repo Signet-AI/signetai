@@ -36,6 +36,14 @@ import type { DbSpaceMetrics } from "./db-vacuum";
 
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { loadMemoryConfig } from "./memory-config";
+import {
+	getDbRuntimeMetrics,
+	recordDbOperation,
+	resetDbObservability,
+	setDbQueueTelemetry,
+	type DbOperationOutcome,
+	type DbRuntimeMetrics,
+} from "./db-observability";
 import { observeDbLatency } from "./runtime-pressure";
 
 export { DbSpacePreflightError };
@@ -142,6 +150,62 @@ export interface WritePressure {
 	readonly oldestWaitMs: number | null;
 	/** Duration of the most recently completed write operation. */
 	readonly lastDurationMs: number | null;
+	/** Number of write transactions currently executing. */
+	readonly active: boolean;
+	/** Operation label of the oldest queued job, if any. */
+	readonly oldestOperation: string | null;
+	/** Number of queued jobs rejected because admission was full. */
+	readonly rejected: number;
+	/** Number of queued jobs cancelled before execution. */
+	readonly cancelled: number;
+	/** Number of jobs that missed their deadline before execution. */
+	readonly timedOut: number;
+	/** Queue wait for the most recently started job. */
+	readonly lastQueueWaitMs: number | null;
+}
+
+export interface ReadPressure {
+	/** Number of active read leases. */
+	readonly activeLeases: number;
+	/** Maximum number of read connections, including non-pooled leases. */
+	readonly maxConnections: number;
+	/** Number of callers waiting for a read lease. */
+	readonly queued: number;
+	/** Maximum number of queued read callers. */
+	readonly maxQueue: number;
+	/** Age of the oldest waiting caller, or null when empty. */
+	readonly oldestWaitMs: number | null;
+	/** Most recent read lease wait. */
+	readonly lastWaitMs: number | null;
+	readonly rejected: number;
+	readonly cancelled: number;
+	readonly timedOut: number;
+}
+
+export interface ReadAdmissionOptions {
+	/** Maximum time to wait for a connection. Default 5 seconds. */
+	readonly timeoutMs?: number;
+	/** Abort a queued request without affecting other readers. */
+	readonly signal?: AbortSignal;
+	/** Stable diagnostic label for the owner boundary. */
+	readonly operation?: string;
+}
+
+export interface WriteAdmissionOptions {
+	/** Stable diagnostic label for the owner boundary. */
+	readonly operation?: string;
+	/** Maximum time a queued job may wait before it is rejected. */
+	readonly deadlineMs?: number;
+	/** Estimated work units for diagnostics and scheduling. */
+	readonly estimatedWorkUnits?: number;
+	/** Abort a queued job before it starts. */
+	readonly signal?: AbortSignal;
+}
+
+export interface DbRuntimePressure {
+	readonly writer: WritePressure;
+	readonly reader: ReadPressure;
+	readonly runtime: DbRuntimeMetrics;
 }
 
 export class DbWriteQueueFullError extends Error {
@@ -150,6 +214,51 @@ export class DbWriteQueueFullError extends Error {
 	constructor() {
 		super("Database write queue is full; retry after write pressure clears");
 		this.name = "DbWriteQueueFullError";
+	}
+}
+
+export class DbReadQueueFullError extends Error {
+	readonly code = "DB_READ_QUEUE_FULL" as const;
+
+	constructor() {
+		super("Database read admission queue is full; retry after read pressure clears");
+		this.name = "DbReadQueueFullError";
+	}
+}
+
+export class DbReadAdmissionTimeoutError extends Error {
+	readonly code = "DB_READ_ADMISSION_TIMEOUT" as const;
+
+	constructor(timeoutMs: number) {
+		super(`Database read admission timed out after ${timeoutMs}ms`);
+		this.name = "DbReadAdmissionTimeoutError";
+	}
+}
+
+export class DbReadAdmissionCancelledError extends Error {
+	readonly code = "DB_READ_ADMISSION_CANCELLED" as const;
+
+	constructor() {
+		super("Database read admission was cancelled before a connection became available");
+		this.name = "DbReadAdmissionCancelledError";
+	}
+}
+
+export class DbWriteAdmissionCancelledError extends Error {
+	readonly code = "DB_WRITE_ADMISSION_CANCELLED" as const;
+
+	constructor() {
+		super("Database write admission was cancelled before execution");
+		this.name = "DbWriteAdmissionCancelledError";
+	}
+}
+
+export class DbWriteAdmissionTimeoutError extends Error {
+	readonly code = "DB_WRITE_ADMISSION_TIMEOUT" as const;
+
+	constructor() {
+		super("Database write admission deadline exceeded");
+		this.name = "DbWriteAdmissionTimeoutError";
 	}
 }
 
@@ -162,7 +271,7 @@ export class DbWriteQueueFullError extends Error {
  */
 export interface AsyncDbAccessor {
 	/** Admit a write transaction through the bounded async writer queue. */
-	withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T>;
+	withWriteTxAsync<T>(fn: (db: WriteDb) => T, options?: WriteAdmissionOptions): Promise<T>;
 
 	/** Admit a WAL checkpoint through the bounded async writer queue. */
 	checkpointWalAsync?(): Promise<void>;
@@ -177,11 +286,15 @@ export interface AsyncDbAccessor {
 	/** Return bounded local diagnostics for the writer admission path. */
 	getWritePressure?(): WritePressure;
 
-	/** Async variant of withReadDb. The connection stays checked out of the
-	 *  read pool for the whole `fn`, including across event-loop yields, so
-	 *  long readers can breathe without starving other readers (the pool
-	 *  grows on demand up to the connection limit). */
-	withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T>;
+	/** Return bounded local diagnostics for the read admission path. */
+	getReadPressure?(): ReadPressure;
+
+	/** Return the combined database-owner diagnostics envelope. */
+	getDbRuntimePressure?(): DbRuntimePressure;
+
+	/** Async variant of withReadDb. The connection is held only for the
+	 * callback's database work and is admitted through a FIFO lease queue. */
+	withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>, options?: ReadAdmissionOptions): Promise<T>;
 
 	/** Close all held connections. Safe to call multiple times. */
 	close(): void;
@@ -1128,14 +1241,34 @@ function backfillVecEmbeddings(db: SqliteDatabase, expectedDimensions: number): 
 // ---------------------------------------------------------------------------
 
 const READ_POOL_SIZE = 4;
-const MAX_READ_CONNECTIONS = 16;
+export const MAX_READ_CONNECTIONS = 16;
+export const MAX_READ_WAITERS = 64;
+export const DEFAULT_READ_WAIT_TIMEOUT_MS = 5_000;
 export const MAX_WRITE_QUEUE = 64;
 
 type WriteJob<T> = {
 	readonly run: () => T;
 	readonly queuedAt: number;
+	readonly operation: string;
+	readonly deadlineAt: number | null;
+	readonly estimatedWorkUnits: number | null;
+	readonly signal: AbortSignal | undefined;
+	readonly onAbort: () => void;
+	readonly transactional: boolean;
+	cancellation: "pending" | "requested" | "started";
 	readonly resolve: (value: T | PromiseLike<T>) => void;
 	readonly reject: (reason?: unknown) => void;
+};
+
+type ReadWaiter = {
+	readonly enqueuedAt: number;
+	readonly operation: string;
+	readonly timeoutMs: number;
+	readonly signal: AbortSignal | undefined;
+	readonly resolve: (lease: { readonly conn: SqliteDatabase; readonly waitMs: number }) => void;
+	readonly reject: (reason?: unknown) => void;
+	readonly onAbort: () => void;
+	readonly timer: ReturnType<typeof setTimeout>;
 };
 
 function yieldToEventLoop(): Promise<void> {
@@ -1145,51 +1278,217 @@ function yieldToEventLoop(): Promise<void> {
 function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 	let closed = false;
 	let writeDraining = false;
+	let writeActive = false;
 	let lastWriteDurationMs: number | null = null;
+	let lastWriteQueueWaitMs: number | null = null;
+	let writeRejected = 0;
+	let writeCancelled = 0;
+	let writeTimedOut = 0;
 	const writeQueue: WriteJob<unknown>[] = [];
 	// Small pool of reusable read connections. Recall does 3 reads per
 	// request so opening/closing every time adds measurable overhead.
 	const readPool: SqliteDatabase[] = [];
 	const readInUse = new Set<SqliteDatabase>();
+	const readWaiters: ReadWaiter[] = [];
+	let lastReadWaitMs: number | null = null;
+	let readRejected = 0;
+	let readCancelled = 0;
+	let readTimedOut = 0;
 
-	function acquireRead(): SqliteDatabase {
+	function updateQueueTelemetry(): void {
+		const oldestRead = readWaiters[0];
+		const oldestWrite = writeQueue[0];
+		setDbQueueTelemetry({
+			readDepth: readWaiters.length,
+			readMaxDepth: MAX_READ_WAITERS,
+			readOldestAgeMs: oldestRead ? Math.max(0, performance.now() - oldestRead.enqueuedAt) : null,
+			readActiveLeases: readInUse.size,
+			writeDepth: writeQueue.length,
+			writeMaxDepth: MAX_WRITE_QUEUE,
+			writeOldestAgeMs: oldestWrite ? Math.max(0, performance.now() - oldestWrite.queuedAt) : null,
+			writeActive,
+		});
+	}
+
+	function openReadConnection(): SqliteDatabase {
 		if (dbPath === null) throw new Error("DbAccessor not initialised");
-		const pooled = readPool.pop();
-		if (pooled) {
-			readInUse.add(pooled);
-			return pooled;
-		}
-		if (readInUse.size >= MAX_READ_CONNECTIONS) {
-			console.warn(`[db] Read connection limit exceeded (${readInUse.size}/${MAX_READ_CONNECTIONS})`);
-			throw new Error("Read connection limit exceeded");
-		}
 		const conn = new Database(dbPath, { readonly: true });
 		conn.exec("PRAGMA busy_timeout = 5000");
 		loadVecExtension(conn);
 		readInUse.add(conn);
+		updateQueueTelemetry();
 		return conn;
+	}
+
+	function acquireReadSync(operation: string): SqliteDatabase {
+		const pooled = readPool.pop();
+		if (pooled) {
+			readInUse.add(pooled);
+			updateQueueTelemetry();
+			return pooled;
+		}
+		if (readInUse.size >= MAX_READ_CONNECTIONS) {
+			readRejected++;
+			recordDbOperation({
+				owner: "read",
+				operation,
+				durationMs: 0,
+				queueWaitMs: 0,
+				queueDepth: readWaiters.length,
+				queueAgeMs: readWaiters[0] ? performance.now() - readWaiters[0].enqueuedAt : null,
+				estimatedWorkUnits: null,
+				outcome: "rejected",
+			});
+			throw new DbReadQueueFullError();
+		}
+		return openReadConnection();
+	}
+
+	function acquireRead(
+		options: ReadAdmissionOptions = {},
+	): Promise<{ readonly conn: SqliteDatabase; readonly waitMs: number }> {
+		const operation = options.operation ?? "db.read";
+		const timeoutMs =
+			typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+				? options.timeoutMs
+				: DEFAULT_READ_WAIT_TIMEOUT_MS;
+		if (closed) return Promise.reject(new Error("DbAccessor is closed"));
+		if (options.signal?.aborted) {
+			readCancelled++;
+			recordDbOperation({
+				owner: "read",
+				operation,
+				durationMs: 0,
+				queueWaitMs: 0,
+				queueDepth: readWaiters.length,
+				queueAgeMs: null,
+				estimatedWorkUnits: null,
+				outcome: "cancelled",
+			});
+			return Promise.reject(new DbReadAdmissionCancelledError());
+		}
+		const pooled = readPool.pop();
+		if (pooled) {
+			readInUse.add(pooled);
+			updateQueueTelemetry();
+			return Promise.resolve({ conn: pooled, waitMs: 0 });
+		}
+		if (readInUse.size < MAX_READ_CONNECTIONS) return Promise.resolve({ conn: openReadConnection(), waitMs: 0 });
+		if (readWaiters.length >= MAX_READ_WAITERS) {
+			readRejected++;
+			recordDbOperation({
+				owner: "read",
+				operation,
+				durationMs: 0,
+				queueWaitMs: 0,
+				queueDepth: readWaiters.length,
+				queueAgeMs: readWaiters[0] ? performance.now() - readWaiters[0].enqueuedAt : null,
+				estimatedWorkUnits: null,
+				outcome: "rejected",
+			});
+			return Promise.reject(new DbReadQueueFullError());
+		}
+
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			const enqueuedAt = performance.now();
+			const waiter = {} as ReadWaiter;
+			const rejectQueued = (error: Error, outcome: DbOperationOutcome): void => {
+				if (settled) return;
+				settled = true;
+				const index = readWaiters.indexOf(waiter);
+				if (index >= 0) readWaiters.splice(index, 1);
+				if (outcome === "cancelled") readCancelled++;
+				else readTimedOut++;
+				const waitMs = Math.max(0, performance.now() - enqueuedAt);
+				recordDbOperation({
+					owner: "read",
+					operation,
+					durationMs: 0,
+					queueWaitMs: waitMs,
+					queueDepth: readWaiters.length,
+					queueAgeMs: waitMs,
+					estimatedWorkUnits: null,
+					outcome,
+				});
+				clearTimeout(waiter.timer);
+				options.signal?.removeEventListener("abort", waiter.onAbort);
+				reject(error);
+				updateQueueTelemetry();
+			};
+			const onAbort = (): void => rejectQueued(new DbReadAdmissionCancelledError(), "cancelled");
+			const timer = setTimeout(() => rejectQueued(new DbReadAdmissionTimeoutError(timeoutMs), "timed_out"), timeoutMs);
+			Object.assign(waiter, {
+				enqueuedAt,
+				operation,
+				timeoutMs,
+				signal: options.signal,
+				resolve,
+				reject,
+				onAbort,
+				timer,
+			});
+			readWaiters.push(waiter);
+			options.signal?.addEventListener("abort", onAbort, { once: true });
+			updateQueueTelemetry();
+		});
 	}
 
 	function releaseRead(conn: SqliteDatabase): void {
 		readInUse.delete(conn);
-		if (readPool.length < READ_POOL_SIZE) {
-			readPool.push(conn);
-		} else {
-			conn.close();
+		const waiter = readWaiters.shift();
+		if (waiter) {
+			clearTimeout(waiter.timer);
+			waiter.signal?.removeEventListener("abort", waiter.onAbort);
+			const waitMs = Math.max(0, performance.now() - waiter.enqueuedAt);
+			lastReadWaitMs = waitMs;
+			readInUse.add(conn);
+			waiter.resolve({ conn, waitMs });
+			updateQueueTelemetry();
+			return;
 		}
+		if (readPool.length < READ_POOL_SIZE) readPool.push(conn);
+		else conn.close();
+		updateQueueTelemetry();
 	}
 
-	function runWriteOperation<T>(fn: () => T): T {
+	function runWriteOperation<T>(
+		fn: () => T,
+		meta: {
+			readonly operation: string;
+			readonly queuedAt?: number;
+			readonly queueDepth?: number;
+			readonly queueAgeMs?: number | null;
+			readonly estimatedWorkUnits?: number | null;
+		},
+	): T {
 		const startedAt = performance.now();
+		let outcome: DbOperationOutcome = "completed";
 		try {
 			return fn();
+		} catch (error) {
+			outcome = "failed";
+			throw error;
 		} finally {
 			lastWriteDurationMs = performance.now() - startedAt;
+			lastWriteQueueWaitMs = meta.queuedAt === undefined ? 0 : Math.max(0, startedAt - meta.queuedAt);
 			observeDbLatency(lastWriteDurationMs);
+			recordDbOperation({
+				owner: "write",
+				operation: meta.operation,
+				durationMs: lastWriteDurationMs,
+				queueWaitMs: lastWriteQueueWaitMs,
+				queueDepth: meta.queueDepth ?? writeQueue.length,
+				queueAgeMs: meta.queueAgeMs ?? (meta.queuedAt === undefined ? null : lastWriteQueueWaitMs),
+				estimatedWorkUnits: meta.estimatedWorkUnits ?? null,
+				outcome,
+			});
 		}
 	}
 
-	function runWriteTx<T>(fn: (db: WriteDb) => T): T {
+	type WriteOperationMeta = Parameters<typeof runWriteOperation>[1];
+
+	function runWriteTx<T>(fn: (db: WriteDb) => T, meta: WriteOperationMeta = { operation: "db.write" }): T {
 		return runWriteOperation(() => {
 			writeConn.exec("BEGIN IMMEDIATE");
 			try {
@@ -1200,39 +1499,102 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 				writeConn.exec("ROLLBACK");
 				throw err;
 			}
-		});
+		}, meta);
 	}
 
 	function runCheckpointWal(): void {
-		runWriteOperation(() => {
-			writeConn.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-		});
+		writeConn.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 	}
 
 	function runIncrementalVacuum(): number {
-		return runWriteOperation(() => {
-			writeConn.exec("PRAGMA incremental_vacuum");
-			const row = writeConn.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
-			return typeof row?.freelist_count === "number" ? row.freelist_count : 0;
-		});
+		writeConn.exec("PRAGMA incremental_vacuum");
+		const row = writeConn.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
+		return typeof row?.freelist_count === "number" ? row.freelist_count : 0;
 	}
 
 	function runVacuumConversion(): boolean {
-		return runWriteOperation(() =>
-			convertToIncrementalVacuum(toMigrationDb(writeConn), { dbPath: dbPath ?? undefined }),
-		);
+		return convertToIncrementalVacuum(toMigrationDb(writeConn), { dbPath: dbPath ?? undefined });
 	}
 
-	function enqueueWrite<T>(run: () => T): Promise<T> {
+	function enqueueWrite<T>(run: () => T, options: WriteAdmissionOptions = {}, transactional = true): Promise<T> {
+		const operation = options.operation ?? "db.write";
 		if (closed) return Promise.reject(new Error("DbAccessor is closed"));
-		if (writeQueue.length >= MAX_WRITE_QUEUE) return Promise.reject(new DbWriteQueueFullError());
+		if (options.signal?.aborted) {
+			writeCancelled++;
+			recordDbOperation({
+				owner: "write",
+				operation,
+				durationMs: 0,
+				queueWaitMs: 0,
+				queueDepth: writeQueue.length,
+				queueAgeMs: null,
+				estimatedWorkUnits: options.estimatedWorkUnits ?? null,
+				outcome: "cancelled",
+			});
+			return Promise.reject(new DbWriteAdmissionCancelledError());
+		}
+		if (writeQueue.length >= MAX_WRITE_QUEUE) {
+			writeRejected++;
+			recordDbOperation({
+				owner: "write",
+				operation,
+				durationMs: 0,
+				queueWaitMs: 0,
+				queueDepth: writeQueue.length,
+				queueAgeMs: writeQueue[0] ? performance.now() - writeQueue[0].queuedAt : null,
+				estimatedWorkUnits: options.estimatedWorkUnits ?? null,
+				outcome: "rejected",
+			});
+			return Promise.reject(new DbWriteQueueFullError());
+		}
 		return new Promise<T>((resolve, reject) => {
-			writeQueue.push({
+			const queuedAt = performance.now();
+			const job = {} as WriteJob<unknown>;
+			const onAbort = (): void => {
+				const index = writeQueue.indexOf(job);
+				if (index < 0) {
+					job.cancellation = "requested";
+					return;
+				}
+				writeQueue.splice(index, 1);
+				job.cancellation = "requested";
+				writeCancelled++;
+				const waitMs = Math.max(0, performance.now() - queuedAt);
+				recordDbOperation({
+					owner: "write",
+					operation,
+					durationMs: 0,
+					queueWaitMs: waitMs,
+					queueDepth: writeQueue.length,
+					queueAgeMs: waitMs,
+					estimatedWorkUnits: job.estimatedWorkUnits,
+					outcome: "cancelled",
+				});
+				reject(new DbWriteAdmissionCancelledError());
+				updateQueueTelemetry();
+			};
+			Object.assign(job, {
 				run,
-				queuedAt: performance.now(),
-				resolve: (value) => resolve(value as T),
+				queuedAt,
+				operation,
+				deadlineAt:
+					typeof options.deadlineMs === "number" && Number.isFinite(options.deadlineMs) && options.deadlineMs > 0
+						? queuedAt + options.deadlineMs
+						: null,
+				estimatedWorkUnits:
+					typeof options.estimatedWorkUnits === "number" && Number.isFinite(options.estimatedWorkUnits)
+						? Math.max(0, options.estimatedWorkUnits)
+						: null,
+				signal: options.signal,
+				onAbort,
+				transactional,
+				cancellation: "pending",
+				resolve: (value: T | PromiseLike<T>) => resolve(value),
 				reject,
 			});
+			writeQueue.push(job);
+			options.signal?.addEventListener("abort", onAbort, { once: true });
+			updateQueueTelemetry();
 			drainWriteQueue();
 		});
 	}
@@ -1244,22 +1606,70 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			const job = writeQueue.shift();
 			if (!job) {
 				writeDraining = false;
+				updateQueueTelemetry();
 				return;
 			}
+			job.signal?.removeEventListener("abort", job.onAbort);
 			if (closed) {
 				job.reject(new Error("DbAccessor is closed"));
-				setTimeout(next, 0);
+				void yieldToEventLoop().then(next);
 				return;
 			}
+			const now = performance.now();
+			if (job.signal?.aborted) {
+				job.cancellation = "requested";
+				writeCancelled++;
+				job.reject(new DbWriteAdmissionCancelledError());
+				void yieldToEventLoop().then(next);
+				return;
+			}
+			if (job.deadlineAt !== null && now >= job.deadlineAt) {
+				writeTimedOut++;
+				recordDbOperation({
+					owner: "write",
+					operation: job.operation,
+					durationMs: 0,
+					queueWaitMs: Math.max(0, now - job.queuedAt),
+					queueDepth: writeQueue.length,
+					queueAgeMs: Math.max(0, now - job.queuedAt),
+					estimatedWorkUnits: job.estimatedWorkUnits,
+					outcome: "timed_out",
+				});
+				job.reject(new DbWriteAdmissionTimeoutError());
+				void yieldToEventLoop().then(next);
+				return;
+			}
+			job.cancellation = "started";
+			writeActive = true;
+			updateQueueTelemetry();
 			try {
-				job.resolve(job.run());
+				job.resolve(
+					job.transactional
+						? runWriteTx(() => job.run(), {
+								operation: job.operation,
+								queuedAt: job.queuedAt,
+								queueDepth: writeQueue.length,
+								queueAgeMs: Math.max(0, now - job.queuedAt),
+								estimatedWorkUnits: job.estimatedWorkUnits,
+							})
+						: runWriteOperation(job.run, {
+								operation: job.operation,
+								queuedAt: job.queuedAt,
+								queueDepth: writeQueue.length,
+								queueAgeMs: Math.max(0, now - job.queuedAt),
+								estimatedWorkUnits: job.estimatedWorkUnits,
+							}),
+				);
 			} catch (err) {
 				job.reject(err);
+			} finally {
+				writeActive = false;
 			}
-			if (writeQueue.length > 0) {
-				void yieldToEventLoop().then(next);
-			} else {
+			updateQueueTelemetry();
+			if (writeQueue.length > 0) void yieldToEventLoop().then(next);
+			else {
 				writeDraining = false;
+				updateQueueTelemetry();
 			}
 		};
 		void yieldToEventLoop().then(next);
@@ -1271,35 +1681,35 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			return runWriteTx(fn);
 		},
 
-		withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
-			return enqueueWrite(() => runWriteTx(fn));
+		withWriteTxAsync<T>(fn: (db: WriteDb) => T, options?: WriteAdmissionOptions): Promise<T> {
+			return enqueueWrite(() => fn(writeConn), options);
 		},
 
 		checkpointWalAsync(): Promise<void> {
-			return enqueueWrite(runCheckpointWal);
+			return enqueueWrite(runCheckpointWal, { operation: "db.checkpoint_wal" }, false);
 		},
 
 		incrementalVacuumAsync(): Promise<number> {
-			return enqueueWrite(runIncrementalVacuum);
+			return enqueueWrite(runIncrementalVacuum, { operation: "db.incremental_vacuum" }, false);
 		},
 
 		vacuumConversionAsync(): Promise<boolean> {
-			return enqueueWrite(runVacuumConversion);
+			return enqueueWrite(runVacuumConversion, { operation: "db.vacuum_conversion" }, false);
 		},
 
 		checkpointWal(): void {
 			if (closed) throw new Error("DbAccessor is closed");
-			runCheckpointWal();
+			runWriteOperation(runCheckpointWal, { operation: "db.checkpoint_wal" });
 		},
 
 		incrementalVacuum(): number {
 			if (closed) throw new Error("DbAccessor is closed");
-			return runIncrementalVacuum();
+			return runWriteOperation(runIncrementalVacuum, { operation: "db.incremental_vacuum" });
 		},
 
 		vacuumConversion(): boolean {
 			if (closed) throw new Error("DbAccessor is closed");
-			return runVacuumConversion();
+			return runWriteOperation(runVacuumConversion, { operation: "db.vacuum_conversion" });
 		},
 
 		getWritePressure(): WritePressure {
@@ -1309,30 +1719,88 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 				maxQueue: MAX_WRITE_QUEUE,
 				oldestWaitMs: oldest ? Math.max(0, performance.now() - oldest.queuedAt) : null,
 				lastDurationMs: lastWriteDurationMs,
+				active: writeActive,
+				oldestOperation: oldest?.operation ?? null,
+				rejected: writeRejected,
+				cancelled: writeCancelled,
+				timedOut: writeTimedOut,
+				lastQueueWaitMs: lastWriteQueueWaitMs,
 			};
+		},
+
+		getReadPressure(): ReadPressure {
+			const oldest = readWaiters[0];
+			return {
+				activeLeases: readInUse.size,
+				maxConnections: MAX_READ_CONNECTIONS,
+				queued: readWaiters.length,
+				maxQueue: MAX_READ_WAITERS,
+				oldestWaitMs: oldest ? Math.max(0, performance.now() - oldest.enqueuedAt) : null,
+				lastWaitMs: lastReadWaitMs,
+				rejected: readRejected,
+				cancelled: readCancelled,
+				timedOut: readTimedOut,
+			};
+		},
+
+		getDbRuntimePressure(): DbRuntimePressure {
+			updateQueueTelemetry();
+			const self = this as unknown as { getWritePressure: () => WritePressure; getReadPressure: () => ReadPressure };
+			return { writer: self.getWritePressure(), reader: self.getReadPressure(), runtime: getDbRuntimeMetrics() };
 		},
 
 		withReadDb<T>(fn: (db: ReadDb) => T): T {
 			if (closed) throw new Error("DbAccessor is closed");
 			const startedAt = performance.now();
-			const conn = acquireRead();
+			const conn = acquireReadSync("db.read.sync");
+			let outcome: DbOperationOutcome = "completed";
 			try {
 				return fn(conn);
+			} catch (error) {
+				outcome = "failed";
+				throw error;
 			} finally {
 				releaseRead(conn);
-				observeDbLatency(performance.now() - startedAt);
+				const durationMs = performance.now() - startedAt;
+				observeDbLatency(durationMs);
+				recordDbOperation({
+					owner: "read",
+					operation: "db.read.sync",
+					durationMs,
+					queueWaitMs: 0,
+					queueDepth: readWaiters.length,
+					queueAgeMs: null,
+					estimatedWorkUnits: null,
+					outcome,
+				});
 			}
 		},
 
-		async withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T> {
+		async withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>, options?: ReadAdmissionOptions): Promise<T> {
 			if (closed) throw new Error("DbAccessor is closed");
 			const startedAt = performance.now();
-			const conn = acquireRead();
+			const lease = await acquireRead(options);
+			let outcome: DbOperationOutcome = "completed";
 			try {
-				return await fn(conn);
+				return await fn(lease.conn);
+			} catch (error) {
+				outcome = "failed";
+				throw error;
 			} finally {
-				releaseRead(conn);
-				observeDbLatency(performance.now() - startedAt);
+				releaseRead(lease.conn);
+				const durationMs = performance.now() - startedAt;
+				lastReadWaitMs = lease.waitMs;
+				observeDbLatency(durationMs);
+				recordDbOperation({
+					owner: "read",
+					operation: options?.operation ?? "db.read",
+					durationMs,
+					queueWaitMs: lease.waitMs,
+					queueDepth: readWaiters.length,
+					queueAgeMs: lease.waitMs,
+					estimatedWorkUnits: null,
+					outcome,
+				});
 			}
 		},
 
@@ -1342,8 +1810,15 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			writeConn.close();
 			for (const conn of readPool) conn.close();
 			for (const conn of readInUse) conn.close();
+			for (const waiter of readWaiters) {
+				clearTimeout(waiter.timer);
+				waiter.signal?.removeEventListener("abort", waiter.onAbort);
+				waiter.reject(new Error("DbAccessor is closed"));
+			}
+			readWaiters.length = 0;
 			readPool.length = 0;
 			readInUse.clear();
+			updateQueueTelemetry();
 		},
 	};
 }
@@ -1382,4 +1857,5 @@ export function closeDbAccessor(): void {
 	vecLoaded = false;
 	vecLoadError = null;
 	vecExtPath = undefined;
+	resetDbObservability();
 }

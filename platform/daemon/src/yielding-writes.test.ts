@@ -91,6 +91,40 @@ describe("drainWriteBatches", () => {
 		expect(remaining).toBe(0);
 	});
 
+	it("checkpoints by byte budget and reports committed progress", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			const stmt = db.prepare("INSERT INTO work (id, payload) VALUES (?, ?)");
+			for (let i = 0; i < 3; i++) stmt.run(i, `item-${i}`);
+		});
+		const checkpoints: Array<{ processed: number; rows: number; bytes: number }> = [];
+
+		const result = await drainWriteBatches(
+			getDbAccessor(),
+			(db: ReadDb, limit: number) =>
+				db
+					.prepare("SELECT id FROM work WHERE id NOT IN (SELECT id FROM items) ORDER BY id LIMIT ?")
+					.all(limit) as Array<{ id: number }>,
+			(db: WriteDb, batch: readonly { id: number }[]) => {
+				for (const item of batch) db.prepare("INSERT INTO items (id) VALUES (?)").run(item.id);
+			},
+			{
+				label: "byte-checkpoint",
+				maxPerTx: 3,
+				maxBytes: 5,
+				estimateBytes: () => 4,
+				checkpoint: ({ processed, rows, bytes }) => checkpoints.push({ processed, rows, bytes }),
+			},
+		);
+
+		expect(result.processed).toBe(3);
+		expect(result.batches).toBe(3);
+		expect(checkpoints).toEqual([
+			{ processed: 1, rows: 1, bytes: 4 },
+			{ processed: 2, rows: 1, bytes: 4 },
+			{ processed: 3, rows: 1, bytes: 4 },
+		]);
+	});
+
 	it("yields to the event loop between batches", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			const stmt = db.prepare("INSERT INTO work (id, payload) VALUES (?, ?)");

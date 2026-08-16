@@ -3,6 +3,7 @@ import { type MigrationDb, hasPendingMigrations } from "@signet/core";
 import type { Hono } from "hono";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { type ReadDb, type WritePressure, getDbAccessor } from "../db-accessor";
+import { getDbRuntimeMetrics, getEventLoopLiveness } from "../db-observability";
 import {
 	QUEUE_MAX_DEAD_RATE,
 	QUEUE_MAX_DEPTH,
@@ -181,6 +182,7 @@ export function mountHealthRoutes(app: Hono): void {
 		const us = getUpdateState();
 		let dbOk = false;
 		let dbWriter: WritePressure | null = null;
+		let dbRuntime = getDbRuntimeMetrics();
 		try {
 			const accessor = getDbAccessor();
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
@@ -189,6 +191,7 @@ export function mountHealthRoutes(app: Hono): void {
 				dbOk = true;
 			});
 			dbWriter = accessor.getWritePressure?.() ?? null;
+			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
 		} catch {}
 
 		const databaseIntegrity = getDatabaseIntegrityStatus();
@@ -205,6 +208,7 @@ export function mountHealthRoutes(app: Hono): void {
 			agentsDir: AGENTS_DIR,
 			db: dbOk,
 			dbWriter,
+			dbRuntime,
 			databaseIntegrity,
 			shuttingDown,
 			updateAvailable: us.lastCheck?.updateAvailable ?? false,
@@ -222,6 +226,7 @@ export function mountHealthRoutes(app: Hono): void {
 			version: CURRENT_VERSION,
 			port: PORT,
 			shuttingDown,
+			eventLoop: getEventLoopLiveness(),
 		});
 	});
 
