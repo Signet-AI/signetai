@@ -4,11 +4,14 @@ description: Capture a Bun CPU profile from a running Signet daemon.
 ---
 
 Use the daemon's Bun inspector when a daemon is alive but its event loop is
-blocked, CPU-bound, or otherwise needs a JavaScript CPU profile. The command
-below is the canonical headless launch:
+blocked, CPU-bound, or otherwise needs a JavaScript CPU profile. Start from a
+stopped daemon and run this single profile-enabled headless launch:
 
 ```bash
-BUN_INSPECT=127.0.0.1:9229/json signet daemon start
+profile_dir=$(mktemp -d)
+BUN_OPTIONS="--cpu-prof --cpu-prof-dir=$profile_dir" \
+  BUN_INSPECT=127.0.0.1:9229/json \
+  signet daemon start
 ```
 
 `signet daemon start` keeps `127.0.0.1:9229` as the public inspector endpoint,
@@ -68,21 +71,15 @@ routes on this runtime and only expose `/json/version`.
 ## Capture a CPU profile
 
 The current Bun runtime exposes the inspector WebSocket for runtime attachment,
-but it does not expose the CDP `Profiler` domain. Use Bun's built-in sampling
-profiler instead. `BUN_OPTIONS` is forwarded through the Linux transient
-`systemd-run --user` service boundary to the daemon child and writes a
-Chrome-compatible `.cpuprofile` when the daemon exits:
+but it does not expose the CDP `Profiler` domain. The profile-enabled launch
+above uses Bun's built-in sampling profiler. `BUN_OPTIONS` is forwarded through
+the Linux transient `systemd-run --user` service boundary to the daemon child
+and writes a Chrome-compatible `.cpuprofile` when the daemon exits.
 
-```bash
-profile_dir=$(mktemp -d)
-BUN_OPTIONS="--cpu-prof --cpu-prof-dir=$profile_dir" \
-  BUN_INSPECT=127.0.0.1:9229/json \
-  signet daemon start
-```
-
-Exercise the workload, then stop the daemon cleanly so Bun can flush the
-profile. The parent handoff and discovery proxy may also write small profiles;
-the daemon profile is the largest file because it contains the workload:
+After the readiness and discovery checks succeed, exercise the workload, then
+stop the daemon cleanly so Bun can flush the profile. The parent handoff and
+discovery proxy may also write small profiles; the daemon profile is the largest
+file because it contains the workload:
 
 ```bash
 signet daemon stop
