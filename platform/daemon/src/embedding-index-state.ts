@@ -26,7 +26,7 @@ export interface EmbeddingIndexState {
 	readonly lastError: string | null;
 }
 
-interface StateRow {
+export interface EmbeddingIndexStateRow {
 	readonly active_profile_json: string;
 	readonly staging_profile_json: string | null;
 	readonly state: EmbeddingIndexBuildState;
@@ -113,7 +113,7 @@ function isEmbeddingProvider(value: unknown): value is EmbeddingConfig["provider
 	return value === "native" || value === "llama-cpp" || value === "ollama" || value === "openai" || value === "none";
 }
 
-function parseState(row: StateRow): EmbeddingIndexState | null {
+function parseState(row: EmbeddingIndexStateRow): EmbeddingIndexState | null {
 	const active = parseProfile(row.active_profile_json);
 	const parsedStaging = row.staging_profile_json === null ? null : parseProfile(row.staging_profile_json);
 	const staging =
@@ -125,13 +125,17 @@ function parseState(row: StateRow): EmbeddingIndexState | null {
 	return { active, staging, state: row.state, lastError: row.last_error };
 }
 
+export function parseEmbeddingIndexStateRow(row: EmbeddingIndexStateRow | null): EmbeddingIndexState | null {
+	return row === null ? null : parseState(row);
+}
+
 export function readEmbeddingIndexState(db: ReadDb): EmbeddingIndexState | null {
 	const row = db
 		.prepare(
 			"SELECT active_profile_json, staging_profile_json, state, last_error FROM embedding_index_state WHERE id = 1",
 		)
-		.get() as StateRow | undefined;
-	return row ? parseState(row) : null;
+		.get() as EmbeddingIndexStateRow | undefined;
+	return parseEmbeddingIndexStateRow(row ?? null);
 }
 
 /**

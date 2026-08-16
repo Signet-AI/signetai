@@ -22,13 +22,23 @@ Every submitted job has this shape:
       params?: Array<string | number | boolean | null | { type: "bytes", base64: string }>,
       result: "all" | "get" | "run",
       maxResultBytes?: number,
-      transactional?: boolean
+      transactional?: boolean,
+      requireChanges?: boolean
     }
   } | {
     kind: "transaction",
     transaction: {
       statements: Array<Statement>
     }
+  } | {
+    kind: "batch",
+    statements: Array<{
+      sql: string,
+      params?: Array<string | number | boolean | null | { type: "bytes", base64: string }>,
+      result: "run",
+      requireChanges?: boolean
+    }>,
+    requireChanges?: boolean
   } | {
     kind: "sleep",
     durationMs: number
@@ -59,7 +69,7 @@ The owner sends:
 
 ## Execution and cancellation
 
-The first implementation has one FIFO process. `read` jobs and `write` or `maintenance` jobs are still tagged separately, preserving the lane split for a future transport with parallel readers and one writer. A `run` statement is wrapped in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. A transaction request wraps all of its statements in one `BEGIN IMMEDIATE`/`COMMIT` and rolls back the complete batch on any failure. Read statements do not open a transaction.
+The first implementation has one FIFO process. `read` jobs and `write` or `maintenance` jobs are still tagged separately, preserving the lane split for a future transport with parallel readers and one writer. A `run` statement is wrapped in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. A transaction request wraps all of its statements in one `BEGIN IMMEDIATE`/`COMMIT` and rolls back the complete batch on any failure. Read statements do not open a transaction. A `batch` contains only `run` statements and executes all statements inside one `BEGIN IMMEDIATE`/`COMMIT`. A batch rolls back when any statement fails. `requireChanges` is a fail-closed precondition: if the batch or marked statement changes zero rows, the whole batch rolls back with `DB_OWNER_NO_CHANGES`.
 
 A queued cancellation is removed from the client pending map, clears its deadline timer, and is removed from the owner's queue before execution. A cancellation received while synchronous native SQLite work is running is best effort because the owner cannot observe stdin until that call returns. A deadline is different: the client kills the entire child with `SIGKILL` at the absolute deadline. The subsequent owner death fails all other in-flight and queued jobs closed.
 

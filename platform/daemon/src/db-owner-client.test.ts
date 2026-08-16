@@ -101,6 +101,34 @@ describe("DB owner client", () => {
 		expect((await write.result).changes).toBe(1);
 	});
 
+	test("rolls back a batch when a required precondition changes zero rows", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		const batch = client.submit(
+			{
+				kind: "batch",
+				statements: [
+					{
+						sql: "INSERT INTO memories (id, content) VALUES (?, ?)",
+						params: ["m2", "rolled back"],
+						result: "run",
+					},
+					{
+						sql: "UPDATE memories SET content = ? WHERE id = ?",
+						params: ["must not persist", "missing"],
+						result: "run",
+						requireChanges: true,
+					},
+				],
+			},
+			{ operation: "memory.batch-precondition", lane: "write", deadlineMs: 1_000 },
+		);
+		await expect(batch.result).rejects.toThrow("DB owner batch precondition changed zero rows");
+		const rows = await recallThroughDbOwner<{ id: string }>(client, "SELECT id FROM memories ORDER BY id");
+		expect(rows).toEqual([{ id: "m1" }]);
+	});
+
 	test("detects an owner crash and recovers with a fresh owner", async () => {
 		const database = makeDb();
 		directory = database.directory;

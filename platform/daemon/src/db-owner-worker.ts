@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { findSqliteVecExtension } from "@signet/core";
 import type { DbOwnerCommand, DbOwnerEvent, DbOwnerJob, DbOwnerParameter, DbOwnerStatement } from "./db-owner-protocol";
 import {
 	DB_OWNER_MAX_DEADLINE_MS,
@@ -23,6 +24,7 @@ interface SqliteStatement {
 interface SqliteDatabase {
 	prepare(sql: string): SqliteStatement;
 	exec(sql: string): void;
+	loadExtension?(path: string): void;
 	close(): void;
 }
 
@@ -48,6 +50,11 @@ export function runDbOwnerWorker(): void {
 
 	const db = new Database(dbPath);
 	db.exec("PRAGMA busy_timeout = 5000");
+	const vecExtension = findSqliteVecExtension();
+	if (vecExtension !== null) {
+		if (typeof db.loadExtension !== "function") throw new Error("SQLite loadExtension API unavailable");
+		db.loadExtension(vecExtension);
+	}
 
 	const BUSY_RETRIES = 3;
 	const BUSY_BACKOFF_MS = 50;
@@ -140,9 +147,42 @@ export function runDbOwnerWorker(): void {
 		});
 	}
 
+	function executeBatch(statements: readonly DbOwnerStatement[], requireChanges: boolean): readonly unknown[] {
+		if (statements.length === 0) throw new Error("DB owner batch must contain at least one statement");
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const results: unknown[] = [];
+			for (const statement of statements) {
+				if (statement.result !== "run") throw new Error("DB owner batches only support run statements");
+				const result = executeStatementWithoutTransaction(statement);
+				if ((requireChanges || statement.requireChanges === true) && result.changes === 0) {
+					const error = new Error("DB owner batch precondition changed zero rows");
+					error.name = "DB_OWNER_NO_CHANGES";
+					throw error;
+				}
+				results.push(result);
+			}
+			db.exec("COMMIT");
+			return enforceResultLimit({ sql: "db-owner-batch", result: "all" }, results) as readonly unknown[];
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				// The original error is the actionable failure.
+			}
+			throw error;
+		}
+	}
+
+	function executeStatementWithoutTransaction(statement: DbOwnerStatement): SqliteRunResult {
+		const params = (statement.params ?? []).map(bindParameter);
+		return db.prepare(statement.sql).run(...params);
+	}
+
 	function execute(job: DbOwnerJob): unknown {
 		if (job.request.kind === "query") return executeStatement(job.request.statement);
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements);
+		if (job.request.kind === "batch") return executeBatch(job.request.statements, job.request.requireChanges === true);
 		const durationMs = Math.max(0, Math.floor(job.request.durationMs));
 		const wait = new Int32Array(new SharedArrayBuffer(4));
 		Atomics.wait(wait, 0, 0, durationMs);

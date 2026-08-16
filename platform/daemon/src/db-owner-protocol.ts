@@ -26,6 +26,8 @@ export interface DbOwnerStatement {
 	/** Maximum UTF-8 JSON payload for this result. The owner rejects larger results. */
 	readonly maxResultBytes?: number;
 	readonly transactional?: boolean;
+	/** Abort a transaction when this run statement changes zero rows. */
+	readonly requireChanges?: boolean;
 }
 
 export interface DbOwnerTransaction {
@@ -33,9 +35,15 @@ export interface DbOwnerTransaction {
 }
 
 export type DbOwnerRequest =
-	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
-	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
-	| { readonly kind: "sleep"; readonly durationMs: number };
+| { readonly kind: "query"; readonly statement: DbOwnerStatement }
+| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
+| {
+		readonly kind: "batch";
+		readonly statements: readonly DbOwnerStatement[];
+		/** Abort the transaction when a run statement changes zero rows. */
+		readonly requireChanges?: boolean;
+	}
+| { readonly kind: "sleep"; readonly durationMs: number };
 
 export interface DbOwnerJob {
 	readonly id: string;

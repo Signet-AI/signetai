@@ -270,6 +270,7 @@ let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
+let dbOwnerClient: DbOwnerClient | null = null;
 let vacuumConversionHandle: VacuumConversionHandle | null = null;
 let embeddingPromotionRestart: Promise<void> | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
@@ -1662,6 +1663,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
 			fetchEmbedding,
 			checkProvider: checkEmbeddingProvider,
+			owner: dbOwnerClient ?? undefined,
 			pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
 			batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
 			onPromoted: () => {
@@ -2019,6 +2021,7 @@ async function main() {
 	}
 
 	await initDbAccessorAsync(MEMORY_DB, { agentsDir: AGENTS_DIR });
+	dbOwnerClient = createDbOwnerClient({ dbPath: MEMORY_DB });
 	setSessionClaimStore(createSessionClaimStore(getDbAccessor()));
 	startSessionCleanup();
 	// Formal TTL lifecycle (#902): when stale-session cleanup evicts a claim
