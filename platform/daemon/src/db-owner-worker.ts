@@ -4,6 +4,7 @@ import {
 	DB_OWNER_MAX_DEADLINE_MS,
 	DB_OWNER_MAX_QUEUE_DEPTH,
 	DB_OWNER_MAX_RESULT_BYTES,
+	DB_OWNER_MAX_TRANSACTION_STATEMENTS,
 	DB_OWNER_MAX_WORK_UNITS,
 	serializeError,
 } from "./db-owner-protocol";
@@ -29,7 +30,13 @@ const require = createRequire(import.meta.url);
 const Database = (
 	typeof (globalThis as Record<string, unknown>).Bun !== "undefined"
 		? require("bun:sqlite").Database
-		: require("better-sqlite3")
+		: (() => {
+				try {
+					return require("node:sqlite").DatabaseSync;
+				} catch {
+					return require("better-sqlite3");
+				}
+			})()
 ) as new (
 	path: string,
 	options?: Record<string, unknown>,
@@ -41,6 +48,36 @@ export function runDbOwnerWorker(): void {
 
 	const db = new Database(dbPath);
 	db.exec("PRAGMA busy_timeout = 5000");
+
+	const BUSY_RETRIES = 3;
+	const BUSY_BACKOFF_MS = 50;
+	const isBusyError = (error: unknown): boolean => {
+		const code = error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
+		const message = error instanceof Error ? error.message : String(error);
+		return code === "SQLITE_BUSY" || message.includes("SQLITE_BUSY") || message.includes("database is locked");
+	};
+	const wait = (milliseconds: number): void => {
+		const signal = new Int32Array(new SharedArrayBuffer(4));
+		Atomics.wait(signal, 0, 0, milliseconds);
+	};
+	const withBusyRetry = <Result>(operation: () => Result): Result => {
+		for (let attempt = 0; ; attempt += 1) {
+			try {
+				db.exec("BEGIN IMMEDIATE");
+				const result = operation();
+				db.exec("COMMIT");
+				return result;
+			} catch (error) {
+				try {
+					db.exec("ROLLBACK");
+				} catch {
+					// Preserve the original SQLite error.
+				}
+				if (!isBusyError(error) || attempt >= BUSY_RETRIES) throw error;
+				wait(BUSY_BACKOFF_MS * 2 ** attempt);
+			}
+		}
+	};
 
 	const cancelled = new Set<string>();
 	const queue: DbOwnerJob[] = [];
@@ -90,24 +127,22 @@ export function runDbOwnerWorker(): void {
 		if (statement.result === "get") return enforceResultLimit(statement, prepared.get(...params));
 		if (statement.transactional === false) return enforceResultLimit(statement, prepared.run(...params));
 
-		db.exec("BEGIN IMMEDIATE");
-		try {
-			const result = prepared.run(...params);
-			const boundedResult = enforceResultLimit(statement, result);
-			db.exec("COMMIT");
-			return boundedResult;
-		} catch (error) {
-			try {
-				db.exec("ROLLBACK");
-			} catch {
-				// The original error is the actionable failure.
-			}
-			throw error;
+		return withBusyRetry(() => enforceResultLimit(statement, prepared.run(...params)));
+	}
+
+	function executeTransaction(statements: readonly DbOwnerStatement[]): readonly unknown[] {
+		if (statements.length === 0 || statements.length > DB_OWNER_MAX_TRANSACTION_STATEMENTS) {
+			throw new Error(`DB owner transaction must contain 1 to ${DB_OWNER_MAX_TRANSACTION_STATEMENTS} statements`);
 		}
+		return withBusyRetry(() => {
+			const results = statements.map((statement) => executeStatement({ ...statement, transactional: false }));
+			return enforceResultLimit({ sql: "DB_OWNER_TRANSACTION", result: "all" }, results) as readonly unknown[];
+		});
 	}
 
 	function execute(job: DbOwnerJob): unknown {
 		if (job.request.kind === "query") return executeStatement(job.request.statement);
+		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements);
 		const durationMs = Math.max(0, Math.floor(job.request.durationMs));
 		const wait = new Int32Array(new SharedArrayBuffer(4));
 		Atomics.wait(wait, 0, 0, durationMs);

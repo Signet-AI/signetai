@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairTelemetryIndexes, runDeferredIntegrityCheck } from "./database-integrity";
+import { createDbOwnerClient } from "./db-owner-client";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 
 function fakeAccessor(options: { readonly quickMessage?: string; readonly telemetryMessage?: string }): {
@@ -88,6 +89,32 @@ afterEach(async () => {
 });
 
 describe("telemetry database integrity recovery (#1360)", () => {
+	it("runs quick_check and telemetry verification through the DB owner", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-owner-"));
+		const dbPath = join(dir, "memory.db");
+		const database = new Database(dbPath);
+		database.exec(
+			"CREATE TABLE telemetry_events (event TEXT, queue TEXT, timestamp TEXT, unsent INTEGER); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event)",
+		);
+		database.close();
+		const owner = createDbOwnerClient({ dbPath });
+		try {
+			const result = await repairTelemetryIndexes(fakeAccessor({}).accessor, undefined, {
+				owner,
+				repairTimeoutMs: 5_000,
+			});
+			expect(result.state).toBe("healthy");
+			expect(result.quickCheck.ok).toBe(true);
+			expect(result.telemetryCheck.ok).toBe(true);
+			expect(result.ownerState).toBe("ready");
+			expect(result.ownerGeneration).toBe(1);
+			expect(result.deadlineKills).toBe(0);
+		} finally {
+			await owner.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("rebuilds disposable telemetry indexes after quick_check misses the mismatch", async () => {
 		const { accessor, reindexed } = fakeAccessor({
 			telemetryMessage: "row 111120 missing from index idx_telemetry_events_event",

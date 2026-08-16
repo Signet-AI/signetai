@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { createDbOwnerClient } from "./db-owner-client";
 import { startDreamingWorker } from "./pipeline/dreaming-worker";
 import { getStartupRecoveryCompletion, runStartupRecovery, runStartupRecoveryAsync } from "./startup-recovery";
 
@@ -115,6 +116,21 @@ describe("runStartupRecovery", () => {
 
 		expect(report.deadJobsPurged).toBe(2);
 		expect(countRows("memory_jobs")).toBe(2); // dead-recent + pending-1
+	});
+
+	it("routes startup cleanup through the DB owner without blocking the caller", async () => {
+		const old = new Date(Date.now() - 10 * 86_400_000).toISOString();
+		getDbAccessor().withWriteTx((db) => insertJob(db, "owner-dead-old", "dead", old));
+		const owner = createDbOwnerClient({ dbPath: join(agentsDir, "memory", "memories.db") });
+		try {
+			const report = await runStartupRecoveryAsync(getDbAccessor(), { owner });
+			expect(report.deadJobsPurged).toBe(1);
+			expect(owner.health().state).toBe("ready");
+			expect(owner.health().generation).toBe(1);
+			expect(countRows("memory_jobs")).toBe(0);
+		} finally {
+			await owner.close();
+		}
 	});
 
 	it("recovers every document lease during startup without touching other job types", async () => {

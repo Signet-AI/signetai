@@ -57,6 +57,8 @@ import {
 	type WriteDb,
 } from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum";
+import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
+import { ownerRunStatement } from "./db-owner-maintenance";
 import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
@@ -263,6 +265,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 let httpServer: import("node:net").Server | null = null;
+let dbOwnerClient: DbOwnerClient | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
@@ -1821,6 +1824,10 @@ async function cleanup() {
 		});
 	}
 
+	if (dbOwnerClient !== null) {
+		await dbOwnerClient.close();
+		dbOwnerClient = null;
+	}
 	closeDbAccessor();
 
 	if (watcher) {
@@ -2032,11 +2039,10 @@ async function main() {
 	startEventLoopMonitor();
 	startFdPollMonitor();
 
-	// Clean accumulated crash-loop damage (dead jobs, stagnant staging buffer,
-	// WAL bloat) before any worker starts. Integrity scanning is deliberately
-	// not part of this synchronous phase. The full-database quick_check runs in
-	// a bounded worker after the HTTP server is ready (#1513).
-	runStartupRecovery(getDbAccessor());
+	dbOwnerClient = createDbOwnerClient({ dbPath: MEMORY_DB });
+	// Clean accumulated crash-loop damage through the owner. This remains a
+	// deferred call, so owner startup and the bounded drain never delay readiness.
+	runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
 
 	// Purge artifacts of sources deleted while the daemon was down (e.g.
 	// crash-loop-disabled sources). This needs the DB accessor, so it runs
@@ -2394,6 +2400,32 @@ async function main() {
 		vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor());
 		void runDeferredIntegrityCheck(getDbAccessor(), MEMORY_DB, {
 			timeoutMs: 30_000,
+			owner: dbOwnerClient ?? undefined,
+			ownerAudit: (indexes, detectionMessages) => {
+				const auditId = createHash("sha256")
+					.update(JSON.stringify({ indexes, detectionMessages }))
+					.digest("hex")
+					.slice(0, 32);
+				return [
+					ownerRunStatement(
+						`INSERT OR IGNORE INTO memory_history
+						 (id, memory_id, event, old_content, new_content, changed_by, reason, metadata, created_at, actor_type)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						[
+							auditId,
+							"system",
+							"none",
+							null,
+							null,
+							"daemon",
+							"deferred database integrity repair",
+							JSON.stringify({ repairAction: "reindex-telemetry", indexes, detectionMessages }),
+							new Date().toISOString(),
+							"daemon",
+						],
+					),
+				];
+			},
 			audit: (db, indexes) => {
 				try {
 					insertHistoryEvent(db, {

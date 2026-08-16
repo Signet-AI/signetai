@@ -25,6 +25,11 @@ Every submitted job has this shape:
       transactional?: boolean
     }
   } | {
+    kind: "transaction",
+    transaction: {
+      statements: Array<Statement>
+    }
+  } | {
     kind: "sleep",
     durationMs: number
   }
@@ -54,7 +59,7 @@ The owner sends:
 
 ## Execution and cancellation
 
-The first implementation has one FIFO process. `read` jobs and `write` or `maintenance` jobs are still tagged separately, preserving the lane split for a future transport with parallel readers and one writer. A `run` statement is wrapped in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. Read statements do not open a transaction.
+The first implementation has one FIFO process. `read` jobs and `write` or `maintenance` jobs are still tagged separately, preserving the lane split for a future transport with parallel readers and one writer. A `run` statement is wrapped in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. A transaction request wraps all of its statements in one `BEGIN IMMEDIATE`/`COMMIT` and rolls back the complete batch on any failure. Read statements do not open a transaction.
 
 A queued cancellation is removed from the client pending map, clears its deadline timer, and is removed from the owner's queue before execution. A cancellation received while synchronous native SQLite work is running is best effort because the owner cannot observe stdin until that call returns. A deadline is different: the client kills the entire child with `SIGKILL` at the absolute deadline. The subsequent owner death fails all other in-flight and queued jobs closed.
 
@@ -69,6 +74,7 @@ Construction failure, malformed protocol input, owner exit, deadline kill, and j
 - `awaitResult(handle, timeoutMs?)` awaits a result and cancels on the optional caller timeout.
 - `cancel(jobId)` requests cancellation.
 - `health()` returns owner state, PID, generation, queued count, active job, and last error without touching SQLite.
+- `health()` also reports hard-deadline kills, so maintenance pressure is visible without touching SQLite.
 - `close()` sends shutdown and is idempotent.
 
 No callback receives a database handle. No synchronous SQLite symbol is exported by the client or the recall seam. The owner module is the sanctioned synchronous site.

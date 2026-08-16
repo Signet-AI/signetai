@@ -14,6 +14,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import { DbOwnerDeadlineError, type DbOwnerClient } from "./db-owner-client";
+import { ownerQueryAll, ownerRunStatement, ownerTransaction } from "./db-owner-maintenance";
+import type { DbOwnerStatement } from "./db-owner-protocol";
 import { logger } from "./logger";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 
@@ -33,6 +36,9 @@ export interface DatabaseIntegrityStatus {
 	readonly rebuiltIndexes: readonly string[];
 	readonly durationMs: number;
 	readonly repairGuidance: string | null;
+	readonly ownerState: string | null;
+	readonly ownerGeneration: number | null;
+	readonly deadlineKills: number;
 }
 
 const UNKNOWN_CHECK: IntegrityCheckStatus = { ok: false, messages: ["not checked"] };
@@ -48,6 +54,9 @@ let latestStatus: DatabaseIntegrityStatus = {
 	rebuiltIndexes: [],
 	durationMs: 0,
 	repairGuidance: null,
+	ownerState: null,
+	ownerGeneration: null,
+	deadlineKills: 0,
 };
 
 function check(db: ReadDb, pragma: "quick_check" | "integrity_check", table?: string): IntegrityCheckStatus {
@@ -80,7 +89,9 @@ function statusWith(
 	phase: DatabaseIntegrityStatus["phase"] = "complete",
 	durationMs = 0,
 	repairGuidance: string | null = state === "corrupt" || state === "unavailable" ? REPAIR_GUIDANCE : null,
+	owner?: DbOwnerClient,
 ): DatabaseIntegrityStatus {
+	const health = owner?.health();
 	return {
 		checkedAt: new Date().toISOString(),
 		state,
@@ -90,6 +101,9 @@ function statusWith(
 		rebuiltIndexes,
 		durationMs,
 		repairGuidance,
+		ownerState: health?.state ?? null,
+		ownerGeneration: health?.generation ?? null,
+		deadlineKills: health?.deadlineKills ?? 0,
 	};
 }
 
@@ -113,11 +127,22 @@ export interface DatabaseIntegrityWorkerMessage {
 	readonly result: DatabaseIntegrityWorkerResult;
 }
 
+function ownerCheck(rows: readonly Record<string, unknown>[], key: string): IntegrityCheckStatus {
+	const messages = rows.map((row) => String(row[key] ?? ""));
+	if (messages.length === 1 && messages[0] === "ok") return { ok: true, messages: [] };
+	return { ok: false, messages };
+}
+
 export interface DeferredIntegrityCheckOptions {
 	readonly workerPath?: string;
 	readonly timeoutMs?: number;
 	readonly audit?: TelemetryIndexRepairAudit;
 	readonly onWorkerStarted?: () => void;
+	readonly owner?: DbOwnerClient;
+	readonly ownerAudit?: (
+		indexes: readonly string[],
+		detectionMessages: readonly string[],
+	) => readonly DbOwnerStatement[];
 }
 
 const DEFAULT_INTEGRITY_TIMEOUT_MS = 30_000;
@@ -294,11 +319,74 @@ export function runDeferredIntegrityCheck(
 	return run;
 }
 
+async function runOwnerDeferredIntegrityCheck(
+	accessor: DbAccessor,
+	dbPath: string,
+	options: Partial<DeferredIntegrityCheckOptions>,
+): Promise<DatabaseIntegrityStatus> {
+	const owner = options.owner;
+	if (owner === undefined) throw new Error("owner integrity check requires a DB owner");
+	const timeoutMs = options.timeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS;
+	const startedAt = Date.now();
+	latestStatus = statusWith("unknown", UNKNOWN_CHECK, UNKNOWN_CHECK, [], "running", 0, null, owner);
+	logger.info("startup-recovery", "Deferred database integrity check started through the DB owner", { timeoutMs });
+	const progressTimer = setInterval(() => {
+		const health = owner.health();
+		logger.info("startup-recovery", "Database integrity owner work in progress", {
+			elapsedMs: Date.now() - startedAt,
+			budgetMs: timeoutMs,
+			ownerState: health.state,
+			ownerGeneration: health.generation,
+			deadlineKills: health.deadlineKills,
+		});
+	}, 1_000);
+	try {
+		const status = await repairTelemetryIndexes(accessor, options.audit, {
+			dbPath,
+			repairTimeoutMs: timeoutMs,
+			owner,
+			ownerAudit: options.ownerAudit,
+		});
+		latestStatus = { ...status, durationMs: Date.now() - startedAt };
+		logger.info("startup-recovery", "Deferred database integrity check complete through the DB owner", {
+			state: latestStatus.state,
+			durationMs: latestStatus.durationMs,
+			ownerState: latestStatus.ownerState,
+			ownerGeneration: latestStatus.ownerGeneration,
+			deadlineKills: latestStatus.deadlineKills,
+		});
+		return latestStatus;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		const timedOut = error instanceof DbOwnerDeadlineError;
+		latestStatus = statusWith(
+			"unavailable",
+			{ ok: false, messages: [message] },
+			UNKNOWN_CHECK,
+			[],
+			timedOut ? "timed_out" : "complete",
+			Date.now() - startedAt,
+			REPAIR_GUIDANCE,
+			owner,
+		);
+		logger.error("startup-recovery", "Owner-routed database integrity check failed", undefined, {
+			error: message,
+			ownerState: latestStatus.ownerState,
+			ownerGeneration: latestStatus.ownerGeneration,
+			deadlineKills: latestStatus.deadlineKills,
+		});
+		return latestStatus;
+	} finally {
+		clearInterval(progressTimer);
+	}
+}
+
 async function runDeferredIntegrityCheckInternal(
 	accessor: DbAccessor,
 	dbPath: string,
 	options: Partial<DeferredIntegrityCheckOptions>,
 ): Promise<DatabaseIntegrityStatus> {
+	if (options.owner !== undefined) return await runOwnerDeferredIntegrityCheck(accessor, dbPath, options);
 	const timeoutMs = options.timeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS;
 	const startedAt = Date.now();
 	latestStatus = statusWith("unknown", UNKNOWN_CHECK, UNKNOWN_CHECK, [], "running", 0);
@@ -409,27 +497,76 @@ async function runDeferredIntegrityCheckInternal(
  * doubles without a database path use one queued transaction for both
  * operations.
  */
+export interface IntegrityRepairOptions {
+	readonly quickCheck?: IntegrityCheckStatus;
+	readonly dbPath?: string;
+	readonly repairTimeoutMs?: number;
+	readonly repairWorkerPath?: string;
+	readonly repairRuntimePath?: string;
+	readonly repairRequireBase?: string;
+	readonly owner?: DbOwnerClient;
+	readonly ownerAudit?: (
+		indexes: readonly string[],
+		detectionMessages: readonly string[],
+	) => readonly DbOwnerStatement[];
+}
+
+async function readIntegrityChecks(
+	accessor: DbAccessor,
+	options: IntegrityRepairOptions | undefined,
+): Promise<{
+	readonly quick: IntegrityCheckStatus;
+	readonly telemetry: IntegrityCheckStatus;
+	readonly indexes: readonly string[];
+}> {
+	if (options?.owner === undefined) {
+		return await accessor.withReadDbAsync(async (db) => ({
+			quick: options?.quickCheck ?? check(db, "quick_check"),
+			telemetry: check(db, "integrity_check", "telemetry_events"),
+			indexes: listTelemetryIndexes(db),
+		}));
+	}
+	const deadlineMs = options.repairTimeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS;
+	const quick =
+		options.quickCheck ??
+		ownerCheck(
+			await ownerQueryAll<Record<string, unknown>>(options.owner, "integrity.quick-check", "PRAGMA quick_check", [], {
+				deadlineMs,
+			}),
+			"quick_check",
+		);
+	const telemetry = ownerCheck(
+		await ownerQueryAll<Record<string, unknown>>(
+			options.owner,
+			"integrity.telemetry-check",
+			"PRAGMA integrity_check(telemetry_events)",
+			[],
+			{ deadlineMs },
+		),
+		"integrity_check",
+	);
+	const indexes = (
+		await ownerQueryAll<{ name?: unknown }>(
+			options.owner,
+			"integrity.telemetry-indexes",
+			"SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'telemetry_events' AND sql IS NOT NULL ORDER BY name",
+			[],
+			{ deadlineMs },
+		)
+	).flatMap((row) => (typeof row.name === "string" ? [row.name] : []));
+	return { quick, telemetry, indexes };
+}
+
 export async function repairTelemetryIndexes(
 	accessor: DbAccessor,
 	audit?: TelemetryIndexRepairAudit,
-	options?: {
-		readonly quickCheck?: IntegrityCheckStatus;
-		readonly dbPath?: string;
-		readonly repairTimeoutMs?: number;
-		readonly repairWorkerPath?: string;
-		readonly repairRuntimePath?: string;
-		readonly repairRequireBase?: string;
-	},
+	options?: IntegrityRepairOptions,
 ): Promise<DatabaseIntegrityStatus> {
 	let quickCheck: IntegrityCheckStatus;
 	let telemetryCheck: IntegrityCheckStatus;
 	let telemetryIndexes: readonly string[];
 	try {
-		const checks = await accessor.withReadDbAsync(async (db) => ({
-			quick: options?.quickCheck ?? check(db, "quick_check"),
-			telemetry: check(db, "integrity_check", "telemetry_events"),
-			indexes: listTelemetryIndexes(db),
-		}));
+		const checks = await readIntegrityChecks(accessor, options);
 		quickCheck = checks.quick;
 		telemetryCheck = checks.telemetry;
 		telemetryIndexes = checks.indexes;
@@ -439,25 +576,48 @@ export async function repairTelemetryIndexes(
 			{ ok: false, messages: [error instanceof Error ? error.message : String(error)] },
 			UNKNOWN_CHECK,
 			[],
+			"complete",
+			0,
+			REPAIR_GUIDANCE,
+			options?.owner,
 		);
 		return latestStatus;
 	}
 
 	if (quickCheck.ok && telemetryCheck.ok) {
-		latestStatus = statusWith("healthy", quickCheck, telemetryCheck, []);
+		latestStatus = statusWith("healthy", quickCheck, telemetryCheck, [], "complete", 0, null, options?.owner);
 		return latestStatus;
 	}
 
 	// quick_check covers the whole database. A failed global check is not
 	// safely repairable by rebuilding a telemetry index.
 	if (!quickCheck.ok) {
-		latestStatus = statusWith("corrupt", quickCheck, telemetryCheck, []);
+		latestStatus = statusWith(
+			"corrupt",
+			quickCheck,
+			telemetryCheck,
+			[],
+			"complete",
+			0,
+			REPAIR_GUIDANCE,
+			options?.owner,
+		);
 		return latestStatus;
 	}
 
 	if (!telemetryCheck.ok) {
 		try {
-			if (options?.dbPath !== undefined) {
+			if (options?.owner !== undefined) {
+				const statements = [
+					...(options.ownerAudit?.(telemetryIndexes, telemetryCheck.messages) ?? []),
+					...telemetryIndexes.map((index) => ownerRunStatement(`REINDEX ${escapedIdentifier(index)}`)),
+				];
+				if (statements.length === 0) throw new Error("telemetry repair has no owner statements");
+				await ownerTransaction(options.owner, "integrity.repair", statements, {
+					deadlineMs: options.repairTimeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS,
+					estimatedWorkUnits: Math.max(1, statements.length),
+				});
+			} else if (options?.dbPath !== undefined) {
 				if (audit !== undefined) {
 					await writeAsync(accessor, (db) => audit(db, telemetryIndexes, telemetryCheck.messages));
 				}
@@ -476,24 +636,52 @@ export async function repairTelemetryIndexes(
 				});
 			}
 
-			const verifiedTelemetry = await accessor.withReadDbAsync(async (db) =>
-				check(db, "integrity_check", "telemetry_events"),
-			);
+			const verifiedTelemetry =
+				options?.owner === undefined
+					? await accessor.withReadDbAsync(async (db) => check(db, "integrity_check", "telemetry_events"))
+					: ownerCheck(
+							await ownerQueryAll<Record<string, unknown>>(
+								options.owner,
+								"integrity.telemetry-verify",
+								"PRAGMA integrity_check(telemetry_events)",
+								[],
+								{ deadlineMs: options.repairTimeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS },
+							),
+							"integrity_check",
+						);
 			if (verifiedTelemetry.ok) {
-				latestStatus = statusWith("repaired", quickCheck, verifiedTelemetry, [...telemetryIndexes]);
+				latestStatus = statusWith(
+					"repaired",
+					quickCheck,
+					verifiedTelemetry,
+					[...telemetryIndexes],
+					"complete",
+					0,
+					null,
+					options?.owner,
+				);
 				return latestStatus;
 			}
 			telemetryCheck = verifiedTelemetry;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			telemetryCheck = { ok: false, messages: [...telemetryCheck.messages, message] };
-			if (error instanceof IntegrityRepairTimeoutError) {
-				latestStatus = statusWith("unavailable", quickCheck, telemetryCheck, [], "timed_out", 0);
+			if (error instanceof IntegrityRepairTimeoutError || error instanceof DbOwnerDeadlineError) {
+				latestStatus = statusWith(
+					"unavailable",
+					quickCheck,
+					telemetryCheck,
+					[],
+					"timed_out",
+					0,
+					REPAIR_GUIDANCE,
+					options?.owner,
+				);
 				return latestStatus;
 			}
 		}
 	}
 
-	latestStatus = statusWith("corrupt", quickCheck, telemetryCheck, []);
+	latestStatus = statusWith("corrupt", quickCheck, telemetryCheck, [], "complete", 0, REPAIR_GUIDANCE, options?.owner);
 	return latestStatus;
 }

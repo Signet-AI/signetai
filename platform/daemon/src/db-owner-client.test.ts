@@ -78,6 +78,29 @@ describe("DB owner client", () => {
 		expect(rows).toEqual([{ id: "m1" }, { id: "m2" }]);
 	});
 
+	test("waits through a busy writer instead of failing the owner transaction", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const blocker = new Database(database.path);
+		blocker.exec("BEGIN IMMEDIATE");
+		client = createDbOwnerClient({ dbPath: database.path });
+		const write = client.submit<{ readonly changes: number }>(
+			{
+				kind: "query",
+				statement: {
+					sql: "INSERT INTO memories (id, content) VALUES (?, ?)",
+					params: ["busy-writer", "waited for the writer"],
+					result: "run",
+				},
+			},
+			{ operation: "integrity.busy-writer", lane: "maintenance", deadlineMs: 2_000 },
+		);
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		blocker.exec("ROLLBACK");
+		blocker.close();
+		expect((await write.result).changes).toBe(1);
+	});
+
 	test("detects an owner crash and recovers with a fresh owner", async () => {
 		const database = makeDb();
 		directory = database.directory;
@@ -105,6 +128,7 @@ describe("DB owner client", () => {
 		);
 		await expect(slow.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
 		await waitFor(() => client?.health().state === "dead");
+		expect(client.health().deadlineKills).toBe(1);
 		const fast = client.submit<unknown[]>(
 			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
 			{ operation: "recall.read", lane: "read", deadlineMs: 1_000 },

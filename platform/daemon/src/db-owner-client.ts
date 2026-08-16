@@ -35,6 +35,8 @@ export interface DbOwnerHealth {
 	readonly queuedJobs: number;
 	readonly activeJobId: string | null;
 	readonly lastError: string | null;
+	/** Number of owner processes SIGKILLed by a hard job deadline. */
+	readonly deadlineKills: number;
 }
 
 export interface DbOwnerSubmitOptions {
@@ -153,6 +155,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let pid: number | null = null;
 	let activeJobId: string | null = null;
 	let lastError: string | null = null;
+	let deadlineKills = 0;
 	let sequence = 0;
 	let input = "";
 	const pending = new Map<string, PendingJob<unknown>>();
@@ -165,6 +168,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			queuedJobs: pending.size,
 			activeJobId,
 			lastError,
+			deadlineKills,
 		};
 	}
 
@@ -471,6 +475,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				const entry = pending.get(job.id);
 				if (entry === undefined || entry.settled) return;
 				lastError = `deadline exceeded for ${job.id}`;
+				deadlineKills++;
 				settle(job.id, (settledJob) => {
 					if (!settledJob.settled) {
 						settledJob.settled = true;
