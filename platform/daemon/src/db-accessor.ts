@@ -25,8 +25,9 @@ import {
 	createMemoriesFts,
 	findSqliteVecExtension,
 	hasPendingMigrations,
+	memoriesFtsIntegrityIsComplete,
 	memoriesFtsNeedsTokenizerRepair,
-	readMemoriesFtsState,
+	readMemoriesFtsIntegrity,
 	readMemoriesFtsSql,
 	refreshMemoriesFtsState,
 	recreateMemoriesFts,
@@ -1002,8 +1003,8 @@ function finishDbAccessorInit(
 	// older installs where the table was dropped or never created.
 	resetFtsIndexState();
 	ensureFtsTable(writeConn, { deferBackfill: true });
-	const ftsState = readMemoriesFtsState(toFtsSchemaQueryDb(writeConn));
-	setFtsIndexIncomplete(ftsState === null || ftsState.memoryCount !== ftsState.indexedCount);
+	const ftsIntegrity = readMemoriesFtsIntegrity(toFtsSchemaQueryDb(writeConn));
+	setFtsIndexIncomplete(ftsIntegrity === null || !memoriesFtsIntegrityIsComplete(ftsIntegrity));
 	const configuredEmbedding = loadMemoryConfig(opts?.agentsDir ?? resolveSqliteAgentsDir()).embedding;
 	const legacyVecSql = writeConn
 		.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'")

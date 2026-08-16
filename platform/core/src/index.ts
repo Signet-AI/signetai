@@ -260,8 +260,10 @@ export type {
 } from "./recall";
 export {
 	createMemoriesFts,
+	memoriesFtsIntegrityIsComplete,
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsIndexRowCount,
+	readMemoriesFtsIntegrity,
 	readMemoriesFtsState,
 	readMemoriesFtsSql,
 	refreshMemoriesFtsState,

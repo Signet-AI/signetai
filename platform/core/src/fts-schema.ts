@@ -104,6 +104,70 @@ export function refreshMemoriesFtsState(db: FtsSchemaExecDb): void {
 	`);
 }
 
+export interface MemoriesFtsIntegrity {
+	readonly memoryCount: number;
+	readonly indexedCount: number;
+	readonly hasIndexedRows: boolean;
+	readonly firstMemoryIndexed: boolean;
+	readonly lastMemoryIndexed: boolean;
+}
+
+function sqliteBoolean(value: unknown): boolean {
+	return value === 1 || value === true;
+}
+
+/**
+ * Read the maintained counters plus bounded physical probes for the FTS index.
+ *
+ * The probes stop at the first matching row and only inspect the first and last
+ * memory rowids. They can detect an empty/reset index and boundary loss, but
+ * they cannot prove that every middle row is present. Full verification belongs
+ * to deferred owner maintenance, where an O(N) scan is allowed.
+ */
+export function readMemoriesFtsIntegrity(db: FtsSchemaQueryDb): MemoriesFtsIntegrity | null {
+	const row = db
+		.prepare(`
+			SELECT
+				memory_count,
+				indexed_count,
+				EXISTS(SELECT 1 FROM memories_fts_docsize LIMIT 1) AS has_indexed_rows,
+				CASE WHEN NOT EXISTS(SELECT 1 FROM memories) THEN 1 ELSE EXISTS(
+					SELECT 1 FROM memories_fts_docsize
+					WHERE id = (SELECT rowid FROM memories ORDER BY rowid LIMIT 1)
+				) END AS first_memory_indexed,
+				CASE WHEN NOT EXISTS(SELECT 1 FROM memories) THEN 1 ELSE EXISTS(
+					SELECT 1 FROM memories_fts_docsize
+					WHERE id = (SELECT rowid FROM memories ORDER BY rowid DESC LIMIT 1)
+				) END AS last_memory_indexed
+			FROM ${FTS_STATE_TABLE}
+			WHERE id = 1
+		`)
+		.get() as
+		| {
+				memory_count?: unknown;
+				indexed_count?: unknown;
+				has_indexed_rows?: unknown;
+				first_memory_indexed?: unknown;
+				last_memory_indexed?: unknown;
+		  }
+		| undefined;
+	if (typeof row?.memory_count !== "number" || typeof row.indexed_count !== "number") return null;
+	return {
+		memoryCount: row.memory_count,
+		indexedCount: row.indexed_count,
+		hasIndexedRows: sqliteBoolean(row.has_indexed_rows),
+		firstMemoryIndexed: sqliteBoolean(row.first_memory_indexed),
+		lastMemoryIndexed: sqliteBoolean(row.last_memory_indexed),
+	};
+}
+
+export function memoriesFtsIntegrityIsComplete(integrity: MemoriesFtsIntegrity): boolean {
+	if (integrity.memoryCount < 0 || integrity.indexedCount < 0) return false;
+	if (integrity.memoryCount !== integrity.indexedCount) return false;
+	if (integrity.memoryCount === 0) return !integrity.hasIndexedRows;
+	return integrity.hasIndexedRows && integrity.firstMemoryIndexed && integrity.lastMemoryIndexed;
+}
+
 export function readMemoriesFtsState(
 	db: FtsSchemaQueryDb,
 ): { readonly memoryCount: number; readonly indexedCount: number } | null {

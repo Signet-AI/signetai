@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isFtsIndexIncomplete } from "./fts-index-state";
 import {
 	DbSpacePreflightError,
 	DbReadAdmissionCancelledError,
@@ -84,6 +85,29 @@ describe("DbAccessor", () => {
 		expect(elapsedMs).toBeLessThan(2_000);
 	});
 
+	test("does not cache FTS completeness when a previously complete index is emptied", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		initDbAccessor(dbPath);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', 'global', datetime('now'), datetime('now'), 'test')`,
+			).run("empty-index-memory", "memory for the empty-index restart regression");
+			db.exec(
+				"UPDATE memories_fts_state SET memory_count = (SELECT COUNT(*) FROM memories), indexed_count = (SELECT COUNT(*) FROM memories_fts_docsize)",
+			);
+		});
+		closeDbAccessor();
+
+		const db = new Database(dbPath);
+		db.exec("DELETE FROM memories_fts");
+		db.close();
+
+		initDbAccessor(dbPath);
+		expect(isFtsIndexIncomplete()).toBe(true);
+	});
 	test("retains the pre-migration backup when migration fails", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));

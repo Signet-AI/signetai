@@ -109,6 +109,27 @@ describe("DB owner FTS maintenance", () => {
 		expect(countFts(database.path)).toBe(7);
 	});
 
+	test("resets a running checkpoint after the index is recreated", async () => {
+		const database = makeDatabase();
+		directory = database.directory;
+		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
+
+		await expect(
+			maintenance.backfillFts({ checkpointKey: "fts.running-reset", chunkSize: 2, maxChunks: 1 }),
+		).resolves.toMatchObject({ status: "running", cursor: 2, processed: 2 });
+
+		const db = new Database(database.path);
+		db.exec("DROP TABLE memories_fts");
+		db.exec(
+			"CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61')",
+		);
+		db.close();
+
+		const recovered = await maintenance.backfillFts({ checkpointKey: "fts.running-reset", chunkSize: 2 });
+
+		expect(recovered).toMatchObject({ status: "complete", processed: 7 });
+		expect(countFts(database.path)).toBe(7);
+	});
 	test("stops a backfill at the run-level work budget and resumes later", async () => {
 		const database = makeDatabase();
 		directory = database.directory;

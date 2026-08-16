@@ -139,6 +139,12 @@ interface FtsCheckpoint {
 	readonly cursor: number;
 	readonly processed: number;
 	readonly status: "running" | "complete";
+	readonly memoryCount: number;
+	readonly indexedCount: number;
+	readonly hasIndexedRows: number;
+	readonly firstMemoryIndexed: number;
+	readonly lastMemoryIndexed: number;
+	readonly cursorIndexed: number;
 }
 
 export interface FtsBackfillProgress {
@@ -310,7 +316,7 @@ async function ensureCheckpoint(client: DbOwnerClient, key: string, deadlineMs: 
 					 SET memory_count = (SELECT COUNT(*) FROM memories),
 					     indexed_count = (SELECT COUNT(*) FROM memories_fts_docsize),
 					     updated_at = ?
-					 WHERE id = 1`,
+					 WHERE id = 1 AND (memory_count < 0 OR indexed_count < 0)`,
 					[new Date().toISOString()],
 				),
 				runStatement(
@@ -341,7 +347,23 @@ async function readCheckpoint(client: DbOwnerClient, key: string, deadlineMs: nu
 		{
 			kind: "query",
 			statement: queryStatement(
-				`SELECT job_key, cursor, processed, status FROM ${CHECKPOINT_TABLE} WHERE job_key = ?`,
+				`SELECT c.job_key, c.cursor, c.processed, c.status,
+						s.memory_count AS memoryCount,
+						s.indexed_count AS indexedCount,
+						EXISTS(SELECT 1 FROM memories_fts_docsize LIMIT 1) AS hasIndexedRows,
+						CASE WHEN NOT EXISTS(SELECT 1 FROM memories) THEN 1 ELSE EXISTS(
+							SELECT 1 FROM memories_fts_docsize
+							WHERE id = (SELECT rowid FROM memories ORDER BY rowid LIMIT 1)
+						) END AS firstMemoryIndexed,
+						CASE WHEN NOT EXISTS(SELECT 1 FROM memories) THEN 1 ELSE EXISTS(
+							SELECT 1 FROM memories_fts_docsize
+							WHERE id = (SELECT rowid FROM memories ORDER BY rowid DESC LIMIT 1)
+						) END AS lastMemoryIndexed,
+						CASE WHEN c.cursor <= 0 OR NOT EXISTS(SELECT 1 FROM memories WHERE rowid = c.cursor) THEN 1
+							ELSE EXISTS(SELECT 1 FROM memories_fts_docsize WHERE id = c.cursor) END AS cursorIndexed
+					 FROM ${CHECKPOINT_TABLE} AS c
+					 CROSS JOIN ${FTS_STATE_TABLE} AS s
+					 WHERE c.job_key = ? AND s.id = 1`,
 				[key],
 			),
 		},
@@ -355,29 +377,23 @@ async function readCheckpoint(client: DbOwnerClient, key: string, deadlineMs: nu
 	return row;
 }
 
-async function ftsIndexNeedsRecovery(client: DbOwnerClient, key: string, deadlineMs: number): Promise<boolean> {
-	const row = await submit<{
-		readonly status: FtsCheckpoint["status"];
-		readonly memoryCount: number;
-		readonly indexedCount: number;
-	} | null>(
-		client,
-		{
-			kind: "query",
-			statement: queryStatement(
-				`SELECT c.status,
-						(SELECT COUNT(*) FROM memories) AS memoryCount,
-						(SELECT COUNT(*) FROM memories_fts_docsize) AS indexedCount
-					 FROM ${CHECKPOINT_TABLE} AS c
-					 WHERE c.job_key = ?`,
-				[key],
-			),
-		},
-		"maintenance.fts.integrity.check",
-		deadlineMs,
-		1,
-	);
-	return row != null && row.status === "complete" && row.memoryCount !== row.indexedCount;
+function sqliteProbeTrue(value: number): boolean {
+	return value === 1;
+}
+
+function ftsIndexNeedsRecovery(checkpoint: FtsCheckpoint): boolean {
+	if (checkpoint.status === "complete") {
+		if (checkpoint.memoryCount < 0 || checkpoint.indexedCount < 0) return true;
+		if (checkpoint.memoryCount !== checkpoint.indexedCount) return true;
+		if (checkpoint.memoryCount === 0) return sqliteProbeTrue(checkpoint.hasIndexedRows);
+		return (
+			!sqliteProbeTrue(checkpoint.hasIndexedRows) ||
+			!sqliteProbeTrue(checkpoint.firstMemoryIndexed) ||
+			!sqliteProbeTrue(checkpoint.lastMemoryIndexed)
+		);
+	}
+	if (checkpoint.cursor <= 0) return false;
+	return !sqliteProbeTrue(checkpoint.firstMemoryIndexed) || !sqliteProbeTrue(checkpoint.cursorIndexed);
 }
 
 async function resetCheckpointForRecovery(client: DbOwnerClient, key: string, deadlineMs: number): Promise<void> {
@@ -394,9 +410,7 @@ async function resetCheckpointForRecovery(client: DbOwnerClient, key: string, de
 				),
 				runStatement(
 					`UPDATE ${FTS_STATE_TABLE}
-					 SET memory_count = (SELECT COUNT(*) FROM memories),
-					     indexed_count = (SELECT COUNT(*) FROM memories_fts_docsize),
-					     updated_at = ?
+					 SET indexed_count = 0, updated_at = ?
 					 WHERE id = 1`,
 					[new Date().toISOString()],
 				),
@@ -406,27 +420,6 @@ async function resetCheckpointForRecovery(client: DbOwnerClient, key: string, de
 		deadlineMs,
 		2,
 	);
-}
-
-async function hasMissingRows(client: DbOwnerClient, cursor: number, deadlineMs: number): Promise<boolean> {
-	const row = await submit<{ readonly present: number } | null>(
-		client,
-		{
-			kind: "query",
-			statement: queryStatement(
-				`SELECT 1 AS present
-				 FROM memories AS m
-				 LEFT JOIN memories_fts_docsize AS f ON f.id = m.rowid
-				 WHERE m.rowid > ? AND f.id IS NULL
-				 LIMIT 1`,
-				[cursor],
-			),
-		},
-		"maintenance.fts.missing.check",
-		deadlineMs,
-		1,
-	);
-	return row != null;
 }
 
 async function markComplete(client: DbOwnerClient, key: string, deadlineMs: number): Promise<void> {
@@ -462,7 +455,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 	if (maxChunks === 0) {
 		await ensureCheckpoint(client, key, deadlineMs);
 		let checkpoint = await readCheckpoint(client, key, deadlineMs);
-		if (await ftsIndexNeedsRecovery(client, key, deadlineMs)) {
+		if (ftsIndexNeedsRecovery(checkpoint)) {
 			await resetCheckpointForRecovery(client, key, deadlineMs);
 			checkpoint = await readCheckpoint(client, key, deadlineMs);
 		}
@@ -478,7 +471,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 
 	await ensureCheckpoint(client, key, deadlineMs);
 	let checkpoint = await readCheckpoint(client, key, deadlineMs);
-	if (await ftsIndexNeedsRecovery(client, key, deadlineMs)) {
+	if (ftsIndexNeedsRecovery(checkpoint)) {
 		await resetCheckpointForRecovery(client, key, deadlineMs);
 		checkpoint = await readCheckpoint(client, key, deadlineMs);
 	}
@@ -491,13 +484,19 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 		const remainingMs = runBudgetMs - elapsedMs;
 		if (remainingMs < 1 || workUnits + chunkSize > maxWorkUnits) break;
 		const chunkDeadlineMs = Math.min(deadlineMs, remainingMs);
-		const cursor = checkpoint.cursor;
-		if (!(await hasMissingRows(client, cursor, chunkDeadlineMs))) {
+		checkpoint = await readCheckpoint(client, key, chunkDeadlineMs);
+		if (ftsIndexNeedsRecovery(checkpoint)) {
+			await resetCheckpointForRecovery(client, key, chunkDeadlineMs);
+			checkpoint = await readCheckpoint(client, key, chunkDeadlineMs);
+		}
+		setFtsIndexIncomplete(checkpoint.status !== "complete");
+		if (checkpoint.memoryCount >= 0 && checkpoint.indexedCount === checkpoint.memoryCount) {
 			await markComplete(client, key, chunkDeadlineMs);
 			checkpoint = await readCheckpoint(client, key, chunkDeadlineMs);
 			setFtsIndexIncomplete(checkpoint.status !== "complete");
 			break;
 		}
+		const cursor = checkpoint.cursor;
 		const now = new Date().toISOString();
 		const statements: readonly DbOwnerStatement[] = [
 			runStatement(
