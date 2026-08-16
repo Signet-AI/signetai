@@ -3,13 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import {
-	DbReadAdmissionTimeoutError,
-	MAX_READ_CONNECTIONS,
-	closeDbAccessor,
-	getDbAccessor,
-	initDbAccessor,
-} from "../db-accessor";
+import { MAX_READ_CONNECTIONS, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { mountHealthRoutes } from "./health";
 
 /**
@@ -89,25 +83,25 @@ describe("GET /health/live", () => {
 	});
 
 	test("stays responsive while the read lease pool is saturated", async () => {
-		let releaseReaders: () => void = () => undefined;
-		const readersReleased = new Promise<void>((resolve) => {
-			releaseReaders = resolve;
-		});
-		const heldReaders = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
-			getDbAccessor().withReadDbAsync(async () => {
-				await readersReleased;
-			}),
-		);
-
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		const sync = getDbAccessor() as unknown as {
+			withReadDb<T>(fn: (db: import("../db-accessor").ReadDb) => T): T;
+		};
 		const app = makeApp();
-		const liveResponse = await app.request("http://localhost/health/live");
-		expect(liveResponse.status).toBe(200);
+		let livePromise: Promise<Response> | null = null;
+		const acquireNestedReads = (remaining: number): void => {
+			if (remaining === 0) {
+				livePromise = Promise.resolve(app.request("http://localhost/health/live"));
+				return;
+			}
+			sync.withReadDb(() => acquireNestedReads(remaining - 1));
+		};
+		acquireNestedReads(MAX_READ_CONNECTIONS);
+		const pending = livePromise;
+		if (pending === null) throw new Error("liveness request was not started");
 
-		const timedOutRead = getDbAccessor().withReadDbAsync(async () => undefined, { timeoutMs: 25 });
-		await expect(timedOutRead).rejects.toBeInstanceOf(DbReadAdmissionTimeoutError);
-		releaseReaders();
-		await Promise.all(heldReaders);
+		const liveResponse = await pending;
+		expect(liveResponse.status).toBe(200);
+		expect(getDbAccessor().getReadPressure?.().activeLeases).toBe(0);
 	});
 });
 

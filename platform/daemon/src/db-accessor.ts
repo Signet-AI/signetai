@@ -303,10 +303,10 @@ export interface AsyncDbAccessor {
 	/** Return the combined database-owner diagnostics envelope. */
 	getDbRuntimePressure?(): DbRuntimePressure;
 
-	/** Async variant of withReadDb. The connection is held only for the
-	 * callback's database work and is admitted through a FIFO lease queue.
-	 * Callbacks that need unrelated async work must return their database result
-	 * first, then await that work after this method resolves. */
+	/** Async variant of withReadDb. The connection is held only while the
+	 * callback's synchronous database work runs and is admitted through a FIFO
+	 * lease queue. If the callback returns a promise, its continuation runs
+	 * after the lease is released and must not use the database connection. */
 	withReadDbAsync<T>(fn: (db: ReadDb) => T | Promise<T>, options?: ReadAdmissionOptions): Promise<T>;
 
 	/** Close all held connections. Safe to call multiple times. */
@@ -1797,13 +1797,37 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			const startedAt = performance.now();
 			const lease = await acquireRead(options);
 			let outcome: DbOperationOutcome = "completed";
+			let result: T | Promise<T>;
 			try {
-				return await fn(lease.conn);
+				// Invoke the callback before releasing the lease so its synchronous
+				// query work runs against the admitted connection. Do not await a
+				// returned promise here: unrelated async work must not retain it.
+				result = fn(lease.conn);
+			} catch (error) {
+				outcome = "failed";
+				releaseRead(lease.conn);
+				const durationMs = performance.now() - startedAt;
+				lastReadWaitMs = lease.waitMs;
+				observeDbLatency(durationMs);
+				recordDbOperation({
+					owner: "read",
+					operation: options?.operation ?? "db.read",
+					durationMs,
+					queueWaitMs: lease.waitMs,
+					queueDepth: readWaiters.length,
+					queueAgeMs: lease.waitMs,
+					estimatedWorkUnits: null,
+					outcome,
+				});
+				throw error;
+			}
+			releaseRead(lease.conn);
+			try {
+				return await result;
 			} catch (error) {
 				outcome = "failed";
 				throw error;
 			} finally {
-				releaseRead(lease.conn);
 				const durationMs = performance.now() - startedAt;
 				lastReadWaitMs = lease.waitMs;
 				observeDbLatency(durationMs);

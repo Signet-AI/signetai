@@ -4420,20 +4420,6 @@
       "category": "hot-path"
     },
     {
-      "path": "routes/health.ts",
-      "line": 187,
-      "api": "withReadDb",
-      "source": "accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/health.ts",
-      "line": 236,
-      "api": "withReadDb",
-      "source": "dbResult = getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
       "path": "routes/hooks-routes.ts",
       "line": 1163,
       "api": "withReadDb",
@@ -5114,14 +5100,14 @@
     },
     {
       "path": "yielding-writes.ts",
-      "line": 86,
+      "line": 115,
       "api": "withWriteTx",
       "source": "return accessor.withWriteTx(processBatch);",
       "category": "hot-path"
     },
     {
       "path": "yielding-writes.ts",
-      "line": 123,
+      "line": 155,
       "api": "withReadDb",
       "source": "const batch = accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => fetchBatch(db, limit));",
       "category": "hot-path"

@@ -178,7 +178,7 @@ function checkInference(): { ok: boolean; detail: InferenceCheck; reason: string
 }
 
 export function mountHealthRoutes(app: Hono): void {
-	app.get("/health", (c) => {
+	app.get("/health", async (c) => {
 		const us = getUpdateState();
 		let dbOk = false;
 		let dbWriter: WritePressure | null = null;
@@ -187,11 +187,13 @@ export function mountHealthRoutes(app: Hono): void {
 		try {
 			const accessor = getDbAccessor();
 			try {
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-				accessor.withReadDb((db: ReadDb) => {
-					db.prepare("SELECT 1").get();
-					dbOk = true;
-				});
+				await accessor.withReadDbAsync(
+					(db: ReadDb) => {
+						db.prepare("SELECT 1").get();
+						dbOk = true;
+					},
+					{ operation: "health" },
+				);
 			} catch {
 				// Keep the structured admission outcome visible below.
 			}

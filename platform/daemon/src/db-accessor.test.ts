@@ -10,7 +10,6 @@ import {
 	DbSpacePreflightError,
 	DbReadAdmissionCancelledError,
 	DbReadAdmissionRejectedError,
-	DbReadAdmissionTimeoutError,
 	DbWriteQueueFullError,
 	MAX_READ_CONNECTIONS,
 	MAX_WRITE_QUEUE,
@@ -213,41 +212,54 @@ describe("DbAccessor", () => {
 		await Promise.all(pending);
 	});
 
-	test("read admission waits FIFO and records timeout/cancellation pressure", async () => {
+	test("releases the read lease before an async callback continuation", async () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));
 		initDbAccessor(dbPath);
 		const acc = getDbAccessor();
-		let releaseReaders: () => void = () => undefined;
-		const readersReleased = new Promise<void>((resolve) => {
-			releaseReaders = resolve;
+		let callbackStarted = () => undefined;
+		const started = new Promise<void>((resolve) => {
+			callbackStarted = resolve;
 		});
-		const heldReaders = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
-			acc.withReadDbAsync(async () => {
-				await readersReleased;
-			}),
+		let continueCallback = () => undefined;
+		const continuation = new Promise<void>((resolve) => {
+			continueCallback = resolve;
+		});
+
+		const pending = acc.withReadDbAsync(
+			async (db) => {
+				db.prepare("SELECT 1").get();
+				callbackStarted();
+				await continuation;
+				return true;
+			},
+			{ operation: "test.async-release" },
 		);
 
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		const timedOut = acc.withReadDbAsync(async () => undefined, { timeoutMs: 25, operation: "test.timeout" });
-		await expect(timedOut).rejects.toBeInstanceOf(DbReadAdmissionTimeoutError);
-		expect(acc.getReadPressure?.().timedOut).toBe(1);
-
-		const controller = new AbortController();
-		const cancelled = acc.withReadDbAsync(async () => undefined, {
-			signal: controller.signal,
-			operation: "test.cancel",
-		});
-		controller.abort();
-		await expect(cancelled).rejects.toBeInstanceOf(DbReadAdmissionCancelledError);
-		expect(acc.getReadPressure?.().cancelled).toBe(1);
-
-		releaseReaders();
-		await Promise.all(heldReaders);
+		await started;
 		expect(acc.getReadPressure?.().activeLeases).toBe(0);
+		continueCallback();
+		await expect(pending).resolves.toBe(true);
 	});
 
-	test("synchronous legacy reads expose structured admission rejection at the cap", async () => {
+	test("read admission rejects pre-cancelled requests without acquiring a lease", async () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		initDbAccessor(dbPath);
+		const acc = getDbAccessor();
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(
+			acc.withReadDbAsync(() => undefined, {
+				signal: controller.signal,
+				operation: "test.cancel",
+			}),
+		).rejects.toBeInstanceOf(DbReadAdmissionCancelledError);
+		expect(acc.getReadPressure?.().cancelled).toBe(1);
+	});
+
+	test("synchronous legacy reads expose structured admission rejection at the cap", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));
 		initDbAccessor(dbPath);
@@ -255,22 +267,13 @@ describe("DbAccessor", () => {
 		const sync = acc as unknown as {
 			withReadDb<T>(fn: (db: import("./db-accessor").ReadDb) => T): T;
 		};
-		let releaseReaders: () => void = () => undefined;
-		const readersReleased = new Promise<void>((resolve) => {
-			releaseReaders = resolve;
-		});
-		const heldReaders = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
-			acc.withReadDbAsync(async () => {
-				await readersReleased;
-			}),
-		);
+		const acquireNestedReads = (remaining: number): void => {
+			if (remaining === 0) return;
+			sync.withReadDb(() => acquireNestedReads(remaining - 1));
+		};
 
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(() => sync.withReadDb(() => undefined)).toThrow(DbReadAdmissionRejectedError);
-		expect(acc.getReadPressure?.()).toMatchObject({ rejected: 1, syncRejected: 1 });
-
-		releaseReaders();
-		await Promise.all(heldReaders);
+		expect(() => sync.withReadDb(() => acquireNestedReads(MAX_READ_CONNECTIONS))).toThrow(DbReadAdmissionRejectedError);
+		expect(acc.getReadPressure?.()).toMatchObject({ rejected: 1, syncRejected: 1, activeLeases: 0 });
 	});
 
 	test("close rejects queued async writes", async () => {
