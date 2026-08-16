@@ -7,11 +7,16 @@ import { repairTelemetryIndexes, runDeferredIntegrityCheck } from "./database-in
 import { createDbOwnerClient } from "./db-owner-client";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 
-function fakeAccessor(options: { readonly quickMessage?: string; readonly telemetryMessage?: string }): {
+function fakeAccessor(options: {
+	readonly quickMessage?: string;
+	readonly telemetryMessage?: string;
+	readonly repairAfterFirstTelemetryCheck?: boolean;
+}): {
 	readonly accessor: DbAccessor;
 	readonly reindexed: string[];
 } {
 	let repaired = false;
+	let telemetryChecks = 0;
 	const reindexed: string[] = [];
 	const readDb: ReadDb = {
 		prepare(sql: string) {
@@ -25,7 +30,11 @@ function fakeAccessor(options: { readonly quickMessage?: string; readonly teleme
 				all<Row = unknown>(): Row[] {
 					if (sql === "PRAGMA quick_check") return [{ quick_check: options.quickMessage ?? "ok" }] as Row[];
 					if (sql === "PRAGMA integrity_check(telemetry_events)") {
-						return [{ integrity_check: repaired ? "ok" : (options.telemetryMessage ?? "ok") }] as Row[];
+						telemetryChecks += 1;
+						const externallyRepaired = options.repairAfterFirstTelemetryCheck === true && telemetryChecks > 1;
+						return [
+							{ integrity_check: repaired || externallyRepaired ? "ok" : (options.telemetryMessage ?? "ok") },
+						] as Row[];
 					}
 					if (
 						sql ===
@@ -141,11 +150,13 @@ describe("telemetry database integrity recovery (#1360)", () => {
 			"CREATE TABLE telemetry_events (event TEXT, queue TEXT, timestamp TEXT, unsent INTEGER); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event); CREATE INDEX idx_telemetry_events_queue ON telemetry_events(queue); CREATE INDEX idx_telemetry_events_timestamp ON telemetry_events(timestamp); CREATE INDEX idx_telemetry_events_unsent ON telemetry_events(unsent)",
 		);
 		database.close();
-		const { accessor } = fakeAccessor({ telemetryMessage: "index mismatch" });
+		const { accessor } = fakeAccessor({ telemetryMessage: "index mismatch", repairAfterFirstTelemetryCheck: true });
+		let auditCalls = 0;
 
 		const result = await repairTelemetryIndexes(
 			accessor,
 			(db) => {
+				auditCalls += 1;
 				db.exec("INSERT INTO repair_audit VALUES (1)");
 			},
 			{
@@ -157,6 +168,7 @@ describe("telemetry database integrity recovery (#1360)", () => {
 
 		expect(result.state).toBe("repaired");
 		expect(result.rebuiltIndexes).toHaveLength(4);
+		expect(auditCalls).toBe(1);
 		const verification = new Database(dbPath);
 		expect(verification.prepare("PRAGMA integrity_check(telemetry_events)").all()).toEqual([{ integrity_check: "ok" }]);
 		verification.close();
@@ -180,7 +192,7 @@ describe("telemetry database integrity recovery (#1360)", () => {
 
 		try {
 			const result = await repairTelemetryIndexes(
-				fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+				fakeAccessor({ telemetryMessage: "index mismatch", repairAfterFirstTelemetryCheck: true }).accessor,
 				(db) => {
 					db.exec("INSERT INTO repair_audit VALUES (1)");
 				},
@@ -243,7 +255,7 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		expect(result.telemetryCheck.messages).toContain("memory_history unavailable");
 	});
 
-	it("does not start a production repair child when the audit fails", async () => {
+	it("fails closed when a production repair audit fails after verification", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "integrity-repair-audit-failure-"));
 		const dbPath = join(dir, "memory.db");
 		const markerPath = join(dir, "child-started");
@@ -255,11 +267,11 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		database.close();
 		writeFileSync(
 			workerPath,
-			`import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(markerPath)}, "started");\n`,
+			`import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(markerPath)}, "started"); process.stdout.write(JSON.stringify({ ok: true }) + "\\n");\n`,
 		);
 
 		const result = await repairTelemetryIndexes(
-			fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+			fakeAccessor({ telemetryMessage: "index mismatch", repairAfterFirstTelemetryCheck: true }).accessor,
 			() => {
 				throw new Error("audit unavailable");
 			},
@@ -268,7 +280,33 @@ describe("telemetry database integrity recovery (#1360)", () => {
 
 		expect(result.state).toBe("corrupt");
 		expect(result.telemetryCheck.messages).toContain("audit unavailable");
-		expect(existsSync(markerPath)).toBe(false);
+		expect(existsSync(markerPath)).toBe(true);
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("does not audit a failed production repair child", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-repair-child-failure-"));
+		const dbPath = join(dir, "memory.db");
+		const workerPath = join(dir, "failed-repair-worker.mjs");
+		const database = new Database(dbPath);
+		database.exec(
+			"CREATE TABLE telemetry_events (event TEXT); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event)",
+		);
+		database.close();
+		writeFileSync(workerPath, 'process.stderr.write("repair failed"); process.exitCode = 1;\n');
+		let auditCalls = 0;
+
+		const result = await repairTelemetryIndexes(
+			fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+			() => {
+				auditCalls += 1;
+			},
+			{ dbPath, repairWorkerPath: workerPath, repairRuntimePath: "node", repairTimeoutMs: 5_000 },
+		);
+
+		expect(result.state).toBe("corrupt");
+		expect(result.telemetryCheck.messages).toContain("telemetry index repair worker exited with code 1: repair failed");
+		expect(auditCalls).toBe(0);
 		rmSync(dir, { recursive: true, force: true });
 	});
 

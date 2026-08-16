@@ -493,9 +493,10 @@ async function runDeferredIntegrityCheckInternal(
  * Check the database and repair only disposable telemetry indexes when the
  * targeted check identifies damage. Production REINDEX work runs in a
  * killable child with a real deadline. Production audits are admitted through
- * the bounded async writer queue before the child can commit its repair; test
- * doubles without a database path use one queued transaction for both
- * operations.
+ * the bounded async writer queue only after the child commits and verification
+ * succeeds. Owner-routed repairs keep their audit statement in the same
+ * transaction as REINDEX; test doubles without a database path use one queued
+ * transaction for both operations.
  */
 export interface IntegrityRepairOptions {
 	readonly quickCheck?: IntegrityCheckStatus;
@@ -618,9 +619,6 @@ export async function repairTelemetryIndexes(
 					estimatedWorkUnits: Math.max(1, statements.length),
 				});
 			} else if (options?.dbPath !== undefined) {
-				if (audit !== undefined) {
-					await writeAsync(accessor, (db) => audit(db, telemetryIndexes, telemetryCheck.messages));
-				}
 				await runKillableTelemetryRepair(
 					options.dbPath,
 					telemetryIndexes,
@@ -650,6 +648,9 @@ export async function repairTelemetryIndexes(
 							"integrity_check",
 						);
 			if (verifiedTelemetry.ok) {
+				if (options?.dbPath !== undefined && audit !== undefined) {
+					await writeAsync(accessor, (db) => audit(db, telemetryIndexes, telemetryCheck.messages));
+				}
 				latestStatus = statusWith(
 					"repaired",
 					quickCheck,
