@@ -262,7 +262,9 @@ export {
 	createMemoriesFts,
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsIndexRowCount,
+	readMemoriesFtsState,
 	readMemoriesFtsSql,
+	refreshMemoriesFtsState,
 	recreateMemoriesFts,
 	recreateMemoriesFtsSchema,
 } from "./fts-schema";

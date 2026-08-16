@@ -21,6 +21,7 @@ export const PIPELINE_CAUSE_FAMILIES = [
 	"quota",
 	"rate_limit",
 	"provider_unavailable",
+	"fts_index_incomplete",
 	"timeout",
 	"parse_failure",
 	"cancellation",

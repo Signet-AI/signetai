@@ -29,6 +29,7 @@ import { normalizeAndHashContent } from "./content-normalization";
 import { type ReadDb, getDbAccessor, runWriteTxAsync, prepareTypedStatement } from "./db-accessor";
 import { DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
 import type { EmbeddingRole } from "./embedding-profile";
+import { isFtsIndexIncomplete } from "./fts-index-state";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
 import { buildAgentScopeClause } from "./memory-access-scope";
@@ -707,23 +708,6 @@ function lexicalFallbackTerms(keywordQuery: string): string[] {
 
 /** Keep synchronous lexical fallback within the DB-owner work budget. */
 export const MAX_LEXICAL_FALLBACK_SCAN_ROWS = DB_OWNER_MAX_WORK_UNITS;
-
-function ftsIndexIsIncomplete(db: ReadDb): boolean {
-	try {
-		const row = db
-			.prepare(
-				`SELECT 1 AS missing
-				 FROM memories AS m
-				 LEFT JOIN memories_fts_docsize AS f ON f.id = m.rowid
-				 WHERE m.is_deleted = 0 AND f.id IS NULL
-				 LIMIT 1`,
-			)
-			.get() as { missing?: unknown } | undefined;
-		return row != null;
-	} catch {
-		return true;
-	}
-}
 
 function readLexicalFallback(
 	db: ReadDb,
@@ -1616,7 +1600,7 @@ export async function hybridRecall(
 					}
 				};
 
-				const indexIncomplete = ftsFailed || ftsIndexIsIncomplete(db);
+				const indexIncomplete = ftsFailed || isFtsIndexIncomplete();
 				if (indexIncomplete) {
 					lexicalSearchPartial = true;
 					lexicalFallbackAttempted = true;

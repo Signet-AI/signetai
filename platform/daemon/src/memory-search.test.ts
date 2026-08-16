@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import {
@@ -338,6 +339,7 @@ describe("hybridRecall", () => {
 			).run("deferred-fts-memory", "deferred startup lexical bridge", now, now);
 			db.exec("DELETE FROM memories_fts");
 		});
+		setFtsIndexIncomplete(true);
 
 		const result = await hybridRecall(
 			{
@@ -384,6 +386,7 @@ describe("hybridRecall", () => {
 				 SELECT rowid, content FROM memories WHERE id = ?`,
 			).run("indexed-fts-memory");
 		});
+		setFtsIndexIncomplete(true);
 
 		const result = await hybridRecall(
 			{
@@ -425,6 +428,7 @@ describe("hybridRecall", () => {
 			}
 			db.exec("DELETE FROM memories_fts");
 		});
+		setFtsIndexIncomplete(true);
 
 		const result = await hybridRecall(
 			{
@@ -440,6 +444,18 @@ describe("hybridRecall", () => {
 
 		expect(result.meta.partial).toBe(true);
 		expect(result.results.map((row) => row.id)).not.toContain("old-fallback-target");
+	});
+
+	it("reads FTS completeness from cached state without per-recall count queries", () => {
+		setFtsIndexIncomplete(true);
+		for (let index = 0; index < 100; index++) {
+			expect(isFtsIndexIncomplete()).toBe(true);
+		}
+
+		setFtsIndexIncomplete(false);
+		for (let index = 0; index < 100; index++) {
+			expect(isFtsIndexIncomplete()).toBe(false);
+		}
 	});
 
 	it("returns source-provenanced ontology claims as first-class recall results", async () => {

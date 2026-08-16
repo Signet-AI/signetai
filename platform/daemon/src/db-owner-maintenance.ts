@@ -12,6 +12,7 @@ import { DbOwnerDiedError, type DbOwnerClient, type DbOwnerHealth, type DbOwnerJ
 import { createDbOwnerClient } from "./db-owner-client";
 import type { DbOwnerParameter, DbOwnerRequest, DbOwnerStatement } from "./db-owner-protocol";
 import { DB_OWNER_MAX_RESULT_BYTES, DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
+import { setFtsIndexIncomplete } from "./fts-index-state";
 
 export interface DbOwnerMaintenanceOptions {
 	readonly deadlineMs?: number;
@@ -127,6 +128,7 @@ const DEFAULT_FTS_RUN_BUDGET_MS = 60_000;
 const MAX_FTS_RUN_BUDGET_MS = 10 * 60_000;
 const DEFAULT_FTS_RUN_WORK_UNITS = DB_OWNER_MAX_WORK_UNITS;
 const CHECKPOINT_TABLE = "db_owner_maintenance_checkpoints";
+const FTS_STATE_TABLE = "memories_fts_state";
 
 interface SqliteRunResult {
 	readonly changes: number;
@@ -253,6 +255,27 @@ async function ensureCheckpoint(client: DbOwnerClient, key: string, deadlineMs: 
 			kind: "batch",
 			statements: [
 				runStatement(
+					`CREATE TABLE IF NOT EXISTS ${FTS_STATE_TABLE} (
+							id INTEGER PRIMARY KEY CHECK (id = 1),
+							memory_count INTEGER NOT NULL,
+							indexed_count INTEGER NOT NULL,
+							updated_at TEXT NOT NULL
+						)`,
+				),
+				runStatement(
+					`INSERT OR IGNORE INTO ${FTS_STATE_TABLE} (id, memory_count, indexed_count, updated_at)
+						 VALUES (1, (SELECT COUNT(*) FROM memories), (SELECT COUNT(*) FROM memories_fts_docsize), ?)`,
+					[new Date().toISOString()],
+				),
+				runStatement(
+					`UPDATE ${FTS_STATE_TABLE}
+					 SET memory_count = (SELECT COUNT(*) FROM memories),
+					     indexed_count = (SELECT COUNT(*) FROM memories_fts_docsize),
+					     updated_at = ?
+					 WHERE id = 1`,
+					[new Date().toISOString()],
+				),
+				runStatement(
 					`CREATE TABLE IF NOT EXISTS ${CHECKPOINT_TABLE} (
 							job_key TEXT PRIMARY KEY,
 							cursor INTEGER NOT NULL DEFAULT 0,
@@ -270,7 +293,7 @@ async function ensureCheckpoint(client: DbOwnerClient, key: string, deadlineMs: 
 		},
 		"maintenance.fts.checkpoint.init",
 		deadlineMs,
-		2,
+		5,
 	);
 }
 
@@ -316,14 +339,19 @@ async function hasMissingRows(client: DbOwnerClient, cursor: number, deadlineMs:
 }
 
 async function markComplete(client: DbOwnerClient, key: string, deadlineMs: number): Promise<void> {
-	await submit<SqliteRunResult>(
+	await submit<readonly SqliteRunResult[]>(
 		client,
 		{
-			kind: "query",
-			statement: runStatement(`UPDATE ${CHECKPOINT_TABLE} SET status = 'complete', updated_at = ? WHERE job_key = ?`, [
-				new Date().toISOString(),
-				key,
-			]),
+			kind: "batch",
+			statements: [
+				runStatement(`UPDATE ${CHECKPOINT_TABLE} SET status = 'complete', updated_at = ? WHERE job_key = ?`, [
+					new Date().toISOString(),
+					key,
+				]),
+				runStatement(`UPDATE ${FTS_STATE_TABLE} SET indexed_count = memory_count, updated_at = ? WHERE id = 1`, [
+					new Date().toISOString(),
+				]),
+			],
 		},
 		"maintenance.fts.checkpoint.complete",
 		deadlineMs,
@@ -343,6 +371,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 	if (maxChunks === 0) {
 		await ensureCheckpoint(client, key, deadlineMs);
 		const checkpoint = await readCheckpoint(client, key, deadlineMs);
+		setFtsIndexIncomplete(checkpoint.status !== "complete");
 		return {
 			checkpointKey: key,
 			status: checkpoint.status,
@@ -354,6 +383,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 
 	await ensureCheckpoint(client, key, deadlineMs);
 	let checkpoint = await readCheckpoint(client, key, deadlineMs);
+	setFtsIndexIncomplete(checkpoint.status !== "complete");
 	let chunks = 0;
 	let workUnits = 0;
 	while (checkpoint.status === "running" && chunks < maxChunks) {
@@ -366,6 +396,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 		if (!(await hasMissingRows(client, cursor, chunkDeadlineMs))) {
 			await markComplete(client, key, chunkDeadlineMs);
 			checkpoint = await readCheckpoint(client, key, chunkDeadlineMs);
+			setFtsIndexIncomplete(checkpoint.status !== "complete");
 			break;
 		}
 		const now = new Date().toISOString();
@@ -397,6 +428,21 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 				[cursor, chunkSize, cursor, chunkSize, now, key, cursor],
 			),
 			runStatement(
+				`UPDATE ${FTS_STATE_TABLE}
+				 SET indexed_count = indexed_count + COALESCE((
+					 SELECT COUNT(*) FROM (
+						 SELECT m.rowid AS rowid
+						 FROM memories AS m
+						 LEFT JOIN memories_fts_docsize AS f ON f.id = m.rowid
+						 WHERE m.rowid > ? AND f.id IS NULL
+						 ORDER BY m.rowid
+						 LIMIT ?
+					 )
+				 ), 0), updated_at = ?
+				 WHERE id = 1`,
+				[cursor, chunkSize, now],
+			),
+			runStatement(
 				`INSERT INTO memories_fts(rowid, content)
 				 SELECT m.rowid, m.content
 				 FROM memories AS m
@@ -416,6 +462,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 			chunkSize,
 		);
 		checkpoint = await readCheckpoint(client, key, chunkDeadlineMs);
+		setFtsIndexIncomplete(checkpoint.status !== "complete");
 		const inserted = Math.max(0, checkpoint.processed - previousProcessed);
 		chunks += 1;
 		workUnits += chunkSize;
@@ -498,6 +545,7 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 	const rebuild = async (rebuildOptions: FtsBackfillOptions = {}): Promise<FtsBackfillResult> => {
 		const deadlineMs = boundedDeadline(rebuildOptions.deadlineMs);
 		const key = checkpointKey(rebuildOptions.checkpointKey);
+		setFtsIndexIncomplete(true);
 		await ensureCheckpoint(owner, key, deadlineMs);
 		await submit<readonly SqliteRunResult[]>(
 			owner,
@@ -508,14 +556,22 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 					runStatement("DROP TRIGGER IF EXISTS memories_ad"),
 					runStatement("DROP TRIGGER IF EXISTS memories_au"),
 					runStatement("DROP TABLE IF EXISTS memories_fts"),
+					runStatement("DROP TABLE IF EXISTS memories_fts_state"),
 					runStatement(
-						"CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61')",
+						`CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61')`,
 					),
 					runStatement(
-						"CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
+						`CREATE TABLE memories_fts_state (id INTEGER PRIMARY KEY CHECK (id = 1), memory_count INTEGER NOT NULL, indexed_count INTEGER NOT NULL, updated_at TEXT NOT NULL)`,
 					),
 					runStatement(
-						"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END",
+						`INSERT INTO memories_fts_state (id, memory_count, indexed_count, updated_at) VALUES (1, (SELECT COUNT(*) FROM memories), 0, ?)`,
+						[new Date().toISOString()],
+					),
+						runStatement(
+						"CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE memory_count + 1 END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE indexed_count + 1 END, updated_at = datetime('now') WHERE id = 1; END",
+					),
+					runStatement(
+						"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE MAX(0, memory_count - 1) END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE MAX(0, indexed_count - 1) END, updated_at = datetime('now') WHERE id = 1; END",
 					),
 					runStatement(
 						"CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",

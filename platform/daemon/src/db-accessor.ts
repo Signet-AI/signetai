@@ -26,7 +26,9 @@ import {
 	findSqliteVecExtension,
 	hasPendingMigrations,
 	memoriesFtsNeedsTokenizerRepair,
+	readMemoriesFtsState,
 	readMemoriesFtsSql,
+	refreshMemoriesFtsState,
 	recreateMemoriesFts,
 	recreateMemoriesFtsSchema,
 	resolveSqliteJournalConfig,
@@ -46,6 +48,7 @@ import {
 	type DbRuntimeMetrics,
 } from "./db-observability";
 import { observeDbLatency } from "./runtime-pressure";
+import { resetFtsIndexState, setFtsIndexIncomplete } from "./fts-index-state";
 
 export { DbSpacePreflightError };
 
@@ -997,7 +1000,10 @@ function finishDbAccessorInit(
 
 	// Ensure FTS5 virtual table exists — may be missing on upgrades from
 	// older installs where the table was dropped or never created.
+	resetFtsIndexState();
 	ensureFtsTable(writeConn, { deferBackfill: true });
+	const ftsState = readMemoriesFtsState(toFtsSchemaQueryDb(writeConn));
+	setFtsIndexIncomplete(ftsState === null || ftsState.memoryCount !== ftsState.indexedCount);
 	const configuredEmbedding = loadMemoryConfig(opts?.agentsDir ?? resolveSqliteAgentsDir()).embedding;
 	const legacyVecSql = writeConn
 		.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'")
@@ -1084,14 +1090,20 @@ export function ensureFtsTable(db: SqliteDatabase, options: { readonly deferBack
 				console.log(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
 			}
 		}
+		if (options.deferBackfill !== true) refreshMemoriesFtsState(db);
 		return;
 	}
 
-	if (!memoriesFtsNeedsTokenizerRepair(sql)) return;
+	if (!memoriesFtsNeedsTokenizerRepair(sql)) {
+		createMemoriesFts(db);
+		if (options.deferBackfill !== true) refreshMemoriesFtsState(db);
+		return;
+	}
 
 	console.log("[db-accessor] memories_fts tokenizer drift detected — recreating FTS5 table");
 	if (options.deferBackfill === true) recreateMemoriesFtsSchema(db);
 	else recreateMemoriesFts(db);
+	if (options.deferBackfill !== true) refreshMemoriesFtsState(db);
 }
 
 // ---------------------------------------------------------------------------

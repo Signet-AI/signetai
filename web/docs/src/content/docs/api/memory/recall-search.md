@@ -147,7 +147,10 @@ normally but found no matching results.
 the daemon used the bounded lexical bridge to supplement indexed results. This
 is an honest partial-coverage signal, not an HTTP failure: the response remains
 `200` and can contain useful results. Consumers should treat the result set as
-incomplete and retry after indexing recovery. This differs from
+incomplete and retry after indexing recovery. Hook callers also receive the
+`x-signet-operation-cause: fts_index_incomplete` header for this condition. This
+cause is distinct from `provider_unavailable`, which is reserved for provider
+outages and their 503 semantics. This differs from
 `aggregate.partial`, which means aggregate planning or synthesis stopped after
 retrieving only partial evidence.
 `meta.timings`, when present, reports daemon-side stage timings in

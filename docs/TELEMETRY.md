@@ -233,7 +233,8 @@ Notes on individual events:
   they can lag the in-memory event buffer by one flush interval.
 - **Normalized causes** are a bounded taxonomy: `context_limit`,
   `invalid_input`, `auth`, `quota`, `rate_limit`, `provider_unavailable`,
-  `timeout`, `parse_failure`, `cancellation`, and `internal_error`. HTTP
+  `timeout`, `parse_failure`, `cancellation`, `internal_error`, and
+  `fts_index_incomplete`. HTTP
   context-limit responses are classified locally from status and response
   shape, but the response body is never recorded or sent.
 - **Runtime-pressure buckets (#1282)** — heartbeats and rate-limited

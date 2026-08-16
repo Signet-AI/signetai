@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
+import { setFtsIndexIncomplete } from "./fts-index-state";
 import { __setPromptSubmitAdmissionForTests, createPromptSubmitAdmission } from "./routes/hooks-routes";
 import { resetSessionEndTelemetry } from "./session-end-state";
 import { createTelemetryCollector, setActiveTelemetry } from "./telemetry";
@@ -117,6 +118,23 @@ memory:
 		expect(body.memories).toEqual(body.results);
 		expect(body.count).toBe(body.results.length);
 		expect(body.message).toBe("No matching memories found.");
+	});
+
+	it("labels partial FTS recall separately from provider outages", async () => {
+		setFtsIndexIncomplete(true);
+		try {
+			const resp = await app.request("/api/hooks/recall", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ harness: "openclaw", query: "partial index", limit: 5 }),
+			});
+
+			expect(resp.status).toBe(200);
+			expect(resp.headers.get("x-signet-operation-degraded")).toBe("1");
+			expect(resp.headers.get("x-signet-operation-cause")).toBe("fts_index_incomplete");
+		} finally {
+			setFtsIndexIncomplete(false);
+		}
 	});
 
 	it("records recall attempt and outcome telemetry at the hook boundary", async () => {

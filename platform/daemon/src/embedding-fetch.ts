@@ -365,6 +365,7 @@ function preferFallbackCause(
 		parse_failure: 50,
 		invalid_input: 40,
 		provider_unavailable: 30,
+		fts_index_incomplete: 25,
 		cancellation: 20,
 		internal_error: 10,
 	};

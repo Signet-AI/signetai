@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDbOwnerMaintenance } from "./db-owner-maintenance";
 import { createDbOwnerClient } from "./db-owner-client";
+import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 
 function makeDatabase(): { readonly directory: string; readonly path: string } {
 	const directory = mkdtempSync(join(tmpdir(), "signet-fts-owner-"));
@@ -72,6 +73,21 @@ describe("DB owner FTS maintenance", () => {
 		expect(progress).toEqual([2, 2, 2, 1]);
 		expect(countFts(database.path)).toBe(7);
 		expect(maintenance.health().pid).not.toBe(process.pid);
+	});
+
+	test("updates the cached completeness signal as backfill completes", async () => {
+		const database = makeDatabase();
+		directory = database.directory;
+		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
+		setFtsIndexIncomplete(false);
+
+		const partial = await maintenance.backfillFts({ checkpointKey: "fts.cache", chunkSize: 2, maxChunks: 1 });
+		expect(partial.status).toBe("running");
+		expect(isFtsIndexIncomplete()).toBe(true);
+
+		const complete = await maintenance.backfillFts({ checkpointKey: "fts.cache", chunkSize: 2 });
+		expect(complete.status).toBe("complete");
+		expect(isFtsIndexIncomplete()).toBe(false);
 	});
 
 	test("stops a backfill at the run-level work budget and resumes later", async () => {
