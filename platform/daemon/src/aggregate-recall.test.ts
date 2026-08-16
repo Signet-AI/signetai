@@ -41,7 +41,7 @@ function row(
 	};
 }
 
-function response(query: string, results: readonly RecallResult[]): RecallResponse {
+function response(query: string, results: readonly RecallResult[], partial = false): RecallResponse {
 	return {
 		results: [...results],
 		query,
@@ -50,6 +50,7 @@ function response(query: string, results: readonly RecallResult[]): RecallRespon
 			totalReturned: results.length,
 			hasSupplementary: false,
 			noHits: results.length === 0,
+			...(partial ? { partial: true } : {}),
 			timings: { totalMs: 0, stages: [] },
 		},
 	};
@@ -494,6 +495,59 @@ memory:
 			partial: true,
 		});
 		expect(result.aggregate?.message).toContain("router");
+	});
+
+	it("propagates partial FTS metadata through every aggregate response builder", async () => {
+		const partialEvidence = (params: RecallParams, withEvidence = true): RecallResponse =>
+			response(params.query, withEvidence ? [row("partial-memory", "Partial evidence")] : [], true);
+
+		const routerUnavailable = await aggregateRecall(
+			{ query: "router unavailable", aggregate: true, saveAggregate: false },
+			loadMemoryConfig(dir),
+			{
+				router: null,
+				embedFn: async () => null,
+				logger: quietLogger(),
+				hybridRecall: async (params) => partialEvidence(params),
+			},
+		);
+		expect(routerUnavailable.meta.partial).toBe(true);
+
+		const complete = await aggregateRecall(
+			{ query: "complete aggregate", aggregate: true, saveAggregate: false },
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				hybridRecall: async (params) => partialEvidence(params),
+			},
+		);
+		expect(complete.meta.partial).toBe(true);
+
+		const noEvidence = await aggregateRecall(
+			{ query: "no evidence", aggregate: true, saveAggregate: false },
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				hybridRecall: async (params) => partialEvidence(params, false),
+			},
+		);
+		expect(noEvidence.meta.partial).toBe(true);
+
+		const synthesisFailed = await aggregateRecall(
+			{ query: "synthesis failed", aggregate: true, saveAggregate: false },
+			loadMemoryConfig(dir),
+			{
+				router: new SynthesisFailingRouter(),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				hybridRecall: async (params) => partialEvidence(params),
+			},
+		);
+		expect(synthesisFailed.meta.partial).toBe(true);
 	});
 
 	it("returns evidence with partial aggregate metadata when synthesis fails", async () => {

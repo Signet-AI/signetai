@@ -239,6 +239,7 @@ function emptyAggregateResponse(
 	queries: readonly string[],
 	sourceMemoryIds: readonly string[],
 	stoppedReason: AggregateRecallStoppedReason,
+	partial: boolean,
 ): RecallResponse {
 	return {
 		results: [],
@@ -248,6 +249,7 @@ function emptyAggregateResponse(
 			totalReturned: 0,
 			hasSupplementary: false,
 			noHits: true,
+			...(partial ? { partial: true } : {}),
 			timings: { totalMs: 0, stages: [] },
 		},
 		aggregate: {
@@ -269,6 +271,7 @@ function degradedAggregateResponse(
 	evidence: readonly RecallResult[],
 	sourceMemoryIds: readonly string[],
 	stoppedReason: "router_unavailable" | "synthesis_failed",
+	partial: boolean,
 ): RecallResponse {
 	const message =
 		stoppedReason === "router_unavailable"
@@ -282,6 +285,7 @@ function degradedAggregateResponse(
 			totalReturned: evidence.length,
 			hasSupplementary: evidence.some((row) => row.supplementary === true),
 			noHits: evidence.length === 0,
+			...(partial ? { partial: true } : {}),
 			timings: { totalMs: 0, stages: [] },
 		},
 		aggregate: {
@@ -917,7 +921,15 @@ export async function aggregateRecall(
 		const sourceMemoryIds = linkableSourceMemoryIds(firstEvidence);
 		if (firstEvidence.length > 0) {
 			return finish(
-				degradedAggregateResponse(params, budget, [params.query], firstEvidence, sourceMemoryIds, "router_unavailable"),
+				degradedAggregateResponse(
+					params,
+					budget,
+					[params.query],
+					firstEvidence,
+					sourceMemoryIds,
+					"router_unavailable",
+					first.meta.partial === true,
+				),
 			);
 		}
 		return finish(
@@ -927,6 +939,7 @@ export async function aggregateRecall(
 				[params.query],
 				sourceMemoryIds,
 				firstEvidence.length === 0 ? "no_evidence" : "router_unavailable",
+				first.meta.partial === true,
 			),
 		);
 	}
@@ -963,6 +976,7 @@ export async function aggregateRecall(
 					),
 				);
 	const recalls = [first, ...followupRecalls];
+	const partial = recalls.some((result) => result.meta.partial === true);
 
 	const evidence = uniqueEvidence(recalls.flatMap((result) => result.results));
 	const evidenceIds = evidence.map((row) => row.id);
@@ -970,7 +984,7 @@ export async function aggregateRecall(
 	const evidenceSources = aggregateEvidenceSources(evidence);
 	const saveVisibility = aggregateVisibilityForEvidence(evidence);
 	if (evidence.length === 0) {
-		return finish(emptyAggregateResponse(params, budget, queries, [], "no_evidence"));
+		return finish(emptyAggregateResponse(params, budget, queries, [], "no_evidence", partial));
 	}
 
 	const synthesized = await timings.timeAsync("aggregate_synthesis", () => synthesize({ router, params, evidence }));
@@ -978,7 +992,9 @@ export async function aggregateRecall(
 	const answer =
 		synthesized.answer && scanMemoryContent(synthesized.answer).contextEligible ? synthesized.answer : null;
 	if (!answer) {
-		return finish(degradedAggregateResponse(params, budget, queries, evidence, sourceMemoryIds, "synthesis_failed"));
+		return finish(
+			degradedAggregateResponse(params, budget, queries, evidence, sourceMemoryIds, "synthesis_failed", partial),
+		);
 	}
 
 	const agentId = params.agentId ?? "default";
@@ -1107,6 +1123,7 @@ export async function aggregateRecall(
 			totalReturned: row ? 1 : 0,
 			hasSupplementary: false,
 			noHits: !row,
+			...(partial ? { partial: true } : {}),
 			timings: { totalMs: 0, stages: [] },
 		},
 		aggregate: {

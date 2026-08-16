@@ -300,6 +300,69 @@ inference:
 			}
 		});
 
+		it("records the FTS cause for a partial aggregate recall", async () => {
+			const state = await import("./routes/state.js");
+			const { Hono } = await import("hono");
+			const { aggregateRecall } = await import("./aggregate-recall");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { setActiveTelemetry } = await import("./telemetry");
+			const events: Array<{ event: string; properties: Record<string, unknown> }> = [];
+			setActiveTelemetry({
+				record: (event: string, properties: Readonly<Record<string, string | number | boolean | null>>) =>
+					events.push({ event, properties: { ...properties } }),
+				recordFirstUse: () => {},
+			} as never);
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode aggregate recall test");
+			const aggregateRecallWithPartialHybrid: typeof aggregateRecall = async (params, cfg, deps) =>
+				aggregateRecall(params, cfg, {
+					...deps,
+					router: null,
+					hybridRecall: async (recallParams) => ({
+						results: [],
+						query: recallParams.query,
+						method: "hybrid",
+						meta: {
+							totalReturned: 0,
+							hasSupplementary: false,
+							noHits: true,
+							partial: true,
+							timings: { totalMs: 0, stages: [] },
+						},
+					}),
+				});
+			try {
+				const app = new Hono();
+				app.use("*", createAuthMiddleware(state.authConfig, secret));
+				registerMemoryRoutes(app, {
+					aggregateRecall: aggregateRecallWithPartialHybrid,
+					getInferenceRouterOrNull: () => null,
+					fetchEmbedding: async () => null,
+				});
+				const token = createToken(secret, { sub: "partial-aggregate-recall", role: "readonly", scope: {} }, 60);
+				const response = await app.request("/api/memory/recall", {
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${token}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ query: "partial aggregate recall", aggregate: true, saveAggregate: false }),
+				});
+
+				expect(response.status).toBe(200);
+				expect((await response.json()).meta.partial).toBe(true);
+				const operation = events.find((event) => event.event === "pipeline.operation");
+				expect(operation?.properties).toMatchObject({
+					operationClass: "recall",
+					outcome: "partial",
+					causeFamily: "fts_index_incomplete",
+				});
+			} finally {
+				setActiveTelemetry(undefined);
+			}
+		});
+
 		it("POST /api/memory/remember returns 403 without auth", async () => {
 			const app = await makeApp();
 			const { registerMemoryRoutes } = await import("./routes/memory-routes");
