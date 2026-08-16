@@ -1212,7 +1212,14 @@ export async function startEmbeddingIndexMigration(input: {
 				if (consecutiveFailures >= MAX_CONSECUTIVE_PROVIDER_FAILURES) {
 					const message = `Embedding provider unavailable after ${consecutiveFailures} consecutive checks; aborting the build`;
 					logger.error("embedding", message);
-					await withQueuedWrite(input.accessor, (db) => failEmbeddingIndexBuild(db, message));
+					if (input.owner)
+						await ownerRun(
+							input.owner,
+							"UPDATE embedding_index_state SET state = 'failed', last_error = ?, updated_at = ? WHERE id = 1",
+							[message, new Date().toISOString()],
+							ownerMaintenanceOptions("embedding-index.fail"),
+						);
+					else await withQueuedWrite(input.accessor, (db) => failEmbeddingIndexBuild(db, message));
 					running = false;
 					return;
 				}

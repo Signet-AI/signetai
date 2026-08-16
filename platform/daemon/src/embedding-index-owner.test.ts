@@ -38,6 +38,7 @@ interface OwnerStateSnapshot {
 	readonly state: string;
 	readonly active_profile_json: string;
 	readonly staging_profile_json: string | null;
+	readonly last_error: string | null;
 }
 
 function readOwnerState(path: string, extension: string): OwnerStateSnapshot {
@@ -45,7 +46,9 @@ function readOwnerState(path: string, extension: string): OwnerStateSnapshot {
 	database.exec("PRAGMA busy_timeout = 1000");
 	database.loadExtension(extension);
 	const state = database
-		.prepare("SELECT state, active_profile_json, staging_profile_json FROM embedding_index_state WHERE id = 1")
+		.prepare(
+			"SELECT state, active_profile_json, staging_profile_json, last_error FROM embedding_index_state WHERE id = 1",
+		)
 		.get() as OwnerStateSnapshot;
 	database.close();
 	return state;
@@ -179,5 +182,55 @@ describe("embedding index DB-owner routing", () => {
 			{ agent_id: "agent-b", count: 102 },
 		]);
 		verify.close();
+	});
+
+	it("routes provider exhaustion failure persistence through the owner", async () => {
+		const extension = findSqliteVecExtension();
+		if (extension === null) return;
+		const rawDirectory = mkdtempSync(join(tmpdir(), "signet-embedding-owner-exhaustion-"));
+		directory = rawDirectory;
+		const path = join(rawDirectory, "memories.db");
+		const raw = new Database(path);
+		raw.loadExtension(extension);
+		raw.exec(`
+			CREATE TABLE embeddings (
+				id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER,
+				source_type TEXT, source_id TEXT, chunk_text TEXT, created_at TEXT, agent_id TEXT
+			);
+			CREATE TABLE embeddings_staging (
+				id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER,
+				source_type TEXT, source_id TEXT, chunk_text TEXT, created_at TEXT, agent_id TEXT
+			);
+			CREATE TABLE embedding_index_state (
+				id INTEGER PRIMARY KEY CHECK (id = 1), active_profile_json TEXT NOT NULL,
+				staging_profile_json TEXT, state TEXT NOT NULL, last_error TEXT,
+				created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+			);
+			CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[4] distance_metric=cosine);
+			CREATE VIRTUAL TABLE vec_embeddings_staging USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[2] distance_metric=cosine);
+		`);
+		ensureEmbeddingIndexState(raw as unknown as WriteDb, activeConfig);
+		raw.close();
+
+		owner = createDbOwnerClient({ dbPath: path });
+		let providerChecks = 0;
+		const handle = await startEmbeddingIndexMigration({
+			accessor: ownerAccessor(),
+			configured: stagingConfig,
+			fetchEmbedding: async () => [0.25, 0.75],
+			checkProvider: async () => {
+				providerChecks++;
+				return { available: false };
+			},
+			pollMs: 1,
+			batchSize: 1,
+			owner,
+		});
+		if (handle === null) throw new Error("owner exhaustion migration did not start");
+
+		const state = await waitForOwnerState(path, extension, (snapshot) => snapshot.state === "failed");
+		expect(providerChecks).toBe(6);
+		expect(state.last_error).toBe("Embedding provider unavailable after 6 consecutive checks; aborting the build");
+		await handle.stop();
 	});
 });

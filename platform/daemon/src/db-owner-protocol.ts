@@ -35,15 +35,15 @@ export interface DbOwnerTransaction {
 }
 
 export type DbOwnerRequest =
-| { readonly kind: "query"; readonly statement: DbOwnerStatement }
-| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
-| {
-		readonly kind: "batch";
-		readonly statements: readonly DbOwnerStatement[];
-		/** Abort the transaction when a run statement changes zero rows. */
-		readonly requireChanges?: boolean;
-	}
-| { readonly kind: "sleep"; readonly durationMs: number };
+	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
+	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
+	| {
+			readonly kind: "batch";
+			readonly statements: readonly DbOwnerStatement[];
+			/** Abort the transaction when a run statement changes zero rows. */
+			readonly requireChanges?: boolean;
+	  }
+	| { readonly kind: "sleep"; readonly durationMs: number };
 
 export interface DbOwnerJob {
 	readonly id: string;

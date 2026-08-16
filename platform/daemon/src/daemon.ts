@@ -270,7 +270,6 @@ let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
-let dbOwnerClient: DbOwnerClient | null = null;
 let vacuumConversionHandle: VacuumConversionHandle | null = null;
 let embeddingPromotionRestart: Promise<void> | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
