@@ -129,6 +129,22 @@ describe("DB owner client", () => {
 		expect(client.health().generation).toBe(2);
 	});
 
+	test("recovers on the immediate submission after an external SIGABRT", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		const pid = client.health().pid;
+		if (pid === null) throw new Error("owner did not publish a pid");
+		process.kill(pid, "SIGABRT");
+		const fast = client.submit<unknown[]>(
+			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+			{ operation: "recall.immediate-sigabrt-recovery", lane: "read", deadlineMs: 1_000 },
+		);
+		expect(await fast.result).toEqual([{ value: 1 }]);
+		expect(client.health().generation).toBe(2);
+	});
+
 	test("fails closed when the owner cannot construct its database", async () => {
 		const database = makeDb();
 		directory = database.directory;
