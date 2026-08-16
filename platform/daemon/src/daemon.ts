@@ -64,7 +64,7 @@ import {
 	ownerRunStatement,
 	registerDbOwnerMaintenance,
 } from "./db-owner-maintenance";
-import { createDeferredRuntimeGate } from "./deferred-runtime-gate";
+import { createDeferredRuntimeGate, createDeferredRuntimeScheduler } from "./deferred-runtime-gate";
 import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
@@ -2324,6 +2324,15 @@ async function main() {
 	}
 
 	const deferredRuntimeGate = createDeferredRuntimeGate();
+	const deferredRuntimeScheduler = createDeferredRuntimeScheduler({
+		gate: deferredRuntimeGate,
+		schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+		onPipelineError: (error): void => {
+			logger.error("daemon", "Deferred pipeline runtime startup failed", undefined, {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		},
+	});
 
 	// Grace period: defer all background workers for 10s after startup so the
 	// event-loop monitor can calibrate and migrations can settle before any
@@ -2409,13 +2418,7 @@ async function main() {
 		initFeatureFlags(AGENTS_DIR);
 		startUpdateTimer();
 	};
-	setTimeout(() => {
-		void startPostReadyRuntime().catch((error) => {
-			logger.error("daemon", "Deferred pipeline runtime startup failed", undefined, {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		});
-	}, 30_000);
+	deferredRuntimeScheduler.schedulePipeline(startPostReadyRuntime);
 
 	const REQUEST_BODY_LIMIT = 10 * 1_048_576;
 	const { createServer: nodeCreateServer } = await import("node:http");
@@ -2457,11 +2460,11 @@ async function main() {
 			port: info.port,
 		});
 		logger.info("daemon", "Daemon ready");
-		setTimeout(() => {
+		deferredRuntimeScheduler.scheduleIntegrity(async (): Promise<void> => {
 			logFdSnapshot("server-ready");
 			writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
 			vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor());
-			void runDeferredIntegrityCheck(getDbAccessor(), MEMORY_DB, {
+			await runDeferredIntegrityCheck(getDbAccessor(), MEMORY_DB, {
 				timeoutMs: DEFERRED_INTEGRITY_TIMEOUT_MS,
 				ownerTimeoutMs: DEFERRED_INTEGRITY_OWNER_TIMEOUT_MS,
 				owner: dbOwnerClient ?? undefined,
@@ -2526,9 +2529,6 @@ async function main() {
 				})
 				.catch((error) => {
 					logger.error("startup-recovery", "Deferred database integrity check rejected", error);
-				})
-				.finally(() => {
-					deferredRuntimeGate.completeIntegrity();
 				});
 
 			const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
@@ -2685,7 +2685,7 @@ async function main() {
 						);
 					});
 			}
-		}, 30_000);
+		});
 	};
 
 	bindWithRetry({
