@@ -112,6 +112,23 @@ describe("DB owner client", () => {
 		expect(await fast.result).toEqual([{ value: 1 }]);
 	});
 
+	test("recovers immediately after a deadline kills the owner", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		const slow = client.submit(
+			{ kind: "sleep", durationMs: 250 },
+			{ operation: "maintenance.immediate-deadline-test", lane: "maintenance", deadlineMs: 40 },
+		);
+		await expect(slow.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		const fast = client.submit<unknown[]>(
+			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+			{ operation: "recall.immediate-recovery", lane: "read", deadlineMs: 1_000 },
+		);
+		expect(await fast.result).toEqual([{ value: 1 }]);
+		expect(client.health().generation).toBe(2);
+	});
+
 	test("fails closed when the owner cannot construct its database", async () => {
 		const database = makeDb();
 		directory = database.directory;

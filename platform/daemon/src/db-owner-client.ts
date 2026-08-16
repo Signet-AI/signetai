@@ -103,6 +103,7 @@ interface PendingJob<Result> {
 	readonly reject: (reason?: unknown) => void;
 	readonly timer: ReturnType<typeof setTimeout>;
 	settled: boolean;
+	dispatched: boolean;
 }
 
 export interface DbOwnerClientOptions {
@@ -168,8 +169,9 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		callback(job);
 	}
 
-	function rejectAll(error: Error): void {
+	function rejectAll(error: Error, dispatchedOnly = false): void {
 		for (const jobId of pending.keys()) {
+			if (dispatchedOnly && pending.get(jobId)?.dispatched !== true) continue;
 			settle(jobId, (job) => {
 				if (!job.settled) {
 					job.settled = true;
@@ -179,7 +181,37 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		}
 	}
 
-	function handleEvent(event: DbOwnerEvent): void {
+	function retireOwner(
+		error: Error,
+		owner: ChildProcess | null = child,
+		nextState: "dead" | "failed" = "dead",
+		dispatchedOnly = false,
+	): void {
+		if (owner !== null && child !== owner) return;
+		const retired = child;
+		child = null;
+		pid = null;
+		activeJobId = null;
+		input = "";
+		startPromise = null;
+		state = closed ? "closed" : nextState;
+		lastError = error.message;
+		const rejectStartup = startupReject;
+		startupResolve = null;
+		startupReject = null;
+		rejectStartup?.(error);
+		if (!closed) rejectAll(error, dispatchedOnly);
+		if (retired !== null) {
+			try {
+				retired.kill("SIGKILL");
+			} catch {
+				// The owner may already have exited.
+			}
+		}
+	}
+
+	function handleEvent(owner: ChildProcess, event: DbOwnerEvent): void {
+		if (child !== owner) return;
 		if (event.type === "ready") {
 			state = "ready";
 			pid = event.pid;
@@ -215,14 +247,15 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		});
 	}
 
-	function handleStdout(chunk: string): void {
+	function handleStdout(owner: ChildProcess, chunk: string): void {
+		if (child !== owner) return;
 		input += chunk;
 		const lines = input.split("\n");
 		input = lines.pop() ?? "";
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			try {
-				handleEvent(JSON.parse(line) as DbOwnerEvent);
+				handleEvent(owner, JSON.parse(line) as DbOwnerEvent);
 			} catch (error) {
 				lastError = error instanceof Error ? error.message : String(error);
 				state = "failed";
@@ -230,34 +263,43 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		}
 	}
 
-	function handleExit(code: number | null, signal: NodeJS.Signals | null): void {
+	function handleExit(owner: ChildProcess, code: number | null, signal: NodeJS.Signals | null): void {
+		if (child !== owner) return;
 		const expected = closed;
-		child = null;
-		pid = null;
-		activeJobId = null;
-		input = "";
-		startPromise = null;
-		if (!expected) {
-			state = state === "starting" || state === "failed" ? "failed" : "dead";
-			lastError = signal === null ? `DB owner exited with code ${code ?? "unknown"}` : `DB owner killed by ${signal}`;
-			startupReject?.(new DbOwnerDiedError(lastError));
-			rejectAll(new DbOwnerDiedError(lastError));
-			startupResolve = null;
-			startupReject = null;
+		if (expected) {
+			child = null;
+			pid = null;
+			activeJobId = null;
+			input = "";
+			startPromise = null;
+			return;
 		}
+		const message = signal === null ? `DB owner exited with code ${code ?? "unknown"}` : `DB owner killed by ${signal}`;
+		retireOwner(
+			new DbOwnerDiedError(message),
+			owner,
+			state === "starting" || state === "failed" ? "failed" : "dead",
+			true,
+		);
 	}
 
-	function handleTransportError(error: Error): void {
-		if (closed) return;
-		lastError = error.message;
-		state = state === "starting" ? "failed" : "dead";
-		startupReject?.(new DbOwnerDiedError(error.message));
-		rejectAll(new DbOwnerDiedError(error.message));
+	function handleTransportError(owner: ChildProcess, error: Error): void {
+		if (child !== owner || closed) return;
+		retireOwner(new DbOwnerDiedError(error.message), owner, state === "starting" ? "failed" : "dead");
 	}
 
 	async function start(): Promise<void> {
 		if (closed) throw new DbOwnerError("DB_OWNER_CLOSED", "DB owner client is closed");
-		if (state === "ready" && child !== null) return;
+		if (state === "ready" && child !== null) {
+			const owner = child;
+			if (owner.exitCode !== null || owner.signalCode !== null || owner.killed) {
+				retireOwner(new DbOwnerDiedError(), owner);
+				return await start();
+			}
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+			if (child !== owner || state !== "ready") return await start();
+			return;
+		}
 		if (startPromise !== null) return await startPromise;
 		const timeoutMs = options.startupTimeoutMs ?? 5_000;
 		state = "starting";
@@ -276,11 +318,11 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			});
 			child = owner;
 			owner.stdout?.setEncoding("utf8");
-			owner.stdout?.on("data", handleStdout);
-			owner.stdin?.on("error", handleTransportError);
+			owner.stdout?.on("data", (chunk: string) => handleStdout(owner, chunk));
+			owner.stdin?.on("error", (error: Error) => handleTransportError(owner, error));
 			owner.stderr?.resume();
-			owner.once("error", handleTransportError);
-			owner.once("close", handleExit);
+			owner.once("error", (error: Error) => handleTransportError(owner, error));
+			owner.once("close", (code, signal) => handleExit(owner, code, signal));
 			const timer = setTimeout(() => {
 				if (state !== "ready") {
 					lastError = `DB owner did not become ready within ${timeoutMs}ms`;
@@ -300,10 +342,11 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				rejectStartup?.(error);
 			};
 		});
+		const currentStartPromise = startPromise;
 		try {
-			await startPromise;
+			await currentStartPromise;
 		} finally {
-			startPromise = null;
+			if (startPromise === currentStartPromise) startPromise = null;
 		}
 	}
 
@@ -356,15 +399,18 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 						settledJob.reject(new DbOwnerDeadlineError(job.id));
 					}
 				});
-				child?.kill("SIGKILL");
+				retireOwner(new DbOwnerDiedError(`DB owner killed after deadline for ${job.id}`));
 			}, submitOptions.deadlineMs);
-			pendingJob = { job, resolve, reject, timer, settled: false };
+			pendingJob = { job, resolve, reject, timer, settled: false, dispatched: false };
 			pending.set(job.id, pendingJob as PendingJob<unknown>);
 			void start().then(
 				() => {
 					if (!pending.has(job.id) || pending.get(job.id)?.settled === true) return;
 					activeJobId ??= job.id;
 					try {
+						const entry = pending.get(job.id);
+						if (entry === undefined || entry.settled) return;
+						entry.dispatched = true;
 						write({ type: "submit", job });
 					} catch (error) {
 						settle(job.id, (entry) => {
