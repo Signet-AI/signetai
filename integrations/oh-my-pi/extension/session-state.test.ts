@@ -33,4 +33,16 @@ describe("createSessionState", () => {
 		expect(message?.content).toContain("session context only");
 		expect(state.consumePersistentHiddenInject("session-2")).toBeUndefined();
 	});
+
+	it("delivers a queued clock through the hidden per-turn message", () => {
+		const state = createSessionState();
+		state.queuePendingClock("session-3", "Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)");
+
+		const message = state.consumePersistentHiddenInject("session-3");
+
+		expect(message?.customType).toBe("signet-oh-my-pi-clock-context");
+		expect(message?.display).toBe(false);
+		expect(message?.content).toBe("Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)");
+		expect(state.consumePersistentHiddenInject("session-3")).toBeUndefined();
+	});
 });

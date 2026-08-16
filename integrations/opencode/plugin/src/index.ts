@@ -74,6 +74,24 @@ function readContextString(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
 
+const CLOCK_CONTEXT_START = "<signet-clock-context>";
+const CLOCK_CONTEXT_END = "</signet-clock-context>";
+
+function stripAppendedClockContext(text: string): string {
+	const blockStart = `\n\n${CLOCK_CONTEXT_START}\n`;
+	const blockEnd = `\n${CLOCK_CONTEXT_END}`;
+	if (!text.endsWith(blockEnd)) return text;
+	const start = text.lastIndexOf(blockStart);
+	if (start < 0) return text;
+	return text.slice(0, start).trimEnd();
+}
+
+function appendClockContext(text: string, clockContext: string): string {
+	const cleanText = stripAppendedClockContext(text);
+	const clockBlock = `${CLOCK_CONTEXT_START}\n${clockContext}\n${CLOCK_CONTEXT_END}`;
+	return [cleanText, clockBlock].filter((part) => part.length > 0).join("\n\n");
+}
+
 // Per-turn inject cache: every LLM transform for a prompt receives the same context.
 // The next chat.message replaces it, and session end removes it. The cap prevents
 // unbounded growth if OpenCode never emits either lifecycle hook for a session.
@@ -461,7 +479,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				const textPart = [...message.parts].reverse().find((part) => part.type === "text");
 				if (textPart?.type !== "text") return;
 				const providerContent = composeApiUserContent(textPart.text, dynamicContext);
-				textPart.text = [providerContent, clockContext].filter((part) => part.length > 0).join("\n\n");
+				textPart.text = appendClockContext(providerContent, clockContext);
 				return;
 			}
 		},

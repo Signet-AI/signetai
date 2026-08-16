@@ -28,4 +28,13 @@ describe("createSessionState", () => {
 		expect(secondMessages).toHaveLength(1);
 		expect(secondMessages[0]?.content).toContain("third");
 	});
+
+	it("clears a queued clock when the next turn starts", () => {
+		const state = createSessionState();
+		state.queuePendingClock("session-1", "Current date/time: stale");
+
+		state.clearPendingClock("session-1");
+
+		expect(state.consumeHiddenInjectMessages("session-1")).toEqual([]);
+	});
 });

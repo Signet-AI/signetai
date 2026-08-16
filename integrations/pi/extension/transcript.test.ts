@@ -3,12 +3,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readSessionFileSnapshot } from "@signet/pi-extension-base";
-import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE } from "./src/types.js";
-
-const EXCLUDED_CUSTOM_TYPES: ReadonlySet<string> = new Set([
+import { PI_LIFECYCLE_CONFIG } from "./src/lifecycle.js";
+import {
+	HIDDEN_CLOCK_CUSTOM_TYPE,
 	HIDDEN_RECALL_CUSTOM_TYPE,
 	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
-]);
+} from "./src/types.js";
+
+const EXCLUDED_CUSTOM_TYPES = PI_LIFECYCLE_CONFIG.excludedCustomTypes;
 
 const tempDirs: string[] = [];
 
@@ -34,13 +36,18 @@ describe("readSessionFileSnapshot", () => {
 				}),
 				JSON.stringify({
 					type: "custom_message",
-					customType: "signet-pi-session-context",
+					customType: HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
 					content: "should stay hidden",
 				}),
 				JSON.stringify({
 					type: "custom_message",
-					customType: "signet-pi-hidden-recall",
+					customType: HIDDEN_RECALL_CUSTOM_TYPE,
 					content: "should stay hidden too",
+				}),
+				JSON.stringify({
+					type: "custom_message",
+					customType: HIDDEN_CLOCK_CUSTOM_TYPE,
+					content: "Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)",
 				}),
 				JSON.stringify({
 					type: "message",

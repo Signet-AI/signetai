@@ -18,7 +18,7 @@ interface OpenCodeHooks {
 	}) => Promise<void>;
 	readonly "tool.execute.before": (input: { readonly sessionID: string }) => Promise<void>;
 	readonly "chat.message": (
-		input: { readonly sessionID: string },
+		input: { readonly sessionID: string; readonly messageID?: string },
 		output: { readonly parts: ReadonlyArray<{ readonly type: "text"; readonly text: string }> },
 	) => Promise<void>;
 	readonly "experimental.chat.messages.transform": (
@@ -215,6 +215,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 		const replayedContent = apiOutput.messages[0]?.parts[0]?.text;
 		await hooks["experimental.chat.messages.transform"]({}, apiOutput);
 		expect(apiOutput.messages[0]?.parts[0]?.text).toBe(replayedContent);
+		expect(replayedContent?.match(/Current date\/time:/g)).toHaveLength(1);
 	});
 
 	test("scrubs a memory fence before completed assistant text is exposed", async () => {

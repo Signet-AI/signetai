@@ -42,6 +42,7 @@ export interface BaseSessionState {
 	queuePendingRecall(sessionId: string, inject: string): void;
 	queuePendingClock(sessionId: string, clockContext: string): void;
 	consumePendingClock(sessionId: string | undefined): string | undefined;
+	clearPendingClock(sessionId: string | undefined): void;
 	clearPendingRecall(sessionId: string | undefined): void;
 	clearPendingSessionData(sessionId: string | undefined): void;
 	hasPendingRecall(sessionId: string | undefined): boolean;
@@ -143,6 +144,11 @@ export class BaseSessionStateStore implements BaseSessionState {
 		const clockContext = this.pendingClock.get(sessionId);
 		this.pendingClock.delete(sessionId);
 		return clockContext;
+	}
+
+	clearPendingClock(sessionId: string | undefined): void {
+		if (!sessionId) return;
+		this.pendingClock.delete(sessionId);
 	}
 
 	clearPendingRecall(sessionId: string | undefined): void {

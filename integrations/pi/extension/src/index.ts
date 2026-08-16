@@ -333,6 +333,7 @@ function registerPromptHandlers(pi: PiExtensionApi, deps: LifecycleDeps): void {
 	pi.on("input", async (event: PiInputEvent, ctx) => {
 		const session = currentSessionRef(ctx);
 		deps.state.clearPendingRecall(session.sessionId);
+		deps.state.clearPendingClock(session.sessionId);
 		await requestRecallForPrompt(deps, ctx, event.text);
 	});
 

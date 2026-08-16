@@ -56,6 +56,7 @@ function registerPromptHandlers(pi: OmpExtensionApi, deps: OmpDeps): void {
 	pi.on("input", async (event: OmpInputEvent, ctx) => {
 		const session = currentSessionRef(ctx);
 		deps.state.clearPendingRecall(session.sessionId);
+		deps.state.clearPendingClock(session.sessionId);
 		await requestRecallForPrompt(deps, ctx, event.text);
 	});
 

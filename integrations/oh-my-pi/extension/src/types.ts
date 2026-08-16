@@ -18,6 +18,7 @@ export const FETCH_TIMEOUT_ENV = "SIGNET_FETCH_TIMEOUT";
 
 export const HIDDEN_RECALL_CUSTOM_TYPE = "signet-oh-my-pi-hidden-recall";
 export const HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE = "signet-oh-my-pi-session-context";
+export const HIDDEN_CLOCK_CUSTOM_TYPE = "signet-oh-my-pi-clock-context";
 
 export interface PreCompactionResult {
 	readonly guidelines?: string;
