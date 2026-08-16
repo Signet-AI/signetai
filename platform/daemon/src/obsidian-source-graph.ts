@@ -398,7 +398,7 @@ function purgeOrphanedDocumentReferences(db: WriteDb, agentId: string, sourceId:
 		.run(agentId, sourceId, root).changes;
 }
 
-function purgeObsidianSourceFileStructureInTx(
+export function purgeObsidianSourceFileStructureInTx(
 	db: WriteDb,
 	input: PurgeObsidianSourceFileStructureInput,
 ): PurgeObsidianSourceStructureResult {
@@ -465,7 +465,8 @@ function purgeObsidianSourceFileStructureInTx(
 	return { entities, attributes: attributes + derivedAttributes, dependencies, communities: aspects };
 }
 
-export function indexObsidianSourceStructure(
+export function applyObsidianSourceStructureInTx(
+	db: import("./db-accessor").WriteDb,
 	input: IndexObsidianSourceStructureInput,
 ): IndexObsidianSourceStructureResult {
 	const root = normalizedRoot(input.root);
@@ -473,12 +474,10 @@ export function indexObsidianSourceStructure(
 	const fileRel = relPath(root, filePath);
 	const now = new Date().toISOString();
 	const content = stripFrontmatter(input.content);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-		// A source file is authoritative: before rebuilding its projection,
-		// remove the prior per-file headings/claims/links so deleted Markdown
-		// structure does not linger as stale graph facts.
-		purgeObsidianSourceFileStructureInTx(db, input);
+	// A source file is authoritative: before rebuilding its projection,
+	// remove the prior per-file headings/claims/links so deleted Markdown
+	// structure does not linger as stale graph facts.
+	purgeObsidianSourceFileStructureInTx(db, input);
 
 		let folderEntitiesTouched = 0;
 		let documentEntitiesTouched = 0;
@@ -685,8 +684,16 @@ export function indexObsidianSourceStructure(
 			dependenciesTouched,
 			aspectsTouched,
 			attributesTouched,
-		};
-	});
+	};
+}
+
+export function indexObsidianSourceStructure(
+	input: IndexObsidianSourceStructureInput,
+): IndexObsidianSourceStructureResult {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
+		applyObsidianSourceStructureInTx(db, input),
+	);
 }
 
 export function purgeObsidianSourceFileStructure(
@@ -698,15 +705,14 @@ export function purgeObsidianSourceFileStructure(
 	);
 }
 
-export function purgeObsidianSourceStructure(
+export function applyObsidianSourceStructurePurgeInTx(
+	db: import("./db-accessor").WriteDb,
 	input: PurgeObsidianSourceStructureInput,
 ): PurgeObsidianSourceStructureResult {
 	const root = normalizedRoot(input.root);
 	const agentWhere = input.agentId ? "agent_id = ? AND " : "";
 	const params = input.agentId ? [input.agentId, input.sourceId, root] : [input.sourceId, root];
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-		purgeAttributeMemoryProjectionsInTx(db, {
+	purgeAttributeMemoryProjectionsInTx(db, {
 			agentId: input.agentId,
 			sourceId: input.sourceId,
 			sourceRoot: root,
@@ -765,13 +771,21 @@ export function purgeObsidianSourceStructure(
 				}
 			}
 		}
-		return {
-			entities: entities + derivedEntities,
-			attributes: attrs + derivedAttrs,
-			dependencies: deps + derivedDeps,
-			communities,
-		};
-	});
+	return {
+		entities: entities + derivedEntities,
+		attributes: attrs + derivedAttrs,
+		dependencies: deps + derivedDeps,
+		communities,
+	};
+}
+
+export function purgeObsidianSourceStructure(
+	input: PurgeObsidianSourceStructureInput,
+): PurgeObsidianSourceStructureResult {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
+		applyObsidianSourceStructurePurgeInTx(db, input),
+	);
 }
 
 export function sourceIdForObsidianRoot(root: string): string {
