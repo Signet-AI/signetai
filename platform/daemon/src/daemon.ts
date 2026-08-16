@@ -100,6 +100,7 @@ import {
 } from "./pipeline";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
+import { getDreamingLiveBus } from "./pipeline/dreaming-live";
 import { retireLegacyExtractionJobs } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
@@ -1691,6 +1692,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 						hourlyBudget: memoryCfg.pipelineV2.repair.requeueHourlyBudget,
 						maxAttempts: 3,
 					},
+					// Read-only live observation for `dream attach` (#1601).
+					liveEvents: { bus: getDreamingLiveBus() },
 				},
 				graphWriteCaps(memoryCfg),
 			);

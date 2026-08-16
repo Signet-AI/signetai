@@ -29,6 +29,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type {
 	AccountingProvenance,
+	DreamingRawEventSink,
 	LlmCacheRequestAccounting,
 	LlmGenerateResult,
 	LlmProvider,
@@ -53,6 +54,10 @@ const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
 
 /** Keyless local/gateway servers get a dummy key so pi-ai's resolver short-circuits. */
 const KEYLESS_API_KEY = "signet-keyless";
+
+/** System instructions every daemon-owned bounded session receives. */
+export const PI_AGENT_SESSION_SYSTEM_PROMPT =
+	"You are a bounded Signet maintenance agent. You may use only the supplied daemon tools.";
 
 const LOCAL_COMPAT: OpenAICompletionsCompat = {
 	supportsStore: false,
@@ -129,7 +134,12 @@ export interface PiAgentSessionProvider {
 	readonly agentSessionTimeoutMs: number;
 	createAgentSession(
 		tools: readonly ToolDefinition[],
-		options?: { readonly maxTokens?: number; readonly signal?: AbortSignal },
+		options?: {
+			readonly maxTokens?: number;
+			readonly signal?: AbortSignal;
+			/** Read-only live observation sink (#1601); never steers the session. */
+			readonly sessionEventSink?: DreamingRawEventSink;
+		},
 	): Promise<PiAgentSession>;
 }
 
@@ -711,7 +721,17 @@ export function createPiModelProvider(
 		agentSessionTimeoutMs: defaultTimeoutMs,
 		async createAgentSession(
 			tools: readonly ToolDefinition[],
-			options: { readonly maxTokens?: number; readonly signal?: AbortSignal } = {},
+			options: {
+				readonly maxTokens?: number;
+				readonly signal?: AbortSignal;
+				/**
+				 * Optional raw-event sink for read-only live observation
+				 * (Dreaming live views, #1601). Receives every AgentSessionEvent
+				 * plus a leading context sentinel; observation only — never
+				 * steers the session.
+				 */
+				readonly sessionEventSink?: DreamingRawEventSink;
+			} = {},
 		) {
 			// Isolated from the user's Pi credentials and models.json. The same
 			// daemon-owned runtime services ordinary calls and this AgentSession.
@@ -726,7 +746,7 @@ export function createPiModelProvider(
 				noPromptTemplates: true,
 				noThemes: true,
 				noContextFiles: true,
-				systemPrompt: "You are a bounded Signet maintenance agent. You may use only the supplied daemon tools.",
+				systemPrompt: PI_AGENT_SESSION_SYSTEM_PROMPT,
 			});
 			await awaitWithAbort(resourceLoader.reload(), options.signal);
 			const { session } = await awaitWithAbort(
@@ -742,10 +762,26 @@ export function createPiModelProvider(
 				options.signal,
 				(result) => result.session.dispose(),
 			);
+			let unsubscribeSessionEvents: (() => void) | undefined;
+			if (typeof options.sessionEventSink === "function") {
+				// Context sentinel first: instruction + routed model metadata,
+				// so observers never need session introspection.
+				options.sessionEventSink({
+					type: "signet_context",
+					instructions: PI_AGENT_SESSION_SYSTEM_PROMPT,
+					modelLabel: label,
+				});
+				unsubscribeSessionEvents = session.subscribe((event) =>
+					options.sessionEventSink?.(event),
+				);
+			}
 			return {
 				prompt: (text) => session.prompt(text),
 				abort: () => session.abort(),
-				dispose: () => session.dispose(),
+				dispose: () => {
+					unsubscribeSessionEvents?.();
+					session.dispose();
+				},
 				getActiveToolNames: () => session.getActiveToolNames(),
 				getStats: () => session.getSessionStats(),
 				getRequestUsages: () =>

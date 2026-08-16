@@ -55,6 +55,7 @@ export { getDreamingAttention } from "./dreaming-attention";
 export { getDreamingWorkloadDiagnostics } from "./dreaming";
 export { getDreamingQualityReport } from "./dreaming-quality";
 export type { DreamingSchedulerStatus, DreamingWorkerHandle } from "./dreaming-worker";
+export { getDreamingLiveBus, type DreamingLiveBus, type DreamingLiveFrame } from "./dreaming-live";
 
 /** Get the active synthesis worker handle (for API routes). */
 export function getSynthesisWorker(): SynthesisWorkerHandle | null {

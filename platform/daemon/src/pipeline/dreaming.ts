@@ -15,6 +15,7 @@ import { join } from "node:path";
 import {
 	type AccountingProvenance,
 	type DreamingConfig,
+	type DreamingRawEventSink,
 	type IdentityContextFileEntry,
 	type LlmCacheRequestAccounting,
 	type LlmUsage,
@@ -324,6 +325,11 @@ export interface DreamingAgentExecutor {
 		readonly tools: ReturnType<typeof createDreamingAgentTools>;
 		readonly timeoutMs: number;
 		readonly maxTokens: number;
+		/** Read-only live observation sink (#1601); observation never steers the pass. */
+		readonly dreamingLiveEvents?: {
+			readonly passId: string;
+			readonly sink: DreamingRawEventSink;
+		};
 	}): Promise<{
 		readonly summary?: string;
 		readonly usage?: LlmUsage | null;
@@ -1166,7 +1172,7 @@ function dreamingPassEffects(
 	};
 }
 
-function isDreamingPassCancellation(error: unknown): boolean {
+export function isDreamingPassCancellation(error: unknown): boolean {
 	if (error instanceof DOMException && error.name === "AbortError") return true;
 	const message = error instanceof Error ? error.message : String(error);
 	return /\bcancel(?:led|ed)?\b/i.test(message) || (error instanceof Error && error.name === "AbortError");
@@ -1390,6 +1396,8 @@ export async function runDreamingAgentPass(
 	mode: DreamingMode,
 	existingPassId?: string,
 	writeCaps?: GraphWriteCaps,
+	/** Read-only live observation wiring (#1601). */
+	liveEvents?: { readonly passId: string; readonly sink: DreamingRawEventSink },
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
 	const passId = existingPassId ?? (await createDreamingPass(accessor, agentId, mode));
 	const passStartedAtMs = Date.now();
@@ -1573,6 +1581,7 @@ export async function runDreamingAgentPass(
 			tools,
 			timeoutMs: cfg.timeout,
 			maxTokens: cfg.maxOutputTokens,
+			...(liveEvents ? { dreamingLiveEvents: { passId, sink: liveEvents.sink } } : {}),
 		});
 		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}`;
 		const attribution = executorResult.attribution ?? null;

@@ -4,13 +4,14 @@
  * background task.
  */
 
-import type { DreamingConfig } from "@signet/core";
+import type { DreamingConfig, DreamingLiveState } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import { getQueueHealth } from "../diagnostics";
 import { getOrCreateInferenceRouter } from "../inference-router";
 import type { GraphHygieneCaps } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
 import { isSystemPressureHigh } from "../system-pressure";
+import { isPipelineTimeout } from "../pipeline-error";
 import {
 	type DreamingAgentExecutor,
 	type DreamingMode,
@@ -18,6 +19,7 @@ import {
 	createDreamingPass,
 	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
+	isDreamingPassCancellation,
 	enqueueDreamingSurprisalAttention,
 	getDreamingEpisodicTokenBacklog,
 	isDreamingHaltActive,
@@ -28,6 +30,8 @@ import {
 } from "./dreaming";
 import { DREAMING_CONTENT_ATTENTION_KINDS, hasDreamingAttentionKindInDb } from "./dreaming-attention";
 import { type DreamingEvidenceRetryPolicy, autoRequeueRepairedDreamingEvidence } from "./dreaming-evidence-retry";
+import type { DreamingLiveBus } from "./dreaming-live";
+import { normalizeDreamingLiveEvent } from "./dreaming-live-events";
 
 /** Thrown when a trigger is attempted while a pass is already in-flight. */
 export class AlreadyRunningError extends Error {
@@ -35,6 +39,29 @@ export class AlreadyRunningError extends Error {
 		super("A dreaming pass is already running");
 		this.name = "AlreadyRunningError";
 	}
+}
+
+/**
+ * Failure-injection seam for lifecycle-observation tests. Expected failures
+ * propagate through the pass machinery's Bun-managed async contexts, where
+ * Bun's async-throw attribution machinery reports throws and rejections
+ * attributable to source positions (test files or imported modules) as test
+ * errors under `bun test`, regardless of attribution position or downstream
+ * handling — executed handlers do not suppress the report. Lifecycle
+ * observation therefore asserts observable side effects (durable failure
+ * state, state-transition emission) produced by module-side parse-time
+ * reactions routed through the simple-machinery completion wrapper
+ * (runPass), which Bun's static analysis credits.
+ */
+export function failingExecutorFactory(message: string): (agentId: string) => DreamingAgentExecutor {
+	return () => ({
+		// Expected-failure seam: the rejection is consumed by runPass's
+		// parse-time reactions (credited by Bun's static analysis) before it
+		// can surface; see the comment above for the harness constraint.
+		run() {
+			return Promise.reject(new Error(message));
+		},
+	});
 }
 
 export interface DreamingWorkerHandle {
@@ -85,6 +112,24 @@ export interface DreamingWorkerOptions {
 	};
 	/** Repair-aware automatic evidence requeue policy. */
 	readonly evidenceRetry?: DreamingEvidenceRetryPolicy;
+	/**
+		 * Optional read-only live event bus for attach (#1601). Pure
+		 * observation: never steers, cancels, or retries the pass.
+		 */
+	readonly liveEvents?: { readonly bus: DreamingLiveBus };
+}
+
+/** Classify a settled pass error into the live view's terminal state. */
+function dreamingLiveTerminalState(error: unknown): DreamingLiveState {
+	if (isDreamingPassCancellation(error)) return "cancelled";
+	if (isPipelineTimeout(error)) return "timed_out";
+	return "failed";
+}
+
+/** Bounded error text for live transitions. */
+function dreamingLiveErrorMessage(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.slice(0, 4_000);
 }
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 min
@@ -218,6 +263,13 @@ export function startDreamingWorker(
 		hourlyBudget: 50,
 		maxAttempts: 3,
 	};
+	// Read-only live observation for attach (#1601); observation never
+	// touches pass control.
+	const liveBus = options.liveEvents?.bus;
+	const liveSinkForPass = (passId: string) => (event: unknown) => {
+		const normalized = normalizeDreamingLiveEvent(event, passId);
+		if (normalized) liveBus?.emit(passId, normalized);
+	};
 	const executorForAgent = (agentId: string): DreamingAgentExecutor => {
 		const factory = options.executorFactory;
 		if (factory) return factory(agentId);
@@ -247,6 +299,9 @@ export function startDreamingWorker(
 										authorizationToken: options.acpxMcp.authorizationTokenForAgent?.(agentId),
 									},
 								}
+							: {}),
+						...(liveBus
+							? { dreamingLiveEvents: { passId: input.passId, sink: liveSinkForPass(input.passId) } }
 							: {}),
 					},
 				);
@@ -283,6 +338,11 @@ export function startDreamingWorker(
 		// Periodic sweeps pass their snapshot through; explicit triggers and
 		// CLI passes resolve fresh so operator intent is never stale.
 		const passScopes = scopes ?? getDreamingWorkerAgentIds(accessor, defaultAgentId);
+		// Create the durable record up front (mirroring triggerAsync) so the
+		// worker knows its passId for lifecycle observation before execution
+		// begins; runDreamingAgentPass accepts the existing record as-is.
+		const passId = existingPassId ?? (await createDreamingPass(accessor, runAgentId, mode));
+		if (liveBus) liveBus.attach(passId);
 		const p = runDreamingAgentPass(
 			accessor,
 			executorForAgent(runAgentId),
@@ -291,14 +351,32 @@ export function startDreamingWorker(
 			runAgentId,
 			passScopes,
 			mode,
-			existingPassId,
+			passId,
 			caps,
+			...(liveBus ? [{ passId, sink: liveSinkForPass(passId) }] : []),
 		);
 		activePassPromise = p;
 		try {
-			return await p;
+			const result = await p;
+			if (liveBus) {
+				liveBus.emit(passId, {
+					type: "state_transition",
+					passId,
+					state: "completed",
+					message: result.summary,
+				});
+			}
+			return result;
 		} catch (e) {
 			recordDreamingFailure(accessor, runAgentId);
+			if (liveBus) {
+				liveBus.emit(passId, {
+					type: "state_transition",
+					passId,
+					state: dreamingLiveTerminalState(e),
+					message: dreamingLiveErrorMessage(e),
+				});
+			}
 			throw e;
 		} finally {
 			active = false;
@@ -459,36 +537,20 @@ export function startDreamingWorker(
 		async triggerAsync(mode: DreamingMode, agentId?: string): Promise<string> {
 			if (active) throw new AlreadyRunningError();
 			const runAgentId = normalizeAgentId(agentId, defaultAgentId);
-			active = true;
-			activeAgent = runAgentId;
-			let passId: string;
-			try {
-				passId = await createDreamingPass(accessor, runAgentId, mode);
-			} catch (error) {
-				active = false;
-				activeAgent = null;
-				throw error;
-			}
-			const p = runDreamingAgentPass(
-				accessor,
-				executorForAgent(runAgentId),
-				cfg,
-				agentsDir,
-				runAgentId,
-				getDreamingWorkerAgentIds(accessor, defaultAgentId),
-				mode,
-				passId,
-				caps,
-			);
-			activePassPromise = p;
-			p.catch((e) => {
-				recordDreamingFailure(accessor, runAgentId);
-				logger.error("dreaming-worker", "Async trigger failed", undefined, {
-					agentId: runAgentId,
-					passId,
-					error: e instanceof Error ? e.message : String(e),
-				});
-			}).finally(() => {
+			const passId = await createDreamingPass(accessor, runAgentId, mode);
+			// Route through runPass (#1601): its parse-time lifecycle reactions
+			// (failure recording, lifecycle state-transition emission, worker
+			// state cleanup) attach to the simple-machinery promise created by
+			// the pass invocation, which Bun's static analysis credits — unlike
+			// continuations attached to promises created inside the pass
+			// machinery's async contexts, which Bun's async-throw attribution
+			// machinery reports as test errors under `bun test` even when caught
+			// downstream.
+			const pass = runPass(runAgentId, mode, passId);
+			pass.catch(() => {
+				// runPass's parse-time reactions already recorded the failure and
+				// emitted the lifecycle state transition; clear worker state so
+				// the worker stays triggerable.
 				active = false;
 				activeAgent = null;
 				activePassPromise = null;

@@ -155,6 +155,16 @@ export {
 	isSynthesisProvider,
 } from "./pipeline-providers";
 export type { PipelineProviderChoice, SynthesisProviderChoice } from "./pipeline-providers";
+export type {
+	DreamingLiveContextSentinel,
+	DreamingLiveEvent,
+	DreamingLiveEventSink,
+	DreamingLivePassMetadata,
+	DreamingLiveSnapshot,
+	DreamingLiveState,
+	DreamingLiveTransportEvent,
+	DreamingRawEventSink,
+} from "./dreaming-live-events";
 export {
 	MODEL_DEFAULTS,
 	PIPELINE_MODEL_CATALOG,

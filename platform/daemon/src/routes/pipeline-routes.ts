@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
+import type { DreamingLivePassMetadata, DreamingLiveSnapshot, DreamingLiveState } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";
@@ -19,6 +20,7 @@ import {
 	getDreamingAttention,
 	getDreamingEpisodicTokenBacklog,
 	getDreamingEvidenceExclusions,
+	getDreamingLiveBus,
 	getDreamingPasses,
 	getDreamingQualityReport,
 	getDreamingState,
@@ -209,6 +211,67 @@ function resolveScopedDreamAgent(
 	body: Readonly<Record<string, unknown>> = {},
 ): { readonly agentId: string; readonly error?: string } {
 	return resolveScopedAgentId(c, requestedDreamAgentId(c, body), resolveDaemonAgentId());
+}
+
+/** Terminal Dreaming live states that end an attached stream. */
+const dreamingLiveTerminalStates: ReadonlySet<string> = new Set([
+	"completed",
+	"failed",
+	"cancelled",
+	"timed_out",
+]);
+
+function dreamingLiveStateFromStatus(status: string): DreamingLiveState {
+	if (status === "completed") return "completed";
+	if (status === "failed") return "failed";
+	if (status === "cancelled") return "cancelled";
+	return "running";
+}
+
+function dreamingLiveSnapshotForPass(
+	passId: string,
+	pass: {
+		agentId: string;
+		mode: string;
+		status: string;
+		startedAt: string;
+		summary: string | null;
+		error: string | null;
+	},
+	context: { instructions: string | null; modelLabel: string | null },
+): DreamingLiveSnapshot {
+	const metadata: DreamingLivePassMetadata = {
+		passId,
+		agentId: pass.agentId,
+		mode: pass.mode,
+		startedAt: pass.startedAt,
+		...(context.modelLabel !== null ? { modelLabel: context.modelLabel } : {}),
+		...(context.instructions !== null ? { instructions: context.instructions } : {}),
+	};
+	const startedMs = Date.parse(pass.startedAt);
+	let toolCalls = 0;
+	try {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		toolCalls = getDbAccessor().withReadDb(
+			(db: import("../db-accessor").ReadDb) =>
+				(db
+					.prepare(
+						`SELECT id FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ?`,
+					)
+					.all(pass.agentId, passId) as unknown[]
+				).length
+		);
+	} catch {
+		// Observation must not fail attach on trace-read errors.
+	}
+	return {
+		pass: metadata,
+		state: dreamingLiveStateFromStatus(pass.status),
+		elapsedMs: Number.isFinite(startedMs) ? Math.max(0, Date.now() - startedMs) : 0,
+		toolCalls,
+		...(pass.status === "completed" && typeof pass.summary === "string" ? { summary: pass.summary } : {}),
+		...(pass.status === "failed" && typeof pass.error === "string" ? { error: pass.error } : {}),
+	};
 }
 
 async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
@@ -730,6 +793,243 @@ export function registerPipelineRoutes(app: Hono): void {
 			agentId: scopedAgent.agentId,
 			passId,
 			items: getDreamingToolCalls(getDbAccessor(), scopedAgent.agentId, passId),
+		});
+	});
+
+	/**
+		 * Enumerate agent-scoped active Dreaming passes for attach selection
+		 * (#1601). The worker is single-flight, so normally at most one row;
+		 * stale rows from crashed in-memory state may coexist and callers must
+		 * then require an explicit choice.
+		 */
+	app.get("/api/dream/passes/active", (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		let items: readonly { passId: string; agentId: string; mode: string; status: string; startedAt: string }[] = [];
+		try {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			items = getDbAccessor().withReadDb(
+				(db: import("../db-accessor").ReadDb) =>
+					db
+						.prepare(
+							`SELECT id AS passId, agent_id AS agentId, mode, status, started_at AS startedAt
+							  FROM dreaming_passes
+							  WHERE agent_id = ? AND status = 'running'
+							  ORDER BY started_at DESC`,
+						)
+						.all(scopedAgent.agentId),
+			);
+		} catch (e) {
+			return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+		}
+		return c.json({ items });
+	});
+
+	/**
+		 * Live attach stream (#1601): scoped SSE subscription to one active
+		 * Dreaming pass's normalized live events, with cursor-based bounded
+		 * replay and gap recovery. Read-only: the stream observes; it cannot
+		 * steer, cancel, or retry the pass. Ctrl+C on the client side detaches
+		 * without aborting.
+		 */
+	app.get("/api/dream/passes/:passId/live", (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const passId = c.req.param("passId").trim();
+		if (!passId || !/^[a-z0-9-]{6,64}$/i.test(passId)) {
+			return c.json({ error: "Invalid Dreaming pass id" }, 400);
+		}
+		const bus = getDreamingLiveBus();
+		let pass: {
+			agentId: string;
+			mode: string;
+			status: string;
+			startedAt: string;
+			summary: string | null;
+			error: string | null;
+		} | null = null;
+		try {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+			pass = getDbAccessor().withReadDb(
+					(db: import("../db-accessor").ReadDb) =>
+						db
+							.prepare(
+								`SELECT agent_id AS agentId, mode, status, started_at AS startedAt,
+								  summary, error
+								  FROM dreaming_passes WHERE id = ?`,
+							)
+							.get(passId) as typeof pass | undefined,
+				) ?? null;
+		} catch (e) {
+			return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+		}
+		if (!pass || pass.agentId !== scopedAgent.agentId) {
+			return c.json(
+				{ error: `Dreaming pass ${passId} is not in this agent's context` },
+				404,
+			);
+		}
+		const state = bus.states(passId);
+		if (!state) {
+			if (pass.status === "running") {
+				return c.json(
+					{
+						error: "No live event stream is attached to this pass yet",
+						retryable: true,
+						suggestion: "retry shortly, or poll /api/dream/status",
+					},
+					503,
+				);
+			}
+			return c.json(
+				{
+					error: `Dreaming pass ${passId} already settled (${pass.status})`,
+					state: pass.status,
+					summary: pass.summary ?? null,
+					summaryDetail: pass.error ?? null,
+				},
+				410,
+			);
+		}
+		const cursorParam = c.req.query("cursor");
+		let cursor: number | null = null;
+		if (cursorParam !== undefined) {
+			const parsed = Number(cursorParam);
+			if (!Number.isInteger(parsed) || parsed < 0 || parsed > 1_000_000_000) {
+				return c.json({ error: "Invalid cursor" }, 400);
+			}
+			cursor = parsed;
+		}
+		const snapshotFor = (): DreamingLiveSnapshot =>
+			dreamingLiveSnapshotForPass(passId, pass, bus.context(passId));
+
+		const encoder = new TextEncoder();
+		const subId = `dream-live-${Math.random().toString(36).slice(2)}`;
+		let heartbeat: ReturnType<typeof setInterval> | undefined;
+		const stream = new ReadableStream({
+			start(controller) {
+				let closed = false;
+				let settled = false;
+				// Coalesce rapid assistant/reasoning deltas into fewer SSE
+				// frames (the bounded buffer keeps every event intact).
+				let pending: { kind: string; text: string } | null = null;
+				const send = (payload: unknown): boolean => {
+					if (closed) return false;
+					try {
+						controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+						return true;
+					} catch {
+						closed = true;
+						return false;
+					}
+				};
+				const flushPending = (): boolean => {
+					if (!pending) return true;
+					const ok = send({ type: pending.kind, passId, text: pending.text });
+					pending = null;
+					return ok;
+				};
+
+				const cleanup = (): void => {
+					if (closed) return;
+					closed = true;
+					try {
+						bus.unsubscribe(passId, subId);
+					} catch {
+						// observation teardown is best-effort
+					}
+					if (heartbeat) clearInterval(heartbeat);
+				};
+
+				heartbeat = setInterval(() => {
+					if (settled || closed) return;
+					if (!flushPending()) return;
+					if (!send({ type: "heartbeat" })) cleanup();
+				}, 30_000);
+
+				const finishStream = (): void => {
+					cleanup();
+					try {
+						controller.close();
+					} catch {
+						// already closed by the consumer
+					}
+				};
+
+				// Stream lifecycle: connected marker, bounded replay, then
+				// live subscription.
+				send({ type: "connected", passId, cursor: state.seq, snapshot: snapshotFor() });
+				if (cursor !== null && cursor + 1 < state.oldest) {
+					send({
+						type: "gap",
+						passId,
+						cursor,
+						oldest: state.oldest,
+						snapshot: snapshotFor(),
+					});
+				}
+				for (const frame of bus.replay(passId, cursor ?? 0)) {
+					if (!send(frame.event)) {
+						cleanup();
+						return;
+					}
+				}
+
+				const onFrame = (frame: import("../pipeline/dreaming-live").DreamingLiveFrame) => {
+					if (closed || settled) return;
+					const event = frame.event;
+					if (event.type === "assistant_delta" || event.type === "reasoning_delta") {
+						pending = { kind: event.type, text: (pending?.text ?? "") + event.text };
+						return;
+					}
+					if (!flushPending()) return;
+					if (event.type === "state_transition" && dreamingLiveTerminalStates.has(event.state)) {
+						settled = true;
+						if (send({ type: "complete", passId, state: event.state })) finishStream();
+						return;
+					}
+					if (!send(event)) cleanup();
+				};
+
+				if (state.terminal) {
+					settled = true;
+					if (send({ type: "complete", passId, state: dreamingLiveStateFromStatus(pass.status) })) {
+						finishStream();
+						return;
+					}
+				}
+
+				if (!bus.subscribe(passId, subId, onFrame)) {
+					settled = true;
+					if (send({ type: "complete", passId, state: dreamingLiveStateFromStatus(pass.status) })) {
+						finishStream();
+						return;
+					}
+				}
+
+				c.req.raw.signal.addEventListener("abort", () => {
+					if (pending) pending = null;
+					cleanup();
+				}, { once: true });
+			},
+			cancel() {
+				// Consumer-side disconnect: stop observation; the pass
+				// continues unaffected.
+				if (heartbeat) clearInterval(heartbeat);
+				try {
+					bus.unsubscribe(passId, subId);
+				} catch {
+					// best effort
+				}
+			},
+		});
+
+		return new Response(stream, {
+			headers: {
+				"Content-Type": "text/event-stream",
+				"Cache-Control": "no-cache, no-transform",
+				"X-Accel-Buffering": "no",
+			},
 		});
 	});
 

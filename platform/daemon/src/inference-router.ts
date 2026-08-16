@@ -3,6 +3,7 @@ import { isAbsolute, join, normalize, resolve } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
 	AcpxModelSelection,
+	DreamingRawEventSink,
 	LlmGenerateResult,
 	LlmProvider,
 	LlmUsage,
@@ -1035,6 +1036,15 @@ export class InferenceRouter {
 				readonly daemonUrl: string;
 				readonly authorizationToken?: string;
 			};
+			/**
+				 * Read-only live observation for Dreaming attach (#1601). The sink
+				 * receives raw session events plus a context sentinel; observation
+				 * only — it never steers, cancels, or retries the session.
+				 */
+			readonly dreamingLiveEvents?: {
+				readonly passId: string;
+				readonly sink: DreamingRawEventSink;
+			};
 		},
 	): Promise<RouterResult<InferenceAgentExecutionResult>> {
 		const background = this.beginBackgroundExecution(request.operation, request.agentId, "agent");
@@ -1129,6 +1139,7 @@ export class InferenceRouter {
 							session = await provider.createAgentSession(tools, {
 								maxTokens: opts?.maxTokens,
 								signal: initializationController.signal,
+								sessionEventSink: opts?.dreamingLiveEvents?.sink,
 							});
 						} catch (error) {
 							if (initializationTimedOut) {
