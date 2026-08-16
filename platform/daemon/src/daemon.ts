@@ -1631,6 +1631,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			providerTracker,
 			analyticsCollector,
 			telemetry,
+			dbOwnerMaintenanceHandle ?? undefined,
 		);
 
 		// Configure the main thread's own native embedding handle — but ONLY when
@@ -1706,6 +1707,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 						hourlyBudget: memoryCfg.pipelineV2.repair.requeueHourlyBudget,
 						maxAttempts: 3,
 					},
+					ownerMaintenance: dbOwnerMaintenanceHandle ?? undefined,
 				},
 				graphWriteCaps(memoryCfg),
 			);
