@@ -28,6 +28,7 @@ const targets: Array<{
 	{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" },
 	{ entrypoint: "./src/synthesis-render-worker.ts", outfile: "./dist/synthesis-render-worker.js" },
 	{ entrypoint: "./src/database-integrity-worker.ts", outfile: "./dist/database-integrity-worker.js" },
+	{ entrypoint: "./src/db-owner-worker.ts", outfile: "./dist/db-owner-worker.js" },
 	{ entrypoint: "./src/pipeline/dreaming-token-worker.ts", outfile: "./dist/dreaming-token-worker.js" },
 ];
 
