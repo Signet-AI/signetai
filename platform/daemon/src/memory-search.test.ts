@@ -349,11 +349,50 @@ describe("hybridRecall", () => {
 		);
 
 		expect(result.results.map((row) => row.id)).toContain("deferred-fts-memory");
+		expect(result.meta.partial).toBe(true);
 		expect(
 			getDbAccessor().withReadDb(
 				(db) => (db.prepare("SELECT COUNT(*) AS count FROM memories_fts_docsize").get() as { count: number }).count,
 			),
 		).toBe(0);
+	});
+
+	it("supplements partial FTS results and reports degraded lexical coverage", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', 'global', ?, ?, 'test')`,
+			).run("indexed-fts-memory", "partial indexing probe alpha", now, now);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', 'global', ?, ?, 'test')`,
+			).run("deferred-fts-memory-2", "partial indexing probe beta", now, now);
+			db.exec("DELETE FROM memories_fts");
+			db.prepare(
+				`INSERT INTO memories_fts(rowid, content)
+				 SELECT rowid, content FROM memories WHERE id = ?`,
+			).run("indexed-fts-memory");
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "partial indexing probe",
+				keywordQuery: "partial indexing probe",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toEqual(
+			expect.arrayContaining(["indexed-fts-memory", "deferred-fts-memory-2"]),
+		);
+		expect(result.meta.partial).toBe(true);
 	});
 
 	it("returns source-provenanced ontology claims as first-class recall results", async () => {

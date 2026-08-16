@@ -139,6 +139,8 @@ export interface RecallResponse {
 		totalReturned: number;
 		hasSupplementary: boolean;
 		noHits: boolean;
+		/** True when the lexical result set used a known-incomplete FTS index. */
+		partial?: boolean;
 		timings: RecallTimings;
 		temporal?: RecallTemporalMeta;
 		dedupe?: RecallDedupeMeta;
@@ -1387,6 +1389,7 @@ export async function hybridRecall(
 	const filter = buildFilterClause(params);
 	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
 	const timings = createRecallTimingCollector();
+	let lexicalSearchPartial = false;
 	const selectionSuppressedIds = new Set<string>();
 	const lifecycleSourceResults = new Map<string, { readonly source?: string; readonly source_id?: string }>();
 	const selectionDedupeEnabled = !!params.sessionKey?.trim() && params.includeRecalled !== true;
@@ -1431,6 +1434,7 @@ export async function hybridRecall(
 			totalReturned: response.results.length,
 			hasSupplementary: response.results.some((row) => row.supplementary === true),
 			noHits: response.results.length === 0,
+			...(lexicalSearchPartial ? { partial: true } : {}),
 			...(dedupeMeta.enabled ? { dedupe: dedupeMeta } : {}),
 		};
 		try {
@@ -1584,25 +1588,33 @@ export async function hybridRecall(
 					});
 				}
 
-				if (ftsFailed || (ftsRows.length === 0 && ftsIndexIsIncomplete(db))) {
+				const addFtsScores = (rows: ReadonlyArray<{ id: string; raw_score: number }>): void => {
+					const rawScores = rows.map((r) => Math.abs(r.raw_score));
+					const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
+					const normalizer = maxRaw > 0 ? maxRaw : 1;
+					for (const row of rows) {
+						const normalised = Math.abs(row.raw_score) / normalizer;
+						bm25Map.set(row.id, normalised);
+					}
+				};
+
+				const indexIncomplete = ftsFailed || ftsIndexIsIncomplete(db);
+				if (indexIncomplete) {
+					lexicalSearchPartial = true;
 					lexicalFallbackAttempted = true;
 					logger.warn("memory", "FTS index incomplete; using bounded LIKE lexical fallback");
+					addFtsScores(ftsRows);
 					const fallbackRows = readLexicalFallback(db, keywordQuery, filter, cfg.search.top_k);
 					const fallbackTermCount = Math.max(1, lexicalFallbackTerms(keywordQuery).length);
 					for (const row of fallbackRows) {
-						bm25Map.set(row.id, row.matches / fallbackTermCount);
+						const score = row.matches / fallbackTermCount;
+						bm25Map.set(row.id, Math.max(bm25Map.get(row.id) ?? 0, score));
 					}
 					return;
 				}
 
 				// Min-max normalize BM25 scores to [0,1] within the batch
-				const rawScores = ftsRows.map((r) => Math.abs(r.raw_score));
-				const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
-				const normalizer = maxRaw > 0 ? maxRaw : 1;
-				for (const row of ftsRows) {
-					const normalised = Math.abs(row.raw_score) / normalizer;
-					bm25Map.set(row.id, normalised);
-				}
+				addFtsScores(ftsRows);
 			});
 		});
 	} catch (e) {
