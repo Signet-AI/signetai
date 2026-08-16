@@ -2,9 +2,9 @@
  * Frozen daemon/DB-owner protocol.
  *
  * The daemon sends serializable jobs. The owner is the only process that
- * imports SQLite and executes synchronous statements. Read jobs use the
- * recall lane, while writes and maintenance use the serial owner lane. The
- * transport runs those lanes independently without changing this contract.
+ * imports SQLite and executes synchronous statements. Read jobs run on an
+ * independent reader owner while write and maintenance jobs share one serial
+ * owner. `lane` selects that scheduling boundary.
  */
 
 export type DbOwnerLane = "read" | "write" | "maintenance";

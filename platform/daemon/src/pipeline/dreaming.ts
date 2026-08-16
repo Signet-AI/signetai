@@ -22,6 +22,7 @@ import {
 	resolveStartupIdentityFiles,
 } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import {
 	EPISODIC_CAPTURED_AT_FLOOR,
 	type EpisodicCursor,
@@ -525,6 +526,29 @@ export async function createDreamingPass(accessor: DbAccessor, agentId: string, 
 			 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))`,
 		).run(id, agentId, mode);
 	});
+	dreamingLiveEvents.startPass({ passId: id, agentId, mode });
+	return id;
+}
+
+export async function createDreamingPassThroughOwner(
+	maintenance: DbOwnerMaintenance,
+	agentId: string,
+	mode: DreamingMode,
+): Promise<string> {
+	const id = randomUUID();
+	const handle = maintenance.owner.submit<{ readonly changes: number }>(
+		{
+			kind: "query",
+			statement: {
+				sql: `INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
+				 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))`,
+				params: [id, agentId, mode],
+				result: "run",
+			},
+		},
+		{ operation: "dreaming.pass.create", lane: "maintenance", deadlineMs: 10_000, estimatedWorkUnits: 1 },
+	);
+	await handle.result;
 	dreamingLiveEvents.startPass({ passId: id, agentId, mode });
 	return id;
 }
@@ -1456,8 +1480,13 @@ export async function runDreamingAgentPass(
 	existingPassId?: string,
 	writeCaps?: GraphWriteCaps,
 	liveOptions?: DreamingPassLiveOptions,
+	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
-	const passId = existingPassId ?? (await createDreamingPass(accessor, agentId, mode));
+	const passId =
+		existingPassId ??
+		(await (ownerMaintenance
+			? createDreamingPassThroughOwner(ownerMaintenance, agentId, mode)
+			: createDreamingPass(accessor, agentId, mode)));
 	const live = liveOptions?.hub ?? dreamingLiveEvents;
 	live.startPass({ passId, agentId, mode });
 	live.publish(passId, "lifecycle", { phase: "preparing", mode });

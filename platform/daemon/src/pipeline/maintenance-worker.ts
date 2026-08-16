@@ -331,6 +331,11 @@ export function startMaintenanceWorker(
 	};
 
 	async function doTick(): Promise<MaintenanceCycleResult> {
+		if (deps.ownerMaintenance && !(await deps.ownerMaintenance.queueIsHealthy())) {
+			const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker));
+			logger.info("maintenance", "Cycle deferred while the owner maintenance lane is unhealthy");
+			return { report, recommendations: [], executed: [], feedbackDecayedAspects: 0, feedbackPropagatedAttributes: 0 };
+		}
 		if (isSystemPressureHigh()) {
 			const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker));
 			return { report, recommendations: [], executed: [], feedbackDecayedAspects: 0, feedbackPropagatedAttributes: 0 };

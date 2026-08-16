@@ -69,7 +69,15 @@ The owner sends:
 
 ## Execution and cancellation
 
-The first implementation has one FIFO process. `read` jobs and `write` or `maintenance` jobs are still tagged separately, preserving the lane split for a future transport with parallel readers and one writer. A `run` statement is wrapped in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. A transaction request wraps all of its statements in one `BEGIN IMMEDIATE`/`COMMIT` and rolls back the complete batch on any failure. Read statements do not open a transaction. A `batch` contains only `run` statements and executes all statements inside one `BEGIN IMMEDIATE`/`COMMIT`. A batch rolls back when any statement fails. `requireChanges` is a fail-closed precondition: if the batch or marked statement changes zero rows, the whole batch rolls back with `DB_OWNER_NO_CHANGES`.
+The owner has two independent FIFO processes: a reader for `read` jobs and a
+serial writer for `write` and `maintenance` jobs. A read job therefore does
+not wait behind a synchronous maintenance job. Each process has its own SQLite
+connection; WAL mode provides the concurrent read/write boundary. The writer
+still serializes all writes and maintenance work. A `run` statement is wrapped
+in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. A
+transaction request wraps all of its statements atomically. A `batch` contains
+only `run` statements and also rolls back on failure; `requireChanges` is a
+fail-closed zero-change precondition.
 
 A queued cancellation is removed from the client pending map, clears its deadline timer, and is removed from the owner's queue before execution. A cancellation received while synchronous native SQLite work is running is best effort because the owner cannot observe stdin until that call returns. A deadline is different: the client kills the entire child with `SIGKILL` at the absolute deadline. The subsequent owner death fails all other in-flight and queued jobs closed.
 
@@ -88,3 +96,8 @@ Construction failure, malformed protocol input, owner exit, deadline kill, and j
 - `close()` sends shutdown and is idempotent.
 
 No callback receives a database handle. No synchronous SQLite symbol is exported by the client or the recall seam. The owner module is the sanctioned synchronous site.
+## FTS and Dreaming maintenance
+
+`db-owner-maintenance.ts` owns bounded FTS repair and backfill. Startup creates only the canonical FTS schema and triggers, then submits keyset-paginated chunks to the maintenance lane. Each chunk uses a durable `db_owner_maintenance_checkpoints` row and one atomic batch that advances the cursor and inserts the matching anti-join rows. The checkpoint is the resume contract after an owner crash. Tokenizer rebuilds recreate the schema in the owner before chunking; they never perform a full synchronous backfill on the daemon event loop. A backfill invocation also has a total wall-clock budget, total estimated work-unit budget, and cooperative `AbortSignal`; when any budget is exhausted it returns `running` with the durable checkpoint for a later invocation.
+
+The maintenance lane publishes the queue-pressure gate used by scheduled Dreaming sweeps and autonomous pipeline maintenance. Dreaming pass lifecycle rows and retention/repair admission are submitted through that lane, while queue depth, oldest pending age, recent dead rate, and stale leases are evaluated in the owner before work starts. Manual Dreaming work, pipeline scheduling/retry behavior, retention lifecycle, and existing evidence ordering remain unchanged; queue pressure only defers scheduled work.

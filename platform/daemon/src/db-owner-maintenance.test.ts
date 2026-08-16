@@ -74,6 +74,34 @@ describe("DB owner FTS maintenance", () => {
 		expect(maintenance.health().pid).not.toBe(process.pid);
 	});
 
+	test("stops a backfill at the run-level work budget and resumes later", async () => {
+		const database = makeDatabase();
+		directory = database.directory;
+		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
+
+		const bounded = await maintenance.backfillFts({
+			checkpointKey: "fts.run-budget",
+			chunkSize: 2,
+			maxWorkUnits: 1,
+		});
+		expect(bounded).toMatchObject({ status: "running", chunks: 0, processed: 0 });
+
+		const resumed = await maintenance.backfillFts({
+			checkpointKey: "fts.run-budget",
+			chunkSize: 2,
+			maxWorkUnits: 10,
+		});
+		expect(resumed).toMatchObject({ status: "complete", processed: 7 });
+
+		const cancelled = new AbortController();
+		cancelled.abort();
+		const cancelledRun = await maintenance.backfillFts({
+			checkpointKey: "fts.cancelled",
+			chunkSize: 2,
+			signal: cancelled.signal,
+		});
+		expect(cancelledRun).toMatchObject({ status: "running", chunks: 0, processed: 0 });
+	});
 	test("reads queue pressure through the owner with age and liveness thresholds", async () => {
 		const database = makeDatabase();
 		directory = database.directory;

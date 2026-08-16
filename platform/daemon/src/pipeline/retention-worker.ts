@@ -15,6 +15,7 @@
  */
 
 import type { DbAccessor, WriteDb } from "../db-accessor";
+import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 
 async function writeTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
 	const writer = accessor.withWriteTxAsync;
@@ -95,6 +96,18 @@ export interface RetentionSweepResult {
 	completedTranscriptCaptureJobsPurged: number;
 	deadTranscriptCaptureJobsPurged: number;
 }
+
+const EMPTY_RETENTION_RESULT: RetentionSweepResult = {
+	graphLinksPurged: 0,
+	entitiesOrphaned: 0,
+	embeddingsPurged: 0,
+	tombstonesPurged: 0,
+	historyPurged: 0,
+	completedJobsPurged: 0,
+	deadJobsPurged: 0,
+	completedTranscriptCaptureJobsPurged: 0,
+	deadTranscriptCaptureJobsPurged: 0,
+};
 
 function purgeGraphLinks(
 	db: WriteDb,
@@ -368,7 +381,9 @@ function normalizeRetentionConfig(cfg: RetentionConfig): RetentionConfig {
 export async function runRetentionSweepOnce(
 	accessor: DbAccessor,
 	cfg: RetentionConfig = DEFAULT_RETENTION,
+	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<RetentionSweepResult> {
+	if (ownerMaintenance && !(await ownerMaintenance.queueIsHealthy())) return EMPTY_RETENTION_RESULT;
 	const normalizedCfg = normalizeRetentionConfig(cfg);
 	const now = Date.now();
 	const tombstoneCutoff = new Date(now - normalizedCfg.tombstoneRetentionMs).toISOString();
@@ -443,13 +458,17 @@ export async function runRetentionSweepOnce(
 	};
 }
 
-export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig = DEFAULT_RETENTION): RetentionHandle {
+export function startRetentionWorker(
+	accessor: DbAccessor,
+	cfg: RetentionConfig = DEFAULT_RETENTION,
+	ownerMaintenance?: DbOwnerMaintenance,
+): RetentionHandle {
 	const normalizedCfg = normalizeRetentionConfig(cfg);
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
 
 	async function doSweep(): Promise<RetentionSweepResult> {
-		const result = await runRetentionSweepOnce(accessor, normalizedCfg);
+		const result = await runRetentionSweepOnce(accessor, normalizedCfg, ownerMaintenance);
 		const total =
 			result.graphLinksPurged +
 			result.entitiesOrphaned +

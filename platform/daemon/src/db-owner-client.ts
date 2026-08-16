@@ -144,7 +144,7 @@ function messageFromError(error: DbOwnerSerializedError): Error {
 	return new DbOwnerError(error.name, error.message);
 }
 
-export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient {
+function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient {
 	let child: ChildProcess | null = null;
 	let startPromise: Promise<void> | null = null;
 	let startupResolve: (() => void) | null = null;
@@ -550,4 +550,69 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	}
 
 	return { start, submit, awaitResult, cancel, health: currentHealth, close };
+}
+
+/**
+ * Keep recall independent from serial writes and maintenance. Each lane owns
+ * its own SQLite connection and FIFO queue. Read jobs therefore cannot wait
+ * behind a synchronous maintenance job, while writes and maintenance remain
+ * serialized on one owner connection.
+ */
+export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient {
+	const readLane = createSingleDbOwnerClient(options);
+	const maintenanceLane = createSingleDbOwnerClient(options);
+	let closed = false;
+
+	function laneFor(requestLane: DbOwnerLane): DbOwnerClient {
+		return requestLane === "read" ? readLane : maintenanceLane;
+	}
+
+	function health(): DbOwnerHealth {
+		const read = readLane.health();
+		const maintenance = maintenanceLane.health();
+		const state: DbOwnerHealthState =
+			read.state === "closed" && maintenance.state === "closed"
+				? "closed"
+				: read.state === "failed" || maintenance.state === "failed"
+					? "failed"
+					: (read.state === "dead" && read.generation > 0) ||
+							(maintenance.state === "dead" && maintenance.generation > 0)
+						? "dead"
+						: read.state === "starting" || maintenance.state === "starting"
+							? "starting"
+							: read.state === "ready" || maintenance.state === "ready"
+								? "ready"
+								: "dead";
+		return {
+			state,
+			pid: read.pid ?? maintenance.pid,
+			generation: Math.max(read.generation, maintenance.generation),
+			queuedJobs: read.queuedJobs + maintenance.queuedJobs,
+			activeJobId: read.activeJobId ?? maintenance.activeJobId,
+			lastError: read.lastError ?? maintenance.lastError,
+		};
+	}
+
+	return {
+		async start(): Promise<void> {
+			if (closed) throw new DbOwnerError("DB_OWNER_CLOSED", "DB owner client is closed");
+			await Promise.all([readLane.start(), maintenanceLane.start()]);
+		},
+		submit<Result>(request: DbOwnerRequest, submitOptions: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> {
+			return laneFor(submitOptions.lane).submit<Result>(request, submitOptions);
+		},
+		awaitResult<Result>(handle: DbOwnerJobHandle<Result>, timeoutMs?: number): Promise<Result> {
+			return laneFor(handle.job.lane).awaitResult(handle, timeoutMs);
+		},
+		cancel(jobId) {
+			readLane.cancel(jobId);
+			maintenanceLane.cancel(jobId);
+		},
+		health,
+		async close(): Promise<void> {
+			if (closed) return;
+			closed = true;
+			await Promise.all([readLane.close(), maintenanceLane.close()]);
+		},
+	};
 }

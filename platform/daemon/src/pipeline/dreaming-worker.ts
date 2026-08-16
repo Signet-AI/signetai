@@ -17,6 +17,7 @@ import {
 	type DreamingMode,
 	type DreamingPassFocus,
 	createDreamingPass,
+	createDreamingPassThroughOwner,
 	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
 	enqueueDreamingSurprisalAttention,
@@ -306,6 +307,8 @@ export function startDreamingWorker(
 			mode,
 			existingPassId,
 			caps,
+			undefined,
+			options.ownerMaintenance,
 		);
 		activePassPromise = p;
 		try {
@@ -476,7 +479,9 @@ export function startDreamingWorker(
 			activeAgent = runAgentId;
 			let passId: string;
 			try {
-				passId = await createDreamingPass(accessor, runAgentId, mode);
+				passId = options.ownerMaintenance
+					? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode)
+					: await createDreamingPass(accessor, runAgentId, mode);
 			} catch (error) {
 				active = false;
 				activeAgent = null;
@@ -492,6 +497,8 @@ export function startDreamingWorker(
 				mode,
 				passId,
 				caps,
+				undefined,
+				options.ownerMaintenance,
 			);
 			activePassPromise = p;
 			p.catch((e) => {

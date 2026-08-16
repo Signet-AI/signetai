@@ -144,9 +144,13 @@ export function getPipelineWorkerStatus(): PipelineWorkerStatus {
 	};
 }
 
-export function ensureRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig = DEFAULT_RETENTION): void {
+export function ensureRetentionWorker(
+	accessor: DbAccessor,
+	cfg: RetentionConfig = DEFAULT_RETENTION,
+	ownerMaintenance?: DbOwnerMaintenance,
+): void {
 	if (retentionHandle) return;
-	retentionHandle = startRetentionWorker(accessor, cfg);
+	retentionHandle = startRetentionWorker(accessor, cfg, ownerMaintenance);
 }
 
 export function getRetentionWorker(): RetentionHandle | null {
@@ -187,7 +191,7 @@ export function startPipeline(
 
 	// Retention worker also managed here when pipeline is active;
 	// standalone retention is started separately in main() for non-pipeline users.
-	ensureRetentionWorker(accessor, DEFAULT_RETENTION);
+	ensureRetentionWorker(accessor, DEFAULT_RETENTION, ownerMaintenance);
 
 	// Maintenance worker (F3) — runs alongside retention
 	if (!maintenanceHandle && providerTracker) {

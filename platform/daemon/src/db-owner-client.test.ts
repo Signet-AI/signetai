@@ -58,6 +58,25 @@ describe("DB owner client", () => {
 		expect(client.health().pid).not.toBe(process.pid);
 	});
 
+	test("recall lane completes while maintenance lane is saturated", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		const maintenance = client.submit(
+			{ kind: "sleep", durationMs: 250 },
+			{ operation: "maintenance.saturation", lane: "maintenance", deadlineMs: 1_000 },
+		);
+		const startedAt = performance.now();
+		const recall = client.submit<unknown[]>(
+			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+			{ operation: "recall.concurrent", lane: "read", deadlineMs: 1_000 },
+		);
+		await expect(recall.result).resolves.toEqual([{ value: 1 }]);
+		const recallDurationMs = performance.now() - startedAt;
+		await maintenance.result;
+		expect(recallDurationMs).toBeLessThan(200);
+	});
+
 	test("executes a transactional write on the owner before a read lane job", async () => {
 		const database = makeDb();
 		directory = database.directory;
@@ -178,7 +197,7 @@ describe("DB owner client", () => {
 			{ operation: "recall.immediate-recovery", lane: "read", deadlineMs: 1_000 },
 		);
 		expect(await fast.result).toEqual([{ value: 1 }]);
-		expect(client.health().generation).toBe(2);
+		expect(client.health().generation).toBe(1);
 	});
 
 	test("recovers on the immediate submission after an external SIGABRT", async () => {
@@ -219,7 +238,7 @@ describe("DB owner client", () => {
 		);
 		const second = client.submit(
 			{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
-			{ operation: "recall.read", lane: "read", deadlineMs: 1_000 },
+			{ operation: "maintenance.queued-read", lane: "maintenance", deadlineMs: 1_000 },
 		);
 		await waitFor(() => client?.health().activeJobId === first.job.id);
 		second.cancel();

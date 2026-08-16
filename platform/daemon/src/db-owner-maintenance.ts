@@ -16,7 +16,7 @@ import {
 } from "./db-owner-client";
 import { createDbOwnerClient } from "./db-owner-client";
 import type { DbOwnerParameter, DbOwnerRequest, DbOwnerStatement } from "./db-owner-protocol";
-import { DB_OWNER_MAX_RESULT_BYTES } from "./db-owner-protocol";
+import { DB_OWNER_MAX_RESULT_BYTES, DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
 
 export interface DbOwnerMaintenanceOptions {
 	readonly deadlineMs?: number;
@@ -128,6 +128,9 @@ export function ownerChanges(result: unknown): number {
 const DEFAULT_FTS_CHUNK_SIZE = 100;
 const MAX_FTS_CHUNK_SIZE = 500;
 const DEFAULT_FTS_DEADLINE_MS = 10_000;
+const DEFAULT_FTS_RUN_BUDGET_MS = 60_000;
+const MAX_FTS_RUN_BUDGET_MS = 10 * 60_000;
+const DEFAULT_FTS_RUN_WORK_UNITS = DB_OWNER_MAX_WORK_UNITS;
 const CHECKPOINT_TABLE = "db_owner_maintenance_checkpoints";
 
 interface SqliteRunResult {
@@ -161,8 +164,14 @@ export interface FtsBackfillOptions {
 	readonly checkpointKey?: string;
 	readonly chunkSize?: number;
 	readonly deadlineMs?: number;
-	/** Stop after this many chunks. Omit to drain the checkpoint. */
+	/** Stop after this many chunks. Omit to drain within the run budget. */
 	readonly maxChunks?: number;
+	/** Maximum wall-clock time for the complete backfill invocation. */
+	readonly runBudgetMs?: number;
+	/** Maximum estimated owner work units for the complete invocation. */
+	readonly maxWorkUnits?: number;
+	/** Cooperatively stop before submitting another chunk. */
+	readonly signal?: AbortSignal;
 	readonly onChunk?: (progress: FtsBackfillProgress) => void | Promise<void>;
 	readonly audit?: FtsRepairAudit;
 }
@@ -195,6 +204,18 @@ function boundedDeadline(deadlineMs: number | undefined): number {
 	if (deadlineMs === undefined) return DEFAULT_FTS_DEADLINE_MS;
 	if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) throw new RangeError("FTS owner deadline must be positive");
 	return Math.min(60_000, Math.floor(deadlineMs));
+}
+
+function boundedRunBudget(value: number | undefined): number {
+	if (value === undefined) return DEFAULT_FTS_RUN_BUDGET_MS;
+	if (!Number.isFinite(value) || value <= 0) throw new RangeError("FTS run budget must be positive");
+	return Math.min(MAX_FTS_RUN_BUDGET_MS, Math.floor(value));
+}
+
+function boundedRunWorkUnits(value: number | undefined): number {
+	if (value === undefined) return DEFAULT_FTS_RUN_WORK_UNITS;
+	if (!Number.isFinite(value) || value <= 0) throw new RangeError("FTS run work budget must be positive");
+	return Math.min(DB_OWNER_MAX_WORK_UNITS, Math.floor(value));
 }
 
 function checkpointKey(value: string | undefined): string {
@@ -319,8 +340,11 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 	const key = checkpointKey(options.checkpointKey);
 	const chunkSize = boundedChunkSize(options.chunkSize);
 	const deadlineMs = boundedDeadline(options.deadlineMs);
+	const runBudgetMs = boundedRunBudget(options.runBudgetMs);
+	const maxWorkUnits = boundedRunWorkUnits(options.maxWorkUnits);
 	const maxChunks =
 		options.maxChunks === undefined ? Number.POSITIVE_INFINITY : Math.max(0, Math.floor(options.maxChunks));
+	const startedAt = Date.now();
 	if (maxChunks === 0) {
 		await ensureCheckpoint(client, key, deadlineMs);
 		const checkpoint = await readCheckpoint(client, key, deadlineMs);
@@ -336,11 +360,17 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 	await ensureCheckpoint(client, key, deadlineMs);
 	let checkpoint = await readCheckpoint(client, key, deadlineMs);
 	let chunks = 0;
+	let workUnits = 0;
 	while (checkpoint.status === "running" && chunks < maxChunks) {
+		if (options.signal?.aborted) break;
+		const elapsedMs = Date.now() - startedAt;
+		const remainingMs = runBudgetMs - elapsedMs;
+		if (remainingMs < 1 || workUnits + chunkSize > maxWorkUnits) break;
+		const chunkDeadlineMs = Math.min(deadlineMs, remainingMs);
 		const cursor = checkpoint.cursor;
-		if (!(await hasMissingRows(client, cursor, deadlineMs))) {
-			await markComplete(client, key, deadlineMs);
-			checkpoint = await readCheckpoint(client, key, deadlineMs);
+		if (!(await hasMissingRows(client, cursor, chunkDeadlineMs))) {
+			await markComplete(client, key, chunkDeadlineMs);
+			checkpoint = await readCheckpoint(client, key, chunkDeadlineMs);
 			break;
 		}
 		const now = new Date().toISOString();
@@ -387,12 +417,13 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 			client,
 			{ kind: "batch", batch: { statements } },
 			"maintenance.fts.backfill.chunk",
-			deadlineMs,
+			chunkDeadlineMs,
 			chunkSize,
 		);
-		checkpoint = await readCheckpoint(client, key, deadlineMs);
+		checkpoint = await readCheckpoint(client, key, chunkDeadlineMs);
 		const inserted = Math.max(0, checkpoint.processed - previousProcessed);
 		chunks += 1;
+		workUnits += chunkSize;
 		await options.onChunk?.({
 			checkpointKey: key,
 			cursor: checkpoint.cursor,
