@@ -301,6 +301,10 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 
 export const app = new Hono();
 
+// Recall uses its own child-process lane so request reads never wait behind
+// maintenance or write work in the generic owner.
+const recallDbOwner = createDbOwnerClient({ dbPath: MEMORY_DB, workerRole: "recall" });
+
 registerGlobalMiddleware(app);
 getOrCreateInferenceRouter(resolveDefaultBasePath());
 
@@ -308,7 +312,7 @@ mountHealthRoutes(app);
 mountMcpRoute(app);
 registerAuthRoutes(app);
 
-registerMemoryRoutes(app);
+registerMemoryRoutes(app, { recallOwner: recallDbOwner });
 registerHooksRoutes(app);
 registerKnowledgeRoutes(app);
 registerOntologyRoutes(app);
@@ -1848,6 +1852,7 @@ async function cleanup() {
 		await dbOwnerClient.close();
 		dbOwnerClient = null;
 	}
+	await recallDbOwner.close();
 	closeDbAccessor();
 
 	if (watcher) {

@@ -1,6 +1,13 @@
 import { createRequire } from "node:module";
 import { findSqliteVecExtension } from "@signet/core";
-import type { DbOwnerCommand, DbOwnerEvent, DbOwnerJob, DbOwnerParameter, DbOwnerStatement } from "./db-owner-protocol";
+import type {
+	DbOwnerCommand,
+	DbOwnerEvent,
+	DbOwnerJob,
+	DbOwnerParameter,
+	DbOwnerRecallPayload,
+	DbOwnerStatement,
+} from "./db-owner-protocol";
 import {
 	DB_OWNER_MAX_DEADLINE_MS,
 	DB_OWNER_MAX_QUEUE_DEPTH,
@@ -47,6 +54,7 @@ const Database = (
 export function runDbOwnerWorker(): void {
 	const dbPath = process.env.SIGNET_DB_OWNER_DB_PATH;
 	if (dbPath === undefined) throw new Error("DB owner requires SIGNET_DB_OWNER_DB_PATH");
+	const ownerDbPath = dbPath;
 
 	const db = new Database(dbPath);
 	db.exec("PRAGMA busy_timeout = 5000");
@@ -179,10 +187,73 @@ export function runDbOwnerWorker(): void {
 		return db.prepare(statement.sql).run(...params);
 	}
 
-	function execute(job: DbOwnerJob): unknown {
+	let recallAccessorReady = false;
+
+	async function executeRecall(payload: DbOwnerRecallPayload): Promise<unknown> {
+		if (process.env.SIGNET_DB_OWNER_RECALL_WORKER !== "1") {
+			throw new Error("DB owner recall jobs require a recall worker");
+		}
+		if (!recallAccessorReady) {
+			const { initDbAccessorAsync } = await import("./db-accessor");
+			await initDbAccessorAsync(ownerDbPath);
+			recallAccessorReady = true;
+		}
+		const { getDbAccessor } = await import("./db-accessor");
+		const { resolveActiveEmbeddingConfig } = await import("./embedding-index-state");
+		const { hybridRecall } = await import("./memory-search");
+		const config = payload.config as Parameters<typeof hybridRecall>[1];
+		const agentId = payload.agentId ?? (await import("./agent-id")).resolveDaemonAgentId();
+		if (config.pipelineV2.reranker.enabled && config.pipelineV2.reranker.useExtractionModel) {
+			const { resolveDefaultBasePath } = await import("@signet/core");
+			const { getOrCreateInferenceRouter } = await import("./inference-router");
+			const { initInferenceProviderResolver } = await import("./llm");
+			const router = getOrCreateInferenceRouter(resolveDefaultBasePath());
+			initInferenceProviderResolver((workload) => {
+				switch (workload) {
+					case "memoryExtraction":
+						return router.createWorkloadProvider("memory_extraction", agentId);
+					case "sessionSynthesis":
+						return router.createWorkloadProvider("session_synthesis", agentId);
+					case "aggregateRecall":
+						return router.createWorkloadProvider("aggregate_recall", agentId);
+					case "widgetGeneration":
+						return router.createWorkloadProvider("widget_generation", agentId);
+					case "repair":
+						return router.createWorkloadProvider("repair", agentId);
+					case "interactive":
+						return router.createWorkloadProvider("interactive", agentId);
+					case "default":
+						return router.createWorkloadProvider("default", agentId);
+				}
+			});
+		}
+		const embedding = await getDbAccessor().withReadDbAsync(async (db) =>
+			resolveActiveEmbeddingConfig(db, config.embedding),
+		);
+		const query = payload.query;
+		const queryEmbedding =
+			payload.queryEmbedding !== undefined
+				? payload.queryEmbedding
+				: query === undefined
+					? null
+					: await (async () => {
+							const { fetchEmbedding } = await import("./embedding-fetch");
+							return await fetchEmbedding(query, embedding, "query", {
+								usage: { source: "recall", agentId },
+							});
+						})();
+		return await hybridRecall(
+			payload.params as Parameters<typeof hybridRecall>[0],
+			{ ...config, embedding },
+			async () => (queryEmbedding === null ? null : queryEmbedding === undefined ? null : [...queryEmbedding]),
+		);
+	}
+
+	async function execute(job: DbOwnerJob): Promise<unknown> {
 		if (job.request.kind === "query") return executeStatement(job.request.statement);
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements);
 		if (job.request.kind === "batch") return executeBatch(job.request.statements, job.request.requireChanges === true);
+		if (job.request.kind === "recall") return await executeRecall(job.request.payload);
 		const durationMs = Math.max(0, Math.floor(job.request.durationMs));
 		const wait = new Int32Array(new SharedArrayBuffer(4));
 		Atomics.wait(wait, 0, 0, durationMs);
@@ -200,7 +271,7 @@ export function runDbOwnerWorker(): void {
 	function runNext(): void {
 		if (draining) return;
 		draining = true;
-		const next = (): void => {
+		const next = async (): Promise<void> => {
 			const job = queue.shift();
 			if (job === undefined) {
 				draining = false;
@@ -213,16 +284,16 @@ export function runDbOwnerWorker(): void {
 				} else if (Date.now() >= job.deadlineAt) {
 					result(job.id, "timed_out");
 				} else {
-					result(job.id, "completed", execute(job));
+					result(job.id, "completed", await execute(job));
 				}
 			} catch (error) {
 				send({ type: "result", jobId: job.id, outcome: "failed", error: serializeError(error) });
 			} finally {
 				activeJobId = null;
-				setImmediate(next);
+				setImmediate(() => void next());
 			}
 		};
-		setImmediate(next);
+		setImmediate(() => void next());
 	}
 
 	function handle(command: DbOwnerCommand): void {

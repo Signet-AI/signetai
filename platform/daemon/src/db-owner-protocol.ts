@@ -39,10 +39,26 @@ export type DbOwnerRequest =
 	| {
 			readonly kind: "batch";
 			readonly statements: readonly DbOwnerStatement[];
-			/** Abort the transaction when a run statement changes zero rows. */
+			/** Abort a transaction when a run statement changes zero rows. */
 			readonly requireChanges?: boolean;
 	  }
+	| {
+			readonly kind: "recall";
+			/** Serialized recall inputs. The owner reconstructs no daemon callbacks. */
+			readonly payload: DbOwnerRecallPayload;
+	  }
 	| { readonly kind: "sleep"; readonly durationMs: number };
+
+export interface DbOwnerRecallPayload {
+	readonly params: unknown;
+	readonly config: unknown;
+	/** Resolved agent used for query-embedding usage attribution. */
+	readonly agentId?: string;
+	/** Original query used when the owner must compute its embedding. */
+	readonly query?: string;
+	/** Precomputed embedding for callers that already own the embedding boundary. */
+	readonly queryEmbedding?: readonly number[] | null;
+}
 
 export interface DbOwnerJob {
 	readonly id: string;

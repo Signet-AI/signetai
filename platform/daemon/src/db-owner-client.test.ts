@@ -77,6 +77,45 @@ describe("DB owner client", () => {
 		expect(recallDurationMs).toBeLessThan(200);
 	});
 
+	test("keeps recall reads independent from maintenance work", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const maintenanceClient = createDbOwnerClient({ dbPath: database.path });
+		client = createDbOwnerClient({ dbPath: database.path, workerRole: "recall" });
+		try {
+			await Promise.all([maintenanceClient.start(), client.start()]);
+			const slow = maintenanceClient.submit(
+				{ kind: "sleep", durationMs: 300 },
+				{ operation: "maintenance.blocking-test", lane: "maintenance", deadlineMs: 1_000 },
+			);
+			const startedAt = Date.now();
+			const rows = await recallThroughDbOwner<{ id: string }>(client, "SELECT id FROM memories", [], {
+				deadlineMs: 1_000,
+			});
+			expect(rows).toEqual([{ id: "m1" }]);
+			expect(Date.now() - startedAt).toBeLessThan(250);
+			await slow.result;
+		} finally {
+			await maintenanceClient.close();
+		}
+	});
+
+	test("applies a hard deadline to a slow recall read and recovers", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path, workerRole: "recall" });
+		const slow = client.submit(
+			{ kind: "sleep", durationMs: 250 },
+			{ operation: "recall.slow-read-deadline", lane: "read", deadlineMs: 40 },
+		);
+		await expect(slow.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		const fast = recallThroughDbOwner<{ id: string }>(client, "SELECT id FROM memories", [], {
+			deadlineMs: 1_000,
+		});
+		expect(await fast).toEqual([{ id: "m1" }]);
+		expect(client.health().generation).toBe(2);
+	});
+
 	test("executes a transactional write on the owner before a read lane job", async () => {
 		const database = makeDb();
 		directory = database.directory;

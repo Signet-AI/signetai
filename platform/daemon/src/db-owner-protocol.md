@@ -40,6 +40,15 @@ Every submitted job has this shape:
     }>,
     requireChanges?: boolean
   } | {
+    kind: "recall",
+    payload: {
+      params: unknown,
+      config: unknown,
+      agentId?: string,
+      query?: string,
+      queryEmbedding?: number[] | null
+    }
+  } | {
     kind: "sleep",
     durationMs: number
   }

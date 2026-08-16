@@ -8,6 +8,8 @@ import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-i
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
+import type { DbOwnerClient } from "../db-owner-client";
+import { hybridRecallThroughDbOwner } from "../db-owner-recall";
 import { normalizeAndHashContent } from "../content-normalization";
 import { type ReadDb, type WriteDb, getDbAccessor, runWriteTxAsync, prepareTypedStatement } from "../db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
@@ -129,6 +131,8 @@ export interface MemoryRoutesDeps {
 	readonly fetchEmbedding?: typeof fetchEmbedding;
 	readonly getInferenceRouterOrNull?: typeof getInferenceRouterOrNull;
 	readonly memoryCaptureAdmission?: ConcurrencyAdmission;
+	/** Dedicated owner read lane. When set, recall never touches daemon SQLite. */
+	readonly recallOwner?: DbOwnerClient;
 }
 
 function contentSafetyForInspection(db: ReadDb, agentId: string, memoryId: string, content: unknown) {
@@ -750,6 +754,15 @@ export function createMemoryCaptureAdmissionMiddleware(
 export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
 	const aggregateRecallFn = deps.aggregateRecall ?? aggregateRecall;
 	const hybridRecallFn = deps.hybridRecall ?? hybridRecall;
+	const recallOwner = deps.recallOwner;
+	const routeRecall = async (
+		params: RecallParams,
+		config: ResolvedMemoryConfig,
+		embedFn: Parameters<typeof hybridRecall>[2],
+	): Promise<RecallResponse> => {
+		if (recallOwner !== undefined) return await hybridRecallThroughDbOwner(recallOwner, params, config);
+		return await hybridRecallFn(params, config, embedFn);
+	};
 	const fetchEmbeddingFn = deps.fetchEmbedding ?? fetchEmbedding;
 	const getInferenceRouterOrNullFn = deps.getInferenceRouterOrNull ?? getInferenceRouterOrNull;
 	const memoryCaptureAdmission =
@@ -3327,7 +3340,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			if (denied) return denied;
 		}
 
-		const cfg = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		const configuredCfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg =
+			recallOwner !== undefined && body.aggregate !== true
+				? configuredCfg
+				: await withActiveEmbeddingConfig(configuredCfg);
 		if (
 			((cfg.pipelineV2.reranker.enabled && cfg.pipelineV2.reranker.useExtractionModel) || body.aggregate === true) &&
 			authConfig.mode !== "local"
@@ -3395,7 +3412,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							router: getInferenceRouterOrNullFn(),
 							embedFn: recallAttributedEmbedFn(fetchEmbeddingFn, agentId, recordRouteOperationFailure(c)),
 						})
-					: await hybridRecallFn(
+					: await routeRecall(
 							params,
 							cfg,
 							recallAttributedEmbedFn(fetchEmbeddingFn, agentId, recordRouteOperationFailure(c)),
@@ -3449,7 +3466,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const project = c.req.query("project");
 		const includeRecalled = c.req.query("includeRecalled") ?? c.req.query("include_recalled");
 
-		const cfg = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		const configuredCfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = recallOwner !== undefined ? configuredCfg : await withActiveEmbeddingConfig(configuredCfg);
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		const recallSurface = "explicit_api" as const;
 		try {
@@ -3484,7 +3502,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				recallMode: "direct",
 				...(scopeProject ? { project: scopeProject } : {}),
 			};
-			const result = await hybridRecall(
+			const result = await routeRecall(
 				params,
 				cfg,
 				recallAttributedEmbedFn(fetchEmbedding, agentId, recordRouteOperationFailure(c)),

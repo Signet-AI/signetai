@@ -112,6 +112,7 @@ export interface DbOwnerClientOptions {
 	readonly dbPath: string;
 	readonly workerPath?: string;
 	readonly startupTimeoutMs?: number;
+	readonly workerRole?: "generic" | "recall";
 }
 
 function workerArguments(workerPath: string | undefined): readonly string[] {
@@ -349,6 +350,7 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 					...process.env,
 					SIGNET_DB_OWNER_DB_PATH: options.dbPath,
 					SIGNET_DB_OWNER_WORKER: "1",
+					...(options.workerRole === "recall" ? { SIGNET_DB_OWNER_RECALL_WORKER: "1" } : {}),
 				},
 				stdio: ["pipe", "pipe", "pipe"],
 			});
