@@ -334,12 +334,56 @@ export interface UserPromptSubmitResponse {
 	dynamicContext: string;
 	/** Compatibility alias for clients that still consume the aggregate field. */
 	inject: string;
+	/** Dynamic prompt-handling clock, deliberately excluded from memory context hashing. */
+	clockContext?: string;
 	contextHash?: string;
 	contextVersion?: typeof PROMPT_CONTEXT_VERSION;
 	memoryCount: number;
 	queryTerms?: string;
 	engine?: string;
 	warnings?: string[];
+}
+
+/**
+ * Format the prompt-handling instant without putting it in the memory envelope.
+ * Invalid or unavailable local timezone data falls back deterministically to UTC.
+ */
+export function formatPromptClockContext(date: Date, requestedTimeZone?: string): string {
+	let localTimeZone = "UTC";
+	try {
+		localTimeZone = requestedTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+	} catch {
+		// Use UTC when the host cannot resolve its local timezone.
+	}
+	for (const timeZone of [localTimeZone, "UTC"]) {
+		try {
+			const parts = new Intl.DateTimeFormat("en-CA", {
+				timeZone,
+				year: "numeric",
+				month: "2-digit",
+				day: "2-digit",
+				hour: "2-digit",
+				minute: "2-digit",
+				second: "2-digit",
+				hourCycle: "h23",
+				timeZoneName: "longOffset",
+			}).formatToParts(date);
+			const values = new Map(parts.map((part) => [part.type, part.value]));
+			const offset = values.get("timeZoneName") ?? "GMT";
+			const offsetMatch = /^GMT(?:(?<sign>[+-])(?<hours>\d{1,2})(?::?(?<minutes>\d{2}))?)?$/.exec(offset);
+			if (!offsetMatch?.groups) throw new Error("Unsupported timezone offset");
+			const normalizedOffset = offsetMatch.groups.sign
+				? `${offsetMatch.groups.sign}${offsetMatch.groups.hours?.padStart(2, "0")}:${offsetMatch.groups.minutes ?? "00"}`
+				: "+00:00";
+			const datePart = `${values.get("year")}-${values.get("month")}-${values.get("day")}`;
+			const timePart = `${values.get("hour")}:${values.get("minute")}:${values.get("second")}`;
+			return `Current date/time: ${datePart}T${timePart}${normalizedOffset} (${timeZone})`;
+		} catch {
+			// Retry once with UTC so a malformed host timezone never breaks a hook.
+		}
+	}
+	const utc = date.toISOString();
+	return `Current date/time: ${utc.slice(0, 19)}+00:00 (UTC)`;
 }
 
 export interface SessionEndRequest {
@@ -1491,6 +1535,7 @@ function recordUserPromptRecallTelemetry(input: {
 
 type UserPromptSubmitDeps = {
 	readonly logger: typeof logger;
+	readonly now: () => number;
 	readonly loadMemoryConfig: typeof loadMemoryConfig;
 	readonly resolveAgentId: typeof resolveAgentId;
 	readonly getAgentScope: typeof getAgentScope;
@@ -1512,6 +1557,7 @@ type UserPromptSubmitDeps = {
 
 const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 	logger,
+	now: Date.now,
 	loadMemoryConfig,
 	resolveAgentId,
 	getAgentScope,
@@ -1536,7 +1582,8 @@ export async function handleUserPromptSubmit(
 	overrides?: Partial<UserPromptSubmitDeps>,
 ): Promise<UserPromptSubmitResponse> {
 	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
-	const start = Date.now();
+	const start = deps.now();
+	const clockContext = formatPromptClockContext(new Date(start));
 	const submitCfg = loadHooksConfigForHarness(req.harness).userPromptSubmit ?? {};
 	const userMessage = resolveRecallUserMessage(req);
 	const agentId = deps.resolveAgentId(req);
@@ -1682,9 +1729,9 @@ export async function handleUserPromptSubmit(
 		}
 	}
 
-	// Per-prompt context must not contain a wall-clock value. Harnesses may
-	// replay the same response for title, primary, retry, and tool-loop calls;
-	// dynamic metadata would invalidate their prompt cache and its hash.
+	// Cache-stable per-prompt memory context must not contain a wall-clock value.
+	// Harnesses may replay the same response for title, primary, retry, and
+	// tool-loop calls; dynamic metadata belongs in the separate clock signal.
 	const metadataHeader = "";
 	const expiryWarning = req.sessionKey ? deps.getExpiryWarning(req.sessionKey, agentId) : null;
 	const warnings = expiryWarning ? [expiryWarning] : undefined;
@@ -1696,6 +1743,7 @@ export async function handleUserPromptSubmit(
 			start,
 			{
 				dynamicContext: "",
+				clockContext,
 				inject: "",
 				memoryCount: 0,
 				warnings,
@@ -1722,6 +1770,7 @@ export async function handleUserPromptSubmit(
 			start,
 			{
 				dynamicContext: "",
+				clockContext,
 				inject: metadataHeader,
 				memoryCount: 0,
 				queryTerms: keywordTerms.join(" ") || undefined,
@@ -1796,6 +1845,7 @@ export async function handleUserPromptSubmit(
 				start,
 				{
 					dynamicContext: "",
+					clockContext,
 					inject: "",
 					memoryCount: 0,
 					queryTerms: keywordTerms.join(" ") || undefined,
@@ -1838,6 +1888,7 @@ export async function handleUserPromptSubmit(
 				start,
 				{
 					dynamicContext: "",
+					clockContext,
 					inject: "",
 					memoryCount: 0,
 					queryTerms: keywordTerms.join(" ") || undefined,
@@ -1873,6 +1924,7 @@ export async function handleUserPromptSubmit(
 			start,
 			{
 				dynamicContext: inject,
+				clockContext,
 				inject,
 				memoryCount: entityContext.memoryCount,
 				queryTerms: keywordTerms.join(" ") || undefined,
@@ -1895,6 +1947,7 @@ export async function handleUserPromptSubmit(
 		deps.logger.error("hooks", "User prompt submit failed", e as Error);
 		return {
 			dynamicContext: "",
+			clockContext,
 			inject: "",
 			memoryCount: 0,
 			warnings,

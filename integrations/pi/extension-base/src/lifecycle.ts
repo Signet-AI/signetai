@@ -20,6 +20,7 @@ export interface SessionStartResult {
 export interface UserPromptSubmitResult {
 	readonly inject?: string;
 	readonly dynamicContext?: string;
+	readonly clockContext?: string;
 	readonly contextHash?: string;
 	readonly contextVersion?: number;
 	readonly memoryCount?: number;
@@ -349,5 +350,9 @@ export async function requestRecallForPrompt(
 	const inject = readTrimmedString(result.dynamicContext) ?? readTrimmedString(result.inject);
 	if (inject) {
 		deps.state.queuePendingRecall(session.sessionId, inject);
+	}
+	const clockContext = readTrimmedString(result.clockContext);
+	if (clockContext) {
+		deps.state.queuePendingClock(session.sessionId, clockContext);
 	}
 }

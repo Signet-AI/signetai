@@ -184,6 +184,7 @@ export interface PreCompactionResult {
 export interface UserPromptSubmitResult {
 	inject: string;
 	dynamicContext?: string;
+	clockContext?: string;
 	contextHash?: string;
 	contextVersion?: number;
 	memoryCount: number;
@@ -1207,17 +1208,21 @@ function installSdkSanitizer(): () => void {
 
 function buildInjectionResult(result: UserPromptSubmitResult): { prependContext: string } | undefined {
 	const dynamicContext = readContextString(result.dynamicContext) || readContextString(result.inject);
-	if (!dynamicContext) {
+	const clockContext = readContextString(result.clockContext);
+	if (!dynamicContext && !clockContext) {
 		return undefined;
 	}
-	const queryAttr = result.queryTerms ? ` query="${result.queryTerms.replace(/"/g, "'").slice(0, 100)}"` : "";
-	const attrs = `source="auto-recall"${queryAttr} results="${result.memoryCount}" engine="${result.engine ?? "fts+decay"}"`;
-	const context = wrapMemoryContext(dynamicContext, "auto-recall").replace(
-		'<signet-memory source="auto-recall">',
-		`<signet-memory ${attrs}>`,
-	);
+	let context = "";
+	if (dynamicContext) {
+		const queryAttr = result.queryTerms ? ` query="${result.queryTerms.replace(/"/g, "'").slice(0, 100)}"` : "";
+		const attrs = `source="auto-recall"${queryAttr} results="${result.memoryCount}" engine="${result.engine ?? "fts+decay"}"`;
+		context = wrapMemoryContext(dynamicContext, "auto-recall").replace(
+			'<signet-memory source="auto-recall">',
+			`<signet-memory ${attrs}>`,
+		);
+	}
 	return {
-		prependContext: context,
+		prependContext: [context, clockContext].filter((part) => part.length > 0).join("\n\n"),
 	};
 }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { vectorToBlob } from "./db-helpers";
-import { handleUserPromptSubmit } from "./hooks";
+import { handleUserPromptSubmit, formatPromptClockContext } from "./hooks";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
 import { setActiveTelemetry } from "./telemetry";
 
@@ -204,6 +204,39 @@ function seedEntityContext(): void {
 }
 
 describe("handleUserPromptSubmit entity context", () => {
+	it("formats an explicit offset and deterministic UTC fallback for the prompt clock", () => {
+		const instant = new Date("2026-08-16T20:35:00.000Z");
+		expect(formatPromptClockContext(instant, "America/Denver")).toBe(
+			"Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)",
+		);
+		expect(formatPromptClockContext(instant, "invalid/timezone")).toBe(
+			"Current date/time: 2026-08-16T20:35:00+00:00 (UTC)",
+		);
+	});
+
+	it("computes one clock per request without changing the memory context hash", async () => {
+		seedEntityContext();
+		let now = Date.parse("2026-08-16T20:35:00.000Z");
+		const nowMock = mock(() => now);
+		const deps = makeDeps({ now: nowMock });
+
+		const first = await handleUserPromptSubmit(
+			{ harness: "codex", userMessage: "Tell me about Signet architecture", sessionKey: "clock-stability" },
+			deps,
+		);
+		now = Date.parse("2026-08-16T20:36:00.000Z");
+		const second = await handleUserPromptSubmit(
+			{ harness: "codex", userMessage: "Tell me about Signet architecture", sessionKey: "clock-stability" },
+			deps,
+		);
+
+		expect(nowMock).toHaveBeenCalledTimes(2);
+		expect(first.clockContext).not.toBe(second.clockContext);
+		expect(first.inject).toBe(second.inject);
+		expect(first.contextHash).toBe(second.contextHash);
+		expect(first.clockContext).not.toContain("<signet-memory-context>");
+	});
+
 	beforeEach(() => {
 		infoMock.mockClear();
 		warnMock.mockClear();
@@ -324,6 +357,7 @@ describe("handleUserPromptSubmit entity context", () => {
 		);
 
 		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-entity" });
+		expect(result.clockContext).toMatch(/^Current date\/time: .*\+\d{2}:\d{2} \(.+\)$/);
 		expect(hybridRecallMock).not.toHaveBeenCalled();
 		expect(searchTemporalFallbackMock).not.toHaveBeenCalled();
 	});
@@ -341,6 +375,7 @@ describe("handleUserPromptSubmit entity context", () => {
 		);
 
 		expect(result.engine).toBe("entity-context");
+		expect(result.clockContext).toMatch(/^Current date\/time: .*\+\d{2}:\d{2} \(.+\)$/);
 		expect(result.inject).toContain("## Relevant Entity Context");
 		expect(result.inject).toContain("[attribute] Signet / architecture / runtime / prompt_context");
 		expect(result.inject).not.toContain("[constraint] Signet / architecture / runtime / fallback_policy");

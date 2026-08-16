@@ -35,6 +35,8 @@ export interface UserPromptSubmitResponse {
 	/** Deprecated compatibility field from the pre-hook response shape. */
 	readonly context?: string;
 	readonly dynamicContext?: string;
+	/** Dynamic prompt-handling clock, excluded from contextHash. */
+	readonly clockContext?: string;
 	/** Compatibility aggregate for clients predating the split contract. */
 	readonly inject?: string;
 	readonly contextHash?: string;

@@ -292,12 +292,18 @@ interface HookNotificationContext {
 }
 
 function withCrossAgentNotifications<T extends object>(
-	result: T & { readonly inject?: string; readonly dynamicContext?: string; readonly contextHash?: string },
+	result: T & {
+		readonly inject?: string;
+		readonly dynamicContext?: string;
+		readonly contextHash?: string;
+		readonly clockContext?: string;
+	},
 	context: HookNotificationContext,
 ): T & {
 	readonly inject: string;
 	readonly dynamicContext?: string;
 	readonly contextHash?: string;
+	readonly clockContext?: string;
 	readonly notifications?: HookNotificationsBlock;
 } {
 	const notifications = collectCrossAgentNotifications(context);

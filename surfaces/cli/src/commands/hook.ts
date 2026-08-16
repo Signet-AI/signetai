@@ -234,6 +234,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const data = await fetchHookData<{
 				inject?: string;
 				dynamicContext?: string;
+				clockContext?: string;
 				contextHash?: string;
 				contextVersion?: number;
 			}>(deps, "user-prompt-submit", "/api/hooks/user-prompt-submit", {
@@ -246,7 +247,9 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				if (options.codexJson) printCodexHookOutput("UserPromptSubmit");
 				process.exit(0);
 			}
-			const dynamicContext = data.dynamicContext ?? data.inject;
+			const dynamicContext = [data.dynamicContext ?? data.inject, data.clockContext]
+				.filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+				.join("\n\n");
 			if (options.codexJson) {
 				printCodexHookOutput("UserPromptSubmit", dynamicContext);
 			} else if (options.json) {

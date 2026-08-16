@@ -14,7 +14,7 @@ Hooks are HTTP endpoints exposed by the Signet [Daemon](/daemon/). Harnesses cal
 | Hook | When | Purpose |
 |------|------|---------|
 | `session-start` | New session begins | Inject memories, identity, and the Memory Check Loop into context |
-| `user-prompt-submit` | Before each user turn | Inject compact current-view context only when the prompt mentions a known entity or active entity alias |
+| `user-prompt-submit` | Before each user turn | Inject compact current-view context only when the prompt mentions a known entity or active entity alias, and provide a separate dynamic clock signal |
 | `notifications` | Any declared compatible harness hook | Inject unread cross-agent messages without running recall or transcript side effects |
 | `session-end` | Session finishes | Persist transcript lineage and queue session summary |
 | `pre-compaction` | Before context compaction | Get summary guidelines |
@@ -38,6 +38,13 @@ The session-start response separates prompt context into two fields:
   integrations should prefer the split fields. The aggregate is returned in
   the versioned `<signet-memory-context>` envelope with `contextHash` and
   `contextVersion` so legacy clients can verify the exact bytes they received.
+
+The `user-prompt-submit` response additionally includes `clockContext`, a
+compact, dynamic prompt-handling timestamp. The adapter delivers it through its
+hidden/provider-bound per-turn path. It is not a transcript turn or stored
+memory, and is never included in `inject`, `contextHash`, or the
+`<signet-memory-context>` envelope. A legacy inject-only CLI hook renders it
+alongside the compatibility context.
 
 Canonical transcript surfaces remove internal `<signet-memory>` and
 `<memory-context>` blocks (including `<signet-memory-context>` envelopes).

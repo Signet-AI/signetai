@@ -64,6 +64,7 @@ interface HookNotificationResult {
 }
 
 interface UserPromptSubmitResult extends HookNotificationResult {
+	readonly clockContext?: string;
 	readonly memoryCount?: number;
 	readonly contextHash?: string;
 	readonly contextVersion?: number;
@@ -81,6 +82,7 @@ interface ActiveTurn {
 	messageID?: string;
 	userText: string;
 	dynamicContext: string;
+	clockContext: string;
 	notificationInject: string;
 }
 const activeTurns = new Map<string, ActiveTurn>();
@@ -90,7 +92,7 @@ function beginTurn(sessionID: string, messageID: string | undefined, userText: s
 		const oldest = activeTurns.keys().next().value;
 		if (oldest !== undefined) activeTurns.delete(oldest);
 	}
-	const turn = { messageID, userText, dynamicContext: "", notificationInject: "" };
+	const turn = { messageID, userText, dynamicContext: "", clockContext: "", notificationInject: "" };
 	activeTurns.set(sessionID, turn);
 	return turn;
 }
@@ -398,6 +400,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				if (result) {
 					const recallInject = recallOnlyInject(result);
 					if (recallInject) appendTurnContext(input.sessionID, turn, recallInject);
+					turn.clockContext = readContextString(result.clockContext);
 					turn.notificationInject =
 						readContextString(result.notifications?.dynamicContext) || readContextString(result.notifications?.inject);
 				}
@@ -441,7 +444,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				const message = output.messages[index];
 				if (message == null || message.info.role !== "user") continue;
 				const turn = activeTurns.get(message.info.sessionID);
-				if (!turn || !turn.dynamicContext.trim()) continue;
+				if (!turn || (!turn.dynamicContext.trim() && !turn.clockContext.trim())) continue;
 				if (turn.messageID && message.info.id !== turn.messageID) continue;
 				if (!turn.messageID && turn.userText) {
 					const messageText = message.parts
@@ -453,10 +456,12 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				}
 
 				const dynamicContext = turn.dynamicContext.trim();
-				if (!dynamicContext) return;
+				const clockContext = turn.clockContext.trim();
+				if (!dynamicContext && !clockContext) return;
 				const textPart = [...message.parts].reverse().find((part) => part.type === "text");
-				if (!textPart || textPart.type !== "text") return;
-				textPart.text = composeApiUserContent(textPart.text, dynamicContext);
+				if (textPart?.type !== "text") return;
+				const providerContent = composeApiUserContent(textPart.text, dynamicContext);
+				textPart.text = [providerContent, clockContext].filter((part) => part.length > 0).join("\n\n");
 				return;
 			}
 		},

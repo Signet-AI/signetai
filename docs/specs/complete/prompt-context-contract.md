@@ -19,7 +19,14 @@ The daemon also returns:
 - `contextVersion`: the envelope version (`1`)
 - `contextHash`: SHA-256 of the exact serialized `inject` bytes
 
-The serializer normalizes CRLF/CR to LF, removes trailing transport whitespace, and always emits one terminal LF. Nested envelope markers in memory content are escaped before serialization. Replaying identical context therefore produces identical bytes and an identical hash. Compatible hook responses may append a structured cross-agent notification block after the envelope for legacy adapters; when present, `contextHash` covers the final returned `inject` bytes, including that block.
+The serializer normalizes CRLF/CR to LF, removes trailing transport whitespace, and always emits one terminal LF. Nested envelope markers in memory content are escaped before serialization. Replaying identical context therefore produces identical bytes and an identical hash. Compatible hook responses may append a structured cross-agent notification block after the envelope for legacy adapters; when present, `contextHash` covers the final returned `inject` bytes.
+
+`user-prompt-submit` also returns `clockContext`, formatted as a line beginning
+`Current date/time:` and ending with the explicit UTC offset plus IANA timezone.
+This is computed once at request start and is explicitly dynamic. Adapters deliver
+it through their hidden/provider-bound per-turn path, but it is never added to
+`inject`, the `<signet-memory-context>` envelope, or `contextHash`. Therefore a
+clock-only change does not change the memory-context hash.
 
 ## Delivery matrix
 

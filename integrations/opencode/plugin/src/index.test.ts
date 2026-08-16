@@ -61,7 +61,10 @@ function installFetch(): RequestRecord[] {
 			}
 
 			if (url.pathname === "/api/hooks/user-prompt-submit") {
-				return Response.json({ dynamicContext: "prompt-submit-context" });
+				return Response.json({
+					dynamicContext: "prompt-submit-context",
+					clockContext: "Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)",
+				});
 			}
 
 			return Response.json({});
@@ -203,6 +206,12 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 		await hooks["experimental.chat.messages.transform"]({}, apiOutput);
 		expect(apiOutput.messages[0]?.parts[0]?.text).toContain("prompt-submit-context");
 		expect(apiOutput.messages[0]?.parts[0]?.text).toContain('<signet-memory source="api-context">');
+		expect(apiOutput.messages[0]?.parts[0]?.text).toContain(
+			"Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)",
+		);
+		expect(apiOutput.messages[0]?.parts[0]?.text).not.toContain(
+			'<signet-memory source="api-context">Current date/time:',
+		);
 		const replayedContent = apiOutput.messages[0]?.parts[0]?.text;
 		await hooks["experimental.chat.messages.transform"]({}, apiOutput);
 		expect(apiOutput.messages[0]?.parts[0]?.text).toBe(replayedContent);

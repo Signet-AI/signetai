@@ -98,6 +98,25 @@ where no attribute clears `hooks.userPromptSubmit.minScore` return `inject: ""`.
 Raw transcript search is not injected on prompt-submit; use the dedicated
 `session_search` MCP/API surface when a caller needs transcript evidence.
 
+A normal successful response includes a separate dynamic clock field:
+
+```json
+{
+  "clockContext": "Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)",
+  "dynamicContext": "",
+  "inject": "",
+  "memoryCount": 0,
+  "engine": "no-entity"
+}
+```
+
+`clockContext` is computed once at prompt handling start and uses the daemon's
+resolved IANA timezone with an explicit UTC offset. It is delivered through the
+harness's hidden/provider-bound per-turn path. It is not included in the
+cache-stable `<signet-memory-context>` envelope or `contextHash`, so a clock-only
+change does not invalidate memory-context replay. Bypassed, internal, duplicate,
+and other no-op responses retain their existing no-context shape.
+
 Under sustained concurrency (many harnesses submitting at once), the daemon
 caps in-flight prompt-submit work: once more than 8 submissions are processing
 concurrently, the hook returns `503` with a `Retry shortly` error instead of

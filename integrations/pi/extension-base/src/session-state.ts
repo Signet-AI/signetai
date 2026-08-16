@@ -40,6 +40,8 @@ export interface BaseSessionState {
 	setPendingSessionContext(sessionId: string | undefined, inject: string | undefined): void;
 	clearPendingSessionContext(sessionId: string | undefined): void;
 	queuePendingRecall(sessionId: string, inject: string): void;
+	queuePendingClock(sessionId: string, clockContext: string): void;
+	consumePendingClock(sessionId: string | undefined): string | undefined;
 	clearPendingRecall(sessionId: string | undefined): void;
 	clearPendingSessionData(sessionId: string | undefined): void;
 	hasPendingRecall(sessionId: string | undefined): boolean;
@@ -55,6 +57,7 @@ export interface BaseSessionState {
 export class BaseSessionStateStore implements BaseSessionState {
 	protected readonly pendingSessionContext = new Map<string, string>();
 	protected readonly pendingRecall = new Map<string, string[]>();
+	protected readonly pendingClock = new Map<string, string>();
 	private readonly pendingSessionEnds = new Map<string, PendingSessionEnd>();
 	private readonly pendingSessionSwitches: PendingSessionSwitch[] = [];
 	private readonly endedSessions = new Map<string, number>();
@@ -130,6 +133,18 @@ export class BaseSessionStateStore implements BaseSessionState {
 		this.pendingRecall.set(sessionId, queue);
 	}
 
+	queuePendingClock(sessionId: string, clockContext: string): void {
+		const trimmed = readTrimmedString(clockContext);
+		if (trimmed) this.pendingClock.set(sessionId, trimmed);
+	}
+
+	consumePendingClock(sessionId: string | undefined): string | undefined {
+		if (!sessionId) return undefined;
+		const clockContext = this.pendingClock.get(sessionId);
+		this.pendingClock.delete(sessionId);
+		return clockContext;
+	}
+
 	clearPendingRecall(sessionId: string | undefined): void {
 		if (!sessionId) return;
 		this.pendingRecall.delete(sessionId);
@@ -139,6 +154,7 @@ export class BaseSessionStateStore implements BaseSessionState {
 		if (!sessionId) return;
 		this.pendingSessionContext.delete(sessionId);
 		this.pendingRecall.delete(sessionId);
+		this.pendingClock.delete(sessionId);
 		this.pendingSessionEnds.delete(sessionId);
 	}
 

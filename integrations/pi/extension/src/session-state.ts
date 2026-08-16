@@ -5,7 +5,12 @@ import {
 	sanitizeInject,
 } from "@signet/pi-extension-base";
 import { readTrimmedString } from "@signet/pi-extension-base";
-import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE, type PiAgentMessage } from "./types.js";
+import {
+	HIDDEN_CLOCK_CUSTOM_TYPE,
+	HIDDEN_RECALL_CUSTOM_TYPE,
+	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
+	type PiAgentMessage,
+} from "./types.js";
 
 function createHiddenInjectMessage(customType: string, inject: string): PiAgentMessage {
 	return {
@@ -13,6 +18,16 @@ function createHiddenInjectMessage(customType: string, inject: string): PiAgentM
 		customType,
 		display: false,
 		content: `<signet-memory source="auto-recall">\n${sanitizeInject(inject)}\n</signet-memory>`,
+		timestamp: Date.now(),
+	};
+}
+
+function createHiddenClockMessage(clockContext: string): PiAgentMessage {
+	return {
+		role: "custom",
+		customType: HIDDEN_CLOCK_CUSTOM_TYPE,
+		display: false,
+		content: clockContext,
 		timestamp: Date.now(),
 	};
 }
@@ -35,6 +50,11 @@ class PiSessionStateStore extends BaseSessionStateStore implements PiSessionStat
 		const recallInject = this.consumePendingRecall(sessionId);
 		if (recallInject) {
 			messages.push(createHiddenInjectMessage(HIDDEN_RECALL_CUSTOM_TYPE, recallInject));
+		}
+
+		const clockContext = this.consumePendingClock(sessionId);
+		if (clockContext) {
+			messages.push(createHiddenClockMessage(clockContext));
 		}
 
 		return messages;

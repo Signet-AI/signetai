@@ -39,6 +39,12 @@ The daemon exposes two prompt-context fields on the hook responses:
   exact returned bytes; `contextVersion` identifies the envelope contract.
   New adapters must prefer the split fields.
 
+`clockContext` is a separate dynamic prompt-handling timestamp returned by
+`user-prompt-submit`. It uses an explicit UTC offset and IANA timezone, is sent
+through a hidden/provider-bound per-turn channel, and is never placed in the
+memory envelope or `contextHash`. A clock-only change therefore does not change
+cache-stable memory context.
+
 When a harness supports an API-only message copy, the adapter uses the clean
 user message as the persisted value and composes a separate provider-bound
 copy with a `<signet-memory source="api-context">` block. The exact composed
