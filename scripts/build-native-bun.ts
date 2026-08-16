@@ -341,6 +341,24 @@ handoffInspectorParent();
 if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PROXY_TARGET) {
 	const { runInspectorProxyFromEnvironment } = await import("../surfaces/cli/src/lib/inspector-proxy");
 	await runInspectorProxyFromEnvironment();
+} else if (process.env.SIGNET_DB_OWNER_WORKER) {
+	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
+	runDbOwnerWorker();
+} else if (process.env.SIGNET_DB_OWNER_CLIENT_SMOKE) {
+	const dbPath = process.env.SIGNET_DB_OWNER_DB_PATH;
+	if (!dbPath) throw new Error("DB owner client smoke requires SIGNET_DB_OWNER_DB_PATH");
+	const { createDbOwnerClient } = await import("../platform/daemon/src/db-owner-client");
+	const client = createDbOwnerClient({ dbPath });
+	try {
+		const handle = client.submit<readonly { readonly value: number }[]>(
+			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+			{ operation: "native.client-smoke", lane: "read", deadlineMs: 5_000 },
+		);
+		const result = await handle.result;
+		process.stdout.write(\`\${JSON.stringify({ type: "client-result", result })}\\n\`);
+	} finally {
+		await client.close();
+	}
 } else if (process.env.SIGNET_DB_OWNER_DB_PATH) {
 	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
 	runDbOwnerWorker();

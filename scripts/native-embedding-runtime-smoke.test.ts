@@ -308,6 +308,46 @@ describe("compiled native embedding runtime", () => {
 	);
 
 	smoke(
+		"constructs DbOwnerClient inside the compiled native binary",
+		async () => {
+			const binary = nativeSmokeBinary();
+			if (!existsSync(binary)) {
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+			}
+			const directory = tempDir();
+			const dbPath = join(directory, "memory.db");
+			const database = new Database(dbPath);
+			database.close();
+			const child = spawn(binary, [], {
+				env: {
+					...process.env,
+					SIGNET_DB_OWNER_DB_PATH: dbPath,
+					SIGNET_DB_OWNER_CLIENT_SMOKE: "1",
+					SIGNET_TELEMETRY_OPTOUT: "1",
+				},
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			children.push(child);
+			let output = "";
+			child.stdout.setEncoding("utf8");
+			child.stdout.on("data", (chunk: string) => {
+				output += chunk;
+			});
+			child.stderr.resume();
+
+			const result = await waitForJsonEvent(outputText, (event) => event.type === "client-result");
+			expect(result).toMatchObject({ type: "client-result", result: [{ value: 1 }] });
+			const closed = new Promise<number | null>((resolve) => child.once("close", resolve));
+			expect(await closed).toBe(0);
+
+			function outputText(): string {
+				return output;
+			}
+		},
+		60_000,
+	);
+
+	smoke(
 		"serves embedded dashboard assets, connector assets, and fresh workspace migrations",
 		async () => {
 			const binary = nativeSmokeBinary();

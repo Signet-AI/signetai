@@ -267,7 +267,11 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			startupResolve = resolve;
 			startupReject = reject;
 			const owner = spawn(process.execPath, workerArguments(options.workerPath), {
-				env: { ...process.env, SIGNET_DB_OWNER_DB_PATH: options.dbPath },
+				env: {
+					...process.env,
+					SIGNET_DB_OWNER_DB_PATH: options.dbPath,
+					SIGNET_DB_OWNER_WORKER: "1",
+				},
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 			child = owner;
