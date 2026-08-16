@@ -16,6 +16,7 @@ import { yieldEvery } from "./async-yield";
 import type { WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
+import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
 import { isMemoryContentContextEligible, upsertMemoryContentSafetyInTx } from "./memory-content-safety";

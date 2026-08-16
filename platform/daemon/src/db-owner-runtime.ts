@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
-import { getDbPath } from "./db-accessor";
+import { join } from "node:path";
+import { resolveSqliteAgentsDir } from "./db-accessor";
 import {
 	createDbOwnerClient,
 	DbOwnerAdmissionError,
@@ -32,7 +33,9 @@ async function dbIdentity(dbPath: string): Promise<string> {
 }
 
 /** Start the single process DB owner used by category migrations. */
-export async function startDbOwner(dbPath = getDbPath()): Promise<DbOwnerClient> {
+export async function startDbOwner(
+	dbPath = join(resolveSqliteAgentsDir(), "memory", "memories.db"),
+): Promise<DbOwnerClient> {
 	const identity = await dbIdentity(dbPath);
 	if (
 		client !== null &&

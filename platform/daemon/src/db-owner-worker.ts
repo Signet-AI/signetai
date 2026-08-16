@@ -1,7 +1,12 @@
 import { createRequire } from "node:module";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { findSqliteVecExtension } from "@signet/core";
-import { applyObsidianSourceStructureInTx, applyObsidianSourceStructurePurgeInTx, buildObsidianMarkdownPathIndex, purgeObsidianSourceFileStructureInTx } from "./obsidian-source-graph";
+import {
+	applyObsidianSourceStructureInTx,
+	applyObsidianSourceStructurePurgeInTx,
+	buildObsidianMarkdownPathIndex,
+	purgeObsidianSourceFileStructureInTx,
+} from "./obsidian-source-graph";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
 import type {
 	DbOwnerCommand,
@@ -227,15 +232,9 @@ export function runDbOwnerWorker(): void {
 					markdownPathIndex,
 				});
 			} else if (request.kind === "source_graph_file_purge") {
-				result = purgeObsidianSourceFileStructureInTx(
-					db as unknown as import("./db-accessor").WriteDb,
-					request.input,
-				);
+				result = purgeObsidianSourceFileStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
 			} else {
-				result = applyObsidianSourceStructurePurgeInTx(
-					db as unknown as import("./db-accessor").WriteDb,
-					request.input,
-				);
+				result = applyObsidianSourceStructurePurgeInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
 			}
 			db.exec("COMMIT");
 			return result;

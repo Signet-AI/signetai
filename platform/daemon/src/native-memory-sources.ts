@@ -14,6 +14,7 @@ import {
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import {
+	dbOwnerBatch,
 	dbOwnerQuery,
 	dbOwnerSourceGraphFilePurge,
 	dbOwnerSourceGraphIndex,
@@ -563,22 +564,18 @@ function sleep(ms: number): Promise<void> {
 	return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
-async function withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
-	const accessor = getDbAccessor();
-	if (!accessor.withWriteTxAsync) throw new Error("Async database writer is unavailable");
-	return accessor.withWriteTxAsync(fn);
-}
 async function nativeArtifactContentHash(filePath: string, agentId: string): Promise<string | null> {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const row = db
-				.prepare(
-					"SELECT source_sha256 FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
-				)
-				.get(agentId, sourcePath) as { source_sha256: string } | undefined;
-			return row?.source_sha256 ?? null;
-		});
+		const row = await dbOwnerQuery<{ readonly source_sha256: string } | null>(
+			ownerStatement(
+				"SELECT source_sha256 FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
+				[agentId, sourcePath],
+				"get",
+			),
+			{ operation: "sources.artifact-hash", lane: "read" },
+		);
+		return row?.source_sha256 ?? null;
 	} catch {
 		return null;
 	}
@@ -587,14 +584,15 @@ async function nativeArtifactContentHash(filePath: string, agentId: string): Pro
 async function nativeArtifactCapturedAt(filePath: string, agentId: string): Promise<string | null> {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const row = db
-				.prepare(
-					"SELECT captured_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
-				)
-				.get(agentId, sourcePath) as { captured_at: string } | undefined;
-			return row?.captured_at ?? null;
-		});
+		const row = await dbOwnerQuery<{ readonly captured_at: string } | null>(
+			ownerStatement(
+				"SELECT captured_at FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
+				[agentId, sourcePath],
+				"get",
+			),
+			{ operation: "sources.artifact-captured-at", lane: "read" },
+		);
+		return row?.captured_at ?? null;
 	} catch {
 		return null;
 	}
@@ -616,13 +614,17 @@ async function healSentinelCapturedAt(
 	if (timestampMillis(capturedAt) >= Date.parse(EPISODIC_CAPTURED_AT_FLOOR)) return;
 	try {
 		const stampedAt = new Date().toISOString();
-		await withWriteTxAsync((db) => {
-			db.prepare(
-				`UPDATE memory_artifacts
-				 SET captured_at = ?, updated_at = ?
-				 WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0`,
-			).run(stampedAt, stampedAt, agentId, filePath.replace(/\\/g, "/"));
-		});
+		await dbOwnerBatch(
+			[
+				ownerStatement(
+					`UPDATE memory_artifacts
+					 SET captured_at = ?, updated_at = ?
+					 WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0`,
+					[stampedAt, stampedAt, agentId, filePath.replace(/\\/g, "/")],
+				),
+			],
+			{ operation: "sources.artifact-heal", lane: "write", estimatedWorkUnits: 1 },
+		);
 		logger.warn("watcher", "Healed pre-epoch captured_at on native memory artifact", {
 			harness,
 			path: filePath,
@@ -638,19 +640,20 @@ async function healSentinelCapturedAt(
 
 async function obsidianGraphExists(agentId: string, sourceId: string, filePath: string): Promise<boolean> {
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const row = db
-				.prepare(
-					`SELECT 1 FROM entities
-					 WHERE agent_id = ?
-					   AND source_id = ?
-					   AND source_path = ?
-					   AND entity_type = 'source_document'
-					 LIMIT 1`,
-				)
-				.get(agentId, sourceId, filePath.replace(/\\/g, "/")) as { "1": number } | undefined;
-			return row !== undefined;
-		});
+		const row = await dbOwnerQuery<{ readonly "1": number } | null>(
+			ownerStatement(
+				`SELECT 1 FROM entities
+				 WHERE agent_id = ?
+				   AND source_id = ?
+				   AND source_path = ?
+				   AND entity_type = 'source_document'
+				 LIMIT 1`,
+				[agentId, sourceId, filePath.replace(/\\/g, "/")],
+				"get",
+			),
+			{ operation: "sources.graph-exists", lane: "read" },
+		);
+		return row !== null;
 	} catch {
 		return false;
 	}
@@ -666,24 +669,23 @@ async function obsidianEmbeddingsExist(input: {
 	const chunks = buildObsidianSourceChunks(input);
 	if (chunks.length === 0) return true;
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const rows = db
-				.prepare(
-					`SELECT source_id FROM embeddings
-					 WHERE agent_id = ?
-					   AND source_type IN (?, ?)
-					   AND source_id IN (${chunks.map(() => "?").join(", ")})`,
-				)
-				.all(
+		const rows = await dbOwnerQuery<readonly { readonly source_id: string }[]>(
+			ownerStatement(
+				`SELECT source_id FROM embeddings
+				 WHERE agent_id = ?
+				   AND source_type IN (?, ?)
+				   AND source_id IN (${chunks.map(() => "?").join(", ")})`,
+				[
 					input.agentId,
 					SOURCE_CHUNK_SOURCE_TYPE,
 					LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 					...chunks.map((chunk) => chunk.id),
-				) as Array<{
-				source_id: string;
-			}>;
-			return new Set(rows.map((row) => row.source_id)).size === chunks.length;
-		});
+				],
+				"all",
+			),
+			{ operation: "sources.embeddings-exists", lane: "read" },
+		);
+		return new Set(rows.map((row) => row.source_id)).size === chunks.length;
 	} catch {
 		return false;
 	}
@@ -692,31 +694,30 @@ async function obsidianEmbeddingsExist(input: {
 async function activeNativeArtifactPaths(source: NativeMemorySource, agentId: string): Promise<string[]> {
 	const rootPrefix = `${normalizedRoot(source.root)}/`;
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const rows = db
-				.prepare(
-					`SELECT source_path FROM memory_artifacts
-					 WHERE agent_id = ?
-					   AND harness = ?
-					   AND (
-						   source_id = ?
-						   OR (source_id IS NULL AND source_path >= ? AND source_path < ?)
-					   )
-					   AND source_kind IN (${source.files.map(() => "?").join(", ")})
-					   AND COALESCE(is_deleted, 0) = 0`,
-				)
-				.all(
+		const rows = await dbOwnerQuery<readonly { readonly source_path: string }[]>(
+			ownerStatement(
+				`SELECT source_path FROM memory_artifacts
+				 WHERE agent_id = ?
+				   AND harness = ?
+				   AND (
+					   source_id = ?
+					   OR (source_id IS NULL AND source_path >= ? AND source_path < ?)
+				   )
+				   AND source_kind IN (${source.files.map(() => "?").join(", ")})
+				   AND COALESCE(is_deleted, 0) = 0`,
+				[
 					agentId,
 					source.harness,
 					source.sourceId ?? "",
 					rootPrefix,
 					prefixUpperBound(rootPrefix),
 					...source.files.map((file) => file.kind),
-				) as Array<{
-				source_path: string;
-			}>;
-			return rows.map((row) => row.source_path);
-		});
+				],
+				"all",
+			),
+			{ operation: "sources.active-artifact-paths", lane: "read" },
+		);
+		return rows.map((row) => row.source_path);
 	} catch (err) {
 		logger.warn("watcher", "Failed listing active native memory artifacts", {
 			harness: source.harness,
@@ -995,21 +996,21 @@ export async function purgeNativeMemorySourceArtifacts(source: NativeMemorySourc
 		)
 			indexed.delete(key);
 	}
-	const artifactRows = await runWriteTxAsync(getDbAccessor(), (db) => {
-		const agentWhere = agentId ? "agent_id = ? AND " : "";
-		const rootUpperBound = prefixUpperBound(rootPrefix);
-		const params = agentId
-			? [
-					agentId,
-					source.harness,
-					source.sourceId ?? "",
-					rootPrefix,
-					rootUpperBound,
-					...source.files.map((file) => file.kind),
-				]
-			: [source.harness, source.sourceId ?? "", rootPrefix, rootUpperBound, ...source.files.map((file) => file.kind)];
-		const result = db
-			.prepare(
+	const agentWhere = agentId ? "agent_id = ? AND " : "";
+	const rootUpperBound = prefixUpperBound(rootPrefix);
+	const params = agentId
+		? [
+				agentId,
+				source.harness,
+				source.sourceId ?? "",
+				rootPrefix,
+				rootUpperBound,
+				...source.files.map((file) => file.kind),
+			]
+		: [source.harness, source.sourceId ?? "", rootPrefix, rootUpperBound, ...source.files.map((file) => file.kind)];
+	const [artifactResult] = await dbOwnerBatch(
+		[
+			ownerStatement(
 				`DELETE FROM memory_artifacts
 				 WHERE ${agentWhere}harness = ?
 				   AND (
@@ -1017,10 +1018,12 @@ export async function purgeNativeMemorySourceArtifacts(source: NativeMemorySourc
 					   OR (source_id IS NULL AND source_path >= ? AND source_path < ?)
 				   )
 				   AND source_kind IN (${source.files.map(() => "?").join(", ")})`,
-			)
-			.run(...params);
-		return result.changes;
-	});
+				params,
+			),
+		],
+		{ operation: "sources.artifacts.purge", lane: "write", estimatedWorkUnits: 4 },
+	);
+	const artifactRows = (artifactResult as { readonly changes: number }).changes;
 	let embeddingRows = 0;
 	if (source.harness === "obsidian") {
 		embeddingRows = await purgeObsidianSourceEmbeddingsViaOwner({
