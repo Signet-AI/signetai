@@ -9,6 +9,7 @@ import { MIGRATIONS } from "../platform/core/src/migrations";
 
 const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_NATIVE_EMBEDDING_SMOKE === "1";
+const dbOwnerSmokeEnabled = process.env.SIGNET_DB_OWNER_SMOKE === "1";
 const tempDirs: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 const CHILD_KILL_REAP_MS = 2_000;
@@ -244,8 +245,9 @@ describe("native embedding smoke teardown", () => {
 
 describe("compiled native embedding runtime", () => {
 	const smoke = enabled ? test : test.skip;
+	const dbOwnerSmoke = dbOwnerSmokeEnabled ? test : test.skip;
 
-	smoke(
+	dbOwnerSmoke(
 		"dispatches the embedded DB owner through the compiled binary",
 		async () => {
 			const binary = nativeSmokeBinary();
@@ -307,7 +309,7 @@ describe("compiled native embedding runtime", () => {
 		60_000,
 	);
 
-	smoke(
+	dbOwnerSmoke(
 		"constructs DbOwnerClient inside the compiled native binary",
 		async () => {
 			const binary = nativeSmokeBinary();

@@ -18,6 +18,8 @@ on:
       - "platform/daemon/src/embedding-health.ts"
       - "platform/daemon/src/routes/utils.ts"
       - "platform/daemon/src/daemon.ts"
+      - "platform/daemon/src/db-owner*.ts"
+      - "platform/daemon/src/native-runtime-assets.ts"
       - "scripts/native-embedding-runtime-smoke.test.ts"
       - "scripts/build-native-bun.ts"
       - ".github/workflows/embedding-health-isolation.yml"
@@ -30,6 +32,10 @@ on:
       - "platform/daemon/src/embedding-health.ts"
       - "platform/daemon/src/routes/utils.ts"
       - "platform/daemon/src/daemon.ts"
+      - "platform/daemon/src/db-owner*.ts"
+      - "platform/daemon/src/native-runtime-assets.ts"
+      - "scripts/native-embedding-runtime-smoke.test.ts"
+      - "scripts/build-native-bun.ts"
       - ".github/workflows/embedding-health-isolation.yml"
 
 permissions:
@@ -51,13 +57,30 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
-      - name: Build @signet/core (workspace dep the daemon imports)
-        run: bun run build:core
+      - name: Build workspace dependencies
+        run: bun run build
       # Unit guard: proves the main-thread adapter never blocks while the
       # embedding worker is stuck (the ★ non-blocking invariant), plus RPC
-      # bounds, crash/exit handling, and sync status. Needs only @signet/core.
-      # The end-to-end /health-SLA test (real daemon spawn) and the compiled-
-      # binary smoke run in release.yml, where the full workspace is built.
+      # bounds, crash/exit handling, and sync status. The compiled-binary
+      # guard below builds the full workspace and exercises the shipped asset.
       - name: Worker-handle unit + facade contract tests
         working-directory: platform/daemon
         run: bun test src/embedding-worker-handle.test.ts src/native-embedding.test.ts
+
+      # Compiled-binary guard: this is deliberately a separate gate from the
+      # embedding smoke. It constructs DbOwnerClient inside the Bun-compiled
+      # binary and executes a real owner query, so a missing embedded
+      # db-owner-worker asset fails this PR check instead of being skipped.
+      - name: Build dashboard assets
+        run: bun run build:dashboard
+
+      - name: Build native Signet binary
+        run: bun run build:native-bun
+
+      - name: Compiled native DB-owner smoke
+        env:
+          SIGNET_DB_OWNER_SMOKE: "1"
+          SIGNET_NATIVE_EMBEDDING_SMOKE: "0"
+          SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/signet-linux-x64
+          SIGNET_TELEMETRY_OPTOUT: "1"
+        run: bun test scripts/native-embedding-runtime-smoke.test.ts

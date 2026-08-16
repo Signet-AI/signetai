@@ -347,6 +347,10 @@ if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PR
 } else if (process.env.SIGNET_DB_OWNER_CLIENT_SMOKE) {
 	const dbPath = process.env.SIGNET_DB_OWNER_DB_PATH;
 	if (!dbPath) throw new Error("DB owner client smoke requires SIGNET_DB_OWNER_DB_PATH");
+	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/native-runtime-assets");
+	if (resolveEmbeddedWorkerPath("db-owner-worker") === null) {
+		throw new Error("DB owner client smoke requires embedded db-owner-worker asset");
+	}
 	const { createDbOwnerClient } = await import("../platform/daemon/src/db-owner-client");
 	const client = createDbOwnerClient({ dbPath });
 	try {
