@@ -8,12 +8,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import {
-	DbOwnerDiedError,
-	type DbOwnerClient,
-	type DbOwnerHealth,
-	type DbOwnerJobHandle,
-} from "./db-owner-client";
+import { DbOwnerDiedError, type DbOwnerClient, type DbOwnerHealth, type DbOwnerJobHandle } from "./db-owner-client";
 import { createDbOwnerClient } from "./db-owner-client";
 import type { DbOwnerParameter, DbOwnerRequest, DbOwnerStatement } from "./db-owner-protocol";
 import { DB_OWNER_MAX_RESULT_BYTES, DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
@@ -257,21 +252,21 @@ async function ensureCheckpoint(client: DbOwnerClient, key: string, deadlineMs: 
 		{
 			kind: "batch",
 			statements: [
-					runStatement(
-						`CREATE TABLE IF NOT EXISTS ${CHECKPOINT_TABLE} (
+				runStatement(
+					`CREATE TABLE IF NOT EXISTS ${CHECKPOINT_TABLE} (
 							job_key TEXT PRIMARY KEY,
 							cursor INTEGER NOT NULL DEFAULT 0,
 							processed INTEGER NOT NULL DEFAULT 0,
 							status TEXT NOT NULL DEFAULT 'running',
 							updated_at TEXT NOT NULL
 						)`,
-					),
-					runStatement(
-						`INSERT OR IGNORE INTO ${CHECKPOINT_TABLE} (job_key, cursor, processed, status, updated_at)
+				),
+				runStatement(
+					`INSERT OR IGNORE INTO ${CHECKPOINT_TABLE} (job_key, cursor, processed, status, updated_at)
 						 VALUES (?, 0, 0, 'running', ?)`,
-						[key, new Date().toISOString()],
-					),
-				],
+					[key, new Date().toISOString()],
+				),
+			],
 		},
 		"maintenance.fts.checkpoint.init",
 		deadlineMs,
@@ -415,7 +410,7 @@ async function backfillFts(client: DbOwnerClient, options: FtsBackfillOptions = 
 		const previousProcessed = checkpoint.processed;
 		await submit<readonly SqliteRunResult[]>(
 			client,
-			{ kind: "batch", batch: { statements } },
+			{ kind: "batch", statements },
 			"maintenance.fts.backfill.chunk",
 			chunkDeadlineMs,
 			chunkSize,
@@ -510,26 +505,26 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 				kind: "batch",
 				statements: [
 					runStatement("DROP TRIGGER IF EXISTS memories_ai"),
-						runStatement("DROP TRIGGER IF EXISTS memories_ad"),
-						runStatement("DROP TRIGGER IF EXISTS memories_au"),
-						runStatement("DROP TABLE IF EXISTS memories_fts"),
-						runStatement(
-							"CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61')",
-						),
-						runStatement(
-							"CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
-						),
-						runStatement(
-							"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END",
-						),
-						runStatement(
-							"CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
-						),
-						runStatement(
-							`INSERT OR REPLACE INTO ${CHECKPOINT_TABLE} (job_key, cursor, processed, status, updated_at) VALUES (?, 0, 0, 'running', ?)`,
-							[key, new Date().toISOString()],
-						),
-					],
+					runStatement("DROP TRIGGER IF EXISTS memories_ad"),
+					runStatement("DROP TRIGGER IF EXISTS memories_au"),
+					runStatement("DROP TABLE IF EXISTS memories_fts"),
+					runStatement(
+						"CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61')",
+					),
+					runStatement(
+						"CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
+					),
+					runStatement(
+						"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END",
+					),
+					runStatement(
+						"CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
+					),
+					runStatement(
+						`INSERT OR REPLACE INTO ${CHECKPOINT_TABLE} (job_key, cursor, processed, status, updated_at) VALUES (?, 0, 0, 'running', ?)`,
+						[key, new Date().toISOString()],
+					),
+				],
 			},
 			"maintenance.fts.rebuild.schema",
 			deadlineMs,

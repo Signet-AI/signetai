@@ -590,6 +590,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			queuedJobs: read.queuedJobs + maintenance.queuedJobs,
 			activeJobId: read.activeJobId ?? maintenance.activeJobId,
 			lastError: read.lastError ?? maintenance.lastError,
+			deadlineKills: read.deadlineKills + maintenance.deadlineKills,
 		};
 	}
 
