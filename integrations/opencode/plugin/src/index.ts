@@ -478,7 +478,8 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				if (!dynamicContext && !clockContext) return;
 				const textPart = [...message.parts].reverse().find((part) => part.type === "text");
 				if (textPart?.type !== "text") return;
-				const providerContent = composeApiUserContent(textPart.text, dynamicContext);
+				const normalizedText = stripInternalMemoryContext(stripAppendedClockContext(textPart.text)).trimEnd();
+				const providerContent = composeApiUserContent(normalizedText, dynamicContext);
 				textPart.text = appendClockContext(providerContent, clockContext);
 				return;
 			}

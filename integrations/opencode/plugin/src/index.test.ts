@@ -218,6 +218,39 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 		expect(replayedContent?.match(/Current date\/time:/g)).toHaveLength(1);
 	});
 
+	test("keeps provider-bound memory context idempotent on the real messageID path", async () => {
+		process.env.SIGNET_AGENT_ID = undefined;
+		installFetch();
+		const hooks = await createHooks();
+		const sessionID = "memory-context-replay";
+		const messageID = "memory-context-message";
+		const userText = "continue with the memory-backed task";
+
+		await hooks["chat.message"]({ sessionID, messageID }, { parts: [{ type: "text", text: userText }] });
+		const apiOutput = {
+			messages: [
+				{
+					info: { id: messageID, sessionID, role: "user" as const },
+					parts: [{ type: "text" as const, text: userText }],
+				},
+			],
+		};
+
+		await hooks["experimental.chat.messages.transform"]({}, apiOutput);
+		const firstProviderText = apiOutput.messages[0]?.parts[0]?.text;
+		expect(firstProviderText?.match(/Current date\/time:/g)).toHaveLength(1);
+		const memoryIndex = firstProviderText?.indexOf('<signet-memory source="api-context">') ?? -1;
+		const clockIndex = firstProviderText?.indexOf("<signet-clock-context>") ?? -1;
+		expect(memoryIndex).toBeGreaterThanOrEqual(0);
+		expect(clockIndex).toBeGreaterThan(memoryIndex);
+
+		for (let iteration = 0; iteration < 3; iteration += 1) {
+			await hooks["experimental.chat.messages.transform"]({}, apiOutput);
+			expect(apiOutput.messages[0]?.parts[0]?.text).toBe(firstProviderText);
+			expect(apiOutput.messages[0]?.parts[0]?.text.match(/Current date\/time:/g)).toHaveLength(1);
+		}
+	});
+
 	test("scrubs a memory fence before completed assistant text is exposed", async () => {
 		installFetch();
 		const hooks = await createHooks();
