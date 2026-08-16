@@ -129,8 +129,8 @@ describe("memory-lineage", () => {
 			minutesAgo: 1,
 		});
 
-		expect(purgeCanonicalNoiseSessionsOnce("default", "test cleanup")).toBe(1);
-		expect(purgeCanonicalNoiseSessionsOnce("default", "test cleanup")).toBe(0);
+		expect(await purgeCanonicalNoiseSessionsOnce("default", "test cleanup")).toBe(1);
+		expect(await purgeCanonicalNoiseSessionsOnce("default", "test cleanup")).toBe(0);
 	});
 
 	it("tombstones existing temp-session artifacts without touching real sessions", async () => {
@@ -145,7 +145,7 @@ describe("memory-lineage", () => {
 			minutesAgo: 2,
 		});
 
-		const removed = purgeCanonicalNoiseSessions("default", "test cleanup");
+		const removed = await purgeCanonicalNoiseSessions("default", "test cleanup");
 
 		expect(removed).toBe(1);
 
@@ -188,7 +188,7 @@ describe("memory-lineage", () => {
 		);
 		expect(existsSync(join(dir, row.source_path))).toBe(true);
 
-		expect(purgeCanonicalNoiseSessions("default", "test cleanup")).toBe(1);
+		expect(await purgeCanonicalNoiseSessions("default", "test cleanup")).toBe(1);
 		expect(existsSync(join(dir, row.source_path))).toBe(false);
 	});
 
@@ -298,7 +298,7 @@ describe("memory-lineage", () => {
 		expect(rows.count).toBe(1);
 	});
 
-	it("keeps canonical sessions when any artifact row carries a real project", () => {
+	it("keeps canonical sessions when any artifact row carries a real project", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -351,7 +351,7 @@ describe("memory-lineage", () => {
 			);
 		});
 
-		expect(purgeCanonicalNoiseSessions("default", "test cleanup")).toBe(0);
+		expect(await purgeCanonicalNoiseSessions("default", "test cleanup")).toBe(0);
 
 		const count = getDbAccessor().withReadDb(
 			(db) =>
@@ -1091,13 +1091,13 @@ describe("reindexMemoryArtifacts batch staging", () => {
 		expect(afterSecond).toEqual(afterFirst);
 	});
 
-	it("stamps corrupt pre-epoch mtimes as the index time, not the DOS-epoch sentinel (#1149)", () => {
+	it("stamps corrupt pre-epoch mtimes as the index time, not the DOS-epoch sentinel (#1149)", async () => {
 		// Regression for #1149: files whose mtime is the 1980 DOS-epoch
 		// sentinel (timestamp-stripping filesystems/sync layers) used to get
 		// captured_at = 1980, which no rolling `since` watermark can reach —
 		// the row was invisible to Dreaming forever. The index time must be
 		// stamped instead; the raw mtime still lands in source_mtime_ms.
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: "/vault/notes/sentinel.md",
 			sourceKind: "source_obsidian_markdown",
@@ -1120,7 +1120,7 @@ describe("reindexMemoryArtifacts batch staging", () => {
 		expect(sentinel.sourceMtimeMs).toBe(Date.parse("1980-01-01T06:00:00.000Z"));
 
 		// A real mtime is still stamped verbatim.
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: "/vault/notes/real.md",
 			sourceKind: "source_obsidian_markdown",

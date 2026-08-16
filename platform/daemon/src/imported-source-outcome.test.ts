@@ -27,12 +27,12 @@ describe("imported source outcomes", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("rolls back graph extraction and its durable outcome after an injected pre-commit crash across restart", () => {
+	it("rolls back graph extraction and its durable outcome after an injected pre-commit crash across restart", async () => {
 		const agentId = "import-outcome-test-agent";
 		const sourceId = "import:test";
 		const sourcePath = "imports/import:test/atomic.md";
 		const dbPath = join(dir, "memory", "memories.db");
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId,
 			sourceId,
 			sourcePath,

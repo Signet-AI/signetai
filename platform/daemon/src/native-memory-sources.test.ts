@@ -625,7 +625,7 @@ describe("native memory sources", () => {
 		const file = join(root, "memories", "memory_summary.md");
 		const content = "Codex remembered a persisted artifact row.\n";
 		writeFileSync(file, content);
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "agent-native",
 			sourcePath: file,
 			sourceKind: "native_memory_summary",

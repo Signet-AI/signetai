@@ -687,7 +687,7 @@ describe("hybridRecall", () => {
 	});
 
 	it("recalls imported source artifacts through the source-backed fallback", async () => {
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: "imports/source-csv/contacts.csv#rows-1-1",
 			sourceKind: "source_import_csv_chunk",
@@ -1383,7 +1383,7 @@ describe("hybridRecall", () => {
 		const codexMemoryPath = join(dir, "codex", "memories", "MEMORY.md");
 		mkdirSync(join(dir, "codex", "memories"), { recursive: true });
 		writeFileSync(codexMemoryPath, "# Codex Memory\n\nFiltered source fallback marker from native artifact.\n");
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: codexMemoryPath,
 			sourceKind: "native_memory_registry",
@@ -1644,7 +1644,7 @@ describe("hybridRecall", () => {
 		const codexMemoryPath = join(dir, "codex", "memories", "MEMORY.md");
 		mkdirSync(join(dir, "codex", "memories"), { recursive: true });
 		writeFileSync(codexMemoryPath, "# Codex Memory\n\nNicholai prefers portable memory across Hermes and Codex.\n");
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: codexMemoryPath,
 			sourceKind: "native_memory_registry",
@@ -1681,7 +1681,7 @@ describe("hybridRecall", () => {
 		const codexMemoryPath = join(dir, "codex", "automations", "smoke", "memory.md");
 		mkdirSync(join(dir, "codex", "automations", "smoke"), { recursive: true });
 		writeFileSync(codexMemoryPath, "# Codex Memory\n\nsoft deleted native bridge marker should not recall.\n");
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: codexMemoryPath,
 			sourceKind: "native_automation_memory",
@@ -1715,7 +1715,7 @@ describe("hybridRecall", () => {
 		const codexMemoryPath = join(dir, "codex", "memories", "MEMORY.md");
 		mkdirSync(join(dir, "codex", "memories"), { recursive: true });
 		writeFileSync(codexMemoryPath, "# Codex Memory\n\nSpoofed native provenance marker should not surface.\n");
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: codexMemoryPath,
 			sourceKind: "native_memory_registry",
@@ -1748,7 +1748,7 @@ describe("hybridRecall", () => {
 		const sourceId = `native:codex:native_memory_registry:${createHash("sha256").update(codexMemoryPath).digest("hex").slice(0, 16)}`;
 		mkdirSync(join(dir, "codex", "memories"), { recursive: true });
 		writeFileSync(codexMemoryPath, "# Codex Memory\n\nCodex remembered a duplicate native recall marker.\n");
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: codexMemoryPath,
 			sourceKind: "native_memory_registry",
@@ -1789,7 +1789,7 @@ describe("hybridRecall", () => {
 			const path = join(dir, "hermes", "profiles", profile, "memories", `${kind}.md`);
 			mkdirSync(dirname(path), { recursive: true });
 			writeFileSync(path, content);
-			indexExternalMemoryArtifact({
+			await indexExternalMemoryArtifact({
 				agentId: "default",
 				sourcePath: path,
 				sourceKind: kind,
@@ -1826,7 +1826,7 @@ describe("hybridRecall", () => {
 		const path = join(dir, "hermes", "memories", "MEMORY.md");
 		mkdirSync(join(dir, "hermes", "memories"), { recursive: true });
 		writeFileSync(path, content);
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: path,
 			sourceKind: "native_hermes_memory",
@@ -1888,7 +1888,7 @@ describe("hybridRecall", () => {
 		for (let i = 0; i < 6; i++) {
 			const file = join(root, `native-limit-${i}.md`);
 			writeFileSync(file, `# Codex Memory ${i}\n\nshared native bridge limit marker ${i}.\n`);
-			indexExternalMemoryArtifact({
+			await indexExternalMemoryArtifact({
 				agentId: "default",
 				sourcePath: file,
 				sourceKind: "native_rollout_summary",

@@ -31,10 +31,10 @@ describe("imported source lifecycle", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("removes searchable artifacts while preserving provenance for Dreaming review", () => {
+	it("removes searchable artifacts while preserving provenance for Dreaming review", async () => {
 		const sourceId = "source-import-1";
 		const agentId = "lifecycle-test-agent";
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId,
 			sourcePath: "imports/source-import-1/notes.json",
 			sourceKind: "source_import_json_projection",
@@ -242,12 +242,12 @@ describe("imported source lifecycle", () => {
 		).toEqual({ kind: "hygiene", subject_ref: `source:${sourceId}` });
 	});
 
-	it("keeps imported evidence and canonical embeddings retryable when vec cleanup fails", () => {
+	it("keeps imported evidence and canonical embeddings retryable when vec cleanup fails", async () => {
 		const sourceId = "source-import-vec-failure";
 		const agentId = "lifecycle-test-agent";
 		const otherAgentId = "other-agent";
 		const now = new Date().toISOString();
-		indexExternalMemoryArtifact({
+		await indexExternalMemoryArtifact({
 			agentId,
 			sourcePath: "imports/source-import-vec-failure/notes.json",
 			sourceKind: "source_import_json_projection",
