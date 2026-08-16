@@ -51,6 +51,39 @@ describe("DbAccessor", () => {
 		expect(readdirSync(join(dbPath, "..")).filter((name) => name.includes(".bak-v"))).toEqual([]);
 	});
 
+	test("keeps large deferred FTS backfills off the initialization path", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		initDbAccessor(dbPath);
+		closeDbAccessor();
+
+		const db = new Database(dbPath);
+		const insert = db.prepare(
+			`INSERT INTO memories (
+				id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+			) VALUES (?, ?, 'fact', 'default', 'global', datetime('now'), datetime('now'), 'test')`,
+		);
+		for (let index = 0; index < 10_000; index += 1) {
+			insert.run(`large-fts-memory-${index}`, `large deferred FTS corpus memory ${index}`);
+		}
+		db.exec("DROP TRIGGER memories_ai");
+		db.exec("DROP TRIGGER memories_ad");
+		db.exec("DROP TRIGGER memories_au");
+		db.exec("DROP TABLE memories_fts");
+		db.close();
+
+		const started = performance.now();
+		initDbAccessor(dbPath);
+		const elapsedMs = performance.now() - started;
+		const indexed = getDbAccessor().withReadDb(
+			(readDb) =>
+				(readDb.prepare("SELECT COUNT(*) AS count FROM memories_fts_docsize").get() as { count: number }).count,
+		);
+
+		expect(indexed).toBe(0);
+		expect(elapsedMs).toBeLessThan(2_000);
+	});
+
 	test("retains the pre-migration backup when migration fails", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));

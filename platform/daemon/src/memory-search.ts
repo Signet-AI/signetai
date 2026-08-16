@@ -685,6 +685,58 @@ function memorySupersessionSql(
 	return currentness.length > 0 ? ` AND ${currentness.join(" AND ")}` : "";
 }
 
+function lexicalFallbackTerms(keywordQuery: string): string[] {
+	return [
+		...new Set(
+			keywordQuery
+				.split(/\s+OR\s+|\s+/)
+				.map((term) => term.replace(/^"|"$/g, "").trim())
+				.filter((term) => term.length >= 2),
+		),
+	];
+}
+
+function ftsIndexIsIncomplete(db: ReadDb): boolean {
+	try {
+		const row = db
+			.prepare(
+				`SELECT 1 AS missing
+				 FROM memories AS m
+				 LEFT JOIN memories_fts_docsize AS f ON f.id = m.rowid
+				 WHERE m.is_deleted = 0 AND f.id IS NULL
+				 LIMIT 1`,
+			)
+			.get() as { missing?: unknown } | undefined;
+		return row != null;
+	} catch {
+		return true;
+	}
+}
+
+function readLexicalFallback(
+	db: ReadDb,
+	keywordQuery: string,
+	filter: FilterClause,
+	limit: number,
+): Array<{ id: string; matches: number }> {
+	const terms = lexicalFallbackTerms(keywordQuery);
+	if (terms.length === 0) return [];
+	const like = terms.map(() => "LOWER(m.content) LIKE ? ESCAPE '\\'");
+	const score = terms.map(() => "CASE WHEN LOWER(m.content) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END");
+	const args = terms.map((term) => `%${escapeLike(term.toLowerCase())}%`);
+	const match = terms.length <= 3 ? like.join(" AND ") : like.join(" OR ");
+	return prepareTypedStatement<{ id: string; matches: number }>(
+		db,
+		`SELECT m.id, (${score.join(" + ")}) AS matches
+		 FROM memories m
+		 WHERE (${match})
+		   AND m.is_deleted = 0
+		   ${memorySupersessionSql(db)}${filter.sql}
+		 ORDER BY matches DESC
+		 LIMIT ?`,
+	).all(...args, ...args, ...filter.args, limit);
+}
+
 /**
  * Lifecycle predicate for surfacing memories: deleted, superseded, and stale
  * rows must never reach a caller. Mirrors the gate `authorizeScoredCandidates`
@@ -1502,15 +1554,19 @@ export async function hybridRecall(
 	const bm25Map = new Map<string, number>();
 	const hintMap = new Map<string, number>();
 	const traversalEvidenceMap = new Map<string, number>();
+	let lexicalFallbackAttempted = false;
 	try {
 		timings.timeAsync("memory_fts", async () => {
 			if (keywordQuery.length === 0) return;
 			await getDbAccessor().withReadDbAsync(async (db) => {
 				// CROSS JOIN keeps SQLite from scanning memories first via
 				// low-selectivity filters before applying the FTS rowid match.
-				const ftsRows = prepareTypedStatement<{ id: string; raw_score: number }>(
-					db,
-					`
+				let ftsRows: Array<{ id: string; raw_score: number }> = [];
+				let ftsFailed = false;
+				try {
+					ftsRows = prepareTypedStatement<{ id: string; raw_score: number }>(
+						db,
+						`
         SELECT m.id, bm25(memories_fts) AS raw_score
         FROM memories_fts
         CROSS JOIN memories m ON memories_fts.rowid = m.rowid
@@ -1520,7 +1576,24 @@ export async function hybridRecall(
         ORDER BY raw_score
         LIMIT ?
       `,
-				).all(keywordQuery, ...filter.args, cfg.search.top_k);
+					).all(keywordQuery, ...filter.args, cfg.search.top_k);
+				} catch (error) {
+					ftsFailed = true;
+					logger.warn("memory", "FTS search failed; attempting lexical fallback", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+
+				if (ftsFailed || (ftsRows.length === 0 && ftsIndexIsIncomplete(db))) {
+					lexicalFallbackAttempted = true;
+					logger.warn("memory", "FTS index incomplete; using bounded LIKE lexical fallback");
+					const fallbackRows = readLexicalFallback(db, keywordQuery, filter, cfg.search.top_k);
+					const fallbackTermCount = Math.max(1, lexicalFallbackTerms(keywordQuery).length);
+					for (const row of fallbackRows) {
+						bm25Map.set(row.id, row.matches / fallbackTermCount);
+					}
+					return;
+				}
 
 				// Min-max normalize BM25 scores to [0,1] within the batch
 				const rawScores = ftsRows.map((r) => Math.abs(r.raw_score));
@@ -1533,6 +1606,14 @@ export async function hybridRecall(
 			});
 		});
 	} catch (e) {
+		if (lexicalFallbackAttempted) {
+			logger.error(
+				"memory",
+				"FTS search and lexical fallback failed; refusing silent empty recall",
+				e instanceof Error ? e : new Error(String(e)),
+			);
+			throw e;
+		}
 		logger.warn("memory", "FTS search failed, continuing with vector only", {
 			error: e instanceof Error ? e.message : String(e),
 		});

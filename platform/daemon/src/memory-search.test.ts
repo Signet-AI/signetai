@@ -325,6 +325,37 @@ describe("hybridRecall", () => {
 		}
 	});
 
+	it("returns lexical hits through the LIKE bridge while FTS backfill is deferred", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', 'global', ?, ?, 'test')`,
+			).run("deferred-fts-memory", "deferred startup lexical bridge", now, now);
+			db.exec("DELETE FROM memories_fts");
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "deferred startup lexical bridge",
+				keywordQuery: "deferred startup lexical bridge",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toContain("deferred-fts-memory");
+		expect(
+			getDbAccessor().withReadDb(
+				(db) => (db.prepare("SELECT COUNT(*) AS count FROM memories_fts_docsize").get() as { count: number }).count,
+			),
+		).toBe(0);
+	});
+
 	it("returns source-provenanced ontology claims as first-class recall results", async () => {
 		seedUnbackedOntologyClaim({
 			id: "attr-artbat-invoice",
