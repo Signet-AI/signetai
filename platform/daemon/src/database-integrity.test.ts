@@ -407,6 +407,57 @@ describe("deferred database integrity recovery (#1513)", () => {
 		}
 	});
 
+	it("does not pass profiler or inspector env to the telemetry repair child", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-repair-worker-env-"));
+		const dbPath = join(dir, "memory.db");
+		const markerPath = join(dir, "worker-env.json");
+		const workerPath = join(dir, "env-repair-worker.mjs");
+		const database = new Database(dbPath);
+		database.exec(
+			"CREATE TABLE telemetry_events (event TEXT); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event)",
+		);
+		database.close();
+		writeFileSync(
+			workerPath,
+			[
+				'import { writeFileSync } from "node:fs";',
+				`const keys = ["BUN_INSPECT", "BUN_OPTIONS", "NODE_OPTIONS", "SIGNET_INSPECTOR_HANDOFF", "SIGNET_INSPECTOR_PUBLIC", "SIGNET_INSPECTOR_PROXY_PUBLIC", "SIGNET_INSPECTOR_PROXY_TARGET"]; writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify(Object.fromEntries(keys.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]))));`,
+				'process.stdout.write(JSON.stringify({ ok: true }) + "\\n");',
+			].join("\n"),
+		);
+		const keys = [
+			"BUN_INSPECT",
+			"BUN_OPTIONS",
+			"NODE_OPTIONS",
+			"SIGNET_INSPECTOR_HANDOFF",
+			"SIGNET_INSPECTOR_PUBLIC",
+			"SIGNET_INSPECTOR_PROXY_PUBLIC",
+			"SIGNET_INSPECTOR_PROXY_TARGET",
+		] as const;
+		const previous = keys.map((key) => [key, process.env[key]] as const);
+		for (const key of keys) process.env[key] = `test-${key}`;
+		try {
+			const result = await repairTelemetryIndexes(
+				fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+				(db) => db.exec("audit"),
+				{
+					dbPath,
+					repairWorkerPath: workerPath,
+					repairRuntimePath: "node",
+					repairTimeoutMs: 5_000,
+				},
+			);
+			expect(result.state).toBe("repaired");
+			expect(JSON.parse(readFileSync(markerPath, "utf8"))).toEqual({});
+		} finally {
+			for (const [key, value] of previous) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("kills a synchronous scan at the deadline on a large fixture", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "integrity-large-"));
 		const dbPath = join(dir, "memory.db");

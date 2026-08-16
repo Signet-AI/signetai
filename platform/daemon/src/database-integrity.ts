@@ -44,6 +44,21 @@ export interface DatabaseIntegrityStatus {
 const UNKNOWN_CHECK: IntegrityCheckStatus = { ok: false, messages: ["not checked"] };
 const REPAIR_GUIDANCE =
 	"Stop the daemon, back up the database, and run the operator integrity repair flow before restarting.";
+const INTEGRITY_CHILD_ENV_KEYS = [
+	"BUN_INSPECT",
+	"BUN_OPTIONS",
+	"NODE_OPTIONS",
+	"SIGNET_INSPECTOR_HANDOFF",
+	"SIGNET_INSPECTOR_PUBLIC",
+	"SIGNET_INSPECTOR_PROXY_PUBLIC",
+	"SIGNET_INSPECTOR_PROXY_TARGET",
+] as const;
+
+function integrityChildEnv(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+	for (const key of INTEGRITY_CHILD_ENV_KEYS) delete env[key];
+	return env;
+}
 
 let latestStatus: DatabaseIntegrityStatus = {
 	checkedAt: "",
@@ -233,12 +248,11 @@ async function runKillableTelemetryRepair(
 	let child: ChildProcess | undefined;
 	try {
 		child = spawn(runtimePath ?? process.execPath, [scriptPath], {
-			env: {
-				...process.env,
+			env: integrityChildEnv({
 				SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
 				SIGNET_DATABASE_INTEGRITY_INDEXES: JSON.stringify(indexes),
 				SIGNET_DATABASE_INTEGRITY_REQUIRE_BASE: requireBase ?? fileURLToPath(import.meta.url),
-			},
+			}),
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		await new Promise<void>((resolve, reject) => {
@@ -399,20 +413,13 @@ async function runDeferredIntegrityCheckInternal(
 	let progressTimer: ReturnType<typeof setInterval> | undefined;
 
 	try {
-		const workerEnv: NodeJS.ProcessEnv = {
-			...process.env,
-			SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
-		};
 		// The integrity child must not inherit the daemon's inspector or
 		// profiler settings. In the profiling runbook BUN_INSPECT points at the
 		// daemon's private inspector port. The child then tries to bind the same
 		// port and exits before it can report its quick_check result.
-		delete workerEnv.BUN_INSPECT;
-		delete workerEnv.BUN_OPTIONS;
-		delete workerEnv.SIGNET_INSPECTOR_HANDOFF;
-		delete workerEnv.SIGNET_INSPECTOR_PUBLIC;
-		delete workerEnv.SIGNET_INSPECTOR_PROXY_PUBLIC;
-		delete workerEnv.SIGNET_INSPECTOR_PROXY_TARGET;
+		const workerEnv = integrityChildEnv({
+			SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
+		});
 		const child = spawn(process.execPath, workerArgs, {
 			env: workerEnv,
 			stdio: ["ignore", "pipe", "pipe"],

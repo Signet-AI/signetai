@@ -2325,80 +2325,93 @@ async function main() {
 	// Grace period: defer all background workers for 10s after startup so the
 	// event-loop monitor can calibrate and migrations can settle before any
 	// background write work piles on (#1059 thundering-herd prevention).
-	reportStartupGrace();
-	await startPipelineRuntime(memoryCfg, telemetryCollector);
-	logFdSnapshot("post-pipeline");
+	const startPostReadyRuntime = async (): Promise<void> => {
+		reportStartupGrace();
+		await startPipelineRuntime(memoryCfg, telemetryCollector);
+		logFdSnapshot("post-pipeline");
 
-	initCheckpointFlush(getDbAccessor());
+		initCheckpointFlush(getDbAccessor());
 
-	schedulerHandle = startSchedulerWorker(getDbAccessor());
-	if (!transcriptCaptureWorkerHandle) {
-		transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
-	}
-	if (!transcriptRecoveryWorkerHandle) {
-		transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(getDbAccessor(), AGENTS_DIR, resolveDaemonAgentId());
-	}
+		schedulerHandle = startSchedulerWorker(getDbAccessor());
+		if (!transcriptCaptureWorkerHandle) {
+			transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
+		}
+		if (!transcriptRecoveryWorkerHandle) {
+			transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(
+				getDbAccessor(),
+				AGENTS_DIR,
+				resolveDaemonAgentId(),
+			);
+		}
 
-	checkpointPruneTimer = setInterval(() => {
-		try {
-			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
-			if (cfg.enabled) {
-				pruneCheckpoints(getDbAccessor(), cfg.retentionDays);
+		checkpointPruneTimer = setInterval(() => {
+			try {
+				const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+				if (cfg.enabled) {
+					pruneCheckpoints(getDbAccessor(), cfg.retentionDays);
+				}
+			} catch (err) {
+				logger.warn("daemon", "Checkpoint pruning failed", {
+					error: err instanceof Error ? err.message : String(err),
+				});
 			}
-		} catch (err) {
-			logger.warn("daemon", "Checkpoint pruning failed", {
-				error: err instanceof Error ? err.message : String(err),
+		}, 3600_000);
+		setCheckpointPruneTimer(checkpointPruneTimer);
+
+		startGitSyncTimer();
+		initUpdateSystem(CURRENT_VERSION, AGENTS_DIR, (preferredExecutablePath) => {
+			if (resolveDaemonRestartMode() === "service-manager") {
+				logger.info("daemon", "Update installed; releasing lock for launchd KeepAlive restart");
+				setTimeout(() => {
+					requestShutdown("update:launchd-restart", 0, undefined, false);
+				}, 500);
+				return;
+			}
+
+			const daemonScript = process.argv[1] ?? "";
+			if (!daemonScript) {
+				logger.warn("daemon", "Cannot self-restart: process.argv[1] is empty, falling back to clean exit");
+				setTimeout(() => {
+					requestShutdown("update:no-self-restart", 0, undefined, false);
+				}, 500);
+				return;
+			}
+
+			logger.info("daemon", "Spawning replacement daemon process", {
+				execPath: preferredExecutablePath ?? process.execPath,
+				script: daemonScript,
 			});
-		}
-	}, 3600_000);
-	setCheckpointPruneTimer(checkpointPruneTimer);
 
-	startGitSyncTimer();
-	initUpdateSystem(CURRENT_VERSION, AGENTS_DIR, (preferredExecutablePath) => {
-		if (resolveDaemonRestartMode() === "service-manager") {
-			logger.info("daemon", "Update installed; releasing lock for launchd KeepAlive restart");
+			const replacement = spawn(preferredExecutablePath ?? process.execPath, [daemonScript], {
+				detached: true,
+				stdio: "ignore",
+				windowsHide: true,
+				env: {
+					...process.env,
+					SIGNET_PORT: String(PORT),
+					SIGNET_HOST: HOST,
+					SIGNET_BIND: BIND_HOST,
+					SIGNET_PATH: AGENTS_DIR,
+					SIGNET_DAEMON_ENTRYPOINT: "1",
+				},
+			});
+			replacement.unref();
+
+			logger.info("daemon", "Replacement daemon spawned, exiting current process");
 			setTimeout(() => {
-				requestShutdown("update:launchd-restart", 0, undefined, false);
+				requestShutdown("update:replacement-spawned", 0, undefined, false);
 			}, 500);
-			return;
-		}
-
-		const daemonScript = process.argv[1] ?? "";
-		if (!daemonScript) {
-			logger.warn("daemon", "Cannot self-restart: process.argv[1] is empty, falling back to clean exit");
-			setTimeout(() => {
-				requestShutdown("update:no-self-restart", 0, undefined, false);
-			}, 500);
-			return;
-		}
-
-		logger.info("daemon", "Spawning replacement daemon process", {
-			execPath: preferredExecutablePath ?? process.execPath,
-			script: daemonScript,
 		});
-
-		const replacement = spawn(preferredExecutablePath ?? process.execPath, [daemonScript], {
-			detached: true,
-			stdio: "ignore",
-			windowsHide: true,
-			env: {
-				...process.env,
-				SIGNET_PORT: String(PORT),
-				SIGNET_HOST: HOST,
-				SIGNET_BIND: BIND_HOST,
-				SIGNET_PATH: AGENTS_DIR,
-				SIGNET_DAEMON_ENTRYPOINT: "1",
-			},
+		initFeatureFlags(AGENTS_DIR);
+		startUpdateTimer();
+	};
+	setTimeout(() => {
+		void startPostReadyRuntime().catch((error) => {
+			logger.error("daemon", "Deferred pipeline runtime startup failed", undefined, {
+				error: error instanceof Error ? error.message : String(error),
+			});
 		});
-		replacement.unref();
-
-		logger.info("daemon", "Replacement daemon spawned, exiting current process");
-		setTimeout(() => {
-			requestShutdown("update:replacement-spawned", 0, undefined, false);
-		}, 500);
-	});
-	initFeatureFlags(AGENTS_DIR);
-	startUpdateTimer();
+	}, 30_000);
 
 	const REQUEST_BODY_LIMIT = 10 * 1_048_576;
 	const { createServer: nodeCreateServer } = await import("node:http");
@@ -2434,227 +2447,231 @@ async function main() {
 			port: info.port,
 		});
 		logger.info("daemon", "Daemon ready");
-		logFdSnapshot("server-ready");
-		writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
-		vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor());
-		void runDeferredIntegrityCheck(getDbAccessor(), MEMORY_DB, {
-			timeoutMs: 30_000,
-			owner: dbOwnerClient ?? undefined,
-			ownerAudit: (indexes, detectionMessages) => {
-				const auditId = createHash("sha256")
-					.update(JSON.stringify({ indexes, detectionMessages }))
-					.digest("hex")
-					.slice(0, 32);
-				return [
-					ownerRunStatement(
-						`INSERT OR IGNORE INTO memory_history
+		setTimeout(() => {
+			logFdSnapshot("server-ready");
+			writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
+			vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor());
+			void runDeferredIntegrityCheck(getDbAccessor(), MEMORY_DB, {
+				timeoutMs: 30_000,
+				owner: dbOwnerClient ?? undefined,
+				ownerAudit: (indexes, detectionMessages) => {
+					const auditId = createHash("sha256")
+						.update(JSON.stringify({ indexes, detectionMessages }))
+						.digest("hex")
+						.slice(0, 32);
+					return [
+						ownerRunStatement(
+							`INSERT OR IGNORE INTO memory_history
 						 (id, memory_id, event, old_content, new_content, changed_by, reason, metadata, created_at, actor_type)
 						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-						[
-							auditId,
-							"system",
-							"none",
-							null,
-							null,
-							"daemon",
-							"deferred database integrity repair",
-							JSON.stringify({ repairAction: "reindex-telemetry", indexes, detectionMessages }),
-							new Date().toISOString(),
-							"daemon",
-						],
-					),
-				];
-			},
-			audit: (db, indexes) => {
-				try {
-					insertHistoryEvent(db, {
-						memoryId: "system",
-						event: "none",
-						oldContent: null,
-						newContent: null,
-						changedBy: "daemon",
-						reason: "deferred database integrity repair",
-						metadata: JSON.stringify({ repairAction: "reindex-telemetry", indexes }),
-						createdAt: new Date().toISOString(),
-						actorType: "daemon",
-					});
-				} catch (error) {
-					if (process.env.SIGNET_ALLOW_UNAUDITED_TELEMETRY_REPAIR !== "1") throw error;
-					logger.error("startup-recovery", "Telemetry index repair committed without audit", undefined, {
-						error: error instanceof Error ? error.message : String(error),
-						indexes,
-					});
-				}
-			},
-		})
-			.then((status) => {
-				if (status.state === "corrupt" || status.state === "unavailable") {
-					logger.error("startup-recovery", "Database integrity failed after readiness", undefined, {
-						state: status.state,
-						phase: status.phase,
-						quickCheck: status.quickCheck.messages,
-						telemetryCheck: status.telemetryCheck.messages,
-						guidance:
-							"Stop the daemon, back up the database, and run the operator integrity repair flow before restarting.",
-					});
-				}
-			})
-			.catch((error) => {
-				logger.error("startup-recovery", "Deferred database integrity check rejected", error);
-			});
-
-		const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
-		try {
-			let previousVersion: string | null = null;
-			if (existsSync(healthStampPath)) {
-				const prev = JSON.parse(readFileSync(healthStampPath, "utf-8"));
-				previousVersion = typeof prev.version === "string" ? prev.version : null;
-			}
-			writeFileSync(
-				healthStampPath,
-				JSON.stringify({
-					version: CURRENT_VERSION,
-					startedAt: new Date().toISOString(),
-					pid: process.pid,
-				}),
-			);
-			if (previousVersion && previousVersion !== CURRENT_VERSION && CURRENT_VERSION !== "0.0.0") {
-				logger.info("daemon", `Upgraded from ${previousVersion} to ${CURRENT_VERSION}`, {
-					previousVersion,
-					currentVersion: CURRENT_VERSION,
-				});
-				logger.info(
-					"daemon",
-					"What's new: knowledge graph, session continuity, constellation entity overlay, predictive scorer (opt-in)",
-				);
-			}
-		} catch {}
-
-		importExistingMemoryFiles().catch((e) => {
-			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
-			logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
-		});
-		startMemoryImportPoller();
-		startStaleSessionSweeper();
-		startAcpDeliveryReconciliation();
-
-		if (!nativeMemoryBridge) {
-			const startupSourceJobs = new Map<string, string>();
-			for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
-				if (!source.enabled || source.kind !== "obsidian") continue;
-				// Startup indexing is asynchronous; keep its lifecycle write in the shutdown drain.
-				void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
-				const job = beginSourceIndexJob(source.id, "source-startup");
-				startupSourceJobs.set(source.id, job.id);
-				markSourceIndexInFlight(source.id);
-				markSourceIndexJobRunning(source.id, job.id);
-			}
-			nativeMemoryBridge = startNativeMemoryBridge(configuredNativeMemorySources(AGENTS_DIR), {
-				agentsDir: AGENTS_DIR,
-				includeConfiguredSources: true,
-				pollIntervalMs: 10_000,
-				sourceCleanupEnabled: true,
-				shouldCleanupSource: (source) => source.harness !== "obsidian",
-				sourceGraphEnabled: false,
-				...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
-				onFileIndexed: (event) => {
-					const sourceId = event.source.sourceId;
-					if (!sourceId) return;
-					const jobId = startupSourceJobs.get(sourceId);
-					if (!jobId) return;
-					updateSourceIndexJobProgress(sourceId, jobId, {
-						scanned: event.scanned,
-						total: event.total,
-						indexed: event.changed,
-						currentPath: event.filePath,
-						statusMessage: event.status,
-					});
+							[
+								auditId,
+								"system",
+								"none",
+								null,
+								null,
+								"daemon",
+								"deferred database integrity repair",
+								JSON.stringify({ repairAction: "reindex-telemetry", indexes, detectionMessages }),
+								new Date().toISOString(),
+								"daemon",
+							],
+						),
+					];
 				},
-			});
-			nativeMemoryBridge
-				.syncExisting()
-				.then(() => {
-					for (const [sourceId, jobId] of startupSourceJobs) {
-						completeSourceIndexJobFromProgress(sourceId, jobId);
-						const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
-						const job = getSourceIndexJob(sourceId);
-						if (source) {
-							// Index completion is intentionally fire-and-forget, but tracked until shutdown.
-							void trackSourceLifecycleWrite(
-								recordSourceIndexOperation({
-									source,
-									agentId: resolveDaemonAgentId(),
-									discovered: job?.scanned ?? 0,
-									accepted: job?.indexed ?? 0,
-									durationMs:
-										job?.startedAt && job.finishedAt
-											? Math.max(0, Date.parse(job.finishedAt) - Date.parse(job.startedAt))
-											: 0,
-									outcome: "success",
-								}),
-							);
-						}
+				audit: (db, indexes) => {
+					try {
+						insertHistoryEvent(db, {
+							memoryId: "system",
+							event: "none",
+							oldContent: null,
+							newContent: null,
+							changedBy: "daemon",
+							reason: "deferred database integrity repair",
+							metadata: JSON.stringify({ repairAction: "reindex-telemetry", indexes }),
+							createdAt: new Date().toISOString(),
+							actorType: "daemon",
+						});
+					} catch (error) {
+						if (process.env.SIGNET_ALLOW_UNAUDITED_TELEMETRY_REPAIR !== "1") throw error;
+						logger.error("startup-recovery", "Telemetry index repair committed without audit", undefined, {
+							error: error instanceof Error ? error.message : String(error),
+							indexes,
+						});
+					}
+				},
+			})
+				.then((status) => {
+					if (status.state === "corrupt" || status.state === "unavailable") {
+						logger.error("startup-recovery", "Database integrity failed after readiness", undefined, {
+							state: status.state,
+							phase: status.phase,
+							quickCheck: status.quickCheck.messages,
+							telemetryCheck: status.telemetryCheck.messages,
+							guidance:
+								"Stop the daemon, back up the database, and run the operator integrity repair flow before restarting.",
+						});
 					}
 				})
-				.catch((e) => {
-					for (const [sourceId, jobId] of startupSourceJobs) {
-						const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
-						const job = getSourceIndexJob(sourceId);
-						if (source) {
-							// Failed indexing follows the same tracked best-effort shutdown path.
-							void trackSourceLifecycleWrite(
-								recordSourceIndexOperation({
-									source,
-									agentId: resolveDaemonAgentId(),
-									discovered: job?.scanned ?? 0,
-									accepted: job?.indexed ?? 0,
-									failed: 1,
-									durationMs: job?.startedAt ? Math.max(0, Date.now() - Date.parse(job.startedAt)) : 0,
-									outcome: (job?.indexed ?? 0) > 0 ? "partial" : "failed",
-									failureClass: sourceFailureClass(e),
-									searchable: (job?.indexed ?? 0) > 0,
-								}),
-							);
-						}
-						failSourceIndexJob(sourceId, jobId, e);
-					}
-					const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
-					logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
-				})
-				.finally(() => {
-					for (const sourceId of startupSourceJobs.keys()) clearSourceIndexInFlight(sourceId);
+				.catch((error) => {
+					logger.error("startup-recovery", "Deferred database integrity check rejected", error);
 				});
-		}
 
-		const startupCfg = loadMemoryConfig(AGENTS_DIR);
-		if (startupCfg.embedding.provider !== "none") {
-			checkEmbeddingProvider(startupCfg.embedding)
-				.then((embeddingStatus) => {
-					if (!embeddingStatus.available) {
-						logger.warn(
-							"daemon",
-							`Embedding provider '${startupCfg.embedding.provider}' is unavailable: ${embeddingStatus.error ?? "unknown error"}`,
-						);
-						logger.warn(
-							"daemon",
-							"Vector search and memory embeddings will not work until this is resolved. Run 'signet sync' or reconfigure with 'signet setup'.",
-						);
-					} else if (embeddingStatus.error) {
-						logger.warn("daemon", `Embedding provider using fallback: ${embeddingStatus.error}`);
-					} else {
-						logger.info(
-							"daemon",
-							`Embedding provider '${startupCfg.embedding.provider}' is ready (model: ${startupCfg.embedding.model})`,
-						);
-					}
-				})
-				.catch((e) => {
-					logger.warn(
+			const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
+			try {
+				let previousVersion: string | null = null;
+				if (existsSync(healthStampPath)) {
+					const prev = JSON.parse(readFileSync(healthStampPath, "utf-8"));
+					previousVersion = typeof prev.version === "string" ? prev.version : null;
+				}
+				writeFileSync(
+					healthStampPath,
+					JSON.stringify({
+						version: CURRENT_VERSION,
+						startedAt: new Date().toISOString(),
+						pid: process.pid,
+					}),
+				);
+				if (previousVersion && previousVersion !== CURRENT_VERSION && CURRENT_VERSION !== "0.0.0") {
+					logger.info("daemon", `Upgraded from ${previousVersion} to ${CURRENT_VERSION}`, {
+						previousVersion,
+						currentVersion: CURRENT_VERSION,
+					});
+					logger.info(
 						"daemon",
-						`Embedding provider health check failed: ${e instanceof Error ? e.message : String(e)}`,
+						"What's new: knowledge graph, session continuity, constellation entity overlay, predictive scorer (opt-in)",
 					);
-				});
-		}
+				}
+			} catch {}
+
+			importExistingMemoryFiles().catch((e) => {
+				const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+				logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
+			});
+			startMemoryImportPoller();
+			startStaleSessionSweeper();
+			startAcpDeliveryReconciliation();
+
+			setTimeout(() => {
+				if (!nativeMemoryBridge) {
+					const startupSourceJobs = new Map<string, string>();
+					for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
+						if (!source.enabled || source.kind !== "obsidian") continue;
+						// Startup indexing is asynchronous; keep its lifecycle write in the shutdown drain.
+						void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
+						const job = beginSourceIndexJob(source.id, "source-startup");
+						startupSourceJobs.set(source.id, job.id);
+						markSourceIndexInFlight(source.id);
+						markSourceIndexJobRunning(source.id, job.id);
+					}
+					nativeMemoryBridge = startNativeMemoryBridge(configuredNativeMemorySources(AGENTS_DIR), {
+						agentsDir: AGENTS_DIR,
+						includeConfiguredSources: true,
+						pollIntervalMs: 10_000,
+						sourceCleanupEnabled: true,
+						shouldCleanupSource: (source) => source.harness !== "obsidian",
+						sourceGraphEnabled: false,
+						...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
+						onFileIndexed: (event) => {
+							const sourceId = event.source.sourceId;
+							if (!sourceId) return;
+							const jobId = startupSourceJobs.get(sourceId);
+							if (!jobId) return;
+							updateSourceIndexJobProgress(sourceId, jobId, {
+								scanned: event.scanned,
+								total: event.total,
+								indexed: event.changed,
+								currentPath: event.filePath,
+								statusMessage: event.status,
+							});
+						},
+					});
+					nativeMemoryBridge
+						.syncExisting()
+						.then(() => {
+							for (const [sourceId, jobId] of startupSourceJobs) {
+								completeSourceIndexJobFromProgress(sourceId, jobId);
+								const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
+								const job = getSourceIndexJob(sourceId);
+								if (source) {
+									// Index completion is intentionally fire-and-forget, but tracked until shutdown.
+									void trackSourceLifecycleWrite(
+										recordSourceIndexOperation({
+											source,
+											agentId: resolveDaemonAgentId(),
+											discovered: job?.scanned ?? 0,
+											accepted: job?.indexed ?? 0,
+											durationMs:
+												job?.startedAt && job.finishedAt
+													? Math.max(0, Date.parse(job.finishedAt) - Date.parse(job.startedAt))
+													: 0,
+											outcome: "success",
+										}),
+									);
+								}
+							}
+						})
+						.catch((e) => {
+							for (const [sourceId, jobId] of startupSourceJobs) {
+								const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
+								const job = getSourceIndexJob(sourceId);
+								if (source) {
+									// Failed indexing follows the same tracked best-effort shutdown path.
+									void trackSourceLifecycleWrite(
+										recordSourceIndexOperation({
+											source,
+											agentId: resolveDaemonAgentId(),
+											discovered: job?.scanned ?? 0,
+											accepted: job?.indexed ?? 0,
+											failed: 1,
+											durationMs: job?.startedAt ? Math.max(0, Date.now() - Date.parse(job.startedAt)) : 0,
+											outcome: (job?.indexed ?? 0) > 0 ? "partial" : "failed",
+											failureClass: sourceFailureClass(e),
+											searchable: (job?.indexed ?? 0) > 0,
+										}),
+									);
+								}
+								failSourceIndexJob(sourceId, jobId, e);
+							}
+							const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+							logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
+						})
+						.finally(() => {
+							for (const sourceId of startupSourceJobs.keys()) clearSourceIndexInFlight(sourceId);
+						});
+				}
+			}, 30_000);
+
+			const startupCfg = loadMemoryConfig(AGENTS_DIR);
+			if (startupCfg.embedding.provider !== "none") {
+				checkEmbeddingProvider(startupCfg.embedding)
+					.then((embeddingStatus) => {
+						if (!embeddingStatus.available) {
+							logger.warn(
+								"daemon",
+								`Embedding provider '${startupCfg.embedding.provider}' is unavailable: ${embeddingStatus.error ?? "unknown error"}`,
+							);
+							logger.warn(
+								"daemon",
+								"Vector search and memory embeddings will not work until this is resolved. Run 'signet sync' or reconfigure with 'signet setup'.",
+							);
+						} else if (embeddingStatus.error) {
+							logger.warn("daemon", `Embedding provider using fallback: ${embeddingStatus.error}`);
+						} else {
+							logger.info(
+								"daemon",
+								`Embedding provider '${startupCfg.embedding.provider}' is ready (model: ${startupCfg.embedding.model})`,
+							);
+						}
+					})
+					.catch((e) => {
+						logger.warn(
+							"daemon",
+							`Embedding provider health check failed: ${e instanceof Error ? e.message : String(e)}`,
+						);
+					});
+			}
+		}, 30_000);
 	};
 
 	bindWithRetry({
