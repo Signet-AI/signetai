@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DbOwnerClient, DbOwnerJobHandle, DbOwnerSubmitOptions } from "./db-owner-client";
+import type { DbOwnerRequest } from "./db-owner-protocol";
 import type { RecallParams, RecallResponse } from "./memory-search";
 
 /*
@@ -27,7 +29,12 @@ mkdirSync(join(tmpDir, ".daemon"), { recursive: true });
 writeFileSync(join(tmpDir, ".daemon", "auth-secret"), "test-secret-key-32-bytes-min!!");
 writeFileSync(
 	join(tmpDir, "agent.yaml"),
-	`auth:
+	`memory:
+  pipelineV2:
+    reranker:
+      enabled: true
+      useExtractionModel: true
+auth:
   mode: team
   rateLimits:
     forget:
@@ -107,6 +114,69 @@ describe("auth guard co-location", () => {
 	}
 
 	describe("memory routes have own guards", () => {
+		function rejectingRecallOwner(error: Error): DbOwnerClient {
+			return {
+				start: async () => {},
+				submit<Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> {
+					return {
+						job: {
+							id: "test-recall-job",
+							operation: options.operation,
+							lane: options.lane,
+							enqueuedAt: 0,
+							deadlineAt: options.deadlineMs,
+							estimatedWorkUnits: options.estimatedWorkUnits ?? 1,
+							cancellation: "pending",
+							request,
+						},
+						result: Promise.reject(error),
+						cancel: () => {},
+					};
+				},
+				awaitResult<Result>(handle: DbOwnerJobHandle<Result>): Promise<Result> {
+					return handle.result;
+				},
+				cancel: () => {},
+				health: () => ({
+					state: "ready",
+					pid: null,
+					generation: 1,
+					queuedJobs: 0,
+					activeJobId: null,
+					lastError: null,
+					deadlineKills: 0,
+				}),
+				close: async () => {},
+			};
+		}
+
+		it("maps configured reranker provider-down failures to HTTP 503 through recall routes", async () => {
+			const state = await import("./routes/state.js");
+			const { Hono } = await import("hono");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode recall test");
+			const token = createToken(secret, { sub: "reranker-recall", role: "readonly", scope: {} }, 60);
+
+			const app = new Hono();
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerMemoryRoutes(app, {
+				recallOwner: rejectingRecallOwner(new Error("configured reranker provider unavailable")),
+			});
+			const response = await app.request("/api/memory/recall", {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ query: "provider down" }),
+			});
+
+			expect(response.status).toBe(503);
+			expect(await response.json()).toEqual({ error: "Recall failed", results: [] });
+		});
+
 		it("POST /api/memory/remember returns 403 without auth", async () => {
 			const app = await makeApp();
 			const { registerMemoryRoutes } = await import("./routes/memory-routes");

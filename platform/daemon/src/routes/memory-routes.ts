@@ -685,6 +685,10 @@ function normalizeRouteFailure(status: number): PipelineCauseFamily {
 	return status === 500 ? "internal_error" : normalizePipelineCause({ status });
 }
 
+function recallFailureStatus(error: unknown): 500 | 503 {
+	return normalizePipelineCause(error) === "provider_unavailable" ? 503 : 500;
+}
+
 async function responseOperationSummary(
 	response: Response,
 ): Promise<{ readonly deduped: boolean; readonly accepted?: number }> {
@@ -3443,7 +3447,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const recallSurface = normalizeRecallSurface(body.recallSurface, "explicit_api");
 			if (recallAttempted) recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 			logger.error("memory", "Recall failed", e as Error);
-			return c.json({ error: "Recall failed", results: [] }, 500);
+			return c.json({ error: "Recall failed", results: [] }, recallFailureStatus(e));
 		}
 	});
 
@@ -3526,7 +3530,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		} catch (e) {
 			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
 			logger.error("memory", "Search (recall alias) failed", e as Error);
-			return c.json({ error: "Recall failed", results: [] }, 500);
+			return c.json({ error: "Recall failed", results: [] }, recallFailureStatus(e));
 		}
 	});
 
