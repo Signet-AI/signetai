@@ -42,7 +42,8 @@ routes on this runtime and only expose `/json/version`.
 
 The current Bun runtime exposes the inspector WebSocket for runtime attachment,
 but it does not expose the CDP `Profiler` domain. Use Bun's built-in sampling
-profiler instead. `BUN_OPTIONS` is inherited by the daemon child and writes a
+profiler instead. `BUN_OPTIONS` is forwarded through the Linux transient
+`systemd-run --user` service boundary to the daemon child and writes a
 Chrome-compatible `.cpuprofile` when the daemon exits:
 
 ```bash

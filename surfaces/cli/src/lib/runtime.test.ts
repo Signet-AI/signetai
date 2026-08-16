@@ -184,6 +184,20 @@ describe("buildSystemdDaemonStartArgs", () => {
 		expect(args).toContain("--setenv=BUN_INSPECT=127.0.0.1:9230");
 	});
 
+	it("forwards Bun runtime options through the transient service boundary", () => {
+		const args = buildSystemdDaemonStartArgs({
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+			bunOptions: "--cpu-prof --cpu-prof-dir=/tmp/signet-profile",
+		});
+
+		expect(args).toContain("--setenv=BUN_OPTIONS=--cpu-prof --cpu-prof-dir=/tmp/signet-profile");
+	});
+
 	it("forwards only allowlisted telemetry variables through service-manager boundaries", () => {
 		const input = {
 			daemonPath: "/opt/signet/dist/daemon.js",

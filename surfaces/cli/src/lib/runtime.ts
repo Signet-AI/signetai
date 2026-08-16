@@ -946,6 +946,8 @@ export interface DaemonStartArgsInput {
 	// The parent CLI forwards this only when it is not already a Bun process.
 	// A Bun parent has already bound BUN_INSPECT before this code runs.
 	readonly bunInspect?: string;
+	/** Forward Bun runtime options through service-manager boundaries. */
+	readonly bunOptions?: string;
 	/** Source environment for the allowlisted telemetry variables below. */
 	readonly telemetryEnv?: NodeJS.ProcessEnv;
 }
@@ -1052,6 +1054,7 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		`--setenv=SIGNET_PATH=${input.agentsDir}`,
 		"--setenv=SIGNET_DAEMON_ENTRYPOINT=1",
 		`--setenv=BUN_INSPECT=${input.bunInspect ?? ""}`,
+		`--setenv=BUN_OPTIONS=${input.bunOptions ?? ""}`,
 		...Object.entries(resolveTelemetryEnvironment(input.telemetryEnv ?? process.env)).map(
 			([key, value]) => `--setenv=${key}=${value}`,
 		),
@@ -1495,6 +1498,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 			startupLogPath,
 			unitName: systemdUnitName,
 			bunInspect: inspectorForwarding.childInspector,
+			bunOptions: process.env.BUN_OPTIONS,
 			telemetryEnv: process.env,
 		});
 		const result = spawnSync("systemd-run", systemdArgs, {
