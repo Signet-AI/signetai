@@ -1,6 +1,12 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import type { DaemonFetch, DaemonFetchFailure, DaemonFetchResult } from "../lib/daemon.js";
+import type { DaemonFetch, DaemonFetchFailure, DaemonFetchResult, DaemonStreamResult } from "../lib/daemon.js";
+import {
+	createDreamingAttachTui,
+	DreamingAttachError,
+	DreamingAttachView,
+	followDreamingPass,
+} from "../lib/dream-attach.js";
 
 interface DreamDeps {
 	readonly fetchFromDaemon: DaemonFetch;
@@ -8,6 +14,7 @@ interface DreamDeps {
 		path: string,
 		opts?: RequestInit & { timeout?: number },
 	) => Promise<DaemonFetchResult<T>>;
+	readonly fetchDaemonStream?: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 	/** Poll cadence for `dream trigger` (test seams; defaults match production). */
 	readonly pollIntervalMs?: number;
 	readonly minWaitMs?: number;
@@ -51,6 +58,15 @@ interface DreamStatus {
 		readonly backfillOnFirstRun: boolean;
 	};
 	readonly passes: readonly DreamPass[];
+}
+
+interface ActiveDreamPass extends DreamPass {
+	readonly agentId: string;
+}
+
+interface ActiveDreamingResponse {
+	readonly agentId: string;
+	readonly items: readonly ActiveDreamPass[];
 }
 
 interface TriggerAccepted {
@@ -249,6 +265,93 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 				}
 			}
 			console.log();
+		});
+
+	dream
+		.command("attach")
+		.description("Attach a read-only live view to a running Dreaming pass (Ctrl+V toggles raw mode; Ctrl+C detaches)")
+		.option("--pass-id <id>", "Explicit Dreaming pass id when more than one pass is active")
+		.action(async (options: { passId?: string }) => {
+			let passId = options.passId?.trim() || undefined;
+			if (!passId) {
+				const activeResult = await deps.fetchDaemonResult<ActiveDreamingResponse>("/api/dream/passes/active");
+				if (!activeResult.ok) {
+					if (activeResult.reason === "http" && activeResult.error) {
+						console.error(chalk.red(`Failed to find an active Dreaming pass: ${activeResult.error}`));
+					} else {
+						reportDaemonUnavailable(activeResult.reason, activeResult.status, "Failed to find an active Dreaming pass");
+					}
+					process.exit(1);
+					return;
+				}
+				if (activeResult.data.items.length === 0) {
+					console.error(chalk.yellow("No Dreaming pass is currently active."));
+					console.error(chalk.dim("  Run `signet dream status` to inspect recent passes."));
+					process.exit(1);
+					return;
+				}
+				if (activeResult.data.items.length > 1) {
+					console.error(chalk.yellow("Multiple Dreaming passes are active; choose one with --pass-id:"));
+					for (const pass of activeResult.data.items) {
+						console.error(`  ${pass.id}  agent=${pass.agentId}  mode=${pass.mode}  started=${pass.startedAt}`);
+					}
+					process.exit(1);
+					return;
+				}
+				passId = activeResult.data.items[0]?.id;
+			}
+			if (!passId) {
+				console.error(chalk.red("No Dreaming pass id was selected."));
+				process.exit(1);
+				return;
+			}
+			if (!deps.fetchDaemonStream) {
+				console.error(chalk.red("Live Dreaming attach is unavailable in this CLI build."));
+				process.exit(1);
+				return;
+			}
+			if (!process.stdin.isTTY || !process.stdout.isTTY) {
+				console.error(chalk.red("`signet dream attach` requires an interactive terminal."));
+				console.error(chalk.dim("  Use `signet dream status` for a non-interactive snapshot."));
+				process.exit(1);
+				return;
+			}
+
+			const abortController = new AbortController();
+			const detach = () => abortController.abort();
+			let requestRender = () => {};
+			const liveView = new DreamingAttachView(detach, () => requestRender());
+			const ui = createDreamingAttachTui(liveView);
+			requestRender = () => ui.tui.requestRender();
+			const onSignal = () => abortController.abort();
+			process.once("SIGINT", onSignal);
+			process.once("SIGTERM", onSignal);
+			try {
+				ui.tui.start();
+				await followDreamingPass({
+					passId,
+					fetchStream: deps.fetchDaemonStream,
+					view: liveView,
+					signal: abortController.signal,
+				});
+			} catch (error) {
+				if (!abortController.signal.aborted) {
+					const message =
+						error instanceof DreamingAttachError
+							? error.message
+							: error instanceof Error
+								? error.message
+								: String(error);
+					console.error(chalk.red(`Dreaming attach failed: ${message}`));
+					process.exitCode = 1;
+				}
+			} finally {
+				abortController.abort();
+				process.removeListener("SIGINT", onSignal);
+				process.removeListener("SIGTERM", onSignal);
+				ui.tui.stop();
+				await ui.terminal.drainInput(1_000, 50).catch(() => undefined);
+			}
 		});
 
 	dream

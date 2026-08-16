@@ -20,6 +20,8 @@ import {
 	getDreamingEpisodicTokenBacklog,
 	getDreamingEvidenceExclusions,
 	getDreamingPasses,
+	getDreamingPass,
+	getActiveDreamingPasses,
 	getDreamingQualityReport,
 	getDreamingState,
 	getDreamingToolCalls,
@@ -28,6 +30,11 @@ import {
 	getPipelineWorkerStatus,
 	requestDreamingEvidenceRequeue,
 } from "../pipeline";
+import {
+	DREAMING_LIVE_HEARTBEAT_MS,
+	dreamingLiveEvents,
+	type DreamingLiveEvent,
+} from "../pipeline/dreaming-live-events";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
@@ -210,6 +217,35 @@ function resolveScopedDreamAgent(
 ): { readonly agentId: string; readonly error?: string } {
 	return resolveScopedAgentId(c, requestedDreamAgentId(c, body), resolveDaemonAgentId());
 }
+
+function parseDreamingCursor(value: string | undefined): number | null | "invalid" {
+	if (value === undefined || value.trim() === "") return null;
+	if (!/^\d+$/.test(value.trim())) return "invalid";
+	const cursor = Number.parseInt(value, 10);
+	return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : "invalid";
+}
+
+function sseEncode(eventName: string, data: unknown, cursor?: number): Uint8Array {
+	const id = cursor === undefined ? "" : `id: ${cursor}\n`;
+	return new TextEncoder().encode(`${id}event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function isTerminalDreamingEvent(event: DreamingLiveEvent): boolean {
+	return event.type === "pass_completed" || event.type === "pass_failed";
+}
+
+function dreamingEventForTransport(event: DreamingLiveEvent, verbose: boolean): DreamingLiveEvent {
+	if (verbose) return event;
+	if (event.type === "thinking_delta") return { ...event, data: { redacted: true } };
+	if (!("raw" in event.data)) return event;
+	const { raw: _raw, ...conciseData } = event.data;
+	return { ...event, data: conciseData };
+}
+
+// A ReadableStream will otherwise keep accepting chunks while a client is
+// paused. Closing a full stream lets the viewer reconnect from its last SSE id
+// instead of allowing one slow terminal to accumulate an unbounded queue.
+const DREAMING_LIVE_STREAM_QUEUE_SIZE = 64;
 
 async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
 	if (pipelineTransition) {
@@ -687,10 +723,10 @@ export function registerPipelineRoutes(app: Hono): void {
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const agentId = scopedAgent.agentId;
 
-		const state = getDreamingState(accessor, agentId);
+		const state = await getDreamingState(accessor, agentId);
 		const episodicTokensPending = await getDreamingEpisodicTokenBacklog(accessor, agentId);
-		const passes = getDreamingPasses(accessor, agentId, 10);
-		const exclusions = getDreamingEvidenceExclusions(accessor, agentId);
+		const passes = await getDreamingPasses(accessor, agentId, 10);
+		const exclusions = await getDreamingEvidenceExclusions(accessor, agentId);
 		const attention = getDreamingAttention(accessor, agentId);
 		const worker = getDreamingWorker();
 
@@ -717,11 +753,155 @@ export function registerPipelineRoutes(app: Hono): void {
 		});
 	});
 
+	/** List active passes for read-only attach selection in one agent scope. */
+	app.get("/api/dream/passes/active", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		return c.json({
+			agentId: scopedAgent.agentId,
+			items: await getActiveDreamingPasses(getDbAccessor(), scopedAgent.agentId),
+		});
+	});
+
+	/**
+	 * Stream one scoped Dreaming pass. The stream is observation-only: it has
+	 * no request body and no action that can steer, abort, or retry the pass.
+	 */
+	app.get("/api/dream/passes/:passId/events", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const passId = c.req.param("passId").trim();
+		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
+		const pass = await getDreamingPass(getDbAccessor(), scopedAgent.agentId, passId);
+		if (!pass) return c.json({ error: "Dreaming pass not found" }, 404);
+
+		const cursorValue = c.req.query("after") ?? c.req.header("last-event-id");
+		const afterCursor = parseDreamingCursor(cursorValue);
+		if (afterCursor === "invalid") return c.json({ error: "after/Last-Event-ID must be a non-negative integer" }, 400);
+		const verbose = c.req.query("verbose") === "1" || c.req.query("verbose") === "true";
+
+		dreamingLiveEvents.ensurePass({
+			passId: pass.id,
+			agentId: pass.agentId,
+			mode: pass.mode,
+			startedAt: pass.startedAt,
+			status: pass.status,
+			completedAt: pass.completedAt,
+			summary: pass.summary,
+			error: pass.error,
+		});
+
+		const encoder = new TextEncoder();
+		let closed = false;
+		let heartbeat: ReturnType<typeof setInterval> | undefined;
+		let subscription: ReturnType<typeof dreamingLiveEvents.subscribe> | null = null;
+		let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+		const requestSignal = c.req.raw.signal;
+		const close = (): void => {
+			if (closed) return;
+			closed = true;
+			if (heartbeat) clearInterval(heartbeat);
+			subscription?.unsubscribe();
+			requestSignal.removeEventListener("abort", close);
+			try {
+				controllerRef?.close();
+			} catch {
+				// The client may already have cancelled the stream.
+			}
+		};
+		const write = (eventName: string, data: unknown, cursor?: number): void => {
+			if (closed || !controllerRef) return;
+			if (controllerRef.desiredSize !== null && controllerRef.desiredSize <= 0) {
+				close();
+				return;
+			}
+			try {
+				controllerRef.enqueue(sseEncode(eventName, data, cursor));
+			} catch {
+				close();
+			}
+		};
+
+		const stream = new ReadableStream<Uint8Array>(
+			{
+				start(controller) {
+					controllerRef = controller;
+					requestSignal.addEventListener("abort", close, { once: true });
+					if (requestSignal.aborted) {
+						close();
+						return;
+					}
+					const writeLiveEvent = (event: DreamingLiveEvent): void => {
+						const transported = dreamingEventForTransport(event, verbose);
+						write(transported.type, transported, transported.cursor);
+						if (isTerminalDreamingEvent(event)) close();
+					};
+					try {
+						subscription = dreamingLiveEvents.subscribe(passId, afterCursor, (event) => {
+							writeLiveEvent(event);
+						});
+					} catch (error) {
+						write("error", { error: error instanceof Error ? error.message : String(error) });
+						close();
+						return;
+					}
+					if (!subscription) {
+						write("error", { error: "Dreaming pass live stream is unavailable" });
+						close();
+						return;
+					}
+					// Snapshot/gap frames describe state but do not claim the replay
+					// cursor. Replay and live event ids must remain the only resume
+					// checkpoints so a disconnect cannot skip older replay frames.
+					write("snapshot", { type: "snapshot", passId, snapshot: subscription.snapshot });
+					if (subscription.gap) {
+						write("gap", { type: "gap", passId, gap: subscription.gap });
+					}
+					for (const event of subscription.replay) {
+						writeLiveEvent(event);
+					}
+					if (closed || requestSignal.aborted) {
+						close();
+						return;
+					}
+					if (subscription.snapshot.status !== "running") {
+						close();
+						return;
+					}
+					heartbeat = setInterval(() => {
+						if (closed || !controllerRef) return;
+						if (controllerRef.desiredSize !== null && controllerRef.desiredSize <= 0) {
+							close();
+							return;
+						}
+						try {
+							controllerRef.enqueue(encoder.encode(`: heartbeat ${Date.now()}\n\n`));
+						} catch {
+							close();
+						}
+					}, DREAMING_LIVE_HEARTBEAT_MS);
+					heartbeat.unref?.();
+				},
+				cancel: close,
+			},
+			{ highWaterMark: DREAMING_LIVE_STREAM_QUEUE_SIZE, size: () => 1 },
+		);
+
+		return new Response(stream, {
+			headers: {
+				"Content-Type": "text/event-stream",
+				"Cache-Control": "no-cache, no-transform",
+				Connection: "keep-alive",
+				"X-Accel-Buffering": "no",
+			},
+		});
+	});
+
 	/**
 	 * Review the exact capability calls a Pi Dreaming agent made during one
 	 * scoped pass. The trace is local, agent-scoped, and never written to logs.
 	 */
-	app.get("/api/dream/passes/:passId/tools", (c) => {
+	app.get("/api/dream/passes/:passId/tools", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const passId = c.req.param("passId").trim();
@@ -729,7 +909,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		return c.json({
 			agentId: scopedAgent.agentId,
 			passId,
-			items: getDreamingToolCalls(getDbAccessor(), scopedAgent.agentId, passId),
+			items: await getDreamingToolCalls(getDbAccessor(), scopedAgent.agentId, passId),
 		});
 	});
 

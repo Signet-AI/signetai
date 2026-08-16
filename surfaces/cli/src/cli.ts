@@ -1079,7 +1079,10 @@ async function ensureDaemonForSecrets(): Promise<boolean> {
 	return ensureDaemonRunning(isDaemonRunning);
 }
 
-const { fetchFromDaemon, fetchDaemonResult, secretApiCall } = createDaemonClient(DEFAULT_PORT, AGENTS_DIR);
+const { fetchFromDaemon, fetchDaemonResult, fetchDaemonStream, secretApiCall } = createDaemonClient(
+	DEFAULT_PORT,
+	AGENTS_DIR,
+);
 const offlineSecretApiCall = createOfflineSecretApiCall();
 const secretCommandApiCall = async (
 	method: string,
@@ -1221,6 +1224,7 @@ registerSessionCommands(program, {
 registerDreamCommands(program, {
 	fetchFromDaemon,
 	fetchDaemonResult,
+	fetchDaemonStream,
 });
 
 // ============================================================================

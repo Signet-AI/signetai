@@ -22,6 +22,7 @@ import {
 	DefaultResourceLoader,
 	ModelRuntime,
 	SessionManager,
+	type AgentSessionEvent,
 	type SessionStats,
 	SettingsManager,
 	type ToolDefinition,
@@ -112,6 +113,12 @@ export interface PiAgentSession {
 	prompt(text: string): Promise<void>;
 	abort(): Promise<void>;
 	dispose(): void;
+	/** Forward the underlying Pi event stream without making it durable. */
+	subscribe?(listener: (event: AgentSessionEvent) => void): () => void;
+	/** Session context used by the opt-in Dreaming live viewer. */
+	getSystemPrompt?(): string;
+	getSessionId?(): string;
+	getModelName?(): string | undefined;
 	getActiveToolNames(): readonly string[];
 	getFailureMessage(): string | undefined;
 	/**
@@ -746,6 +753,10 @@ export function createPiModelProvider(
 				prompt: (text) => session.prompt(text),
 				abort: () => session.abort(),
 				dispose: () => session.dispose(),
+				subscribe: (listener) => session.subscribe(listener),
+				getSystemPrompt: () => session.systemPrompt,
+				getSessionId: () => session.sessionId,
+				getModelName: () => session.model?.id,
 				getActiveToolNames: () => session.getActiveToolNames(),
 				getStats: () => session.getSessionStats(),
 				getRequestUsages: () =>

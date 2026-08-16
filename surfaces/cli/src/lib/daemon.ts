@@ -19,6 +19,16 @@ export type DaemonFetchResult<T> =
 			readonly body?: unknown;
 	  };
 
+export type DaemonStreamResult =
+	| { readonly ok: true; readonly response: Response }
+	| {
+			readonly ok: false;
+			readonly reason: DaemonFetchFailure;
+			readonly status?: number;
+			readonly error?: string;
+			readonly body?: unknown;
+	  };
+
 export type DaemonApiCall = (
 	method: string,
 	path: string,
@@ -68,6 +78,27 @@ function withAuthHeaders(headers?: HeadersInit): Headers {
 	return merged;
 }
 
+function createStreamAbortSignal(
+	callerSignal: AbortSignal | undefined,
+	timeoutMs: number | undefined,
+): { readonly signal: AbortSignal | undefined; readonly cleanup: () => void } {
+	if (!callerSignal && !(timeoutMs && timeoutMs > 0)) return { signal: undefined, cleanup: () => {} };
+	if (!timeoutMs || timeoutMs <= 0) return { signal: callerSignal, cleanup: () => {} };
+
+	const controller = new AbortController();
+	const abortFromCaller = () => controller.abort(callerSignal?.reason);
+	if (callerSignal?.aborted) abortFromCaller();
+	else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+	const timeout = setTimeout(() => controller.abort(new DOMException("Request timed out", "TimeoutError")), timeoutMs);
+	return {
+		signal: controller.signal,
+		cleanup: () => {
+			clearTimeout(timeout);
+			callerSignal?.removeEventListener("abort", abortFromCaller);
+		},
+	};
+}
+
 export function createDaemonClient(
 	port: number,
 	agentsDir?: string,
@@ -78,6 +109,7 @@ export function createDaemonClient(
 		path: string,
 		opts?: RequestInit & { timeout?: number },
 	) => Promise<DaemonFetchResult<T>>;
+	readonly fetchDaemonStream: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 	readonly secretApiCall: DaemonApiCall;
 } {
 	const url = resolveDaemonClientUrl(port, agentsDir);
@@ -112,6 +144,35 @@ export function createDaemonClient(
 				return { ok: false, reason: "timeout" };
 			}
 			return { ok: false, reason: "offline" };
+		}
+	};
+
+	const fetchDaemonStream = async (
+		path: string,
+		opts?: RequestInit & { timeout?: number },
+	): Promise<DaemonStreamResult> => {
+		const { timeout, ...fetchOpts } = opts || {};
+		// Bound only the initial HTTP handshake. Once headers arrive, the SSE
+		// body is intentionally long-lived and is cancelled by the caller's
+		// attachment signal instead.
+		const streamSignal = createStreamAbortSignal(fetchOpts.signal ?? undefined, timeout ?? 5_000);
+		try {
+			const res = await fetch(`${url}${path}`, {
+				...fetchOpts,
+				headers: withAuthHeaders(fetchOpts.headers),
+				signal: streamSignal.signal,
+			});
+			if (!res.ok) {
+				const response = await readHttpErrorBody(res);
+				return { ok: false, reason: "http", status: res.status, ...response };
+			}
+			if (!res.body) return { ok: false, reason: "invalid-json", status: res.status };
+			return { ok: true, response: res };
+		} catch (err) {
+			if (isTimeoutError(err)) return { ok: false, reason: "timeout" };
+			return { ok: false, reason: "offline" };
+		} finally {
+			streamSignal.cleanup();
 		}
 	};
 
@@ -163,6 +224,7 @@ export function createDaemonClient(
 		url,
 		fetchFromDaemon,
 		fetchDaemonResult,
+		fetchDaemonStream,
 		secretApiCall,
 	};
 }

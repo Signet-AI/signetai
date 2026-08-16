@@ -355,3 +355,55 @@ describe("dream trigger pass diagnostics", () => {
 		}
 	});
 });
+
+describe("dream attach selection", () => {
+	it("refuses to open an empty view when no pass is active", async () => {
+		const calls: string[] = [];
+		const fetchDaemonResult = mockFetch(async (path: string) => {
+			calls.push(path);
+			return okResult({ agentId: "default", items: [] });
+		});
+		const program = new Command();
+		registerDreamCommands(program, { ...makeDeps(), fetchDaemonResult });
+		const capture = captureOutput();
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+		try {
+			await expect(program.parseAsync(["node", "test", "dream", "attach"])).rejects.toThrow("EXIT_1");
+			expect(calls).toEqual(["/api/dream/passes/active"]);
+			expect(capture.errorLines.join("\n")).toContain("signet dream status");
+		} finally {
+			exitSpy.mockRestore();
+			capture.restore();
+		}
+	});
+
+	it("requires explicit selection when multiple passes are active", async () => {
+		const fetchDaemonResult = mockFetch(async () =>
+			okResult({
+				agentId: "default",
+				items: [
+					{ id: "pass-a", mode: "incremental", status: "running", startedAt: "2026-08-05T00:00:00.000Z" },
+					{ id: "pass-b", mode: "compact", status: "running", startedAt: "2026-08-05T00:01:00.000Z" },
+				],
+			}),
+		);
+		const program = new Command();
+		registerDreamCommands(program, { ...makeDeps(), fetchDaemonResult });
+		const capture = captureOutput();
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+		try {
+			await expect(program.parseAsync(["node", "test", "dream", "attach"])).rejects.toThrow("EXIT_1");
+			const output = capture.errorLines.join("\n");
+			expect(output).toContain("--pass-id");
+			expect(output).toContain("pass-a");
+			expect(output).toContain("pass-b");
+		} finally {
+			exitSpy.mockRestore();
+			capture.restore();
+		}
+	});
+});

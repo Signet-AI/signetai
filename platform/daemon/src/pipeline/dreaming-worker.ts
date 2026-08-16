@@ -238,6 +238,8 @@ export function startDreamingWorker(
 					{
 						timeoutMs: input.timeoutMs,
 						maxTokens: input.maxTokens,
+						onEvent: input.onEvent,
+						onSessionInfo: input.onSessionInfo,
 						...(options.acpxMcp
 							? {
 									acpxMcp: {

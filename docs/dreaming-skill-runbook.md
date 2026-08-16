@@ -22,6 +22,27 @@ signet dream trigger
 signet dream trigger --compact
 ```
 
+For a live, read-only view of an in-flight pass, use:
+
+```bash
+signet dream attach
+signet dream attach --pass-id <pass-id>
+```
+
+`dream attach` selects the sole active pass for the current agent context. It
+refuses to guess when there are multiple active passes and lists their IDs,
+agents, modes, and start times; use `--pass-id` to choose one. With no active
+pass it exits non-zero and points back to `signet dream status`. The daemon
+owns the Pi session and the CLI only follows its scoped SSE event stream, so
+the attach view has no chat input, steering, retry, cancellation, or mutation
+control. Press **Ctrl+C** to detach without affecting the pass. Press
+**Ctrl+V** to toggle the in-place raw verbose view; raw prompts, instructions,
+reasoning, evidence, and tool payloads may be visible in that mode. Toggling
+the mode briefly reconnects the same SSE stream with the raw-data opt-in; the
+default transport omits those fields. The stream reconnects from its bounded
+cursor when possible and reports a replay gap when older events are no longer
+available.
+
 Invalid or rejected operations are recorded without stalling the selected
 evidence cursor. Use an ontology proposal only for broad or explicitly reviewed
 semantic refactors.

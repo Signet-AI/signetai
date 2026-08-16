@@ -83,6 +83,13 @@ import {
 	selectDreamingSurprisalInDb,
 } from "./dreaming-surprisal";
 import { DreamingBacklogTokenCache, type DreamingBacklogTokenEntry } from "./dreaming-token-cache";
+import {
+	dreamingLiveEvents,
+	publishDreamingAgentEvent,
+	publishDreamingSessionInfo,
+	publishDreamingToolTrace,
+	type DreamingLiveEventHub,
+} from "./dreaming-live-events";
 import { countTokens } from "./tokenizer";
 
 async function writeTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
@@ -229,7 +236,7 @@ export function _testParseEpisodicCursor(value: string | null): EpisodicCursor |
 	return parseEpisodicCursor(value);
 }
 
-interface DreamingPassRow {
+export interface DreamingPassRow {
 	readonly id: string;
 	readonly mode: string;
 	readonly status: string;
@@ -324,6 +331,12 @@ export interface DreamingAgentExecutor {
 		readonly tools: ReturnType<typeof createDreamingAgentTools>;
 		readonly timeoutMs: number;
 		readonly maxTokens: number;
+		readonly onEvent?: (event: unknown) => void;
+		readonly onSessionInfo?: (info: {
+			readonly sessionId?: string;
+			readonly model?: string;
+			readonly systemPrompt?: string;
+		}) => void;
 	}): Promise<{
 		readonly summary?: string;
 		readonly usage?: LlmUsage | null;
@@ -512,6 +525,7 @@ export async function createDreamingPass(accessor: DbAccessor, agentId: string, 
 			 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))`,
 		).run(id, agentId, mode);
 	});
+	dreamingLiveEvents.startPass({ passId: id, agentId, mode });
 	return id;
 }
 
@@ -551,6 +565,52 @@ export async function getDreamingPasses(
 			)
 			.all(agentId, limit) as DreamingPassRow[];
 	});
+}
+
+export interface DreamingPassScope extends DreamingPassRow {
+	readonly agentId: string;
+}
+
+function dreamingPassSelect(includeAgent = false): string {
+	return `SELECT ${includeAgent ? "agent_id AS agentId, " : ""}id, mode, status, started_at AS startedAt,
+				completed_at AS completedAt, tokens_consumed AS tokensConsumed,
+				tokens_input AS tokensInput, tokens_output AS tokensOutput,
+				tokens_cache_read AS tokensCacheRead, tokens_cache_write AS tokensCacheWrite,
+				tokens_cost AS tokensCost,
+				mutations_applied AS mutationsApplied,
+				mutations_skipped AS mutationsSkipped,
+				mutations_failed AS mutationsFailed,
+				summary, error
+			 FROM dreaming_passes`;
+}
+
+export async function getDreamingPass(
+	accessor: DbAccessor,
+	agentId: string,
+	passId: string,
+): Promise<DreamingPassScope | null> {
+	return readDb(
+		accessor,
+		(db) =>
+			(db.prepare(`${dreamingPassSelect(true)} WHERE agent_id = ? AND id = ? LIMIT 1`).get(agentId, passId) as
+				| DreamingPassScope
+				| undefined) ?? null,
+	);
+}
+
+export async function getActiveDreamingPasses(
+	accessor: DbAccessor,
+	agentId: string,
+): Promise<readonly DreamingPassScope[]> {
+	return readDb(
+		accessor,
+		(db) =>
+			db
+				.prepare(
+					`${dreamingPassSelect(true)} WHERE agent_id = ? AND status = 'running' ORDER BY started_at ASC, id ASC`,
+				)
+				.all(agentId) as DreamingPassScope[],
+	);
 }
 
 const MAX_DREAMING_TOOL_TRACE_JSON_CHARS = 128_000;
@@ -1029,6 +1089,11 @@ export function selectDreamingPassMode(
  * exclusion/cursor bookkeeping, tool construction, and audited writes.
  */
 
+export interface DreamingPassLiveOptions {
+	/** Test seam; production uses the process-local ephemeral event hub. */
+	readonly hub?: DreamingLiveEventHub;
+}
+
 /**
  * Anonymous telemetry for a completed agentic dreaming pass: provider-reported
  * token usage and cost so dreaming economics show up in PostHog alongside
@@ -1390,8 +1455,12 @@ export async function runDreamingAgentPass(
 	mode: DreamingMode,
 	existingPassId?: string,
 	writeCaps?: GraphWriteCaps,
+	liveOptions?: DreamingPassLiveOptions,
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
 	const passId = existingPassId ?? (await createDreamingPass(accessor, agentId, mode));
+	const live = liveOptions?.hub ?? dreamingLiveEvents;
+	live.startPass({ passId, agentId, mode });
+	live.publish(passId, "lifecycle", { phase: "preparing", mode });
 	const passStartedAtMs = Date.now();
 	const effects = createDreamingPassEffectState();
 	let toolCallSequence = 0;
@@ -1476,6 +1545,7 @@ export async function runDreamingAgentPass(
 				durationMs: Date.now() - passStartedAtMs,
 				queueAgeMs: 0,
 			});
+			live.finish(passId, "completed", { summary: earlyExitSummary, outcome: "no_work" });
 			return { passId, applied: 0, skipped: 0, failed: 0, summary: earlyExitSummary };
 		}
 
@@ -1506,6 +1576,7 @@ export async function runDreamingAgentPass(
 				rejectedEvidence.push(...collectRejectedDreamingEvidence(accessor, scopeId, result, operations));
 			},
 			async onToolCall(trace) {
+				publishDreamingToolTrace(passId, trace, live);
 				await recordDreamingToolCall(accessor, agentId, passId, ++toolCallSequence, trace);
 				if (trace.tool === "search_evidence" && trace.output.ok === true && Array.isArray(trace.output.items)) {
 					const input = isRecord(trace.input) ? trace.input : null;
@@ -1573,6 +1644,8 @@ export async function runDreamingAgentPass(
 			tools,
 			timeoutMs: cfg.timeout,
 			maxTokens: cfg.maxOutputTokens,
+			onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
+			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
 		});
 		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}`;
 		const attribution = executorResult.attribution ?? null;
@@ -1698,6 +1771,12 @@ export async function runDreamingAgentPass(
 			durationMs: Date.now() - passStartedAtMs,
 			queueAgeMs: 0,
 		});
+		live.finish(passId, "completed", {
+			summary,
+			applied,
+			failed,
+			outcome,
+		});
 
 		return { passId, applied, skipped: 0, failed, summary };
 	} catch (error) {
@@ -1707,6 +1786,7 @@ export async function runDreamingAgentPass(
 		try {
 			await failDreamingPass(accessor, passId, message);
 		} finally {
+			live.finish(passId, isDreamingPassCancellation(error) ? "cancelled" : "failed", { error: message });
 			recordDreamingPassTelemetry({
 				mode,
 				outcome: isDreamingPassCancellation(error) ? "cancelled" : "failed",

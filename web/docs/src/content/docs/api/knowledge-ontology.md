@@ -538,6 +538,69 @@ leaves everything pending. The worker can run for pending attention even
 when no new episodic evidence has arrived, while normal failure backoff still
 applies.
 
+### GET /api/dream/passes/active
+
+List the currently running passes in the resolved agent scope. This is the
+selection endpoint used by `signet dream attach`: the CLI attaches implicitly
+only when this list contains exactly one item. Requires `admin` permission.
+
+```json
+{
+  "agentId": "noam",
+  "items": [
+    {
+      "id": "pass-uuid",
+      "mode": "incremental",
+      "status": "running",
+      "startedAt": "2026-04-01 12:00:00",
+      "completedAt": null,
+      "summary": null,
+      "error": null
+    }
+  ]
+}
+```
+
+The response is always scoped to the daemon's current agent context unless an
+agent selector is supplied through the existing scoped-agent headers/query
+parameters. A pass ID from another agent is never accepted by the live stream
+route.
+
+### GET /api/dream/passes/:passId/events
+
+Open a read-only Server-Sent Events (SSE) stream for one agent-scoped pass.
+Requires `admin` permission. The optional `after` query parameter, or the
+`Last-Event-ID` header, resumes after a non-negative event cursor:
+
+```text
+GET /api/dream/passes/pass-uuid/events?after=42
+Accept: text/event-stream
+```
+
+Set `verbose=1` (or `verbose=true`) when the operator has opted into raw
+debugging data. The default stream omits `raw` fields; the CLI reconnects on
+the same SSE transport when **Ctrl+V** toggles this mode.
+
+The first event is a `snapshot` whose data contains the current pass metadata
+and replay window. Subsequent events carry a monotonic `id` and include
+assistant deltas, reasoning deltas, Pi lifecycle transitions, tool start/
+progress/end events, detailed `tool_trace` events, session metadata, and a
+terminal `pass_completed` or `pass_failed` event. Tool traces and Pi events remain ephemeral; the durable
+`dreaming_passes` and `dreaming_tool_calls` rows are the audit source.
+
+When the requested cursor is outside the bounded in-memory replay window, the
+stream sends a `gap` event with `requestedCursor`, `availableFrom`,
+`availableTo`, and `reason`. The snapshot is authoritative and the client can
+continue from the latest cursor. Heartbeats are sent as SSE comments so idle
+connections remain detectable. Slow viewers are disconnected once their
+bounded stream queue fills and can reconnect from the last delivered cursor.
+
+The verbose event data includes bounded `raw` fields for the opt-in terminal
+view. These may contain prompts, system/developer instructions, model
+reasoning, evidence, tool arguments, and tool results. The daemon does not
+persist a second transcript for attachment and the stream exposes no control
+or prompt-submission action.
+
 ### POST /api/dream/exclusions/requeue
 
 Request one quarantined evidence source be considered again after correcting
@@ -678,7 +741,8 @@ Returns `202 Accepted` immediately and runs the pass in the background
 Returns 409 if a pass is already running. Returns 503 if the
 dreaming worker is not started.
 
-Poll `GET /api/dream/status` and check `passes[0].status` for completion.
+Poll `GET /api/dream/status` and check `passes[0].status` for completion, or
+use `GET /api/dream/passes/:passId/events` for a live read-only view.
 
 **Request body**
 

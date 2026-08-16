@@ -1,6 +1,6 @@
 import { readFile as readFileAsync, stat as statAsync } from "node:fs/promises";
 import { isAbsolute, join, normalize, resolve } from "node:path";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
 	AcpxModelSelection,
 	LlmGenerateResult,
@@ -1029,6 +1029,14 @@ export class InferenceRouter {
 			readonly timeoutMs?: number;
 			readonly maxTokens?: number;
 			readonly refresh?: boolean;
+			/** Synchronous observer for the in-process Pi session event stream. */
+			readonly onEvent?: (event: AgentSessionEvent) => void;
+			/** Synchronous observer for the session's non-message context. */
+			readonly onSessionInfo?: (info: {
+				readonly sessionId?: string;
+				readonly model?: string;
+				readonly systemPrompt?: string;
+			}) => void;
 			readonly acpxMcp?: {
 				readonly agentId: string;
 				readonly passId: string;
@@ -1106,6 +1114,7 @@ export class InferenceRouter {
 						throw error;
 					}
 					let session: PiAgentSession | undefined;
+					let unsubscribeSessionEvents: (() => void) | undefined;
 					let releaseDeferred = false;
 					const remainingBeforeInitialization = deadline === undefined ? undefined : deadline - performance.now();
 					const initializationController = new AbortController();
@@ -1140,6 +1149,25 @@ export class InferenceRouter {
 							throw initializationTimeout ?? new PiAgentSessionTimeoutError(deadlineMs, Promise.resolve());
 						if (initializationTimer) clearTimeout(initializationTimer);
 						initializationTimer = undefined;
+						if (opts?.onSessionInfo) {
+							try {
+								opts.onSessionInfo({
+									sessionId: session.getSessionId?.(),
+									model: session.getModelName?.(),
+									systemPrompt: session.getSystemPrompt?.(),
+								});
+							} catch {
+								// Observers cannot change the provider/session result.
+							}
+						}
+						if (opts?.onEvent && session.subscribe) {
+							try {
+								unsubscribeSessionEvents = session.subscribe(opts.onEvent);
+							} catch {
+								// Event observation is optional; keep the Pi run usable when
+								// an older provider wrapper lacks the subscription seam.
+							}
+						}
 						// AgentSession owns an internal model loop, so acquire the
 						// process-wide permit before initialization and hold it until
 						// the whole session is disposed. This prevents tool-driven
@@ -1177,6 +1205,11 @@ export class InferenceRouter {
 						);
 					} finally {
 						if (initializationTimer) clearTimeout(initializationTimer);
+						try {
+							unsubscribeSessionEvents?.();
+						} finally {
+							unsubscribeSessionEvents = undefined;
+						}
 						if (!releaseDeferred) {
 							try {
 								session?.dispose();

@@ -48,6 +48,8 @@ export {
 	getDreamingToolCalls,
 	getDreamingState,
 	getDreamingPasses,
+	getDreamingPass,
+	getActiveDreamingPasses,
 	recordDreamingFailure,
 	requestDreamingEvidenceRequeue,
 } from "./dreaming";
@@ -55,6 +57,14 @@ export { getDreamingAttention } from "./dreaming-attention";
 export { getDreamingWorkloadDiagnostics } from "./dreaming";
 export { getDreamingQualityReport } from "./dreaming-quality";
 export type { DreamingSchedulerStatus, DreamingWorkerHandle } from "./dreaming-worker";
+export {
+	dreamingLiveEvents,
+	DreamingLiveEventHub,
+	DREAMING_LIVE_HEARTBEAT_MS,
+	type DreamingLiveEvent,
+	type DreamingLivePassSnapshot,
+	type DreamingLiveGap,
+} from "./dreaming-live-events";
 
 /** Get the active synthesis worker handle (for API routes). */
 export function getSynthesisWorker(): SynthesisWorkerHandle | null {
