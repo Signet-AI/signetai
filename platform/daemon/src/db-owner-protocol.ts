@@ -33,6 +33,63 @@ export interface DbOwnerTransaction {
 	readonly statements: readonly DbOwnerStatement[];
 }
 
+export interface DbOwnerSourceSnapshotArtifact {
+	readonly sourcePath: string;
+	readonly sourceSha256: string;
+	readonly sourceKind: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly sessionToken: string;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+	readonly manifestPath: string | null;
+	readonly sourceNodeId: string | null;
+	readonly memorySentence: string | null;
+	readonly memorySentenceQuality: string | null;
+	readonly content: string;
+	readonly updatedAt: string;
+	readonly sourceMtimeMs: number | null;
+	readonly sourceId: string;
+	readonly sourceRoot: string | null;
+	readonly sourceExternalId: string | null;
+	readonly sourceParentPath: string | null;
+	readonly sourceMetaJson: string | null;
+}
+
+export interface DbOwnerSourceSnapshotImport {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly sourceRoot: string;
+	readonly includeLocalDiscord: boolean;
+	readonly artifacts: readonly DbOwnerSourceSnapshotArtifact[];
+}
+
+export interface DbOwnerSourceGraphIndex {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly sourceName: string;
+	readonly root: string;
+	readonly filePath: string;
+	readonly content: string;
+	readonly markdownPaths?: readonly string[];
+}
+
+export interface DbOwnerSourceGraphFilePurge {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly root: string;
+	readonly filePath: string;
+}
+
+export interface DbOwnerSourceGraphPurge {
+	readonly agentId?: string;
+	readonly sourceId: string;
+	readonly root: string;
+}
+
 export type DbOwnerRequest =
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
 	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
@@ -47,6 +104,10 @@ export type DbOwnerRequest =
 			/** Serialized recall inputs. The owner reconstructs no daemon callbacks. */
 			readonly payload: DbOwnerRecallPayload;
 	  }
+	| { readonly kind: "source_snapshot_import"; readonly input: DbOwnerSourceSnapshotImport }
+	| { readonly kind: "source_graph_index"; readonly input: DbOwnerSourceGraphIndex }
+	| { readonly kind: "source_graph_file_purge"; readonly input: DbOwnerSourceGraphFilePurge }
+	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "sleep"; readonly durationMs: number };
 
 export interface DbOwnerRecallPayload {

@@ -362,7 +362,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				});
 				return c.json({ error: "Invalid JSON body" }, 400);
 			}
-			const result = importSourceSnapshot({
+			const result = await importSourceSnapshot({
 				source,
 				agentId: resolveDaemonAgentId(),
 				snapshot: body,

@@ -151,10 +151,10 @@ describe("source snapshot import", () => {
 		};
 	}
 
-	test("restores every artifact and provenance field through the shared upsert", () => {
+	test("restores every artifact and provenance field through the shared upsert", async () => {
 		const source = makeSourceEntry("src-1", "/tmp/vault");
 		const artifact = makeArtifact();
-		const result = importSourceSnapshot({
+		const result = await importSourceSnapshot({
 			source,
 			agentId,
 			snapshot: snapshotFor(source, [artifact]),
@@ -193,10 +193,10 @@ describe("source snapshot import", () => {
 		expect(row?.deleted_at).toBeNull();
 	});
 
-	test("preserves a null source_mtime_ms through the shared upsert", () => {
+	test("preserves a null source_mtime_ms through the shared upsert", async () => {
 		const source = makeSourceEntry("src-1", "/tmp/vault");
 		const artifact = makeArtifact({ sourceMtimeMs: null });
-		const result = importSourceSnapshot({
+		const result = await importSourceSnapshot({
 			source,
 			agentId,
 			snapshot: snapshotFor(source, [artifact]),
@@ -207,12 +207,12 @@ describe("source snapshot import", () => {
 		expect(row?.source_mtime_ms).toBeNull();
 	});
 
-	test("re-importing an updated snapshot overwrites the same-source row", () => {
+	test("re-importing an updated snapshot overwrites the same-source row", async () => {
 		const source = makeSourceEntry("src-1", "/tmp/vault");
 		const original = makeArtifact({ content: "first version content", updatedAt: "2026-01-02T01:00:00.000Z" });
 		// sha must match content; recompute to keep the snapshot valid.
 		const first = { ...original, sourceSha256: hashNormalizedBody(original.content) };
-		expect(importSourceSnapshot({ source, agentId, snapshot: snapshotFor(source, [first]) })).toEqual({
+		expect(await importSourceSnapshot({ source, agentId, snapshot: snapshotFor(source, [first]) })).toEqual({
 			ok: true,
 			imported: 1,
 			skipped: { localDiscordArtifacts: 0 },
@@ -226,7 +226,7 @@ describe("source snapshot import", () => {
 			updatedAt: "2026-01-02T02:00:00.000Z",
 			memorySentence: "Updated sentence.",
 		});
-		expect(importSourceSnapshot({ source, agentId, snapshot: snapshotFor(source, [updated]) })).toEqual({
+		expect(await importSourceSnapshot({ source, agentId, snapshot: snapshotFor(source, [updated]) })).toEqual({
 			ok: true,
 			imported: 1,
 			skipped: { localDiscordArtifacts: 0 },
@@ -239,10 +239,10 @@ describe("source snapshot import", () => {
 		expect(row?.is_deleted).toBe(0);
 	});
 
-	test("rejects a snapshot artifact whose checksum does not match its content", () => {
+	test("rejects a snapshot artifact whose checksum does not match its content", async () => {
 		const source = makeSourceEntry("src-1", "/tmp/vault");
 		const artifact = makeArtifact({ sourceSha256: "deadbeef" });
-		const result = importSourceSnapshot({ source, agentId, snapshot: snapshotFor(source, [artifact]) });
+		const result = await importSourceSnapshot({ source, agentId, snapshot: snapshotFor(source, [artifact]) });
 		expect(result).toEqual({ ok: false, error: expect.stringMatching(/checksum mismatch/) });
 	});
 });

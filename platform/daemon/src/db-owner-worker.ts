@@ -1,5 +1,8 @@
 import { createRequire } from "node:module";
+import type { Database as BunDatabase } from "bun:sqlite";
 import { findSqliteVecExtension } from "@signet/core";
+import { applyObsidianSourceStructureInTx, applyObsidianSourceStructurePurgeInTx, buildObsidianMarkdownPathIndex, purgeObsidianSourceFileStructureInTx } from "./obsidian-source-graph";
+import { applySourceSnapshotImportInTx } from "./source-snapshots";
 import type {
 	DbOwnerCommand,
 	DbOwnerEvent,
@@ -187,6 +190,65 @@ export function runDbOwnerWorker(): void {
 		return db.prepare(statement.sql).run(...params);
 	}
 
+	function executeSourceSnapshotImport(
+		job: Extract<DbOwnerJob["request"], { readonly kind: "source_snapshot_import" }>,
+	): unknown {
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const result = applySourceSnapshotImportInTx(db as unknown as BunDatabase, job.input);
+			db.exec("COMMIT");
+			return result;
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				// The original error is the actionable failure.
+			}
+			throw error;
+		}
+	}
+
+	function executeSourceGraph(
+		request: Extract<
+			DbOwnerJob["request"],
+			{ readonly kind: "source_graph_index" | "source_graph_file_purge" | "source_graph_purge" }
+		>,
+	): unknown {
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			let result: unknown;
+			if (request.kind === "source_graph_index") {
+				const markdownPathIndex =
+					request.input.markdownPaths === undefined
+						? undefined
+						: buildObsidianMarkdownPathIndex(request.input.root, request.input.markdownPaths);
+				result = applyObsidianSourceStructureInTx(db as unknown as import("./db-accessor").WriteDb, {
+					...request.input,
+					markdownPathIndex,
+				});
+			} else if (request.kind === "source_graph_file_purge") {
+				result = purgeObsidianSourceFileStructureInTx(
+					db as unknown as import("./db-accessor").WriteDb,
+					request.input,
+				);
+			} else {
+				result = applyObsidianSourceStructurePurgeInTx(
+					db as unknown as import("./db-accessor").WriteDb,
+					request.input,
+				);
+			}
+			db.exec("COMMIT");
+			return result;
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				// The original error is the actionable failure.
+			}
+			throw error;
+		}
+	}
+
 	let recallAccessorReady = false;
 
 	async function executeRecall(payload: DbOwnerRecallPayload): Promise<unknown> {
@@ -253,6 +315,13 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "query") return executeStatement(job.request.statement);
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements);
 		if (job.request.kind === "batch") return executeBatch(job.request.statements, job.request.requireChanges === true);
+		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request);
+		if (
+			job.request.kind === "source_graph_index" ||
+			job.request.kind === "source_graph_file_purge" ||
+			job.request.kind === "source_graph_purge"
+		)
+			return executeSourceGraph(job.request);
 		if (job.request.kind === "recall") return await executeRecall(job.request.payload);
 		const durationMs = Math.max(0, Math.floor(job.request.durationMs));
 		const wait = new Int32Array(new SharedArrayBuffer(4));

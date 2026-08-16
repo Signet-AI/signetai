@@ -1,7 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { SOURCE_CHUNK_SOURCE_TYPE, type SignetSourceEntry } from "@signet/core";
+import { dbOwnerSourceSnapshotImport } from "./db-owner-runtime";
 import { getDbAccessor } from "./db-accessor";
 import type { WriteDb } from "./db-accessor";
+import type { DbOwnerSourceSnapshotImport } from "./db-owner-protocol";
 import { syncVecDeleteByEmbeddingIds } from "./db-helpers";
 import { hashNormalizedBody, upsertMemoryArtifactInTx } from "./memory-lineage";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
@@ -144,7 +146,7 @@ export function exportSourceSnapshot(options: ExportSourceSnapshotOptions): Sour
 	});
 }
 
-export function importSourceSnapshot(options: ImportSourceSnapshotOptions): ImportSourceSnapshotResult {
+export async function importSourceSnapshot(options: ImportSourceSnapshotOptions): Promise<ImportSourceSnapshotResult> {
 	const snapshot = parseSourceSnapshot(options.snapshot);
 	if (snapshot.ok === false) return snapshot;
 	if (snapshot.value.source.id !== options.source.id) {
@@ -175,68 +177,83 @@ export function importSourceSnapshot(options: ImportSourceSnapshotOptions): Impo
 	}
 
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			const writeDb = db as WriteDb as Database;
-			const conflict = findPathOwnershipConflict(writeDb, artifacts, options.agentId, options.source.id);
-			if (conflict) throw new Error(conflict);
-			purgeImportScopeGraph(writeDb, options.source.id, options.agentId, options.source.root, includeLocalDiscord);
-			deleteImportScope(writeDb, options.source.id, options.agentId, includeLocalDiscord);
-			purgeImportScopeChunks(writeDb, options.source.id, options.agentId, includeLocalDiscord);
-			for (const artifact of artifacts) {
-				upsertMemoryArtifactInTx(
-					writeDb,
-					{
-						agentId: options.agentId,
-						sourcePath: artifact.sourcePath,
-						sourceSha256: artifact.sourceSha256,
-						sourceKind: artifact.sourceKind,
-						sessionId: artifact.sessionId,
-						sessionKey: artifact.sessionKey,
-						sessionToken: artifact.sessionToken,
-						project: artifact.project,
-						harness: artifact.harness,
-						capturedAt: artifact.capturedAt,
-						startedAt: artifact.startedAt,
-						endedAt: artifact.endedAt,
-						manifestPath: artifact.manifestPath,
-						sourceNodeId: artifact.sourceNodeId,
-						memorySentence: artifact.memorySentence,
-						memorySentenceQuality: artifact.memorySentenceQuality,
-						content: artifact.content,
-						updatedAt: artifact.updatedAt,
-						sourceMtimeMs: artifact.sourceMtimeMs,
-						sourceId: artifact.sourceId,
-						sourceRoot: artifact.sourceRoot,
-						sourceExternalId: artifact.sourceExternalId,
-						sourceParentPath: artifact.sourceParentPath,
-						sourceMetaJson: artifact.sourceMetaJson,
-					},
-					{ conflictGuardSourceId: true },
-				);
-				if (indexesSnapshotArtifactGraph(artifact)) {
-					indexSourceArtifactStructureInTx(
-						db as WriteDb,
-						{
-							agentId: options.agentId,
-							sourceId: artifact.sourceId,
-							sourceKind: artifact.sourceKind,
-							sourceRoot: artifact.sourceRoot ?? options.source.root,
-							sourceParentPath: artifact.sourceParentPath ?? undefined,
-							sourcePath: artifact.sourcePath,
-							displayName: sourceArtifactDisplayName(artifact),
-							content: artifact.content,
-						},
-						artifact.updatedAt,
-					);
-				}
-			}
+		const input: DbOwnerSourceSnapshotImport = {
+			agentId: options.agentId,
+			sourceId: options.source.id,
+			sourceRoot: options.source.root,
+			includeLocalDiscord,
+			artifacts,
+		};
+		const result = await dbOwnerSourceSnapshotImport(input, {
+			operation: "source-snapshot-import",
+			estimatedWorkUnits: Math.max(1, artifacts.length),
 		});
+		return { ok: true, imported: result.imported, skipped: { localDiscordArtifacts: skippedLocal } };
 	} catch (err) {
 		return { ok: false, error: err instanceof Error ? err.message : String(err) };
 	}
+}
 
-	return { ok: true, imported: artifacts.length, skipped: { localDiscordArtifacts: skippedLocal } };
+export function applySourceSnapshotImportInTx(
+	db: Database,
+	input: DbOwnerSourceSnapshotImport,
+): { readonly imported: number } {
+	const artifacts = input.artifacts;
+	const writeDb = db as WriteDb as Database;
+	const conflict = findPathOwnershipConflict(db, artifacts, input.agentId, input.sourceId);
+	if (conflict) throw new Error(conflict);
+	purgeImportScopeGraph(db, input.sourceId, input.agentId, input.sourceRoot, input.includeLocalDiscord);
+	deleteImportScope(db, input.sourceId, input.agentId, input.includeLocalDiscord);
+	purgeImportScopeChunks(db, input.sourceId, input.agentId, input.includeLocalDiscord);
+	for (const artifact of artifacts) {
+		upsertMemoryArtifactInTx(
+			writeDb,
+			{
+				agentId: input.agentId,
+				sourcePath: artifact.sourcePath,
+				sourceSha256: artifact.sourceSha256,
+				sourceKind: artifact.sourceKind,
+				sessionId: artifact.sessionId,
+				sessionKey: artifact.sessionKey,
+				sessionToken: artifact.sessionToken,
+				project: artifact.project,
+				harness: artifact.harness,
+				capturedAt: artifact.capturedAt,
+				startedAt: artifact.startedAt,
+				endedAt: artifact.endedAt,
+				manifestPath: artifact.manifestPath,
+				sourceNodeId: artifact.sourceNodeId,
+				memorySentence: artifact.memorySentence,
+				memorySentenceQuality: artifact.memorySentenceQuality,
+				content: artifact.content,
+				updatedAt: artifact.updatedAt,
+				sourceMtimeMs: artifact.sourceMtimeMs,
+				sourceId: artifact.sourceId,
+				sourceRoot: artifact.sourceRoot,
+				sourceExternalId: artifact.sourceExternalId,
+				sourceParentPath: artifact.sourceParentPath,
+				sourceMetaJson: artifact.sourceMetaJson,
+			},
+			{ conflictGuardSourceId: true },
+		);
+		if (indexesSnapshotArtifactGraph(artifact)) {
+			indexSourceArtifactStructureInTx(
+				db as WriteDb,
+				{
+					agentId: input.agentId,
+					sourceId: artifact.sourceId,
+					sourceKind: artifact.sourceKind,
+					sourceRoot: artifact.sourceRoot ?? input.sourceRoot,
+					sourceParentPath: artifact.sourceParentPath ?? undefined,
+					sourcePath: artifact.sourcePath,
+					displayName: sourceArtifactDisplayName(artifact),
+					content: artifact.content,
+				},
+				artifact.updatedAt,
+			);
+		}
+	}
+	return { imported: artifacts.length };
 }
 
 function findPathOwnershipConflict(
