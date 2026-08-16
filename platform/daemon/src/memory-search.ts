@@ -2113,9 +2113,9 @@ export async function hybridRecall(
 		}
 	}
 
-	timings.time("rehearsal_boost", () => {
-		applyRehearsalBoost(scored, cfg.search, { enabled: freshnessIntent, nowMs: temporalNowMs });
-	});
+	await timings.timeAsync("rehearsal_boost", () =>
+		applyRehearsalBoost(scored, cfg.search, { enabled: freshnessIntent, nowMs: temporalNowMs }),
+	);
 
 	// --- Optional reranker hook ---
 	let recallSummary: string | undefined;

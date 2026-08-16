@@ -84,7 +84,8 @@ describe("hybridRecall freshness-aware rehearsal", () => {
 		});
 	}
 
-	async function recall(query: string, cfg: ResolvedMemoryConfig) {
+	// Keep this suite focused on ranking. Access-ledger writes are tested separately.
+	async function recall(query: string, cfg: ResolvedMemoryConfig, trackRecallAccess = false) {
 		return hybridRecall(
 			{
 				query,
@@ -94,6 +95,7 @@ describe("hybridRecall freshness-aware rehearsal", () => {
 				limit: 5,
 				agentId: "agent-a",
 				readPolicy: "isolated",
+				trackRecallAccess,
 			},
 			cfg,
 			async () => null,
@@ -112,6 +114,53 @@ describe("hybridRecall freshness-aware rehearsal", () => {
 		const enabled = await recall("heron status level", testCfg());
 		const disabled = await recall("heron status level", testCfg({ temporal_prior_enabled: false }));
 		expect(enabled.results.map((row) => row.id)).toEqual(disabled.results.map((row) => row.id));
+	});
+
+	it("awaits delayed rehearsal reads before ranking and teardown", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DELETE FROM memories WHERE id IN (?, ?)").run("older-fact", "recent-fact");
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'agent-a', 'global', ?, ?, 'test')`,
+			).run("recent-fact", "heron status level is blue", RECENT_CREATED, RECENT_CREATED);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, access_count, last_accessed
+				) VALUES (?, ?, 'fact', 'agent-a', 'global', ?, ?, 'test', ?, ?)`,
+			).run("older-fact", "heron status level is red", OLDER_CREATED, OLDER_CREATED, 20, new Date().toISOString());
+		});
+
+		const accessor = getDbAccessor();
+		const originalWithReadDbAsync = accessor.withReadDbAsync;
+		accessor.withReadDbAsync = async (fn, options) => {
+			if (String(fn).includes("access_count")) await Bun.sleep(25);
+			return await originalWithReadDbAsync(fn, options);
+		};
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const result = await recall(
+				"heron status level",
+				testCfg({
+					rehearsal_enabled: true,
+					rehearsal_weight: 0.5,
+					temporal_prior_enabled: false,
+				}),
+				false,
+			);
+			expect(result.results[0]?.id).toBe("older-fact");
+
+			closeDbAccessor();
+			await Bun.sleep(50);
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+			accessor.withReadDbAsync = originalWithReadDbAsync;
+		}
 	});
 
 	it("does not add a second scoring path for month-range queries", async () => {
