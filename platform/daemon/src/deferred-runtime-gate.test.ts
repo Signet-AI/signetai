@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { createDeferredRuntimeGate, scheduleDeferredRuntimeWork } from "./deferred-runtime-gate";
+import {
+	createDeferredRuntimeGate,
+	createDeferredRuntimeScheduler,
+	scheduleDeferredRuntimeWork,
+} from "./deferred-runtime-gate";
 
 describe("deferred runtime startup contention (#1609)", () => {
 	it("serializes both 30-second callbacks before pipeline startup", async () => {
@@ -51,5 +55,30 @@ describe("deferred runtime startup contention (#1609)", () => {
 		expect(maxOwnerActive).toBe(1);
 		expect(deadlineKills).toBe(0);
 		expect(pipelineFailure).toBeUndefined();
+	});
+
+	it("keeps FTS maintenance behind the deferred integrity gate", async () => {
+		const gate = createDeferredRuntimeGate();
+		const callbacks: Array<() => void> = [];
+		const events: string[] = [];
+
+		const scheduler = createDeferredRuntimeScheduler({
+			gate,
+			schedule: (callback) => callbacks.push(callback),
+			onPipelineError: (error) => events.push(`pipeline-error:${String(error)}`),
+			onMaintenanceError: (error) => events.push(`maintenance-error:${String(error)}`),
+		});
+		scheduler.scheduleMaintenance(async () => {
+			events.push("maintenance:start");
+		});
+
+		expect(callbacks).toHaveLength(1);
+		callbacks[0]?.();
+		await Bun.sleep(0);
+		expect(events).toEqual([]);
+
+		gate.completeIntegrity();
+		await Bun.sleep(0);
+		expect(events).toEqual(["maintenance:start"]);
 	});
 });

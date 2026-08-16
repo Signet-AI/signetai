@@ -16,6 +16,8 @@ describe("daemon production DB owner wiring", () => {
 			"dbOwnerMaintenanceHandle = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient });",
 		);
 		expect(source).toContain("registerDbOwnerMaintenance(dbOwnerMaintenanceHandle);");
+		expect(source).toContain("deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {");
+		expect(source).toContain("completeFtsStartupRecovery({");
 		expect(source).toContain("			telemetry,\n			dbOwnerMaintenanceHandle ?? undefined,\n		);");
 		expect(source).toContain("ownerMaintenance: dbOwnerMaintenanceHandle ?? undefined,");
 	});

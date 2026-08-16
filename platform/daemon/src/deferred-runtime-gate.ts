@@ -10,6 +10,7 @@ export interface DeferredRuntimeScheduleOptions {
 	readonly startIntegrity: () => Promise<void>;
 	readonly startPipeline: () => Promise<void>;
 	readonly onPipelineError: (error: unknown) => void;
+	readonly onMaintenanceError?: (error: unknown) => void;
 }
 
 export interface DeferredRuntimeSchedulerOptions {
@@ -17,11 +18,13 @@ export interface DeferredRuntimeSchedulerOptions {
 	readonly delayMs?: number;
 	readonly schedule: (callback: () => void, delayMs: number) => unknown;
 	readonly onPipelineError: (error: unknown) => void;
+	readonly onMaintenanceError: (error: unknown) => void;
 }
 
 export interface DeferredRuntimeScheduler {
 	readonly scheduleIntegrity: (callback: () => Promise<void>) => void;
 	readonly schedulePipeline: (callback: () => Promise<void>) => void;
+	readonly scheduleMaintenance: (callback: () => Promise<void>) => void;
 }
 
 /**
@@ -56,12 +59,20 @@ export function createDeferredRuntimeScheduler(options: DeferredRuntimeScheduler
 				void options.gate.waitForIntegrity().then(callback).catch(options.onPipelineError);
 			}, delayMs);
 		},
+		scheduleMaintenance: (callback): void => {
+			options.schedule(() => {
+				void options.gate.waitForIntegrity().then(callback).catch(options.onMaintenanceError);
+			}, delayMs);
+		},
 	};
 }
 
 /** Schedule both deferred callbacks while serializing pipeline startup. */
 export function scheduleDeferredRuntimeWork(options: DeferredRuntimeScheduleOptions): void {
-	const scheduler = createDeferredRuntimeScheduler(options);
+	const scheduler = createDeferredRuntimeScheduler({
+		...options,
+		onMaintenanceError: options.onMaintenanceError ?? options.onPipelineError,
+	});
 	scheduler.scheduleIntegrity(options.startIntegrity);
 	scheduler.schedulePipeline(options.startPipeline);
 }

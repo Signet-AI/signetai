@@ -6,8 +6,9 @@ import { join } from "node:path";
 import { createDbOwnerMaintenance } from "./db-owner-maintenance";
 import { createDbOwnerClient } from "./db-owner-client";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
+import { completeFtsStartupRecovery } from "./fts-startup-recovery";
 
-function makeDatabase(): { readonly directory: string; readonly path: string } {
+function makeDatabase(memoryCount = 7): { readonly directory: string; readonly path: string } {
 	const directory = mkdtempSync(join(tmpdir(), "signet-fts-owner-"));
 	const path = join(directory, "memory.db");
 	const db = new Database(path);
@@ -31,7 +32,7 @@ function makeDatabase(): { readonly directory: string; readonly path: string } {
 		CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61');
 	`);
 	const insert = db.prepare("INSERT INTO memories (content) VALUES (?)");
-	for (let index = 0; index < 7; index += 1) insert.run(`owner backfill memory ${index}`);
+	for (let index = 0; index < memoryCount; index++) insert.run(`owner backfill memory ${index}`);
 	db.close();
 	return { directory, path };
 }
@@ -90,7 +91,9 @@ describe("DB owner FTS maintenance", () => {
 		const progress: number[] = [];
 		const result = await maintenance.backfillFts({
 			chunkSize: 2,
-			onChunk: (chunk) => progress.push(chunk.inserted),
+			onChunk: (chunk): void => {
+				progress.push(chunk.inserted);
+			},
 		});
 
 		expect(result.status).toBe("complete");
@@ -114,6 +117,31 @@ describe("DB owner FTS maintenance", () => {
 		const complete = await maintenance.backfillFts({ checkpointKey: "fts.cache", chunkSize: 2 });
 		expect(complete.status).toBe("complete");
 		expect(isFtsIndexIncomplete()).toBe(false);
+	});
+
+	test("resumes startup FTS recovery after the 10,000-unit cap (#1631)", async () => {
+		const database = makeDatabase(10_001);
+		directory = database.directory;
+		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
+		setFtsIndexIncomplete(false);
+		const passes: Array<{ readonly status: string; readonly processed: number; readonly incomplete: boolean }> = [];
+
+		const result = await completeFtsStartupRecovery({
+			backfill: maintenance.backfillFts,
+			backfillOptions: { checkpointKey: "fts.memories.startup" },
+			scheduleContinuation: (callback): void => {
+				const timer = setTimeout(callback, 0);
+				timer.unref?.();
+			},
+			onPass: (pass) =>
+				passes.push({ status: pass.status, processed: pass.processed, incomplete: isFtsIndexIncomplete() }),
+		});
+
+		expect(passes[0]).toMatchObject({ status: "running", processed: 10_000, incomplete: true });
+		expect(result).toMatchObject({ status: "complete", processed: 10_001 });
+		expect(isFtsIndexIncomplete()).toBe(false);
+		expect(readFtsState(database.path)).toEqual({ memoryCount: 10_001, indexedCount: 10_001, physicalCount: 10_001 });
+		expect(countFtsMatches(database.path, "10000")).toBe(1);
 	});
 
 	test("converges after deleting a row below the active backfill cursor", async () => {

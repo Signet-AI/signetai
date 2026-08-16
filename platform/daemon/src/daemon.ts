@@ -69,6 +69,7 @@ import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnos
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
 import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
+import { completeFtsStartupRecovery } from "./fts-startup-recovery";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
@@ -2069,17 +2070,6 @@ async function main() {
 	dbOwnerClient = createDbOwnerClient({ dbPath: MEMORY_DB });
 	dbOwnerMaintenanceHandle = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient });
 	registerDbOwnerMaintenance(dbOwnerMaintenanceHandle);
-	// FTS recovery is intentionally handed to the killable DB owner. Startup
-	// only creates the schema above, so a large legacy index cannot block the
-	// daemon's event loop before it can serve degraded lexical recall.
-	void dbOwnerMaintenanceHandle
-		.backfillFts({ checkpointKey: "fts.memories.startup" })
-		.then((result) => logger.info("daemon", "FTS startup maintenance finished", { ...result }))
-		.catch((error) =>
-			logger.warn("daemon", "FTS startup maintenance deferred after owner failure", {
-				error: error instanceof Error ? error.message : String(error),
-			}),
-		);
 	// Clean accumulated crash-loop damage through the owner. This remains a
 	// deferred call, so owner startup and the bounded drain never delay readiness.
 	runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
@@ -2332,6 +2322,12 @@ async function main() {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		},
+		onMaintenanceError: (error): void => {
+			logger.warn("daemon", "Deferred FTS startup maintenance failed", {
+				error: error instanceof Error ? error.message : String(error),
+				cause: "fts_index_incomplete",
+			});
+		},
 	});
 
 	// Grace period: defer all background workers for 10s after startup so the
@@ -2460,6 +2456,19 @@ async function main() {
 			port: info.port,
 		});
 		logger.info("daemon", "Daemon ready");
+		deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
+			const maintenance = dbOwnerMaintenanceHandle;
+			if (maintenance === null) throw new Error("DB owner maintenance is unavailable for FTS startup recovery");
+			const result = await completeFtsStartupRecovery({
+				backfill: maintenance.backfillFts,
+				backfillOptions: { checkpointKey: "fts.memories.startup" },
+				scheduleContinuation: (callback): void => {
+					const timer = setTimeout(callback, 0);
+					timer.unref?.();
+				},
+			});
+			logger.info("daemon", "FTS startup maintenance finished", { ...result });
+		});
 		deferredRuntimeScheduler.scheduleIntegrity(async (): Promise<void> => {
 			logFdSnapshot("server-ready");
 			writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
