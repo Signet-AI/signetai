@@ -278,10 +278,10 @@ async function ensureFtsSchema(client: DbOwnerClient, deadlineMs: number): Promi
 					"CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE memory_count + 1 END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE indexed_count + 1 END, updated_at = datetime('now') WHERE id = 1; END",
 				),
 				runStatement(
-					"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE MAX(0, memory_count - 1) END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE MAX(0, indexed_count - 1) END, updated_at = datetime('now') WHERE id = 1; END",
+					"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE MAX(0, memory_count - 1) END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE MAX(0, indexed_count - CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 1 ELSE 0 END) END, updated_at = datetime('now') WHERE id = 1; INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END",
 				),
 				runStatement(
-					"CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
+					"CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN UPDATE memories_fts_state SET indexed_count = CASE WHEN indexed_count < 0 THEN CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 0 ELSE 1 END ELSE indexed_count + CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 0 ELSE 1 END END, updated_at = datetime('now') WHERE id = 1; INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
 				),
 			],
 		},
@@ -669,10 +669,10 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 						"CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE memory_count + 1 END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE indexed_count + 1 END, updated_at = datetime('now') WHERE id = 1; END",
 					),
 					runStatement(
-						"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE MAX(0, memory_count - 1) END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE MAX(0, indexed_count - 1) END, updated_at = datetime('now') WHERE id = 1; END",
+						"CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN UPDATE memories_fts_state SET memory_count = CASE WHEN memory_count < 0 THEN -1 ELSE MAX(0, memory_count - 1) END, indexed_count = CASE WHEN indexed_count < 0 THEN 0 ELSE MAX(0, indexed_count - CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 1 ELSE 0 END) END, updated_at = datetime('now') WHERE id = 1; INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END",
 					),
 					runStatement(
-						"CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
+						"CREATE TRIGGER memories_au AFTER UPDATE OF content ON memories BEGIN UPDATE memories_fts_state SET indexed_count = CASE WHEN indexed_count < 0 THEN CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 0 ELSE 1 END ELSE indexed_count + CASE WHEN EXISTS (SELECT 1 FROM memories_fts_docsize WHERE id = old.rowid) THEN 0 ELSE 1 END END, updated_at = datetime('now') WHERE id = 1; INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END",
 					),
 					runStatement(
 						`INSERT OR REPLACE INTO ${CHECKPOINT_TABLE} (job_key, cursor, processed, status, updated_at) VALUES (?, 0, 0, 'running', ?)`,

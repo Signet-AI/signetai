@@ -820,9 +820,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 		const status = c.res.status;
 		const degraded = c.res.headers.get("x-signet-operation-degraded") === "1";
+		const cause = c.res.headers.get("x-signet-operation-cause") as PipelineCauseFamily | null;
 		if (c.res.headers.get("x-signet-operation-recorded") === "1") {
 			c.res.headers.delete("x-signet-operation-recorded");
 			c.res.headers.delete("x-signet-operation-degraded");
+			c.res.headers.delete("x-signet-operation-cause");
 			routeOperationFailures.delete(c);
 			return c.res;
 		}
@@ -853,10 +855,16 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			failed,
 			durationMs: Date.now() - startedAt,
 			queueAgeMs: 0,
-			causeFamily: failed > 0 ? (failures[0] ?? normalizeRouteFailure(status)) : undefined,
+			causeFamily:
+				failed > 0
+					? (failures[0] ?? normalizeRouteFailure(status))
+					: degraded
+						? (cause ?? "provider_unavailable")
+						: undefined,
 		});
 		c.res.headers.delete("x-signet-operation-skipped");
 		c.res.headers.delete("x-signet-operation-degraded");
+		c.res.headers.delete("x-signet-operation-cause");
 		if (c.req.header("x-signet-operation-forwarded") === "1") {
 			c.header("x-signet-operation-recorded", "1");
 		} else {
@@ -3453,7 +3461,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				truncated: returnedResult.results.length >= recallLimit,
 				delivery: "returned",
 			});
-			if (returnedResult.meta.partial === true) c.header("x-signet-operation-degraded", "1");
+			if (returnedResult.meta.partial === true) {
+				c.header("x-signet-operation-degraded", "1");
+				c.header("x-signet-operation-cause", "fts_index_incomplete");
+			}
 			recordFirstUseTelemetry("recall");
 			return c.json(returnedResult);
 		} catch (e) {
@@ -3539,7 +3550,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				truncated: result.results.length >= limit,
 				delivery: "returned",
 			});
-			if (result.meta.partial === true) c.header("x-signet-operation-degraded", "1");
+			if (result.meta.partial === true) {
+				c.header("x-signet-operation-degraded", "1");
+				c.header("x-signet-operation-cause", "fts_index_incomplete");
+			}
 			return c.json(result);
 		} catch (e) {
 			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });

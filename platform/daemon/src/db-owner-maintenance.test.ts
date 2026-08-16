@@ -45,6 +45,32 @@ function countFts(path: string): number {
 	return row.count;
 }
 
+function readFtsState(path: string): {
+	readonly memoryCount: number;
+	readonly indexedCount: number;
+	readonly physicalCount: number;
+} {
+	const db = new Database(path, { readonly: true });
+	const state = db
+		.prepare("SELECT memory_count AS memoryCount, indexed_count AS indexedCount FROM memories_fts_state")
+		.get() as {
+		memoryCount: number;
+		indexedCount: number;
+	};
+	const physical = db.prepare("SELECT COUNT(*) AS count FROM memories_fts_docsize").get() as { count: number };
+	db.close();
+	return { memoryCount: state.memoryCount, indexedCount: state.indexedCount, physicalCount: physical.count };
+}
+
+function countFtsMatches(path: string, query: string): number {
+	const db = new Database(path, { readonly: true });
+	const row = db.prepare("SELECT COUNT(*) AS count FROM memories_fts WHERE memories_fts MATCH ?").get(query) as {
+		count: number;
+	};
+	db.close();
+	return row.count;
+}
+
 describe("DB owner FTS maintenance", () => {
 	let maintenance: ReturnType<typeof createDbOwnerMaintenance> | null = null;
 	let directory: string | null = null;
@@ -88,6 +114,40 @@ describe("DB owner FTS maintenance", () => {
 		const complete = await maintenance.backfillFts({ checkpointKey: "fts.cache", chunkSize: 2 });
 		expect(complete.status).toBe("complete");
 		expect(isFtsIndexIncomplete()).toBe(false);
+	});
+
+	test("converges after deleting a row below the active backfill cursor", async () => {
+		const database = makeDatabase();
+		directory = database.directory;
+		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
+
+		await maintenance.backfillFts({ checkpointKey: "fts.delete-unindexed", chunkSize: 2, maxChunks: 1 });
+		const db = new Database(database.path);
+		db.prepare("DELETE FROM memories WHERE rowid = ?").run(7);
+		db.close();
+
+		const result = await maintenance.backfillFts({ checkpointKey: "fts.delete-unindexed", chunkSize: 2 });
+
+		expect(result.status).toBe("complete");
+		expect(readFtsState(database.path)).toEqual({ memoryCount: 6, indexedCount: 6, physicalCount: 6 });
+	});
+
+	test("indexes new content and converges after updating a row below the active backfill cursor", async () => {
+		const database = makeDatabase();
+		directory = database.directory;
+		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
+
+		await maintenance.backfillFts({ checkpointKey: "fts.update-unindexed", chunkSize: 2, maxChunks: 1 });
+		const db = new Database(database.path);
+		db.prepare("UPDATE memories SET content = ? WHERE rowid = ?").run("updated unindexed content", 7);
+		db.close();
+
+		const result = await maintenance.backfillFts({ checkpointKey: "fts.update-unindexed", chunkSize: 2 });
+
+		expect(result.status).toBe("complete");
+		expect(readFtsState(database.path)).toEqual({ memoryCount: 7, indexedCount: 7, physicalCount: 7 });
+		expect(countFtsMatches(database.path, "updated")).toBe(1);
+		expect(countFtsMatches(database.path, "old")).toBe(0);
 	});
 
 	test("invalidates a completed checkpoint after the FTS index is lost", async () => {

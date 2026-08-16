@@ -245,6 +245,61 @@ inference:
 			expect(await response.json()).toEqual({ error: "Recall failed", results: [] });
 		});
 
+		it("records the FTS cause for a partial direct recall", async () => {
+			const state = await import("./routes/state.js");
+			const { Hono } = await import("hono");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { setActiveTelemetry } = await import("./telemetry");
+			const events: Array<{ event: string; properties: Record<string, unknown> }> = [];
+			setActiveTelemetry({
+				record: (event: string, properties: Readonly<Record<string, string | number | boolean | null>>) =>
+					events.push({ event, properties: { ...properties } }),
+				recordFirstUse: () => {},
+			} as never);
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode recall test");
+			const hybridRecallMock = mock(
+				async (params: RecallParams): Promise<RecallResponse> => ({
+					results: [],
+					query: params.query,
+					method: "hybrid",
+					meta: {
+						totalReturned: 0,
+						hasSupplementary: false,
+						noHits: true,
+						partial: true,
+						timings: { totalMs: 0, stages: [] },
+					},
+				}),
+			);
+			try {
+				const app = new Hono();
+				app.use("*", createAuthMiddleware(state.authConfig, secret));
+				registerMemoryRoutes(app, { hybridRecall: hybridRecallMock, fetchEmbedding: async () => null });
+				const token = createToken(secret, { sub: "partial-recall", role: "readonly", scope: {} }, 60);
+				const response = await app.request("/api/memory/recall", {
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${token}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ query: "partial direct recall" }),
+				});
+
+				expect(response.status).toBe(200);
+				expect(hybridRecallMock).toHaveBeenCalledTimes(1);
+				const operation = events.find((event) => event.event === "pipeline.operation");
+				expect(operation?.properties).toMatchObject({
+					operationClass: "recall",
+					outcome: "partial",
+					causeFamily: "fts_index_incomplete",
+				});
+			} finally {
+				setActiveTelemetry(undefined);
+			}
+		});
+
 		it("POST /api/memory/remember returns 403 without auth", async () => {
 			const app = await makeApp();
 			const { registerMemoryRoutes } = await import("./routes/memory-routes");
