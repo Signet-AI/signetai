@@ -24,12 +24,39 @@ proxy.
 
 ## Verify the launch
 
+`signet daemon start` waits for `/health/live`, but the public proxy and the
+private Bun inspector become ready independently. Poll health first, then poll
+all public inspector discovery endpoints. Do not continue to the attach step
+until both checks succeed:
+
+```bash
+ready=0
+for attempt in $(seq 1 60); do
+  if curl -fsS --max-time 2 http://127.0.0.1:3850/health/live >/dev/null; then
+    if curl -fsS --max-time 2 http://127.0.0.1:9229/json/version >/dev/null && \
+       curl -fsS --max-time 2 http://127.0.0.1:9229/json >/dev/null && \
+       curl -fsS --max-time 2 http://127.0.0.1:9229/json/list >/dev/null && \
+       curl -fsS --max-time 2 http://127.0.0.1:9229/json/protocol >/dev/null; then
+      ready=1
+      break
+    fi
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo "daemon and inspector did not become ready within 60 seconds" >&2
+  exit 1
+fi
+```
+
 The daemon and inspector are independent endpoints:
 
 ```bash
 curl -fsS http://127.0.0.1:3850/health/live
 curl -fsS http://127.0.0.1:9229/json/version
 curl -fsS http://127.0.0.1:9229/json
+curl -fsS http://127.0.0.1:9229/json/list
+curl -fsS http://127.0.0.1:9229/json/protocol
 ```
 
 The expected inspector responses are HTTP 200. `/json` returns one target with
