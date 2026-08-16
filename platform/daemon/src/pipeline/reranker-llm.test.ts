@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { LlmProvider } from "@signet/core";
 import { createLlmReranker, summarizeRecallWithLlm } from "./reranker-llm";
+import { rerank } from "./reranker";
 
 describe("createLlmReranker", () => {
 	it("reorders candidates when provider returns scored ids", async () => {
@@ -75,6 +76,19 @@ describe("createLlmReranker", () => {
 
 		expect(result).toEqual(input);
 	});
+});
+
+it("fails closed when configured ranking provider is unavailable", async () => {
+	await expect(
+		rerank(
+			"deploy checklist",
+			[{ id: "a", content: "alpha", score: 0.8 }],
+			async () => {
+				throw new Error("provider unavailable");
+			},
+			{ model: "", topN: 20, timeoutMs: 2000, throwOnError: true },
+		),
+	).rejects.toThrow("provider unavailable");
 });
 
 describe("summarizeRecallWithLlm", () => {

@@ -20,6 +20,8 @@ export interface RerankConfig {
 	readonly topN: number;
 	readonly timeoutMs: number;
 	readonly model: string;
+	/** Fail closed when configured ranking is required by the caller. */
+	readonly throwOnError?: boolean;
 }
 
 export type RerankProvider = (
@@ -64,7 +66,8 @@ export async function rerank(
 		const reranked = await Promise.race([provider(query, head, cfg), timer]);
 
 		return [...reranked, ...tail];
-	} catch {
+	} catch (error) {
+		if (cfg.throwOnError) throw error;
 		// Timeout or provider error: return original ordering
 		return candidates;
 	} finally {

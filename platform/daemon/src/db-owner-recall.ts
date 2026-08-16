@@ -34,6 +34,7 @@ export async function hybridRecallThroughDbOwner(
 			payload: {
 				params,
 				config,
+				...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
 				query: params.query,
 				...(options.queryEmbedding !== undefined ? { queryEmbedding: options.queryEmbedding } : {}),
 			},

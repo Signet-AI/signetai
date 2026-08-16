@@ -2159,6 +2159,7 @@ export async function hybridRecall(
 				topN: cfg.pipelineV2.reranker.topN,
 				timeoutMs: cfg.pipelineV2.reranker.timeoutMs,
 				model: cfg.pipelineV2.reranker.model,
+				throwOnError: cfg.pipelineV2.reranker.useExtractionModel,
 			});
 			// Update scores from reranked results without collapsing calibrated
 			// relevance into rank-position placeholders.

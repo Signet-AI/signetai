@@ -10,6 +10,7 @@ import { hybridRecall, type RecallResponse } from "./memory-search";
 
 let directory: string | null = null;
 let previousSignetPath: string | undefined;
+let stopInferenceServer: (() => void) | null = null;
 
 function testConfig(path: string): ResolvedMemoryConfig {
 	const raw = loadMemoryConfig(path);
@@ -36,6 +37,11 @@ function seedFacts(): void {
 				id, content, type, agent_id, visibility, created_at, updated_at, updated_by
 			) VALUES (?, ?, 'fact', 'agent-b', 'global', datetime('now'), datetime('now'), 'test')`,
 		).run("owner-fact-other-agent", "owner recall fixture alpha");
+		db.prepare(
+			`INSERT INTO memories (
+				id, content, type, agent_id, visibility, created_at, updated_at, updated_by
+			) VALUES (?, ?, 'fact', 'agent-a', 'global', datetime('now'), datetime('now'), 'test')`,
+		).run("owner-fact-a-second", "owner recall fixture beta");
 	});
 }
 
@@ -53,6 +59,8 @@ function comparable(response: RecallResponse): unknown {
 }
 
 afterEach(() => {
+	stopInferenceServer?.();
+	stopInferenceServer = null;
 	closeDbAccessor();
 	if (directory !== null) rmSync(directory, { recursive: true, force: true });
 	directory = null;
@@ -89,6 +97,98 @@ describe("DB owner recall lane", () => {
 			const routed = await hybridRecallThroughDbOwner(client, params, cfg, { queryEmbedding: null });
 			expect(comparable(routed)).toEqual(comparable(direct));
 			expect(routed.results.map((result) => result.id)).not.toContain("owner-fact-other-agent");
+		} finally {
+			await client.close();
+		}
+	});
+
+	test("initializes the owner resolver for configured extraction reranking", async () => {
+		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-reranker-"));
+		previousSignetPath = process.env.SIGNET_PATH;
+		mkdirSync(join(directory, "memory"), { recursive: true });
+		const server = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				if (new URL(request.url).pathname.endsWith("/models")) {
+					return new Response(JSON.stringify({ data: [] }), { headers: { "content-type": "application/json" } });
+				}
+				const body = await request.json();
+				const messages = Array.isArray(body.messages) ? body.messages : [];
+				const prompt = messages.at(-1)?.content;
+				if (typeof prompt !== "string" || !prompt.includes("You are a reranker.")) {
+					return new Response(JSON.stringify({ error: "unexpected prompt" }), { status: 400 });
+				}
+				const scores = [
+					{ id: "owner-fact-a", score: 0.1 },
+					{ id: "owner-fact-a-second", score: 0.9 },
+				];
+				const chunks = [
+					`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify({ scores }) } }] })}\n\n`,
+					`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+					"data: [DONE]\n\n",
+				];
+				return new Response(chunks.join(""), { headers: { "content-type": "text/event-stream" } });
+			},
+		});
+		stopInferenceServer = () => server.stop();
+		writeFileSync(
+			join(directory, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    reranker:
+      enabled: true
+      useExtractionModel: true
+      topN: 2
+      timeoutMs: 2000
+inference:
+  defaultPolicy: recall
+  targets:
+    local:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:${server.port}/v1
+      models:
+        default:
+          model: test-model
+  policies:
+    recall:
+      mode: strict
+      defaultTargets:
+        - local/default
+  workloads:
+    memoryExtraction:
+      policy: recall
+`,
+		);
+		process.env.SIGNET_PATH = directory;
+		const databasePath = join(directory, "memory", "memories.db");
+		initDbAccessor(databasePath);
+		seedFacts();
+		const cfg = testConfig(directory);
+		const reranker = {
+			...cfg.pipelineV2.reranker,
+			enabled: true,
+			useExtractionModel: true,
+			topN: 2,
+			timeoutMs: 2000,
+		};
+		const params = {
+			query: "owner recall fixture",
+			keywordQuery: "owner recall fixture",
+			limit: 2,
+			agentId: "agent-a",
+			readPolicy: "isolated" as const,
+			trackRecallAccess: false,
+			claimRecallResults: false,
+		};
+		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
+		try {
+			const routed = await hybridRecallThroughDbOwner(
+				client,
+				params,
+				{ ...cfg, pipelineV2: { ...cfg.pipelineV2, reranker } },
+				{ queryEmbedding: null },
+			);
+			expect(routed.results.map((result) => result.id)).toEqual(["owner-fact-a-second", "owner-fact-a"]);
 		} finally {
 			await client.close();
 		}
