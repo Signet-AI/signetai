@@ -357,6 +357,13 @@ function clearDegradedWarning(): void {
 	}
 }
 
+/**
+ * Re-encrypt a legacy snapshot with the native keyring key.
+ *
+ * The caller must hold the cross-process secret-store lock for the full
+ * read/decrypt/rewrite sequence. Releasing it before saveStore() would let a
+ * concurrent writer update the snapshot and then be overwritten here.
+ */
 async function migrateLegacyStore(store: SecretsStore, legacyKey: Uint8Array, nativeKey: Uint8Array): Promise<void> {
 	const plaintexts = new Map<string, string>();
 	for (const [name, entry] of Object.entries(store.secrets)) {
@@ -807,16 +814,16 @@ export async function putLocalSecret(name: string, value: string): Promise<void>
 }
 
 export async function getLocalSecretValue(name: string): Promise<string> {
-	const store = loadStore();
-	const resolution = await resolveMasterKey(store);
-	const localName = parseLocalSecretName(name);
-	const entry = store.secrets[localName];
-	if (!entry) throw new Error(`Secret '${localName}' not found`);
-	const plaintext = await decryptWithKey(entry.ciphertext, resolution.key);
-	if (resolution.provider === "legacy-obfuscated") {
-		await withSecretStoreLock(() => anchorLegacyMachineIdAfterVerification(resolution.key));
-	}
-	return plaintext;
+	return withSecretStoreLock(async () => {
+		const store = loadStore();
+		const resolution = await resolveMasterKey(store);
+		const localName = parseLocalSecretName(name);
+		const entry = store.secrets[localName];
+		if (!entry) throw new Error(`Secret '${localName}' not found`);
+		const plaintext = await decryptWithKey(entry.ciphertext, resolution.key);
+		if (resolution.provider === "legacy-obfuscated") await anchorLegacyMachineIdAfterVerification(resolution.key);
+		return plaintext;
+	});
 }
 
 export function hasLocalSecret(name: string): boolean {

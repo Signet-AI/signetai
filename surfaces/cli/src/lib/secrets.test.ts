@@ -17,8 +17,12 @@ function runWriter(
 	value: string,
 	extraEnv: Record<string, string> = {},
 ): Promise<number> {
+	return runSecretProcess(script, [name, value], extraEnv);
+}
+
+function runSecretProcess(script: string, args: string[], extraEnv: Record<string, string> = {}): Promise<number> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(process.execPath, [script, name, value], {
+		const child = spawn(process.execPath, [script, ...args], {
 			env: { ...process.env, SIGNET_PATH: workspace, ...extraEnv },
 			stdio: "ignore",
 		});
@@ -35,6 +39,14 @@ async function waitForFile(path: string): Promise<void> {
 	throw new Error(`Timed out waiting for ${path}`);
 }
 
+async function waitForFileWithin(path: string, attempts: number): Promise<boolean> {
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
+		if (existsSync(path)) return true;
+		await new Promise<void>((resolve) => setTimeout(resolve, 2));
+	}
+	return existsSync(path);
+}
+
 function unavailableKeyring() {
 	return {
 		platform: "test",
@@ -47,6 +59,39 @@ function unavailableKeyring() {
 			return { state: "unavailable" as const, message: "test keyring unavailable" };
 		},
 	};
+}
+
+function nativeKeyring(value: string) {
+	return {
+		platform: "test",
+		service: "test",
+		account: "test",
+		async get() {
+			return { state: "found" as const, value };
+		},
+		async set(nextValue: string) {
+			return { state: "found" as const, value: nextValue };
+		},
+	};
+}
+
+function writeMigrationRaceScript(path: string): void {
+	writeFileSync(
+		path,
+		[
+			'import { existsSync, writeFileSync } from "node:fs";',
+			'import { __setSecretStoreLockHookForTests, __setSecretStoreWriteHookForTests, getLocalSecretValue, putLocalSecret, setSecretKeyringAdapterForTests } from "@signet/core";',
+			'const nativeKey = process.env.SIGNET_NATIVE_KEY ?? "";',
+			'const keyring = process.env.SIGNET_KEYRING === "found" ? { platform: "test", service: "test", account: "test", async get() { return { state: "found", value: nativeKey }; }, async set(value) { return { state: "found", value }; } } : { platform: "test", service: "test", account: "test", async get() { return { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } };',
+			"setSecretKeyringAdapterForTests(keyring);",
+			'if (process.env.SIGNET_MIGRATION_READY && process.env.SIGNET_MIGRATION_GO) __setSecretStoreWriteHookForTests((stage) => { if (stage !== "after-write") return; writeFileSync(process.env.SIGNET_MIGRATION_READY, "ready"); while (!existsSync(process.env.SIGNET_MIGRATION_GO)) {} });',
+			'if (process.env.SIGNET_WRITER_LOCK_READY && process.env.SIGNET_WRITER_LOCK_GO) __setSecretStoreLockHookForTests((stage) => { if (stage !== "after-acquire") return; writeFileSync(process.env.SIGNET_WRITER_LOCK_READY, "ready"); while (!existsSync(process.env.SIGNET_WRITER_LOCK_GO)) {} });',
+			'if (process.env.SIGNET_WRITER_STARTED) writeFileSync(process.env.SIGNET_WRITER_STARTED, "started");',
+			'if (process.argv[2] === "read") await getLocalSecretValue("BASE"); else await putLocalSecret("WRITER", "writer-value");',
+			'if (process.env.SIGNET_WRITER_DONE) writeFileSync(process.env.SIGNET_WRITER_DONE, "done");',
+		].join("\n"),
+		"utf-8",
+	);
 }
 
 afterEach(() => {
@@ -223,6 +268,85 @@ describe("daemonless secret API", () => {
 			ok: true,
 			data: { secrets: ["FIRST_KEY", "SECOND_KEY"], provider: "local" },
 		});
+	});
+
+	test("does not lose a writer during legacy-to-native migration", async () => {
+		workspace = mkdtempSync(join(tmpdir(), "signet-migration-write-race-"));
+		process.env.SIGNET_PATH = workspace;
+		const script = join(import.meta.dir, `.secret-migration-race-${process.pid}.mjs`);
+		writerScript = script;
+		writeMigrationRaceScript(script);
+		setSecretKeyringAdapterForTests(unavailableKeyring());
+		await createOfflineSecretApiCall()("POST", "/api/secrets/BASE", { value: "base-value" });
+
+		const nativeKey = Buffer.alloc(32, 7).toString("base64");
+		const migrationReady = join(workspace, "migration-ready");
+		const migrationGo = join(workspace, "migration-go");
+		const writerStarted = join(workspace, "writer-started");
+		const writerLockReady = join(workspace, "writer-lock-ready");
+		const writerLockGo = join(workspace, "writer-lock-go");
+		const writerDone = join(workspace, "writer-done");
+		const migration = runSecretProcess(script, ["read"], {
+			SIGNET_KEYRING: "found",
+			SIGNET_NATIVE_KEY: nativeKey,
+			SIGNET_MIGRATION_READY: migrationReady,
+			SIGNET_MIGRATION_GO: migrationGo,
+		});
+		await waitForFile(migrationReady);
+
+		const writer = runSecretProcess(script, ["write"], {
+			SIGNET_KEYRING: "found",
+			SIGNET_NATIVE_KEY: nativeKey,
+			SIGNET_WRITER_STARTED: writerStarted,
+			SIGNET_WRITER_LOCK_READY: writerLockReady,
+			SIGNET_WRITER_LOCK_GO: writerLockGo,
+			SIGNET_WRITER_DONE: writerDone,
+		});
+		await waitForFile(writerStarted);
+		const writerAcquiredBeforeMigration = await waitForFileWithin(writerLockReady, 200);
+		if (writerAcquiredBeforeMigration) {
+			writeFileSync(writerLockGo, "go");
+			await waitForFile(writerDone);
+			writeFileSync(migrationGo, "go");
+		} else {
+			writeFileSync(migrationGo, "go");
+			await waitForFile(writerLockReady);
+			writeFileSync(writerLockGo, "go");
+		}
+		expect(await Promise.all([migration, writer])).toEqual([0, 0]);
+		expect(writerAcquiredBeforeMigration).toBe(false);
+
+		setSecretKeyringAdapterForTests(nativeKeyring(nativeKey));
+		expect(await getLocalSecretValue("BASE")).toBe("base-value");
+		expect(await getLocalSecretValue("WRITER")).toBe("writer-value");
+	});
+
+	test("keeps both secrets when migration completes before a writer starts", async () => {
+		workspace = mkdtempSync(join(tmpdir(), "signet-migration-before-write-"));
+		process.env.SIGNET_PATH = workspace;
+		const script = join(import.meta.dir, `.secret-migration-order-${process.pid}.mjs`);
+		writerScript = script;
+		writeMigrationRaceScript(script);
+		setSecretKeyringAdapterForTests(unavailableKeyring());
+		await createOfflineSecretApiCall()("POST", "/api/secrets/BASE", { value: "base-value" });
+
+		const nativeKey = Buffer.alloc(32, 9).toString("base64");
+		expect(
+			await runSecretProcess(script, ["read"], {
+				SIGNET_KEYRING: "found",
+				SIGNET_NATIVE_KEY: nativeKey,
+			}),
+		).toBe(0);
+		expect(
+			await runSecretProcess(script, ["write"], {
+				SIGNET_KEYRING: "found",
+				SIGNET_NATIVE_KEY: nativeKey,
+			}),
+		).toBe(0);
+
+		setSecretKeyringAdapterForTests(nativeKeyring(nativeKey));
+		expect(await getLocalSecretValue("BASE")).toBe("base-value");
+		expect(await getLocalSecretValue("WRITER")).toBe("writer-value");
 	});
 
 	test("a delayed stale reaper cannot remove a newly reacquired lock", async () => {
