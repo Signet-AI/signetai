@@ -163,12 +163,20 @@ describe("Sources routes", () => {
 		expect(source).not.toMatch(/\b(?:execSync|spawnSync)\b/);
 	});
 
-	it("tracks recurring lifecycle writes and awaits startup tombstone cleanup (#1590)", async () => {
+	it("defers startup tombstone cleanup to the post-ready lane (#1630)", async () => {
 		const routeSource = await Bun.file(new URL("./sources-routes.ts", import.meta.url)).text();
 		const daemonSource = await Bun.file(new URL("../daemon.ts", import.meta.url)).text();
 		expect(routeSource).toContain("trackSourceLifecycleWrite(recordSourceReadiness(input.source, agentId))");
 		expect(routeSource).toContain("trackSourceLifecycleWrite(recordSourceFreshness(input.source, agentId))");
-		expect(daemonSource).toContain("await cleanupSourceDeletionTombstones(AGENTS_DIR)");
+		const runtimeStartIndex = daemonSource.indexOf("const startPostReadyRuntime = async (): Promise<void> => {");
+		const runtimeEndIndex = daemonSource.indexOf("deferredRuntimeScheduler.schedulePipeline(startPostReadyRuntime);");
+		const cleanupIndex = daemonSource.indexOf("await cleanupSourceDeletionTombstones(AGENTS_DIR);");
+		const pipelineIndex = daemonSource.indexOf("await startPipelineRuntime(memoryCfg, telemetryCollector);");
+		expect(runtimeStartIndex).toBeGreaterThanOrEqual(0);
+		expect(cleanupIndex).toBeGreaterThan(runtimeStartIndex);
+		expect(cleanupIndex).toBeLessThan(pipelineIndex);
+		expect(pipelineIndex).toBeLessThan(runtimeEndIndex);
+		expect(daemonSource).toContain("Deferred source-deletion tombstone cleanup failed; retry remains available");
 	});
 
 	it("lists no configured sources by default", async () => {
@@ -623,6 +631,65 @@ describe("Sources routes", () => {
 		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
 	});
 
+	it("keeps post-ready startup responsive while tombstone lifecycle cleanup waits for the writer (#1630)", async () => {
+		const tombstonePath = join(dir, ".daemon", "source-deletion-tombstones.json");
+		mkdirSync(join(dir, ".daemon"), { recursive: true });
+		writeFileSync(
+			tombstonePath,
+			`${JSON.stringify(
+				[
+					{
+						id: "tombstone-blocked-writer",
+						source: { id: "blocked-writer-vault", name: "Blocked Writer Vault", kind: "obsidian", root: vault },
+						agentId: "test-agent",
+						deletedAt: new Date().toISOString(),
+					},
+				],
+				null,
+				2,
+			)}\n`,
+		);
+
+		const accessor = getDbAccessor();
+		const originalAsync = accessor.withWriteTxAsync;
+		if (!originalAsync) throw new Error("async write API is unavailable");
+		const injectable = accessor as {
+			withWriteTxAsync: <T>(fn: (db: import("../db-accessor").WriteDb) => T) => Promise<T>;
+		};
+		let releaseWriter = () => {};
+		const writerGate = new Promise<void>((resolve) => {
+			releaseWriter = resolve;
+		});
+		let purges = 0;
+		let settled = false;
+		injectable.withWriteTxAsync = async (fn) => {
+			await writerGate;
+			return originalAsync(fn);
+		};
+
+		try {
+			const cleanup = cleanupSourceDeletionTombstones(dir, () => {
+				purges++;
+				return 1;
+			});
+			void cleanup.then(() => {
+				settled = true;
+			});
+
+			await Bun.sleep(50);
+			expect(cleanup instanceof Promise).toBe(true);
+			expect(settled).toBe(false);
+			expect(purges).toBe(0);
+
+			releaseWriter();
+			await cleanup;
+			expect(settled).toBe(true);
+			expect(purges).toBe(1);
+			expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
+		} finally {
+			injectable.withWriteTxAsync = originalAsync;
+		}
+	});
 	it("reports source chunk stats using source-owned chunk id prefixes", async () => {
 		const added = addObsidianSource({ root: vault, name: "Stats Vault" }, dir);
 		expect(added.ok).toBe(true);

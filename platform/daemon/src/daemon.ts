@@ -2074,19 +2074,9 @@ async function main() {
 	// deferred call, so owner startup and the bounded drain never delay readiness.
 	runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
 
-	// Purge artifacts of sources deleted while the daemon was down (e.g.
-	// crash-loop-disabled sources). This needs the DB accessor, so it runs
-	// here in the startup sequence — not at route registration, which
-	// executes before DB init and crashed the daemon whenever a tombstone
-	// existed at boot (#1143). Failures are tolerated inside the cleanup;
-	// failed purges defer to the next boot.
-	try {
-		await cleanupSourceDeletionTombstones(AGENTS_DIR);
-	} catch (err) {
-		logger.warn("daemon", "Source-deletion tombstone cleanup failed; continuing startup", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-	}
+	// Source-deletion cleanup runs in the post-ready deferred lane below. Do not
+	// put it before binding the HTTP server: its lifecycle-state delete uses the
+	// bounded async writer and must not make readiness depend on that queue.
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
@@ -2335,6 +2325,16 @@ async function main() {
 	// background write work piles on (#1059 thundering-herd prevention).
 	const startPostReadyRuntime = async (): Promise<void> => {
 		await deferredRuntimeGate.waitForIntegrity();
+		// Tombstone cleanup uses the bounded async writer. Keep it in this
+		// serialized post-ready lane, before pipeline startup, so readiness is
+		// already published while lifecycle deletion still avoids write contention.
+		try {
+			await cleanupSourceDeletionTombstones(AGENTS_DIR);
+		} catch (error) {
+			logger.error("daemon", "Deferred source-deletion tombstone cleanup failed; retry remains available", undefined, {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 		reportStartupGrace();
 		await startPipelineRuntime(memoryCfg, telemetryCollector);
 		logFdSnapshot("post-pipeline");

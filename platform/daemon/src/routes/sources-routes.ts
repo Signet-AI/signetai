@@ -675,7 +675,7 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
 
 /**
  * Purge artifacts of sources deleted while the daemon was down and drop their
- * tombstones. Runs in the daemon startup sequence AFTER the DB accessor is
+ * tombstones. Runs in the post-ready deferred lane AFTER the DB accessor is
  * initialized (#1143): route registration executes before DB init, so it must
  * not trigger this — the old placement crashed the daemon with "DbAccessor not
  * initialised" whenever a tombstone existed at boot.
