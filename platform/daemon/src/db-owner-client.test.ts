@@ -3,7 +3,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDbOwnerClient, DbOwnerCancelledError, DbOwnerDeadlineError, DbOwnerDiedError } from "./db-owner-client";
+import {
+	createDbOwnerClient,
+	DbOwnerAdmissionError,
+	DbOwnerCancelledError,
+	DbOwnerDeadlineError,
+	DbOwnerDiedError,
+	MAX_DB_OWNER_PENDING_JOBS,
+	MAX_DB_OWNER_WORK_UNITS,
+} from "./db-owner-client";
 import { recallThroughDbOwner } from "./db-owner-recall";
 
 function makeDb(): { readonly directory: string; readonly path: string } {
@@ -128,8 +136,66 @@ describe("DB owner client", () => {
 			{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
 			{ operation: "recall.read", lane: "read", deadlineMs: 1_000 },
 		);
+		await waitFor(() => client?.health().activeJobId === first.job.id);
 		second.cancel();
 		await expect(second.result).rejects.toBeInstanceOf(DbOwnerCancelledError);
+		expect(client.health().queuedJobs).toBe(1);
+		expect(client.health().activeJobId).toBe(first.job.id);
 		await first.result;
+		expect(client.health().queuedJobs).toBe(0);
+		expect(client.health().activeJobId).toBeNull();
+	});
+
+	test("rejects owner work beyond the bounded queue admission cap", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		const owner = client;
+		if (owner === null) throw new Error("owner client not created");
+		expect(() =>
+			owner.submit(
+				{ kind: "sleep", durationMs: 1 },
+				{
+					operation: "maintenance.work-budget-overflow",
+					lane: "maintenance",
+					deadlineMs: 2_000,
+					estimatedWorkUnits: MAX_DB_OWNER_WORK_UNITS + 1,
+				},
+			),
+		).toThrow(DbOwnerAdmissionError);
+		const handles = Array.from({ length: MAX_DB_OWNER_PENDING_JOBS }, () =>
+			owner.submit(
+				{ kind: "sleep", durationMs: 50 },
+				{ operation: "maintenance.admission-test", lane: "maintenance", deadlineMs: 2_000 },
+			),
+		);
+		expect(handles).toHaveLength(MAX_DB_OWNER_PENDING_JOBS);
+		expect(() =>
+			client?.submit(
+				{ kind: "sleep", durationMs: 1 },
+				{ operation: "maintenance.admission-overflow", lane: "maintenance", deadlineMs: 2_000 },
+			),
+		).toThrow(DbOwnerAdmissionError);
+
+		for (const handle of handles) handle.cancel();
+		await Promise.allSettled(handles.map((handle) => handle.result));
+	});
+
+	test("rejects a result that exceeds the bounded wire payload", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		const handle = client.submit(
+			{
+				kind: "query",
+				statement: {
+					sql: "SELECT ? AS content",
+					params: ["x".repeat(1_100_000)],
+					result: "all",
+				},
+			},
+			{ operation: "recall.result-limit-test", lane: "read", deadlineMs: 2_000 },
+		);
+		await expect(handle.result).rejects.toMatchObject({ code: "DB_OWNER_RESULT_TOO_LARGE" });
 	});
 });

@@ -21,6 +21,7 @@ Every submitted job has this shape:
       sql: string,
       params?: Array<string | number | boolean | null | { type: "bytes", base64: string }>,
       result: "all" | "get" | "run",
+      maxResultBytes?: number,
       transactional?: boolean
     }
   } | {
@@ -30,7 +31,7 @@ Every submitted job has this shape:
 }
 ```
 
-`enqueuedAt` and `deadlineAt` use Unix milliseconds. `deadlineAt` is an absolute deadline, so queue wait and execution consume the same budget. `estimatedWorkUnits` is admission and telemetry metadata, not permission to exceed the deadline. The `sleep` request exists only for lifecycle and deadline tests and is not a production database operation.
+`enqueuedAt` and `deadlineAt` use Unix milliseconds. `deadlineAt` is an absolute deadline, so queue wait and execution consume the same budget. Admission is bounded at 64 pending jobs, 10,000 estimated work units per job, and a 60-second deadline. `maxResultBytes` is bounded at 1 MiB. A result above that limit is rejected with `DB_OWNER_RESULT_TOO_LARGE`; callers must page the SQL query or select fewer columns. The owner never emits an unbounded result line. `estimatedWorkUnits` is admission and telemetry metadata, not permission to exceed the deadline. The `sleep` request exists only for lifecycle and deadline tests and is not a production database operation.
 
 ## Wire messages
 
@@ -55,7 +56,7 @@ The owner sends:
 
 The first implementation has one FIFO process. `read` jobs and `write` or `maintenance` jobs are still tagged separately, preserving the lane split for a future transport with parallel readers and one writer. A `run` statement is wrapped in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. Read statements do not open a transaction.
 
-A queued cancellation is removed logically before execution. A cancellation received while synchronous native SQLite work is running is best effort because the owner cannot observe stdin until that call returns. A deadline is different: the client kills the entire child with `SIGKILL` at the absolute deadline. This is the hard boundary for uninterruptible native work. The subsequent owner death fails all other in-flight and queued jobs closed.
+A queued cancellation is removed from the client pending map, clears its deadline timer, and is removed from the owner's queue before execution. A cancellation received while synchronous native SQLite work is running is best effort because the owner cannot observe stdin until that call returns. A deadline is different: the client kills the entire child with `SIGKILL` at the absolute deadline. The subsequent owner death fails all other in-flight and queued jobs closed.
 
 Construction failure, malformed protocol input, owner exit, deadline kill, and job failure are all observable through the health state or the rejected handle. A dead owner is recoverable without a daemon restart, but no job is silently replayed because writes may have reached SQLite before a process crash.
 

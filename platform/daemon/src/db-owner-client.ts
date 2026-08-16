@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 import type {
 	DbOwnerCommand,
 	DbOwnerEvent,
@@ -10,10 +11,22 @@ import type {
 	DbOwnerRequest,
 	DbOwnerSerializedError,
 } from "./db-owner-protocol";
+import {
+	DB_OWNER_MAX_DEADLINE_MS,
+	DB_OWNER_MAX_QUEUE_DEPTH,
+	DB_OWNER_MAX_RESULT_BYTES,
+	DB_OWNER_MAX_WORK_UNITS,
+} from "./db-owner-protocol";
 
 export type { DbOwnerLane, DbOwnerRequest } from "./db-owner-protocol";
 
 export type DbOwnerHealthState = "starting" | "ready" | "dead" | "failed" | "closed";
+
+/** Keep owner admission bounded like the Phase B async database queues. */
+export const MAX_DB_OWNER_PENDING_JOBS = DB_OWNER_MAX_QUEUE_DEPTH;
+export const MAX_DB_OWNER_WORK_UNITS = DB_OWNER_MAX_WORK_UNITS;
+export const MAX_DB_OWNER_DEADLINE_MS = DB_OWNER_MAX_DEADLINE_MS;
+export const MAX_DB_OWNER_RESULT_BYTES = DB_OWNER_MAX_RESULT_BYTES;
 
 export interface DbOwnerHealth {
 	readonly state: DbOwnerHealthState;
@@ -77,6 +90,13 @@ export class DbOwnerDiedError extends DbOwnerError {
 	}
 }
 
+export class DbOwnerAdmissionError extends DbOwnerError {
+	constructor(code: "DB_OWNER_QUEUE_FULL" | "DB_OWNER_WORK_BUDGET", message: string) {
+		super(code, message);
+		this.name = "DbOwnerAdmissionError";
+	}
+}
+
 interface PendingJob<Result> {
 	readonly job: DbOwnerJob;
 	readonly resolve: (value: Result | PromiseLike<Result>) => void;
@@ -92,6 +112,8 @@ export interface DbOwnerClientOptions {
 }
 
 function defaultWorkerPath(): string {
+	const embedded = resolveEmbeddedWorkerPath("db-owner-worker");
+	if (embedded !== null) return embedded;
 	const directory = dirname(fileURLToPath(import.meta.url));
 	const bundled = join(directory, "db-owner-worker.js");
 	return existsSync(bundled) ? bundled : join(directory, "db-owner-worker.ts");
@@ -280,6 +302,28 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		if (!Number.isFinite(submitOptions.deadlineMs) || submitOptions.deadlineMs <= 0) {
 			throw new RangeError("DB owner deadlineMs must be a positive finite number");
 		}
+		if (submitOptions.deadlineMs > MAX_DB_OWNER_DEADLINE_MS) {
+			throw new DbOwnerAdmissionError(
+				"DB_OWNER_WORK_BUDGET",
+				`DB owner deadlineMs exceeds the ${MAX_DB_OWNER_DEADLINE_MS}ms admission limit`,
+			);
+		}
+		const estimatedWorkUnits = submitOptions.estimatedWorkUnits ?? 1;
+		if (!Number.isFinite(estimatedWorkUnits) || estimatedWorkUnits < 0) {
+			throw new RangeError("DB owner estimatedWorkUnits must be a non-negative finite number");
+		}
+		if (estimatedWorkUnits > MAX_DB_OWNER_WORK_UNITS) {
+			throw new DbOwnerAdmissionError(
+				"DB_OWNER_WORK_BUDGET",
+				`DB owner estimatedWorkUnits exceeds the ${MAX_DB_OWNER_WORK_UNITS}-unit admission limit`,
+			);
+		}
+		if (pending.size >= MAX_DB_OWNER_PENDING_JOBS) {
+			throw new DbOwnerAdmissionError(
+				"DB_OWNER_QUEUE_FULL",
+				`DB owner admission queue is full at ${MAX_DB_OWNER_PENDING_JOBS} pending jobs`,
+			);
+		}
 		const now = Date.now();
 		const job: DbOwnerJob = {
 			id: `db-owner-${process.pid}-${++sequence}`,
@@ -287,7 +331,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			lane: submitOptions.lane,
 			enqueuedAt: now,
 			deadlineAt: now + submitOptions.deadlineMs,
-			estimatedWorkUnits: Math.max(0, submitOptions.estimatedWorkUnits ?? 1),
+			estimatedWorkUnits,
 			cancellation: "pending",
 			request,
 		};
@@ -296,9 +340,13 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			const timer = setTimeout(() => {
 				const entry = pending.get(job.id);
 				if (entry === undefined || entry.settled) return;
-				entry.settled = true;
 				lastError = `deadline exceeded for ${job.id}`;
-				entry.reject(new DbOwnerDeadlineError(job.id));
+				settle(job.id, (settledJob) => {
+					if (!settledJob.settled) {
+						settledJob.settled = true;
+						settledJob.reject(new DbOwnerDeadlineError(job.id));
+					}
+				});
 				child?.kill("SIGKILL");
 			}, submitOptions.deadlineMs);
 			pendingJob = { job, resolve, reject, timer, settled: false };
@@ -334,8 +382,12 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	function cancel(jobId: string): void {
 		const entry = pending.get(jobId);
 		if (entry === undefined || entry.settled) return;
-		entry.settled = true;
-		entry.reject(new DbOwnerCancelledError(jobId));
+		settle(jobId, (job) => {
+			if (!job.settled) {
+				job.settled = true;
+				job.reject(new DbOwnerCancelledError(jobId));
+			}
+		});
 		try {
 			if (state === "ready") write({ type: "cancel", jobId });
 		} catch {

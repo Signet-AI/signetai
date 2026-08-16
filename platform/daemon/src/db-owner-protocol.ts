@@ -9,6 +9,10 @@
  */
 
 export type DbOwnerLane = "read" | "write" | "maintenance";
+export const DB_OWNER_MAX_QUEUE_DEPTH = 64;
+export const DB_OWNER_MAX_WORK_UNITS = 10_000;
+export const DB_OWNER_MAX_DEADLINE_MS = 60_000;
+export const DB_OWNER_MAX_RESULT_BYTES = 1_048_576;
 export type DbOwnerCancellation = "pending" | "requested" | "started";
 export type DbOwnerOutcome = "completed" | "cancelled" | "timed_out" | "failed" | "owner_died";
 
@@ -18,6 +22,8 @@ export interface DbOwnerStatement {
 	readonly sql: string;
 	readonly params?: readonly DbOwnerParameter[];
 	readonly result: "all" | "get" | "run";
+	/** Maximum UTF-8 JSON payload for this result. The owner rejects larger results. */
+	readonly maxResultBytes?: number;
 	readonly transactional?: boolean;
 }
 
