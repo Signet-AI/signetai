@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
-import { closeDbAccessor, initDbAccessor } from "./db-accessor";
-import { MEMORY_HEAD_MAX_TOKENS, writeMemoryHead } from "./memory-head";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { curateMemoryHead, MEMORY_HEAD_MAX_TOKENS, writeMemoryHead } from "./memory-head";
 
 const tok = new Tiktoken(cl100k_base);
 
@@ -120,5 +120,67 @@ describe("writeMemoryHead", () => {
 
 		expect(result).toMatchObject({ ok: false, code: "invalid" });
 		expect(existsSync(join(agentsDir, "MEMORY.md"))).toBe(false);
+	});
+
+	it("rolls back the head and projection when audit insertion violates uniqueness", () => {
+		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
+		const initialContent = "# MEMORY\n\n## Active\n- original curated head\n";
+		const initialWrite = writeMemoryHead(initialContent, { agentId: "agent-a", owner: "memory-head-test" });
+		expect(initialWrite).toEqual({ ok: true, revision: 1 });
+
+		const path = join(agentsDir, "agents", "agent-a", "MEMORY.md");
+		const previousFile = readFileSync(path);
+		const previousRow = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT content, content_hash, revision FROM memory_md_heads WHERE agent_id = ?").get("agent-a") as
+				| { content: string; content_hash: string; revision: number }
+				| undefined,
+		);
+		expect(previousRow).toBeDefined();
+
+		// The curation below will write revision 2. Pre-seeding the exact audit key
+		// makes its INSERT fail inside the transaction, after head publication.
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memory_head_revisions
+				 (id, agent_id, pass_id, revision, content_hash, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"pre-seeded-audit-row",
+				"agent-a",
+				"pass-atomicity",
+				2,
+				"pre-seeded-hash",
+				"entry-duplicate",
+				"pre-seeded entry",
+				"added",
+				"[]",
+				"[]",
+			);
+		});
+
+		const result = curateMemoryHead({
+			passId: "pass-atomicity",
+			agentId: "agent-a",
+			baseRevision: previousRow!.revision,
+			baseHash: previousRow!.content_hash,
+			content: "# MEMORY\n\n## Active\n- replacement curated head\n",
+			entries: [
+				{
+					id: "entry-duplicate",
+					text: "replacement entry",
+					operation: "added",
+					sourceRefs: ["source:atomicity"],
+					supportingQuotes: ["replacement entry"],
+				},
+			],
+		});
+
+		expect(result).toMatchObject({ ok: false, code: "invalid" });
+		expect(result.ok === false && result.error).toContain("UNIQUE");
+		expect(readFileSync(path)).toEqual(previousFile);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT content, content_hash, revision FROM memory_md_heads WHERE agent_id = ?").get("agent-a"),
+		)).toEqual(previousRow);
 	});
 });
