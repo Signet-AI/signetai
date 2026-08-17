@@ -1591,6 +1591,7 @@ export async function runDreamingAgentPass(
 			agentId,
 			actor: "dreaming",
 			passId,
+			mode,
 			writeCaps,
 			async onOperationsAboutToApply(operations, scopeId) {
 				retirementCandidates = await collectDreamingRetirementCandidates(accessor, scopeId, operations);

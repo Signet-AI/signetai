@@ -43,6 +43,7 @@ describe("writeMemoryHead", () => {
 	});
 
 	it("keeps short MEMORY.md content intact", () => {
+		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
 		const content = "# MEMORY\n\n## Active\n- short note\n";
 
 		const result = writeMemoryHead(content);
@@ -97,7 +98,7 @@ describe("writeMemoryHead", () => {
 		expect(existsSync(join(agentsDir, "agents"))).toBe(false);
 	});
 
-	it("truncates the tail of oversized MEMORY.md content to 5000 tokens", () => {
+	it("rejects oversized MEMORY.md candidates without truncating them", () => {
 		const keep = "# MEMORY\n\n## Active\n- retain this context\n\n";
 		const chunk =
 			"alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega\n";
@@ -110,13 +111,8 @@ describe("writeMemoryHead", () => {
 		content += tail;
 
 		const result = writeMemoryHead(content);
-		expect(result.ok).toBe(true);
-
-		const file = readMemoryHead();
-		expect(file.startsWith("<!-- generated ")).toBe(true);
-		expect(file).toContain("retain this context");
-		expect(file).not.toContain("## Tail Marker");
-		expect(tok.encode(file).length).toBeLessThanOrEqual(MEMORY_HEAD_MAX_TOKENS);
+		expect(result).toMatchObject({ ok: false, code: "invalid" });
+		expect(existsSync(join(agentsDir, "MEMORY.md"))).toBe(false);
 	});
 
 	it("refuses hostile content instead of projecting it into MEMORY.md", () => {

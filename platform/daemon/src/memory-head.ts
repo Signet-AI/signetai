@@ -5,9 +5,9 @@ import { resolveDefaultBasePath, scanMemoryContent } from "@signet/core";
 import { getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { loadMemoryConfig } from "./memory-config";
-import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
+import { countTokens } from "./pipeline/tokenizer";
 
-export const MEMORY_HEAD_MAX_TOKENS = 5000;
+export const MEMORY_HEAD_MAX_TOKENS = 1000;
 
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -27,6 +27,27 @@ export type MemoryHeadWriteResult =
 	| { readonly ok: true; readonly revision: number }
 	| { readonly ok: false; readonly error: string; readonly code?: "busy" | "invalid" | "unavailable" };
 
+export interface MemoryHeadEntry {
+	readonly id: string;
+	readonly text: string;
+	readonly operation: "added" | "updated" | "removed" | "deferred" | "no-op";
+	readonly sourceRefs: readonly string[];
+	readonly supportingQuotes: readonly string[];
+}
+
+export interface MemoryHeadCuration {
+	readonly passId: string;
+	readonly agentId: string;
+	readonly baseRevision: number;
+	readonly baseHash: string;
+	readonly content: string;
+	readonly entries: readonly MemoryHeadEntry[];
+}
+
+export type MemoryHeadCurationResult =
+	| { readonly ok: true; readonly revision: number; readonly hash: string; readonly changed: boolean }
+	| { readonly ok: false; readonly error: string; readonly code: "invalid" | "busy" };
+
 function hashContent(content: string): string {
 	return createHash("sha256").update(content).digest("hex");
 }
@@ -34,8 +55,10 @@ function hashContent(content: string): string {
 function projectMemoryMd(content: string): { readonly body: string; readonly file: string } {
 	const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
 	const prefix = `<!-- generated ${stamp} -->\n\n`;
-	const budget = MEMORY_HEAD_MAX_TOKENS - countTokens(prefix);
-	const body = truncateToTokens(content, budget);
+	const body = content.trim();
+	if (countTokens(`${prefix}${body}`) > MEMORY_HEAD_MAX_TOKENS) {
+		throw new Error(`MEMORY.md candidate exceeds the ${MEMORY_HEAD_MAX_TOKENS}-token limit`);
+	}
 	return { body, file: `${prefix}${body}` };
 }
 
@@ -198,7 +221,12 @@ export function writeMemoryHead(
 		};
 	}
 
-	const projected = projectMemoryMd(trimmed);
+	let projected: { readonly body: string; readonly file: string };
+	try {
+		projected = projectMemoryMd(trimmed);
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error), code: "invalid" };
+	}
 	const agentId = normalizeAgentId(opts?.agentId);
 	if (!isSafeAgentId(agentId)) {
 		return { ok: false, error: `Invalid agentId for MEMORY.md path: ${agentId}`, code: "invalid" };
@@ -223,11 +251,7 @@ export function writeMemoryHead(
 			writeProjection(projected.file, agentId);
 			return { ok: true, revision: 0 };
 		}
-		return {
-			ok: false,
-			error: "Curated memory head state unavailable; refusing legacy projection",
-			code: "unavailable",
-		};
+		return { ok: false, error: lease.error, code: lease.code === "unavailable" ? "unavailable" : lease.code };
 	}
 
 	const next = lease.row.hash === hashContent(projected.body) ? lease.row.revision : lease.row.revision + 1;
@@ -246,4 +270,51 @@ export function writeMemoryHead(
 			error: error instanceof Error ? error.message : String(error),
 		};
 	}
+}
+
+/** Audited content-pass seam; hygiene passes have no way to invoke this. */
+export function curateMemoryHead(input: MemoryHeadCuration): MemoryHeadCurationResult {
+	if (!input.passId.trim() || !input.agentId.trim())
+		return { ok: false, error: "passId and agentId are required", code: "invalid" };
+	for (const entry of input.entries) {
+		if (!entry.id.trim() || !entry.text.trim())
+			return { ok: false, error: "Memory head entries require id and text", code: "invalid" };
+		if (
+			entry.operation !== "deferred" &&
+			entry.operation !== "no-op" &&
+			(!entry.sourceRefs.length || !entry.supportingQuotes.length)
+		)
+			return { ok: false, error: `Entry ${entry.id} requires provenance`, code: "invalid" };
+	}
+	const result = writeMemoryHead(input.content, { agentId: input.agentId, owner: `dreaming:${input.passId}` });
+	if (!result.ok) return { ok: false, error: result.error, code: result.code === "busy" ? "busy" : "invalid" };
+	const hash = hashContent(input.content.trim());
+	try {
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: audited revision write
+		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+			for (const entry of input.entries)
+				db.prepare(
+					`INSERT INTO memory_head_revisions (id, agent_id, pass_id, revision, content_hash, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				).run(
+					randomUUID(),
+					input.agentId,
+					input.passId,
+					result.revision,
+					hash,
+					entry.id,
+					entry.text,
+					entry.operation,
+					JSON.stringify(entry.sourceRefs),
+					JSON.stringify(entry.supportingQuotes),
+				);
+		});
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error), code: "invalid" };
+	}
+	return {
+		ok: true,
+		revision: result.revision,
+		hash,
+		changed: result.revision !== input.baseRevision || hash !== input.baseHash,
+	};
 }

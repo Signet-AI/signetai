@@ -39,6 +39,7 @@ import {
 import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
 import { commitCuratedMemoryHead, readCuratedMemoryHead } from "../memory-head-curation";
+import { curateMemoryHead } from "../memory-head";
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
@@ -214,9 +215,11 @@ export const DREAMING_CAPABILITY_IDS = [
 	"runbook_write",
 	"attention_list",
 	"apply_ontology_ops",
+	"curate_memory_head",
 ] as const;
 
 export type DreamingCapabilityId = (typeof DREAMING_CAPABILITY_IDS)[number];
+export type DreamingCapabilityMode = "incremental" | "compact" | "incremental-hygiene" | "incremental-content";
 
 export interface DreamingCapabilityResult {
 	readonly tool: DreamingCapabilityId;
@@ -261,6 +264,8 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly actor: string;
 	/** Present only for a live Dreaming pass; protects runbook writes. */
 	readonly passId?: string;
+	/** Focus mode gates content-only capabilities structurally. */
+	readonly mode?: DreamingCapabilityMode;
 	/** Write-path caps forwarded to applyDreamingOperations. */
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
@@ -807,6 +812,59 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				};
 			},
 		),
+		...(params.mode === "incremental-hygiene"
+			? []
+			: [
+					capability(
+						"curate_memory_head",
+						"Curate MEMORY.md head",
+						"Content-pass-only audited MEMORY.md curation; hygiene passes cannot invoke this capability.",
+						false,
+						z.object({
+							passId: z.string().min(1),
+							agentId: z.string().min(1),
+							baseRevision: z.number().int().nonnegative(),
+							baseHash: z.string().length(64),
+							content: z.string().trim().min(1),
+							entries: z
+								.array(
+									z.object({
+										id: z.string().trim().min(1),
+										text: z.string().trim().min(1),
+										operation: z.enum(["added", "updated", "removed", "deferred", "no-op"]),
+										sourceRefs: z.array(z.string()),
+										supportingQuotes: z.array(z.string()),
+									}),
+								)
+								.max(200),
+						}),
+						async (input) => {
+							if (!params.passId || input.passId !== params.passId)
+								return { ok: false, error: "Head curation requires the active Dreaming pass" };
+							const result = curateMemoryHead(input);
+							if (result.ok && params.accessor.withWriteTxAsync) {
+								await params.accessor.withWriteTxAsync((db) =>
+									db
+										.prepare(
+											`UPDATE dreaming_passes SET head_revision = ?, head_hash = ?, head_added = ?, head_updated = ?, head_removed = ?, head_deferred = ?, head_no_op = ? WHERE id = ? AND agent_id = ?`,
+										)
+										.run(
+											result.revision,
+											result.hash,
+											input.entries.filter((entry) => entry.operation === "added").length,
+											input.entries.filter((entry) => entry.operation === "updated").length,
+											input.entries.filter((entry) => entry.operation === "removed").length,
+											input.entries.filter((entry) => entry.operation === "deferred").length,
+											input.entries.filter((entry) => entry.operation === "no-op").length,
+											input.passId,
+											input.agentId,
+										),
+								);
+							}
+							return result;
+						},
+					),
+				]),
 	];
 }
 
@@ -823,6 +881,7 @@ export function getDreamingCapabilityManifest(): readonly DreamingCapabilityMani
 		accessor: undefined as never,
 		agentId: "manifest",
 		actor: "manifest",
+		mode: "incremental-content",
 	}).map((capability) => ({
 		id: capability.id,
 		title: capability.title,
