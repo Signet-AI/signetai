@@ -194,7 +194,7 @@ describe("memory-lineage", () => {
 
 	it("manifest lock contention yields to the event loop and removes dead owners", async () => {
 		const stamp = new Date().toISOString();
-		const manifest = ensureCanonicalManifest({
+		const manifest = await ensureCanonicalManifest({
 			agentId: "default",
 			sessionId: "manifest-lock-contention",
 			sessionKey: "manifest-lock-contention",
@@ -233,7 +233,7 @@ describe("memory-lineage", () => {
 
 	it("concurrent manifest updates are serialized without losing revisions", async () => {
 		const stamp = new Date().toISOString();
-		const manifest = ensureCanonicalManifest({
+		const manifest = await ensureCanonicalManifest({
 			agentId: "default",
 			sessionId: "manifest-lock-queue",
 			sessionKey: "manifest-lock-queue",
