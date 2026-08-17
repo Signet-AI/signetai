@@ -1678,11 +1678,10 @@ export async function runDreamingAgentPass(
 			onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
 			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
 		});
-		if (mode === "incremental-content" && memoryHeadResult?.["ok"] !== true) {
-			failed++;
+		const memoryHeadMissing = mode === "incremental-content" && memoryHeadResult?.["ok"] !== true;
+		if (memoryHeadMissing)
 			logger.warn("dreaming", "Content pass completed without a successful memory-head commit", { passId });
-		}
-		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}`;
+		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}${memoryHeadMissing ? " [memory-head commit missing]" : ""}`;
 		const attribution = executorResult.attribution ?? null;
 		// Provider-reported aggregate when the executor surfaced it (pi-backed
 		// agent sessions); otherwise fall back to the local prompt estimate so
