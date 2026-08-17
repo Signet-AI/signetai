@@ -1,11 +1,11 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
-import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSourceIfGeneration } from "@signet/core";
+import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSource } from "@signet/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getPeerAddress } from "../auth/middleware";
-import { getDbAccessor } from "../db-accessor";
+import { getDbAccessor, runWriteTxAsync } from "../db-accessor";
 import {
 	IMPORT_MAX_BATCH_BYTES,
 	IMPORT_MAX_FILES,
@@ -22,7 +22,7 @@ import { logger } from "../logger";
 import { indexExternalMemoryArtifact } from "../memory-lineage";
 import { enqueueDreamingAttentionInTx } from "../pipeline/dreaming-attention";
 import { indexSourceArtifactStructureInTx } from "../source-artifact-graph";
-import { purgeSourceOwnedRows } from "../source-purge";
+import { purgeSourceOwnedRowsInTx } from "../source-purge";
 
 const MAX_MULTIPART_OVERHEAD = 1 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD;
@@ -248,8 +248,7 @@ export function registerImportRoutes(app: Hono): void {
 						sourceMeta: { ...normalized.value.sourceMeta, ...chunk.sourceMeta },
 					});
 				}
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+				await runWriteTxAsync(getDbAccessor(), (db) => {
 					enqueueDreamingAttentionInTx(db, {
 						agentId,
 						kind: "hygiene",
@@ -259,19 +258,12 @@ export function registerImportRoutes(app: Hono): void {
 					});
 				});
 				if (replacedSource !== undefined) {
-					try {
-						markImportedSourceUnsupported({
-							sourceId: replacedSource.id,
-							agentId: resolveDaemonAgentId(),
-							reason: "imported source replaced",
-						});
-					} catch (cleanupError) {
-						logger.warn("documents", "Replaced dashboard import purge failed", {
-							sourceId: replacedSource.id,
-							error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-						});
-					}
-					const removed = removeSourceIfGeneration(replacedSource.id, replacedSource.generation, agentsDir);
+					await markImportedSourceUnsupported({
+						sourceId: replacedSource.id,
+						agentId: resolveDaemonAgentId(),
+						reason: "imported source replaced",
+					});
+					const removed = removeSource(replacedSource.id, agentsDir);
 					if (removed.ok === false)
 						logger.warn("documents", "Replaced dashboard import config cleanup failed", {
 							sourceId: replacedSource.id,
@@ -295,8 +287,10 @@ export function registerImportRoutes(app: Hono): void {
 			} catch (error) {
 				if (added.created) {
 					try {
-						purgeSourceOwnedRows({ sourceId: added.source.id, agentId: resolveDaemonAgentId() });
-						removeSourceIfGeneration(added.source.id, added.source.generation, process.env.SIGNET_PATH);
+						await runWriteTxAsync(getDbAccessor(), (db) =>
+							purgeSourceOwnedRowsInTx(db, { sourceId: added.source.id, agentId: resolveDaemonAgentId() }),
+						);
+						removeSource(added.source.id, process.env.SIGNET_PATH);
 					} catch (cleanupError) {
 						logger.warn("documents", "Dashboard import cleanup failed", {
 							sourceId: added.source.id,
