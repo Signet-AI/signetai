@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveDefaultBasePath, scanMemoryContent } from "@signet/core";
 import { getDbAccessor, hasDbAccessor } from "./db-accessor";
@@ -286,12 +286,27 @@ export function curateMemoryHead(input: MemoryHeadCuration): MemoryHeadCurationR
 		)
 			return { ok: false, error: `Entry ${entry.id} requires provenance`, code: "invalid" };
 	}
-	const result = writeMemoryHead(input.content, { agentId: input.agentId, owner: `dreaming:${input.passId}` });
-	if (!result.ok) return { ok: false, error: result.error, code: result.code === "busy" ? "busy" : "invalid" };
-	const hash = hashContent(input.content.trim());
+	let projected: { readonly body: string; readonly file: string };
+	try {
+		projected = projectMemoryMd(input.content.trim());
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error), code: "invalid" };
+	}
+	const lease = acquireHeadLease(input.agentId, `dreaming:${input.passId}`, loadMemoryConfig(getAgentsDir()).pipelineV2.worker.leaseTimeoutMs);
+	if (!lease.ok) return { ok: false, error: lease.error, code: lease.code === "busy" ? "busy" : "invalid" };
+	const hash = hashContent(projected.body);
+	const next = lease.row.hash === hash ? lease.row.revision : lease.row.revision + 1;
+	const path = resolveMemoryHeadPath(getAgentsDir(), input.agentId);
+	const previous = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: audited revision write
 		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+			// Keep the database publication, audit rows, and projection in one
+			// admission. Audit failures therefore happen before the projection is
+			// changed, and projection failures roll the database transaction back.
+			db.prepare(
+				`UPDATE memory_md_heads SET content = ?, content_hash = ?, revision = ?, updated_at = ?, lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL WHERE agent_id = ? AND lease_token = ?`,
+			).run(projected.body, hash, next, new Date().toISOString(), input.agentId, lease.row.token);
 			for (const entry of input.entries)
 				db.prepare(
 					`INSERT INTO memory_head_revisions (id, agent_id, pass_id, revision, content_hash, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -299,7 +314,7 @@ export function curateMemoryHead(input: MemoryHeadCuration): MemoryHeadCurationR
 					randomUUID(),
 					input.agentId,
 					input.passId,
-					result.revision,
+					next,
 					hash,
 					entry.id,
 					entry.text,
@@ -307,14 +322,20 @@ export function curateMemoryHead(input: MemoryHeadCuration): MemoryHeadCurationR
 					JSON.stringify(entry.sourceRefs),
 					JSON.stringify(entry.supportingQuotes),
 				);
+			writeProjection(projected.file, input.agentId);
 		});
 	} catch (error) {
+		try {
+			if (previous === undefined) {
+				if (existsSync(path)) rmSync(path);
+			} else writeFileSync(path, previous);
+		} catch { /* preserve the original failure */ }
 		return { ok: false, error: error instanceof Error ? error.message : String(error), code: "invalid" };
 	}
 	return {
 		ok: true,
-		revision: result.revision,
+		revision: next,
 		hash,
-		changed: result.revision !== input.baseRevision || hash !== input.baseHash,
+		changed: next !== input.baseRevision || hash !== input.baseHash,
 	};
 }

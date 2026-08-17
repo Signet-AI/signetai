@@ -812,7 +812,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				};
 			},
 		),
-		...(params.mode === "incremental-hygiene"
+		...(params.mode !== "incremental-content"
 			? []
 			: [
 					capability(
@@ -842,7 +842,9 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 							if (!params.passId || input.passId !== params.passId)
 								return { ok: false, error: "Head curation requires the active Dreaming pass" };
 							const result = curateMemoryHead(input);
-							if (result.ok && params.accessor.withWriteTxAsync) {
+							if (result.ok) {
+								if (!params.accessor.withWriteTxAsync)
+									throw new Error("Head curation requires the async write transaction accessor to record its pass manifest");
 								await params.accessor.withWriteTxAsync((db) =>
 									db
 										.prepare(
