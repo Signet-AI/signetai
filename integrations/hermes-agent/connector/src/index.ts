@@ -100,10 +100,16 @@ interface HermesProbeResult {
 }
 
 function resolveContainedWritePath(targetPath: string, targetRoot: string): string {
-	if (existsSync(targetRoot) && realpathSync(targetRoot) !== targetRoot) {
+	let rootPath = targetRoot;
+	while (!existsSync(rootPath)) {
+		const parent = dirname(rootPath);
+		if (parent === rootPath) throw new Error(`Hermes target root does not exist: ${targetRoot}`);
+		rootPath = parent;
+	}
+	if (realpathSync(rootPath) !== rootPath) {
 		throw new Error(`Hermes target root is symlinked and cannot be used for writes: ${targetRoot}`);
 	}
-	let rootPath = targetRoot;
+	rootPath = targetRoot;
 	while (!existsSync(rootPath)) {
 		const parent = dirname(rootPath);
 		if (parent === rootPath) throw new Error(`Hermes target root does not exist: ${targetRoot}`);
@@ -165,14 +171,15 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 }
 
 /** Remove the Signet memory plugin from the Hermes plugins directory. */
-function uninstallPlugin(targetDir: string): string[] {
+function uninstallPlugin(targetDir: string, targetRoot?: string): string[] {
 	if (!existsSync(targetDir)) return [];
-	if (!readInstallMarker(targetDir)) {
+	const safeTargetDir = targetRoot ? resolveContainedWritePath(targetDir, targetRoot) : targetDir;
+	if (!readInstallMarker(safeTargetDir)) {
 		throw new Error(
 			`Refusing to uninstall unowned Hermes plugin path: ${targetDir} (missing or invalid ${INSTALL_MARKER_FILE})`,
 		);
 	}
-	rmSync(targetDir, { recursive: true, force: true });
+	rmSync(safeTargetDir, { recursive: true, force: true });
 	return [targetDir];
 }
 
@@ -347,8 +354,10 @@ function readProviderBackup(hermesHome: string): ProviderBackup | null {
 	}
 }
 
-function removeProviderBackup(hermesHome: string): string | null {
-	const backupPath = getProviderBackupPath(hermesHome);
+function removeProviderBackup(hermesHome: string, targetRoot?: string): string | null {
+	const backupPath = targetRoot
+		? resolveContainedWritePath(getProviderBackupPath(hermesHome), targetRoot)
+		: getProviderBackupPath(hermesHome);
 	if (!existsSync(backupPath)) return null;
 	rmSync(backupPath, { force: true });
 	return backupPath;
@@ -464,9 +473,16 @@ function configureProvider(
 	return { configPath, backupPath };
 }
 
-function restoreOrClearProvider(hermesHome: string): { configPath: string | null; backupPath: string | null } {
+function restoreOrClearProvider(
+	hermesHome: string,
+	targetRoot?: string,
+): { configPath: string | null; backupPath: string | null } {
+	const safeConfigPath = targetRoot
+		? resolveContainedWritePath(resolveConfigPath(hermesHome), targetRoot)
+		: resolveConfigPath(hermesHome);
 	const config = readConfigYaml(hermesHome);
-	if (!config) return { configPath: null, backupPath: removeProviderBackup(hermesHome) };
+	if (!config) return { configPath: null, backupPath: removeProviderBackup(hermesHome, targetRoot) };
+	resolveContainedWritePath(config.path, targetRoot ?? hermesHome);
 	const lines = config.content.replace(/\r\n/g, "\n").split("\n");
 	const block = findMemoryBlock(lines);
 	const dottedProvider = findDottedProvider(lines);
@@ -496,11 +512,11 @@ function restoreOrClearProvider(hermesHome: string): { configPath: string | null
 		configChanged = true;
 	}
 	if (configChanged) {
-		writeFileSync(config.path, `${lines.join("\n").replace(/\n+$/g, "")}\n`);
+		writeFileSync(safeConfigPath, `${lines.join("\n").replace(/\n+$/g, "")}\n`);
 	}
 	return {
-		configPath: configChanged ? config.path : null,
-		backupPath: removeProviderBackup(hermesHome),
+		configPath: configChanged ? safeConfigPath : null,
+		backupPath: removeProviderBackup(hermesHome, targetRoot),
 	};
 }
 
@@ -1106,16 +1122,18 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesRepo = this.getHermesRepo();
 		if (hermesRepo) {
-			const removed = uninstallPlugin(getRepoPluginTargetDir(hermesRepo));
+			const removed = uninstallPlugin(getRepoPluginTargetDir(hermesRepo), hermesRepo);
 			filesRemoved.push(...removed);
 		}
 
 		// Clean up env vars
 		const hermesHome = this.getHermesHome();
-		const userPluginRemoved = uninstallPlugin(getUserPluginTargetDir(hermesHome));
+		const targetRoot = this.target?.kind === "profile" ? this.target.home : undefined;
+		if (targetRoot) assertContainedTargetPath(hermesHome, targetRoot);
+		const userPluginRemoved = uninstallPlugin(getUserPluginTargetDir(hermesHome), targetRoot);
 		filesRemoved.push(...userPluginRemoved);
 
-		const providerConfig = restoreOrClearProvider(hermesHome);
+		const providerConfig = restoreOrClearProvider(hermesHome, targetRoot);
 		if (providerConfig.configPath) {
 			configsPatched.push(providerConfig.configPath);
 		}
@@ -1123,7 +1141,9 @@ export class HermesAgentConnector extends BaseConnector {
 			filesRemoved.push(providerConfig.backupPath);
 		}
 
-		const envPath = join(hermesHome, ".env");
+		const envPath = targetRoot
+			? resolveContainedWritePath(join(hermesHome, ".env"), targetRoot)
+			: join(hermesHome, ".env");
 		if (existsSync(envPath)) {
 			try {
 				let envContent = readFileSync(envPath, "utf-8");

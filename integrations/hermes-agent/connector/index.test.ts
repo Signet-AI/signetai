@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1751,6 +1751,19 @@ assert gets[0][0] == "/api/memory/search?q=new%20preference&limit=10&tags=hermes
 });
 
 describe("HermesAgentConnector.uninstall()", () => {
+	it("rejects a symlinked profile ancestor before uninstall can mutate an outside .env", async () => {
+		const outside = join(tmpRoot, "outside-profile");
+		const profiles = join(tmpRoot, "profiles");
+		mkdirSync(outside, { recursive: true });
+		symlinkSync(outside, profiles, "dir");
+		const outsideEnv = join(outside, ".env");
+		writeFileSync(outsideEnv, "KEEP=yes\nSIGNET_AGENT_ID=bot\n");
+
+		const connector = new HermesAgentConnector({ home: join(profiles, "bot"), kind: "profile" });
+		await expect(connector.uninstall()).rejects.toThrow(/symlinked|escapes validated root/);
+		expect(readFileSync(outsideEnv, "utf-8")).toBe("KEEP=yes\nSIGNET_AGENT_ID=bot\n");
+	});
+
 	it("removes the plugin directory and reports it in filesRemoved", async () => {
 		const hermesRepo = join(tmpRoot, "hermes-agent");
 		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
