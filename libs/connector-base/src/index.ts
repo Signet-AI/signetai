@@ -33,7 +33,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
@@ -118,6 +118,14 @@ export abstract class BaseConnector {
 		const raw = readFileSync(agentsPath, "utf-8");
 		const cleaned = stripSignetBlock(raw);
 		if (cleaned === raw) return null;
+		// Validate the final destination before creating the temporary file. This
+		// is also what protects symlinked ancestors from escaping basePath.
+		const root = realpathSync(basePath);
+		const parent = realpathSync(dirname(agentsPath));
+		const rel = relative(root, join(parent, "AGENTS.md"));
+		if (rel.startsWith("..") || isAbsolute(rel)) {
+			throw new Error(`Target path escapes validated root: ${agentsPath}`);
+		}
 		const tmp = join(basePath, `.${randomBytes(6).toString("hex")}.tmp`);
 		try {
 			writeFileSync(tmp, cleaned, "utf-8");

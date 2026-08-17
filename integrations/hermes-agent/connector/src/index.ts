@@ -100,6 +100,9 @@ interface HermesProbeResult {
 }
 
 function resolveContainedWritePath(targetPath: string, targetRoot: string): string {
+	if (existsSync(targetRoot) && realpathSync(targetRoot) !== targetRoot) {
+		throw new Error(`Hermes target root is symlinked and cannot be used for writes: ${targetRoot}`);
+	}
 	let rootPath = targetRoot;
 	while (!existsSync(rootPath)) {
 		const parent = dirname(rootPath);
@@ -706,11 +709,13 @@ export type AgentRegistrationResult =
 	| { readonly ok: true; readonly created: boolean; readonly agentId: string }
 	| { readonly ok: false; readonly agentId: string; readonly error: string };
 
-function configuredAgentReadPolicy(warnings: string[]): AgentReadPolicy {
+function configuredAgentReadPolicy(warnings: string[], strict = false): AgentReadPolicy | null {
 	const raw = sanitizedEnv("SIGNET_AGENT_READ_POLICY") || sanitizedEnv("SIGNET_AGENT_MEMORY_POLICY");
 	if (!raw) return "shared";
 	if (raw === "isolated" || raw === "shared" || raw === "group") return raw;
-	warnings.push(`Ignoring unsupported SIGNET_AGENT_READ_POLICY '${raw}'. Expected one of: isolated, shared, group.`);
+	const error = `Unsupported SIGNET_AGENT_READ_POLICY '${raw}'. Expected one of: isolated, shared, group.`;
+	if (strict) return null;
+	warnings.push(`Ignoring ${error}`);
 	return "shared";
 }
 
@@ -745,7 +750,7 @@ async function resolveDaemonAgentId(daemonUrl: string): Promise<string | null> {
 	}
 }
 
-async function ensureNamedAgentRegistered(
+export async function ensureNamedAgentRegistered(
 	daemonUrl: string,
 	agentIdOrOptions: string | AgentRegistrationOptions,
 	warnings: string[],
@@ -781,11 +786,16 @@ async function ensureNamedAgentRegistered(
 				`Could not check Signet agent '${agentId}' before registration: HTTP ${getResp.status} ${body.slice(0, 200)}`,
 			);
 		}
-	} catch {
+	} catch (e) {
 		// Daemon may be offline; the POST below will produce the user-facing warning.
+		if (strict) {
+			const msg = e instanceof Error ? e.message : String(e);
+			return fail(`Could not check Signet agent '${agentId}' because the daemon was unreachable. (${msg})`);
+		}
 	}
 
-	const readPolicy = options.readPolicy ?? configuredAgentReadPolicy(warnings);
+	const readPolicy = options.readPolicy ?? configuredAgentReadPolicy(warnings, strict);
+	if (readPolicy === null) return fail(`Could not register Signet agent '${agentId}' because its read policy is invalid.`);
 	const policyGroup =
 		options.policyGroup !== undefined
 			? options.policyGroup

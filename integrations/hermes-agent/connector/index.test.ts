@@ -4,7 +4,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rm
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { HermesAgentConnector, diagnoseHermesIntegration } from "./src/index.js";
+import { HermesAgentConnector, diagnoseHermesIntegration, ensureNamedAgentRegistered } from "./src/index.js";
 
 const originalEnv = {
 	HOME: process.env.HOME,
@@ -349,6 +349,28 @@ describe("HermesAgentConnector.isInstalled()", () => {
 			expect(existsSync(join(profileHome, ".env"))).toBe(true);
 			expect(existsSync(join(ambientHome, "plugins"))).toBe(false);
 			expect(process.env.HERMES_HOME).toBeUndefined();
+		});
+
+		it("does not mutate ambient AGENTS.md during a profile install", async () => {
+			const ambientAgents = join(tmpRoot, "AGENTS.md");
+			const original = "ambient\n<!-- SIGNET:START -->\nkeep\n<!-- SIGNET:END -->\n";
+			writeFileSync(ambientAgents, original);
+			const profileHome = join(tmpRoot, "profiles", "bot");
+			const result = await new HermesAgentConnector({ target: { kind: "profile", profile: "bot", home: profileHome } }).install(tmpRoot);
+			expect(result.success).toBe(true);
+			expect(readFileSync(ambientAgents, "utf-8")).toBe(original);
+		});
+
+		it("rejects a symlinked profile ancestor without writing outside the target root", async () => {
+			const outside = mkdtempSync(join(tmpdir(), "hermes-outside-"));
+			const link = join(tmpRoot, "profiles", "bot");
+			mkdirSync(join(tmpRoot, "profiles"), { recursive: true });
+			// Symlink creation is supported by the test platform and models the escape.
+			await Bun.write(join(tmpRoot, "profiles", "placeholder"), "");
+			const { symlinkSync } = await import("node:fs");
+			symlinkSync(outside, link);
+			await expect(new HermesAgentConnector({ target: { kind: "profile", profile: "bot", home: link } }).install(tmpRoot)).rejects.toThrow("symlinked");
+			expect(existsSync(join(outside, "plugins"))).toBe(false);
 		});
 	});
 	describe("HermesAgentConnector.install()", () => {
@@ -924,6 +946,54 @@ describe("HermesAgentConnector.isInstalled()", () => {
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
+	});
+});
+
+describe("ensureNamedAgentRegistered result contract", () => {
+	const run = async (response: (url: string, init?: RequestInit) => Response | Promise<Response>, options: Parameters<typeof ensureNamedAgentRegistered>[1] = { agentId: "dot", strict: true }) => {
+		const originalFetch = globalThis.fetch;
+		const previousSkip = process.env.SIGNET_SKIP_AGENT_REGISTER;
+		delete process.env.SIGNET_SKIP_AGENT_REGISTER;
+		const warnings: string[] = [];
+		globalThis.fetch = (async (url, init) => response(String(url), init)) as typeof fetch;
+		try {
+			return { result: await ensureNamedAgentRegistered("http://daemon.test", options, warnings), warnings };
+		} finally {
+			globalThis.fetch = originalFetch;
+			if (previousSkip === undefined) delete process.env.SIGNET_SKIP_AGENT_REGISTER;
+			else process.env.SIGNET_SKIP_AGENT_REGISTER = previousSkip;
+		}
+	};
+
+	it("reuses an existing agent without POST", async () => {
+		const calls: string[] = [];
+		const { result } = await run((url) => { calls.push(url); return new Response(JSON.stringify({ id: "dot" }), { status: 200 }); });
+		expect(result).toEqual({ ok: true, created: false, agentId: "dot" });
+		expect(calls).toEqual(["http://daemon.test/api/agents/dot"]);
+	});
+
+	it("creates after a typed 404", async () => {
+		const calls: string[] = [];
+		const { result } = await run((url) => { calls.push(url); return new Response(url.endsWith("/dot") ? "missing" : JSON.stringify({ id: "dot" }), { status: url.endsWith("/dot") ? 404 : 201 }); });
+		expect(result).toEqual({ ok: true, created: true, agentId: "dot" });
+		expect(calls).toEqual(["http://daemon.test/api/agents/dot", "http://daemon.test/api/agents"]);
+	});
+
+	it("rejects invalid policy without POST", async () => {
+		process.env.SIGNET_AGENT_READ_POLICY = "bogus";
+		const calls: string[] = [];
+		const { result } = await run((url) => { calls.push(url); return new Response("missing", { status: 404 }); });
+		expect(result.ok).toBe(false);
+		expect(result).toHaveProperty("error", expect.stringContaining("invalid"));
+		expect(calls).toHaveLength(1);
+	});
+
+	it("returns actionable daemon failure without POST", async () => {
+		const calls: string[] = [];
+		const { result } = await run((url) => { calls.push(url); throw new Error("connection refused"); });
+		expect(result.ok).toBe(false);
+		expect(result).toHaveProperty("error", expect.stringContaining("unreachable"));
+		expect(calls).toHaveLength(1);
 	});
 });
 
