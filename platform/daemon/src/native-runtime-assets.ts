@@ -5,8 +5,10 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	renameSync,
 	rmSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -108,6 +110,15 @@ export function materializeEmbeddedNativeAddon(name: string): string | null {
 	const dir = join(tmpdir(), "signet-native-addons");
 	const path = join(dir, `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-${hash}.node`);
 	mkdirSync(dir, { recursive: true });
+	const prefix = `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-`;
+	for (const entry of readdirSync(dir)) {
+		if (!entry.startsWith(prefix) || !entry.endsWith(".node") || entry === path.slice(dir.length + 1)) continue;
+		try {
+			unlinkSync(join(dir, entry));
+		} catch {
+			// A stale addon may still be loaded on Windows; retry next start.
+		}
+	}
 	const valid = () =>
 		existsSync(path) && createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16) === hash;
 	if (!valid()) {
@@ -115,20 +126,27 @@ export function materializeEmbeddedNativeAddon(name: string): string | null {
 		const tempPath = join(tempDir, "addon.node");
 		try {
 			writeFileSync(tempPath, content, { flag: "wx" });
-			// rename() is atomic when it succeeds. On Windows, transient sharing
-			// violations can reject replacement while another loader has the file
-			// open, so retry the same atomic replace without unlinking the live
-			// destination. This preserves the old valid file until replacement
-			// succeeds and makes a crash leave either the old or new file.
+			// The temp is fully written before rename, so the loader never sees
+			// partial content. Hash-keyed names mean we never replace a live file.
+			// Concurrent identical publishers converge on one valid destination.
 			let published = false;
-			for (let attempt = 0; attempt < 5 && !published; attempt += 1) {
+			for (let attempt = 0; attempt < 2 && !published; attempt += 1) {
 				try {
 					renameSync(tempPath, path);
 					published = true;
 				} catch (error) {
 					const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 					if (code !== "EEXIST" && code !== "EPERM" && code !== "EBUSY") throw error;
-					if (attempt < 4) Bun.sleepSync(5 * (attempt + 1));
+					if (valid()) {
+						published = true;
+					} else if (attempt === 0) {
+						// A corrupt destination is not loadable/locked; replace it once.
+						try {
+							unlinkSync(path);
+						} catch {
+							/* another publisher may be repairing it */
+						}
+					}
 				}
 			}
 			if (!published) throw new Error(`Unable to publish native addon: ${path}`);
