@@ -156,7 +156,7 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 
 	for (const file of PLUGIN_FILES) {
 		const src = join(sourceDir, file);
-		const dst = join(writeDir, file);
+		const dst = targetRoot ? resolveContainedWritePath(join(writeDir, file), targetRoot) : join(writeDir, file);
 		if (existsSync(src)) {
 			writeFileSync(dst, readFileSync(src));
 			written.push(dst);
@@ -184,19 +184,21 @@ function uninstallPlugin(targetDir: string, targetRoot?: string): string[] {
 // Config patching
 // ---------------------------------------------------------------------------
 
-function getConfigCandidates(hermesHome: string): string[] {
-	return [join(hermesHome, "config.yaml"), join(hermesHome, "cli-config.yaml")];
+function getConfigCandidates(hermesHome: string, targetRoot?: string): string[] {
+	const candidates = [join(hermesHome, "config.yaml"), join(hermesHome, "cli-config.yaml")];
+	return targetRoot ? candidates.map((candidate) => resolveContainedWritePath(candidate, targetRoot)) : candidates;
 }
 
-function resolveConfigPath(hermesHome: string): string {
-	for (const candidate of getConfigCandidates(hermesHome)) {
+function resolveConfigPath(hermesHome: string, targetRoot?: string): string {
+	for (const candidate of getConfigCandidates(hermesHome, targetRoot)) {
 		if (existsSync(candidate)) return candidate;
 	}
-	return join(hermesHome, "config.yaml");
+	const fallback = join(hermesHome, "config.yaml");
+	return targetRoot ? resolveContainedWritePath(fallback, targetRoot) : fallback;
 }
 
-function readConfigYaml(hermesHome: string): { path: string; content: string } | null {
-	const configPath = resolveConfigPath(hermesHome);
+function readConfigYaml(hermesHome: string, targetRoot?: string): { path: string; content: string } | null {
+	const configPath = resolveConfigPath(hermesHome, targetRoot);
 	if (!existsSync(configPath)) return null;
 	try {
 		return { path: configPath, content: readFileSync(configPath, "utf-8") };
@@ -389,8 +391,9 @@ function isProviderConfigured(hermesHome: string): boolean {
 function configureProvider(
 	hermesHome: string,
 	warnings: string[],
+	targetRoot?: string,
 ): { configPath: string | null; backupPath: string | null } {
-	const configPath = resolveConfigPath(hermesHome);
+	const configPath = resolveConfigPath(hermesHome, targetRoot);
 	let content = "";
 	if (existsSync(configPath)) {
 		try {
@@ -897,8 +900,9 @@ export class HermesAgentConnector extends BaseConnector {
 			};
 		}
 
-		// 2. Write env config for the Signet daemon connection
-		const envPath = join(hermesHome, ".env");
+		const envPath = options.profile
+			? resolveContainedWritePath(join(hermesHome, ".env"), hermesHome)
+			: join(hermesHome, ".env");
 		let configuredSignetAgentId = "default";
 		const configuredDaemonUrl = (process.env.SIGNET_DAEMON_URL?.trim() || "http://127.0.0.1:3850").replace(
 			/[\r\n]+/g,
@@ -1004,7 +1008,7 @@ export class HermesAgentConnector extends BaseConnector {
 		}
 
 		// 3. Activate Signet as the external Hermes memory provider.
-		const providerConfig = configureProvider(hermesHome, warnings);
+		const providerConfig = configureProvider(hermesHome, warnings, options.profile ? hermesHome : undefined);
 		if (providerConfig.configPath) {
 			configsPatched.push(providerConfig.configPath);
 		}
@@ -1073,7 +1077,9 @@ export class HermesAgentConnector extends BaseConnector {
 			filesRemoved.push(providerConfig.backupPath);
 		}
 
-		const envPath = join(hermesHome, ".env");
+		const envPath = options.profile
+			? resolveContainedWritePath(join(hermesHome, ".env"), hermesHome)
+			: join(hermesHome, ".env");
 		if (existsSync(envPath)) {
 			try {
 				let envContent = readFileSync(envPath, "utf-8");
