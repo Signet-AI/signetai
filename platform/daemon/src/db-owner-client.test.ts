@@ -71,6 +71,13 @@ describe("DB owner client", () => {
 		}
 	}
 
+	function assertNoSurvivors(spawnedPids: ReadonlySet<number>): void {
+		const survivors = [...spawnedPids].filter(processExists);
+		if (survivors.length > 0) {
+			throw new Error(`DB owner survivor(s) detected: ${survivors.join(", ")}`);
+		}
+	}
+
 	test("detects an owner survivor when harness teardown is skipped", async () => {
 		const database = makeDb();
 		directory = database.directory;
@@ -82,8 +89,7 @@ describe("DB owner client", () => {
 		client = null;
 		try {
 			const spawnedPids = new Set([ownerPid]);
-			const survivors = [...spawnedPids].filter(processExists);
-			expect(survivors).toEqual([ownerPid]);
+			expect(() => assertNoSurvivors(spawnedPids)).toThrow(String(ownerPid));
 		} finally {
 			if (processExists(ownerPid)) process.kill(ownerPid, "SIGKILL");
 			await waitFor(() => !processExists(ownerPid));
