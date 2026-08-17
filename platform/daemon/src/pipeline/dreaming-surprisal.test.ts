@@ -36,6 +36,9 @@ function wrapDb(db: Database): DbAccessor {
 		withReadDb<T>(fn: (db: Database) => T): T {
 			return fn(db);
 		},
+		withReadDbAsync<T>(fn: (db: Database) => T | Promise<T>): Promise<T> {
+			return Promise.resolve(fn(db));
+		},
 		withWriteTx<T>(fn: (db: Database) => T): T {
 			db.exec("BEGIN IMMEDIATE");
 			try {
@@ -45,6 +48,17 @@ function wrapDb(db: Database): DbAccessor {
 			} catch (error) {
 				db.exec("ROLLBACK");
 				throw error;
+			}
+		},
+		withWriteTxAsync<T>(fn: (db: Database) => T): Promise<T> {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const result = fn(db);
+				db.exec("COMMIT");
+				return Promise.resolve(result);
+			} catch (error) {
+				db.exec("ROLLBACK");
+				return Promise.reject(error);
 			}
 		},
 	} as unknown as DbAccessor;
@@ -173,7 +187,7 @@ describe("dreaming surprisal attention", () => {
 		expect(selection.candidates.some((candidate) => candidate.id === "other-outlier")).toBe(false);
 	});
 
-	it("queues hints without advancing the evidence cursor", () => {
+	it("queues hints without advancing the evidence cursor", async () => {
 		for (const observation of makeObservations()) {
 			seedMemory(db, "default", observation.id, [...observation.vector], observation.capturedAt);
 		}
@@ -182,7 +196,7 @@ describe("dreaming surprisal attention", () => {
 			 VALUES ('default', 0, 'cursor-sentinel')`,
 		).run();
 
-		const selection = enqueueDreamingSurprisalAttention(accessor, "default", DREAMING_CONFIG);
+		const selection = await enqueueDreamingSurprisalAttention(accessor, "default", DREAMING_CONFIG);
 		expect(selection?.candidates[0]?.id).toBe("semantic-outlier");
 		expect(
 			db.prepare("SELECT kind, subject_ref, details_json FROM dreaming_attention WHERE agent_id = 'default'").all(),
