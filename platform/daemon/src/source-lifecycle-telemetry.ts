@@ -46,6 +46,7 @@ export type SourceLagBucket = (typeof SOURCE_LAG_BUCKETS)[number];
 
 interface SourceLifecycleSource {
 	readonly id: string;
+	readonly generation?: string;
 	readonly kind: SignetSourceKind | string;
 	readonly root?: string;
 	readonly providerSettings?: Readonly<Record<string, unknown>>;
@@ -226,7 +227,8 @@ function sourceKey(sourceIdentity: string): string {
 }
 
 function sourceIdentity(source: SourceLifecycleSource): string {
-	return source.id || `${source.kind}:${source.root ?? ""}`;
+	const identity = source.id || `${source.kind}:${source.root ?? ""}`;
+	return source.generation === undefined ? identity : `${identity}\u0000generation:${source.generation}`;
 }
 
 function emit(properties: Readonly<Record<string, string | number | boolean | null>>): void {
