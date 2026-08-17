@@ -6,8 +6,14 @@ describe("api.updateAgentScope", () => {
 
 	it("clears group when changing a grouped agent to shared or isolated", async () => {
 		const bodies: unknown[] = [];
-		vi.spyOn(globalThis, "fetch").mockImplementation((async (_input, init) => {
-			bodies.push(init?.body);
+		vi.spyOn(globalThis, "fetch").mockImplementation((async (input, init) => {
+			const request =
+				input instanceof Request ||
+				(typeof input === "object" && input !== null && "clone" in input)
+					? (input as Request)
+					: null;
+			const body = request ? await request.clone().text() : init?.body;
+			bodies.push(body);
 			return new Response(JSON.stringify({ data: { name: "worker" }, error: null }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
