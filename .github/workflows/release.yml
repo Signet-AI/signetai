@@ -34,6 +34,10 @@ jobs:
           if [ -z "$RESUME_INPUT" ]; then
             exit 0
           fi
+          if [ "${#RESUME_INPUT}" -gt 64 ]; then
+            echo "::error::resume_from_tag must be at most 64 characters"
+            exit 1
+          fi
           if [[ ! "$RESUME_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::resume_from_tag must be a version tag such as v0.207.1"
             exit 1
