@@ -9,6 +9,7 @@ import {
 } from "./obsidian-source-graph";
 import { upsertMemoryArtifactInTx } from "./memory-lineage";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
+import { markImportedSourceUnsupportedInTx } from "./imported-source-lifecycle";
 import type {
 	DbOwnerCommand,
 	DbOwnerEvent,
@@ -241,6 +242,24 @@ export function runDbOwnerWorker(): void {
 		}
 	}
 
+	function executeImportedSourceUnsupported(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "imported_source_unsupported" }>,
+	): unknown {
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const result = markImportedSourceUnsupportedInTx(request.input, db as unknown as import("./db-accessor").WriteDb);
+			db.exec("COMMIT");
+			return result;
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				/* preserve original error */
+			}
+			throw error;
+		}
+	}
+
 	function executeSourceGraph(
 		request: Extract<
 			DbOwnerJob["request"],
@@ -343,6 +362,7 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements);
 		if (job.request.kind === "batch") return executeBatch(job.request.statements, job.request.requireChanges === true);
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request);
+		if (job.request.kind === "imported_source_unsupported") return executeImportedSourceUnsupported(job.request);
 		if (job.request.kind === "source_artifact_upsert" || job.request.kind === "source_artifact_upsert_batch")
 			return executeSourceArtifactUpsert(job.request);
 		if (

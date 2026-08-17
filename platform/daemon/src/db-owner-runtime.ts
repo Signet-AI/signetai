@@ -15,6 +15,7 @@ import type {
 	DbOwnerSourceGraphPurge,
 	DbOwnerSourceSnapshotImport,
 	DbOwnerSourceArtifactUpsert,
+	DbOwnerImportedSourceUnsupported,
 	DbOwnerStatement,
 } from "./db-owner-protocol";
 
@@ -162,6 +163,18 @@ export async function dbOwnerSourceSnapshotImport(
 		owner,
 		{ kind: "source_snapshot_import", input },
 		{ ...options, lane: options.lane ?? "write" },
+	);
+}
+
+export async function dbOwnerImportedSourceUnsupported(
+	input: DbOwnerImportedSourceUnsupported,
+	options: DbOwnerSqlOptions,
+): Promise<import("./imported-source-lifecycle").MarkImportedSourceUnsupportedResult> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission<import("./imported-source-lifecycle").MarkImportedSourceUnsupportedResult>(
+		owner,
+		{ kind: "imported_source_unsupported", input },
+		{ ...options, lane: "write" },
 	);
 }
 

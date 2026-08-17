@@ -260,7 +260,7 @@ export function registerImportRoutes(app: Hono): void {
 				});
 				if (replacedSource !== undefined) {
 					try {
-						markImportedSourceUnsupported({
+						await markImportedSourceUnsupported({
 							sourceId: replacedSource.id,
 							agentId: resolveDaemonAgentId(),
 							reason: "imported source replaced",

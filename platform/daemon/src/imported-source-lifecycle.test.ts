@@ -31,7 +31,7 @@ describe("imported source lifecycle", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("removes searchable artifacts while preserving provenance for Dreaming review", () => {
+	it("removes searchable artifacts while preserving provenance for Dreaming review", async () => {
 		const sourceId = "source-import-1";
 		const agentId = "lifecycle-test-agent";
 		indexExternalMemoryArtifact({
@@ -129,7 +129,7 @@ describe("imported source lifecycle", () => {
 			);
 		});
 
-		const result = markImportedSourceUnsupported({ sourceId, agentId, reason: "source removed by user" });
+		const result = await markImportedSourceUnsupported({ sourceId, agentId, reason: "source removed by user" });
 
 		expect(result.artifacts).toBeGreaterThan(0);
 		expect(result.derivedMemories).toBe(1);

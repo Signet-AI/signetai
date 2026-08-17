@@ -51,11 +51,13 @@ export const obsidianSourceProvider: SourceProviderAdapter = {
 
 export const importedSourceProvider: SourceProviderAdapter = {
 	kind: "import",
-	purge: (source, agentId) =>
-		markImportedSourceUnsupported({
-			sourceId: source.id,
-			agentId: agentId ?? "default",
-		}).artifacts,
+	purge: async (source, agentId) =>
+		(
+			await markImportedSourceUnsupported({
+				sourceId: source.id,
+				agentId: agentId ?? "default",
+			})
+		).artifacts,
 };
 
 export function registerSourceProvider(provider: SourceProviderAdapter): void {

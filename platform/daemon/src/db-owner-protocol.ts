@@ -122,6 +122,12 @@ export interface DbOwnerSourceArtifactUpsert {
 	readonly conflictGuardSourceId?: boolean;
 }
 
+export interface DbOwnerImportedSourceUnsupported {
+	readonly sourceId: string;
+	readonly agentId: string;
+	readonly reason?: string;
+}
+
 export type DbOwnerRequest =
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
 	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
@@ -142,6 +148,7 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "source_artifact_upsert"; readonly input: DbOwnerSourceArtifactUpsert }
 	| { readonly kind: "source_artifact_upsert_batch"; readonly input: readonly DbOwnerSourceArtifactUpsert[] }
+	| { readonly kind: "imported_source_unsupported"; readonly input: DbOwnerImportedSourceUnsupported }
 	| { readonly kind: "sleep"; readonly durationMs: number };
 
 export interface DbOwnerRecallPayload {
