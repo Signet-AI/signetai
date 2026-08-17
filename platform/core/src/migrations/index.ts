@@ -140,6 +140,7 @@ import { up as dreamingEvidenceConsumption } from "./131-dreaming-evidence-consu
 import { up as observerScopedEpistemicAssertions } from "./132-observer-scoped-epistemic-assertions";
 import { up as dreamingMemoryHead } from "./133-dreaming-memory-head";
 import { up as scopeMemoryHeadEntries } from "./134-scope-memory-head-entries";
+import { up as memoryHeadPublication } from "./135-memory-head-publication";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1239,6 +1240,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "scope-memory-head-entries",
 		up: scopeMemoryHeadEntries,
 		artifacts: { tables: ["memory_head_entries"] },
+	},
+	{
+		version: 135,
+		name: "memory-head-publication",
+		up: memoryHeadPublication,
+		artifacts: { tables: ["memory_head_publications"] },
 	},
 ];
 

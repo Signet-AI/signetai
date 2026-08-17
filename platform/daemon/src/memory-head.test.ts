@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { MEMORY_HEAD_MAX_TOKENS, writeMemoryHead } from "./memory-head";
 
 const tok = new Tiktoken(cl100k_base);
@@ -14,10 +14,6 @@ let prevSignetPath: string | undefined;
 
 function readMemoryHead(): string {
 	return readFileSync(join(agentsDir, "MEMORY.md"), "utf-8");
-}
-
-function readAgentMemoryHead(agentId: string): string {
-	return readFileSync(join(agentsDir, "agents", agentId, "MEMORY.md"), "utf-8");
 }
 
 describe("writeMemoryHead", () => {
@@ -65,26 +61,13 @@ describe("writeMemoryHead", () => {
 			agentId: "agent-a",
 			owner: "memory-head-test",
 		});
-		expect(result.ok).toBe(true);
-
-		const row = getDbAccessor().withReadDb((db) => {
-			return db.prepare("SELECT agent_id, content, revision FROM memory_md_heads WHERE agent_id = ?").get("agent-a") as
-				| { agent_id: string; content: string; revision: number }
-				| undefined;
+		expect(result).toEqual({
+			ok: false,
+			error: "Legacy synthesis writer disabled; curated memory head is authoritative",
+			code: "invalid",
 		});
-		expect(row).toEqual({
-			agent_id: "agent-a",
-			content: "# MEMORY\n\n## Active\n- agent-specific synthesis",
-			revision: 1,
-		});
-
-		const otherCount = getDbAccessor().withReadDb((db) => {
-			const result = db.prepare("SELECT COUNT(*) as n FROM memory_md_heads WHERE agent_id = 'default'").get() as {
-				n: number;
-			};
-			return result.n;
-		});
-		expect(otherCount).toBe(0);
+		expect(result).toMatchObject({ ok: false, code: "invalid" });
+		expect(existsSync(join(agentsDir, "agents", "agent-a", "MEMORY.md"))).toBe(false);
 	});
 
 	it("writes named-agent projections to the agent-local MEMORY.md", () => {
@@ -94,12 +77,8 @@ describe("writeMemoryHead", () => {
 			agentId: "agent-a",
 			owner: "memory-head-test",
 		});
-		expect(result.ok).toBe(true);
-
-		const file = readAgentMemoryHead("agent-a");
-		expect(file.startsWith("<!-- generated ")).toBe(true);
-		expect(file).toContain("local to agent-a");
-		expect(existsSync(join(agentsDir, "MEMORY.md"))).toBe(false);
+		expect(result).toMatchObject({ ok: false, code: "invalid" });
+		expect(existsSync(join(agentsDir, "agents", "agent-a", "MEMORY.md"))).toBe(false);
 	});
 
 	it("rejects unsafe agent ids before writing a projection", () => {

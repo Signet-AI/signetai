@@ -203,6 +203,13 @@ export function writeMemoryHead(
 	if (!isSafeAgentId(agentId)) {
 		return { ok: false, error: `Invalid agentId for MEMORY.md path: ${agentId}`, code: "invalid" };
 	}
+	if (hasDbAccessor()) {
+		return {
+			ok: false,
+			error: "Legacy synthesis writer disabled; curated memory head is authoritative",
+			code: "invalid",
+		};
+	}
 	const owner = opts?.owner ?? `memory-head:${process.pid}:${randomUUID().slice(0, 8)}`;
 	const ttlMs = loadMemoryConfig(getAgentsDir()).pipelineV2.worker.leaseTimeoutMs;
 	const lease = acquireHeadLease(agentId, owner, ttlMs);

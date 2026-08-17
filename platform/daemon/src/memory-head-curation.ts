@@ -42,11 +42,25 @@ export async function readCuratedMemoryHead(agentId: string): Promise<Record<str
 			const target = pathFor(agentId);
 			mkdirSync(dirname(target), { recursive: true });
 			let existing = "";
-			try { existing = readFileSync(target, "utf8").trim(); } catch {}
-			if (!existing.endsWith(content)) {
+			try {
+				existing = readFileSync(target, "utf8");
+			} catch {}
+			if (existing !== `${content}\n`) {
 				const temporary = `${target}.recovery-${String(head?.revision ?? 0)}.tmp`;
 				writeFileSync(temporary, `${content}\n`, "utf8");
 				renameSync(temporary, target);
+			}
+			const pending = db
+				.prepare("SELECT status FROM memory_head_publications WHERE agent_id = ? AND revision = ?")
+				.get(agentId, head?.revision ?? 0) as { status?: string } | undefined;
+			if (pending?.status === "pending") {
+				await getDbAccessor().withWriteTxAsync((writeDb) => {
+					writeDb
+						.prepare(
+							"UPDATE memory_head_publications SET status='completed', completed_at=? WHERE agent_id=? AND revision=?",
+						)
+						.run(new Date().toISOString(), agentId, head?.revision ?? 0);
+				});
 			}
 		}
 		return {
@@ -75,7 +89,7 @@ export async function commitCuratedMemoryHead(input: {
 	if (countTokens(body) > CURATED_MEMORY_HEAD_MAX_TOKENS)
 		return { ok: false, code: "TOKEN_BUDGET_EXCEEDED", error: "curated head exceeds 1000 tokens" };
 	const contentHash = hash(body);
-	return await getDbAccessor().withWriteTxAsync((db) => {
+	const committed = await getDbAccessor().withWriteTxAsync((db) => {
 		const pass = db.prepare("SELECT mode, status, agent_id FROM dreaming_passes WHERE id = ?").get(input.passId) as
 			| { mode?: string; status?: string; agent_id?: string }
 			| undefined;
@@ -174,11 +188,9 @@ export async function commitCuratedMemoryHead(input: {
 		db.prepare(
 			"UPDATE memory_md_heads SET content=?, content_hash=?, revision=?, revision_id=?, pass_id=?, updated_at=? WHERE agent_id=?",
 		).run(body, contentHash, nextRevision, revisionId, input.passId, now, input.agentId);
-		const target = pathFor(input.agentId);
-		mkdirSync(dirname(target), { recursive: true });
-		const temporary = `${target}.curated-${revisionId}.tmp`;
-		writeFileSync(temporary, `${body}\n`, "utf8");
-		renameSync(temporary, target);
+		db.prepare(
+			"INSERT INTO memory_head_publications (agent_id, revision, revision_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+		).run(input.agentId, nextRevision, revisionId, now);
 		return {
 			ok: true,
 			code: "COMMITTED",
@@ -187,4 +199,34 @@ export async function commitCuratedMemoryHead(input: {
 			changedIds: input.entries.map((entry) => entry.entryId),
 		};
 	});
+	if (!committed.ok || committed.code !== "COMMITTED" || committed.revision === undefined) return committed;
+	const target = pathFor(input.agentId);
+	mkdirSync(dirname(target), { recursive: true });
+	const temporary = `${target}.curated-${committed.revision}.tmp`;
+	try {
+		writeFileSync(temporary, `${body}\n`, "utf8");
+		renameSync(temporary, target);
+	} catch (error) {
+		return {
+			...committed,
+			ok: false,
+			code: "PUBLICATION_PENDING",
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+	try {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"UPDATE memory_head_publications SET status='completed', completed_at=? WHERE agent_id=? AND revision=?",
+			).run(new Date().toISOString(), input.agentId, committed.revision);
+		});
+	} catch (error) {
+		return {
+			...committed,
+			ok: false,
+			code: "PUBLICATION_PENDING",
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+	return committed;
 }
