@@ -26,9 +26,9 @@ const pathFor = (agentId: string): string =>
 		: join(resolveDefaultBasePath(), "agents", agentId, "MEMORY.md");
 const render = (entries: readonly Entry[]): string => entries.map((entry) => `- ${entry.text.trim()}`).join("\n");
 
-export function readCuratedMemoryHead(agentId: string): Record<string, unknown> {
+export async function readCuratedMemoryHead(agentId: string): Promise<Record<string, unknown>> {
 	if (!agentId.trim()) throw new Error("agentId is required");
-	return getDbAccessor().withReadDb((db) => {
+	return await getDbAccessor().withReadDbAsync(async (db) => {
 		const head = db
 			.prepare("SELECT revision, content_hash, revision_id FROM memory_md_heads WHERE agent_id = ?")
 			.get(agentId) as Record<string, unknown> | undefined;
@@ -47,13 +47,13 @@ export function readCuratedMemoryHead(agentId: string): Record<string, unknown> 
 	});
 }
 
-export function commitCuratedMemoryHead(input: {
+export async function commitCuratedMemoryHead(input: {
 	readonly agentId: string;
 	readonly passId: string;
 	readonly baseRevision: number;
 	readonly baseHash: string;
 	readonly entries: readonly Entry[];
-}): MemoryHeadResult {
+}): Promise<MemoryHeadResult> {
 	if (!input.agentId.trim() || !input.passId.trim())
 		return { ok: false, code: "INVALID_SCOPE", error: "agentId and passId are required" };
 	const body = render(input.entries);
@@ -63,7 +63,7 @@ export function commitCuratedMemoryHead(input: {
 	if (countTokens(body) > CURATED_MEMORY_HEAD_MAX_TOKENS)
 		return { ok: false, code: "TOKEN_BUDGET_EXCEEDED", error: "curated head exceeds 1000 tokens" };
 	const contentHash = hash(body);
-	return getDbAccessor().withWriteTx((db) => {
+	return await getDbAccessor().withWriteTxAsync((db) => {
 		const pass = db.prepare("SELECT mode, status, agent_id FROM dreaming_passes WHERE id = ?").get(input.passId) as
 			| { mode?: string; status?: string; agent_id?: string }
 			| undefined;

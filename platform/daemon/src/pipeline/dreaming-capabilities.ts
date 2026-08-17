@@ -328,7 +328,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			"Read the scoped Dreaming-curated MEMORY.md head.",
 			true,
 			z.object({ agentId: z.string().min(1) }),
-			async ({ agentId: scopeId }) => ({ ok: true, head: readCuratedMemoryHead(scopeId) }),
+			async ({ agentId: scopeId }) => ({ ok: true, head: await readCuratedMemoryHead(scopeId) }),
 		),
 		capability(
 			"memory_head_commit",
