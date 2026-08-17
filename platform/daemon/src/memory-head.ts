@@ -248,8 +248,12 @@ export function writeMemoryHead(
 
 	if (!lease.ok) {
 		if (!hasDbAccessor()) {
-			writeProjection(projected.file, agentId);
-			return { ok: true, revision: 0 };
+			try {
+				writeProjection(projected.file, agentId);
+				return { ok: true, revision: 0 };
+			} catch (error) {
+				return { ok: false, error: error instanceof Error ? error.message : String(error) };
+			}
 		}
 		return { ok: false, error: lease.error, code: lease.code === "unavailable" ? "unavailable" : lease.code };
 	}
