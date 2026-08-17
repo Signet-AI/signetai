@@ -2,6 +2,11 @@ name: Nightly Release
 
 on:
   workflow_dispatch:
+    inputs:
+      resume_from_tag:
+        description: "Resume build and publish for an existing tag, for example v0.207.1"
+        required: false
+        type: string
   push:
     branches: [main]
 
@@ -29,6 +34,11 @@ jobs:
       - name: Check for code changes
         id: changes
         run: |
+          if [ -n "${{ inputs.resume_from_tag }}" ]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "Resume requested for ${{ inputs.resume_from_tag }}"
+            exit 0
+          fi
           CODE_CHANGES=$(git diff --name-only HEAD~1 HEAD -- \
             'platform/**' 'surfaces/**' 'integrations/**' 'libs/**' 'dist/**' 'plugins/**' 'runtimes/**' 'scripts/**' \
             'package.json' 'bunfig.toml' 'tsconfig*.json' \
@@ -79,9 +89,20 @@ jobs:
           git clean -fd
           git pull --rebase origin main
 
+      - name: Resolve resume tag
+        if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag != ''
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.resume_from_tag }}"
+          case "$tag" in v*) ;; *) tag="v$tag" ;; esac
+          git fetch --tags origin "$tag"
+          git rev-parse --verify "refs/tags/$tag" >/dev/null
+          echo "NEW_VERSION=${tag#v}" >> "$GITHUB_ENV"
+          echo "Resuming release for $tag without changing version or tag"
+
       - name: Bump version
         id: bump_version
-        if: steps.changes.outputs.skip != 'true'
+        if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag == ''
         run: |
           set -euo pipefail
 
@@ -128,7 +149,7 @@ jobs:
           git tag "v$NEW_VERSION"
 
       - name: Push version bump
-        if: steps.changes.outputs.skip != 'true'
+        if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag == ''
         run: |
           git push origin HEAD:main
           git push origin "v$NEW_VERSION"
@@ -137,17 +158,36 @@ jobs:
         id: create_release
         if: steps.changes.outputs.skip != 'true'
         run: |
+          set -euo pipefail
           NOTES=$(bun scripts/extract-changelog-section.ts "$NEW_VERSION")
           if [ -z "$NOTES" ] || [ "$NOTES" = "No changelog section found for v$NEW_VERSION" ]; then
-            # This runs after the version bump commit and tag are pushed. If it
-            # fails, recover by creating the draft release manually with
-            # `gh release create "v$NEW_VERSION" --draft --notes-file <notes>`.
             echo "::error::Missing CHANGELOG.md section for v$NEW_VERSION"
             exit 1
           fi
-          # Create as a draft prerelease. The publish job undrafts only after
-          # native publishing completes and every desktop asset is present.
-          gh release create "v$NEW_VERSION" --draft --prerelease --title "v$NEW_VERSION" --notes "$NOTES"
+          tag="v$NEW_VERSION"
+          # The tag is pushed before this step. First reuse an existing draft
+          # release, then create it. A transient 5xx is retried; a concurrent
+          # create (409) is resolved by fetching the release on the next pass.
+          for attempt in 1 2 3; do
+            if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
+              echo "Reusing existing GitHub release $tag"
+              break
+            fi
+            set +e
+            output=$(gh release create "$tag" --draft --prerelease --title "$tag" --notes "$NOTES" 2>&1)
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ] || gh release view "$tag" --json isDraft >/dev/null 2>&1; then
+              echo "GitHub release $tag is available"
+              break
+            fi
+            printf '%s\n' "$output" >&2
+            if [ "$attempt" -eq 3 ]; then
+              exit "$status"
+            fi
+            echo "Retrying release creation after transient GitHub API failure (${attempt}/3)"
+            sleep $((attempt * 5))
+          done
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -160,7 +200,7 @@ jobs:
 
   build-native:
     needs: release
-    if: needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    if: needs.release.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
     permissions:
       contents: write
     strategy:
