@@ -70,7 +70,9 @@ function tryRequireOverride(): typeof import("@napi-rs/keyring") | null {
 	// This variable is a compiled-runtime bootstrap contract. A value supplied
 	// by the launcher must never fall back to package resolution: that would
 	// make a broken compiled bundle appear healthy by loading a host addon.
-	if (!override.startsWith("/")) return null;
+	const isAbsolute =
+		override.startsWith("/") || /^\\\\[^\\]+\\[^\\]+/.test(override) || /^[A-Za-z]:[\\/]/.test(override);
+	if (!isAbsolute) return null;
 	try {
 		return require(override) as typeof import("@napi-rs/keyring");
 	} catch {

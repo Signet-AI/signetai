@@ -113,14 +113,14 @@ const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
 // at the materialized copy before anything imports the addon.
 const coreRequire = createRequire(join(root, "platform", "core", "package.json"));
 const nativeAddonAssets = (() => {
-	const packagePlatformKey =
-		platformKey === "linux-x64" || platformKey === "linux-arm64" ? `${platformKey}-gnu` : platformKey;
-	const platformPackageName = `@napi-rs/keyring-${packagePlatformKey}`;
+	const packagePlatformKey = platformKey.startsWith("linux-") ? `${platformKey}-gnu` : platformKey;
+	const packageSuffix = platformKey === "win32-x64" ? "win32-x64-msvc" : packagePlatformKey;
+	const platformPackageName = `@napi-rs/keyring-${packageSuffix}`;
 	try {
 		const keyringPackageJson = coreRequire.resolve("@napi-rs/keyring/package.json");
 		const keyringRequire = createRequire(keyringPackageJson);
 		const platformPackageJson = keyringRequire.resolve(`${platformPackageName}/package.json`);
-		const nodeFile = join(dirname(platformPackageJson), `keyring.${packagePlatformKey}.node`);
+		const nodeFile = join(dirname(platformPackageJson), `keyring.${packageSuffix}.node`);
 		if (!existsSync(nodeFile)) {
 			throw new Error(`Required @napi-rs/keyring native asset is missing for ${platformKey}: ${nodeFile}`);
 		}

@@ -103,11 +103,11 @@ export function materializeEmbeddedNativeAddon(name: string): string | null {
 	const asset = (nativeRuntimeAssets().nativeAddons ?? []).find((a) => a.name === name);
 	if (!asset) return null;
 
-	const hash = createHash("sha256").update(asset.contentBase64).digest("hex").slice(0, 16);
+	const content = Buffer.from(asset.contentBase64, "base64");
+	const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);
 	const dir = join(tmpdir(), "signet-native-addons");
 	const path = join(dir, `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-${hash}.node`);
 	mkdirSync(dir, { recursive: true });
-	const content = Buffer.from(asset.contentBase64, "base64");
 	const valid = () =>
 		existsSync(path) && createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16) === hash;
 	if (!valid()) {
