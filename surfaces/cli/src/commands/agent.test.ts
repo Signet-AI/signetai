@@ -68,4 +68,36 @@ describe("registerAgentCommands", () => {
 			true,
 		);
 	});
+
+	test("agent set sends the exact daemon PATCH shape", async () => {
+		console.log = () => {};
+		const calls: Array<{ url: string; init?: RequestInit }> = [];
+		const program = new Command();
+		registerAgentCommands(program, {
+			AGENTS_DIR: mkdtempSync(join(tmpdir(), "signet-agent-command-")),
+			fetchFromDaemon: async <T>(url: string, init?: RequestInit) => {
+				calls.push({ url, init });
+				return { read_policy: "group" } as T;
+			},
+		});
+		await program.parseAsync(["node", "test", "agent", "set", "writer", "--memory", "group", "--group", "writers"]);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.url).toBe("/api/agents/writer");
+		expect(calls[0]?.init?.method).toBe("PATCH");
+		expect(calls[0]?.init?.body).toBe(JSON.stringify({ memory: "group", group: "writers" }));
+	});
+
+	test("agent show renders daemon-backed scope", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => lines.push(String(line ?? ""));
+		const program = new Command();
+		registerAgentCommands(program, {
+			AGENTS_DIR: mkdtempSync(join(tmpdir(), "signet-agent-command-")),
+			fetchFromDaemon: async <T>() => ({ name: "writer", read_policy: "shared", effective_scope: "global" }) as T,
+		});
+		await program.parseAsync(["node", "test", "agent", "show", "writer"]);
+		expect(lines).toContain("  Agent: writer");
+		expect(lines).toContain("  Read policy: shared");
+		expect(lines).toContain("  Effective scope: global");
+	});
 });

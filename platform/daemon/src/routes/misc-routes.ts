@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseSimpleYaml, resolveAgentMemoryPolicy } from "@signet/core";
-import type { Context, Hono } from "hono";
+import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
 import { getDbAccessor, runWriteTxAsync } from "../db-accessor.js";
@@ -221,8 +221,20 @@ export function registerMiscRoutes(app: Hono): void {
 					.get(name) as AgentRow | undefined,
 		);
 		if (!agent) return c.json({ error: "Agent not found" }, 404);
-		const resolved = resolveAgentMemoryPolicy(agent.read_policy, agent.policy_group);
-		return c.json({ ...agent, effective_scope: resolved.effectiveScope });
+		try {
+			const resolved = resolveAgentMemoryPolicy(agent.read_policy, agent.policy_group);
+			return c.json({ ...agent, effective_scope: resolved.effectiveScope });
+		} catch (error) {
+			return c.json(
+				{
+					error:
+						error instanceof Error
+							? `Invalid persisted memory policy: ${error.message}`
+							: "Invalid persisted memory policy",
+				},
+				500,
+			);
+		}
 	});
 
 	app.post("/api/agents", async (c) => {
@@ -265,11 +277,22 @@ export function registerMiscRoutes(app: Hono): void {
 		} catch (error) {
 			return c.json({ error: error instanceof Error ? error.message : "Invalid memory policy" }, 400);
 		}
-		const existing = await getDbAccessor().withReadDbAsync(async (db) => db.prepare("SELECT id FROM agents WHERE name = ?").get(name) as { id: string } | undefined);
+		const existing = await getDbAccessor().withReadDbAsync(
+			async (db) => db.prepare("SELECT id FROM agents WHERE name = ?").get(name) as { id: string } | undefined,
+		);
 		if (!existing) return c.json({ error: "Agent not found" }, 404);
 		const now = new Date().toISOString();
-		await runWriteTxAsync(getDbAccessor(), (db) => db.prepare("UPDATE agents SET read_policy = ?, policy_group = ?, updated_at = ? WHERE id = ?").run(resolved.readPolicy, resolved.policyGroup, now, existing.id));
-		const updated = await getDbAccessor().withReadDbAsync(async (db) => db.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE id = ?").get(existing.id) as unknown as AgentRow);
+		await runWriteTxAsync(getDbAccessor(), (db) =>
+			db
+				.prepare("UPDATE agents SET read_policy = ?, policy_group = ?, updated_at = ? WHERE id = ?")
+				.run(resolved.readPolicy, resolved.policyGroup, now, existing.id),
+		);
+		const updated = await getDbAccessor().withReadDbAsync(
+			async (db) =>
+				db
+					.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE id = ?")
+					.get(existing.id) as unknown as AgentRow,
+		);
 		return c.json({ ...updated, effective_scope: resolved.effectiveScope });
 	});
 
@@ -716,7 +739,7 @@ export function registerMiscRoutes(app: Hono): void {
 	app.delete("/api/tasks/:id", async (c) => {
 		const taskId = c.req.param("id");
 
-		const result = await runWriteTxAsync(getDbAccessor(), (db) => {
+		await runWriteTxAsync(getDbAccessor(), (db) => {
 			const info = db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(taskId);
 			return info;
 		});

@@ -22,7 +22,8 @@ export function resolveAgentMemoryPolicy(readPolicy: unknown, policyGroup: unkno
 		throw new Error("memory must be one of: isolated, shared, group");
 	}
 	if (readPolicy === "group") {
-		if (typeof policyGroup !== "string" || policyGroup.length === 0) throw new Error("group is required when memory is group");
+		if (typeof policyGroup !== "string" || policyGroup.length === 0)
+			throw new Error("group is required when memory is group");
 		return { readPolicy, policyGroup, effectiveScope: "group" };
 	}
 	if (policyGroup !== undefined && policyGroup !== null) throw new Error("group is only valid when memory is group");
