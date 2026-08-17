@@ -507,16 +507,13 @@ function loadTombstonedSourceGenerations(agentsDir: string, agentId: string): Re
 	return new Set(
 		loadSourceDeletionTombstones(agentsDir)
 			.filter((tombstone) => tombstone.agentId === agentId)
-			.map((tombstone) => sourceGenerationKey(tombstone.source)),
+			.map((tombstone) => sourceGenerationKey(tombstone.source))
+			.filter((generation): generation is string => generation !== undefined),
 	);
 }
 
-function sourceGenerationKey(source: SignetSourceEntry): string {
-	return `${source.id}\u0000${source.generation ?? legacySourceGeneration(source)}`;
-}
-
-function legacySourceGeneration(source: SignetSourceEntry): string {
-	return `legacy:${source.id}:${source.createdAt}:${source.updatedAt}`;
+function sourceGenerationKey(source: SignetSourceEntry): string | undefined {
+	return source.generation === undefined ? undefined : `${source.id}\u0000${source.generation}`;
 }
 
 function isSourceVisibleToAgent(source: SignetSourceEntry, agentId: string): boolean {
@@ -728,13 +725,11 @@ export async function cleanupSourceDeletionTombstones(
 	const remaining: SourceDeletionTombstone[] = [];
 	for (const tombstone of tombstones) {
 		const configured = configuredSources.find((source: SignetSourceEntry) => source.id === tombstone.source.id);
-		if (
-			configured !== undefined &&
-			configured.generation === (tombstone.source.generation ?? legacySourceGeneration(tombstone.source))
-		) {
-			// Config removal is the final deletion-state transition. Keep the
-			// tombstone while this source generation is still non-live. This also
-			// preserves a durable barrier for legacy records with no generation.
+		if (configured !== undefined) {
+			// Artifact purge is keyed by source id rather than generation. Retain
+			// every tombstone while that id is configured: this avoids deleting a
+			// deliberately re-added source, while generation-specific route
+			// filtering leaves a newer source generation visible.
 			remaining.push(tombstone);
 			continue;
 		}

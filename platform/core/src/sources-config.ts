@@ -165,21 +165,7 @@ export function getSourcesConfigPath(agentsDir = getAgentsDir()): string {
 }
 
 export function loadSourcesConfig(agentsDir = getAgentsDir()): SignetSourcesConfig {
-	const path = getSourcesConfigPath(agentsDir);
-	if (!existsSync(path)) return emptyConfig();
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-	} catch {
-		return emptyConfig();
-	}
-	if (!isRecord(parsed) || parsed.version !== SOURCES_CONFIG_VERSION || !Array.isArray(parsed.sources))
-		return emptyConfig();
-	const sources = parsed.sources.filter(isSourceEntry).map(normalizeSourceEntry);
-	const config: SignetSourcesConfig = { version: SOURCES_CONFIG_VERSION, sources };
-	if (parsed.sources.some((source) => isSourceEntry(source) && source.generation === undefined))
-		saveSourcesConfig(config, agentsDir);
-	return config;
+	return loadSourcesConfigForWrite(agentsDir);
 }
 
 export function saveSourcesConfig(config: SignetSourcesConfig, agentsDir = getAgentsDir()): void {
@@ -664,7 +650,6 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 				? mergeDefaultObsidianExcludeGlobs(input.excludeGlobs)
 				: (existing.excludeGlobs ?? [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS]),
 			enabled: true,
-			generation: newSourceGeneration(),
 			updatedAt: now,
 		};
 		saveSourcesConfig(

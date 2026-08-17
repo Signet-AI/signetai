@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addDiscordSource, addImportedSource, addObsidianSource, loadSourcesConfig } from "@signet/core";
+import {
+	addDiscordSource,
+	addImportedSource,
+	addObsidianSource,
+	loadSourcesConfig,
+	removeSourceIfGeneration,
+} from "@signet/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { dbOwnerBatch, ownerStatement } from "../db-owner-runtime";
@@ -173,8 +179,7 @@ describe("Sources routes", () => {
 		const cleanupIndex = daemonSource.indexOf("await cleanupSourceDeletionTombstones(AGENTS_DIR);");
 		const pipelineIndex = daemonSource.indexOf("await startPipelineRuntime(memoryCfg, telemetryCollector);");
 		expect(runtimeStartIndex).toBeGreaterThanOrEqual(0);
-		expect(cleanupIndex).toBeGreaterThan(runtimeStartIndex);
-		expect(cleanupIndex).toBeLessThan(pipelineIndex);
+		expect(cleanupIndex).toBeGreaterThan(runtimeEndIndex);
 		expect(pipelineIndex).toBeLessThan(runtimeEndIndex);
 		expect(daemonSource).toContain("Deferred source-deletion tombstone cleanup failed; retry remains available");
 	});
@@ -293,6 +298,8 @@ describe("Sources routes", () => {
 			)}\n`,
 		);
 
+		const removed = removeSourceIfGeneration(first.source.id, first.source.generation, dir);
+		expect(removed.ok).toBe(true);
 		const second = addObsidianSource({ root: vault, name: "Generation Two", now: "2026-08-16T18:00:00.000Z" }, dir);
 		expect(second.ok).toBe(true);
 		if (second.ok === false) throw new Error(second.error);
@@ -305,8 +312,8 @@ describe("Sources routes", () => {
 			purges++;
 			return Promise.resolve(1);
 		});
-		expect(purges).toBe(1);
-		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
+		expect(purges).toBe(0);
+		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(1);
 
 		const app = makeApp();
 		const list = await app.request("/api/sources");
@@ -344,7 +351,7 @@ describe("Sources routes", () => {
 		if (readded.ok === false) throw new Error(readded.error);
 		expect(readded.source.generation).not.toBe(legacySource.generation);
 		await cleanupSourceDeletionTombstones(dir, () => Promise.resolve(1));
-		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
+		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(1);
 		const listedResponse = await makeApp().request("/api/sources");
 		const listed = (await listedResponse.json()) as { sources: Array<{ id: string }> };
 		expect(listed.sources.map((source) => source.id)).toContain(added.source.id);
@@ -374,6 +381,8 @@ describe("Sources routes", () => {
 			)}\n`,
 		);
 
+		const removed = removeSourceIfGeneration(first.source.id, first.source.generation, dir);
+		expect(removed.ok).toBe(true);
 		const second = addObsidianSource({ root: vault, name: "Generation Two", now: "2026-08-16T21:00:00.000Z" }, dir);
 		expect(second.ok).toBe(true);
 		if (second.ok === false) throw new Error(second.error);

@@ -84,6 +84,19 @@ describe("sources-config", () => {
 		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
 	});
 
+	it("preserves the generation on an ordinary Obsidian update", () => {
+		const agentsDir = tmp();
+		const vault = join(agentsDir, "vault");
+		mkdirSync(vault, { recursive: true });
+		const first = addObsidianSource({ root: vault, now: "2026-01-01T00:00:00.000Z" }, agentsDir);
+		expect(first.ok).toBe(true);
+		if (first.ok === false) throw new Error(first.error);
+		const second = addObsidianSource({ root: vault, name: "Updated", now: "2026-01-02T00:00:00.000Z" }, agentsDir);
+		expect(second.ok).toBe(true);
+		if (second.ok === false) throw new Error(second.error);
+		expect(second.source.generation).toBe(first.source.generation);
+	});
+
 	it("adds a Discord source with validated provider settings", () => {
 		const agentsDir = tmp();
 
@@ -455,6 +468,7 @@ describe("sources-config", () => {
 		expect(loaded).toHaveLength(1);
 		expect(loaded[0]).toMatchObject(source);
 		expect(loaded[0]?.generation).toBe("legacy:discord:test:2026-01-01T00:00:00.000Z:2026-01-01T00:00:00.000Z");
+		expect(JSON.parse(readFileSync(getSourcesConfigPath(agentsDir), "utf8")).sources[0].generation).toBeUndefined();
 	});
 
 	it("removes a source by id from the config", () => {
@@ -524,7 +538,7 @@ describe("sources-config", () => {
 		const configPath = getSourcesConfigPath(agentsDir);
 		writeFileSync(configPath, "{ not valid json", "utf8");
 
-		expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		expect(() => loadSourcesConfig(agentsDir)).toThrow("Sources config is not readable JSON");
 		const result = addObsidianSource({ root: vault, name: "Vault A" }, agentsDir);
 
 		expect(result.ok).toBe(false);

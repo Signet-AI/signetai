@@ -2325,16 +2325,6 @@ async function main() {
 	// background write work piles on (#1059 thundering-herd prevention).
 	const startPostReadyRuntime = async (): Promise<void> => {
 		await deferredRuntimeGate.waitForIntegrity();
-		// Tombstone cleanup uses the bounded async writer. Keep it in this
-		// serialized post-ready lane, before pipeline startup, so readiness is
-		// already published while lifecycle deletion still avoids write contention.
-		try {
-			await cleanupSourceDeletionTombstones(AGENTS_DIR);
-		} catch (error) {
-			logger.error("daemon", "Deferred source-deletion tombstone cleanup failed; retry remains available", undefined, {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
 		reportStartupGrace();
 		await startPipelineRuntime(memoryCfg, telemetryCollector);
 		logFdSnapshot("post-pipeline");
@@ -2415,6 +2405,17 @@ async function main() {
 		startUpdateTimer();
 	};
 	deferredRuntimeScheduler.schedulePipeline(startPostReadyRuntime);
+	// Cleanup is retryable maintenance. It must not hold up pipeline startup if
+	// the async writer is blocked or unavailable.
+	deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
+		try {
+			await cleanupSourceDeletionTombstones(AGENTS_DIR);
+		} catch (error) {
+			logger.error("daemon", "Deferred source-deletion tombstone cleanup failed; retry remains available", undefined, {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	});
 
 	const REQUEST_BODY_LIMIT = 10 * 1_048_576;
 	const { createServer: nodeCreateServer } = await import("node:http");
