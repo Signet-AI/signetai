@@ -162,22 +162,19 @@ export function getSourcesConfigPath(agentsDir = getAgentsDir()): string {
 export function loadSourcesConfig(agentsDir = getAgentsDir()): SignetSourcesConfig {
 	const path = getSourcesConfigPath(agentsDir);
 	if (!existsSync(path)) return emptyConfig();
+	let parsed: unknown;
 	try {
-		const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-		if (!isRecord(parsed) || parsed.version !== SOURCES_CONFIG_VERSION || !Array.isArray(parsed.sources)) {
-			return emptyConfig();
-		}
-		const sources = parsed.sources.filter(isSourceEntry).map(normalizeSourceEntry);
-		const config: SignetSourcesConfig = {
-			version: SOURCES_CONFIG_VERSION,
-			sources,
-		};
-		if (parsed.sources.some((source) => isSourceEntry(source) && source.generation === undefined))
-			saveSourcesConfig(config, agentsDir);
-		return config;
+		parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
 	} catch {
 		return emptyConfig();
 	}
+	if (!isRecord(parsed) || parsed.version !== SOURCES_CONFIG_VERSION || !Array.isArray(parsed.sources))
+		return emptyConfig();
+	const sources = parsed.sources.filter(isSourceEntry).map(normalizeSourceEntry);
+	const config: SignetSourcesConfig = { version: SOURCES_CONFIG_VERSION, sources };
+	if (parsed.sources.some((source) => isSourceEntry(source) && source.generation === undefined))
+		saveSourcesConfig(config, agentsDir);
+	return config;
 }
 
 export function saveSourcesConfig(config: SignetSourcesConfig, agentsDir = getAgentsDir()): void {

@@ -339,10 +339,11 @@ describe("Sources routes", () => {
 			])}\n`,
 		);
 
-		await cleanupSourceDeletionTombstones(dir, () => {
-			throw new Error("ambiguous legacy tombstones must not purge the live re-add");
-		});
-		expect(loadSourcesConfig(dir).sources[0]?.generation).toBeString();
+		const readded = addObsidianSource({ root: vault, name: "True Re-add", now: "2026-08-16T18:00:00.000Z" }, dir);
+		expect(readded.ok).toBe(true);
+		if (readded.ok === false) throw new Error(readded.error);
+		expect(readded.source.generation).not.toBe(legacySource.generation);
+		await cleanupSourceDeletionTombstones(dir, () => Promise.resolve(1));
 		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
 		const listedResponse = await makeApp().request("/api/sources");
 		const listed = (await listedResponse.json()) as { sources: Array<{ id: string }> };

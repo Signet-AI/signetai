@@ -507,18 +507,16 @@ function loadTombstonedSourceGenerations(agentsDir: string, agentId: string): Re
 	return new Set(
 		loadSourceDeletionTombstones(agentsDir)
 			.filter((tombstone) => tombstone.agentId === agentId)
-			.flatMap((tombstone) => {
-				const key = sourceGenerationKey(tombstone.source);
-				return key === undefined ? [] : [key];
-			}),
+			.map((tombstone) => sourceGenerationKey(tombstone.source)),
 	);
 }
 
-function sourceGenerationKey(source: SignetSourceEntry): string | undefined {
-	// A missing generation is unknown, not a shared legacy generation. Matching
-	// unknown tombstones to unknown configs permanently poisons source re-adds.
-	if (source.generation === undefined) return undefined;
-	return `${source.id}\u0000${source.generation}`;
+function sourceGenerationKey(source: SignetSourceEntry): string {
+	return `${source.id}\u0000${source.generation ?? legacySourceGeneration(source)}`;
+}
+
+function legacySourceGeneration(source: SignetSourceEntry): string {
+	return `legacy:${source.id}:${source.createdAt}:${source.updatedAt}`;
 }
 
 function isSourceVisibleToAgent(source: SignetSourceEntry, agentId: string): boolean {
@@ -726,19 +724,17 @@ export async function cleanupSourceDeletionTombstones(
 ): Promise<void> {
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
 	if (tombstones.length === 0) return;
-	const configuredSources = new Map(loadSourcesConfig(agentsDir).sources.map((source) => [source.id, source]));
+	const configuredSources = loadSourcesConfig(agentsDir).sources;
 	const remaining: SourceDeletionTombstone[] = [];
 	for (const tombstone of tombstones) {
-		const configured = configuredSources.get(tombstone.source.id);
-		if (configured !== undefined && tombstone.source.generation === undefined) {
-			// Old tombstones cannot identify their deleted generation safely. The
-			// configured source is a live compatibility-normalized re-add. Drop the
-			// ambiguous marker, but do not purge rows belonging to the live source.
-			continue;
-		}
-		if (configured !== undefined && configured.generation === tombstone.source.generation) {
+		const configured = configuredSources.find((source: SignetSourceEntry) => source.id === tombstone.source.id);
+		if (
+			configured !== undefined &&
+			configured.generation === (tombstone.source.generation ?? legacySourceGeneration(tombstone.source))
+		) {
 			// Config removal is the final deletion-state transition. Keep the
-			// tombstone while this source generation is still non-live.
+			// tombstone while this source generation is still non-live. This also
+			// preserves a durable barrier for legacy records with no generation.
 			remaining.push(tombstone);
 			continue;
 		}
