@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
 	getNativeTransformersBindings,
 	materializeEmbeddedAssetTree,
@@ -70,6 +72,32 @@ describe("native-runtime-assets", () => {
 		expect(new Set(concurrentPaths).size).toBe(1);
 		expect(concurrentPaths[0] ? readFileSync(concurrentPaths[0], "utf8") : "").toBe("fake-native-binding");
 		expect(materializeEmbeddedNativeAddon("missing-addon")).toBeNull();
+	});
+
+	test("fences valid differently-hashed addons during sweep and removes corrupt strays", () => {
+		const contentA = Buffer.from("newer-content");
+		const contentB = Buffer.from("older-content");
+		registerNativeAssets({ nativeAddons: [{ name: "fenced-addon", contentBase64: contentA.toString("base64") }] });
+		const pathA = materializeEmbeddedNativeAddon("fenced-addon");
+		expect(pathA).toBeTruthy();
+		registerNativeAssets({ nativeAddons: [{ name: "fenced-addon", contentBase64: contentB.toString("base64") }] });
+		const pathB = materializeEmbeddedNativeAddon("fenced-addon");
+		expect(pathB).toBeTruthy();
+		expect(pathA).not.toBe(pathB);
+		expect(pathA ? readFileSync(pathA) : null).toEqual(contentA);
+		expect(pathB ? readFileSync(pathB) : null).toEqual(contentB);
+
+		const dir = join(tmpdir(), "signet-native-addons");
+		const corrupt = join(dir, "fenced-addon-deadbeefdeadbeef.node");
+		const stray = join(dir, "fenced-addon-stray.tmp");
+		writeFileSync(corrupt, "torn");
+		writeFileSync(stray, "temp");
+		materializeEmbeddedNativeAddon("fenced-addon");
+		expect(pathA ? existsSync(pathA) : false).toBe(true);
+		expect(pathB ? existsSync(pathB) : false).toBe(true);
+		expect(existsSync(corrupt)).toBe(false);
+		expect(existsSync(stray)).toBe(false);
+		expect(readdirSync(dir).some((entry) => entry.startsWith("fenced-addon-") && entry.endsWith(".node"))).toBe(true);
 	});
 
 	test("materializes embedded setup asset trees", () => {

@@ -110,11 +110,24 @@ export function materializeEmbeddedNativeAddon(name: string): string | null {
 	const dir = join(tmpdir(), "signet-native-addons");
 	const path = join(dir, `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-${hash}.node`);
 	mkdirSync(dir, { recursive: true });
-	const prefix = `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-`;
+	const safeName = name.replace(/[^a-zA-Z0-9_.-]/g, "_");
+	const prefix = `${safeName}-`;
+	const validName = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}[a-f0-9]{16}\\.node$`);
 	for (const entry of readdirSync(dir)) {
-		if (!entry.startsWith(prefix) || !entry.endsWith(".node") || entry === path.slice(dir.length + 1)) continue;
+		if (!entry.startsWith(prefix)) continue;
+		const entryPath = join(dir, entry);
+		let isValidHashFile = false;
+		if (validName.test(entry)) {
+			try {
+				const entryHash = createHash("sha256").update(readFileSync(entryPath)).digest("hex").slice(0, 16);
+				isValidHashFile = entry.endsWith(`${entryHash}.node`);
+			} catch {
+				// An unreadable destination is corrupt and eligible for one-shot cleanup.
+			}
+		}
+		if (isValidHashFile) continue;
 		try {
-			unlinkSync(join(dir, entry));
+			unlinkSync(entryPath);
 		} catch {
 			// A stale addon may still be loaded on Windows; retry next start.
 		}
