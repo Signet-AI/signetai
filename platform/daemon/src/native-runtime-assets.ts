@@ -115,7 +115,22 @@ export function materializeEmbeddedNativeAddon(name: string): string | null {
 		const tempPath = join(tempDir, "addon.node");
 		try {
 			writeFileSync(tempPath, content, { flag: "wx" });
-			renameSync(tempPath, path);
+			// rename() is atomic when it succeeds, but Windows refuses to replace
+			// an existing destination. Unlinking first leaves a short absence
+			// window for that platform; every published file is still complete,
+			// and concurrent callers retry so the last complete publish wins.
+			let published = false;
+			for (let attempt = 0; attempt < 5 && !published; attempt += 1) {
+				try {
+					renameSync(tempPath, path);
+					published = true;
+				} catch (error) {
+					const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+					if (code !== "EEXIST" && code !== "EPERM" && code !== "EBUSY") throw error;
+					rmSync(path, { force: true });
+				}
+			}
+			if (!published) throw new Error(`Unable to publish native addon: ${path}`);
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
