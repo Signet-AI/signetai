@@ -93,7 +93,7 @@ export const BASE_GROUPS: { label: string; items: NavItem[] }[] = [
 		label: "System",
 		items: [
 			{ view: "home", label: "Home", icon: HomeIcon },
-			{ view: "agents", label: "Agents", icon: AgentsIcon, disabled: true },
+			{ view: "agents", label: "Agents", icon: AgentsIcon },
 		],
 	},
 	{

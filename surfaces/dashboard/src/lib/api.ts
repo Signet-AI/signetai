@@ -432,6 +432,20 @@ export interface SkillsResponse {
 	count: number;
 }
 
+export interface Agent {
+	id: string;
+	name: string;
+	read_policy: "isolated" | "shared" | "group";
+	policy_group: string | null;
+	effective_scope?: "agent" | "global" | "group";
+	created_at: string;
+	updated_at: string;
+}
+
+export interface AgentsResponse {
+	agents: Agent[];
+}
+
 export interface ImportSourcesResponse {
 	imported: number;
 	failed: number;
@@ -584,6 +598,18 @@ export interface DreamStatus {
 
 export const api = {
 	getStatus: () => getJSON<DaemonStatus>("/api/status"),
+	getAgents: () => getJSONResult<AgentsResponse>("/api/agents"),
+	updateAgentScope: async (
+		name: string,
+		memory: "isolated" | "shared" | "group",
+		group?: string,
+	): Promise<ApiReadResult<Agent>> => {
+		return getJSONResult<Agent>(`/api/agents/${encodeURIComponent(name)}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ memory, ...(memory === "group" ? { group } : {}) }),
+		});
+	},
 	getHealth: async (): Promise<boolean> => {
 		try {
 			return (await fetch(`${API_BASE}/health`)).ok;
