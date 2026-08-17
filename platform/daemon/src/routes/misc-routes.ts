@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
+import { parseSimpleYaml, resolveAgentMemoryPolicy } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
@@ -221,7 +221,8 @@ export function registerMiscRoutes(app: Hono): void {
 					.get(name) as AgentRow | undefined,
 		);
 		if (!agent) return c.json({ error: "Agent not found" }, 404);
-		return c.json(agent);
+		const resolved = resolveAgentMemoryPolicy(agent.read_policy, agent.policy_group);
+		return c.json({ ...agent, effective_scope: resolved.effectiveScope });
 	});
 
 	app.post("/api/agents", async (c) => {
@@ -229,8 +230,14 @@ export function registerMiscRoutes(app: Hono): void {
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const name = parseOptionalString(body.name);
 		if (!name) return c.json({ error: "name is required" }, 400);
-		const readPolicy = parseOptionalString(body.read_policy) ?? "isolated";
-		const group = parseOptionalString(body.policy_group) ?? null;
+		let resolved: ReturnType<typeof resolveAgentMemoryPolicy>;
+		try {
+			resolved = resolveAgentMemoryPolicy(parseOptionalString(body.read_policy) ?? "isolated", body.policy_group);
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "Invalid memory policy" }, 400);
+		}
+		const readPolicy = resolved.readPolicy;
+		const group = resolved.policyGroup;
 		const now = new Date().toISOString();
 		await runWriteTxAsync(getDbAccessor(), (db) => {
 			db.prepare(
@@ -245,6 +252,25 @@ export function registerMiscRoutes(app: Hono): void {
 					.get(name) as unknown as AgentRow,
 		);
 		return c.json(created, 201);
+	});
+
+	app.patch("/api/agents/:name", async (c) => {
+		const name = c.req.param("name");
+		if (name === "default") return c.json({ error: "Cannot modify the default agent" }, 400);
+		const body = toRecord(await c.req.json().catch(() => null));
+		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+		let resolved: ReturnType<typeof resolveAgentMemoryPolicy>;
+		try {
+			resolved = resolveAgentMemoryPolicy(body.memory ?? body.read_policy, body.group ?? body.policy_group);
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "Invalid memory policy" }, 400);
+		}
+		const existing = await getDbAccessor().withReadDbAsync(async (db) => db.prepare("SELECT id FROM agents WHERE name = ?").get(name) as { id: string } | undefined);
+		if (!existing) return c.json({ error: "Agent not found" }, 404);
+		const now = new Date().toISOString();
+		await runWriteTxAsync(getDbAccessor(), (db) => db.prepare("UPDATE agents SET read_policy = ?, policy_group = ?, updated_at = ? WHERE id = ?").run(resolved.readPolicy, resolved.policyGroup, now, existing.id));
+		const updated = await getDbAccessor().withReadDbAsync(async (db) => db.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE id = ?").get(existing.id) as unknown as AgentRow);
+		return c.json({ ...updated, effective_scope: resolved.effectiveScope });
 	});
 
 	app.delete("/api/agents/:name", async (c) => {

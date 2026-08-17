@@ -11,6 +11,24 @@ import type { AgentDefinition, ReadPolicy } from "./types";
 
 export type AgentRosterReadPolicy = "isolated" | "shared" | "group";
 
+export interface ResolvedAgentMemoryPolicy {
+	readonly readPolicy: AgentRosterReadPolicy;
+	readonly policyGroup: string | null;
+	readonly effectiveScope: "agent" | "global" | "group";
+}
+
+export function resolveAgentMemoryPolicy(readPolicy: unknown, policyGroup: unknown): ResolvedAgentMemoryPolicy {
+	if (readPolicy !== "isolated" && readPolicy !== "shared" && readPolicy !== "group") {
+		throw new Error("memory must be one of: isolated, shared, group");
+	}
+	if (readPolicy === "group") {
+		if (typeof policyGroup !== "string" || policyGroup.length === 0) throw new Error("group is required when memory is group");
+		return { readPolicy, policyGroup, effectiveScope: "group" };
+	}
+	if (policyGroup !== undefined && policyGroup !== null) throw new Error("group is only valid when memory is group");
+	return { readPolicy, policyGroup: null, effectiveScope: readPolicy === "shared" ? "global" : "agent" };
+}
+
 export interface NormalizedAgentRosterEntry {
 	readonly name: string;
 	readonly readPolicy: AgentRosterReadPolicy;

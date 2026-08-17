@@ -107,3 +107,8 @@ Mutations blocked by the kill switch return `503`.
 Route details live in `docs/api/` so the root API page stays readable. When
 adding or changing daemon routes, update the matching reference file and run
 `bun scripts/doc-drift.ts --markdown`.
+
+
+## Agent policy
+
+`GET /api/agents/:name` returns the agent's `read_policy`, optional `policy_group`, timestamps, and resolved `effective_scope` (`agent`, `global`, or `group`). `POST /api/agents` and `PATCH /api/agents/:name` accept `isolated`, `shared`, or `group`; `group` requires a group name and the other policies reject one. The daemon validates at the boundary and never falls back to local `agent.yaml` state. `signet agent set` uses PATCH, `signet agent show` uses GET, and `signet agent info` remains a compatibility alias.

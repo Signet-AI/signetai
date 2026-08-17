@@ -501,9 +501,10 @@ export {
 	getAgentIdentityFiles,
 	resolveAgentSkills,
 	buildAgentMemoryConfig,
+	resolveAgentMemoryPolicy,
 	normalizeAgentRosterEntry,
 } from "./agents";
-export type { AgentRosterReadPolicy, NormalizedAgentRosterEntry } from "./agents";
+export type { AgentRosterReadPolicy, NormalizedAgentRosterEntry, ResolvedAgentMemoryPolicy } from "./agents";
 
 // Skills unification
 export {
