@@ -39,7 +39,7 @@ export function writeMemoryMd(
 		readonly agentId?: string;
 		readonly owner?: string;
 	},
-): { ok: true } | { ok: false; error: string; code?: "busy" | "invalid" } {
+): { ok: true } | { ok: false; error: string; code?: "busy" | "invalid" | "unavailable" } {
 	const result = writeMemoryHead(content, opts);
 	if (result.ok) return { ok: true };
 	logger.error("hooks", result.error, undefined, {

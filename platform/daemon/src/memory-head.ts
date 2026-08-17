@@ -25,7 +25,7 @@ type LeaseResult =
 
 export type MemoryHeadWriteResult =
 	| { readonly ok: true; readonly revision: number }
-	| { readonly ok: false; readonly error: string; readonly code?: "busy" | "invalid" };
+	| { readonly ok: false; readonly error: string; readonly code?: "busy" | "invalid" | "unavailable" };
 
 function hashContent(content: string): string {
 	return createHash("sha256").update(content).digest("hex");
@@ -223,7 +223,11 @@ export function writeMemoryHead(
 			writeProjection(projected.file, agentId);
 			return { ok: true, revision: 0 };
 		}
-		return { ok: false, error: "Curated memory head state unavailable; refusing legacy projection" };
+		return {
+			ok: false,
+			error: "Curated memory head state unavailable; refusing legacy projection",
+			code: "unavailable",
+		};
 	}
 
 	const next = lease.row.hash === hashContent(projected.body) ? lease.row.revision : lease.row.revision + 1;

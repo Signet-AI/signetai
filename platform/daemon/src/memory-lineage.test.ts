@@ -24,8 +24,8 @@ const tok = new Tiktoken(cl100k_base);
 let dir = "";
 let prev: string | undefined;
 
-function resetWorkspace(): void {
-	closeDbAccessor();
+async function resetWorkspace(): Promise<void> {
+	await closeDbAccessor();
 	resetProjectionPurgeState();
 	rmSync(join(dir, "memory"), { recursive: true, force: true });
 	mkdirSync(join(dir, "memory"), { recursive: true });
@@ -52,7 +52,7 @@ async function addSummary(input: {
 }
 
 describe("memory-lineage", () => {
-	beforeAll(() => {
+	beforeAll(async () => {
 		prev = process.env.SIGNET_PATH;
 		dir = createTestTempDir("signet-memory-lineage-");
 		process.env.SIGNET_PATH = dir;
@@ -63,11 +63,11 @@ describe("memory-lineage", () => {
     enabled: false
 `,
 		);
-		resetWorkspace();
+		await resetWorkspace();
 	});
 
-	beforeEach(() => {
-		resetWorkspace();
+	beforeEach(async () => {
+		await resetWorkspace();
 	});
 
 	afterAll(() => {
@@ -1026,8 +1026,12 @@ describe("memory-lineage", () => {
 });
 
 describe("reindexMemoryArtifacts batch staging", () => {
-	beforeAll(() => {
-		resetWorkspace();
+	beforeAll(async () => {
+		// The parent suite restores SIGNET_PATH after its sibling describe has finished.
+		// Re-bind this suite to its own temp workspace before resetting the DB; otherwise
+		// reindexMemoryArtifacts scans the user's default workspace.
+		process.env.SIGNET_PATH = dir;
+		await resetWorkspace();
 	});
 
 	afterAll(() => {

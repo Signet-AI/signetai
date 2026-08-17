@@ -15,8 +15,8 @@ describe("dreaming operations", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -404,7 +404,7 @@ describe("dreaming operations", () => {
 		expect(result.ok).toBe(true);
 		expect((result.items[0]?.result as { reviewRequired?: boolean }).reviewRequired).toBe(true);
 		const proposalId = (result.items[0]?.proposal as { id: string }).id;
-		expect(getOntologyProposal(getDbAccessor(), proposalId, "agent-a")).toMatchObject({
+		expect(await getOntologyProposal(getDbAccessor(), proposalId, "agent-a")).toMatchObject({
 			operation: "create_link",
 			status: "pending",
 			risk: "review_required",
@@ -417,7 +417,7 @@ describe("dreaming operations", () => {
 					},
 			),
 		).toEqual({ c: 0 });
-		const applied = applyOntologyProposal(getDbAccessor(), {
+		const applied = await applyOntologyProposal(getDbAccessor(), {
 			agentId: "agent-a",
 			id: proposalId,
 			actor: "dashboard",
@@ -454,7 +454,7 @@ describe("dreaming operations", () => {
 					db.prepare("SELECT COUNT(*) AS c FROM ontology_proposals WHERE agent_id = ?").get("agent-a") as { c: number },
 			),
 		).toEqual({ c: 1 });
-		rejectOntologyProposal(getDbAccessor(), {
+		await rejectOntologyProposal(getDbAccessor(), {
 			agentId: "agent-a",
 			id: proposalId,
 			actor: "dashboard",
@@ -462,7 +462,7 @@ describe("dreaming operations", () => {
 		});
 		const third = await run();
 		expect((third.items[0]?.result as { deduped?: boolean }).deduped).toBe(true);
-		expect(getOntologyProposal(getDbAccessor(), proposalId, "agent-a")).toMatchObject({ status: "rejected" });
+		expect(await getOntologyProposal(getDbAccessor(), proposalId, "agent-a")).toMatchObject({ status: "rejected" });
 	});
 
 	it("archives a flagged entity in the same batch via attention:$<index>", async () => {

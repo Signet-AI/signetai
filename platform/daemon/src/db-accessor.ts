@@ -1901,8 +1901,8 @@ export function hasDbAccessor(): boolean {
 	return accessor !== null;
 }
 
-/** Tear down the singleton. Safe to call even if never initialised. */
-export function closeDbAccessor(): void {
+/** Tear down the singleton and its lazy DB-owner clients. Safe to call even if never initialised. */
+export async function closeDbAccessor(): Promise<void> {
 	if (accessor) {
 		accessor.close();
 		accessor = null;
@@ -1915,4 +1915,6 @@ export function closeDbAccessor(): void {
 	vecLoadError = null;
 	vecExtPath = undefined;
 	resetDbObservability();
+	const { closeDbOwner } = await import("./db-owner-runtime");
+	await closeDbOwner();
 }

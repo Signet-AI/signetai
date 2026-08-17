@@ -1311,7 +1311,7 @@ memory:
 
 describe("handlePreCompaction", () => {
 	test.serial("returns default guidelines when no config", async () => {
-		const result = handlePreCompaction({ harness: "test" });
+		const result = await handlePreCompaction({ harness: "test" });
 
 		expect(result.guidelines).toContain("Key decisions made");
 		expect(result.guidelines).toContain("User preferences discovered");
@@ -1325,7 +1325,7 @@ hooks:
     summaryGuidelines: "Custom summary rules"
 `);
 
-		const result = handlePreCompaction({ harness: "test" });
+		const result = await handlePreCompaction({ harness: "test" });
 
 		expect(result.guidelines).toBe("Custom summary rules");
 		expect(result.summaryPrompt).toContain("Custom summary rules");
@@ -1334,7 +1334,7 @@ hooks:
 	test.serial("includes recent memories in summary prompt", async () => {
 		createMemoryDb([{ content: "Important decision about auth", importance: 0.9 }]);
 
-		const result = handlePreCompaction({ harness: "test" });
+		const result = await handlePreCompaction({ harness: "test" });
 
 		expect(result.summaryPrompt).toContain("Recent memories for reference");
 		expect(result.summaryPrompt).toContain("Important decision about auth");
@@ -1349,7 +1349,7 @@ hooks:
 
 		createMemoryDb([{ content: "Should not appear", importance: 0.9 }]);
 
-		const result = handlePreCompaction({ harness: "test" });
+		const result = await handlePreCompaction({ harness: "test" });
 
 		expect(result.summaryPrompt).not.toContain("Should not appear");
 	});
@@ -2625,14 +2625,14 @@ describe("memory-lineage", () => {
 
 	test.serial(
 		"ensureCanonicalManifest returns existing manifest for pre-fix rows where session_id equals session_key",
-		() => {
+		async () => {
 			createMemoryDb([]);
 			const capturedAt = "2026-04-03T10:00:00.000Z";
 			const sharedKey = "agent:main:main";
 
 			// Create a manifest via the normal path — this simulates a pre-fix
 			// row where session_id was persisted verbatim from the shared key.
-			const manifest = ensureCanonicalManifest({
+			const manifest = await ensureCanonicalManifest({
 				agentId: "default",
 				sessionId: sharedKey,
 				sessionKey: sharedKey,
@@ -2647,7 +2647,7 @@ describe("memory-lineage", () => {
 
 			// Calling again with the same session_id should return the
 			// existing manifest via the session_id lookup.
-			const found = ensureCanonicalManifest({
+			const found = await ensureCanonicalManifest({
 				agentId: "default",
 				sessionId: sharedKey,
 				sessionKey: sharedKey,
@@ -2661,13 +2661,13 @@ describe("memory-lineage", () => {
 		},
 	);
 
-	test.serial("ensureCanonicalManifest creates fresh manifest when sessionId differs from sessionKey", () => {
+	test.serial("ensureCanonicalManifest creates fresh manifest when sessionId differs from sessionKey", async () => {
 		createMemoryDb([]);
 		const capturedAt = "2026-04-03T11:00:00.000Z";
 		const sharedKey = "agent:main:main";
 
 		// Pre-fix row: session_id === session_key
-		const legacy = ensureCanonicalManifest({
+		const legacy = await ensureCanonicalManifest({
 			agentId: "default",
 			sessionId: sharedKey,
 			sessionKey: sharedKey,
@@ -2680,7 +2680,7 @@ describe("memory-lineage", () => {
 
 		// New-style call with a derived session_id should NOT match
 		// the legacy row and should create a fresh manifest.
-		const fresh = ensureCanonicalManifest({
+		const fresh = await ensureCanonicalManifest({
 			agentId: "default",
 			sessionId: "session-end:path:/tmp/transcript:abc123",
 			sessionKey: sharedKey,
@@ -2757,7 +2757,7 @@ describe("memory-lineage", () => {
 			transcript: "User: preserve historical terminal provenance\nAssistant: direct evidence remains lossless.",
 			summaryStatus: "not_requested" as const,
 		};
-		const existing = ensureCanonicalManifest({ ...params, summaryStatus: "skipped" });
+		const existing = await ensureCanonicalManifest({ ...params, summaryStatus: "skipped" });
 		const manifestPath = join(TEST_DIR, existing.path.replace(`${TEST_DIR}/`, ""));
 		writeFileSync(
 			manifestPath,
@@ -3271,7 +3271,11 @@ describe("writeMemoryMd", () => {
 		createMemoryDb([]);
 
 		const result = synthWriteMemoryMd("# Working Memory\n\nTemporal head content.");
-		expect(result.ok).toBe(true);
+		expect(result).toEqual({
+			ok: false,
+			code: "invalid",
+			error: "Legacy synthesis writer disabled; curated memory head is authoritative",
+		});
 
 		const db = openTestDb();
 		const row = db
@@ -3285,9 +3289,7 @@ describe("writeMemoryMd", () => {
 			| undefined;
 		db.close();
 
-		expect(row?.revision).toBe(1);
-		expect(row?.content_hash.length).toBeGreaterThan(0);
-		expect(row?.content).toContain("Temporal head content");
+		expect(row).toBeNull();
 	});
 
 	test.serial("refuses writes when another MEMORY.md lease is active", async () => {
@@ -3303,7 +3305,7 @@ describe("writeMemoryMd", () => {
 		const result = synthWriteMemoryMd("# Working Memory\n\nShould be blocked.");
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error).toContain("busy");
+			expect(result.error).toContain("Legacy synthesis writer disabled");
 		}
 	});
 
@@ -3337,23 +3339,23 @@ describe("writeMemoryMd", () => {
 			process.env.SIGNET_PATH = previousSignetPath;
 		});
 
-		it("forwards agent scope to the shared memory head writer", () => {
+		it("reports the retired legacy writer for every agent scope", () => {
 			const result = synthWriteMemoryMd("# MEMORY\n\n## Active\n- synthesized for agent-b\n", {
 				agentId: "agent-b",
 				owner: "hooks-test",
 			});
-			expect(result).toEqual({ ok: true });
+			expect(result).toEqual({
+				ok: false,
+				code: "invalid",
+				error: "Legacy synthesis writer disabled; curated memory head is authoritative",
+			});
 
 			const row = getDbAccessor().withReadDb((db) => {
 				return db
 					.prepare("SELECT agent_id, content, revision FROM memory_md_heads WHERE agent_id = ?")
 					.get("agent-b") as { agent_id: string; content: string; revision: number } | undefined;
 			});
-			expect(row).toEqual({
-				agent_id: "agent-b",
-				content: "# MEMORY\n\n## Active\n- synthesized for agent-b",
-				revision: 1,
-			});
+			expect(row).toBeNull();
 
 			const defaultCount = getDbAccessor().withReadDb((db) => {
 				const found = db.prepare("SELECT COUNT(*) as n FROM memory_md_heads WHERE agent_id = 'default'").get() as {

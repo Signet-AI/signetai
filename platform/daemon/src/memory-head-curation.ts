@@ -28,7 +28,7 @@ const render = (entries: readonly Entry[]): string => entries.map((entry) => `- 
 
 export async function readCuratedMemoryHead(agentId: string): Promise<Record<string, unknown>> {
 	if (!agentId.trim()) throw new Error("agentId is required");
-	return await getDbAccessor().withReadDbAsync(async (db) => {
+	const snapshot = await getDbAccessor().withReadDbAsync((db) => {
 		const head = db
 			.prepare("SELECT revision, content, content_hash, revision_id FROM memory_md_heads WHERE agent_id = ?")
 			.get(agentId) as Record<string, unknown> | undefined;
@@ -37,40 +37,43 @@ export async function readCuratedMemoryHead(agentId: string): Promise<Record<str
 				"SELECT entry_id, canonical_text, status FROM memory_head_entries WHERE agent_id = ? AND status = 'active' ORDER BY entry_id",
 			)
 			.all(agentId);
-		const content = typeof head?.content === "string" ? head.content : "";
-		if (content) {
-			const target = pathFor(agentId);
-			mkdirSync(dirname(target), { recursive: true });
-			let existing = "";
-			try {
-				existing = readFileSync(target, "utf8");
-			} catch {}
-			if (existing !== `${content}\n`) {
-				const temporary = `${target}.recovery-${String(head?.revision ?? 0)}.tmp`;
-				writeFileSync(temporary, `${content}\n`, "utf8");
-				renameSync(temporary, target);
-			}
-			const pending = db
-				.prepare("SELECT status FROM memory_head_publications WHERE agent_id = ? AND revision = ?")
-				.get(agentId, head?.revision ?? 0) as { status?: string } | undefined;
-			if (pending?.status === "pending") {
-				await getDbAccessor().withWriteTxAsync((writeDb) => {
-					writeDb
-						.prepare(
-							"UPDATE memory_head_publications SET status='completed', completed_at=? WHERE agent_id=? AND revision=?",
-						)
-						.run(new Date().toISOString(), agentId, head?.revision ?? 0);
-				});
-			}
-		}
-		return {
-			agentId,
-			revision: head?.revision ?? 0,
-			hash: head?.content_hash ?? "",
-			revisionId: head?.revision_id ?? null,
-			entries,
-		};
+		const revision = head?.revision ?? 0;
+		const pending = db
+			.prepare("SELECT status FROM memory_head_publications WHERE agent_id = ? AND revision = ?")
+			.get(agentId, revision) as { status?: string } | undefined;
+		return { head, entries, pending };
 	});
+	const head = snapshot.head;
+	const content = typeof head?.content === "string" ? head.content : "";
+	if (content) {
+		const target = pathFor(agentId);
+		mkdirSync(dirname(target), { recursive: true });
+		let existing = "";
+		try {
+			existing = readFileSync(target, "utf8");
+		} catch {}
+		if (existing !== `${content}\n`) {
+			const temporary = `${target}.recovery-${String(head?.revision ?? 0)}.tmp`;
+			writeFileSync(temporary, `${content}\n`, "utf8");
+			renameSync(temporary, target);
+		}
+		if (snapshot.pending?.status === "pending") {
+			await getDbAccessor().withWriteTxAsync((writeDb) => {
+				writeDb
+					.prepare(
+						"UPDATE memory_head_publications SET status='completed', completed_at=? WHERE agent_id=? AND revision=?",
+					)
+					.run(new Date().toISOString(), agentId, head?.revision ?? 0);
+			});
+		}
+	}
+	return {
+		agentId,
+		revision: head?.revision ?? 0,
+		hash: head?.content_hash ?? "",
+		revisionId: head?.revision_id ?? null,
+		entries: snapshot.entries,
+	};
 }
 
 export async function commitCuratedMemoryHead(input: {
