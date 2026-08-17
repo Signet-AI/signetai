@@ -607,7 +607,7 @@ export const api = {
 		return getJSONResult<Agent>(`/api/agents/${encodeURIComponent(name)}`, {
 			method: "PATCH",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ memory, ...(memory === "group" ? { group } : {}) }),
+			body: JSON.stringify({ memory, group: memory === "group" ? group : null }),
 		});
 	},
 	getHealth: async (): Promise<boolean> => {
