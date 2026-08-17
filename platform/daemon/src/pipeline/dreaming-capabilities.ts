@@ -844,7 +844,9 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 							const result = curateMemoryHead(input);
 							if (result.ok) {
 								if (!params.accessor.withWriteTxAsync)
-									throw new Error("Head curation requires the async write transaction accessor to record its pass manifest");
+									throw new Error(
+										"Head curation requires the async write transaction accessor to record its pass manifest",
+									);
 								await params.accessor.withWriteTxAsync((db) =>
 									db
 										.prepare(

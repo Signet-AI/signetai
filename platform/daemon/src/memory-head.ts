@@ -231,7 +231,7 @@ export function writeMemoryHead(
 	if (!isSafeAgentId(agentId)) {
 		return { ok: false, error: `Invalid agentId for MEMORY.md path: ${agentId}`, code: "invalid" };
 	}
-	if (hasDbAccessor()) {
+	if (hasDbAccessor() && agentId !== "default") {
 		return {
 			ok: false,
 			error: "Legacy synthesis writer disabled; curated memory head is authoritative",
@@ -292,7 +292,11 @@ export function curateMemoryHead(input: MemoryHeadCuration): MemoryHeadCurationR
 	} catch (error) {
 		return { ok: false, error: error instanceof Error ? error.message : String(error), code: "invalid" };
 	}
-	const lease = acquireHeadLease(input.agentId, `dreaming:${input.passId}`, loadMemoryConfig(getAgentsDir()).pipelineV2.worker.leaseTimeoutMs);
+	const lease = acquireHeadLease(
+		input.agentId,
+		`dreaming:${input.passId}`,
+		loadMemoryConfig(getAgentsDir()).pipelineV2.worker.leaseTimeoutMs,
+	);
 	if (!lease.ok) return { ok: false, error: lease.error, code: lease.code === "busy" ? "busy" : "invalid" };
 	const hash = hashContent(projected.body);
 	const next = lease.row.hash === hash ? lease.row.revision : lease.row.revision + 1;
@@ -309,13 +313,18 @@ export function curateMemoryHead(input: MemoryHeadCuration): MemoryHeadCurationR
 			).run(projected.body, hash, next, new Date().toISOString(), input.agentId, lease.row.token);
 			for (const entry of input.entries)
 				db.prepare(
-					`INSERT INTO memory_head_revisions (id, agent_id, pass_id, revision, content_hash, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					`INSERT INTO memory_head_revisions (id, agent_id, revision, content, content_hash, rendered_token_count, pass_id, base_revision, base_hash, created_at, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				).run(
 					randomUUID(),
 					input.agentId,
-					input.passId,
 					next,
+					input.content.trim(),
 					hash,
+					countTokens(input.content.trim()),
+					input.passId,
+					input.baseRevision,
+					input.baseHash,
+					new Date().toISOString(),
 					entry.id,
 					entry.text,
 					entry.operation,
@@ -329,7 +338,9 @@ export function curateMemoryHead(input: MemoryHeadCuration): MemoryHeadCurationR
 			if (previous === undefined) {
 				if (existsSync(path)) rmSync(path);
 			} else writeFileSync(path, previous);
-		} catch { /* preserve the original failure */ }
+		} catch {
+			/* preserve the original failure */
+		}
 		return { ok: false, error: error instanceof Error ? error.message : String(error), code: "invalid" };
 	}
 	return {

@@ -107,7 +107,7 @@ describe("dreaming-agent-tools", () => {
 			mode: "incremental-content",
 		});
 		expect(tools.map((tool) => tool.name)).toEqual([...DREAMING_CAPABILITY_IDS]);
-		expect(tools).toHaveLength(14);
+		expect(tools).toHaveLength(15);
 	});
 
 	it("preserves a retry boundary through the Pi capability after a writer failure (#1414)", async () => {

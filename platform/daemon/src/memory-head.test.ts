@@ -125,31 +125,53 @@ describe("writeMemoryHead", () => {
 	it("rolls back the head and projection when audit insertion violates uniqueness", () => {
 		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
 		const initialContent = "# MEMORY\n\n## Active\n- original curated head\n";
-		const initialWrite = writeMemoryHead(initialContent, { agentId: "agent-a", owner: "memory-head-test" });
-		expect(initialWrite).toEqual({ ok: true, revision: 1 });
+		const initialWrite = curateMemoryHead({
+			passId: "pass-initial",
+			agentId: "agent-a",
+			baseRevision: 0,
+			baseHash: "",
+			content: initialContent,
+			entries: [
+				{
+					id: "entry-initial",
+					text: "original curated head",
+					operation: "added",
+					sourceRefs: ["source:initial"],
+					supportingQuotes: ["original curated head"],
+				},
+			],
+		});
+		expect(initialWrite).toMatchObject({ ok: true, revision: 1 });
 
 		const path = join(agentsDir, "agents", "agent-a", "MEMORY.md");
 		const previousFile = readFileSync(path);
-		const previousRow = getDbAccessor().withReadDb((db) =>
-			db.prepare("SELECT content, content_hash, revision FROM memory_md_heads WHERE agent_id = ?").get("agent-a") as
-				| { content: string; content_hash: string; revision: number }
-				| undefined,
+		const previousRow = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT content, content_hash, revision FROM memory_md_heads WHERE agent_id = ?").get("agent-a") as
+					| { content: string; content_hash: string; revision: number }
+					| undefined,
 		);
 		expect(previousRow).toBeDefined();
+		if (!previousRow) throw new Error("missing previous head row");
 
 		// The curation below will write revision 2. Pre-seeding the exact audit key
 		// makes its INSERT fail inside the transaction, after head publication.
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memory_head_revisions
-				 (id, agent_id, pass_id, revision, content_hash, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 (id, agent_id, revision, content, content_hash, rendered_token_count, pass_id, base_revision, base_hash, created_at, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				"pre-seeded-audit-row",
 				"agent-a",
-				"pass-atomicity",
 				2,
+				"pre-seeded content",
 				"pre-seeded-hash",
+				1,
+				"pass-atomicity",
+				1,
+				"previous-hash",
+				new Date().toISOString(),
 				"entry-duplicate",
 				"pre-seeded entry",
 				"added",
@@ -161,8 +183,8 @@ describe("writeMemoryHead", () => {
 		const result = curateMemoryHead({
 			passId: "pass-atomicity",
 			agentId: "agent-a",
-			baseRevision: previousRow!.revision,
-			baseHash: previousRow!.content_hash,
+			baseRevision: previousRow.revision,
+			baseHash: previousRow.content_hash,
 			content: "# MEMORY\n\n## Active\n- replacement curated head\n",
 			entries: [
 				{
@@ -181,6 +203,7 @@ describe("writeMemoryHead", () => {
 		expect(
 			getDbAccessor().withReadDb((db) =>
 				db.prepare("SELECT content, content_hash, revision FROM memory_md_heads WHERE agent_id = ?").get("agent-a"),
-		)).toEqual(previousRow);
+			),
+		).toEqual(previousRow);
 	});
 });
