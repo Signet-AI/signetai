@@ -113,22 +113,22 @@ const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
 // at the materialized copy before anything imports the addon.
 const coreRequire = createRequire(join(root, "platform", "core", "package.json"));
 const nativeAddonAssets = (() => {
-	const platformPackageName = `@napi-rs/keyring-${platformKey}`;
+	const packagePlatformKey =
+		platformKey === "linux-x64" || platformKey === "linux-arm64" ? `${platformKey}-gnu` : platformKey;
+	const platformPackageName = `@napi-rs/keyring-${packagePlatformKey}`;
 	try {
 		const keyringPackageJson = coreRequire.resolve("@napi-rs/keyring/package.json");
 		const keyringRequire = createRequire(keyringPackageJson);
 		const platformPackageJson = keyringRequire.resolve(`${platformPackageName}/package.json`);
-		const nodeFile = join(dirname(platformPackageJson), `keyring.${platformKey}.node`);
+		const nodeFile = join(dirname(platformPackageJson), `keyring.${packagePlatformKey}.node`);
 		if (!existsSync(nodeFile)) {
-			console.warn(`Skipping @napi-rs/keyring native asset: ${nodeFile} does not exist`);
-			return [];
+			throw new Error(`Required @napi-rs/keyring native asset is missing for ${platformKey}: ${nodeFile}`);
 		}
 		return [{ name: "napi-rs-keyring", contentBase64: readFileSync(nodeFile).toString("base64") }];
 	} catch (error) {
-		console.warn(
-			`Skipping @napi-rs/keyring native asset: ${platformPackageName} not resolvable (${(error as Error).message})`,
+		throw new Error(
+			`Required @napi-rs/keyring native asset is not resolvable for ${platformKey}: ${platformPackageName} (${(error as Error).message})`,
 		);
-		return [];
 	}
 })();
 

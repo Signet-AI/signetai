@@ -66,6 +66,9 @@ describe("native-runtime-assets", () => {
 		expect(addonPath).toBeTruthy();
 		expect(addonPath?.endsWith(".node")).toBe(true);
 		expect(addonPath ? readFileSync(addonPath, "utf8") : "").toBe("fake-native-binding");
+		const concurrentPaths = Array.from({ length: 16 }, () => materializeEmbeddedNativeAddon("napi-rs-keyring"));
+		expect(new Set(concurrentPaths).size).toBe(1);
+		expect(concurrentPaths[0] ? readFileSync(concurrentPaths[0], "utf8") : "").toBe("fake-native-binding");
 		expect(materializeEmbeddedNativeAddon("missing-addon")).toBeNull();
 	});
 

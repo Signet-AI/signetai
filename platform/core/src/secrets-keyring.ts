@@ -67,6 +67,10 @@ function classifyError(error: unknown): SecretKeyringResult {
 function tryRequireOverride(): typeof import("@napi-rs/keyring") | null {
 	const override = process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH?.trim();
 	if (!override) return null;
+	// This variable is a compiled-runtime bootstrap contract. A value supplied
+	// by the launcher must never fall back to package resolution: that would
+	// make a broken compiled bundle appear healthy by loading a host addon.
+	if (!override.startsWith("/")) return null;
 	try {
 		return require(override) as typeof import("@napi-rs/keyring");
 	} catch {
@@ -75,12 +79,20 @@ function tryRequireOverride(): typeof import("@napi-rs/keyring") | null {
 }
 
 async function loadModule(): Promise<typeof import("@napi-rs/keyring") | null> {
-	modulePromise ??= (async () => tryRequireOverride() ?? (await import("@napi-rs/keyring").catch(() => null)))();
+	modulePromise ??= (async () => {
+		const override = process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH?.trim();
+		if (override) return tryRequireOverride();
+		return await import("@napi-rs/keyring").catch(() => null);
+	})();
 	return modulePromise;
 }
 
 function loadModuleSync(): typeof import("@napi-rs/keyring") | null {
 	if (syncModule !== undefined) return syncModule;
+	if (process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH?.trim()) {
+		syncModule = tryRequireOverride();
+		return syncModule;
+	}
 	const override = tryRequireOverride();
 	if (override) {
 		syncModule = override;

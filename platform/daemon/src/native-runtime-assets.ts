@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -98,8 +107,18 @@ export function materializeEmbeddedNativeAddon(name: string): string | null {
 	const dir = join(tmpdir(), "signet-native-addons");
 	const path = join(dir, `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-${hash}.node`);
 	mkdirSync(dir, { recursive: true });
-	if (!existsSync(path)) {
-		writeFileSync(path, Buffer.from(asset.contentBase64, "base64"));
+	const content = Buffer.from(asset.contentBase64, "base64");
+	const valid = () =>
+		existsSync(path) && createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16) === hash;
+	if (!valid()) {
+		const tempDir = mkdtempSync(join(dir, ".tmp-"));
+		const tempPath = join(tempDir, "addon.node");
+		try {
+			writeFileSync(tempPath, content, { flag: "wx" });
+			renameSync(tempPath, path);
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	}
 	return path;
 }
