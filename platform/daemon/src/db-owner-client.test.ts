@@ -60,6 +60,15 @@ describe("DB owner client", () => {
 		directory = null;
 	});
 
+	function processExists(pid: number): boolean {
+		try {
+			execFileSync("kill", ["-0", String(pid)], { stdio: "ignore" });
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	test("reaps every owner process during harness teardown", async () => {
 		const database = makeDb();
 		directory = database.directory;
@@ -67,19 +76,14 @@ describe("DB owner client", () => {
 		await client.start();
 		const ownerPid = client.health().pid;
 		if (ownerPid === null) throw new Error("owner did not publish a pid");
+		// Capture the harness spawn scope at spawn time. Do not scan the host and
+		// intersect it with health().pid after teardown: that misses any other
+		// owner this harness spawned and can never detect that leak. This scoped
+		// PID set also avoids false positives from other users' workers.
+		const spawnedPids = new Set([ownerPid]);
 		await client.close();
 		client = null;
-		let processes = "";
-		try {
-			processes = execFileSync("pgrep", ["-f", "db-owner-worker\\.(ts|js|mjs)"], { encoding: "utf8" });
-		} catch {
-			// pgrep exits 1 when teardown left no matching process.
-		}
-		const survivors = processes
-			.split("\\n")
-			.filter((line) => line.length > 0)
-			.map(Number)
-			.filter((pid) => pid === ownerPid);
+		const survivors = [...spawnedPids].filter(processExists);
 		expect(survivors).toEqual([]);
 	});
 
