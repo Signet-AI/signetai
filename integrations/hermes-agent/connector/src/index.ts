@@ -64,6 +64,13 @@ export interface HermesDiagnosticCheck {
 	readonly fix?: string;
 }
 
+export interface HermesConnectorOptions {
+	readonly profile?: string;
+	readonly agentId?: string;
+	readonly memoryPolicy?: "isolated" | "shared" | "group";
+	readonly policyGroup?: string;
+}
+
 export interface HermesDoctorReport {
 	readonly ok: boolean;
 	readonly hermesHome: string;
@@ -904,7 +911,8 @@ export class HermesAgentConnector extends BaseConnector {
 		return resolveConfigPath(this.getHermesHome());
 	}
 
-	async install(basePath: string): Promise<InstallResult> {
+	async install(basePath: string, options: HermesConnectorOptions = {}): Promise<InstallResult> {
+		this.targetOptions = options;
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
 		const warnings: string[] = [];
@@ -1116,7 +1124,8 @@ export class HermesAgentConnector extends BaseConnector {
 		};
 	}
 
-	async uninstall(): Promise<UninstallResult> {
+	async uninstall(options: HermesConnectorOptions = {}): Promise<UninstallResult> {
+		this.targetOptions = options;
 		const filesRemoved: string[] = [];
 		const configsPatched: string[] = [];
 
