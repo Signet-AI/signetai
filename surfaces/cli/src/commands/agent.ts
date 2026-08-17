@@ -360,8 +360,14 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 		.description("Show daemon-backed agent policy and scope")
 		.action(async (name: string) => {
 			const data = await deps.fetchFromDaemon<Record<string, unknown>>(`/api/agents/${encodeURIComponent(name)}`);
-			if (!data) { console.log(chalk.red("  Daemon unavailable")); process.exit(1); }
-			if (data && typeof data.error === "string") { console.log(chalk.red(`  ${data.error}`)); process.exit(1); }
+			if (!data) {
+				console.log(chalk.red("  Daemon unavailable"));
+				process.exit(1);
+			}
+			if (data && typeof data.error === "string") {
+				console.log(chalk.red(`  ${data.error}`));
+				process.exit(1);
+			}
 			console.log(`  Agent: ${String(data?.name ?? name)}`);
 			console.log(`  Read policy: ${String(data?.read_policy ?? "isolated")}`);
 			if (data?.policy_group) console.log(`  Policy group: ${String(data.policy_group)}`);
@@ -376,12 +382,22 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 		.option("--group <group>", "Policy group name (required when --memory=group)")
 		.action(async (name: string, options: { memory: string; group?: string }) => {
 			const err = validateName(name);
-			if (err) { console.log(chalk.red(`  ${err}`)); process.exit(1); }
+			if (err) {
+				console.log(chalk.red(`  ${err}`));
+				process.exit(1);
+			}
 			const result = await deps.fetchFromDaemon<Record<string, unknown>>(`/api/agents/${encodeURIComponent(name)}`, {
-				method: "PATCH", headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ memory: options.memory, ...(options.group !== undefined ? { group: options.group } : {}) }),
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					memory: options.memory,
+					...(options.group !== undefined ? { group: options.group } : {}),
+				}),
 			});
-			if (!result || typeof result.error === "string") { console.log(chalk.red(`  ${typeof result?.error === "string" ? result.error : "Daemon unavailable"}`)); process.exit(1); }
+			if (!result || typeof result.error === "string") {
+				console.log(chalk.red(`  ${typeof result?.error === "string" ? result.error : "Daemon unavailable"}`));
+				process.exit(1);
+			}
 			console.log(`  Agent ${name} policy set to ${String(result.read_policy)}`);
 		});
 }

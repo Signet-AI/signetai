@@ -244,7 +244,15 @@ export function registerMiscRoutes(app: Hono): void {
 		if (!name) return c.json({ error: "name is required" }, 400);
 		let resolved: ReturnType<typeof resolveAgentMemoryPolicy>;
 		try {
-			resolved = resolveAgentMemoryPolicy(parseOptionalString(body.read_policy) ?? "isolated", body.policy_group);
+			const rawPolicy = Object.hasOwn(body, "read_policy") ? body.read_policy : undefined;
+			const rawGroup = Object.hasOwn(body, "policy_group") ? body.policy_group : undefined;
+			if (rawPolicy !== undefined && typeof rawPolicy !== "string") {
+				return c.json({ error: "memory must be one of: isolated, shared, group" }, 400);
+			}
+			if (rawGroup !== undefined && typeof rawGroup !== "string") {
+				return c.json({ error: "group must be a string" }, 400);
+			}
+			resolved = resolveAgentMemoryPolicy(rawPolicy ?? "isolated", rawGroup);
 		} catch (error) {
 			return c.json({ error: error instanceof Error ? error.message : "Invalid memory policy" }, 400);
 		}
@@ -271,16 +279,35 @@ export function registerMiscRoutes(app: Hono): void {
 		if (name === "default") return c.json({ error: "Cannot modify the default agent" }, 400);
 		const body = toRecord(await c.req.json().catch(() => null));
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+		const existing = await getDbAccessor().withReadDbAsync(
+			async (db) =>
+				db.prepare("SELECT id, read_policy, policy_group FROM agents WHERE name = ?").get(name) as
+					| { id: string; read_policy: string; policy_group: string | null }
+					| undefined,
+		);
+		if (!existing) return c.json({ error: "Agent not found" }, 404);
 		let resolved: ReturnType<typeof resolveAgentMemoryPolicy>;
 		try {
-			resolved = resolveAgentMemoryPolicy(body.memory ?? body.read_policy, body.group ?? body.policy_group);
+			const rawPolicy = Object.hasOwn(body, "memory")
+				? body.memory
+				: Object.hasOwn(body, "read_policy")
+					? body.read_policy
+					: existing.read_policy;
+			const rawGroup = Object.hasOwn(body, "group")
+				? body.group
+				: Object.hasOwn(body, "policy_group")
+					? body.policy_group
+					: existing.policy_group;
+			if (typeof rawPolicy !== "string") {
+				return c.json({ error: "memory must be one of: isolated, shared, group" }, 400);
+			}
+			if (rawGroup !== null && rawGroup !== undefined && typeof rawGroup !== "string") {
+				return c.json({ error: "group must be a string" }, 400);
+			}
+			resolved = resolveAgentMemoryPolicy(rawPolicy, rawGroup);
 		} catch (error) {
 			return c.json({ error: error instanceof Error ? error.message : "Invalid memory policy" }, 400);
 		}
-		const existing = await getDbAccessor().withReadDbAsync(
-			async (db) => db.prepare("SELECT id FROM agents WHERE name = ?").get(name) as { id: string } | undefined,
-		);
-		if (!existing) return c.json({ error: "Agent not found" }, 404);
 		const now = new Date().toISOString();
 		await runWriteTxAsync(getDbAccessor(), (db) =>
 			db
