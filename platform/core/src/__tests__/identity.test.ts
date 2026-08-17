@@ -8,6 +8,8 @@ import {
 	detectExistingSetup,
 	loadIdentityMode,
 	readStaticIdentity,
+	resolveHermesHomePath,
+	resolveHermesTarget,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
 	resolveStartupIdentityFiles,
@@ -195,6 +197,29 @@ describe("readStaticIdentity", () => {
 		const result = readStaticIdentity(TMP) ?? "";
 		expect(result.indexOf("## About Your User")).toBeLessThan(result.indexOf("## Agent Instructions"));
 	});
+});
+
+describe("resolveHermesTarget", () => {
+	test("resolves ambient and isolated profile homes without changing env", () => {
+		process.env.HOME = TMP;
+		process.env.HERMES_HOME = join(TMP, "hermes");
+		const before = process.env.HERMES_HOME;
+		expect(resolveHermesTarget()).toEqual({ kind: "ambient", home: join(TMP, "hermes") });
+		expect(resolveHermesTarget("bot")).toEqual({
+			kind: "profile",
+			profile: "bot",
+			home: join(TMP, "hermes", "profiles", "bot"),
+		});
+		expect(resolveHermesHomePath()).toBe(before);
+		expect(process.env.HERMES_HOME).toBe(before);
+	});
+
+	for (const profile of ["../escape", "..", "/tmp/absolute", "a/b", "a\\\\b", ""]) {
+		if (profile === "") continue;
+		test(`rejects invalid profile '${profile}'`, () => {
+			expect(() => resolveHermesTarget(profile)).toThrow("Invalid Hermes profile name");
+		});
+	}
 });
 
 describe("parseSimpleYaml", () => {

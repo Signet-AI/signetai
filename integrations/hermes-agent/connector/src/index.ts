@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult, resolveSignetApiKey } from "@signet/connector-base";
-import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
+import { expandHome, resolveHermesHomePath, resolveHermesRepoPath, type HermesTarget } from "@signet/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -660,6 +660,18 @@ function trustedOriginForDaemonUrl(daemonUrl: string): string | null {
 
 type AgentReadPolicy = "isolated" | "shared" | "group";
 
+export interface AgentRegistrationOptions {
+	readonly agentId: string;
+	readonly readPolicy?: AgentReadPolicy;
+	readonly policyGroup?: string | null;
+	/** Requested profile provisioning must fail closed instead of warning. */
+	readonly strict?: boolean;
+}
+
+export type AgentRegistrationResult =
+	| { readonly ok: true; readonly created: boolean; readonly agentId: string }
+	| { readonly ok: false; readonly agentId: string; readonly error: string };
+
 function configuredAgentReadPolicy(warnings: string[]): AgentReadPolicy {
 	const raw = sanitizedEnv("SIGNET_AGENT_READ_POLICY") || sanitizedEnv("SIGNET_AGENT_MEMORY_POLICY");
 	if (!raw) return "shared";
@@ -699,9 +711,23 @@ async function resolveDaemonAgentId(daemonUrl: string): Promise<string | null> {
 	}
 }
 
-async function ensureNamedAgentRegistered(daemonUrl: string, agentId: string, warnings: string[]): Promise<void> {
-	if (!agentId || agentId === "default" || agentId === "hermes-agent") return;
-	if (process.env.SIGNET_SKIP_AGENT_REGISTER === "1") return;
+async function ensureNamedAgentRegistered(
+	daemonUrl: string,
+	agentIdOrOptions: string | AgentRegistrationOptions,
+	warnings: string[],
+): Promise<AgentRegistrationResult> {
+	const options: AgentRegistrationOptions =
+		typeof agentIdOrOptions === "string" ? { agentId: agentIdOrOptions } : agentIdOrOptions;
+	const { agentId } = options;
+	const strict = options.strict === true;
+	const fail = (error: string): AgentRegistrationResult => {
+		if (!strict) warnings.push(error);
+		return { ok: false, agentId, error };
+	};
+	if (!agentId || agentId === "default" || agentId === "hermes-agent") {
+		return { ok: true, created: false, agentId };
+	}
+	if (process.env.SIGNET_SKIP_AGENT_REGISTER === "1") return { ok: true, created: false, agentId };
 
 	const baseUrl = trimTrailingSlashes(daemonUrl);
 	const token = sanitizedAuthTokenEnv();
@@ -714,21 +740,21 @@ async function ensureNamedAgentRegistered(daemonUrl: string, agentId: string, wa
 			headers,
 			signal: AbortSignal.timeout(1_000),
 		});
-		if (getResp.ok) return;
+		if (getResp.ok) return { ok: true, created: false, agentId };
 		if (getResp.status !== 404) {
 			const body = await getResp.text();
-			warnings.push(
-				`Could not check Signet agent '${agentId}' before registration: HTTP ${getResp.status} ${body.slice(0, 200)}`,
-			);
-			return;
+			return fail(`Could not check Signet agent '${agentId}' before registration: HTTP ${getResp.status} ${body.slice(0, 200)}`);
 		}
 	} catch {
 		// Daemon may be offline; the POST below will produce the user-facing warning.
 	}
 
-	const readPolicy = configuredAgentReadPolicy(warnings);
-	const policyGroup = readPolicy === "group" ? sanitizedEnv("SIGNET_AGENT_POLICY_GROUP") || null : null;
+	const readPolicy = options.readPolicy ?? configuredAgentReadPolicy(warnings);
+	const policyGroup = options.policyGroup !== undefined
+		? options.policyGroup
+		: readPolicy === "group" ? sanitizedEnv("SIGNET_AGENT_POLICY_GROUP") || null : null;
 	if (readPolicy === "group" && !policyGroup) {
+		if (strict) return fail(`Agent '${agentId}' requested group policy but no policy group was provided.`);
 		warnings.push(
 			`SIGNET_AGENT_READ_POLICY=group requires SIGNET_AGENT_POLICY_GROUP. Registering '${agentId}' with isolated memory instead.`,
 		);
@@ -752,15 +778,12 @@ async function ensureNamedAgentRegistered(daemonUrl: string, agentId: string, wa
 		});
 		if (!resp.ok) {
 			const body = await resp.text();
-			warnings.push(
-				`Could not register Signet agent '${agentId}' with ${effectiveReadPolicy} memory policy: ${body.slice(0, 200)}. ${policyHint}`,
-			);
+			return fail(`Could not register Signet agent '${agentId}' with ${effectiveReadPolicy} memory policy: ${body.slice(0, 200)}. ${policyHint}`);
 		}
+		return { ok: true, created: true, agentId };
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
-		warnings.push(
-			`Could not register Signet agent '${agentId}' because the daemon was unreachable. ` + `${policyHint} (${msg})`,
-		);
+		return fail(`Could not register Signet agent '${agentId}' because the daemon was unreachable. ${policyHint} (${msg})`);
 	}
 }
 
@@ -768,12 +791,33 @@ async function ensureNamedAgentRegistered(daemonUrl: string, agentId: string, wa
 // Connector
 // ---------------------------------------------------------------------------
 
+export interface HermesConnectorOptions {
+	readonly target?: HermesTarget;
+	readonly agentId?: string;
+	readonly readPolicy?: AgentReadPolicy;
+	readonly policyGroup?: string | null;
+}
+
 export class HermesAgentConnector extends BaseConnector {
 	readonly name = "Hermes Agent";
 	readonly harnessId = "hermes-agent";
+	private readonly target?: HermesTarget;
+	private readonly registration?: AgentRegistrationOptions;
+
+	constructor(options?: HermesTarget | HermesConnectorOptions) {
+		super();
+		if (options && "home" in options) {
+			this.target = options;
+		} else {
+			this.target = options?.target;
+			this.registration = options
+				? { agentId: options.agentId ?? "", readPolicy: options.readPolicy, policyGroup: options.policyGroup, strict: options.target?.kind === "profile" }
+				: undefined;
+		}
+	}
 
 	private getHermesHome(): string {
-		return resolveHermesHomePath();
+		return this.target?.home ?? resolveHermesHomePath();
 	}
 
 	private getHermesRepo(): string | null {
@@ -861,7 +905,7 @@ export class HermesAgentConnector extends BaseConnector {
 			// then "default" for the default workspace. The harness name
 			// ("hermes-agent") is provenance, never an agent id — a stale value
 			// from an older install is healed instead of honored.
-			let signetAgentId = sanitizedEnv("SIGNET_AGENT_ID");
+			let signetAgentId = this.registration?.agentId || sanitizedEnv("SIGNET_AGENT_ID");
 			if (signetAgentId === "hermes-agent") {
 				warnings.push(
 					"SIGNET_AGENT_ID='hermes-agent' is the harness name, not an agent scope. Re-resolving from the daemon.",
@@ -931,7 +975,19 @@ export class HermesAgentConnector extends BaseConnector {
 			warnings.push(`Failed to update .env: ${msg}`);
 		}
 
-		await ensureNamedAgentRegistered(configuredDaemonUrl, configuredSignetAgentId, warnings);
+		const registration = this.registration
+			? { ...this.registration, agentId: this.registration.agentId || configuredSignetAgentId }
+			: configuredSignetAgentId;
+		const registrationResult = await ensureNamedAgentRegistered(configuredDaemonUrl, registration, warnings);
+		if (!registrationResult.ok && this.target?.kind === "profile") {
+			return {
+				success: false,
+				message: registrationResult.error,
+				filesWritten,
+				configsPatched,
+				warnings,
+			};
+		}
 
 		// 3. Activate Signet as the external Hermes memory provider.
 		const providerConfig = configureProvider(hermesHome, warnings);

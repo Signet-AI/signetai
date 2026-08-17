@@ -318,9 +318,37 @@ function isBinaryOnPath(bin: string): boolean {
 		.some((directory) => directory.length > 0 && existsSync(join(directory, bin)));
 }
 
+export interface HermesTarget {
+	readonly kind: "ambient" | "profile";
+	readonly home: string;
+	readonly profile?: string;
+}
+
+const HERMES_PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Resolve the ambient Hermes home without mutating process.env. */
 export function resolveHermesHomePath(): string {
 	const hermesHome = process.env.HERMES_HOME?.trim();
 	return hermesHome || join(userHome(), ".hermes");
+}
+
+/**
+ * Resolve an explicit Hermes target. Named profiles are isolated directories
+ * below the ambient Hermes home; profile names never accept path separators,
+ * traversal, or absolute paths.
+ */
+export function resolveHermesTarget(profile?: string): HermesTarget {
+	if (profile === undefined || profile === "") {
+		return { kind: "ambient", home: resolveHermesHomePath() };
+	}
+	if (!HERMES_PROFILE_NAME.test(profile) || profile === "." || profile === "..") {
+		throw new Error(`Invalid Hermes profile name '${profile}'. Use letters, numbers, '.', '_' or '-' only.`);
+	}
+	return {
+		kind: "profile",
+		profile,
+		home: join(resolveHermesHomePath(), "profiles", profile),
+	};
 }
 
 /**

@@ -334,7 +334,24 @@ describe("HermesAgentConnector.isInstalled()", () => {
 	});
 });
 
-describe("HermesAgentConnector.install()", () => {
+	describe("explicit Hermes targets", () => {
+		it("writes profile files only below the selected target home", async () => {
+			const profileHome = join(tmpRoot, "profiles", "bot");
+			const ambientHome = join(tmpRoot, ".hermes");
+			const connector = new HermesAgentConnector({
+				target: { kind: "profile", profile: "bot", home: profileHome },
+				agentId: "bot",
+			});
+			const result = await connector.install(tmpRoot);
+
+			expect(result.success).toBe(true);
+			expect(existsSync(join(profileHome, "plugins", "signet", "__init__.py"))).toBe(true);
+			expect(existsSync(join(profileHome, ".env"))).toBe(true);
+			expect(existsSync(join(ambientHome, "plugins"))).toBe(false);
+			expect(process.env.HERMES_HOME).toBeUndefined();
+		});
+	});
+	describe("HermesAgentConnector.install()", () => {
 	it("copies plugin files into both user and repo plugin locations when HERMES_REPO is set", async () => {
 		const hermesRepo = join(tmpRoot, "hermes-agent");
 		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });

@@ -452,6 +452,7 @@ export {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolveAgentBasePath,
 	resolveHermesHomePath,
+	resolveHermesTarget,
 	resolveHermesRepoPath,
 	resolveKimiHomePath,
 	resolveHermesRepoPluginPath,
@@ -470,6 +471,7 @@ export type {
 	IdentityFile,
 	IdentityMap,
 	SetupDetection,
+	HermesTarget,
 } from "./identity";
 
 export {
