@@ -19,8 +19,8 @@ Hooks are HTTP endpoints exposed by the Signet [Daemon](/daemon/). Harnesses cal
 | `session-end` | Session finishes | Persist transcript lineage and queue session summary |
 | `pre-compaction` | Before context compaction | Get summary guidelines |
 | `compaction-complete` | After compaction | Save a first-class compaction artifact into the temporal DAG |
-| `synthesis` | Scheduled or manual | Get prompt to regenerate MEMORY.md |
-| `synthesis/complete` | After synthesis | Save the merge-safe temporal head |
+| `synthesis` | Retired | The route remains only as a loud compatibility boundary |
+| `synthesis/complete` | Retired | Returns HTTP 410; Dreaming owns manifest-gated MEMORY.md head publication |
 
 ---
 
@@ -167,8 +167,9 @@ no-op responses with `bypassed: true`:
 - `remember` — memory is not saved
 - `recall` — no search results returned
 
-The `synthesis` and `synthesis/complete` hooks are **not** affected by bypass.
-They are scheduler-driven and have no session context.
+The retired `synthesis` and `synthesis/complete` routes are not part of the
+session bypass contract. `synthesis/complete` returns HTTP 410; Dreaming owns
+manifest-gated MEMORY.md head publication.
 
 The `SIGNET_BYPASS=1` environment variable causes the CLI hook process to
 exit immediately — the daemon is never contacted, so no session is created
@@ -441,20 +442,13 @@ Response:
 
 The harness runs the prompt through the specified model.
 
-### Step 3: Save the result
+### Step 3: Retired route
 
-**`POST /api/hooks/synthesis/complete`**
+`POST /api/hooks/synthesis/complete` is retired and returns HTTP 410. Do not
+send generated content to this route. Dreaming owns manifest-gated publication
+of the curated MEMORY.md head.
 
-```json
-{
-  "content": "# Memory\n\n## Active Projects\n..."
-}
-```
-
-The daemon:
-1. Backs up the existing MEMORY.md to `memory/MEMORY.backup-<timestamp>.md`
-2. Writes the new content with a generation timestamp header
-3. Returns `{ "success": true }`
+The daemon does not write MEMORY.md here, and no head change occurs.
 
 ### Configuration
 

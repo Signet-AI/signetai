@@ -12,14 +12,12 @@ import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-	type AccountingProvenance,
-	type DreamingConfig,
-	type IdentityContextFileEntry,
-	type LlmCacheRequestAccounting,
-	type LlmUsage,
-	resolveSpecialIdentityFiles,
-	resolveStartupIdentityFiles,
+import type {
+	AccountingProvenance,
+	DreamingConfig,
+	IdentityContextFileEntry,
+	LlmCacheRequestAccounting,
+	LlmUsage,
 } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
@@ -43,23 +41,13 @@ import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import {
 	DREAMING_CONTENT_ATTENTION_KINDS,
-	type DreamingAttention,
 	enqueueDreamingAttentionInTx,
-	getDreamingAttention,
 	getDreamingAttentionInDb,
 	getDreamingAttentionWorkloadDiagnostics,
-	getDreamingAttentionSnapshots,
 	hasDreamingAttentionKindInDb,
-	renderDreamingAttentionForPrompt,
-	resolveDreamingAttentionInTx,
 } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
-import {
-	type DreamingEvidenceFragment,
-	createDreamingAgentEvidence,
-	nextDreamingEvidenceFragment,
-	renderDreamingEvidence,
-} from "./dreaming-evidence";
+import { renderDreamingEvidence } from "./dreaming-evidence";
 import {
 	deliveredOffsetForSource,
 	hasDreamingEvidenceContinuation,
@@ -67,17 +55,11 @@ import {
 } from "./dreaming-evidence-consumption";
 import {
 	type RejectedDreamingEvidence,
-	autoRequeueRepairedDreamingEvidence,
 	collectRejectedDreamingEvidence,
 	recordRejectedDreamingEvidenceInTx,
 	resolveRequeuedDreamingEvidenceInTx,
 } from "./dreaming-evidence-retry";
 import type { ApplyDreamingOperationsResult, DreamingOperationRequest } from "./dreaming-operations";
-import {
-	readDreamingRunbook,
-	recordDreamingEvidenceWindowInTx,
-	renderDreamingRunbookForPrompt,
-} from "./dreaming-runbook";
 import {
 	DREAMING_SURPRISAL_SELECTOR_VERSION,
 	type DreamingSurprisalSelection,
@@ -790,7 +772,7 @@ export async function requestDreamingEvidenceRequeue(
 // Data fetching for prompt assembly
 // ---------------------------------------------------------------------------
 
-function fetchEpisodicEvidence(
+function _fetchEpisodicEvidence(
 	db: ReadDb,
 	agentId: string,
 	since: string | null,
@@ -811,12 +793,7 @@ function fetchEpisodicEvidence(
 // Prompt construction
 // ---------------------------------------------------------------------------
 
-interface RenderedIdentityBlock {
-	readonly content: string;
-	readonly unreadablePaths: readonly string[];
-}
-
-function readIdentityFile(
+function _readIdentityFile(
 	dir: string,
 	entry: IdentityContextFileEntry,
 ): { readonly content: string; readonly unreadable: boolean } {
@@ -1473,7 +1450,7 @@ export async function runDreamingAgentPass(
 	accessor: DbAccessor,
 	executor: DreamingAgentExecutor,
 	cfg: DreamingConfig,
-	agentsDir: string,
+	_agentsDir: string,
 	agentId: string,
 	scopes: readonly string[],
 	mode: DreamingMode,
@@ -1679,7 +1656,8 @@ export async function runDreamingAgentPass(
 			onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
 			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
 		});
-		const memoryHeadMissing = mode === "incremental-content" && memoryHeadResult?.["ok"] !== true;
+		const memoryHeadMissing =
+			mode === "incremental-content" && (memoryHeadResult === null || Reflect.get(memoryHeadResult, "ok") !== true);
 		if (memoryHeadMissing)
 			logger.warn("dreaming", "Content pass completed without a successful memory-head commit", { passId });
 		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}${memoryHeadMissing ? " [memory-head commit missing]" : ""}`;

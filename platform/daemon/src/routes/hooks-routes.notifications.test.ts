@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -46,6 +46,21 @@ async function post(path: string, body: Readonly<Record<string, unknown>>): Prom
 }
 
 describe("cross-agent notification routes", () => {
+	it("rejects retired synthesis completion without changing MEMORY.md", async () => {
+		const memoryPath = join(dir, "MEMORY.md");
+		const before = "# Existing head\n\n- keep this content\n";
+		writeFileSync(memoryPath, before);
+
+		const response = await post("/api/hooks/synthesis/complete", {
+			harness: "test",
+			agentId: "default",
+			content: "# Must not be published",
+		});
+
+		expect(response.status).toBe(410);
+		expect(readFileSync(memoryPath, "utf8")).toBe(before);
+	});
+
 	it("injects unread messages at a compatible hook and suppresses them after explicit acknowledgement", async () => {
 		upsertAgentPresence({ agentId: "beta", harness: "opencode", sessionKey: "session-beta" });
 		const message = createAgentMessage({

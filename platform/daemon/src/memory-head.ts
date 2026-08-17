@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveDefaultBasePath, scanMemoryContent } from "@signet/core";
-import { getDbAccessor, hasDbAccessor } from "./db-accessor";
+import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { loadMemoryConfig } from "./memory-config";
 import { countTokens } from "./pipeline/tokenizer";
