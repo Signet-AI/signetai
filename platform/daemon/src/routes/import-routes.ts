@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
-import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSource } from "@signet/core";
+import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSourceIfGeneration } from "@signet/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
@@ -262,7 +262,7 @@ export function registerImportRoutes(app: Hono): void {
 						agentId: resolveDaemonAgentId(),
 						reason: "imported source replaced",
 					});
-					const removed = removeSource(replacedSource.id, agentsDir);
+					const removed = removeSourceIfGeneration(replacedSource.id, replacedSource.generation, agentsDir);
 					if (removed.ok === false)
 						logger.warn("documents", "Replaced dashboard import config cleanup failed", {
 							sourceId: replacedSource.id,
@@ -289,7 +289,7 @@ export function registerImportRoutes(app: Hono): void {
 						await runWriteTxAsync(getDbAccessor(), (db) =>
 							purgeSourceOwnedRowsInTx(db, { sourceId: added.source.id, agentId: resolveDaemonAgentId() }),
 						);
-						removeSource(added.source.id, process.env.SIGNET_PATH);
+						removeSourceIfGeneration(added.source.id, added.source.generation, process.env.SIGNET_PATH);
 					} catch (cleanupError) {
 						logger.warn("documents", "Dashboard import cleanup failed", {
 							sourceId: added.source.id,
