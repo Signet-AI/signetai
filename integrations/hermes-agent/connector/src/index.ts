@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult, resolveSignetApiKey } from "@signet/connector-base";
 import { expandHome, resolveHermesHomePath, resolveHermesRepoPath, type HermesTarget } from "@signet/core";
@@ -99,6 +99,21 @@ interface HermesProbeResult {
 	readonly error: string | null;
 }
 
+function assertContainedTargetPath(targetPath: string, targetRoot: string): void {
+	let rootPath = targetRoot;
+	while (!existsSync(rootPath)) {
+		const parent = dirname(rootPath);
+		if (parent === rootPath) throw new Error(`Hermes target root does not exist: ${targetRoot}`);
+		rootPath = parent;
+	}
+	const root = realpathSync(rootPath);
+	const candidate = existsSync(targetPath) ? realpathSync(targetPath) : join(root, relative(root, targetPath));
+	const rel = relative(root, candidate);
+	if (rel.startsWith("..") || isAbsolute(rel)) {
+		throw new Error(`Hermes target path escapes validated root: ${targetPath}`);
+	}
+}
+
 function getRepoPluginTargetDir(hermesRepo: string): string {
 	return join(hermesRepo, "plugins", "memory", "signet");
 }
@@ -112,7 +127,8 @@ function getProviderBackupPath(hermesHome: string): string {
 }
 
 /** Copy the Signet memory plugin into a Hermes plugin directory. */
-function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"]): string[] {
+function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot?: string): string[] {
+	if (targetRoot) assertContainedTargetPath(targetDir, targetRoot);
 	const sourceDir = getPluginSourceDir();
 
 	mkdirSync(targetDir, { recursive: true });
@@ -134,14 +150,12 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 
 /** Remove the Signet memory plugin from the Hermes plugins directory. */
 function uninstallPlugin(targetDir: string): string[] {
-	const removed: string[] = [];
-
-	if (existsSync(targetDir)) {
-		rmSync(targetDir, { recursive: true, force: true });
-		removed.push(targetDir);
+	if (!existsSync(targetDir)) return [];
+	if (!readInstallMarker(targetDir)) {
+		throw new Error(`Refusing to uninstall unowned Hermes plugin path: ${targetDir} (missing or invalid ${INSTALL_MARKER_FILE})`);
 	}
-
-	return removed;
+	rmSync(targetDir, { recursive: true, force: true });
+	return [targetDir];
 }
 
 // ---------------------------------------------------------------------------
@@ -808,6 +822,7 @@ export class HermesAgentConnector extends BaseConnector {
 		super();
 		if (options && "home" in options) {
 			this.target = options;
+			this.registration = { agentId: "", strict: options.kind === "profile" };
 		} else {
 			this.target = options?.target;
 			this.registration = options
@@ -821,6 +836,7 @@ export class HermesAgentConnector extends BaseConnector {
 	}
 
 	private getHermesRepo(): string | null {
+		if (this.target?.kind === "profile") return null;
 		return resolveHermesRepoPath();
 	}
 
@@ -839,13 +855,14 @@ export class HermesAgentConnector extends BaseConnector {
 		}
 
 		const hermesHome = this.getHermesHome();
+		if (this.target?.kind === "profile") assertContainedTargetPath(hermesHome, this.target.home);
 		const hermesRepo = this.getHermesRepo();
 		let userPluginInstalled = false;
 		let repoPluginInstalled = false;
 
 		// 1. Install the Python plugin into the current user-plugin location.
 		try {
-			const pluginFiles = installPlugin(getUserPluginTargetDir(hermesHome), "user");
+			const pluginFiles = installPlugin(getUserPluginTargetDir(hermesHome), "user", hermesHome);
 			filesWritten.push(...pluginFiles);
 			userPluginInstalled = true;
 		} catch (e) {
@@ -858,7 +875,7 @@ export class HermesAgentConnector extends BaseConnector {
 		// cannot shadow the fixed Signet provider.
 		if (hermesRepo) {
 			try {
-				const pluginFiles = installPlugin(getRepoPluginTargetDir(hermesRepo), "repo");
+				const pluginFiles = installPlugin(getRepoPluginTargetDir(hermesRepo), "repo", hermesRepo);
 				filesWritten.push(...pluginFiles);
 				repoPluginInstalled = true;
 			} catch (e) {
