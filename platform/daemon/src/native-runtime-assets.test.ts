@@ -57,7 +57,7 @@ describe("native-runtime-assets", () => {
 		expect(wasmDir ? existsSync(`${wasmDir}/example.wasm`) : false).toBe(true);
 	});
 
-	test("materializes an embedded native addon to a real .node file, returning null when absent", () => {
+	test("materializes an embedded native addon to a real .node file, returning null when absent", async () => {
 		expect(materializeEmbeddedNativeAddon("napi-rs-keyring")).toBeNull();
 
 		registerNativeAssets({
@@ -68,9 +68,21 @@ describe("native-runtime-assets", () => {
 		expect(addonPath).toBeTruthy();
 		expect(addonPath?.endsWith(".node")).toBe(true);
 		expect(addonPath ? readFileSync(addonPath, "utf8") : "").toBe("fake-native-binding");
-		const concurrentPaths = Array.from({ length: 16 }, () => materializeEmbeddedNativeAddon("napi-rs-keyring"));
+
+		// Create every promise before awaiting so concurrent consumers enter the
+		// materializer in the same turn and converge on one published artifact.
+		const concurrentPaths = await Promise.all(
+			Array.from({ length: 16 }, () => Promise.resolve().then(() => materializeEmbeddedNativeAddon("napi-rs-keyring"))),
+		);
 		expect(new Set(concurrentPaths).size).toBe(1);
+		expect(concurrentPaths.every((path) => path && existsSync(path))).toBe(true);
 		expect(concurrentPaths[0] ? readFileSync(concurrentPaths[0], "utf8") : "").toBe("fake-native-binding");
+
+		const addonDir = join(tmpdir(), "signet-native-addons");
+		const addonEntries = readdirSync(addonDir).filter((entry) => entry.startsWith("napi-rs-keyring-"));
+		expect(addonEntries).toHaveLength(1);
+		expect(addonEntries[0]?.endsWith(".node")).toBe(true);
+		expect(addonEntries.some((entry) => entry.includes(".tmp-"))).toBe(false);
 		expect(materializeEmbeddedNativeAddon("missing-addon")).toBeNull();
 	});
 
