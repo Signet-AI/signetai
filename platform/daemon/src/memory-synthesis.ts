@@ -62,7 +62,7 @@ export async function handleSynthesisRequest(
 
 	const agentId = opts?.agentId ?? "default";
 	if (hasDbAccessor()) {
-		purgeCanonicalNoiseSessionsOnce(agentId, NOISE_PURGE_REASON);
+		await purgeCanonicalNoiseSessionsOnce(agentId, NOISE_PURGE_REASON);
 	}
 
 	const worker = getSynthesisWorker();
