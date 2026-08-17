@@ -14,14 +14,13 @@ import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
-import { handleSynthesisRequest, writeMemoryMd } from "../memory-synthesis";
+import { handleSynthesisRequest } from "../memory-synthesis";
 import { activeSessionCount } from "../session-tracker";
 import { emitLifecycleObservation, emitLifecycleShutdown } from "@signet/lifecycle-proof";
 
 type SynthesisDeps = {
 	readonly getDbAccessor: typeof getDbAccessor;
 	readonly handleSynthesisRequest: typeof handleSynthesisRequest;
-	readonly writeMemoryMd: typeof writeMemoryMd;
 	readonly logger: typeof logger;
 	readonly activeSessionCount: typeof activeSessionCount;
 };
@@ -29,7 +28,6 @@ type SynthesisDeps = {
 const DEFAULT_DEPS: SynthesisDeps = {
 	getDbAccessor,
 	handleSynthesisRequest,
-	writeMemoryMd,
 	logger,
 	activeSessionCount,
 };
@@ -241,23 +239,13 @@ async function runSynthesisWithDeps(
 			return "failed";
 		}
 
-		// Write MEMORY.md via shared helper (handles backup)
-		const writeResult = deps.writeMemoryMd(finalText, {
+		// The legacy idle-gap renderer is retained only for scheduling/audit
+		// compatibility. Dreaming is the sole MEMORY.md publication trigger.
+		deps.logger.info("synthesis", "Skipped retired idle-gap MEMORY.md publication", {
 			agentId: scopeAgentId,
-			owner: "synthesis-worker",
-		});
-		if (!writeResult.ok) {
-			if (writeResult.code === "busy") {
-				deps.logger.warn("synthesis", "MEMORY.md head busy, deferring synthesis write");
-				return "busy";
-			}
-			deps.logger.error("synthesis", `MEMORY.md write refused: ${writeResult.error}`);
-			return "failed";
-		}
-
-		deps.logger.info("synthesis", "MEMORY.md synthesized", {
 			sourceItems: synthesisData.fileCount,
 			outputLength: finalText.length,
+			reason: "dreaming-is-memory-head-authority",
 		});
 
 		return "ok";

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startSynthesisWorker } from "./synthesis-worker";
@@ -116,7 +116,11 @@ describe("synthesis-worker", () => {
 		}
 	});
 
-	it("writes the rendered projection through the shared MEMORY.md helper", async () => {
+	it("does not publish the legacy rendered projection to MEMORY.md", async () => {
+		const memoryPath = join(agentsDir, "MEMORY.md");
+		writeFileSync(memoryPath, "Dreaming-owned head\n");
+		const before = statSync(memoryPath);
+		const beforeContent = readFileSync(memoryPath, "utf-8");
 		const worker = createWorker();
 
 		try {
@@ -127,13 +131,9 @@ describe("synthesis-worker", () => {
 				reason: undefined,
 			});
 			expect(worker.isSynthesizing).toBe(false);
-			expect(mockWriteMemoryMd).toHaveBeenCalledWith(
-				"# MEMORY\n\nprojection for default",
-				expect.objectContaining({
-					agentId: "default",
-					owner: "synthesis-worker",
-				}),
-			);
+				expect(mockWriteMemoryMd).not.toHaveBeenCalled();
+			expect(readFileSync(memoryPath, "utf-8")).toBe(beforeContent);
+			expect(statSync(memoryPath).mtimeMs).toBe(before.mtimeMs);
 		} finally {
 			worker.stop();
 			await worker.drain();
@@ -214,13 +214,7 @@ describe("synthesis-worker", () => {
 				reason: undefined,
 			});
 			expect(mockHandleSynthesisRequest).toHaveBeenCalledTimes(1);
-			expect(mockWriteMemoryMd).toHaveBeenCalledWith(
-				"# MEMORY\n\nprojection for default",
-				expect.objectContaining({
-					agentId: "default",
-					owner: "synthesis-worker",
-				}),
-			);
+				expect(mockWriteMemoryMd).not.toHaveBeenCalled();
 		} finally {
 			worker.stop();
 			expect(await worker.drain()).toBe("completed");
@@ -244,13 +238,7 @@ describe("synthesis-worker", () => {
 					agentId: "agent-a",
 				}),
 			);
-			expect(mockWriteMemoryMd).toHaveBeenCalledWith(
-				"# MEMORY\n\nprojection for agent-a",
-				expect.objectContaining({
-					agentId: "agent-a",
-					owner: "synthesis-worker",
-				}),
-			);
+			expect(mockWriteMemoryMd).not.toHaveBeenCalled();
 		} finally {
 			worker.stop();
 			expect(await worker.drain()).toBe("completed");
@@ -378,44 +366,13 @@ describe("synthesis-worker", () => {
 		}
 	}, 20_000);
 
-	it("surfaces MEMORY.md head lease contention as a retryable skip", async () => {
-		mockWriteMemoryMd.mockImplementationOnce(() => ({
-			ok: false as const,
-			error: "MEMORY.md write busy",
-			code: "busy" as const,
-		}));
-
-		const worker = createWorker();
-
-		try {
-			const result = await worker.triggerNow();
-			expect(result).toEqual({
-				success: false,
-				skipped: true,
-				reason: "MEMORY.md head busy",
-			});
-		} finally {
-			worker.stop();
-			expect(await worker.drain()).toBe("completed");
-		}
-	});
-
-	it("queues forced retry when MEMORY.md head is busy", async () => {
-		mockWriteMemoryMd.mockImplementationOnce(() => ({
-			ok: false as const,
-			error: "MEMORY.md write busy",
-			code: "busy" as const,
-		}));
-
+	it("does not invoke the retired MEMORY.md writer", async () => {
 		const worker = createWorker();
 
 		try {
 			const result = await worker.triggerNow({ force: true, source: "compaction-complete" });
-			expect(result).toEqual({
-				success: false,
-				skipped: true,
-				reason: "MEMORY.md head busy (queued forced retry)",
-			});
+			expect(result.success).toBe(true);
+			expect(mockWriteMemoryMd).not.toHaveBeenCalled();
 		} finally {
 			worker.stop();
 			expect(await worker.drain()).toBe("completed");
