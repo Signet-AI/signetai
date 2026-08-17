@@ -46,7 +46,6 @@ import {
 	handleSynthesisRequest,
 	handleUserPromptSubmit,
 	resetSessionStartDedupe,
-	writeMemoryMd,
 } from "../hooks.js";
 import { getInferenceRouterOrNull } from "../inference-router";
 import { fetchInternal } from "../internal-fetch.js";
@@ -1873,7 +1872,7 @@ function registerSynthesis(app: Hono): void {
 			if (scopedAgent.error) {
 				return c.json({ error: scopedAgent.error }, 403);
 			}
-			const result = await handleSynthesisRequest(body, { agentId: scopedAgent.agentId, writeToDisk: false });
+			const result = await handleSynthesisRequest(body, { agentId: scopedAgent.agentId });
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Synthesis request failed", e as Error);
@@ -1881,63 +1880,9 @@ function registerSynthesis(app: Hono): void {
 		}
 	});
 
-	// Save synthesized MEMORY.md
+	// Retired: Dreaming's manifest-gated path is the sole MEMORY.md publisher.
 	app.post("/api/hooks/synthesis/complete", async (c) => {
-		try {
-			const body = (await c.req.json()) as { content: string; agentId?: string; sessionKey?: string };
-
-			if (!body.content) {
-				return c.json({ error: "content is required" }, 400);
-			}
-
-			const worker = getSynthesisWorker();
-			if (!worker) {
-				return c.json({ error: "Synthesis worker not running" }, 503);
-			}
-
-			let lockToken: number | null = null;
-			if (!worker.running) {
-				return c.json({ error: "Synthesis worker is shutting down" }, 503);
-			}
-
-			lockToken = worker.acquireWriteLock();
-			if (lockToken === null) {
-				return worker.running
-					? c.json({ error: "Synthesis already in progress" }, 409)
-					: c.json({ error: "Synthesis worker is shutting down" }, 503);
-			}
-
-			try {
-				const scopedAgent = resolveScopedAgentId(
-					c,
-					resolveAgentId({
-						agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
-						sessionKey: body.sessionKey ?? c.req.header("x-signet-session-key"),
-					}),
-				);
-				if (scopedAgent.error) {
-					return c.json({ error: scopedAgent.error }, 403);
-				}
-				const result = writeMemoryMd(body.content, {
-					agentId: scopedAgent.agentId,
-					owner: "api-hooks-synthesis-complete",
-				});
-				if (!result.ok) {
-					const status = result.code === "busy" ? 409 : 400;
-					return c.json({ error: result.error }, status);
-				}
-				logger.info("hooks", "MEMORY.md synthesized");
-			} finally {
-				if (worker) {
-					worker.releaseWriteLock(lockToken);
-				}
-			}
-
-			return c.json({ success: true });
-		} catch (e) {
-			logger.error("hooks", "Synthesis complete failed", e instanceof Error ? e : new Error(String(e)));
-			return c.json({ error: "Failed to save MEMORY.md" }, 500);
-		}
+		return c.json({ error: "Synthesis completion route retired; use Dreaming" }, 410);
 	});
 
 	// Trigger immediate MEMORY.md synthesis

@@ -51,7 +51,7 @@ export function writeMemoryMd(
 
 export async function handleSynthesisRequest(
 	req: SynthesisRequest,
-	opts?: { maxTokens?: number; sinceTimestamp?: number; agentId?: string; writeToDisk?: boolean },
+	opts?: { maxTokens?: number; sinceTimestamp?: number; agentId?: string },
 ): Promise<SynthesisResponse> {
 	logger.info("hooks", "Synthesis request", { trigger: req.trigger });
 
@@ -69,9 +69,6 @@ export async function handleSynthesisRequest(
 	if (worker === null) {
 		logger.warn("hooks", "Synthesis render worker not available, falling back to synchronous render");
 		const rendered = await renderMemoryProjection(agentId);
-		if (opts?.writeToDisk === true) {
-			writeMemoryMd(rendered.content, { agentId });
-		}
 		return {
 			harness: "daemon",
 			model: "projection",
@@ -106,9 +103,6 @@ export async function handleSynthesisRequest(
 			logger.warn("hooks", "Synthesis render worker failed, falling back to synchronous render", error ?? { message });
 			try {
 				const rendered = await renderMemoryProjection(agentId);
-				if (opts?.writeToDisk === true) {
-					writeMemoryMd(rendered.content, { agentId });
-				}
 				resolve({
 					harness: "daemon",
 					model: "projection",
@@ -146,9 +140,6 @@ export async function handleSynthesisRequest(
 			if (isRenderResult(msg)) {
 				settled = true;
 				cleanup();
-				if (opts?.writeToDisk === true) {
-					writeMemoryMd(msg.content, { agentId });
-				}
 				resolve({
 					harness: "daemon",
 					model: "projection",

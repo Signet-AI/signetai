@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -214,7 +214,7 @@ describe("handleSynthesisRequest", () => {
 		}
 	});
 
-	test("returns SynthesisResponse with writeToDisk:false (null worker fallback)", async () => {
+	test("returns SynthesisResponse without publishing (null worker fallback)", async () => {
 		if (!DB_AVAILABLE) {
 			console.warn("SKIP: real DB not available");
 			return;
@@ -225,7 +225,6 @@ describe("handleSynthesisRequest", () => {
 		const req: SynthesisRequest = { trigger: "manual" };
 		const resp = await handleSynthesisRequest(req, {
 			agentId: "default",
-			writeToDisk: false,
 		});
 
 		expect(resp.harness).toBe("daemon");
@@ -234,7 +233,7 @@ describe("handleSynthesisRequest", () => {
 		expect(typeof resp.fileCount).toBe("number");
 	}, 60_000);
 
-	test("writeToDisk:true writes MEMORY.md to SIGNET_PATH", async () => {
+	test("ignores the retired writeToDisk publication option", async () => {
 		if (!DB_AVAILABLE) {
 			console.warn("SKIP: real DB not available");
 			return;
@@ -249,13 +248,9 @@ describe("handleSynthesisRequest", () => {
 		const req: SynthesisRequest = { trigger: "manual" };
 		await handleSynthesisRequest(req, {
 			agentId: "default",
-			writeToDisk: true,
 		});
 
-		const memoryMdPath = join(tmpDir, "MEMORY.md");
-		expect(existsSync(memoryMdPath)).toBe(true);
-		const content = readFileSync(memoryMdPath, "utf8");
-		expect(typeof content).toBe("string");
+		expect(existsSync(join(tmpDir, "MEMORY.md"))).toBe(false);
 	}, 60_000);
 
 	test("null worker fallback returns valid response shape", async () => {
