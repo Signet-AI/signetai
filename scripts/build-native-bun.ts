@@ -107,6 +107,31 @@ const workerEntries = [
 ] as const;
 const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
 
+// `@napi-rs/keyring` can't be require()'d by name inside a compiled binary
+// (Bun `--compile` can't trace its loader). Embed the platform `.node` file
+// as a runtime asset; cli-native.ts points SIGNET_KEYRING_NATIVE_MODULE_PATH
+// at the materialized copy before anything imports the addon.
+const coreRequire = createRequire(join(root, "platform", "core", "package.json"));
+const nativeAddonAssets = (() => {
+	const platformPackageName = `@napi-rs/keyring-${platformKey}`;
+	try {
+		const keyringPackageJson = coreRequire.resolve("@napi-rs/keyring/package.json");
+		const keyringRequire = createRequire(keyringPackageJson);
+		const platformPackageJson = keyringRequire.resolve(`${platformPackageName}/package.json`);
+		const nodeFile = join(dirname(platformPackageJson), `keyring.${platformKey}.node`);
+		if (!existsSync(nodeFile)) {
+			console.warn(`Skipping @napi-rs/keyring native asset: ${nodeFile} does not exist`);
+			return [];
+		}
+		return [{ name: "napi-rs-keyring", contentBase64: readFileSync(nodeFile).toString("base64") }];
+	} catch (error) {
+		console.warn(
+			`Skipping @napi-rs/keyring native asset: ${platformPackageName} not resolvable (${(error as Error).message})`,
+		);
+		return [];
+	}
+})();
+
 for (const [name, entry] of workerEntries) {
 	runBunBuild([
 		"--target=bun",
@@ -290,7 +315,8 @@ writeFileSync(
 		`export const skillAssets = ${JSON.stringify(skillAssets)} as const;\n` +
 		`export const templateAssets = ${JSON.stringify(templateAssets)} as const;\n` +
 		`export const workerAssets = ${JSON.stringify(workerAssets)} as const;\n` +
-		`export const wasmAssets = ${JSON.stringify(wasmAssets)} as const;\n`,
+		`export const wasmAssets = ${JSON.stringify(wasmAssets)} as const;\n` +
+		`export const nativeAddonAssets = ${JSON.stringify(nativeAddonAssets)} as const;\n`,
 );
 
 writeFileSync(
@@ -304,19 +330,23 @@ export const { env, pipeline } = transformers;
 
 writeFileSync(
 	join(buildDir, "cli-native.ts"),
-	`import { materializeEmbeddedAssetTree, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
+	`import { materializeEmbeddedAssetTree, materializeEmbeddedNativeAddon, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
 import { handoffInspectorParent } from "../surfaces/cli/src/lib/inspector-proxy";
-import { connectorAssets, dashboardAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
+import { connectorAssets, dashboardAssets, nativeAddonAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
 import * as transformersWebRuntime from "./transformers-web-runtime";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-registerNativeAssets({ connectors: connectorAssets, dashboard: dashboardAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets });
+registerNativeAssets({ connectors: connectorAssets, dashboard: dashboardAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets, nativeAddons: nativeAddonAssets });
 registerNativeTransformersBindings(transformersWebRuntime);
 process.env.SIGNET_VERSION = process.env.SIGNET_VERSION?.trim() || ${JSON.stringify(nativeVersion)};
 process.env.SIGNET_TEMPLATES_DIR ??= materializeEmbeddedAssetTree("templates") ?? "";
 process.env.SIGNET_SKILLS_SOURCE ??= materializeEmbeddedAssetTree("skills") ?? "";
 process.env.SIGNET_CONNECTOR_ASSETS_DIR ??= materializeEmbeddedAssetTree("connectors") ?? "";
+if (!process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH?.trim()) {
+	const keyringAddonPath = materializeEmbeddedNativeAddon("napi-rs-keyring");
+	if (keyringAddonPath) process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH = keyringAddonPath;
+}
 
 // When the binary is invoked directly (curl-install + signet install,
 // raw binary from PATH) without a parent process setting SIGNET_DIR,

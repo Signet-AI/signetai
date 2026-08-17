@@ -61,16 +61,33 @@ function classifyError(error: unknown): SecretKeyringResult {
 	return { state: "corrupt", message };
 }
 
+// `@napi-rs/keyring`'s own `createRequire(__filename)` breaks Bun `--compile`
+// bundling; require the `.node` addon by absolute path instead (path set by
+// native-runtime-assets.ts in compiled builds, unset in source/dev runs).
+function tryRequireOverride(): typeof import("@napi-rs/keyring") | null {
+	const override = process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH?.trim();
+	if (!override) return null;
+	try {
+		return require(override) as typeof import("@napi-rs/keyring");
+	} catch {
+		return null;
+	}
+}
+
 async function loadModule(): Promise<typeof import("@napi-rs/keyring") | null> {
-	modulePromise ??= import("@napi-rs/keyring").catch(() => null);
+	modulePromise ??= (async () => tryRequireOverride() ?? (await import("@napi-rs/keyring").catch(() => null)))();
 	return modulePromise;
 }
 
 function loadModuleSync(): typeof import("@napi-rs/keyring") | null {
 	if (syncModule !== undefined) return syncModule;
+	const override = tryRequireOverride();
+	if (override) {
+		syncModule = override;
+		return syncModule;
+	}
 	try {
-		const mod: typeof import("@napi-rs/keyring") = require("@napi-rs/keyring");
-		syncModule = mod;
+		syncModule = require("@napi-rs/keyring") as typeof import("@napi-rs/keyring");
 	} catch {
 		syncModule = null;
 	}

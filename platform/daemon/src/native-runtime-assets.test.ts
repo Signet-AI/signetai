@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import {
 	getNativeTransformersBindings,
 	materializeEmbeddedAssetTree,
+	materializeEmbeddedNativeAddon,
 	materializeEmbeddedWasmAssets,
 	registerNativeAssets,
 	registerNativeTransformersBindings,
@@ -52,6 +53,20 @@ describe("native-runtime-assets", () => {
 		const wasmDir = materializeEmbeddedWasmAssets();
 		expect(wasmDir).toBeTruthy();
 		expect(wasmDir ? existsSync(`${wasmDir}/example.wasm`) : false).toBe(true);
+	});
+
+	test("materializes an embedded native addon to a real .node file, returning null when absent", () => {
+		expect(materializeEmbeddedNativeAddon("napi-rs-keyring")).toBeNull();
+
+		registerNativeAssets({
+			nativeAddons: [{ name: "napi-rs-keyring", contentBase64: Buffer.from("fake-native-binding").toString("base64") }],
+		});
+
+		const addonPath = materializeEmbeddedNativeAddon("napi-rs-keyring");
+		expect(addonPath).toBeTruthy();
+		expect(addonPath?.endsWith(".node")).toBe(true);
+		expect(addonPath ? readFileSync(addonPath, "utf8") : "").toBe("fake-native-binding");
+		expect(materializeEmbeddedNativeAddon("missing-addon")).toBeNull();
 	});
 
 	test("materializes embedded setup asset trees", () => {

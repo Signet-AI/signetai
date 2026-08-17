@@ -14,6 +14,11 @@ export interface EmbeddedWorkerAsset {
 	readonly contentBase64: string;
 }
 
+export interface EmbeddedNativeAddonAsset {
+	readonly name: string;
+	readonly contentBase64: string;
+}
+
 export interface EmbeddedWasmAsset {
 	readonly name: string;
 	readonly contentBase64: string;
@@ -32,6 +37,7 @@ export interface NativeRuntimeAssets {
 	readonly templates?: readonly EmbeddedFileAsset[];
 	readonly workers?: readonly EmbeddedWorkerAsset[];
 	readonly wasm?: readonly EmbeddedWasmAsset[];
+	readonly nativeAddons?: readonly EmbeddedNativeAddonAsset[];
 }
 
 declare global {
@@ -77,6 +83,23 @@ export function resolveEmbeddedWorkerPath(name: string): string | null {
 	mkdirSync(dir, { recursive: true });
 	if (!existsSync(path)) {
 		writeFileSync(path, Buffer.from(worker.contentBase64, "base64"));
+	}
+	return path;
+}
+
+// Materializes an embedded native `.node` addon so callers can `require()` it
+// by absolute path -- some N-API packages (e.g. `@napi-rs/keyring`) don't
+// survive Bun `--compile` bundling by package name.
+export function materializeEmbeddedNativeAddon(name: string): string | null {
+	const asset = (nativeRuntimeAssets().nativeAddons ?? []).find((a) => a.name === name);
+	if (!asset) return null;
+
+	const hash = createHash("sha256").update(asset.contentBase64).digest("hex").slice(0, 16);
+	const dir = join(tmpdir(), "signet-native-addons");
+	const path = join(dir, `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-${hash}.node`);
+	mkdirSync(dir, { recursive: true });
+	if (!existsSync(path)) {
+		writeFileSync(path, Buffer.from(asset.contentBase64, "base64"));
 	}
 	return path;
 }
