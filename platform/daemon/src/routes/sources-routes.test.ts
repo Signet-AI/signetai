@@ -270,6 +270,95 @@ describe("Sources routes", () => {
 		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
 	});
 
+	it("does not hide a re-added source when restart cleanup sees an older generation tombstone (#1630)", async () => {
+		const first = addObsidianSource({ root: vault, name: "Generation One", now: "2026-08-16T18:00:00.000Z" }, dir);
+		expect(first.ok).toBe(true);
+		if (first.ok === false) throw new Error(first.error);
+
+		const tombstonePath = join(dir, ".daemon", "source-deletion-tombstones.json");
+		mkdirSync(join(dir, ".daemon"), { recursive: true });
+		writeFileSync(
+			tombstonePath,
+			`${JSON.stringify(
+				[
+					{
+						id: "tombstone-generation-one",
+						source: first.source,
+						agentId: "default",
+						deletedAt: new Date().toISOString(),
+					},
+				],
+				null,
+				2,
+			)}\n`,
+		);
+
+		const second = addObsidianSource({ root: vault, name: "Generation Two", now: "2026-08-16T19:00:00.000Z" }, dir);
+		expect(second.ok).toBe(true);
+		if (second.ok === false) throw new Error(second.error);
+		expect(second.source.id).toBe(first.source.id);
+		expect(second.source.updatedAt).not.toBe(first.source.updatedAt);
+
+		let purges = 0;
+		await cleanupSourceDeletionTombstones(dir, () => {
+			purges++;
+			return Promise.resolve(1);
+		});
+		expect(purges).toBe(1);
+		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
+
+		const app = makeApp();
+		const list = await app.request("/api/sources");
+		expect(list.status).toBe(200);
+		const listed = (await list.json()) as { sources: Array<{ id: string; updatedAt: string }> };
+		expect(listed.sources).toHaveLength(1);
+		expect(listed.sources[0]).toMatchObject({ id: second.source.id, updatedAt: second.source.updatedAt });
+
+		const health = await app.request(`/api/sources/${encodeURIComponent(second.source.id)}/health`);
+		expect(health.status).toBe(200);
+		const snapshot = await app.request(`/api/sources/${encodeURIComponent(second.source.id)}/snapshot`);
+		expect(snapshot.status).toBe(200);
+	});
+
+	it("keeps an older generation tombstone when deleting the re-added source (#1630)", async () => {
+		const first = addObsidianSource({ root: vault, name: "Generation One", now: "2026-08-16T20:00:00.000Z" }, dir);
+		expect(first.ok).toBe(true);
+		if (first.ok === false) throw new Error(first.error);
+
+		const tombstonePath = join(dir, ".daemon", "source-deletion-tombstones.json");
+		mkdirSync(join(dir, ".daemon"), { recursive: true });
+		writeFileSync(
+			tombstonePath,
+			`${JSON.stringify(
+				[
+					{
+						id: "tombstone-generation-one",
+						source: first.source,
+						agentId: "default",
+						deletedAt: new Date().toISOString(),
+					},
+				],
+				null,
+				2,
+			)}\n`,
+		);
+
+		const second = addObsidianSource({ root: vault, name: "Generation Two", now: "2026-08-16T21:00:00.000Z" }, dir);
+		expect(second.ok).toBe(true);
+		if (second.ok === false) throw new Error(second.error);
+
+		const deleted = await makeApp().request(`/api/sources/${encodeURIComponent(second.source.id)}`, {
+			method: "DELETE",
+		});
+		expect(deleted.status).toBe(200);
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+		const remaining = JSON.parse(readFileSync(tombstonePath, "utf8")) as Array<{
+			source: { id: string; updatedAt: string };
+		}>;
+		expect(remaining).toHaveLength(1);
+		expect(remaining[0]?.source).toEqual({ ...first.source });
+	});
+
 	it("connects an Obsidian source, queues indexing, and records lastIndexedAt after the job finishes", async () => {
 		const res = await makeApp({ indexed: 3 }).request("/api/sources/obsidian", {
 			method: "POST",

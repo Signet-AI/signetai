@@ -183,11 +183,14 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.get("/api/sources", (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();
-		const tombstonedSourceIds = loadTombstonedSourceIds(agentsDir, agentId);
+		const tombstonedSourceGenerations = loadTombstonedSourceGenerations(agentsDir, agentId);
 		return c.json({
 			version: config.version,
 			sources: config.sources
-				.filter((source) => isSourceVisibleToAgent(source, agentId) && !tombstonedSourceIds.has(source.id))
+				.filter(
+					(source) =>
+						isSourceVisibleToAgent(source, agentId) && !tombstonedSourceGenerations.has(sourceGenerationKey(source)),
+				)
 				.map((source) => {
 					const stats = sourceStats(source, agentId);
 					return {
@@ -485,21 +488,25 @@ function findConfiguredSource(
 	agentId: string,
 	options: { readonly includeTombstoned?: boolean } = {},
 ): SignetSourceEntry | undefined {
-	const tombstonedSourceIds = loadTombstonedSourceIds(agentsDir, agentId);
+	const tombstonedSourceGenerations = loadTombstonedSourceGenerations(agentsDir, agentId);
 	return loadSourcesConfig(agentsDir).sources.find(
 		(source: SignetSourceEntry) =>
 			source.id === sourceId &&
 			isSourceVisibleToAgent(source, agentId) &&
-			(options.includeTombstoned === true || !tombstonedSourceIds.has(source.id)),
+			(options.includeTombstoned === true || !tombstonedSourceGenerations.has(sourceGenerationKey(source))),
 	);
 }
 
-function loadTombstonedSourceIds(agentsDir: string, agentId: string): ReadonlySet<string> {
+function loadTombstonedSourceGenerations(agentsDir: string, agentId: string): ReadonlySet<string> {
 	return new Set(
 		loadSourceDeletionTombstones(agentsDir)
 			.filter((tombstone) => tombstone.agentId === agentId)
-			.map((tombstone) => tombstone.source.id),
+			.map((tombstone) => sourceGenerationKey(tombstone.source)),
 	);
+}
+
+function sourceGenerationKey(source: SignetSourceEntry): string {
+	return `${source.id}\u0000${source.updatedAt}`;
 }
 
 function isSourceVisibleToAgent(source: SignetSourceEntry, agentId: string): boolean {
@@ -707,12 +714,13 @@ export async function cleanupSourceDeletionTombstones(
 ): Promise<void> {
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
 	if (tombstones.length === 0) return;
-	const configuredIds = new Set(loadSourcesConfig(agentsDir).sources.map((source) => source.id));
+	const configuredSources = new Map(loadSourcesConfig(agentsDir).sources.map((source) => [source.id, source]));
 	const remaining: SourceDeletionTombstone[] = [];
 	for (const tombstone of tombstones) {
-		if (configuredIds.has(tombstone.source.id)) {
+		const configured = configuredSources.get(tombstone.source.id);
+		if (configured !== undefined && configured.updatedAt === tombstone.source.updatedAt) {
 			// Config removal is the final deletion-state transition. Keep the
-			// tombstone while the configured source is still non-live.
+			// tombstone while this source generation is still non-live.
 			remaining.push(tombstone);
 			continue;
 		}
@@ -744,7 +752,10 @@ function purgeSource(
 
 function recordSourceDeletionTombstone(source: SignetSourceEntry, agentId: string, agentsDir: string): void {
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
-	const next = tombstones.filter((entry) => entry.source.id !== source.id || entry.agentId !== agentId);
+	const next = tombstones.filter(
+		(entry) =>
+			entry.source.id !== source.id || entry.agentId !== agentId || entry.source.updatedAt !== source.updatedAt,
+	);
 	saveSourceDeletionTombstones(
 		[
 			...next,
@@ -766,7 +777,10 @@ function clearSourceDeletionTombstone(source: SignetSourceEntry, agentId: string
 	const configured = loadSourcesConfig(agentsDir).sources.find((entry) => entry.id === source.id);
 	if (configured?.updatedAt === source.updatedAt) return;
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
-	const next = tombstones.filter((entry) => entry.source.id !== source.id || entry.agentId !== agentId);
+	const next = tombstones.filter(
+		(entry) =>
+			entry.source.id !== source.id || entry.agentId !== agentId || entry.source.updatedAt !== source.updatedAt,
+	);
 	if (next.length !== tombstones.length) saveSourceDeletionTombstones(next, agentsDir);
 }
 
