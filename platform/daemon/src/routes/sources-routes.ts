@@ -474,7 +474,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const purged = provider ? await purgeSource(provider, source, sourceAgentId, purgeNativeSource) : 0;
 		const result = removeSource(sourceId, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 500);
-		if (!isSourceIndexInFlight(source.id)) clearSourceDeletionTombstone(source.id, sourceAgentId, agentsDir);
+		if (!isSourceIndexInFlight(source.id)) clearSourceDeletionTombstone(source, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
 	});
 }
@@ -669,7 +669,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		if (consumeCanceledSourceIndexJob(job.id) && !sourceIndexStopping) {
 			const provider = getSourceProvider(input.source.kind);
 			if (provider) await purgeSource(provider, input.source, resolveDaemonAgentId(), input.purgeNativeSource);
-			clearSourceDeletionTombstone(input.source.id, resolveDaemonAgentId(), input.agentsDir);
+			clearSourceDeletionTombstone(input.source, resolveDaemonAgentId(), input.agentsDir);
 		}
 		clearSourceIndexInFlight(input.source.id);
 	}
@@ -710,7 +710,12 @@ export async function cleanupSourceDeletionTombstones(
 	const configuredIds = new Set(loadSourcesConfig(agentsDir).sources.map((source) => source.id));
 	const remaining: SourceDeletionTombstone[] = [];
 	for (const tombstone of tombstones) {
-		if (configuredIds.has(tombstone.source.id)) continue;
+		if (configuredIds.has(tombstone.source.id)) {
+			// Config removal is the final deletion-state transition. Keep the
+			// tombstone while the configured source is still non-live.
+			remaining.push(tombstone);
+			continue;
+		}
 		const provider = getSourceProvider(tombstone.source.kind);
 		try {
 			await removeSourceLifecycleState(tombstone.source, tombstone.agentId);
@@ -754,9 +759,14 @@ function recordSourceDeletionTombstone(source: SignetSourceEntry, agentId: strin
 	);
 }
 
-function clearSourceDeletionTombstone(sourceId: string, agentId: string, agentsDir: string): void {
+function clearSourceDeletionTombstone(source: SignetSourceEntry, agentId: string, agentsDir: string): void {
+	// The canceled-index cleanup path can run after a failed config write. Keep
+	// the marker for the same source generation, but allow a deliberate
+	// reconnect to replace that generation and become live again.
+	const configured = loadSourcesConfig(agentsDir).sources.find((entry) => entry.id === source.id);
+	if (configured?.updatedAt === source.updatedAt) return;
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
-	const next = tombstones.filter((entry) => entry.source.id !== sourceId || entry.agentId !== agentId);
+	const next = tombstones.filter((entry) => entry.source.id !== source.id || entry.agentId !== agentId);
 	if (next.length !== tombstones.length) saveSourceDeletionTombstones(next, agentsDir);
 }
 

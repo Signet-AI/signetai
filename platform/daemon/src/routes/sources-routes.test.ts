@@ -224,6 +224,52 @@ describe("Sources routes", () => {
 		}
 	});
 
+	it("retains a configured tombstone across restart cleanup until config removal completes (#1630)", async () => {
+		const added = addObsidianSource({ root: vault, name: "Restart Cleanup Vault" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const tombstonePath = join(dir, ".daemon", "source-deletion-tombstones.json");
+		mkdirSync(join(dir, ".daemon"), { recursive: true });
+		writeFileSync(
+			tombstonePath,
+			`${JSON.stringify(
+				[
+					{
+						id: "tombstone-restart-state",
+						source: added.source,
+						agentId: "default",
+						deletedAt: new Date().toISOString(),
+					},
+				],
+				null,
+				2,
+			)}\n`,
+		);
+
+		await cleanupSourceDeletionTombstones(dir, () => {
+			throw new Error("cleanup must not purge a source that is still configured");
+		});
+		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(1);
+
+		const app = makeApp();
+		const list = await app.request("/api/sources");
+		expect(list.status).toBe(200);
+		expect(await list.json()).toEqual({ version: 1, sources: [] });
+		for (const path of [
+			`/api/sources/${encodeURIComponent(added.source.id)}/health`,
+			`/api/sources/${encodeURIComponent(added.source.id)}/snapshot`,
+		]) {
+			const response = await app.request(path);
+			expect(response.status).toBe(404);
+		}
+
+		const deleted = await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, { method: "DELETE" });
+		expect(deleted.status).toBe(200);
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
+	});
+
 	it("connects an Obsidian source, queues indexing, and records lastIndexedAt after the job finishes", async () => {
 		const res = await makeApp({ indexed: 3 }).request("/api/sources/obsidian", {
 			method: "POST",
