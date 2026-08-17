@@ -263,11 +263,9 @@ export function registerImportRoutes(app: Hono): void {
 						reason: "imported source replaced",
 					});
 					const removed = removeSourceIfGeneration(replacedSource.id, replacedSource.generation, agentsDir);
-					if (removed.ok === false)
-						logger.warn("documents", "Replaced dashboard import config cleanup failed", {
-							sourceId: replacedSource.id,
-							error: removed.error,
-						});
+					if (removed.ok === false) {
+						throw new Error(`Replaced dashboard import config cleanup failed: ${removed.error}`);
+					}
 				}
 				markSourceIndexed(added.source.id, now, agentsDir);
 				imported += 1;
@@ -284,24 +282,30 @@ export function registerImportRoutes(app: Hono): void {
 					},
 				});
 			} catch (error) {
+				const primaryError = error instanceof Error ? error.message : String(error);
+				let failure = primaryError;
 				if (added.created) {
 					try {
 						await runWriteTxAsync(getDbAccessor(), (db) =>
 							purgeSourceOwnedRowsInTx(db, { sourceId: added.source.id, agentId: resolveDaemonAgentId() }),
 						);
-						removeSourceIfGeneration(added.source.id, added.source.generation, process.env.SIGNET_PATH);
+						const removed = removeSourceIfGeneration(added.source.id, added.source.generation, process.env.SIGNET_PATH);
+						if (removed.ok === false) throw new Error(removed.error);
 					} catch (cleanupError) {
+						const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+						failure = `${primaryError}; cleanup failed: ${cleanupMessage}`;
 						logger.warn("documents", "Dashboard import cleanup failed", {
 							sourceId: added.source.id,
-							error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+							error: cleanupMessage,
+							primaryError,
 						});
 					}
 				}
 				logger.warn("documents", "Dashboard import failed after source registration", {
 					sourceId: added.source.id,
-					error: error instanceof Error ? error.message : String(error),
+					error: failure,
 				});
-				statuses.push({ fileName: file.name, status: "failed", error: "Could not persist imported source" });
+				statuses.push({ fileName: file.name, status: "failed", error: failure });
 			}
 		}
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSourcesConfig } from "@signet/core";
@@ -352,6 +352,15 @@ describe("import routes", () => {
 			{ kind: "import", providerSettings: { fileName: "new-name.csv" } },
 		]);
 		expect(loadSourcesConfig(dir).sources).toHaveLength(1);
+	});
+
+	it("does not convert generation-guarded cleanup failure into replacement success", () => {
+		const source = readFileSync(new URL("./import-routes.ts", import.meta.url), "utf8");
+		const cleanupFailure = source.indexOf("const removed = removeSourceIfGeneration(replacedSource.id");
+		const successAccounting = source.indexOf("imported += 1", cleanupFailure);
+		expect(cleanupFailure).toBeGreaterThanOrEqual(0);
+		expect(source.slice(cleanupFailure, successAccounting)).toContain("throw new Error");
+		expect(source.slice(cleanupFailure, successAccounting)).not.toContain("logger.warn");
 	});
 
 	it("rejects a batch that exceeds the file-count boundary", async () => {
