@@ -183,10 +183,11 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.get("/api/sources", (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();
+		const tombstonedSourceIds = loadTombstonedSourceIds(agentsDir, agentId);
 		return c.json({
 			version: config.version,
 			sources: config.sources
-				.filter((source) => isSourceVisibleToAgent(source, agentId))
+				.filter((source) => isSourceVisibleToAgent(source, agentId) && !tombstonedSourceIds.has(source.id))
 				.map((source) => {
 					const stats = sourceStats(source, agentId);
 					return {
@@ -458,7 +459,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 
 	app.delete("/api/sources/:sourceId", async (c) => {
 		const sourceId = c.req.param("sourceId");
-		const source = findConfiguredSource(sourceId, agentsDir, resolveDaemonAgentId());
+		const source = findConfiguredSource(sourceId, agentsDir, resolveDaemonAgentId(), { includeTombstoned: true });
 		if (source === undefined) return c.json({ error: "Source not found" }, 404);
 		const sourceAgentId = resolveDaemonAgentId();
 		if (source.kind === "import" && source.providerSettings?.agentId !== sourceAgentId)
@@ -478,9 +479,26 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	});
 }
 
-function findConfiguredSource(sourceId: string, agentsDir: string, agentId: string): SignetSourceEntry | undefined {
+function findConfiguredSource(
+	sourceId: string,
+	agentsDir: string,
+	agentId: string,
+	options: { readonly includeTombstoned?: boolean } = {},
+): SignetSourceEntry | undefined {
+	const tombstonedSourceIds = loadTombstonedSourceIds(agentsDir, agentId);
 	return loadSourcesConfig(agentsDir).sources.find(
-		(source) => source.id === sourceId && isSourceVisibleToAgent(source, agentId),
+		(source: SignetSourceEntry) =>
+			source.id === sourceId &&
+			isSourceVisibleToAgent(source, agentId) &&
+			(options.includeTombstoned === true || !tombstonedSourceIds.has(source.id)),
+	);
+}
+
+function loadTombstonedSourceIds(agentsDir: string, agentId: string): ReadonlySet<string> {
+	return new Set(
+		loadSourceDeletionTombstones(agentsDir)
+			.filter((tombstone) => tombstone.agentId === agentId)
+			.map((tombstone) => tombstone.source.id),
 	);
 }
 

@@ -185,6 +185,45 @@ describe("Sources routes", () => {
 		expect(await res.json()).toEqual({ version: 1, sources: [] });
 	});
 
+	it("does not serve a tombstoned source while deferred cleanup is pending (#1630)", async () => {
+		const added = addObsidianSource({ root: vault, name: "Pending Cleanup Vault" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const tombstonePath = join(dir, ".daemon", "source-deletion-tombstones.json");
+		mkdirSync(join(dir, ".daemon"), { recursive: true });
+		writeFileSync(
+			tombstonePath,
+			`${JSON.stringify(
+				[
+					{
+						id: "tombstone-pending-cleanup",
+						source: added.source,
+						agentId: "default",
+						deletedAt: new Date().toISOString(),
+					},
+				],
+				null,
+				2,
+			)}\n`,
+		);
+
+		// This app is the production source route registration used after the
+		// daemon is ready. Cleanup is intentionally not run before these reads.
+		const app = makeApp();
+		const list = await app.request("/api/sources");
+		expect(list.status).toBe(200);
+		expect(await list.json()).toEqual({ version: 1, sources: [] });
+
+		for (const path of [
+			`/api/sources/${encodeURIComponent(added.source.id)}/health`,
+			`/api/sources/${encodeURIComponent(added.source.id)}/snapshot`,
+		]) {
+			const response = await app.request(path);
+			expect(response.status).toBe(404);
+		}
+	});
+
 	it("connects an Obsidian source, queues indexing, and records lastIndexedAt after the job finishes", async () => {
 		const res = await makeApp({ indexed: 3 }).request("/api/sources/obsidian", {
 			method: "POST",
