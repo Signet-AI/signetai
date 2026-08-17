@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,6 +58,29 @@ describe("DB owner client", () => {
 		client = null;
 		if (directory !== null) rmSync(directory, { recursive: true, force: true });
 		directory = null;
+	});
+
+	test("reaps every owner process during harness teardown", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		const ownerPid = client.health().pid;
+		if (ownerPid === null) throw new Error("owner did not publish a pid");
+		await client.close();
+		client = null;
+		let processes = "";
+		try {
+			processes = execFileSync("pgrep", ["-f", "db-owner-worker\\.(ts|js|mjs)"], { encoding: "utf8" });
+		} catch {
+			// pgrep exits 1 when teardown left no matching process.
+		}
+		const survivors = processes
+			.split("\\n")
+			.filter((line) => line.length > 0)
+			.map(Number)
+			.filter((pid) => pid === ownerPid);
+		expect(survivors).toEqual([]);
 	});
 
 	test("loads sqlite-vec for legacy snapshot import and preserves KNN rows", async () => {
