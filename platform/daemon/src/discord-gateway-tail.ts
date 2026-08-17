@@ -136,6 +136,25 @@ async function runDiscordGatewayConnection(
 			heartbeatTimer = null;
 			continueTimer = null;
 		};
+		const failConnection = (error: unknown): void => {
+			if (settled) return;
+			settled = true;
+			settleRequested = true;
+			cleanup();
+			socket.onopen = null;
+			socket.onmessage = null;
+			socket.onerror = null;
+			socket.onclose = null;
+			try {
+				socket.close(1011, "gateway event processing failed");
+			} catch {}
+			reject(error);
+		};
+		const enqueue = (operation: () => MaybePromise<void>): void => {
+			const nextQueue = eventQueue.then(operation);
+			eventQueue = nextQueue;
+			void nextQueue.catch(failConnection);
+		};
 		const settle = (retry: boolean): void => {
 			if (settled || settleRequested) return;
 			settleRequested = true;
@@ -146,12 +165,7 @@ async function runDiscordGatewayConnection(
 					cleanup();
 					resolve({ retry });
 				},
-				(error: unknown) => {
-					if (settled) return;
-					settled = true;
-					cleanup();
-					reject(error);
-				},
+				(error: unknown) => failConnection(error),
 			);
 		};
 		const closeForCancellation = (): void => {
@@ -169,9 +183,7 @@ async function runDiscordGatewayConnection(
 		};
 		socket.onerror = () => {
 			closeFailureRecorded = true;
-			eventQueue = eventQueue.then(() =>
-				input.recordFailure("Discord gateway websocket error", { phase: "gateway_tail" }, true),
-			);
+			enqueue(() => input.recordFailure("Discord gateway websocket error", { phase: "gateway_tail" }, true));
 			try {
 				socket.close(1011, "gateway websocket error");
 			} catch {
@@ -188,7 +200,7 @@ async function runDiscordGatewayConnection(
 				return;
 			}
 			if (isFatalGatewayCloseCode(event.code)) {
-				eventQueue = eventQueue.then(() =>
+				enqueue(() =>
 					input.recordFailure(
 						`Discord gateway closed with non-retryable code ${event.code}${event.reason ? `: ${event.reason}` : ""}`,
 						{ phase: "gateway_tail", code: event.code ?? null },
@@ -199,7 +211,7 @@ async function runDiscordGatewayConnection(
 				return;
 			}
 			if (!closeFailureRecorded)
-				eventQueue = eventQueue.then(() =>
+				enqueue(() =>
 					input.recordFailure(
 						`Discord gateway closed unexpectedly${event.reason ? `: ${event.reason}` : ""}`,
 						{ phase: "gateway_tail", code: event.code ?? null },
@@ -209,7 +221,7 @@ async function runDiscordGatewayConnection(
 			settle(true);
 		};
 		socket.onmessage = (event) => {
-			eventQueue = eventQueue.then(async () => {
+			enqueue(async () => {
 				const payload = parseGatewayPayload(event.data);
 				if (!payload) return;
 				if (typeof payload.s === "number") sequence = payload.s;

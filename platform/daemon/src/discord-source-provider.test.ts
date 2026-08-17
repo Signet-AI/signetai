@@ -402,6 +402,58 @@ describe("discord-source-provider", () => {
 		}
 	});
 
+	it("fails an open gateway when an async event write rejects", async () => {
+		const originalSetInterval = globalThis.setInterval;
+		const originalClearInterval = globalThis.clearInterval;
+		const active = new Set<unknown>();
+		globalThis.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+			const handle = originalSetInterval(handler, timeout, ...args);
+			active.add(handle);
+			return handle;
+		}) as typeof setInterval;
+		globalThis.clearInterval = ((handle: unknown) => {
+			active.delete(handle);
+			return originalClearInterval(handle as Parameters<typeof clearInterval>[0]);
+		}) as typeof clearInterval;
+
+		let socket: RejectingDiscordGatewaySocket | null = null;
+		setDiscordGatewaySocketFactoryForTest(() => {
+			socket = new RejectingDiscordGatewaySocket(() => {}, false);
+			return socket;
+		});
+		try {
+			const result = await Promise.race([
+				syncDiscordGatewayTail({
+					source: {} as never,
+					token: "token",
+					guildIds: ["g"],
+					shouldContinue: () => true,
+					recordFailure: async () => {},
+					recordMessage: async () => {
+						throw new Error("db failed");
+					},
+					recordMessageDelete: async () => {},
+					recordChannel: async () => {},
+					recordMember: async () => {},
+					recordMemberRemove: async () => {},
+				}).then(
+					(value) => ({ status: "resolved" as const, value }),
+					(error: unknown) => ({ status: "rejected" as const, error: String(error) }),
+				),
+				Bun.sleep(300).then(() => ({ status: "timeout" as const })),
+			]);
+
+			expect(result.status).toBe("rejected");
+			if (result.status === "rejected") expect(result.error).toContain("db failed");
+			expect(socket?.closeCalls).toBe(1);
+			expect(active).toHaveLength(0);
+		} finally {
+			for (const handle of active) originalClearInterval(handle as Parameters<typeof clearInterval>[0]);
+			globalThis.setInterval = originalSetInterval;
+			globalThis.clearInterval = originalClearInterval;
+		}
+	});
+
 	it("records partial Discord failures without deleting existing source-owned rows", async () => {
 		const added = addDiscordSource(
 			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", now: "2026-01-01T00:00:00.000Z" },
@@ -1465,10 +1517,13 @@ class RejectingDiscordGatewaySocket {
 	onerror: ((event: unknown) => void) | null = null;
 	onclose: ((event: { readonly code?: number; readonly reason?: string }) => void) | null = null;
 	private readonly stop: () => void;
+	private readonly closeAfterDispatch: boolean;
 	private closed = false;
+	closeCalls = 0;
 
-	constructor(stop: () => void) {
+	constructor(stop: () => void, closeAfterDispatch = true) {
 		this.stop = stop;
+		this.closeAfterDispatch = closeAfterDispatch;
 		queueMicrotask(() => {
 			this.onopen?.({});
 			this.onmessage?.({ data: JSON.stringify({ op: 10, d: { heartbeat_interval: 1_000 } }) });
@@ -1493,11 +1548,12 @@ class RejectingDiscordGatewaySocket {
 					},
 				}),
 			});
-			this.close(1000, "probe complete");
+			if (this.closeAfterDispatch) this.close(1000, "probe complete");
 		});
 	}
 
 	close(code = 1000, reason = ""): void {
+		this.closeCalls++;
 		if (this.closed) return;
 		this.closed = true;
 		this.stop();
