@@ -506,7 +506,7 @@ function loadTombstonedSourceGenerations(agentsDir: string, agentId: string): Re
 }
 
 function sourceGenerationKey(source: SignetSourceEntry): string {
-	return `${source.id}\u0000${source.updatedAt}`;
+	return `${source.id}\u0000${source.generation ?? `legacy:${source.updatedAt}`}`;
 }
 
 function isSourceVisibleToAgent(source: SignetSourceEntry, agentId: string): boolean {
@@ -718,7 +718,12 @@ export async function cleanupSourceDeletionTombstones(
 	const remaining: SourceDeletionTombstone[] = [];
 	for (const tombstone of tombstones) {
 		const configured = configuredSources.get(tombstone.source.id);
-		if (configured !== undefined && configured.updatedAt === tombstone.source.updatedAt) {
+		if (configured !== undefined && tombstone.source.generation === undefined) {
+			// Old tombstones cannot identify their deleted generation safely.
+			// A configured source is a deliberate re-add, so never purge its rows.
+			continue;
+		}
+		if (configured !== undefined && configured.generation === tombstone.source.generation) {
 			// Config removal is the final deletion-state transition. Keep the
 			// tombstone while this source generation is still non-live.
 			remaining.push(tombstone);
@@ -754,7 +759,7 @@ function recordSourceDeletionTombstone(source: SignetSourceEntry, agentId: strin
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
 	const next = tombstones.filter(
 		(entry) =>
-			entry.source.id !== source.id || entry.agentId !== agentId || entry.source.updatedAt !== source.updatedAt,
+			entry.source.id !== source.id || entry.agentId !== agentId || entry.source.generation !== source.generation,
 	);
 	saveSourceDeletionTombstones(
 		[
@@ -775,11 +780,11 @@ function clearSourceDeletionTombstone(source: SignetSourceEntry, agentId: string
 	// the marker for the same source generation, but allow a deliberate
 	// reconnect to replace that generation and become live again.
 	const configured = loadSourcesConfig(agentsDir).sources.find((entry) => entry.id === source.id);
-	if (configured?.updatedAt === source.updatedAt) return;
+	if (configured?.generation === source.generation) return;
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
 	const next = tombstones.filter(
 		(entry) =>
-			entry.source.id !== source.id || entry.agentId !== agentId || entry.source.updatedAt !== source.updatedAt,
+			entry.source.id !== source.id || entry.agentId !== agentId || entry.source.generation !== source.generation,
 	);
 	if (next.length !== tombstones.length) saveSourceDeletionTombstones(next, agentsDir);
 }

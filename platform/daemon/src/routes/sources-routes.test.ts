@@ -293,11 +293,12 @@ describe("Sources routes", () => {
 			)}\n`,
 		);
 
-		const second = addObsidianSource({ root: vault, name: "Generation Two", now: "2026-08-16T19:00:00.000Z" }, dir);
+		const second = addObsidianSource({ root: vault, name: "Generation Two", now: "2026-08-16T18:00:00.000Z" }, dir);
 		expect(second.ok).toBe(true);
 		if (second.ok === false) throw new Error(second.error);
 		expect(second.source.id).toBe(first.source.id);
-		expect(second.source.updatedAt).not.toBe(first.source.updatedAt);
+		expect(second.source.updatedAt).toBe(first.source.updatedAt);
+		expect(second.source.generation).not.toBe(first.source.generation);
 
 		let purges = 0;
 		await cleanupSourceDeletionTombstones(dir, () => {

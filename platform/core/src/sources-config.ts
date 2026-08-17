@@ -9,6 +9,8 @@ export type SignetSourceProviderSettings = Readonly<Record<string, unknown>>;
 
 export interface SignetSourceEntry {
 	readonly id: string;
+	/** Unique lifecycle epoch. Unlike updatedAt, this is never reused. */
+	readonly generation?: string;
 	readonly kind: SignetSourceKind;
 	readonly name: string;
 	readonly root: string;
@@ -198,7 +200,17 @@ function loadSourcesConfigForWrite(agentsDir = getAgentsDir()): SignetSourcesCon
 	if (!parsed.sources.every(isSourceEntry)) {
 		throw new Error(`Sources config contains invalid source entries; refusing to overwrite ${path}`);
 	}
-	return { version: SOURCES_CONFIG_VERSION, sources: parsed.sources };
+	return { version: SOURCES_CONFIG_VERSION, sources: parsed.sources.map(normalizeSourceEntry) };
+}
+
+function newSourceGeneration(): string {
+	return randomUUID();
+}
+
+function normalizeSourceEntry(source: SignetSourceEntry): SignetSourceEntry {
+	return source.generation
+		? source
+		: { ...source, generation: `legacy:${source.id}:${source.createdAt}:${source.updatedAt}` };
 }
 
 export function addObsidianSource(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
@@ -243,6 +255,7 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 				: `import:${contentHash.slice(0, 16)}${mode === "reimport" ? `:${randomUUID().slice(0, 8)}` : ownerSuffix}`;
 		const source: SignetSourceEntry = {
 			id: sourceId,
+			generation: newSourceGeneration(),
 			kind: "import",
 			name: basename(fileName),
 			root: basename(fileName),
@@ -297,6 +310,7 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 			root,
 			enabled: true,
 			providerSettings: discordSettingsProviderSettings(settings),
+			generation: newSourceGeneration(),
 			updatedAt: now,
 		};
 		saveSourcesConfig(
@@ -311,6 +325,7 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 
 	const source: SignetSourceEntry = {
 		id: sourceId,
+		generation: newSourceGeneration(),
 		kind: "discord",
 		name: cleanName(input.name) ?? "Discord Source",
 		root,
@@ -353,6 +368,7 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 			root,
 			enabled: true,
 			providerSettings: githubSettingsProviderSettings(updatedSettings),
+			generation: newSourceGeneration(),
 			updatedAt: now,
 		};
 		saveSourcesConfig(
@@ -367,6 +383,7 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 
 	const source: SignetSourceEntry = {
 		id: sourceId,
+		generation: newSourceGeneration(),
 		kind: "github",
 		name: cleanName(input.name) ?? settings.repos[0] ?? "GitHub Source",
 		root,
@@ -641,6 +658,7 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 				? mergeDefaultObsidianExcludeGlobs(input.excludeGlobs)
 				: (existing.excludeGlobs ?? [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS]),
 			enabled: true,
+			generation: newSourceGeneration(),
 			updatedAt: now,
 		};
 		saveSourcesConfig(
@@ -655,6 +673,7 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 
 	const source: SignetSourceEntry = {
 		id: `obsidian:${createHash("sha256").update(root).digest("hex").slice(0, 16)}`,
+		generation: newSourceGeneration(),
 		kind: "obsidian",
 		name: cleanName(input.name) ?? "Obsidian Vault",
 		root,
