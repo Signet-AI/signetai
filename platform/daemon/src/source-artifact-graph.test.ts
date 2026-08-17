@@ -155,7 +155,7 @@ describe("source artifact graph structure", () => {
 		expect(counts).toEqual({ entities: 0, attrs: 0, deps: 0 });
 	});
 
-	it("purges source-owned aspects during whole-source removal", () => {
+	it("purges source-owned aspects during whole-source removal", async () => {
 		indexSourceArtifactStructure({
 			agentId: "default",
 			sourceId: "github:test",
@@ -166,7 +166,7 @@ describe("source artifact graph structure", () => {
 			content: "# README\n\nThis source document has a claim that creates an aspect row.\n",
 		});
 
-		const purged = purgeSourceOwnedRows({ agentId: "default", sourceId: "github:test" });
+		const purged = await purgeSourceOwnedRows({ agentId: "default", sourceId: "github:test" });
 		expect(purged).toBeGreaterThan(0);
 		const counts = getDbAccessor().withReadDb((db) => ({
 			entities: (
@@ -184,7 +184,7 @@ describe("source artifact graph structure", () => {
 		expect(counts).toEqual({ entities: 0, aspects: 0, attrs: 0 });
 	});
 
-	it("purges dreaming-derived claim values stamped with the source entry id", () => {
+	it("purges dreaming-derived claim values stamped with the source entry id", async () => {
 		// A Dreaming-derived entity_attribute carries the configured Signet source
 		// entry id in source_id (the purge key), not the episodic node identity.
 		const db = getDbAccessor();
@@ -256,7 +256,7 @@ describe("source artifact graph structure", () => {
 				.run();
 		});
 
-		const purged = purgeSourceOwnedRows({ agentId: "default", sourceId: "obsidian:signet" });
+		const purged = await purgeSourceOwnedRows({ agentId: "default", sourceId: "obsidian:signet" });
 		expect(purged).toBeGreaterThan(0);
 		const counts = getDbAccessor().withReadDb((read) => ({
 			derived: (
@@ -346,7 +346,7 @@ describe("source artifact graph structure", () => {
 			source_root: "dreaming",
 		});
 
-		purgeSourceOwnedRows({ agentId: "default", sourceId: "obsidian:nightly" });
+		await purgeSourceOwnedRows({ agentId: "default", sourceId: "obsidian:nightly" });
 		expect(
 			getDbAccessor().withReadDb(
 				(db) =>

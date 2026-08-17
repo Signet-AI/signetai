@@ -1494,7 +1494,7 @@ describe("discord-source-provider", () => {
 			);
 		});
 
-		const purged = discordSourceProvider.purge(added.source, "default");
+		const purged = await discordSourceProvider.purge(added.source, "default");
 
 		expect(purged).toBeGreaterThanOrEqual(2);
 		expect(sourceRows(added.source.id)).toEqual([]);

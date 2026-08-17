@@ -51,7 +51,7 @@ interface WrittenGitHubArtifacts {
 export const githubSourceProvider: SourceProviderAdapter = {
 	kind: "github",
 	sync: syncGitHubSource,
-	purge: (source, agentId) => purgeSourceOwnedRows({ sourceId: source.id, agentId }),
+	purge: async (source, agentId) => await purgeSourceOwnedRows({ sourceId: source.id, agentId }),
 };
 
 async function syncGitHubSource(context: SourceProviderSyncContext): Promise<SourceProviderSyncResult> {

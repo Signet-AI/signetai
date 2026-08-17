@@ -835,7 +835,7 @@ describe("github-source-provider", () => {
 			content: "old issue",
 		});
 
-		const purged = githubSourceProvider.purge({ id: "github:test" } as SignetSourceEntry, "default");
+		const purged = await githubSourceProvider.purge({ id: "github:test" } as SignetSourceEntry, "default");
 
 		expect(purged).toBeGreaterThanOrEqual(1);
 		expect(sourceRows("github:test")).toEqual([]);

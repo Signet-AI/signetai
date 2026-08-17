@@ -4435,13 +4435,6 @@
     },
     {
       "path": "routes/import-routes.ts",
-      "line": 252,
-      "api": "withWriteTx",
-      "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/import-routes.ts",
       "line": 337,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
@@ -4970,13 +4963,6 @@
       "line": 314,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "source-purge.ts",
-      "line": 23,
-      "api": "withWriteTx",
-      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {

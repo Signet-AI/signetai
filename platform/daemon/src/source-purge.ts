@@ -1,5 +1,5 @@
 import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
-import { getDbAccessor, type WriteDb } from "./db-accessor";
+import { getDbAccessor, runWriteTxAsync, type WriteDb } from "./db-accessor";
 import { countChanges, syncVecDeleteByEmbeddingIds, tableExists } from "./db-helpers";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
@@ -16,9 +16,8 @@ const SOURCE_OWNED_GRAPH_TABLES = [
 	"entities",
 ] as const;
 
-export function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): number {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: compatibility wrapper; route paths use the owner transaction helper
-	return getDbAccessor().withWriteTx((db: WriteDb) => purgeSourceOwnedRowsInTx(db, input));
+export async function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): Promise<number> {
+	return await runWriteTxAsync(getDbAccessor(), (db) => purgeSourceOwnedRowsInTx(db, input));
 }
 
 export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRowsInput): number {

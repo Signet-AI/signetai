@@ -82,7 +82,7 @@ export { setDiscordGatewaySocketFactoryForTest };
 export const discordSourceProvider: SourceProviderAdapter = {
 	kind: "discord",
 	sync: syncDiscordSource,
-	purge: (source, agentId) => purgeSourceOwnedRows({ sourceId: source.id, agentId }),
+	purge: async (source, agentId) => await purgeSourceOwnedRows({ sourceId: source.id, agentId }),
 };
 
 async function syncDiscordSource(context: SourceProviderSyncContext): Promise<SourceProviderSyncResult> {
