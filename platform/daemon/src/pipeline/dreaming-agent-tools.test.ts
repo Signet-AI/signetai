@@ -102,7 +102,7 @@ describe("dreaming-agent-tools", () => {
 	it("derives Pi tools and public metadata from the same capability registry", () => {
 		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
 		expect(tools.map((tool) => tool.name)).toEqual([...DREAMING_CAPABILITY_IDS]);
-		expect(tools).toHaveLength(12);
+		expect(tools).toHaveLength(14);
 	});
 
 	it("preserves a retry boundary through the Pi capability after a writer failure (#1414)", async () => {

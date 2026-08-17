@@ -28,7 +28,6 @@ import { type GraphWriteCaps, findDuplicateEntityMerges } from "../ontology-prop
 import { detectProspectiveContradictionRisk } from "./antonyms";
 import { getDreamingAttentionAcrossScopes, getDreamingAttentionScoped } from "./dreaming-attention";
 import { nextDreamingEvidenceFragment, renderDreamingEvidence } from "./dreaming-evidence";
-import type { DreamingAgentEvidence } from "./dreaming-evidence";
 import { deliveredOffsetForSource, pendingDreamingEvidenceContinuations } from "./dreaming-evidence-consumption";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import {
@@ -39,6 +38,7 @@ import {
 } from "./dreaming-operations";
 import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
+import { commitCuratedMemoryHead, readCuratedMemoryHead } from "../memory-head-curation";
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
@@ -200,6 +200,8 @@ const pagination = {
 };
 
 export const DREAMING_CAPABILITY_IDS = [
+	"memory_head_read",
+	"memory_head_commit",
 	"search_entities",
 	"get_entity",
 	"list_aspect_claims",
@@ -320,6 +322,34 @@ function capability<T extends z.ZodType>(
 export function createDreamingCapabilities(params: CreateDreamingCapabilitiesParams): readonly DreamingCapability[] {
 	const { accessor, agentId, actor } = params;
 	return [
+		capability(
+			"memory_head_read",
+			"Read curated memory head",
+			"Read the scoped Dreaming-curated MEMORY.md head.",
+			true,
+			z.object({ agentId: z.string().min(1) }),
+			async ({ agentId: scopeId }) => ({ ok: true, head: readCuratedMemoryHead(scopeId) }),
+		),
+		capability(
+			"memory_head_commit",
+			"Commit curated memory head",
+			"Commit a bounded, evidence-backed MEMORY.md head from a running content pass.",
+			false,
+			z.object({
+				agentId: z.string().min(1),
+				passId: z.string().min(1),
+				baseRevision: z.number().int().nonnegative(),
+				baseHash: z.string(),
+				entries: z.array(
+					z.object({
+						entryId: z.string().min(1),
+						text: z.string().min(1),
+						support: z.array(z.record(z.string(), z.unknown())).default([]),
+					}),
+				),
+			}),
+			async (input) => commitCuratedMemoryHead(input),
+		),
 		capability(
 			"search_entities",
 			"Search entities",
