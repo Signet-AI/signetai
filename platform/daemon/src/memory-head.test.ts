@@ -122,10 +122,10 @@ describe("writeMemoryHead", () => {
 		expect(existsSync(join(agentsDir, "MEMORY.md"))).toBe(false);
 	});
 
-	it("rolls back the head and projection when audit insertion violates uniqueness", () => {
+	it("rolls back the head and projection when audit insertion violates uniqueness", async () => {
 		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
 		const initialContent = "# MEMORY\n\n## Active\n- original curated head\n";
-		const initialWrite = curateMemoryHead({
+		const initialWrite = await curateMemoryHead({
 			passId: "pass-initial",
 			agentId: "agent-a",
 			baseRevision: 0,
@@ -180,7 +180,7 @@ describe("writeMemoryHead", () => {
 			);
 		});
 
-		const result = curateMemoryHead({
+		const result = await curateMemoryHead({
 			passId: "pass-atomicity",
 			agentId: "agent-a",
 			baseRevision: previousRow.revision,

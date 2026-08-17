@@ -841,7 +841,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						async (input) => {
 							if (!params.passId || input.passId !== params.passId)
 								return { ok: false, error: "Head curation requires the active Dreaming pass" };
-							const result = curateMemoryHead(input);
+							const result = await curateMemoryHead(input);
 							if (result.ok) {
 								if (!params.accessor.withWriteTxAsync)
 									throw new Error(

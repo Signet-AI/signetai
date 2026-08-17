@@ -273,7 +273,7 @@ export function writeMemoryHead(
 }
 
 /** Audited content-pass seam; hygiene passes have no way to invoke this. */
-export function curateMemoryHead(input: MemoryHeadCuration): MemoryHeadCurationResult {
+export async function curateMemoryHead(input: MemoryHeadCuration): Promise<MemoryHeadCurationResult> {
 	if (!input.passId.trim() || !input.agentId.trim())
 		return { ok: false, error: "passId and agentId are required", code: "invalid" };
 	for (const entry of input.entries) {
@@ -303,8 +303,7 @@ export function curateMemoryHead(input: MemoryHeadCuration): MemoryHeadCurationR
 	const path = resolveMemoryHeadPath(getAgentsDir(), input.agentId);
 	const previous = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: audited revision write
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await getDbAccessor().withWriteTxAsync((db: import("./db-accessor").WriteDb) => {
 			// Keep the database publication, audit rows, and projection in one
 			// admission. Audit failures therefore happen before the projection is
 			// changed, and projection failures roll the database transaction back.
