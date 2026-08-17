@@ -189,7 +189,8 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			sources: config.sources
 				.filter(
 					(source) =>
-						isSourceVisibleToAgent(source, agentId) && !tombstonedSourceGenerations.has(sourceGenerationKey(source)),
+						isSourceVisibleToAgent(source, agentId) &&
+						!isSourceGenerationTombstoned(source, tombstonedSourceGenerations),
 				)
 				.map((source) => {
 					const stats = sourceStats(source, agentId);
@@ -493,20 +494,31 @@ function findConfiguredSource(
 		(source: SignetSourceEntry) =>
 			source.id === sourceId &&
 			isSourceVisibleToAgent(source, agentId) &&
-			(options.includeTombstoned === true || !tombstonedSourceGenerations.has(sourceGenerationKey(source))),
+			(options.includeTombstoned === true || !isSourceGenerationTombstoned(source, tombstonedSourceGenerations)),
 	);
+}
+
+function isSourceGenerationTombstoned(source: SignetSourceEntry, generations: ReadonlySet<string>): boolean {
+	const key = sourceGenerationKey(source);
+	return key !== undefined && generations.has(key);
 }
 
 function loadTombstonedSourceGenerations(agentsDir: string, agentId: string): ReadonlySet<string> {
 	return new Set(
 		loadSourceDeletionTombstones(agentsDir)
 			.filter((tombstone) => tombstone.agentId === agentId)
-			.map((tombstone) => sourceGenerationKey(tombstone.source)),
+			.flatMap((tombstone) => {
+				const key = sourceGenerationKey(tombstone.source);
+				return key === undefined ? [] : [key];
+			}),
 	);
 }
 
-function sourceGenerationKey(source: SignetSourceEntry): string {
-	return `${source.id}\u0000${source.generation ?? `legacy:${source.updatedAt}`}`;
+function sourceGenerationKey(source: SignetSourceEntry): string | undefined {
+	// A missing generation is unknown, not a shared legacy generation. Matching
+	// unknown tombstones to unknown configs permanently poisons source re-adds.
+	if (source.generation === undefined) return undefined;
+	return `${source.id}\u0000${source.generation}`;
 }
 
 function isSourceVisibleToAgent(source: SignetSourceEntry, agentId: string): boolean {
@@ -719,8 +731,9 @@ export async function cleanupSourceDeletionTombstones(
 	for (const tombstone of tombstones) {
 		const configured = configuredSources.get(tombstone.source.id);
 		if (configured !== undefined && tombstone.source.generation === undefined) {
-			// Old tombstones cannot identify their deleted generation safely.
-			// A configured source is a deliberate re-add, so never purge its rows.
+			// Old tombstones cannot identify their deleted generation safely. The
+			// configured source is a live compatibility-normalized re-add. Drop the
+			// ambiguous marker, but do not purge rows belonging to the live source.
 			continue;
 		}
 		if (configured !== undefined && configured.generation === tombstone.source.generation) {

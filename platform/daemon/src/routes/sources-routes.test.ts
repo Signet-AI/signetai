@@ -321,6 +321,35 @@ describe("Sources routes", () => {
 		expect(snapshot.status).toBe(200);
 	});
 
+	it("does not let an unknown legacy tombstone poison a normalized legacy re-add", async () => {
+		const added = addObsidianSource({ root: vault, name: "Legacy Vault", now: "2026-08-16T17:00:00.000Z" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		const configPath = join(dir, "sources.json");
+		const legacySource = { ...added.source } as Record<string, unknown>;
+		delete legacySource.generation;
+		writeFileSync(configPath, `${JSON.stringify({ version: 1, sources: [legacySource] })}\n`);
+		const tombstonePath = join(dir, ".daemon", "source-deletion-tombstones.json");
+		mkdirSync(join(dir, ".daemon"), { recursive: true });
+		const legacyTombstone = { ...legacySource };
+		writeFileSync(
+			tombstonePath,
+			`${JSON.stringify([
+				{ id: "legacy-tombstone", source: legacyTombstone, agentId: "default", deletedAt: new Date().toISOString() },
+			])}\n`,
+		);
+
+		await cleanupSourceDeletionTombstones(dir, () => {
+			throw new Error("ambiguous legacy tombstones must not purge the live re-add");
+		});
+		expect(loadSourcesConfig(dir).sources[0]?.generation).toBeString();
+		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
+		const listedResponse = await makeApp().request("/api/sources");
+		const listed = (await listedResponse.json()) as { sources: Array<{ id: string }> };
+		expect(listed.sources.map((source) => source.id)).toContain(added.source.id);
+		expect((await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`)).status).toBe(200);
+	});
+
 	it("keeps an older generation tombstone when deleting the re-added source (#1630)", async () => {
 		const first = addObsidianSource({ root: vault, name: "Generation One", now: "2026-08-16T20:00:00.000Z" }, dir);
 		expect(first.ok).toBe(true);

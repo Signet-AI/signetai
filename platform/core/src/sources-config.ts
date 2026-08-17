@@ -167,10 +167,14 @@ export function loadSourcesConfig(agentsDir = getAgentsDir()): SignetSourcesConf
 		if (!isRecord(parsed) || parsed.version !== SOURCES_CONFIG_VERSION || !Array.isArray(parsed.sources)) {
 			return emptyConfig();
 		}
-		return {
+		const sources = parsed.sources.filter(isSourceEntry).map(normalizeSourceEntry);
+		const config: SignetSourcesConfig = {
 			version: SOURCES_CONFIG_VERSION,
-			sources: parsed.sources.filter(isSourceEntry),
+			sources,
 		};
+		if (parsed.sources.some((source) => isSourceEntry(source) && source.generation === undefined))
+			saveSourcesConfig(config, agentsDir);
+		return config;
 	} catch {
 		return emptyConfig();
 	}

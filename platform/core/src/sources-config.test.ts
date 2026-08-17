@@ -450,7 +450,10 @@ describe("sources-config", () => {
 		};
 		writeFileSync(getSourcesConfigPath(agentsDir), `${JSON.stringify({ version: 1, sources: [source] })}\n`);
 
-		expect(loadSourcesConfig(agentsDir).sources).toEqual([source]);
+		const loaded = loadSourcesConfig(agentsDir).sources;
+		expect(loaded).toHaveLength(1);
+		expect(loaded[0]).toMatchObject(source);
+		expect(loaded[0]?.generation).toBe("legacy:discord:test:2026-01-01T00:00:00.000Z:2026-01-01T00:00:00.000Z");
 	});
 
 	it("removes a source by id from the config", () => {
