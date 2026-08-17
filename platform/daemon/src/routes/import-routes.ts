@@ -208,8 +208,7 @@ export function registerImportRoutes(app: Hono): void {
 						sourceMeta: { ...normalized.value.sourceMeta, representation: "structured-json-canonical" },
 					});
 				}
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				const extraction = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+				const extraction = await runWriteTxAsync(getDbAccessor(), (db) => {
 					const result = indexSourceArtifactStructureInTx(db, {
 						agentId,
 						sourceId: added.source.id,

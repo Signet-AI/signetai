@@ -11,10 +11,10 @@ import {
 	renderReport,
 } from "./audit-event-loop-contract";
 
-test("the deterministic ledger retains the exact 729-site inventory", () => {
+test("the deterministic ledger retains the exact 726-site inventory", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	expect(baseline).toHaveLength(729);
-	expect(baseline.filter((site) => site.api === "withWriteTx")).toHaveLength(105);
+	expect(baseline).toHaveLength(726);
+	expect(baseline.filter((site) => site.api === "withWriteTx")).toHaveLength(102);
 	expect(baseline.filter((site) => site.api === "withReadDb")).toHaveLength(140);
 });
 
@@ -278,9 +278,9 @@ test("the production TypeScript project cannot import the compatibility module",
 
 test("the generated report describes the type boundary and transitional counts", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	const report = renderReport(baseline, { total: 245, withWriteTx: 105, withReadDb: 140 });
-	expect(report).toContain("Exact ledger inventory: 729 sites");
-	expect(report).toContain("105 synchronous writes and 140 synchronous reads");
+	const report = renderReport(baseline, { total: 242, withWriteTx: 102, withReadDb: 140 });
+	expect(report).toContain("Exact ledger inventory: 726 sites");
+	expect(report).toContain("102 synchronous writes and 140 synchronous reads");
 	expect(report).toContain("type boundary");
 	expect(report).not.toContain("1061");
 });

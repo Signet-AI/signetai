@@ -4426,13 +4426,7 @@
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
-    {
-      "path": "routes/import-routes.ts",
-      "line": 212,
-      "api": "withWriteTx",
-      "source": "const extraction = getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
+
     {
       "path": "routes/import-routes.ts",
       "line": 337,
