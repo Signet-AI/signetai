@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveDefaultBasePath, scanMemoryContent } from "@signet/core";
-import { getDbAccessor } from "./db-accessor";
+import { getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { loadMemoryConfig } from "./memory-config";
 import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
@@ -212,15 +212,11 @@ export function writeMemoryHead(
 	}
 
 	if (!lease.ok) {
-		try {
+		if (!hasDbAccessor()) {
 			writeProjection(projected.file, agentId);
 			return { ok: true, revision: 0 };
-		} catch (error) {
-			return {
-				ok: false,
-				error: error instanceof Error ? error.message : String(error),
-			};
 		}
+		return { ok: false, error: "Curated memory head state unavailable; refusing legacy projection" };
 	}
 
 	const next = lease.row.hash === hashContent(projected.body) ? lease.row.revision : lease.row.revision + 1;

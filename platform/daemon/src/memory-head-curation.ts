@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveDefaultBasePath, scanMemoryContent } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
@@ -30,13 +30,25 @@ export async function readCuratedMemoryHead(agentId: string): Promise<Record<str
 	if (!agentId.trim()) throw new Error("agentId is required");
 	return await getDbAccessor().withReadDbAsync(async (db) => {
 		const head = db
-			.prepare("SELECT revision, content_hash, revision_id FROM memory_md_heads WHERE agent_id = ?")
+			.prepare("SELECT revision, content, content_hash, revision_id FROM memory_md_heads WHERE agent_id = ?")
 			.get(agentId) as Record<string, unknown> | undefined;
 		const entries = db
 			.prepare(
 				"SELECT entry_id, canonical_text, status FROM memory_head_entries WHERE agent_id = ? AND status = 'active' ORDER BY entry_id",
 			)
 			.all(agentId);
+		const content = typeof head?.content === "string" ? head.content : "";
+		if (content) {
+			const target = pathFor(agentId);
+			mkdirSync(dirname(target), { recursive: true });
+			let existing = "";
+			try { existing = readFileSync(target, "utf8").trim(); } catch {}
+			if (!existing.endsWith(content)) {
+				const temporary = `${target}.recovery-${String(head?.revision ?? 0)}.tmp`;
+				writeFileSync(temporary, `${content}\n`, "utf8");
+				renameSync(temporary, target);
+			}
+		}
 		return {
 			agentId,
 			revision: head?.revision ?? 0,
@@ -137,7 +149,7 @@ export async function commitCuratedMemoryHead(input: {
 		for (const [ordinal, entry] of input.entries.entries()) {
 			const entryHash = hash(entry.text.trim());
 			db.prepare(
-				"INSERT INTO memory_head_entries (entry_id, agent_id, canonical_text, entry_hash, status, first_revision, last_revision, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET canonical_text=excluded.canonical_text, entry_hash=excluded.entry_hash, status='active', last_revision=excluded.last_revision, updated_at=excluded.updated_at",
+				"INSERT INTO memory_head_entries (entry_id, agent_id, canonical_text, entry_hash, status, first_revision, last_revision, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?) ON CONFLICT(agent_id, entry_id) DO UPDATE SET canonical_text=excluded.canonical_text, entry_hash=excluded.entry_hash, status='active', last_revision=excluded.last_revision, updated_at=excluded.updated_at",
 			).run(entry.entryId, input.agentId, entry.text.trim(), entryHash, nextRevision, nextRevision, now, now);
 			db.prepare(
 				"INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json) VALUES (?, ?, ?, ?, 'add', ?)",

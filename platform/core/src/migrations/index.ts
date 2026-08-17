@@ -139,6 +139,7 @@ import { up as embeddingRepairState } from "./130-embedding-repair-state";
 import { up as dreamingEvidenceConsumption } from "./131-dreaming-evidence-consumption";
 import { up as observerScopedEpistemicAssertions } from "./132-observer-scoped-epistemic-assertions";
 import { up as dreamingMemoryHead } from "./133-dreaming-memory-head";
+import { up as scopeMemoryHeadEntries } from "./134-scope-memory-head-entries";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1232,6 +1233,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "dreaming-memory-head",
 		up: dreamingMemoryHead,
 		artifacts: { tables: ["memory_head_revisions", "memory_head_entries", "memory_head_revision_entries"] },
+	},
+	{
+		version: 134,
+		name: "scope-memory-head-entries",
+		up: scopeMemoryHeadEntries,
+		artifacts: { tables: ["memory_head_entries"] },
 	},
 ];
 
