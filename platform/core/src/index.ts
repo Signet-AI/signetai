@@ -366,6 +366,7 @@ export {
 	parseDiscordSettings,
 	parseGitHubSettings,
 	removeSource,
+	removeSourceIfGeneration,
 	saveSourcesConfig,
 } from "./sources-config";
 export type {

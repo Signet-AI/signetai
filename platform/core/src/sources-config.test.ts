@@ -17,6 +17,7 @@ import {
 	parseDiscordSettings,
 	parseGitHubSettings,
 	removeSource,
+	removeSourceIfGeneration,
 } from "./sources-config";
 
 let dir = "";
@@ -470,6 +471,25 @@ describe("sources-config", () => {
 		if (removed.ok === false) throw new Error(removed.error);
 		expect(removed.source.id).toBe(added.source.id);
 		expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+	});
+
+	it("does not remove a re-added source when the old generation is stale", () => {
+		const agentsDir = tmp();
+		const vault = join(agentsDir, "vault");
+		mkdirSync(vault, { recursive: true });
+		const first = addObsidianSource({ root: vault, name: "Vault A", now: "2026-01-01T00:00:00.000Z" }, agentsDir);
+		expect(first.ok).toBe(true);
+		if (first.ok === false) throw new Error(first.error);
+		const removed = removeSource(first.source.id, agentsDir);
+		expect(removed.ok).toBe(true);
+		const readded = addObsidianSource({ root: vault, name: "Vault A2", now: "2026-01-02T00:00:00.000Z" }, agentsDir);
+		expect(readded.ok).toBe(true);
+		if (readded.ok === false) throw new Error(readded.error);
+
+		const stale = removeSourceIfGeneration(first.source.id, first.source.generation, agentsDir);
+
+		expect(stale).toEqual({ ok: true, removed: false, source: readded.source });
+		expect(loadSourcesConfig(agentsDir).sources).toEqual([readded.source]);
 	});
 
 	it("uses unique temp files and leaves no stale lock or tmp files after sequential mutations", () => {

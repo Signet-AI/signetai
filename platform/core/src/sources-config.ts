@@ -138,6 +138,11 @@ export type RemoveSourceResult =
 	| { readonly ok: true; readonly source: SignetSourceEntry }
 	| { readonly ok: false; readonly error: string };
 
+export type RemoveSourceIfGenerationResult =
+	| { readonly ok: true; readonly removed: true; readonly source: SignetSourceEntry }
+	| { readonly ok: true; readonly removed: false; readonly source: SignetSourceEntry | undefined }
+	| { readonly ok: false; readonly error: string };
+
 const SOURCES_CONFIG_VERSION = 1;
 export const DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL = 1000;
 export const MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL = 10_000;
@@ -715,6 +720,31 @@ function markSourceIndexedUnlocked(
 
 export function removeSource(sourceId: string, agentsDir = getAgentsDir()): RemoveSourceResult {
 	return withSourcesConfigLock(agentsDir, () => removeSourceUnlocked(sourceId, agentsDir));
+}
+
+/** Remove a source only while the captured lifecycle generation is still live. */
+export function removeSourceIfGeneration(
+	sourceId: string,
+	generation: string | undefined,
+	agentsDir = getAgentsDir(),
+): RemoveSourceIfGenerationResult {
+	return withSourcesConfigLock(agentsDir, () => {
+		try {
+			const id = sourceId.trim();
+			if (!id) return { ok: false, error: "Source id is required" };
+			const cfg = loadSourcesConfigForWrite(agentsDir);
+			const source = cfg.sources.find((entry) => entry.id === id);
+			if (!source || source.generation !== generation) return { ok: true, removed: false, source };
+			saveSourcesConfig(
+				{ version: SOURCES_CONFIG_VERSION, sources: cfg.sources.filter((entry) => entry !== source) },
+				agentsDir,
+			);
+			return { ok: true, removed: true, source };
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			return { ok: false, error: detail };
+		}
+	});
 }
 
 function removeSourceUnlocked(sourceId: string, agentsDir = getAgentsDir()): RemoveSourceResult {

@@ -13,7 +13,7 @@ import {
 	addObsidianSource,
 	loadSourcesConfig,
 	markSourceIndexed,
-	removeSource,
+	removeSourceIfGeneration,
 } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
@@ -476,10 +476,10 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		await removeSourceLifecycleState(source, sourceAgentId);
 		const provider = getSourceProvider(source.kind);
 		const purged = provider ? await purgeSource(provider, source, sourceAgentId, purgeNativeSource) : 0;
-		const result = removeSource(sourceId, agentsDir);
+		const result = removeSourceIfGeneration(sourceId, source.generation, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 500);
 		if (!isSourceIndexInFlight(source.id)) clearSourceDeletionTombstone(source, sourceAgentId, agentsDir);
-		return c.json({ source: result.source, purged });
+		return c.json({ source: result.source ?? source, purged });
 	});
 }
 
