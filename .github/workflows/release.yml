@@ -26,17 +26,50 @@ jobs:
       contents: write
 
     steps:
+      - name: Validate resume tag input
+        env:
+          RESUME_INPUT: ${{ inputs.resume_from_tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RESUME_INPUT" ]; then
+            exit 0
+          fi
+          if [[ ! "$RESUME_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::resume_from_tag must be a version tag such as v0.207.1"
+            exit 1
+          fi
+          printf 'RESUME_TAG=%s\n' "$RESUME_INPUT" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT }}
 
+      - name: Checkout validated resume tag
+        if: inputs.resume_from_tag != ''
+        env:
+          RESUME_TAG: ${{ inputs.resume_from_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin "refs/tags/${RESUME_TAG}:refs/tags/${RESUME_TAG}"
+          TAG_SHA=$(git rev-parse --verify "refs/tags/${RESUME_TAG}^{commit}")
+          git checkout --detach "$TAG_SHA"
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "$HEAD_SHA" != "$TAG_SHA" ]; then
+            echo "::error::Resume checkout mismatch: HEAD=$HEAD_SHA tag=$TAG_SHA"
+            exit 1
+          fi
+          printf 'NEW_VERSION=%s\n' "${RESUME_TAG#v}" >> "$GITHUB_ENV"
+          echo "Checked out ${RESUME_TAG} at ${TAG_SHA}"
+
       - name: Check for code changes
         id: changes
+        env:
+          RESUME_INPUT: ${{ inputs.resume_from_tag }}
         run: |
-          if [ -n "${{ inputs.resume_from_tag }}" ]; then
+          if [ -n "$RESUME_INPUT" ]; then
             echo "skip=false" >> $GITHUB_OUTPUT
-            echo "Resume requested for ${{ inputs.resume_from_tag }}"
+            echo "Resume requested for $RESUME_INPUT"
             exit 0
           fi
           CODE_CHANGES=$(git diff --name-only HEAD~1 HEAD -- \
@@ -93,12 +126,13 @@ jobs:
         if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag != ''
         run: |
           set -euo pipefail
-          tag="${{ inputs.resume_from_tag }}"
-          case "$tag" in v*) ;; *) tag="v$tag" ;; esac
-          git fetch --tags origin "$tag"
-          git rev-parse --verify "refs/tags/$tag" >/dev/null
-          echo "NEW_VERSION=${tag#v}" >> "$GITHUB_ENV"
-          echo "Resuming release for $tag without changing version or tag"
+          TAG_SHA=$(git rev-parse --verify "refs/tags/${RESUME_TAG}^{commit}")
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "$HEAD_SHA" != "$TAG_SHA" ]; then
+            echo "::error::Resume checkout assertion failed: HEAD=$HEAD_SHA tag=$TAG_SHA"
+            exit 1
+          fi
+          echo "Resuming release for $RESUME_TAG at $TAG_SHA without changing version or tag"
 
       - name: Bump version
         id: bump_version
