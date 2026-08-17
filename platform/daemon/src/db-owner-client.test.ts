@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -62,6 +62,8 @@ describe("DB owner client", () => {
 
 	function processExists(pid: number): boolean {
 		try {
+			const status = readFileSync(`/proc/${pid}/status`, "utf8");
+			if (/^State:\s+Z/m.test(status)) return false;
 			execFileSync("kill", ["-0", String(pid)], { stdio: "ignore" });
 			return true;
 		} catch {
@@ -69,22 +71,23 @@ describe("DB owner client", () => {
 		}
 	}
 
-	test("reaps every owner process during harness teardown", async () => {
+	test("detects an owner survivor when harness teardown is skipped", async () => {
 		const database = makeDb();
 		directory = database.directory;
 		client = createDbOwnerClient({ dbPath: database.path });
 		await client.start();
 		const ownerPid = client.health().pid;
 		if (ownerPid === null) throw new Error("owner did not publish a pid");
-		// Capture the harness spawn scope at spawn time. Do not scan the host and
-		// intersect it with health().pid after teardown: that misses any other
-		// owner this harness spawned and can never detect that leak. This scoped
-		// PID set also avoids false positives from other users' workers.
-		const spawnedPids = new Set([ownerPid]);
-		await client.close();
+		// Intentionally skip client.close(): this is the leaked-survivor path.
 		client = null;
-		const survivors = [...spawnedPids].filter(processExists);
-		expect(survivors).toEqual([]);
+		try {
+			const spawnedPids = new Set([ownerPid]);
+			const survivors = [...spawnedPids].filter(processExists);
+			expect(survivors).toEqual([ownerPid]);
+		} finally {
+			if (processExists(ownerPid)) process.kill(ownerPid, "SIGKILL");
+			await waitFor(() => !processExists(ownerPid));
+		}
 	});
 
 	test("loads sqlite-vec for legacy snapshot import and preserves KNN rows", async () => {
