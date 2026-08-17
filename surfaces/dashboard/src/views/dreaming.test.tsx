@@ -47,6 +47,7 @@ const DREAM_STATUS = {
 	attention: [],
 	exclusions: [],
 };
+const originalFetch = globalThis.fetch;
 
 beforeAll(() => {
 	(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -75,7 +76,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-	globalThis.fetch = undefined as unknown as typeof fetch;
+	globalThis.fetch = originalFetch;
 });
 
 describe("dreaming summary layout", () => {

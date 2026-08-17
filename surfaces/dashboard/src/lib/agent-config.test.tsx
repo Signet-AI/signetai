@@ -44,6 +44,7 @@ x-custom-operator-key:
 `;
 
 let capturedSaveBody: string | null = null;
+const originalFetch = globalThis.fetch;
 
 function requireStore(store: AgentConfigStore | null): AgentConfigStore {
 	if (!store) throw new Error("store not initialized");
@@ -120,7 +121,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-	globalThis.fetch = undefined as unknown as typeof fetch;
+	globalThis.fetch = originalFetch;
 });
 
 describe("agent config store", () => {

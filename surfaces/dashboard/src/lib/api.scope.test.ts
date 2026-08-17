@@ -1,11 +1,12 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import { api } from "./api";
 
 describe("api.updateAgentScope", () => {
+	afterEach(() => vi.restoreAllMocks());
+
 	it("clears group when changing a grouped agent to shared or isolated", async () => {
 		const bodies: unknown[] = [];
-		const originalFetch = globalThis.fetch;
-		globalThis.fetch = (async (input, init) => {
+		vi.spyOn(globalThis, "fetch").mockImplementation((async (input, init) => {
 			const request =
 				input instanceof Request ||
 				(typeof input === "object" && input !== null && "clone" in input)
@@ -17,14 +18,10 @@ describe("api.updateAgentScope", () => {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
-		}) as typeof fetch;
+		}) as typeof fetch);
 
-		try {
-			await api.updateAgentScope("worker", "shared", undefined);
-			await api.updateAgentScope("worker", "isolated", undefined);
-		} finally {
-			globalThis.fetch = originalFetch;
-		}
+		await api.updateAgentScope("worker", "shared", undefined);
+		await api.updateAgentScope("worker", "isolated", undefined);
 
 		expect(bodies).toHaveLength(2);
 		for (const body of bodies) {

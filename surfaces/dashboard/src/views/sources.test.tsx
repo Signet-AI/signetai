@@ -12,6 +12,7 @@ const originalImportSources = api.importSources;
 const originalPickFiles = api.pickFiles;
 const originalGetSourceSnapshot = api.getSourceSnapshot;
 const originalRemoveSource = api.removeSource;
+const originalFetch = globalThis.fetch;
 
 let importCall: { files: readonly File[]; duplicateMode: string; paths: readonly string[] } | null = null;
 let sourcesResponse: { version: number; sources: SignetSource[] } = { version: 1, sources: [] };
@@ -93,7 +94,7 @@ afterAll(() => {
 	api.pickFiles = originalPickFiles;
 	api.getSourceSnapshot = originalGetSourceSnapshot;
 	api.removeSource = originalRemoveSource;
-	globalThis.fetch = undefined as unknown as typeof fetch;
+	globalThis.fetch = originalFetch;
 });
 
 function sourceFixture(
