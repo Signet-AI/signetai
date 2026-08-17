@@ -1579,6 +1579,7 @@ export async function runDreamingAgentPass(
 		}
 
 		let applyCallbackReported = false;
+		let memoryHeadResult: Record<string, unknown> | null = null;
 		let retirementCandidates: DreamingRetirementCandidates = new Map();
 		const rejectedEvidence: RejectedDreamingEvidence[] = [];
 		// The newest captured_at each scope's search_evidence surfaced this
@@ -1607,6 +1608,7 @@ export async function runDreamingAgentPass(
 			async onToolCall(trace) {
 				publishDreamingToolTrace(passId, trace, live);
 				await recordDreamingToolCall(accessor, agentId, passId, ++toolCallSequence, trace);
+				if (trace.tool === "memory_head_commit") memoryHeadResult = trace.output;
 				if (trace.tool === "search_evidence" && trace.output.ok === true && Array.isArray(trace.output.items)) {
 					const input = isRecord(trace.input) ? trace.input : null;
 					const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
@@ -1676,6 +1678,10 @@ export async function runDreamingAgentPass(
 			onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
 			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
 		});
+		if (mode === "incremental-content" && memoryHeadResult?.["ok"] !== true) {
+			failed++;
+			logger.warn("dreaming", "Content pass completed without a successful memory-head commit", { passId });
+		}
 		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}`;
 		const attribution = executorResult.attribution ?? null;
 		// Provider-reported aggregate when the executor surfaced it (pi-backed
@@ -1738,6 +1744,21 @@ export async function runDreamingAgentPass(
 				passId,
 			);
 			recordRejectedDreamingEvidenceInTx(db, passId, rejectedEvidence);
+			if (memoryHeadResult !== null) {
+				const row = db.prepare("SELECT runbook_json AS runbookJson FROM dreaming_passes WHERE id = ?").get(passId) as
+					| { runbookJson: string | null }
+					| undefined;
+				let manifest: Record<string, unknown> = {};
+				try {
+					const parsed = JSON.parse(row?.runbookJson ?? "{}");
+					if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+						manifest = parsed as Record<string, unknown>;
+				} catch {
+					manifest = {};
+				}
+				manifest.memoryHead = memoryHeadResult;
+				db.prepare("UPDATE dreaming_passes SET runbook_json = ? WHERE id = ?").run(JSON.stringify(manifest), passId);
+			}
 			if (mode !== "incremental-hygiene" && failed === 0) {
 				const runbook = db
 					.prepare("SELECT runbook_json AS runbookJson FROM dreaming_passes WHERE id = ?")

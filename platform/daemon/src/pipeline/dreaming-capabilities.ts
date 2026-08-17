@@ -344,7 +344,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					z.object({
 						entryId: z.string().min(1),
 						text: z.string().min(1),
-						support: z.array(z.record(z.string(), z.unknown())).default([]),
+						support: z.array(z.object({ source_ref: z.string().min(1), quote: z.string().min(1) })).min(1),
 					}),
 				),
 			}),

@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { resolveDefaultBasePath, scanMemoryContent } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { countTokens } from "./pipeline/tokenizer";
+import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
+import { readEpisodicSource } from "./episodic-sources";
 
 export const CURATED_MEMORY_HEAD_MAX_TOKENS = 1000;
 
@@ -85,6 +87,36 @@ export function commitCuratedMemoryHead(input: {
 				hash: currentHash,
 			};
 		if (currentHash === contentHash) return { ok: true, code: "NOOP", revision, hash: contentHash, changedIds: [] };
+		for (const entry of input.entries) {
+			if (entry.support.length === 0)
+				return { ok: false, code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` };
+			for (const support of entry.support) {
+				const sourceRef =
+					typeof support.source_ref === "string"
+						? support.source_ref
+						: typeof support.sourceRef === "string"
+							? support.sourceRef
+							: "";
+				const quote = typeof support.quote === "string" ? support.quote.trim() : "";
+				if (
+					!quote ||
+					sourceRef.startsWith("attention:") ||
+					!/^(memory|artifact|transcript|summary):.+$/.test(sourceRef)
+				)
+					return {
+						ok: false,
+						code: "INVALID_PROVENANCE",
+						error: `entry ${entry.entryId} requires scoped exact evidence`,
+					};
+				const source = readEpisodicSource(db, { agentId: input.agentId, from: sourceRef });
+				if (source === null || !renderDreamingEvidence(source).includes(quote))
+					return {
+						ok: false,
+						code: "INVALID_PROVENANCE",
+						error: `entry ${entry.entryId} quote is not exact scoped evidence`,
+					};
+			}
+		}
 		const nextRevision = revision + 1;
 		const revisionId = randomUUID();
 		const now = new Date().toISOString();
@@ -110,6 +142,19 @@ export function commitCuratedMemoryHead(input: {
 			db.prepare(
 				"INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json) VALUES (?, ?, ?, ?, 'add', ?)",
 			).run(input.agentId, nextRevision, entry.entryId, ordinal, JSON.stringify(entry.support));
+		}
+		const activeEntries = db
+			.prepare("SELECT entry_id FROM memory_head_entries WHERE agent_id = ? AND status = 'active'")
+			.all(input.agentId) as Array<{ entry_id: string }>;
+		const retained = new Set(input.entries.map((entry) => entry.entryId));
+		for (const old of activeEntries) {
+			if (retained.has(old.entry_id)) continue;
+			db.prepare(
+				"UPDATE memory_head_entries SET status='removed', last_revision=?, updated_at=? WHERE agent_id=? AND entry_id=?",
+			).run(nextRevision, now, input.agentId, old.entry_id);
+			db.prepare(
+				"INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json) VALUES (?, ?, ?, ?, 'remove', '[]')",
+			).run(input.agentId, nextRevision, old.entry_id, input.entries.length);
 		}
 		db.prepare(
 			"INSERT OR IGNORE INTO memory_md_heads (agent_id, content, content_hash, revision, updated_at) VALUES (?, '', '', 0, ?)",
