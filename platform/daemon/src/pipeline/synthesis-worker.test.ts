@@ -131,7 +131,7 @@ describe("synthesis-worker", () => {
 				reason: undefined,
 			});
 			expect(worker.isSynthesizing).toBe(false);
-				expect(mockWriteMemoryMd).not.toHaveBeenCalled();
+			expect(mockWriteMemoryMd).not.toHaveBeenCalled();
 			expect(readFileSync(memoryPath, "utf-8")).toBe(beforeContent);
 			expect(statSync(memoryPath).mtimeMs).toBe(before.mtimeMs);
 		} finally {
@@ -214,7 +214,7 @@ describe("synthesis-worker", () => {
 				reason: undefined,
 			});
 			expect(mockHandleSynthesisRequest).toHaveBeenCalledTimes(1);
-				expect(mockWriteMemoryMd).not.toHaveBeenCalled();
+			expect(mockWriteMemoryMd).not.toHaveBeenCalled();
 		} finally {
 			worker.stop();
 			expect(await worker.drain()).toBe("completed");
