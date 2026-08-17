@@ -50,7 +50,8 @@ async function installHermes(options: ConnectorInstallOptions, deps: ConnectorDe
 		policyGroup: options.group,
 	});
 	for (const warning of result.warnings ?? []) console.warn(chalk.yellow(`  ${warning}`));
-	if (!result.success) throw new Error(`${result.message}. Repair or rerun the command for the targeted Hermes profile.`);
+	if (!result.success)
+		throw new Error(`${result.message}. Repair or rerun the command for the targeted Hermes profile.`);
 	console.log(chalk.green(`  ✓ ${result.message}`));
 }
 
@@ -85,8 +86,10 @@ export function registerConnectorCommands(program: Command, deps: ConnectorDeps)
 		);
 
 	const disconnect = program.command("disconnect <harness>").description("Disconnect a harness connector");
-	disconnect.option("--profile <name>", "Hermes profile name").action((harness: string, options: ConnectorInstallOptions) => {
-		if (harness !== "hermes") throw new Error("Only disconnect hermes is supported");
-		return disconnectHermes(options);
-	});
+	disconnect
+		.option("--profile <name>", "Hermes profile name")
+		.action((harness: string, options: ConnectorInstallOptions) => {
+			if (harness !== "hermes") throw new Error("Only disconnect hermes is supported");
+			return disconnectHermes(options);
+		});
 }

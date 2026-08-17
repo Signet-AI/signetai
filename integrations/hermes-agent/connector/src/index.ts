@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult, resolveSignetApiKey } from "@signet/connector-base";
-import { expandHome, resolveHermesHomePath, resolveHermesRepoPath, type HermesTarget } from "@signet/core";
+import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -116,12 +116,6 @@ function resolveContainedWritePath(targetPath: string, targetRoot: string): stri
 	if (realpathSync(rootPath) !== rootPath) {
 		throw new Error(`Hermes target root is symlinked and cannot be used for writes: ${targetRoot}`);
 	}
-	rootPath = targetRoot;
-	while (!existsSync(rootPath)) {
-		const parent = dirname(rootPath);
-		if (parent === rootPath) throw new Error(`Hermes target root does not exist: ${targetRoot}`);
-		rootPath = parent;
-	}
 	const root = realpathSync(rootPath);
 	let existing = targetPath;
 	const missing: string[] = [];
@@ -137,10 +131,6 @@ function resolveContainedWritePath(targetPath: string, targetRoot: string): stri
 		throw new Error(`Hermes target path escapes validated root: ${targetPath}`);
 	}
 	return candidate;
-}
-
-function assertContainedTargetPath(targetPath: string, targetRoot: string): void {
-	resolveContainedWritePath(targetPath, targetRoot);
 }
 
 function getRepoPluginTargetDir(hermesRepo: string): string {
@@ -321,13 +311,12 @@ function setDottedProviderLine(lines: string[], line: number, value: string): vo
 
 function writeProviderBackup(
 	hermesHome: string,
-	targetRoot: string,
 	configPath: string,
 	providerKind: ProviderBackup["providerKind"],
 	previousProvider: string,
 ): string | null {
 	if (previousProvider === "signet") return null;
-	const backupPath = resolveContainedWritePath(getProviderBackupPath(hermesHome), targetRoot);
+	const backupPath = getProviderBackupPath(hermesHome);
 	if (existsSync(backupPath)) return null;
 	const backup: ProviderBackup = {
 		schemaVersion: 1,
@@ -400,9 +389,8 @@ function isProviderConfigured(hermesHome: string): boolean {
 function configureProvider(
 	hermesHome: string,
 	warnings: string[],
-	targetRoot: string = hermesHome,
 ): { configPath: string | null; backupPath: string | null } {
-	const configPath = resolveContainedWritePath(resolveConfigPath(hermesHome), targetRoot);
+	const configPath = resolveConfigPath(hermesHome);
 	let content = "";
 	if (existsSync(configPath)) {
 		try {
@@ -424,7 +412,6 @@ function configureProvider(
 		if (!dottedWasSignet) {
 			backupPath = writeProviderBackup(
 				hermesHome,
-				targetRoot,
 				configPath,
 				"dotted",
 				parseDottedProviderLine(lines[dottedProvider] ?? "") ?? "",
@@ -436,7 +423,6 @@ function configureProvider(
 			if (dottedWasSignet) {
 				const nestedBackupPath = writeProviderBackup(
 					hermesHome,
-					targetRoot,
 					configPath,
 					"nested",
 					parseProviderLine(lines[block.provider] ?? "") ?? "",
@@ -462,7 +448,6 @@ function configureProvider(
 		if (providerLineIsSignet(lines[block.provider] ?? "")) return { configPath: null, backupPath: null };
 		backupPath = writeProviderBackup(
 			hermesHome,
-			targetRoot,
 			configPath,
 			"nested",
 			parseProviderLine(lines[block.provider] ?? "") ?? "",
@@ -489,7 +474,7 @@ function restoreOrClearProvider(
 		: resolveConfigPath(hermesHome);
 	const config = readConfigYaml(hermesHome);
 	if (!config) return { configPath: null, backupPath: removeProviderBackup(hermesHome, targetRoot) };
-	resolveContainedWritePath(config.path, targetRoot ?? hermesHome);
+	if (targetRoot) resolveContainedWritePath(config.path, targetRoot);
 	const lines = config.content.replace(/\r\n/g, "\n").split("\n");
 	const block = findMemoryBlock(lines);
 	const dottedProvider = findDottedProvider(lines);
@@ -720,25 +705,12 @@ function trustedOriginForDaemonUrl(daemonUrl: string): string | null {
 
 type AgentReadPolicy = "isolated" | "shared" | "group";
 
-export interface AgentRegistrationOptions {
-	readonly agentId: string;
-	readonly readPolicy?: AgentReadPolicy;
-	readonly policyGroup?: string | null;
-	/** Requested profile provisioning must fail closed instead of warning. */
-	readonly strict?: boolean;
-}
-
-export type AgentRegistrationResult =
-	| { readonly ok: true; readonly created: boolean; readonly agentId: string }
-	| { readonly ok: false; readonly agentId: string; readonly error: string };
-
-function configuredAgentReadPolicy(warnings: string[], strict = false): AgentReadPolicy | null {
+function configuredAgentReadPolicy(warnings: string[], options: HermesConnectorOptions = {}): AgentReadPolicy {
+	if (options.memoryPolicy) return options.memoryPolicy;
 	const raw = sanitizedEnv("SIGNET_AGENT_READ_POLICY") || sanitizedEnv("SIGNET_AGENT_MEMORY_POLICY");
 	if (!raw) return "shared";
 	if (raw === "isolated" || raw === "shared" || raw === "group") return raw;
-	const error = `Unsupported SIGNET_AGENT_READ_POLICY '${raw}'. Expected one of: isolated, shared, group.`;
-	if (strict) return null;
-	warnings.push(`Ignoring ${error}`);
+	warnings.push(`Ignoring unsupported SIGNET_AGENT_READ_POLICY '${raw}'. Expected one of: isolated, shared, group.`);
 	return "shared";
 }
 
@@ -773,23 +745,14 @@ async function resolveDaemonAgentId(daemonUrl: string): Promise<string | null> {
 	}
 }
 
-export async function ensureNamedAgentRegistered(
+async function ensureNamedAgentRegistered(
 	daemonUrl: string,
-	agentIdOrOptions: string | AgentRegistrationOptions,
+	agentId: string,
 	warnings: string[],
-): Promise<AgentRegistrationResult> {
-	const options: AgentRegistrationOptions =
-		typeof agentIdOrOptions === "string" ? { agentId: agentIdOrOptions } : agentIdOrOptions;
-	const { agentId } = options;
-	const strict = options.strict === true;
-	const fail = (error: string): AgentRegistrationResult => {
-		if (!strict) warnings.push(error);
-		return { ok: false, agentId, error };
-	};
-	if (!agentId || agentId === "default" || agentId === "hermes-agent") {
-		return { ok: true, created: false, agentId };
-	}
-	if (process.env.SIGNET_SKIP_AGENT_REGISTER === "1") return { ok: true, created: false, agentId };
+	options: HermesConnectorOptions = {},
+): Promise<string | null> {
+	if (!agentId || agentId === "default" || agentId === "hermes-agent") return null;
+	if (process.env.SIGNET_SKIP_AGENT_REGISTER === "1") return null;
 
 	const baseUrl = trimTrailingSlashes(daemonUrl);
 	const token = sanitizedAuthTokenEnv();
@@ -802,36 +765,25 @@ export async function ensureNamedAgentRegistered(
 			headers,
 			signal: AbortSignal.timeout(1_000),
 		});
-		if (getResp.ok) return { ok: true, created: false, agentId };
+		if (getResp.ok) return null;
 		if (getResp.status !== 404) {
 			const body = await getResp.text();
-			return fail(
+			warnings.push(
 				`Could not check Signet agent '${agentId}' before registration: HTTP ${getResp.status} ${body.slice(0, 200)}`,
 			);
+			return null;
 		}
-	} catch (e) {
+	} catch {
 		// Daemon may be offline; the POST below will produce the user-facing warning.
-		if (strict) {
-			const msg = e instanceof Error ? e.message : String(e);
-			return fail(`Could not check Signet agent '${agentId}' because the daemon was unreachable. (${msg})`);
-		}
 	}
 
-	const readPolicy = options.readPolicy ?? configuredAgentReadPolicy(warnings, strict);
-	if (readPolicy === null) return fail(`Could not register Signet agent '${agentId}' because its read policy is invalid.`);
+	const readPolicy = configuredAgentReadPolicy(warnings, options);
 	const policyGroup =
-		options.policyGroup !== undefined
-			? options.policyGroup
-			: readPolicy === "group"
-				? sanitizedEnv("SIGNET_AGENT_POLICY_GROUP") || null
-				: null;
+		readPolicy === "group" ? options.policyGroup?.trim() || sanitizedEnv("SIGNET_AGENT_POLICY_GROUP") || null : null;
 	if (readPolicy === "group" && !policyGroup) {
-		if (strict) return fail(`Agent '${agentId}' requested group policy but no policy group was provided.`);
-		warnings.push(
-			`SIGNET_AGENT_READ_POLICY=group requires SIGNET_AGENT_POLICY_GROUP. Registering '${agentId}' with isolated memory instead.`,
-		);
+		return `Group memory policy for '${agentId}' requires --group or SIGNET_AGENT_POLICY_GROUP.`;
 	}
-	const effectiveReadPolicy: AgentReadPolicy = readPolicy === "group" && !policyGroup ? "isolated" : readPolicy;
+	const effectiveReadPolicy: AgentReadPolicy = readPolicy;
 	const policyHint =
 		effectiveReadPolicy === "shared"
 			? `Run: signet agent create ${agentId} --memory shared, or use --memory isolated for private memory.`
@@ -850,60 +802,38 @@ export async function ensureNamedAgentRegistered(
 		});
 		if (!resp.ok) {
 			const body = await resp.text();
-			return fail(
-				`Could not register Signet agent '${agentId}' with ${effectiveReadPolicy} memory policy: ${body.slice(0, 200)}. ${policyHint}`,
-			);
+			return `Could not register Signet agent '${agentId}' with ${effectiveReadPolicy} memory policy: ${body.slice(0, 200)}. ${policyHint}`;
 		}
-		return { ok: true, created: true, agentId };
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
-		return fail(
-			`Could not register Signet agent '${agentId}' because the daemon was unreachable. ${policyHint} (${msg})`,
-		);
+		return `Could not register Signet agent '${agentId}' because the daemon was unreachable. ${policyHint} (${msg})`;
 	}
+	return null;
 }
 
 // ---------------------------------------------------------------------------
 // Connector
 // ---------------------------------------------------------------------------
 
-export interface HermesConnectorOptions {
-	readonly target?: HermesTarget;
-	readonly agentId?: string;
-	readonly readPolicy?: AgentReadPolicy;
-	readonly policyGroup?: string | null;
-}
-
 export class HermesAgentConnector extends BaseConnector {
 	readonly name = "Hermes Agent";
 	readonly harnessId = "hermes-agent";
-	private readonly target?: HermesTarget;
-	private readonly registration?: AgentRegistrationOptions;
-
-	constructor(options?: HermesTarget | HermesConnectorOptions) {
-		super();
-		if (options && "home" in options) {
-			this.target = options;
-			this.registration = { agentId: "", strict: options.kind === "profile" };
-		} else {
-			this.target = options?.target;
-			this.registration = options
-				? {
-						agentId: options.agentId ?? "",
-						readPolicy: options.readPolicy,
-						policyGroup: options.policyGroup,
-						strict: options.target?.kind === "profile",
-					}
-				: undefined;
-		}
-	}
+	private targetOptions: HermesConnectorOptions = {};
 
 	private getHermesHome(): string {
-		return this.target?.home ?? resolveHermesHomePath();
+		if (this.targetOptions.profile) {
+			if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(this.targetOptions.profile)) {
+				throw new Error("Invalid Hermes profile name; use 1-64 letters, numbers, '.', '_' or '-'.");
+			}
+			const userHome = process.env.HOME?.trim() || homedir();
+			const profileHome = join(userHome, ".hermes", "profiles", this.targetOptions.profile);
+			return resolveContainedWritePath(profileHome, join(userHome, ".hermes", "profiles"));
+		}
+		return resolveHermesHomePath();
 	}
 
 	private getHermesRepo(): string | null {
-		if (this.target?.kind === "profile") return null;
+		if (this.targetOptions.profile) return null;
 		return resolveHermesRepoPath();
 	}
 
@@ -917,21 +847,23 @@ export class HermesAgentConnector extends BaseConnector {
 		const configsPatched: string[] = [];
 		const warnings: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
-		const hermesHome = this.getHermesHome();
-		const legacyAgentsBasePath = this.target?.kind === "profile" ? hermesHome : expandedBasePath;
-		const strippedAgentsPath = this.stripLegacySignetBlock(legacyAgentsBasePath);
+		const strippedAgentsPath = options.profile ? null : this.stripLegacySignetBlock(expandedBasePath);
 		if (strippedAgentsPath !== null) {
 			filesWritten.push(strippedAgentsPath);
 		}
 
-		if (this.target?.kind === "profile") assertContainedTargetPath(hermesHome, this.target.home);
+		const hermesHome = this.getHermesHome();
 		const hermesRepo = this.getHermesRepo();
 		let userPluginInstalled = false;
 		let repoPluginInstalled = false;
 
 		// 1. Install the Python plugin into the current user-plugin location.
 		try {
-			const pluginFiles = installPlugin(getUserPluginTargetDir(hermesHome), "user", hermesHome);
+			const pluginFiles = installPlugin(
+				getUserPluginTargetDir(hermesHome),
+				"user",
+				options.profile ? hermesHome : undefined,
+			);
 			filesWritten.push(...pluginFiles);
 			userPluginInstalled = true;
 		} catch (e) {
@@ -944,7 +876,7 @@ export class HermesAgentConnector extends BaseConnector {
 		// cannot shadow the fixed Signet provider.
 		if (hermesRepo) {
 			try {
-				const pluginFiles = installPlugin(getRepoPluginTargetDir(hermesRepo), "repo", hermesRepo);
+				const pluginFiles = installPlugin(getRepoPluginTargetDir(hermesRepo), "repo");
 				filesWritten.push(...pluginFiles);
 				repoPluginInstalled = true;
 			} catch (e) {
@@ -965,10 +897,8 @@ export class HermesAgentConnector extends BaseConnector {
 			};
 		}
 
-		const envPath =
-			this.target?.kind === "profile"
-				? resolveContainedWritePath(join(hermesHome, ".env"), this.target.home)
-				: join(hermesHome, ".env");
+		// 2. Write env config for the Signet daemon connection
+		const envPath = join(hermesHome, ".env");
 		let configuredSignetAgentId = "default";
 		const configuredDaemonUrl = (process.env.SIGNET_DAEMON_URL?.trim() || "http://127.0.0.1:3850").replace(
 			/[\r\n]+/g,
@@ -993,7 +923,7 @@ export class HermesAgentConnector extends BaseConnector {
 			// then "default" for the default workspace. The harness name
 			// ("hermes-agent") is provenance, never an agent id — a stale value
 			// from an older install is healed instead of honored.
-			let signetAgentId = this.registration?.agentId || sanitizedEnv("SIGNET_AGENT_ID");
+			let signetAgentId = sanitizedEnv("SIGNET_AGENT_ID");
 			if (signetAgentId === "hermes-agent") {
 				warnings.push(
 					"SIGNET_AGENT_ID='hermes-agent' is the harness name, not an agent scope. Re-resolving from the daemon.",
@@ -1063,26 +993,18 @@ export class HermesAgentConnector extends BaseConnector {
 			warnings.push(`Failed to update .env: ${msg}`);
 		}
 
-		const registration = this.registration
-			? { ...this.registration, agentId: this.registration.agentId || configuredSignetAgentId }
-			: configuredSignetAgentId;
-		const registrationResult = await ensureNamedAgentRegistered(configuredDaemonUrl, registration, warnings);
-		if (!registrationResult.ok && this.target?.kind === "profile") {
-			return {
-				success: false,
-				message: registrationResult.error,
-				filesWritten,
-				configsPatched,
-				warnings,
-			};
+		const registrationError = await ensureNamedAgentRegistered(
+			configuredDaemonUrl,
+			configuredSignetAgentId,
+			warnings,
+			options,
+		);
+		if (registrationError) {
+			return { success: false, message: registrationError, filesWritten, configsPatched, warnings };
 		}
 
 		// 3. Activate Signet as the external Hermes memory provider.
-		const providerConfig = configureProvider(
-			hermesHome,
-			warnings,
-			this.target?.kind === "profile" ? this.target.home : hermesHome,
-		);
+		const providerConfig = configureProvider(hermesHome, warnings);
 		if (providerConfig.configPath) {
 			configsPatched.push(providerConfig.configPath);
 		}
@@ -1131,18 +1053,19 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesRepo = this.getHermesRepo();
 		if (hermesRepo) {
-			const removed = uninstallPlugin(getRepoPluginTargetDir(hermesRepo), hermesRepo);
+			const removed = uninstallPlugin(getRepoPluginTargetDir(hermesRepo));
 			filesRemoved.push(...removed);
 		}
 
-		// Clean up env vars
 		const hermesHome = this.getHermesHome();
-		const targetRoot = this.target?.kind === "profile" ? this.target.home : undefined;
-		if (targetRoot) assertContainedTargetPath(hermesHome, targetRoot);
-		const userPluginRemoved = uninstallPlugin(getUserPluginTargetDir(hermesHome), targetRoot);
+		const userPluginTarget = getUserPluginTargetDir(hermesHome);
+		if (options.profile && (!existsSync(userPluginTarget) || readInstallMarker(userPluginTarget) === null)) {
+			return { filesRemoved, configsPatched };
+		}
+		const userPluginRemoved = uninstallPlugin(userPluginTarget, options.profile ? hermesHome : undefined);
 		filesRemoved.push(...userPluginRemoved);
 
-		const providerConfig = restoreOrClearProvider(hermesHome, targetRoot);
+		const providerConfig = restoreOrClearProvider(hermesHome, options.profile ? hermesHome : undefined);
 		if (providerConfig.configPath) {
 			configsPatched.push(providerConfig.configPath);
 		}
@@ -1150,9 +1073,7 @@ export class HermesAgentConnector extends BaseConnector {
 			filesRemoved.push(providerConfig.backupPath);
 		}
 
-		const envPath = targetRoot
-			? resolveContainedWritePath(join(hermesHome, ".env"), targetRoot)
-			: join(hermesHome, ".env");
+		const envPath = join(hermesHome, ".env");
 		if (existsSync(envPath)) {
 			try {
 				let envContent = readFileSync(envPath, "utf-8");
