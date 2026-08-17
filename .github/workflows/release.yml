@@ -116,7 +116,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Sync with remote main
-        if: steps.changes.outputs.skip != 'true'
+        if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag == ''
         run: |
           # Rebase onto the latest remote main before bumping so the version
           # commit and tag land on top of the final tree — not a stale snapshot
