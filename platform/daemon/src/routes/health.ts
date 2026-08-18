@@ -191,7 +191,10 @@ export function mountHealthRoutes(app: Hono): void {
 						db.prepare("SELECT 1").get();
 						dbOk = true;
 					},
-					{ operation: "health" },
+					// /health is a liveness-adjacent probe. Do not let a queued
+					// database-owner/read lease turn a transient DB stall into an
+					// HTTP stall. The structured response below reports db: false.
+					{ operation: "health", timeoutMs: 500 },
 				);
 			} catch {
 				// Keep the structured admission outcome visible below.
