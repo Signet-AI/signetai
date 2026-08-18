@@ -137,26 +137,36 @@ export async function preflightOllamaEmbedding(model: string): Promise<{
 	}
 }
 
-export function resolveCommandPath(command: string): string | undefined {
+export function resolveCommandPath(
+	command: string,
+	opts: {
+		readonly currentPlatform?: NodeJS.Platform;
+		readonly probe?: (path: string) => boolean;
+		readonly lookup?: () => string | undefined;
+	} = {},
+): string | undefined {
 	try {
-		const result = spawnSync(process.platform === "win32" ? "where" : "which", [command], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-			timeout: COMMAND_DETECTION_TIMEOUT_MS,
-			windowsHide: true,
-		});
-		if (result.status === 0) {
-			const resolved = result.stdout
-				.split(/\r?\n/)
-				.map((line) => line.trim())
-				.find(Boolean);
-			if (resolved && probeCommand(resolved)) return resolved;
-		}
+		const resolved = opts.lookup
+			? opts.lookup()
+			: (() => {
+					const result = spawnSync(process.platform === "win32" ? "where" : "which", [command], {
+						encoding: "utf8",
+						stdio: ["ignore", "pipe", "ignore"],
+						timeout: COMMAND_DETECTION_TIMEOUT_MS,
+						windowsHide: true,
+					});
+					if (result.status !== 0) return undefined;
+					return result.stdout
+						.split(/\r?\n/)
+						.map((line) => line.trim())
+						.find(Boolean);
+				})();
+		if (resolved && (opts.probe ?? probeCommand)(resolved)) return resolved;
 
-		if (platform() !== "darwin") return undefined;
-		return resolveMacOSCommandPath(command);
+		if ((opts.currentPlatform ?? platform()) !== "darwin") return undefined;
+		return resolveMacOSCommandPath(command, opts.probe);
 	} catch {
-		return platform() === "darwin" ? resolveMacOSCommandPath(command) : undefined;
+		return (opts.currentPlatform ?? platform()) === "darwin" ? resolveMacOSCommandPath(command, opts.probe) : undefined;
 	}
 }
 
@@ -234,15 +244,25 @@ function printOllamaInstallInstructions(): void {
 	console.log(chalk.dim("    https://ollama.com/download"));
 }
 
-async function offerOllamaInstallFlow(): Promise<boolean> {
-	const installNow = await confirm({ message: "Ollama is not installed. Try to install it now?", default: true });
+export async function offerOllamaInstallFlow(
+	opts: {
+		readonly currentPlatform?: NodeJS.Platform;
+		readonly confirmInstall?: () => Promise<boolean>;
+		readonly resolvePath?: (command: string) => string | undefined;
+		readonly runCommand?: typeof runCommandWithOutput;
+	} = {},
+): Promise<boolean> {
+	const installNow = await (
+		opts.confirmInstall ??
+		(() => confirm({ message: "Ollama is not installed. Try to install it now?", default: true }))
+	)();
 	if (!installNow) {
 		printOllamaInstallInstructions();
 		return false;
 	}
 
-	if (platform() === "darwin") {
-		const brewPath = resolveCommandPath("brew");
+	if ((opts.currentPlatform ?? platform()) === "darwin") {
+		const brewPath = (opts.resolvePath ?? resolveCommandPath)("brew");
 		if (!brewPath) {
 			console.log(chalk.yellow("  Homebrew not found, cannot auto-install."));
 			printOllamaInstallInstructions();
@@ -250,7 +270,7 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 		}
 
 		const spinner = ora("Installing Ollama with Homebrew...").start();
-		const result = await runCommandWithOutput(brewPath, ["install", "ollama"], {
+		const result = await (opts.runCommand ?? runCommandWithOutput)(brewPath, ["install", "ollama"], {
 			env: { ...process.env },
 			timeout: 300000,
 		});
@@ -266,12 +286,16 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 		return hasCommand("ollama");
 	}
 
-	if (platform() === "linux") {
+	if ((opts.currentPlatform ?? platform()) === "linux") {
 		const spinner = ora("Installing Ollama...").start();
-		const result = await runCommandWithOutput("sh", ["-c", "curl -fsSL https://ollama.com/install.sh | sh"], {
-			env: { ...process.env },
-			timeout: 300000,
-		});
+		const result = await (opts.runCommand ?? runCommandWithOutput)(
+			"sh",
+			["-c", "curl -fsSL https://ollama.com/install.sh | sh"],
+			{
+				env: { ...process.env },
+				timeout: 300000,
+			},
+		);
 		if (result.code !== 0) {
 			spinner.fail("Ollama install failed");
 			if (result.stderr.trim()) {
