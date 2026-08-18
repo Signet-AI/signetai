@@ -334,6 +334,25 @@ export async function curateMemoryHead(input: MemoryHeadCuration): Promise<Memor
 					JSON.stringify(entry.sourceRefs),
 					JSON.stringify(entry.supportingQuotes),
 				);
+			const manifestUpdate = db
+				.prepare(
+					`UPDATE dreaming_passes
+					 SET head_revision = ?, head_hash = ?, head_added = ?, head_updated = ?,
+					     head_removed = ?, head_deferred = ?, head_no_op = ?
+					 WHERE id = ? AND agent_id = ?`,
+				)
+				.run(
+					next,
+					hash,
+					input.entries.filter((entry) => entry.operation === "added").length,
+					input.entries.filter((entry) => entry.operation === "updated").length,
+					input.entries.filter((entry) => entry.operation === "removed").length,
+					input.entries.filter((entry) => entry.operation === "deferred").length,
+					input.entries.filter((entry) => entry.operation === "no-op").length,
+					input.passId,
+					input.agentId,
+				);
+			if (manifestUpdate.changes !== 1) throw new Error("Dreaming pass manifest row is missing");
 			writeProjection(projected.file, input.agentId);
 		});
 	} catch (error) {

@@ -841,31 +841,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						async (input) => {
 							if (!params.passId || input.passId !== params.passId)
 								return { ok: false, error: "Head curation requires the active Dreaming pass" };
-							const result = await curateMemoryHead(input);
-							if (result.ok) {
-								if (!params.accessor.withWriteTxAsync)
-									throw new Error(
-										"Head curation requires the async write transaction accessor to record its pass manifest",
-									);
-								await params.accessor.withWriteTxAsync((db) =>
-									db
-										.prepare(
-											`UPDATE dreaming_passes SET head_revision = ?, head_hash = ?, head_added = ?, head_updated = ?, head_removed = ?, head_deferred = ?, head_no_op = ? WHERE id = ? AND agent_id = ?`,
-										)
-										.run(
-											result.revision,
-											result.hash,
-											input.entries.filter((entry) => entry.operation === "added").length,
-											input.entries.filter((entry) => entry.operation === "updated").length,
-											input.entries.filter((entry) => entry.operation === "removed").length,
-											input.entries.filter((entry) => entry.operation === "deferred").length,
-											input.entries.filter((entry) => entry.operation === "no-op").length,
-											input.passId,
-											input.agentId,
-										),
-								);
-							}
-							return result;
+							return await curateMemoryHead(input);
 						},
 					),
 				]),

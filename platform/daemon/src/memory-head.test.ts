@@ -124,6 +124,11 @@ describe("writeMemoryHead", () => {
 
 	it("rolls back the head and projection when audit insertion violates uniqueness", async () => {
 		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES (?, ?, 'incremental-content', 'running')",
+			).run("pass-initial", "agent-a");
+		});
 		const initialContent = "# MEMORY\n\n## Active\n- original curated head\n";
 		const initialWrite = await curateMemoryHead({
 			passId: "pass-initial",
@@ -205,5 +210,35 @@ describe("writeMemoryHead", () => {
 				db.prepare("SELECT content, content_hash, revision FROM memory_md_heads WHERE agent_id = ?").get("agent-a"),
 			),
 		).toEqual(previousRow);
+	});
+
+	it("rolls back head publication when the pass manifest update fails", async () => {
+		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
+		const result = await curateMemoryHead({
+			passId: "missing-manifest-pass",
+			agentId: "agent-a",
+			baseRevision: 0,
+			baseHash: "",
+			content: "# MEMORY\n\n## Active\n- must not publish\n",
+			entries: [
+				{
+					id: "entry-missing-manifest",
+					text: "must not publish",
+					operation: "added",
+					sourceRefs: ["source:missing-manifest"],
+					supportingQuotes: ["must not publish"],
+				},
+			],
+		});
+
+		expect(result).toMatchObject({ ok: false });
+		if (result.ok) throw new Error("expected manifest failure");
+		expect(result.error).toContain("manifest row is missing");
+		expect(existsSync(join(agentsDir, "agents", "agent-a", "MEMORY.md"))).toBe(false);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT revision, content FROM memory_md_heads WHERE agent_id = ?").get("agent-a"),
+			),
+		).toEqual({ revision: 0, content: "" });
 	});
 });
