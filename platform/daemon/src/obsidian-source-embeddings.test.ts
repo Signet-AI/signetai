@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
 import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import { hybridRecall } from "./memory-search";
+import { resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 import {
 	buildObsidianSourceChunks,
 	indexObsidianSourceEmbeddings,
@@ -43,6 +44,7 @@ describe("Obsidian source embeddings", () => {
 	});
 
 	afterEach(() => {
+		resetEmbeddingCircuitBreakers();
 		closeDbAccessor();
 		if (prevSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = prevSignetPath;

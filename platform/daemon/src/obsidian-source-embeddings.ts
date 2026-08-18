@@ -19,6 +19,7 @@ import type { EmbeddingRole } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
+import { logger } from "./logger";
 
 export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
 const OBSIDIAN_SOURCE_CHUNK_DELAY_MS = 100;
@@ -276,7 +277,21 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 	if (configured.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const failureKey = sourceEmbeddingFailureKey(input, configured.model);
 	const providerKey = `${configured.provider}:${configured.model}:${configured.base_url ?? ""}`;
-	const gate = await awaitEmbeddingProviderAvailable(providerKey, async () => true, SOURCE_EMBEDDING_POLL_MS);
+	let probeCause: PipelineCauseFamily = "provider_unavailable";
+	const gate = await awaitEmbeddingProviderAvailable(
+		providerKey,
+		async () => {
+			const probe = await input.fetchEmbedding("", configured, "document", {
+				usage: { source: "artifact-index", agentId: input.agentId },
+				onFailure: (cause) => {
+					probeCause = cause;
+				},
+			});
+			return Boolean(probe?.length) && !providerUnavailableCause(probeCause);
+		},
+		SOURCE_EMBEDDING_POLL_MS,
+		() => logger.warn("embedding", `Embedding provider unavailable; retrying source indexing (${providerKey})`),
+	);
 	if (!gate.available)
 		return {
 			chunks: chunks.length,
@@ -560,6 +575,7 @@ export async function indexObsidianSourceEmbeddings(
 	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
 	const failureKey = sourceEmbeddingFailureKey(input, embeddingConfig.model);
+	const providerKey = `${embeddingConfig.provider}:${embeddingConfig.model}:${embeddingConfig.base_url ?? ""}`;
 	const failureState = sourceEmbeddingFailures.get(failureKey);
 	if (failureState && failureState.retryAt > Date.now()) {
 		return {
@@ -615,6 +631,8 @@ export async function indexObsidianSourceEmbeddings(
 		});
 		if (!vector || vector.length === 0) {
 			if (providerUnavailableCause(failureCause)) {
+				const activeProviderKey = `${writeConfig.provider}:${writeConfig.model}:${writeConfig.base_url ?? ""}`;
+				recordEmbeddingProviderFailure(activeProviderKey, SOURCE_EMBEDDING_POLL_MS);
 				const attempts = (failureState?.attempts ?? 0) + 1;
 				retryAfterMs = computeRetryBackoffMs(attempts, SOURCE_EMBEDDING_POLL_MS);
 				sourceEmbeddingFailures.set(failureKey, { attempts, retryAt: Date.now() + retryAfterMs });

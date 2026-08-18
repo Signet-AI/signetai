@@ -185,6 +185,7 @@ export function startEmbeddingTracker(
 				`${embeddingCfg.provider}:${embeddingCfg.model}:${embeddingCfg.base_url ?? ""}`,
 				async () => (await checkProviderFn(embeddingCfg)).available,
 				trackerCfg.pollMs,
+				() => logger.warn("embedding", "Embedding provider unavailable; retrying tracker cycle"),
 			);
 			if (!gate.available) {
 				skippedCycles++;

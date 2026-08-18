@@ -1211,6 +1211,7 @@ export async function startEmbeddingIndexMigration(input: {
 				providerKey,
 				async () => (await input.checkProvider(providerCfg)).available,
 				input.pollMs,
+				() => logger.warn("embedding", "Embedding provider unavailable; retrying index migration"),
 			);
 			if (!gate.available) {
 				consecutiveFailures++;

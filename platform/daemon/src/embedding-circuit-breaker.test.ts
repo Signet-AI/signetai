@@ -30,4 +30,18 @@ describe("embedding provider circuit breaker", () => {
 		expect(shouldEmitEmbeddingProviderNotice("native:test", Date.now())).toBe(true);
 		expect(shouldEmitEmbeddingProviderNotice("native:test", Date.now())).toBe(false);
 	});
+
+	it("does not let a reset circuit be clobbered by a stale check", async () => {
+		let release!: (available: boolean) => void;
+		const slow = awaitEmbeddingProviderAvailable(
+			"native:stale",
+			() => new Promise<boolean>((resolve) => (release = resolve)),
+			10_000,
+		);
+		resetEmbeddingCircuitBreakers();
+		expect(await awaitEmbeddingProviderAvailable("native:stale", async () => true, 10_000)).toEqual({ available: true });
+		release(false);
+		expect(await slow).toEqual({ available: true });
+		expect(await awaitEmbeddingProviderAvailable("native:stale", async () => true, 10_000)).toEqual({ available: true });
+	});
 });

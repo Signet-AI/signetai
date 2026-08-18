@@ -10,6 +10,7 @@ interface CircuitState {
 }
 const circuits = new Map<string, CircuitState>();
 const inFlightChecks = new Map<string, Promise<EmbeddingProviderGateResult>>();
+let circuitGeneration = 0;
 
 export interface EmbeddingProviderGateResult {
 	readonly available: boolean;
@@ -26,10 +27,11 @@ export async function awaitEmbeddingProviderAvailable(
 	key: string,
 	check: () => Promise<boolean>,
 	pollMs: number,
+	onProviderUnavailable?: () => void,
 ): Promise<EmbeddingProviderGateResult> {
 	const inFlight = inFlightChecks.get(key);
 	if (inFlight) return inFlight;
-	const flight = checkEmbeddingProviderAvailable(key, check, pollMs);
+	const flight = checkEmbeddingProviderAvailable(key, check, pollMs, onProviderUnavailable);
 	inFlightChecks.set(key, flight);
 	try {
 		return await flight;
@@ -42,11 +44,14 @@ async function checkEmbeddingProviderAvailable(
 	key: string,
 	check: () => Promise<boolean>,
 	pollMs: number,
+	onProviderUnavailable?: () => void,
 ): Promise<EmbeddingProviderGateResult> {
+	const generation = circuitGeneration;
 	const state = stateFor(key);
 	const now = Date.now();
 	if (state.retryAt > now) return { available: false, retryAfterMs: state.retryAt - now };
 	const available = await check();
+	if (generation !== circuitGeneration) return { available: true };
 	if (available) {
 		state.failures = 0;
 		state.retryAt = 0;
@@ -56,6 +61,7 @@ async function checkEmbeddingProviderAvailable(
 	state.failures = Math.min(state.failures + 1, MAX_CONSECUTIVE_PROVIDER_FAILURES);
 	const delay = Math.min(computeRetryBackoffMs(state.failures, pollMs), MAX_PROVIDER_BACKOFF_MS);
 	state.retryAt = Date.now() + delay;
+	if (onProviderUnavailable && shouldEmitEmbeddingProviderNotice(key)) onProviderUnavailable();
 	return { available: false, retryAfterMs: delay };
 }
 
@@ -75,6 +81,7 @@ export function shouldEmitEmbeddingProviderNotice(key: string, now = Date.now())
 }
 
 export function resetEmbeddingCircuitBreakers(): void {
+	circuitGeneration += 1;
 	circuits.clear();
 	inFlightChecks.clear();
 }
