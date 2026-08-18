@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
+import { createDbOwnerClient } from "./db-owner-client";
 
 let app: Hono;
 let dir = "";
@@ -645,5 +646,60 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 		// The retired worker's exclusive side-effect (markSynthesized) must
 		// never fire — proving no dependency-synthesis tick ran.
 		expect(synthesized.last_synthesized_at).toBeNull();
+	});
+
+	it("keeps the real HTTP surface responsive during owner initialization", async () => {
+		const dbPath = join(dir, "memory", "memories.db");
+		const owner = createDbOwnerClient({ dbPath });
+		try {
+			await owner.start();
+			const initialization = owner.submit(
+				{ kind: "initialize", agentsDir: dir },
+				{ operation: "db.initialize.liveness-regression", lane: "maintenance", deadlineMs: 60_000 },
+			);
+			const started = performance.now();
+			const responses = await Promise.all([
+				app.request("http://localhost/health/live"),
+				app.request("http://localhost/api/status"),
+			]);
+			const elapsed = performance.now() - started;
+			expect(responses[0]?.status).toBe(200);
+			expect(responses[1]?.status).toBe(200);
+			expect(elapsed).toBeLessThan(500);
+			await owner.awaitResult(initialization, 60_000);
+		} finally {
+			await owner.close();
+		}
+	});
+
+	it("can safely re-enter initialization after an owner dies", async () => {
+		const dbPath = join(dir, "memory", "memories.db");
+		const first = createDbOwnerClient({ dbPath });
+		await first.start();
+		const pid = first.health().pid;
+		if (pid === null) throw new Error("owner did not publish a pid");
+		const pending = first.submit(
+			{ kind: "initialize", agentsDir: dir },
+			{ operation: "db.initialize.kill-reentry", lane: "maintenance", deadlineMs: 5_000 },
+		);
+		process.kill(pid, "SIGKILL");
+		await expect(pending.result).rejects.toBeDefined();
+		await first.close();
+
+		const second = createDbOwnerClient({ dbPath });
+		try {
+			await second.start();
+			await second.submit(
+				{ kind: "initialize", agentsDir: dir },
+				{ operation: "db.initialize.reentry", lane: "maintenance", deadlineMs: 60_000 },
+			).result;
+			const integrity = await second.submit<{ integrity_check: string }[]>(
+				{ kind: "query", statement: { sql: "PRAGMA integrity_check", result: "all" } },
+				{ operation: "db.initialize.integrity-after-reentry", lane: "read", deadlineMs: 5_000 },
+			).result;
+			expect(integrity).toEqual([{ integrity_check: "ok" }]);
+		} finally {
+			await second.close();
+		}
 	});
 });
