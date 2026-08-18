@@ -3762,20 +3762,6 @@
       "category": "hot-path"
     },
     {
-      "path": "embedding-usage.ts",
-      "line": 90,
-      "api": "withWriteTx",
-      "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "embedding-usage.ts",
-      "line": 115,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
       "path": "github-source-provider.ts",
       "line": 461,
       "api": "withReadDb",

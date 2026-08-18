@@ -64,6 +64,38 @@ describe("daemon status contract", () => {
 		provider.configureLlmConcurrency(2);
 	});
 
+	it("keeps /api/status responsive while the DB owner is blocked", async () => {
+		const { getDbAccessor } = await import("./db-accessor");
+		const accessor = getDbAccessor();
+		const originalWithReadDbAsync = accessor.withReadDbAsync;
+		let ownerStarted = false;
+		let releaseOwner!: () => void;
+		const ownerReleased = new Promise<void>((resolve) => {
+			releaseOwner = resolve;
+		});
+		accessor.withReadDbAsync = async (fn, options) => {
+			ownerStarted = true;
+			await ownerReleased;
+			return originalWithReadDbAsync(fn, options);
+		};
+
+		try {
+			const startedAt = performance.now();
+			const responsePromise = app.request("http://localhost/api/status");
+			while (!ownerStarted && performance.now() - startedAt < 250) {
+				await new Promise<void>((resolve) => setTimeout(resolve, 1));
+			}
+			expect(ownerStarted).toBe(true);
+			releaseOwner();
+			const res = await responsePromise;
+			expect(res.status).toBe(200);
+			expect(performance.now() - startedAt).toBeLessThan(1_000);
+		} finally {
+			releaseOwner();
+			accessor.withReadDbAsync = originalWithReadDbAsync;
+		}
+	});
+
 	it("exposes process memory metrics on /api/status", async () => {
 		const res = await app.request("http://localhost/api/status");
 		expect(res.status).toBe(200);
