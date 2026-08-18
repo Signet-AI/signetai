@@ -464,6 +464,18 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	return report;
 }
 
+/**
+ * Read the diagnostics cache without running its synchronous database query.
+ *
+ * Lightweight status and liveness routes must not turn a cache miss into a
+ * main-loop database scan while the daemon is already under pressure. The
+ * full getter remains available to the bounded diagnostics surface.
+ */
+export function getCachedDiagnosticsReportIfFresh(): DiagnosticsReport | null {
+	const now = Date.now();
+	return diagnosticsCache !== null && diagnosticsCache.expiresAt > now ? diagnosticsCache.report : null;
+}
+
 export function setPipelineTransition(value: boolean): void {
 	pipelineTransition = value;
 }

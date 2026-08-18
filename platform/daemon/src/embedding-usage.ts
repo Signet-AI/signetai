@@ -118,6 +118,8 @@ export interface EmbeddingUsageSummary {
 	readonly byProvider: ReadonlyArray<{ readonly provider: string; readonly requests: number; readonly tokens: number }>;
 }
 
+let cachedEmbeddingUsageSummary: EmbeddingUsageSummary | null = null;
+
 /**
  * Aggregate the daily table into totals, today's totals, and per-source /
  * per-provider breakdowns for /api/status. Returns null when the table is
@@ -128,7 +130,7 @@ export async function readEmbeddingUsageSummary(
 	now: Date = new Date(),
 ): Promise<EmbeddingUsageSummary | null> {
 	try {
-		return await accessor.withReadDbAsync((db: import("./db-accessor").ReadDb) => {
+		const summary = await accessor.withReadDbAsync((db: import("./db-accessor").ReadDb) => {
 			const day = todayKey(now);
 			const totals = db
 				.prepare(
@@ -154,12 +156,19 @@ export async function readEmbeddingUsageSummary(
 				.all() as Array<{ provider: string; requests: number; tokens: number }>;
 			return { total: totals, today, bySource, byProvider };
 		});
+		cachedEmbeddingUsageSummary = summary;
+		return summary;
 	} catch (e) {
 		logger.warn("embedding", "Failed to read embedding usage summary", {
 			error: e instanceof Error ? e.message : String(e),
 		});
 		return null;
 	}
+}
+
+/** Return the last usage aggregate without synchronously reading SQLite. */
+export function getCachedEmbeddingUsageSummary(): EmbeddingUsageSummary | null {
+	return cachedEmbeddingUsageSummary;
 }
 
 export type { EmbeddingUsageRow };

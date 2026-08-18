@@ -150,6 +150,30 @@ describe("daemon status contract", () => {
 		).toBe(true);
 	});
 
+	it("serves status without synchronously reading SQLite when the event loop is under pressure", async () => {
+		const { getDbAccessor } = await import("./db-accessor");
+		const accessor = getDbAccessor();
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: regression probes retired sync path
+		const originalWithReadDb = accessor.withReadDb;
+		let syncReadCalled = false;
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: regression probes retired sync path
+		accessor.withReadDb = () => {
+			syncReadCalled = true;
+			throw new Error("synthetic blocked status read");
+		};
+
+		try {
+			const res = await app.request("http://localhost/api/status");
+			expect(res.status).toBe(200);
+			const agentsRes = await app.request("http://localhost/api/agents");
+			expect(agentsRes.status).toBe(200);
+			expect(syncReadCalled).toBe(false);
+		} finally {
+			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: regression probes retired sync path
+			accessor.withReadDb = originalWithReadDb;
+		}
+	});
+
 	it("reports unknown queue completeness when the status read fails", async () => {
 		const { getDbAccessor } = await import("./db-accessor");
 		const { pipelineQueueBlock } = await import("./routes/pipeline-routes");

@@ -289,6 +289,29 @@ export interface ResourceSnapshot {
 	cpuPercent: number | null;
 }
 
+function processOnlyResourceSnapshot(): ResourceSnapshot {
+	const mem = process.memoryUsage();
+	return {
+		total: null,
+		memoryMd: null,
+		sockets: null,
+		inotify: null,
+		pipes: null,
+		db: null,
+		other: null,
+		rss: Math.round(mem.rss / 1024 / 1024),
+		heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+		physicalFootprint: null,
+		peakPhysicalFootprint: null,
+		cpuPercent: null,
+	};
+}
+
+// HTTP diagnostics read this bounded snapshot. The full /proc walk is
+// performed at daemon startup and by the diagnostic poller, never as part of
+// a request that is meant to prove liveness.
+let cachedResourceSnapshot: ResourceSnapshot = processOnlyResourceSnapshot();
+
 let lastCpuUsage: NodeJS.CpuUsage | null = null;
 let lastCpuSampleAt: number | null = null;
 
@@ -349,11 +372,19 @@ function snapshotResources(readPhysicalMemory: PhysicalMemoryReader = readMacOsP
 }
 
 export function getResourceSnapshot(readPhysicalMemory?: PhysicalMemoryReader): ResourceSnapshot {
-	return snapshotResources(readPhysicalMemory);
+	const snapshot = snapshotResources(readPhysicalMemory);
+	if (readPhysicalMemory === undefined) cachedResourceSnapshot = snapshot;
+	return snapshot;
+}
+
+/** Return the most recent bounded resource sample without touching /proc. */
+export function getCachedResourceSnapshot(): ResourceSnapshot {
+	return cachedResourceSnapshot;
 }
 
 export function logFdSnapshot(stage: string): ResourceSnapshot {
 	const snap = snapshotResources();
+	cachedResourceSnapshot = snap;
 	logger.info("resources", `[${stage}]`, {
 		total: snap.total,
 		memoryMd: snap.memoryMd,
@@ -406,9 +437,14 @@ export function startFdPollMonitor(intervalMs = 30_000): void {
 	if (fdPollTimer) {
 		clearInterval(fdPollTimer);
 	}
-	let prev: ResourceSnapshot | null = null;
+	// Prime the cache before the HTTP server is bound. Subsequent status and
+	// health requests use this value instead of repeating the synchronous FD
+	// walk on the request path.
+	let prev: ResourceSnapshot | null = snapshotResources();
+	cachedResourceSnapshot = prev;
 	fdPollTimer = setInterval(() => {
 		const snap = snapshotResources();
+		cachedResourceSnapshot = snap;
 		const delta = prev
 			? {
 					total: snap.total !== null && prev.total !== null ? snap.total - prev.total : null,

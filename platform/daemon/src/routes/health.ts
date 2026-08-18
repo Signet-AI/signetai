@@ -13,7 +13,7 @@ import {
 } from "../diagnostics";
 import { getAllFeatureFlags } from "../feature-flags";
 import { loadMemoryConfig } from "../memory-config";
-import { getResourceSnapshot } from "../resource-monitor";
+import { getCachedResourceSnapshot } from "../resource-monitor";
 import { getUpdateState } from "../update-system";
 import {
 	AGENTS_DIR,
@@ -222,7 +222,7 @@ export function mountHealthRoutes(app: Hono): void {
 			shuttingDown,
 			updateAvailable: us.lastCheck?.updateAvailable ?? false,
 			pendingRestart: us.pendingRestartVersion !== null,
-			resources: getResourceSnapshot(),
+			resources: getCachedResourceSnapshot(),
 		});
 	});
 

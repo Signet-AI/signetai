@@ -5,6 +5,7 @@ import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
 import { getDbAccessor, runWriteTxAsync } from "../db-accessor.js";
+import { dbOwnerQuery } from "../db-owner-runtime.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { loadPipelineConfig } from "../memory-config.js";
 import {
@@ -214,23 +215,35 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.get("/api/agents", async (c) => {
-		const agents = await getDbAccessor().withReadDbAsync(
-			async (db) =>
-				db
-					.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents ORDER BY name")
-					.all() as AgentRow[],
-		);
-		return c.json({ agents });
+		try {
+			const agents = await dbOwnerQuery<AgentRow[]>(
+				{
+					sql: "SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents ORDER BY name",
+					result: "all",
+				},
+				{ operation: "agents.list", lane: "read", deadlineMs: 2_000 },
+			);
+			return c.json({ agents });
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "Database unavailable" }, 503);
+		}
 	});
 
 	app.get("/api/agents/:name", async (c) => {
 		const name = c.req.param("name");
-		const agent = await getDbAccessor().withReadDbAsync(
-			async (db) =>
-				db
-					.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE name = ?")
-					.get(name) as AgentRow | undefined,
-		);
+		let agent: AgentRow | undefined;
+		try {
+			agent = await dbOwnerQuery<AgentRow | undefined>(
+				{
+					sql: "SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE name = ?",
+					params: [name],
+					result: "get",
+				},
+				{ operation: "agents.get", lane: "read", deadlineMs: 2_000 },
+			);
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "Database unavailable" }, 503);
+		}
 		if (!agent) return c.json({ error: "Agent not found" }, 404);
 		try {
 			const resolved = resolveAgentMemoryPolicy(agent.read_policy, agent.policy_group);

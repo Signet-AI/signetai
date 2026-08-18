@@ -7,7 +7,7 @@ import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { getVacuumConversionStatus } from "../db-vacuum.js";
 import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-queue.js";
-import { readEmbeddingUsageSummary } from "../embedding-usage";
+import { getCachedEmbeddingUsageSummary, readEmbeddingUsageSummary } from "../embedding-usage";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { BackgroundWorkloadDiagnostics } from "../inference-router.js";
 import { getLlmProvider } from "../llm.js";
@@ -46,7 +46,7 @@ import {
 	getRegistryStatus,
 	refreshRegistry,
 } from "../pipeline/model-registry.js";
-import { getResourceSnapshot } from "../resource-monitor.js";
+import { getCachedResourceSnapshot } from "../resource-monitor.js";
 import { activeSessionCount, getBypassedSessionKeys, getSessionTrackerStats } from "../session-tracker.js";
 import { getTranscriptCaptureStatus } from "../transcript-capture-worker.js";
 import { getTranscriptHealthReport } from "../transcript-health.js";
@@ -64,6 +64,7 @@ import {
 	authConfig,
 	buildOpenClawHealth,
 	getCachedDiagnosticsReport,
+	getCachedDiagnosticsReportIfFresh,
 	getExtractionWorkloadState,
 	getUpdateState,
 	invalidateDiagnosticsCache,
@@ -102,7 +103,14 @@ const UNKNOWN_QUEUE_COUNTS_SHAPE: QueueCounts = {
 	completeness: "unknown",
 };
 
-export function pipelineQueueBlock(): PipelineQueueBlock {
+export function pipelineQueueBlock(options: { readonly allowSynchronousRead?: boolean } = {}): PipelineQueueBlock {
+	if (options.allowSynchronousRead === false) {
+		return {
+			memory: { ...UNKNOWN_QUEUE_COUNTS_SHAPE },
+			summary: { ...UNKNOWN_QUEUE_COUNTS_SHAPE },
+			oldestDeadSummaryJob: null,
+		};
+	}
 	try {
 		const accessor = getDbAccessor();
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
@@ -319,8 +327,8 @@ export function registerPipelineRoutes(app: Hono): void {
 
 		let health: { score: number; status: string } | undefined;
 		try {
-			const report = getCachedDiagnosticsReport();
-			health = report.composite;
+			const report = getCachedDiagnosticsReportIfFresh();
+			if (report !== null) health = report.composite;
 		} catch {
 			// DB not ready yet — omit health
 		}
@@ -376,10 +384,13 @@ export function registerPipelineRoutes(app: Hono): void {
 			agentId: resolveDaemonAgentId(),
 			agentsDir: AGENTS_DIR,
 			memoryDb: existsSync(MEMORY_DB),
-			resources: getResourceSnapshot(),
+			resources: getCachedResourceSnapshot(),
 			pipelineV2: config.pipelineV2,
 			pipeline: {
-				queue: pipelineQueueBlock(),
+				// A status request is a liveness surface. Do not synchronously scan
+				// memory_jobs when the diagnostics cache is cold or the DB is under
+				// pressure; the dedicated diagnostics route owns that work.
+				queue: pipelineQueueBlock({ allowSynchronousRead: false }),
 				dreaming: getDreamingWorker()?.scheduler ?? null,
 			},
 			providerResolution: { ...providerRuntimeResolution, extraction: extractionWorkload },
