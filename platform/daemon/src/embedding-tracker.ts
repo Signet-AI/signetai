@@ -21,6 +21,7 @@ import {
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import { isSystemPressureHigh } from "./system-pressure";
+import { awaitEmbeddingProviderAvailable } from "./embedding-circuit-breaker";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -180,8 +181,12 @@ export function startEmbeddingTracker(
 
 		try {
 			// 1. Check provider health (uses existing 30s cache)
-			const health = await checkProviderFn(embeddingCfg);
-			if (!health.available) {
+			const gate = await awaitEmbeddingProviderAvailable(
+				`${embeddingCfg.provider}:${embeddingCfg.model}:${embeddingCfg.base_url ?? ""}`,
+				async () => (await checkProviderFn(embeddingCfg)).available,
+				trackerCfg.pollMs,
+			);
+			if (!gate.available) {
 				skippedCycles++;
 				return;
 			}

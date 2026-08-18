@@ -18,6 +18,7 @@ import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import type { EmbeddingRole } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
+import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
 
 export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
 const OBSIDIAN_SOURCE_CHUNK_DELAY_MS = 100;
@@ -274,6 +275,10 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 	const configured = await ownerEmbeddingConfig(input.embeddingConfig);
 	if (configured.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const failureKey = sourceEmbeddingFailureKey(input, configured.model);
+	const providerKey = `${configured.provider}:${configured.model}:${configured.base_url ?? ""}`;
+	const gate = await awaitEmbeddingProviderAvailable(providerKey, async () => true, SOURCE_EMBEDDING_POLL_MS);
+	if (!gate.available)
+		return { chunks: chunks.length, embedded: 0, skipped: chunks.length, status: EMBEDDINGS_PENDING_PROVIDER_DOWN, providerUnavailable: true, retryAfterMs: gate.retryAfterMs };
 	const failureState = sourceEmbeddingFailures.get(failureKey);
 	if (failureState && failureState.retryAt > Date.now())
 		return {

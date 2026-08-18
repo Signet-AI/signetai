@@ -21,6 +21,7 @@ import { embeddingProfileFingerprint, recommendedEmbeddingProfileId, type Embedd
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import type { PipelineCauseFamily } from "./pipeline-operation";
+import { awaitEmbeddingProviderAvailable } from "./embedding-circuit-breaker";
 
 const STAGING_VECTOR_TABLE = "vec_embeddings_staging";
 const ACTIVE_VECTOR_TABLE = "vec_embeddings";
@@ -1205,7 +1206,13 @@ export async function startEmbeddingIndexMigration(input: {
 				return;
 			}
 			const providerCfg = configForProfile(state.staging, configured);
-			if (!(await input.checkProvider(providerCfg)).available) {
+			const providerKey = `${providerCfg.provider}:${providerCfg.model}:${providerCfg.base_url ?? ""}`;
+			const gate = await awaitEmbeddingProviderAvailable(
+				providerKey,
+				async () => (await input.checkProvider(providerCfg)).available,
+				input.pollMs,
+			);
+			if (!gate.available) {
 				consecutiveFailures++;
 				failed++;
 				if (consecutiveFailures >= MAX_CONSECUTIVE_PROVIDER_FAILURES) {

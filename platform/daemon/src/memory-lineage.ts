@@ -31,6 +31,7 @@ import { buildAgentScopeClause } from "./memory-search";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { isNoiseSession, isTempProject } from "./session-noise";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
+import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
 
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -1073,7 +1074,15 @@ async function doReindex(agentId?: string): Promise<void> {
 	}
 
 	const fileSet = new Set(files);
-	const yielder = yieldEvery(REINDEX_BATCH_SIZE);
+	const baseYielder = yieldEvery(REINDEX_BATCH_SIZE);
+	let itemsSinceYield = 0;
+	const yielder = async (): Promise<void> => {
+		itemsSinceYield += 1;
+		if (itemsSinceYield < REINDEX_BATCH_SIZE) return;
+		itemsSinceYield = 0;
+		if (isSystemPressureHigh()) await awaitPressureClear();
+		await baseYielder();
+	};
 	for (const path of files) {
 		let statKey: string;
 		let mtime: number;
