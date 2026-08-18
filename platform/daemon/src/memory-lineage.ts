@@ -32,8 +32,8 @@ import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { isNoiseSession, isTempProject } from "./session-noise";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
-
 import { loadMemoryConfig } from "./memory-config";
+import { awaitEmbeddingProviderAvailable } from "./embedding-circuit-breaker";
 
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -1076,16 +1076,22 @@ async function doReindex(agentId?: string): Promise<void> {
 	}
 
 	const fileSet = new Set(files);
+	const embedding = loadMemoryConfig(getAgentsDir()).embedding;
+	const providerKey = `${embedding.provider}:${embedding.model}:${embedding.base_url ?? ""}`;
 	const baseYielder = yieldEvery(REINDEX_BATCH_SIZE);
 	let itemsSinceYield = 0;
+	let breakerOpen = false;
 	const yielder = async (): Promise<void> => {
 		itemsSinceYield += 1;
 		if (itemsSinceYield < REINDEX_BATCH_SIZE) return;
 		itemsSinceYield = 0;
 		if (isSystemPressureHigh()) await awaitPressureClear();
+		const gate = await awaitEmbeddingProviderAvailable(providerKey, undefined, 1000);
+		breakerOpen = !gate.available;
 		await baseYielder();
 	};
 	for (const path of files) {
+		if (breakerOpen) break;
 		let statKey: string;
 		let mtime: number;
 		try {
@@ -1136,8 +1142,9 @@ async function doReindex(agentId?: string): Promise<void> {
 			continue;
 		}
 		pendingUpserts.push({ path, frontmatter: parsed.frontmatter, body, mtime, statKey, markChanged: true });
-		if (pendingUpserts.length >= REINDEX_BATCH_SIZE && (await flushUpsertBatch())) {
+		if (pendingUpserts.length >= REINDEX_BATCH_SIZE) {
 			await yielder();
+			if (!breakerOpen) await flushUpsertBatch();
 		}
 	}
 
@@ -1150,7 +1157,7 @@ async function doReindex(agentId?: string): Promise<void> {
 		}
 	}
 
-	if (await flushUpsertBatch()) {
+	if (!breakerOpen && (await flushUpsertBatch())) {
 		await yielder();
 	}
 	if (await flushDeleteBatch()) {
@@ -1934,7 +1941,7 @@ async function buildLedger(agentId: string): Promise<ReadonlyArray<LedgerSession
 		const stamp = Date.parse(membershipTs(group));
 		if (!Number.isFinite(stamp) || stamp < floor || stamp > now) continue;
 		const picked = chooseSentence(group);
-		if (!picked || !picked.memory_sentence) continue;
+		if (!picked?.memory_sentence) continue;
 		if (
 			isNoiseSession({
 				project: sessionProject(group),

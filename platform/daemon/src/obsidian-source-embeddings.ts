@@ -18,7 +18,11 @@ import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import type { EmbeddingRole } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
-import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
+import {
+	awaitEmbeddingProviderAvailable,
+	recordEmbeddingProviderFailure,
+	shouldEmitEmbeddingProviderNotice,
+} from "./embedding-circuit-breaker";
 import { logger } from "./logger";
 
 export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
@@ -352,6 +356,8 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 		if (!vector || vector.length === 0) {
 			if (providerUnavailableCause(failureCause)) {
 				recordEmbeddingProviderFailure(providerKey, SOURCE_EMBEDDING_POLL_MS);
+				if (shouldEmitEmbeddingProviderNotice(providerKey))
+					logger.warn("embedding", `Embedding provider unavailable; retrying source indexing (${providerKey})`);
 				const attempts = (failureState?.attempts ?? 0) + 1;
 				retryAfterMs = computeRetryBackoffMs(attempts, SOURCE_EMBEDDING_POLL_MS);
 				sourceEmbeddingFailures.set(failureKey, { attempts, retryAt: Date.now() + retryAfterMs });
@@ -575,7 +581,6 @@ export async function indexObsidianSourceEmbeddings(
 	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
 	const failureKey = sourceEmbeddingFailureKey(input, embeddingConfig.model);
-	const providerKey = `${embeddingConfig.provider}:${embeddingConfig.model}:${embeddingConfig.base_url ?? ""}`;
 	const failureState = sourceEmbeddingFailures.get(failureKey);
 	if (failureState && failureState.retryAt > Date.now()) {
 		return {
@@ -633,6 +638,8 @@ export async function indexObsidianSourceEmbeddings(
 			if (providerUnavailableCause(failureCause)) {
 				const activeProviderKey = `${writeConfig.provider}:${writeConfig.model}:${writeConfig.base_url ?? ""}`;
 				recordEmbeddingProviderFailure(activeProviderKey, SOURCE_EMBEDDING_POLL_MS);
+				if (shouldEmitEmbeddingProviderNotice(activeProviderKey))
+					logger.warn("embedding", `Embedding provider unavailable; retrying source indexing (${activeProviderKey})`);
 				const attempts = (failureState?.attempts ?? 0) + 1;
 				retryAfterMs = computeRetryBackoffMs(attempts, SOURCE_EMBEDDING_POLL_MS);
 				sourceEmbeddingFailures.set(failureKey, { attempts, retryAt: Date.now() + retryAfterMs });

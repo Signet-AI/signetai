@@ -39,9 +39,13 @@ describe("embedding provider circuit breaker", () => {
 			10_000,
 		);
 		resetEmbeddingCircuitBreakers();
-		expect(await awaitEmbeddingProviderAvailable("native:stale", async () => true, 10_000)).toEqual({ available: true });
+		expect(await awaitEmbeddingProviderAvailable("native:stale", async () => true, 10_000)).toEqual({
+			available: true,
+		});
 		release(false);
 		expect(await slow).toEqual({ available: true });
-		expect(await awaitEmbeddingProviderAvailable("native:stale", async () => true, 10_000)).toEqual({ available: true });
+		expect(await awaitEmbeddingProviderAvailable("native:stale", async () => true, 10_000)).toEqual({
+			available: true,
+		});
 	});
 });

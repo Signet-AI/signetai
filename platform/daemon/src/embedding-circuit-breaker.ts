@@ -25,7 +25,7 @@ function stateFor(key: string): CircuitState {
 
 export async function awaitEmbeddingProviderAvailable(
 	key: string,
-	check: () => Promise<boolean>,
+	check: (() => Promise<boolean>) | undefined,
 	pollMs: number,
 	onProviderUnavailable?: () => void,
 ): Promise<EmbeddingProviderGateResult> {
@@ -42,7 +42,7 @@ export async function awaitEmbeddingProviderAvailable(
 
 async function checkEmbeddingProviderAvailable(
 	key: string,
-	check: () => Promise<boolean>,
+	check: (() => Promise<boolean>) | undefined,
 	pollMs: number,
 	onProviderUnavailable?: () => void,
 ): Promise<EmbeddingProviderGateResult> {
@@ -50,7 +50,7 @@ async function checkEmbeddingProviderAvailable(
 	const state = stateFor(key);
 	const now = Date.now();
 	if (state.retryAt > now) return { available: false, retryAfterMs: state.retryAt - now };
-	const available = await check();
+	const available = check ? await check() : state.retryAt <= Date.now();
 	if (generation !== circuitGeneration) return { available: true };
 	if (available) {
 		state.failures = 0;
