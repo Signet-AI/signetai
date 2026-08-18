@@ -22,6 +22,7 @@ import {
 	DbSpacePreflightError,
 	getFreePageRatio,
 	getVacuumConversionStatus,
+	reclaimIncrementalVacuum,
 	startVacuumConversionWorker,
 } from "./db-vacuum";
 
@@ -389,5 +390,76 @@ describe("deferred vacuum conversion (#1493)", () => {
 		closeDbAccessor();
 		initDbAccessor(db.path);
 		expect(getVacuumConversionStatus(getDbAccessor())).toMatchObject({ state: "failed", attempts: 3 });
+	});
+});
+
+describe("integrated incremental reclaim resume (#1667)", () => {
+	it("observes owner batches and resumes from the durable checkpoint after SIGKILL", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-vacuum-reclaim-test-"));
+		const dbPath = join(directory, "memories.db");
+		const seed = new Database(dbPath);
+		seed.exec("PRAGMA auto_vacuum = INCREMENTAL; CREATE TABLE reclaim_bloat (data BLOB)");
+		const insert = seed.prepare("INSERT INTO reclaim_bloat (data) VALUES (?)");
+		for (let index = 0; index < 100; index++) insert.run(Buffer.alloc(4096, 0x42));
+		seed.exec("DROP TABLE reclaim_bloat");
+		const freeBefore = (seed.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
+		seed.close();
+		expect(freeBefore).toBeGreaterThan(2);
+
+		const owner = createDbOwnerClient({ dbPath });
+		const accessor = {} as Parameters<typeof reclaimIncrementalVacuum>[0];
+		const checkpoints: Array<{ reclaimed: number; remaining: number }> = [];
+		let killed = false;
+		try {
+			await owner.start();
+			await reclaimIncrementalVacuum(accessor, {
+				owner,
+				batchPages: 1,
+				checkpointKey: "test.integrated-reclaim",
+				maxBatches: 1,
+				onCheckpoint: (reclaimed, remaining) => {
+					checkpoints.push({ reclaimed, remaining });
+					if (!killed && checkpoints.length === 1 && remaining > 0) {
+						killed = true;
+						const pid = owner.health().pid;
+						if (pid === null) throw new Error("owner did not publish a pid");
+						process.kill(pid, "SIGKILL");
+					}
+				},
+			});
+			expect(killed).toBe(true);
+			expect(checkpoints).toHaveLength(1);
+			expect(checkpoints[0].remaining).toBeGreaterThan(0);
+		} finally {
+			await owner.close().catch(() => undefined);
+		}
+
+		const integrityAfterKill = new Database(dbPath, { readonly: true });
+		expect(
+			(integrityAfterKill.prepare("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check,
+		).toBe("ok");
+		integrityAfterKill.close();
+
+		const resumedOwner = createDbOwnerClient({ dbPath });
+		try {
+			await resumedOwner.start();
+			const resumed = await reclaimIncrementalVacuum(accessor, {
+				owner: resumedOwner,
+				batchPages: 1,
+				checkpointKey: "test.integrated-reclaim",
+				maxBatches: 200,
+				onCheckpoint: (reclaimed, remaining) => checkpoints.push({ reclaimed, remaining }),
+			});
+			expect(resumed.remaining).toBe(0);
+			expect(checkpoints.length).toBeGreaterThan(1);
+			expect(checkpoints.at(-1)).toEqual(expect.objectContaining({ remaining: 0 }));
+		} finally {
+			await resumedOwner.close();
+		}
+
+		const finalDb = new Database(dbPath, { readonly: true });
+		expect((finalDb.prepare("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check).toBe("ok");
+		finalDb.close();
+		rmSync(directory, { recursive: true, force: true });
 	});
 });
