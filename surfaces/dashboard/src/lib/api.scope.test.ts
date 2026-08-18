@@ -8,8 +8,7 @@ describe("api.updateAgentScope", () => {
 		const bodies: unknown[] = [];
 		vi.spyOn(globalThis, "fetch").mockImplementation((async (input, init) => {
 			const request =
-				input instanceof Request ||
-				(typeof input === "object" && input !== null && "clone" in input)
+				input instanceof Request || (typeof input === "object" && input !== null && "clone" in input)
 					? (input as Request)
 					: null;
 			const body = request ? await request.clone().text() : init?.body;

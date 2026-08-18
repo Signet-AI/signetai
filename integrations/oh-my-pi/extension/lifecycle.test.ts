@@ -60,7 +60,7 @@ describe("Oh My Pi lifecycle session-end handling", () => {
 		// Release call sent even without transcript (to free daemon claim)
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.path).toBe("/api/hooks/session-end");
-		expect((calls[0]?.body as Record<string, unknown>).transcript).toBeUndefined();
+		expect((calls[0]?.body as Record<string, unknown> | undefined)?.transcript).toBeUndefined();
 		expect(deps.state.sessionAlreadyEnded("prev-session")).toBe(false);
 		expect(deps.state.getPendingSessionEnds()).toHaveLength(1);
 
