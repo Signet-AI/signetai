@@ -661,10 +661,6 @@ export function isVectorRuntimeUsable(): boolean {
 }
 
 const MAX_MIGRATION_BACKUPS = 1;
-// Some runner and edge filesystems report zero available blocks even though a
-// small write still succeeds. Probe those small databases instead of treating
-// the statfs result as definitive, while keeping large databases fail-closed.
-const MAX_ZERO_FREE_SPACE_PROBE_BYTES = 1024 * 1024;
 
 interface MigrationBackupDeps {
 	readonly copyFileSync: (source: string, destination: string) => void;
@@ -731,7 +727,10 @@ function availableBytes(path: string, deps: MigrationBackupDeps): number | null 
 	if (!deps.statfsSync) return null;
 	try {
 		const stat = deps.statfsSync(path);
-		return stat.bavail * stat.bsize;
+		if (!Number.isFinite(stat.bavail) || stat.bavail < 0) return null;
+		if (!Number.isFinite(stat.bsize) || stat.bsize <= 0) return null;
+		const available = stat.bavail * stat.bsize;
+		return Number.isFinite(available) && available >= 0 ? available : null;
 	} catch {
 		return null;
 	}
@@ -762,16 +761,15 @@ function isDbFullError(err: unknown): boolean {
 function preflightMigrationBackupSpace(dbPath: string, deps: MigrationBackupDeps): DbSpaceMetrics | null {
 	const dbBytes = fileSize(dbPath, deps);
 	const freeBytes = availableBytes(dirname(dbPath), deps);
-	if (dbBytes === null || freeBytes === null) return null;
-	const metrics = { dbBytes, freeBytes, requiredBytes: dbBytes };
-	if (freeBytes === 0 && dbBytes <= MAX_ZERO_FREE_SPACE_PROBE_BYTES) {
+	if (dbBytes === null) return null;
+	const metrics = { dbBytes, freeBytes: freeBytes ?? 0, requiredBytes: dbBytes };
+	if (freeBytes === null) {
 		const probeDest = `${dbPath}.space-probe-${deps.now()}`;
 		try {
-			// A zero statfs reading is not reliable on every runner or edge
-			// filesystem. Copy the actual database before failing closed so this
-			// exception is allowed only when the required backup write succeeds.
+			// A degenerate statfs reading is not reliable. Copy the actual database
+			// before proceeding so this outcome is authorized by a real write.
 			deps.copyFileSync(dbPath, probeDest);
-			return metrics;
+			return { ...metrics, freeBytes: dbBytes };
 		} catch (err) {
 			throw new DbSpacePreflightError("migration_backup", metrics, err);
 		} finally {

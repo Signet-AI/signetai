@@ -442,7 +442,7 @@ describe("DbAccessor", () => {
 			},
 			readdirSync: () => Array.from(files.keys()),
 			statSync: (path) => ({ mtimeMs: files.get(String(path).slice(dbDir.length + 1)) ?? 0, size: 8 }),
-			statfsSync: () => ({ bavail: 0, bsize: 1 }),
+			statfsSync: () => ({ bavail: 0, bsize: 0 }),
 			unlinkSync: (path) => {
 				const name = String(path).slice(dbDir.length + 1);
 				operations.push(`unlink:${name}`);
@@ -460,23 +460,41 @@ describe("DbAccessor", () => {
 		expect(files.has("test.db.bak-v64-6000")).toBe(true);
 	});
 
-	test("still blocks a large migration backup when statfs reports zero free bytes", () => {
+	test("uses the write probe when statfs returns a degenerate block size", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		writeFileSync(dbPath, "database");
+		const operations: string[] = [];
+
+		backupBeforeMigration({ exec: () => {} }, dbPath, 65, {
+			copyFileSync: (_source, destination) => {
+				operations.push(String(destination).includes("space-probe") ? "probe" : "backup");
+			},
+			readdirSync: () => [],
+			statSync: () => ({ mtimeMs: 0, size: 1024 * 1024 + 1 }),
+			statfsSync: () => ({ bavail: 244199454, bsize: 0 }),
+			unlinkSync: () => {
+				operations.push("unlink");
+			},
+			now: () => 7000,
+			log: () => {},
+		});
+		expect(operations).toEqual(["probe", "unlink", "backup"]);
+	});
+
+	test("still blocks a genuinely verified-full migration backup", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));
 		writeFileSync(dbPath, "database");
 		const operations: string[] = [];
 
 		expect(() =>
-			backupBeforeMigration({ exec: () => {} }, dbPath, 65, {
-				copyFileSync: () => {
-					operations.push("copy");
-				},
+			backupBeforeMigration({ exec: () => {} }, dbPath, 66, {
+				copyFileSync: () => operations.push("copy"),
 				readdirSync: () => [],
 				statSync: () => ({ mtimeMs: 0, size: 1024 * 1024 + 1 }),
-				statfsSync: () => ({ bavail: 0, bsize: 1 }),
-				unlinkSync: () => {
-					operations.push("unlink");
-				},
+				statfsSync: () => ({ bavail: 0, bsize: 4096 }),
+				unlinkSync: () => operations.push("unlink"),
 				now: () => 7000,
 				log: () => {},
 			}),
