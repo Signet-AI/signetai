@@ -762,7 +762,7 @@ function preflightMigrationBackupSpace(dbPath: string, deps: MigrationBackupDeps
 	const dbBytes = fileSize(dbPath, deps);
 	const freeBytes = availableBytes(dirname(dbPath), deps);
 	if (dbBytes === null) return null;
-	const metrics = { dbBytes, freeBytes: freeBytes ?? 0, requiredBytes: dbBytes };
+	const metrics = { dbBytes, freeBytes, requiredBytes: dbBytes } as DbSpaceMetrics;
 	if (freeBytes === null) {
 		const probeDest = `${dbPath}.space-probe-${deps.now()}`;
 		try {

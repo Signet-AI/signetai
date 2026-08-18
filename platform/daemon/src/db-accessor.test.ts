@@ -482,6 +482,32 @@ describe("DbAccessor", () => {
 		expect(operations).toEqual(["probe", "unlink", "backup"]);
 	});
 
+	test("does not fabricate free space when the degenerate write probe fails", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		writeFileSync(dbPath, "database");
+
+		let error: DbSpacePreflightError | undefined;
+		try {
+			backupBeforeMigration({ exec: () => {} }, dbPath, 65, {
+				copyFileSync: () => {
+					throw new Error("probe failed");
+				},
+				readdirSync: () => [],
+				statSync: () => ({ mtimeMs: 0, size: 1024 }),
+				statfsSync: () => ({ bavail: 1, bsize: 0 }),
+				unlinkSync: () => {},
+				now: () => 7000,
+				log: () => {},
+			});
+		} catch (err) {
+			error = err as DbSpacePreflightError;
+		}
+		expect(error).toBeInstanceOf(DbSpacePreflightError);
+		if (!error) throw new Error("expected DbSpacePreflightError");
+		expect((error.metrics as unknown as { freeBytes: number | null }).freeBytes).toBeNull();
+	});
+
 	test("still blocks a genuinely verified-full migration backup", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));
