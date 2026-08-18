@@ -256,6 +256,12 @@ export interface CreateDreamingCapabilitiesParams {
 		operations: readonly DreamingOperationRequest[],
 		agentId: string,
 	) => void | PromiseLike<void>;
+	readonly onOperationsAccountingError?: (
+		error: unknown,
+		result: ApplyDreamingOperationsResult,
+		operations: readonly DreamingOperationRequest[],
+		agentId: string,
+	) => void | PromiseLike<void>;
 	readonly onOperationsAboutToApply?: (
 		operations: readonly DreamingOperationRequest[],
 		agentId: string,
@@ -705,7 +711,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"attention_list",
 			"List attention",
-			"List attention records by kind and resolution status. Use kind hygiene for structural queue work, kind surprisal for bounded exploration hints, or review_due for expired and approaching temporal claims. Omit agentId to see the whole install; pass agentId to narrow to one scope.",
+			"List attention records by kind and resolution status. Use kind hygiene for structural queue work, kind surprisal for bounded exploration hints, or review_due for expired and approaching temporal claims. Omit agentId to see all attention authorized for the current pass; pass an authorized agentId to narrow to one scope.",
 			true,
 			z.object({
 				agentId: z.string().optional(),
@@ -785,7 +791,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					passId: params.passId,
 					writeCaps: params.writeCaps,
 				});
-				await params.onOperationsApplied?.(result, operations, scopeId);
+				try {
+					await params.onOperationsApplied?.(result, operations, scopeId);
+				} catch (error) {
+					// The ontology write may already be committed. Accounting must
+					// not turn that result into a response the agent can replay.
+					try {
+						await params.onOperationsAccountingError?.(error, result, operations, scopeId);
+					} catch {}
+				}
 				return {
 					ok: result.ok,
 					...(result.error ? { error: result.error } : {}),

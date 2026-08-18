@@ -51,6 +51,8 @@ export {
 	getDreamingPasses,
 	getDreamingPass,
 	getActiveDreamingPasses,
+	getActiveDreamingCapabilityContext,
+	recordDreamingToolCall,
 	recordDreamingFailure,
 	requestDreamingEvidenceRequeue,
 } from "./dreaming";

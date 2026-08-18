@@ -36,16 +36,11 @@ function codexEnvironment(
 		if (!isRecord(parsed)) throw new Error("CODEX_CONFIG must contain a JSON object for scoped Dreaming MCP");
 		config = parsed;
 	}
-	if (config.mcp_servers !== undefined && !isRecord(config.mcp_servers)) {
-		throw new Error("CODEX_CONFIG.mcp_servers must contain a JSON object for scoped Dreaming MCP");
-	}
-	const mcpServers = isRecord(config.mcp_servers) ? config.mcp_servers : {};
 	return {
 		...Object.fromEntries(env.map((entry) => [entry.name, entry.value])),
 		CODEX_CONFIG: JSON.stringify({
 			...config,
 			mcp_servers: {
-				...mcpServers,
 				[DREAMING_MCP_NAME]: {
 					command: processConfig.command,
 					args: processConfig.args,

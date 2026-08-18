@@ -102,7 +102,8 @@ describe("Dreaming ACPX MCP config", () => {
 			mcp_servers?: Record<string, Record<string, unknown>>;
 		};
 		expect(codex.features?.web_search).toBe(false);
-		expect(codex.mcp_servers?.existing).toEqual({ url: "https://example.test/mcp" });
+		expect(codex.mcp_servers?.existing).toBeUndefined();
+		expect(Object.keys(codex.mcp_servers ?? {})).toEqual(["signet_dreaming"]);
 		expect(codex.mcp_servers?.signet_dreaming).toMatchObject({
 			command: process.execPath,
 			args: [],

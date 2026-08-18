@@ -222,6 +222,7 @@ export function startDreamingWorker(
 	// alternate hygiene → content → hygiene → … when both kinds of work are
 	// pending (#1098). Explicit triggers do not touch it.
 	let nextScheduledFocus: DreamingPassFocus | null = null;
+	let lastScheduledScopeId: string | null = null;
 	const getAgentScopes = createAgentScopeSnapshot(AGENT_SCOPE_SNAPSHOT_REFRESH_MS, () =>
 		getDreamingWorkerAgentIds(accessor, defaultAgentId),
 	);
@@ -230,6 +231,7 @@ export function startDreamingWorker(
 		hourlyBudget: 50,
 		maxAttempts: 3,
 	};
+	const scopeBoundPasses = options.acpxMcp !== undefined;
 	const executorForAgent = (agentId: string): DreamingAgentExecutor => {
 		const factory = options.executorFactory;
 		if (factory) return factory(agentId);
@@ -296,7 +298,8 @@ export function startDreamingWorker(
 		activeAgent = runAgentId;
 		// Periodic sweeps pass their snapshot through; explicit triggers and
 		// CLI passes resolve fresh so operator intent is never stale.
-		const passScopes = scopes ?? getDreamingWorkerAgentIds(accessor, defaultAgentId);
+		const passScopes =
+			scopes ?? (scopeBoundPasses ? [runAgentId] : getDreamingWorkerAgentIds(accessor, defaultAgentId));
 		const p = runDreamingAgentPass(
 			accessor,
 			executorForAgent(runAgentId),
@@ -337,10 +340,13 @@ export function startDreamingWorker(
 		}
 		scheduler = { status: "idle", reason: null, checkedAt };
 
-		// One Dreaming universe: a single pass covers every agent scope. The
-		// sweep runs one pass when any scope has attention or a backlog; the
-		// pass itself addresses scopes via the per-call agentId on its tools.
+		// In-process executors can cover the whole install. External ACP agents
+		// receive an agent-scoped credential, so each pass must stay in the scope
+		// that triggered it instead of advertising inaccessible scopes.
 		const scopes = getAgentScopes();
+		const lastScopeIndex = lastScheduledScopeId === null ? -1 : scopes.indexOf(lastScheduledScopeId);
+		const scheduledScopes =
+			lastScopeIndex < 0 ? scopes : [...scopes.slice(lastScopeIndex + 1), ...scopes.slice(0, lastScopeIndex + 1)];
 		const autoRequeued = autoRequeueRepairedDreamingEvidence(accessor, evidenceRetry);
 		if (autoRequeued > 0) {
 			logger.info("dreaming-worker", "Automatically requeued repaired Dreaming evidence", {
@@ -348,8 +354,8 @@ export function startDreamingWorker(
 				budget: evidenceRetry.hourlyBudget,
 			});
 		}
-		let triggered = false;
-		for (const scopeId of scopes) {
+		let triggeredScopeId: string | null = null;
+		for (const scopeId of scheduledScopes) {
 			if (stopped || active) return;
 			// A halted scope must not burn the 6-query hygiene scan and the
 			// episodic backlog read on every sweep: skip straight past it.
@@ -359,7 +365,7 @@ export function startDreamingWorker(
 				await enqueueDreamingSurprisalAttention(accessor, scopeId, cfg);
 				const episodicTokens = await getDreamingEpisodicTokenBacklog(accessor, scopeId);
 				if (!(await shouldTriggerDreaming(accessor, cfg, scopeId, Date.now(), episodicTokens))) continue;
-				triggered = true;
+				triggeredScopeId = scopeId;
 				logger.info("dreaming-worker", "Episodic evidence threshold reached, starting dreaming pass", {
 					scopeId,
 					episodicTokens,
@@ -374,16 +380,18 @@ export function startDreamingWorker(
 				});
 			}
 		}
-		if (!triggered) return;
+		if (triggeredScopeId === null) return;
+		lastScheduledScopeId = triggeredScopeId;
 		// #1098: with the hygiene queue perpetually full, every pass used to
 		// drain flags first and run out of budget before content work. Give
 		// content a guaranteed turn: alternate the runbook per check cycle
 		// when both kinds of work are pending; run the only-pending kind
 		// directly otherwise.
-		const mode = await selectDreamingCheckMode(accessor, scopes, nextScheduledFocus);
+		const passScopes = scopeBoundPasses ? [triggeredScopeId] : scopes;
+		const mode = await selectDreamingCheckMode(accessor, passScopes, nextScheduledFocus);
 		nextScheduledFocus = dreamingFocusOfMode(mode) ?? nextScheduledFocus;
 		try {
-			await runPass(defaultAgentId, mode, undefined, scopes);
+			await runPass(scopeBoundPasses ? triggeredScopeId : defaultAgentId, mode, undefined, passScopes);
 		} catch (e) {
 			// runPass already recorded the failure (recordDreamingFailure)
 			// and failDreamingPass marked the pass row failed. A pass error
@@ -447,7 +455,8 @@ export function startDreamingWorker(
 		},
 
 		trigger(mode: DreamingMode, agentId?: string) {
-			return runPass(normalizeAgentId(agentId, defaultAgentId), mode);
+			const runAgentId = normalizeAgentId(agentId, defaultAgentId);
+			return runPass(runAgentId, mode);
 		},
 
 		async triggerAsync(mode: DreamingMode, agentId?: string): Promise<string> {
@@ -471,7 +480,7 @@ export function startDreamingWorker(
 				cfg,
 				agentsDir,
 				runAgentId,
-				getDreamingWorkerAgentIds(accessor, defaultAgentId),
+				scopeBoundPasses ? [runAgentId] : getDreamingWorkerAgentIds(accessor, defaultAgentId),
 				mode,
 				passId,
 				caps,

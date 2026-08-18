@@ -778,11 +778,20 @@ inference:
 			const app = await makeApp();
 			const state = await import("./routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { getDbAccessor } = await import("./db-accessor");
 			const { registerPipelineRoutes } = await import("./routes/pipeline-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode Dreaming test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
 			registerPipelineRoutes(app);
+			getDbAccessor().withWriteTx((db) => {
+				const insert = db.prepare(
+					`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
+					 VALUES (?, ?, 'incremental', 'running', datetime('now'), datetime('now'))`,
+				);
+				insert.run("auth-trace-agent-a", "agent-a");
+				insert.run("auth-trace-agent-b", "agent-b");
+			});
 			const token = createToken(secret, { sub: "dreaming-agent-a", role: "agent", scope: { agent: "agent-a" } }, 60);
 			const res = await app.request("/api/dream/operations", {
 				method: "POST",
@@ -796,6 +805,28 @@ inference:
 				body: JSON.stringify({ agentId: "agent-b", input: { query: "Atlas" } }),
 			});
 			expect(toolRes.status).toBe(403);
+			const ownRejectedTrace = await app.request("/api/dream/tools/search_entities", {
+				method: "POST",
+				headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+				body: JSON.stringify({ agentId: "agent-b", passId: "auth-trace-agent-a", input: { query: "Atlas" } }),
+			});
+			const foreignRejectedTrace = await app.request("/api/dream/tools/search_entities", {
+				method: "POST",
+				headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+				body: JSON.stringify({ agentId: "agent-b", passId: "auth-trace-agent-b", input: { query: "Atlas" } }),
+			});
+			expect(ownRejectedTrace.status).toBe(403);
+			expect(foreignRejectedTrace.status).toBe(403);
+			expect(
+				getDbAccessor().withReadDb((db) =>
+					db
+						.prepare(
+							`SELECT agent_id AS agentId, pass_id AS passId FROM dreaming_tool_calls
+							 WHERE pass_id IN ('auth-trace-agent-a', 'auth-trace-agent-b') ORDER BY pass_id`,
+						)
+						.all(),
+				),
+			).toEqual([{ agentId: "agent-a", passId: "auth-trace-agent-a" }]);
 			const manifestRes = await app.request("/api/dream/tools", {
 				headers: { Authorization: `Bearer ${token}` },
 			});

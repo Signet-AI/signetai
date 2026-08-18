@@ -11,12 +11,15 @@ import { useEffect, useMemo, useState } from "react";
 
 /* ── Formatting helpers ──────────────────────────────────────────────────── */
 
-function parseDate(s: string): Date | null {
+export function normalizeDreamingTimestamp(s: string): string {
 	// SQLite datetime('now') strings ("YYYY-MM-DD HH:MM:SS") are UTC; ISO
 	// strings pass through unchanged. Never let the engine parse the space
 	// form as local time — it would shift every pass by the TZ offset.
-	const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? `${s.replace(" ", "T")}Z` : s;
-	const d = new Date(iso);
+	return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(s) ? `${s.replace(" ", "T")}Z` : s;
+}
+
+function parseDate(s: string): Date | null {
+	const d = new Date(normalizeDreamingTimestamp(s));
 	return Number.isNaN(d.getTime()) ? null : d;
 }
 

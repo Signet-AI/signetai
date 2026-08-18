@@ -668,10 +668,12 @@ scope.
 
 ### GET /api/dream/passes/:passId/tools
 
-Return the local, ordered Pi capability trace for one Dreaming pass: every
-tool's input, output, success result, and latency. The route is agent-scoped
-and requires `admin` permission. It is intended for reviewing whether the
-agent searched graph or episodic evidence before proposing semantic writes.
+Return the local, ordered capability trace for one Dreaming pass, whether the
+agent invoked the registry in-process through Pi or through the restricted MCP
+transport. Each row contains the tool input, output, success result, and
+latency. The route is agent-scoped and requires `admin` permission. It is
+intended for reviewing whether the agent searched graph or episodic evidence
+before proposing semantic writes.
 
 ### GET /api/dream/quality
 
@@ -710,11 +712,17 @@ agent scope. Requires `modify` permission.
 ```json
 {
   "agentId": "noam",
+  "passId": "active-dreaming-pass-id",
   "input": { "query": "deployment target" }
 }
 ```
 
 `input` must satisfy the selected capability's schema from `GET /api/dream/tools`.
+Restricted MCP calls include `passId`; the daemon verifies that it identifies a
+running pass in the credential's agent scope and records the call in that
+pass's ordered audit trace. An unknown pass returns `404`, and a completed or
+failed pass returns `409`. Shell-driven calls may omit `passId` when no pass
+trace is required.
 For example, `search_entities` accepts `query`, `type`, `limit`, and `offset`;
 `apply_ontology_ops` accepts a cited `operations` batch. Its schema is a
 closed union of the 19 audited ontology operations and each operation's

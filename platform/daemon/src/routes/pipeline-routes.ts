@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
@@ -11,6 +12,7 @@ import { readEmbeddingUsageSummary } from "../embedding-usage";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { BackgroundWorkloadDiagnostics } from "../inference-router.js";
 import { getLlmProvider } from "../llm.js";
+import { logger as appLogger } from "../logger.js";
 import { getMcpWorkloadDiagnostics } from "../mcp/route.js";
 import { getLlmConcurrencyStatus } from "../pipeline/provider.js";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config.js";
@@ -22,12 +24,14 @@ import {
 	getDreamingPasses,
 	getDreamingPass,
 	getActiveDreamingPasses,
+	getActiveDreamingCapabilityContext,
 	getDreamingQualityReport,
 	getDreamingState,
 	getDreamingToolCalls,
 	getDreamingWorker,
 	getDreamingWorkloadDiagnostics,
 	getPipelineWorkerStatus,
+	recordDreamingToolCall,
 	requestDreamingEvidenceRequeue,
 } from "../pipeline";
 import {
@@ -36,7 +40,12 @@ import {
 	type DreamingLiveEvent,
 } from "../pipeline/dreaming-live-events";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
-import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
+import {
+	type DreamingCapabilityMode,
+	type DreamingCapabilityResult,
+	getDreamingCapability,
+	getDreamingCapabilityManifest,
+} from "../pipeline/dreaming-capabilities.js";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
 import { AlreadyRunningError } from "../pipeline/dreaming-worker.js";
 import { getTraversalStatus } from "../pipeline/graph-traversal.js";
@@ -203,6 +212,17 @@ function _readBoolean(record: Readonly<Record<string, unknown>>, key: string): b
 function readArray(record: Readonly<Record<string, unknown>>, key: string): readonly unknown[] | undefined {
 	const value = record[key];
 	return Array.isArray(value) ? value : undefined;
+}
+
+function dreamingCapabilityMode(value: string | undefined): DreamingCapabilityMode | undefined {
+	if (
+		value === "incremental" ||
+		value === "compact" ||
+		value === "incremental-hygiene" ||
+		value === "incremental-content"
+	)
+		return value;
+	return undefined;
 }
 
 function requestedDreamAgentId(c: Context, body: Readonly<Record<string, unknown>> = {}): string | undefined {
@@ -993,27 +1013,100 @@ export function registerPipelineRoutes(app: Hono): void {
 	// binding. The capability id and input schema are never copied here.
 	app.get("/api/dream/tools", (c) => c.json({ items: getDreamingCapabilityManifest() }));
 	app.post("/api/dream/tools/:capability", async (c) => {
+		const startedAt = Date.now();
 		const raw: unknown = await c.req.json().catch(() => null);
 		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
 		const body = asRecord(raw);
+		const input = asRecord(body.input);
+		const passId = readString(body, "passId");
+		const toolCallId = readString(body, "toolCallId") ?? `http:${randomUUID()}`;
 		const scopedAgent = resolveScopedDreamAgent(c, body);
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const credentialAgentId = c.get("auth")?.claims?.scope.agent?.trim();
+		const traceAgentId = scopedAgent.error ? credentialAgentId : scopedAgent.agentId;
+		const pass =
+			passId === undefined || !traceAgentId ? null : await getDreamingPass(getDbAccessor(), traceAgentId, passId);
+		const activeContext =
+			passId === undefined || !traceAgentId ? undefined : getActiveDreamingCapabilityContext(traceAgentId, passId);
+		const mode = activeContext?.mode ?? dreamingCapabilityMode(pass?.mode);
 		const capability = getDreamingCapability(
 			{
 				accessor: getDbAccessor(),
 				agentId: scopedAgent.agentId,
 				actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "dreaming-client",
-				passId: readString(body, "passId") ?? undefined,
+				passId,
+				...(mode ? { mode } : {}),
+				writeCaps: activeContext?.writeCaps ?? graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
+				...(activeContext
+					? {
+							onOperationsAboutToApply: activeContext.onOperationsAboutToApply,
+							onOperationsApplied: activeContext.onOperationsApplied,
+							onOperationsAccountingError: activeContext.onOperationsAccountingError,
+						}
+					: {}),
 			},
 			c.req.param("capability"),
 		);
+		const recordTrace = async (output: DreamingCapabilityResult, traceInput: unknown = input) => {
+			if (passId === undefined || !traceAgentId || pass?.status !== "running" || capability === undefined) return;
+			try {
+				const toolTrace = {
+					toolCallId,
+					tool: capability.id,
+					input: traceInput,
+					output,
+					latencyMs: Date.now() - startedAt,
+				};
+				if (activeContext) await activeContext.onToolCall(toolTrace);
+				else await recordDreamingToolCall(getDbAccessor(), traceAgentId, passId, toolTrace);
+			} catch (error) {
+				// The capability may already have committed writes. Preserve its
+				// result so an MCP retry cannot replay a successful mutation.
+				appLogger.warn("dreaming", "Failed to record Dreaming MCP tool call", {
+					agentId: traceAgentId,
+					passId,
+					tool: capability.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		};
+		const trace = (output: DreamingCapabilityResult, traceInput: unknown = input): Promise<void> =>
+			activeContext
+				? activeContext.runCapability(() => recordTrace(output, traceInput))
+				: recordTrace(output, traceInput);
+		if (scopedAgent.error) {
+			if (capability !== undefined) await trace({ tool: capability.id, ok: false, error: scopedAgent.error });
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		if (passId !== undefined && !pass) return c.json({ error: "Dreaming pass not found" }, 404);
+		if (pass?.status !== undefined && pass.status !== "running") {
+			return c.json({ error: "Dreaming pass is not running" }, 409);
+		}
 		if (!capability) return c.json({ error: "Unknown Dreaming capability" }, 404);
-		const input = asRecord(body.input);
 		const requestedInputAgent = readString(input, "agentId");
 		if (requestedInputAgent !== undefined && requestedInputAgent !== scopedAgent.agentId) {
+			await trace({
+				tool: capability.id,
+				ok: false,
+				error: "Dreaming capability agent scope does not match the credential",
+			});
 			return c.json({ error: "Dreaming capability agent scope does not match the credential" }, 403);
 		}
-		const result = await capability.invoke({ ...input, agentId: scopedAgent.agentId });
+		const requestedInputPass = readString(input, "passId");
+		if (requestedInputPass !== undefined && requestedInputPass !== passId) {
+			await trace({ tool: capability.id, ok: false, error: "Dreaming capability pass does not match the credential" });
+			return c.json({ error: "Dreaming capability pass does not match the credential" }, 403);
+		}
+		const effectiveInput = {
+			...input,
+			agentId: scopedAgent.agentId,
+			...(passId ? { passId } : {}),
+		};
+		const invoke = async (): Promise<DreamingCapabilityResult> => {
+			const result = await capability.invoke(effectiveInput);
+			await recordTrace(result, effectiveInput);
+			return result;
+		};
+		const result = activeContext ? await activeContext.runCapability(invoke) : await invoke();
 		return c.json({ ...result, agentId: scopedAgent.agentId }, result.ok ? 200 : result.retryable === true ? 503 : 400);
 	});
 

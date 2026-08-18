@@ -327,6 +327,53 @@ export interface DreamingAgentExecutor {
 	}>;
 }
 
+export interface ActiveDreamingCapabilityContext {
+	readonly mode: DreamingMode;
+	readonly writeCaps?: GraphWriteCaps;
+	readonly runCapability: <T>(invoke: () => Promise<T>) => Promise<T>;
+	readonly onOperationsApplied: (
+		result: ApplyDreamingOperationsResult,
+		operations: readonly DreamingOperationRequest[],
+		agentId: string,
+	) => void | PromiseLike<void>;
+	readonly onOperationsAboutToApply: (
+		operations: readonly DreamingOperationRequest[],
+		agentId: string,
+	) => void | PromiseLike<void>;
+	readonly onOperationsAccountingError: (
+		error: unknown,
+		result: ApplyDreamingOperationsResult,
+		operations: readonly DreamingOperationRequest[],
+		agentId: string,
+	) => void | PromiseLike<void>;
+	readonly onToolCall: (trace: DreamingToolCallTrace) => void | PromiseLike<void>;
+}
+
+const activeDreamingCapabilityContexts = new Map<string, ActiveDreamingCapabilityContext>();
+
+function dreamingCapabilityContextKey(agentId: string, passId: string): string {
+	return `${agentId}\u0000${passId}`;
+}
+
+export function getActiveDreamingCapabilityContext(
+	agentId: string,
+	passId: string,
+): ActiveDreamingCapabilityContext | undefined {
+	return activeDreamingCapabilityContexts.get(dreamingCapabilityContextKey(agentId, passId));
+}
+
+function bindActiveDreamingCapabilityContext(
+	agentId: string,
+	passId: string,
+	context: ActiveDreamingCapabilityContext,
+): () => void {
+	const key = dreamingCapabilityContextKey(agentId, passId);
+	activeDreamingCapabilityContexts.set(key, context);
+	return () => {
+		if (activeDreamingCapabilityContexts.get(key) === context) activeDreamingCapabilityContexts.delete(key);
+	};
+}
+
 export interface DreamingPassAttribution {
 	readonly executor: string;
 	readonly provider: string;
@@ -645,14 +692,19 @@ function parseToolTrace(value: string): unknown {
 	}
 }
 
-async function recordDreamingToolCall(
+export async function recordDreamingToolCall(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
-	sequence: number,
 	trace: DreamingToolCallTrace,
 ): Promise<void> {
 	await writeTx(accessor, (db) => {
+		const row = db
+			.prepare(
+				`SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence
+				 FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ?`,
+			)
+			.get(agentId, passId) as { sequence: number };
 		db.prepare(
 			`INSERT INTO dreaming_tool_calls
 			 (id, agent_id, pass_id, sequence, tool_call_id, tool_name, input_json, output_json, success, latency_ms)
@@ -661,7 +713,7 @@ async function recordDreamingToolCall(
 			randomUUID(),
 			agentId,
 			passId,
-			sequence,
+			row.sequence,
 			trace.toolCallId || null,
 			trace.tool,
 			serializeToolTrace(trace.input),
@@ -827,7 +879,7 @@ export const DREAMING_AGENT_PROMPT = `You are a bounded Signet maintenance agent
 
 Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. The graph is a derived structure; every write carries provenance (an attention id for hygiene, an exact quote from episodic evidence for content). Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
 
-An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's attention queue, with each record carrying its owning agentId.
+This pass may address only the agent scopes listed in <agent_scopes>. Scoped tools take an agentId: always use one of those listed values, and never guess or address another scope. Each write is attributed to the agent you name. attention_list without an agentId lists the attention queue authorized for this pass, with each record carrying its owning agentId.
 
 ### State targets
 
@@ -899,7 +951,7 @@ export const DREAMING_HYGIENE_AGENT_PROMPT = `You are a bounded Signet maintenan
 
 Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a HYGIENE pass: process the attention queue — inspect flagged targets and archive or merge them with attention provenance, minting flags for junk the queue missed. Content maintenance (claims, entities) belongs to content passes, which cite exact quotes from episodic evidence. Use the pass log (runbook_read) as the dedup source: the previous pass's changes are the cutoff.
 
-An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's attention queue, with each record carrying its owning agentId.
+This pass may address only the agent scopes listed in <agent_scopes>. Scoped tools take an agentId: always use one of those listed values, and never guess or address another scope. Each write is attributed to the agent you name. attention_list without an agentId lists the attention queue authorized for this pass, with each record carrying its owning agentId.
 
 ### State targets
 
@@ -954,7 +1006,7 @@ export const DREAMING_CONTENT_AGENT_PROMPT = `You are a bounded Signet maintenan
 
 Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a CONTENT pass: process review work, inspect bounded surprisal hints, and find new evidence since the cutoff; extract/update claims with exact-quote citations and create entities only for durable subjects. Hygiene archives/merges belong to hygiene passes, which process structural attention. Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
 
-An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's attention queue, with each record carrying its owning agentId.
+This pass may address only the agent scopes listed in <agent_scopes>. Scoped tools take an agentId: always use one of those listed values, and never guess or address another scope. Each write is attributed to the agent you name. attention_list without an agentId lists the attention queue authorized for this pass, with each record carrying its owning agentId.
 
 ### State targets
 
@@ -1473,10 +1525,7 @@ export async function runDreamingAgentPass(
 	let applied = 0;
 	let failed = 0;
 	try {
-		const prompt =
-			scopes.length > 1
-				? `${dreamingPromptForMode(mode)}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`
-				: dreamingPromptForMode(mode);
+		const prompt = `${dreamingPromptForMode(mode)}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`;
 
 		// Pass-start cutoff, SQLite format. The stored watermark may also be
 		// the raw surfaced captured_at (ISO); every comparison goes through
@@ -1486,8 +1535,8 @@ export async function runDreamingAgentPass(
 			(db) => (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now,
 		);
 
-		// One Dreaming pass covers the whole install: it only runs when some
-		// scope has pending attention or an episodic backlog. Scheduled checks
+		// A pass covers its advertised scopes: it only runs when one of them has
+		// pending attention or an episodic backlog. Scheduled checks
 		// are already gated by shouldTriggerDreaming; this protects manual
 		// triggers and compact runs from spending tokens on nothing.
 		const [hasPendingHygieneAttention, hasPendingContentAttention, hasPendingAttention] = await Promise.all([
@@ -1563,13 +1612,18 @@ export async function runDreamingAgentPass(
 		// pass; the pass-end watermark may advance only to it (#1149).
 		const surfacedWatermarkByScope = new Map<string, string>();
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
-		const tools = createDreamingAgentTools({
-			accessor,
-			agentId,
-			actor: "dreaming",
-			passId,
+		let capabilityQueue = Promise.resolve();
+		const capabilityContext: ActiveDreamingCapabilityContext = {
 			mode,
-			writeCaps,
+			...(writeCaps ? { writeCaps } : {}),
+			runCapability<T>(invoke: () => Promise<T>): Promise<T> {
+				const result = capabilityQueue.then(invoke, invoke);
+				capabilityQueue = result.then(
+					() => undefined,
+					() => undefined,
+				);
+				return result;
+			},
 			async onOperationsAboutToApply(operations, scopeId) {
 				retirementCandidates = await collectDreamingRetirementCandidates(accessor, scopeId, operations);
 			},
@@ -1583,9 +1637,17 @@ export async function runDreamingAgentPass(
 				await writeTx(accessor, (db) => resolveRequeuedDreamingEvidenceInTx(db, scopeId, passId, result, operations));
 				rejectedEvidence.push(...collectRejectedDreamingEvidence(accessor, scopeId, result, operations));
 			},
+			onOperationsAccountingError(error, _result, _operations, scopeId) {
+				failed++;
+				logger.error("dreaming", "Ontology operations committed but pass accounting failed", undefined, {
+					agentId: scopeId,
+					passId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
 			async onToolCall(trace) {
 				publishDreamingToolTrace(passId, trace, live);
-				await recordDreamingToolCall(accessor, agentId, passId, ++toolCallSequence, trace);
+				toolCallSequence++;
 				if (trace.tool === "memory_head_commit") memoryHeadResult = trace.output;
 				if (trace.tool === "search_evidence" && trace.output.ok === true && Array.isArray(trace.output.items)) {
 					const input = isRecord(trace.input) ? trace.input : null;
@@ -1641,21 +1703,36 @@ export async function runDreamingAgentPass(
 					}
 					applyCallbackReported = false;
 				}
+				await recordDreamingToolCall(accessor, agentId, passId, trace);
 			},
+		};
+		const tools = createDreamingAgentTools({
+			accessor,
+			agentId,
+			actor: "dreaming",
+			passId,
+			...capabilityContext,
 		});
 		logger.info("dreaming", "Starting agentic dreaming pass", {
 			mode,
 			promptChars: prompt.length,
 		});
-		const executorResult = await executor.run({
-			passId,
-			prompt,
-			tools,
-			timeoutMs: cfg.timeout,
-			maxTokens: cfg.maxOutputTokens,
-			onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
-			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
-		});
+		const releaseCapabilityContext = bindActiveDreamingCapabilityContext(agentId, passId, capabilityContext);
+		const executorResult = await (async () => {
+			try {
+				return await executor.run({
+					passId,
+					prompt,
+					tools,
+					timeoutMs: cfg.timeout,
+					maxTokens: cfg.maxOutputTokens,
+					onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
+					onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
+				});
+			} finally {
+				releaseCapabilityContext();
+			}
+		})();
 		const memoryHeadMissing =
 			mode === "incremental-content" && (memoryHeadResult === null || Reflect.get(memoryHeadResult, "ok") !== true);
 		if (memoryHeadMissing)

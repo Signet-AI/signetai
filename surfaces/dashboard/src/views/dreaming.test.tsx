@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { DreamsView } from "./dreaming";
+import { DreamsView, normalizeDreamingTimestamp } from "./dreaming";
 
 const DREAM_STATUS = {
 	worker: { running: true, active: false, activeAgentId: null },
@@ -80,6 +80,11 @@ afterAll(() => {
 });
 
 describe("dreaming summary layout", () => {
+	test("treats fractional SQLite Dreaming timestamps as UTC", () => {
+		expect(normalizeDreamingTimestamp("2026-08-17 15:36:54.796")).toBe("2026-08-17T15:36:54.796Z");
+		expect(normalizeDreamingTimestamp("2026-08-17 15:40:38")).toBe("2026-08-17T15:40:38Z");
+	});
+
 	test("keeps the summary in a scrollable, scrollbar-free container", async () => {
 		const container = document.createElement("div");
 		document.body.appendChild(container);

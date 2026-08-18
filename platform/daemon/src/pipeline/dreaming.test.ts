@@ -58,6 +58,10 @@ function defaultCfg(overrides?: Partial<DreamingConfig>): DreamingConfig {
 	};
 }
 
+function scopedPrompt(prompt: string, ...scopes: readonly string[]): string {
+	return `${prompt}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`;
+}
+
 function wrapDb(db: Database): DbAccessor {
 	return {
 		withReadDb<T>(fn: (db: Database) => T): T {
@@ -308,7 +312,7 @@ describe("Dreaming", () => {
 			);
 		const result = await run();
 		expect(result.summary).toBe("Done");
-		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
+		expect(prompt).toBe(scopedPrompt(DREAMING_AGENT_PROMPT, AGENT));
 		const firstDelivery = (await getDreamingToolCalls(accessor, AGENT, result.passId)).find(
 			(call) => call.toolName === "search_evidence",
 		);
@@ -889,7 +893,7 @@ describe("Dreaming", () => {
 		);
 
 		expect(result.summary).toBe("Reviewed due claim");
-		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
+		expect(prompt).toBe(scopedPrompt(DREAMING_AGENT_PROMPT, AGENT));
 		// Attention is not auto-resolved: the agent consumes it via a flag +
 		// archive batch, which is covered by the operations suite.
 		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(1);
@@ -1024,7 +1028,7 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental",
 		);
-		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
+		expect(prompt).toBe(scopedPrompt(DREAMING_AGENT_PROMPT, AGENT));
 		expect(toolNames).toEqual(
 			expect.arrayContaining(["search_entities", "get_entity", "list_aspect_claims", "walk_links", "attention_list"]),
 		);
@@ -1514,7 +1518,7 @@ describe("Dreaming", () => {
 			"compact",
 		);
 		// The pass prompt is fixed; the agent reads prior notes via runbook_read.
-		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
+		expect(prompt).toBe(scopedPrompt(DREAMING_AGENT_PROMPT, AGENT));
 	});
 
 	it("reports a rejected unsupported operation as a failed mutation", async () => {
@@ -1702,7 +1706,7 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-hygiene",
 		);
-		expect(hygienePrompt).toBe(DREAMING_HYGIENE_AGENT_PROMPT);
+		expect(hygienePrompt).toBe(scopedPrompt(DREAMING_HYGIENE_AGENT_PROMPT, AGENT));
 		expect(hygienePrompt).not.toContain("find new evidence since the cutoff");
 
 		seedSummary(db, "content-prompt", "New evidence for the content runbook.", 8);
@@ -1721,7 +1725,7 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-		expect(contentPrompt).toBe(DREAMING_CONTENT_AGENT_PROMPT);
+		expect(contentPrompt).toBe(scopedPrompt(DREAMING_CONTENT_AGENT_PROMPT, AGENT));
 		expect(contentPrompt).not.toContain("Process ALL pending hygiene records");
 		expect(contentPrompt).toContain("kind=surprisal");
 		expect(contentPrompt).toContain("never cite attention:<id>");

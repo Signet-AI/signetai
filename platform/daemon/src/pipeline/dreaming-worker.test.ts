@@ -357,35 +357,68 @@ describe("dreaming worker agent scope", () => {
 		const worker = startDreamingWorker(accessor, defaultCfg({ tokenThreshold: 1 }), agentsDir, "default", {
 			executorFactory,
 			checkIntervalMs: 20,
+			acpxMcp: { daemonUrl: "http://127.0.0.1:3850" },
 		});
 		try {
-			// Failures accumulate on the run agent ("default") while the
-			// per-scope backoff reads each scope's own state, so "alpha"'s
-			// fresh backlog re-triggers on the next tick. Two recorded
-			// failures prove the loop survived the first one and kept
-			// checking instead of dying with it.
+			// The external agent credential and pass both belong to the scope
+			// whose backlog triggered the sweep. Its failure backoff prevents an
+			// immediate retry, while a later scheduler timestamp proves the loop
+			// survived the rejection and re-armed.
 			await waitFor(() => {
 				const state = db
-					.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'default'")
+					.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'alpha'")
 					.get() as { n: number } | null;
-				return state != null && state.n >= 2;
+				return state != null && state.n >= 1;
 			}, 2_000);
+			const failedAt = worker.scheduler.checkedAt;
+			await waitFor(() => worker.scheduler.checkedAt !== failedAt, 2_000);
 			expect(unhandled).toEqual([]);
 
 			const state = db
-				.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'default'")
+				.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'alpha'")
 				.get() as { n: number };
-			expect(state.n).toBeGreaterThanOrEqual(2);
+			expect(state.n).toBe(1);
 
-			const passes = db.prepare("SELECT status, error FROM dreaming_passes ORDER BY created_at").all() as Array<{
+			const passes = db
+				.prepare("SELECT agent_id, status, error FROM dreaming_passes ORDER BY created_at")
+				.all() as Array<{
+				agent_id: string;
 				status: string;
 				error: string | null;
 			}>;
-			expect(passes.length).toBeGreaterThanOrEqual(2);
+			expect(passes).toHaveLength(1);
+			expect(passes.every((pass) => pass.agent_id === "alpha")).toBe(true);
 			expect(passes.every((pass) => pass.status === "failed" && pass.error?.includes("429"))).toBe(true);
 		} finally {
 			worker.stop();
 			process.off("unhandledRejection", onUnhandledRejection);
+		}
+	});
+
+	it("rotates MCP-bound scheduled passes across continuously eligible agent scopes", async () => {
+		for (const agentId of ["alpha", "beta"]) {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+				 VALUES (?, ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+			).run(`fairness-${agentId}`, agentId, `${agentId} has durable evidence awaiting maintenance.`);
+		}
+		const agents: string[] = [];
+		const worker = startDreamingWorker(accessor, defaultCfg({ tokenThreshold: 1 }), agentsDir, "default", {
+			checkIntervalMs: 10,
+			acpxMcp: { daemonUrl: "http://127.0.0.1:3850" },
+			executorFactory: (agentId) => ({
+				async run() {
+					agents.push(agentId);
+					return { summary: `Checked ${agentId}` };
+				},
+			}),
+		});
+		try {
+			await waitFor(() => agents.length >= 2, 2_000);
+			expect(agents.slice(0, 2)).toEqual(["alpha", "beta"]);
+		} finally {
+			worker.stop();
 		}
 	});
 
@@ -452,15 +485,12 @@ describe("dreaming worker agent scope", () => {
 		});
 	});
 
-	it("runs one universe pass over every agent scope and keeps semantic rows agent-isolated (#946)", async () => {
-		// Behavioral regression: one Dreaming pass covers the whole install.
-		// The pass addresses each agent scope via the per-call agentId on its
-		// tools; every write is attributed to the agent named on the call, and
-		// no cross-agent evidence leaks into another scope's derived graph.
+	it("keeps an MCP-bound pass inside its credential scope instead of advertising foreign scopes", async () => {
+		// Regression: ACPX received a default-scoped credential but the pass
+		// advertised every scope, causing attention_list(main) to be rejected.
 		const ALPHA = "alpha";
 		const BETA = "beta";
 		const alphaEvidence = "Alpha is building the Apex platform.";
-		const betaEvidence = "Beta is building the Zenith platform.";
 
 		// Seed distinct episodic evidence for each agent.
 		db.prepare(
@@ -468,21 +498,14 @@ describe("dreaming worker agent scope", () => {
 			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
 			 VALUES ('summary-alpha', ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
 		).run(ALPHA, alphaEvidence);
-		db.prepare(
-			`INSERT INTO session_transcripts
-			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
-			 VALUES ('summary-beta', ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
-		).run(BETA, betaEvidence);
-
-		// Deterministic provider: one universe pass consolidates BOTH scopes
-		// in a single invocation, each apply batch carrying the agentId whose
-		// graph it maintains and citing that scope's own evidence.
 		const seenPrompts: string[] = [];
+		const seenAgents: string[] = [];
 		const executorFactory = (agentId: string) => ({
 			async run(input: {
 				prompt: string;
 				tools: ReadonlyArray<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }>;
 			}) {
+				seenAgents.push(agentId);
 				seenPrompts.push(input.prompt);
 				const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
 				if (!apply) throw new Error("Missing apply_ontology_ops");
@@ -505,26 +528,7 @@ describe("dreaming worker agent scope", () => {
 						},
 					],
 				});
-				await apply.execute("call", {
-					agentId: BETA,
-					operations: [
-						{
-							operation: "create_entity",
-							payload: { name: "Zenith", type: "project" },
-							reason: "The evidence identifies the project.",
-							confidence: 0.9,
-							evidence: [
-								{
-									source_ref: "transcript:summary-beta",
-									source_kind: "transcript",
-									source_id: "summary-beta",
-									quote: betaEvidence,
-								},
-							],
-						},
-					],
-				});
-				return { summary: "Consolidated both scopes" };
+				return { summary: "Consolidated credential scope" };
 			},
 		});
 
@@ -533,26 +537,26 @@ describe("dreaming worker agent scope", () => {
 			defaultCfg({ tokenThreshold: 1, backfillOnFirstRun: true }),
 			agentsDir,
 			"default",
-			{ executorFactory },
+			{
+				executorFactory,
+				acpxMcp: { daemonUrl: "http://127.0.0.1:3850" },
+			},
 		);
 		try {
-			// One trigger = one pass covering every discovered scope.
-			await worker.trigger("incremental", "default");
+			await worker.trigger("incremental", ALPHA);
 
-			// A single pass row on the primary agent.
 			const passes = db
 				.prepare("SELECT agent_id, status, mode FROM dreaming_passes ORDER BY created_at")
 				.all() as Array<{ agent_id: string; status: string; mode: string }>;
-			expect(passes).toEqual([{ agent_id: "default", status: "completed", mode: "incremental" }]);
+			expect(passes).toEqual([{ agent_id: ALPHA, status: "completed", mode: "incremental" }]);
 
-			// One invocation, and the prompt names every scope in the install.
+			expect(seenAgents).toEqual([ALPHA]);
 			expect(seenPrompts).toHaveLength(1);
 			expect(seenPrompts[0]).toContain(DREAMING_AGENT_PROMPT);
 			expect(seenPrompts[0]).toContain("<agent_scopes>");
 			expect(seenPrompts[0]).toContain(ALPHA);
-			expect(seenPrompts[0]).toContain(BETA);
+			expect(seenPrompts[0]).not.toContain(BETA);
 
-			// Semantic rows are agent-isolated: each agent only owns its entity.
 			const alphaEntities = (
 				db
 					.prepare("SELECT canonical_name FROM entities WHERE agent_id = ? ORDER BY canonical_name")
@@ -568,9 +572,8 @@ describe("dreaming worker agent scope", () => {
 				}>
 			).map((r) => r.canonical_name);
 			expect(alphaEntities).toEqual(["apex"]);
-			expect(betaEntities).toEqual(["zenith"]);
+			expect(betaEntities).toEqual([]);
 
-			// No entity was written to the wrong agent.
 			expect(
 				(
 					db

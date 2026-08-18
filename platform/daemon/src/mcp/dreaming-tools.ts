@@ -29,7 +29,7 @@ export function createDreamingMcpServer(options: DreamingMcpServerOptions): McpS
 				inputSchema: z.fromJSONSchema(capability.inputSchema) as never,
 				annotations: { readOnlyHint: capability.readOnly },
 			},
-			(async (input: unknown) => {
+			(async (input: unknown, extra?: { readonly requestId?: string | number }) => {
 				const result = await daemonFetch<unknown>(
 					options.daemonUrl,
 					`/api/dream/tools/${encodeURIComponent(capability.id)}`,
@@ -39,6 +39,7 @@ export function createDreamingMcpServer(options: DreamingMcpServerOptions): McpS
 							input,
 							agentId: options.agentId,
 							actor: "dreaming-acpx",
+							...(extra?.requestId === undefined ? {} : { toolCallId: String(extra.requestId) }),
 							...(options.passId ? { passId: options.passId } : {}),
 						},
 					},

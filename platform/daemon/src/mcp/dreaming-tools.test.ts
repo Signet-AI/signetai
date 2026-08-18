@@ -6,6 +6,7 @@ import { createDreamingMcpServer } from "./dreaming-tools";
 interface RegisteredTool {
 	readonly handler: (
 		args: Record<string, unknown>,
+		extra?: { readonly requestId?: string | number },
 	) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>;
 }
 
@@ -57,11 +58,12 @@ describe("Dreaming MCP tools", () => {
 		const capture: { url?: string; method?: string; body?: string } = {};
 		mockFetch(capture);
 
-		await tool(server, "search_entities").handler({ query: "Atlas" });
+		await tool(server, "search_entities").handler({ query: "Atlas" }, { requestId: "mcp-call-1" });
 		expect(capture.url).toBe("http://localhost:3850/api/dream/tools/search_entities");
 		expect(JSON.parse(capture.body ?? "{}")).toMatchObject({
 			agentId: "agent-a",
 			passId: "pass-a",
+			toolCallId: "mcp-call-1",
 			input: { query: "Atlas" },
 		});
 
