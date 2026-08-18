@@ -1664,7 +1664,7 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		symlinkSync(victim, join(home, ".hermes", "profiles", "escape"));
 		process.env.HOME = home;
 		process.env.HERMES_HOME = undefined;
-		await expect(new HermesAgentConnector().install(join(home, ".agents"), { profile: "escape" })).rejects.toThrow(
+		await expect(new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"))).rejects.toThrow(
 			/(symlinked|escapes validated root)/,
 		);
 		expect(existsSync(join(victim, "plugins"))).toBe(false);
@@ -1680,7 +1680,7 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		writeFileSync(join(profile, ".env"), env);
 		process.env.HOME = home;
 		process.env.HERMES_HOME = undefined;
-		const result = await new HermesAgentConnector().uninstall({ profile: "unowned" });
+		const result = await new HermesAgentConnector({ profile: "unowned" }).uninstall();
 		expect(result.filesRemoved).toEqual([]);
 		expect(readFileSync(join(profile, "config.yaml"), "utf8")).toBe(config);
 		expect(readFileSync(join(profile, ".env"), "utf8")).toBe(env);

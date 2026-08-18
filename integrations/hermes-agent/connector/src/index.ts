@@ -71,6 +71,10 @@ export interface HermesConnectorOptions {
 	readonly policyGroup?: string;
 }
 
+export interface HermesConnectorTarget {
+	readonly profile?: string;
+}
+
 export interface HermesDoctorReport {
 	readonly ok: boolean;
 	readonly hermesHome: string;
@@ -821,22 +825,27 @@ async function ensureNamedAgentRegistered(
 export class HermesAgentConnector extends BaseConnector {
 	readonly name = "Hermes Agent";
 	readonly harnessId = "hermes-agent";
-	private targetOptions: HermesConnectorOptions = {};
+	private readonly target?: HermesConnectorTarget;
+
+	constructor(target?: HermesConnectorTarget) {
+		super();
+		this.target = target;
+	}
 
 	private getHermesHome(): string {
-		if (this.targetOptions.profile) {
-			if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(this.targetOptions.profile)) {
+		if (this.target?.profile) {
+			if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(this.target.profile)) {
 				throw new Error("Invalid Hermes profile name; use 1-64 letters, numbers, '.', '_' or '-'.");
 			}
 			const userHome = process.env.HOME?.trim() || homedir();
-			const profileHome = join(userHome, ".hermes", "profiles", this.targetOptions.profile);
+			const profileHome = join(userHome, ".hermes", "profiles", this.target.profile);
 			return resolveContainedWritePath(profileHome, join(userHome, ".hermes", "profiles"));
 		}
 		return resolveHermesHomePath();
 	}
 
 	private getHermesRepo(): string | null {
-		if (this.targetOptions.profile) return null;
+		if (this.target?.profile) return null;
 		return resolveHermesRepoPath();
 	}
 
@@ -845,12 +854,11 @@ export class HermesAgentConnector extends BaseConnector {
 	}
 
 	async install(basePath: string, options: HermesConnectorOptions = {}): Promise<InstallResult> {
-		this.targetOptions = options;
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
 		const warnings: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
-		const strippedAgentsPath = options.profile ? null : this.stripLegacySignetBlock(expandedBasePath);
+		const strippedAgentsPath = this.target?.profile ? null : this.stripLegacySignetBlock(expandedBasePath);
 		if (strippedAgentsPath !== null) {
 			filesWritten.push(strippedAgentsPath);
 		}
@@ -1050,8 +1058,7 @@ export class HermesAgentConnector extends BaseConnector {
 		};
 	}
 
-	async uninstall(options: HermesConnectorOptions = {}): Promise<UninstallResult> {
-		this.targetOptions = options;
+	async uninstall(): Promise<UninstallResult> {
 		const filesRemoved: string[] = [];
 		const configsPatched: string[] = [];
 
@@ -1063,13 +1070,13 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesHome = this.getHermesHome();
 		const userPluginTarget = getUserPluginTargetDir(hermesHome);
-		if (options.profile && (!existsSync(userPluginTarget) || readInstallMarker(userPluginTarget) === null)) {
+		if (this.target?.profile && (!existsSync(userPluginTarget) || readInstallMarker(userPluginTarget) === null)) {
 			return { filesRemoved, configsPatched };
 		}
-		const userPluginRemoved = uninstallPlugin(userPluginTarget, options.profile ? hermesHome : undefined);
+		const userPluginRemoved = uninstallPlugin(userPluginTarget, this.target?.profile ? hermesHome : undefined);
 		filesRemoved.push(...userPluginRemoved);
 
-		const providerConfig = restoreOrClearProvider(hermesHome, options.profile ? hermesHome : undefined);
+		const providerConfig = restoreOrClearProvider(hermesHome, this.target?.profile ? hermesHome : undefined);
 		if (providerConfig.configPath) {
 			configsPatched.push(providerConfig.configPath);
 		}
@@ -1077,7 +1084,7 @@ export class HermesAgentConnector extends BaseConnector {
 			filesRemoved.push(providerConfig.backupPath);
 		}
 
-		const envPath = options.profile
+		const envPath = this.target?.profile
 			? resolveContainedWritePath(join(hermesHome, ".env"), hermesHome)
 			: join(hermesHome, ".env");
 		if (existsSync(envPath)) {

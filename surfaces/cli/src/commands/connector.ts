@@ -43,8 +43,7 @@ async function installConnector(harness: string, options: ConnectorInstallOption
 
 async function installHermes(options: ConnectorInstallOptions, deps: ConnectorDeps): Promise<void> {
 	if (!options.profile) throw new Error("--profile is required for connect hermes");
-	const result = await new HermesAgentConnector().install(options.path ?? deps.agentsDir, {
-		profile: options.profile,
+	const result = await new HermesAgentConnector({ profile: options.profile }).install(options.path ?? deps.agentsDir, {
 		agentId: options.agent ?? options.profile,
 		memoryPolicy: options.memory,
 		policyGroup: options.group,
@@ -57,7 +56,7 @@ async function installHermes(options: ConnectorInstallOptions, deps: ConnectorDe
 
 async function disconnectHermes(options: ConnectorInstallOptions): Promise<void> {
 	if (!options.profile) throw new Error("--profile is required for disconnect hermes");
-	const result = await new HermesAgentConnector().uninstall({ profile: options.profile });
+	const result = await new HermesAgentConnector({ profile: options.profile }).uninstall();
 	console.log(chalk.green(`  ✓ Hermes Agent disconnected (${result.filesRemoved.length} file(s) removed)`));
 }
 
