@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
 import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import { hybridRecall } from "./memory-search";
-import { resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
+import { awaitEmbeddingProviderAvailable, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 import {
 	buildObsidianSourceChunks,
 	indexObsidianSourceEmbeddings,
@@ -178,6 +178,8 @@ describe("Obsidian source embeddings", () => {
 		});
 
 		expect(first.providerUnavailable).toBe(true);
+		const sharedCircuit = await awaitEmbeddingProviderAvailable("native:nomic-embed-text-v1.5:", undefined, 1000);
+		expect(sharedCircuit.available).toBe(false);
 		expect(first.status).toBe("embeddings pending - provider down");
 		expect(first.skipped).toBe(first.chunks);
 		expect(second.providerUnavailable).toBe(true);

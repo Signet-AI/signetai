@@ -923,6 +923,14 @@ export async function reindexMemoryArtifacts(agentId?: string): Promise<void> {
 
 async function doReindex(agentId?: string): Promise<void> {
 	const scope = agentId?.trim() || null;
+	let breakerOpen = false;
+	const embedding = loadMemoryConfig(getAgentsDir()).embedding;
+	const providerKey = `${embedding.provider}:${embedding.model}:${embedding.base_url ?? ""}`;
+	const initialGate = await awaitEmbeddingProviderAvailable(providerKey, undefined, 1000);
+	if (!initialGate.available) {
+		breakerOpen = true;
+		return;
+	}
 	const files = await listCanonicalFiles();
 	const t0 = performance.now();
 	const stopTimer = logger.time("resources", "reindexMemoryArtifacts");
@@ -1076,11 +1084,8 @@ async function doReindex(agentId?: string): Promise<void> {
 	}
 
 	const fileSet = new Set(files);
-	const embedding = loadMemoryConfig(getAgentsDir()).embedding;
-	const providerKey = `${embedding.provider}:${embedding.model}:${embedding.base_url ?? ""}`;
 	const baseYielder = yieldEvery(REINDEX_BATCH_SIZE);
 	let itemsSinceYield = 0;
-	let breakerOpen = false;
 	const yielder = async (): Promise<void> => {
 		itemsSinceYield += 1;
 		if (itemsSinceYield < REINDEX_BATCH_SIZE) return;
