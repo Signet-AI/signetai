@@ -304,7 +304,7 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 		}
 	}
 
-	function handleExit(owner: ChildProcess, code: number | null, signal: NodeJS.Signals | null): void {
+	function handleExit(owner: ChildProcess, code: number | null, signal: NodeJS.Signals | null, detail?: string): void {
 		if (child !== owner) return;
 		const expected = closed;
 		if (expected) {
@@ -317,7 +317,7 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 		}
 		const message = signal === null ? `DB owner exited with code ${code ?? "unknown"}` : `DB owner killed by ${signal}`;
 		retireOwner(
-			new DbOwnerDiedError(message),
+			new DbOwnerDiedError(detail === undefined ? message : `${message}; child stderr: ${detail}`),
 			owner,
 			state === "starting" || state === "failed" ? "failed" : "dead",
 			true,
@@ -349,25 +349,37 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 		startPromise = new Promise<void>((resolve, reject) => {
 			startupResolve = resolve;
 			startupReject = reject;
+			const workerEnv: NodeJS.ProcessEnv = {
+				...process.env,
+				SIGNET_DB_OWNER_DB_PATH: options.dbPath,
+				SIGNET_DB_OWNER_WORKER: "1",
+				...(options.workerRole === "recall" ? { SIGNET_DB_OWNER_RECALL_WORKER: "1" } : {}),
+			};
+			// A compiled daemon sets this marker so the native entrypoint dispatches
+			// into the daemon. It must not leak into the worker child: the worker
+			// marker is the authoritative dispatch selector for this process.
+			delete workerEnv.SIGNET_DAEMON_ENTRYPOINT;
 			const owner = spawn(process.execPath, workerArguments(options.workerPath), {
-				env: {
-					...process.env,
-					SIGNET_DB_OWNER_DB_PATH: options.dbPath,
-					SIGNET_DB_OWNER_WORKER: "1",
-					...(options.workerRole === "recall" ? { SIGNET_DB_OWNER_RECALL_WORKER: "1" } : {}),
-				},
+				env: workerEnv,
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 			child = owner;
+			let stderr = "";
+			const appendStderr = (chunk: string): void => {
+				stderr = `${stderr}${chunk}`.slice(-8_192);
+			};
+			const diagnostic = (message: string): string =>
+				stderr.trim().length === 0 ? message : `${message}; child stderr: ${stderr.trim()}`;
 			owner.stdout?.setEncoding("utf8");
 			owner.stdout?.on("data", (chunk: string) => handleStdout(owner, chunk));
-			owner.stdin?.on("error", (error: Error) => handleTransportError(owner, error));
-			owner.stderr?.resume();
-			owner.once("error", (error: Error) => handleTransportError(owner, error));
-			owner.once("close", (code, signal) => handleExit(owner, code, signal));
+			owner.stdin?.on("error", (error: Error) => handleTransportError(owner, new Error(diagnostic(error.message))));
+			owner.stderr?.setEncoding("utf8");
+			owner.stderr?.on("data", appendStderr);
+			owner.once("error", (error: Error) => handleTransportError(owner, new Error(diagnostic(error.message))));
+			owner.once("close", (code, signal) => handleExit(owner, code, signal, stderr.trim() || undefined));
 			const timer = setTimeout(() => {
 				if (state !== "ready") {
-					lastError = `DB owner did not become ready within ${timeoutMs}ms`;
+					lastError = diagnostic(`DB owner did not become ready within ${timeoutMs}ms`);
 					state = "failed";
 					owner.kill("SIGKILL");
 					startupReject?.(new DbOwnerError("DB_OWNER_START_TIMEOUT", lastError));
