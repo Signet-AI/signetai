@@ -109,8 +109,8 @@ import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { createOfflineSecretApiCall, createSecretCommandApiCall } from "./lib/secrets.js";
 import {
 	checkForUpdates,
+	getUpdateState,
 	initUpdateSystem,
-	readUpdateConfigOffline,
 	runUpdate,
 	setUpdateConfigOffline,
 } from "../../../platform/daemon/src/update-system.js";
@@ -1200,12 +1200,15 @@ const offlineUpdate = {
 				const result = setUpdateConfigOffline(body);
 				return { success: true, ...result } as T;
 			}
-			const config = readUpdateConfigOffline();
+			const state = getUpdateState();
 			return {
-				autoInstall: config.autoInstall,
-				checkInterval: config.checkInterval,
-				channel: config.channel,
-				updateInProgress: false,
+				autoInstall: state.config.autoInstall,
+				checkInterval: state.config.checkInterval,
+				channel: state.config.channel,
+				updateInProgress: state.checkInProgress || state.installInProgress,
+				pendingRestartVersion: state.pendingRestartVersion ?? undefined,
+				lastAutoUpdateAt: state.lastAutoUpdateAt?.toISOString(),
+				lastAutoUpdateError: state.lastAutoUpdateError ?? undefined,
 			} as T;
 		}
 		return null;
