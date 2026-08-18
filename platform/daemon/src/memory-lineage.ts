@@ -32,6 +32,8 @@ import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { isNoiseSession, isTempProject } from "./session-noise";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
+import { awaitEmbeddingProviderAvailable } from "./embedding-circuit-breaker";
+import { loadMemoryConfig } from "./memory-config";
 
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -1076,14 +1078,20 @@ async function doReindex(agentId?: string): Promise<void> {
 	const fileSet = new Set(files);
 	const baseYielder = yieldEvery(REINDEX_BATCH_SIZE);
 	let itemsSinceYield = 0;
+	let breakerOpen = false;
+	const embedding = loadMemoryConfig(getAgentsDir()).embedding;
+	const providerKey = `${embedding.provider}:${embedding.model}:${embedding.base_url ?? ""}`;
 	const yielder = async (): Promise<void> => {
 		itemsSinceYield += 1;
 		if (itemsSinceYield < REINDEX_BATCH_SIZE) return;
 		itemsSinceYield = 0;
 		if (isSystemPressureHigh()) await awaitPressureClear();
+		const gate = await awaitEmbeddingProviderAvailable(providerKey, async () => true, 10_000);
+		if (!gate.available) breakerOpen = true;
 		await baseYielder();
 	};
 	for (const path of files) {
+		if (breakerOpen) break;
 		let statKey: string;
 		let mtime: number;
 		try {

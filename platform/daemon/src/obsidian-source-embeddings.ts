@@ -278,7 +278,14 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 	const providerKey = `${configured.provider}:${configured.model}:${configured.base_url ?? ""}`;
 	const gate = await awaitEmbeddingProviderAvailable(providerKey, async () => true, SOURCE_EMBEDDING_POLL_MS);
 	if (!gate.available)
-		return { chunks: chunks.length, embedded: 0, skipped: chunks.length, status: EMBEDDINGS_PENDING_PROVIDER_DOWN, providerUnavailable: true, retryAfterMs: gate.retryAfterMs };
+		return {
+			chunks: chunks.length,
+			embedded: 0,
+			skipped: chunks.length,
+			status: EMBEDDINGS_PENDING_PROVIDER_DOWN,
+			providerUnavailable: true,
+			retryAfterMs: gate.retryAfterMs,
+		};
 	const failureState = sourceEmbeddingFailures.get(failureKey);
 	if (failureState && failureState.retryAt > Date.now())
 		return {
@@ -329,6 +336,7 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 		});
 		if (!vector || vector.length === 0) {
 			if (providerUnavailableCause(failureCause)) {
+				recordEmbeddingProviderFailure(providerKey, SOURCE_EMBEDDING_POLL_MS);
 				const attempts = (failureState?.attempts ?? 0) + 1;
 				retryAfterMs = computeRetryBackoffMs(attempts, SOURCE_EMBEDDING_POLL_MS);
 				sourceEmbeddingFailures.set(failureKey, { attempts, retryAt: Date.now() + retryAfterMs });

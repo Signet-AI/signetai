@@ -3,8 +3,13 @@ import { computeRetryBackoffMs } from "./embedding-repair-state";
 export const MAX_CONSECUTIVE_PROVIDER_FAILURES = 6;
 export const MAX_PROVIDER_BACKOFF_MS = 60_000;
 
-interface CircuitState { failures: number; retryAt: number; lastNoticeAt: number }
+interface CircuitState {
+	failures: number;
+	retryAt: number;
+	lastNoticeAt: number;
+}
 const circuits = new Map<string, CircuitState>();
+const inFlightChecks = new Map<string, Promise<EmbeddingProviderGateResult>>();
 
 export interface EmbeddingProviderGateResult {
 	readonly available: boolean;
@@ -22,6 +27,22 @@ export async function awaitEmbeddingProviderAvailable(
 	check: () => Promise<boolean>,
 	pollMs: number,
 ): Promise<EmbeddingProviderGateResult> {
+	const inFlight = inFlightChecks.get(key);
+	if (inFlight) return inFlight;
+	const flight = checkEmbeddingProviderAvailable(key, check, pollMs);
+	inFlightChecks.set(key, flight);
+	try {
+		return await flight;
+	} finally {
+		if (inFlightChecks.get(key) === flight) inFlightChecks.delete(key);
+	}
+}
+
+async function checkEmbeddingProviderAvailable(
+	key: string,
+	check: () => Promise<boolean>,
+	pollMs: number,
+): Promise<EmbeddingProviderGateResult> {
 	const state = stateFor(key);
 	const now = Date.now();
 	if (state.retryAt > now) return { available: false, retryAfterMs: state.retryAt - now };
@@ -29,6 +50,7 @@ export async function awaitEmbeddingProviderAvailable(
 	if (available) {
 		state.failures = 0;
 		state.retryAt = 0;
+		state.lastNoticeAt = 0;
 		return { available: true };
 	}
 	state.failures = Math.min(state.failures + 1, MAX_CONSECUTIVE_PROVIDER_FAILURES);
@@ -47,9 +69,12 @@ export function recordEmbeddingProviderFailure(key: string, pollMs: number): num
 
 export function shouldEmitEmbeddingProviderNotice(key: string, now = Date.now()): boolean {
 	const state = stateFor(key);
-	if (state.lastNoticeAt > now) return false;
-	state.lastNoticeAt = state.retryAt;
+	if (state.retryAt <= now || state.lastNoticeAt > 0) return false;
+	state.lastNoticeAt = now;
 	return true;
 }
 
-export function resetEmbeddingCircuitBreakers(): void { circuits.clear(); }
+export function resetEmbeddingCircuitBreakers(): void {
+	circuits.clear();
+	inFlightChecks.clear();
+}
