@@ -11,7 +11,7 @@
 
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
-import { getFreePageRatio } from "../db-vacuum";
+import { getFreePageRatio, reclaimIncrementalVacuum } from "../db-vacuum";
 import type { DiagnosticsReport, ProviderTracker } from "../diagnostics";
 import { getDiagnostics } from "../diagnostics";
 import { isActiveEmbeddingConfig } from "../embedding-index-state";
@@ -491,7 +491,7 @@ export function startMaintenanceWorker(
 		try {
 			const ratio = await accessor.withReadDbAsync(async (db) => getFreePageRatio(db));
 			if (ratio >= 0.2) {
-				await accessor.incrementalVacuumAsync?.();
+				await reclaimIncrementalVacuum(accessor, { owner: deps.ownerMaintenance?.owner });
 			}
 		} catch {
 			// Non-fatal — vacuum should never interrupt the maintenance cycle
