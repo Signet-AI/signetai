@@ -447,11 +447,13 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 						current.dispatched = true;
 					},
 					(error: unknown) => {
-						if (child === owner && !closed) {
-							const transportError = error instanceof Error ? error : new Error(String(error));
-							handleTransportError(owner, transportError);
-						}
-						if (!closed && pending.get(jobId)?.settled !== true) dispatch(jobId);
+						if (child !== owner || closed) return;
+						const transportError = error instanceof Error ? error : new Error(String(error));
+						// Retire synchronously before considering a retry. This both prevents
+						// writes to the broken stdin and lets deferred child diagnostics run.
+						handleTransportError(owner, transportError);
+						if (child === owner || pending.get(jobId)?.settled === true) return;
+						dispatch(jobId);
 					},
 				);
 			},

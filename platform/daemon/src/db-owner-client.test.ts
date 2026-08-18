@@ -317,6 +317,24 @@ describe("DB owner client", () => {
 		expect(rows).toEqual([{ id: "m1" }]);
 	});
 
+	test("retires a broken stdin without starving the queue in a retry loop", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const workerPath = join(database.directory, "broken-stdin-worker.js");
+		await Bun.write(
+			workerPath,
+			'process.stdout.write(JSON.stringify({ type: "ready", pid: process.pid }) + "\\n"); setTimeout(() => process.stdin.destroy(), 25);',
+		);
+		client = createDbOwnerClient({ dbPath: database.path, workerPath });
+		await client.start();
+		const handle = client.submit(
+			{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
+			{ operation: "transport.retry-guard", lane: "read", deadlineMs: 1_000 },
+		);
+		await expect(handle.result).rejects.toBeInstanceOf(DbOwnerDiedError);
+		expect(client.health().state).toBe("dead");
+	});
+
 	test("detects an owner crash and recovers with a fresh owner", async () => {
 		const database = makeDb();
 		directory = database.directory;
