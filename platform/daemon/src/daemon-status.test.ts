@@ -55,50 +55,71 @@ describe("daemon status contract", () => {
 		provider.configureLlmConcurrency(2);
 	});
 
-	it("keeps /api/status responsive while the DB owner is blocked", async () => {
+	it("keeps /health/live responsive while the DB owner is blocked (status genuinely contends, not dropped)", async () => {
 		const { getDbAccessor } = await import("./db-accessor");
 		const accessor = getDbAccessor();
 		const originalWithReadDbAsync = accessor.withReadDbAsync;
-		let ownerStarted = false;
-		const releaseOwner = (): void => {};
+		let releaseOwner: (() => void) | undefined;
+		const ownerStarted$ = new Promise<void>((resolve) => {
+			releaseOwner = resolve;
+		});
+		let ownerBlocked = false;
+		// A REAL gate: every read through the owner awaits this promise, so the
+		// "DB owner blocked" condition is actually true while we measure.
 		accessor.withReadDbAsync = async (fn, options) => {
-			ownerStarted = true;
+			ownerBlocked = true;
+			await ownerStarted$;
 			return originalWithReadDbAsync(fn, options);
 		};
 
 		try {
-			const startedAt = performance.now();
+			// Fire /api/status FIRST. It awaits readEmbeddingUsageSummary ->
+			// withReadDbAsync, so it must be held pending behind the gate.
+			const statusStartedAt = performance.now();
 			let statusLatencyMs = -1;
-			let healthLatencyMs = -1;
-			const responsePromise = Promise.resolve(app.request("http://localhost/api/status")).then((response: Response) => {
-				statusLatencyMs = performance.now() - startedAt;
-				expect(response.status).toBe(200);
-				return response;
-			});
+			const statusPromise = Promise.resolve(app.request("http://localhost/api/status")).then(
+				(response: Response) => {
+					statusLatencyMs = performance.now() - statusStartedAt;
+					expect(response.status).toBe(200);
+					return response;
+				},
+			);
+
+			// Give /api/status a beat to reach the blocked owner.
+			await new Promise<void>((resolve) => setTimeout(resolve, 50));
+			expect(ownerBlocked).toBe(true);
+			// Status must NOT have resolved while the owner is blocked — it is
+			// genuinely contending (not silently dropped). Prove it is still pending.
+			const pending = await Promise.race([
+				statusPromise.then(() => "resolved"),
+				new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 300)),
+			]);
+			expect(pending).toBe("pending");
+
+			// /health/live touches no DB accessor and MUST respond promptly while
+			// the DB owner is still blocked.
 			const healthStartedAt = performance.now();
-			const healthPromise = Promise.resolve(app.request("http://localhost/health/live")).then((response: Response) => {
-				healthLatencyMs = performance.now() - healthStartedAt;
-				expect(response.status).toBe(200);
-				return response;
-			});
-			while (!ownerStarted && performance.now() - startedAt < 250) {
-				await new Promise<void>((resolve) => setTimeout(resolve, 1));
-			}
-			expect(ownerStarted).toBe(true);
-			await Promise.all([responsePromise, healthPromise]);
+			const healthResponse = await app.request("http://localhost/health/live");
+			const healthLatencyMs = performance.now() - healthStartedAt;
+			expect(healthResponse.status).toBe(200);
+			expect(healthLatencyMs).toBeLessThan(1_000);
+
+			// Release the owner; /api/status must now complete promptly.
+			releaseOwner?.();
+			const res = await statusPromise;
+			expect(res.status).toBe(200);
 			expect(statusLatencyMs).toBeGreaterThanOrEqual(0);
 			expect(statusLatencyMs).toBeLessThan(1_000);
-			expect(healthLatencyMs).toBeGreaterThanOrEqual(0);
-			expect(healthLatencyMs).toBeLessThan(1_000);
+
 			console.log(
 				JSON.stringify({
-					ownerBlocked: true,
+					ownerBlockedDuringHealth: true,
 					healthLiveLatencyMs: healthLatencyMs,
-					statusLatencyMs,
+					statusLatencyAfterReleaseMs: statusLatencyMs,
 				}),
 			);
 		} finally {
-			releaseOwner();
+			releaseOwner?.();
 			accessor.withReadDbAsync = originalWithReadDbAsync;
 		}
 	});
