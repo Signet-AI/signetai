@@ -374,6 +374,11 @@ export function runDbOwnerWorker(): void {
 		)
 			return executeSourceGraph(job.request);
 		if (job.request.kind === "vacuum_conversion") {
+			const pauseMs = Number.parseInt(process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS ?? "0", 10);
+			if (Number.isFinite(pauseMs) && pauseMs > 0) {
+				const wait = new Int32Array(new SharedArrayBuffer(4));
+				Atomics.wait(wait, 0, 0, Math.min(pauseMs, 60_000));
+			}
 			const { convertToIncrementalVacuum } = await import("./db-vacuum");
 			return {
 				converted: convertToIncrementalVacuum(db as unknown as import("./db-vacuum").PragmaDb, {

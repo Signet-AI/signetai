@@ -192,7 +192,7 @@ function readNumber(record: Readonly<Record<string, unknown>>, key: string): num
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function readBoolean(record: Readonly<Record<string, unknown>>, key: string): boolean | undefined {
+function _readBoolean(record: Readonly<Record<string, unknown>>, key: string): boolean | undefined {
 	const value = record[key];
 	if (typeof value === "boolean") return value;
 	if (value === "true") return true;
@@ -559,7 +559,6 @@ export function registerPipelineRoutes(app: Hono): void {
 			return c.json({ error: "pluginVersion (string) is required" }, 400);
 		}
 		const prev = openClawHeartbeat?.data;
-		const { logger } = await import("../logger.js");
 		const newData: import("./state.js").OpenClawHeartbeatData = {
 			pluginVersion: b.pluginVersion.slice(0, 128),
 			hooksRegistered: Array.isArray(b.hooksRegistered)

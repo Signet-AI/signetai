@@ -306,6 +306,48 @@ describe("deferred vacuum conversion (#1493)", () => {
 		}
 	});
 
+	it("recovers safely when the real VACUUM owner is SIGKILLed", async () => {
+		const db = legacyDbPath();
+		dir = db.dir;
+		initDbAccessor(db.path);
+		const owner = createDbOwnerClient({ dbPath: db.path });
+		const previousPause = process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS;
+		process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = "5000";
+		await owner.start();
+		try {
+			const worker = startVacuumConversionWorker(getDbAccessor(), { owner, startImmediately: false });
+			const running = worker.run();
+			const deadline = Date.now() + 2000;
+			while (owner.health().activeJobId === null && Date.now() < deadline) await Bun.sleep(5);
+			const pid = owner.health().pid;
+			expect(owner.health().activeJobId).not.toBeNull();
+			expect(pid).not.toBeNull();
+			process.kill(pid as number, "SIGKILL");
+			await Promise.race([running.catch(() => undefined), Bun.sleep(100)]);
+		} finally {
+			if (previousPause === undefined) Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS");
+			else process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = previousPause;
+			await Promise.race([owner.close().catch(() => undefined), Bun.sleep(250)]);
+		}
+
+		const integrity = new Database(db.path, { readonly: true });
+		expect((integrity.prepare("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check).toBe(
+			"ok",
+		);
+		integrity.close();
+		closeDbAccessor();
+		initDbAccessor(db.path);
+		expect(getVacuumConversionStatus(getDbAccessor()).state).toBe("pending");
+		const nextOwner = createDbOwnerClient({ dbPath: db.path });
+		await nextOwner.start();
+		try {
+			const resumed = startVacuumConversionWorker(getDbAccessor(), { owner: nextOwner, startImmediately: false });
+			expect(await resumed.run()).toMatchObject({ state: "completed", attempts: 2 });
+		} finally {
+			await nextOwner.close();
+		}
+	});
+
 	it("a killed or failed conversion remains retryable without blocking initialization", async () => {
 		const db = legacyDbPath();
 		dir = db.dir;

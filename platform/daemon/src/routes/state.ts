@@ -9,7 +9,7 @@ import {
 	resolveDefaultBasePath,
 	resolveNetworkBinding,
 } from "@signet/core";
-import { type AnalyticsCollector, createAnalyticsCollector } from "../analytics";
+import { createAnalyticsCollector } from "../analytics";
 import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig } from "../auth";
 import { getDbAccessor } from "../db-accessor";
 import { type DiagnosticsOptions, type DiagnosticsReport, createProviderTracker, getDiagnostics } from "../diagnostics";

@@ -22,7 +22,6 @@ import {
 	authConfig,
 	getCurrentAgentsDir,
 	getExtractionWorkloadState,
-	providerRuntimeResolution,
 	shuttingDown,
 } from "./state.js";
 import { checkEmbeddingProvider } from "./utils";

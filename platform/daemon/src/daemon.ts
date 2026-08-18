@@ -65,7 +65,7 @@ import {
 	registerDbOwnerMaintenance,
 } from "./db-owner-maintenance";
 import { createDeferredRuntimeGate, createDeferredRuntimeScheduler } from "./deferred-runtime-gate";
-import { getQueueDiagnosticsSnapshot, getQueuePressureSnapshot } from "./diagnostics-queue";
+import { getQueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
 import { resolveActiveEmbeddingConfig } from "./embedding-index-state";
@@ -143,9 +143,7 @@ import {
 	invalidateDiagnosticsCache,
 	providerRuntimeResolution,
 	providerTracker,
-	readEnvTrimmed,
 	reloadAuthState,
-	repairLimiter,
 	setCheckpointPruneTimer,
 	setEmbeddingTrackerHandle,
 	setHeartbeatTimer,
@@ -1419,8 +1417,6 @@ function restartAfterEmbeddingPromotion(telemetry?: TelemetryCollector): void {
 export async function stopDaemonRuntimeForTests(): Promise<void> {
 	await stopPipelineRuntime();
 }
-
-type RouterHandle = ReturnType<typeof getOrCreateInferenceRouter>;
 
 function executorForTargetRef(
 	statusValue: InferenceStatusSummary,

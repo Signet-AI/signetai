@@ -18,6 +18,15 @@ async function waitForMarker(path: string): Promise<void> {
 	expect(existsSync(path)).toBe(true);
 }
 
+function _streamFromString(value: string): ReadableStream<Uint8Array> {
+	return new ReadableStream({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode(value));
+			controller.close();
+		},
+	});
+}
+
 describe("daemon status contract", () => {
 	beforeAll(async () => {
 		prev = process.env.SIGNET_PATH;
@@ -171,6 +180,38 @@ describe("daemon status contract", () => {
 		} finally {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: regression probes retired sync path
 			accessor.withReadDb = originalWithReadDb;
+		}
+	});
+
+	it("keeps the real HTTP listener responsive during an active DB-owner VACUUM window", async () => {
+		const { createDbOwnerClient } = await import("./db-owner-client");
+		const owner = createDbOwnerClient({ dbPath: join(dir, "memory", "memories.db") });
+		const previousPause = process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS;
+		process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = "1000";
+		const server = Bun.serve({ port: 0, fetch: app.fetch });
+		try {
+			await owner.start();
+			const job = owner.submit(
+				{ kind: "vacuum_conversion" },
+				{ operation: "db.vacuum_conversion", lane: "maintenance", deadlineMs: 5000, estimatedWorkUnits: 1 },
+			);
+			const deadline = Date.now() + 2000;
+			while (owner.health().activeJobId === null && Date.now() < deadline) await Bun.sleep(5);
+			expect(owner.health().activeJobId).not.toBeNull();
+			const started = performance.now();
+			const [live, status] = await Promise.all([
+				fetch(`http://127.0.0.1:${server.port}/health/live`),
+				fetch(`http://127.0.0.1:${server.port}/api/status`),
+			]);
+			expect(performance.now() - started).toBeLessThan(250);
+			expect(live.status).toBe(200);
+			expect(status.status).toBe(200);
+			await owner.awaitResult(job, 5000).catch(() => undefined);
+		} finally {
+			server.stop(true);
+			await owner.close().catch(() => undefined);
+			if (previousPause === undefined) Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS");
+			else process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = previousPause;
 		}
 	});
 
