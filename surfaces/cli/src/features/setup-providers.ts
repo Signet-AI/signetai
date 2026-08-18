@@ -7,6 +7,9 @@ import ora from "ora";
 import { getEmbeddingDimensions, readErr } from "./setup-shared.js";
 
 const COMMAND_DETECTION_TIMEOUT_MS = 1000;
+const MACOS_COMMAND_PATHS: Readonly<Record<string, readonly string[]>> = {
+	brew: ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"],
+};
 
 export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"; model: string; dimensions: number }> {
 	console.log();
@@ -142,17 +145,36 @@ export function resolveCommandPath(command: string): string | undefined {
 			timeout: COMMAND_DETECTION_TIMEOUT_MS,
 			windowsHide: true,
 		});
-		if (result.status !== 0) return undefined;
-		return result.stdout
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.find(Boolean);
+		if (result.status === 0) {
+			const resolved = result.stdout
+				.split(/\r?\n/)
+				.map((line) => line.trim())
+				.find(Boolean);
+			if (resolved && probeCommand(resolved)) return resolved;
+		}
+
+		if (platform() !== "darwin") return undefined;
+		return resolveMacOSCommandPath(command);
 	} catch {
-		return undefined;
+		return platform() === "darwin" ? resolveMacOSCommandPath(command) : undefined;
 	}
 }
 
+export function resolveMacOSCommandPath(
+	command: string,
+	probe: (path: string) => boolean = probeCommand,
+): string | undefined {
+	for (const path of MACOS_COMMAND_PATHS[command] ?? []) {
+		if (probe(path)) return path;
+	}
+	return undefined;
+}
+
 export function hasCommand(command: string): boolean {
+	return probeCommand(command);
+}
+
+function probeCommand(command: string): boolean {
 	try {
 		const result = spawnSync(command, ["--version"], {
 			stdio: "ignore",
@@ -220,14 +242,15 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 	}
 
 	if (platform() === "darwin") {
-		if (!hasCommand("brew")) {
+		const brewPath = resolveCommandPath("brew");
+		if (!brewPath) {
 			console.log(chalk.yellow("  Homebrew not found, cannot auto-install."));
 			printOllamaInstallInstructions();
 			return false;
 		}
 
 		const spinner = ora("Installing Ollama with Homebrew...").start();
-		const result = await runCommandWithOutput("brew", ["install", "ollama"], {
+		const result = await runCommandWithOutput(brewPath, ["install", "ollama"], {
 			env: { ...process.env },
 			timeout: 300000,
 		});
