@@ -6,6 +6,9 @@ import type { EmbeddingConfig } from "./memory-config";
 export type EmbeddingIndexBuildState = "ready" | "building" | "failed";
 export type EmbeddingProjectionSlot = "active" | "staging";
 
+export const MAX_CONSECUTIVE_PROVIDER_FAILURES = 6;
+export const MAX_PROVIDER_BACKOFF_MS = 60_000;
+
 export interface PersistedEmbeddingProfile {
 	readonly fingerprint: string;
 	readonly provider: EmbeddingConfig["provider"];
@@ -31,6 +34,35 @@ export interface EmbeddingIndexStateRow {
 	readonly staging_profile_json: string | null;
 	readonly state: EmbeddingIndexBuildState;
 	readonly last_error: string | null;
+}
+
+type PersistedFailure = {
+	readonly message: string;
+	readonly cause?: "provider-unavailable";
+	readonly nextAttemptAt?: string;
+};
+
+function parseFailure(value: string | null): PersistedFailure | null {
+	if (!value) return null;
+	try {
+		const parsed = JSON.parse(value) as Partial<PersistedFailure>;
+		return typeof parsed.message === "string"
+			? {
+					message: parsed.message,
+					...(parsed.cause === "provider-unavailable" ? { cause: parsed.cause } : {}),
+					...(typeof parsed.nextAttemptAt === "string" ? { nextAttemptAt: parsed.nextAttemptAt } : {}),
+				}
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+export function persistEmbeddingIndexFailure(
+	error: string,
+	options?: { cause?: "provider-unavailable"; nextAttemptAt?: string },
+): string {
+	return JSON.stringify({ message: error, ...options });
 }
 
 function profileForStorage(cfg: EmbeddingConfig): PersistedEmbeddingProfile {
@@ -183,6 +215,15 @@ export function beginEmbeddingIndexBuild(
 		projectionSlot: current.active.projectionSlot === "staging" ? ("active" as const) : ("staging" as const),
 	};
 	if (current.state === "building" && current.staging?.fingerprint === staging.fingerprint) return current;
+	const failure = parseFailure(current.lastError);
+	if (
+		current.state === "failed" &&
+		current.staging?.fingerprint === staging.fingerprint &&
+		failure?.cause === "provider-unavailable" &&
+		failure.nextAttemptAt !== undefined &&
+		now < failure.nextAttemptAt
+	)
+		return current;
 	if (current.active.fingerprint === staging.fingerprint) {
 		// The configured profile IS the active generation: nothing to build.
 		// If a build of a different generation is in flight (the live config
@@ -209,9 +250,14 @@ export function beginEmbeddingIndexBuild(
 	return { active: current.active, staging, state: "building", lastError: null };
 }
 
-export function failEmbeddingIndexBuild(db: WriteDb, error: string, now = new Date().toISOString()): void {
+export function failEmbeddingIndexBuild(
+	db: WriteDb,
+	error: string,
+	now = new Date().toISOString(),
+	options?: { cause?: "provider-unavailable"; nextAttemptAt?: string },
+): void {
 	db.prepare("UPDATE embedding_index_state SET state = 'failed', last_error = ?, updated_at = ? WHERE id = 1").run(
-		error,
+		persistEmbeddingIndexFailure(error, options),
 		now,
 	);
 }

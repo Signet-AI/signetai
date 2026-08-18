@@ -68,6 +68,43 @@ describe("embedding index state", () => {
 		expect(ensureEmbeddingIndexState(db, config).active).toEqual(active.active);
 	});
 
+	it("keeps provider-unavailable failure durable across restart until its retry time", () => {
+		const raw = new Database(":memory:");
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(
+			"CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER)",
+		);
+		const db = raw as unknown as WriteDb;
+		const staged = beginEmbeddingIndexBuild(db, {
+			...config,
+			provider: "ollama",
+			model: "qwen3-embedding:0.6b",
+			dimensions: 1024,
+		});
+		db.prepare(
+			"INSERT INTO embeddings_staging (id, content_hash, vector, dimensions) VALUES ('s1', 'h1', X'00', 1024)",
+		).run();
+		failEmbeddingIndexBuild(db, "provider unavailable", "2026-01-01T00:00:00.000Z", {
+			cause: "provider-unavailable",
+			nextAttemptAt: "2026-01-02T00:00:00.000Z",
+		});
+		const resumed = beginEmbeddingIndexBuild(
+			db,
+			{ ...config, provider: "ollama", model: "qwen3-embedding:0.6b", dimensions: 1024 },
+			"2026-01-01T12:00:00.000Z",
+		);
+		expect(resumed.state).toBe("failed");
+		expect(db.prepare("SELECT COUNT(*) AS n FROM embeddings_staging").get()).toEqual({ n: 1 });
+		expect(
+			beginEmbeddingIndexBuild(
+				db,
+				{ ...config, provider: "ollama", model: "qwen3-embedding:0.6b", dimensions: 1024 },
+				"2026-01-02T00:00:00.000Z",
+			).state,
+		).toBe("building");
+		expect(staged.staging?.fingerprint).toBe(resumed.staging?.fingerprint);
+	});
+
 	it("stages unknown model changes with identity formatting instead of silently skipping them", () => {
 		const raw = new Database(":memory:");
 		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);

@@ -10,7 +10,13 @@ import {
 	type PersistedEmbeddingProfile,
 	readEmbeddingIndexState,
 } from "./embedding-index-state";
-import { beginEmbeddingIndexBuild, failEmbeddingIndexBuild } from "./embedding-index-state";
+import {
+	beginEmbeddingIndexBuild,
+	failEmbeddingIndexBuild,
+	MAX_CONSECUTIVE_PROVIDER_FAILURES,
+	MAX_PROVIDER_BACKOFF_MS,
+	persistEmbeddingIndexFailure,
+} from "./embedding-index-state";
 import { embeddingProfileFingerprint, recommendedEmbeddingProfileId, type EmbeddingRole } from "./embedding-profile";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
@@ -21,13 +27,6 @@ const ACTIVE_VECTOR_TABLE = "vec_embeddings";
 const VECTOR_REBUILD_BATCH_SIZE = 50;
 const VECTOR_REBUILD_RETRY_DELAY_MS = 100;
 const MAX_VECTOR_REBUILD_RETRIES_WITHOUT_CANCELLATION = 3;
-
-// #1160: after this many consecutive provider-unavailable checks the build is
-// aborted (state='failed') instead of retrying forever; the daemon restarts
-// the build on the next config change / daemon restart.
-const MAX_CONSECUTIVE_PROVIDER_FAILURES = 6;
-// Backoff grows pollMs * 2^n between failed checks, capped at this delay.
-const MAX_PROVIDER_BACKOFF_MS = 60_000;
 
 interface ActiveEmbeddingRow {
 	readonly content_hash: string;
@@ -1212,14 +1211,26 @@ export async function startEmbeddingIndexMigration(input: {
 				if (consecutiveFailures >= MAX_CONSECUTIVE_PROVIDER_FAILURES) {
 					const message = `Embedding provider unavailable after ${consecutiveFailures} consecutive checks; aborting the build`;
 					logger.error("embedding", message);
+					const nextAttemptAt = new Date(
+						Date.now() + Math.min(input.pollMs * 2 ** Math.min(consecutiveFailures, 6), MAX_PROVIDER_BACKOFF_MS),
+					).toISOString();
 					if (input.owner)
 						await ownerRun(
 							input.owner,
 							"UPDATE embedding_index_state SET state = 'failed', last_error = ?, updated_at = ? WHERE id = 1",
-							[message, new Date().toISOString()],
+							[
+								persistEmbeddingIndexFailure(message, { cause: "provider-unavailable", nextAttemptAt }),
+								new Date().toISOString(),
+							],
 							ownerMaintenanceOptions("embedding-index.fail"),
 						);
-					else await withQueuedWrite(input.accessor, (db) => failEmbeddingIndexBuild(db, message));
+					else
+						await withQueuedWrite(input.accessor, (db) =>
+							failEmbeddingIndexBuild(db, message, new Date().toISOString(), {
+								cause: "provider-unavailable",
+								nextAttemptAt,
+							}),
+						);
 					running = false;
 					return;
 				}
