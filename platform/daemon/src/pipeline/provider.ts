@@ -723,6 +723,7 @@ export interface AcpxProviderConfig {
 	readonly onEvent?: (event: AcpxJsonEvent) => void;
 	readonly timeoutMs?: number;
 	readonly extraArgs?: readonly string[];
+	readonly environment?: Readonly<NodeJS.ProcessEnv>;
 }
 
 const DEFAULT_ACPX_VERSION = "0.12.0";
@@ -797,7 +798,7 @@ function mergeSterileOpenCodeConfig(raw: string | undefined, model: string | und
 }
 
 function acpxEnv(config: AcpxProviderConfig, runId?: string): NodeJS.ProcessEnv {
-	const env: NodeJS.ProcessEnv = { ...process.env };
+	const env: NodeJS.ProcessEnv = { ...process.env, ...config.environment };
 	if (config.hooks === "disabled") {
 		env.SIGNET_NO_HOOKS = "1";
 		env.SIGNET_ENABLED = "false";

@@ -23,6 +23,8 @@ export interface CreateRoutingProviderOptions {
 	readonly acpxHooks?: AcpxHooksMode;
 	/** Per-run ACPX arguments (for example, a scoped ephemeral MCP config). */
 	readonly acpxExtraArgs?: readonly string[];
+	/** Per-run environment used to scope an ACP agent's tool policy. */
+	readonly acpxEnvironment?: Readonly<NodeJS.ProcessEnv>;
 	readonly claudeCode?: PipelineClaudeCodeConfig;
 	resolveCredential(account: RoutingAccountConfig | undefined): Promise<ResolvedInferenceCredential | undefined>;
 }
@@ -76,6 +78,7 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 				...target.acpx,
 				...(opts.acpxHooks ? { hooks: opts.acpxHooks } : {}),
 				extraArgs: [...(target.acpx.extraArgs ?? []), ...(opts.acpxExtraArgs ?? [])],
+				...(opts.acpxEnvironment ? { environment: opts.acpxEnvironment } : {}),
 				model: model.model,
 			}),
 			telemetryAttribution: routingTelemetryAttribution(target, model),

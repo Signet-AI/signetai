@@ -834,12 +834,13 @@ export class InferenceRouter {
 		modelId: string,
 		acpxHooks?: AcpxHooksMode,
 		acpxExtraArgs?: readonly string[],
+		acpxEnvironment?: Readonly<NodeJS.ProcessEnv>,
 	): Promise<StreamCapableLlmProvider> {
 		const cacheKey = `${loaded.signature}:${targetId}/${modelId}:${acpxHooks ?? "configured-hooks"}`;
 		const target = loaded.config.targets[targetId];
 		const account = target?.account ? loaded.config.accounts[target.account] : undefined;
 		const oauthBacked = isOAuthBackedAccount(account);
-		if (!oauthBacked && !acpxExtraArgs) {
+		if (!oauthBacked && !acpxExtraArgs && !acpxEnvironment) {
 			const cached = this.providerCache.get(cacheKey);
 			if (cached) return cached;
 		}
@@ -851,12 +852,13 @@ export class InferenceRouter {
 				modelId,
 				acpxHooks,
 				acpxExtraArgs,
+				acpxEnvironment,
 				claudeCode: loadMemoryConfig(this.agentsDir).pipelineV2.claudeCode,
 				resolveCredential: (candidateAccount) => this.resolveCredential(candidateAccount),
 			});
 		})();
 
-		if (!oauthBacked && !acpxExtraArgs) this.providerCache.set(cacheKey, build);
+		if (!oauthBacked && !acpxExtraArgs && !acpxEnvironment) this.providerCache.set(cacheKey, build);
 		return build;
 	}
 
@@ -1084,14 +1086,15 @@ export class InferenceRouter {
 						if (!opts?.acpxMcp) {
 							throw new Error("ACPX agent target requires the scoped Signet MCP binding");
 						}
-						mcpConfig = createDreamingAcpxMcpConfig(opts.acpxMcp);
+						mcpConfig = createDreamingAcpxMcpConfig({ ...opts.acpxMcp, acpxAgent: target.acpx?.agent });
 					}
 					const provider = await this.createProvider(
 						loaded.value,
 						parsed.value.targetId,
 						parsed.value.modelId,
 						undefined,
-						mcpConfig ? ["--mcp-config", mcpConfig.path] : undefined,
+						mcpConfig?.args,
+						mcpConfig?.environment,
 					);
 					if (!isPiAgentSessionProvider(provider)) {
 						const generated = await provider.generate(prompt, {

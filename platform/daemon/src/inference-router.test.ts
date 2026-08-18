@@ -17,6 +17,7 @@ import {
 	withLlmConcurrency,
 } from "./pipeline/provider";
 import { invalidateSecretsCache } from "./secrets";
+import { DREAMING_CAPABILITY_IDS } from "./pipeline/dreaming-capability-ids";
 
 const originalFetch = globalThis.fetch;
 const originalOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
@@ -44,17 +45,23 @@ function writeDreamingAcpxAgentFixture(
 	readonly argsPath: string;
 	readonly mcpConfigPathPath: string;
 	readonly mcpConfigCopyPath: string;
+	readonly codexConfigPath: string;
+	readonly dreamingEnvPath: string;
 } {
 	mkdirSync(join(root, "memory"), { recursive: true });
 	const bin = join(root, "fake-dreaming-acpx.sh");
 	const argsPath = join(root, "acpx-args.txt");
 	const mcpConfigPathPath = join(root, "acpx-mcp-path.txt");
 	const mcpConfigCopyPath = join(root, "acpx-mcp.json");
+	const codexConfigPath = join(root, "codex-config.json");
+	const dreamingEnvPath = join(root, "dreaming-env.txt");
 	const holdCommand = holdPath ? `while [ ! -f ${JSON.stringify(holdPath)} ]; do sleep 0.01; done` : ":";
 	writeFileSync(
 		bin,
 		`#!/usr/bin/env bash
 printf '%s\\n' "$@" > ${JSON.stringify(argsPath)}
+printf '%s' "\${CODEX_CONFIG:-}" > ${JSON.stringify(codexConfigPath)}
+printf '%s|%s|%s|%s' "\${SIGNET_DREAMING_AGENT_ID:-}" "\${SIGNET_DREAMING_PASS_ID:-}" "\${SIGNET_DAEMON_URL:-}" "\${SIGNET_TOKEN:-}" > ${JSON.stringify(dreamingEnvPath)}
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--mcp-config" ]; then
     printf '%s' "$2" > ${JSON.stringify(mcpConfigPathPath)}
@@ -95,7 +102,7 @@ printf 'dreaming agent completed\\n'
       policy: dreaming
 `,
 	);
-	return { argsPath, mcpConfigPathPath, mcpConfigCopyPath };
+	return { argsPath, mcpConfigPathPath, mcpConfigCopyPath, codexConfigPath, dreamingEnvPath };
 }
 
 function writeMinimalRoutingConfig(root: string, policy?: string): void {
@@ -318,26 +325,26 @@ describe("InferenceRouter legacy API credentials", () => {
 			});
 
 			const args = readFileSync(fixture.argsPath, "utf8").trim().split("\n");
-			expect(args).toContain("--mcp-config");
-			const mcpConfigPath = readFileSync(fixture.mcpConfigPathPath, "utf8");
-			expect(args[args.indexOf("--mcp-config") + 1]).toBe(mcpConfigPath);
-			const mcpConfig = JSON.parse(readFileSync(fixture.mcpConfigCopyPath, "utf8")) as {
-				mcpServers: Array<{
-					name: string;
-					env: Array<{ name: string; value: string }>;
-				}>;
+			expect(args).not.toContain("--mcp-config");
+			expect(args).toContain("--deny-all");
+			expect(args).not.toContain("--approve-all");
+			const codex = JSON.parse(readFileSync(fixture.codexConfigPath, "utf8")) as {
+				mcp_servers: Record<string, Record<string, unknown>>;
 			};
-			expect(mcpConfig.mcpServers).toHaveLength(1);
-			expect(mcpConfig.mcpServers[0]).toMatchObject({ name: "signet_dreaming" });
-			expect(mcpConfig.mcpServers[0]?.env).toEqual(
-				expect.arrayContaining([
-					{ name: "SIGNET_DREAMING_AGENT_ID", value: "agent-a" },
-					{ name: "SIGNET_DREAMING_PASS_ID", value: "pass-a" },
-					{ name: "SIGNET_DAEMON_URL", value: "http://127.0.0.1:3850" },
-					{ name: "SIGNET_TOKEN", value: "scoped-agent-token" },
-				]),
+			expect(codex.mcp_servers.signet_dreaming).toMatchObject({
+				enabled_tools: [...DREAMING_CAPABILITY_IDS],
+				default_tools_approval_mode: "approve",
+				required: true,
+			});
+			expect(codex.mcp_servers.signet_dreaming?.env_vars).toEqual([
+				"SIGNET_DREAMING_AGENT_ID",
+				"SIGNET_DREAMING_PASS_ID",
+				"SIGNET_DAEMON_URL",
+				"SIGNET_TOKEN",
+			]);
+			expect(readFileSync(fixture.dreamingEnvPath, "utf8")).toBe(
+				"agent-a|pass-a|http://127.0.0.1:3850|scoped-agent-token",
 			);
-			expect(existsSync(mcpConfigPath)).toBe(false);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
