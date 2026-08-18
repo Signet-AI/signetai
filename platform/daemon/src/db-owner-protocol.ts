@@ -123,6 +123,7 @@ export interface DbOwnerSourceArtifactUpsert {
 }
 
 export type DbOwnerRequest =
+	| { readonly kind: "initialize"; readonly agentsDir?: string }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
 	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
 	| {

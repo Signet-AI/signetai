@@ -53,7 +53,7 @@ import {
 	closeDbAccessor,
 	getDbAccessor,
 	getVectorRuntimeStatus,
-	initDbAccessorAsync,
+	initDbAccessorLite,
 	type WriteDb,
 } from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum";
@@ -2045,8 +2045,17 @@ async function main() {
 		});
 	}
 
-	await initDbAccessorAsync(MEMORY_DB, { agentsDir: AGENTS_DIR });
+	// Expensive schema/FTS/vector initialization must execute in the killable
+	// owner process, not merely behind an async function on this isolate.
 	dbOwnerClient = createDbOwnerClient({ dbPath: MEMORY_DB });
+	await dbOwnerClient.start();
+	const initialization = dbOwnerClient.submit(
+		{ kind: "initialize", agentsDir: AGENTS_DIR },
+		{ operation: "db.initialize", lane: "maintenance", deadlineMs: 60_000, estimatedWorkUnits: 10_000 },
+	);
+	await dbOwnerClient.awaitResult(initialization, 60_000);
+	const { extensionPath: initExtensionPath } = getVectorRuntimeStatus();
+	initDbAccessorLite(MEMORY_DB, initExtensionPath ?? "");
 	setSessionClaimStore(createSessionClaimStore(getDbAccessor()));
 	startSessionCleanup();
 	// Formal TTL lifecycle (#902): when stale-session cleanup evicts a claim
@@ -2067,7 +2076,6 @@ async function main() {
 	startEventLoopMonitor();
 	startFdPollMonitor();
 
-	dbOwnerClient = createDbOwnerClient({ dbPath: MEMORY_DB });
 	dbOwnerMaintenanceHandle = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient });
 	registerDbOwnerMaintenance(dbOwnerMaintenanceHandle);
 	// Clean accumulated crash-loop damage through the owner. This remains a

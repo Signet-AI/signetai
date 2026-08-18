@@ -345,7 +345,14 @@ export function runDbOwnerWorker(): void {
 		);
 	}
 
+	async function executeInitialization(agentsDir: string | undefined): Promise<unknown> {
+		const { initDbAccessorAsync } = await import("./db-accessor");
+		await initDbAccessorAsync(ownerDbPath, { agentsDir });
+		return { initialized: true };
+	}
+
 	async function execute(job: DbOwnerJob): Promise<unknown> {
+		if (job.request.kind === "initialize") return await executeInitialization(job.request.agentsDir);
 		if (job.request.kind === "query") return executeStatement(job.request.statement);
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements);
 		if (job.request.kind === "batch") return executeBatch(job.request.statements, job.request.requireChanges === true);
