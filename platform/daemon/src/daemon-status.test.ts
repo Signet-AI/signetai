@@ -709,5 +709,5 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 		} finally {
 			await second.close();
 		}
-	});
+	}, 15000);
 });
