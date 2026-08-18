@@ -86,10 +86,23 @@ describe("daemon status contract", () => {
 				await new Promise<void>((resolve) => setTimeout(resolve, 1));
 			}
 			expect(ownerStarted).toBe(true);
+			const healthStartedAt = performance.now();
+			const healthResponse = await app.request("http://localhost/health/live");
+			const healthLatencyMs = performance.now() - healthStartedAt;
+			expect(healthResponse.status).toBe(200);
+			expect(healthLatencyMs).toBeLessThan(1_000);
 			releaseOwner();
 			const res = await responsePromise;
+			const statusLatencyMs = performance.now() - startedAt;
 			expect(res.status).toBe(200);
-			expect(performance.now() - startedAt).toBeLessThan(1_000);
+			expect(statusLatencyMs).toBeLessThan(1_000);
+			console.log(
+				JSON.stringify({
+					ownerBlocked: true,
+					healthLiveLatencyMs: healthLatencyMs,
+					statusLatencyMs,
+				}),
+			);
 		} finally {
 			releaseOwner();
 			accessor.withReadDbAsync = originalWithReadDbAsync;
