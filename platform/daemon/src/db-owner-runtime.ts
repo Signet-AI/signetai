@@ -153,6 +153,24 @@ export async function dbOwnerVacuumConversion(
 	);
 }
 
+export async function dbOwnerIncrementalVacuum(
+	owner: DbOwnerClient,
+	pages: number,
+	options: { readonly deadlineMs?: number } = {},
+): Promise<number> {
+	const boundedPages = Math.max(1, Math.min(10_000, Math.trunc(pages)));
+	return await submitWithAdmission<number>(
+		owner,
+		{ kind: "incremental_vacuum", pages: boundedPages },
+		{
+			operation: "vacuum.incremental",
+			lane: "maintenance",
+			deadlineMs: options.deadlineMs ?? 60_000,
+			estimatedWorkUnits: boundedPages,
+		},
+	);
+}
+
 /** Execute read-modify-write statements atomically on the serialized owner. */
 export async function dbOwnerTransaction(
 	statements: readonly DbOwnerStatement[],

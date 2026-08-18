@@ -13,7 +13,7 @@ import { statSync, statfsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
-import { dbOwnerVacuumConversion } from "./db-owner-runtime";
+import { dbOwnerIncrementalVacuum, dbOwnerVacuumConversion } from "./db-owner-runtime";
 import { logger } from "./logger";
 
 /** Marker table name for the one-time VACUUM conversion. */
@@ -396,6 +396,42 @@ export function convertToIncrementalVacuum(db: PragmaDb, options: VacuumConversi
 	db.exec(`CREATE TABLE IF NOT EXISTS ${VACUUM_CONVERSION_TABLE} (converted_at TEXT)`);
 	db.prepare(`INSERT INTO ${VACUUM_CONVERSION_TABLE} (converted_at) VALUES (?)`).run(now());
 	return true;
+}
+
+export interface IncrementalReclaimOptions {
+	readonly owner?: DbOwnerClient;
+	readonly batchPages?: number;
+	readonly maxBatches?: number;
+	readonly onCheckpoint?: (reclaimed: number, remaining: number) => void;
+}
+
+/** Reclaim free pages in bounded, resumable batches. Conversion remains monolithic. */
+export async function reclaimIncrementalVacuum(
+	accessor: DbAccessor,
+	opts: IncrementalReclaimOptions = {},
+): Promise<{ readonly reclaimed: number; readonly remaining: number }> {
+	const batchPages = Math.max(1, Math.min(10_000, Math.trunc(opts.batchPages ?? 1_000)));
+	const maxBatches = Math.max(1, Math.min(100_000, Math.trunc(opts.maxBatches ?? 100_000)));
+	let remaining = 0;
+	// The checkpoint is durable SQLite state: a crash leaves the freelist itself
+	// intact, so the next invocation resumes from the current count.
+	let reclaimed = 0;
+	let previousRemaining: number | null = null;
+	for (let batch = 0; batch < maxBatches; batch += 1) {
+		if (opts.owner) remaining = await dbOwnerIncrementalVacuum(opts.owner, batchPages);
+		else {
+			if (!accessor.incrementalVacuumAsync) throw new Error("incremental vacuum operation is unavailable");
+			remaining = await accessor.incrementalVacuumAsync();
+		}
+		const progressed =
+			previousRemaining === null ? Math.max(0, batchPages) : Math.max(0, previousRemaining - remaining);
+		reclaimed += progressed;
+		previousRemaining = remaining;
+		opts.onCheckpoint?.(reclaimed, remaining);
+		if (remaining <= 0 || progressed <= 0) break;
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	}
+	return { reclaimed, remaining };
 }
 
 /**

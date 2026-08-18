@@ -391,6 +391,12 @@ export function runDbOwnerWorker(): void {
 				}),
 			};
 		}
+		if (job.request.kind === "incremental_vacuum") {
+			const pages = Math.max(1, Math.min(10_000, Math.trunc(job.request.pages)));
+			db.exec(`PRAGMA incremental_vacuum(${pages})`);
+			const row = db.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
+			return typeof row?.freelist_count === "number" ? row.freelist_count : 0;
+		}
 		if (job.request.kind === "recall") return await executeRecall(job.request.payload);
 		const durationMs = Math.max(0, Math.floor(job.request.durationMs));
 		const wait = new Int32Array(new SharedArrayBuffer(4));
