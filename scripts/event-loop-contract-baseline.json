@@ -5069,6 +5069,300 @@
       "api": "withReadDb",
       "source": "const batch = accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => fetchBatch(db, limit));",
       "category": "hot-path"
+    },
+    {
+      "path": "aggregate-recall.ts",
+      "line": 740,
+      "api": "withReadDb",
+      "source": "const activeCfg = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "aggregate-recall.ts",
+      "line": 746,
+      "api": "withWriteTx",
+      "source": "const written = getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "aggregate-recall.ts",
+      "line": 995,
+      "api": "withWriteTx",
+      "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "daemon.ts",
+      "line": 1440,
+      "api": "withWriteTx",
+      "source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "daemon.ts",
+      "line": 1521,
+      "api": "withReadDb",
+      "source": "const activeEmbeddingCfg = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "daemon.ts",
+      "line": 2208,
+      "api": "withReadDb",
+      "source": "const memoryCount = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "daemon.ts",
+      "line": 2219,
+      "api": "withReadDb",
+      "source": "const queue = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "embedding-fetch.ts",
+      "line": 494,
+      "api": "withReadDb",
+      "source": "getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => resolveActiveEmbeddingConfig(db, cfg));",
+      "category": "hot-path"
+    },
+    {
+      "path": "embedding-usage.ts",
+      "line": 90,
+      "api": "withWriteTx",
+      "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "embedding-usage.ts",
+      "line": 117,
+      "api": "withReadDb",
+      "source": "const summary = accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "memory-head.ts",
+      "line": 59,
+      "api": "withWriteTx",
+      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "memory-head.ts",
+      "line": 128,
+      "api": "withWriteTx",
+      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "memory-head.ts",
+      "line": 147,
+      "api": "withWriteTx",
+      "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-embeddings.ts",
+      "line": 269,
+      "api": "withReadDb",
+      "source": "const embeddingConfig = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-embeddings.ts",
+      "line": 304,
+      "api": "withWriteTx",
+      "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-embeddings.ts",
+      "line": 318,
+      "api": "withReadDb",
+      "source": "const writeConfig = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-embeddings.ts",
+      "line": 347,
+      "api": "withWriteTx",
+      "source": "const stored = getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-embeddings.ts",
+      "line": 408,
+      "api": "withWriteTx",
+      "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-embeddings.ts",
+      "line": 454,
+      "api": "withReadDb",
+      "source": "const row = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-embeddings.ts",
+      "line": 475,
+      "api": "withWriteTx",
+      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-graph.ts",
+      "line": 696,
+      "api": "withWriteTx",
+      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "pipeline/dreaming-worker.ts",
+      "line": 96,
+      "api": "withReadDb",
+      "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => getQueueHealth(db).status !== \"healthy\");",
+      "category": "hot-path"
+    },
+    {
+      "path": "pipeline/dreaming-worker.ts",
+      "line": 106,
+      "api": "withReadDb",
+      "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "pipeline/dreaming-worker.ts",
+      "line": 182,
+      "api": "withReadDb",
+      "source": "accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => hasDreamingAttentionKindInDb(db, scope, [\"hygiene\"])),",
+      "category": "hot-path"
+    },
+    {
+      "path": "pipeline/dreaming-worker.ts",
+      "line": 186,
+      "api": "withReadDb",
+      "source": "accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "pipeline/synthesis-worker.ts",
+      "line": 127,
+      "api": "withReadDb",
+      "source": "const checkpointRow = deps.getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "pipeline/synthesis-worker.ts",
+      "line": 153,
+      "api": "withReadDb",
+      "source": "const transcriptRow = deps.getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/hooks-routes.ts",
+      "line": 1163,
+      "api": "withReadDb",
+      "source": "getDbAccessor().withReadDb(",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/hooks-routes.ts",
+      "line": 1191,
+      "api": "withWriteTx",
+      "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/hooks-routes.ts",
+      "line": 1311,
+      "api": "withWriteTx",
+      "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/import-routes.ts",
+      "line": 337,
+      "api": "withReadDb",
+      "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/pipeline-routes.ts",
+      "line": 102,
+      "api": "withReadDb",
+      "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/pipeline-routes.ts",
+      "line": 457,
+      "api": "withReadDb",
+      "source": "const report: ReturnType<typeof listMemoryContentSafety> = getDbAccessor().withReadDb(",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/pipeline-routes.ts",
+      "line": 557,
+      "api": "withReadDb",
+      "source": "const dbData = accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/sources-routes.ts",
+      "line": 800,
+      "api": "withReadDb",
+      "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/sources-routes.ts",
+      "line": 939,
+      "api": "withReadDb",
+      "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/sources-routes.ts",
+      "line": 1051,
+      "api": "withReadDb",
+      "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/sources-routes.ts",
+      "line": 1114,
+      "api": "withReadDb",
+      "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/sources-routes.ts",
+      "line": 1153,
+      "api": "withReadDb",
+      "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "source-snapshots.ts",
+      "line": 104,
+      "api": "withReadDb",
+      "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-graph.ts",
+      "line": 694,
+      "api": "withWriteTx",
+      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
+      "category": "hot-path"
+    },
+    {
+      "path": "obsidian-source-graph.ts",
+      "line": 703,
+      "api": "withWriteTx",
+      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
+      "category": "hot-path"
     }
   ]
 }
