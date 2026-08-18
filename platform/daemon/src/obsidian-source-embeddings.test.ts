@@ -6,6 +6,7 @@ import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor 
 import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import { hybridRecall } from "./memory-search";
 import { awaitEmbeddingProviderAvailable, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
+import { logger } from "./logger";
 import {
 	buildObsidianSourceChunks,
 	indexObsidianSourceEmbeddings,
@@ -185,6 +186,34 @@ describe("Obsidian source embeddings", () => {
 		expect(second.providerUnavailable).toBe(true);
 		expect(second.status).toBe("embeddings pending - provider down");
 		expect(fetches).toBe(1);
+	});
+
+	it("emits one consolidated notice while sweeping many provider-failing files", async () => {
+		const notices: string[] = [];
+		const originalWarn = logger.warn;
+		logger.warn = ((_category: unknown, message: unknown) => {
+			if (String(message).includes("Embedding provider unavailable")) notices.push(String(message));
+		}) as typeof logger.warn;
+		try {
+			const fetchEmbedding: SourceEmbeddingFetch = async (_text, _cfg, _role, opts) => {
+				opts?.onFailure?.("provider_unavailable");
+				return null;
+			};
+			for (let index = 0; index < 5; index++) {
+				await indexObsidianSourceEmbeddings({
+					agentId: "obsidian-embedding-agent",
+					sourceId: "obsidian:test-vault",
+					root: vault,
+					filePath: join(vault, "literature", `provider-down-${index}.md`),
+					content: `# Provider Down ${index}\n\nThis source note is representative of a failing many-file provider sweep.`,
+					embeddingConfig,
+					fetchEmbedding,
+				});
+			}
+			expect(notices).toHaveLength(1);
+		} finally {
+			logger.warn = originalWarn;
+		}
 	});
 
 	it("removes legacy Obsidian chunk rows once generic chunks are refreshed", async () => {

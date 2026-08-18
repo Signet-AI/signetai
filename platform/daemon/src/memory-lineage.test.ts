@@ -18,6 +18,7 @@ import {
 } from "./memory-lineage";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
+import { recordEmbeddingProviderFailure, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 
 const tok = new Tiktoken(cl100k_base);
 
@@ -68,6 +69,7 @@ describe("memory-lineage", () => {
 
 	beforeEach(async () => {
 		await resetWorkspace();
+		resetEmbeddingCircuitBreakers();
 	});
 
 	afterAll(() => {
@@ -363,6 +365,24 @@ describe("memory-lineage", () => {
 	});
 
 	describe("reindexMemoryArtifacts incremental", () => {
+		it("halts a small scan before accumulating or flushing when the shared provider circuit is already open", async () => {
+			await addSummary({ sessionId: "seed-open", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ?").run("default");
+			});
+			recordEmbeddingProviderFailure("native:nomic-embed-text-v1.5:", 10_000);
+
+			await reindexMemoryArtifacts("default");
+
+			const count = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("default") as {
+						count: number;
+					},
+			);
+			expect(count.count).toBe(0);
+		});
+
 		it("first boot: empty cache + empty DB → full scan", async () => {
 			await addSummary({ sessionId: "scan-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
 			await addSummary({ sessionId: "scan-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
