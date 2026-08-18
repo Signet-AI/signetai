@@ -307,11 +307,14 @@ jobs:
           # embedding smoke is disabled. This must fail if the worker asset is
           # missing from the release binary.
           SIGNET_DB_OWNER_SMOKE: "1"
+          # Dreaming must launch its scoped MCP server from the compiled binary
+          # without resolving a JavaScript entrypoint under /$bunfs.
+          SIGNET_DREAMING_MCP_SMOKE: "1"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/${{ matrix.asset }}
           # The smoke boots a real default-config daemon; keep its telemetry
           # out of the Signet PostHog project.
           SIGNET_TELEMETRY_OPTOUT: "1"
-        run: bun test scripts/native-embedding-runtime-smoke.test.ts
+        run: bun test scripts/native-embedding-runtime-smoke.test.ts scripts/native-dreaming-mcp-smoke.test.ts
 
       - name: Upload to release
         shell: bash

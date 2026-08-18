@@ -60,6 +60,10 @@ export function registerNativeAssets(assets: NativeRuntimeAssets): void {
 	globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__ = assets;
 }
 
+export function hasNativeRuntimeAssets(): boolean {
+	return globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__ !== undefined;
+}
+
 export function registerNativeTransformersBindings(bindings: unknown): void {
 	globalThis.__SIGNET_NATIVE_TRANSFORMERS_BINDINGS__ = bindings;
 }

@@ -334,7 +334,7 @@ writeFileSync(
 import { handoffInspectorParent } from "../surfaces/cli/src/lib/inspector-proxy";
 import { connectorAssets, dashboardAssets, nativeAddonAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
 import * as transformersWebRuntime from "./transformers-web-runtime";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 registerNativeAssets({ connectors: connectorAssets, dashboard: dashboardAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets, nativeAddons: nativeAddonAssets });
@@ -371,6 +371,21 @@ handoffInspectorParent();
 if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PROXY_TARGET) {
 	const { runInspectorProxyFromEnvironment } = await import("../surfaces/cli/src/lib/inspector-proxy");
 	await runInspectorProxyFromEnvironment();
+} else if (process.env.SIGNET_DREAMING_MCP_CONFIG_SMOKE) {
+	const { createDreamingAcpxMcpConfig } = await import("../platform/daemon/src/pipeline/acpx-dreaming-mcp");
+	const config = createDreamingAcpxMcpConfig({
+		agentId: "native-smoke",
+		passId: "native-smoke-pass",
+		daemonUrl: "http://127.0.0.1:1",
+	});
+	try {
+		process.stdout.write(\`\${readFileSync(config.path, "utf8")}\\n\`);
+	} finally {
+		config.dispose();
+	}
+} else if (process.env.SIGNET_MCP_STDIO_WORKER) {
+	const { runMcpStdio } = await import("../platform/daemon/src/mcp-stdio-runtime");
+	await runMcpStdio();
 } else if (process.env.SIGNET_DB_OWNER_WORKER) {
 	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
 	runDbOwnerWorker();

@@ -19,7 +19,10 @@ on:
       - "platform/daemon/src/routes/utils.ts"
       - "platform/daemon/src/daemon.ts"
       - "platform/daemon/src/db-owner*.ts"
+      - "platform/daemon/src/mcp-stdio*.ts"
+      - "platform/daemon/src/pipeline/acpx-dreaming-mcp*.ts"
       - "platform/daemon/src/native-runtime-assets.ts"
+      - "scripts/native-dreaming-mcp-smoke.test.ts"
       - "scripts/native-embedding-runtime-smoke.test.ts"
       - "scripts/build-native-bun.ts"
       - ".github/workflows/embedding-health-isolation.yml"
@@ -33,7 +36,10 @@ on:
       - "platform/daemon/src/routes/utils.ts"
       - "platform/daemon/src/daemon.ts"
       - "platform/daemon/src/db-owner*.ts"
+      - "platform/daemon/src/mcp-stdio*.ts"
+      - "platform/daemon/src/pipeline/acpx-dreaming-mcp*.ts"
       - "platform/daemon/src/native-runtime-assets.ts"
+      - "scripts/native-dreaming-mcp-smoke.test.ts"
       - "scripts/native-embedding-runtime-smoke.test.ts"
       - "scripts/build-native-bun.ts"
       - ".github/workflows/embedding-health-isolation.yml"
@@ -77,10 +83,11 @@ jobs:
       - name: Build native Signet binary
         run: bun run build:native-bun
 
-      - name: Compiled native DB-owner smoke
+      - name: Compiled native subprocess smoke
         env:
           SIGNET_DB_OWNER_SMOKE: "1"
+          SIGNET_DREAMING_MCP_SMOKE: "1"
           SIGNET_NATIVE_EMBEDDING_SMOKE: "0"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/signet-linux-x64
           SIGNET_TELEMETRY_OPTOUT: "1"
-        run: bun test scripts/native-embedding-runtime-smoke.test.ts
+        run: bun test scripts/native-embedding-runtime-smoke.test.ts scripts/native-dreaming-mcp-smoke.test.ts
