@@ -35,6 +35,17 @@ import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRe
 const GUARDED_CONFIG_FILES_CI = new Set(["agent.yaml", "config.yaml"]);
 
 const MAX_CONFIG_BYTES = 1_048_576;
+const MAX_POLICY_GROUP_LENGTH = 128;
+
+function validatePolicyGroup(rawGroup: unknown): string | null | undefined {
+	if (rawGroup !== undefined && rawGroup !== null && typeof rawGroup !== "string") {
+		throw new Error("group must be a string");
+	}
+	if (typeof rawGroup === "string" && (rawGroup.length === 0 || rawGroup.length > MAX_POLICY_GROUP_LENGTH)) {
+		throw new Error(`group must be between 1 and ${MAX_POLICY_GROUP_LENGTH} characters`);
+	}
+	return rawGroup;
+}
 
 interface AgentRow {
 	id: string;
@@ -249,13 +260,7 @@ export function registerMiscRoutes(app: Hono): void {
 			if (rawPolicy !== undefined && typeof rawPolicy !== "string") {
 				return c.json({ error: "memory must be one of: isolated, shared, group" }, 400);
 			}
-			if (rawGroup !== undefined && rawGroup !== null && typeof rawGroup !== "string") {
-				return c.json({ error: "group must be a string" }, 400);
-			}
-			if (typeof rawGroup === "string" && (rawGroup.length === 0 || rawGroup.length > 128)) {
-				return c.json({ error: "group must be between 1 and 128 characters" }, 400);
-			}
-			resolved = resolveAgentMemoryPolicy(rawPolicy ?? "isolated", rawGroup);
+			resolved = resolveAgentMemoryPolicy(rawPolicy ?? "isolated", validatePolicyGroup(rawGroup));
 		} catch (error) {
 			return c.json({ error: error instanceof Error ? error.message : "Invalid memory policy" }, 400);
 		}
@@ -304,10 +309,7 @@ export function registerMiscRoutes(app: Hono): void {
 			if (typeof rawPolicy !== "string") {
 				return c.json({ error: "memory must be one of: isolated, shared, group" }, 400);
 			}
-			if (rawGroup !== null && rawGroup !== undefined && typeof rawGroup !== "string") {
-				return c.json({ error: "group must be a string" }, 400);
-			}
-			resolved = resolveAgentMemoryPolicy(rawPolicy, rawGroup);
+			resolved = resolveAgentMemoryPolicy(rawPolicy, validatePolicyGroup(rawGroup));
 		} catch (error) {
 			return c.json({ error: error instanceof Error ? error.message : "Invalid memory policy" }, 400);
 		}

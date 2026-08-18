@@ -71,6 +71,12 @@ describe("agent route memory policy contracts", () => {
 		expect((await request("PATCH", "/api/agents/omitted", { read_policy: "group", policy_group: "team" })).status).toBe(
 			200,
 		);
+		expect((await request("PATCH", "/api/agents/omitted", { read_policy: "group", policy_group: "" })).status).toBe(
+			400,
+		);
+		expect(
+			(await request("PATCH", "/api/agents/omitted", { read_policy: "group", policy_group: "x".repeat(129) })).status,
+		).toBe(400);
 		expect((await request("PATCH", "/api/agents/not-found", {})).status).toBe(404);
 	});
 });
