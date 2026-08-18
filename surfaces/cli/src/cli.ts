@@ -5,15 +5,12 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
-	chmodSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
 	readFileSync,
 	readlinkSync,
-	renameSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -32,34 +29,21 @@ import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
 import { PiConnector } from "@signet/connector-pi";
 import {
-	IDENTITY_FILES,
-	type ImportResult,
-	type MigrationResult,
-	type SchemaInfo,
 	type SetupDetection,
-	type SkillsResult,
 	detectExistingSetup as detectExistingSetupCore,
 	expandHome,
-	formatYaml,
 	getGlobalInstallCommand,
-	getMissingIdentityFiles,
-	getSkillsRunnerCommand,
-	hasValidIdentity,
-	importMemoryLogs,
 	loadConfiguredHarnesses,
-	loadSqliteVec,
 	LOOPBACK_HOST,
 	readStaticIdentity,
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
-	symlinkSkills,
 	syncWorkspaceSourceRepo,
 	syncWorkspaceSourceRepoAsync,
-	unifySkills,
 } from "@signet/core";
 import chalk from "chalk";
 import { Command } from "commander";
-import ora from "ora";
+
 import { registerBrowseCommand } from "./browse.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerApiKeyCommands } from "./commands/api-key.js";
