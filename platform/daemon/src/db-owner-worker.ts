@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { existsSync, writeFileSync } from "node:fs";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { findSqliteVecExtension } from "@signet/core";
 import {
@@ -346,6 +347,12 @@ export function runDbOwnerWorker(): void {
 	}
 
 	async function executeInitialization(agentsDir: string | undefined): Promise<unknown> {
+		const startedMarker = process.env.SIGNET_DB_OWNER_TEST_INIT_STARTED;
+		const releaseMarker = process.env.SIGNET_DB_OWNER_TEST_INIT_RELEASE;
+		if (startedMarker !== undefined && releaseMarker !== undefined) {
+			writeFileSync(startedMarker, "started\n");
+			while (!existsSync(releaseMarker)) await new Promise((resolve) => setTimeout(resolve, 5));
+		}
 		const { initDbAccessorAsync } = await import("./db-accessor");
 		await initDbAccessorAsync(ownerDbPath, { agentsDir });
 		return { initialized: true };

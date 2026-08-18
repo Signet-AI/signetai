@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
@@ -11,6 +11,12 @@ let prev: string | undefined;
 let countConnectorsActive: (connectors: readonly { readonly status: string }[]) => number;
 const originalSpawn = Bun.spawn;
 const originalWhich = Bun.which;
+
+async function waitForMarker(path: string): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (!existsSync(path) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+	expect(existsSync(path)).toBe(true);
+}
 
 describe("daemon status contract", () => {
 	beforeAll(async () => {
@@ -230,11 +236,6 @@ describe("daemon status contract", () => {
 				`memory:
   pipelineV2:
     enabled: true
-    extraction:
-      provider: ollama
-      model: qwen3:4b
-    synthesis:
-      enabled: false
 `,
 			);
 			expect(state.restartPipelineRuntimeRef).toBeDefined();
@@ -276,9 +277,6 @@ describe("daemon status contract", () => {
 			`memory:
   pipelineV2:
     enabled: true
-    extraction:
-      provider: ollama
-      model: qwen3:4b
     worker:
       maxLlmConcurrency: 1
 `,
@@ -325,9 +323,6 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 	const DREAMING_ENABLED_CONFIG = `memory:
   pipelineV2:
     enabled: true
-    extraction:
-      provider: ollama
-      model: qwen3:4b
 `;
 
 	function writeConfig(cfg: string): void {
@@ -475,9 +470,6 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 	const DREAMING_ENABLED_STRUCTURAL_CONFIG = `memory:
   pipelineV2:
     enabled: true
-    extraction:
-      provider: ollama
-      model: qwen3:4b
     graph:
       enabled: true
     structural:
@@ -650,13 +642,18 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 
 	it("keeps the real HTTP surface responsive during owner initialization", async () => {
 		const dbPath = join(dir, "memory", "memories.db");
-		const owner = createDbOwnerClient({ dbPath });
+		const startedMarker = join(dir, "init-started");
+		const releaseMarker = join(dir, "init-release");
+		process.env.SIGNET_DB_OWNER_TEST_INIT_STARTED = startedMarker;
+		process.env.SIGNET_DB_OWNER_TEST_INIT_RELEASE = releaseMarker;
+		const owner = createDbOwnerClient({ dbPath, workerPath: join(import.meta.dir, "db-owner-worker.ts") });
 		try {
 			await owner.start();
 			const initialization = owner.submit(
 				{ kind: "initialize", agentsDir: dir },
 				{ operation: "db.initialize.liveness-regression", lane: "maintenance", deadlineMs: 60_000 },
 			);
+			await waitForMarker(startedMarker);
 			const started = performance.now();
 			const responses = await Promise.all([
 				app.request("http://localhost/health/live"),
@@ -666,6 +663,7 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 			expect(responses[0]?.status).toBe(200);
 			expect(responses[1]?.status).toBe(200);
 			expect(elapsed).toBeLessThan(500);
+			writeFileSync(releaseMarker, "release\n");
 			await owner.awaitResult(initialization, 60_000);
 		} finally {
 			await owner.close();
@@ -674,7 +672,11 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 
 	it("can safely re-enter initialization after an owner dies", async () => {
 		const dbPath = join(dir, "memory", "memories.db");
-		const first = createDbOwnerClient({ dbPath });
+		const startedMarker = join(dir, "kill-init-started");
+		const releaseMarker = join(dir, "kill-init-release");
+		process.env.SIGNET_DB_OWNER_TEST_INIT_STARTED = startedMarker;
+		process.env.SIGNET_DB_OWNER_TEST_INIT_RELEASE = releaseMarker;
+		const first = createDbOwnerClient({ dbPath, workerPath: join(import.meta.dir, "db-owner-worker.ts") });
 		await first.start();
 		const pid = first.health().pid;
 		if (pid === null) throw new Error("owner did not publish a pid");
@@ -682,9 +684,15 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 			{ kind: "initialize", agentsDir: dir },
 			{ operation: "db.initialize.kill-reentry", lane: "maintenance", deadlineMs: 5_000 },
 		);
+		await waitForMarker(startedMarker);
 		process.kill(pid, "SIGKILL");
 		await expect(pending.result).rejects.toBeDefined();
+		writeFileSync(releaseMarker, "release\n");
+		Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_INIT_STARTED");
+		Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_INIT_RELEASE");
 		await first.close();
+		Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_INIT_STARTED");
+		Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_INIT_RELEASE");
 
 		const second = createDbOwnerClient({ dbPath });
 		try {
