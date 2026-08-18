@@ -77,13 +77,11 @@ describe("daemon status contract", () => {
 			// withReadDbAsync, so it must be held pending behind the gate.
 			const statusStartedAt = performance.now();
 			let statusLatencyMs = -1;
-			const statusPromise = Promise.resolve(app.request("http://localhost/api/status")).then(
-				(response: Response) => {
-					statusLatencyMs = performance.now() - statusStartedAt;
-					expect(response.status).toBe(200);
-					return response;
-				},
-			);
+			const statusPromise = Promise.resolve(app.request("http://localhost/api/status")).then((response: Response) => {
+				statusLatencyMs = performance.now() - statusStartedAt;
+				expect(response.status).toBe(200);
+				return response;
+			});
 
 			// Give /api/status a beat to reach the blocked owner.
 			await new Promise<void>((resolve) => setTimeout(resolve, 50));
