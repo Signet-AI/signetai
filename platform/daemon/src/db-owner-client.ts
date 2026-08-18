@@ -163,7 +163,12 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 	let deadlineKills = 0;
 	let sequence = 0;
 	let input = "";
+	let stderr = "";
 	const pending = new Map<string, PendingJob<unknown>>();
+
+	function diagnostic(message: string): string {
+		return stderr.trim().length === 0 ? message : `${message}; child stderr: ${stderr.trim()}`;
+	}
 
 	function currentHealth(): DbOwnerHealth {
 		return {
@@ -317,7 +322,7 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 		}
 		const message = signal === null ? `DB owner exited with code ${code ?? "unknown"}` : `DB owner killed by ${signal}`;
 		retireOwner(
-			new DbOwnerDiedError(detail === undefined ? message : `${message}; child stderr: ${detail}`),
+			new DbOwnerDiedError(detail === undefined ? diagnostic(message) : `${message}; child stderr: ${detail}`),
 			owner,
 			state === "starting" || state === "failed" ? "failed" : "dead",
 			true,
@@ -326,7 +331,20 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 
 	function handleTransportError(owner: ChildProcess, error: Error): void {
 		if (child !== owner || closed) return;
-		retireOwner(new DbOwnerDiedError(error.message), owner, state === "starting" ? "failed" : "dead", true);
+		// Node can report the pipe error before the stderr readable has emitted
+		// its final queued chunk. Defer retirement until the current I/O turn has
+		// drained so transport diagnostics retain the same stderr context as the
+		// close and timeout paths.
+		setImmediate(() => {
+			if (child !== owner || closed) return;
+			const message = error.message;
+			retireOwner(
+				new DbOwnerDiedError(stderr.trim().length === 0 ? message : `${message}; child stderr: ${stderr.trim()}`),
+				owner,
+				state === "starting" ? "failed" : "dead",
+				true,
+			);
+		});
 	}
 
 	async function start(): Promise<void> {
@@ -345,6 +363,7 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 		const timeoutMs = options.startupTimeoutMs ?? 5_000;
 		state = "starting";
 		lastError = null;
+		stderr = "";
 		generation++;
 		startPromise = new Promise<void>((resolve, reject) => {
 			startupResolve = resolve;
@@ -364,25 +383,22 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 			child = owner;
-			let stderr = "";
 			const appendStderr = (chunk: string): void => {
 				stderr = `${stderr}${chunk}`.slice(-8_192);
 			};
-			const diagnostic = (message: string): string =>
-				stderr.trim().length === 0 ? message : `${message}; child stderr: ${stderr.trim()}`;
 			owner.stdout?.setEncoding("utf8");
 			owner.stdout?.on("data", (chunk: string) => handleStdout(owner, chunk));
-			owner.stdin?.on("error", (error: Error) => handleTransportError(owner, new Error(diagnostic(error.message))));
+			owner.stdin?.on("error", (error: Error) => handleTransportError(owner, error));
 			owner.stderr?.setEncoding("utf8");
 			owner.stderr?.on("data", appendStderr);
-			owner.once("error", (error: Error) => handleTransportError(owner, new Error(diagnostic(error.message))));
+			owner.once("error", (error: Error) => handleTransportError(owner, error));
 			owner.once("close", (code, signal) => handleExit(owner, code, signal, stderr.trim() || undefined));
 			const timer = setTimeout(() => {
 				if (state !== "ready") {
 					lastError = diagnostic(`DB owner did not become ready within ${timeoutMs}ms`);
 					state = "failed";
 					owner.kill("SIGKILL");
-					startupReject?.(new DbOwnerError("DB_OWNER_START_TIMEOUT", lastError));
+					startupReject?.(new DbOwnerError("DB_OWNER_START_TIMEOUT", diagnostic(lastError)));
 				}
 			}, timeoutMs);
 			const resolveStartup = startupResolve;

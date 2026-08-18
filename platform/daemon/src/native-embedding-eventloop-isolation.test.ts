@@ -305,4 +305,29 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		}
 		expect(logText).toMatch(/nomic-embed|Initializing.*nomic|embedding/i);
 	}, 60_000);
+
+	it("starts the DB owner when the fresh workspace has no memory directory", async () => {
+		const agentsDir = tempDir();
+		const port = await freePort();
+		const origin = `http://127.0.0.1:${port}`;
+		expect(readdirSync(agentsDir)).not.toContain("memory");
+
+		const child = spawn(process.execPath, [daemonScript], {
+			env: {
+				...process.env,
+				SIGNET_PORT: String(port),
+				SIGNET_PATH: agentsDir,
+				SIGNET_BIND: "127.0.0.1",
+				SIGNET_DAEMON_ENTRYPOINT: "1",
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		children.push(child);
+		const lifecycle = captureChildLifecycle(child, agentsDir);
+		child.stdout.on("data", () => {});
+
+		await waitForHealth(origin, child, lifecycle);
+		expect(readdirSync(agentsDir)).toContain("memory");
+		expect((await fetch(`${origin}/health`)).ok).toBe(true);
+	});
 });
