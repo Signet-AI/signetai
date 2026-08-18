@@ -55,10 +55,10 @@ const context = await client.userPromptSubmit({ sessionKey: "session-123", promp
 await client.sessionEnd({ sessionKey: "session-123", harness: "my-harness", transcript: "…", project: "/workspace/app" });
 await client.preCompaction({ sessionKey: "session-123", context: "Current session summary", project: "/workspace/app" });
 await client.compactionComplete({ sessionKey: "session-123", summary: "Compacted summary", project: "/workspace/app" });
-await client.synthesisComplete({ content: "Memory summary", project: "/workspace/app" });
+await client.requestSynthesis({ project: "/workspace/app" });
 ```
 
-`sessionEnd` requires `sessionKey` and `harness`; it does not take a `summary` field. `synthesisComplete` is the exported method name, not `completeSynthesis`.
+`sessionEnd` requires `sessionKey` and `harness`; it does not take a `summary` field. Synthesis is Dreaming-owned and manifest-gated; callers request a run with `requestSynthesis` and must not submit generated MEMORY.md content.
 
 ## Connectors
 

@@ -191,7 +191,7 @@ signet hook session-end --harness claude-code
 signet hook pre-compaction --harness claude-code
 signet hook compaction-complete --harness claude-code --summary "..."
 signet hook synthesis
-signet hook synthesis-complete --content "..."
+
 ```
 
 Subcommands:
@@ -204,7 +204,7 @@ Subcommands:
 | `signet hook pre-compaction` | Get summary instructions before compaction |
 | `signet hook compaction-complete` | Save session summary after compaction |
 | `signet hook synthesis` | Get the MEMORY.md synthesis prompt |
-| `signet hook synthesis-complete` | Save synthesized MEMORY.md content |
+| `POST /api/synthesis/trigger` | Trigger Dreaming's manifest-gated MEMORY.md publication |
 
 Most subcommands require `-H, --harness <harness>` identifying the calling
 platform (e.g. `claude-code`, `opencode`, `openclaw`). If the daemon is

@@ -31,7 +31,7 @@ export function getSynthesisWorker(): Worker | null {
 
 /**
  * Write MEMORY.md with backup of previous version.
- * Shared by the synthesis-complete endpoint and the synthesis worker.
+ * Shared by the synthesis worker and legacy internal callers.
  */
 export function writeMemoryMd(
 	content: string,

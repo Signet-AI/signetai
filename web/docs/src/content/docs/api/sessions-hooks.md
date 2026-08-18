@@ -393,30 +393,11 @@ the correct agent-scoped head.
 
 ### POST /api/hooks/synthesis/complete
 
-Write a newly synthesized `MEMORY.md`. Backs up the existing file before
-overwriting and records DB-backed head metadata used for same-agent
-merge protection.
+Retired. This compatibility boundary returns HTTP 410 with a structured,
+versioned migration payload. Dreaming owns manifest-gated `MEMORY.md` head
+publication; callers must not submit generated content directly.
 
-**Request body**
-
-```json
-{
-  "content": "# Memory\n\n...",
-  "agentId": "optional-agent-id",
-  "sessionKey": "optional-session-key"
-}
-```
-
-`content` is required.
-
-If another writer currently holds the active `MEMORY.md` lease for the same
-agent head, this route returns `409`.
-
-**Response**
-
-```json
-{ "success": true }
-```
+Use `POST /api/synthesis/trigger` to request the supported Dreaming flow.
 
 
 ## Sessions

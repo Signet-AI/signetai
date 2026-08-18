@@ -20,7 +20,7 @@ Hooks are HTTP endpoints exposed by the Signet [Daemon](/daemon/). Harnesses cal
 | `pre-compaction` | Before context compaction | Get summary guidelines |
 | `compaction-complete` | After compaction | Save a first-class compaction artifact into the temporal DAG |
 | `synthesis` | Retired | The route remains only as a loud compatibility boundary |
-| `synthesis/complete` | Retired | Returns HTTP 410; Dreaming owns manifest-gated MEMORY.md head publication |
+| `synthesis/complete` | Retired | Returns HTTP 410 with a structured payload; Dreaming owns manifest-gated MEMORY.md head publication |
 
 ---
 
@@ -442,11 +442,12 @@ Response:
 
 The harness runs the prompt through the specified model.
 
-### Step 3: Retired route
+### Step 3: Retired completion route
 
-`POST /api/hooks/synthesis/complete` is retired and returns HTTP 410. Do not
-send generated content to this route. Dreaming owns manifest-gated publication
-of the curated MEMORY.md head.
+`POST /api/hooks/synthesis/complete` is retired and returns HTTP 410 with a structured
+deprecation payload. Do not send generated content to this route. Dreaming
+owns manifest-gated publication of the curated `MEMORY.md` head. Use
+`POST /api/synthesis/trigger` to request the supported flow.
 
 The daemon does not write MEMORY.md here, and no head change occurs.
 

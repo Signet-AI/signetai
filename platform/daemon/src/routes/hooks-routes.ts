@@ -1882,7 +1882,17 @@ function registerSynthesis(app: Hono): void {
 
 	// Retired: Dreaming's manifest-gated path is the sole MEMORY.md publisher.
 	app.post("/api/hooks/synthesis/complete", async (c) => {
-		return c.json({ error: "Synthesis completion route retired; use Dreaming" }, 410);
+		return c.json(
+			{
+				error: "Synthesis completion route retired; use Dreaming",
+				code: "SYNTHESIS_COMPLETION_RETIRED",
+				version: 1,
+				deprecatedRoute: "/api/hooks/synthesis/complete",
+				replacement: { method: "POST", path: "/api/synthesis/trigger" },
+				migration: "Dreaming owns manifest-gated MEMORY.md head publication; do not submit content directly.",
+			},
+			410,
+		);
 	});
 
 	// Trigger immediate MEMORY.md synthesis

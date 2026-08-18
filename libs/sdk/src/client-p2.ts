@@ -45,7 +45,6 @@ import type {
 	SessionEndResponse,
 	// Hooks
 	SessionStartResponse,
-	SynthesisCompleteResponse,
 	SynthesisConfigResponse,
 	SynthesisRequestResponse,
 	TraversalStatusResponse,
@@ -275,19 +274,6 @@ export class SignetClientP2 {
 		readonly force?: boolean;
 	}): Promise<SynthesisRequestResponse> {
 		return this.transport.post<SynthesisRequestResponse>("/api/hooks/synthesis", opts ?? {});
-	}
-
-	/**
-	 * @example
-	 * const result = await client.synthesisComplete({
-	 *   content: '# MEMORY.md\n...'
-	 * });
-	 */
-	async synthesisComplete(opts: {
-		readonly content: string;
-		readonly project?: string;
-	}): Promise<SynthesisCompleteResponse> {
-		return this.transport.post<SynthesisCompleteResponse>("/api/hooks/synthesis/complete", opts);
 	}
 
 	// --- Connectors ---

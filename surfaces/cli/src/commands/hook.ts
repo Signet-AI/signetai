@@ -443,28 +443,6 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			console.log(chalk.dim(`Session files: ${data?.fileCount ?? 0}\n`));
 			if (data?.prompt) console.log(data.prompt);
 		});
-
-	hookCmd
-		.command("synthesis-complete")
-		.description("Save synthesized MEMORY.md content")
-		.requiredOption("-c, --content <content>", "Synthesized MEMORY.md content")
-		.action(async (options) => {
-			const data = await fetchHookData<{ success?: boolean; error?: string }>(
-				deps,
-				"synthesis-complete",
-				"/api/hooks/synthesis/complete",
-				{
-					method: "POST",
-					body: JSON.stringify({ content: options.content }),
-				},
-			);
-			if (!data) return;
-			if (data?.error) {
-				console.error(chalk.red(`Error: ${data.error}`));
-				process.exit(1);
-			}
-			if (data?.success) console.log(chalk.green("✓ MEMORY.md synthesized"));
-		});
 }
 
 export function shouldReadCompactionInput(

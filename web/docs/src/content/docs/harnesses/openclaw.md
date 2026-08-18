@@ -111,9 +111,9 @@ The daemon synthesis worker is the primary runtime path for keeping
 1. Calls `GET /api/hooks/synthesis/config` to check if synthesis should run
 2. Calls `POST /api/hooks/synthesis` to get the synthesis prompt
 3. Runs the prompt through the configured model
-4. Posts the result to `POST /api/hooks/synthesis/complete`
+4. Does not post generated content to the retired completion hook; Dreaming owns manifest-gated publication
 
-Both paths write through the same merge-safe head record, so the rendered
+The supported path writes through Dreaming's merge-safe manifest head, so the rendered
 `MEMORY.md` stays shared across harnesses instead of becoming
 OpenClaw-specific.
 

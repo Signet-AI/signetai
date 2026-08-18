@@ -297,9 +297,7 @@ export class GeneratedClient {
 		return this.transport.post<unknown>("/api/hooks/synthesis", opts);
 	}
 
-	async postApiHooksSynthesisComplete(opts?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.post<unknown>("/api/hooks/synthesis/complete", opts);
-	}
+
 
 	async postApiSynthesisTrigger(opts?: Record<string, unknown>): Promise<unknown> {
 		return this.transport.post<unknown>("/api/synthesis/trigger", opts);

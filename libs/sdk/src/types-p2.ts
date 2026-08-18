@@ -119,10 +119,6 @@ export interface SynthesisRequestResponse {
 	readonly triggered: boolean;
 }
 
-export interface SynthesisCompleteResponse {
-	readonly message: string;
-}
-
 // ============================================================================
 // Connectors types
 // ============================================================================

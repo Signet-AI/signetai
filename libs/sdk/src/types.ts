@@ -1267,7 +1267,6 @@ export type {
 	CompactionCompleteResponse,
 	SynthesisConfigResponse,
 	SynthesisRequestResponse,
-	SynthesisCompleteResponse,
 	// Connectors
 	ConnectorRecord,
 	ConnectorListResponse,
