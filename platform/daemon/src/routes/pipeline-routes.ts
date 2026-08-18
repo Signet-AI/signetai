@@ -7,7 +7,7 @@ import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { getVacuumConversionStatus } from "../db-vacuum.js";
 import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-queue.js";
-import { getCachedEmbeddingUsageSummary, readEmbeddingUsageSummary } from "../embedding-usage";
+import { readEmbeddingUsageSummary } from "../embedding-usage";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { BackgroundWorkloadDiagnostics } from "../inference-router.js";
 import { getLlmProvider } from "../llm.js";
