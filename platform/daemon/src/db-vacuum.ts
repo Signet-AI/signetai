@@ -55,6 +55,8 @@ export interface VacuumConversionOptions {
 	readonly dbPath?: string;
 	readonly deps?: DbSpaceDeps;
 	readonly log?: (message: string) => void;
+	/** Test-only seam at the real VACUUM conversion boundary. */
+	readonly beforeVacuum?: () => void;
 }
 
 const dbSpaceDeps: DbSpaceDeps = { statSync, statfsSync };
@@ -367,6 +369,10 @@ export function convertToIncrementalVacuum(db: PragmaDb, options: VacuumConversi
 
 	const startedAt = Date.now();
 	try {
+		// This is deliberately adjacent to the real SQLite statement, not in the
+		// owner job dispatcher. Tests may pause here, proving they reached the
+		// conversion boundary rather than an artificial pre-VACUUM hole.
+		options.beforeVacuum?.();
 		db.exec("VACUUM");
 	} catch (error) {
 		if (options.dbPath && isDbFullError(error)) {

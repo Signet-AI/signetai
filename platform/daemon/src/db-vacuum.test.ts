@@ -11,7 +11,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -312,21 +312,27 @@ describe("deferred vacuum conversion (#1493)", () => {
 		initDbAccessor(db.path);
 		const owner = createDbOwnerClient({ dbPath: db.path });
 		const previousPause = process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS;
+		const previousActiveFile = process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE;
+		const activeFile = join(db.dir, "vacuum-active");
 		process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = "5000";
+		process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE = activeFile;
 		await owner.start();
 		try {
 			const worker = startVacuumConversionWorker(getDbAccessor(), { owner, startImmediately: false });
 			const running = worker.run();
 			const deadline = Date.now() + 2000;
-			while (owner.health().activeJobId === null && Date.now() < deadline) await Bun.sleep(5);
+			while (!existsSync(activeFile) && Date.now() < deadline) await Bun.sleep(5);
 			const pid = owner.health().pid;
-			expect(owner.health().activeJobId).not.toBeNull();
+			expect(existsSync(activeFile)).toBe(true);
 			expect(pid).not.toBeNull();
 			process.kill(pid as number, "SIGKILL");
 			await Promise.race([running.catch(() => undefined), Bun.sleep(100)]);
 		} finally {
 			if (previousPause === undefined) Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS");
 			else process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = previousPause;
+			if (previousActiveFile === undefined)
+				Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE");
+			else process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE = previousActiveFile;
 			await Promise.race([owner.close().catch(() => undefined), Bun.sleep(250)]);
 		}
 
