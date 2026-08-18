@@ -204,6 +204,11 @@ Subcommands:
 | `signet hook pre-compaction` | Get summary instructions before compaction |
 | `signet hook compaction-complete` | Save session summary after compaction |
 | `signet hook synthesis` | Get the MEMORY.md synthesis prompt |
+
+API/migration endpoint:
+
+| Endpoint | Description |
+|----------|-------------|
 | `POST /api/synthesis/trigger` | Trigger Dreaming's manifest-gated MEMORY.md publication |
 
 Most subcommands require `-H, --harness <harness>` identifying the calling

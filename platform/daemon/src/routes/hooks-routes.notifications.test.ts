@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
+import { getSynthesisWorker } from "../hooks";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 
 const previousSignetPath = process.env.SIGNET_PATH;
@@ -46,7 +47,7 @@ async function post(path: string, body: Readonly<Record<string, unknown>>): Prom
 }
 
 describe("cross-agent notification routes", () => {
-	it("rejects retired synthesis completion without changing MEMORY.md", async () => {
+	it("rejects retired synthesis completion with its structured contract and without changing MEMORY.md", async () => {
 		const memoryPath = join(dir, "MEMORY.md");
 		const before = "# Existing head\n\n- keep this content\n";
 		writeFileSync(memoryPath, before);
@@ -58,7 +59,17 @@ describe("cross-agent notification routes", () => {
 		});
 
 		expect(response.status).toBe(410);
+		expect(await response.json()).toEqual({
+			error: "Synthesis completion route retired; use Dreaming",
+			code: "SYNTHESIS_COMPLETION_RETIRED",
+			version: 1,
+			deprecatedRoute: "/api/hooks/synthesis/complete",
+			replacement: { method: "POST", path: "/api/synthesis/trigger" },
+			migration: "Dreaming owns manifest-gated MEMORY.md head publication; do not submit content directly.",
+		});
 		expect(readFileSync(memoryPath, "utf8")).toBe(before);
+		expect(existsSync(join(dir, "agents", "default", "MEMORY.md"))).toBe(false);
+		expect(getSynthesisWorker()).toBeNull();
 	});
 
 	it("injects unread messages at a compatible hook and suppresses them after explicit acknowledgement", async () => {
