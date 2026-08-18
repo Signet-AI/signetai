@@ -249,8 +249,11 @@ export function registerMiscRoutes(app: Hono): void {
 			if (rawPolicy !== undefined && typeof rawPolicy !== "string") {
 				return c.json({ error: "memory must be one of: isolated, shared, group" }, 400);
 			}
-			if (rawGroup !== undefined && typeof rawGroup !== "string") {
+			if (rawGroup !== undefined && rawGroup !== null && typeof rawGroup !== "string") {
 				return c.json({ error: "group must be a string" }, 400);
+			}
+			if (typeof rawGroup === "string" && (rawGroup.length === 0 || rawGroup.length > 128)) {
+				return c.json({ error: "group must be between 1 and 128 characters" }, 400);
 			}
 			resolved = resolveAgentMemoryPolicy(rawPolicy ?? "isolated", rawGroup);
 		} catch (error) {

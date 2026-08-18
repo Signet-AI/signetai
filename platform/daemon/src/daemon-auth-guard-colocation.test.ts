@@ -643,6 +643,32 @@ inference:
 			});
 			expect(readFileSync(join(tmpDir, "agent.yaml"), "utf-8")).toBe(original);
 		});
+		it("POST /api/agents distinguishes omitted, null, valid, and invalid policy_group", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			const cases = [
+				[{ name: "agent-omitted" }, 201],
+				[{ name: "agent-null-isolated", read_policy: "isolated", policy_group: null }, 201],
+				[{ name: "agent-null-shared", read_policy: "shared", policy_group: null }, 201],
+				[{ name: "agent-valid", read_policy: "group", policy_group: "workers" }, 201],
+				[{ name: "agent-number", policy_group: 42 }, 400],
+				[{ name: "agent-empty", policy_group: "" }, 400],
+				[{ name: "agent-oversize", policy_group: "x".repeat(129) }, 400],
+			] as const;
+			for (const [body, expectedStatus] of cases) {
+				const response = await app.request("/api/agents", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(body),
+				});
+				expect(response.status).toBe(expectedStatus);
+				if (expectedStatus === 201) {
+					const created = (await response.json()) as { policy_group: string | null };
+					expect(created.policy_group).toBe((body as { policy_group?: string | null }).policy_group ?? null);
+				}
+			}
+		});
 	});
 
 	describe("knowledge routes need guards", () => {
