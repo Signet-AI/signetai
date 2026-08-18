@@ -410,7 +410,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				...(cachedEmbeddingStatus && Date.now() - statusCacheTime < STATUS_CACHE_TTL
 					? { available: cachedEmbeddingStatus.available }
 					: {}),
-				usage: readEmbeddingUsageSummary(getDbAccessor()),
+				usage: await readEmbeddingUsageSummary(getDbAccessor()),
 			},
 		});
 	});

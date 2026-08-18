@@ -86,10 +86,24 @@ export function recordEmbeddingUsage(input: {
 	});
 	if (!hasDbAccessor()) return;
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			db.prepare(UPSERT_SQL).run(todayKey(input.now), input.agentId ?? "", input.source, input.provider, input.tokens);
-		});
+		void getDbAccessor()
+			.withWriteTxAsync(
+				(db: import("./db-accessor").WriteDb) => {
+					db.prepare(UPSERT_SQL).run(
+						todayKey(input.now),
+						input.agentId ?? "",
+						input.source,
+						input.provider,
+						input.tokens,
+					);
+				},
+				{ operation: "embedding.usage", estimatedWorkUnits: 1 },
+			)
+			.catch((e) => {
+				logger.warn("embedding", "Failed to record embedding usage", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			});
 	} catch (e) {
 		logger.warn("embedding", "Failed to record embedding usage", {
 			error: e instanceof Error ? e.message : String(e),
@@ -109,10 +123,12 @@ export interface EmbeddingUsageSummary {
  * per-provider breakdowns for /api/status. Returns null when the table is
  * absent (pre-migration database) or the DB is unavailable.
  */
-export function readEmbeddingUsageSummary(accessor: DbAccessor, now: Date = new Date()): EmbeddingUsageSummary | null {
+export async function readEmbeddingUsageSummary(
+	accessor: DbAccessor,
+	now: Date = new Date(),
+): Promise<EmbeddingUsageSummary | null> {
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+		return await accessor.withReadDbAsync((db: import("./db-accessor").ReadDb) => {
 			const day = todayKey(now);
 			const totals = db
 				.prepare(
