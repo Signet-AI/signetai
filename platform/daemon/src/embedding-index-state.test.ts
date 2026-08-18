@@ -1,5 +1,8 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { up as embeddingIndexGenerations } from "../../core/src/migrations/091-embedding-index-generations";
 import {
 	beginEmbeddingIndexBuild,
@@ -68,41 +71,67 @@ describe("embedding index state", () => {
 		expect(ensureEmbeddingIndexState(db, config).active).toEqual(active.active);
 	});
 
-	it("keeps provider-unavailable failure durable across restart until its retry time", () => {
-		const raw = new Database(":memory:");
-		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
-		raw.exec(
-			"CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER)",
-		);
-		const db = raw as unknown as WriteDb;
-		const staged = beginEmbeddingIndexBuild(db, {
-			...config,
-			provider: "ollama",
-			model: "qwen3-embedding:0.6b",
-			dimensions: 1024,
-		});
-		db.prepare(
-			"INSERT INTO embeddings_staging (id, content_hash, vector, dimensions) VALUES ('s1', 'h1', X'00', 1024)",
-		).run();
-		failEmbeddingIndexBuild(db, "provider unavailable", "2026-01-01T00:00:00.000Z", {
-			cause: "provider-unavailable",
-			nextAttemptAt: "2026-01-02T00:00:00.000Z",
-		});
-		const resumed = beginEmbeddingIndexBuild(
-			db,
-			{ ...config, provider: "ollama", model: "qwen3-embedding:0.6b", dimensions: 1024 },
-			"2026-01-01T12:00:00.000Z",
-		);
-		expect(resumed.state).toBe("failed");
-		expect(db.prepare("SELECT COUNT(*) AS n FROM embeddings_staging").get()).toEqual({ n: 1 });
-		expect(
-			beginEmbeddingIndexBuild(
-				db,
+	it("keeps provider-unavailable failure durable across a file-backed restart until its retry time", () => {
+		const dir = mkdtempSync(join(tmpdir(), "embedding-index-state-restart-"));
+		const dbPath = join(dir, "memory.db");
+		try {
+			const first = new Database(dbPath);
+			embeddingIndexGenerations(first as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+			first.exec(
+				"CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER)",
+			);
+			const staged = beginEmbeddingIndexBuild(first as unknown as WriteDb, {
+				...config,
+				provider: "ollama",
+				model: "qwen3-embedding:0.6b",
+				dimensions: 1024,
+			});
+			first
+				.prepare(
+					"INSERT INTO embeddings_staging (id, content_hash, vector, dimensions) VALUES ('s1', 'h1', X'00', 1024)",
+				)
+				.run();
+			failEmbeddingIndexBuild(first as unknown as WriteDb, "provider unavailable", "2026-01-01T00:00:00.000Z", {
+				cause: "provider-unavailable",
+				nextAttemptAt: "2026-01-02T00:00:00.000Z",
+			});
+			first.close();
+
+			const reopened = new Database(dbPath);
+			const reopenedDb = reopened as unknown as WriteDb;
+			const persisted = readEmbeddingIndexState(reopenedDb);
+			expect(persisted?.state).toBe("failed");
+			expect(persisted?.staging?.fingerprint).toBe(staged.staging?.fingerprint);
+			expect(
+				JSON.parse(
+					(
+						reopened.prepare("SELECT last_error FROM embedding_index_state WHERE id = 1").get() as {
+							last_error: string;
+						}
+					).last_error,
+				).nextAttemptAt,
+			).toBe("2026-01-02T00:00:00.000Z");
+			expect(reopened.prepare("SELECT COUNT(*) AS n FROM embeddings_staging").get()).toEqual({ n: 1 });
+			expect(
+				beginEmbeddingIndexBuild(
+					reopenedDb,
+					{ ...config, provider: "ollama", model: "qwen3-embedding:0.6b", dimensions: 1024 },
+					"2026-01-01T12:00:00.000Z",
+				).state,
+			).toBe("failed");
+			reopened.close();
+
+			const afterDeadline = new Database(dbPath);
+			const resumed = beginEmbeddingIndexBuild(
+				afterDeadline as unknown as WriteDb,
 				{ ...config, provider: "ollama", model: "qwen3-embedding:0.6b", dimensions: 1024 },
 				"2026-01-02T00:00:00.000Z",
-			).state,
-		).toBe("building");
-		expect(staged.staging?.fingerprint).toBe(resumed.staging?.fingerprint);
+			);
+			expect(resumed.state).toBe("building");
+			afterDeadline.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("stages unknown model changes with identity formatting instead of silently skipping them", () => {
