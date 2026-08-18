@@ -107,6 +107,13 @@ import { flushCliTelemetry, recordCommandInvoked } from "./features/telemetry.js
 import { signetBanner } from "./lib/banner.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { createOfflineSecretApiCall, createSecretCommandApiCall } from "./lib/secrets.js";
+import {
+	checkForUpdates,
+	initUpdateSystem,
+	readUpdateConfigOffline,
+	runUpdate,
+	setUpdateConfigOffline,
+} from "../../../platform/daemon/src/update-system.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
 import {
 	acquireNativeSyncLock,
@@ -1175,9 +1182,34 @@ registerHookCommands(program, {
 
 const MIN_AUTO_UPDATE_INTERVAL = 300;
 const MAX_AUTO_UPDATE_INTERVAL = 604800;
-const reconcileDaemonInstallation = async (): Promise<boolean> => {
-	if (!(await isDaemonRunning())) return true;
-	return await startDaemon(AGENTS_DIR);
+initUpdateSystem(VERSION, AGENTS_DIR);
+const offlineUpdate = {
+	request: async <T>(path: string, opts?: RequestInit): Promise<T | null> => {
+		if (path.startsWith("/api/update/check")) return (await checkForUpdates()) as T;
+		if (path === "/api/update/run" && opts?.method === "POST") {
+			const body = JSON.parse(String(opts.body ?? "{}")) as { targetVersion?: string };
+			return (await runUpdate(body.targetVersion)) as T;
+		}
+		if (path === "/api/update/config") {
+			if (opts?.method === "POST") {
+				const body = JSON.parse(String(opts.body ?? "{}")) as {
+					autoInstall?: boolean;
+					checkInterval?: number;
+					channel?: "stable" | "nightly";
+				};
+				const result = setUpdateConfigOffline(body);
+				return { success: true, ...result } as T;
+			}
+			const config = readUpdateConfigOffline();
+			return {
+				autoInstall: config.autoInstall,
+				checkInterval: config.checkInterval,
+				channel: config.channel,
+				updateInProgress: false,
+			} as T;
+		}
+		return null;
+	},
 };
 
 registerUpdateCommands(program, {
@@ -1191,7 +1223,7 @@ registerUpdateCommands(program, {
 	isOpenClawInstalled: () => new OpenClawConnector().isInstalled(),
 	isOhMyPiInstalled: () => new OhMyPiConnector().isInstalled(),
 	isPiInstalled: () => new PiConnector().isInstalled(),
-	reconcileDaemon: reconcileDaemonInstallation,
+	offline: offlineUpdate,
 	syncBuiltinSkills,
 	syncWorkspaceSourceRepo,
 });

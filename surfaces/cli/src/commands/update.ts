@@ -24,6 +24,9 @@ interface UpdateDeps {
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
 	readonly detectInstallations?: () => SignetInstallationReport;
+	readonly offline?: {
+		readonly request: <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
+	};
 }
 
 const UPDATE_INSTALL_TIMEOUT_MS = 15 * 60_000;
@@ -45,6 +48,10 @@ function formatUpdateChannel(channel: string | undefined): string {
 
 export function registerUpdateCommands(program: Command, deps: UpdateDeps): void {
 	const updateCmd = program.command("update").description("Check, install, and manage auto-updates");
+	const fetchUpdate = async <T>(path: string, opts?: RequestInit & { timeout?: number }): Promise<T | null> => {
+		const daemonResult = await deps.fetchFromDaemon<T>(path, opts);
+		return daemonResult ?? (deps.offline ? await deps.offline.request<T>(path, opts) : null);
+	};
 
 	updateCmd
 		.command("check")
@@ -52,7 +59,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 		.option("-f, --force", "Force check (ignore cache)")
 		.action(async (options) => {
 			const spinner = ora("Checking for updates...").start();
-			const data = await deps.fetchFromDaemon<{
+			const data = await fetchUpdate<{
 				currentVersion?: string;
 				latestVersion?: string;
 				updateAvailable?: boolean;
@@ -113,7 +120,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 			const printInstallationWarning = (): void => {
 				printConcurrentInstallationWarning((deps.detectInstallations ?? detectSignetInstallations)());
 			};
-			const check = await deps.fetchFromDaemon<{
+			const check = await fetchUpdate<{
 				updateAvailable?: boolean;
 				latestVersion?: string;
 				restartRequired?: boolean;
@@ -141,7 +148,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 
 			console.log(chalk.cyan(`Installing v${check.latestVersion}...`));
 			const spinner = ora("Downloading and installing...").start();
-			const data = await deps.fetchFromDaemon<{
+			const data = await fetchUpdate<{
 				success?: boolean;
 				message?: string;
 				output?: string;
@@ -218,7 +225,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 		.command("status")
 		.description("Show auto-update settings and status")
 		.action(async () => {
-			const data = await deps.fetchFromDaemon<{
+			const data = await fetchUpdate<{
 				autoInstall?: boolean;
 				checkInterval?: number;
 				channel?: string;
@@ -256,7 +263,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 		.description("Show or set the update channel (stable or nightly)")
 		.action(async (rawChannel?: string) => {
 			if (!rawChannel) {
-				const data = await deps.fetchFromDaemon<{ channel?: string }>("/api/update/config");
+				const data = await fetchUpdate<{ channel?: string }>("/api/update/config");
 				if (!data) {
 					console.error(chalk.red("Failed to get update channel"));
 					process.exit(1);
@@ -272,7 +279,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 				process.exit(1);
 			}
 
-			const data = await deps.fetchFromDaemon<{
+			const data = await fetchUpdate<{
 				success?: boolean;
 				persisted?: boolean;
 				config?: { channel?: string };
@@ -323,7 +330,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 				process.exit(1);
 			}
 
-			const data = await deps.fetchFromDaemon<{ success?: boolean; persisted?: boolean }>("/api/update/config", {
+			const data = await fetchUpdate<{ success?: boolean; persisted?: boolean }>("/api/update/config", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ autoInstall: true, checkInterval: interval }),
@@ -346,7 +353,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 		.command("disable")
 		.description("Disable unattended auto-update installs")
 		.action(async () => {
-			const data = await deps.fetchFromDaemon<{ success?: boolean; persisted?: boolean }>("/api/update/config", {
+			const data = await fetchUpdate<{ success?: boolean; persisted?: boolean }>("/api/update/config", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ autoInstall: false }),
@@ -365,7 +372,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 
 	updateCmd.action(async () => {
 		const spinner = ora("Checking for updates...").start();
-		const data = await deps.fetchFromDaemon<{
+		const data = await fetchUpdate<{
 			currentVersion?: string;
 			latestVersion?: string;
 			updateAvailable?: boolean;

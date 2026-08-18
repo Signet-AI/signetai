@@ -211,6 +211,12 @@ export function getUpdateConfig(): UpdateConfig {
 	return { ...updateConfig };
 }
 
+/** Read the canonical update config for daemonless recovery commands. */
+export function readUpdateConfigOffline(): UpdateConfig {
+	assertInitialized();
+	return { ...updateConfig };
+}
+
 // ---------------------------------------------------------------------------
 // Error categorization
 // ---------------------------------------------------------------------------
@@ -1113,4 +1119,21 @@ export function setUpdateConfig(patch: { autoInstall?: boolean; checkInterval?: 
 
 	const persisted = persistUpdateConfig(updateConfig);
 	return { config: { ...updateConfig }, persisted };
+}
+
+/** Persist CLI changes without starting the daemon's background timer. */
+export function setUpdateConfigOffline(patch: {
+	autoInstall?: boolean;
+	checkInterval?: number;
+	channel?: UpdateChannel;
+}): { config: UpdateConfig; persisted: boolean } {
+	assertInitialized();
+	if (patch.autoInstall !== undefined) updateConfig.autoInstall = patch.autoInstall;
+	if (patch.checkInterval !== undefined) updateConfig.checkInterval = patch.checkInterval;
+	if (patch.channel !== undefined) {
+		updateConfig.channel = patch.channel;
+		lastUpdateCheck = null;
+		lastUpdateCheckTime = null;
+	}
+	return { config: { ...updateConfig }, persisted: persistUpdateConfig(updateConfig) };
 }
