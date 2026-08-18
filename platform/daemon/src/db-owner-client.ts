@@ -14,6 +14,7 @@ import type {
 } from "./db-owner-protocol";
 import {
 	DB_OWNER_MAX_DEADLINE_MS,
+	DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS,
 	DB_OWNER_MAX_QUEUE_DEPTH,
 	DB_OWNER_MAX_RESULT_BYTES,
 	DB_OWNER_MAX_WORK_UNITS,
@@ -441,10 +442,12 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 		if (!Number.isFinite(submitOptions.deadlineMs) || submitOptions.deadlineMs <= 0) {
 			throw new RangeError("DB owner deadlineMs must be a positive finite number");
 		}
-		if (submitOptions.deadlineMs > MAX_DB_OWNER_DEADLINE_MS) {
+		const maxDeadlineMs =
+			submitOptions.lane === "maintenance" ? DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS : MAX_DB_OWNER_DEADLINE_MS;
+		if (submitOptions.deadlineMs > maxDeadlineMs) {
 			throw new DbOwnerAdmissionError(
 				"DB_OWNER_WORK_BUDGET",
-				`DB owner deadlineMs exceeds the ${MAX_DB_OWNER_DEADLINE_MS}ms admission limit`,
+				`DB owner deadlineMs exceeds the ${maxDeadlineMs}ms admission limit for the ${submitOptions.lane} lane`,
 			);
 		}
 		const estimatedWorkUnits = submitOptions.estimatedWorkUnits ?? 1;

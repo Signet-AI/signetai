@@ -4,12 +4,16 @@
  * Existing databases need a one-time VACUUM to switch from the legacy
  * auto_vacuum=0 mode to incremental mode. That rebuild can take minutes on a
  * large database, so startup only records durable work state. The conversion
- * runs after the daemon is ready and is single-flight across the worker.
+ * runs after the daemon is ready and is single-flight across the worker. In
+ * production the VACUUM executes in the DB-owner child so the rebuild cannot
+ * block HTTP callbacks on the daemon event loop.
  */
 
 import { statSync, statfsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import type { DbOwnerClient } from "./db-owner-client";
+import { dbOwnerVacuumConversion } from "./db-owner-runtime";
 import { logger } from "./logger";
 
 /** Marker table name for the one-time VACUUM conversion. */
@@ -45,6 +49,12 @@ export class DbSpacePreflightError extends Error {
 export interface DbSpaceDeps {
 	readonly statSync: (path: string) => { readonly size: number };
 	readonly statfsSync: (path: string) => { readonly bavail: number; readonly bsize: number };
+}
+
+export interface VacuumConversionOptions {
+	readonly dbPath?: string;
+	readonly deps?: DbSpaceDeps;
+	readonly log?: (message: string) => void;
 }
 
 const dbSpaceDeps: DbSpaceDeps = { statSync, statfsSync };
@@ -336,11 +346,9 @@ export function getFreePageRatio(db: PragmaReadDb): number {
  * This function must only be called by the post-ready worker. It deliberately
  * does not run from either synchronous or asynchronous DB initialization.
  */
-export function convertToIncrementalVacuum(
-	db: PragmaDb,
-	options: { readonly dbPath?: string; readonly deps?: DbSpaceDeps } = {},
-): boolean {
+export function convertToIncrementalVacuum(db: PragmaDb, options: VacuumConversionOptions = {}): boolean {
 	const mode = getAutoVacuumMode(db);
+	const writeLog = options.log ?? ((message: string): void => logger.info("db-vacuum", message));
 
 	// 2 = INCREMENTAL. Already converted or fresh DB created after the fix.
 	if (mode === 2) return false;
@@ -354,11 +362,8 @@ export function convertToIncrementalVacuum(
 	const freelistBefore = db.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
 	const freeBefore = typeof freelistBefore?.freelist_count === "number" ? freelistBefore.freelist_count : 0;
 
-	logger.info(
-		"db-vacuum",
-		`Converting database to incremental auto_vacuum (current mode: ${mode}, free pages: ${freeBefore})`,
-	);
-	logger.info("db-vacuum", "Running one-time VACUUM after readiness; large databases may take several minutes");
+	writeLog(`Converting database to incremental auto_vacuum (current mode: ${mode}, free pages: ${freeBefore})`);
+	writeLog("Running one-time VACUUM after readiness; large databases may take several minutes");
 
 	const startedAt = Date.now();
 	try {
@@ -377,8 +382,7 @@ export function convertToIncrementalVacuum(
 	const freeAfter = typeof freelistAfter?.freelist_count === "number" ? freelistAfter.freelist_count : 0;
 	const modeAfter = getAutoVacuumMode(db);
 
-	logger.info(
-		"db-vacuum",
+	writeLog(
 		`VACUUM complete in ${Math.round(elapsedMs / 1000)}s — free pages: ${freeBefore} -> ${freeAfter}, auto_vacuum: ${mode} -> ${modeAfter}`,
 	);
 
@@ -395,7 +399,7 @@ export function convertToIncrementalVacuum(
  */
 export function startVacuumConversionWorker(
 	accessor: DbAccessor,
-	opts: { readonly startImmediately?: boolean } = {},
+	opts: { readonly startImmediately?: boolean; readonly owner?: DbOwnerClient } = {},
 ): VacuumConversionHandle {
 	let active = true;
 	let timer: ReturnType<typeof setTimeout> | null = null;
@@ -431,8 +435,12 @@ export function startVacuumConversionWorker(
 			});
 
 			try {
-				if (!accessor.vacuumConversionAsync) throw new Error("VACUUM conversion operation is unavailable");
-				await accessor.vacuumConversionAsync();
+				if (opts.owner !== undefined) {
+					await dbOwnerVacuumConversion(opts.owner);
+				} else {
+					if (!accessor.vacuumConversionAsync) throw new Error("VACUUM conversion operation is unavailable");
+					await accessor.vacuumConversionAsync();
+				}
 				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 				accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 					const state = stateFromRow(

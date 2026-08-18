@@ -137,6 +137,22 @@ export async function dbOwnerBatch(
 	return await submitWithAdmission<readonly unknown[]>(owner, { kind: "batch", statements }, options);
 }
 
+export async function dbOwnerVacuumConversion(
+	owner: DbOwnerClient,
+	options: { readonly deadlineMs?: number } = {},
+): Promise<{ readonly converted: boolean }> {
+	return await submitWithAdmission<{ readonly converted: boolean }>(
+		owner,
+		{ kind: "vacuum_conversion" },
+		{
+			operation: "vacuum.conversion",
+			lane: "maintenance",
+			deadlineMs: options.deadlineMs ?? 15 * 60_000,
+			estimatedWorkUnits: 1,
+		},
+	);
+}
+
 /** Execute read-modify-write statements atomically on the serialized owner. */
 export async function dbOwnerTransaction(
 	statements: readonly DbOwnerStatement[],

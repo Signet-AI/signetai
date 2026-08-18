@@ -11,6 +11,7 @@ export type DbOwnerLane = "read" | "write" | "maintenance";
 export const DB_OWNER_MAX_QUEUE_DEPTH = 64;
 export const DB_OWNER_MAX_WORK_UNITS = 10_000;
 export const DB_OWNER_MAX_DEADLINE_MS = 60_000;
+export const DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS = 15 * 60_000;
 export const DB_OWNER_MAX_RESULT_BYTES = 1_048_576;
 export const DB_OWNER_MAX_TRANSACTION_STATEMENTS = 128;
 export type DbOwnerCancellation = "pending" | "requested" | "started";
@@ -143,6 +144,7 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "source_artifact_upsert"; readonly input: DbOwnerSourceArtifactUpsert }
 	| { readonly kind: "source_artifact_upsert_batch"; readonly input: readonly DbOwnerSourceArtifactUpsert[] }
+	| { readonly kind: "vacuum_conversion" }
 	| { readonly kind: "sleep"; readonly durationMs: number };
 
 export interface DbOwnerRecallPayload {

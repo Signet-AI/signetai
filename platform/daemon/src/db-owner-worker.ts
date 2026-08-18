@@ -20,6 +20,7 @@ import type {
 } from "./db-owner-protocol";
 import {
 	DB_OWNER_MAX_DEADLINE_MS,
+	DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS,
 	DB_OWNER_MAX_QUEUE_DEPTH,
 	DB_OWNER_MAX_RESULT_BYTES,
 	DB_OWNER_MAX_TRANSACTION_STATEMENTS,
@@ -372,6 +373,15 @@ export function runDbOwnerWorker(): void {
 			job.request.kind === "source_graph_purge"
 		)
 			return executeSourceGraph(job.request);
+		if (job.request.kind === "vacuum_conversion") {
+			const { convertToIncrementalVacuum } = await import("./db-vacuum");
+			return {
+				converted: convertToIncrementalVacuum(db as unknown as import("./db-vacuum").PragmaDb, {
+					dbPath: ownerDbPath,
+					log: () => {},
+				}),
+			};
+		}
 		if (job.request.kind === "recall") return await executeRecall(job.request.payload);
 		const durationMs = Math.max(0, Math.floor(job.request.durationMs));
 		const wait = new Int32Array(new SharedArrayBuffer(4));
@@ -425,8 +435,10 @@ export function runDbOwnerWorker(): void {
 			cancelled.add(command.jobId);
 			return;
 		}
-		if (command.job.deadlineAt - command.job.enqueuedAt > DB_OWNER_MAX_DEADLINE_MS) {
-			failed(command.job.id, "DB_OWNER_WORK_BUDGET", `DB owner deadline exceeds ${DB_OWNER_MAX_DEADLINE_MS}ms`);
+		const maxDeadlineMs =
+			command.job.lane === "maintenance" ? DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS : DB_OWNER_MAX_DEADLINE_MS;
+		if (command.job.deadlineAt - command.job.enqueuedAt > maxDeadlineMs) {
+			failed(command.job.id, "DB_OWNER_WORK_BUDGET", `DB owner deadline exceeds ${maxDeadlineMs}ms`);
 			return;
 		}
 		if (

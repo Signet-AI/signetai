@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { createDbOwnerClient } from "./db-owner-client";
 import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import {
 	convertToIncrementalVacuum,
@@ -288,6 +289,21 @@ describe("deferred vacuum conversion (#1493)", () => {
 				(readDb.prepare("SELECT COUNT(*) AS count FROM _signet_vacuum_converted").get() as { count: number }).count,
 		);
 		expect(markerCount).toBe(1);
+	});
+
+	it("runs production conversion through the DB owner child", async () => {
+		const db = legacyDbPath();
+		dir = db.dir;
+		initDbAccessor(db.path);
+		const owner = createDbOwnerClient({ dbPath: db.path });
+		await owner.start();
+		try {
+			const worker = startVacuumConversionWorker(getDbAccessor(), { owner, startImmediately: false });
+			await expect(worker.run()).resolves.toMatchObject({ state: "completed", attempts: 1 });
+			expect(owner.health().state).toBe("ready");
+		} finally {
+			await owner.close();
+		}
 	});
 
 	it("a killed or failed conversion remains retryable without blocking initialization", async () => {

@@ -49,13 +49,15 @@ Every submitted job has this shape:
       queryEmbedding?: number[] | null
     }
   } | {
+    kind: "vacuum_conversion"
+  } | {
     kind: "sleep",
     durationMs: number
   }
 }
 ```
 
-`enqueuedAt` and `deadlineAt` use Unix milliseconds. `deadlineAt` is an absolute deadline, so queue wait and execution consume the same budget. Admission is bounded at 64 pending jobs, 10,000 estimated work units per job, and a 60-second deadline. `maxResultBytes` is bounded at 1 MiB. A result above that limit is rejected with `DB_OWNER_RESULT_TOO_LARGE`; callers must page the SQL query or select fewer columns. The owner never emits an unbounded result line. `estimatedWorkUnits` is admission and telemetry metadata, not permission to exceed the deadline. The `sleep` request exists only for lifecycle and deadline tests and is not a production database operation.
+`enqueuedAt` and `deadlineAt` use Unix milliseconds. `deadlineAt` is an absolute deadline, so queue wait and execution consume the same budget. Admission is bounded at 64 pending jobs, 10,000 estimated work units per job, and a 60-second deadline for read/write jobs. Maintenance jobs may use a 15-minute deadline for bounded, killable operations such as the one-time VACUUM conversion. `maxResultBytes` is bounded at 1 MiB. A result above that limit is rejected with `DB_OWNER_RESULT_TOO_LARGE`; callers must page the SQL query or select fewer columns. The owner never emits an unbounded result line. `estimatedWorkUnits` is admission and telemetry metadata, not permission to exceed the deadline. The `sleep` request exists only for lifecycle and deadline tests and is not a production database operation.
 
 ## Wire messages
 

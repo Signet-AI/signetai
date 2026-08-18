@@ -2481,7 +2481,7 @@ async function main() {
 		deferredRuntimeScheduler.scheduleIntegrity(async (): Promise<void> => {
 			logFdSnapshot("server-ready");
 			writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
-			vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor());
+			vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor(), { owner: dbOwnerClient ?? undefined });
 			await runDeferredIntegrityCheck(getDbAccessor(), MEMORY_DB, {
 				timeoutMs: DEFERRED_INTEGRITY_TIMEOUT_MS,
 				ownerTimeoutMs: DEFERRED_INTEGRITY_OWNER_TIMEOUT_MS,
