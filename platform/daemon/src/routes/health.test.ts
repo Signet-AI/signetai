@@ -202,6 +202,30 @@ describe("GET /health/ready", () => {
 });
 
 describe("GET /health (back-compat)", () => {
+	test("returns 200 with db false within the SLA when read admission is saturated", async () => {
+		const app = makeApp();
+		const accessor = getDbAccessor();
+		const original = accessor.withReadDbAsync;
+		accessor.withReadDbAsync = async (fn, options) => {
+			if (options?.operation === "health") {
+				await Bun.sleep(options.timeoutMs ?? 10_000);
+				throw new Error("simulated saturated read pool");
+			}
+			return original(fn, options);
+		};
+		const startedAt = performance.now();
+		const res = await app.request("http://localhost/health", {
+			signal: AbortSignal.timeout(900),
+		});
+		const elapsedMs = performance.now() - startedAt;
+		accessor.withReadDbAsync = original;
+
+		expect(res.status).toBe(200);
+		expect(elapsedMs).toBeLessThan(900);
+		const body = (await res.json()) as { db: boolean };
+		expect(body.db).toBe(false);
+	});
+
 	test("legacy endpoint still responds", async () => {
 		const app = makeApp();
 		const res = await app.request("http://localhost/health");
