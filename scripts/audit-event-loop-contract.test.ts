@@ -4,11 +4,14 @@ import { join, relative, resolve } from "node:path";
 import { expect, test } from "bun:test";
 import ts from "typescript";
 import {
+	evaluateCountRatchet,
 	findStaleBaselineSites,
 	loadBaseline,
+	loadCountBaseline,
 	occurrenceKeys,
 	runAudit,
 	renderReport,
+	type LegacyDbCountBaseline,
 } from "./audit-event-loop-contract";
 
 test("the deterministic ledger retains the exact 724-site inventory", () => {
@@ -77,7 +80,10 @@ test("the ledger rejects a replacement call at the same path and API", () => {
 			},
 		];
 		const result = runAudit({ sourceRoot: root, baselineSites: baseline });
-		expect(result.violations).toHaveLength(1);
+		const kinds = result.violations.map((violation) => violation.kind);
+		// The replacement call is both beyond the ledger and unmarked.
+		expect(kinds).toContain("new-legacy-db-access");
+		expect(kinds).toContain("unmarked-legacy-db-access");
 		expect(result.violations[0]?.path).toBe("legacy.ts");
 		expect(occurrenceKeys(result.sites)).not.toEqual(occurrenceKeys(baseline));
 		expect(findStaleBaselineSites(result.sites, baseline)).toHaveLength(1);
@@ -93,7 +99,10 @@ test("the scanner detects literal bracket access to legacy DB APIs", () => {
 		const result = runAudit({ sourceRoot: root });
 		expect(result.sites).toHaveLength(1);
 		expect(result.sites[0]?.api).toBe("withReadDb");
-		expect(result.violations).toHaveLength(1);
+		// Bracket access without a marker is both beyond the ledger and unmarked.
+		expect(result.violations).toHaveLength(2);
+		expect(result.violations.map((violation) => violation.kind)).toContain("new-legacy-db-access");
+		expect(result.violations.map((violation) => violation.kind)).toContain("unmarked-legacy-db-access");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -283,6 +292,79 @@ test("the generated report describes the type boundary and transitional counts",
 	expect(report).toContain("101 synchronous writes and 139 synchronous reads");
 	expect(report).toContain("type boundary");
 	expect(report).not.toContain("1061");
+});
+
+const countBaseline = (total: number, withReadDb: number, withWriteTx: number): LegacyDbCountBaseline => ({
+	version: 1,
+	generatedFrom: "test",
+	markedCallsites: { total, withReadDb, withWriteTx },
+});
+
+test("the count ratchet fails when the marker count grows past the baseline", () => {
+	const outcome = evaluateCountRatchet({ total: 241, withReadDb: 139, withWriteTx: 102 }, countBaseline(240, 139, 101));
+	expect(outcome.status).toBe("increase");
+	expect(outcome.message).toContain("240 -> 241");
+	expect(outcome.message).toContain("only goes down");
+});
+
+test("the count ratchet passes with guidance when the marker count decreases", () => {
+	const outcome = evaluateCountRatchet({ total: 238, withReadDb: 138, withWriteTx: 100 }, countBaseline(240, 139, 101));
+	expect(outcome.status).toBe("decrease");
+	expect(outcome.message).toContain("240 -> 238");
+	expect(outcome.message).toContain("legacy-sync-db-baseline");
+});
+
+test("the count ratchet passes when the marker count holds the baseline", () => {
+	const outcome = evaluateCountRatchet({ total: 240, withReadDb: 140, withWriteTx: 100 }, countBaseline(240, 139, 101));
+	expect(outcome.status).toBe("pass");
+});
+
+test("the committed count baseline matches the live marker count", () => {
+	const baseline = loadCountBaseline(resolve("scripts/legacy-sync-db-baseline.json"));
+	const result = runAudit({ sourceRoot: resolve("platform/daemon/src") });
+	expect(result.violations.filter((violation) => violation.kind === "unmarked-legacy-db-access")).toEqual([]);
+	expect(evaluateCountRatchet(result.legacyDbAccess, baseline).status).toBe("pass");
+});
+
+test("an unmarked synchronous DB call is a violation even with no baseline", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-legacy-ratchet-"));
+	try {
+		writeFileSync(
+			join(root, "unmarked.ts"),
+			"getDbAccessor().withReadDb((db) => db);\nconst far = getDbAccessor().withWriteTx((db) => db);\n",
+		);
+		const result = runAudit({ sourceRoot: root });
+		const unmarked = result.violations.filter((violation) => violation.kind === "unmarked-legacy-db-access");
+		expect(unmarked).toHaveLength(1);
+		expect(unmarked[0]?.path).toBe("unmarked.ts");
+		expect(unmarked[0]?.message).toContain("1(withReadDb), 2(withWriteTx)");
+		expect(unmarked[0]?.message).toContain("without a LEGACY_SYNC_DB_ACCESS marker");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a marker above the call line keeps the site marked, a distant marker does not", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-legacy-ratchet-marker-"));
+	try {
+		writeFileSync(
+			join(root, "placement.ts"),
+			[
+				"// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site",
+				"getDbAccessor().withReadDb((db) => db);",
+				"const unrelated = 1;",
+				"// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site",
+				"const gap = 2;",
+				"getDbAccessor().withWriteTx((db) => db);",
+			].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		const unmarkedViolations = result.violations.filter((violation) => violation.kind === "unmarked-legacy-db-access");
+		expect(unmarkedViolations).toHaveLength(1);
+		expect(unmarkedViolations[0]?.message).toContain("6(withWriteTx)");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 // Keep the production/public type distinction visible in source review. The

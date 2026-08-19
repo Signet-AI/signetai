@@ -169,6 +169,14 @@ no non-null assertions (`!`), explicit return types on all exported
 functions, `readonly` where mutation is not intended, `as const` unions
 over `enum`.
 
+**Legacy synchronous DB access:** `@ts-expect-error LEGACY_SYNC_DB_ACCESS` marks
+the remaining synchronous `withReadDb`/`withWriteTx` call sites in the daemon;
+CI (`bun scripts/audit-event-loop-contract.ts`) ratchets the count in
+`scripts/legacy-sync-db-baseline.json` down only. To convert a site, switch the
+call to `withReadDbAsync`/`withWriteTxAsync` (thread an async wrapper up to the
+nearest await boundary), delete the marker, and when the count drops, re-run
+`bun scripts/legacy-sync-db-baseline.ts` in the same PR.
+
 **Commit messages:** Conventional commits with a 50-character subject
 line and 72-character body width. Use imperative mood. Types: `feat`,
 `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`,

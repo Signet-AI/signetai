@@ -56,13 +56,39 @@ export interface LegacyDbAccessViolation {
 
 export interface LegacyDbAccessCounts {
 	readonly total: number;
-	readonly withWriteTx: number;
 	readonly withReadDb: number;
+	readonly withWriteTx: number;
+}
+
+/** A synchronous DB call site with no LEGACY_SYNC_DB_ACCESS marker above it. */
+export interface UnmarkedLegacyDbAccessViolation {
+	readonly kind: "unmarked-legacy-db-access";
+	readonly path: string;
+	readonly unmarked: number;
+	readonly message: string;
+}
+
+/** Committed marker-count snapshot; the ratchet fails when the live count grows past it. */
+export interface LegacyDbCountBaseline {
+	readonly version: 1;
+	readonly generatedFrom: string;
+	readonly markedCallsites: {
+		readonly total: number;
+		readonly withReadDb: number;
+		readonly withWriteTx: number;
+	};
+}
+
+export type RatchetStatus = "pass" | "decrease" | "increase";
+
+export interface RatchetOutcome {
+	readonly status: RatchetStatus;
+	readonly message: string;
 }
 
 export interface AuditResult {
 	readonly sites: readonly AuditSite[];
-	readonly violations: readonly (ImportBoundaryViolation | LegacyDbAccessViolation)[];
+	readonly violations: readonly (ImportBoundaryViolation | LegacyDbAccessViolation | UnmarkedLegacyDbAccessViolation)[];
 	readonly legacyDbAccess: LegacyDbAccessCounts;
 }
 
@@ -81,10 +107,19 @@ interface AuditOptions {
 
 const DEFAULT_SOURCE_ROOT = "platform/daemon/src";
 const DEFAULT_BASELINE = "scripts/event-loop-contract-baseline.json";
+const DEFAULT_COUNT_BASELINE = "scripts/legacy-sync-db-baseline.json";
 const DEFAULT_REPORT = "docs/event-loop-contract-audit.md";
 const SYNC_COMPAT_MODULE = "db-accessor-sync";
 const SOURCE_MODULE_EXTENSIONS = [".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".jsx", ".tsx"] as const;
 const LEGACY_MARKER = /@ts-expect-error LEGACY_SYNC_DB_ACCESS: (withReadDb|withWriteTx)/g;
+const MARKER_LINE = /LEGACY_SYNC_DB_ACCESS/;
+/**
+ * A call site counts as marked only when a LEGACY_SYNC_DB_ACCESS marker sits on
+ * the line directly above the call — exactly the line whose errors a
+ * `@ts-expect-error` directive suppresses, and the only placement the
+ * compiler accepts (an unused directive is itself an error).
+ */
+const MARKER_WINDOW_LINES = 1;
 
 function isExcludedSource(path: string): boolean {
 	return (
@@ -275,12 +310,20 @@ function findImportBoundaryViolations(
 	return violations;
 }
 
-function findLegacyDbAccessSites(sourceRoot: string): AuditSite[] {
+function findLegacyDbAccessSites(sourceRoot: string): {
+	readonly sites: AuditSite[];
+	readonly unmarked: UnmarkedCallSite[];
+} {
 	const sites: AuditSite[] = [];
+	const unmarked: UnmarkedCallSite[] = [];
 	for (const path of walk(sourceRoot)) {
 		const source = readFileSync(path, "utf8");
 		const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 		const lines = source.split("\n");
+		const markerLines = new Set<number>();
+		for (let index = 0; index < lines.length; index++) {
+			if (MARKER_LINE.test(lines[index] ?? "")) markerLines.add(index + 1);
+		}
 		const relativePath = relative(sourceRoot, path).replaceAll("\\", "/");
 		const visit = (node: ts.Node): void => {
 			if (ts.isCallExpression(node)) {
@@ -305,13 +348,28 @@ function findLegacyDbAccessSites(sourceRoot: string): AuditSite[] {
 						source: lines[line - 1]?.trim() ?? "",
 						category: "hot-path",
 					});
+					let marked = false;
+					for (let candidate = line - 1; candidate >= Math.max(1, line - MARKER_WINDOW_LINES); candidate--) {
+						if (markerLines.has(candidate)) {
+							marked = true;
+							break;
+						}
+					}
+					if (!marked) unmarked.push({ path: relativePath, line, api: api as LegacyDbApi });
 				}
 			}
 			ts.forEachChild(node, visit);
 		};
 		visit(sourceFile);
 	}
-	return sites;
+	return { sites, unmarked };
+}
+
+/** A synchronous DB call site with no LEGACY_SYNC_DB_ACCESS marker within the marker window. */
+export interface UnmarkedCallSite {
+	readonly path: string;
+	readonly line: number;
+	readonly api: LegacyDbApi;
 }
 
 function siteKey(site: Pick<AuditSite, "path" | "api" | "source">): string {
@@ -369,7 +427,7 @@ function findNewLegacyDbAccessViolations(
 	return violations;
 }
 
-function countLegacyDbAccess(sourceRoot: string): LegacyDbAccessCounts {
+export function countLegacyDbAccess(sourceRoot: string): LegacyDbAccessCounts {
 	let withReadDb = 0;
 	let withWriteTx = 0;
 	for (const path of walk(sourceRoot)) {
@@ -382,14 +440,85 @@ function countLegacyDbAccess(sourceRoot: string): LegacyDbAccessCounts {
 	return { total: withReadDb + withWriteTx, withReadDb, withWriteTx };
 }
 
+export function findUnmarkedLegacyDbAccess(unmarked: readonly UnmarkedCallSite[]): UnmarkedLegacyDbAccessViolation[] {
+	if (unmarked.length === 0) return [];
+	const byPath = new Map<string, UnmarkedCallSite[]>();
+	for (const site of unmarked) {
+		const sites = byPath.get(site.path) ?? [];
+		sites.push(site);
+		byPath.set(site.path, sites);
+	}
+	return [...byPath.entries()]
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([path, sites]) => ({
+			kind: "unmarked-legacy-db-access" as const,
+			path,
+			unmarked: sites.length,
+			message:
+				`${path}:${sites.map((site) => `${site.line}(${site.api})`).join(", ")} calls synchronous DB APIs ` +
+				`without a LEGACY_SYNC_DB_ACCESS marker on the line above; new synchronous DB access is not allowed — ` +
+				`convert the call site to withReadDbAsync/withWriteTxAsync (or thread an async wrapper) instead`,
+		}));
+}
+
+export function evaluateCountRatchet(counts: LegacyDbAccessCounts, baseline: LegacyDbCountBaseline): RatchetOutcome {
+	const baselineTotal = baseline.markedCallsites.total;
+	if (counts.total > baselineTotal) {
+		return {
+			status: "increase",
+			message:
+				`legacy sync DB marker count increased: ${baselineTotal} -> ${counts.total} ` +
+				`(withReadDb ${baseline.markedCallsites.withReadDb} -> ${counts.withReadDb}, ` +
+				`withWriteTx ${baseline.markedCallsites.withWriteTx} -> ${counts.withWriteTx}); ` +
+				`the ratchet only goes down — convert the new call site to withReadDbAsync/withWriteTxAsync`,
+		};
+	}
+	if (counts.total < baselineTotal) {
+		return {
+			status: "decrease",
+			message:
+				`legacy sync DB marker count decreased: ${baselineTotal} -> ${counts.total}; ` +
+				`commit the new count in scripts/legacy-sync-db-baseline.json in this PR to tighten the ratchet ` +
+				`(run: bun scripts/legacy-sync-db-baseline.ts)`,
+		};
+	}
+	return { status: "pass", message: `legacy sync DB marker count holds at ${counts.total}` };
+}
+
+export function loadCountBaseline(path = DEFAULT_COUNT_BASELINE): LegacyDbCountBaseline {
+	const baseline = JSON.parse(readFileSync(resolve(path), "utf8")) as LegacyDbCountBaseline;
+	if (baseline.version !== 1 || typeof baseline.markedCallsites?.total !== "number") {
+		throw new Error(`Invalid legacy sync DB count baseline: ${path}`);
+	}
+	return baseline;
+}
+
+export function writeCountBaseline(
+	counts: LegacyDbAccessCounts,
+	path = DEFAULT_COUNT_BASELINE,
+	generatedFrom = "bun scripts/legacy-sync-db-baseline.ts",
+): void {
+	const output: LegacyDbCountBaseline = {
+		version: 1,
+		generatedFrom,
+		markedCallsites: {
+			total: counts.total,
+			withReadDb: counts.withReadDb,
+			withWriteTx: counts.withWriteTx,
+		},
+	};
+	writeFileSync(resolve(path), `${JSON.stringify(output, null, 2)}\n`);
+}
+
 export function runAudit(options: AuditOptions): AuditResult {
-	const sites = findLegacyDbAccessSites(options.sourceRoot);
+	const { sites, unmarked } = findLegacyDbAccessSites(options.sourceRoot);
 	const baselineSites = options.baselineSites ?? [];
 	return {
 		sites,
 		violations: [
 			...findImportBoundaryViolations(options.sourceRoot, new Set(options.allowedSyncCompatImporters ?? [])),
 			...findNewLegacyDbAccessViolations(sites, baselineSites),
+			...findUnmarkedLegacyDbAccess(unmarked),
 		],
 		legacyDbAccess: countLegacyDbAccess(options.sourceRoot),
 	};
@@ -448,6 +577,7 @@ A runtime-computed require() or import() can still reach a source-tree file when
 
 function main(): void {
 	const baselineSites = loadBaseline();
+	const countBaseline = loadCountBaseline();
 	const result = runAudit({ sourceRoot: resolve(DEFAULT_SOURCE_ROOT), baselineSites });
 	const report = renderReport(baselineSites, result.legacyDbAccess);
 	writeFileSync(resolve(DEFAULT_REPORT), report);
@@ -455,6 +585,13 @@ function main(): void {
 	console.log(
 		`Legacy DB sites: ${result.legacyDbAccess.total} (${result.legacyDbAccess.withWriteTx} writes, ${result.legacyDbAccess.withReadDb} reads)`,
 	);
+	const ratchet = evaluateCountRatchet(result.legacyDbAccess, countBaseline);
+	if (ratchet.status === "increase") {
+		console.error(`RATCHET FAIL: ${ratchet.message}`);
+		process.exitCode = 1;
+	} else {
+		console.log(`Ratchet: ${ratchet.message}`);
+	}
 	if (result.violations.length > 0) {
 		for (const violation of result.violations) console.error(violation.message);
 		process.exitCode = 1;
