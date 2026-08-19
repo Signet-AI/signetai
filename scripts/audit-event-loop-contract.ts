@@ -507,7 +507,9 @@ export function writeCountBaseline(
 			withWriteTx: counts.withWriteTx,
 		},
 	};
-	writeFileSync(resolve(path), `${JSON.stringify(output, null, 2)}\n`);
+	// Tab indentation matches Biome's canonical JSON formatting so
+	// regenerated baselines never churn the tree.
+	writeFileSync(resolve(path), `${JSON.stringify(output, null, "	")}\n`);
 }
 
 export function runAudit(options: AuditOptions): AuditResult {
