@@ -33,7 +33,7 @@ import {
 } from "./discord-source-fetch";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { getSecret } from "./secrets";
-import { indexSourceArtifactStructure, purgeSourceArtifactStructure } from "./source-artifact-graph";
+import { indexSourceArtifactStructureAsync, purgeSourceArtifactStructureAsync } from "./source-artifact-graph";
 import type { SourceProviderAdapter, SourceProviderSyncContext, SourceProviderSyncResult } from "./source-providers";
 import { purgeSourceOwnedRows } from "./source-purge";
 
@@ -233,7 +233,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 		const messageChannels = [...channelRows, ...threadMap.values()].filter(isDiscordTextReadableChannel);
 		for (const channel of messageChannels) {
 			if (!context.shouldContinue()) break;
-			const previousCheckpoint = readDiscordCheckpoint(context.source.id, agentId, guild.id, channel.id);
+			const previousCheckpoint = await readDiscordCheckpoint(context.source.id, agentId, guild.id, channel.id);
 			const afterCursor = previousCheckpoint?.latestCursor ?? undefined;
 			if (afterCursor) incrementalMessageChannelPaths.add(discordChannelPath(guild.id, channel.id));
 			const messages = await fetchChannelMessages(
@@ -306,7 +306,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 	}
 
 	if (failures.length === 0 && scanned === total) {
-		purgeStaleDiscordArtifacts(context.source.id, agentId, syncStartedAt, {
+		await purgeStaleDiscordArtifacts(context.source.id, agentId, syncStartedAt, {
 			preserveMessageChannelPaths: [...incrementalMessageChannelPaths],
 		});
 	}
@@ -361,9 +361,9 @@ async function syncDiscordGatewayTailSource(
 				if (message.poll)
 					indexed += await writeArtifact(context.source, agentId, pollArtifact(guild, channel, message));
 			} else if (gatewayEventType === "MESSAGE_UPDATE") {
-				const patched = patchedMessageArtifact(context.source, agentId, guildId, channelId, messageId, payload);
+				const patched = await patchedMessageArtifact(context.source, agentId, guildId, channelId, messageId, payload);
 				if (patched) indexed += await writeArtifact(context.source, agentId, patched);
-				purgeClearedPartialUpdateArtifacts(context.source, agentId, guildId, channelId, messageId, payload);
+				await purgeClearedPartialUpdateArtifacts(context.source, agentId, guildId, channelId, messageId, payload);
 			}
 			indexed += await writeArtifact(
 				context.source,
@@ -430,7 +430,7 @@ async function writeArtifact(source: SignetSourceEntry, agentId: string, artifac
 		sourceMeta: artifact.meta,
 	});
 	if (indexesSourceArtifactGraph(artifact)) {
-		indexSourceArtifactStructure({
+		await indexSourceArtifactStructureAsync({
 			agentId,
 			sourceId: source.id,
 			sourceKind: artifact.kind,
@@ -546,12 +546,12 @@ async function writeFailureArtifact(
 	});
 }
 
-function purgeStaleDiscordArtifacts(
+async function purgeStaleDiscordArtifacts(
 	sourceId: string,
 	agentId: string,
 	syncStartedAt: string,
 	options: { readonly preserveMessageChannelPaths?: readonly string[] } = {},
-): number {
+): Promise<number> {
 	const preservePaths = options.preserveMessageChannelPaths ?? [];
 	const preserveClause =
 		preservePaths.length > 0
@@ -570,9 +570,8 @@ function purgeStaleDiscordArtifacts(
 					...preservePaths.flatMap((path) => [`${path}/messages/%`, `${path}/message/%`]),
 				]
 			: [agentId, sourceId, syncStartedAt];
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const rows = getDbAccessor().withReadDb(
-		(db: import("./db-accessor").ReadDb) =>
+	const rows = await getDbAccessor().withReadDbAsync(
+		(db) =>
 			db
 				.prepare(
 					`SELECT source_path FROM memory_artifacts
@@ -582,21 +581,23 @@ function purgeStaleDiscordArtifacts(
 					   ${preserveClause}`,
 				)
 				.all(...params) as Array<{ source_path: string }>,
+		{ operation: "discord-source.purge-stale.read" },
 	);
-	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
-		countChanges(
-			db
-				.prepare(
-					`DELETE FROM memory_artifacts
-					 WHERE agent_id = ?
-					   AND source_id = ?
-					   AND updated_at < ?
-					   ${preserveClause}`,
-				)
-				.run(...params),
-		),
+	for (const row of rows) await purgeSourceArtifactStructureAsync({ agentId, sourceId, sourcePath: row.source_path });
+	return await getDbAccessor().withWriteTxAsync(
+		(db) =>
+			countChanges(
+				db
+					.prepare(
+						`DELETE FROM memory_artifacts
+						 WHERE agent_id = ?
+						   AND source_id = ?
+						   AND updated_at < ?
+						   ${preserveClause}`,
+					)
+					.run(...params),
+			),
+		{ operation: "discord-source.purge-stale.delete" },
 	);
 }
 
@@ -620,15 +621,14 @@ interface DiscordCheckpoint {
 	readonly backfillComplete: boolean;
 }
 
-function readDiscordCheckpoint(
+async function readDiscordCheckpoint(
 	sourceId: string,
 	agentId: string,
 	guildId: string,
 	channelId: string,
-): DiscordCheckpoint | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const row = getDbAccessor().withReadDb(
-		(db: import("./db-accessor").ReadDb) =>
+): Promise<DiscordCheckpoint | null> {
+	const row = await getDbAccessor().withReadDbAsync(
+		(db) =>
 			db
 				.prepare(
 					`SELECT source_meta_json FROM memory_artifacts
@@ -641,6 +641,7 @@ function readDiscordCheckpoint(
 				.get(agentId, sourceId, `discord://source/${sourceId}/checkpoint/${guildId}/${channelId}`) as
 				| { source_meta_json: string | null }
 				| undefined,
+		{ operation: "discord-source.checkpoint.read" },
 	);
 	if (!row?.source_meta_json) return null;
 	try {
@@ -862,18 +863,17 @@ function messageArtifact(guild: DiscordGuild, channel: DiscordChannel, msg: Disc
 	};
 }
 
-function patchedMessageArtifact(
+async function patchedMessageArtifact(
 	source: SignetSourceEntry,
 	agentId: string,
 	guildId: string,
 	channelId: string,
 	messageId: string,
 	payload: unknown,
-): DiscordArtifact | null {
+): Promise<DiscordArtifact | null> {
 	if (!isRecord(payload)) return null;
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const row = getDbAccessor().withReadDb(
-		(db: import("./db-accessor").ReadDb) =>
+	const row = await getDbAccessor().withReadDbAsync(
+		(db) =>
 			db
 				.prepare(
 					`SELECT content, source_meta_json
@@ -929,14 +929,14 @@ function patchedMessageArtifact(
 	};
 }
 
-function purgeClearedPartialUpdateArtifacts(
+async function purgeClearedPartialUpdateArtifacts(
 	source: SignetSourceEntry,
 	agentId: string,
 	guildId: string,
 	channelId: string,
 	messageId: string,
 	payload: unknown,
-): number {
+): Promise<number> {
 	if (!isRecord(payload)) return 0;
 	const clearedKinds: string[] = [];
 	if (hasOwn(payload, "poll") && !isRecord(payload.poll)) clearedKinds.push("source_discord_poll");
@@ -955,9 +955,8 @@ function purgeClearedPartialUpdateArtifacts(
 	const sourceParentPath = `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`;
 	const placeholders = clearedKinds.map(() => "?").join(", ");
 	const params = [agentId, source.id, sourceParentPath, ...clearedKinds];
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const rows = getDbAccessor().withReadDb(
-		(db: import("./db-accessor").ReadDb) =>
+	const rows = await getDbAccessor().withReadDbAsync(
+		(db) =>
 			db
 				.prepare(
 					`SELECT source_path FROM memory_artifacts
@@ -967,21 +966,24 @@ function purgeClearedPartialUpdateArtifacts(
 					   AND source_kind IN (${placeholders})`,
 				)
 				.all(...params) as Array<{ source_path: string }>,
+		{ operation: "discord-source.partial-purge.read" },
 	);
-	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId: source.id, sourcePath: row.source_path });
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
-		countChanges(
-			db
-				.prepare(
-					`DELETE FROM memory_artifacts
-					 WHERE agent_id = ?
-					   AND source_id = ?
-					   AND source_parent_path = ?
-					   AND source_kind IN (${placeholders})`,
-				)
-				.run(...params),
-		),
+	for (const row of rows)
+		await purgeSourceArtifactStructureAsync({ agentId, sourceId: source.id, sourcePath: row.source_path });
+	return await getDbAccessor().withWriteTxAsync(
+		(db) =>
+			countChanges(
+				db
+					.prepare(
+						`DELETE FROM memory_artifacts
+						 WHERE agent_id = ?
+						   AND source_id = ?
+						   AND source_parent_path = ?
+						   AND source_kind IN (${placeholders})`,
+					)
+					.run(...params),
+			),
+		{ operation: "discord-source.partial-purge.delete" },
 	);
 }
 

@@ -91,27 +91,27 @@ function getClearRecoveryTranscriptTarget(
 	return { sessionKey: row.session_key, transcript: row.content };
 }
 
-export function recoverMissingSessionEndOnClearStart(
+export async function recoverMissingSessionEndOnClearStart(
 	req: ClearSessionStartRequest,
 	agentId: string,
 	completedAt: string,
-): string | undefined {
+): Promise<string | undefined> {
 	const sessionKey = req.sessionKey?.trim();
 	if (!sessionKey) return undefined;
 
 	try {
-		// Keep target selection and completion in one write transaction so
-		// parallel clear hooks cannot race a transcript back into the live set.
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		const result = getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			const target = getClearRecoveryTranscriptTarget(db, req, sessionKey, agentId);
-			if (!target) return { skipped: "no-stored-transcript" as const };
-			const completed = markSessionTranscriptCompletedInTx(db, target.sessionKey, agentId, completedAt);
-			if (!completed) {
-				return { skipped: "already-completed" as const, recoveredSessionKey: target.sessionKey };
-			}
-			return { recoveredSessionKey: target.sessionKey, transcriptChars: target.transcript.length };
-		});
+		const result = await getDbAccessor().withWriteTxAsync(
+			(db) => {
+				const target = getClearRecoveryTranscriptTarget(db, req, sessionKey, agentId);
+				if (!target) return { skipped: "no-stored-transcript" as const };
+				const completed = markSessionTranscriptCompletedInTx(db, target.sessionKey, agentId, completedAt);
+				if (!completed) {
+					return { skipped: "already-completed" as const, recoveredSessionKey: target.sessionKey };
+				}
+				return { recoveredSessionKey: target.sessionKey, transcriptChars: target.transcript.length };
+			},
+			{ operation: "session-end.clear-recovery" },
+		);
 
 		if ("transcriptChars" in result) {
 			logger.info("hooks", "Recovered missing session-end completion from clear session-start", {

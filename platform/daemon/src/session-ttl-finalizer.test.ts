@@ -21,7 +21,7 @@ describe("TTL eviction finalizer (#902)", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	}
 
-	it("writes a ttl_expired checkpoint from residual continuity state", () => {
+	it("writes a ttl_expired checkpoint from residual continuity state", async () => {
 		setup();
 		const sessionKey = "ttl-checkpoint-sess";
 		initContinuity(sessionKey, "hermes", "test-project");
@@ -32,7 +32,7 @@ describe("TTL eviction finalizer (#902)", () => {
 		});
 		expect(getState(sessionKey)).toBeDefined();
 
-		const outcome = handler({
+		const outcome = await handler({
 			sessionKey,
 			agentId: "default",
 			runtimePath: "plugin",
@@ -53,7 +53,7 @@ describe("TTL eviction finalizer (#902)", () => {
 		clearContinuity(sessionKey);
 	});
 
-	it("marks a retained transcript complete and deduplicates repeated TTL finalization", () => {
+	it("marks a retained transcript complete and deduplicates repeated TTL finalization", async () => {
 		setup();
 		const transcript = `User: ${"x".repeat(600)}`;
 		upsertSessionTranscript("ttl-transcript", transcript, "plugin", null, "agent-a");
@@ -68,8 +68,8 @@ describe("TTL eviction finalizer (#902)", () => {
 			claimedAt: new Date().toISOString(),
 		};
 
-		expect(handler(info)).toBe("finalized");
-		expect(handler(info)).toBe("finalized");
+		expect(await handler(info)).toBe("finalized");
+		expect(await handler(info)).toBe("finalized");
 		const row = getDbAccessor().withReadDb(
 			(db) =>
 				db
@@ -80,7 +80,7 @@ describe("TTL eviction finalizer (#902)", () => {
 		expect(row?.content_hash).toBeTruthy();
 	});
 
-	it("skips when there is no retained transcript", () => {
+	it("skips when there is no retained transcript", async () => {
 		setup();
 		const handler = createTtlEvictionHandler({
 			accessor: getDbAccessor(),
@@ -88,7 +88,7 @@ describe("TTL eviction finalizer (#902)", () => {
 		});
 
 		expect(
-			handler({
+			await handler({
 				sessionKey: "ttl-empty-sess",
 				agentId: "default",
 				runtimePath: "plugin",

@@ -3,11 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { DbOwnerDiedError } from "./db-owner-client";
 import { deriveSessionEndFallbackId } from "./session-end-recovery";
 import { markSessionTranscriptCompleted, upsertSessionTranscript } from "./session-transcripts";
 import { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } from "./transcript-capture-worker";
 import { normalizeSessionTranscript } from "./transcript-normalization";
-import { runTranscriptRecoveryScan } from "./transcript-recovery-worker";
+import { runTranscriptRecoveryScan, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 
 let dir = "";
 let claudeRoot = "";
@@ -360,5 +361,139 @@ describe("transcript recovery worker", () => {
 		const second = await scan();
 		expect(second.skippedUnchanged).toBe(1);
 		expect(second.examined).toBe(0);
+	});
+
+	it("resumes a bounded scan from its durable frontier", async () => {
+		const firstPath = join(claudeRoot, "-repo", "a-frontier.jsonl");
+		const secondPath = join(claudeRoot, "-repo", "b-frontier.jsonl");
+		const makeLog = (sessionId: string, content: string) =>
+			[
+				JSON.stringify({
+					sessionId,
+					timestamp: "2026-07-20T10:00:00.000Z",
+					cwd: "/repo",
+					message: { role: "user", content },
+				}),
+				JSON.stringify({
+					sessionId,
+					timestamp: "2026-07-20T10:01:00.000Z",
+					cwd: "/repo",
+					message: { role: "assistant", content: `${content} response` },
+				}),
+			].join("\\n");
+		writeSettled(firstPath, makeLog("frontier-a", "frontier a"));
+		writeSettled(secondPath, makeLog("frontier-b", "frontier b"));
+
+		const bounded = () =>
+			runTranscriptRecoveryScan(getDbAccessor(), dir, "agent-a", {
+				roots: { claudeCode: claudeRoot, codex: codexRoot },
+				maxFiles: 1,
+			});
+		const first = await bounded();
+		expect(first.examined).toBe(1);
+		expect(first.enqueued).toBe(1);
+		const second = await bounded();
+		expect(second.examined).toBe(1);
+		expect(second.enqueued).toBe(1);
+
+		const jobs = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT transcript_path FROM transcript_capture_jobs ORDER BY transcript_path").all(),
+		) as Array<{ transcript_path: string }>;
+		expect(jobs.map((job) => job.transcript_path)).toEqual([firstPath, secondPath]);
+	});
+
+	it("resumes after cancellation keeps the persisted frontier", async () => {
+		const firstPath = join(claudeRoot, "-repo", "a-aborted.jsonl");
+		const secondPath = join(claudeRoot, "-repo", "b-aborted.jsonl");
+		const makeLog = (sessionId: string) =>
+			JSON.stringify({
+				sessionId,
+				timestamp: "2026-07-20T10:00:00.000Z",
+				cwd: "/repo",
+				message: { role: "user", content: sessionId },
+			});
+		writeSettled(firstPath, makeLog("aborted-a"));
+		writeSettled(secondPath, makeLog("aborted-b"));
+
+		const cancellation = new AbortController();
+		const realAccessor = getDbAccessor();
+		let frontierSaves = 0;
+		const interruptingAccessor = {
+			...realAccessor,
+			withWriteTxAsync: (
+				fn: Parameters<typeof realAccessor.withWriteTxAsync>[0],
+				options?: Parameters<typeof realAccessor.withWriteTxAsync>[1],
+			) =>
+				realAccessor.withWriteTxAsync(fn, options).then((value) => {
+					if (options?.operation === "transcript-recovery.save-frontier" && ++frontierSaves === 1)
+						cancellation.abort(new Error("cancel recovery after first cursor"));
+					return value;
+				}),
+		} as import("./db-accessor").DbAccessor;
+		await expect(
+			runTranscriptRecoveryScan(interruptingAccessor, dir, "agent-a", {
+				roots: { claudeCode: claudeRoot, codex: codexRoot },
+				signal: cancellation.signal,
+			}),
+		).rejects.toThrow("cancel recovery after first cursor");
+
+		const persisted = await realAccessor.withReadDbAsync((db) =>
+			db
+				.prepare("SELECT cursor_path FROM transcript_recovery_frontiers WHERE agent_id = ? AND harness = ?")
+				.get("agent-a", "claude-code"),
+		);
+		expect(persisted).toEqual({ cursor_path: firstPath });
+		const resumed = await scan();
+		expect(resumed.enqueued).toBe(1);
+		const jobs = realAccessor.withReadDb((db) =>
+			db.prepare("SELECT transcript_path FROM transcript_capture_jobs ORDER BY transcript_path").all(),
+		) as Array<{ transcript_path: string }>;
+		expect(jobs.map((job) => job.transcript_path)).toEqual([firstPath, secondPath]);
+	});
+
+	it("propagates DB-owner death instead of converting it into recovery success", async () => {
+		const ownerDiedAccessor = {
+			withReadDbAsync: async () => {
+				throw new DbOwnerDiedError();
+			},
+		} as unknown as import("./db-accessor").DbAccessor;
+		await expect(
+			runTranscriptRecoveryScan(ownerDiedAccessor, dir, "agent-a", {
+				roots: { claudeCode: claudeRoot, codex: codexRoot },
+				maxDiscoveredFiles: 1,
+			}),
+		).rejects.toBeInstanceOf(DbOwnerDiedError);
+		const responsive = await scan();
+		expect(responsive.enqueued).toBe(0);
+	});
+	it("cancels an in-flight scan without scheduling another pass", async () => {
+		const handle = startTranscriptRecoveryWorker(getDbAccessor(), dir, "agent-a", {
+			roots: { claudeCode: claudeRoot, codex: codexRoot },
+			intervalMs: 60_000,
+		});
+		await handle.stop();
+		expect(handle.running).toBe(false);
+	});
+
+	it("cancels a scan waiting for DB admission", async () => {
+		let admittedResolve!: () => void;
+		const admitted = new Promise<void>((resolve) => {
+			admittedResolve = resolve;
+		});
+		const queuedAccessor = {
+			withReadDbAsync(_fn: unknown, options?: { readonly signal?: AbortSignal }): Promise<never> {
+				admittedResolve();
+				return new Promise((_, reject) => {
+					options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+				});
+			},
+		} as unknown as import("./db-accessor").DbAccessor;
+		const handle = startTranscriptRecoveryWorker(queuedAccessor, dir, "agent-a", {
+			roots: { claudeCode: claudeRoot, codex: codexRoot },
+			intervalMs: 60_000,
+		});
+		await admitted;
+		await handle.stop();
+		expect(handle.running).toBe(false);
 	});
 });

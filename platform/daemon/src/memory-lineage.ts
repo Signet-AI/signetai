@@ -744,7 +744,13 @@ async function upsertSourceArtifactRow(
 ): Promise<void> {
 	await dbOwnerSourceArtifactUpsert(
 		{ fields: artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options) },
-		{ operation: "sources.artifacts.upsert", lane: "write", workloadClass: "maintenance", estimatedWorkUnits: 2 },
+		{
+			operation: "sources.artifacts.upsert",
+			lane: "write",
+			workloadClass: "maintenance",
+			deadlineMs: 30_000,
+			estimatedWorkUnits: 2,
+		},
 	);
 }
 

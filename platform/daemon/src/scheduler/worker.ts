@@ -99,18 +99,28 @@ export function startSchedulerWorker(db: DbAccessor): SchedulerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	const activeProcesses = new Set<Promise<void>>();
 
-	// On startup, mark any leftover "running" runs as failed (daemon restart)
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	db.withWriteTx((wdb: import("../db-accessor").WriteDb) => {
-		wdb
-			.prepare(
-				`UPDATE task_runs
-			 SET status = 'failed', error = 'daemon_restart',
-			     completed_at = datetime('now')
-			 WHERE status IN ('pending', 'running')`,
-			)
-			.run();
-	});
+	// On startup, mark any leftover "running" runs as failed (daemon restart).
+	// Keep this out of the caller's synchronous startup turn: the scheduler is
+	// optional background work and must not make readiness depend on a database
+	// write.
+	void db
+		.withWriteTxAsync(
+			(wdb) =>
+				wdb
+					.prepare(
+						`UPDATE task_runs
+					 SET status = 'failed', error = 'daemon_restart',
+					     completed_at = datetime('now')
+					 WHERE status IN ('pending', 'running')`,
+					)
+					.run(),
+			{ operation: "scheduler.recover-runs" },
+		)
+		.catch((error: unknown) => {
+			logger.warn("scheduler", "Startup run recovery failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
 
 	async function poll(): Promise<void> {
 		if (!running) return;
@@ -118,9 +128,9 @@ export function startSchedulerWorker(db: DbAccessor): SchedulerHandle {
 		try {
 			// Find due tasks (enabled, next_run_at <= now, not already running)
 			const nowIso = new Date().toISOString();
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const dueTasks = db.withReadDb((rdb: import("../db-accessor").ReadDb) =>
-				selectDueTasks(rdb, nowIso, MAX_CONCURRENT - activeProcesses.size),
+			const dueTasks = await db.withReadDbAsync<ReadonlyArray<DueTaskRow>>(
+				(rdb) => selectDueTasks(rdb, nowIso, MAX_CONCURRENT - activeProcesses.size),
+				{ operation: "scheduler.select-due-tasks" },
 			);
 
 			for (const task of dueTasks) {
@@ -189,23 +199,25 @@ export async function executeTask(
 		return;
 	}
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	db.withWriteTx((wdb: import("../db-accessor").WriteDb) => {
-		wdb
-			.prepare(
-				`INSERT INTO task_runs (id, task_id, status, started_at)
-			 VALUES (?, ?, 'running', ?)`,
-			)
-			.run(runId, task.id, now);
+	await db.withWriteTxAsync(
+		(wdb) => {
+			wdb
+				.prepare(
+					`INSERT INTO task_runs (id, task_id, status, started_at)
+					 VALUES (?, ?, 'running', ?)`,
+				)
+				.run(runId, task.id, now);
 
-		wdb
-			.prepare(
-				`UPDATE scheduled_tasks
-			 SET next_run_at = ?, last_run_at = ?, updated_at = ?
-			 WHERE id = ?`,
-			)
-			.run(nextRun, now, now, task.id);
-	});
+			wdb
+				.prepare(
+					`UPDATE scheduled_tasks
+					 SET next_run_at = ?, last_run_at = ?, updated_at = ?
+					 WHERE id = ?`,
+				)
+				.run(nextRun, now, now, task.id);
+		},
+		{ operation: "scheduler.lease-task" },
+	);
 
 	deps.emitTaskStream({
 		type: "run-started",
@@ -276,17 +288,18 @@ export async function executeTask(
 	const completedAt = new Date().toISOString();
 	const status = result.error !== null || (result.exitCode !== null && result.exitCode !== 0) ? "failed" : "completed";
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	db.withWriteTx((wdb: import("../db-accessor").WriteDb) => {
-		wdb
-			.prepare(
-				`UPDATE task_runs
-			 SET status = ?, completed_at = ?, exit_code = ?,
-			     stdout = ?, stderr = ?, error = ?
-			 WHERE id = ?`,
-			)
-			.run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
-	});
+	await db.withWriteTxAsync(
+		(wdb) =>
+			wdb
+				.prepare(
+					`UPDATE task_runs
+					 SET status = ?, completed_at = ?, exit_code = ?,
+					     stdout = ?, stderr = ?, error = ?
+					 WHERE id = ?`,
+				)
+				.run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId),
+		{ operation: "scheduler.complete-task" },
+	);
 
 	deps.emitTaskStream({
 		type: "run-completed",

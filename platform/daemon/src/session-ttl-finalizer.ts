@@ -17,7 +17,7 @@
 import { type ContinuityState, type StructuralSnapshot, getState } from "./continuity-state";
 import type { DbAccessor } from "./db-accessor";
 import { logger } from "./logger";
-import { type WriteCheckpointParams, writeCheckpoint } from "./session-checkpoints";
+import { type WriteCheckpointParams, writeCheckpointAsync } from "./session-checkpoints";
 import type { EvictedSessionInfo, SessionEvictionHandler } from "./session-tracker";
 import { markSessionTranscriptCompletedInTx } from "./session-transcripts";
 
@@ -51,14 +51,18 @@ function snapshotToCheckpoint(snap: ContinuityState, sessionKey: string): WriteC
  * `setSessionEvictionHandler`.
  */
 export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictionHandler {
-	return (info: EvictedSessionInfo): "finalized" | "skipped" | undefined => {
+	return async (info: EvictedSessionInfo): Promise<"finalized" | "skipped" | undefined> => {
 		let transcriptFinalized = false;
 
 		// 1. Persist a ttl_expired checkpoint from residual continuity state.
 		const snap = getState(info.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {
 			try {
-				writeCheckpoint(deps.accessor, snapshotToCheckpoint(snap, info.sessionKey), deps.maxCheckpointsPerSession);
+				await writeCheckpointAsync(
+					deps.accessor,
+					snapshotToCheckpoint(snap, info.sessionKey),
+					deps.maxCheckpointsPerSession,
+				);
 				logger.info("session-tracker", "TTL-evicted session checkpointed", {
 					sessionKey: info.sessionKey,
 					promptCount: snap.totalPromptCount,
@@ -71,12 +75,10 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 			}
 		}
 
-		// 2. TTL is a session-end boundary for the retained transcript. The
-		// marker is idempotent and does not depend on a worker or length gate.
+		// 2. TTL is a session-end boundary for the retained transcript.
 		try {
 			const completedAt = new Date().toISOString();
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const alreadyCompleted = deps.accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
+			const alreadyCompleted = await deps.accessor.withReadDbAsync((db) => {
 				const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
 					Record<string, unknown>
 				>;
@@ -88,10 +90,9 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 			});
 			transcriptFinalized =
 				alreadyCompleted ||
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				deps.accessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
+				(await deps.accessor.withWriteTxAsync((db) =>
 					markSessionTranscriptCompletedInTx(db, info.sessionKey, info.agentId, completedAt),
-				);
+				));
 		} catch (err) {
 			logger.warn("session-tracker", "TTL-eviction transcript completion failed (non-fatal)", {
 				sessionKey: info.sessionKey,

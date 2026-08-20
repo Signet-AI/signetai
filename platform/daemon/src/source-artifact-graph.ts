@@ -306,6 +306,19 @@ export function purgeSourceArtifactStructure(
 	);
 }
 
+export async function purgeSourceArtifactStructureAsync(
+	input: PurgeSourceArtifactStructureInput,
+): Promise<PurgeSourceArtifactStructureResult> {
+	const { dbOwnerSourceArtifactPurge } = await import("./db-owner-runtime");
+	return (await dbOwnerSourceArtifactPurge(input, {
+		operation: "sources.artifacts.graph-purge",
+		lane: "write",
+		workloadClass: "maintenance",
+		deadlineMs: 30_000,
+		estimatedWorkUnits: 2,
+	})) as PurgeSourceArtifactStructureResult;
+}
+
 export function indexSourceArtifactStructure(
 	input: IndexSourceArtifactStructureInput,
 ): IndexSourceArtifactStructureResult {
@@ -314,6 +327,19 @@ export function indexSourceArtifactStructure(
 	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
 		indexSourceArtifactStructureInTx(db, input, now),
 	);
+}
+
+export async function indexSourceArtifactStructureAsync(
+	input: IndexSourceArtifactStructureInput,
+): Promise<IndexSourceArtifactStructureResult> {
+	const { dbOwnerSourceArtifactIndex } = await import("./db-owner-runtime");
+	return (await dbOwnerSourceArtifactIndex(input, {
+		operation: "sources.artifacts.graph-index",
+		lane: "write",
+		workloadClass: "maintenance",
+		deadlineMs: 30_000,
+		estimatedWorkUnits: Math.max(1, Math.ceil(input.content.length / 1024)),
+	})) as IndexSourceArtifactStructureResult;
 }
 
 export function indexSourceArtifactStructureInTx(

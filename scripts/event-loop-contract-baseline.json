@@ -3405,27 +3405,6 @@
       "category": "hot-path"
     },
     {
-      "path": "aggregate-recall.ts",
-      "line": 744,
-      "api": "withReadDb",
-      "source": "const activeCfg = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "aggregate-recall.ts",
-      "line": 750,
-      "api": "withWriteTx",
-      "source": "const written = getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "aggregate-recall.ts",
-      "line": 1011,
-      "api": "withWriteTx",
-      "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
       "path": "auth/api-keys.ts",
       "line": 197,
       "api": "withWriteTx",
@@ -3465,27 +3444,6 @@
       "line": 467,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "connectors/filesystem.ts",
-      "line": 232,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "connectors/filesystem.ts",
-      "line": 287,
-      "api": "withWriteTx",
-      "source": "accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "connectors/filesystem.ts",
-      "line": 310,
-      "api": "withWriteTx",
-      "source": "accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {
@@ -3636,90 +3594,6 @@
       "category": "hot-path"
     },
     {
-      "path": "db-vacuum.ts",
-      "line": 480,
-      "api": "withWriteTx",
-      "source": "accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "db-vacuum.ts",
-      "line": 510,
-      "api": "withWriteTx",
-      "source": "accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "db-vacuum.ts",
-      "line": 526,
-      "api": "withWriteTx",
-      "source": "accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "discord-desktop-cache-source.ts",
-      "line": 481,
-      "api": "withReadDb",
-      "source": "const rows = getDbAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "discord-desktop-cache-source.ts",
-      "line": 494,
-      "api": "withWriteTx",
-      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "discord-source-provider.ts",
-      "line": 574,
-      "api": "withReadDb",
-      "source": "const rows = getDbAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "discord-source-provider.ts",
-      "line": 588,
-      "api": "withWriteTx",
-      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "discord-source-provider.ts",
-      "line": 630,
-      "api": "withReadDb",
-      "source": "const row = getDbAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "discord-source-provider.ts",
-      "line": 875,
-      "api": "withReadDb",
-      "source": "const row = getDbAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "discord-source-provider.ts",
-      "line": 959,
-      "api": "withReadDb",
-      "source": "const rows = getDbAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "discord-source-provider.ts",
-      "line": 973,
-      "api": "withWriteTx",
-      "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "embedding-fetch.ts",
-      "line": 495,
-      "api": "withReadDb",
-      "source": "getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => resolveActiveEmbeddingConfig(db, cfg));",
-      "category": "hot-path"
-    },
-    {
       "path": "embedding-repair-state.ts",
       "line": 101,
       "api": "withWriteTx",
@@ -3759,27 +3633,6 @@
       "line": 271,
       "api": "withWriteTx",
       "source": "applied = accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "github-source-provider.ts",
-      "line": 461,
-      "api": "withReadDb",
-      "source": "const rows = getDbAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "github-source-provider.ts",
-      "line": 483,
-      "api": "withWriteTx",
-      "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "github-source-provider.ts",
-      "line": 497,
-      "api": "withWriteTx",
-      "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {
@@ -4392,20 +4245,6 @@
       "category": "hot-path"
     },
     {
-      "path": "routes/database-diagnostics.ts",
-      "line": 241,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/database-diagnostics.ts",
-      "line": 276,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
       "path": "routes/hooks-routes.ts",
       "line": 1180,
       "api": "withReadDb",
@@ -4466,13 +4305,6 @@
       "line": 504,
       "api": "withReadDb",
       "source": "const report: ReturnType<typeof listMemoryContentSafety> = getDbAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/pipeline-routes.ts",
-      "line": 603,
-      "api": "withReadDb",
-      "source": "const dbData = accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path"
     },
     {
@@ -4693,34 +4525,6 @@
       "category": "hot-path"
     },
     {
-      "path": "scheduler/worker.ts",
-      "line": 104,
-      "api": "withWriteTx",
-      "source": "db.withWriteTx((wdb: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "scheduler/worker.ts",
-      "line": 122,
-      "api": "withReadDb",
-      "source": "const dueTasks = db.withReadDb((rdb: import(\"../db-accessor\").ReadDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "scheduler/worker.ts",
-      "line": 193,
-      "api": "withWriteTx",
-      "source": "db.withWriteTx((wdb: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "scheduler/worker.ts",
-      "line": 280,
-      "api": "withWriteTx",
-      "source": "db.withWriteTx((wdb: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
       "path": "session-checkpoints.ts",
       "line": 109,
       "api": "withWriteTx",
@@ -4795,13 +4599,6 @@
       "line": 125,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(readClaims);",
-      "category": "hot-path"
-    },
-    {
-      "path": "session-end-recovery.ts",
-      "line": 106,
-      "api": "withWriteTx",
-      "source": "const result = getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {
@@ -4924,20 +4721,6 @@
       "category": "hot-path"
     },
     {
-      "path": "session-ttl-finalizer.ts",
-      "line": 79,
-      "api": "withReadDb",
-      "source": "const alreadyCompleted = deps.accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "session-ttl-finalizer.ts",
-      "line": 92,
-      "api": "withWriteTx",
-      "source": "deps.accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
-      "category": "hot-path"
-    },
-    {
       "path": "skill-invocations.ts",
       "line": 50,
       "api": "withWriteTx",
@@ -5012,48 +4795,6 @@
       "line": 442,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-recovery-worker.ts",
-      "line": 266,
-      "api": "withReadDb",
-      "source": "if (dbAccessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => unchanged(db, agentId, candidate))) {",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-recovery-worker.ts",
-      "line": 295,
-      "api": "withWriteTx",
-      "source": "dbAccessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-recovery-worker.ts",
-      "line": 304,
-      "api": "withReadDb",
-      "source": "const alreadyCaptured = dbAccessor.withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-recovery-worker.ts",
-      "line": 309,
-      "api": "withWriteTx",
-      "source": "dbAccessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-recovery-worker.ts",
-      "line": 329,
-      "api": "withWriteTx",
-      "source": "dbAccessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-recovery-worker.ts",
-      "line": 375,
-      "api": "withWriteTx",
-      "source": "dbAccessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) =>",
       "category": "hot-path"
     },
     {

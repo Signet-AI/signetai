@@ -65,7 +65,7 @@ import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperati
 import { DEFAULT_SYNTHESIS_WORKER_CONFIG } from "../pipeline/synthesis-worker";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
 import { isNoiseSession } from "../session-noise";
-import { advanceRecallContextEpoch } from "../session-recall-dedupe";
+import { advanceRecallContextEpochAsync } from "../session-recall-dedupe";
 import {
 	type RuntimePath,
 	claimSession,
@@ -844,7 +844,7 @@ function registerCheckpointExtract(app: Hono): void {
 
 			renewSession(body.sessionKey, agentId);
 
-			const result = handleCheckpointExtract(body);
+			const result = await handleCheckpointExtract(body);
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Checkpoint extract hook failed", e as Error);
@@ -1309,7 +1309,7 @@ function registerCompactionComplete(app: Hono): void {
 				memoryId: summaryId ?? "skipped-temp-session",
 			});
 
-			const epoch = advanceRecallContextEpoch({
+			const epoch = await advanceRecallContextEpochAsync({
 				sessionKey: body.sessionKey,
 				agentId,
 				reason: "compaction-complete",

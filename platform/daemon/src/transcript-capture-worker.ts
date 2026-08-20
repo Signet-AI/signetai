@@ -99,31 +99,34 @@ export function transcriptCaptureJobId(input: TranscriptCaptureJobInput): string
 export async function enqueueTranscriptCaptureJob(
 	dbAccessor: DbAccessor,
 	input: TranscriptCaptureJobInput,
+	signal?: AbortSignal,
 ): Promise<string | null> {
 	if (input.transcript.trim().length === 0 && input.rawTranscript.trim().length === 0) return null;
 	const id = transcriptCaptureJobId(input);
 	const createdAt = nowIso();
 	const maxAttempts = normalizeMaxAttempts(input.maxAttempts);
 	let resolvedId = id;
-	await runWriteTxAsync(dbAccessor, (db) => {
-		// capturedAt is delivery time for hooks but file mtime for recovery scans.
-		// Treat the stable snapshot identity + content as authoritative so a
-		// hook/recovery race cannot create two jobs for the same snapshot.
-		const existing = db
-			.prepare(
-				`SELECT id
+	await runWriteTxAsync(
+		dbAccessor,
+		(db) => {
+			// capturedAt is delivery time for hooks but file mtime for recovery scans.
+			// Treat the stable snapshot identity + content as authoritative so a
+			// hook/recovery race cannot create two jobs for the same snapshot.
+			const existing = db
+				.prepare(
+					`SELECT id
 				 FROM transcript_capture_jobs
 				 WHERE agent_id = ? AND session_id = ? AND transcript = ?
 				   AND status <> 'dead'
 				 LIMIT 1`,
-			)
-			.get(input.agentId, input.sessionId, input.transcript) as { id?: unknown } | undefined;
-		if (typeof existing?.id === "string") {
-			resolvedId = existing.id;
-			return;
-		}
-		db.prepare(
-			`INSERT INTO transcript_capture_jobs (
+				)
+				.get(input.agentId, input.sessionId, input.transcript) as { id?: unknown } | undefined;
+			if (typeof existing?.id === "string") {
+				resolvedId = existing.id;
+				return;
+			}
+			db.prepare(
+				`INSERT INTO transcript_capture_jobs (
 				id, agent_id, harness, session_key, session_id, project, transcript, raw_transcript,
 				transcript_path, captured_at, ended_at, summary_status, status, attempts, max_attempts, created_at, updated_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
@@ -147,26 +150,28 @@ export async function enqueueTranscriptCaptureJob(
 					WHEN transcript_capture_jobs.status IN ('failed', 'dead') THEN NULL
 					ELSE transcript_capture_jobs.error
 				END`,
-		).run(
-			id,
-			input.agentId,
-			input.harness,
-			input.sessionKey,
-			input.sessionId,
-			input.project,
-			input.transcript,
-			input.rawTranscript || null,
-			input.transcriptPath ?? null,
-			input.capturedAt,
-			input.endedAt,
-			// Session summaries are retired. Keep the legacy column explicit so
-			// old manifests cannot enqueue a second derived delivery path.
-			"not_requested",
-			maxAttempts,
-			createdAt,
-			createdAt,
-		);
-	});
+			).run(
+				id,
+				input.agentId,
+				input.harness,
+				input.sessionKey,
+				input.sessionId,
+				input.project,
+				input.transcript,
+				input.rawTranscript || null,
+				input.transcriptPath ?? null,
+				input.capturedAt,
+				input.endedAt,
+				// Session summaries are retired. Keep the legacy column explicit so
+				// old manifests cannot enqueue a second derived delivery path.
+				"not_requested",
+				maxAttempts,
+				createdAt,
+				createdAt,
+			);
+		},
+		{ operation: "transcript-capture.enqueue", signal },
+	);
 	return resolvedId;
 }
 

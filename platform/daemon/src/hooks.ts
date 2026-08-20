@@ -35,7 +35,7 @@ import {
 	shouldCheckpoint,
 } from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
-import { type ReadDb, getDbAccessor } from "./db-accessor";
+import { getDbAccessor } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import {
 	DEFAULT_SESSION_START_MAX_INJECT_TOKENS,
@@ -103,7 +103,7 @@ import {
 	getLatestCheckpoint,
 	getLatestCheckpointBySession,
 	queueCheckpointWrite,
-	writeCheckpoint,
+	writeCheckpointAsync,
 } from "./session-checkpoints";
 import { deriveSessionEndFallbackId, recoverMissingSessionEndOnClearStart } from "./session-end-recovery";
 import {
@@ -121,7 +121,7 @@ import {
 	recordSessionCandidates,
 	trackFtsHits,
 } from "./session-memories";
-import { advanceRecallContextEpoch, claimRecallItems } from "./session-recall-dedupe";
+import { advanceRecallContextEpochAsync, claimRecallItemsAsync } from "./session-recall-dedupe";
 import {
 	buildSignetSystemPrompt,
 	formatLastSeenShort,
@@ -141,11 +141,11 @@ import {
 } from "./session-start-state";
 import { getExpiryWarning } from "./session-tracker";
 import {
-	ensureCanonicalTranscriptHistory,
 	findStaleLiveSessions,
-	getSessionTranscriptContent,
+	getStoredSessionTranscriptInfoAsync,
 	markSessionTranscriptCompleted,
 	upsertSessionTranscript,
+	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
 import { type StructuralCandidateSource, type StructuralFeatures, getStructuralFeatures } from "./structural-features";
 import { assembleInheritedContextBlock, resolveParentSession } from "./subagent-context";
@@ -686,7 +686,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	if (isClearSessionStart(req)) {
 		const sessionKey = req.sessionKey?.trim();
-		const recoveredSessionEnd = recoverMissingSessionEndOnClearStart(req, agentId, new Date().toISOString());
+		const recoveredSessionEnd = await recoverMissingSessionEndOnClearStart(req, agentId, new Date().toISOString());
 		clearSessionStartDedupe(req);
 		// A reset also opens a new session lifetime — any prior session.end
 		// marker must not suppress a termination event for the new one (#1212).
@@ -698,7 +698,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		if (sessionKey) {
 			clearRawSessionStartDedupeKey(sessionKey);
 			clearContinuity(sessionKey);
-			advanceRecallContextEpoch({
+			await advanceRecallContextEpochAsync({
 				sessionKey: sessionStartRecallKey(req),
 				agentId,
 				reason: "session-clear",
@@ -1028,13 +1028,15 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	const sessionStartRecallSessionKey = sessionStartRecallKey(req);
 	if (sessionStartRecallSessionKey && memories.length > 0) {
-		memories = claimRecallItems({
-			sessionKey: sessionStartRecallSessionKey,
-			agentId,
-			surface: "api.hooks.session-start",
-			mode: "automatic",
-			items: memories,
-		}).items;
+		memories = (
+			await claimRecallItemsAsync({
+				sessionKey: sessionStartRecallSessionKey,
+				agentId,
+				surface: "api.hooks.session-start",
+				mode: "automatic",
+				items: memories,
+			})
+		).items;
 	}
 
 	const exploredId: string | null = null;
@@ -1369,7 +1371,7 @@ ${guidelines}
 		try {
 			const cfg = loadMemoryConfig(getAgentsDir()).pipelineV2.continuity;
 			const digest = formatPreCompactionDigest(snap, req.sessionContext);
-			writeCheckpoint(
+			await writeCheckpointAsync(
 				getDbAccessor(),
 				{
 					sessionKey: snap.sessionKey,
@@ -1547,6 +1549,7 @@ type UserPromptSubmitDeps = {
 	readonly queueCheckpointWrite: typeof queueCheckpointWrite;
 	readonly formatPeriodicDigest: typeof formatPeriodicDigest;
 	readonly upsertSessionTranscript: typeof upsertSessionTranscript;
+	readonly upsertSessionTranscriptAsync?: typeof upsertSessionTranscriptAsync;
 	readonly getExpiryWarning: typeof getExpiryWarning;
 	readonly hybridRecall: typeof hybridRecall;
 	readonly fetchEmbedding: typeof fetchEmbedding;
@@ -1569,6 +1572,7 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 	queueCheckpointWrite,
 	formatPeriodicDigest,
 	upsertSessionTranscript,
+	upsertSessionTranscriptAsync,
 	getExpiryWarning,
 	hybridRecall,
 	fetchEmbedding,
@@ -1582,6 +1586,10 @@ export async function handleUserPromptSubmit(
 	overrides?: Partial<UserPromptSubmitDeps>,
 ): Promise<UserPromptSubmitResponse> {
 	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
+	const upsertTranscriptAsync =
+		deps.upsertSessionTranscriptAsync ??
+		(async (...args: Parameters<typeof upsertSessionTranscript>): Promise<boolean> =>
+			deps.upsertSessionTranscript(...args));
 	const start = deps.now();
 	const clockContext = formatPromptClockContext(new Date(start));
 	const submitCfg = loadHooksConfigForHarness(req.harness).userPromptSubmit ?? {};
@@ -1664,9 +1672,10 @@ export async function handleUserPromptSubmit(
 
 		if (transcript) {
 			try {
-				const prev = getSessionTranscriptContent(req.sessionKey, agentId);
+				const prevInfo = await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId);
+				const prev = prevInfo?.content;
 				if (!prev || transcript.length >= prev.length) {
-					deps.upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+					await upsertTranscriptAsync(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
 				}
 				await transcriptCapture.writeCanonicalTranscriptFromSnapshot({
 					basePath: getAgentsDir(),
@@ -1686,8 +1695,9 @@ export async function handleUserPromptSubmit(
 		} else if (userMessage.trim().length > 0) {
 			try {
 				const liveTranscript = transcriptCapture.formatLivePromptTranscript(userMessage, req.lastAssistantMessage);
-				const prev = getSessionTranscriptContent(req.sessionKey, agentId);
-				deps.upsertSessionTranscript(
+				const prevInfo = await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId);
+				const prev = prevInfo?.content;
+				await upsertTranscriptAsync(
 					req.sessionKey,
 					transcriptCapture.appendLivePromptTranscript(prev, liveTranscript),
 					req.harness,
@@ -1988,7 +1998,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		// Caller intends to discard session context — skip checkpoint, just clean up
 		clearSessionStartDedupe(req);
 		clearRawSessionStartDedupeKey(sessionKey);
-		advanceRecallContextEpoch({
+		await advanceRecallContextEpochAsync({
 			sessionKey: sessionStartRecallKey(req),
 			agentId,
 			reason: "session-clear",
@@ -2040,7 +2050,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	if (snap && snap.totalPromptCount > 0) {
 		try {
 			const cfg = loadMemoryConfig(getAgentsDir()).pipelineV2.continuity;
-			writeCheckpoint(
+			await writeCheckpointAsync(
 				getDbAccessor(),
 				{
 					sessionKey: snap.sessionKey,
@@ -2090,7 +2100,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	let storedTranscript = "";
 	if (sessionKey) {
 		try {
-			storedTranscript = getSessionTranscriptContent(sessionKey, agentId) ?? "";
+			storedTranscript = (await getStoredSessionTranscriptInfoAsync(sessionKey, agentId))?.content ?? "";
 		} catch (error) {
 			logger.warn("hooks", "Failed to read stored transcript for fallback", {
 				error: error instanceof Error ? error.message : String(error),
@@ -2118,7 +2128,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	let transcriptRetained = false;
 	if (retainedTranscript && sessionKey) {
 		try {
-			transcriptRetained = upsertSessionTranscript(
+			transcriptRetained = await upsertSessionTranscriptAsync(
 				sessionKey,
 				retainedTranscript,
 				req.harness,
@@ -2317,7 +2327,7 @@ async function deferSessionEndWork(params: {
 // Mid-session checkpoint extraction (long-lived sessions)
 // ---------------------------------------------------------------------------
 
-export function handleCheckpointExtract(req: CheckpointExtractRequest): CheckpointExtractResponse {
+export async function handleCheckpointExtract(req: CheckpointExtractRequest): Promise<CheckpointExtractResponse> {
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
 	ensureAgentRegistered(agentId);
 
@@ -2350,7 +2360,7 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 
 	// Fall back to stored transcript if nothing was provided inline
 	if (!transcript) {
-		transcript = getSessionTranscriptContent(req.sessionKey, agentId) ?? "";
+		transcript = (await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId))?.content ?? "";
 		fromStore = true;
 	}
 
@@ -2367,10 +2377,10 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	// payload would discard valid canonical content before the final completion
 	// marker is written.
 	if (!fromStore) {
-		const prev = getSessionTranscriptContent(req.sessionKey, agentId);
+		const prev = (await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId))?.content;
 		if (!prev || transcript.length >= prev.length) {
 			try {
-				upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+				await upsertSessionTranscriptAsync(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
 			} catch (e) {
 				logger.warn("hooks", "Checkpoint transcript upsert failed (non-fatal)", {
 					error: e instanceof Error ? e.message : String(e),
@@ -2395,7 +2405,7 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		const snap = consumeState(req.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {
 			const cfg = loadMemoryConfig(getAgentsDir()).pipelineV2.continuity;
-			writeCheckpoint(
+			await writeCheckpointAsync(
 				getDbAccessor(),
 				{
 					sessionKey: snap.sessionKey,

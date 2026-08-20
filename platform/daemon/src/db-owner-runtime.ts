@@ -14,6 +14,8 @@ import type {
 	DbOwnerSourceGraphIndex,
 	DbOwnerSourceGraphPurge,
 	DbOwnerSourceSnapshotImport,
+	DbOwnerSourceArtifactIndex,
+	DbOwnerSourceArtifactPurge,
 	DbOwnerSourceArtifactUpsert,
 	DbOwnerStatement,
 	DbOwnerWorkloadClass,
@@ -259,6 +261,30 @@ export async function dbOwnerSourceGraphPurge(
 	return await submitWithAdmission<unknown>(
 		owner,
 		{ kind: "source_graph_purge", input },
+		{ ...options, lane: options.lane ?? "write" },
+	);
+}
+
+export async function dbOwnerSourceArtifactIndex(
+	input: DbOwnerSourceArtifactIndex,
+	options: DbOwnerSqlOptions,
+): Promise<unknown> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission<unknown>(
+		owner,
+		{ kind: "source_artifact_index", input },
+		{ ...options, lane: options.lane ?? "write" },
+	);
+}
+
+export async function dbOwnerSourceArtifactPurge(
+	input: DbOwnerSourceArtifactPurge,
+	options: DbOwnerSqlOptions,
+): Promise<unknown> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission<unknown>(
+		owner,
+		{ kind: "source_artifact_purge", input },
 		{ ...options, lane: options.lane ?? "write" },
 	);
 }

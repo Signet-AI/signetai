@@ -2,12 +2,19 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
-import { readDatabaseSchema, readTableSample, registerDatabaseDiagnosticsRoutes } from "./database-diagnostics";
+import {
+	readDatabaseSchemaAsync,
+	readTableSampleAsync,
+	registerDatabaseDiagnosticsRoutes,
+} from "./database-diagnostics";
 
 function makeAccessor(db: Database): DbAccessor {
 	return {
 		withReadDb<T>(fn: (readDb: ReadDb) => T): T {
 			return fn(db);
+		},
+		async withReadDbAsync<T>(fn: (readDb: ReadDb) => T | Promise<T>): Promise<T> {
+			return await fn(db);
 		},
 		withWriteTx<T>(fn: (writeDb: WriteDb) => T): T {
 			db.exec("BEGIN IMMEDIATE");
@@ -58,8 +65,8 @@ describe("database diagnostics", () => {
 		db.close();
 	});
 
-	it("returns live schema metadata with row counts, columns, indexes, and foreign keys", () => {
-		const schema = readDatabaseSchema(accessor);
+	it("returns live schema metadata with row counts, columns, indexes, and foreign keys", async () => {
+		const schema = await readDatabaseSchemaAsync(accessor);
 		const entities = schema.tables.find((table) => table.name === "entities");
 		const attrs = schema.tables.find((table) => table.name === "entity_attributes");
 
@@ -71,8 +78,8 @@ describe("database diagnostics", () => {
 		expect(schema.groups.core).toBeGreaterThanOrEqual(2);
 	});
 
-	it("returns bounded table samples for validated table names", () => {
-		const sample = readTableSample(accessor, "entity_attributes", 1, 0);
+	it("returns bounded table samples for validated table names", async () => {
+		const sample = await readTableSampleAsync(accessor, "entity_attributes", 1, 0);
 
 		expect("error" in sample).toBe(false);
 		if ("error" in sample) return;
@@ -82,16 +89,16 @@ describe("database diagnostics", () => {
 		expect(sample.hasMore).toBe(false);
 	});
 
-	it("rejects unknown table names before building sample SQL", () => {
-		const sample = readTableSample(accessor, 'entities"; DROP TABLE entities; --', 25, 0);
+	it("rejects unknown table names before building sample SQL", async () => {
+		const sample = await readTableSampleAsync(accessor, 'entities"; DROP TABLE entities; --', 25, 0);
 
 		expect(sample).toEqual({ error: "unknown table", status: 404 });
 		const stillThere = db.prepare("SELECT COUNT(*) AS count FROM entities").get() as { count: number };
 		expect(stillThere.count).toBe(1);
 	});
 
-	it("blocks samples for internal virtual tables", () => {
-		const sample = readTableSample(accessor, "memories_fts", 25, 0);
+	it("blocks samples for internal virtual tables", async () => {
+		const sample = await readTableSampleAsync(accessor, "memories_fts", 25, 0);
 
 		expect(sample).toEqual({ error: "sample unavailable: internal index table", status: 400 });
 	});

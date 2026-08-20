@@ -236,63 +236,74 @@ function readForeignKeys(db: ReadDb, table: string): readonly DatabaseForeignKey
 	);
 }
 
-export function readDatabaseSchema(accessor: DbAccessor): DatabaseSchemaResponse {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-		const tables = listTables(db).map((row) => {
-			const blocked = sampleBlockedReason(row);
-			return {
-				name: row.name,
-				group: groupForTable(row.name),
-				kind: row.type,
-				rowCount: safeCount(db, row.name),
-				sampleAllowed: blocked === undefined,
-				...(blocked ? { sampleBlockedReason: blocked } : {}),
-				columns: readColumns(db, row.name),
-				indexes: readIndexes(db, row.name),
-				foreignKeys: readForeignKeys(db, row.name),
-				sql: row.sql,
-			};
-		});
-		const groups = {
-			core: 0,
-			provenance: 0,
-			runtime: 0,
-			internal: 0,
-			other: 0,
-		} satisfies Record<DatabaseSchemaGroup, number>;
-		for (const table of tables) groups[table.group] += 1;
-		return { generatedAt: new Date().toISOString(), tables, groups };
+function readDatabaseSchemaFromDb(db: ReadDb): DatabaseSchemaResponse {
+	const tables = listTables(db).map((row) => {
+		const blocked = sampleBlockedReason(row);
+		return {
+			name: row.name,
+			group: groupForTable(row.name),
+			kind: row.type,
+			rowCount: safeCount(db, row.name),
+			sampleAllowed: blocked === undefined,
+			...(blocked ? { sampleBlockedReason: blocked } : {}),
+			columns: readColumns(db, row.name),
+			indexes: readIndexes(db, row.name),
+			foreignKeys: readForeignKeys(db, row.name),
+			sql: row.sql,
+		};
+	});
+	const groups = {
+		core: 0,
+		provenance: 0,
+		runtime: 0,
+		internal: 0,
+		other: 0,
+	} satisfies Record<DatabaseSchemaGroup, number>;
+	for (const table of tables) groups[table.group] += 1;
+	return { generatedAt: new Date().toISOString(), tables, groups };
+}
+
+export async function readDatabaseSchemaAsync(accessor: DbAccessor): Promise<DatabaseSchemaResponse> {
+	return await accessor.withReadDbAsync((db) => readDatabaseSchemaFromDb(db), {
+		operation: "diagnostics.database.schema",
 	});
 }
 
-export function readTableSample(
-	accessor: DbAccessor,
+function readTableSampleFromDb(
+	db: ReadDb,
 	table: string,
 	limit: number,
 	offset: number,
 ): DatabaseTableSampleResponse | { readonly error: string; readonly status: 400 | 404 } {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-		const match = listTables(db).find((row) => row.name === table);
-		if (!match) return { error: "unknown table", status: 404 };
-		const blocked = sampleBlockedReason(match);
-		if (blocked) return { error: `sample unavailable: ${blocked}`, status: 400 };
-		const columns = readColumns(db, table).map((col) => col.name);
-		const rows = (
-			db.prepare(`SELECT * FROM ${quoteIdentifier(table)} LIMIT ? OFFSET ?`).all(limit + 1, offset) as Array<
-				Record<string, unknown>
-			>
-		).map(serializeRow);
-		return {
-			table,
-			columns,
-			rows: rows.slice(0, limit),
-			limit,
-			offset,
-			rowCount: safeCount(db, table),
-			hasMore: rows.length > limit,
-		};
+	const match = listTables(db).find((row) => row.name === table);
+	if (!match) return { error: "unknown table", status: 404 };
+	const blocked = sampleBlockedReason(match);
+	if (blocked) return { error: `sample unavailable: ${blocked}`, status: 400 };
+	const columns = readColumns(db, table).map((col) => col.name);
+	const rows = (
+		db.prepare(`SELECT * FROM ${quoteIdentifier(table)} LIMIT ? OFFSET ?`).all(limit + 1, offset) as Array<
+			Record<string, unknown>
+		>
+	).map(serializeRow);
+	return {
+		table,
+		columns,
+		rows: rows.slice(0, limit),
+		limit,
+		offset,
+		rowCount: safeCount(db, table),
+		hasMore: rows.length > limit,
+	};
+}
+
+export async function readTableSampleAsync(
+	accessor: DbAccessor,
+	table: string,
+	limit: number,
+	offset: number,
+): Promise<DatabaseTableSampleResponse | { readonly error: string; readonly status: 400 | 404 }> {
+	return await accessor.withReadDbAsync((db) => readTableSampleFromDb(db, table, limit, offset), {
+		operation: "diagnostics.database.sample",
 	});
 }
 
@@ -302,10 +313,10 @@ export function registerDatabaseDiagnosticsRoutes(app: Hono, deps?: { readonly a
 	app.use("/api/diagnostics/database", async (c, next) => requirePermission("diagnostics", authConfig)(c, next));
 	app.use("/api/diagnostics/database/*", async (c, next) => requirePermission("diagnostics", authConfig)(c, next));
 
-	app.get("/api/diagnostics/database/schema", (c) => c.json(readDatabaseSchema(accessor())));
+	app.get("/api/diagnostics/database/schema", async (c) => c.json(await readDatabaseSchemaAsync(accessor())));
 
-	app.get("/api/diagnostics/database/tables/:table/sample", (c) => {
-		const result = readTableSample(
+	app.get("/api/diagnostics/database/tables/:table/sample", async (c) => {
+		const result = await readTableSampleAsync(
 			accessor(),
 			c.req.param("table"),
 			parseBoundedInt(c.req.query("limit"), 25, 1, 100),

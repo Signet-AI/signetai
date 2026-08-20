@@ -8,6 +8,7 @@ import {
 	buildObsidianMarkdownPathIndex,
 	purgeObsidianSourceFileStructureInTx,
 } from "./obsidian-source-graph";
+import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
 import { upsertMemoryArtifactInTx } from "./memory-lineage";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
 import type {
@@ -341,6 +342,42 @@ export function runDbOwnerWorker(): void {
 		}
 	}
 
+	function executeSourceArtifactIndex(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "source_artifact_index" }>,
+	): unknown {
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const result = indexSourceArtifactStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+			db.exec("COMMIT");
+			return result;
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				// Preserve the original error.
+			}
+			throw error;
+		}
+	}
+
+	function executeSourceArtifactPurge(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "source_artifact_purge" }>,
+	): unknown {
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const result = purgeSourceArtifactStructureInTx(db as unknown as import("./db-accessor").WriteDb, request.input);
+			db.exec("COMMIT");
+			return result;
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				// Preserve the original error.
+			}
+			throw error;
+		}
+	}
+
 	let recallAccessorReady = false;
 
 	async function executeRecall(payload: DbOwnerRecallPayload): Promise<unknown> {
@@ -429,6 +466,8 @@ export function runDbOwnerWorker(): void {
 			job.request.kind === "source_graph_purge"
 		)
 			return executeSourceGraph(job.request);
+		if (job.request.kind === "source_artifact_index") return executeSourceArtifactIndex(job.request);
+		if (job.request.kind === "source_artifact_purge") return executeSourceArtifactPurge(job.request);
 		if (job.request.kind === "vacuum_conversion") {
 			const { convertToIncrementalVacuum } = await import("./db-vacuum");
 			const pauseMs = Number.parseInt(process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS ?? "0", 10);

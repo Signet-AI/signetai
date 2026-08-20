@@ -35,6 +35,7 @@ export const MAX_DB_OWNER_MAINTENANCE_JOBS = DB_OWNER_MAX_QUEUE_DEPTH;
 export const MAX_DB_OWNER_WORK_UNITS = DB_OWNER_MAX_WORK_UNITS;
 export const MAX_DB_OWNER_DEADLINE_MS = DB_OWNER_MAX_DEADLINE_MS;
 export const MAX_DB_OWNER_RESULT_BYTES = DB_OWNER_MAX_RESULT_BYTES;
+const dbOwnerWallClockNow = Date.now.bind(Date);
 
 export interface DbOwnerLaneHealth {
 	readonly state: DbOwnerHealthState;
@@ -235,7 +236,7 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 	}
 
 	function currentHealth(): DbOwnerHealth {
-		const now = Date.now();
+		const now = dbOwnerWallClockNow();
 		const jobs = [...pending.values()].filter((entry) => entry.job.id !== activeJobId);
 		const count = (workloadClass: DbOwnerWorkloadClass): number =>
 			jobs.filter((entry) => entry.job.workloadClass === workloadClass).length;
@@ -593,7 +594,7 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 				`DB owner ${workloadClass} admission queue is full at ${maxClassJobs} pending jobs`,
 			);
 		}
-		const now = Date.now();
+		const now = dbOwnerWallClockNow();
 		const job: DbOwnerJob = {
 			id: `db-owner-${process.pid}-${++sequence}`,
 			operation: submitOptions.operation,

@@ -100,6 +100,72 @@ export function redactCheckpointRow(row: CheckpointRow): CheckpointRow {
 // Write
 // ============================================================================
 
+export async function writeCheckpointAsync(
+	db: DbAccessor,
+	params: WriteCheckpointParams,
+	maxPerSession: number,
+): Promise<void> {
+	const id = crypto.randomUUID();
+	const now = new Date().toISOString();
+	const digest = redactSecrets(params.digest);
+
+	await db.withWriteTxAsync((wdb) => {
+		wdb
+			.prepare(
+				`INSERT INTO session_checkpoints
+			 (id, session_key, harness, project, project_normalized,
+			  trigger, digest, prompt_count, memory_queries,
+			  recent_remembers, focal_entity_ids, focal_entity_names,
+			  active_aspect_ids, surfaced_constraint_count,
+			  traversal_memory_count, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
+			.run(
+				id,
+				params.sessionKey,
+				params.harness,
+				params.project ?? null,
+				params.projectNormalized ?? null,
+				params.trigger,
+				digest,
+				params.promptCount,
+				params.memoryQueries.length > 0 ? JSON.stringify(params.memoryQueries) : null,
+				params.recentRemembers.length > 0 ? JSON.stringify(params.recentRemembers.map(redactSecrets)) : null,
+				params.focalEntityIds && params.focalEntityIds.length > 0 ? JSON.stringify(params.focalEntityIds) : null,
+				params.focalEntityNames && params.focalEntityNames.length > 0 ? JSON.stringify(params.focalEntityNames) : null,
+				params.activeAspectIds && params.activeAspectIds.length > 0 ? JSON.stringify(params.activeAspectIds) : null,
+				typeof params.surfacedConstraintCount === "number" ? params.surfacedConstraintCount : null,
+				typeof params.traversalMemoryCount === "number" ? params.traversalMemoryCount : null,
+				now,
+			);
+
+		const count = wdb
+			.prepare("SELECT COUNT(*) as cnt FROM session_checkpoints WHERE session_key = ?")
+			.get(params.sessionKey) as { cnt: number };
+		if (count.cnt > maxPerSession) {
+			const excess = count.cnt - maxPerSession;
+			wdb
+				.prepare(
+					`DELETE FROM session_checkpoints
+				 WHERE id IN (
+					 SELECT id FROM session_checkpoints
+					 WHERE session_key = ?
+					 ORDER BY created_at ASC, rowid ASC
+					 LIMIT ?
+				 )`,
+				)
+				.run(params.sessionKey, excess);
+		}
+	});
+
+	logger.info("checkpoints", "Checkpoint written", {
+		id,
+		sessionKey: params.sessionKey,
+		trigger: params.trigger,
+		promptCount: params.promptCount,
+	});
+}
+
 export function writeCheckpoint(db: DbAccessor, params: WriteCheckpointParams, maxPerSession: number): void {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();

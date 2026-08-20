@@ -29,7 +29,7 @@ import {
 import { logger } from "./logger";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { getSecret } from "./secrets";
-import { indexSourceArtifactStructure, purgeSourceArtifactStructure } from "./source-artifact-graph";
+import { indexSourceArtifactStructureAsync, purgeSourceArtifactStructureAsync } from "./source-artifact-graph";
 import type { SourceProviderAdapter, SourceProviderSyncContext, SourceProviderSyncResult } from "./source-providers";
 import { purgeSourceOwnedRows } from "./source-purge";
 
@@ -98,9 +98,9 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 		scanned++;
 		context.onProgress?.({ scanned, total: repos.length, indexed, currentPath: `github://${repo.fullName}` });
 		if (failures.length === failureCountBeforeRepo)
-			purgeStaleGitHubArtifacts(context.source.id, agentId, syncStartedAt, seenPaths, repo.fullName);
+			await purgeStaleGitHubArtifacts(context.source.id, agentId, syncStartedAt, seenPaths, repo.fullName);
 	}
-	if (context.shouldContinue()) purgeStaleGitHubFailureArtifacts(context.source.id, agentId, syncStartedAt);
+	if (context.shouldContinue()) await purgeStaleGitHubFailureArtifacts(context.source.id, agentId, syncStartedAt);
 	for (const failure of failures) {
 		indexed += await writeFailureArtifact(context.source, agentId, failure);
 	}
@@ -275,7 +275,7 @@ async function writeResourceArtifact(
 			...resource.extra,
 		},
 	});
-	indexSourceArtifactStructure({
+	await indexSourceArtifactStructureAsync({
 		agentId,
 		sourceId: source.id,
 		sourceKind,
@@ -324,7 +324,7 @@ async function writeCommentArtifact(
 			updatedAt: comment.updated_at,
 		},
 	});
-	indexSourceArtifactStructure({
+	await indexSourceArtifactStructureAsync({
 		agentId,
 		sourceId: source.id,
 		sourceKind: "source_github_comment",
@@ -449,17 +449,16 @@ function failureState(
 	};
 }
 
-function purgeStaleGitHubArtifacts(
+async function purgeStaleGitHubArtifacts(
 	sourceId: string,
 	agentId: string,
 	syncStartedAt: string,
 	seenPaths: ReadonlySet<string>,
 	repo: string,
-): void {
+): Promise<void> {
 	const repoPathPrefix = `github://${repo}/`;
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const rows = getDbAccessor().withReadDb(
-		(db: import("./db-accessor").ReadDb) =>
+	const rows = await getDbAccessor().withReadDbAsync(
+		(db) =>
 			db
 				.prepare(
 					`SELECT rowid, source_path FROM memory_artifacts
@@ -477,10 +476,9 @@ function purgeStaleGitHubArtifacts(
 	);
 	for (const row of rows) {
 		if (seenPaths.has(row.source_path)) continue;
-		purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
+		await purgeSourceArtifactStructureAsync({ agentId, sourceId, sourcePath: row.source_path });
 	}
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+	await getDbAccessor().withWriteTxAsync((db) => {
 		for (const row of rows) {
 			if (seenPaths.has(row.source_path)) continue;
 			countChanges(
@@ -492,9 +490,12 @@ function purgeStaleGitHubArtifacts(
 	});
 }
 
-function purgeStaleGitHubFailureArtifacts(sourceId: string, agentId: string, syncStartedAt: string): void {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+async function purgeStaleGitHubFailureArtifacts(
+	sourceId: string,
+	agentId: string,
+	syncStartedAt: string,
+): Promise<void> {
+	await getDbAccessor().withWriteTxAsync((db) => {
 		countChanges(
 			db
 				.prepare(

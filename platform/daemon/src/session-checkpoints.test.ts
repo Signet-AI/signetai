@@ -24,6 +24,7 @@ import {
 	redactCheckpointRow,
 	redactSecrets,
 	writeCheckpoint,
+	writeCheckpointAsync,
 } from "./session-checkpoints";
 
 function makeState(overrides: Partial<ContinuityState> = {}): ContinuityState {
@@ -62,8 +63,22 @@ function createTestDbAccessor(dbPath: string): DbAccessor {
 				throw err;
 			}
 		},
+		async withWriteTxAsync<T>(fn: (wdb: WriteDb) => T): Promise<T> {
+			db.run("BEGIN IMMEDIATE");
+			try {
+				const result = fn(db as unknown as WriteDb);
+				db.run("COMMIT");
+				return result;
+			} catch (err) {
+				db.run("ROLLBACK");
+				throw err;
+			}
+		},
 		withReadDb<T>(fn: (rdb: ReadDb) => T): T {
 			return fn(db as unknown as ReadDb);
+		},
+		async withReadDbAsync<T>(fn: (rdb: ReadDb) => T | Promise<T>): Promise<T> {
+			return await fn(db as unknown as ReadDb);
 		},
 		close() {
 			db.close();
@@ -115,6 +130,22 @@ describe("session-checkpoints", () => {
 		if (!rows[0].memory_queries || !rows[0].focal_entity_names) throw new Error("checkpoint JSON fields missing");
 		expect(JSON.parse(rows[0].memory_queries)).toEqual(["typescript", "database"]);
 		expect(JSON.parse(rows[0].focal_entity_names)).toEqual(["signetai"]);
+	});
+
+	test("writeCheckpointAsync uses the async DB boundary", async () => {
+		let syncCrossings = 0;
+		const asyncAccessor = {
+			withWriteTx: () => {
+				syncCrossings++;
+				throw new Error("unexpected synchronous checkpoint write");
+			},
+			withWriteTxAsync: async <T>(fn: (wdb: WriteDb) => T): Promise<T> =>
+				(dbAcc as unknown as { withWriteTx: (callback: (wdb: WriteDb) => T) => T }).withWriteTx(fn),
+		} as unknown as DbAccessor;
+
+		await writeCheckpointAsync(asyncAccessor, makeParams({ sessionKey: "async-checkpoint" }), 50);
+		expect(syncCrossings).toBe(0);
+		expect(getCheckpointsBySession(dbAcc, "async-checkpoint")).toHaveLength(1);
 	});
 
 	test("writeCheckpoint enforces maxPerSession", () => {

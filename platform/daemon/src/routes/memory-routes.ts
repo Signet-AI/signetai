@@ -51,7 +51,7 @@ import {
 	recordRecallOutcome,
 } from "../recall-telemetry";
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
-import { upsertSessionTranscript } from "../session-transcripts";
+import { upsertSessionTranscriptAsync } from "../session-transcripts";
 import { getActiveTelemetry } from "../telemetry";
 import { createTemporalEdgeId, normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
 import {
@@ -2055,7 +2055,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		// Lossless transcript storage
 		if (body.transcript && sourceId) {
-			upsertSessionTranscript(sourceId, body.transcript, sourceType, project, agentId);
+			await upsertSessionTranscriptAsync(sourceId, body.transcript, sourceType, project, agentId);
 		}
 
 		// Generate embedding asynchronously

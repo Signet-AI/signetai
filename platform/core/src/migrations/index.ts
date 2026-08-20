@@ -144,6 +144,7 @@ import { up as memoryHeadPublication } from "./135-memory-head-publication";
 import { up as memoryHeadRevisions } from "./136-memory-head-revisions";
 import { up as dreamingHeadManifest } from "./137-dreaming-head-manifest";
 import { up as boundedStatusProjections } from "./138-bounded-status-projections";
+import { up as transcriptRecoveryFrontier } from "./139-transcript-recovery-frontier";
 
 // -- Public interface consumed by Database.init() --
 
@@ -1274,6 +1275,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		artifacts: {
 			tables: ["transcript_capture_status", "memories_duplicate_hash_counts", "memories_diagnostics_state"],
 		},
+	},
+	{
+		version: 139,
+		name: "transcript-recovery-frontier",
+		up: transcriptRecoveryFrontier,
+		artifacts: { tables: ["transcript_recovery_frontiers"] },
 	},
 ];
 

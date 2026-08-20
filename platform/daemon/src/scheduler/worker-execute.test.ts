@@ -38,6 +38,12 @@ describe("executeTask", () => {
 			withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
 				return fn(db as unknown as WriteDb);
 			},
+			async withReadDbAsync<T>(fn: (rdb: ReadDb) => T | Promise<T>): Promise<T> {
+				return await fn(db as unknown as ReadDb);
+			},
+			async withWriteTxAsync<T>(fn: (wdb: WriteDb) => T): Promise<T> {
+				return fn(db as unknown as WriteDb);
+			},
 			close() {},
 		};
 
@@ -100,6 +106,12 @@ describe("executeTask", () => {
 				return fn(db as unknown as ReadDb);
 			},
 			withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
+				return fn(db as unknown as WriteDb);
+			},
+			async withReadDbAsync<T>(fn: (rdb: ReadDb) => T | Promise<T>): Promise<T> {
+				return await fn(db as unknown as ReadDb);
+			},
+			async withWriteTxAsync<T>(fn: (wdb: WriteDb) => T): Promise<T> {
 				return fn(db as unknown as WriteDb);
 			},
 			close() {},

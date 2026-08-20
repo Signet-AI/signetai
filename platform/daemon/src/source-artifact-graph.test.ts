@@ -5,7 +5,11 @@ import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { runDreamingAgentPass } from "./pipeline/dreaming";
-import { indexSourceArtifactStructure, purgeSourceArtifactStructure } from "./source-artifact-graph";
+import {
+	indexSourceArtifactStructure,
+	indexSourceArtifactStructureAsync,
+	purgeSourceArtifactStructure,
+} from "./source-artifact-graph";
 import { purgeSourceOwnedRows } from "./source-purge";
 import { txIngestEnvelope } from "./transactions";
 
@@ -100,6 +104,25 @@ describe("source artifact graph structure", () => {
 		]);
 	});
 
+	it("indexes generic source artifacts through the killable DB owner", async () => {
+		const result = await indexSourceArtifactStructureAsync({
+			agentId: "default",
+			sourceId: "github:owner-boundary",
+			sourceKind: "source_github_issue",
+			sourceRoot: "github://repos/example/repo",
+			sourceParentPath: "github://example/repo",
+			sourcePath: "github://example/repo/issues/42",
+			displayName: "Owner boundary issue",
+			content: "# Owner boundary issue\n\nThis source artifact must be indexed by the isolated SQLite owner.\n",
+		});
+		expect(result.documentEntityId).toBeTruthy();
+		const row = await getDbAccessor().withReadDbAsync((db) =>
+			db
+				.prepare("SELECT source_kind FROM entities WHERE agent_id = ? AND source_path = ?")
+				.get("default", "github://example/repo/issues/42"),
+		);
+		expect(row).toEqual({ source_kind: "source_github_issue" });
+	});
 	it("refreshes and purges graph rows by source artifact path", () => {
 		const base = {
 			agentId: "default",

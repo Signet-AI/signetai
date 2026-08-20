@@ -11,7 +11,7 @@ import {
 	nativeMemoryReadBackoffActive,
 	recordNativeMemoryPermissionDenied,
 } from "./native-memory-sources";
-import { indexSourceArtifactStructure, purgeSourceArtifactStructure } from "./source-artifact-graph";
+import { indexSourceArtifactStructureAsync, purgeSourceArtifactStructureAsync } from "./source-artifact-graph";
 import type { SourceProviderSyncResult } from "./source-providers";
 
 const DISCORD_PROVIDER_KIND = "discord";
@@ -201,7 +201,7 @@ export async function syncDiscordDesktopCacheSource(
 		await writeArtifact(options.source, options.agentId, artifact);
 		indexed++;
 	}
-	if (!cancelled) purgeStaleDesktopCacheArtifacts(options.source.id, options.agentId, syncStartedAt);
+	if (!cancelled) await purgeStaleDesktopCacheArtifacts(options.source.id, options.agentId, syncStartedAt);
 
 	return { indexed, scanned: stats.filesScanned, total: candidates.length, failures: [] };
 }
@@ -458,7 +458,7 @@ async function writeArtifact(source: SignetSourceEntry, agentId: string, artifac
 		sourceMeta: artifact.meta,
 	});
 	if (artifact.kind !== "source_discord_checkpoint") {
-		indexSourceArtifactStructure({
+		await indexSourceArtifactStructureAsync({
 			agentId,
 			sourceId: source.id,
 			sourceKind: artifact.kind,
@@ -476,9 +476,12 @@ function sourceArtifactDisplayName(artifact: CacheArtifact): string | undefined 
 	return typeof name === "string" && name.trim().length > 0 ? name.trim() : undefined;
 }
 
-function purgeStaleDesktopCacheArtifacts(sourceId: string, agentId: string, syncStartedAt: string): number {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const rows = getDbAccessor().withReadDb(
+async function purgeStaleDesktopCacheArtifacts(
+	sourceId: string,
+	agentId: string,
+	syncStartedAt: string,
+): Promise<number> {
+	const rows = await getDbAccessor().withReadDbAsync(
 		(db: import("./db-accessor").ReadDb) =>
 			db
 				.prepare(
@@ -488,20 +491,22 @@ function purgeStaleDesktopCacheArtifacts(sourceId: string, agentId: string, sync
 					   AND updated_at < ?`,
 				)
 				.all(agentId, sourceId, syncStartedAt) as Array<{ source_path: string }>,
+		{ operation: "discord-desktop-cache.purge-stale.read" },
 	);
-	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
-		countChanges(
-			db
-				.prepare(
-					`DELETE FROM memory_artifacts
-					 WHERE agent_id = ?
-					   AND source_id = ?
-					   AND updated_at < ?`,
-				)
-				.run(agentId, sourceId, syncStartedAt),
-		),
+	for (const row of rows) await purgeSourceArtifactStructureAsync({ agentId, sourceId, sourcePath: row.source_path });
+	return await getDbAccessor().withWriteTxAsync(
+		(db: import("./db-accessor").WriteDb) =>
+			countChanges(
+				db
+					.prepare(
+						`DELETE FROM memory_artifacts
+						 WHERE agent_id = ?
+						   AND source_id = ?
+						   AND updated_at < ?`,
+					)
+					.run(agentId, sourceId, syncStartedAt),
+			),
+		{ operation: "discord-desktop-cache.purge-stale.delete" },
 	);
 }
 

@@ -34,6 +34,8 @@ export interface SessionInfo {
 }
 
 interface SessionClaim {
+	/** Identity token prevents a delayed eviction result from touching a replacement claim. */
+	readonly claimId: symbol;
 	readonly sessionKey: string;
 	readonly agentId: string;
 	readonly runtimePath: RuntimePath;
@@ -76,7 +78,10 @@ export interface EvictedSessionInfo {
  * handler did not classify the outcome. Counters exposed via
  * `getSessionTrackerStats` are updated accordingly (#902).
  */
-export type SessionEvictionHandler = (info: EvictedSessionInfo) => "finalized" | "skipped" | undefined;
+export type SessionEvictionOutcome = "finalized" | "skipped" | undefined;
+export type SessionEvictionHandler = (
+	info: EvictedSessionInfo,
+) => SessionEvictionOutcome | Promise<SessionEvictionOutcome>;
 
 const STALE_SESSION_MS = 4 * 60 * 60 * 1000; // 4 hours
 const ENDED_SESSION_TOMBSTONE_MS = 30 * 60 * 1000; // 30 minutes
@@ -159,27 +164,43 @@ function evictExpiredSession(mapKey: string, claim: SessionClaim, emitEndTelemet
 		claimStore?.markExpired(key, claim.agentId);
 		return;
 	}
-	let outcome: "finalized" | "skipped" | undefined;
+	const isCurrentClaim = (): boolean => sessions.get(mapKey)?.claimId === claim.claimId;
+	const applyOutcome = (outcome: SessionEvictionOutcome): void => {
+		if (outcome === "skipped") unfinalizedCount++;
+		if (!isCurrentClaim()) return;
+		if (outcome === "finalized") {
+			claimStore?.remove(key, claim.agentId);
+		} else {
+			claimStore?.markExpired(key, claim.agentId);
+		}
+	};
 	try {
-		outcome = evictionHandler({
+		const result = evictionHandler({
 			sessionKey: key,
 			agentId: claim.agentId,
 			runtimePath: claim.runtimePath,
 			harness: claim.harness,
 			claimedAt: claim.claimedAt,
 		});
-		if (outcome === "skipped") unfinalizedCount++;
+		if (result instanceof Promise) {
+			void result.then(applyOutcome).catch((err: unknown) => {
+				unfinalizedCount++;
+				if (isCurrentClaim()) claimStore?.markExpired(key, claim.agentId);
+				logger.warn("session-tracker", "Async session eviction handler failed", {
+					sessionKey: key,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
+			return;
+		}
+		applyOutcome(result);
 	} catch (err) {
 		unfinalizedCount++;
+		if (isCurrentClaim()) claimStore?.markExpired(key, claim.agentId);
 		logger.warn("session-tracker", "Session eviction handler failed", {
 			sessionKey: key,
 			error: err instanceof Error ? err.message : String(err),
 		});
-	}
-	if (outcome === "finalized") {
-		claimStore?.remove(key, claim.agentId);
-	} else {
-		claimStore?.markExpired(key, claim.agentId);
 	}
 }
 
@@ -223,6 +244,7 @@ export function claimSession(
 	}
 
 	const claim: SessionClaim = {
+		claimId: Symbol("session-claim"),
 		sessionKey: key,
 		agentId,
 		runtimePath,
@@ -561,6 +583,7 @@ export function restorePersistedSessions(): {
 		}
 
 		const claim: SessionClaim = {
+			claimId: Symbol("session-claim"),
 			sessionKey: row.sessionKey,
 			agentId: row.agentId,
 			runtimePath: row.runtimePath,

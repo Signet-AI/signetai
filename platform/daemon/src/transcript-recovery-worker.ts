@@ -6,7 +6,7 @@ import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 import { deriveSessionToken } from "./memory-lineage";
 import { deriveSessionEndFallbackId } from "./session-end-recovery";
-import { getStoredSessionTranscriptInfo, upsertSessionTranscript } from "./session-transcripts";
+import { getStoredSessionTranscriptInfoAsync, upsertSessionTranscriptAsync } from "./session-transcripts";
 import { enqueueTranscriptCaptureJob } from "./transcript-capture-worker";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 import { normalizeSessionTranscript } from "./transcript-normalization";
@@ -19,6 +19,7 @@ export const TRANSCRIPT_RECOVERY_MAX_DISCOVERED_FILES = 50_000;
 
 interface RecoveryCandidate {
 	readonly harness: "claude-code" | "codex";
+	readonly rootPath: string;
 	readonly path: string;
 	readonly size: number;
 	readonly mtimeMs: number;
@@ -42,6 +43,7 @@ export interface TranscriptRecoveryScanOptions {
 	readonly maxBytes?: number;
 	readonly maxFiles?: number;
 	readonly maxDiscoveredFiles?: number;
+	readonly signal?: AbortSignal;
 }
 
 export interface TranscriptRecoveryScanResult {
@@ -74,9 +76,11 @@ async function discoverFiles(
 	harness: RecoveryCandidate["harness"],
 	maxFiles: number,
 	output: RecoveryCandidate[],
+	signal?: AbortSignal,
 ): Promise<void> {
 	const pending = [root];
 	while (pending.length > 0 && output.length < maxFiles) {
+		if (signal?.aborted) return;
 		const directory = pending.pop();
 		if (!directory) break;
 		let entries: Array<{
@@ -90,6 +94,7 @@ async function discoverFiles(
 			continue;
 		}
 		for (const entry of entries) {
+			if (signal?.aborted) return;
 			if (output.length >= maxFiles) return;
 			const path = join(directory, entry.name);
 			if (entry.isDirectory()) {
@@ -100,7 +105,7 @@ async function discoverFiles(
 			if (harness === "codex" && !entry.name.startsWith("rollout-")) continue;
 			try {
 				const metadata = await stat(path);
-				output.push({ harness, path, size: metadata.size, mtimeMs: metadata.mtimeMs });
+				output.push({ harness, rootPath: root, path, size: metadata.size, mtimeMs: metadata.mtimeMs });
 			} catch {
 				// A harness may rotate a file between directory enumeration and stat.
 			}
@@ -226,6 +231,74 @@ function markScanned(
 	);
 }
 
+function frontierKey(candidate: RecoveryCandidate): string {
+	return `${candidate.harness}\\0${candidate.rootPath}`;
+}
+
+async function loadFrontiers(
+	dbAccessor: DbAccessor,
+	agentId: string,
+	signal?: AbortSignal,
+): Promise<Map<string, string | null>> {
+	return dbAccessor.withReadDbAsync(
+		(db) => {
+			const rows = db
+				.prepare("SELECT harness, root_path, cursor_path FROM transcript_recovery_frontiers WHERE agent_id = ?")
+				.all(agentId) as Array<{ harness: string; root_path: string; cursor_path?: string | null }>;
+			return new Map(rows.map((row) => [`${row.harness}\\0${row.root_path}`, row.cursor_path ?? null]));
+		},
+		{ operation: "transcript-recovery.load-frontiers", signal },
+	);
+}
+
+async function saveFrontier(
+	dbAccessor: DbAccessor,
+	agentId: string,
+	candidate: RecoveryCandidate,
+	cursorPath: string | null,
+	signal?: AbortSignal,
+): Promise<void> {
+	await dbAccessor.withWriteTxAsync(
+		(db) => {
+			db.prepare(
+				`INSERT INTO transcript_recovery_frontiers (agent_id, harness, root_path, cursor_path, updated_at)
+				 VALUES (?, ?, ?, ?, ?)
+				 ON CONFLICT(agent_id, harness, root_path) DO UPDATE SET
+					cursor_path = excluded.cursor_path,
+					updated_at = excluded.updated_at`,
+			).run(agentId, candidate.harness, candidate.rootPath, cursorPath, new Date().toISOString());
+		},
+		{ operation: "transcript-recovery.save-frontier", signal },
+	);
+}
+
+async function clearFrontiers(
+	dbAccessor: DbAccessor,
+	agentId: string,
+	roots: TranscriptRecoveryRoots,
+	signal?: AbortSignal,
+): Promise<void> {
+	await dbAccessor.withWriteTxAsync(
+		(db) => {
+			db.prepare("DELETE FROM transcript_recovery_frontiers WHERE agent_id = ? AND root_path IN (?, ?)").run(
+				agentId,
+				roots.claudeCode,
+				roots.codex,
+			);
+		},
+		{ operation: "transcript-recovery.clear-frontiers", signal },
+	);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+	if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Transcript recovery aborted");
+}
+
+function isFatalDbOwnerError(error: unknown): boolean {
+	const code = error instanceof Error && "code" in error ? (error as Error & { code?: unknown }).code : undefined;
+	return typeof code === "string" && code.startsWith("DB_OWNER_");
+}
+
 export async function runTranscriptRecoveryScan(
 	dbAccessor: DbAccessor,
 	basePath: string,
@@ -241,9 +314,14 @@ export async function runTranscriptRecoveryScan(
 	const maxDiscoveredFiles = options.maxDiscoveredFiles ?? TRANSCRIPT_RECOVERY_MAX_DISCOVERED_FILES;
 	const candidates: RecoveryCandidate[] = [];
 	const claudeDiscoveryLimit = Math.max(1, Math.floor(maxDiscoveredFiles / 2));
-	await discoverFiles(roots.claudeCode, "claude-code", claudeDiscoveryLimit, candidates);
-	await discoverFiles(roots.codex, "codex", maxDiscoveredFiles, candidates);
-	candidates.sort((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path));
+	await discoverFiles(roots.claudeCode, "claude-code", claudeDiscoveryLimit, candidates, options.signal);
+	await discoverFiles(roots.codex, "codex", maxDiscoveredFiles, candidates, options.signal);
+	candidates.sort((a, b) => a.path.localeCompare(b.path));
+	const frontiers = await loadFrontiers(dbAccessor, agentId, options.signal);
+	const resumableCandidates = candidates.filter((candidate) => {
+		const cursor = frontiers.get(frontierKey(candidate));
+		return cursor === undefined || cursor === null || candidate.path > cursor;
+	});
 
 	let examined = 0;
 	let enqueued = 0;
@@ -253,18 +331,26 @@ export async function runTranscriptRecoveryScan(
 	let skippedUnchanged = 0;
 	let skippedInvalid = 0;
 
-	for (const candidate of candidates) {
+	for (const candidate of resumableCandidates) {
+		throwIfAborted(options.signal);
 		if (nowMs - candidate.mtimeMs < settleMs) {
 			skippedRecent++;
+			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
 		if (candidate.size > maxBytes) {
 			skippedOversized++;
+			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		if (dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) => unchanged(db, agentId, candidate))) {
+		if (
+			await dbAccessor.withReadDbAsync((db) => unchanged(db, agentId, candidate), {
+				operation: "transcript-recovery.unchanged",
+				signal: options.signal,
+			})
+		) {
 			skippedUnchanged++;
+			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
 		if (examined >= maxFiles) break;
@@ -272,13 +358,15 @@ export async function runTranscriptRecoveryScan(
 
 		let raw: string;
 		try {
-			raw = await readFile(candidate.path, "utf8");
+			raw = await readFile(candidate.path, { encoding: "utf8", signal: options.signal });
 		} catch (error) {
+			throwIfAborted(options.signal);
 			logger.debug("transcripts", "Transcript recovery read failed", {
 				path: candidate.path,
 				error: error instanceof Error ? error.message : String(error),
 			});
 			skippedInvalid++;
+			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
 		const metadata = readMetadata(candidate, raw);
@@ -291,29 +379,36 @@ export async function runTranscriptRecoveryScan(
 				.update(contentSha256)
 				.digest("hex")
 				.slice(0, 24)}`;
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
-				markScanned(db, agentId, candidate, contentSha256, skippedSessionId, new Date(nowMs).toISOString()),
+			await dbAccessor.withWriteTxAsync(
+				(db) => markScanned(db, agentId, candidate, contentSha256, skippedSessionId, new Date(nowMs).toISOString()),
+				{ operation: "transcript-recovery.mark-scanned", signal: options.signal },
 			);
 			skippedInvalid++;
+			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
 		const sessionId = deriveSessionEndFallbackId(metadata.sessionKey, candidate.path, transcript);
 		const contentSha256 = createHash("sha256").update(raw).digest("hex");
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const alreadyCaptured = dbAccessor.withReadDb((db: import("./db-accessor").ReadDb) =>
-			snapshotAlreadyCaptured(db, agentId, candidate, sessionId, transcript),
+		const alreadyCaptured = await dbAccessor.withReadDbAsync(
+			(db) => snapshotAlreadyCaptured(db, agentId, candidate, sessionId, transcript),
+			{ operation: "transcript-recovery.snapshot-check", signal: options.signal },
 		);
 		if (alreadyCaptured) {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
-				markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
+			await dbAccessor.withWriteTxAsync(
+				(db) => markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
+				{ operation: "transcript-recovery.mark-scanned", signal: options.signal },
 			);
 			deduplicated++;
+			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
 
-		const existingTranscript = getStoredSessionTranscriptInfo(metadata.sessionKey, agentId);
+		const existingTranscript = await getStoredSessionTranscriptInfoAsync(
+			metadata.sessionKey,
+			agentId,
+			dbAccessor,
+			options.signal,
+		);
 		// A completed canonical row is authoritative. Recovery files are legacy
 		// snapshots and may be older or partial. A later settled snapshot is
 		// allowed through only when it strictly extends the retained content;
@@ -325,16 +420,17 @@ export async function runTranscriptRecoveryScan(
 			transcript.length > existingTranscript.content.length &&
 			transcript.includes(existingTranscript.content);
 		if (existingTranscript?.completedAt && !completedSnapshotExtendsCanonical) {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
-				markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
+			await dbAccessor.withWriteTxAsync(
+				(db) => markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
+				{ operation: "transcript-recovery.mark-scanned", signal: options.signal },
 			);
 			deduplicated++;
+			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
 
 		try {
-			const retained = upsertSessionTranscript(
+			const retained = await upsertSessionTranscriptAsync(
 				metadata.sessionKey,
 				transcript,
 				candidate.harness,
@@ -342,40 +438,51 @@ export async function runTranscriptRecoveryScan(
 				agentId,
 				metadata.capturedAt,
 				dbAccessor,
-				{ completedAt: metadata.capturedAt, preserveExistingContent: true },
+				{ completedAt: metadata.capturedAt, preserveExistingContent: true, signal: options.signal },
 			);
 			if (!retained)
 				logger.warn("transcripts", "Recovered transcript retention or completion failed", {
 					sessionKey: metadata.sessionKey,
 				});
 		} catch (error) {
+			throwIfAborted(options.signal);
+			if (isFatalDbOwnerError(error)) throw error;
 			logger.warn("transcripts", "Recovered transcript retention failed", {
 				error: error instanceof Error ? error.message : String(error),
 				sessionKey: metadata.sessionKey,
 			});
 		}
-		const jobId = await enqueueTranscriptCaptureJob(dbAccessor, {
-			agentId,
-			harness: candidate.harness,
-			sessionKey: metadata.sessionKey,
-			sessionId,
-			project: metadata.project,
-			transcript,
-			rawTranscript: raw,
-			transcriptPath: candidate.path,
-			capturedAt: metadata.capturedAt,
-			endedAt: metadata.capturedAt,
-			summaryStatus: "not_requested",
-		});
+		const jobId = await enqueueTranscriptCaptureJob(
+			dbAccessor,
+			{
+				agentId,
+				harness: candidate.harness,
+				sessionKey: metadata.sessionKey,
+				sessionId,
+				project: metadata.project,
+				transcript,
+				rawTranscript: raw,
+				transcriptPath: candidate.path,
+				capturedAt: metadata.capturedAt,
+				endedAt: metadata.capturedAt,
+				summaryStatus: "not_requested",
+			},
+			options.signal,
+		);
 		if (!jobId) {
 			skippedInvalid++;
+			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		dbAccessor.withWriteTx((db: import("./db-accessor").WriteDb) =>
-			markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
+		await dbAccessor.withWriteTxAsync(
+			(db) => markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
+			{ operation: "transcript-recovery.mark-scanned", signal: options.signal },
 		);
+		await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 		enqueued++;
+	}
+	if (!options.signal?.aborted && examined < maxFiles) {
+		await clearFrontiers(dbAccessor, agentId, roots, options.signal);
 	}
 
 	return {
@@ -400,6 +507,7 @@ export function startTranscriptRecoveryWorker(
 	let running = false;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let activeScan: Promise<void> | null = null;
+	const cancellation = new AbortController();
 
 	const schedule = (delayMs: number): void => {
 		if (stopped || timer) return;
@@ -413,11 +521,15 @@ export function startTranscriptRecoveryWorker(
 		running = true;
 		activeScan = (async () => {
 			try {
-				const result = await runTranscriptRecoveryScan(dbAccessor, basePath, agentId, options);
+				const result = await runTranscriptRecoveryScan(dbAccessor, basePath, agentId, {
+					...options,
+					signal: cancellation.signal,
+				});
 				if (result.enqueued > 0 || result.deduplicated > 0) {
 					logger.info("transcripts", "Transcript recovery scan complete", { ...result });
 				}
 			} catch (error) {
+				if (cancellation.signal.aborted) return;
 				logger.warn("transcripts", "Transcript recovery scan failed", {
 					error: error instanceof Error ? error.message : String(error),
 				});
@@ -436,6 +548,7 @@ export function startTranscriptRecoveryWorker(
 	return {
 		async stop(): Promise<void> {
 			stopped = true;
+			cancellation.abort();
 			if (timer) clearTimeout(timer);
 			timer = null;
 			await activeScan;

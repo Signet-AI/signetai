@@ -3666,10 +3666,10 @@ describe("session memory recording integration", () => {
 // ============================================================================
 
 describe("handleCheckpointExtract", () => {
-	test.serial("returns skipped when no transcript available", () => {
+	test.serial("returns skipped when no transcript available", async () => {
 		createMemoryDb([]);
 
-		const result = handleCheckpointExtract({
+		const result = await handleCheckpointExtract({
 			harness: "test",
 			sessionKey: "ckpt-no-transcript",
 		});
@@ -3678,10 +3678,10 @@ describe("handleCheckpointExtract", () => {
 		expect(result.queued).toBeUndefined();
 	});
 
-	test.serial("returns skipped when delta is below 500 chars", () => {
+	test.serial("returns skipped when delta is below 500 chars", async () => {
 		createMemoryDb([]);
 
-		const result = handleCheckpointExtract({
+		const result = await handleCheckpointExtract({
 			harness: "test",
 			sessionKey: "ckpt-short",
 			transcript: "x".repeat(400),
@@ -3691,12 +3691,12 @@ describe("handleCheckpointExtract", () => {
 		expect(result.queued).toBeUndefined();
 	});
 
-	test.serial("truncated inline transcript does not overwrite stored lossless transcript", () => {
+	test.serial("truncated inline transcript does not overwrite stored lossless transcript", async () => {
 		createMemoryDb([]);
 		const full = "x".repeat(600);
 
 		// First call: store the full transcript and advance cursor
-		handleCheckpointExtract({
+		await handleCheckpointExtract({
 			harness: "test",
 			sessionKey: "ckpt-truncation",
 			transcript: full,
@@ -3705,7 +3705,7 @@ describe("handleCheckpointExtract", () => {
 		// Second call: send a truncated version (shorter than stored)
 		// The stored transcript must remain unchanged — cursor must not regress
 		const truncated = "x".repeat(200);
-		const result = handleCheckpointExtract({
+		const result = await handleCheckpointExtract({
 			harness: "test",
 			sessionKey: "ckpt-truncation",
 			transcript: truncated,
@@ -3723,10 +3723,10 @@ describe("handleCheckpointExtract", () => {
 		expect(row?.len).toBe(full.length);
 	});
 
-	test.serial("skips when transcriptPath does not exist", () => {
+	test.serial("skips when transcriptPath does not exist", async () => {
 		createMemoryDb([]);
 
-		const result = handleCheckpointExtract({
+		const result = await handleCheckpointExtract({
 			harness: "test",
 			sessionKey: "ckpt-nopath",
 			transcriptPath: "/nonexistent/path/transcript.jsonl",
@@ -3735,14 +3735,14 @@ describe("handleCheckpointExtract", () => {
 		expect(result.queued).toBeUndefined();
 	});
 
-	test.serial("skips checkpoint when pipelineV2 is disabled", () => {
+	test.serial("skips checkpoint when pipelineV2 is disabled", async () => {
 		writeAgentYaml(`memory:
   pipelineV2:
     enabled: false
 `);
 		createMemoryDb([]);
 
-		const result = handleCheckpointExtract({
+		const result = await handleCheckpointExtract({
 			harness: "test",
 			sessionKey: "ckpt-both-disabled",
 			transcript: "x".repeat(600),

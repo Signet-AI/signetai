@@ -18,6 +18,7 @@ import {
 	renewSession,
 	resetSessions,
 	runStaleCleanup,
+	setSessionClaimStore,
 	setSessionEvictionHandler,
 } from "./session-tracker";
 import { createTelemetryCollector, setActiveTelemetry } from "./telemetry";
@@ -34,6 +35,7 @@ const TEST_TELEMETRY_CONFIG = {
 } as const;
 
 afterEach(() => {
+	setSessionClaimStore(null);
 	resetSessions();
 });
 
@@ -258,6 +260,53 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 
 		expect(getSessionTrackerStats().expired).toBe(1);
 		expect(getSessionTrackerStats().unfinalized).toBe(1);
+	});
+
+	it("does not block eviction on an async handler and records its eventual outcome", async () => {
+		let finished = false;
+		setSessionEvictionHandler(async (): Promise<"finalized"> => {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			finished = true;
+			return "finalized";
+		});
+		claimSession("ttl-async", "plugin", "agent-async");
+		_expireSessionForTest("ttl-async", "agent-async");
+
+		runStaleCleanup();
+		expect(finished).toBe(false);
+		expect(getSessionTrackerStats().expired).toBe(1);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(finished).toBe(true);
+		expect(getSessionTrackerStats().unfinalized).toBe(0);
+	});
+
+	it("does not let a delayed eviction outcome corrupt a replacement claim", async () => {
+		const persistedStates = new Map<string, "active" | "expired">();
+		setSessionClaimStore({
+			upsertActive: (claim) => persistedStates.set(`${claim.agentId}:${claim.sessionKey}`, "active"),
+			markExpired: (sessionKey, agentId) => persistedStates.set(`${agentId}:${sessionKey}`, "expired"),
+			markEnded: () => {},
+			remove: (sessionKey, agentId) => persistedStates.delete(`${agentId}:${sessionKey}`),
+			list: () => [],
+		});
+		let resolveEviction!: (outcome: "finalized") => void;
+		const evictionFinished = new Promise<"finalized">((resolve) => {
+			resolveEviction = resolve;
+		});
+		setSessionEvictionHandler(() => evictionFinished);
+
+		claimSession("ttl-reused", "plugin", "agent-reused");
+		_expireSessionForTest("ttl-reused", "agent-reused");
+		expect(claimSession("ttl-reused", "legacy", "agent-reused")).toEqual({ ok: true });
+		expect(hasSession("ttl-reused", "agent-reused")).toBe(true);
+		expect(persistedStates.get("agent-reused:ttl-reused")).toBe("active");
+
+		resolveEviction("finalized");
+		await evictionFinished;
+		// The old finalizer must not remove or expire the replacement claim.
+		expect(hasSession("ttl-reused", "agent-reused")).toBe(true);
+		expect(getSessionPath("ttl-reused", "agent-reused")).toBe("legacy");
+		expect(persistedStates.get("agent-reused:ttl-reused")).toBe("active");
 	});
 
 	it("does not count a 'finalized' outcome as unfinalized", () => {

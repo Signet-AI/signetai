@@ -93,6 +93,23 @@ export interface DbOwnerSourceGraphPurge {
 	readonly root: string;
 }
 
+export interface DbOwnerSourceArtifactPurge {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly sourcePath: string;
+}
+
+export interface DbOwnerSourceArtifactIndex {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly sourceKind: string;
+	readonly sourceRoot: string;
+	readonly sourcePath: string;
+	readonly sourceParentPath?: string;
+	readonly displayName?: string;
+	readonly content: string;
+}
+
 export interface DbOwnerSourceArtifactFields {
 	readonly agentId: string;
 	readonly sourcePath: string;
@@ -144,6 +161,8 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_index"; readonly input: DbOwnerSourceGraphIndex }
 	| { readonly kind: "source_graph_file_purge"; readonly input: DbOwnerSourceGraphFilePurge }
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
+	| { readonly kind: "source_artifact_index"; readonly input: DbOwnerSourceArtifactIndex }
+	| { readonly kind: "source_artifact_purge"; readonly input: DbOwnerSourceArtifactPurge }
 	| { readonly kind: "source_artifact_upsert"; readonly input: DbOwnerSourceArtifactUpsert }
 	| { readonly kind: "source_artifact_upsert_batch"; readonly input: readonly DbOwnerSourceArtifactUpsert[] }
 	| { readonly kind: "vacuum_conversion" }

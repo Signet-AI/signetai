@@ -1891,9 +1891,12 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 // Public helpers
 // ---------------------------------------------------------------------------
 
-/** Queue a write transaction through the bounded async writer. */
-export async function runWriteTxAsync<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
-	return await accessor.withWriteTxAsync(fn);
+export async function runWriteTxAsync<T>(
+	accessor: DbAccessor,
+	fn: (db: WriteDb) => T,
+	options?: WriteAdmissionOptions,
+): Promise<T> {
+	return await accessor.withWriteTxAsync(fn, options);
 }
 
 /** Get the initialised accessor. Throws if `initDbAccessor` hasn't been called. */

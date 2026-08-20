@@ -227,13 +227,15 @@ interface ExistingDocRow {
 	readonly updated_at: string;
 }
 
-function findDocBySourceUrl(accessor: DbAccessor, sourceUrl: string): ExistingDocRow | undefined {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-		return db.prepare("SELECT id, updated_at FROM documents WHERE source_url = ? LIMIT 1").get(sourceUrl) as
-			| ExistingDocRow
-			| undefined;
-	});
+async function findDocBySourceUrl(accessor: DbAccessor, sourceUrl: string): Promise<ExistingDocRow | undefined> {
+	return await accessor.withReadDbAsync(
+		(db) => {
+			return db.prepare("SELECT id, updated_at FROM documents WHERE source_url = ? LIMIT 1").get(sourceUrl) as
+				| ExistingDocRow
+				| undefined;
+		},
+		{ operation: "connector.filesystem.find-document" },
+	);
 }
 
 export async function readFileContent(
@@ -273,18 +275,17 @@ export async function readFileContent(
 /**
  * Insert a new document row and return its id.
  */
-function insertDocument(
+async function insertDocument(
 	accessor: DbAccessor,
 	connectorId: string,
 	sourceUrl: string,
 	title: string,
 	rawContent: string,
-): string {
+): Promise<string> {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+	await accessor.withWriteTxAsync((db) => {
 		db.prepare(
 			`INSERT INTO documents
 			 (id, source_url, source_type, content_type, title,
@@ -303,11 +304,10 @@ function insertDocument(
 /**
  * Update an existing document row with fresh content and reset to queued.
  */
-function updateDocument(accessor: DbAccessor, docId: string, rawContent: string): void {
+async function updateDocument(accessor: DbAccessor, docId: string, rawContent: string): Promise<void> {
 	const now = new Date().toISOString();
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+	await accessor.withWriteTxAsync((db) => {
 		db.prepare(
 			`UPDATE documents
 			 SET raw_content = ?, status = 'queued', error = NULL,
@@ -344,10 +344,10 @@ async function processFile(
 		};
 	}
 
-	const existing = findDocBySourceUrl(accessor, sourceUrl);
+	const existing = await findDocBySourceUrl(accessor, sourceUrl);
 
 	if (existing === undefined) {
-		const docId = insertDocument(accessor, connectorId, sourceUrl, file.name, content);
+		const docId = await insertDocument(accessor, connectorId, sourceUrl, file.name, content);
 		await enqueueDocumentIngestJob(accessor, docId);
 		return { added: 1, updated: 0, error: null };
 	}
@@ -360,7 +360,7 @@ async function processFile(
 		return { added: 0, updated: 0, error: null };
 	}
 
-	updateDocument(accessor, existing.id, content);
+	await updateDocument(accessor, existing.id, content);
 	await enqueueDocumentIngestJob(accessor, existing.id);
 	return { added: 0, updated: 1, error: null };
 }

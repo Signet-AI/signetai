@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { extractAnchorTerms } from "./anchor-terms";
-import { type DbAccessor, type WriteDb, getDbAccessor } from "./db-accessor";
+import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { sanitizeFtsQuery } from "./memory-search";
@@ -60,6 +60,7 @@ export interface StoredTranscriptInfo {
 export interface SessionTranscriptUpsertOptions {
 	readonly completedAt?: string;
 	readonly preserveExistingContent?: boolean;
+	readonly signal?: AbortSignal;
 }
 
 export interface TranscriptHit {
@@ -521,6 +522,97 @@ export function upsertSessionTranscript(
 	}
 }
 
+export async function upsertSessionTranscriptAsync(
+	sessionKey: string,
+	transcript: string,
+	harness: string,
+	project: string | null,
+	agentId: string,
+	capturedAt?: string,
+	accessor: DbAccessor = getDbAccessor(),
+	options?: SessionTranscriptUpsertOptions,
+): Promise<boolean> {
+	if (sessionKey.trim().length === 0 || transcript.trim().length === 0) return false;
+
+	try {
+		return await accessor.withWriteTxAsync(
+			(db) => {
+				if (!tableExistsInDatabase(db, "session_transcripts")) return false;
+				const existing = options?.preserveExistingContent
+					? (db
+							.prepare(
+								`SELECT content
+								 FROM session_transcripts
+								 WHERE session_key = ? AND agent_id = ?`,
+							)
+							.get(sessionKey, agentId) as { content?: string } | null | undefined)
+					: undefined;
+				const retainedTranscript = mergeTranscriptContent(existing?.content ?? "", transcript);
+				const now = capturedAt ?? new Date().toISOString();
+				const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
+					Record<string, unknown>
+				>;
+				const hasUpdated = cols.some((col) => col.name === "updated_at");
+				const hasCompleted = cols.some((col) => col.name === "completed_at");
+				const hasHash = cols.some((col) => col.name === "content_hash");
+				const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
+				const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at"];
+				const values: unknown[] = [sessionKey, retainedTranscript, harness, project, agentId, now];
+				const updates = [
+					"content = excluded.content",
+					"harness = excluded.harness",
+					"project = excluded.project",
+					"agent_id = excluded.agent_id",
+				];
+				const sameContent = hasHash
+					? "(session_transcripts.content_hash = excluded.content_hash OR (session_transcripts.content_hash IS NULL AND session_transcripts.content = excluded.content))"
+					: "session_transcripts.content = excluded.content";
+				if (hasUpdated) {
+					insertColumns.push("updated_at");
+					values.push(now);
+					updates.push(
+						`updated_at = CASE WHEN ${sameContent} THEN session_transcripts.updated_at ELSE excluded.updated_at END`,
+					);
+				}
+				if (hasCompleted) {
+					insertColumns.push("completed_at");
+					values.push(options?.completedAt ?? null);
+					updates.push(
+						options?.completedAt
+							? "completed_at = CASE WHEN session_transcripts.completed_at IS NULL THEN excluded.completed_at ELSE session_transcripts.completed_at END"
+							: `completed_at = CASE WHEN ${sameContent} THEN session_transcripts.completed_at ELSE NULL END`,
+					);
+				}
+				if (hasHash) {
+					insertColumns.push("content_hash");
+					values.push(contentHash);
+					updates.push("content_hash = excluded.content_hash");
+				}
+				db.prepare(
+					`INSERT INTO session_transcripts (${insertColumns.join(", ")})
+						 VALUES (${insertColumns.map(() => "?").join(", ")})
+						 ON CONFLICT(agent_id, session_key) DO UPDATE SET ${updates.join(", ")}`,
+				).run(...values);
+				upsertMemoryContentSafetyInTx(db, {
+					agentId,
+					sourceKind: "transcript",
+					sourceId: sessionKey,
+					content: retainedTranscript,
+				});
+				return true;
+			},
+			{ operation: "transcripts.upsert", signal: options?.signal },
+		);
+	} catch (error) {
+		if (options?.signal?.aborted) throw error;
+		logger.warn("transcripts", "Async transcript upsert failed", {
+			error: error instanceof Error ? error.message : String(error),
+			sessionKey,
+		});
+		return false;
+	}
+}
+
 function mergeTranscriptContent(existing: string, incoming: string): string {
 	if (existing.length === 0) return incoming;
 	if (incoming.length === 0 || existing === incoming || existing.includes(incoming)) return existing;
@@ -628,6 +720,78 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 			};
 		});
 	} catch {
+		return undefined;
+	}
+}
+
+function readStoredSessionTranscriptInfo(
+	db: ReadDb,
+	sessionKey: string,
+	agentId: string,
+): StoredTranscriptInfo | undefined {
+	const aliases = [...new Set([sessionKey, canonicalizeTranscriptLookup(sessionKey)])];
+	const placeholders = aliases.map(() => "?").join(", ");
+	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+	const hasUpdated = cols.some((col) => col.name === "updated_at");
+	const hasCompleted = cols.some((col) => col.name === "completed_at");
+	const hasHash = cols.some((col) => col.name === "content_hash");
+	const updatedAtExpr = hasUpdated ? "updated_at" : "NULL AS updated_at";
+	const completedAtExpr = hasCompleted ? "completed_at" : "NULL AS completed_at";
+	const contentHashExpr = hasHash ? "content_hash" : "NULL AS content_hash";
+	const seenExpr = hasUpdated ? "COALESCE(updated_at, created_at)" : "created_at";
+	const row = db
+		.prepare(
+			`SELECT session_key, agent_id, content, harness, project, created_at, ${updatedAtExpr}, ${completedAtExpr}, ${contentHashExpr}
+			 FROM session_transcripts
+			 WHERE agent_id = ? AND session_key IN (${placeholders})
+			 ORDER BY CASE WHEN session_key = ? THEN 0 ELSE 1 END, ${seenExpr} DESC
+			 LIMIT 1`,
+		)
+		.get(agentId, ...aliases, sessionKey) as
+		| {
+				session_key: string;
+				agent_id: string;
+				content: string;
+				harness: string | null;
+				project: string | null;
+				created_at: string;
+				updated_at?: string | null;
+				completed_at?: string | null;
+				content_hash?: string | null;
+		  }
+		| undefined;
+	if (!row) return undefined;
+	return {
+		sessionKey: row.session_key,
+		agentId: row.agent_id,
+		content: row.content,
+		harness: row.harness,
+		project: row.project,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at ?? null,
+		completedAt: row.completed_at ?? null,
+		contentHash: row.content_hash ?? null,
+	};
+}
+
+/** Async transcript lookup for background recovery and maintenance paths. */
+export async function getStoredSessionTranscriptInfoAsync(
+	sessionKey: string,
+	agentId: string,
+	accessor: DbAccessor = getDbAccessor(),
+	signal?: AbortSignal,
+): Promise<StoredTranscriptInfo | undefined> {
+	if (sessionKey.trim().length === 0 || agentId.trim().length === 0) return undefined;
+	try {
+		return await accessor.withReadDbAsync(
+			(db) => {
+				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
+				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
+			},
+			{ operation: "transcripts.lookup", signal },
+		);
+	} catch (error) {
+		if (signal?.aborted) throw error;
 		return undefined;
 	}
 }
