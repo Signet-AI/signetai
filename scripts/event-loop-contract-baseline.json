@@ -3559,34 +3559,6 @@
       "category": "hot-path"
     },
     {
-      "path": "daemon.ts",
-      "line": 1451,
-      "api": "withWriteTx",
-      "source": "db.withWriteTx((w: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "daemon.ts",
-      "line": 1532,
-      "api": "withReadDb",
-      "source": "const activeEmbeddingCfg = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "daemon.ts",
-      "line": 2238,
-      "api": "withReadDb",
-      "source": "const memoryCount = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "daemon.ts",
-      "line": 2249,
-      "api": "withReadDb",
-      "source": "const queue = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) =>",
-      "category": "hot-path"
-    },
-    {
       "path": "db-vacuum.ts",
       "line": 335,
       "api": "withReadDb",
@@ -4053,13 +4025,6 @@
       "line": 198,
       "api": "withReadDb",
       "source": "accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) =>",
-      "category": "hot-path"
-    },
-    {
-      "path": "pipeline/extraction-fallback.ts",
-      "line": 17,
-      "api": "withWriteTx",
-      "source": "return accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {

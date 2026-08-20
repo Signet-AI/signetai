@@ -110,6 +110,14 @@ export function listConnectors(accessor: DbAccessor): readonly ConnectorRow[] {
 	});
 }
 
+/** Async diagnostic projection used by heartbeat and other background paths. */
+export async function listConnectorsAsync(accessor: DbAccessor): Promise<readonly ConnectorRow[]> {
+	return await accessor.withReadDbAsync(
+		(db) => db.prepare("SELECT * FROM connectors ORDER BY created_at DESC").all() as ConnectorRow[],
+		{ operation: "heartbeat.list-connectors" },
+	);
+}
+
 /**
  * Count documents whose source_url begins with the connector's root path.
  *

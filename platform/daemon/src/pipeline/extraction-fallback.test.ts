@@ -1,15 +1,15 @@
 import Database from "bun:sqlite";
 import { beforeEach, describe, expect, it } from "bun:test";
-import type { DbAccessor, WriteDb } from "../db-accessor";
-import { retireLegacyExtractionJobs } from "./extraction-fallback";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { retireLegacyExtractionJobsAsync } from "./extraction-fallback";
 
 function makeAccessor(db: Database): DbAccessor {
 	return {
-		withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
-			return fn(db as unknown as WriteDb);
+		withWriteTxAsync<T>(fn: (wdb: WriteDb) => T): Promise<T> {
+			return Promise.resolve(fn(db as unknown as WriteDb));
 		},
-		withReadDb<T>(fn: (rdb: Database) => T): T {
-			return fn(db);
+		withReadDbAsync<T>(fn: (rdb: ReadDb) => T | Promise<T>): Promise<T> {
+			return Promise.resolve(fn(db as unknown as ReadDb));
 		},
 		close() {
 			db.close();
@@ -39,7 +39,7 @@ describe("legacy extraction retirement", () => {
 		accessor = makeAccessor(db);
 	});
 
-	it("terminalizes every unfinished retired extraction job without creating replacement work", () => {
+	it("terminalizes every unfinished retired extraction job without creating replacement work", async () => {
 		const now = new Date().toISOString();
 		db.prepare("INSERT INTO memories (id, extraction_status, memory_kind, source_type) VALUES (?, ?, ?, ?)").run(
 			"pending-memory",
@@ -112,7 +112,7 @@ describe("legacy extraction retirement", () => {
 			);
 		}
 
-		expect(retireLegacyExtractionJobs(accessor, { reason: "Dreaming owns semantic writes" })).toBe(8);
+		expect(await retireLegacyExtractionJobsAsync(accessor, { reason: "Dreaming owns semantic writes" })).toBe(8);
 
 		const jobs = db.prepare("SELECT id, status FROM memory_jobs ORDER BY id").all();
 		expect(jobs).toEqual([

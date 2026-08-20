@@ -1,7 +1,9 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 import { deriveSessionToken } from "./memory-lineage";
@@ -44,6 +46,8 @@ export interface TranscriptRecoveryScanOptions {
 	readonly maxFiles?: number;
 	readonly maxDiscoveredFiles?: number;
 	readonly signal?: AbortSignal;
+	/** Production scans run in a killable child; in-process is reserved for direct tests/helpers. */
+	readonly execution?: "child" | "in-process";
 }
 
 export interface TranscriptRecoveryScanResult {
@@ -61,6 +65,8 @@ export interface TranscriptRecoveryWorkerHandle {
 	stop(): Promise<void>;
 	nudge(): void;
 	readonly running: boolean;
+	/** Active child PID, exposed for lifecycle tests and diagnostics. */
+	readonly childPid: number | null;
 }
 
 function defaultRoots(): TranscriptRecoveryRoots {
@@ -77,10 +83,11 @@ async function discoverFiles(
 	maxFiles: number,
 	output: RecoveryCandidate[],
 	signal?: AbortSignal,
-): Promise<void> {
+): Promise<boolean> {
 	const pending = [root];
-	while (pending.length > 0 && output.length < maxFiles) {
-		if (signal?.aborted) return;
+	while (pending.length > 0) {
+		if (signal?.aborted) return false;
+		if (output.length >= maxFiles) return false;
 		const directory = pending.pop();
 		if (!directory) break;
 		let entries: Array<{
@@ -94,8 +101,8 @@ async function discoverFiles(
 			continue;
 		}
 		for (const entry of entries) {
-			if (signal?.aborted) return;
-			if (output.length >= maxFiles) return;
+			if (signal?.aborted) return false;
+			if (output.length >= maxFiles) return false;
 			const path = join(directory, entry.name);
 			if (entry.isDirectory()) {
 				pending.push(path);
@@ -111,6 +118,7 @@ async function discoverFiles(
 			}
 		}
 	}
+	return !signal?.aborted;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -314,8 +322,21 @@ export async function runTranscriptRecoveryScan(
 	const maxDiscoveredFiles = options.maxDiscoveredFiles ?? TRANSCRIPT_RECOVERY_MAX_DISCOVERED_FILES;
 	const candidates: RecoveryCandidate[] = [];
 	const claudeDiscoveryLimit = Math.max(1, Math.floor(maxDiscoveredFiles / 2));
-	await discoverFiles(roots.claudeCode, "claude-code", claudeDiscoveryLimit, candidates, options.signal);
-	await discoverFiles(roots.codex, "codex", maxDiscoveredFiles, candidates, options.signal);
+	const claudeDiscoveryComplete = await discoverFiles(
+		roots.claudeCode,
+		"claude-code",
+		claudeDiscoveryLimit,
+		candidates,
+		options.signal,
+	);
+	const codexDiscoveryComplete = await discoverFiles(
+		roots.codex,
+		"codex",
+		maxDiscoveredFiles,
+		candidates,
+		options.signal,
+	);
+	const discoveryComplete = claudeDiscoveryComplete && codexDiscoveryComplete;
 	candidates.sort((a, b) => a.path.localeCompare(b.path));
 	const frontiers = await loadFrontiers(dbAccessor, agentId, options.signal);
 	const resumableCandidates = candidates.filter((candidate) => {
@@ -481,7 +502,7 @@ export async function runTranscriptRecoveryScan(
 		await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 		enqueued++;
 	}
-	if (!options.signal?.aborted && examined < maxFiles) {
+	if (!options.signal?.aborted && discoveryComplete && examined < maxFiles) {
 		await clearFrontiers(dbAccessor, agentId, roots, options.signal);
 	}
 
@@ -507,7 +528,9 @@ export function startTranscriptRecoveryWorker(
 	let running = false;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let activeScan: Promise<void> | null = null;
+	let activeChild: ChildProcess | null = null;
 	const cancellation = new AbortController();
+	const execution = options.execution ?? "child";
 
 	const schedule = (delayMs: number): void => {
 		if (stopped || timer) return;
@@ -516,20 +539,70 @@ export function startTranscriptRecoveryWorker(
 			void scan();
 		}, delayMs);
 	};
+
+	const runChild = async (): Promise<TranscriptRecoveryScanResult> => {
+		const childName = fileURLToPath(import.meta.url).endsWith(".ts")
+			? "transcript-recovery-child.ts"
+			: "transcript-recovery-child.js";
+		const childPath = join(dirname(fileURLToPath(import.meta.url)), childName);
+		const { intervalMs: _intervalMs, signal: _signal, execution: _execution, ...scanOptions } = options;
+		const child = spawn(process.execPath, [childPath], {
+			env: {
+				...process.env,
+				SIGNET_TRANSCRIPT_RECOVERY_INPUT: JSON.stringify({ basePath, agentId, options: scanOptions }),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		activeChild = child;
+		return await new Promise<TranscriptRecoveryScanResult>((resolve, reject) => {
+			let output = "";
+			let settled = false;
+			const settle = (callback: () => void): void => {
+				if (settled) return;
+				settled = true;
+				callback();
+			};
+			child.stdout?.setEncoding("utf8");
+			child.stdout?.on("data", (chunk: string) => {
+				output += chunk;
+				for (const line of output.split("\\n").slice(0, -1)) {
+					try {
+						const event = JSON.parse(line) as { type?: string; result?: TranscriptRecoveryScanResult };
+						if (event.type === "result" && event.result !== undefined)
+							settle(() => resolve(event.result as TranscriptRecoveryScanResult));
+					} catch {
+						// Logger output is not part of the child protocol.
+					}
+				}
+				output = output.slice(output.lastIndexOf("\\n") + 1);
+			});
+			child.on("error", (error) => settle(() => reject(error)));
+			child.on("exit", (code, signal) => {
+				if (!settled) {
+					const detail = signal === null ? `exit code ${code ?? "unknown"}` : `signal ${signal}`;
+					settle(() => reject(new Error(`Transcript recovery child exited with ${detail}`)));
+				}
+			});
+		});
+	};
+
 	const scan = async (): Promise<void> => {
 		if (stopped || running) return;
 		running = true;
 		activeScan = (async () => {
 			try {
-				const result = await runTranscriptRecoveryScan(dbAccessor, basePath, agentId, {
-					...options,
-					signal: cancellation.signal,
-				});
+				const result =
+					execution === "in-process"
+						? await runTranscriptRecoveryScan(dbAccessor, basePath, agentId, {
+								...options,
+								signal: cancellation.signal,
+							})
+						: await runChild();
 				if (result.enqueued > 0 || result.deduplicated > 0) {
 					logger.info("transcripts", "Transcript recovery scan complete", { ...result });
 				}
 			} catch (error) {
-				if (cancellation.signal.aborted) return;
+				if (cancellation.signal.aborted || stopped) return;
 				logger.warn("transcripts", "Transcript recovery scan failed", {
 					error: error instanceof Error ? error.message : String(error),
 				});
@@ -539,6 +612,7 @@ export function startTranscriptRecoveryWorker(
 			await activeScan;
 		} finally {
 			activeScan = null;
+			activeChild = null;
 			running = false;
 			schedule(options.intervalMs ?? TRANSCRIPT_RECOVERY_INTERVAL_MS);
 		}
@@ -551,6 +625,13 @@ export function startTranscriptRecoveryWorker(
 			cancellation.abort();
 			if (timer) clearTimeout(timer);
 			timer = null;
+			if (activeChild !== null) {
+				try {
+					activeChild.kill("SIGKILL");
+				} catch {
+					// The child may have exited between the check and kill.
+				}
+			}
 			await activeScan;
 		},
 		nudge(): void {
@@ -560,6 +641,9 @@ export function startTranscriptRecoveryWorker(
 		},
 		get running(): boolean {
 			return !stopped;
+		},
+		get childPid(): number | null {
+			return activeChild?.pid ?? null;
 		},
 	};
 }

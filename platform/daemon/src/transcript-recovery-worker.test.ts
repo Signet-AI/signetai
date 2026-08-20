@@ -14,6 +14,7 @@ let dir = "";
 let claudeRoot = "";
 let codexRoot = "";
 let previousSignetPath: string | undefined;
+let previousRecoveryHoldFile: string | undefined;
 
 function writeSettled(path: string, content: string): void {
 	mkdirSync(dirname(path), { recursive: true });
@@ -32,6 +33,7 @@ async function scan(nowMs = Date.now()) {
 describe("transcript recovery worker", () => {
 	beforeEach(() => {
 		previousSignetPath = process.env.SIGNET_PATH;
+		previousRecoveryHoldFile = process.env.SIGNET_TRANSCRIPT_RECOVERY_TEST_HOLD_FILE;
 		dir = mkdtempSync(join(tmpdir(), "signet-transcript-recovery-"));
 		claudeRoot = join(dir, "native", "claude", "projects");
 		codexRoot = join(dir, "native", "codex", "sessions");
@@ -43,6 +45,9 @@ describe("transcript recovery worker", () => {
 		closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
+		if (previousRecoveryHoldFile === undefined)
+			Reflect.deleteProperty(process.env, "SIGNET_TRANSCRIPT_RECOVERY_TEST_HOLD_FILE");
+		else process.env.SIGNET_TRANSCRIPT_RECOVERY_TEST_HOLD_FILE = previousRecoveryHoldFile;
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -470,6 +475,7 @@ describe("transcript recovery worker", () => {
 		const handle = startTranscriptRecoveryWorker(getDbAccessor(), dir, "agent-a", {
 			roots: { claudeCode: claudeRoot, codex: codexRoot },
 			intervalMs: 60_000,
+			execution: "child",
 		});
 		await handle.stop();
 		expect(handle.running).toBe(false);
@@ -491,9 +497,72 @@ describe("transcript recovery worker", () => {
 		const handle = startTranscriptRecoveryWorker(queuedAccessor, dir, "agent-a", {
 			roots: { claudeCode: claudeRoot, codex: codexRoot },
 			intervalMs: 60_000,
+			execution: "in-process",
 		});
 		await admitted;
 		await handle.stop();
 		expect(handle.running).toBe(false);
+	});
+
+	it("does not clear a frontier when discovery is capped", async () => {
+		const firstPath = join(claudeRoot, "-repo", "a-capped.jsonl");
+		const secondPath = join(claudeRoot, "-repo", "b-capped.jsonl");
+		const makeLog = (sessionId: string) => JSON.stringify({ sessionId, message: { role: "user", content: sessionId } });
+		writeSettled(firstPath, makeLog("capped-a"));
+		writeSettled(secondPath, makeLog("capped-b"));
+
+		const result = await runTranscriptRecoveryScan(getDbAccessor(), dir, "agent-a", {
+			roots: { claudeCode: claudeRoot, codex: codexRoot },
+			maxDiscoveredFiles: 1,
+			maxFiles: 10,
+		});
+		expect(result.discovered).toBe(1);
+		const frontier = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT cursor_path FROM transcript_recovery_frontiers WHERE agent_id = ? AND harness = ?")
+					.get("agent-a", "claude-code") as { cursor_path?: string } | null,
+		);
+		expect(frontier?.cursor_path === firstPath || frontier?.cursor_path === secondPath).toBe(true);
+	});
+
+	it("keeps the parent responsive when the recovery child dies and resumes its durable frontier", async () => {
+		const firstPath = join(claudeRoot, "-repo", "a-child-death.jsonl");
+		const secondPath = join(claudeRoot, "-repo", "b-child-death.jsonl");
+		const makeLog = (sessionId: string) => JSON.stringify({ sessionId, message: { role: "user", content: sessionId } });
+		writeSettled(firstPath, makeLog("child-death-a"));
+		writeSettled(secondPath, makeLog("child-death-b"));
+		await runTranscriptRecoveryScan(getDbAccessor(), dir, "agent-a", {
+			roots: { claudeCode: claudeRoot, codex: codexRoot },
+			maxFiles: 1,
+		});
+
+		const holdFile = join(dir, "hold-recovery-child");
+		writeFileSync(holdFile, "hold");
+		process.env.SIGNET_TRANSCRIPT_RECOVERY_TEST_HOLD_FILE = holdFile;
+		const killed = startTranscriptRecoveryWorker(getDbAccessor(), dir, "agent-a", {
+			roots: { claudeCode: claudeRoot, codex: codexRoot },
+			intervalMs: 60_000,
+		});
+		let childPid: number | null = null;
+		for (let attempt = 0; attempt < 100 && childPid === null; attempt++) {
+			childPid = killed.childPid;
+			if (childPid === null) await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		expect(childPid).not.toBeNull();
+		if (childPid !== null) process.kill(childPid, "SIGKILL");
+		await killed.stop();
+
+		rmSync(holdFile, { force: true });
+		const resumed = startTranscriptRecoveryWorker(getDbAccessor(), dir, "agent-a", {
+			roots: { claudeCode: claudeRoot, codex: codexRoot },
+			intervalMs: 60_000,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		await resumed.stop();
+		const jobs = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT transcript_path FROM transcript_capture_jobs ORDER BY transcript_path").all(),
+		) as Array<{ transcript_path: string }>;
+		expect(jobs.map((job) => job.transcript_path)).toEqual([firstPath, secondPath]);
 	});
 });

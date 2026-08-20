@@ -194,7 +194,7 @@ describe("session-checkpoints", () => {
 		expect(rows.length).toBe(2);
 	});
 
-	test("queueCheckpointWrite merges structural snapshots explicitly", () => {
+	test("queueCheckpointWrite merges structural snapshots explicitly", async () => {
 		initCheckpointFlush(dbAcc);
 		queueCheckpointWrite(
 			makeParams({
@@ -219,7 +219,7 @@ describe("session-checkpoints", () => {
 			50,
 		);
 
-		flushPendingCheckpoints();
+		await flushPendingCheckpoints();
 		const row = getLatestCheckpointBySession(dbAcc, "structural-merge");
 		if (!row?.focal_entity_ids || !row.focal_entity_names || !row.active_aspect_ids) {
 			throw new Error("merged checkpoint fields missing");
@@ -506,13 +506,13 @@ describe("debounce merge", () => {
 		initCheckpointFlush(dbAcc);
 	});
 
-	afterEach(() => {
-		flushPendingCheckpoints();
+	afterEach(async () => {
+		await flushPendingCheckpoints();
 		dbAcc.close();
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	test("queuing two writes for same session merges data", () => {
+	test("queuing two writes for same session merges data", async () => {
 		const base: WriteCheckpointParams = {
 			sessionKey: "merge-test",
 			harness: "test",
@@ -537,7 +537,7 @@ describe("debounce merge", () => {
 			50,
 		);
 
-		flushPendingCheckpoints();
+		await flushPendingCheckpoints();
 		const rows = getCheckpointsBySession(dbAcc, "merge-test");
 		expect(rows.length).toBe(1);
 		// Prompt counts summed

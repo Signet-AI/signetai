@@ -333,6 +333,24 @@ export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): Rea
 	});
 }
 
+/** Async session checkpoint projection for HTTP/background callers. */
+export async function getCheckpointsBySessionAsync(
+	db: DbAccessor,
+	sessionKey: string,
+): Promise<ReadonlyArray<CheckpointRow>> {
+	return await db.withReadDbAsync(
+		(rdb) =>
+			rdb
+				.prepare(
+					`SELECT * FROM session_checkpoints
+					 WHERE session_key = ?
+					 ORDER BY created_at DESC, rowid DESC`,
+				)
+				.all(sessionKey) as unknown as CheckpointRow[],
+		{ operation: "http.checkpoints-by-session" },
+	);
+}
+
 /** Get recent checkpoints for a project (for API). */
 export function getCheckpointsByProject(
 	db: DbAccessor,
@@ -376,6 +394,20 @@ export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number 
 		}
 		return deleted;
 	});
+}
+
+/** Async maintenance variant; checkpoint retention is bulk work, not a bounded HTTP lookup. */
+export async function pruneCheckpointsAsync(db: DbAccessor, retentionDays: number): Promise<number> {
+	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+	return await db.withWriteTxAsync(
+		(wdb) => {
+			const result = wdb.prepare("DELETE FROM session_checkpoints WHERE created_at < ?").run(cutoff);
+			const deleted = (result as unknown as { changes: number }).changes ?? 0;
+			if (deleted > 0) logger.info("checkpoints", "Pruned old checkpoints", { deleted, retentionDays });
+			return deleted;
+		},
+		{ operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
+	);
 }
 
 // ============================================================================
@@ -598,12 +630,14 @@ export function queueCheckpointWrite(params: WriteCheckpointParams, maxPerSessio
 	}
 
 	if (flushTimer === null) {
-		flushTimer = setTimeout(flushPendingCheckpoints, FLUSH_DELAY_MS);
+		flushTimer = setTimeout(() => {
+			void flushPendingCheckpoints();
+		}, FLUSH_DELAY_MS);
 	}
 }
 
-/** Flush all pending checkpoint writes immediately. */
-export function flushPendingCheckpoints(): void {
+/** Flush all pending checkpoint writes immediately through async DB admission. */
+export async function flushPendingCheckpoints(): Promise<void> {
 	if (flushTimer !== null) {
 		clearTimeout(flushTimer);
 		flushTimer = null;
@@ -616,7 +650,7 @@ export function flushPendingCheckpoints(): void {
 
 	for (const entry of entries) {
 		try {
-			writeCheckpoint(dbRef, entry.params, entry.maxPerSession);
+			await writeCheckpointAsync(dbRef, entry.params, entry.maxPerSession);
 		} catch (err) {
 			logger.error("checkpoints", "Failed to flush checkpoint", undefined, {
 				sessionKey: entry.params.sessionKey,

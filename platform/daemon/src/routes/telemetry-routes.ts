@@ -9,7 +9,7 @@ import { getDiagnostics } from "../diagnostics.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { listMemorySearchTelemetry } from "../memory-search-telemetry.js";
 import { addResourceUtilizationSample, emptyResourceUtilizationStats } from "../resource-telemetry.js";
-import { getCheckpointsByProject, getCheckpointsBySession, redactCheckpointRow } from "../session-checkpoints.js";
+import { getCheckpointsByProject, getCheckpointsBySessionAsync, redactCheckpointRow } from "../session-checkpoints.js";
 import type { TelemetryEventType } from "../telemetry.js";
 import { type TimelineSources, buildTimeline } from "../timeline.js";
 import {
@@ -820,9 +820,9 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({ checkpoints: redacted, count: redacted.length });
 	});
 
-	app.get("/api/checkpoints/:sessionKey", (c) => {
+	app.get("/api/checkpoints/:sessionKey", async (c) => {
 		const sessionKey = c.req.param("sessionKey");
-		const rows = getCheckpointsBySession(getDbAccessor(), sessionKey);
+		const rows = await getCheckpointsBySessionAsync(getDbAccessor(), sessionKey);
 		const redacted = rows.map(redactCheckpointRow);
 		return c.json({ checkpoints: redacted, count: redacted.length });
 	});

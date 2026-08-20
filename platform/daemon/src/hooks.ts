@@ -1987,7 +1987,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 
 	// Flush pending periodic checkpoints
 	try {
-		flushPendingCheckpoints();
+		await flushPendingCheckpoints();
 	} catch (err) {
 		logger.warn("hooks", "Checkpoint flush on session-end failed", {
 			error: err instanceof Error ? err.message : String(err),

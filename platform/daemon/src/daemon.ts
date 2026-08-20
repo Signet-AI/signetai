@@ -46,7 +46,7 @@ import {
 	migrateRetiredMemoryPipelineRoutingV9,
 	migrateSessionSynthesisRoute,
 } from "./config-migration";
-import { listConnectors } from "./connectors/registry";
+import { listConnectorsAsync } from "./connectors/registry";
 import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
 import { runIncrementalDatabaseIntegrityCheck } from "./incremental-database-integrity";
 import {
@@ -106,7 +106,7 @@ import {
 } from "./pipeline";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
-import { retireLegacyExtractionJobs } from "./pipeline/extraction-fallback";
+import { retireLegacyExtractionJobsAsync } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
 import { configureLlmConcurrency } from "./pipeline/provider";
@@ -157,7 +157,7 @@ import {
 	setRuntimePressureEnvelope,
 } from "./runtime-pressure";
 import { startSchedulerWorker } from "./scheduler";
-import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
+import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpointsAsync } from "./session-checkpoints";
 import { createSessionClaimStore } from "./session-claims";
 import {
 	releaseAllSessions,
@@ -1432,7 +1432,7 @@ function executorForTargetRef(
 	return (statusValue.targets[parsed.value.targetId]?.executor as RuntimeProviderName | undefined) ?? null;
 }
 
-function syncAgentRoster(agentsDir: string): void {
+async function syncAgentRoster(agentsDir: string): Promise<void> {
 	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
 	let roster: readonly AgentDefinition[] = [];
 	for (const p of paths) {
@@ -1451,23 +1451,25 @@ function syncAgentRoster(agentsDir: string): void {
 
 	const db = getDbAccessor();
 	const now = new Date().toISOString();
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	db.withWriteTx((w: import("./db-accessor").WriteDb) => {
-		const stmt = w.prepare(
-			`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(id) DO UPDATE SET
-			   name = excluded.name,
-			   read_policy = excluded.read_policy,
-			   policy_group = excluded.policy_group,
-			   updated_at = excluded.updated_at`,
-		);
-		for (const entry of roster) {
-			const normalized = normalizeAgentRosterEntry(entry);
-			if (!normalized) continue;
-			stmt.run(normalized.name, normalized.name, normalized.readPolicy, normalized.policyGroup, now, now);
-		}
-	});
+	await db.withWriteTxAsync(
+		(w) => {
+			const stmt = w.prepare(
+				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?)
+				 ON CONFLICT(id) DO UPDATE SET
+				   name = excluded.name,
+				   read_policy = excluded.read_policy,
+				   policy_group = excluded.policy_group,
+				   updated_at = excluded.updated_at`,
+			);
+			for (const entry of roster) {
+				const normalized = normalizeAgentRosterEntry(entry);
+				if (!normalized) continue;
+				stmt.run(normalized.name, normalized.name, normalized.readPolicy, normalized.policyGroup, now, now);
+			}
+		},
+		{ operation: "startup.sync-agent-roster", estimatedWorkUnits: roster.length },
+	);
 	logger.info("daemon", "Agent roster synced", { count: roster.length });
 }
 
@@ -1522,7 +1524,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	// Leased rows are terminalized too because no legacy worker remains. Runs on
 	// cold boot and live-reload config transitions (#913).
 	if (!pipelinePaused) {
-		const deadLettered = retireLegacyExtractionJobs(getDbAccessor(), {
+		const deadLettered = await retireLegacyExtractionJobsAsync(getDbAccessor(), {
 			reason: "Dreaming cutover: legacy extraction worker not started",
 		});
 		if (deadLettered > 0) {
@@ -1532,9 +1534,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		}
 	}
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	const activeEmbeddingCfg = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
-		resolveActiveEmbeddingConfig(db, memoryCfg.embedding),
+	const activeEmbeddingCfg = await getDbAccessor().withReadDbAsync(
+		(db) => resolveActiveEmbeddingConfig(db, memoryCfg.embedding),
+		{ operation: "startup.resolve-active-embedding" },
 	);
 	configureLlmConcurrency(memoryCfg.pipelineV2.worker.maxLlmConcurrency);
 	logger.info("config", "Resolved embedding config", {
@@ -1814,7 +1816,7 @@ async function cleanup() {
 	}
 
 	try {
-		flushPendingCheckpoints();
+		await flushPendingCheckpoints();
 	} catch {}
 
 	await stopPipelineRuntime();
@@ -2153,7 +2155,7 @@ async function main() {
 		});
 	}
 
-	syncAgentRoster(AGENTS_DIR);
+	await syncAgentRoster(AGENTS_DIR);
 
 	invalidateTraversalCache();
 
@@ -2234,76 +2236,81 @@ async function main() {
 		const daemonStartTime = Date.now();
 		heartbeatTimer = setInterval(
 			() => {
-				if (!telemetryRef) return;
-				try {
-					const liveCfg = loadMemoryConfig(AGENTS_DIR);
-					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-					const memoryCount = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-						const row = db
-							.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
-							.get() as { cnt: number } | undefined;
-						return row?.cnt ?? 0;
-					});
-					const connectors = listConnectors(getDbAccessor());
-					let runtimePressure: ReturnType<typeof buildRuntimePressureEnvelope> | undefined;
-					let resourceTelemetry: ReturnType<typeof buildResourceUtilizationTelemetry> | undefined;
+				void (async () => {
+					if (!telemetryRef) return;
 					try {
-						// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-						const queue = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) =>
-							getQueuePressureSnapshot(db),
-						);
-						const workers = getPipelineWorkerStatus();
-						const resources = getResourceSnapshot();
-						resourceTelemetry = buildResourceUtilizationTelemetry(
-							resources,
-							getSystemPressure(),
-							dreamingWorkerHandle?.running === true,
-						);
-						const recoveryOutcome: PressureRecoveryOutcome = restartedHeartbeatPending
-							? "restarted"
-							: getPressureRecoveryOutcome();
-						runtimePressure = buildRuntimePressureEnvelope({
-							memoryQueueDepth: queue.memoryQueueDepth,
-							summaryQueueDepth: queue.summaryQueueDepth,
-							oldestJobAgeSec: queue.oldestJobAgeSec,
-							activeWorkers: countActiveWorkers(
-								[
-									workers.summary.running,
-									workers.document.running,
-									workers.retention.running,
-									workers.maintenance.running,
-									workers.synthesis.running,
-									workers.hints.running,
-									workers.dreaming.running,
-								],
-								workers.llmConcurrency.concurrency.running,
+						const liveCfg = loadMemoryConfig(AGENTS_DIR);
+						const accessor = getDbAccessor();
+						const [memoryCount, connectors, queue] = await Promise.all([
+							accessor.withReadDbAsync(
+								(db) => {
+									const row = db
+										.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
+										.get() as { cnt: number } | undefined;
+									return row?.cnt ?? 0;
+								},
+								{ operation: "heartbeat.memory-count" },
 							),
-							batchSize: liveCfg.pipelineV2.embeddingTracker.batchSize,
-							memoryRssMb: resources.rss,
-							cpuPercent: resources.cpuPercent,
-							recoveryOutcome,
+							listConnectorsAsync(accessor),
+							accessor.withReadDbAsync((db) => getQueuePressureSnapshot(db), {
+								operation: "heartbeat.queue-pressure",
+							}),
+						]);
+						let runtimePressure: ReturnType<typeof buildRuntimePressureEnvelope> | undefined;
+						let resourceTelemetry: ReturnType<typeof buildResourceUtilizationTelemetry> | undefined;
+						try {
+							const workers = getPipelineWorkerStatus();
+							const resources = getResourceSnapshot();
+							resourceTelemetry = buildResourceUtilizationTelemetry(
+								resources,
+								getSystemPressure(),
+								dreamingWorkerHandle?.running === true,
+							);
+							const recoveryOutcome: PressureRecoveryOutcome = restartedHeartbeatPending
+								? "restarted"
+								: getPressureRecoveryOutcome();
+							runtimePressure = buildRuntimePressureEnvelope({
+								memoryQueueDepth: queue.memoryQueueDepth,
+								summaryQueueDepth: queue.summaryQueueDepth,
+								oldestJobAgeSec: queue.oldestJobAgeSec,
+								activeWorkers: countActiveWorkers(
+									[
+										workers.summary.running,
+										workers.document.running,
+										workers.retention.running,
+										workers.maintenance.running,
+										workers.synthesis.running,
+										workers.hints.running,
+										workers.dreaming.running,
+									],
+									workers.llmConcurrency.concurrency.running,
+								),
+								batchSize: liveCfg.pipelineV2.embeddingTracker.batchSize,
+								memoryRssMb: resources.rss,
+								cpuPercent: resources.cpuPercent,
+								recoveryOutcome,
+							});
+							setRuntimePressureEnvelope(runtimePressure);
+						} catch {
+							// Pressure context is best-effort; a slow or unavailable subsystem must never suppress liveness.
+						}
+						telemetryRef?.record("daemon.heartbeat", {
+							uptimeMs: Date.now() - daemonStartTime,
+							version: CURRENT_VERSION,
+							platform: process.platform,
+							memoryCount,
+							connectorsActive: countConnectorsActive(connectors),
+							pipelineMode: readPipelineMode(liveCfg.pipelineV2),
+							extractionProvider: providerRuntimeResolution.extraction.effective,
+							embeddingProvider: liveCfg.embedding.provider,
+							...(runtimePressure ?? {}),
+							...(resourceTelemetry ?? {}),
 						});
-						setRuntimePressureEnvelope(runtimePressure);
+						if (runtimePressure?.recoveryOutcome === "restarted") restartedHeartbeatPending = false;
 					} catch {
-						// Pressure context is best-effort; a slow or unavailable
-						// subsystem must never suppress the liveness heartbeat.
+						// Database pressure is diagnostic only; preserve the heartbeat if the owner is unavailable.
 					}
-					telemetryRef.record("daemon.heartbeat", {
-						uptimeMs: Date.now() - daemonStartTime,
-						version: CURRENT_VERSION,
-						platform: process.platform,
-						memoryCount,
-						connectorsActive: countConnectorsActive(connectors),
-						pipelineMode: readPipelineMode(liveCfg.pipelineV2),
-						extractionProvider: providerRuntimeResolution.extraction.effective,
-						embeddingProvider: liveCfg.embedding.provider,
-						...(runtimePressure ?? {}),
-						...(resourceTelemetry ?? {}),
-					});
-					if (runtimePressure?.recoveryOutcome === "restarted") {
-						restartedHeartbeatPending = false;
-					}
-				} catch {}
+				})();
 			},
 			5 * 60 * 1000,
 		);
@@ -2354,7 +2361,11 @@ async function main() {
 			try {
 				const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
 				if (cfg.enabled) {
-					pruneCheckpoints(getDbAccessor(), cfg.retentionDays);
+					void pruneCheckpointsAsync(getDbAccessor(), cfg.retentionDays).catch((err: unknown) => {
+						logger.warn("daemon", "Checkpoint pruning failed", {
+							error: err instanceof Error ? err.message : String(err),
+						});
+					});
 				}
 			} catch (err) {
 				logger.warn("daemon", "Checkpoint pruning failed", {
