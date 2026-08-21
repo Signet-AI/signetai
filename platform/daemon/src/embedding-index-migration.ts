@@ -268,22 +268,25 @@ async function updateProgressThroughAccessor(accessor: DbAccessor, values: Recor
 async function projectionCursorThroughAccessor(
 	accessor: DbAccessor,
 ): Promise<{ lastId: string | null; slot: "active" | "staging" | null }> {
-	return accessor.withReadDbAsync(async (db) => {
-		const columns = (db.prepare("PRAGMA table_info(embedding_index_state)").all() as Array<{ name?: string }>).map(
-			(row) => row.name,
-		);
-		if (!columns.includes("projection_cursor_last_id")) return { lastId: null, slot: null };
-		const row = db
-			.prepare("SELECT projection_cursor_last_id, projection_cursor_slot FROM embedding_index_state WHERE id = 1")
-			.get() as { projection_cursor_last_id?: string | null; projection_cursor_slot?: string | null } | undefined;
-		return {
-			lastId: row?.projection_cursor_last_id ?? null,
-			slot:
-				row?.projection_cursor_slot === "active" || row?.projection_cursor_slot === "staging"
-					? row.projection_cursor_slot
-					: null,
-		};
-	});
+	return accessor.withReadDbAsync(
+		async (db) => {
+			const columns = (db.prepare("PRAGMA table_info(embedding_index_state)").all() as Array<{ name?: string }>).map(
+				(row) => row.name,
+			);
+			if (!columns.includes("projection_cursor_last_id")) return { lastId: null, slot: null };
+			const row = db
+				.prepare("SELECT projection_cursor_last_id, projection_cursor_slot FROM embedding_index_state WHERE id = 1")
+				.get() as { projection_cursor_last_id?: string | null; projection_cursor_slot?: string | null } | undefined;
+			return {
+				lastId: row?.projection_cursor_last_id ?? null,
+				slot:
+					row?.projection_cursor_slot === "active" || row?.projection_cursor_slot === "staging"
+						? row.projection_cursor_slot
+						: null,
+			};
+		},
+		{ siteToken: "embedding-index-migration.ts:271" },
+	);
 }
 
 async function ownerIsVecVirtualTable(owner: DbOwnerClient, name: string): Promise<boolean> {
@@ -422,16 +425,19 @@ async function rebuildVectorIndex(
 				initialized = true;
 			}
 
-			const rows = await accessor.withReadDbAsync(async (db) => {
-				const query =
-					lastId === null
-						? "SELECT id, vector FROM embeddings ORDER BY id LIMIT ?"
-						: "SELECT id, vector FROM embeddings WHERE id > ? ORDER BY id LIMIT ?";
-				return (lastId === null ? db.prepare(query).all(limit) : db.prepare(query).all(lastId, limit)) as Array<{
-					readonly id: string;
-					readonly vector: Uint8Array;
-				}>;
-			}, { siteToken: "embedding-index-migration.ts:330" });
+			const rows = await accessor.withReadDbAsync(
+				async (db) => {
+					const query =
+						lastId === null
+							? "SELECT id, vector FROM embeddings ORDER BY id LIMIT ?"
+							: "SELECT id, vector FROM embeddings WHERE id > ? ORDER BY id LIMIT ?";
+					return (lastId === null ? db.prepare(query).all(limit) : db.prepare(query).all(lastId, limit)) as Array<{
+						readonly id: string;
+						readonly vector: Uint8Array;
+					}>;
+				},
+				{ siteToken: "embedding-index-migration.ts:428" },
+			);
 			if (rows.length === 0) return;
 
 			await withQueuedWrite(accessor, (db) => {
@@ -908,7 +914,9 @@ export async function stageEmbeddingBatch(input: {
 	readonly owner?: DbOwnerClient;
 }): Promise<{ staged: number; coverage: EmbeddingMigrationCoverage | null }> {
 	if (input.owner) return stageEmbeddingBatchThroughOwner({ ...input, owner: input.owner });
-	const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db), { siteToken: "embedding-index-migration.ts:769" });
+	const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db), {
+		siteToken: "embedding-index-migration.ts:917",
+	});
 	if (state?.state !== "building" || !state.staging) return { staged: 0, coverage: null };
 	const profile = state.staging;
 	const vectorTable = vectorTableForSlot(profile.projectionSlot);
@@ -917,33 +925,36 @@ export async function stageEmbeddingBatch(input: {
 	// Without this cleanup, an obsolete staging row would keep the count-based
 	// readiness gate false forever after its active counterpart disappears.
 	await pruneStagingRows(input.accessor);
-	const rows = await input.accessor.withReadDbAsync(async (db) => {
-		if (!tableExists(db, vectorTable)) throw new Error("Staging vector index is unavailable");
-		const hasFailures = tableExists(db, "embedding_index_failures");
-		const failureFilter = hasFailures
-			? ` AND NOT EXISTS (
+	const rows = await input.accessor.withReadDbAsync(
+		async (db) => {
+			if (!tableExists(db, vectorTable)) throw new Error("Staging vector index is unavailable");
+			const hasFailures = tableExists(db, "embedding_index_failures");
+			const failureFilter = hasFailures
+				? ` AND NOT EXISTS (
 					SELECT 1 FROM embedding_index_failures f
 					WHERE f.content_hash = e.content_hash
 					  AND f.target_fingerprint = ?
 					  AND f.retry_policy = 'quarantined'
 				)`
-			: "";
-		return db
-			.prepare(
-				`SELECT e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
+				: "";
+			return db
+				.prepare(
+					`SELECT e.content_hash, e.source_type, e.source_id, e.chunk_text, e.agent_id
 				 FROM embeddings e
 				 LEFT JOIN embeddings_staging s ON s.content_hash = e.content_hash
 				 WHERE (s.id IS NULL OR s.dimensions != ?)
 				 ${failureFilter}
 				 ORDER BY e.created_at ASC
 				 LIMIT ?`,
-			)
-			.all(
-				...(hasFailures
-					? [profile.dimensions, profile.fingerprint, input.batchSize]
-					: [profile.dimensions, input.batchSize]),
-			) as ActiveEmbeddingRow[];
-	}, { siteToken: "embedding-index-migration.ts:778" });
+				)
+				.all(
+					...(hasFailures
+						? [profile.dimensions, profile.fingerprint, input.batchSize]
+						: [profile.dimensions, input.batchSize]),
+				) as ActiveEmbeddingRow[];
+		},
+		{ siteToken: "embedding-index-migration.ts:928" },
+	);
 
 	let staged = 0;
 	for (const row of rows) {
@@ -997,9 +1008,10 @@ export async function stageEmbeddingBatch(input: {
 		staged++;
 	}
 
-	const coverage = await input.accessor.withReadDbAsync(async (db) =>
-		stagingCoverage(db, profile.dimensions, profile.fingerprint),
-	{ siteToken: "embedding-index-migration.ts:858" });
+	const coverage = await input.accessor.withReadDbAsync(
+		async (db) => stagingCoverage(db, profile.dimensions, profile.fingerprint),
+		{ siteToken: "embedding-index-migration.ts:1011" },
+	);
 	return { staged, coverage };
 }
 
@@ -1238,7 +1250,8 @@ export async function promoteStagingIndex(
 	if (plan.rebuildVectorIndex) {
 		await completeProjectionRebuild(accessor, plan.profile, options?.vectorBatchSize, options?.shouldContinue);
 	}
-	if (accessor.incrementalVacuumAsync) await accessor.incrementalVacuumAsync({ siteToken: "embedding-index-migration.ts:1040" });
+	if (accessor.incrementalVacuumAsync)
+		await accessor.incrementalVacuumAsync({ siteToken: "embedding-index-migration.ts:1254" });
 	return true;
 }
 
@@ -1296,7 +1309,6 @@ export async function startEmbeddingIndexMigration(input: {
 	if (initial.state !== "building" || !staging) return null;
 	if (staging.projectionRebuild) {
 		try {
-<<<<<<< HEAD
 			await completeProjectionRebuild(input.accessor, staging, undefined, undefined, migrationOwner);
 			await ownerRun(
 				migrationOwner,
@@ -1304,17 +1316,6 @@ export async function startEmbeddingIndexMigration(input: {
 				[],
 				ownerMaintenanceOptions("embedding-index.incremental-vacuum"),
 			);
-=======
-			await completeProjectionRebuild(input.accessor, staging, undefined, undefined, input.owner);
-			if (input.owner)
-				await ownerRun(
-					input.owner,
-					"PRAGMA incremental_vacuum",
-					[],
-					ownerMaintenanceOptions("embedding-index.incremental-vacuum"),
-				);
-			else if (input.accessor.incrementalVacuumAsync) await input.accessor.incrementalVacuumAsync({ siteToken: "embedding-index-migration.ts:1103" });
->>>>>>> 495be0d50 (fix(daemon): attribute async parent DB work)
 			input.onPromoted?.();
 		} catch (error) {
 			logger.warn("embedding", "Interrupted vector projection rebuild remains queued for retry", {
@@ -1330,15 +1331,7 @@ export async function startEmbeddingIndexMigration(input: {
 		embeddingProfileFingerprintsEqual(before.staging.fingerprint, staging.fingerprint);
 	try {
 		if (resumeExistingBuild) {
-<<<<<<< HEAD
 			const hasStagingVectorIndex = await ownerTableExists(migrationOwner, vectorTableForSlot(staging.projectionSlot));
-=======
-			const hasStagingVectorIndex = input.owner
-				? await ownerTableExists(input.owner, vectorTableForSlot(staging.projectionSlot))
-				: await input.accessor.withReadDbAsync(async (db) =>
-						tableExists(db, vectorTableForSlot(staging.projectionSlot)),
-					{ siteToken: "embedding-index-migration.ts:1117" });
->>>>>>> 495be0d50 (fix(daemon): attribute async parent DB work)
 			if (!hasStagingVectorIndex) throw new Error("Staging vector index is unavailable while resuming a build");
 		} else {
 			await resetStagingVectorIndexThroughOwner(migrationOwner, staging.dimensions, staging.projectionSlot);
@@ -1357,7 +1350,6 @@ export async function startEmbeddingIndexMigration(input: {
 		if (!running) return;
 		nextDelayMs = input.pollMs;
 		try {
-<<<<<<< HEAD
 			const state = await ownerReadState(migrationOwner);
 			if (state?.state !== "building" || !state.staging) return;
 			if (state.staging.projectionRebuild) {
@@ -1369,23 +1361,6 @@ export async function startEmbeddingIndexMigration(input: {
 						[],
 						ownerMaintenanceOptions("embedding-index.incremental-vacuum"),
 					);
-=======
-			const state = input.owner
-				? await ownerReadState(input.owner)
-				: await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db), { siteToken: "embedding-index-migration.ts:1150" });
-			if (state?.state !== "building" || !state.staging) return;
-			if (state.staging.projectionRebuild) {
-				try {
-					await completeProjectionRebuild(input.accessor, state.staging, undefined, () => running, input.owner);
-					if (input.owner)
-						await ownerRun(
-							input.owner,
-							"PRAGMA incremental_vacuum",
-							[],
-							ownerMaintenanceOptions("embedding-index.incremental-vacuum"),
-						);
-					else if (input.accessor.incrementalVacuumAsync) await input.accessor.incrementalVacuumAsync({ siteToken: "embedding-index-migration.ts:1162" });
->>>>>>> 495be0d50 (fix(daemon): attribute async parent DB work)
 					running = false;
 					input.onPromoted?.();
 				} catch (error) {
@@ -1502,23 +1477,10 @@ export async function startEmbeddingIndexMigration(input: {
 				running = false;
 				return;
 			}
-<<<<<<< HEAD
 			const pendingProjection = await (async () => {
 				const current = await ownerReadState(migrationOwner);
 				return current?.state === "building" && current.staging?.projectionRebuild === true;
 			})();
-=======
-			const owner = input.owner;
-			const pendingProjection = owner
-				? await (async () => {
-						const current = await ownerReadState(owner);
-						return current?.state === "building" && current.staging?.projectionRebuild === true;
-					})()
-				: await input.accessor.withReadDbAsync(async (db) => {
-						const current = readEmbeddingIndexState(db);
-						return current?.state === "building" && current.staging?.projectionRebuild === true;
-					}, { siteToken: "embedding-index-migration.ts:1275" });
->>>>>>> 495be0d50 (fix(daemon): attribute async parent DB work)
 			if (pendingProjection) {
 				logger.warn("embedding", "Vector projection rebuild remains queued for retry", {
 					error: error instanceof Error ? error.message : String(error),

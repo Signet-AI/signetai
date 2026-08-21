@@ -443,7 +443,10 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 						if (!isLegacy) {
 							const expected = `${relativePath}:${line}`;
 							const token = staticAsyncSiteToken(node, bindings, api as Exclude<AttributedDbApi, LegacyDbApi>);
-							if (token !== expected) {
+							const dynamicTokenBoundary = lines
+								.slice(Math.max(0, line - 3), line)
+								.some((candidate) => candidate.includes("DYNAMIC_SITE_TOKEN"));
+							if (!dynamicTokenBoundary && token !== expected) {
 								missingSiteTokens.push({
 									kind: "missing-async-db-site-token",
 									path: relativePath,

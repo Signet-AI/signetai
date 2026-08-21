@@ -1,6 +1,6 @@
 {
 	"$schema": "https://turbo.build/schema.json",
-	"globalPassThroughEnv": ["SIGNET_PHASE_D_PROBE_PORT"],
+	"globalPassThroughEnv": ["SIGNET_PHASE_D_PROBE_PORT", "SIGNET_PORT", "SIGNET_PATH"],
 	"tasks": {
 		"build": {
 			"dependsOn": ["^build"],

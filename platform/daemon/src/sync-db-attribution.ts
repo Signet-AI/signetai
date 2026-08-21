@@ -67,6 +67,7 @@ const siteMetrics = new Map<
 	string,
 	{ calls: number; slowCalls: number; totalDurationMs: number; maxDurationMs: number }
 >();
+const FAST_PATH_SEQUENCE = 0;
 let nextSequence = 1;
 let calls = 0;
 let slowCalls = 0;
@@ -145,6 +146,12 @@ export function beginSyncDbCall(
 	startedAtMs = Date.now(),
 	siteToken?: SyncDbCallSiteToken,
 ): SyncDbCallToken {
+	if (siteToken === undefined) {
+		// Unmarked calls cannot be named while they are executing. Keep their
+		// normal-path cost to a timestamp token and recover a caller frame only
+		// when the completed call is slow enough to matter.
+		return { sequence: FAST_PATH_SEQUENCE, siteId: "", kind, startedAtMs };
+	}
 	const record: SyncDbCallRecord = {
 		sequence: nextSequence++,
 		kind,
@@ -164,6 +171,49 @@ export function beginSyncDbCall(
 }
 
 export function endSyncDbCall(token: SyncDbCallToken, endedAtMs = Date.now()): void {
+	if (token.sequence === FAST_PATH_SEQUENCE) {
+		const durationMs = Math.max(token.startedAtMs, endedAtMs) - token.startedAtMs;
+		calls++;
+		totalDurationMs += durationMs;
+		maxDurationMs = Math.max(maxDurationMs, durationMs);
+		const isSlow = durationMs >= SLOW_CALL_THRESHOLD_MS;
+		if (!isSlow) {
+			unattributedCalls++;
+			unattributedDurationMs += durationMs;
+			return;
+		}
+		slowCalls++;
+		const siteId = `${token.kind}@${captureCallerSite()}`;
+		const record: SyncDbCallRecord = {
+			sequence: FAST_PATH_SEQUENCE,
+			kind: token.kind,
+			startedAtMs: token.startedAtMs,
+			hasSiteToken: false,
+			endedAtMs: Math.max(token.startedAtMs, endedAtMs),
+			durationMs,
+			siteId,
+		};
+		if (siteId.endsWith(`@${UNATTRIBUTED_SITE}`)) {
+			unattributedCalls++;
+			unattributedDurationMs += durationMs;
+			unattributedSlowDurationMs += durationMs;
+		} else {
+			const site = siteMetrics.get(siteId) ?? {
+				calls: 0,
+				slowCalls: 0,
+				totalDurationMs: 0,
+				maxDurationMs: 0,
+			};
+			site.calls++;
+			site.slowCalls++;
+			site.totalDurationMs += durationMs;
+			site.maxDurationMs = Math.max(site.maxDurationMs, durationMs);
+			siteMetrics.set(siteId, site);
+		}
+		history.push(record);
+		if (history.length > MAX_HISTORY) history.shift();
+		return;
+	}
 	const record = inFlight.get(token.sequence);
 	if (!record) return;
 	inFlight.delete(token.sequence);
@@ -197,6 +247,14 @@ export function endSyncDbCall(token: SyncDbCallToken, endedAtMs = Date.now()): v
 	}
 	history.push(record);
 	if (history.length > MAX_HISTORY) history.shift();
+}
+
+/** Capture the caller token before an async helper queues work on the owner. */
+export function captureSyncDbCallSiteToken(): SyncDbCallSiteToken | undefined {
+	const site = captureCallerSite();
+	if (site === UNATTRIBUTED_SITE) return undefined;
+	const prefixIndex = site.lastIndexOf(SITE_TOKEN_PREFIX);
+	return prefixIndex >= 0 ? site.slice(prefixIndex + SITE_TOKEN_PREFIX.length) : site;
 }
 
 /** Return site ids whose synchronous interval overlapped the observed stall. */

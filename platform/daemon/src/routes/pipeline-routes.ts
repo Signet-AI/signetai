@@ -337,8 +337,9 @@ export function registerPipelineRoutes(app: Hono): void {
 		const us = getUpdateState();
 		let embeddingMigration = null;
 		try {
-			embeddingMigration = await getDbAccessor().withReadDbAsync((db) =>
-				readEmbeddingIndexMigrationProgress(db, config.embedding),
+			embeddingMigration = await getDbAccessor().withReadDbAsync(
+				(db) => readEmbeddingIndexMigrationProgress(db, config.embedding),
+				{ siteToken: "routes/pipeline-routes.ts:340" },
 			);
 		} catch {
 			// Database may still be initializing; omit migration visibility.
@@ -520,7 +521,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					limit,
 					offset,
 				}),
-			"routes/pipeline-routes.ts:514",
+			"routes/pipeline-routes.ts:515",
 		);
 		return c.json({
 			agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
@@ -637,7 +638,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					},
 				};
 			},
-			{ siteToken: "routes/pipeline-routes.ts:603", operation: "pipeline.status" },
+			{ siteToken: "routes/pipeline-routes.ts:614", operation: "pipeline.status" },
 		);
 		const diagnostics = getCachedDiagnosticsReport();
 

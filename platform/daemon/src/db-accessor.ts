@@ -51,7 +51,12 @@ import {
 import type { DbOwnerHealth } from "./db-owner-client";
 import { observeDbLatency } from "./runtime-pressure";
 import { resetFtsIndexState, setFtsIndexIncomplete } from "./fts-index-state";
-import { beginSyncDbCall, endSyncDbCall, type SyncDbCallSiteToken } from "./sync-db-attribution";
+import {
+	beginSyncDbCall,
+	captureSyncDbCallSiteToken,
+	endSyncDbCall,
+	type SyncDbCallSiteToken,
+} from "./sync-db-attribution";
 
 export type { SyncDbCallSiteToken } from "./sync-db-attribution";
 
@@ -1956,7 +1961,9 @@ export async function runWriteTxAsync<T>(
 	fn: (db: WriteDb) => T,
 	options?: WriteAdmissionOptions,
 ): Promise<T> {
-	return await accessor.withWriteTxAsync(fn, { ...options, siteToken: "db-accessor.ts:1959" });
+	const siteToken = options?.siteToken ?? captureSyncDbCallSiteToken();
+	// DYNAMIC_SITE_TOKEN: this helper captures its actual caller before queueing.
+	return await accessor.withWriteTxAsync(fn, siteToken === undefined ? options : { ...options, siteToken });
 }
 
 /** Get the initialised accessor. Throws if `initDbAccessor` hasn't been called. */
