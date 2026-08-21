@@ -285,9 +285,10 @@ async function insertDocument(
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 
-	await accessor.withWriteTxAsync((db) => {
-		db.prepare(
-			`INSERT INTO documents
+	await accessor.withWriteTxAsync(
+		(db) => {
+			db.prepare(
+				`INSERT INTO documents
 			 (id, source_url, source_type, content_type, title,
 			  raw_content, status, error, connector_id,
 			  chunk_count, memory_count,
@@ -295,8 +296,10 @@ async function insertDocument(
 			 VALUES (?, ?, 'file', 'text/plain', ?,
 			         ?, 'queued', NULL, ?,
 			         0, 0, NULL, ?, ?, NULL)`,
-		).run(id, sourceUrl, title, rawContent, connectorId, now, now);
-	}, { siteToken: "connectors/filesystem.ts:288" });
+			).run(id, sourceUrl, title, rawContent, connectorId, now, now);
+		},
+		{ siteToken: "connectors/filesystem.ts:288" },
+	);
 
 	return id;
 }
@@ -307,15 +310,18 @@ async function insertDocument(
 async function updateDocument(accessor: DbAccessor, docId: string, rawContent: string): Promise<void> {
 	const now = new Date().toISOString();
 
-	await accessor.withWriteTxAsync((db) => {
-		db.prepare(
-			`UPDATE documents
+	await accessor.withWriteTxAsync(
+		(db) => {
+			db.prepare(
+				`UPDATE documents
 			 SET raw_content = ?, status = 'queued', error = NULL,
 			     chunk_count = 0, memory_count = 0,
 			     completed_at = NULL, updated_at = ?
 			 WHERE id = ?`,
-		).run(rawContent, now, docId);
-	}, { siteToken: "connectors/filesystem.ts:310" });
+			).run(rawContent, now, docId);
+		},
+		{ siteToken: "connectors/filesystem.ts:313" },
+	);
 }
 
 // ---------------------------------------------------------------------------

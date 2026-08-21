@@ -109,54 +109,59 @@ export async function writeCheckpointAsync(
 	const now = new Date().toISOString();
 	const digest = redactSecrets(params.digest);
 
-	await db.withWriteTxAsync((wdb) => {
-		wdb
-			.prepare(
-				`INSERT INTO session_checkpoints
+	await db.withWriteTxAsync(
+		(wdb) => {
+			wdb
+				.prepare(
+					`INSERT INTO session_checkpoints
 			 (id, session_key, harness, project, project_normalized,
 			  trigger, digest, prompt_count, memory_queries,
 			  recent_remembers, focal_entity_ids, focal_entity_names,
 			  active_aspect_ids, surfaced_constraint_count,
 			  traversal_memory_count, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(
-				id,
-				params.sessionKey,
-				params.harness,
-				params.project ?? null,
-				params.projectNormalized ?? null,
-				params.trigger,
-				digest,
-				params.promptCount,
-				params.memoryQueries.length > 0 ? JSON.stringify(params.memoryQueries) : null,
-				params.recentRemembers.length > 0 ? JSON.stringify(params.recentRemembers.map(redactSecrets)) : null,
-				params.focalEntityIds && params.focalEntityIds.length > 0 ? JSON.stringify(params.focalEntityIds) : null,
-				params.focalEntityNames && params.focalEntityNames.length > 0 ? JSON.stringify(params.focalEntityNames) : null,
-				params.activeAspectIds && params.activeAspectIds.length > 0 ? JSON.stringify(params.activeAspectIds) : null,
-				typeof params.surfacedConstraintCount === "number" ? params.surfacedConstraintCount : null,
-				typeof params.traversalMemoryCount === "number" ? params.traversalMemoryCount : null,
-				now,
-			);
+				)
+				.run(
+					id,
+					params.sessionKey,
+					params.harness,
+					params.project ?? null,
+					params.projectNormalized ?? null,
+					params.trigger,
+					digest,
+					params.promptCount,
+					params.memoryQueries.length > 0 ? JSON.stringify(params.memoryQueries) : null,
+					params.recentRemembers.length > 0 ? JSON.stringify(params.recentRemembers.map(redactSecrets)) : null,
+					params.focalEntityIds && params.focalEntityIds.length > 0 ? JSON.stringify(params.focalEntityIds) : null,
+					params.focalEntityNames && params.focalEntityNames.length > 0
+						? JSON.stringify(params.focalEntityNames)
+						: null,
+					params.activeAspectIds && params.activeAspectIds.length > 0 ? JSON.stringify(params.activeAspectIds) : null,
+					typeof params.surfacedConstraintCount === "number" ? params.surfacedConstraintCount : null,
+					typeof params.traversalMemoryCount === "number" ? params.traversalMemoryCount : null,
+					now,
+				);
 
-		const count = wdb
-			.prepare("SELECT COUNT(*) as cnt FROM session_checkpoints WHERE session_key = ?")
-			.get(params.sessionKey) as { cnt: number };
-		if (count.cnt > maxPerSession) {
-			const excess = count.cnt - maxPerSession;
-			wdb
-				.prepare(
-					`DELETE FROM session_checkpoints
+			const count = wdb
+				.prepare("SELECT COUNT(*) as cnt FROM session_checkpoints WHERE session_key = ?")
+				.get(params.sessionKey) as { cnt: number };
+			if (count.cnt > maxPerSession) {
+				const excess = count.cnt - maxPerSession;
+				wdb
+					.prepare(
+						`DELETE FROM session_checkpoints
 				 WHERE id IN (
 					 SELECT id FROM session_checkpoints
 					 WHERE session_key = ?
 					 ORDER BY created_at ASC, rowid ASC
 					 LIMIT ?
 				 )`,
-				)
-				.run(params.sessionKey, excess);
-		}
-	}, { siteToken: "session-checkpoints.ts:112" });
+					)
+					.run(params.sessionKey, excess);
+			}
+		},
+		{ siteToken: "session-checkpoints.ts:112" },
+	);
 
 	logger.info("checkpoints", "Checkpoint written", {
 		id,
@@ -221,7 +226,7 @@ export function writeCheckpoint(db: DbAccessor, params: WriteCheckpointParams, m
 				)
 				.run(params.sessionKey, excess);
 		}
-	}, "session-checkpoints.ts:175");
+	}, "session-checkpoints.ts:180");
 
 	logger.info("checkpoints", "Checkpoint written", {
 		id,
@@ -300,7 +305,7 @@ export function getLatestCheckpoint(
 			)
 			.get(projectNormalized, cutoff) as unknown as CheckpointRow | null;
 		return row ?? undefined;
-	}, "session-checkpoints.ts:292");
+	}, "session-checkpoints.ts:297");
 }
 
 /** Get the most recent checkpoint for a specific session key. */
@@ -316,7 +321,7 @@ export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string)
 			)
 			.get(sessionKey) as unknown as CheckpointRow | null;
 		return row ?? undefined;
-	}, "session-checkpoints.ts:309");
+	}, "session-checkpoints.ts:314");
 }
 
 /** Get all checkpoints for a session, newest first. */
@@ -330,7 +335,7 @@ export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): Rea
 				 ORDER BY created_at DESC, rowid DESC`,
 			)
 			.all(sessionKey) as unknown as CheckpointRow[];
-	}, "session-checkpoints.ts:325");
+	}, "session-checkpoints.ts:330");
 }
 
 /** Async session checkpoint projection for HTTP/background callers. */
@@ -347,7 +352,7 @@ export async function getCheckpointsBySessionAsync(
 					 ORDER BY created_at DESC, rowid DESC`,
 				)
 				.all(sessionKey) as unknown as CheckpointRow[],
-		{ siteToken: "session-checkpoints.ts:341", operation: "http.checkpoints-by-session" },
+		{ siteToken: "session-checkpoints.ts:346", operation: "http.checkpoints-by-session" },
 	);
 }
 
@@ -367,7 +372,7 @@ export function getCheckpointsByProject(
 				 LIMIT ?`,
 			)
 			.all(projectNormalized, limit) as unknown as CheckpointRow[];
-	}, "session-checkpoints.ts:361");
+	}, "session-checkpoints.ts:366");
 }
 
 // ============================================================================
@@ -393,7 +398,7 @@ export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number 
 			});
 		}
 		return deleted;
-	}, "session-checkpoints.ts:385");
+	}, "session-checkpoints.ts:390");
 }
 
 /** Async maintenance variant; checkpoint retention is bulk work, not a bounded HTTP lookup. */
@@ -406,7 +411,7 @@ export async function pruneCheckpointsAsync(db: DbAccessor, retentionDays: numbe
 			if (deleted > 0) logger.info("checkpoints", "Pruned old checkpoints", { deleted, retentionDays });
 			return deleted;
 		},
-		{ siteToken: "session-checkpoints.ts:402", operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
+		{ siteToken: "session-checkpoints.ts:407", operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
 	);
 }
 

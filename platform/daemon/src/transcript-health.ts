@@ -93,65 +93,71 @@ export async function getTranscriptHealthReport(
 	agentId?: string | null,
 ): Promise<TranscriptHealthReport> {
 	const capture = await getTranscriptCaptureStatus(dbAccessor, agentId);
-	const sessionStore = await dbAccessor.withReadDbAsync(async (db) => {
-		const where = agentId ? "WHERE agent_id = ?" : "";
-		const params = agentId ? [agentId] : [];
-		const row = db
-			.prepare(
-				`SELECT COUNT(*) AS rows, MIN(updated_at) AS oldest_updated_at, MAX(updated_at) AS newest_updated_at
-				 FROM session_transcripts ${where}`,
-			)
-			.get(...params) as Record<string, unknown> | undefined;
-		return {
-			rows: asCount(row?.rows),
-			oldestUpdatedAt: asStringOrNull(row?.oldest_updated_at),
-			newestUpdatedAt: asStringOrNull(row?.newest_updated_at),
-		};
-	}, { siteToken: "transcript-health.ts:96" });
-	const artifacts = await dbAccessor.withReadDbAsync(async (db) => {
-		const andAgent = agentId ? "AND agent_id = ?" : "";
-		const params = agentId ? [agentId] : [];
-		const countKind = (kind: string): number => {
+	const sessionStore = await dbAccessor.withReadDbAsync(
+		async (db) => {
+			const where = agentId ? "WHERE agent_id = ?" : "";
+			const params = agentId ? [agentId] : [];
 			const row = db
-				.prepare(`SELECT COUNT(*) AS count FROM memory_artifacts WHERE source_kind = ? ${andAgent}`)
-				.get(kind, ...params) as Record<string, unknown> | undefined;
-			return asCount(row?.count);
-		};
-		const manifestRows = db
-			.prepare(`SELECT source_path FROM memory_artifacts WHERE source_kind = 'manifest' ${andAgent}`)
-			.all(...params) as Array<Record<string, unknown>>;
-		let pendingSummaries = 0;
-		let failedSummaries = 0;
-		let missingTranscriptArtifacts = 0;
-		let missingSummaryArtifacts = 0;
-		for (const row of manifestRows) {
-			const sourcePath = asStringOrNull(row.source_path);
-			if (!sourcePath) continue;
-			const fullManifestPath = join(basePath, sourcePath);
-			const summaryPath = readManifestValue(fullManifestPath, "summary_path");
-			const summaryStatus = readManifestValue(fullManifestPath, "summary_status");
-			const transcriptPath = readManifestValue(fullManifestPath, "transcript_path");
-			const transcriptStatus = readManifestValue(fullManifestPath, "transcript_status");
-			if (summaryStatus === "pending") pendingSummaries++;
-			if (summaryStatus === "failed") failedSummaries++;
-			if (summaryPath && !pathExists(basePath, summaryPath)) missingSummaryArtifacts++;
-			if (
-				(transcriptStatus === "completed" || (!transcriptStatus && transcriptPath)) &&
-				!pathExists(basePath, transcriptPath)
-			) {
-				missingTranscriptArtifacts++;
+				.prepare(
+					`SELECT COUNT(*) AS rows, MIN(updated_at) AS oldest_updated_at, MAX(updated_at) AS newest_updated_at
+				 FROM session_transcripts ${where}`,
+				)
+				.get(...params) as Record<string, unknown> | undefined;
+			return {
+				rows: asCount(row?.rows),
+				oldestUpdatedAt: asStringOrNull(row?.oldest_updated_at),
+				newestUpdatedAt: asStringOrNull(row?.newest_updated_at),
+			};
+		},
+		{ siteToken: "transcript-health.ts:96" },
+	);
+	const artifacts = await dbAccessor.withReadDbAsync(
+		async (db) => {
+			const andAgent = agentId ? "AND agent_id = ?" : "";
+			const params = agentId ? [agentId] : [];
+			const countKind = (kind: string): number => {
+				const row = db
+					.prepare(`SELECT COUNT(*) AS count FROM memory_artifacts WHERE source_kind = ? ${andAgent}`)
+					.get(kind, ...params) as Record<string, unknown> | undefined;
+				return asCount(row?.count);
+			};
+			const manifestRows = db
+				.prepare(`SELECT source_path FROM memory_artifacts WHERE source_kind = 'manifest' ${andAgent}`)
+				.all(...params) as Array<Record<string, unknown>>;
+			let pendingSummaries = 0;
+			let failedSummaries = 0;
+			let missingTranscriptArtifacts = 0;
+			let missingSummaryArtifacts = 0;
+			for (const row of manifestRows) {
+				const sourcePath = asStringOrNull(row.source_path);
+				if (!sourcePath) continue;
+				const fullManifestPath = join(basePath, sourcePath);
+				const summaryPath = readManifestValue(fullManifestPath, "summary_path");
+				const summaryStatus = readManifestValue(fullManifestPath, "summary_status");
+				const transcriptPath = readManifestValue(fullManifestPath, "transcript_path");
+				const transcriptStatus = readManifestValue(fullManifestPath, "transcript_status");
+				if (summaryStatus === "pending") pendingSummaries++;
+				if (summaryStatus === "failed") failedSummaries++;
+				if (summaryPath && !pathExists(basePath, summaryPath)) missingSummaryArtifacts++;
+				if (
+					(transcriptStatus === "completed" || (!transcriptStatus && transcriptPath)) &&
+					!pathExists(basePath, transcriptPath)
+				) {
+					missingTranscriptArtifacts++;
+				}
 			}
-		}
-		return {
-			manifests: countKind("manifest"),
-			transcriptArtifacts: countKind("transcript"),
-			summaryArtifacts: countKind("summary"),
-			pendingSummaries,
-			failedSummaries,
-			missingTranscriptArtifacts,
-			missingSummaryArtifacts,
-		};
-	}, { siteToken: "transcript-health.ts:111" });
+			return {
+				manifests: countKind("manifest"),
+				transcriptArtifacts: countKind("transcript"),
+				summaryArtifacts: countKind("summary"),
+				pendingSummaries,
+				failedSummaries,
+				missingTranscriptArtifacts,
+				missingSummaryArtifacts,
+			};
+		},
+		{ siteToken: "transcript-health.ts:114" },
+	);
 	// Summary status fields are retained as historical provenance, but no
 	// longer participate in health: the summary worker is retired and direct
 	// transcript completion is the live delivery contract.

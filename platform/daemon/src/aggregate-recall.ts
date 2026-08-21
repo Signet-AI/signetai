@@ -740,28 +740,32 @@ async function embedAggregateMemory(
 	// Aggregate saves can originate from hooks with the desired config while a
 	// new index is staging. They must stay in the active vector space until
 	// promotion; the staging worker independently copies every active row.
-	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), { siteToken: "aggregate-recall.ts:743",
+	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
+		siteToken: "aggregate-recall.ts:743",
 		operation: "aggregate-recall.resolve-active-embedding",
 	});
 	const vec = await embedFn(content, activeCfg, "document");
 	if (!vec || vec.length !== activeCfg.dimensions) return false;
-	const written = await getDbAccessor().withWriteTxAsync((db) => {
-		// Promotion can commit while the provider call above is in flight. Do
-		// not contaminate the new generation with an old-space vector; the
-		// normal tracker will enqueue this memory against the new active model.
-		if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
-		const embId = randomUUID();
-		syncVecDeleteBySourceId(db, "memory", memoryId);
-		db.prepare("DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?").run(memoryId);
-		db.prepare(`
+	const written = await getDbAccessor().withWriteTxAsync(
+		(db) => {
+			// Promotion can commit while the provider call above is in flight. Do
+			// not contaminate the new generation with an old-space vector; the
+			// normal tracker will enqueue this memory against the new active model.
+			if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
+			const embId = randomUUID();
+			syncVecDeleteBySourceId(db, "memory", memoryId);
+			db.prepare("DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?").run(memoryId);
+			db.prepare(`
 			INSERT INTO embeddings
 			  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 			VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
 		`).run(embId, contentHash, vectorToBlob(vec), vec.length, memoryId, content, createdAt);
-		syncVecInsert(db, embId, vec);
-		db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
-		return true;
-	}, { siteToken: "aggregate-recall.ts:748" });
+			syncVecInsert(db, embId, vec);
+			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
+			return true;
+		},
+		{ siteToken: "aggregate-recall.ts:749" },
+	);
 	return written;
 }
 
@@ -1007,56 +1011,9 @@ export async function aggregateRecall(
 		row = await timings.timeAsync(
 			"aggregate_save",
 			async () =>
-				await getDbAccessor().withWriteTxAsync((db) => {
-					const duplicate = resolveAggregateDuplicate(db, {
-						key,
-						agentId,
-						project,
-						query: params.query,
-						contentHash: normalized.contentHash,
-						normalizedContent: normalized.normalizedContent || normalized.hashBasis,
-						storageContent: normalized.storageContent,
-						answer,
-						evidenceSources,
-						saveVisibility,
-						now,
-					});
-					if (duplicate) {
-						deduped = duplicate.refreshed !== true;
-						saved = duplicate.saved;
-						return duplicate.row;
-					}
-					const id = deps.idFactory?.() ?? randomUUID();
-					const envelope: IngestEnvelope = {
-						id,
-						content: normalized.storageContent,
-						normalizedContent: normalized.normalizedContent || normalized.hashBasis,
-						contentHash: normalized.contentHash,
-						who: "signet",
-						why: "aggregate recall",
-						project,
-						importance: 0.75,
-						type: "semantic",
-						tags: "aggregate,recall",
-						pinned: 0,
-						isDeleted: 0,
-						extractionStatus: "none",
-						embeddingModel: null,
-						extractionModel: null,
-						updatedBy: "signet",
-						sourceType: "aggregate-recall",
-						sourceId: key,
-						idempotencyKey: key,
-						scope: null,
-						agentId,
-						visibility: saveVisibility,
-						createdAt: now,
-					};
-					try {
-						ingestEnvelope(db, envelope);
-					} catch (err) {
-						if (!isUniqueConstraintError(err)) throw err;
-						const racedDuplicate = resolveAggregateDuplicate(db, {
+				await getDbAccessor().withWriteTxAsync(
+					(db) => {
+						const duplicate = resolveAggregateDuplicate(db, {
 							key,
 							agentId,
 							project,
@@ -1069,20 +1026,70 @@ export async function aggregateRecall(
 							saveVisibility,
 							now,
 						});
-						if (!racedDuplicate) {
-							deduped = true;
-							saved = false;
-							return unsavedAggregateResult(answer, key, project);
+						if (duplicate) {
+							deduped = duplicate.refreshed !== true;
+							saved = duplicate.saved;
+							return duplicate.row;
 						}
-						deduped = racedDuplicate.refreshed !== true;
-						saved = racedDuplicate.saved;
-						return racedDuplicate.row;
-					}
-					linkAggregateEvidenceSources(db, id, evidenceSources, agentId, now);
-					linkAggregateQueryHint(db, id, agentId, params.query, now);
-					saved = true;
-					return loadAggregateMemory(db, id);
-				}, { siteToken: "aggregate-recall.ts:1010" }),
+						const id = deps.idFactory?.() ?? randomUUID();
+						const envelope: IngestEnvelope = {
+							id,
+							content: normalized.storageContent,
+							normalizedContent: normalized.normalizedContent || normalized.hashBasis,
+							contentHash: normalized.contentHash,
+							who: "signet",
+							why: "aggregate recall",
+							project,
+							importance: 0.75,
+							type: "semantic",
+							tags: "aggregate,recall",
+							pinned: 0,
+							isDeleted: 0,
+							extractionStatus: "none",
+							embeddingModel: null,
+							extractionModel: null,
+							updatedBy: "signet",
+							sourceType: "aggregate-recall",
+							sourceId: key,
+							idempotencyKey: key,
+							scope: null,
+							agentId,
+							visibility: saveVisibility,
+							createdAt: now,
+						};
+						try {
+							ingestEnvelope(db, envelope);
+						} catch (err) {
+							if (!isUniqueConstraintError(err)) throw err;
+							const racedDuplicate = resolveAggregateDuplicate(db, {
+								key,
+								agentId,
+								project,
+								query: params.query,
+								contentHash: normalized.contentHash,
+								normalizedContent: normalized.normalizedContent || normalized.hashBasis,
+								storageContent: normalized.storageContent,
+								answer,
+								evidenceSources,
+								saveVisibility,
+								now,
+							});
+							if (!racedDuplicate) {
+								deduped = true;
+								saved = false;
+								return unsavedAggregateResult(answer, key, project);
+							}
+							deduped = racedDuplicate.refreshed !== true;
+							saved = racedDuplicate.saved;
+							return racedDuplicate.row;
+						}
+						linkAggregateEvidenceSources(db, id, evidenceSources, agentId, now);
+						linkAggregateQueryHint(db, id, agentId, params.query, now);
+						saved = true;
+						return loadAggregateMemory(db, id);
+					},
+					{ siteToken: "aggregate-recall.ts:1014" },
+				),
 		);
 		if (row && !deduped) {
 			const savedRow = row;

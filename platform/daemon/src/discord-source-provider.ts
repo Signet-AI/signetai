@@ -887,7 +887,8 @@ async function patchedMessageArtifact(
 				.get(agentId, source.id, `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`) as
 				| { content: string; source_meta_json: string | null }
 				| undefined,
-	{ siteToken: "discord-source-provider.ts:875" });
+		{ siteToken: "discord-source-provider.ts:875" },
+	);
 	if (!row) return null;
 	const meta = parseMetaJson(row.source_meta_json);
 	const editedAt = readPayloadString(payload, "edited_timestamp") ?? readMetaString(meta, "editedAt");
@@ -966,7 +967,7 @@ async function purgeClearedPartialUpdateArtifacts(
 					   AND source_kind IN (${placeholders})`,
 				)
 				.all(...params) as Array<{ source_path: string }>,
-		{ siteToken: "discord-source-provider.ts:958", operation: "discord-source.partial-purge.read" },
+		{ siteToken: "discord-source-provider.ts:959", operation: "discord-source.partial-purge.read" },
 	);
 	for (const row of rows)
 		await purgeSourceArtifactStructureAsync({ agentId, sourceId: source.id, sourcePath: row.source_path });
@@ -983,7 +984,7 @@ async function purgeClearedPartialUpdateArtifacts(
 					)
 					.run(...params),
 			),
-		{ siteToken: "discord-source-provider.ts:973", operation: "discord-source.partial-purge.delete" },
+		{ siteToken: "discord-source-provider.ts:974", operation: "discord-source.partial-purge.delete" },
 	);
 }
 
@@ -1054,7 +1055,7 @@ function consumeBlankLine(lines: readonly string[], index: number): number {
 }
 
 function hasOwn(record: Readonly<Record<string, unknown>>, key: string): boolean {
-	return Object.prototype.hasOwnProperty.call(record, key);
+	return Object.hasOwn(record, key);
 }
 
 function mentionArtifact(guild: DiscordGuild, channel: DiscordChannel, msg: DiscordMessage): DiscordArtifact {

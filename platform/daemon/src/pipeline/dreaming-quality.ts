@@ -93,12 +93,13 @@ function qualityIssues(rows: readonly EntityRow[]): readonly DreamingQualityIssu
  */
 export async function getDreamingQualityReport(accessor: DbAccessor, agentId: string): Promise<DreamingQualityReport> {
 	const { claimPaths, entities, totalClaimValues, unaddressableClaimValues, structureQuality } =
-		await accessor.withReadDbAsync(async (db) => {
-			const topologyPlaceholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
-			const semanticFilter = `NOT (e.entity_type IN (${topologyPlaceholders}) OR (e.entity_type = 'source' AND e.source_root IS NOT NULL))`;
-			const claimPaths = db
-				.prepare(
-					`SELECT DISTINCT e.name AS entity, asp.canonical_name AS aspect,
+		await accessor.withReadDbAsync(
+			async (db) => {
+				const topologyPlaceholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
+				const semanticFilter = `NOT (e.entity_type IN (${topologyPlaceholders}) OR (e.entity_type = 'source' AND e.source_root IS NOT NULL))`;
+				const claimPaths = db
+					.prepare(
+						`SELECT DISTINCT e.name AS entity, asp.canonical_name AS aspect,
 				        COALESCE(ea.group_key, 'general') AS groupKey, ea.claim_key AS claimKey
 				 FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id AND asp.agent_id = ea.agent_id
@@ -106,31 +107,31 @@ export async function getDreamingQualityReport(accessor: DbAccessor, agentId: st
 				 WHERE ea.agent_id = ? AND ea.status = 'active'
 				   AND TRIM(COALESCE(ea.claim_key, '')) <> ''
 				   AND ${semanticFilter}`,
-				)
-				.all(agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as ClaimPathRow[];
-			const claimCounts = db
-				.prepare(
-					`SELECT COUNT(*) AS totalClaimValues,
+					)
+					.all(agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as ClaimPathRow[];
+				const claimCounts = db
+					.prepare(
+						`SELECT COUNT(*) AS totalClaimValues,
 				        SUM(CASE WHEN TRIM(COALESCE(ea.claim_key, '')) = '' THEN 1 ELSE 0 END) AS unaddressableClaimValues
 				 FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id AND asp.agent_id = ea.agent_id
 				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = ea.agent_id
 				 WHERE ea.agent_id = ? AND ea.status = 'active' AND ${semanticFilter}`,
-				)
-				.get(agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as {
-				totalClaimValues: number;
-				unaddressableClaimValues: number | null;
-			};
-			const entities = db
-				.prepare(
-					`SELECT id, name, canonical_name AS canonicalName, entity_type AS entityType
+					)
+					.get(agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as {
+					totalClaimValues: number;
+					unaddressableClaimValues: number | null;
+				};
+				const entities = db
+					.prepare(
+						`SELECT id, name, canonical_name AS canonicalName, entity_type AS entityType
 				 FROM entities e
 				 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${semanticFilter}`,
-				)
-				.all(agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as EntityRow[];
-			const structure = db
-				.prepare(
-					`SELECT COUNT(DISTINCT e.id) AS totalEntities,
+					)
+					.all(agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as EntityRow[];
+				const structure = db
+					.prepare(
+						`SELECT COUNT(DISTINCT e.id) AS totalEntities,
 				        COUNT(DISTINCT CASE WHEN LOWER(TRIM(e.entity_type)) IN ('', 'unknown') THEN e.id END) AS unknownEntityTypes,
 				        COUNT(asp.id) AS totalAspects,
 				        SUM(CASE WHEN LOWER(TRIM(asp.canonical_name)) = 'profile' THEN 1 ELSE 0 END) AS profileAspects,
@@ -141,40 +142,42 @@ export async function getDreamingQualityReport(accessor: DbAccessor, agentId: st
 				  AND asp.agent_id = e.agent_id
 				  AND COALESCE(asp.status, 'active') = 'active'
 				 WHERE e.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND ${semanticFilter}`,
-				)
-				.get(...GENERIC_ASPECT_NAMES, agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as {
-				totalEntities: number;
-				unknownEntityTypes: number | null;
-				totalAspects: number;
-				profileAspects: number | null;
-				genericAspects: number | null;
-			};
-			return {
-				claimPaths,
-				entities,
-				totalClaimValues: Number(claimCounts.totalClaimValues),
-				unaddressableClaimValues: Number(claimCounts.unaddressableClaimValues ?? 0),
-				structureQuality: {
-					totalEntities: Number(structure.totalEntities),
-					unknownEntityTypes: Number(structure.unknownEntityTypes ?? 0),
-					unknownEntityTypeRate:
-						Number(structure.totalEntities) === 0
-							? null
-							: Number(structure.unknownEntityTypes ?? 0) / Number(structure.totalEntities),
-					totalAspects: Number(structure.totalAspects),
-					profileAspects: Number(structure.profileAspects ?? 0),
-					profileAspectRate:
-						Number(structure.totalAspects) === 0
-							? null
-							: Number(structure.profileAspects ?? 0) / Number(structure.totalAspects),
-					genericAspects: Number(structure.genericAspects ?? 0),
-					genericAspectRate:
-						Number(structure.totalAspects) === 0
-							? null
-							: Number(structure.genericAspects ?? 0) / Number(structure.totalAspects),
-				},
-			};
-		}, { siteToken: "pipeline/dreaming-quality.ts:96" });
+					)
+					.get(...GENERIC_ASPECT_NAMES, agentId, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as {
+					totalEntities: number;
+					unknownEntityTypes: number | null;
+					totalAspects: number;
+					profileAspects: number | null;
+					genericAspects: number | null;
+				};
+				return {
+					claimPaths,
+					entities,
+					totalClaimValues: Number(claimCounts.totalClaimValues),
+					unaddressableClaimValues: Number(claimCounts.unaddressableClaimValues ?? 0),
+					structureQuality: {
+						totalEntities: Number(structure.totalEntities),
+						unknownEntityTypes: Number(structure.unknownEntityTypes ?? 0),
+						unknownEntityTypeRate:
+							Number(structure.totalEntities) === 0
+								? null
+								: Number(structure.unknownEntityTypes ?? 0) / Number(structure.totalEntities),
+						totalAspects: Number(structure.totalAspects),
+						profileAspects: Number(structure.profileAspects ?? 0),
+						profileAspectRate:
+							Number(structure.totalAspects) === 0
+								? null
+								: Number(structure.profileAspects ?? 0) / Number(structure.totalAspects),
+						genericAspects: Number(structure.genericAspects ?? 0),
+						genericAspectRate:
+							Number(structure.totalAspects) === 0
+								? null
+								: Number(structure.genericAspects ?? 0) / Number(structure.totalAspects),
+					},
+				};
+			},
+			{ siteToken: "pipeline/dreaming-quality.ts:96" },
+		);
 
 	let valuesWithResolvedEpisodicQuote = 0;
 	let unresolvedClaimPaths = 0;

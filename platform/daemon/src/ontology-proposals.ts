@@ -476,12 +476,15 @@ function getProposalInTx(db: WriteDb, id: string, agentId: string): ProposalRow 
 }
 
 async function getProposalReadRow(accessor: DbAccessor, id: string, agentId: string): Promise<ProposalRow | null> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const row = db.prepare("SELECT * FROM ontology_proposals WHERE id = ? AND agent_id = ?").get(id, agentId) as
-			| ProposalRow
-			| undefined;
-		return row ?? null;
-	}, { siteToken: "ontology-proposals.ts:479" });
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const row = db.prepare("SELECT * FROM ontology_proposals WHERE id = ? AND agent_id = ?").get(id, agentId) as
+				| ProposalRow
+				| undefined;
+			return row ?? null;
+		},
+		{ siteToken: "ontology-proposals.ts:479" },
+	);
 }
 
 function readBackInTx(db: WriteDb, id: string, agentId: string): OntologyProposal {
@@ -2338,9 +2341,10 @@ export async function getOntologyProposalEvidence(
 ): Promise<OntologyProposalEvidenceResult> {
 	const proposal = await getOntologyProposal(accessor, id, agentId);
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
-	const items = await accessor.withReadDbAsync(async (db) =>
-		proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-	{ siteToken: "ontology-proposals.ts:2341" });
+	const items = await accessor.withReadDbAsync(
+		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
+		{ siteToken: "ontology-proposals.ts:2344" },
+	);
 	return { proposal, items, count: items.length };
 }
 
@@ -2354,28 +2358,31 @@ export async function listOntologyProposals(
 }> {
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	return await accessor.withReadDbAsync(async (db) => {
-		const filters = ["agent_id = ?"];
-		const args: unknown[] = [params.agentId];
-		if (params.status) {
-			filters.push("status = ?");
-			args.push(params.status);
-		}
-		if (params.operation) {
-			filters.push("operation = ?");
-			args.push(params.operation);
-		}
-		args.push(limit, offset);
-		const rows = db
-			.prepare(
-				`SELECT * FROM ontology_proposals
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const filters = ["agent_id = ?"];
+			const args: unknown[] = [params.agentId];
+			if (params.status) {
+				filters.push("status = ?");
+				args.push(params.status);
+			}
+			if (params.operation) {
+				filters.push("operation = ?");
+				args.push(params.operation);
+			}
+			args.push(limit, offset);
+			const rows = db
+				.prepare(
+					`SELECT * FROM ontology_proposals
 				 WHERE ${filters.join(" AND ")}
 				 ORDER BY updated_at DESC
 				 LIMIT ? OFFSET ?`,
-			)
-			.all(...args) as ProposalRow[];
-		return { items: rows.map(toProposal), limit, offset };
-	}, { siteToken: "ontology-proposals.ts:2357" });
+				)
+				.all(...args) as ProposalRow[];
+			return { items: rows.map(toProposal), limit, offset };
+		},
+		{ siteToken: "ontology-proposals.ts:2361" },
+	);
 }
 
 export async function listOntologyProposalConflicts(
@@ -2383,54 +2390,57 @@ export async function listOntologyProposalConflicts(
 	params: { readonly agentId: string; readonly limit?: number },
 ): Promise<OntologyProposalConflictsResult> {
 	const limit = Math.min(Math.max(params.limit ?? 500, 1), 1000);
-	return await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT * FROM ontology_proposals
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT * FROM ontology_proposals
 				 WHERE agent_id = ? AND status = 'pending' AND operation = 'add_claim_value'
 				 ORDER BY updated_at DESC
 				 LIMIT ?`,
-			)
-			.all(params.agentId, limit) as ProposalRow[];
-		const groups = new Map<string, OntologyProposalConflict>();
-		for (const proposal of rows.map(toProposal)) {
-			const entity = readString(proposal.payload, "entity");
-			const aspect = readString(proposal.payload, "aspect");
-			const claimKey = readString(proposal.payload, "claim_key");
-			const value = readString(proposal.payload, "value");
-			if (entity === null || aspect === null || claimKey === null || value === null) continue;
-			const groupKey = readString(proposal.payload, "group_key") ?? "general";
-			const key = [canonical(entity), canonical(aspect), canonical(groupKey), canonical(claimKey)].join("\0");
-			const current = groups.get(key) ?? {
-				entity,
-				aspect,
-				groupKey,
-				claimKey,
-				values: [],
-				proposalIds: [],
-				count: 0,
-			};
-			groups.set(key, {
-				...current,
-				values: [
-					...current.values,
-					{
-						proposalId: proposal.id,
-						value,
-						confidence: proposal.confidence,
-						rationale: proposal.rationale,
-						evidenceCount: proposal.evidence.length,
-					},
-				],
-				proposalIds: [...current.proposalIds, proposal.id],
-				count: current.count + 1,
-			});
-		}
-		const items = [...groups.values()].filter(
-			(group) => new Set(group.values.map((item) => canonical(item.value))).size > 1,
-		);
-		return { items, count: items.length };
-	}, { siteToken: "ontology-proposals.ts:2386" });
+				)
+				.all(params.agentId, limit) as ProposalRow[];
+			const groups = new Map<string, OntologyProposalConflict>();
+			for (const proposal of rows.map(toProposal)) {
+				const entity = readString(proposal.payload, "entity");
+				const aspect = readString(proposal.payload, "aspect");
+				const claimKey = readString(proposal.payload, "claim_key");
+				const value = readString(proposal.payload, "value");
+				if (entity === null || aspect === null || claimKey === null || value === null) continue;
+				const groupKey = readString(proposal.payload, "group_key") ?? "general";
+				const key = [canonical(entity), canonical(aspect), canonical(groupKey), canonical(claimKey)].join("\0");
+				const current = groups.get(key) ?? {
+					entity,
+					aspect,
+					groupKey,
+					claimKey,
+					values: [],
+					proposalIds: [],
+					count: 0,
+				};
+				groups.set(key, {
+					...current,
+					values: [
+						...current.values,
+						{
+							proposalId: proposal.id,
+							value,
+							confidence: proposal.confidence,
+							rationale: proposal.rationale,
+							evidenceCount: proposal.evidence.length,
+						},
+					],
+					proposalIds: [...current.proposalIds, proposal.id],
+					count: current.count + 1,
+				});
+			}
+			const items = [...groups.values()].filter(
+				(group) => new Set(group.values.map((item) => canonical(item.value))).size > 1,
+			);
+			return { items, count: items.length };
+		},
+		{ siteToken: "ontology-proposals.ts:2393" },
+	);
 }
 
 function claimVersionRow(row: Record<string, unknown>): ClaimVersionItem {
@@ -2459,53 +2469,54 @@ export async function listClaimVersions(
 	const claimKey = canonicalKey(params.claim);
 	if (claimKey === null) throw new OntologyProposalError("claim is required", 400);
 	const kind = params.kind ?? "attribute";
-	return await accessor.withReadDbAsync(async (db) => {
-		const entityKey = canonical(params.entity);
-		const exactEntity = db
-			.prepare("SELECT id FROM entities WHERE agent_id = ? AND id = ? LIMIT 1")
-			.get(params.agentId, params.entity) as { id: string } | undefined;
-		const entity =
-			exactEntity ??
-			(() => {
-				const rows = db
-					.prepare(
-						`SELECT id FROM entities
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const entityKey = canonical(params.entity);
+			const exactEntity = db
+				.prepare("SELECT id FROM entities WHERE agent_id = ? AND id = ? LIMIT 1")
+				.get(params.agentId, params.entity) as { id: string } | undefined;
+			const entity =
+				exactEntity ??
+				(() => {
+					const rows = db
+						.prepare(
+							`SELECT id FROM entities
 						 WHERE agent_id = ?
 						   AND (COALESCE(canonical_name, LOWER(name)) = ? OR LOWER(name) = ?)
 						 ORDER BY updated_at DESC, name ASC`,
-					)
-					.all(params.agentId, entityKey, entityKey) as Array<{ id: string }>;
-				if (rows.length === 0) throw new OntologyProposalError(`Entity not found: ${params.entity}`, 404);
-				if (rows.length > 1) {
-					throw new OntologyProposalError(`Entity selector is ambiguous: ${params.entity}. Use an id.`, 409);
-				}
-				return rows[0] as { id: string };
-			})();
-		const aspectKey = canonical(params.aspect);
-		const exactAspect = db
-			.prepare("SELECT id FROM entity_aspects WHERE entity_id = ? AND agent_id = ? AND id = ? LIMIT 1")
-			.get(entity.id, params.agentId, params.aspect) as { id: string } | undefined;
-		const aspect =
-			exactAspect ??
-			(() => {
-				const rows = db
-					.prepare(
-						`SELECT id FROM entity_aspects
+						)
+						.all(params.agentId, entityKey, entityKey) as Array<{ id: string }>;
+					if (rows.length === 0) throw new OntologyProposalError(`Entity not found: ${params.entity}`, 404);
+					if (rows.length > 1) {
+						throw new OntologyProposalError(`Entity selector is ambiguous: ${params.entity}. Use an id.`, 409);
+					}
+					return rows[0] as { id: string };
+				})();
+			const aspectKey = canonical(params.aspect);
+			const exactAspect = db
+				.prepare("SELECT id FROM entity_aspects WHERE entity_id = ? AND agent_id = ? AND id = ? LIMIT 1")
+				.get(entity.id, params.agentId, params.aspect) as { id: string } | undefined;
+			const aspect =
+				exactAspect ??
+				(() => {
+					const rows = db
+						.prepare(
+							`SELECT id FROM entity_aspects
 						 WHERE entity_id = ?
 						   AND agent_id = ?
 						   AND (canonical_name = ? OR LOWER(name) = ?)
 						 ORDER BY updated_at DESC, name ASC`,
-					)
-					.all(entity.id, params.agentId, aspectKey, aspectKey) as Array<{ id: string }>;
-				if (rows.length === 0) throw new OntologyProposalError(`Aspect not found: ${params.aspect}`, 404);
-				if (rows.length > 1) {
-					throw new OntologyProposalError(`Aspect selector is ambiguous: ${params.aspect}. Use an id.`, 409);
-				}
-				return rows[0] as { id: string };
-			})();
-		const rows = db
-			.prepare(
-				`SELECT attr.*
+						)
+						.all(entity.id, params.agentId, aspectKey, aspectKey) as Array<{ id: string }>;
+					if (rows.length === 0) throw new OntologyProposalError(`Aspect not found: ${params.aspect}`, 404);
+					if (rows.length > 1) {
+						throw new OntologyProposalError(`Aspect selector is ambiguous: ${params.aspect}. Use an id.`, 409);
+					}
+					return rows[0] as { id: string };
+				})();
+			const rows = db
+				.prepare(
+					`SELECT attr.*
 				 FROM entity_attributes attr
 				 WHERE attr.agent_id = ?
 				   AND attr.aspect_id = ?
@@ -2513,11 +2524,13 @@ export async function listClaimVersions(
 				   AND attr.claim_key = ?
 				   AND attr.kind = ?
 				 ORDER BY attr.version DESC, attr.updated_at DESC`,
-			)
-			.all(params.agentId, aspect.id, groupKey, claimKey, kind) as Array<Record<string, unknown>>;
-		const items = rows.map(claimVersionRow);
-		return { items, count: items.length };
-	}, { siteToken: "ontology-proposals.ts:2462" });
+				)
+				.all(params.agentId, aspect.id, groupKey, claimKey, kind) as Array<Record<string, unknown>>;
+			const items = rows.map(claimVersionRow);
+			return { items, count: items.length };
+		},
+		{ siteToken: "ontology-proposals.ts:2472" },
+	);
 }
 
 export async function getClaimVersion(
@@ -2944,7 +2957,9 @@ export async function findDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
-	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), { siteToken: "ontology-proposals.ts:2947" });
+	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
+		siteToken: "ontology-proposals.ts:2960",
+	});
 }
 
 export async function proposeDuplicateEntityMerges(
@@ -2953,7 +2968,9 @@ export async function proposeDuplicateEntityMerges(
 ): Promise<DuplicateEntityMergeResult> {
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
-	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), { siteToken: "ontology-proposals.ts:2956" });
+	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
+		siteToken: "ontology-proposals.ts:2971",
+	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
 		return {
@@ -3001,9 +3018,10 @@ export async function createEntityMergePlan(
 ): Promise<EntityMergePlanResult> {
 	const agentId = requireText(params.agentId, "agentId");
 	const dryRun = params.writeProposal !== true;
-	const plan = await accessor.withReadDbAsync(async (db) =>
-		buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-	{ siteToken: "ontology-proposals.ts:3004" });
+	const plan = await accessor.withReadDbAsync(
+		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
+		{ siteToken: "ontology-proposals.ts:3021" },
+	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {
 		agentId,

@@ -383,7 +383,8 @@ export async function runTranscriptRecoveryScan(
 			continue;
 		}
 		if (
-			await dbAccessor.withReadDbAsync((db) => unchanged(db, agentId, candidate), { siteToken: "transcript-recovery-worker.ts:386",
+			await dbAccessor.withReadDbAsync((db) => unchanged(db, agentId, candidate), {
+				siteToken: "transcript-recovery-worker.ts:386",
 				operation: "transcript-recovery.unchanged",
 				signal: options.signal,
 			})
@@ -420,7 +421,11 @@ export async function runTranscriptRecoveryScan(
 				.slice(0, 24)}`;
 			await dbAccessor.withWriteTxAsync(
 				(db) => markScanned(db, agentId, candidate, contentSha256, skippedSessionId, new Date(nowMs).toISOString()),
-				{ siteToken: "transcript-recovery-worker.ts:421", operation: "transcript-recovery.mark-scanned", signal: options.signal },
+				{
+					siteToken: "transcript-recovery-worker.ts:422",
+					operation: "transcript-recovery.mark-scanned",
+					signal: options.signal,
+				},
 			);
 			skippedInvalid++;
 			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
@@ -430,12 +435,20 @@ export async function runTranscriptRecoveryScan(
 		const contentSha256 = createHash("sha256").update(raw).digest("hex");
 		const alreadyCaptured = await dbAccessor.withReadDbAsync(
 			(db) => snapshotAlreadyCaptured(db, agentId, candidate, sessionId, transcript),
-			{ siteToken: "transcript-recovery-worker.ts:431", operation: "transcript-recovery.snapshot-check", signal: options.signal },
+			{
+				siteToken: "transcript-recovery-worker.ts:436",
+				operation: "transcript-recovery.snapshot-check",
+				signal: options.signal,
+			},
 		);
 		if (alreadyCaptured) {
 			await dbAccessor.withWriteTxAsync(
 				(db) => markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
-				{ siteToken: "transcript-recovery-worker.ts:436", operation: "transcript-recovery.mark-scanned", signal: options.signal },
+				{
+					siteToken: "transcript-recovery-worker.ts:445",
+					operation: "transcript-recovery.mark-scanned",
+					signal: options.signal,
+				},
 			);
 			deduplicated++;
 			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
@@ -461,7 +474,11 @@ export async function runTranscriptRecoveryScan(
 		if (existingTranscript?.completedAt && !completedSnapshotExtendsCanonical) {
 			await dbAccessor.withWriteTxAsync(
 				(db) => markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
-				{ siteToken: "transcript-recovery-worker.ts:462", operation: "transcript-recovery.mark-scanned", signal: options.signal },
+				{
+					siteToken: "transcript-recovery-worker.ts:475",
+					operation: "transcript-recovery.mark-scanned",
+					signal: options.signal,
+				},
 			);
 			deduplicated++;
 			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
@@ -515,7 +532,11 @@ export async function runTranscriptRecoveryScan(
 		}
 		await dbAccessor.withWriteTxAsync(
 			(db) => markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
-			{ siteToken: "transcript-recovery-worker.ts:516", operation: "transcript-recovery.mark-scanned", signal: options.signal },
+			{
+				siteToken: "transcript-recovery-worker.ts:533",
+				operation: "transcript-recovery.mark-scanned",
+				signal: options.signal,
+			},
 		);
 		await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 		enqueued++;

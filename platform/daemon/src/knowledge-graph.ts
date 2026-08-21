@@ -188,17 +188,20 @@ export async function getAspectsForEntity(
 	entityId: string,
 	agentId: string,
 ): Promise<readonly EntityAspect[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT * FROM entity_aspects
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT * FROM entity_aspects
 				 WHERE entity_id = ? AND agent_id = ?
 				   AND COALESCE(status, 'active') = 'active'
 				 ORDER BY weight DESC`,
-			)
-			.all(entityId, agentId) as Array<Record<string, unknown>>;
-		return rows.map(rowToAspect);
-	}, { siteToken: "knowledge-graph.ts:191" });
+				)
+				.all(entityId, agentId) as Array<Record<string, unknown>>;
+			return rows.map(rowToAspect);
+		},
+		{ siteToken: "knowledge-graph.ts:191" },
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -210,16 +213,19 @@ export async function getAttributesForAspect(
 	aspectId: string,
 	agentId: string,
 ): Promise<readonly EntityAttribute[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT * FROM entity_attributes
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT * FROM entity_attributes
 				 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
 				 ORDER BY importance DESC`,
-			)
-			.all(aspectId, agentId) as Array<Record<string, unknown>>;
-		return rows.map(rowToAttribute);
-	}, { siteToken: "knowledge-graph.ts:213" });
+				)
+				.all(aspectId, agentId) as Array<Record<string, unknown>>;
+			return rows.map(rowToAttribute);
+		},
+		{ siteToken: "knowledge-graph.ts:216" },
+	);
 }
 
 /**
@@ -232,10 +238,11 @@ export async function getConstraintsForEntity(
 	entityId: string,
 	agentId: string,
 ): Promise<readonly EntityAttribute[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT ea.* FROM entity_attributes ea
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT ea.* FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 				 WHERE asp.entity_id = ? AND asp.agent_id = ?
 				   AND ea.agent_id = ?
@@ -243,10 +250,12 @@ export async function getConstraintsForEntity(
 				   AND ea.kind = 'constraint'
 				   AND ea.status = 'active'
 				 ORDER BY ea.importance DESC`,
-			)
-			.all(entityId, agentId, agentId) as Array<Record<string, unknown>>;
-		return rows.map(rowToAttribute);
-	}, { siteToken: "knowledge-graph.ts:235" });
+				)
+				.all(entityId, agentId, agentId) as Array<Record<string, unknown>>;
+			return rows.map(rowToAttribute);
+		},
+		{ siteToken: "knowledge-graph.ts:241" },
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -257,12 +266,15 @@ export async function getEntityDependencyById(
 	accessor: DbAccessor,
 	params: { readonly id: string; readonly agentId: string },
 ): Promise<EntityDependency | null> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const row = db
-			.prepare("SELECT * FROM entity_dependencies WHERE id = ? AND agent_id = ?")
-			.get(params.id, params.agentId) as Record<string, unknown> | undefined;
-		return row === undefined ? null : rowToDependency(row);
-	}, { siteToken: "knowledge-graph.ts:260" });
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const row = db
+				.prepare("SELECT * FROM entity_dependencies WHERE id = ? AND agent_id = ?")
+				.get(params.id, params.agentId) as Record<string, unknown> | undefined;
+			return row === undefined ? null : rowToDependency(row);
+		},
+		{ siteToken: "knowledge-graph.ts:269" },
+	);
 }
 
 export async function getDependenciesFrom(
@@ -270,10 +282,11 @@ export async function getDependenciesFrom(
 	entityId: string,
 	agentId: string,
 ): Promise<readonly EntityDependency[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT dep.*
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT dep.*
 				 FROM entity_dependencies dep
 				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
 				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
@@ -281,10 +294,12 @@ export async function getDependenciesFrom(
 				   AND COALESCE(dep.status, 'active') = 'active'
 				   AND COALESCE(src.status, 'active') = 'active'
 				   AND COALESCE(dst.status, 'active') = 'active'`,
-			)
-			.all(entityId, agentId) as Array<Record<string, unknown>>;
-		return rows.map(rowToDependency);
-	}, { siteToken: "knowledge-graph.ts:273" });
+				)
+				.all(entityId, agentId) as Array<Record<string, unknown>>;
+			return rows.map(rowToDependency);
+		},
+		{ siteToken: "knowledge-graph.ts:285" },
+	);
 }
 
 export async function getDependenciesTo(
@@ -292,10 +307,11 @@ export async function getDependenciesTo(
 	entityId: string,
 	agentId: string,
 ): Promise<readonly EntityDependency[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT dep.*
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT dep.*
 				 FROM entity_dependencies dep
 				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
 				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
@@ -303,10 +319,12 @@ export async function getDependenciesTo(
 				   AND COALESCE(dep.status, 'active') = 'active'
 				   AND COALESCE(src.status, 'active') = 'active'
 				   AND COALESCE(dst.status, 'active') = 'active'`,
-			)
-			.all(entityId, agentId) as Array<Record<string, unknown>>;
-		return rows.map(rowToDependency);
-	}, { siteToken: "knowledge-graph.ts:295" });
+				)
+				.all(entityId, agentId) as Array<Record<string, unknown>>;
+			return rows.map(rowToDependency);
+		},
+		{ siteToken: "knowledge-graph.ts:310" },
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -317,30 +335,33 @@ export async function getPinnedEntities(
 	accessor: DbAccessor,
 	agentId: string,
 ): Promise<ReadonlyArray<PinnedEntitySummary>> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT id, name, pinned_at
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT id, name, pinned_at
 				 FROM entities
 				 WHERE agent_id = ?
 				   AND pinned = 1
 				   AND COALESCE(status, 'active') = 'active'
 				 ORDER BY pinned_at DESC, updated_at DESC, name ASC`,
-			)
-			.all(agentId) as Array<Record<string, unknown>>;
-		return rows.flatMap((row) => {
-			if (typeof row.id !== "string" || typeof row.name !== "string") {
-				return [];
-			}
-			return [
-				{
-					id: row.id,
-					name: row.name,
-					pinnedAt: typeof row.pinned_at === "string" ? row.pinned_at : "",
-				},
-			];
-		});
-	}, { siteToken: "knowledge-graph.ts:320" });
+				)
+				.all(agentId) as Array<Record<string, unknown>>;
+			return rows.flatMap((row) => {
+				if (typeof row.id !== "string" || typeof row.name !== "string") {
+					return [];
+				}
+				return [
+					{
+						id: row.id,
+						name: row.name,
+						pinnedAt: typeof row.pinned_at === "string" ? row.pinned_at : "",
+					},
+				];
+			});
+		},
+		{ siteToken: "knowledge-graph.ts:338" },
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -396,12 +417,15 @@ export async function upsertTaskMeta(accessor: DbAccessor, params: UpsertTaskMet
 }
 
 export async function getTaskMeta(accessor: DbAccessor, entityId: string, agentId: string): Promise<TaskMeta | null> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const row = db.prepare("SELECT * FROM task_meta WHERE entity_id = ? AND agent_id = ?").get(entityId, agentId) as
-			| Record<string, unknown>
-			| undefined;
-		return row ? rowToTaskMeta(row) : null;
-	}, { siteToken: "knowledge-graph.ts:399" });
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const row = db.prepare("SELECT * FROM task_meta WHERE entity_id = ? AND agent_id = ?").get(entityId, agentId) as
+				| Record<string, unknown>
+				| undefined;
+			return row ? rowToTaskMeta(row) : null;
+		},
+		{ siteToken: "knowledge-graph.ts:420" },
+	);
 }
 
 export async function updateTaskStatus(
@@ -576,13 +600,14 @@ export async function resolveNamedEntity(
 	const canonical = toCanonicalName(input.name);
 	if (canonical.length === 0) return null;
 
-	return await accessor.withReadDbAsync(async (db) => {
-		const escaped = canonical.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
-		const starts = `${escaped}%`;
-		const contains = `%${escaped}%`;
-		const rows = db
-			.prepare(
-				`SELECT
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const escaped = canonical.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+			const starts = `${escaped}%`;
+			const contains = `%${escaped}%`;
+			const rows = db
+				.prepare(
+					`SELECT
 					id,
 					name,
 					COALESCE(canonical_name, LOWER(name)) AS canonical_name,
@@ -612,40 +637,42 @@ export async function resolveNamedEntity(
 				   )
 				 ORDER BY match_rank ASC, mentions DESC, updated_at DESC, name ASC
 				 LIMIT 1`,
-			)
-			.get(
-				canonical,
-				canonical,
-				starts,
-				starts,
-				contains,
-				contains,
-				input.agentId,
-				canonical,
-				canonical,
-				starts,
-				starts,
-				contains,
-				contains,
-			) as
-			| {
-					id: string;
-					name: string;
-					canonical_name: string;
-					entity_type: string;
-					description: string | null;
-			  }
-			| undefined;
+				)
+				.get(
+					canonical,
+					canonical,
+					starts,
+					starts,
+					contains,
+					contains,
+					input.agentId,
+					canonical,
+					canonical,
+					starts,
+					starts,
+					contains,
+					contains,
+				) as
+				| {
+						id: string;
+						name: string;
+						canonical_name: string;
+						entity_type: string;
+						description: string | null;
+				  }
+				| undefined;
 
-		if (!rows) return null;
-		return {
-			id: rows.id,
-			name: rows.name,
-			canonicalName: rows.canonical_name,
-			entityType: rows.entity_type,
-			description: rows.description,
-		};
-	}, { siteToken: "knowledge-graph.ts:579" });
+			if (!rows) return null;
+			return {
+				id: rows.id,
+				name: rows.name,
+				canonicalName: rows.canonical_name,
+				entityType: rows.entity_type,
+				description: rows.description,
+			};
+		},
+		{ siteToken: "knowledge-graph.ts:603" },
+	);
 }
 
 function resolveAspectByName(
@@ -751,25 +778,28 @@ export async function listEntityAliases(
 		readonly status?: "active" | "archived" | "all";
 	},
 ): Promise<readonly EntityAlias[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const conditions = ["entity_id = ?", "agent_id = ?"];
-		const args: string[] = [params.entityId, params.agentId];
-		if (params.status && params.status !== "all") {
-			conditions.push("status = ?");
-			args.push(params.status);
-		} else if (!params.status) {
-			conditions.push("status = 'active'");
-		}
-		const rows = db
-			.prepare(
-				`SELECT *
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const conditions = ["entity_id = ?", "agent_id = ?"];
+			const args: string[] = [params.entityId, params.agentId];
+			if (params.status && params.status !== "all") {
+				conditions.push("status = ?");
+				args.push(params.status);
+			} else if (!params.status) {
+				conditions.push("status = 'active'");
+			}
+			const rows = db
+				.prepare(
+					`SELECT *
 				 FROM entity_aliases
 				 WHERE ${conditions.join(" AND ")}
 				 ORDER BY status ASC, alias ASC`,
-			)
-			.all(...args) as Array<Record<string, unknown>>;
-		return rows.map(rowToEntityAlias);
-	}, { siteToken: "knowledge-graph.ts:754" });
+				)
+				.all(...args) as Array<Record<string, unknown>>;
+			return rows.map(rowToEntityAlias);
+		},
+		{ siteToken: "knowledge-graph.ts:781" },
+	);
 }
 
 export async function getEntityAspectsByName(
@@ -779,17 +809,20 @@ export async function getEntityAspectsByName(
 		readonly entity: string;
 	},
 ): Promise<{ readonly entity: Entity; readonly items: readonly AspectWithCounts[] } | null> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const entity = resolveEntityRecordByName(db, {
-			agentId: params.agentId,
-			name: params.entity,
-		});
-		if (!entity) return null;
-		return {
-			entity,
-			items: readEntityAspectsWithCounts(db, entity.id, params.agentId),
-		};
-	}, { siteToken: "knowledge-graph.ts:782" });
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const entity = resolveEntityRecordByName(db, {
+				agentId: params.agentId,
+				name: params.entity,
+			});
+			if (!entity) return null;
+			return {
+				entity,
+				items: readEntityAspectsWithCounts(db, entity.id, params.agentId),
+			};
+		},
+		{ siteToken: "knowledge-graph.ts:812" },
+	);
 }
 
 export async function getEntityKnowledgeTree(
@@ -803,16 +836,17 @@ export async function getEntityKnowledgeTree(
 		readonly depth: number;
 	},
 ): Promise<EntityKnowledgeTree | null> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const entity = resolveEntityRecordByName(db, {
-			agentId: params.agentId,
-			name: params.entity,
-		});
-		if (!entity) return null;
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const entity = resolveEntityRecordByName(db, {
+				agentId: params.agentId,
+				name: params.entity,
+			});
+			if (!entity) return null;
 
-		const aspectRows = db
-			.prepare(
-				`SELECT
+			const aspectRows = db
+				.prepare(
+					`SELECT
 				   asp.*,
 				   COUNT(DISTINCT CASE
 				     WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
@@ -835,24 +869,24 @@ export async function getEntityKnowledgeTree(
 				 GROUP BY asp.id
 				 ORDER BY asp.weight DESC, asp.name ASC
 				 LIMIT ?`,
-			)
-			.all(entity.id, params.agentId, params.maxAspects) as Array<Record<string, unknown>>;
+				)
+				.all(entity.id, params.agentId, params.maxAspects) as Array<Record<string, unknown>>;
 
-		return {
-			entity,
-			limits: {
-				maxAspects: params.maxAspects,
-				maxGroups: params.maxGroups,
-				maxClaims: params.maxClaims,
-				depth: params.depth,
-			},
-			items: aspectRows.map((aspectRow) => {
-				const aspect = rowToAspect(aspectRow);
-				const groupRows =
-					params.depth >= 2
-						? (db
-								.prepare(
-									`SELECT
+			return {
+				entity,
+				limits: {
+					maxAspects: params.maxAspects,
+					maxGroups: params.maxGroups,
+					maxClaims: params.maxClaims,
+					depth: params.depth,
+				},
+				items: aspectRows.map((aspectRow) => {
+					const aspect = rowToAspect(aspectRow);
+					const groupRows =
+						params.depth >= 2
+							? (db
+									.prepare(
+										`SELECT
 									   COALESCE(ea.group_key, 'general') AS group_key,
 									   COUNT(DISTINCT CASE
 									     WHEN ea.kind = 'attribute' AND ea.status = 'active' THEN ea.id
@@ -871,23 +905,23 @@ export async function getEntityKnowledgeTree(
 									 GROUP BY COALESCE(ea.group_key, 'general')
 									 ORDER BY attribute_count DESC, constraint_count DESC, claim_count DESC, group_key ASC
 									 LIMIT ?`,
-								)
-								.all(aspect.id, params.agentId, params.maxGroups) as Array<Record<string, unknown>>)
-						: [];
+									)
+									.all(aspect.id, params.agentId, params.maxGroups) as Array<Record<string, unknown>>)
+							: [];
 
-				return {
-					aspect,
-					attributeCount: Number(aspectRow.attribute_count ?? 0),
-					constraintCount: Number(aspectRow.constraint_count ?? 0),
-					groupCount: Number(aspectRow.group_count ?? 0),
-					claimCount: Number(aspectRow.claim_count ?? 0),
-					groups: groupRows.map((groupRow) => {
-						const groupKey = groupRow.group_key as string;
-						const claimRows =
-							params.depth >= 3
-								? (db
-										.prepare(
-											`SELECT
+					return {
+						aspect,
+						attributeCount: Number(aspectRow.attribute_count ?? 0),
+						constraintCount: Number(aspectRow.constraint_count ?? 0),
+						groupCount: Number(aspectRow.group_count ?? 0),
+						claimCount: Number(aspectRow.claim_count ?? 0),
+						groups: groupRows.map((groupRow) => {
+							const groupKey = groupRow.group_key as string;
+							const claimRows =
+								params.depth >= 3
+									? (db
+											.prepare(
+												`SELECT
 											   ea.claim_key,
 											   COUNT(DISTINCT CASE WHEN ea.kind = 'attribute' THEN ea.id END) AS attribute_count,
 											   COUNT(DISTINCT CASE WHEN ea.kind = 'constraint' THEN ea.id END) AS constraint_count,
@@ -914,31 +948,33 @@ export async function getEntityKnowledgeTree(
 											 GROUP BY ea.claim_key, COALESCE(ea.group_key, 'general')
 											 ORDER BY active_count DESC, latest_updated_at DESC, ea.claim_key ASC
 											 LIMIT ?`,
-										)
-										.all(aspect.id, params.agentId, groupKey, params.maxClaims) as Array<Record<string, unknown>>)
-								: [];
+											)
+											.all(aspect.id, params.agentId, groupKey, params.maxClaims) as Array<Record<string, unknown>>)
+									: [];
 
-						return {
-							groupKey,
-							attributeCount: Number(groupRow.attribute_count ?? 0),
-							constraintCount: Number(groupRow.constraint_count ?? 0),
-							claimCount: Number(groupRow.claim_count ?? 0),
-							latestUpdatedAt: typeof groupRow.latest_updated_at === "string" ? groupRow.latest_updated_at : null,
-							claims: claimRows.map((claimRow) => ({
-								claimKey: claimRow.claim_key as string,
-								attributeCount: Number(claimRow.attribute_count ?? 0),
-								constraintCount: Number(claimRow.constraint_count ?? 0),
-								activeCount: Number(claimRow.active_count ?? 0),
-								supersededCount: Number(claimRow.superseded_count ?? 0),
-								latestUpdatedAt: typeof claimRow.latest_updated_at === "string" ? claimRow.latest_updated_at : null,
-								preview: typeof claimRow.preview === "string" ? claimRow.preview : null,
-							})),
-						};
-					}),
-				};
-			}),
-		};
-	}, { siteToken: "knowledge-graph.ts:806" });
+							return {
+								groupKey,
+								attributeCount: Number(groupRow.attribute_count ?? 0),
+								constraintCount: Number(groupRow.constraint_count ?? 0),
+								claimCount: Number(groupRow.claim_count ?? 0),
+								latestUpdatedAt: typeof groupRow.latest_updated_at === "string" ? groupRow.latest_updated_at : null,
+								claims: claimRows.map((claimRow) => ({
+									claimKey: claimRow.claim_key as string,
+									attributeCount: Number(claimRow.attribute_count ?? 0),
+									constraintCount: Number(claimRow.constraint_count ?? 0),
+									activeCount: Number(claimRow.active_count ?? 0),
+									supersededCount: Number(claimRow.superseded_count ?? 0),
+									latestUpdatedAt: typeof claimRow.latest_updated_at === "string" ? claimRow.latest_updated_at : null,
+									preview: typeof claimRow.preview === "string" ? claimRow.preview : null,
+								})),
+							};
+						}),
+					};
+				}),
+			};
+		},
+		{ siteToken: "knowledge-graph.ts:839" },
+	);
 }
 
 export async function listEntityGroups(
@@ -953,21 +989,22 @@ export async function listEntityGroups(
 	readonly aspect: EntityAspect;
 	readonly items: readonly EntityGroupSummary[];
 } | null> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const entity = resolveEntityRecordByName(db, {
-			agentId: params.agentId,
-			name: params.entity,
-		});
-		if (!entity) return null;
-		const aspect = resolveAspectByName(db, {
-			entityId: entity.id,
-			agentId: params.agentId,
-			aspect: params.aspect,
-		});
-		if (!aspect) return null;
-		const rows = db
-			.prepare(
-				`SELECT
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const entity = resolveEntityRecordByName(db, {
+				agentId: params.agentId,
+				name: params.entity,
+			});
+			if (!entity) return null;
+			const aspect = resolveAspectByName(db, {
+				entityId: entity.id,
+				agentId: params.agentId,
+				aspect: params.aspect,
+			});
+			if (!aspect) return null;
+			const rows = db
+				.prepare(
+					`SELECT
 				   COALESCE(ea.group_key, 'general') AS group_key,
 				   COUNT(DISTINCT CASE
 				     WHEN ea.kind = 'attribute' AND ea.status = 'active' THEN ea.id
@@ -985,20 +1022,22 @@ export async function listEntityGroups(
 				   AND ea.status != 'deleted'
 				 GROUP BY COALESCE(ea.group_key, 'general')
 				 ORDER BY attribute_count DESC, constraint_count DESC, group_key ASC`,
-			)
-			.all(aspect.id, params.agentId) as Array<Record<string, unknown>>;
-		return {
-			entity,
-			aspect,
-			items: rows.map((row) => ({
-				groupKey: row.group_key as string,
-				attributeCount: Number(row.attribute_count ?? 0),
-				constraintCount: Number(row.constraint_count ?? 0),
-				claimCount: Number(row.claim_count ?? 0),
-				latestUpdatedAt: typeof row.latest_updated_at === "string" ? row.latest_updated_at : null,
-			})),
-		};
-	}, { siteToken: "knowledge-graph.ts:956" });
+				)
+				.all(aspect.id, params.agentId) as Array<Record<string, unknown>>;
+			return {
+				entity,
+				aspect,
+				items: rows.map((row) => ({
+					groupKey: row.group_key as string,
+					attributeCount: Number(row.attribute_count ?? 0),
+					constraintCount: Number(row.constraint_count ?? 0),
+					claimCount: Number(row.claim_count ?? 0),
+					latestUpdatedAt: typeof row.latest_updated_at === "string" ? row.latest_updated_at : null,
+				})),
+			};
+		},
+		{ siteToken: "knowledge-graph.ts:992" },
+	);
 }
 
 export async function listEntityClaims(
@@ -1014,22 +1053,23 @@ export async function listEntityClaims(
 	readonly aspect: EntityAspect;
 	readonly items: readonly EntityClaimSummary[];
 } | null> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const entity = resolveEntityRecordByName(db, {
-			agentId: params.agentId,
-			name: params.entity,
-		});
-		if (!entity) return null;
-		const aspect = resolveAspectByName(db, {
-			entityId: entity.id,
-			agentId: params.agentId,
-			aspect: params.aspect,
-		});
-		if (!aspect) return null;
-		const group = toCanonicalName(params.group).replace(/\s+/g, "_");
-		const rows = db
-			.prepare(
-				`SELECT
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const entity = resolveEntityRecordByName(db, {
+				agentId: params.agentId,
+				name: params.entity,
+			});
+			if (!entity) return null;
+			const aspect = resolveAspectByName(db, {
+				entityId: entity.id,
+				agentId: params.agentId,
+				aspect: params.aspect,
+			});
+			if (!aspect) return null;
+			const group = toCanonicalName(params.group).replace(/\s+/g, "_");
+			const rows = db
+				.prepare(
+					`SELECT
 				   ea.claim_key,
 				   ea.group_key,
 				   COUNT(DISTINCT CASE WHEN ea.kind = 'attribute' THEN ea.id END) AS attribute_count,
@@ -1056,23 +1096,25 @@ export async function listEntityClaims(
 				   AND ea.status != 'deleted'
 				 GROUP BY ea.claim_key, COALESCE(ea.group_key, 'general')
 				 ORDER BY active_count DESC, latest_updated_at DESC, ea.claim_key ASC`,
-			)
-			.all(aspect.id, params.agentId, group.length > 0 ? group : "general") as Array<Record<string, unknown>>;
-		return {
-			entity,
-			aspect,
-			items: rows.map((row) => ({
-				claimKey: row.claim_key as string,
-				groupKey: typeof row.group_key === "string" ? row.group_key : null,
-				attributeCount: Number(row.attribute_count ?? 0),
-				constraintCount: Number(row.constraint_count ?? 0),
-				activeCount: Number(row.active_count ?? 0),
-				supersededCount: Number(row.superseded_count ?? 0),
-				latestUpdatedAt: typeof row.latest_updated_at === "string" ? row.latest_updated_at : null,
-				preview: typeof row.preview === "string" ? row.preview : null,
-			})),
-		};
-	}, { siteToken: "knowledge-graph.ts:1017" });
+				)
+				.all(aspect.id, params.agentId, group.length > 0 ? group : "general") as Array<Record<string, unknown>>;
+			return {
+				entity,
+				aspect,
+				items: rows.map((row) => ({
+					claimKey: row.claim_key as string,
+					groupKey: typeof row.group_key === "string" ? row.group_key : null,
+					attributeCount: Number(row.attribute_count ?? 0),
+					constraintCount: Number(row.constraint_count ?? 0),
+					activeCount: Number(row.active_count ?? 0),
+					supersededCount: Number(row.superseded_count ?? 0),
+					latestUpdatedAt: typeof row.latest_updated_at === "string" ? row.latest_updated_at : null,
+					preview: typeof row.preview === "string" ? row.preview : null,
+				})),
+			};
+		},
+		{ siteToken: "knowledge-graph.ts:1056" },
+	);
 }
 
 export async function listEntityAttributesByPath(
@@ -1093,55 +1135,58 @@ export async function listEntityAttributesByPath(
 	readonly aspect: EntityAspect;
 	readonly items: readonly EntityAttribute[];
 } | null> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const entity = resolveEntityRecordByName(db, {
-			agentId: params.agentId,
-			name: params.entity,
-		});
-		if (!entity) return null;
-		const aspect = resolveAspectByName(db, {
-			entityId: entity.id,
-			agentId: params.agentId,
-			aspect: params.aspect,
-		});
-		if (!aspect) return null;
-		const group = toCanonicalName(params.group).replace(/\s+/g, "_");
-		const claim = toCanonicalName(params.claim).replace(/\s+/g, "_");
-		if (claim.length === 0) return { entity, aspect, items: [] };
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const entity = resolveEntityRecordByName(db, {
+				agentId: params.agentId,
+				name: params.entity,
+			});
+			if (!entity) return null;
+			const aspect = resolveAspectByName(db, {
+				entityId: entity.id,
+				agentId: params.agentId,
+				aspect: params.aspect,
+			});
+			if (!aspect) return null;
+			const group = toCanonicalName(params.group).replace(/\s+/g, "_");
+			const claim = toCanonicalName(params.claim).replace(/\s+/g, "_");
+			if (claim.length === 0) return { entity, aspect, items: [] };
 
-		const conditions = [
-			"ea.aspect_id = ?",
-			"ea.agent_id = ?",
-			"COALESCE(ea.group_key, 'general') = ?",
-			"ea.claim_key = ?",
-		];
-		const args: Array<string | number> = [aspect.id, params.agentId, group.length > 0 ? group : "general", claim];
-		if (params.kind) {
-			conditions.push("ea.kind = ?");
-			args.push(params.kind);
-		}
-		if (params.status && params.status !== "all") {
-			conditions.push("ea.status = ?");
-			args.push(params.status);
-		} else if (!params.status) {
-			conditions.push("ea.status = 'active'");
-		}
+			const conditions = [
+				"ea.aspect_id = ?",
+				"ea.agent_id = ?",
+				"COALESCE(ea.group_key, 'general') = ?",
+				"ea.claim_key = ?",
+			];
+			const args: Array<string | number> = [aspect.id, params.agentId, group.length > 0 ? group : "general", claim];
+			if (params.kind) {
+				conditions.push("ea.kind = ?");
+				args.push(params.kind);
+			}
+			if (params.status && params.status !== "all") {
+				conditions.push("ea.status = ?");
+				args.push(params.status);
+			} else if (!params.status) {
+				conditions.push("ea.status = 'active'");
+			}
 
-		const rows = db
-			.prepare(
-				`SELECT ea.*
+			const rows = db
+				.prepare(
+					`SELECT ea.*
 				 FROM entity_attributes ea
 				 WHERE ${conditions.join(" AND ")}
 				 ORDER BY ea.created_at DESC, ea.importance DESC
 				 LIMIT ? OFFSET ?`,
-			)
-			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
-		return {
-			entity,
-			aspect,
-			items: rows.map(rowToAttribute),
-		};
-	}, { siteToken: "knowledge-graph.ts:1096" });
+				)
+				.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
+			return {
+				entity,
+				aspect,
+				items: rows.map(rowToAttribute),
+			};
+		},
+		{ siteToken: "knowledge-graph.ts:1138" },
+	);
 }
 
 export async function listKnowledgeEntities(
@@ -1154,26 +1199,27 @@ export async function listKnowledgeEntities(
 		readonly offset: number;
 	},
 ): Promise<readonly KnowledgeEntityListItem[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const conditions = ["e.agent_id = ?"];
-		const args: Array<string | number> = [params.agentId];
-		conditions.push("COALESCE(e.status, 'active') = 'active'");
-		if (params.type) {
-			conditions.push("e.entity_type = ?");
-			args.push(params.type);
-		}
-		if (params.query) {
-			conditions.push("e.canonical_name LIKE ?");
-			args.push(`%${params.query.trim().toLowerCase()}%`);
-		}
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const conditions = ["e.agent_id = ?"];
+			const args: Array<string | number> = [params.agentId];
+			conditions.push("COALESCE(e.status, 'active') = 'active'");
+			if (params.type) {
+				conditions.push("e.entity_type = ?");
+				args.push(params.type);
+			}
+			if (params.query) {
+				conditions.push("e.canonical_name LIKE ?");
+				args.push(`%${params.query.trim().toLowerCase()}%`);
+			}
 
-		// Paginate entity IDs first, then compute counts only for the page.
-		// This avoids materializing GROUP BY + ORDER BY across every entity in
-		// the agent scope before LIMIT can apply, which is prohibitive on graphs
-		// with tens of thousands of entities. See Signet-AI/signetai#515.
-		const rows = db
-			.prepare(
-				`WITH page AS (
+			// Paginate entity IDs first, then compute counts only for the page.
+			// This avoids materializing GROUP BY + ORDER BY across every entity in
+			// the agent scope before LIMIT can apply, which is prohibitive on graphs
+			// with tens of thousands of entities. See Signet-AI/signetai#515.
+			const rows = db
+				.prepare(
+					`WITH page AS (
 					SELECT e.id
 					FROM entities e
 					WHERE ${conditions.join(" AND ")}
@@ -1220,17 +1266,19 @@ export async function listKnowledgeEntities(
 				 FROM page p
 				 JOIN entities e ON e.id = p.id
 				 ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC, e.updated_at DESC, e.name ASC`,
-			)
-			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
+				)
+				.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
 
-		return rows.map((row) => ({
-			entity: rowToEntity(row),
-			aspectCount: Number(row.aspect_count ?? 0),
-			attributeCount: Number(row.attribute_count ?? 0),
-			constraintCount: Number(row.constraint_count ?? 0),
-			dependencyCount: Number(row.dependency_count ?? 0),
-		}));
-	}, { siteToken: "knowledge-graph.ts:1157" });
+			return rows.map((row) => ({
+				entity: rowToEntity(row),
+				aspectCount: Number(row.aspect_count ?? 0),
+				attributeCount: Number(row.attribute_count ?? 0),
+				constraintCount: Number(row.constraint_count ?? 0),
+				dependencyCount: Number(row.dependency_count ?? 0),
+			}));
+		},
+		{ siteToken: "knowledge-graph.ts:1202" },
+	);
 }
 
 export async function getKnowledgeEntityDetail(
@@ -1238,14 +1286,15 @@ export async function getKnowledgeEntityDetail(
 	entityId: string,
 	agentId: string,
 ): Promise<KnowledgeEntityDetail | null> {
-	const row = await accessor.withReadDbAsync((db) => {
-		// Scalar subqueries per count avoid GROUP BY materialization across
-		// the (LEFT JOIN aspects x attributes x dependencies) cartesian, which
-		// produces the same pathological shape as listKnowledgeEntities even
-		// when filtered to a single entity id. See Signet-AI/signetai#515.
-		return db
-			.prepare(
-				`SELECT
+	const row = await accessor.withReadDbAsync(
+		(db) => {
+			// Scalar subqueries per count avoid GROUP BY materialization across
+			// the (LEFT JOIN aspects x attributes x dependencies) cartesian, which
+			// produces the same pathological shape as listKnowledgeEntities even
+			// when filtered to a single entity id. See Signet-AI/signetai#515.
+			return db
+				.prepare(
+					`SELECT
 					e.*,
 					(
 						SELECT COUNT(*) FROM entity_aspects asp
@@ -1291,9 +1340,11 @@ export async function getKnowledgeEntityDetail(
 				 FROM entities e
 				 WHERE e.id = ? AND e.agent_id = ?
 				   AND COALESCE(e.status, 'active') = 'active'`,
-			)
-			.get(entityId, agentId) as Record<string, unknown> | undefined;
-	}, { siteToken: "knowledge-graph.ts:1241" });
+				)
+				.get(entityId, agentId) as Record<string, unknown> | undefined;
+		},
+		{ siteToken: "knowledge-graph.ts:1289" },
+	);
 
 	if (!row) return null;
 	const structuralDensity = await getStructuralDensity(accessor, entityId, agentId);
@@ -1345,7 +1396,9 @@ export async function getEntityAspectsWithCounts(
 	entityId: string,
 	agentId: string,
 ): Promise<readonly AspectWithCounts[]> {
-	return await accessor.withReadDbAsync(async (db) => readEntityAspectsWithCounts(db, entityId, agentId), { siteToken: "knowledge-graph.ts:1348" });
+	return await accessor.withReadDbAsync(async (db) => readEntityAspectsWithCounts(db, entityId, agentId), {
+		siteToken: "knowledge-graph.ts:1399",
+	});
 }
 
 export async function getAttributesForAspectFiltered(
@@ -1360,38 +1413,41 @@ export async function getAttributesForAspectFiltered(
 		readonly offset: number;
 	},
 ): Promise<readonly EntityAttribute[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const conditions = [
-			"asp.entity_id = ?",
-			"asp.id = ?",
-			"asp.agent_id = ?",
-			"ea.agent_id = ?",
-			"COALESCE(e.status, 'active') = 'active'",
-			"COALESCE(asp.status, 'active') = 'active'",
-		];
-		const args: Array<string | number> = [params.entityId, params.aspectId, params.agentId, params.agentId];
-		if (params.kind) {
-			conditions.push("ea.kind = ?");
-			args.push(params.kind);
-		}
-		if (params.status) {
-			conditions.push("ea.status = ?");
-			args.push(params.status);
-		}
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const conditions = [
+				"asp.entity_id = ?",
+				"asp.id = ?",
+				"asp.agent_id = ?",
+				"ea.agent_id = ?",
+				"COALESCE(e.status, 'active') = 'active'",
+				"COALESCE(asp.status, 'active') = 'active'",
+			];
+			const args: Array<string | number> = [params.entityId, params.aspectId, params.agentId, params.agentId];
+			if (params.kind) {
+				conditions.push("ea.kind = ?");
+				args.push(params.kind);
+			}
+			if (params.status) {
+				conditions.push("ea.status = ?");
+				args.push(params.status);
+			}
 
-		const rows = db
-			.prepare(
-				`SELECT ea.*
+			const rows = db
+				.prepare(
+					`SELECT ea.*
 				 FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 				 WHERE ${conditions.join(" AND ")}
 				 ORDER BY ea.importance DESC, ea.created_at DESC
 				 LIMIT ? OFFSET ?`,
-			)
-			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
-		return rows.map(rowToAttribute);
-	}, { siteToken: "knowledge-graph.ts:1363" });
+				)
+				.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
+			return rows.map(rowToAttribute);
+		},
+		{ siteToken: "knowledge-graph.ts:1416" },
+	);
 }
 
 export async function getEntityDependenciesDetailed(
@@ -1402,17 +1458,18 @@ export async function getEntityDependenciesDetailed(
 		readonly direction: "incoming" | "outgoing" | "both";
 	},
 ): Promise<readonly KnowledgeDependencyEdge[]> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const directionClauses: string[] = [];
-		if (params.direction === "incoming" || params.direction === "both") {
-			directionClauses.push("dep.target_entity_id = ?");
-		}
-		if (params.direction === "outgoing" || params.direction === "both") {
-			directionClauses.push("dep.source_entity_id = ?");
-		}
-		const rows = db
-			.prepare(
-				`SELECT
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const directionClauses: string[] = [];
+			if (params.direction === "incoming" || params.direction === "both") {
+				directionClauses.push("dep.target_entity_id = ?");
+			}
+			if (params.direction === "outgoing" || params.direction === "both") {
+				directionClauses.push("dep.source_entity_id = ?");
+			}
+			const rows = db
+				.prepare(
+					`SELECT
 					dep.*,
 					src.name AS source_entity_name,
 					dst.name AS target_entity_name
@@ -1425,61 +1482,64 @@ export async function getEntityDependenciesDetailed(
 				   AND COALESCE(src.status, 'active') = 'active'
 				   AND COALESCE(dst.status, 'active') = 'active'
 				 ORDER BY dep.strength DESC, dep.updated_at DESC`,
-			)
-			.all(
-				params.agentId,
-				...(params.direction === "incoming" || params.direction === "both" ? [params.entityId] : []),
-				...(params.direction === "outgoing" || params.direction === "both" ? [params.entityId] : []),
-			) as Array<Record<string, unknown>>;
+				)
+				.all(
+					params.agentId,
+					...(params.direction === "incoming" || params.direction === "both" ? [params.entityId] : []),
+					...(params.direction === "outgoing" || params.direction === "both" ? [params.entityId] : []),
+				) as Array<Record<string, unknown>>;
 
-		return rows.map((row) => ({
-			id: row.id as string,
-			direction: row.source_entity_id === params.entityId ? "outgoing" : "incoming",
-			dependencyType: row.dependency_type as string,
-			strength: Number(row.strength ?? 0),
-			aspectId: (row.aspect_id as string) ?? null,
-			reason: typeof row.reason === "string" ? row.reason : null,
-			sourceEntityId: row.source_entity_id as string,
-			sourceEntityName: row.source_entity_name as string,
-			targetEntityId: row.target_entity_id as string,
-			targetEntityName: row.target_entity_name as string,
-			createdAt: row.created_at as string,
-			updatedAt: row.updated_at as string,
-		}));
-	}, { siteToken: "knowledge-graph.ts:1405" });
+			return rows.map((row) => ({
+				id: row.id as string,
+				direction: row.source_entity_id === params.entityId ? "outgoing" : "incoming",
+				dependencyType: row.dependency_type as string,
+				strength: Number(row.strength ?? 0),
+				aspectId: (row.aspect_id as string) ?? null,
+				reason: typeof row.reason === "string" ? row.reason : null,
+				sourceEntityId: row.source_entity_id as string,
+				sourceEntityName: row.source_entity_name as string,
+				targetEntityId: row.target_entity_id as string,
+				targetEntityName: row.target_entity_name as string,
+				createdAt: row.created_at as string,
+				updatedAt: row.updated_at as string,
+			}));
+		},
+		{ siteToken: "knowledge-graph.ts:1461" },
+	);
 }
 
 export async function getKnowledgeStats(accessor: DbAccessor, agentId: string): Promise<KnowledgeStats> {
-	return await accessor.withReadDbAsync(async (db) => {
-		// Drive the join from the (narrower) agent-scoped entities side rather
-		// than scanning every memory with a correlated EXISTS. Same result,
-		// dramatically smaller search space on large corpora.
-		// See Signet-AI/signetai#515.
-		const scopedMemoryRows = db
-			.prepare(
-				`SELECT COUNT(DISTINCT mem.memory_id) as n
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			// Drive the join from the (narrower) agent-scoped entities side rather
+			// than scanning every memory with a correlated EXISTS. Same result,
+			// dramatically smaller search space on large corpora.
+			// See Signet-AI/signetai#515.
+			const scopedMemoryRows = db
+				.prepare(
+					`SELECT COUNT(DISTINCT mem.memory_id) as n
 				 FROM memory_entity_mentions mem
 				 JOIN entities e ON e.id = mem.entity_id AND e.agent_id = ?
 				 JOIN memories m ON m.id = mem.memory_id AND m.is_deleted = 0
 				 WHERE COALESCE(e.status, 'active') = 'active'`,
-			)
-			.get(agentId) as { n: number };
-		const entityCount = db
-			.prepare("SELECT COUNT(*) as n FROM entities WHERE agent_id = ? AND COALESCE(status, 'active') = 'active'")
-			.get(agentId) as { n: number };
-		const aspectCount = db
-			.prepare(
-				`SELECT COUNT(*) as n
+				)
+				.get(agentId) as { n: number };
+			const entityCount = db
+				.prepare("SELECT COUNT(*) as n FROM entities WHERE agent_id = ? AND COALESCE(status, 'active') = 'active'")
+				.get(agentId) as { n: number };
+			const aspectCount = db
+				.prepare(
+					`SELECT COUNT(*) as n
 				 FROM entity_aspects asp
 				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 				 WHERE asp.agent_id = ?
 				   AND COALESCE(e.status, 'active') = 'active'
 				   AND COALESCE(asp.status, 'active') = 'active'`,
-			)
-			.get(agentId) as { n: number };
-		const attributeCount = db
-			.prepare(
-				`SELECT COUNT(*) as n
+				)
+				.get(agentId) as { n: number };
+			const attributeCount = db
+				.prepare(
+					`SELECT COUNT(*) as n
 				 FROM entity_attributes attr
 				 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
 				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
@@ -1488,11 +1548,11 @@ export async function getKnowledgeStats(accessor: DbAccessor, agentId: string): 
 				   AND attr.status = 'active'
 				   AND COALESCE(e.status, 'active') = 'active'
 				   AND COALESCE(asp.status, 'active') = 'active'`,
-			)
-			.get(agentId) as { n: number };
-		const constraintCount = db
-			.prepare(
-				`SELECT COUNT(*) as n
+				)
+				.get(agentId) as { n: number };
+			const constraintCount = db
+				.prepare(
+					`SELECT COUNT(*) as n
 				 FROM entity_attributes attr
 				 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
 				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
@@ -1501,11 +1561,11 @@ export async function getKnowledgeStats(accessor: DbAccessor, agentId: string): 
 				   AND attr.status = 'active'
 				   AND COALESCE(e.status, 'active') = 'active'
 				   AND COALESCE(asp.status, 'active') = 'active'`,
-			)
-			.get(agentId) as { n: number };
-		const dependencyCount = db
-			.prepare(
-				`SELECT COUNT(*) as n
+				)
+				.get(agentId) as { n: number };
+			const dependencyCount = db
+				.prepare(
+					`SELECT COUNT(*) as n
 				 FROM entity_dependencies dep
 				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
 				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
@@ -1513,11 +1573,11 @@ export async function getKnowledgeStats(accessor: DbAccessor, agentId: string): 
 				   AND COALESCE(dep.status, 'active') = 'active'
 				   AND COALESCE(src.status, 'active') = 'active'
 				   AND COALESCE(dst.status, 'active') = 'active'`,
-			)
-			.get(agentId) as { n: number };
-		const assignedMemoryCount = db
-			.prepare(
-				`SELECT COUNT(DISTINCT attr.memory_id) as n
+				)
+				.get(agentId) as { n: number };
+			const assignedMemoryCount = db
+				.prepare(
+					`SELECT COUNT(DISTINCT attr.memory_id) as n
 				 FROM entity_attributes attr
 				 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
 				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
@@ -1526,11 +1586,11 @@ export async function getKnowledgeStats(accessor: DbAccessor, agentId: string): 
 				   AND attr.memory_id IS NOT NULL
 				   AND COALESCE(e.status, 'active') = 'active'
 				   AND COALESCE(asp.status, 'active') = 'active'`,
-			)
-			.get(agentId) as { n: number };
-		const feedbackStats = db
-			.prepare(
-				`SELECT
+				)
+				.get(agentId) as { n: number };
+			const feedbackStats = db
+				.prepare(
+					`SELECT
 					COUNT(*) AS aspect_count,
 					COALESCE(AVG(weight), 0) AS avg_weight,
 					COUNT(CASE WHEN weight >= 1.0 THEN 1 END) AS max_weight_count,
@@ -1543,32 +1603,34 @@ export async function getKnowledgeStats(accessor: DbAccessor, agentId: string): 
 				 WHERE asp.agent_id = ?
 				   AND COALESCE(e.status, 'active') = 'active'
 				   AND COALESCE(asp.status, 'active') = 'active'`,
-			)
-			.get(agentId) as {
-			aspect_count: number;
-			avg_weight: number;
-			max_weight_count: number;
-			min_weight_count: number;
-			updated_last_7_days: number;
-		};
+				)
+				.get(agentId) as {
+				aspect_count: number;
+				avg_weight: number;
+				max_weight_count: number;
+				min_weight_count: number;
+				updated_last_7_days: number;
+			};
 
-		const coveragePercent =
-			scopedMemoryRows.n > 0 ? Math.round((assignedMemoryCount.n / scopedMemoryRows.n) * 1000) / 10 : 0;
+			const coveragePercent =
+				scopedMemoryRows.n > 0 ? Math.round((assignedMemoryCount.n / scopedMemoryRows.n) * 1000) / 10 : 0;
 
-		return {
-			entityCount: entityCount.n,
-			aspectCount: aspectCount.n,
-			attributeCount: attributeCount.n,
-			constraintCount: constraintCount.n,
-			dependencyCount: dependencyCount.n,
-			unassignedMemoryCount: Math.max(scopedMemoryRows.n - assignedMemoryCount.n, 0),
-			coveragePercent,
-			feedbackUpdatedAspectCount: Number(feedbackStats.updated_last_7_days ?? 0),
-			averageAspectWeight: Math.round(Number(feedbackStats.avg_weight ?? 0) * 1000) / 1000,
-			maxWeightAspectCount: Number(feedbackStats.max_weight_count ?? 0),
-			minWeightAspectCount: Number(feedbackStats.min_weight_count ?? 0),
-		};
-	}, { siteToken: "knowledge-graph.ts:1453" });
+			return {
+				entityCount: entityCount.n,
+				aspectCount: aspectCount.n,
+				attributeCount: attributeCount.n,
+				constraintCount: constraintCount.n,
+				dependencyCount: dependencyCount.n,
+				unassignedMemoryCount: Math.max(scopedMemoryRows.n - assignedMemoryCount.n, 0),
+				coveragePercent,
+				feedbackUpdatedAspectCount: Number(feedbackStats.updated_last_7_days ?? 0),
+				averageAspectWeight: Math.round(Number(feedbackStats.avg_weight ?? 0) * 1000) / 1000,
+				maxWeightAspectCount: Number(feedbackStats.max_weight_count ?? 0),
+				minWeightAspectCount: Number(feedbackStats.min_weight_count ?? 0),
+			};
+		},
+		{ siteToken: "knowledge-graph.ts:1512" },
+	);
 }
 
 export async function getEntityHealth(
@@ -1577,21 +1639,22 @@ export async function getEntityHealth(
 	since?: string,
 	minComparisons = 3,
 ): Promise<ReadonlyArray<EntityHealth>> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const predictorTable = db
-			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'predictor_comparisons'")
-			.get() as { name: string } | undefined;
-		if (!predictorTable) return [];
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const predictorTable = db
+				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'predictor_comparisons'")
+				.get() as { name: string } | undefined;
+			if (!predictorTable) return [];
 
-		const args: Array<string | number> = [agentId];
-		const sinceClause = typeof since === "string" && since.length > 0 ? " AND created_at >= ?" : "";
-		if (sinceClause && since !== undefined) {
-			args.push(since);
-		}
+			const args: Array<string | number> = [agentId];
+			const sinceClause = typeof since === "string" && since.length > 0 ? " AND created_at >= ?" : "";
+			if (sinceClause && since !== undefined) {
+				args.push(since);
+			}
 
-		const rows = db
-			.prepare(
-				`SELECT
+			const rows = db
+				.prepare(
+					`SELECT
 					focal_entity_id,
 					COALESCE(focal_entity_name, '') AS focal_entity_name,
 					predictor_won,
@@ -1602,63 +1665,65 @@ export async function getEntityHealth(
 				   AND focal_entity_id IS NOT NULL
 				   ${sinceClause}
 				 ORDER BY focal_entity_id ASC, created_at ASC`,
-			)
-			.all(...args) as Array<Record<string, unknown>>;
+				)
+				.all(...args) as Array<Record<string, unknown>>;
 
-		const grouped = new Map<
-			string,
-			Array<{
-				readonly entityName: string;
-				readonly predictorWon: number;
-				readonly margin: number;
-			}>
-		>();
-		for (const row of rows) {
-			if (typeof row.focal_entity_id !== "string") continue;
-			const bucket = grouped.get(row.focal_entity_id) ?? [];
-			bucket.push({
-				entityName:
-					typeof row.focal_entity_name === "string" && row.focal_entity_name.length > 0
-						? row.focal_entity_name
-						: row.focal_entity_id,
-				predictorWon: Number(row.predictor_won ?? 0),
-				margin: Number(row.margin ?? 0),
+			const grouped = new Map<
+				string,
+				Array<{
+					readonly entityName: string;
+					readonly predictorWon: number;
+					readonly margin: number;
+				}>
+			>();
+			for (const row of rows) {
+				if (typeof row.focal_entity_id !== "string") continue;
+				const bucket = grouped.get(row.focal_entity_id) ?? [];
+				bucket.push({
+					entityName:
+						typeof row.focal_entity_name === "string" && row.focal_entity_name.length > 0
+							? row.focal_entity_name
+							: row.focal_entity_id,
+					predictorWon: Number(row.predictor_won ?? 0),
+					margin: Number(row.margin ?? 0),
+				});
+				grouped.set(row.focal_entity_id, bucket);
+			}
+
+			const health: EntityHealth[] = [];
+			for (const [entityId, comparisons] of grouped) {
+				if (comparisons.length < minComparisons) continue;
+
+				const wins = comparisons.reduce((total, row) => total + (row.predictorWon > 0 ? 1 : 0), 0);
+				const avgMargin = comparisons.reduce((total, row) => total + row.margin, 0) / comparisons.length;
+				const midpoint = Math.max(1, Math.floor(comparisons.length / 2));
+				const firstHalf = comparisons.slice(0, midpoint);
+				const secondHalf = comparisons.slice(midpoint);
+				const firstHalfRate =
+					firstHalf.reduce((total, row) => total + (row.predictorWon > 0 ? 1 : 0), 0) / firstHalf.length;
+				const secondHalfRate =
+					secondHalf.length > 0
+						? secondHalf.reduce((total, row) => total + (row.predictorWon > 0 ? 1 : 0), 0) / secondHalf.length
+						: firstHalfRate;
+				const rateDelta = secondHalfRate - firstHalfRate;
+				health.push({
+					entityId,
+					entityName: comparisons[0]?.entityName ?? entityId,
+					comparisonCount: comparisons.length,
+					winRate: wins / comparisons.length,
+					avgMargin,
+					trend: rateDelta > 0.1 ? "improving" : rateDelta < -0.1 ? "declining" : "stable",
+				});
+			}
+
+			health.sort((a, b) => {
+				if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+				return b.comparisonCount - a.comparisonCount;
 			});
-			grouped.set(row.focal_entity_id, bucket);
-		}
-
-		const health: EntityHealth[] = [];
-		for (const [entityId, comparisons] of grouped) {
-			if (comparisons.length < minComparisons) continue;
-
-			const wins = comparisons.reduce((total, row) => total + (row.predictorWon > 0 ? 1 : 0), 0);
-			const avgMargin = comparisons.reduce((total, row) => total + row.margin, 0) / comparisons.length;
-			const midpoint = Math.max(1, Math.floor(comparisons.length / 2));
-			const firstHalf = comparisons.slice(0, midpoint);
-			const secondHalf = comparisons.slice(midpoint);
-			const firstHalfRate =
-				firstHalf.reduce((total, row) => total + (row.predictorWon > 0 ? 1 : 0), 0) / firstHalf.length;
-			const secondHalfRate =
-				secondHalf.length > 0
-					? secondHalf.reduce((total, row) => total + (row.predictorWon > 0 ? 1 : 0), 0) / secondHalf.length
-					: firstHalfRate;
-			const rateDelta = secondHalfRate - firstHalfRate;
-			health.push({
-				entityId,
-				entityName: comparisons[0]?.entityName ?? entityId,
-				comparisonCount: comparisons.length,
-				winRate: wins / comparisons.length,
-				avgMargin,
-				trend: rateDelta > 0.1 ? "improving" : rateDelta < -0.1 ? "declining" : "stable",
-			});
-		}
-
-		health.sort((a, b) => {
-			if (b.winRate !== a.winRate) return b.winRate - a.winRate;
-			return b.comparisonCount - a.comparisonCount;
-		});
-		return health;
-	}, { siteToken: "knowledge-graph.ts:1580" });
+			return health;
+		},
+		{ siteToken: "knowledge-graph.ts:1642" },
+	);
 }
 
 export async function propagateMemoryStatus(accessor: DbAccessor, agentId: string): Promise<number> {
@@ -1956,17 +2021,18 @@ export async function getKnowledgeGraphForConstellation(
 	const maxAttributesPerAspect = boundedInteger(options.maxAttributesPerAspect, 4, 1, 250);
 	const dependencyLimit = boundedInteger(options.dependencyLimit, 500, 1, 2000);
 
-	return await accessor.withReadDbAsync(async (db) => {
-		const visibleAgentIds = getConstellationVisibleAgentIds(db, agentId);
-		const agentPlaceholders = placeholders(visibleAgentIds.length);
-		const topologyPlaceholders = placeholders(SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.length);
-		// Keep the dashboard read path bounded. The previous implementation loaded
-		// every aspect, active attribute, and dependency for the agent, then filtered
-		// in JS. Large real workspaces can turn a simple Ontology tab visit into an
-		// event-loop/RSS spike big enough for systemd to SIGKILL the daemon.
-		const entityRows = db
-			.prepare(
-				`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const visibleAgentIds = getConstellationVisibleAgentIds(db, agentId);
+			const agentPlaceholders = placeholders(visibleAgentIds.length);
+			const topologyPlaceholders = placeholders(SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.length);
+			// Keep the dashboard read path bounded. The previous implementation loaded
+			// every aspect, active attribute, and dependency for the agent, then filtered
+			// in JS. Large real workspaces can turn a simple Ontology tab visit into an
+			// event-loop/RSS spike big enough for systemd to SIGKILL the daemon.
+			const entityRows = db
+				.prepare(
+					`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id
 				 FROM entities e
 				 WHERE e.agent_id IN (${agentPlaceholders})
 				   AND COALESCE(e.status, 'active') = 'active'
@@ -1995,28 +2061,28 @@ export async function getKnowledgeGraphForConstellation(
 				   )
 				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC
 				 LIMIT ?`,
-			)
-			.all(...visibleAgentIds, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit) as Array<Record<string, unknown>>;
+				)
+				.all(...visibleAgentIds, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit) as Array<Record<string, unknown>>;
 
-		const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
+			const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
 
-		if (entityIds.length === 0) {
-			return {
-				entities: [],
-				dependencies: [],
-				proposals: [],
-				metadata: {
-					dreaming: getConstellationDreamingSummary(db, agentId),
-					proposals: getConstellationProposalSummary(db, agentId),
-				},
-			};
-		}
+			if (entityIds.length === 0) {
+				return {
+					entities: [],
+					dependencies: [],
+					proposals: [],
+					metadata: {
+						dreaming: getConstellationDreamingSummary(db, agentId),
+						proposals: getConstellationProposalSummary(db, agentId),
+					},
+				};
+			}
 
-		const entityIdSet = new Set(entityIds);
-		const entityIdPlaceholders = placeholders(entityIds.length);
-		const aspectRows = db
-			.prepare(
-				`SELECT id, entity_id, name, weight, status, proposal_id
+			const entityIdSet = new Set(entityIds);
+			const entityIdPlaceholders = placeholders(entityIds.length);
+			const aspectRows = db
+				.prepare(
+					`SELECT id, entity_id, name, weight, status, proposal_id
 				 FROM (
 				   SELECT id, entity_id, name, weight, status, proposal_id,
 				          ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY weight DESC, name ASC) AS rn
@@ -2027,45 +2093,45 @@ export async function getKnowledgeGraphForConstellation(
 				 ) ranked_aspects
 				 WHERE rn <= ?
 				 ORDER BY entity_id ASC, weight DESC, name ASC`,
-			)
-			.all(...visibleAgentIds, ...entityIds, maxAspectsPerEntity) as Array<Record<string, unknown>>;
+				)
+				.all(...visibleAgentIds, ...entityIds, maxAspectsPerEntity) as Array<Record<string, unknown>>;
 
-		const aspectsByEntity = new Map<
-			string,
-			Array<{
-				id: string;
-				name: string;
-				weight: number;
-				status: "active" | "archived";
-				proposalId: string | null;
-			}>
-		>();
-		const aspectIds: string[] = [];
+			const aspectsByEntity = new Map<
+				string,
+				Array<{
+					id: string;
+					name: string;
+					weight: number;
+					status: "active" | "archived";
+					proposalId: string | null;
+				}>
+			>();
+			const aspectIds: string[] = [];
 
-		for (const row of aspectRows) {
-			const entityId = row.entity_id as string;
-			if (!entityIdSet.has(entityId)) continue;
-			const bucket = aspectsByEntity.get(entityId) ?? [];
-			if (bucket.length >= maxAspectsPerEntity) continue;
-			const aspectId = row.id as string;
-			aspectIds.push(aspectId);
-			bucket.push({
-				id: aspectId,
-				name: row.name as string,
-				weight: Number(row.weight ?? 0.5),
-				status: row.status === "archived" ? "archived" : "active",
-				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
-			});
-			aspectsByEntity.set(entityId, bucket);
-		}
+			for (const row of aspectRows) {
+				const entityId = row.entity_id as string;
+				if (!entityIdSet.has(entityId)) continue;
+				const bucket = aspectsByEntity.get(entityId) ?? [];
+				if (bucket.length >= maxAspectsPerEntity) continue;
+				const aspectId = row.id as string;
+				aspectIds.push(aspectId);
+				bucket.push({
+					id: aspectId,
+					name: row.name as string,
+					weight: Number(row.weight ?? 0.5),
+					status: row.status === "archived" ? "archived" : "active",
+					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+				});
+				aspectsByEntity.set(entityId, bucket);
+			}
 
-		const attrsByAspect = new Map<string, ConstellationAttribute[]>();
-		if (aspectIds.length > 0) {
-			const aspectIdSet = new Set(aspectIds);
-			const aspectIdPlaceholders = placeholders(aspectIds.length);
-			const attrRows = db
-				.prepare(
-					`SELECT id, aspect_id, content, kind, importance, memory_id, status,
+			const attrsByAspect = new Map<string, ConstellationAttribute[]>();
+			if (aspectIds.length > 0) {
+				const aspectIdSet = new Set(aspectIds);
+				const aspectIdPlaceholders = placeholders(aspectIds.length);
+				const attrRows = db
+					.prepare(
+						`SELECT id, aspect_id, content, kind, importance, memory_id, status,
 					        version, version_root_id, previous_attribute_id,
 					        group_key, claim_key, source_kind, source_path,
 					        proposal_id, proposal_evidence
@@ -2080,65 +2146,65 @@ export async function getKnowledgeGraphForConstellation(
 					 ) ranked_attributes
 					 WHERE rn <= ?
 					 ORDER BY aspect_id ASC, importance DESC`,
-				)
-				.all(...visibleAgentIds, ...aspectIds, maxAttributesPerAspect) as Array<Record<string, unknown>>;
+					)
+					.all(...visibleAgentIds, ...aspectIds, maxAttributesPerAspect) as Array<Record<string, unknown>>;
 
-			for (const row of attrRows) {
-				const aspectId = row.aspect_id as string;
-				if (!aspectIdSet.has(aspectId)) continue;
-				const bucket = attrsByAspect.get(aspectId) ?? [];
-				if (bucket.length >= maxAttributesPerAspect) continue;
-				bucket.push({
-					id: row.id as string,
-					content: row.content as string,
-					kind: row.kind as "attribute" | "constraint",
-					importance: Number(row.importance ?? 0.5),
-					memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
-					status: row.status as AttributeStatus,
-					version: typeof row.version === "number" ? row.version : 1,
-					versionRootId: typeof row.version_root_id === "string" ? row.version_root_id : null,
-					previousAttributeId: typeof row.previous_attribute_id === "string" ? row.previous_attribute_id : null,
-					groupKey: typeof row.group_key === "string" ? row.group_key : null,
-					claimKey: typeof row.claim_key === "string" ? row.claim_key : null,
-					sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
-					sourcePath: typeof row.source_path === "string" ? row.source_path : null,
-					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
-					proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
-				});
-				attrsByAspect.set(aspectId, bucket);
+				for (const row of attrRows) {
+					const aspectId = row.aspect_id as string;
+					if (!aspectIdSet.has(aspectId)) continue;
+					const bucket = attrsByAspect.get(aspectId) ?? [];
+					if (bucket.length >= maxAttributesPerAspect) continue;
+					bucket.push({
+						id: row.id as string,
+						content: row.content as string,
+						kind: row.kind as "attribute" | "constraint",
+						importance: Number(row.importance ?? 0.5),
+						memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
+						status: row.status as AttributeStatus,
+						version: typeof row.version === "number" ? row.version : 1,
+						versionRootId: typeof row.version_root_id === "string" ? row.version_root_id : null,
+						previousAttributeId: typeof row.previous_attribute_id === "string" ? row.previous_attribute_id : null,
+						groupKey: typeof row.group_key === "string" ? row.group_key : null,
+						claimKey: typeof row.claim_key === "string" ? row.claim_key : null,
+						sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+						sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+						proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+						proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
+					});
+					attrsByAspect.set(aspectId, bucket);
+				}
 			}
-		}
 
-		const entitiesById = new Map<string, string>();
-		const entitiesByName = new Map<string, string>();
-		const entities: ConstellationEntity[] = entityRows.map((row) => {
-			const eid = row.id as string;
-			const name = row.name as string;
-			entitiesById.set(eid, name);
-			entitiesByName.set(toCanonicalName(name), eid);
-			const aspects: ConstellationAspect[] = (aspectsByEntity.get(eid) ?? []).map((asp) => ({
-				id: asp.id,
-				name: asp.name,
-				weight: asp.weight,
-				status: asp.status,
-				proposalId: asp.proposalId,
-				attributes: attrsByAspect.get(asp.id) ?? [],
-			}));
-			return {
-				id: eid,
-				name,
-				entityType: row.entity_type as string,
-				mentions: typeof row.mentions === "number" ? row.mentions : 0,
-				pinned: row.pinned === 1,
-				status: row.status === "archived" ? "archived" : "active",
-				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
-				aspects,
-			};
-		});
+			const entitiesById = new Map<string, string>();
+			const entitiesByName = new Map<string, string>();
+			const entities: ConstellationEntity[] = entityRows.map((row) => {
+				const eid = row.id as string;
+				const name = row.name as string;
+				entitiesById.set(eid, name);
+				entitiesByName.set(toCanonicalName(name), eid);
+				const aspects: ConstellationAspect[] = (aspectsByEntity.get(eid) ?? []).map((asp) => ({
+					id: asp.id,
+					name: asp.name,
+					weight: asp.weight,
+					status: asp.status,
+					proposalId: asp.proposalId,
+					attributes: attrsByAspect.get(asp.id) ?? [],
+				}));
+				return {
+					id: eid,
+					name,
+					entityType: row.entity_type as string,
+					mentions: typeof row.mentions === "number" ? row.mentions : 0,
+					pinned: row.pinned === 1,
+					status: row.status === "archived" ? "archived" : "active",
+					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+					aspects,
+				};
+			});
 
-		const depRows = db
-			.prepare(
-				`SELECT source_entity_id, target_entity_id, dependency_type, strength, status, proposal_id, proposal_evidence
+			const depRows = db
+				.prepare(
+					`SELECT source_entity_id, target_entity_id, dependency_type, strength, status, proposal_id, proposal_evidence
 				 FROM entity_dependencies
 				 WHERE agent_id IN (${agentPlaceholders})
 				   AND COALESCE(status, 'active') = 'active'
@@ -2146,58 +2212,60 @@ export async function getKnowledgeGraphForConstellation(
 				   AND target_entity_id IN (${entityIdPlaceholders})
 				 ORDER BY strength DESC
 				 LIMIT ?`,
-			)
-			.all(...visibleAgentIds, ...entityIds, ...entityIds, dependencyLimit) as Array<Record<string, unknown>>;
+				)
+				.all(...visibleAgentIds, ...entityIds, ...entityIds, dependencyLimit) as Array<Record<string, unknown>>;
 
-		const dependencies: ConstellationDependency[] = depRows.map((row) => ({
-			sourceEntityId: row.source_entity_id as string,
-			targetEntityId: row.target_entity_id as string,
-			dependencyType: row.dependency_type as string,
-			strength: Number(row.strength ?? 0.5),
-			status: row.status === "archived" ? "archived" : "active",
-			proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
-			proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
-		}));
+			const dependencies: ConstellationDependency[] = depRows.map((row) => ({
+				sourceEntityId: row.source_entity_id as string,
+				targetEntityId: row.target_entity_id as string,
+				dependencyType: row.dependency_type as string,
+				strength: Number(row.strength ?? 0.5),
+				status: row.status === "archived" ? "archived" : "active",
+				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+				proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
+			}));
 
-		const proposalRows = db
-			.prepare(
-				`SELECT id, operation, payload, confidence, rationale, evidence,
+			const proposalRows = db
+				.prepare(
+					`SELECT id, operation, payload, confidence, rationale, evidence,
 				        source_kind, source_path, updated_at
 				 FROM ontology_proposals
 				 WHERE agent_id IN (${agentPlaceholders}) AND status = 'pending'
 				 ORDER BY updated_at DESC
 				 LIMIT 80`,
-			)
-			.all(...visibleAgentIds) as Array<Record<string, unknown>>;
-		const proposals: ConstellationProposal[] = proposalRows.map((row) => {
-			const payload = parseJsonRecord(row.payload);
-			const target = resolveProposalTargetEntity(payload, entitiesById, entitiesByName);
-			return {
-				id: row.id as string,
-				operation: row.operation as string,
-				confidence: Number(row.confidence ?? 0),
-				rationale: typeof row.rationale === "string" ? row.rationale : "",
-				evidenceCount: parseJsonArray(row.evidence).length,
-				sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
-				sourcePath: typeof row.source_path === "string" ? row.source_path : null,
-				updatedAt: row.updated_at as string,
-				targetEntityId: target.id,
-				targetEntityName: target.name,
-				targetAspectName: readStringValue(payload, ["aspect", "target_aspect", "aspect_name"]),
-				preview: previewFromProposalPayload(payload),
-			};
-		});
+				)
+				.all(...visibleAgentIds) as Array<Record<string, unknown>>;
+			const proposals: ConstellationProposal[] = proposalRows.map((row) => {
+				const payload = parseJsonRecord(row.payload);
+				const target = resolveProposalTargetEntity(payload, entitiesById, entitiesByName);
+				return {
+					id: row.id as string,
+					operation: row.operation as string,
+					confidence: Number(row.confidence ?? 0),
+					rationale: typeof row.rationale === "string" ? row.rationale : "",
+					evidenceCount: parseJsonArray(row.evidence).length,
+					sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+					sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+					updatedAt: row.updated_at as string,
+					targetEntityId: target.id,
+					targetEntityName: target.name,
+					targetAspectName: readStringValue(payload, ["aspect", "target_aspect", "aspect_name"]),
+					preview: previewFromProposalPayload(payload),
+				};
+			});
 
-		return {
-			entities,
-			dependencies,
-			proposals,
-			metadata: {
-				dreaming: getConstellationDreamingSummary(db, agentId),
-				proposals: getConstellationProposalSummary(db, agentId),
-			},
-		};
-	}, { siteToken: "knowledge-graph.ts:1959" });
+			return {
+				entities,
+				dependencies,
+				proposals,
+				metadata: {
+					dreaming: getConstellationDreamingSummary(db, agentId),
+					proposals: getConstellationProposalSummary(db, agentId),
+				},
+			};
+		},
+		{ siteToken: "knowledge-graph.ts:2024" },
+	);
 }
 
 export async function getStructuralDensity(
@@ -2205,47 +2273,50 @@ export async function getStructuralDensity(
 	entityId: string,
 	agentId: string,
 ): Promise<StructuralDensity> {
-	return await accessor.withReadDbAsync((db) => {
-		const aspects = db
-			.prepare(
-				`SELECT COUNT(*) as n FROM entity_aspects
+	return await accessor.withReadDbAsync(
+		(db) => {
+			const aspects = db
+				.prepare(
+					`SELECT COUNT(*) as n FROM entity_aspects
 				 WHERE entity_id = ? AND agent_id = ?`,
-			)
-			.get(entityId, agentId) as { n: number };
+				)
+				.get(entityId, agentId) as { n: number };
 
-		const attributes = db
-			.prepare(
-				`SELECT COUNT(*) as n FROM entity_attributes ea
+			const attributes = db
+				.prepare(
+					`SELECT COUNT(*) as n FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 				 WHERE asp.entity_id = ? AND asp.agent_id = ?
 				   AND ea.agent_id = ?
 				   AND ea.kind = 'attribute' AND ea.status = 'active'`,
-			)
-			.get(entityId, agentId, agentId) as { n: number };
+				)
+				.get(entityId, agentId, agentId) as { n: number };
 
-		const constraints = db
-			.prepare(
-				`SELECT COUNT(*) as n FROM entity_attributes ea
+			const constraints = db
+				.prepare(
+					`SELECT COUNT(*) as n FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 				 WHERE asp.entity_id = ? AND asp.agent_id = ?
 				   AND ea.agent_id = ?
 				   AND ea.kind = 'constraint' AND ea.status = 'active'`,
-			)
-			.get(entityId, agentId, agentId) as { n: number };
+				)
+				.get(entityId, agentId, agentId) as { n: number };
 
-		const dependencies = db
-			.prepare(
-				`SELECT COUNT(*) as n FROM entity_dependencies
+			const dependencies = db
+				.prepare(
+					`SELECT COUNT(*) as n FROM entity_dependencies
 				 WHERE (source_entity_id = ? OR target_entity_id = ?)
 				   AND agent_id = ?`,
-			)
-			.get(entityId, entityId, agentId) as { n: number };
+				)
+				.get(entityId, entityId, agentId) as { n: number };
 
-		return {
-			aspectCount: aspects.n,
-			attributeCount: attributes.n,
-			constraintCount: constraints.n,
-			dependencyCount: dependencies.n,
-		};
-	}, { siteToken: "knowledge-graph.ts:2208" });
+			return {
+				aspectCount: aspects.n,
+				attributeCount: attributes.n,
+				constraintCount: constraints.n,
+				dependencyCount: dependencies.n,
+			};
+		},
+		{ siteToken: "knowledge-graph.ts:2276" },
+	);
 }

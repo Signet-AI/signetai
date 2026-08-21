@@ -499,29 +499,32 @@ async function getSessionGapSummary(): Promise<string | undefined> {
 	if (!existsSync(getMemoryDbPath())) return undefined;
 
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			// The completion marker covers explicit ends and daemon recovery/TTL
-			// boundaries; all are settled session activity for this brief.
-			const lastSession = db.prepare("SELECT MAX(completed_at) as last_end FROM session_transcripts").get() as
-				| { last_end: string | null }
-				| undefined;
+		return await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				// The completion marker covers explicit ends and daemon recovery/TTL
+				// boundaries; all are settled session activity for this brief.
+				const lastSession = db.prepare("SELECT MAX(completed_at) as last_end FROM session_transcripts").get() as
+					| { last_end: string | null }
+					| undefined;
 
-			if (!lastSession?.last_end) return undefined;
+				if (!lastSession?.last_end) return undefined;
 
-			const lastEnd = lastSession.last_end;
+				const lastEnd = lastSession.last_end;
 
-			// Count new memories since last session
-			const memCount = db
-				.prepare("SELECT COUNT(*) as cnt FROM memories WHERE created_at > ? AND is_deleted = 0")
-				.get(lastEnd) as { cnt: number };
+				// Count new memories since last session
+				const memCount = db
+					.prepare("SELECT COUNT(*) as cnt FROM memories WHERE created_at > ? AND is_deleted = 0")
+					.get(lastEnd) as { cnt: number };
 
-			// Count sessions since last session
-			const sessionCount = db
-				.prepare("SELECT COUNT(*) as cnt FROM session_transcripts WHERE completed_at > ?")
-				.get(lastEnd) as { cnt: number };
+				// Count sessions since last session
+				const sessionCount = db
+					.prepare("SELECT COUNT(*) as cnt FROM session_transcripts WHERE completed_at > ?")
+					.get(lastEnd) as { cnt: number };
 
-			return `[since last session: ${memCount.cnt} new memories, ${sessionCount.cnt} sessions captured]`;
-		}, { siteToken: "hooks.ts:502" });
+				return `[since last session: ${memCount.cnt} new memories, ${sessionCount.cnt} sessions captured]`;
+			},
+			{ siteToken: "hooks.ts:502" },
+		);
 	} catch {
 		return undefined;
 	}
@@ -599,11 +602,12 @@ async function getRecentMemories(
 	if (!existsSync(getMemoryDbPath())) return [];
 
 	try {
-		const rows = await getDbAccessor().withReadDbAsync(async (db) => {
-			const scope = agentScope
-				? buildAgentScopeClause(agentScope.agentId, agentScope.readPolicy, agentScope.policyGroup)
-				: { sql: " AND m.visibility != 'archived'", args: [] };
-			const query = `
+		const rows = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const scope = agentScope
+					? buildAgentScopeClause(agentScope.agentId, agentScope.readPolicy, agentScope.policyGroup)
+					: { sql: " AND m.visibility != 'archived'", args: [] };
+				const query = `
         SELECT
           m.id, m.content, m.type, m.importance, m.created_at,
           (julianday('now') - julianday(m.created_at)) as age_days
@@ -616,22 +620,24 @@ async function getRecentMemories(
         LIMIT ?
       `;
 
-			const rows = db.prepare(query).all(...scope.args, limit) as Array<{
-				id: string;
-				content: string;
-				type: string;
-				importance: number;
-				created_at: string;
-			}>;
-			return rows.filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId: agentScope?.agentId ?? "default",
-					sourceKind: "memory",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			);
-		}, { siteToken: "hooks.ts:602" });
+				const rows = db.prepare(query).all(...scope.args, limit) as Array<{
+					id: string;
+					content: string;
+					type: string;
+					importance: number;
+					created_at: string;
+				}>;
+				return rows.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId: agentScope?.agentId ?? "default",
+						sourceKind: "memory",
+						sourceId: row.id,
+						content: row.content,
+					}),
+				);
+			},
+			{ siteToken: "hooks.ts:605" },
+		);
 
 		return rows.map((r) => ({
 			id: r.id,
@@ -807,20 +813,23 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	if (req.sessionKey && existsSync(getMemoryDbPath())) {
 		try {
 			const subagentCfg = memoryCfg.pipelineV2.subagents ?? { inheritContext: true, tailChars: 3000 };
-			const block = await getDbAccessor().withReadDbAsync(async (db) => {
-				const parent = resolveParentSession(db, {
-					harness: req.harness,
-					project: req.project,
-					sessionKey: req.sessionKey,
-					agentId: traversalAgentId,
-					harnessAgentId: req.harnessAgentId,
-					parentSessionKey: req.parentSessionKey,
-					parentKey: req.parentKey,
-					parentId: req.parentId,
-					parentID: req.parentID,
-				});
-				return parent ? assembleInheritedContextBlock(db, parent, subagentCfg) : null;
-			}, { siteToken: "hooks.ts:810" });
+			const block = await getDbAccessor().withReadDbAsync(
+				async (db) => {
+					const parent = resolveParentSession(db, {
+						harness: req.harness,
+						project: req.project,
+						sessionKey: req.sessionKey,
+						agentId: traversalAgentId,
+						harnessAgentId: req.harnessAgentId,
+						parentSessionKey: req.parentSessionKey,
+						parentKey: req.parentKey,
+						parentId: req.parentId,
+						parentID: req.parentID,
+					});
+					return parent ? assembleInheritedContextBlock(db, parent, subagentCfg) : null;
+				},
+				{ siteToken: "hooks.ts:816" },
+			);
 			inheritedSection = block ?? "";
 		} catch (error) {
 			logger.warn("hooks", "Sub-agent inherited context lookup failed (non-fatal)", {
@@ -882,12 +891,14 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	if (traversalEnabled) {
 		const _traversalStart = Date.now();
 		try {
-			const focal = await getDbAccessor().withReadDbAsync(async (db) =>
-				resolveFocalEntities(db, traversalAgentId, {
-					project: req.project,
-					sessionKey: req.sessionKey,
-				}),
-			{ siteToken: "hooks.ts:885" });
+			const focal = await getDbAccessor().withReadDbAsync(
+				async (db) =>
+					resolveFocalEntities(db, traversalAgentId, {
+						project: req.project,
+						sessionKey: req.sessionKey,
+					}),
+				{ siteToken: "hooks.ts:894" },
+			);
 			traversalFocalSource = focal.source;
 			traversalEntities = focal.entityIds.length;
 			traversalEntityNames = focal.entityNames;
@@ -895,7 +906,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			if (focal.entityIds.length > 0) {
 				const traversalResult = await traverseKnowledgeGraph(
 					focal.entityIds,
-					(readFn) => getDbAccessor().withReadDbAsync(readFn, { siteToken: "hooks.ts:898", operation: "hooks.graph-traversal" }),
+					(readFn) =>
+						getDbAccessor().withReadDbAsync(readFn, { siteToken: "hooks.ts:910", operation: "hooks.graph-traversal" }),
 					traversalAgentId,
 					traversalRuntimeCfg,
 				);

@@ -230,61 +230,64 @@ export async function applyRecallDedupeAsync<T extends RecallDedupeItem>(
 
 	const agentId = normalizeAgentId(opts.agentId);
 	try {
-		return await getDbAccessor().withWriteTxAsync((db) => {
-			if (!hasRecallDedupeTables(db)) {
-				return {
-					items: [...opts.items],
-					meta: { enabled: false, suppressed: 0, repeatedReturned: 0 },
-				};
-			}
+		return await getDbAccessor().withWriteTxAsync(
+			(db) => {
+				if (!hasRecallDedupeTables(db)) {
+					return {
+						items: [...opts.items],
+						meta: { enabled: false, suppressed: 0, repeatedReturned: 0 },
+					};
+				}
 
-			const epoch = currentEpoch(db, sessionKey, agentId);
-			if (opts.includeRecalled === true) {
-				const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
-				let repeatedReturned = 0;
-				const items = opts.items.map((item) => {
-					const repeated = recalled.has(`${itemKind(item.id)}\0${item.id}`);
-					if (repeated) repeatedReturned++;
-					if (!repeated) {
-						insertRecallEvent(db, { sessionKey, agentId, epoch, item, surface: opts.surface, mode: opts.mode });
-						return item;
+				const epoch = currentEpoch(db, sessionKey, agentId);
+				if (opts.includeRecalled === true) {
+					const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
+					let repeatedReturned = 0;
+					const items = opts.items.map((item) => {
+						const repeated = recalled.has(`${itemKind(item.id)}\0${item.id}`);
+						if (repeated) repeatedReturned++;
+						if (!repeated) {
+							insertRecallEvent(db, { sessionKey, agentId, epoch, item, surface: opts.surface, mode: opts.mode });
+							return item;
+						}
+						return opts.markRepeated ? opts.markRepeated(item) : item;
+					});
+					return {
+						items,
+						meta: { enabled: true, contextEpoch: epoch, suppressed: 0, repeatedReturned },
+					};
+				}
+
+				let suppressed = 0;
+				const items: T[] = [];
+				if (opts.claim) {
+					for (const item of opts.items) {
+						const claimed = insertRecallEvent(db, {
+							sessionKey,
+							agentId,
+							epoch,
+							item,
+							surface: opts.surface,
+							mode: opts.mode,
+						});
+						if (claimed) items.push(item);
+						else suppressed++;
 					}
-					return opts.markRepeated ? opts.markRepeated(item) : item;
-				});
+				} else {
+					const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
+					for (const item of opts.items) {
+						if (recalled.has(`${itemKind(item.id)}\0${item.id}`)) suppressed++;
+						else items.push(item);
+					}
+				}
+
 				return {
 					items,
-					meta: { enabled: true, contextEpoch: epoch, suppressed: 0, repeatedReturned },
+					meta: { enabled: true, contextEpoch: epoch, suppressed, repeatedReturned: 0 },
 				};
-			}
-
-			let suppressed = 0;
-			const items: T[] = [];
-			if (opts.claim) {
-				for (const item of opts.items) {
-					const claimed = insertRecallEvent(db, {
-						sessionKey,
-						agentId,
-						epoch,
-						item,
-						surface: opts.surface,
-						mode: opts.mode,
-					});
-					if (claimed) items.push(item);
-					else suppressed++;
-				}
-			} else {
-				const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
-				for (const item of opts.items) {
-					if (recalled.has(`${itemKind(item.id)}\0${item.id}`)) suppressed++;
-					else items.push(item);
-				}
-			}
-
-			return {
-				items,
-				meta: { enabled: true, contextEpoch: epoch, suppressed, repeatedReturned: 0 },
-			};
-		}, { siteToken: "session-recall-dedupe.ts:233" });
+			},
+			{ siteToken: "session-recall-dedupe.ts:233" },
+		);
 	} catch (error) {
 		logger.warn("memory", "Recall dedupe failed open", {
 			error: error instanceof Error ? error.message : String(error),
@@ -318,17 +321,20 @@ export async function advanceRecallContextEpochAsync(input: {
 	if (!sessionKey) return { advanced: false };
 	const agentId = normalizeAgentId(input.agentId);
 	try {
-		return await getDbAccessor().withWriteTxAsync((db) => {
-			if (!hasRecallDedupeTables(db)) return { advanced: false };
-			const next = currentEpoch(db, sessionKey, agentId) + 1;
-			db.prepare(
-				`INSERT OR IGNORE INTO session_context_epochs (
+		return await getDbAccessor().withWriteTxAsync(
+			(db) => {
+				if (!hasRecallDedupeTables(db)) return { advanced: false };
+				const next = currentEpoch(db, sessionKey, agentId) + 1;
+				db.prepare(
+					`INSERT OR IGNORE INTO session_context_epochs (
 					session_key, agent_id, context_epoch, reason, source_ref, created_at
 				) VALUES (?, ?, ?, ?, ?, ?)`,
-			).run(sessionKey, agentId, next, input.reason, input.sourceRef ?? null, new Date().toISOString());
-			const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
-			return { advanced: (changed?.count ?? 0) > 0, contextEpoch: next };
-		}, { siteToken: "session-recall-dedupe.ts:321" });
+				).run(sessionKey, agentId, next, input.reason, input.sourceRef ?? null, new Date().toISOString());
+				const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
+				return { advanced: (changed?.count ?? 0) > 0, contextEpoch: next };
+			},
+			{ siteToken: "session-recall-dedupe.ts:324" },
+		);
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
 			error: error instanceof Error ? error.message : String(error),
@@ -373,7 +379,7 @@ export function advanceRecallContextEpoch(input: {
 			).run(sessionKey, agentId, next, input.reason, input.sourceRef ?? null, new Date().toISOString());
 			const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
 			return { advanced: (changed?.count ?? 0) > 0, contextEpoch: next };
-		}, "session-recall-dedupe.ts:366");
+		}, "session-recall-dedupe.ts:372");
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
 			error: error instanceof Error ? error.message : String(error),

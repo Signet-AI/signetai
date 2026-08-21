@@ -75,10 +75,11 @@ export async function getStructuralFeatures(
 
 	if (memoryIds.length === 0) return featuresByMemoryId;
 
-	const primaryRows = await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT
+	const primaryRows = await accessor.withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT
 					ea.memory_id,
 					ea.kind,
 					ea.aspect_id,
@@ -94,15 +95,17 @@ export async function getStructuralFeatures(
 				   CASE ea.kind WHEN 'constraint' THEN 0 ELSE 1 END,
 				   ea.importance DESC,
 				   ea.created_at ASC`,
-			)
-			.all(...memoryIds, agentId) as ReadonlyArray<StructuralAttributeRow>;
+				)
+				.all(...memoryIds, agentId) as ReadonlyArray<StructuralAttributeRow>;
 
-		const byMemoryId = new Map<string, StructuralAttributeRow>();
-		for (const row of rows) {
-			byMemoryId.set(row.memory_id, choosePrimaryRow(byMemoryId.get(row.memory_id), row));
-		}
-		return byMemoryId;
-	}, { siteToken: "structural-features.ts:78" });
+			const byMemoryId = new Map<string, StructuralAttributeRow>();
+			for (const row of rows) {
+				byMemoryId.set(row.memory_id, choosePrimaryRow(byMemoryId.get(row.memory_id), row));
+			}
+			return byMemoryId;
+		},
+		{ siteToken: "structural-features.ts:78" },
+	);
 
 	const densityCache = new Map<string, number>();
 	for (const [memoryId, row] of primaryRows) {
@@ -158,17 +161,20 @@ export async function buildCandidateFeatures(
 		}
 	}
 	const structuralById = await getStructuralFeatures(accessor, candidateIds, agentId, sourceById);
-	const embeddedIds = await accessor.withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT DISTINCT source_id
+	const embeddedIds = await accessor.withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT DISTINCT source_id
 				 FROM embeddings
 				 WHERE source_type = 'memory'
 				   AND source_id IN (${buildPlaceholders(candidateIds.length)})`,
-			)
-			.all(...candidateIds) as ReadonlyArray<{ source_id: string }>;
-		return new Set(rows.map((row) => row.source_id));
-	}, { siteToken: "structural-features.ts:161" });
+				)
+				.all(...candidateIds) as ReadonlyArray<{ source_id: string }>;
+			return new Set(rows.map((row) => row.source_id));
+		},
+		{ siteToken: "structural-features.ts:164" },
+	);
 
 	const nowMs = Date.now();
 	const todAngle = (2 * Math.PI * sessionContext.timeOfDay) / 24;

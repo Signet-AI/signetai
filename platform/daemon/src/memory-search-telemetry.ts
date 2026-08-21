@@ -318,18 +318,21 @@ export async function listMemorySearchTelemetry(
 	const limit = query.limit ?? 100;
 	const offset = query.offset ?? 0;
 
-	return db.withReadDbAsync(async (r) => {
-		const rows = r
-			.prepare(
-				`SELECT id, created_at, route, agent_id, session_key, project, query,
+	return db.withReadDbAsync(
+		async (r) => {
+			const rows = r
+				.prepare(
+					`SELECT id, created_at, route, agent_id, session_key, project, query,
 				        keyword_query, filters_json, method, result_count, top_score,
 				        no_hits, duration_ms, timings_json, results_json, sources_json
 				 FROM memory_search_telemetry
 				 ${where}
 				 ORDER BY created_at DESC
 				 LIMIT ? OFFSET ?`,
-			)
-			.all(...args, limit, offset) as readonly MemorySearchTelemetryRow[];
-		return rows.map(rowToItem);
-	}, { siteToken: "memory-search-telemetry.ts:321" });
+				)
+				.all(...args, limit, offset) as readonly MemorySearchTelemetryRow[];
+			return rows.map(rowToItem);
+		},
+		{ siteToken: "memory-search-telemetry.ts:321" },
+	);
 }

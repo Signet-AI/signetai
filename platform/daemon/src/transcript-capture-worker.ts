@@ -460,22 +460,23 @@ export async function getTranscriptCaptureStatus(
 	dbAccessor: DbAccessor,
 	agentId?: string | null,
 ): Promise<TranscriptCaptureStatusSummary> {
-	return await dbAccessor.withReadDbAsync(async (db) => {
-		if (agentId) {
-			const row = db
-				.prepare(
-					`SELECT pending, processing, completed, failed, dead,
+	return await dbAccessor.withReadDbAsync(
+		async (db) => {
+			if (agentId) {
+				const row = db
+					.prepare(
+						`SELECT pending, processing, completed, failed, dead,
 					        oldest_pending_at AS oldestPendingAt, last_error AS lastError
 					 FROM transcript_capture_status
 					 WHERE agent_id = ?`,
-				)
-				.get(agentId) as TranscriptStatusProjectionRow | undefined;
-			// bun:sqlite returns null (not undefined) for a missing row.
-			return row == null ? EMPTY_TRANSCRIPT_STATUS : projectionRowToSummary(row);
-		}
-		const row = db
-			.prepare(
-				`SELECT COALESCE(SUM(pending), 0) AS pending,
+					)
+					.get(agentId) as TranscriptStatusProjectionRow | undefined;
+				// bun:sqlite returns null (not undefined) for a missing row.
+				return row == null ? EMPTY_TRANSCRIPT_STATUS : projectionRowToSummary(row);
+			}
+			const row = db
+				.prepare(
+					`SELECT COALESCE(SUM(pending), 0) AS pending,
 				        COALESCE(SUM(processing), 0) AS processing,
 				        COALESCE(SUM(completed), 0) AS completed,
 				        COALESCE(SUM(failed), 0) AS failed,
@@ -485,10 +486,12 @@ export async function getTranscriptCaptureStatus(
 				         WHERE last_error_at IS NOT NULL
 				         ORDER BY last_error_at DESC LIMIT 1) AS lastError
 				 FROM transcript_capture_status`,
-			)
-			.get() as TranscriptStatusProjectionRow | undefined;
-		return row == null ? EMPTY_TRANSCRIPT_STATUS : projectionRowToSummary(row);
-	}, { siteToken: "transcript-capture-worker.ts:463" });
+				)
+				.get() as TranscriptStatusProjectionRow | undefined;
+			return row == null ? EMPTY_TRANSCRIPT_STATUS : projectionRowToSummary(row);
+		},
+		{ siteToken: "transcript-capture-worker.ts:463" },
+	);
 }
 
 /** Read one agent-scoped capture receipt without exposing transcript content. */
@@ -497,19 +500,22 @@ export async function getTranscriptCaptureJobStatus(
 	agentId: string,
 	id: string,
 ): Promise<TranscriptCaptureJobReceipt | null> {
-	return await dbAccessor.withReadDbAsync(async (db) => {
-		const row = db
-			.prepare(
-				`SELECT id, status, error
+	return await dbAccessor.withReadDbAsync(
+		async (db) => {
+			const row = db
+				.prepare(
+					`SELECT id, status, error
 				 FROM transcript_capture_jobs
 				 WHERE id = ? AND agent_id = ?`,
-			)
-			.get(id, agentId) as { id?: unknown; status?: unknown; error?: unknown } | undefined;
-		if (typeof row?.id !== "string" || typeof row.status !== "string") return null;
-		return {
-			id: row.id,
-			status: row.status as TranscriptCaptureJobStatus,
-			error: typeof row.error === "string" ? row.error : null,
-		};
-	}, { siteToken: "transcript-capture-worker.ts:500" });
+				)
+				.get(id, agentId) as { id?: unknown; status?: unknown; error?: unknown } | undefined;
+			if (typeof row?.id !== "string" || typeof row.status !== "string") return null;
+			return {
+				id: row.id,
+				status: row.status as TranscriptCaptureJobStatus,
+				error: typeof row.error === "string" ? row.error : null,
+			};
+		},
+		{ siteToken: "transcript-capture-worker.ts:503" },
+	);
 }

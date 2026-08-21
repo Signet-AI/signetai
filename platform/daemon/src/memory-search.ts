@@ -630,7 +630,8 @@ async function applyRehearsalBoost(
 					last_accessed: string | null;
 					created_at: string;
 				}>,
-		{ siteToken: "memory-search.ts:619" });
+			{ siteToken: "memory-search.ts:619" },
+		);
 
 		const accessMap = new Map(accessRows.map((r) => [r.id, r]));
 		for (const s of scored) {
@@ -765,64 +766,70 @@ async function authorizeScoredCandidates(
 	// are safe to use in stages that read content or mutate access metadata.
 	const ids = [...new Set(scored.map((row) => row.id))];
 	if (ids.length === 0) return [];
-	const allowed = await getDbAccessor().withReadDbAsync(async (db) => {
-		const hasSafetyLedger = memoryContentSafetyTableExists(db);
-		const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
-		const safetyJoin = hasSafetyLedger
-			? `LEFT JOIN memory_content_safety AS mcs
+	const allowed = await getDbAccessor().withReadDbAsync(
+		async (db) => {
+			const hasSafetyLedger = memoryContentSafetyTableExists(db);
+			const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
+			const safetyJoin = hasSafetyLedger
+				? `LEFT JOIN memory_content_safety AS mcs
 					 ON mcs.agent_id = COALESCE(NULLIF(m.agent_id, ''), 'default')
 				AND mcs.source_kind = 'memory'
 				AND mcs.source_id = m.id`
-			: "";
-		const allowed = new Set<string>();
-		for (let offset = 0; offset < ids.length; offset += 400) {
-			const batch = ids.slice(offset, offset + 400);
-			const placeholders = batch.map(() => "?").join(", ");
-			const rows = db
-				.prepare(
-					`SELECT m.id, m.content${safetySelect}
+				: "";
+			const allowed = new Set<string>();
+			for (let offset = 0; offset < ids.length; offset += 400) {
+				const batch = ids.slice(offset, offset + 400);
+				const placeholders = batch.map(() => "?").join(", ");
+				const rows = db
+					.prepare(
+						`SELECT m.id, m.content${safetySelect}
 					 FROM memories m
 					 ${safetyJoin}
 					 WHERE m.id IN (${placeholders})
 					   AND m.is_deleted = 0
 					   ${memorySupersessionSql(db)}${filter.sql}
 					   ${hasSafetyLedger ? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))" : ""}`,
-				)
-				.all(...batch, ...filter.args) as Array<{
-				id: string;
-				content: string;
-				safety_status?: string;
-				context_eligible?: number;
-			}>;
-			for (const row of rows) {
-				if (
-					scanMemoryContent(row.content).contextEligible &&
-					(row.safety_status == null || (row.safety_status === "clean" && row.context_eligible === 1))
-				)
-					allowed.add(row.id);
+					)
+					.all(...batch, ...filter.args) as Array<{
+					id: string;
+					content: string;
+					safety_status?: string;
+					context_eligible?: number;
+				}>;
+				for (const row of rows) {
+					if (
+						scanMemoryContent(row.content).contextEligible &&
+						(row.safety_status == null || (row.safety_status === "clean" && row.context_eligible === 1))
+					)
+						allowed.add(row.id);
+				}
 			}
-		}
-		return allowed;
-	}, { siteToken: "memory-search.ts:768" });
+			return allowed;
+		},
+		{ siteToken: "memory-search.ts:769" },
+	);
 	return scored.filter((row) => allowed.has(row.id));
 }
 
 async function loadObservedScores(ids: readonly string[], agentId: string): Promise<Map<string, number>> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
-	return await getDbAccessor().withReadDbAsync(async (db) => {
-		const rows = db
-			.prepare(
-				`SELECT memory_id, AVG(agent_relevance_score) AS score
+	return await getDbAccessor().withReadDbAsync(
+		async (db) => {
+			const rows = db
+				.prepare(
+					`SELECT memory_id, AVG(agent_relevance_score) AS score
 				 FROM session_memories
 				 WHERE agent_id = ?
 				   AND memory_id IN (${placeholders})
 				   AND agent_relevance_score IS NOT NULL
 				 GROUP BY memory_id`,
-			)
-			.all(agentId, ...ids) as Array<{ memory_id: string; score: number }>;
-		return new Map(rows.map((row) => [row.memory_id, row.score]));
-	}, { siteToken: "memory-search.ts:813" });
+				)
+				.all(agentId, ...ids) as Array<{ memory_id: string; score: number }>;
+			return new Map(rows.map((row) => [row.memory_id, row.score]));
+		},
+		{ siteToken: "memory-search.ts:817" },
+	);
 }
 
 interface CurrentnessInfo {
@@ -841,10 +848,11 @@ function shortenCurrentnessContent(content: string): string {
 async function loadCurrentnessInfo(ids: readonly string[], agentId: string): Promise<Map<string, CurrentnessInfo>> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
-	const rows = await getDbAccessor().withReadDbAsync(async (db) => {
-		const queried = db
-			.prepare(
-				`SELECT
+	const rows = await getDbAccessor().withReadDbAsync(
+		async (db) => {
+			const queried = db
+				.prepare(
+					`SELECT
 						 ea.memory_id,
 						 ea.content,
 						 ea.status,
@@ -857,19 +865,21 @@ async function loadCurrentnessInfo(ids: readonly string[], agentId: string): Pro
 					   AND ea.agent_id = ?
 					   AND ea.status IN ('active', 'superseded')
 					 ORDER BY ea.importance DESC, ea.created_at DESC`,
-			)
-			.all(...ids, agentId) as Array<{
-			memory_id: string;
-			content: string;
-			status: string;
-			replacement_content: string | null;
-		}>;
-		return queried.filter(
-			(row) =>
-				scanMemoryContent(row.content).contextEligible &&
-				(row.replacement_content === null || scanMemoryContent(row.replacement_content).contextEligible),
-		);
-	}, { siteToken: "memory-search.ts:844" });
+				)
+				.all(...ids, agentId) as Array<{
+				memory_id: string;
+				content: string;
+				status: string;
+				replacement_content: string | null;
+			}>;
+			return queried.filter(
+				(row) =>
+					scanMemoryContent(row.content).contextEligible &&
+					(row.replacement_content === null || scanMemoryContent(row.replacement_content).contextEligible),
+			);
+		},
+		{ siteToken: "memory-search.ts:851" },
+	);
 
 	const mutable = new Map<
 		string,
@@ -1022,59 +1032,62 @@ async function buildSourceChunkVectorHits(
 	// rescue path for project-scoped recall until the index has that strong key.
 	if (project) return [];
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const hasAgentId = hasColumn(db, "embeddings", "agent_id");
-			const rows = db
-				.prepare(
-					`SELECT id, source_type, source_id, vector, chunk_text, created_at${hasAgentId ? ", agent_id" : ""}
+		return await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const hasAgentId = hasColumn(db, "embeddings", "agent_id");
+				const rows = db
+					.prepare(
+						`SELECT id, source_type, source_id, vector, chunk_text, created_at${hasAgentId ? ", agent_id" : ""}
 					 FROM embeddings
 					 WHERE source_type IN (?, ?)
 					   AND vector IS NOT NULL
 					   ${hasAgentId ? "AND agent_id = ?" : ""}`,
-				)
-				.all(
-					...(hasAgentId
-						? [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, agentId]
-						: [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE]),
-				) as Array<{
-				id: string;
-				source_type: string;
-				source_id: string;
-				vector: Buffer;
-				chunk_text: string;
-				created_at: string;
-			}>;
-			return rows
-				.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "source_chunk",
-						sourceId: row.id,
-						content: row.chunk_text,
-					}),
-				)
-				.flatMap((row) => {
-					const sourcePath = sourcePathFromChunkText(row.chunk_text);
-					return [
-						{
-							embeddingId: row.id,
-							sourceId: row.source_id,
-							sourceType: row.source_type,
-							sourcePath,
-							chunkText: row.chunk_text,
-							score: cosineSimilarity(
-								queryVec,
-								new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4),
-							),
-							createdAt: row.created_at,
-							project: null,
-						},
-					];
-				})
-				.filter((row) => row.score > 0 && !existingSourceIds.has(row.sourceId))
-				.sort((a, b) => b.score - a.score)
-				.slice(0, limit);
-		}, { siteToken: "memory-search.ts:1025" });
+					)
+					.all(
+						...(hasAgentId
+							? [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, agentId]
+							: [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE]),
+					) as Array<{
+					id: string;
+					source_type: string;
+					source_id: string;
+					vector: Buffer;
+					chunk_text: string;
+					created_at: string;
+				}>;
+				return rows
+					.filter((row) =>
+						isMemoryContentContextEligible(db, {
+							agentId,
+							sourceKind: "source_chunk",
+							sourceId: row.id,
+							content: row.chunk_text,
+						}),
+					)
+					.flatMap((row) => {
+						const sourcePath = sourcePathFromChunkText(row.chunk_text);
+						return [
+							{
+								embeddingId: row.id,
+								sourceId: row.source_id,
+								sourceType: row.source_type,
+								sourcePath,
+								chunkText: row.chunk_text,
+								score: cosineSimilarity(
+									queryVec,
+									new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4),
+								),
+								createdAt: row.created_at,
+								project: null,
+							},
+						];
+					})
+					.filter((row) => row.score > 0 && !existingSourceIds.has(row.sourceId))
+					.sort((a, b) => b.score - a.score)
+					.slice(0, limit);
+			},
+			{ siteToken: "memory-search.ts:1035" },
+		);
 	} catch (e) {
 		logger.warn("memory", "Source chunk vector recall failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
@@ -1193,125 +1206,128 @@ async function buildNativeArtifactRecallHits(
 	if (fts.length === 0) return [];
 
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const table = db
-				.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memory_artifacts_fts'`)
-				.get();
-			if (!table) return [];
+		return await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const table = db
+					.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memory_artifacts_fts'`)
+					.get();
+				if (!table) return [];
 
-			const parts = [
-				"SELECT ma.rowid, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project, ma.source_sha256,",
-				"COALESCE(ma.updated_at, ma.captured_at) AS updated_at, ma.content,",
-				"bm25(memory_artifacts_fts) AS rank",
-				"FROM memory_artifacts_fts",
-				"JOIN memory_artifacts ma ON ma.rowid = memory_artifacts_fts.rowid",
-				"WHERE memory_artifacts_fts MATCH ?",
-				"AND ma.agent_id = ?",
-				"AND (ma.source_kind LIKE 'native_%' OR ma.source_kind LIKE 'source_%')",
-				"AND COALESCE(ma.is_deleted, 0) = 0",
-				"AND ma.source_node_id = ?",
-				"AND ma.harness IS NOT NULL",
-			];
-			const args: unknown[] = [fts, params.agentId ?? "default", NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID];
-			if (params.project) {
-				parts.push("AND (ma.project = ? OR ma.project IS NULL)");
-				args.push(params.project);
-			}
-			parts.push("ORDER BY rank ASC, updated_at DESC LIMIT ?");
-			args.push(Math.max(2, Math.min(50, params.limit ?? 10) + existingSourceIds.size));
-
-			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
-				rowid: number;
-				source_id: string | null;
-				source_path: string;
-				source_kind: string;
-				harness: string | null;
-				project: string | null;
-				source_sha256: string | null;
-				updated_at: string;
-				content: string;
-				rank: number;
-			}>;
-			const safeRows = rows.filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId: params.agentId ?? "default",
-					sourceKind: "artifact",
-					sourceId: row.source_path,
-					content: `${row.source_path}\n${row.content}`,
-				}),
-			);
-
-			const mirroredHashes = new Set<string>();
-			if (params.sourceOnly !== true) {
-				const mirrorParts = [
-					"SELECT m.id, m.content, m.content_hash",
-					"FROM memories m",
-					"WHERE m.agent_id = ?",
-					"AND COALESCE(m.is_deleted, 0) = 0",
-					"AND COALESCE(m.visibility, 'global') != 'archived'",
-					"AND m.source_type = 'hermes-memory-write'",
+				const parts = [
+					"SELECT ma.rowid, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project, ma.source_sha256,",
+					"COALESCE(ma.updated_at, ma.captured_at) AS updated_at, ma.content,",
+					"bm25(memory_artifacts_fts) AS rank",
+					"FROM memory_artifacts_fts",
+					"JOIN memory_artifacts ma ON ma.rowid = memory_artifacts_fts.rowid",
+					"WHERE memory_artifacts_fts MATCH ?",
+					"AND ma.agent_id = ?",
+					"AND (ma.source_kind LIKE 'native_%' OR ma.source_kind LIKE 'source_%')",
+					"AND COALESCE(ma.is_deleted, 0) = 0",
+					"AND ma.source_node_id = ?",
+					"AND ma.harness IS NOT NULL",
 				];
-				const mirrorArgs: unknown[] = [params.agentId ?? "default"];
+				const args: unknown[] = [fts, params.agentId ?? "default", NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID];
 				if (params.project) {
-					mirrorParts.push("AND m.project = ?");
-					mirrorArgs.push(params.project);
-				} else {
-					mirrorParts.push("AND m.project IS NULL");
+					parts.push("AND (ma.project = ? OR ma.project IS NULL)");
+					args.push(params.project);
 				}
-				if (params.scope !== undefined) {
-					if (params.scope === null) {
-						mirrorParts.push("AND m.scope IS NULL");
-					} else {
-						mirrorParts.push("AND m.scope = ?");
-						mirrorArgs.push(params.scope);
-					}
-				} else {
-					mirrorParts.push("AND m.scope IS NULL");
-				}
-				const mirrorRows = db.prepare(mirrorParts.join("\n")).all(...mirrorArgs) as Array<{
-					id: string;
-					content: string;
-					content_hash: string | null;
-				}>;
-				for (const mirror of mirrorRows) {
-					if (
-						isMemoryContentContextEligible(db, {
-							agentId: params.agentId ?? "default",
-							sourceKind: "memory",
-							sourceId: mirror.id,
-							content: mirror.content,
-						}) &&
-						mirror.content_hash
-					) {
-						mirroredHashes.add(mirror.content_hash);
-					}
-				}
-			}
+				parts.push("ORDER BY rank ASC, updated_at DESC LIMIT ?");
+				args.push(Math.max(2, Math.min(50, params.limit ?? 10) + existingSourceIds.size));
 
-			const seenHermesHashes = new Set<string>();
-			const dedupedRows = safeRows.filter((row) => {
-				if (row.harness !== "hermes-agent") return true;
-				if (mirroredHashes.has(normalizeAndHashContent(row.content).contentHash)) return false;
-				if (!row.source_sha256) return true;
-				if (seenHermesHashes.has(row.source_sha256)) return false;
-				seenHermesHashes.add(row.source_sha256);
-				return true;
-			});
-			const maxRank = dedupedRows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
-			return dedupedRows
-				.map((row) => ({
-					rowid: row.rowid,
-					sourceId: row.source_id,
-					sourcePath: row.source_path,
-					sourceKind: row.source_kind,
-					harness: row.harness,
-					project: row.project,
-					updatedAt: row.updated_at,
-					content: transcriptExcerpt(row.content, query, 900),
-					rank: maxRank > 0 ? Math.abs(row.rank) / maxRank : 0.2,
-				}))
-				.filter((row) => row.content.length > 0 && !existingSourceIds.has(nativeArtifactPublicId(row)));
-		}, { siteToken: "memory-search.ts:1196" });
+				const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
+					rowid: number;
+					source_id: string | null;
+					source_path: string;
+					source_kind: string;
+					harness: string | null;
+					project: string | null;
+					source_sha256: string | null;
+					updated_at: string;
+					content: string;
+					rank: number;
+				}>;
+				const safeRows = rows.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId: params.agentId ?? "default",
+						sourceKind: "artifact",
+						sourceId: row.source_path,
+						content: `${row.source_path}\n${row.content}`,
+					}),
+				);
+
+				const mirroredHashes = new Set<string>();
+				if (params.sourceOnly !== true) {
+					const mirrorParts = [
+						"SELECT m.id, m.content, m.content_hash",
+						"FROM memories m",
+						"WHERE m.agent_id = ?",
+						"AND COALESCE(m.is_deleted, 0) = 0",
+						"AND COALESCE(m.visibility, 'global') != 'archived'",
+						"AND m.source_type = 'hermes-memory-write'",
+					];
+					const mirrorArgs: unknown[] = [params.agentId ?? "default"];
+					if (params.project) {
+						mirrorParts.push("AND m.project = ?");
+						mirrorArgs.push(params.project);
+					} else {
+						mirrorParts.push("AND m.project IS NULL");
+					}
+					if (params.scope !== undefined) {
+						if (params.scope === null) {
+							mirrorParts.push("AND m.scope IS NULL");
+						} else {
+							mirrorParts.push("AND m.scope = ?");
+							mirrorArgs.push(params.scope);
+						}
+					} else {
+						mirrorParts.push("AND m.scope IS NULL");
+					}
+					const mirrorRows = db.prepare(mirrorParts.join("\n")).all(...mirrorArgs) as Array<{
+						id: string;
+						content: string;
+						content_hash: string | null;
+					}>;
+					for (const mirror of mirrorRows) {
+						if (
+							isMemoryContentContextEligible(db, {
+								agentId: params.agentId ?? "default",
+								sourceKind: "memory",
+								sourceId: mirror.id,
+								content: mirror.content,
+							}) &&
+							mirror.content_hash
+						) {
+							mirroredHashes.add(mirror.content_hash);
+						}
+					}
+				}
+
+				const seenHermesHashes = new Set<string>();
+				const dedupedRows = safeRows.filter((row) => {
+					if (row.harness !== "hermes-agent") return true;
+					if (mirroredHashes.has(normalizeAndHashContent(row.content).contentHash)) return false;
+					if (!row.source_sha256) return true;
+					if (seenHermesHashes.has(row.source_sha256)) return false;
+					seenHermesHashes.add(row.source_sha256);
+					return true;
+				});
+				const maxRank = dedupedRows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
+				return dedupedRows
+					.map((row) => ({
+						rowid: row.rowid,
+						sourceId: row.source_id,
+						sourcePath: row.source_path,
+						sourceKind: row.source_kind,
+						harness: row.harness,
+						project: row.project,
+						updatedAt: row.updated_at,
+						content: transcriptExcerpt(row.content, query, 900),
+						rank: maxRank > 0 ? Math.abs(row.rank) / maxRank : 0.2,
+					}))
+					.filter((row) => row.content.length > 0 && !existingSourceIds.has(nativeArtifactPublicId(row)));
+			},
+			{ siteToken: "memory-search.ts:1209" },
+		);
 	} catch (e) {
 		logger.warn("memory", "Native artifact recall failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
@@ -1546,12 +1562,14 @@ export async function hybridRecall(
 	};
 	const getFocalEntities = async (agentId: string): Promise<ReturnType<typeof resolveFocalEntities>> => {
 		if (focalCache?.agentId === agentId) return focalCache.value;
-		const value = await getDbAccessor().withReadDbAsync(async (db) =>
-			resolveFocalEntities(db, agentId, {
-				queryTokens: getGraphQueryTokens(),
-				includePinned: false,
-			}),
-		{ siteToken: "memory-search.ts:1549" });
+		const value = await getDbAccessor().withReadDbAsync(
+			async (db) =>
+				resolveFocalEntities(db, agentId, {
+					queryTokens: getGraphQueryTokens(),
+					includePinned: false,
+				}),
+			{ siteToken: "memory-search.ts:1565" },
+		);
 		focalCache = { agentId, value };
 		return value;
 	};
@@ -1564,15 +1582,16 @@ export async function hybridRecall(
 	try {
 		timings.timeAsync("memory_fts", async () => {
 			if (keywordQuery.length === 0) return;
-			await getDbAccessor().withReadDbAsync(async (db) => {
-				// CROSS JOIN keeps SQLite from scanning memories first via
-				// low-selectivity filters before applying the FTS rowid match.
-				let ftsRows: Array<{ id: string; raw_score: number }> = [];
-				let ftsFailed = false;
-				try {
-					ftsRows = prepareTypedStatement<{ id: string; raw_score: number }>(
-						db,
-						`
+			await getDbAccessor().withReadDbAsync(
+				async (db) => {
+					// CROSS JOIN keeps SQLite from scanning memories first via
+					// low-selectivity filters before applying the FTS rowid match.
+					let ftsRows: Array<{ id: string; raw_score: number }> = [];
+					let ftsFailed = false;
+					try {
+						ftsRows = prepareTypedStatement<{ id: string; raw_score: number }>(
+							db,
+							`
         SELECT m.id, bm25(memories_fts) AS raw_score
         FROM memories_fts
         CROSS JOIN memories m ON memories_fts.rowid = m.rowid
@@ -1582,42 +1601,44 @@ export async function hybridRecall(
         ORDER BY raw_score
         LIMIT ?
       `,
-					).all(keywordQuery, ...filter.args, cfg.search.top_k);
-				} catch (error) {
-					ftsFailed = true;
-					logger.warn("memory", "FTS search failed; attempting lexical fallback", {
-						error: error instanceof Error ? error.message : String(error),
-					});
-				}
-
-				const addFtsScores = (rows: ReadonlyArray<{ id: string; raw_score: number }>): void => {
-					const rawScores = rows.map((r) => Math.abs(r.raw_score));
-					const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
-					const normalizer = maxRaw > 0 ? maxRaw : 1;
-					for (const row of rows) {
-						const normalised = Math.abs(row.raw_score) / normalizer;
-						bm25Map.set(row.id, normalised);
+						).all(keywordQuery, ...filter.args, cfg.search.top_k);
+					} catch (error) {
+						ftsFailed = true;
+						logger.warn("memory", "FTS search failed; attempting lexical fallback", {
+							error: error instanceof Error ? error.message : String(error),
+						});
 					}
-				};
 
-				const indexIncomplete = ftsFailed || isFtsIndexIncomplete();
-				if (indexIncomplete) {
-					lexicalSearchPartial = true;
-					lexicalFallbackAttempted = true;
-					logger.warn("memory", "FTS index incomplete; using bounded LIKE lexical fallback");
+					const addFtsScores = (rows: ReadonlyArray<{ id: string; raw_score: number }>): void => {
+						const rawScores = rows.map((r) => Math.abs(r.raw_score));
+						const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
+						const normalizer = maxRaw > 0 ? maxRaw : 1;
+						for (const row of rows) {
+							const normalised = Math.abs(row.raw_score) / normalizer;
+							bm25Map.set(row.id, normalised);
+						}
+					};
+
+					const indexIncomplete = ftsFailed || isFtsIndexIncomplete();
+					if (indexIncomplete) {
+						lexicalSearchPartial = true;
+						lexicalFallbackAttempted = true;
+						logger.warn("memory", "FTS index incomplete; using bounded LIKE lexical fallback");
+						addFtsScores(ftsRows);
+						const fallbackRows = readLexicalFallback(db, keywordQuery, filter, limit);
+						const fallbackTermCount = Math.max(1, lexicalFallbackTerms(keywordQuery).length);
+						for (const row of fallbackRows) {
+							const score = row.matches / fallbackTermCount;
+							bm25Map.set(row.id, Math.max(bm25Map.get(row.id) ?? 0, score));
+						}
+						return;
+					}
+
+					// Min-max normalize BM25 scores to [0,1] within the batch
 					addFtsScores(ftsRows);
-					const fallbackRows = readLexicalFallback(db, keywordQuery, filter, limit);
-					const fallbackTermCount = Math.max(1, lexicalFallbackTerms(keywordQuery).length);
-					for (const row of fallbackRows) {
-						const score = row.matches / fallbackTermCount;
-						bm25Map.set(row.id, Math.max(bm25Map.get(row.id) ?? 0, score));
-					}
-					return;
-				}
-
-				// Min-max normalize BM25 scores to [0,1] within the batch
-				addFtsScores(ftsRows);
-			}, { siteToken: "memory-search.ts:1567" });
+				},
+				{ siteToken: "memory-search.ts:1585" },
+			);
 		});
 	} catch (e) {
 		if (lexicalFallbackAttempted) {
@@ -1640,10 +1661,11 @@ export async function hybridRecall(
 		try {
 			timings.timeAsync("hints_fts", async () => {
 				if (keywordQuery.length === 0) return;
-				await getDbAccessor().withReadDbAsync(async (db) => {
-					// Keep memory_hints_fts first; the agent/scope indexes are much
-					// less selective than the FTS match on large workspaces.
-					const sql = `SELECT h.memory_id AS id, bm25(memory_hints_fts) AS raw_score
+				await getDbAccessor().withReadDbAsync(
+					async (db) => {
+						// Keep memory_hints_fts first; the agent/scope indexes are much
+						// less selective than the FTS match on large workspaces.
+						const sql = `SELECT h.memory_id AS id, bm25(memory_hints_fts) AS raw_score
 					   FROM memory_hints_fts
 					   CROSS JOIN memory_hints h ON memory_hints_fts.rowid = h.rowid
 					   CROSS JOIN memories m ON m.id = h.memory_id
@@ -1653,19 +1675,21 @@ export async function hybridRecall(
 					     ${memorySupersessionSql(db)}${filter.sql}
 					   ORDER BY raw_score LIMIT ?`;
 
-					const args = [keywordQuery, ...filter.args, cfg.search.top_k];
+						const args = [keywordQuery, ...filter.args, cfg.search.top_k];
 
-					const rows = prepareTypedStatement<{ id: string; raw_score: number }>(db, sql).all(...args);
+						const rows = prepareTypedStatement<{ id: string; raw_score: number }>(db, sql).all(...args);
 
-					// Normalize hint scores the same way as memory FTS
-					const rawScores = rows.map((r) => Math.abs(r.raw_score));
-					const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
-					const normalizer = maxRaw > 0 ? maxRaw : 1;
-					for (const row of rows) {
-						const hint = Math.abs(row.raw_score) / normalizer;
-						hintMap.set(row.id, Math.max(hintMap.get(row.id) ?? 0, hint));
-					}
-				}, { siteToken: "memory-search.ts:1643" });
+						// Normalize hint scores the same way as memory FTS
+						const rawScores = rows.map((r) => Math.abs(r.raw_score));
+						const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
+						const normalizer = maxRaw > 0 ? maxRaw : 1;
+						for (const row of rows) {
+							const hint = Math.abs(row.raw_score) / normalizer;
+							hintMap.set(row.id, Math.max(hintMap.get(row.id) ?? 0, hint));
+						}
+					},
+					{ siteToken: "memory-search.ts:1664" },
+				);
 			});
 		} catch (e) {
 			// memory_hints_fts may not exist on pre-038 databases — silent fallback
@@ -1700,16 +1724,19 @@ export async function hybridRecall(
 		const vecLimit = needsPostFilter || excludeAggregateRecall ? cfg.search.top_k * 2 : cfg.search.top_k;
 		try {
 			timings.timeAsync("vector_search", async () => {
-				await getDbAccessor().withReadDbAsync(async (db) => {
-					const vecResults = vectorSearch(db, queryVector, {
-						limit: vecLimit,
-						type: params.type,
-						excludeAggregateRecall,
-					});
-					for (const r of vecResults) {
-						vectorMap.set(r.id, r.score);
-					}
-				}, { siteToken: "memory-search.ts:1703" });
+				await getDbAccessor().withReadDbAsync(
+					async (db) => {
+						const vecResults = vectorSearch(db, queryVector, {
+							limit: vecLimit,
+							type: params.type,
+							excludeAggregateRecall,
+						});
+						for (const r of vecResults) {
+							vectorMap.set(r.id, r.score);
+						}
+					},
+					{ siteToken: "memory-search.ts:1727" },
+				);
 			});
 		} catch (e) {
 			logger.warn("memory", "Vector search failed, using keyword only", {
@@ -1732,14 +1759,16 @@ export async function hybridRecall(
 			const candidates = await timings.timeAsync(
 				"structured_path_candidates",
 				async () =>
-					await getDbAccessor().withReadDbAsync(async (db) =>
-						findStructuredPathCandidates(db, query, agentId, {
-							limit: cfg.search.top_k,
-							minScore,
-							filterSql: filter.sql,
-							filterArgs: filter.args,
-						}),
-					{ siteToken: "memory-search.ts:1735" }),
+					await getDbAccessor().withReadDbAsync(
+						async (db) =>
+							findStructuredPathCandidates(db, query, agentId, {
+								limit: cfg.search.top_k,
+								minScore,
+								filterSql: filter.sql,
+								filterArgs: filter.args,
+							}),
+						{ siteToken: "memory-search.ts:1762" },
+					),
 			);
 			for (const [id, score] of candidates) structuredCandidateMap.set(id, score);
 		} catch (e) {
@@ -1753,12 +1782,14 @@ export async function hybridRecall(
 				ontologyClaimCandidates = await timings.timeAsync(
 					"ontology_claim_candidates",
 					async () =>
-						await getDbAccessor().withReadDbAsync(async (db) =>
-							findStructuredClaimCandidates(db, query, agentId, {
-								limit: cfg.search.top_k,
-								minScore,
-							}),
-						{ siteToken: "memory-search.ts:1756" }),
+						await getDbAccessor().withReadDbAsync(
+							async (db) =>
+								findStructuredClaimCandidates(db, query, agentId, {
+									limit: cfg.search.top_k,
+									minScore,
+								}),
+							{ siteToken: "memory-search.ts:1785" },
+						),
 				);
 			} catch (e) {
 				logger.warn("memory", "Ontology claim candidate search failed (non-fatal)", {
@@ -1851,7 +1882,11 @@ export async function hybridRecall(
 						if (focal.entityIds.length > 0) {
 							const traversal = await traverseKnowledgeGraph(
 								focal.entityIds,
-								(readFn) => getDbAccessor().withReadDbAsync(readFn, { siteToken: "memory-search.ts:1854", operation: "memory.graph-traversal" }),
+								(readFn) =>
+									getDbAccessor().withReadDbAsync(readFn, {
+										siteToken: "memory-search.ts:1886",
+										operation: "memory.graph-traversal",
+									}),
 								agentId,
 								{
 									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
@@ -1886,7 +1921,8 @@ export async function hybridRecall(
 											source_id: string;
 											vector: Buffer | null;
 										}>,
-								{ siteToken: "memory-search.ts:1878" });
+									{ siteToken: "memory-search.ts:1913" },
+								);
 								const qv = queryVecF32;
 								for (const row of embRows) {
 									if (!row.vector) continue;
@@ -1962,9 +1998,10 @@ export async function hybridRecall(
 				const graphResult = await timings.timeAsync(
 					"graph_boost",
 					async () =>
-						await getDbAccessor().withReadDbAsync(async (db) =>
-							getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs, params.agentId),
-						{ siteToken: "memory-search.ts:1965" }),
+						await getDbAccessor().withReadDbAsync(
+							async (db) => getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs, params.agentId),
+							{ siteToken: "memory-search.ts:2001" },
+						),
 				);
 				if (graphResult.graphLinkedIds.size > 0) {
 					const gw = cfg.pipelineV2.graph.boostWeight;
@@ -1996,7 +2033,11 @@ export async function hybridRecall(
 						if (focal.entityIds.length > 0) {
 							const traversal = await traverseKnowledgeGraph(
 								focal.entityIds,
-								(readFn) => getDbAccessor().withReadDbAsync(readFn, { siteToken: "memory-search.ts:1999", operation: "memory.graph-traversal" }),
+								(readFn) =>
+									getDbAccessor().withReadDbAsync(readFn, {
+										siteToken: "memory-search.ts:2037",
+										operation: "memory.graph-traversal",
+									}),
 								agentId,
 								{
 									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
@@ -2048,7 +2089,8 @@ export async function hybridRecall(
 											id: string;
 											traversal_score: number;
 										}>,
-								{ siteToken: "memory-search.ts:2029" });
+									{ siteToken: "memory-search.ts:2070" },
+								);
 
 								for (const row of baseRows) {
 									const traversalScore = Math.max(minScore, Math.min(1, row.traversal_score));
@@ -2115,7 +2157,8 @@ export async function hybridRecall(
 								 WHERE id IN (${placeholders})`,
 							)
 							.all(...candidateIds) as Array<{ id: string; content: string }>,
-				{ siteToken: "memory-search.ts:2110" });
+					{ siteToken: "memory-search.ts:2152" },
+				);
 				for (const row of contentRows) {
 					const score = scoreTemporalTopicEvidence(query, row.content);
 					if (score <= 0) continue;
@@ -2152,14 +2195,16 @@ export async function hybridRecall(
 			const candidates = [...byId.values()];
 			try {
 				const agentId = params.agentId ?? "default";
-				const structured = await getDbAccessor().withReadDbAsync(async (db) =>
-					scoreStructuredPathEvidence(
-						db,
-						candidates.map((row) => row.id),
-						query,
-						agentId,
-					),
-				{ siteToken: "memory-search.ts:2155" });
+				const structured = await getDbAccessor().withReadDbAsync(
+					async (db) =>
+						scoreStructuredPathEvidence(
+							db,
+							candidates.map((row) => row.id),
+							query,
+							agentId,
+						),
+					{ siteToken: "memory-search.ts:2198" },
+				);
 				for (const [id, score] of structured) {
 					structuredEvidenceMap.set(id, score);
 				}
@@ -2194,7 +2239,8 @@ export async function hybridRecall(
 									 WHERE id IN (${placeholders})`,
 								)
 								.all(...coverageIds) as Array<{ id: string; content: string }>,
-					{ siteToken: "memory-search.ts:2189" });
+						{ siteToken: "memory-search.ts:2234" },
+					);
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
 
@@ -2243,7 +2289,8 @@ export async function hybridRecall(
 						id: string;
 						content: string;
 					}>,
-			{ siteToken: "memory-search.ts:2235" });
+				{ siteToken: "memory-search.ts:2281" },
+			);
 			const contentMap = new Map(contentRows.map((r) => [r.id, r.content]));
 
 			const candidates: RerankCandidate[] = topForRerank.map((s) => ({
@@ -2322,7 +2369,8 @@ export async function hybridRecall(
 						content: string;
 						type: string;
 					}>,
-			{ siteToken: "memory-search.ts:2313" });
+				{ siteToken: "memory-search.ts:2360" },
+			);
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
 
 			// Build entity linkage: memory_id -> set of entity_ids
@@ -2341,7 +2389,8 @@ export async function hybridRecall(
 							memory_id: string;
 							entity_id: string;
 						}>,
-				{ siteToken: "memory-search.ts:2333" });
+					{ siteToken: "memory-search.ts:2381" },
+				);
 
 				const entityIds = new Set<string>();
 				for (const row of links) {
@@ -2371,7 +2420,8 @@ export async function hybridRecall(
 								entity_id: string;
 								cnt: number;
 							}>,
-					{ siteToken: "memory-search.ts:2361" });
+						{ siteToken: "memory-search.ts:2410" },
+					);
 					for (const row of degreeRows) {
 						degrees.set(row.entity_id, row.cnt);
 					}
@@ -2615,19 +2665,22 @@ export async function hybridRecall(
 						scope: string | null;
 						agent_id: string | null;
 					}>,
-			{ siteToken: "memory-search.ts:2595" }),
+				{ siteToken: "memory-search.ts:2645" },
+			),
 	);
 
-	const safeRows = await getDbAccessor().withReadDbAsync(async (db) =>
-		rows.filter((row) =>
-			isMemoryContentContextEligible(db, {
-				agentId: row.agent_id?.trim() || "default",
-				sourceKind: "memory",
-				sourceId: row.id,
-				content: row.content,
-			}),
-		),
-	{ siteToken: "memory-search.ts:2621" });
+	const safeRows = await getDbAccessor().withReadDbAsync(
+		async (db) =>
+			rows.filter((row) =>
+				isMemoryContentContextEligible(db, {
+					agentId: row.agent_id?.trim() || "default",
+					sourceKind: "memory",
+					sourceId: row.id,
+					content: row.content,
+				}),
+			),
+		{ siteToken: "memory-search.ts:2672" },
+	);
 	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
 	// injected after assembly and the array is capped to `limit` at that point.
@@ -2814,25 +2867,26 @@ export async function hybridRecall(
 	if (decisionIds.length > 0 && cfg.pipelineV2.graph.enabled) {
 		const rationaleStart = performance.now();
 		try {
-			const supplementary = await getDbAccessor().withReadDbAsync(async (db) => {
-				// Find entities linked to decision memories
-				const dPlaceholders = decisionIds.map(() => "?").join(", ");
-				const entityIds = db
-					.prepare(
-						`SELECT DISTINCT entity_id FROM memory_entity_mentions
+			const supplementary = await getDbAccessor().withReadDbAsync(
+				async (db) => {
+					// Find entities linked to decision memories
+					const dPlaceholders = decisionIds.map(() => "?").join(", ");
+					const entityIds = db
+						.prepare(
+							`SELECT DISTINCT entity_id FROM memory_entity_mentions
 							 WHERE memory_id IN (${dPlaceholders})`,
-					)
-					.all(...decisionIds) as Array<{ entity_id: string }>;
+						)
+						.all(...decisionIds) as Array<{ entity_id: string }>;
 
-				if (entityIds.length === 0) return [];
+					if (entityIds.length === 0) return [];
 
-				// Find rationale memories linked to same entities
-				const ePlaceholders = entityIds.map(() => "?").join(", ");
-				const eIds = entityIds.map((r) => r.entity_id);
+					// Find rationale memories linked to same entities
+					const ePlaceholders = entityIds.map(() => "?").join(", ");
+					const eIds = entityIds.map((r) => r.entity_id);
 
-				const queried = db
-					.prepare(
-						`SELECT DISTINCT m.id, m.content, m.type, m.tags, m.pinned,
+					const queried = db
+						.prepare(
+							`SELECT DISTINCT m.id, m.content, m.type, m.tags, m.pinned,
 						        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
 							 FROM memory_entity_mentions mem
 							 JOIN memories m ON m.id = mem.memory_id
@@ -2842,30 +2896,32 @@ export async function hybridRecall(
 							   ${memorySupersessionSql(db)}
 							   ${filter.sql}
 							 LIMIT 10`,
-					)
-					.all(...eIds, ...filter.args) as Array<{
-					id: string;
-					content: string;
-					type: string;
-					tags: string | null;
-					pinned: number;
-					importance: number;
-					who: string;
-					project: string | null;
-					created_at: string;
-					visibility?: string | null;
-					scope?: string | null;
-					agent_id: string | null;
-				}>;
-				return queried.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId: row.agent_id?.trim() || "default",
-						sourceKind: "memory",
-						sourceId: row.id,
-						content: row.content,
-					}),
-				);
-			}, { siteToken: "memory-search.ts:2817" });
+						)
+						.all(...eIds, ...filter.args) as Array<{
+						id: string;
+						content: string;
+						type: string;
+						tags: string | null;
+						pinned: number;
+						importance: number;
+						who: string;
+						project: string | null;
+						created_at: string;
+						visibility?: string | null;
+						scope?: string | null;
+						agent_id: string | null;
+					}>;
+					return queried.filter((row) =>
+						isMemoryContentContextEligible(db, {
+							agentId: row.agent_id?.trim() || "default",
+							sourceKind: "memory",
+							sourceId: row.id,
+							content: row.content,
+						}),
+					);
+				},
+				{ siteToken: "memory-search.ts:2870" },
+			);
 
 			for (const r of supplementary) {
 				if (results.length >= limit) break;
@@ -2911,87 +2967,90 @@ export async function hybridRecall(
 			if (queryTokens.length > 0) {
 				const agentId = params.agentId ?? "default";
 				const focal = await getFocalEntities(agentId);
-				const ctx = await getDbAccessor().withReadDbAsync(async (db) => {
-					if (focal.entityIds.length === 0) return null;
+				const ctx = await getDbAccessor().withReadDbAsync(
+					async (db) => {
+						if (focal.entityIds.length === 0) return null;
 
-					// Project/scope-constrained recall should not let broad focal
-					// entities pull in structural context from outside that slice.
-					let eids = focal.entityIds;
-					if (params.scope !== undefined || params.project) {
-						const ph = eids.map(() => "?").join(", ");
-						const sr = db
-							.prepare(
-								`SELECT DISTINCT mem.entity_id
+						// Project/scope-constrained recall should not let broad focal
+						// entities pull in structural context from outside that slice.
+						let eids = focal.entityIds;
+						if (params.scope !== undefined || params.project) {
+							const ph = eids.map(() => "?").join(", ");
+							const sr = db
+								.prepare(
+									`SELECT DISTINCT mem.entity_id
 								 FROM memory_entity_mentions mem
 								 JOIN memories m ON m.id = mem.memory_id
 								 WHERE mem.entity_id IN (${ph})
 								   AND m.is_deleted = 0${memorySupersessionSql(db)}${filter.sql}`,
-							)
-							.all(...eids, ...filter.args) as Array<{ entity_id: string }>;
-						eids = sr.map((r) => r.entity_id);
-						if (eids.length === 0) return null;
-					}
+								)
+								.all(...eids, ...filter.args) as Array<{ entity_id: string }>;
+							eids = sr.map((r) => r.entity_id);
+							if (eids.length === 0) return null;
+						}
 
-					const placeholders = eids.map(() => "?").join(", ");
-					const entities = db
-						.prepare(
-							`SELECT id, name, entity_type FROM entities
+						const placeholders = eids.map(() => "?").join(", ");
+						const entities = db
+							.prepare(
+								`SELECT id, name, entity_type FROM entities
 							 WHERE id IN (${placeholders})`,
-						)
-						.all(...eids) as Array<{
-						id: string;
-						name: string;
-						entity_type: string;
-					}>;
+							)
+							.all(...eids) as Array<{
+							id: string;
+							name: string;
+							entity_type: string;
+						}>;
 
-					const structured = entities
-						.map((ent) => {
-							const aspects = db
-								.prepare(
-									`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
+						const structured = entities
+							.map((ent) => {
+								const aspects = db
+									.prepare(
+										`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
 								 WHERE entity_id = ? AND agent_id = ?
 								 ORDER BY weight DESC LIMIT 10`,
-								)
-								.all(ent.id, agentId) as Array<{ id: string; name: string }>;
+									)
+									.all(ent.id, agentId) as Array<{ id: string; name: string }>;
 
-							return {
-								name: ent.name,
-								type: ent.entity_type,
-								aspects: aspects
-									.map((asp) => {
-										const attrs = db
-											.prepare(
-												`SELECT content, status, importance, memory_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
+								return {
+									name: ent.name,
+									type: ent.entity_type,
+									aspects: aspects
+										.map((asp) => {
+											const attrs = db
+												.prepare(
+													`SELECT content, status, importance, memory_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
 									 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
 										 ORDER BY importance DESC LIMIT 5`,
-											)
-											.all(asp.id, agentId) as Array<{
-											content: string;
-											status: string;
-											importance: number;
-											memory_id: string | null;
-										}>;
-										return {
-											name: asp.name,
-											attributes: attrs.filter((attr) =>
-												attr.memory_id
-													? isMemoryContentContextEligible(db, {
-															agentId,
-															sourceKind: "memory",
-															sourceId: attr.memory_id,
-															content: attr.content,
-														})
-													: scanMemoryContent(attr.content).contextEligible,
-											),
-										};
-									})
-									.filter((a) => a.attributes.length > 0),
-							};
-						})
-						.filter((e) => e.aspects.length > 0);
+												)
+												.all(asp.id, agentId) as Array<{
+												content: string;
+												status: string;
+												importance: number;
+												memory_id: string | null;
+											}>;
+											return {
+												name: asp.name,
+												attributes: attrs.filter((attr) =>
+													attr.memory_id
+														? isMemoryContentContextEligible(db, {
+																agentId,
+																sourceKind: "memory",
+																sourceId: attr.memory_id,
+																content: attr.content,
+															})
+														: scanMemoryContent(attr.content).contextEligible,
+												),
+											};
+										})
+										.filter((a) => a.attributes.length > 0),
+								};
+							})
+							.filter((e) => e.aspects.length > 0);
 
-					return { eids, structured };
-				}, { siteToken: "memory-search.ts:2914" });
+						return { eids, structured };
+					},
+					{ siteToken: "memory-search.ts:2970" },
+				);
 
 				if (ctx) {
 					entityContext = ctx.structured;
@@ -3017,9 +3076,10 @@ export async function hybridRecall(
 		try {
 			const agentId = params.agentId ?? "default";
 			const cap = Math.max(3, Math.ceil(limit * 0.3));
-			const blocks = await getDbAccessor().withReadDbAsync(async (db) =>
-				constructContextBlocks(db, agentId, focalEids, cap),
-			{ siteToken: "memory-search.ts:3020" });
+			const blocks = await getDbAccessor().withReadDbAsync(
+				async (db) => constructContextBlocks(db, agentId, focalEids, cap),
+				{ siteToken: "memory-search.ts:3079" },
+			);
 			const now = new Date().toISOString();
 			const minReal = results.length > 0 ? Math.min(...results.map((r) => r.score)) : 0.5;
 			const maxConstructed = Math.max(0.01, minReal - 0.01);

@@ -837,7 +837,8 @@ export function createTelemetryCollector(
 					 FROM telemetry_delivery_state WHERE id = 1`,
 						)
 						.get() as TelemetryDeliveryState | undefined,
-			{ siteToken: "telemetry.ts:827" });
+				{ siteToken: "telemetry.ts:827" },
+			);
 			if (row) {
 				droppedEventCount = Math.max(droppedEventCount, row.droppedEventCount ?? 0);
 				return row;
@@ -860,24 +861,27 @@ export function createTelemetryCollector(
 
 	async function refreshPersistedQueue(): Promise<void> {
 		try {
-			const queue = await db.withReadDbAsync(async (r) => {
-				const pending = r
-					.prepare(
-						`SELECT COUNT(*) AS count, MIN(timestamp) AS oldestTimestamp
+			const queue = await db.withReadDbAsync(
+				async (r) => {
+					const pending = r
+						.prepare(
+							`SELECT COUNT(*) AS count, MIN(timestamp) AS oldestTimestamp
 						 FROM telemetry_events WHERE source = 'daemon' AND sent_to_posthog = 0`,
-					)
-					.get() as { count?: number; oldestTimestamp?: string | null } | undefined;
-				const latest = r
-					.prepare(
-						"SELECT MAX(timestamp) AS timestamp FROM telemetry_events WHERE source = 'daemon' AND event <> 'telemetry.health'",
-					)
-					.get() as { timestamp?: string | null } | undefined;
-				return {
-					count: pending?.count ?? 0,
-					oldestTimestamp: pending?.oldestTimestamp ?? null,
-					lastTimestamp: latest?.timestamp ?? null,
-				};
-			}, { siteToken: "telemetry.ts:863" });
+						)
+						.get() as { count?: number; oldestTimestamp?: string | null } | undefined;
+					const latest = r
+						.prepare(
+							"SELECT MAX(timestamp) AS timestamp FROM telemetry_events WHERE source = 'daemon' AND event <> 'telemetry.health'",
+						)
+						.get() as { timestamp?: string | null } | undefined;
+					return {
+						count: pending?.count ?? 0,
+						oldestTimestamp: pending?.oldestTimestamp ?? null,
+						lastTimestamp: latest?.timestamp ?? null,
+					};
+				},
+				{ siteToken: "telemetry.ts:864" },
+			);
 			persistedQueueCount = queue.count;
 			persistedOldestTimestamp = queue.oldestTimestamp;
 			lastDaemonEventTimestamp = queue.lastTimestamp;
@@ -1594,48 +1598,51 @@ export function createTelemetryCollector(
 
 		async query(opts): Promise<readonly TelemetryEvent[]> {
 			try {
-				return await db.withReadDbAsync(async (r) => {
-					const conditions: string[] = [];
-					const params: unknown[] = [];
+				return await db.withReadDbAsync(
+					async (r) => {
+						const conditions: string[] = [];
+						const params: unknown[] = [];
 
-					if (opts?.event) {
-						conditions.push("event = ?");
-						params.push(opts.event);
-					}
-					if (opts?.since) {
-						conditions.push("timestamp >= ?");
-						params.push(opts.since);
-					}
-					if (opts?.until) {
-						conditions.push("timestamp <= ?");
-						params.push(opts.until);
-					}
+						if (opts?.event) {
+							conditions.push("event = ?");
+							params.push(opts.event);
+						}
+						if (opts?.since) {
+							conditions.push("timestamp >= ?");
+							params.push(opts.since);
+						}
+						if (opts?.until) {
+							conditions.push("timestamp <= ?");
+							params.push(opts.until);
+						}
 
-					const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-					const limit = opts?.limit ?? 100;
+						const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+						const limit = opts?.limit ?? 100;
 
-					const rows = r
-						.prepare(
-							`SELECT id, event, timestamp, properties
+						const rows = r
+							.prepare(
+								`SELECT id, event, timestamp, properties
 							 FROM telemetry_events
 							 ${where}
 							 ORDER BY timestamp DESC
 							 LIMIT ?`,
-						)
-						.all(...params, limit) as unknown as readonly {
-						id: string;
-						event: string;
-						timestamp: string;
-						properties: string;
-					}[];
+							)
+							.all(...params, limit) as unknown as readonly {
+							id: string;
+							event: string;
+							timestamp: string;
+							properties: string;
+						}[];
 
-					return rows.map((row) => ({
-						id: row.id,
-						event: row.event as TelemetryEventType,
-						timestamp: row.timestamp,
-						properties: JSON.parse(row.properties) as TelemetryProperties,
-					}));
-				}, { siteToken: "telemetry.ts:1597" });
+						return rows.map((row) => ({
+							id: row.id,
+							event: row.event as TelemetryEventType,
+							timestamp: row.timestamp,
+							properties: JSON.parse(row.properties) as TelemetryProperties,
+						}));
+					},
+					{ siteToken: "telemetry.ts:1601" },
+				);
 			} catch {
 				return [];
 			}

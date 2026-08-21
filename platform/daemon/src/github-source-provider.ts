@@ -473,21 +473,25 @@ async function purgeStaleGitHubArtifacts(
 				rowid: number;
 				source_path: string;
 			}>,
-	{ siteToken: "github-source-provider.ts:460" });
+		{ siteToken: "github-source-provider.ts:460" },
+	);
 	for (const row of rows) {
 		if (seenPaths.has(row.source_path)) continue;
 		await purgeSourceArtifactStructureAsync({ agentId, sourceId, sourcePath: row.source_path });
 	}
-	await getDbAccessor().withWriteTxAsync((db) => {
-		for (const row of rows) {
-			if (seenPaths.has(row.source_path)) continue;
-			countChanges(
-				db
-					.prepare("UPDATE memory_artifacts SET is_deleted = 1, updated_at = ? WHERE rowid = ?")
-					.run(syncStartedAt, row.rowid),
-			);
-		}
-	}, { siteToken: "github-source-provider.ts:481" });
+	await getDbAccessor().withWriteTxAsync(
+		(db) => {
+			for (const row of rows) {
+				if (seenPaths.has(row.source_path)) continue;
+				countChanges(
+					db
+						.prepare("UPDATE memory_artifacts SET is_deleted = 1, updated_at = ? WHERE rowid = ?")
+						.run(syncStartedAt, row.rowid),
+				);
+			}
+		},
+		{ siteToken: "github-source-provider.ts:482" },
+	);
 }
 
 async function purgeStaleGitHubFailureArtifacts(
@@ -495,11 +499,12 @@ async function purgeStaleGitHubFailureArtifacts(
 	agentId: string,
 	syncStartedAt: string,
 ): Promise<void> {
-	await getDbAccessor().withWriteTxAsync((db) => {
-		countChanges(
-			db
-				.prepare(
-					`UPDATE memory_artifacts
+	await getDbAccessor().withWriteTxAsync(
+		(db) => {
+			countChanges(
+				db
+					.prepare(
+						`UPDATE memory_artifacts
 					 SET is_deleted = 1, updated_at = ?
 					 WHERE agent_id = ?
 					   AND source_id = ?
@@ -507,16 +512,18 @@ async function purgeStaleGitHubFailureArtifacts(
 					   AND source_path >= ?
 					   AND source_path < ?
 					   AND COALESCE(is_deleted, 0) = 0`,
-				)
-				.run(
-					syncStartedAt,
-					agentId,
-					sourceId,
-					`github://source/${sourceId}/failures/`,
-					`github://source/${sourceId}/failures/\uffff`,
-				),
-		);
-	}, { siteToken: "github-source-provider.ts:498" });
+					)
+					.run(
+						syncStartedAt,
+						agentId,
+						sourceId,
+						`github://source/${sourceId}/failures/`,
+						`github://source/${sourceId}/failures/\uffff`,
+					),
+			);
+		},
+		{ siteToken: "github-source-provider.ts:502" },
+	);
 }
 
 function resourceExternalId(repo: string, resource: GitHubResource): string {

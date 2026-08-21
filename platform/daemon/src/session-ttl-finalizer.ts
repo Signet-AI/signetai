@@ -78,21 +78,25 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 		// 2. TTL is a session-end boundary for the retained transcript.
 		try {
 			const completedAt = new Date().toISOString();
-			const alreadyCompleted = await deps.accessor.withReadDbAsync((db) => {
-				const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
-					Record<string, unknown>
-				>;
-				if (!columns.some((column) => column.name === "completed_at")) return false;
-				const row = db
-					.prepare("SELECT completed_at FROM session_transcripts WHERE session_key = ? AND agent_id = ? LIMIT 1")
-					.get(info.sessionKey, info.agentId) as { completed_at?: string | null } | undefined;
-				return row?.completed_at != null;
-			}, { siteToken: "session-ttl-finalizer.ts:81" });
+			const alreadyCompleted = await deps.accessor.withReadDbAsync(
+				(db) => {
+					const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
+						Record<string, unknown>
+					>;
+					if (!columns.some((column) => column.name === "completed_at")) return false;
+					const row = db
+						.prepare("SELECT completed_at FROM session_transcripts WHERE session_key = ? AND agent_id = ? LIMIT 1")
+						.get(info.sessionKey, info.agentId) as { completed_at?: string | null } | undefined;
+					return row?.completed_at != null;
+				},
+				{ siteToken: "session-ttl-finalizer.ts:81" },
+			);
 			transcriptFinalized =
 				alreadyCompleted ||
-				(await deps.accessor.withWriteTxAsync((db) =>
-					markSessionTranscriptCompletedInTx(db, info.sessionKey, info.agentId, completedAt),
-				{ siteToken: "session-ttl-finalizer.ts:93" }));
+				(await deps.accessor.withWriteTxAsync(
+					(db) => markSessionTranscriptCompletedInTx(db, info.sessionKey, info.agentId, completedAt),
+					{ siteToken: "session-ttl-finalizer.ts:96" },
+				));
 		} catch (err) {
 			logger.warn("session-tracker", "TTL-eviction transcript completion failed (non-fatal)", {
 				sessionKey: info.sessionKey,

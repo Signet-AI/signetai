@@ -754,26 +754,29 @@ async function readLegacyMarkdownImportState(filePath: string): Promise<{
 	readonly status: string;
 } | null> {
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const row = db
-				.prepare(
-					`SELECT mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count, status
+		return await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const row = db
+					.prepare(
+						`SELECT mtime_ms, ctime_ms, size, content_hash, importer_version, chunk_count, status
 					 FROM legacy_markdown_imports
 					 WHERE path = ?`,
-				)
-				.get(filePath) as
-				| {
-						mtime_ms: number;
-						ctime_ms: number;
-						size: number;
-						content_hash: string;
-						importer_version: number;
-						chunk_count: number;
-						status: string;
-				  }
-				| undefined;
-			return row ?? null;
-		}, { siteToken: "daemon.ts:757" });
+					)
+					.get(filePath) as
+					| {
+							mtime_ms: number;
+							ctime_ms: number;
+							size: number;
+							content_hash: string;
+							importer_version: number;
+							chunk_count: number;
+							status: string;
+					  }
+					| undefined;
+				return row ?? null;
+			},
+			{ siteToken: "daemon.ts:757" },
+		);
 	} catch {
 		// Older/unmigrated DBs fall back to the legacy importer behavior.
 		return null;
@@ -842,12 +845,15 @@ async function writeLegacyMarkdownImportState(args: {
 
 async function legacyMarkdownChunkKnown(filePath: string, chunkHash: string): Promise<boolean> {
 	try {
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const row = db
-				.prepare("SELECT 1 FROM legacy_markdown_chunks WHERE file_path = ? AND chunk_hash = ?")
-				.get(filePath, chunkHash);
-			return row != null;
-		}, { siteToken: "daemon.ts:845" });
+		return await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const row = db
+					.prepare("SELECT 1 FROM legacy_markdown_chunks WHERE file_path = ? AND chunk_hash = ?")
+					.get(filePath, chunkHash);
+				return row != null;
+			},
+			{ siteToken: "daemon.ts:848" },
+		);
 	} catch {
 		return false;
 	}
@@ -1470,7 +1476,7 @@ async function syncAgentRoster(agentsDir: string): Promise<void> {
 				stmt.run(normalized.name, normalized.name, normalized.readPolicy, normalized.policyGroup, now, now);
 			}
 		},
-		{ siteToken: "daemon.ts:1456", operation: "startup.sync-agent-roster", estimatedWorkUnits: roster.length },
+		{ siteToken: "daemon.ts:1462", operation: "startup.sync-agent-roster", estimatedWorkUnits: roster.length },
 	);
 	logger.info("daemon", "Agent roster synced", { count: roster.length });
 }
@@ -1538,7 +1544,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	const activeEmbeddingCfg = await getDbAccessor().withReadDbAsync(
 		(db) => resolveActiveEmbeddingConfig(db, memoryCfg.embedding),
-		{ siteToken: "daemon.ts:1539", operation: "startup.resolve-active-embedding" },
+		{ siteToken: "daemon.ts:1545", operation: "startup.resolve-active-embedding" },
 	);
 	configureLlmConcurrency(memoryCfg.pipelineV2.worker.maxLlmConcurrency);
 	logger.info("config", "Resolved embedding config", {
@@ -2251,10 +2257,11 @@ async function main() {
 										.get() as { cnt: number } | undefined;
 									return row?.cnt ?? 0;
 								},
-								{ siteToken: "daemon.ts:2247", operation: "heartbeat.memory-count" },
+								{ siteToken: "daemon.ts:2253", operation: "heartbeat.memory-count" },
 							),
 							listConnectorsAsync(accessor),
-							accessor.withReadDbAsync((db) => getQueuePressureSnapshot(db), { siteToken: "daemon.ts:2257",
+							accessor.withReadDbAsync((db) => getQueuePressureSnapshot(db), {
+								siteToken: "daemon.ts:2263",
 								operation: "heartbeat.queue-pressure",
 							}),
 						]);

@@ -411,27 +411,30 @@ export async function checkFtsConsistency(
 		};
 	}
 
-	const { memCount, ftsCount, ftsMissing, tokenizerDrift } = await accessor.withReadDbAsync(async (db) => {
-		const memRow = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
+	const { memCount, ftsCount, ftsMissing, tokenizerDrift } = await accessor.withReadDbAsync(
+		async (db) => {
+			const memRow = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
 
-		// Guard against missing FTS index state (can happen on upgrades before
-		// self-heal). Count the physical docsize rows, not the external-content
-		// table, whose COUNT(*) resolves through memories and includes tombstones.
-		let ftsN: number | null = null;
-		try {
-			ftsN = readMemoriesFtsIndexRowCount(toFtsSchemaQueryDb(db));
-		} catch {
-			// Missing FTS shadow state.
-		}
-		const missing = ftsN === null;
-		const ftsSql = missing ? null : readMemoriesFtsSql(toFtsSchemaQueryDb(db));
-		return {
-			memCount: memRow.n,
-			ftsCount: ftsN ?? 0,
-			ftsMissing: missing,
-			tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
-		};
-	}, { siteToken: "repair-actions.ts:414" });
+			// Guard against missing FTS index state (can happen on upgrades before
+			// self-heal). Count the physical docsize rows, not the external-content
+			// table, whose COUNT(*) resolves through memories and includes tombstones.
+			let ftsN: number | null = null;
+			try {
+				ftsN = readMemoriesFtsIndexRowCount(toFtsSchemaQueryDb(db));
+			} catch {
+				// Missing FTS shadow state.
+			}
+			const missing = ftsN === null;
+			const ftsSql = missing ? null : readMemoriesFtsSql(toFtsSchemaQueryDb(db));
+			return {
+				memCount: memRow.n,
+				ftsCount: ftsN ?? 0,
+				ftsMissing: missing,
+				tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
+			};
+		},
+		{ siteToken: "repair-actions.ts:414" },
+	);
 
 	// If FTS table is missing entirely, report it (startup self-heal
 	// via ensureFtsTable should have caught this, but handle gracefully)
@@ -693,39 +696,42 @@ function listOrphanedEmbeddingIds(db: WriteDb, limit: number, agentId?: string):
 
 export async function getEmbeddingGapStats(accessor: DbAccessor, agentId?: string): Promise<EmbeddingGapStats> {
 	const repair = readEmbeddingRepairState(accessor);
-	return await accessor.withReadDbAsync(async (db) => {
-		const totalRow = db
-			.prepare(
-				agentId === undefined
-					? "SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0"
-					: "SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0 AND COALESCE(NULLIF(agent_id, ''), 'default') = ?",
-			)
-			.get(...(agentId === undefined ? [] : [agentId])) as { n: number };
-		const total = totalRow.n;
-		const unembedded = countUnembeddedMemories(db, agentId);
-		const embedded = total - unembedded;
-		const state = tableExists(db, "embedding_index_state") ? readEmbeddingIndexState(db) : null;
-		const staging =
-			state?.staging && tableExists(db, "embeddings_staging")
-				? stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint)
-				: null;
-		const complete = unembedded === 0 && (staging === null || staging.ready);
-		// Floor to one decimal so a near-complete store never rounds up to
-		// 100% while embeddings are still missing (issue #906). When the
-		// store is complete the ratio is exactly 100%.
-		const pct = total > 0 ? (embedded / total) * 100 : 100;
-		const displayed = complete ? pct : Math.floor(pct * 10) / 10;
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const totalRow = db
+				.prepare(
+					agentId === undefined
+						? "SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0"
+						: "SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0 AND COALESCE(NULLIF(agent_id, ''), 'default') = ?",
+				)
+				.get(...(agentId === undefined ? [] : [agentId])) as { n: number };
+			const total = totalRow.n;
+			const unembedded = countUnembeddedMemories(db, agentId);
+			const embedded = total - unembedded;
+			const state = tableExists(db, "embedding_index_state") ? readEmbeddingIndexState(db) : null;
+			const staging =
+				state?.staging && tableExists(db, "embeddings_staging")
+					? stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint)
+					: null;
+			const complete = unembedded === 0 && (staging === null || staging.ready);
+			// Floor to one decimal so a near-complete store never rounds up to
+			// 100% while embeddings are still missing (issue #906). When the
+			// store is complete the ratio is exactly 100%.
+			const pct = total > 0 ? (embedded / total) * 100 : 100;
+			const displayed = complete ? pct : Math.floor(pct * 10) / 10;
 
-		return {
-			unembedded,
-			total,
-			embedded,
-			complete,
-			coverage: `${displayed.toFixed(1)}%`,
-			staging,
-			repair,
-		};
-	}, { siteToken: "repair-actions.ts:696" });
+			return {
+				unembedded,
+				total,
+				embedded,
+				complete,
+				coverage: `${displayed.toFixed(1)}%`,
+				staging,
+				repair,
+			};
+		},
+		{ siteToken: "repair-actions.ts:699" },
+	);
 }
 
 export async function getEmbeddingRepairStats(
@@ -734,10 +740,13 @@ export async function getEmbeddingRepairStats(
 	agentId: string,
 ): Promise<EmbeddingRepairStats> {
 	const gap = await getEmbeddingGapStats(accessor, agentId);
-	const migration = await accessor.withReadDbAsync(async (db) =>
-		countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
-	{ siteToken: "repair-actions.ts:737" });
-	const orphaned = await accessor.withReadDbAsync(async (db) => countOrphanedEmbeddings(db, agentId), { siteToken: "repair-actions.ts:740" });
+	const migration = await accessor.withReadDbAsync(
+		async (db) => countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
+		{ siteToken: "repair-actions.ts:743" },
+	);
+	const orphaned = await accessor.withReadDbAsync(async (db) => countOrphanedEmbeddings(db, agentId), {
+		siteToken: "repair-actions.ts:747",
+	});
 	return { gap, migration, orphaned };
 }
 
@@ -769,9 +778,12 @@ async function reembedMissingMemoriesBatch(
 	batchSize: number,
 	agentId?: string,
 ): Promise<ReembedBatchOutcome> {
-	const unembedded = await accessor.withReadDbAsync(async (db) => {
-		return listUnembeddedMemories(db, batchSize, agentId) as UnembeddedRow[];
-	}, { siteToken: "repair-actions.ts:772" });
+	const unembedded = await accessor.withReadDbAsync(
+		async (db) => {
+			return listUnembeddedMemories(db, batchSize, agentId) as UnembeddedRow[];
+		},
+		{ siteToken: "repair-actions.ts:781" },
+	);
 
 	if (unembedded.length === 0) {
 		return {
@@ -976,9 +988,10 @@ export async function reembedMissingMemories(
 	// profile changed during provider work" (issue: reembed never resolves
 	// the active profile before writing). Resolve once, matching the same
 	// profile the durable index actually owns, before doing any work.
-	const resolvedEmbeddingCfg = await accessor.withReadDbAsync(async (db) =>
-		resolveActiveEmbeddingConfig(db, embeddingCfg),
-	{ siteToken: "repair-actions.ts:979" });
+	const resolvedEmbeddingCfg = await accessor.withReadDbAsync(
+		async (db) => resolveActiveEmbeddingConfig(db, embeddingCfg),
+		{ siteToken: "repair-actions.ts:991" },
+	);
 
 	const initialStats = await getEmbeddingGapStats(accessor, agentId);
 	if (initialStats.unembedded === 0) {
@@ -1123,12 +1136,15 @@ export async function reembedModelMigration(
 	if (!gate.allowed) return { action, success: false, affected: 0, message: gate.reason ?? "denied by policy gate" };
 	const size =
 		Number.isFinite(batchSize) && batchSize > 0 ? Math.min(500, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
-	const { rows, totalMatching, sources, liveVecDimensions } = await accessor.withReadDbAsync(async (db) => ({
-		rows: listEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, size, agentId),
-		totalMatching: countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
-		sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
-		liveVecDimensions: readVecDimensions(db),
-	}), { siteToken: "repair-actions.ts:1126" });
+	const { rows, totalMatching, sources, liveVecDimensions } = await accessor.withReadDbAsync(
+		async (db) => ({
+			rows: listEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, size, agentId),
+			totalMatching: countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
+			sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
+			liveVecDimensions: readVecDimensions(db),
+		}),
+		{ siteToken: "repair-actions.ts:1139" },
+	);
 	const vecDimensionMismatch = liveVecDimensions !== null && liveVecDimensions !== embeddingCfg.dimensions;
 	const details = {
 		selected: totalMatching,
@@ -1569,10 +1585,11 @@ export interface DedupStats {
 }
 
 export async function getDedupStats(accessor: DbAccessor): Promise<DedupStats> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const row = db
-			.prepare(
-				`SELECT COUNT(*) AS clusters, COALESCE(SUM(excess), 0) AS excess_total
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const row = db
+				.prepare(
+					`SELECT COUNT(*) AS clusters, COALESCE(SUM(excess), 0) AS excess_total
 				 FROM (
 					SELECT content_hash, COUNT(*) - 1 AS excess
 					FROM memories
@@ -1581,17 +1598,19 @@ export async function getDedupStats(accessor: DbAccessor): Promise<DedupStats> {
 					GROUP BY content_hash
 					HAVING COUNT(*) > 1
 				 )`,
-			)
-			.get() as { clusters: number; excess_total: number } | undefined;
+				)
+				.get() as { clusters: number; excess_total: number } | undefined;
 
-		const totalRow = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0").get() as { n: number };
+			const totalRow = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0").get() as { n: number };
 
-		return {
-			exactClusters: row?.clusters ?? 0,
-			exactExcess: row?.excess_total ?? 0,
-			totalActive: totalRow.n,
-		};
-	}, { siteToken: "repair-actions.ts:1572" });
+			return {
+				exactClusters: row?.clusters ?? 0,
+				exactExcess: row?.excess_total ?? 0,
+				totalActive: totalRow.n,
+			};
+		},
+		{ siteToken: "repair-actions.ts:1588" },
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -1754,10 +1773,11 @@ export async function deduplicateMemories(
 	const semanticEnabled = options?.semanticEnabled ?? false;
 
 	// Phase 1: Exact hash clusters
-	const hashClusters = await accessor.withReadDbAsync(async (db) => {
-		return db
-			.prepare(
-				`SELECT content_hash, COALESCE(scope, '__NULL__') AS scope_key, COUNT(*) AS cnt
+	const hashClusters = await accessor.withReadDbAsync(
+		async (db) => {
+			return db
+				.prepare(
+					`SELECT content_hash, COALESCE(scope, '__NULL__') AS scope_key, COUNT(*) AS cnt
 				 FROM memories
 				 WHERE is_deleted = 0 AND pinned = 0 AND manual_override = 0
 				   AND content_hash IS NOT NULL
@@ -1765,9 +1785,11 @@ export async function deduplicateMemories(
 				 HAVING COUNT(*) > 1
 				 ORDER BY cnt DESC
 				 LIMIT ?`,
-			)
-			.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
-	}, { siteToken: "repair-actions.ts:1757" });
+				)
+				.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
+		},
+		{ siteToken: "repair-actions.ts:1776" },
+	);
 
 	if (dryRun) {
 		const totalExcess = hashClusters.reduce((sum, c) => sum + c.cnt - 1, 0);
@@ -1885,54 +1907,60 @@ async function findSemanticDuplicates(
 	const clusters: Array<Array<{ id: string }>> = [];
 	const seen = new Set<string>();
 
-	const candidates = await accessor.withReadDbAsync(async (db) => {
-		return db
-			.prepare(
-				`SELECT m.id, e.id AS embedding_id
+	const candidates = await accessor.withReadDbAsync(
+		async (db) => {
+			return db
+				.prepare(
+					`SELECT m.id, e.id AS embedding_id
 				 FROM memories m
 				 JOIN embeddings e ON e.source_type = 'memory' AND e.source_id = m.id
 				 WHERE m.is_deleted = 0 AND m.pinned = 0 AND m.manual_override = 0
 				 ORDER BY m.created_at ASC
 				 LIMIT 500`,
-			)
-			.all() as Array<{ id: string; embedding_id: string }>;
-	}, { siteToken: "repair-actions.ts:1888" });
+				)
+				.all() as Array<{ id: string; embedding_id: string }>;
+		},
+		{ siteToken: "repair-actions.ts:1910" },
+	);
 
 	for (const candidate of candidates) {
 		if (seen.has(candidate.id)) continue;
 		if (clusters.length >= maxClusters) break;
 
-		const neighbors = await accessor.withReadDbAsync(async (db) => {
-			// Get the vector for this candidate's embedding
-			const vecRow = db.prepare("SELECT embedding FROM vec_embeddings WHERE id = ?").get(candidate.embedding_id) as
-				| { embedding: ArrayBuffer }
-				| undefined;
+		const neighbors = await accessor.withReadDbAsync(
+			async (db) => {
+				// Get the vector for this candidate's embedding
+				const vecRow = db.prepare("SELECT embedding FROM vec_embeddings WHERE id = ?").get(candidate.embedding_id) as
+					| { embedding: ArrayBuffer }
+					| undefined;
 
-			if (!vecRow) return [];
+				if (!vecRow) return [];
 
-			const queryVec = new Float32Array(vecRow.embedding);
-			// KNN search for nearby vectors
-			const rows = db
-				.prepare(
-					`SELECT e.source_id, v.distance
+				const queryVec = new Float32Array(vecRow.embedding);
+				// KNN search for nearby vectors
+				const rows = db
+					.prepare(
+						`SELECT e.source_id, v.distance
 					 FROM vec_embeddings v
 					 JOIN embeddings e ON v.id = e.id
 					 JOIN memories m ON e.source_id = m.id
 					 WHERE v.embedding MATCH ? AND k = 6
 					   AND m.is_deleted = 0 AND m.pinned = 0 AND m.manual_override = 0
 					 ORDER BY v.distance`,
-				)
-				.all(queryVec) as Array<{ source_id: string; distance: number }>;
+					)
+					.all(queryVec) as Array<{ source_id: string; distance: number }>;
 
-			// Convert distance to cosine similarity and filter
-			return rows
-				.filter((r) => r.source_id !== candidate.id)
-				.filter((r) => {
-					const similarity = 1 - r.distance;
-					return similarity >= threshold;
-				})
-				.map((r) => ({ id: r.source_id }));
-		}, { siteToken: "repair-actions.ts:1905" });
+				// Convert distance to cosine similarity and filter
+				return rows
+					.filter((r) => r.source_id !== candidate.id)
+					.filter((r) => {
+						const similarity = 1 - r.distance;
+						return similarity >= threshold;
+					})
+					.map((r) => ({ id: r.source_id }));
+			},
+			{ siteToken: "repair-actions.ts:1930" },
+		);
 
 		if (neighbors.length > 0) {
 			const cluster = [{ id: candidate.id }, ...neighbors];
@@ -1974,7 +2002,8 @@ export async function pruneChunkGroupEntities(
 	const total = await accessor.withReadDbAsync(
 		async (db) =>
 			(db.prepare("SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group'").get() as { n: number }).n,
-	{ siteToken: "repair-actions.ts:1974" });
+		{ siteToken: "repair-actions.ts:2002" },
+	);
 
 	if (options?.dryRun) {
 		return {
@@ -2053,7 +2082,8 @@ export async function pruneSingletonExtractedEntities(
 				 LIMIT ?`,
 				)
 				.all(maxMentions, batchSize) as { id: string }[],
-	{ siteToken: "repair-actions.ts:2030" });
+		{ siteToken: "repair-actions.ts:2059" },
+	);
 
 	if (options?.dryRun) {
 		return {
@@ -2154,12 +2184,13 @@ export async function pruneGenericEntities(
 
 	const batchSize = Math.max(1, Math.min(Math.floor(options?.batchSize ?? 100), 500));
 	const agentId = options?.agentId ?? "default";
-	const candidates = await accessor.withReadDbAsync(async (db) => {
-		const candidates: GenericEntityCandidate[] = [];
-		const pageSize = Math.max(batchSize * 10, 500);
-		let offset = 0;
-		const selectPage = db.prepare(
-			`SELECT e.id, e.name, e.entity_type
+	const candidates = await accessor.withReadDbAsync(
+		async (db) => {
+			const candidates: GenericEntityCandidate[] = [];
+			const pageSize = Math.max(batchSize * 10, 500);
+			let offset = 0;
+			const selectPage = db.prepare(
+				`SELECT e.id, e.name, e.entity_type
 			 FROM entities e
 			 WHERE e.agent_id = ?
 			   AND COALESCE(e.pinned, 0) = 0
@@ -2167,22 +2198,24 @@ export async function pruneGenericEntities(
 			   AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
 			 ORDER BY e.updated_at DESC
 			 LIMIT ? OFFSET ?`,
-		);
+			);
 
-		for (;;) {
-			const rows = selectPage.all(agentId, pageSize, offset) as GenericEntityCandidate[];
-			if (rows.length === 0) break;
-			for (const row of rows) {
-				const quality = classifyEntityQuality(row.name, row.entity_type);
-				if (!quality.ok) {
-					candidates.push({ ...row, reason: quality.reason });
-					if (candidates.length >= batchSize) return candidates;
+			for (;;) {
+				const rows = selectPage.all(agentId, pageSize, offset) as GenericEntityCandidate[];
+				if (rows.length === 0) break;
+				for (const row of rows) {
+					const quality = classifyEntityQuality(row.name, row.entity_type);
+					if (!quality.ok) {
+						candidates.push({ ...row, reason: quality.reason });
+						if (candidates.length >= batchSize) return candidates;
+					}
 				}
+				offset += rows.length;
 			}
-			offset += rows.length;
-		}
-		return candidates;
-	}, { siteToken: "repair-actions.ts:2157" });
+			return candidates;
+		},
+		{ siteToken: "repair-actions.ts:2187" },
+	);
 
 	if (options?.dryRun ?? true) {
 		const preview = candidates
@@ -2349,11 +2382,14 @@ function readIntegrityCheck(db: ReadDb, pragma: "quick_check" | "integrity_check
  * broad damage; integrity_check is the authoritative result for indexes.
  */
 export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityCheckResult> {
-	return await accessor.withReadDbAsync(async (db) => {
-		const quickCheck = readIntegrityCheck(db, "quick_check");
-		const fullCheck = readIntegrityCheck(db, "integrity_check");
-		return { ok: fullCheck.ok, messages: fullCheck.messages, quickCheck, fullCheck };
-	}, { siteToken: "repair-actions.ts:2352" });
+	return await accessor.withReadDbAsync(
+		async (db) => {
+			const quickCheck = readIntegrityCheck(db, "quick_check");
+			const fullCheck = readIntegrityCheck(db, "integrity_check");
+			return { ok: fullCheck.ok, messages: fullCheck.messages, quickCheck, fullCheck };
+		},
+		{ siteToken: "repair-actions.ts:2385" },
+	);
 }
 
 // ---------------------------------------------------------------------------

@@ -59,33 +59,35 @@ async function filterDreamingAttributes(
 	agentId: string,
 	attributes: readonly EntityAttribute[],
 ): Promise<readonly EntityAttribute[]> {
-	return await accessor.withReadDbAsync(async (db) =>
-		attributes.filter((attribute) => {
-			if (attribute.memoryId) {
-				return isMemoryContentContextEligible(db, {
-					agentId,
-					sourceKind: "memory",
-					sourceId: attribute.memoryId,
-					content: attribute.content,
-				});
-			}
-			if (attribute.sourcePath || attribute.sourceId) {
-				const sourceKind = attribute.sourceKind?.toLowerCase() ?? "";
-				const kind = sourceKind.includes("transcript")
-					? "transcript"
-					: sourceKind.includes("summary")
-						? "summary"
-						: "artifact";
-				return isMemoryContentContextEligible(db, {
-					agentId,
-					sourceKind: kind,
-					sourceId: attribute.sourcePath ?? attribute.sourceId ?? attribute.id,
-					content: attribute.content,
-				});
-			}
-			return scanMemoryContent(attribute.content).contextEligible;
-		}),
-	{ siteToken: "pipeline/dreaming-capabilities.ts:62" });
+	return await accessor.withReadDbAsync(
+		async (db) =>
+			attributes.filter((attribute) => {
+				if (attribute.memoryId) {
+					return isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: "memory",
+						sourceId: attribute.memoryId,
+						content: attribute.content,
+					});
+				}
+				if (attribute.sourcePath || attribute.sourceId) {
+					const sourceKind = attribute.sourceKind?.toLowerCase() ?? "";
+					const kind = sourceKind.includes("transcript")
+						? "transcript"
+						: sourceKind.includes("summary")
+							? "summary"
+							: "artifact";
+					return isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: kind,
+						sourceId: attribute.sourcePath ?? attribute.sourceId ?? attribute.id,
+						content: attribute.content,
+					});
+				}
+				return scanMemoryContent(attribute.content).contextEligible;
+			}),
+		{ siteToken: "pipeline/dreaming-capabilities.ts:62" },
+	);
 }
 
 /**
@@ -561,52 +563,55 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				chunkSize: z.number().finite().optional(),
 			}),
 			async ({ agentId: scopeId, query, since, before, kind, limit, sourceRef, offset, chunkSize }) =>
-				await accessor.withReadDbAsync(async (db) => {
-					if (sourceRef !== undefined) {
-						const source = readEpisodicSource(db, { agentId: scopeId, from: sourceRef });
-						if (source === null) return { ok: false, error: "Evidence source not found" };
-						if (source.kind === "transcript" && !source.completed) {
-							return { ok: false, error: "Transcript is still in progress" };
+				await accessor.withReadDbAsync(
+					async (db) => {
+						if (sourceRef !== undefined) {
+							const source = readEpisodicSource(db, { agentId: scopeId, from: sourceRef });
+							if (source === null) return { ok: false, error: "Evidence source not found" };
+							if (source.kind === "transcript" && !source.completed) {
+								return { ok: false, error: "Transcript is still in progress" };
+							}
+							const fragment = projectEvidenceFragment(
+								source,
+								Math.max(0, Math.floor(offset ?? 0)),
+								Math.min(Math.max(Math.floor(chunkSize ?? MAX_EVIDENCE_EXCERPT_CHARS), 1), MAX_EVIDENCE_EXCERPT_CHARS),
+							);
+							return fragment === null
+								? { ok: false, error: "Evidence fragment offset is outside the source" }
+								: { ok: true, items: [fragment] };
 						}
-						const fragment = projectEvidenceFragment(
-							source,
-							Math.max(0, Math.floor(offset ?? 0)),
-							Math.min(Math.max(Math.floor(chunkSize ?? MAX_EVIDENCE_EXCERPT_CHARS), 1), MAX_EVIDENCE_EXCERPT_CHARS),
-						);
-						return fragment === null
-							? { ok: false, error: "Evidence fragment offset is outside the source" }
-							: { ok: true, items: [fragment] };
-					}
-					// A scan-first call is the delivery queue. It ignores the time
-					// watermark for selection, drains only incomplete evidence revisions,
-					// and resumes each source at its persisted delivered offset.
-					const scanFirst = query === undefined && since === undefined && before === undefined;
-					const effectiveSince = scanFirst ? undefined : (since ?? readEvidenceWatermark(db, scopeId) ?? undefined);
-					const continuations = scanFirst ? pendingDreamingEvidenceContinuations(db, scopeId, limit ?? 20, kind) : [];
-					const sources =
-						continuations.length > 0
-							? continuations
-							: searchEpisodicSources(db, {
-									agentId: scopeId,
-									query: query ?? "",
-									since: effectiveSince,
-									before,
-									kind,
-									excludeDelivered: scanFirst,
-									limit,
-								});
-					const items = scanFirst
-						? sources.flatMap((source) => {
-								const fragment = projectEvidenceFragment(
-									source,
-									deliveredOffsetForSource(db, scopeId, source),
-									MAX_EVIDENCE_EXCERPT_CHARS,
-								);
-								return fragment === null ? [] : [fragment];
-							})
-						: projectEvidence(sources, query ?? "");
-					return { ok: true, items };
-				}, { siteToken: "pipeline/dreaming-capabilities.ts:564" }),
+						// A scan-first call is the delivery queue. It ignores the time
+						// watermark for selection, drains only incomplete evidence revisions,
+						// and resumes each source at its persisted delivered offset.
+						const scanFirst = query === undefined && since === undefined && before === undefined;
+						const effectiveSince = scanFirst ? undefined : (since ?? readEvidenceWatermark(db, scopeId) ?? undefined);
+						const continuations = scanFirst ? pendingDreamingEvidenceContinuations(db, scopeId, limit ?? 20, kind) : [];
+						const sources =
+							continuations.length > 0
+								? continuations
+								: searchEpisodicSources(db, {
+										agentId: scopeId,
+										query: query ?? "",
+										since: effectiveSince,
+										before,
+										kind,
+										excludeDelivered: scanFirst,
+										limit,
+									});
+						const items = scanFirst
+							? sources.flatMap((source) => {
+									const fragment = projectEvidenceFragment(
+										source,
+										deliveredOffsetForSource(db, scopeId, source),
+										MAX_EVIDENCE_EXCERPT_CHARS,
+									);
+									return fragment === null ? [] : [fragment];
+								})
+							: projectEvidence(sources, query ?? "");
+						return { ok: true, items };
+					},
+					{ siteToken: "pipeline/dreaming-capabilities.ts:566" },
+				),
 		),
 		capability(
 			"validate_proposal",
@@ -733,13 +738,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			async ({ agentId: scopeId, kind, status, limit }) => {
 				if (kind === "review_due") {
 					if (status === "resolved") return { ok: true, items: [] };
-					const due = await accessor.withReadDbAsync(async (db) =>
-						collectReviewDueClaims(
-							{ all: <T>(sql: string, ...params: unknown[]) => db.prepare(sql).all(...params) as T[] },
-							new Date(),
-							{ agentId: scopeId, limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200) },
-						),
-					{ siteToken: "pipeline/dreaming-capabilities.ts:736" });
+					const due = await accessor.withReadDbAsync(
+						async (db) =>
+							collectReviewDueClaims(
+								{ all: <T>(sql: string, ...params: unknown[]) => db.prepare(sql).all(...params) as T[] },
+								new Date(),
+								{ agentId: scopeId, limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200) },
+							),
+						{ siteToken: "pipeline/dreaming-capabilities.ts:741" },
+					);
 					return {
 						ok: true,
 						items: [

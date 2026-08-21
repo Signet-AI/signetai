@@ -307,54 +307,57 @@ export async function curateMemoryHead(input: MemoryHeadCuration): Promise<Memor
 	const path = resolveMemoryHeadPath(getAgentsDir(), input.agentId);
 	const previous = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
 	try {
-		await getDbAccessor().withWriteTxAsync((db: import("./db-accessor").WriteDb) => {
-			// Keep the database publication, audit rows, and projection in one
-			// admission. Audit failures therefore happen before the projection is
-			// changed, and projection failures roll the database transaction back.
-			db.prepare(
-				`UPDATE memory_md_heads SET content = ?, content_hash = ?, revision = ?, updated_at = ?, lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL WHERE agent_id = ? AND lease_token = ?`,
-			).run(projected.body, hash, next, new Date().toISOString(), input.agentId, lease.row.token);
-			for (const entry of input.entries)
+		await getDbAccessor().withWriteTxAsync(
+			(db: import("./db-accessor").WriteDb) => {
+				// Keep the database publication, audit rows, and projection in one
+				// admission. Audit failures therefore happen before the projection is
+				// changed, and projection failures roll the database transaction back.
 				db.prepare(
-					`INSERT INTO memory_head_revisions (id, agent_id, revision, content, content_hash, rendered_token_count, pass_id, base_revision, base_hash, created_at, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				).run(
-					randomUUID(),
-					input.agentId,
-					next,
-					input.content.trim(),
-					hash,
-					countTokens(input.content.trim()),
-					input.passId,
-					input.baseRevision,
-					input.baseHash,
-					new Date().toISOString(),
-					entry.id,
-					entry.text,
-					entry.operation,
-					JSON.stringify(entry.sourceRefs),
-					JSON.stringify(entry.supportingQuotes),
-				);
-			const manifestUpdate = db
-				.prepare(
-					`UPDATE dreaming_passes
+					`UPDATE memory_md_heads SET content = ?, content_hash = ?, revision = ?, updated_at = ?, lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL WHERE agent_id = ? AND lease_token = ?`,
+				).run(projected.body, hash, next, new Date().toISOString(), input.agentId, lease.row.token);
+				for (const entry of input.entries)
+					db.prepare(
+						`INSERT INTO memory_head_revisions (id, agent_id, revision, content, content_hash, rendered_token_count, pass_id, base_revision, base_hash, created_at, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					).run(
+						randomUUID(),
+						input.agentId,
+						next,
+						input.content.trim(),
+						hash,
+						countTokens(input.content.trim()),
+						input.passId,
+						input.baseRevision,
+						input.baseHash,
+						new Date().toISOString(),
+						entry.id,
+						entry.text,
+						entry.operation,
+						JSON.stringify(entry.sourceRefs),
+						JSON.stringify(entry.supportingQuotes),
+					);
+				const manifestUpdate = db
+					.prepare(
+						`UPDATE dreaming_passes
 					 SET head_revision = ?, head_hash = ?, head_added = ?, head_updated = ?,
 					     head_removed = ?, head_deferred = ?, head_no_op = ?
 					 WHERE id = ? AND agent_id = ?`,
-				)
-				.run(
-					next,
-					hash,
-					input.entries.filter((entry) => entry.operation === "added").length,
-					input.entries.filter((entry) => entry.operation === "updated").length,
-					input.entries.filter((entry) => entry.operation === "removed").length,
-					input.entries.filter((entry) => entry.operation === "deferred").length,
-					input.entries.filter((entry) => entry.operation === "no-op").length,
-					input.passId,
-					input.agentId,
-				);
-			if (manifestUpdate.changes !== 1) throw new Error("Dreaming pass manifest row is missing");
-			writeProjection(projected.file, input.agentId);
-		}, { siteToken: "memory-head.ts:310" });
+					)
+					.run(
+						next,
+						hash,
+						input.entries.filter((entry) => entry.operation === "added").length,
+						input.entries.filter((entry) => entry.operation === "updated").length,
+						input.entries.filter((entry) => entry.operation === "removed").length,
+						input.entries.filter((entry) => entry.operation === "deferred").length,
+						input.entries.filter((entry) => entry.operation === "no-op").length,
+						input.passId,
+						input.agentId,
+					);
+				if (manifestUpdate.changes !== 1) throw new Error("Dreaming pass manifest row is missing");
+				writeProjection(projected.file, input.agentId);
+			},
+			{ siteToken: "memory-head.ts:310" },
+		);
 	} catch (error) {
 		try {
 			if (previous === undefined) {

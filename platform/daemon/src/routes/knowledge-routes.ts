@@ -302,23 +302,26 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 	app.get("/api/knowledge/communities", async (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
-		const rows = await getDbAccessor().withReadDbAsync(async (db) => {
-			return db
-				.prepare(
-					`SELECT id, name, cohesion, member_count, created_at, updated_at
+		const rows = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				return db
+					.prepare(
+						`SELECT id, name, cohesion, member_count, created_at, updated_at
 					 FROM entity_communities
 					 WHERE agent_id = ?
 					 ORDER BY member_count DESC`,
-				)
-				.all(agentId) as ReadonlyArray<{
-				id: string;
-				name: string | null;
-				cohesion: number;
-				member_count: number;
-				created_at: string;
-				updated_at: string;
-			}>;
-		}, { siteToken: "routes/knowledge-routes.ts:305" });
+					)
+					.all(agentId) as ReadonlyArray<{
+					id: string;
+					name: string | null;
+					cohesion: number;
+					member_count: number;
+					created_at: string;
+					updated_at: string;
+				}>;
+			},
+			{ siteToken: "routes/knowledge-routes.ts:305" },
+		);
 		return c.json({ items: rows, count: rows.length });
 	});
 
@@ -367,11 +370,13 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				? {
 						entityIds: [resolved.id],
 					}
-				: await getDbAccessor().withReadDbAsync(async (db) =>
-						resolveFocalEntities(db, agentId, {
-							queryTokens: entityName.split(/\s+/),
-						}),
-					{ siteToken: "routes/knowledge-routes.ts:370" });
+				: await getDbAccessor().withReadDbAsync(
+						async (db) =>
+							resolveFocalEntities(db, agentId, {
+								queryTokens: entityName.split(/\s+/),
+							}),
+						{ siteToken: "routes/knowledge-routes.ts:373" },
+					);
 
 		if (focal.entityIds.length === 0) {
 			return c.json(
@@ -404,7 +409,11 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const traversal = await traverseKnowledgeGraph(
 			focal.entityIds,
-			(readFn) => getDbAccessor().withReadDbAsync(readFn, { siteToken: "routes/knowledge-routes.ts:407", operation: "knowledge.graph-traversal" }),
+			(readFn) =>
+				getDbAccessor().withReadDbAsync(readFn, {
+					siteToken: "routes/knowledge-routes.ts:413",
+					operation: "knowledge.graph-traversal",
+				}),
 			agentId,
 			{
 				maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
@@ -419,79 +428,80 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			},
 		);
 
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const entityRow = db
-				.prepare(
-					`SELECT id, name, entity_type, description
+		return await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const entityRow = db
+					.prepare(
+						`SELECT id, name, entity_type, description
 					 FROM entities WHERE id = ?`,
-				)
-				.get(primaryEntityId) as
-				| {
-						id: string;
-						name: string;
-						entity_type: string;
-						description: string | null;
-				  }
-				| undefined;
+					)
+					.get(primaryEntityId) as
+					| {
+							id: string;
+							name: string;
+							entity_type: string;
+							description: string | null;
+					  }
+					| undefined;
 
-			const aspectFilterClause = aspectFilter ? "AND ea.canonical_name LIKE ?" : "";
-			const aspectArgs = aspectFilter
-				? [primaryEntityId, agentId, `%${aspectFilter}%`, traversalCfg.maxAspectsPerEntity]
-				: [primaryEntityId, agentId, traversalCfg.maxAspectsPerEntity];
+				const aspectFilterClause = aspectFilter ? "AND ea.canonical_name LIKE ?" : "";
+				const aspectArgs = aspectFilter
+					? [primaryEntityId, agentId, `%${aspectFilter}%`, traversalCfg.maxAspectsPerEntity]
+					: [primaryEntityId, agentId, traversalCfg.maxAspectsPerEntity];
 
-			const aspects = db
-				.prepare(
-					`SELECT ea.id, ea.canonical_name, ea.weight
+				const aspects = db
+					.prepare(
+						`SELECT ea.id, ea.canonical_name, ea.weight
 					 FROM entity_aspects ea
 					 WHERE ea.entity_id = ? AND ea.agent_id = ?
 					 ${aspectFilterClause}
 					 ORDER BY ea.weight DESC
 					 LIMIT ?`,
-				)
-				.all(...aspectArgs) as Array<{
-				id: string;
-				canonical_name: string;
-				weight: number;
-			}>;
+					)
+					.all(...aspectArgs) as Array<{
+					id: string;
+					canonical_name: string;
+					weight: number;
+				}>;
 
-			const aspectsWithAttributes = aspects.map((aspect) => {
-				const attrs = db
-					.prepare(
-						`SELECT content, kind, importance, confidence, memory_id
+				const aspectsWithAttributes = aspects.map((aspect) => {
+					const attrs = db
+						.prepare(
+							`SELECT content, kind, importance, confidence, memory_id
 						 FROM entity_attributes
 						 WHERE aspect_id = ? AND agent_id = ?
 						   AND status = 'active'
 						 ORDER BY importance DESC
 						 LIMIT ?`,
-					)
-					.all(aspect.id, agentId, traversalCfg.maxAttributesPerAspect) as Array<{
-					content: string;
-					kind: string;
-					importance: number;
-					confidence: number;
-					memory_id: string | null;
-				}>;
-				return {
-					name: aspect.canonical_name,
-					weight: aspect.weight,
-					attributes: attrs
-						.filter((attribute) =>
-							attribute.memory_id
-								? isMemoryContentContextEligible(db, {
-										agentId,
-										sourceKind: "memory",
-										sourceId: attribute.memory_id,
-										content: attribute.content,
-									})
-								: scanMemoryContent(attribute.content).contextEligible,
 						)
-						.map(({ memory_id: _memoryId, ...attribute }) => attribute),
-				};
-			});
+						.all(aspect.id, agentId, traversalCfg.maxAttributesPerAspect) as Array<{
+						content: string;
+						kind: string;
+						importance: number;
+						confidence: number;
+						memory_id: string | null;
+					}>;
+					return {
+						name: aspect.canonical_name,
+						weight: aspect.weight,
+						attributes: attrs
+							.filter((attribute) =>
+								attribute.memory_id
+									? isMemoryContentContextEligible(db, {
+											agentId,
+											sourceKind: "memory",
+											sourceId: attribute.memory_id,
+											content: attribute.content,
+										})
+									: scanMemoryContent(attribute.content).contextEligible,
+							)
+							.map(({ memory_id: _memoryId, ...attribute }) => attribute),
+					};
+				});
 
-			const deps = db
-				.prepare(
-					`SELECT e.name as target, ed.dependency_type as type,
+				const deps = db
+					.prepare(
+						`SELECT e.name as target, ed.dependency_type as type,
 					        ed.strength
 					 FROM entity_dependencies ed
 					 JOIN entities e ON e.id = ed.target_entity_id
@@ -500,66 +510,68 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					   AND ed.strength >= ?
 					 ORDER BY ed.strength DESC
 					 LIMIT ?`,
-				)
-				.all(primaryEntityId, agentId, traversalCfg.minDependencyStrength, traversalCfg.maxDependencyHops) as Array<{
-				target: string;
-				type: string;
-				strength: number;
-			}>;
-
-			let tokenBudget = maxTokens;
-			const hydratedMemories: Array<{
-				id: string;
-				content: string;
-			}> = [];
-			for (const memId of traversal.memoryIds) {
-				if (tokenBudget <= 0) break;
-				const mem = db
-					.prepare(
-						`SELECT id, content, agent_id FROM memories
-						 WHERE id = ? AND is_deleted = 0`,
 					)
-					.get(memId) as { id: string; content: string; agent_id: string | null } | undefined;
-				if (
-					mem &&
-					isMemoryContentContextEligible(db, {
-						agentId: mem.agent_id?.trim() || "default",
-						sourceKind: "memory",
-						sourceId: mem.id,
-						content: mem.content,
-					})
-				) {
-					const approxTokens = Math.ceil(mem.content.length / 4);
-					if (approxTokens <= tokenBudget) {
-						hydratedMemories.push({ id: mem.id, content: mem.content });
-						tokenBudget -= approxTokens;
+					.all(primaryEntityId, agentId, traversalCfg.minDependencyStrength, traversalCfg.maxDependencyHops) as Array<{
+					target: string;
+					type: string;
+					strength: number;
+				}>;
+
+				let tokenBudget = maxTokens;
+				const hydratedMemories: Array<{
+					id: string;
+					content: string;
+				}> = [];
+				for (const memId of traversal.memoryIds) {
+					if (tokenBudget <= 0) break;
+					const mem = db
+						.prepare(
+							`SELECT id, content, agent_id FROM memories
+						 WHERE id = ? AND is_deleted = 0`,
+						)
+						.get(memId) as { id: string; content: string; agent_id: string | null } | undefined;
+					if (
+						mem &&
+						isMemoryContentContextEligible(db, {
+							agentId: mem.agent_id?.trim() || "default",
+							sourceKind: "memory",
+							sourceId: mem.id,
+							content: mem.content,
+						})
+					) {
+						const approxTokens = Math.ceil(mem.content.length / 4);
+						if (approxTokens <= tokenBudget) {
+							hydratedMemories.push({ id: mem.id, content: mem.content });
+							tokenBudget -= approxTokens;
+						}
 					}
 				}
-			}
 
-			const entityDescription = entityRow?.description
-				? scanMemoryContent(entityRow.description).contextEligible
-					? entityRow.description
-					: MEMORY_CONTENT_WITHHELD_NOTICE
-				: null;
-			return c.json({
-				entity: entityRow
-					? {
-							id: entityRow.id,
-							name: entityRow.name,
-							type: entityRow.entity_type,
-							description: entityDescription,
-						}
-					: null,
-				constraints: traversal.constraints.filter(
-					(constraint) => scanMemoryContent(constraint.content).contextEligible,
-				),
-				aspects: aspectsWithAttributes,
-				dependencies: deps,
-				memoryCount: traversal.memoryIds.size,
-				memories: hydratedMemories,
-			});
-		}, { siteToken: "routes/knowledge-routes.ts:422" });
+				const entityDescription = entityRow?.description
+					? scanMemoryContent(entityRow.description).contextEligible
+						? entityRow.description
+						: MEMORY_CONTENT_WITHHELD_NOTICE
+					: null;
+				return c.json({
+					entity: entityRow
+						? {
+								id: entityRow.id,
+								name: entityRow.name,
+								type: entityRow.entity_type,
+								description: entityDescription,
+							}
+						: null,
+					constraints: traversal.constraints.filter(
+						(constraint) => scanMemoryContent(constraint.content).contextEligible,
+					),
+					aspects: aspectsWithAttributes,
+					dependencies: deps,
+					memoryCount: traversal.memoryIds.size,
+					memories: hydratedMemories,
+				});
+			},
+			{ siteToken: "routes/knowledge-routes.ts:431" },
+		);
 	});
 
 	app.post("/api/knowledge/expand/session", async (c) => {
@@ -591,12 +603,15 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entityName is required" }, 400);
 		}
 
-		const hasSessionSummaries = await getDbAccessor().withReadDbAsync(async (db) => {
-			const tbl = db
-				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
-				.get() as { name: string } | undefined;
-			return tbl !== undefined;
-		}, { siteToken: "routes/knowledge-routes.ts:594" });
+		const hasSessionSummaries = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const tbl = db
+					.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
+					.get() as { name: string } | undefined;
+				return tbl !== undefined;
+			},
+			{ siteToken: "routes/knowledge-routes.ts:606" },
+		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
 		const entity = await resolveNamedEntity(getDbAccessor(), {
@@ -605,42 +620,47 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		});
 		if (!entity) return c.json({ entityName, summaries: [], total: 0 });
 
-		return await getDbAccessor().withReadDbAsync(async (db) => {
-			const conditions = ["ss.agent_id = ?", "ss.kind = 'session'", "COALESCE(ss.source_type, 'summary') = 'summary'"];
-			const args: Array<string | number> = [agentId];
+		return await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const conditions = [
+					"ss.agent_id = ?",
+					"ss.kind = 'session'",
+					"COALESCE(ss.source_type, 'summary') = 'summary'",
+				];
+				const args: Array<string | number> = [agentId];
 
-			if (scopedProject.project) {
-				conditions.push("ss.project = ?");
-				args.push(scopedProject.project);
-			}
+				if (scopedProject.project) {
+					conditions.push("ss.project = ?");
+					args.push(scopedProject.project);
+				}
 
-			if (sessionId) {
-				conditions.push("ss.session_key = ?");
-				args.push(sessionId);
-			}
+				if (sessionId) {
+					conditions.push("ss.session_key = ?");
+					args.push(sessionId);
+				}
 
-			if (timeRange === "last_week") {
-				conditions.push("ss.latest_at >= datetime('now', '-7 days')");
-			} else if (timeRange === "last_month") {
-				conditions.push("ss.latest_at >= datetime('now', '-30 days')");
-			} else if (timeRange && timeRange.length > 0) {
-				conditions.push("ss.latest_at >= ?");
-				args.push(timeRange);
-			}
+				if (timeRange === "last_week") {
+					conditions.push("ss.latest_at >= datetime('now', '-7 days')");
+				} else if (timeRange === "last_month") {
+					conditions.push("ss.latest_at >= datetime('now', '-30 days')");
+				} else if (timeRange && timeRange.length > 0) {
+					conditions.push("ss.latest_at >= ?");
+					args.push(timeRange);
+				}
 
-			const cn = entity.canonicalName.toLowerCase().replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
-			const useTextFallback = cn.length >= 4;
-			const normalizedContent =
-				`LOWER(' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(` +
-				"REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ss.content," +
-				`',', ' '), '.', ' '), '!', ' '), '?', ' '), ';', ' '), '"', ' '),` +
-				`char(39), ' '), char(40), ' '), char(41), ' '),` +
-				`char(10), ' '), char(9), ' '), ':', ' '), '-', ' ') || ' ')`;
-			const fallbackClause = useTextFallback ? `OR ${normalizedContent} LIKE ? ESCAPE '\\'` : "";
-			const fallbackArgs = useTextFallback ? [`% ${cn} %`] : [];
-			const rows = db
-				.prepare(
-					`SELECT DISTINCT ss.id, ss.content, ss.session_key,
+				const cn = entity.canonicalName.toLowerCase().replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+				const useTextFallback = cn.length >= 4;
+				const normalizedContent =
+					`LOWER(' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(` +
+					"REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ss.content," +
+					`',', ' '), '.', ' '), '!', ' '), '?', ' '), ';', ' '), '"', ' '),` +
+					`char(39), ' '), char(40), ' '), char(41), ' '),` +
+					`char(10), ' '), char(9), ' '), ':', ' '), '-', ' ') || ' ')`;
+				const fallbackClause = useTextFallback ? `OR ${normalizedContent} LIKE ? ESCAPE '\\'` : "";
+				const fallbackArgs = useTextFallback ? [`% ${cn} %`] : [];
+				const rows = db
+					.prepare(
+						`SELECT DISTINCT ss.id, ss.content, ss.session_key,
 					        ss.harness, ss.earliest_at, ss.latest_at
 					 FROM session_summaries ss
 					 WHERE ${conditions.join(" AND ")}
@@ -657,37 +677,39 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					   )
 					 ORDER BY ss.latest_at DESC
 					 LIMIT ?`,
-				)
-				.all(...args, entity.id, ...fallbackArgs, maxResults) as Array<{
-				id: string;
-				content: string;
-				session_key: string | null;
-				harness: string | null;
-				earliest_at: string;
-				latest_at: string;
-			}>;
-			const safeRows = rows.filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId,
-					sourceKind: "summary",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			);
+					)
+					.all(...args, entity.id, ...fallbackArgs, maxResults) as Array<{
+					id: string;
+					content: string;
+					session_key: string | null;
+					harness: string | null;
+					earliest_at: string;
+					latest_at: string;
+				}>;
+				const safeRows = rows.filter((row) =>
+					isMemoryContentContextEligible(db, {
+						agentId,
+						sourceKind: "summary",
+						sourceId: row.id,
+						content: row.content,
+					}),
+				);
 
-			return c.json({
-				entityName: entity.name,
-				summaries: safeRows.map((row) => ({
-					id: row.id,
-					sessionKey: row.session_key,
-					harness: row.harness,
-					earliestAt: row.earliest_at,
-					latestAt: row.latest_at,
-					content: row.content,
-				})),
-				total: safeRows.length,
-			});
-		}, { siteToken: "routes/knowledge-routes.ts:608" });
+				return c.json({
+					entityName: entity.name,
+					summaries: safeRows.map((row) => ({
+						id: row.id,
+						sessionKey: row.session_key,
+						harness: row.harness,
+						earliestAt: row.earliest_at,
+						latestAt: row.latest_at,
+						content: row.content,
+					})),
+					total: safeRows.length,
+				});
+			},
+			{ siteToken: "routes/knowledge-routes.ts:623" },
+		);
 	});
 
 	app.post("/api/graph/impact", async (c) => {
@@ -703,9 +725,10 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entityId is required" }, 400);
 		}
 
-		const result = await getDbAccessor().withReadDbAsync(async (db) =>
-			walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-		{ siteToken: "routes/knowledge-routes.ts:706" });
+		const result = await getDbAccessor().withReadDbAsync(
+			async (db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
+			{ siteToken: "routes/knowledge-routes.ts:728" },
+		);
 		return c.json(result);
 	});
 }

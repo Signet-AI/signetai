@@ -261,9 +261,12 @@ async function processDocument(
 		throw new Error("document_ingest job missing document_id");
 	}
 
-	const doc = await accessor.withReadDbAsync(async (db) => {
-		return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
-	}, { siteToken: "pipeline/document-worker.ts:264" });
+	const doc = await accessor.withReadDbAsync(
+		async (db) => {
+			return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
+		},
+		{ siteToken: "pipeline/document-worker.ts:264" },
+	);
 
 	if (!doc) {
 		throw new Error(`Document ${docId} not found`);
@@ -574,12 +577,15 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 	>();
 
 	async function terminalStatus(jobId: string): Promise<string | null> {
-		return deps.accessor.withReadDbAsync(async (db) => {
-			const row = db.prepare("SELECT status FROM memory_jobs WHERE id = ?").get(jobId) as
-				| { status?: string }
-				| undefined;
-			return row?.status ?? null;
-		}, { siteToken: "pipeline/document-worker.ts:577" });
+		return deps.accessor.withReadDbAsync(
+			async (db) => {
+				const row = db.prepare("SELECT status FROM memory_jobs WHERE id = ?").get(jobId) as
+					| { status?: string }
+					| undefined;
+				return row?.status ?? null;
+			},
+			{ siteToken: "pipeline/document-worker.ts:580" },
+		);
 	}
 
 	async function emitOperation(
@@ -597,13 +603,15 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 					db.prepare("SELECT chunk_count, memory_count FROM documents WHERE id = ?").get(job.document_id) as
 						| { chunk_count?: number | null; memory_count?: number | null }
 						| undefined,
-			{ siteToken: "pipeline/document-worker.ts:595" });
+				{ siteToken: "pipeline/document-worker.ts:601" },
+			);
 			const durableLinks = await deps.accessor.withReadDbAsync(
 				async (db) =>
 					db.prepare("SELECT COUNT(*) AS count FROM document_memories WHERE document_id = ?").get(job.document_id) as
 						| { count?: number | null }
 						| undefined,
-			{ siteToken: "pipeline/document-worker.ts:601" });
+				{ siteToken: "pipeline/document-worker.ts:608" },
+			);
 			if (durable) {
 				const accepted =
 					typeof durableLinks?.count === "number"
