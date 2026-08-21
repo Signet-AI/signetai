@@ -42,7 +42,7 @@ export async function readCuratedMemoryHead(agentId: string): Promise<Record<str
 			.prepare("SELECT status FROM memory_head_publications WHERE agent_id = ? AND revision = ?")
 			.get(agentId, revision) as { status?: string } | undefined;
 		return { head, entries, pending };
-	});
+	}, { siteToken: "memory-head-curation.ts:31" });
 	const head = snapshot.head;
 	const content = typeof head?.content === "string" ? head.content : "";
 	if (content) {
@@ -64,7 +64,7 @@ export async function readCuratedMemoryHead(agentId: string): Promise<Record<str
 						"UPDATE memory_head_publications SET status='completed', completed_at=? WHERE agent_id=? AND revision=?",
 					)
 					.run(new Date().toISOString(), agentId, head?.revision ?? 0);
-			});
+			}, { siteToken: "memory-head-curation.ts:61" });
 		}
 	}
 	return {
@@ -201,7 +201,7 @@ export async function commitCuratedMemoryHead(input: {
 			hash: contentHash,
 			changedIds: input.entries.map((entry) => entry.entryId),
 		};
-	});
+	}, { siteToken: "memory-head-curation.ts:95" });
 	if (!committed.ok || committed.code !== "COMMITTED" || committed.revision === undefined) return committed;
 	const target = pathFor(input.agentId);
 	mkdirSync(dirname(target), { recursive: true });
@@ -222,7 +222,7 @@ export async function commitCuratedMemoryHead(input: {
 			db.prepare(
 				"UPDATE memory_head_publications SET status='completed', completed_at=? WHERE agent_id=? AND revision=?",
 			).run(new Date().toISOString(), input.agentId, committed.revision);
-		});
+		}, { siteToken: "memory-head-curation.ts:221" });
 	} catch (error) {
 		return {
 			...committed,

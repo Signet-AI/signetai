@@ -107,7 +107,7 @@ export async function getTranscriptHealthReport(
 			oldestUpdatedAt: asStringOrNull(row?.oldest_updated_at),
 			newestUpdatedAt: asStringOrNull(row?.newest_updated_at),
 		};
-	});
+	}, { siteToken: "transcript-health.ts:96" });
 	const artifacts = await dbAccessor.withReadDbAsync(async (db) => {
 		const andAgent = agentId ? "AND agent_id = ?" : "";
 		const params = agentId ? [agentId] : [];
@@ -151,7 +151,7 @@ export async function getTranscriptHealthReport(
 			missingTranscriptArtifacts,
 			missingSummaryArtifacts,
 		};
-	});
+	}, { siteToken: "transcript-health.ts:111" });
 	// Summary status fields are retained as historical provenance, but no
 	// longer participate in health: the summary worker is retired and direct
 	// transcript completion is the live delivery contract.

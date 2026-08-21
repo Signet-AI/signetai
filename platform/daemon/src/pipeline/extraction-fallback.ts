@@ -39,6 +39,6 @@ export async function retireLegacyExtractionJobsAsync(
 				db.prepare("UPDATE memories SET extraction_status = 'retired' WHERE id = ?").run(source.id);
 			return result.changes;
 		},
-		{ operation: "startup.retire-legacy-extraction", estimatedWorkUnits: 1 },
+		{ siteToken: "pipeline/extraction-fallback.ts:19", operation: "startup.retire-legacy-extraction", estimatedWorkUnits: 1 },
 	);
 }

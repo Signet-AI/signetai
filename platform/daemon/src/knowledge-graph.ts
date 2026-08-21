@@ -198,7 +198,7 @@ export async function getAspectsForEntity(
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToAspect);
-	});
+	}, { siteToken: "knowledge-graph.ts:191" });
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ export async function getAttributesForAspect(
 			)
 			.all(aspectId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToAttribute);
-	});
+	}, { siteToken: "knowledge-graph.ts:213" });
 }
 
 /**
@@ -246,7 +246,7 @@ export async function getConstraintsForEntity(
 			)
 			.all(entityId, agentId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToAttribute);
-	});
+	}, { siteToken: "knowledge-graph.ts:235" });
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ export async function getEntityDependencyById(
 			.prepare("SELECT * FROM entity_dependencies WHERE id = ? AND agent_id = ?")
 			.get(params.id, params.agentId) as Record<string, unknown> | undefined;
 		return row === undefined ? null : rowToDependency(row);
-	});
+	}, { siteToken: "knowledge-graph.ts:260" });
 }
 
 export async function getDependenciesFrom(
@@ -284,7 +284,7 @@ export async function getDependenciesFrom(
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToDependency);
-	});
+	}, { siteToken: "knowledge-graph.ts:273" });
 }
 
 export async function getDependenciesTo(
@@ -306,7 +306,7 @@ export async function getDependenciesTo(
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToDependency);
-	});
+	}, { siteToken: "knowledge-graph.ts:295" });
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +340,7 @@ export async function getPinnedEntities(
 				},
 			];
 		});
-	});
+	}, { siteToken: "knowledge-graph.ts:320" });
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +401,7 @@ export async function getTaskMeta(accessor: DbAccessor, entityId: string, agentI
 			| Record<string, unknown>
 			| undefined;
 		return row ? rowToTaskMeta(row) : null;
-	});
+	}, { siteToken: "knowledge-graph.ts:399" });
 }
 
 export async function updateTaskStatus(
@@ -645,7 +645,7 @@ export async function resolveNamedEntity(
 			entityType: rows.entity_type,
 			description: rows.description,
 		};
-	});
+	}, { siteToken: "knowledge-graph.ts:579" });
 }
 
 function resolveAspectByName(
@@ -769,7 +769,7 @@ export async function listEntityAliases(
 			)
 			.all(...args) as Array<Record<string, unknown>>;
 		return rows.map(rowToEntityAlias);
-	});
+	}, { siteToken: "knowledge-graph.ts:754" });
 }
 
 export async function getEntityAspectsByName(
@@ -789,7 +789,7 @@ export async function getEntityAspectsByName(
 			entity,
 			items: readEntityAspectsWithCounts(db, entity.id, params.agentId),
 		};
-	});
+	}, { siteToken: "knowledge-graph.ts:782" });
 }
 
 export async function getEntityKnowledgeTree(
@@ -938,7 +938,7 @@ export async function getEntityKnowledgeTree(
 				};
 			}),
 		};
-	});
+	}, { siteToken: "knowledge-graph.ts:806" });
 }
 
 export async function listEntityGroups(
@@ -998,7 +998,7 @@ export async function listEntityGroups(
 				latestUpdatedAt: typeof row.latest_updated_at === "string" ? row.latest_updated_at : null,
 			})),
 		};
-	});
+	}, { siteToken: "knowledge-graph.ts:956" });
 }
 
 export async function listEntityClaims(
@@ -1072,7 +1072,7 @@ export async function listEntityClaims(
 				preview: typeof row.preview === "string" ? row.preview : null,
 			})),
 		};
-	});
+	}, { siteToken: "knowledge-graph.ts:1017" });
 }
 
 export async function listEntityAttributesByPath(
@@ -1141,7 +1141,7 @@ export async function listEntityAttributesByPath(
 			aspect,
 			items: rows.map(rowToAttribute),
 		};
-	});
+	}, { siteToken: "knowledge-graph.ts:1096" });
 }
 
 export async function listKnowledgeEntities(
@@ -1230,7 +1230,7 @@ export async function listKnowledgeEntities(
 			constraintCount: Number(row.constraint_count ?? 0),
 			dependencyCount: Number(row.dependency_count ?? 0),
 		}));
-	});
+	}, { siteToken: "knowledge-graph.ts:1157" });
 }
 
 export async function getKnowledgeEntityDetail(
@@ -1293,7 +1293,7 @@ export async function getKnowledgeEntityDetail(
 				   AND COALESCE(e.status, 'active') = 'active'`,
 			)
 			.get(entityId, agentId) as Record<string, unknown> | undefined;
-	});
+	}, { siteToken: "knowledge-graph.ts:1241" });
 
 	if (!row) return null;
 	const structuralDensity = await getStructuralDensity(accessor, entityId, agentId);
@@ -1345,7 +1345,7 @@ export async function getEntityAspectsWithCounts(
 	entityId: string,
 	agentId: string,
 ): Promise<readonly AspectWithCounts[]> {
-	return await accessor.withReadDbAsync(async (db) => readEntityAspectsWithCounts(db, entityId, agentId));
+	return await accessor.withReadDbAsync(async (db) => readEntityAspectsWithCounts(db, entityId, agentId), { siteToken: "knowledge-graph.ts:1348" });
 }
 
 export async function getAttributesForAspectFiltered(
@@ -1391,7 +1391,7 @@ export async function getAttributesForAspectFiltered(
 			)
 			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
 		return rows.map(rowToAttribute);
-	});
+	}, { siteToken: "knowledge-graph.ts:1363" });
 }
 
 export async function getEntityDependenciesDetailed(
@@ -1446,7 +1446,7 @@ export async function getEntityDependenciesDetailed(
 			createdAt: row.created_at as string,
 			updatedAt: row.updated_at as string,
 		}));
-	});
+	}, { siteToken: "knowledge-graph.ts:1405" });
 }
 
 export async function getKnowledgeStats(accessor: DbAccessor, agentId: string): Promise<KnowledgeStats> {
@@ -1568,7 +1568,7 @@ export async function getKnowledgeStats(accessor: DbAccessor, agentId: string): 
 			maxWeightAspectCount: Number(feedbackStats.max_weight_count ?? 0),
 			minWeightAspectCount: Number(feedbackStats.min_weight_count ?? 0),
 		};
-	});
+	}, { siteToken: "knowledge-graph.ts:1453" });
 }
 
 export async function getEntityHealth(
@@ -1658,7 +1658,7 @@ export async function getEntityHealth(
 			return b.comparisonCount - a.comparisonCount;
 		});
 		return health;
-	});
+	}, { siteToken: "knowledge-graph.ts:1580" });
 }
 
 export async function propagateMemoryStatus(accessor: DbAccessor, agentId: string): Promise<number> {
@@ -2197,7 +2197,7 @@ export async function getKnowledgeGraphForConstellation(
 				proposals: getConstellationProposalSummary(db, agentId),
 			},
 		};
-	});
+	}, { siteToken: "knowledge-graph.ts:1959" });
 }
 
 export async function getStructuralDensity(
@@ -2247,5 +2247,5 @@ export async function getStructuralDensity(
 			constraintCount: constraints.n,
 			dependencyCount: dependencies.n,
 		};
-	});
+	}, { siteToken: "knowledge-graph.ts:2208" });
 }

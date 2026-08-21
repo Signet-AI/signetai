@@ -102,7 +102,7 @@ export async function getStructuralFeatures(
 			byMemoryId.set(row.memory_id, choosePrimaryRow(byMemoryId.get(row.memory_id), row));
 		}
 		return byMemoryId;
-	});
+	}, { siteToken: "structural-features.ts:78" });
 
 	const densityCache = new Map<string, number>();
 	for (const [memoryId, row] of primaryRows) {
@@ -168,7 +168,7 @@ export async function buildCandidateFeatures(
 			)
 			.all(...candidateIds) as ReadonlyArray<{ source_id: string }>;
 		return new Set(rows.map((row) => row.source_id));
-	});
+	}, { siteToken: "structural-features.ts:161" });
 
 	const nowMs = Date.now();
 	const todAngle = (2 * Math.PI * sessionContext.timeOfDay) / 24;

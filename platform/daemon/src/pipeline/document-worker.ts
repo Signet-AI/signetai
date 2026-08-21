@@ -263,7 +263,7 @@ async function processDocument(
 
 	const doc = await accessor.withReadDbAsync(async (db) => {
 		return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
-	});
+	}, { siteToken: "pipeline/document-worker.ts:264" });
 
 	if (!doc) {
 		throw new Error(`Document ${docId} not found`);
@@ -579,7 +579,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 				| { status?: string }
 				| undefined;
 			return row?.status ?? null;
-		});
+		}, { siteToken: "pipeline/document-worker.ts:577" });
 	}
 
 	async function emitOperation(
@@ -597,13 +597,13 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 					db.prepare("SELECT chunk_count, memory_count FROM documents WHERE id = ?").get(job.document_id) as
 						| { chunk_count?: number | null; memory_count?: number | null }
 						| undefined,
-			);
+			{ siteToken: "pipeline/document-worker.ts:595" });
 			const durableLinks = await deps.accessor.withReadDbAsync(
 				async (db) =>
 					db.prepare("SELECT COUNT(*) AS count FROM document_memories WHERE document_id = ?").get(job.document_id) as
 						| { count?: number | null }
 						| undefined,
-			);
+			{ siteToken: "pipeline/document-worker.ts:601" });
 			if (durable) {
 				const accepted =
 					typeof durableLinks?.count === "number"

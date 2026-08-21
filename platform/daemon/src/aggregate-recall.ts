@@ -740,7 +740,7 @@ async function embedAggregateMemory(
 	// Aggregate saves can originate from hooks with the desired config while a
 	// new index is staging. They must stay in the active vector space until
 	// promotion; the staging worker independently copies every active row.
-	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
+	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), { siteToken: "aggregate-recall.ts:743",
 		operation: "aggregate-recall.resolve-active-embedding",
 	});
 	const vec = await embedFn(content, activeCfg, "document");
@@ -761,7 +761,7 @@ async function embedAggregateMemory(
 		syncVecInsert(db, embId, vec);
 		db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
 		return true;
-	});
+	}, { siteToken: "aggregate-recall.ts:748" });
 	return written;
 }
 
@@ -1082,7 +1082,7 @@ export async function aggregateRecall(
 					linkAggregateQueryHint(db, id, agentId, params.query, now);
 					saved = true;
 					return loadAggregateMemory(db, id);
-				}),
+				}, { siteToken: "aggregate-recall.ts:1010" }),
 		);
 		if (row && !deduped) {
 			const savedRow = row;

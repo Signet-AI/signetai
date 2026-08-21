@@ -581,7 +581,7 @@ async function purgeStaleDiscordArtifacts(
 					   ${preserveClause}`,
 				)
 				.all(...params) as Array<{ source_path: string }>,
-		{ operation: "discord-source.purge-stale.read" },
+		{ siteToken: "discord-source-provider.ts:573", operation: "discord-source.purge-stale.read" },
 	);
 	for (const row of rows) await purgeSourceArtifactStructureAsync({ agentId, sourceId, sourcePath: row.source_path });
 	return await getDbAccessor().withWriteTxAsync(
@@ -597,7 +597,7 @@ async function purgeStaleDiscordArtifacts(
 					)
 					.run(...params),
 			),
-		{ operation: "discord-source.purge-stale.delete" },
+		{ siteToken: "discord-source-provider.ts:587", operation: "discord-source.purge-stale.delete" },
 	);
 }
 
@@ -641,7 +641,7 @@ async function readDiscordCheckpoint(
 				.get(agentId, sourceId, `discord://source/${sourceId}/checkpoint/${guildId}/${channelId}`) as
 				| { source_meta_json: string | null }
 				| undefined,
-		{ operation: "discord-source.checkpoint.read" },
+		{ siteToken: "discord-source-provider.ts:630", operation: "discord-source.checkpoint.read" },
 	);
 	if (!row?.source_meta_json) return null;
 	try {
@@ -887,7 +887,7 @@ async function patchedMessageArtifact(
 				.get(agentId, source.id, `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`) as
 				| { content: string; source_meta_json: string | null }
 				| undefined,
-	);
+	{ siteToken: "discord-source-provider.ts:875" });
 	if (!row) return null;
 	const meta = parseMetaJson(row.source_meta_json);
 	const editedAt = readPayloadString(payload, "edited_timestamp") ?? readMetaString(meta, "editedAt");
@@ -966,7 +966,7 @@ async function purgeClearedPartialUpdateArtifacts(
 					   AND source_kind IN (${placeholders})`,
 				)
 				.all(...params) as Array<{ source_path: string }>,
-		{ operation: "discord-source.partial-purge.read" },
+		{ siteToken: "discord-source-provider.ts:958", operation: "discord-source.partial-purge.read" },
 	);
 	for (const row of rows)
 		await purgeSourceArtifactStructureAsync({ agentId, sourceId: source.id, sourcePath: row.source_path });
@@ -983,7 +983,7 @@ async function purgeClearedPartialUpdateArtifacts(
 					)
 					.run(...params),
 			),
-		{ operation: "discord-source.partial-purge.delete" },
+		{ siteToken: "discord-source-provider.ts:973", operation: "discord-source.partial-purge.delete" },
 	);
 }
 

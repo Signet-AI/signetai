@@ -491,7 +491,7 @@ export async function fetchEmbedding(
 	const effectiveCfg =
 		cfg.indexGeneration === "staging" || !hasDbAccessor()
 			? cfg
-			: await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
+			: await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), { siteToken: "embedding-fetch.ts:494",
 					operation: "embedding.resolve-active-config",
 				});
 	if (effectiveCfg.provider === "none") return null;

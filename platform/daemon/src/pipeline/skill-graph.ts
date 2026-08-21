@@ -95,7 +95,7 @@ async function findSkillEntityId(input: SkillUninstallInput, accessor: DbAccesso
 				.get(input.skillName, agentId) as { id: string } | undefined;
 			return adopted?.id ?? null;
 		},
-		{ operation: "pipeline.skill-graph.find" },
+		{ siteToken: "pipeline/skill-graph.ts:79", operation: "pipeline.skill-graph.find" },
 	);
 }
 
@@ -285,7 +285,7 @@ export async function installSkillNode(
 				);
 			}
 		},
-		{ operation: "pipeline.skill-graph.install-metadata" },
+		{ siteToken: "pipeline/skill-graph.ts:175", operation: "pipeline.skill-graph.install-metadata" },
 	);
 
 	// Step 2: Generate embedding from the authored frontmatter
@@ -293,7 +293,7 @@ export async function installSkillNode(
 	const embeddingText = buildEmbeddingText(fm);
 	const writeConfig = await accessor.withReadDbAsync(
 		(db: import("../db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, embeddingCfg),
-		{ operation: "pipeline.skill-graph.install-embedding-config" },
+		{ siteToken: "pipeline/skill-graph.ts:294", operation: "pipeline.skill-graph.install-embedding-config" },
 	);
 	const embVec = await fetchEmbedding(embeddingText, writeConfig, "document", {
 		usage: { source: "artifact-index", agentId },
@@ -342,7 +342,7 @@ export async function installSkillNode(
 				syncVecInsert(db, actualRow.id, embVec);
 				return true;
 			},
-			{ operation: "pipeline.skill-graph.install-embedding" },
+			{ siteToken: "pipeline/skill-graph.ts:307", operation: "pipeline.skill-graph.install-embedding" },
 		);
 	}
 
@@ -377,7 +377,7 @@ export async function uninstallSkillNode(
 					).run(now, now, metaId, agentId);
 				}
 			},
-			{ operation: "pipeline.skill-graph.uninstall-metadata" },
+			{ siteToken: "pipeline/skill-graph.ts:372", operation: "pipeline.skill-graph.uninstall-metadata" },
 		);
 		return { removed: false, entityId: null };
 	}
@@ -416,7 +416,7 @@ export async function uninstallSkillNode(
 			}
 			db.prepare("DELETE FROM entities WHERE id = ?").run(entityId);
 		},
-		{ operation: "pipeline.skill-graph.uninstall" },
+		{ siteToken: "pipeline/skill-graph.ts:385", operation: "pipeline.skill-graph.uninstall" },
 	);
 
 	logger.info("pipeline", "Skill node uninstalled", {

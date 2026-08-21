@@ -318,7 +318,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				created_at: string;
 				updated_at: string;
 			}>;
-		});
+		}, { siteToken: "routes/knowledge-routes.ts:305" });
 		return c.json({ items: rows, count: rows.length });
 	});
 
@@ -371,7 +371,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 						resolveFocalEntities(db, agentId, {
 							queryTokens: entityName.split(/\s+/),
 						}),
-					);
+					{ siteToken: "routes/knowledge-routes.ts:370" });
 
 		if (focal.entityIds.length === 0) {
 			return c.json(
@@ -404,7 +404,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const traversal = await traverseKnowledgeGraph(
 			focal.entityIds,
-			(readFn) => getDbAccessor().withReadDbAsync(readFn, { operation: "knowledge.graph-traversal" }),
+			(readFn) => getDbAccessor().withReadDbAsync(readFn, { siteToken: "routes/knowledge-routes.ts:407", operation: "knowledge.graph-traversal" }),
 			agentId,
 			{
 				maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
@@ -559,7 +559,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				memoryCount: traversal.memoryIds.size,
 				memories: hydratedMemories,
 			});
-		});
+		}, { siteToken: "routes/knowledge-routes.ts:422" });
 	});
 
 	app.post("/api/knowledge/expand/session", async (c) => {
@@ -596,7 +596,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'")
 				.get() as { name: string } | undefined;
 			return tbl !== undefined;
-		});
+		}, { siteToken: "routes/knowledge-routes.ts:594" });
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
 		const entity = await resolveNamedEntity(getDbAccessor(), {
@@ -687,7 +687,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				})),
 				total: safeRows.length,
 			});
-		});
+		}, { siteToken: "routes/knowledge-routes.ts:608" });
 	});
 
 	app.post("/api/graph/impact", async (c) => {
@@ -705,7 +705,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(async (db) =>
 			walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-		);
+		{ siteToken: "routes/knowledge-routes.ts:706" });
 		return c.json(result);
 	});
 }

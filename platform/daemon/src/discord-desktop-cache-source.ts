@@ -491,7 +491,7 @@ async function purgeStaleDesktopCacheArtifacts(
 					   AND updated_at < ?`,
 				)
 				.all(agentId, sourceId, syncStartedAt) as Array<{ source_path: string }>,
-		{ operation: "discord-desktop-cache.purge-stale.read" },
+		{ siteToken: "discord-desktop-cache-source.ts:484", operation: "discord-desktop-cache.purge-stale.read" },
 	);
 	for (const row of rows) await purgeSourceArtifactStructureAsync({ agentId, sourceId, sourcePath: row.source_path });
 	return await getDbAccessor().withWriteTxAsync(
@@ -506,7 +506,7 @@ async function purgeStaleDesktopCacheArtifacts(
 					)
 					.run(agentId, sourceId, syncStartedAt),
 			),
-		{ operation: "discord-desktop-cache.purge-stale.delete" },
+		{ siteToken: "discord-desktop-cache-source.ts:497", operation: "discord-desktop-cache.purge-stale.delete" },
 	);
 }
 

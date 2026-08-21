@@ -215,7 +215,7 @@ export function mountHealthRoutes(app: Hono): void {
 					// /health is a liveness-adjacent probe. Do not let a queued
 					// database-owner/read lease turn a transient DB stall into an
 					// HTTP stall. The structured response below reports db: false.
-					{ operation: "health", timeoutMs: 500 },
+					{ siteToken: "routes/health.ts:191", operation: "health", timeoutMs: 500 },
 				);
 			} catch {
 				// Keep the structured admission outcome visible below.
@@ -286,7 +286,7 @@ export function mountHealthRoutes(app: Hono): void {
 						queueHealth: getQueueHealth(db),
 					};
 				},
-				{ operation: "health.ready" },
+				{ siteToken: "routes/health.ts:262", operation: "health.ready" },
 			);
 			dbReader = accessor.getReadPressure?.() ?? null;
 			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;

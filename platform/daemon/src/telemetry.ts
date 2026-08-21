@@ -837,7 +837,7 @@ export function createTelemetryCollector(
 					 FROM telemetry_delivery_state WHERE id = 1`,
 						)
 						.get() as TelemetryDeliveryState | undefined,
-			);
+			{ siteToken: "telemetry.ts:827" });
 			if (row) {
 				droppedEventCount = Math.max(droppedEventCount, row.droppedEventCount ?? 0);
 				return row;
@@ -877,7 +877,7 @@ export function createTelemetryCollector(
 					oldestTimestamp: pending?.oldestTimestamp ?? null,
 					lastTimestamp: latest?.timestamp ?? null,
 				};
-			});
+			}, { siteToken: "telemetry.ts:863" });
 			persistedQueueCount = queue.count;
 			persistedOldestTimestamp = queue.oldestTimestamp;
 			lastDaemonEventTimestamp = queue.lastTimestamp;
@@ -1635,7 +1635,7 @@ export function createTelemetryCollector(
 						timestamp: row.timestamp,
 						properties: JSON.parse(row.properties) as TelemetryProperties,
 					}));
-				});
+				}, { siteToken: "telemetry.ts:1597" });
 			} catch {
 				return [];
 			}

@@ -114,7 +114,7 @@ export function listConnectors(accessor: DbAccessor): readonly ConnectorRow[] {
 export async function listConnectorsAsync(accessor: DbAccessor): Promise<readonly ConnectorRow[]> {
 	return await accessor.withReadDbAsync(
 		(db) => db.prepare("SELECT * FROM connectors ORDER BY created_at DESC").all() as ConnectorRow[],
-		{ operation: "heartbeat.list-connectors" },
+		{ siteToken: "connectors/registry.ts:115", operation: "heartbeat.list-connectors" },
 	);
 }
 

@@ -74,7 +74,7 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 async function writeBatch<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
-	return accessor.withWriteTxAsync(processBatch);
+	return accessor.withWriteTxAsync(processBatch, { siteToken: "startup-recovery.ts:77" });
 }
 
 /**
@@ -96,7 +96,7 @@ async function drainBatchesAsync<Item>(
 	let batches = 0;
 	while (processed < maxTotal) {
 		const limit = Math.min(BATCH_SIZE, maxTotal - processed);
-		const batch = await accessor.withReadDbAsync(async (db) => fetchBatch(db, limit));
+		const batch = await accessor.withReadDbAsync(async (db) => fetchBatch(db, limit), { siteToken: "startup-recovery.ts:99" });
 		if (!batch || batch.length === 0) return processed;
 		await writeBatch(accessor, (db) => processBatch(db, batch));
 		processed += batch.length;
@@ -488,7 +488,7 @@ async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerC
 				| { state: string }
 				| undefined;
 			return state?.state === "building";
-		});
+		}, { siteToken: "startup-recovery.ts:482" });
 
 		if (migrationInProgress) {
 			logger.info("startup-recovery", "Skipping staging cleanup, embedding index migration is in progress");

@@ -473,7 +473,7 @@ async function purgeStaleGitHubArtifacts(
 				rowid: number;
 				source_path: string;
 			}>,
-	);
+	{ siteToken: "github-source-provider.ts:460" });
 	for (const row of rows) {
 		if (seenPaths.has(row.source_path)) continue;
 		await purgeSourceArtifactStructureAsync({ agentId, sourceId, sourcePath: row.source_path });
@@ -487,7 +487,7 @@ async function purgeStaleGitHubArtifacts(
 					.run(syncStartedAt, row.rowid),
 			);
 		}
-	});
+	}, { siteToken: "github-source-provider.ts:481" });
 }
 
 async function purgeStaleGitHubFailureArtifacts(
@@ -516,7 +516,7 @@ async function purgeStaleGitHubFailureArtifacts(
 					`github://source/${sourceId}/failures/\uffff`,
 				),
 		);
-	});
+	}, { siteToken: "github-source-provider.ts:498" });
 }
 
 function resourceExternalId(repo: string, resource: GitHubResource): string {

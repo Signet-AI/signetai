@@ -110,7 +110,7 @@ export async function recoverMissingSessionEndOnClearStart(
 				}
 				return { recoveredSessionKey: target.sessionKey, transcriptChars: target.transcript.length };
 			},
-			{ operation: "session-end.clear-recovery" },
+			{ siteToken: "session-end-recovery.ts:103", operation: "session-end.clear-recovery" },
 		);
 
 		if ("transcriptChars" in result) {

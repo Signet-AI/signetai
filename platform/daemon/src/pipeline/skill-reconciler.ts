@@ -173,7 +173,7 @@ export async function reconcileOnce(
 			db
 				.prepare("SELECT entity_id, fs_path FROM skill_meta WHERE agent_id = 'default' AND uninstalled_at IS NULL")
 				.all() as Array<{ entity_id: string; fs_path: string }>,
-		{ operation: "pipeline.skill-reconciler.list-graph-skills" },
+		{ siteToken: "pipeline/skill-reconciler.ts:171", operation: "pipeline.skill-reconciler.list-graph-skills" },
 	);
 
 	for (const row of graphSkills) {
@@ -251,7 +251,7 @@ export async function reconcileSkillFile(
 					db
 						.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = 'default')")
 						.get(entityId, skillName) as { id: string } | undefined,
-				{ operation: "pipeline.skill-reconciler.find-entity" },
+				{ siteToken: "pipeline/skill-reconciler.ts:249", operation: "pipeline.skill-reconciler.find-entity" },
 			);
 			const actualId = existing?.id ?? entityId;
 			const rawHash = skillEmbeddingHash(actualId, parsed.frontmatter);
@@ -260,7 +260,7 @@ export async function reconcileSkillFile(
 					db
 						.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
 						.get(actualId) as { content_hash: string } | undefined,
-				{ operation: "pipeline.skill-reconciler.find-embedding" },
+				{ siteToken: "pipeline/skill-reconciler.ts:258", operation: "pipeline.skill-reconciler.find-embedding" },
 			);
 
 			const shouldInstall =

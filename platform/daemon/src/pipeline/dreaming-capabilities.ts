@@ -85,7 +85,7 @@ async function filterDreamingAttributes(
 			}
 			return scanMemoryContent(attribute.content).contextEligible;
 		}),
-	);
+	{ siteToken: "pipeline/dreaming-capabilities.ts:62" });
 }
 
 /**
@@ -606,7 +606,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 							})
 						: projectEvidence(sources, query ?? "");
 					return { ok: true, items };
-				}),
+				}, { siteToken: "pipeline/dreaming-capabilities.ts:564" }),
 		),
 		capability(
 			"validate_proposal",
@@ -739,7 +739,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 							new Date(),
 							{ agentId: scopeId, limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200) },
 						),
-					);
+					{ siteToken: "pipeline/dreaming-capabilities.ts:736" });
 					return {
 						ok: true,
 						items: [

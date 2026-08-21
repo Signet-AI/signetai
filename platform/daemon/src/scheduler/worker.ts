@@ -114,7 +114,7 @@ export function startSchedulerWorker(db: DbAccessor): SchedulerHandle {
 					 WHERE status IN ('pending', 'running')`,
 					)
 					.run(),
-			{ operation: "scheduler.recover-runs" },
+			{ siteToken: "scheduler/worker.ts:107", operation: "scheduler.recover-runs" },
 		)
 		.catch((error: unknown) => {
 			logger.warn("scheduler", "Startup run recovery failed", {
@@ -130,7 +130,7 @@ export function startSchedulerWorker(db: DbAccessor): SchedulerHandle {
 			const nowIso = new Date().toISOString();
 			const dueTasks = await db.withReadDbAsync<ReadonlyArray<DueTaskRow>>(
 				(rdb) => selectDueTasks(rdb, nowIso, MAX_CONCURRENT - activeProcesses.size),
-				{ operation: "scheduler.select-due-tasks" },
+				{ siteToken: "scheduler/worker.ts:131", operation: "scheduler.select-due-tasks" },
 			);
 
 			for (const task of dueTasks) {
@@ -216,7 +216,7 @@ export async function executeTask(
 				)
 				.run(nextRun, now, now, task.id);
 		},
-		{ operation: "scheduler.lease-task" },
+		{ siteToken: "scheduler/worker.ts:202", operation: "scheduler.lease-task" },
 	);
 
 	deps.emitTaskStream({
@@ -298,7 +298,7 @@ export async function executeTask(
 					 WHERE id = ?`,
 				)
 				.run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId),
-		{ operation: "scheduler.complete-task" },
+		{ siteToken: "scheduler/worker.ts:291", operation: "scheduler.complete-task" },
 	);
 
 	deps.emitTaskStream({

@@ -10,7 +10,14 @@
  * retained.
  */
 
-export type SyncDbCallKind = "withReadDb" | "withWriteTx";
+export type SyncDbCallKind =
+	| "withReadDb"
+	| "withWriteTx"
+	| "withReadDbAsync"
+	| "withWriteTxAsync"
+	| "checkpointWalAsync"
+	| "incrementalVacuumAsync"
+	| "vacuumConversionAsync";
 export type SyncDbCallSiteToken = string;
 
 export interface SyncDbCallToken {
@@ -106,6 +113,11 @@ function captureCallerSite(): string {
 			parsed.functionName.endsWith("endSyncDbCall") ||
 			parsed.functionName.endsWith("withReadDb") ||
 			parsed.functionName.endsWith("withWriteTx") ||
+			parsed.functionName.endsWith("withReadDbAsync") ||
+			parsed.functionName.endsWith("withWriteTxAsync") ||
+			parsed.functionName.endsWith("checkpointWalAsync") ||
+			parsed.functionName.endsWith("incrementalVacuumAsync") ||
+			parsed.functionName.endsWith("vacuumConversionAsync") ||
 			parsed.file.endsWith("/sync-db-attribution.ts") ||
 			parsed.file.endsWith("/db-accessor.ts") ||
 			parsed.file.startsWith("node:") ||

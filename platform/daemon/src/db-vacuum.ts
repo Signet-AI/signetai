@@ -340,7 +340,7 @@ export function getVacuumConversionStatus(accessor: DbAccessor): VacuumConversio
 
 /** Async durable conversion-state lookup for background workers. */
 export async function getVacuumConversionStatusAsync(accessor: DbAccessor): Promise<VacuumConversionStatus> {
-	return await accessor.withReadDbAsync((db) => readStatusFromDb(toPragmaReadDb(db)), {
+	return await accessor.withReadDbAsync((db) => readStatusFromDb(toPragmaReadDb(db)), { siteToken: "db-vacuum.ts:343",
 		operation: "maintenance.vacuum.status",
 	});
 }
@@ -448,7 +448,7 @@ export async function reclaimIncrementalVacuum(
 		if (opts.owner) remaining = await dbOwnerIncrementalVacuum(opts.owner, batchPages);
 		else {
 			if (!accessor.incrementalVacuumAsync) throw new Error("incremental vacuum operation is unavailable");
-			remaining = await accessor.incrementalVacuumAsync();
+			remaining = await accessor.incrementalVacuumAsync({ siteToken: "db-vacuum.ts:451" });
 		}
 		const progressed = before === null ? Math.max(0, batchPages) : Math.max(0, before - remaining);
 		reclaimed += progressed;
@@ -501,7 +501,7 @@ export function startVacuumConversionWorker(
 						lastError: null,
 					});
 				},
-				{ operation: "maintenance.vacuum.mark-running" },
+				{ siteToken: "db-vacuum.ts:489", operation: "maintenance.vacuum.mark-running" },
 			);
 
 			const running = await getVacuumConversionStatusAsync(accessor);
@@ -516,7 +516,7 @@ export function startVacuumConversionWorker(
 					await dbOwnerVacuumConversion(opts.owner);
 				} else {
 					if (!accessor.vacuumConversionAsync) throw new Error("VACUUM conversion operation is unavailable");
-					await accessor.vacuumConversionAsync();
+					await accessor.vacuumConversionAsync({ siteToken: "db-vacuum.ts:519" });
 				}
 				await accessor.withWriteTxAsync(
 					(db) => {
@@ -531,7 +531,7 @@ export function startVacuumConversionWorker(
 							lastError: null,
 						});
 					},
-					{ operation: "maintenance.vacuum.mark-completed" },
+					{ siteToken: "db-vacuum.ts:521", operation: "maintenance.vacuum.mark-completed" },
 				);
 				logger.info("db-vacuum", "Post-ready conversion worker completed");
 			} catch (error) {
@@ -549,7 +549,7 @@ export function startVacuumConversionWorker(
 							lastError: message.slice(0, 500),
 						});
 					},
-					{ operation: "maintenance.vacuum.mark-failed" },
+					{ siteToken: "db-vacuum.ts:539", operation: "maintenance.vacuum.mark-failed" },
 				);
 				logger.error(
 					"db-vacuum",

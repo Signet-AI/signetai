@@ -630,7 +630,7 @@ async function applyRehearsalBoost(
 					last_accessed: string | null;
 					created_at: string;
 				}>,
-		);
+		{ siteToken: "memory-search.ts:619" });
 
 		const accessMap = new Map(accessRows.map((r) => [r.id, r]));
 		for (const s of scored) {
@@ -803,7 +803,7 @@ async function authorizeScoredCandidates(
 			}
 		}
 		return allowed;
-	});
+	}, { siteToken: "memory-search.ts:768" });
 	return scored.filter((row) => allowed.has(row.id));
 }
 
@@ -822,7 +822,7 @@ async function loadObservedScores(ids: readonly string[], agentId: string): Prom
 			)
 			.all(agentId, ...ids) as Array<{ memory_id: string; score: number }>;
 		return new Map(rows.map((row) => [row.memory_id, row.score]));
-	});
+	}, { siteToken: "memory-search.ts:813" });
 }
 
 interface CurrentnessInfo {
@@ -869,7 +869,7 @@ async function loadCurrentnessInfo(ids: readonly string[], agentId: string): Pro
 				scanMemoryContent(row.content).contextEligible &&
 				(row.replacement_content === null || scanMemoryContent(row.replacement_content).contextEligible),
 		);
-	});
+	}, { siteToken: "memory-search.ts:844" });
 
 	const mutable = new Map<
 		string,
@@ -1074,7 +1074,7 @@ async function buildSourceChunkVectorHits(
 				.filter((row) => row.score > 0 && !existingSourceIds.has(row.sourceId))
 				.sort((a, b) => b.score - a.score)
 				.slice(0, limit);
-		});
+		}, { siteToken: "memory-search.ts:1025" });
 	} catch (e) {
 		logger.warn("memory", "Source chunk vector recall failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
@@ -1311,7 +1311,7 @@ async function buildNativeArtifactRecallHits(
 					rank: maxRank > 0 ? Math.abs(row.rank) / maxRank : 0.2,
 				}))
 				.filter((row) => row.content.length > 0 && !existingSourceIds.has(nativeArtifactPublicId(row)));
-		});
+		}, { siteToken: "memory-search.ts:1196" });
 	} catch (e) {
 		logger.warn("memory", "Native artifact recall failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
@@ -1551,7 +1551,7 @@ export async function hybridRecall(
 				queryTokens: getGraphQueryTokens(),
 				includePinned: false,
 			}),
-		);
+		{ siteToken: "memory-search.ts:1549" });
 		focalCache = { agentId, value };
 		return value;
 	};
@@ -1617,7 +1617,7 @@ export async function hybridRecall(
 
 				// Min-max normalize BM25 scores to [0,1] within the batch
 				addFtsScores(ftsRows);
-			});
+			}, { siteToken: "memory-search.ts:1567" });
 		});
 	} catch (e) {
 		if (lexicalFallbackAttempted) {
@@ -1665,7 +1665,7 @@ export async function hybridRecall(
 						const hint = Math.abs(row.raw_score) / normalizer;
 						hintMap.set(row.id, Math.max(hintMap.get(row.id) ?? 0, hint));
 					}
-				});
+				}, { siteToken: "memory-search.ts:1643" });
 			});
 		} catch (e) {
 			// memory_hints_fts may not exist on pre-038 databases — silent fallback
@@ -1709,7 +1709,7 @@ export async function hybridRecall(
 					for (const r of vecResults) {
 						vectorMap.set(r.id, r.score);
 					}
-				});
+				}, { siteToken: "memory-search.ts:1703" });
 			});
 		} catch (e) {
 			logger.warn("memory", "Vector search failed, using keyword only", {
@@ -1739,7 +1739,7 @@ export async function hybridRecall(
 							filterSql: filter.sql,
 							filterArgs: filter.args,
 						}),
-					),
+					{ siteToken: "memory-search.ts:1735" }),
 			);
 			for (const [id, score] of candidates) structuredCandidateMap.set(id, score);
 		} catch (e) {
@@ -1758,7 +1758,7 @@ export async function hybridRecall(
 								limit: cfg.search.top_k,
 								minScore,
 							}),
-						),
+						{ siteToken: "memory-search.ts:1756" }),
 				);
 			} catch (e) {
 				logger.warn("memory", "Ontology claim candidate search failed (non-fatal)", {
@@ -1851,7 +1851,7 @@ export async function hybridRecall(
 						if (focal.entityIds.length > 0) {
 							const traversal = await traverseKnowledgeGraph(
 								focal.entityIds,
-								(readFn) => getDbAccessor().withReadDbAsync(readFn, { operation: "memory.graph-traversal" }),
+								(readFn) => getDbAccessor().withReadDbAsync(readFn, { siteToken: "memory-search.ts:1854", operation: "memory.graph-traversal" }),
 								agentId,
 								{
 									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
@@ -1886,7 +1886,7 @@ export async function hybridRecall(
 											source_id: string;
 											vector: Buffer | null;
 										}>,
-								);
+								{ siteToken: "memory-search.ts:1878" });
 								const qv = queryVecF32;
 								for (const row of embRows) {
 									if (!row.vector) continue;
@@ -1964,7 +1964,7 @@ export async function hybridRecall(
 					async () =>
 						await getDbAccessor().withReadDbAsync(async (db) =>
 							getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs, params.agentId),
-						),
+						{ siteToken: "memory-search.ts:1965" }),
 				);
 				if (graphResult.graphLinkedIds.size > 0) {
 					const gw = cfg.pipelineV2.graph.boostWeight;
@@ -1996,7 +1996,7 @@ export async function hybridRecall(
 						if (focal.entityIds.length > 0) {
 							const traversal = await traverseKnowledgeGraph(
 								focal.entityIds,
-								(readFn) => getDbAccessor().withReadDbAsync(readFn, { operation: "memory.graph-traversal" }),
+								(readFn) => getDbAccessor().withReadDbAsync(readFn, { siteToken: "memory-search.ts:1999", operation: "memory.graph-traversal" }),
 								agentId,
 								{
 									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
@@ -2048,7 +2048,7 @@ export async function hybridRecall(
 											id: string;
 											traversal_score: number;
 										}>,
-								);
+								{ siteToken: "memory-search.ts:2029" });
 
 								for (const row of baseRows) {
 									const traversalScore = Math.max(minScore, Math.min(1, row.traversal_score));
@@ -2115,7 +2115,7 @@ export async function hybridRecall(
 								 WHERE id IN (${placeholders})`,
 							)
 							.all(...candidateIds) as Array<{ id: string; content: string }>,
-				);
+				{ siteToken: "memory-search.ts:2110" });
 				for (const row of contentRows) {
 					const score = scoreTemporalTopicEvidence(query, row.content);
 					if (score <= 0) continue;
@@ -2159,7 +2159,7 @@ export async function hybridRecall(
 						query,
 						agentId,
 					),
-				);
+				{ siteToken: "memory-search.ts:2155" });
 				for (const [id, score] of structured) {
 					structuredEvidenceMap.set(id, score);
 				}
@@ -2194,7 +2194,7 @@ export async function hybridRecall(
 									 WHERE id IN (${placeholders})`,
 								)
 								.all(...coverageIds) as Array<{ id: string; content: string }>,
-					);
+					{ siteToken: "memory-search.ts:2189" });
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
 
@@ -2243,7 +2243,7 @@ export async function hybridRecall(
 						id: string;
 						content: string;
 					}>,
-			);
+			{ siteToken: "memory-search.ts:2235" });
 			const contentMap = new Map(contentRows.map((r) => [r.id, r.content]));
 
 			const candidates: RerankCandidate[] = topForRerank.map((s) => ({
@@ -2322,7 +2322,7 @@ export async function hybridRecall(
 						content: string;
 						type: string;
 					}>,
-			);
+			{ siteToken: "memory-search.ts:2313" });
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
 
 			// Build entity linkage: memory_id -> set of entity_ids
@@ -2341,7 +2341,7 @@ export async function hybridRecall(
 							memory_id: string;
 							entity_id: string;
 						}>,
-				);
+				{ siteToken: "memory-search.ts:2333" });
 
 				const entityIds = new Set<string>();
 				for (const row of links) {
@@ -2371,7 +2371,7 @@ export async function hybridRecall(
 								entity_id: string;
 								cnt: number;
 							}>,
-					);
+					{ siteToken: "memory-search.ts:2361" });
 					for (const row of degreeRows) {
 						degrees.set(row.entity_id, row.cnt);
 					}
@@ -2615,7 +2615,7 @@ export async function hybridRecall(
 						scope: string | null;
 						agent_id: string | null;
 					}>,
-			),
+			{ siteToken: "memory-search.ts:2595" }),
 	);
 
 	const safeRows = await getDbAccessor().withReadDbAsync(async (db) =>
@@ -2627,7 +2627,7 @@ export async function hybridRecall(
 				content: row.content,
 			}),
 		),
-	);
+	{ siteToken: "memory-search.ts:2621" });
 	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
 	// injected after assembly and the array is capped to `limit` at that point.
@@ -2865,7 +2865,7 @@ export async function hybridRecall(
 						content: row.content,
 					}),
 				);
-			});
+			}, { siteToken: "memory-search.ts:2817" });
 
 			for (const r of supplementary) {
 				if (results.length >= limit) break;
@@ -2991,7 +2991,7 @@ export async function hybridRecall(
 						.filter((e) => e.aspects.length > 0);
 
 					return { eids, structured };
-				});
+				}, { siteToken: "memory-search.ts:2914" });
 
 				if (ctx) {
 					entityContext = ctx.structured;
@@ -3019,7 +3019,7 @@ export async function hybridRecall(
 			const cap = Math.max(3, Math.ceil(limit * 0.3));
 			const blocks = await getDbAccessor().withReadDbAsync(async (db) =>
 				constructContextBlocks(db, agentId, focalEids, cap),
-			);
+			{ siteToken: "memory-search.ts:3020" });
 			const now = new Date().toISOString();
 			const minReal = results.length > 0 ? Math.min(...results.map((r) => r.score)) : 0.5;
 			const maxConstructed = Math.max(0.01, minReal - 0.01);

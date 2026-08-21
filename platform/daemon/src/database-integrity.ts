@@ -462,7 +462,7 @@ async function runKillableTelemetryRepair(
 }
 
 async function writeAsync<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
-	return accessor.withWriteTxAsync(processBatch);
+	return accessor.withWriteTxAsync(processBatch, { siteToken: "database-integrity.ts:465" });
 }
 
 /**
@@ -627,7 +627,7 @@ async function readIntegrityChecks(
 			quick: options?.quickCheck ?? check(db, "quick_check"),
 			telemetry: check(db, "integrity_check", "telemetry_events"),
 			indexes: listTelemetryIndexes(db),
-		}));
+		}), { siteToken: "database-integrity.ts:626" });
 	}
 	const deadlineMs = options.repairTimeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS;
 	const quick =
@@ -738,7 +738,7 @@ export async function repairTelemetryIndexes(
 
 			const verifiedTelemetry =
 				options?.owner === undefined
-					? await accessor.withReadDbAsync(async (db) => check(db, "integrity_check", "telemetry_events"))
+					? await accessor.withReadDbAsync(async (db) => check(db, "integrity_check", "telemetry_events"), { siteToken: "database-integrity.ts:741" })
 					: ownerCheck(
 							await ownerQueryAll<Record<string, unknown>>(
 								options.owner,

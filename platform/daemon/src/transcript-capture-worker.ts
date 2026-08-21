@@ -488,7 +488,7 @@ export async function getTranscriptCaptureStatus(
 			)
 			.get() as TranscriptStatusProjectionRow | undefined;
 		return row == null ? EMPTY_TRANSCRIPT_STATUS : projectionRowToSummary(row);
-	});
+	}, { siteToken: "transcript-capture-worker.ts:463" });
 }
 
 /** Read one agent-scoped capture receipt without exposing transcript content. */
@@ -511,5 +511,5 @@ export async function getTranscriptCaptureJobStatus(
 			status: row.status as TranscriptCaptureJobStatus,
 			error: typeof row.error === "string" ? row.error : null,
 		};
-	});
+	}, { siteToken: "transcript-capture-worker.ts:500" });
 }

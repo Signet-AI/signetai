@@ -87,12 +87,12 @@ export function createTtlEvictionHandler(deps: TtlFinalizerDeps): SessionEvictio
 					.prepare("SELECT completed_at FROM session_transcripts WHERE session_key = ? AND agent_id = ? LIMIT 1")
 					.get(info.sessionKey, info.agentId) as { completed_at?: string | null } | undefined;
 				return row?.completed_at != null;
-			});
+			}, { siteToken: "session-ttl-finalizer.ts:81" });
 			transcriptFinalized =
 				alreadyCompleted ||
 				(await deps.accessor.withWriteTxAsync((db) =>
 					markSessionTranscriptCompletedInTx(db, info.sessionKey, info.agentId, completedAt),
-				));
+				{ siteToken: "session-ttl-finalizer.ts:93" }));
 		} catch (err) {
 			logger.warn("session-tracker", "TTL-eviction transcript completion failed (non-fatal)", {
 				sessionKey: info.sessionKey,

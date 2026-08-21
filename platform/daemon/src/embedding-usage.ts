@@ -97,7 +97,7 @@ export function recordEmbeddingUsage(input: {
 						input.tokens,
 					);
 				},
-				{ operation: "embedding.usage", estimatedWorkUnits: 1 },
+				{ siteToken: "embedding-usage.ts:90", operation: "embedding.usage", estimatedWorkUnits: 1 },
 			)
 			.catch((e) => {
 				logger.warn("embedding", "Failed to record embedding usage", {
@@ -155,7 +155,7 @@ export async function readEmbeddingUsageSummary(
 				)
 				.all() as Array<{ provider: string; requests: number; tokens: number }>;
 			return { total: totals, today, bySource, byProvider };
-		});
+		}, { siteToken: "embedding-usage.ts:133" });
 		cachedEmbeddingUsageSummary = summary;
 		return summary;
 	} catch (e) {

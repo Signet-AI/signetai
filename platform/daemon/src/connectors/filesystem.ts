@@ -234,7 +234,7 @@ async function findDocBySourceUrl(accessor: DbAccessor, sourceUrl: string): Prom
 				| ExistingDocRow
 				| undefined;
 		},
-		{ operation: "connector.filesystem.find-document" },
+		{ siteToken: "connectors/filesystem.ts:231", operation: "connector.filesystem.find-document" },
 	);
 }
 
@@ -296,7 +296,7 @@ async function insertDocument(
 			         ?, 'queued', NULL, ?,
 			         0, 0, NULL, ?, ?, NULL)`,
 		).run(id, sourceUrl, title, rawContent, connectorId, now, now);
-	});
+	}, { siteToken: "connectors/filesystem.ts:288" });
 
 	return id;
 }
@@ -315,7 +315,7 @@ async function updateDocument(accessor: DbAccessor, docId: string, rawContent: s
 			     completed_at = NULL, updated_at = ?
 			 WHERE id = ?`,
 		).run(rawContent, now, docId);
-	});
+	}, { siteToken: "connectors/filesystem.ts:310" });
 }
 
 // ---------------------------------------------------------------------------

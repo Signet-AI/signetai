@@ -521,7 +521,7 @@ async function getSessionGapSummary(): Promise<string | undefined> {
 				.get(lastEnd) as { cnt: number };
 
 			return `[since last session: ${memCount.cnt} new memories, ${sessionCount.cnt} sessions captured]`;
-		});
+		}, { siteToken: "hooks.ts:502" });
 	} catch {
 		return undefined;
 	}
@@ -631,7 +631,7 @@ async function getRecentMemories(
 					content: row.content,
 				}),
 			);
-		});
+		}, { siteToken: "hooks.ts:602" });
 
 		return rows.map((r) => ({
 			id: r.id,
@@ -820,7 +820,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					parentID: req.parentID,
 				});
 				return parent ? assembleInheritedContextBlock(db, parent, subagentCfg) : null;
-			});
+			}, { siteToken: "hooks.ts:810" });
 			inheritedSection = block ?? "";
 		} catch (error) {
 			logger.warn("hooks", "Sub-agent inherited context lookup failed (non-fatal)", {
@@ -887,7 +887,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					project: req.project,
 					sessionKey: req.sessionKey,
 				}),
-			);
+			{ siteToken: "hooks.ts:885" });
 			traversalFocalSource = focal.source;
 			traversalEntities = focal.entityIds.length;
 			traversalEntityNames = focal.entityNames;
@@ -895,7 +895,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			if (focal.entityIds.length > 0) {
 				const traversalResult = await traverseKnowledgeGraph(
 					focal.entityIds,
-					(readFn) => getDbAccessor().withReadDbAsync(readFn, { operation: "hooks.graph-traversal" }),
+					(readFn) => getDbAccessor().withReadDbAsync(readFn, { siteToken: "hooks.ts:898", operation: "hooks.graph-traversal" }),
 					traversalAgentId,
 					traversalRuntimeCfg,
 				);

@@ -604,7 +604,7 @@ export async function upsertSessionTranscriptAsync(
 				});
 				return true;
 			},
-			{ operation: "transcripts.upsert", signal: options?.signal },
+			{ siteToken: "session-transcripts.ts:541", operation: "transcripts.upsert", signal: options?.signal },
 		);
 	} catch (error) {
 		if (options?.signal?.aborted) throw error;
@@ -791,7 +791,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ operation: "transcripts.lookup", signal },
+			{ siteToken: "session-transcripts.ts:789", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;

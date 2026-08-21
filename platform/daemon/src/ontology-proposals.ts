@@ -481,7 +481,7 @@ async function getProposalReadRow(accessor: DbAccessor, id: string, agentId: str
 			| ProposalRow
 			| undefined;
 		return row ?? null;
-	});
+	}, { siteToken: "ontology-proposals.ts:479" });
 }
 
 function readBackInTx(db: WriteDb, id: string, agentId: string): OntologyProposal {
@@ -2340,7 +2340,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(async (db) =>
 		proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-	);
+	{ siteToken: "ontology-proposals.ts:2341" });
 	return { proposal, items, count: items.length };
 }
 
@@ -2375,7 +2375,7 @@ export async function listOntologyProposals(
 			)
 			.all(...args) as ProposalRow[];
 		return { items: rows.map(toProposal), limit, offset };
-	});
+	}, { siteToken: "ontology-proposals.ts:2357" });
 }
 
 export async function listOntologyProposalConflicts(
@@ -2430,7 +2430,7 @@ export async function listOntologyProposalConflicts(
 			(group) => new Set(group.values.map((item) => canonical(item.value))).size > 1,
 		);
 		return { items, count: items.length };
-	});
+	}, { siteToken: "ontology-proposals.ts:2386" });
 }
 
 function claimVersionRow(row: Record<string, unknown>): ClaimVersionItem {
@@ -2517,7 +2517,7 @@ export async function listClaimVersions(
 			.all(params.agentId, aspect.id, groupKey, claimKey, kind) as Array<Record<string, unknown>>;
 		const items = rows.map(claimVersionRow);
 		return { items, count: items.length };
-	});
+	}, { siteToken: "ontology-proposals.ts:2462" });
 }
 
 export async function getClaimVersion(
@@ -2944,7 +2944,7 @@ export async function findDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
-	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true));
+	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), { siteToken: "ontology-proposals.ts:2947" });
 }
 
 export async function proposeDuplicateEntityMerges(
@@ -2953,7 +2953,7 @@ export async function proposeDuplicateEntityMerges(
 ): Promise<DuplicateEntityMergeResult> {
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
-	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit));
+	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), { siteToken: "ontology-proposals.ts:2956" });
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
 		return {
@@ -3003,7 +3003,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(async (db) =>
 		buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-	);
+	{ siteToken: "ontology-proposals.ts:3004" });
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {
 		agentId,

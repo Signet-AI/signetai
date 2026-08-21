@@ -174,7 +174,7 @@ export async function getDreamingQualityReport(accessor: DbAccessor, agentId: st
 							: Number(structure.genericAspects ?? 0) / Number(structure.totalAspects),
 				},
 			};
-		});
+		}, { siteToken: "pipeline/dreaming-quality.ts:96" });
 
 	let valuesWithResolvedEpisodicQuote = 0;
 	let unresolvedClaimPaths = 0;

@@ -637,7 +637,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					},
 				};
 			},
-			{ operation: "pipeline.status" },
+			{ siteToken: "routes/pipeline-routes.ts:603", operation: "pipeline.status" },
 		);
 		const diagnostics = getCachedDiagnosticsReport();
 

@@ -77,11 +77,11 @@ import { countTokens } from "./tokenizer";
 
 async function writeTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
 	if (!accessor.withWriteTxAsync) throw new Error("async write API is unavailable");
-	return accessor.withWriteTxAsync(fn);
+	return accessor.withWriteTxAsync(fn, { siteToken: "pipeline/dreaming.ts:80" });
 }
 
 async function readDb<T>(accessor: DbAccessor, fn: (db: ReadDb) => T | PromiseLike<T>): Promise<T> {
-	return accessor.withReadDbAsync(async (db) => fn(db));
+	return accessor.withReadDbAsync(async (db) => fn(db), { siteToken: "pipeline/dreaming.ts:84" });
 }
 
 export type DreamingMode = "incremental" | "compact" | "incremental-hygiene" | "incremental-content";

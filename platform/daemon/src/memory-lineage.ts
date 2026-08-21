@@ -1040,7 +1040,7 @@ async function doReindex(agentId?: string): Promise<void> {
 		const ready = await getDbAccessor().withReadDbAsync(async (db) => {
 			const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifacts'`).get();
 			return row !== undefined;
-		});
+		}, { siteToken: "memory-lineage.ts:1040" });
 		if (!ready) {
 			stopTimer({ fileCount: files.length });
 			return;
@@ -1066,7 +1066,7 @@ async function doReindex(agentId?: string): Promise<void> {
 						source_mtime_ms?: number | null;
 					}>);
 			return rows;
-		});
+		}, { siteToken: "memory-lineage.ts:1056" });
 		if (dbPaths.length > 0) {
 			const root = getAgentsDir();
 			for (const row of dbPaths) {
@@ -1342,7 +1342,7 @@ async function findExistingManifest(agentId: string, sessionId: string): Promise
 					 LIMIT 1`,
 					)
 					.get(agentId, sessionId) as { source_path: string } | undefined,
-		);
+		{ siteToken: "memory-lineage.ts:1334" });
 		if (!row) return null;
 		return loadManifest(join(getAgentsDir(), row.source_path));
 	} catch {
@@ -1776,7 +1776,7 @@ async function readThreadHeads(agentId: string): Promise<
 					content: row.sample,
 				}),
 			);
-		});
+		}, { siteToken: "memory-lineage.ts:1752" });
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1826,7 +1826,7 @@ async function readTopMemories(agentId: string): Promise<
 					content: row.content,
 				}),
 			);
-		});
+		}, { siteToken: "memory-lineage.ts:1805" });
 		return rows.filter((row) => !isNoiseSession({ project: row.project })).slice(0, 8);
 	} catch {
 		return [];
@@ -1876,7 +1876,7 @@ async function readTemporalNodes(agentId: string): Promise<
 					content: row.content,
 				}),
 			);
-		});
+		}, { siteToken: "memory-lineage.ts:1850" });
 		return rows.filter(
 			(row) =>
 				!isNoiseSession({
@@ -1956,7 +1956,7 @@ async function buildLedger(agentId: string): Promise<ReadonlyArray<LedgerSession
 					content: row.content,
 				}),
 			),
-		);
+		{ siteToken: "memory-lineage.ts:1938" });
 	} catch {
 		rows = [];
 	}
@@ -2285,7 +2285,7 @@ export async function removeCanonicalSession(agentId: string, sessionToken: stri
 				 WHERE agent_id = ? AND session_token = ?`,
 				)
 				.all(agentId, sessionToken) as Array<{ source_path: string }>,
-	);
+	{ siteToken: "memory-lineage.ts:2279" });
 	const paths = rows.map((row) => row.source_path);
 	await runWriteTxAsync(getDbAccessor(), (db) => {
 		db.prepare(
@@ -2348,7 +2348,7 @@ export async function purgeCanonicalNoiseSessions(agentId: string, reason: strin
 				project: string | null;
 				harness: string | null;
 			}>,
-	);
+	{ siteToken: "memory-lineage.ts:2334" });
 	const groups = new Map<
 		string,
 		Array<{

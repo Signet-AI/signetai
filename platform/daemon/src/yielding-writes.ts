@@ -109,7 +109,7 @@ async function writeBatch<Result>(
 	estimatedWorkUnits: number,
 ): Promise<Result> {
 	if (accessor.withWriteTxAsync) {
-		return accessor.withWriteTxAsync(processBatch, { operation: `db.batch.${label}`, estimatedWorkUnits });
+		return accessor.withWriteTxAsync(processBatch, { siteToken: "yielding-writes.ts:112", operation: `db.batch.${label}`, estimatedWorkUnits });
 	}
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return accessor.withWriteTx(processBatch, "yielding-writes.ts:115");

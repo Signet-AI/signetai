@@ -354,7 +354,7 @@ export async function curateMemoryHead(input: MemoryHeadCuration): Promise<Memor
 				);
 			if (manifestUpdate.changes !== 1) throw new Error("Dreaming pass manifest row is missing");
 			writeProjection(projected.file, input.agentId);
-		});
+		}, { siteToken: "memory-head.ts:310" });
 	} catch (error) {
 		try {
 			if (previous === undefined) {

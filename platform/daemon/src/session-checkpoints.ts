@@ -156,7 +156,7 @@ export async function writeCheckpointAsync(
 				)
 				.run(params.sessionKey, excess);
 		}
-	});
+	}, { siteToken: "session-checkpoints.ts:112" });
 
 	logger.info("checkpoints", "Checkpoint written", {
 		id,
@@ -347,7 +347,7 @@ export async function getCheckpointsBySessionAsync(
 					 ORDER BY created_at DESC, rowid DESC`,
 				)
 				.all(sessionKey) as unknown as CheckpointRow[],
-		{ operation: "http.checkpoints-by-session" },
+		{ siteToken: "session-checkpoints.ts:341", operation: "http.checkpoints-by-session" },
 	);
 }
 
@@ -406,7 +406,7 @@ export async function pruneCheckpointsAsync(db: DbAccessor, retentionDays: numbe
 			if (deleted > 0) logger.info("checkpoints", "Pruned old checkpoints", { deleted, retentionDays });
 			return deleted;
 		},
-		{ operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
+		{ siteToken: "session-checkpoints.ts:402", operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
 	);
 }
 

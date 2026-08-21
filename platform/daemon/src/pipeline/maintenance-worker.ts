@@ -144,7 +144,7 @@ async function getGraphAgentIds(accessor: DbAccessor): Promise<readonly string[]
 			typeof row.agent_id === "string" && row.agent_id.length > 0 ? [row.agent_id] : [],
 		);
 		return ids.length > 0 ? ids : ["default"];
-	});
+	}, { siteToken: "pipeline/maintenance-worker.ts:133" });
 }
 
 // ---------------------------------------------------------------------------
@@ -332,15 +332,15 @@ export function startMaintenanceWorker(
 
 	async function doTick(): Promise<MaintenanceCycleResult> {
 		if (deps.ownerMaintenance && !(await deps.ownerMaintenance.queueIsHealthy())) {
-			const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker));
+			const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker), { siteToken: "pipeline/maintenance-worker.ts:335" });
 			logger.info("maintenance", "Cycle deferred while the owner maintenance lane is unhealthy");
 			return { report, recommendations: [], executed: [], feedbackDecayedAspects: 0, feedbackPropagatedAttributes: 0 };
 		}
 		if (isSystemPressureHigh()) {
-			const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker));
+			const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker), { siteToken: "pipeline/maintenance-worker.ts:340" });
 			return { report, recommendations: [], executed: [], feedbackDecayedAspects: 0, feedbackPropagatedAttributes: 0 };
 		}
-		const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker));
+		const report = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker), { siteToken: "pipeline/maintenance-worker.ts:343" });
 
 		const embeddingStats = deps.embedding
 			? await getEmbeddingRepairStats(accessor, deps.embedding.cfg, deps.embedding.agentId)
@@ -416,7 +416,7 @@ export function startMaintenanceWorker(
 
 		// Re-check health to evaluate improvement
 		if (executed.length > 0) {
-			const postReport = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker));
+			const postReport = await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker), { siteToken: "pipeline/maintenance-worker.ts:419" });
 			const improved = postReport.composite.score > preScore;
 
 			for (const exec of executed) {
@@ -475,7 +475,7 @@ export function startMaintenanceWorker(
 								DEAD_MEMORY_DEFAULT_ACCESS_DAYS,
 							) as { n: number }
 					).n,
-			);
+			{ siteToken: "pipeline/maintenance-worker.ts:461" });
 			if (count > 100) {
 				logger.warn("maintenance", "Dead memory count exceeds threshold", {
 					count,
@@ -489,7 +489,7 @@ export function startMaintenanceWorker(
 		// Reclaim free pages from DROP/DELETE/promotion operations (#1139).
 		// Only run when the free-page ratio is high and the system is not under pressure.
 		try {
-			const ratio = await accessor.withReadDbAsync(async (db) => getFreePageRatio(db));
+			const ratio = await accessor.withReadDbAsync(async (db) => getFreePageRatio(db), { siteToken: "pipeline/maintenance-worker.ts:492" });
 			if (ratio >= 0.2) {
 				await reclaimIncrementalVacuum(accessor, { owner: deps.ownerMaintenance?.owner });
 			}
