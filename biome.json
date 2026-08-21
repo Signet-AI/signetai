@@ -1,143 +1,150 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
-  "files": {
-    "includes": [
-      "**",
-      "!**/references",
-      "!**/dist",
-      "!**/node_modules",
-      "!**/.svelte-kit",
-      "!**/.astro",
-      "!**/.wrangler",
-      "!**/_app",
-      "!**/build",
-      "!**/target",
-      "!**/coverage",
-      "!**/built",
-      "!**/*.bundle.*",
-      "!**/*.min.*",
-      "!**/generated",
-      "!**/fixtures",
-      "!**/*.html",
-      "!**/*.css",
-      "!**/*.svg",
-      "!**/*.generated.*",
-      "!**/platform/daemon-rs/contracts/replay-corpus",
-      "!**/platform/daemon/dashboard",
-      "!**/web/marketing/public/contentIndex.json",
-      "!**/web/marketing/public/marketing",
-      "!**/memorybench/data",
-      "!**/memorybench/dist",
-      "!**/memorybench/node_modules",
-      "!scripts/event-loop-contract-baseline.json",
-      "!**/.bench"
-    ]
-  },
-  "formatter": {
-    "indentStyle": "tab",
-    "lineWidth": 120
-  },
-  "assist": {
-    "actions": {
-      "source": {
-        "organizeImports": "off"
-      }
-    }
-  },
-  "linter": {
-    "enabled": true,
-    "rules": {
-      "preset": "recommended",
-      "suspicious": {
-        "noAssignInExpressions": "off",
-        "noArrayIndexKey": "warn",
-        "noExplicitAny": "error",
-        "useIterableCallbackReturn": "warn"
-      },
-      "correctness": {
-        "noUnusedVariables": "warn",
-        "noUnsafeOptionalChaining": "warn",
-        "useExhaustiveDependencies": "warn"
-      },
-      "a11y": {
-        "noSvgWithoutTitle": "warn",
-        "noStaticElementInteractions": "warn",
-        "noAutofocus": "warn",
-        "useKeyWithClickEvents": "warn",
-        "useAriaPropsSupportedByRole": "warn",
-        "useSemanticElements": "warn",
-        "noLabelWithoutControl": "warn"
-      },
-      "style": {
-        "noNonNullAssertion": "error"
-      },
-      "complexity": {
-        "noForEach": "error",
-        "noBannedTypes": "error"
-      }
-    }
-  },
-  "json": {
-    "formatter": {
-      "indentStyle": "tab"
-    }
-  },
-  "overrides": [
-    {
-      "includes": [
-        "**/memorybench/**"
-      ],
-      "formatter": {
-        "enabled": false
-      },
-      "assist": {
-        "actions": {
-          "source": {
-            "organizeImports": "off"
-          }
-        }
-      },
-      "linter": {
-        "enabled": true,
-        "rules": {
-          "preset": "none",
-          "correctness": {
-            "noUnusedImports": "error",
-            "noUnusedVariables": "error"
-          },
-          "style": {
-            "noNonNullAssertion": "off",
-            "useNodejsImportProtocol": "off",
-            "noInferrableTypes": "off",
-            "useImportType": "off",
-            "useNumberNamespace": "off",
-            "useTemplate": "off",
-            "noUselessElse": "off",
-            "noUnusedTemplateLiteral": "off"
-          },
-          "complexity": {
-            "noStaticOnlyClass": "off",
-            "noThisInStatic": "off",
-            "noForEach": "off"
-          },
-          "suspicious": {
-            "noExplicitAny": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": [
-        "**/*.astro"
-      ],
-      "linter": {
-        "rules": {
-          "correctness": {
-            "noUnusedImports": "warn",
-            "noUnusedVariables": "warn"
-          }
-        }
-      }
-    }
-  ]
+	"$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
+	"files": {
+		"includes": [
+			"**",
+			"!**/references",
+			"!**/dist",
+			"!**/node_modules",
+			"!**/.svelte-kit",
+			"!**/.astro",
+			"!**/.wrangler",
+			"!**/_app",
+			"!**/build",
+			"!**/target",
+			"!**/coverage",
+			"!**/built",
+			"!**/*.bundle.*",
+			"!**/*.min.*",
+			"!**/generated",
+			"!**/fixtures",
+			"!**/*.html",
+			"!**/*.css",
+			"!**/*.svg",
+			"!**/*.generated.*",
+			"!**/platform/daemon-rs/contracts/replay-corpus",
+			"!**/platform/daemon/dashboard",
+			"!**/web/marketing/public/contentIndex.json",
+			"!**/web/marketing/public/marketing",
+			"!**/memorybench/data",
+			"!**/memorybench/dist",
+			"!**/memorybench/node_modules",
+			"!scripts/event-loop-contract-baseline.json",
+			"!**/.bench"
+		]
+	},
+	"formatter": {
+		"indentStyle": "tab",
+		"lineWidth": 120
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "off"
+			}
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"suspicious": {
+				"noAssignInExpressions": "off",
+				"noArrayIndexKey": "warn",
+				"noExplicitAny": "error",
+				"useIterableCallbackReturn": "warn"
+			},
+			"correctness": {
+				"noUnusedVariables": "warn",
+				"noUnsafeOptionalChaining": "warn",
+				"useExhaustiveDependencies": "warn"
+			},
+			"a11y": {
+				"noSvgWithoutTitle": "warn",
+				"noStaticElementInteractions": "warn",
+				"noAutofocus": "warn",
+				"useKeyWithClickEvents": "warn",
+				"useAriaPropsSupportedByRole": "warn",
+				"useSemanticElements": "warn",
+				"noLabelWithoutControl": "warn"
+			},
+			"style": {
+				"noNonNullAssertion": "error"
+			},
+			"complexity": {
+				"noForEach": "error",
+				"noBannedTypes": "error"
+			}
+		}
+	},
+	"json": {
+		"formatter": {
+			"indentStyle": "tab"
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**/memorybench/**"],
+			"formatter": {
+				"enabled": false
+			},
+			"assist": {
+				"actions": {
+					"source": {
+						"organizeImports": "off"
+					}
+				}
+			},
+			"linter": {
+				"enabled": true,
+				"rules": {
+					"preset": "none",
+					"correctness": {
+						"noUnusedImports": "error",
+						"noUnusedVariables": "error"
+					},
+					"style": {
+						"noNonNullAssertion": "off",
+						"useNodejsImportProtocol": "off",
+						"noInferrableTypes": "off",
+						"useImportType": "off",
+						"useNumberNamespace": "off",
+						"useTemplate": "off",
+						"noUselessElse": "off",
+						"noUnusedTemplateLiteral": "off"
+					},
+					"complexity": {
+						"noStaticOnlyClass": "off",
+						"noThisInStatic": "off",
+						"noForEach": "off"
+					},
+					"suspicious": {
+						"noExplicitAny": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["**/*.astro"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noUnusedImports": "warn",
+						"noUnusedVariables": "warn"
+					}
+				}
+			}
+		},
+		{
+			"includes": ["**/*.astro"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noUnusedImports": "warn",
+						"noUnusedVariables": "warn"
+					}
+				}
+			}
+		}
+	]
 }
