@@ -70,6 +70,18 @@ async function waitForPath(path: string): Promise<void> {
 	throw new Error(`path was not created: ${path}`);
 }
 
+async function waitForLlmConcurrencyStatus(running: number, pending: number): Promise<void> {
+	for (let i = 0; i < 100; i += 1) {
+		const status = getLlmConcurrencyStatus();
+		if (status.running === running && status.pending === pending) return;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setImmediate(resolve);
+		await promise;
+	}
+	const status = getLlmConcurrencyStatus();
+	throw new Error(`LLM concurrency did not reach running=${running}, pending=${pending}: ${JSON.stringify(status)}`);
+}
+
 // ---------------------------------------------------------------------------
 // ACPX harness-subprocess provider
 // ---------------------------------------------------------------------------
@@ -82,7 +94,7 @@ describe("createAcpxProvider", () => {
 		expect(calculateAcpxRetryDelayMs(20, () => 1)).toBe(2_000);
 	});
 
-	it("runs ACPX one-shot exec with pinned version-compatible args and sterile hook env", async () => {
+	it("regression: boolean terminal false passes --no-terminal", async () => {
 		const root = join(tmpdir(), `signet-acpx-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(root, { recursive: true });
 		const bin = join(root, "fake-acpx.sh");
@@ -110,7 +122,7 @@ printf '  acpx answer  \\n'
 				bin,
 				permissions: "deny-all",
 				hooks: "disabled",
-				terminal: "disabled",
+				terminal: false,
 				mode: "session",
 				session: "background",
 				allowedTools: ["read_file"],
@@ -131,6 +143,16 @@ printf '  acpx answer  \\n'
 			expect(readFileSync(promptPath, "utf-8")).toBe("hello acpx");
 			expect(readFileSync(hooksPath, "utf-8")).toBe("1|false");
 			expect(readFileSync(cwdPath, "utf-8")).toBe(realpathSync(join(root, ".daemon", "acpx-background")));
+			await expect(createAcpxProvider({ agent: "codex", bin, terminal: "disabled" }).generate("hello", { timeoutMs: 1000 })).resolves.toBe(
+				"acpx answer",
+			);
+			expect(readFileSync(argsPath, "utf-8").trim().split("\n")).toContain("--no-terminal");
+			for (const terminal of [true, "inherit"] as const) {
+				await expect(createAcpxProvider({ agent: "codex", bin, terminal }).generate("hello", { timeoutMs: 1000 })).resolves.toBe(
+					"acpx answer",
+				);
+				expect(readFileSync(argsPath, "utf-8").trim().split("\n")).not.toContain("--no-terminal");
+			}
 		} finally {
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
@@ -682,6 +704,278 @@ printf 'ok\\n'
 		}
 	});
 
+	it("regression: cleanup barriers resolve when a target exits after SIGTERM", async () => {
+		const root = join(tmpdir(), `signet-acpx-immediate-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const procRoot = join(root, "proc");
+		const escapedPid = 12348;
+		const escapedProc = join(procRoot, String(escapedPid));
+		const bin = join(root, "fake-acpx.sh");
+		mkdirSync(procRoot, { recursive: true });
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+prompt=$(cat)
+if [[ "$prompt" == "next" ]]; then
+printf 'next\\n'
+exit 0
+fi
+mkdir -p ${JSON.stringify(escapedProc)}
+printf 'codex-acp\\0' > ${JSON.stringify(join(escapedProc, "cmdline"))}
+printf 'SIGNET_ACPX_RUN_ID=%s\\0' "$SIGNET_ACPX_RUN_ID" > ${JSON.stringify(join(escapedProc, "environ"))}
+printf 'first\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousKill = process.kill;
+		const terminated = Promise.withResolvers<void>();
+		let killed = false;
+		try {
+			process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "linux";
+			process.env.SIGNET_ACPX_PROC_ROOT = procRoot;
+			process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+				if (pid !== escapedPid) return true;
+				if (signal === "SIGTERM") {
+					rmSync(escapedProc, { recursive: true, force: true });
+					terminated.resolve();
+					return true;
+				}
+				if (signal === 0) {
+					const error = Object.assign(new Error("process exited"), { code: "ESRCH" });
+					throw error;
+				}
+				if (signal === "SIGKILL") killed = true;
+				return true;
+			}) as typeof process.kill;
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			const first = provider.generate("first", { timeoutMs: 3_000 });
+			await terminated.promise;
+			await expect(first).resolves.toBe("first");
+			await expect(provider.generate("next", { timeoutMs: 3_000 })).resolves.toBe("next");
+			expect(killed).toBe(false);
+		} finally {
+			process.kill = previousKill;
+			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
+			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("regression: normal completion returns before escaped-child reaping while the next same-agent attempt waits", async () => {
+		const root = join(tmpdir(), `signet-acpx-success-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const procRoot = join(root, "proc");
+		const escapedPid = 12345;
+		const escapedProc = join(procRoot, String(escapedPid));
+		const bin = join(root, "fake-acpx.sh");
+		const nextRanPath = join(root, "next-ran");
+		mkdirSync(procRoot, { recursive: true });
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+prompt=$(cat)
+if [[ "$prompt" == "next" ]]; then
+touch ${JSON.stringify(nextRanPath)}
+printf 'next\\n'
+exit 0
+fi
+mkdir -p ${JSON.stringify(escapedProc)}
+printf 'codex-acp\\0' > ${JSON.stringify(join(escapedProc, "cmdline"))}
+printf 'SIGNET_ACPX_RUN_ID=%s\\0' "$SIGNET_ACPX_RUN_ID" > ${JSON.stringify(join(escapedProc, "environ"))}
+printf 'ok\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousConcurrencyLimit = getLlmConcurrencyStatus().limit;
+		const previousKill = process.kill;
+		const cleanupStarted = Promise.withResolvers<void>();
+		let cleanupFinished = false;
+		try {
+			configureLlmConcurrency(2);
+			process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "linux";
+			process.env.SIGNET_ACPX_PROC_ROOT = procRoot;
+			process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+				if (pid === escapedPid && signal === "SIGTERM") cleanupStarted.resolve();
+				if (pid === escapedPid && signal === "SIGKILL") cleanupFinished = true;
+				return true;
+			}) as typeof process.kill;
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			const first = provider.generate("first", { timeoutMs: 3_000 });
+			await waitForPath(join(escapedProc, "cmdline"));
+			await cleanupStarted.promise;
+			await expect(first).resolves.toBe("ok");
+			expect(cleanupFinished).toBe(false);
+
+			const next = provider.generate("next", { timeoutMs: 3_000 });
+			for (let i = 0; i < 4; i += 1) await Promise.resolve();
+			expect(getLlmConcurrencyStatus().running).toBe(0);
+			expect(existsSync(nextRanPath)).toBe(false);
+			await expect(next).resolves.toBe("next");
+			expect(cleanupFinished).toBe(true);
+			expect(existsSync(nextRanPath)).toBe(true);
+		} finally {
+			process.kill = previousKill;
+			configureLlmConcurrency(previousConcurrencyLimit);
+			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
+			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("regression: same-agent cleanup re-admission does not hold the only global permit", async () => {
+		const root = join(tmpdir(), `signet-acpx-cleanup-readmit-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const procRoot = join(root, "proc");
+		const escapedPid = 12347;
+		const escapedProc = join(procRoot, String(escapedPid));
+		const bin = join(root, "fake-acpx.sh");
+		const unrelatedRanPath = join(root, "unrelated-ran");
+		mkdirSync(procRoot, { recursive: true });
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+prompt=$(cat)
+if [[ "$prompt" == "first" ]]; then
+  mkdir -p ${JSON.stringify(escapedProc)}
+  printf 'codex-acp\\0' > ${JSON.stringify(join(escapedProc, "cmdline"))}
+  printf 'SIGNET_ACPX_RUN_ID=%s\\0' "$SIGNET_ACPX_RUN_ID" > ${JSON.stringify(join(escapedProc, "environ"))}
+fi
+if [[ "$prompt" == "unrelated" ]]; then touch ${JSON.stringify(unrelatedRanPath)}; fi
+printf '%s\\n' "$prompt"
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousConcurrencyLimit = getLlmConcurrencyStatus().limit;
+		const previousKill = process.kill;
+		const blockerEntered = Promise.withResolvers<void>();
+		const releaseBlocker = Promise.withResolvers<void>();
+		const cleanupStarted = Promise.withResolvers<void>();
+		let cleanupFinished = false;
+		let blocker: Promise<void> | undefined;
+		let first: Promise<string> | undefined;
+		let sameAgent: Promise<string> | undefined;
+		let unrelated: Promise<string> | undefined;
+		try {
+			configureLlmConcurrency(1);
+			process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "linux";
+			process.env.SIGNET_ACPX_PROC_ROOT = procRoot;
+			process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+				if (pid === escapedPid && signal === "SIGTERM") cleanupStarted.resolve();
+				if (pid === escapedPid && signal === "SIGKILL") cleanupFinished = true;
+				return true;
+			}) as typeof process.kill;
+			const codex = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			const claude = createAcpxProvider({ agent: "claude", bin, hooks: "disabled" });
+			blocker = withLlmConcurrency(async () => {
+				blockerEntered.resolve();
+				await releaseBlocker.promise;
+			});
+			await blockerEntered.promise;
+			first = codex.generate("first", { timeoutMs: 3_000 });
+			sameAgent = codex.generate("same-agent", { timeoutMs: 3_000 });
+			unrelated = claude.generate("unrelated", { timeoutMs: 3_000 });
+			await waitForLlmConcurrencyStatus(1, 3);
+			expect(getLlmConcurrencyStatus().pending).toBe(3);
+
+			releaseBlocker.resolve();
+			await blocker;
+			await waitForPath(join(escapedProc, "cmdline"));
+			await cleanupStarted.promise;
+			await expect(first).resolves.toBe("first");
+			await waitForPath(unrelatedRanPath);
+			expect(cleanupFinished).toBe(false);
+			await expect(unrelated).resolves.toBe("unrelated");
+			await expect(sameAgent).resolves.toBe("same-agent");
+			expect(cleanupFinished).toBe(true);
+		} finally {
+			releaseBlocker.resolve();
+			await Promise.allSettled([blocker, first, sameAgent, unrelated]);
+			process.kill = previousKill;
+			configureLlmConcurrency(previousConcurrencyLimit);
+			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
+			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("regression: cleanup-barrier waits honor caller abort and deadline", async () => {
+		const root = join(tmpdir(), `signet-acpx-cleanup-wait-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const procRoot = join(root, "proc");
+		const escapedPid = 12346;
+		const escapedProc = join(procRoot, String(escapedPid));
+		const bin = join(root, "fake-acpx.sh");
+		const spawnedPath = join(root, "spawned");
+		mkdirSync(procRoot, { recursive: true });
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+prompt=$(cat)
+if [[ "$prompt" != "first" ]]; then
+touch ${JSON.stringify(spawnedPath)}
+printf 'unexpected\\n'
+exit 0
+fi
+mkdir -p ${JSON.stringify(escapedProc)}
+printf 'codex-acp\\0' > ${JSON.stringify(join(escapedProc, "cmdline"))}
+printf 'SIGNET_ACPX_RUN_ID=%s\\0' "$SIGNET_ACPX_RUN_ID" > ${JSON.stringify(join(escapedProc, "environ"))}
+printf 'ok\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousKill = process.kill;
+		const cleanupStarted = Promise.withResolvers<void>();
+		try {
+			process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "linux";
+			process.env.SIGNET_ACPX_PROC_ROOT = procRoot;
+			process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+				if (pid === escapedPid && signal === "SIGTERM") cleanupStarted.resolve();
+				return true;
+			}) as typeof process.kill;
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			const first = provider.generate("first", { timeoutMs: 3_000 });
+			await waitForPath(join(escapedProc, "cmdline"));
+			await cleanupStarted.promise;
+
+			const controller = new AbortController();
+			const abortStartedAt = performance.now();
+			const aborted = provider.generate("aborted", { timeoutMs: 3_000, signal: controller.signal });
+			controller.abort(new Error("cleanup caller cancelled"));
+			await expect(aborted).rejects.toThrow("cleanup caller cancelled");
+			expect(performance.now() - abortStartedAt).toBeLessThan(250);
+			expect(existsSync(spawnedPath)).toBe(false);
+
+			const deadlineStartedAt = performance.now();
+			await expect(provider.generate("timed-out", { timeoutMs: 100 })).rejects.toThrow(
+				/codex via ACPX timeout after 100ms/,
+			);
+			const deadlineElapsedMs = performance.now() - deadlineStartedAt;
+			expect(deadlineElapsedMs).toBeGreaterThanOrEqual(60);
+			expect(deadlineElapsedMs).toBeLessThan(400);
+			expect(existsSync(spawnedPath)).toBe(false);
+
+			await expect(first).resolves.toBe("ok");
+			expect(existsSync(spawnedPath)).toBe(false);
+		} finally {
+			process.kill = previousKill;
+			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
+			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("reaps escaped Codex ACP children on darwin via a bounded ps sweep (#1459)", async () => {
 		const root = join(tmpdir(), `signet-acpx-darwin-sweep-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(root, { recursive: true });
@@ -1055,7 +1349,6 @@ printf 'ok\\n'
 	});
 
 	it("keeps the event loop responsive while ACPX cleanup waits on proc I/O (#1328)", async () => {
-		if (process.platform !== "linux") return;
 		const root = join(tmpdir(), `signet-acpx-async-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const procRoot = join(root, "proc");
 		const procPid = join(procRoot, "12345");
@@ -1072,8 +1365,12 @@ sleep 30
 		);
 		chmodSync(bin, 0o755);
 		const writer = nodeSpawn("bash", ["-c", `sleep 0.25; printf 'not-codex\\0' > ${JSON.stringify(cmdlinePath)}`]);
+		const writerClosed =
+			writer.exitCode === null ? new Promise<void>((resolve) => writer.once("close", () => resolve())) : Promise.resolve();
 		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
 		process.env.SIGNET_ACPX_PROC_ROOT = procRoot;
+		process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "linux";
 		let heartbeats = 0;
 		const heartbeat = setInterval(() => {
 			heartbeats += 1;
@@ -1088,7 +1385,10 @@ sleep 30
 			clearInterval(heartbeat);
 			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
 			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
-			writer.kill();
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			await writerClosed;
+			await new Promise<void>((resolve) => setImmediate(resolve));
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
@@ -1288,6 +1588,221 @@ printf 'ok\n'
 			expect(readFileSync(pwdPath, "utf-8").trim()).toBe(join(root, "workspace"));
 		} finally {
 			process.chdir(previousCwd);
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+
+	it("regression: timeout starts escaped-stdio cleanup but releases its permit after a bounded termination wait", async () => {
+		const root = join(tmpdir(), `signet-acpx-escaped-stdio-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const procRoot = join(root, "proc");
+		const bin = join(root, "fake-acpx.sh");
+		const childSpawner = join(root, "spawn-escaped-child.mjs");
+		const childPidPath = join(root, "escaped-child.pid");
+		const holderReadyPath = join(root, "holder-ready");
+		const retryRanPath = join(root, "retry-ran");
+		const unrelatedRanPath = join(root, "unrelated-ran");
+		mkdirSync(procRoot, { recursive: true });
+		writeFileSync(
+			childSpawner,
+			`import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);"], {
+	detached: true,
+	stdio: "inherit",
+});
+writeFileSync(process.argv[2], String(child.pid));
+child.unref();
+`,
+		);
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+prompt=$(cat)
+if [[ "$prompt" == "barrier-settle" ]]; then
+  printf 'ready\\n'
+  exit 0
+fi
+if [[ "$prompt" == "retry" ]]; then
+  touch ${JSON.stringify(retryRanPath)}
+  printf 'retry answer\\n'
+  exit 0
+fi
+if [[ "$prompt" == "unrelated" ]]; then
+  touch ${JSON.stringify(unrelatedRanPath)}
+  printf 'unrelated answer\\n'
+  exit 0
+fi
+${JSON.stringify(process.execPath)} ${JSON.stringify(childSpawner)} ${JSON.stringify(childPidPath)}
+escaped_pid="$(cat ${JSON.stringify(childPidPath)})"
+mkdir -p ${JSON.stringify(procRoot)}/"$escaped_pid"
+printf 'codex-acp\\0' > ${JSON.stringify(procRoot)}/"$escaped_pid"/cmdline
+printf 'SIGNET_ACPX_RUN_ID=%s\\0' "$SIGNET_ACPX_RUN_ID" > ${JSON.stringify(procRoot)}/"$escaped_pid"/environ
+touch ${JSON.stringify(holderReadyPath)}
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousConcurrencyLimit = getLlmConcurrencyStatus().limit;
+		const previousKill = process.kill;
+		const cleanupStarted = Promise.withResolvers<void>();
+		let escapedPid: number | undefined;
+		let cleanupSignals = 0;
+		let cleanupKillSignals = 0;
+		let cleanupStartedAt = 0;
+		let barrierSettled: Promise<string> | undefined;
+		let holder: Promise<string> | undefined;
+		let retry: Promise<string> | undefined;
+		let unrelated: Promise<string> | undefined;
+		try {
+			configureLlmConcurrency(16);
+			process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "linux";
+			process.env.SIGNET_ACPX_PROC_ROOT = procRoot;
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			barrierSettled = provider.generate("barrier-settle", { timeoutMs: 3_000 });
+			await expect(barrierSettled).resolves.toBe("ready");
+			holder = provider.generate("holder", { timeoutMs: 500 });
+			void holder.catch(() => undefined);
+			await waitForPath(holderReadyPath);
+			escapedPid = await waitForPidFile(childPidPath);
+			process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+				if (pid === escapedPid) {
+					if (signal === "SIGTERM") {
+						cleanupSignals += 1;
+						cleanupStartedAt = performance.now();
+						cleanupStarted.resolve();
+					}
+					if (signal === "SIGKILL") cleanupKillSignals += 1;
+					return true;
+				}
+				return previousKill(pid, signal as NodeJS.Signals);
+			}) as typeof process.kill;
+
+			await cleanupStarted.promise;
+			retry = provider.generate("retry", { timeoutMs: 5_000 });
+			unrelated = createAcpxProvider({ agent: "claude-code", bin, hooks: "disabled" }).generate("unrelated", { timeoutMs: 5_000 });
+			await expect(unrelated).resolves.toBe("unrelated answer");
+			// The run-id barrier is active even if the bounded child wait has already released the permit.
+			expect(existsSync(retryRanPath)).toBe(false);
+
+			await expect(holder).rejects.toThrow(/codex via ACPX timeout after \d+ms/);
+			const cleanupElapsedMs = performance.now() - cleanupStartedAt;
+			expect(cleanupElapsedMs).toBeLessThan(300);
+			expect(getLlmConcurrencyStatus()).toMatchObject({ running: 0, pending: 0 });
+			expect(cleanupSignals).toBe(1);
+			expect(cleanupKillSignals).toBe(0);
+			expect(() => previousKill(escapedPid, 0)).not.toThrow();
+
+			rmSync(join(procRoot, String(escapedPid)), { recursive: true, force: true });
+			await expect(retry).resolves.toBe("retry answer");
+			previousKill(escapedPid, "SIGKILL");
+			await waitForProcessExit(escapedPid);
+			const { promise: closeTurn, resolve: advanceCloseTurn } = Promise.withResolvers<void>();
+			setImmediate(advanceCloseTurn);
+			await closeTurn;
+			expect(cleanupSignals).toBe(1);
+			expect(cleanupKillSignals).toBe(1);
+		} finally {
+			if (escapedPid !== undefined) {
+				try {
+					previousKill(escapedPid, "SIGKILL");
+				} catch {
+					// Already exited.
+				}
+			}
+			await Promise.allSettled([barrierSettled, holder, retry, unrelated]);
+			configureLlmConcurrency(previousConcurrencyLimit);
+			process.kill = previousKill;
+			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
+			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
+			rmSync(root, { recursive: true, force: true });
+		}
+	}, 4_000);
+
+	it("does not launch a same-agent request aborted during ACPX cleanup", async () => {
+		const root = join(tmpdir(), `signet-acpx-aborted-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const procRoot = join(root, "proc");
+		const bin = join(root, "fake-acpx.sh");
+		const holderReadyPath = join(root, "holder-ready");
+		const queuedRanPath = join(root, "queued-ran");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+prompt=$(cat)
+if [[ "$prompt" == "barrier-settle" ]]; then
+  printf 'ready\\n'
+  exit 0
+fi
+if [[ "$prompt" == "holder" ]]; then
+  mkdir -p ${JSON.stringify(join(procRoot, "12345"))}
+  printf 'codex-acp\\0' > ${JSON.stringify(join(procRoot, "12345", "cmdline"))}
+  printf 'SIGNET_ACPX_RUN_ID=%s\\0' "$SIGNET_ACPX_RUN_ID" > ${JSON.stringify(join(procRoot, "12345", "environ"))}
+  touch ${JSON.stringify(holderReadyPath)}
+  sleep 30
+else
+  touch ${JSON.stringify(queuedRanPath)}
+  printf 'queued answer\\n'
+fi
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
+		const previousKill = process.kill;
+		const previousConcurrencyLimit = getLlmConcurrencyStatus().limit;
+		const cleanupStarted = Promise.withResolvers<void>();
+		const cleanupFinished = Promise.withResolvers<void>();
+		let cleanupInFlight = false;
+		let holderController: AbortController | undefined;
+		let queuedController: AbortController | undefined;
+		let barrierSettled: Promise<string> | undefined;
+		let holder: Promise<string> | undefined;
+		let queued: Promise<string> | undefined;
+		try {
+			process.env.SIGNET_ACPX_CLEANUP_PLATFORM = "linux";
+			configureLlmConcurrency(16);
+			process.env.SIGNET_ACPX_PROC_ROOT = procRoot;
+			process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+				if (pid !== 12345) return previousKill(pid, signal as NodeJS.Signals);
+				if (signal === "SIGTERM") {
+					cleanupInFlight = true;
+					cleanupStarted.resolve();
+				}
+				if (signal === "SIGKILL") cleanupFinished.resolve();
+				return true;
+			}) as typeof process.kill;
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			barrierSettled = provider.generate("barrier-settle", { timeoutMs: 3_000 });
+			await expect(barrierSettled).resolves.toBe("ready");
+			holderController = new AbortController();
+			holder = provider.generate("holder", { signal: holderController.signal, timeoutMs: 5_000 });
+			await waitForPath(holderReadyPath);
+			holderController.abort();
+			const holderAborted = expect(holder).rejects.toThrow("codex via ACPX aborted");
+			await cleanupStarted.promise;
+			await holderAborted;
+
+			queuedController = new AbortController();
+			queued = provider.generate("queued", { signal: queuedController.signal, timeoutMs: 5_000 });
+			await waitForLlmConcurrencyStatus(0, 0);
+			queuedController.abort(new Error("queued caller cancelled"));
+			await expect(queued).rejects.toThrow("queued caller cancelled");
+			expect(existsSync(queuedRanPath)).toBe(false);
+		} finally {
+			holderController?.abort();
+			queuedController?.abort();
+			await Promise.allSettled([barrierSettled, holder, queued]);
+			if (cleanupInFlight) await cleanupFinished.promise;
+			configureLlmConcurrency(previousConcurrencyLimit);
+			process.kill = previousKill;
+			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
+			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
+			if (previousPlatform === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_CLEANUP_PLATFORM");
+			else process.env.SIGNET_ACPX_CLEANUP_PLATFORM = previousPlatform;
 			rmSync(root, { recursive: true, force: true });
 		}
 	});

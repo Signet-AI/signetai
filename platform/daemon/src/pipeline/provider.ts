@@ -17,7 +17,7 @@
  */
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
-import { spawn as nodeSpawn } from "node:child_process";
+import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
@@ -696,7 +696,7 @@ export async function awaitSubprocessWithDeadline<T>(
 
 export type AcpxPermissionMode = "inherit" | "deny-all" | "approve-reads" | "approve-all";
 export type AcpxHooksMode = "inherit" | "disabled" | "enabled";
-export type AcpxTerminalMode = "inherit" | "disabled" | "enabled";
+export type AcpxTerminalMode = "inherit" | "disabled" | "enabled" | boolean;
 export type AcpxSessionMode = "exec" | "session";
 export type AcpxOutputFormat = "quiet" | "json";
 
@@ -730,6 +730,71 @@ const DEFAULT_ACPX_EMPTY_RESPONSE_RETRIES = 1;
 const MAX_ACPX_EMPTY_RESPONSE_RETRIES = 3;
 const DEFAULT_ACPX_EMPTY_RESPONSE_RETRY_DELAY_MS = 100;
 const MAX_ACPX_EMPTY_RESPONSE_RETRY_DELAY_MS = 2_000;
+
+const acpxCleanupBarriers = new Map<string, Promise<void>>();
+const acpxCleanupGenerations = new Map<string, number>();
+const ACPX_RETRY_ADMISSION = Symbol("acpx retry admission");
+
+function acpxCleanupKey(agent: string): string {
+	return normalizeAcpxAgent(agent).toLowerCase();
+}
+
+function acpxCleanupGeneration(agent: string): number {
+	return acpxCleanupGenerations.get(acpxCleanupKey(agent)) ?? 0;
+}
+
+function trackAcpxCleanupBarrier(agent: string, cleanup: Promise<void>): Promise<void> {
+	const key = acpxCleanupKey(agent);
+	acpxCleanupGenerations.set(key, acpxCleanupGeneration(agent) + 1);
+	const settledCleanup = cleanup.catch(() => undefined);
+	const predecessor = acpxCleanupBarriers.get(key);
+	const barrier = predecessor ? Promise.all([predecessor, settledCleanup]).then(() => undefined) : settledCleanup;
+	acpxCleanupBarriers.set(key, barrier);
+	void barrier.then(() => {
+		if (acpxCleanupBarriers.get(key) === barrier) acpxCleanupBarriers.delete(key);
+	});
+	return barrier;
+}
+
+async function waitForAcpxCleanupBarrier(
+	agent: string,
+	deadline: number,
+	timeoutMs: number,
+	signal: AbortSignal | undefined,
+): Promise<number> {
+	const key = acpxCleanupKey(agent);
+	while (true) {
+		const barrier = acpxCleanupBarriers.get(key);
+		if (!barrier) return acpxCleanupGeneration(agent);
+		signal?.throwIfAborted();
+		const remainingMs = deadline - performance.now();
+		if (remainingMs <= 1) {
+			throw new Error(`${agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
+		}
+		await new Promise<void>((resolve, reject) => {
+			let settled = false;
+			const finish = (fn: () => void): void => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
+				fn();
+			};
+			const onAbort = (): void => finish(() => reject(signal?.reason ?? new Error(`${agent} via ACPX aborted`)));
+			const timer = setTimeout(
+				() =>
+					finish(() =>
+						reject(new Error(`${agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`)),
+					),
+				remainingMs,
+			);
+			timer.unref?.();
+			signal?.addEventListener("abort", onAbort, { once: true });
+			void barrier.then(() => finish(resolve));
+		});
+		if (acpxCleanupBarriers.get(key) === barrier) return acpxCleanupGeneration(agent);
+	}
+}
 
 function normalizeAcpxAgent(agent: string): string {
 	return agent === "claude-code" ? "claude" : agent;
@@ -862,7 +927,7 @@ function buildAcpxCommand(
 		args.push("--model", config.model);
 	}
 	args.push(...acpxPermissionArgs(config.permissions));
-	if (config.terminal === "disabled") args.push("--no-terminal");
+	if (config.terminal === false || config.terminal === "disabled") args.push("--no-terminal");
 	if (allowedTools) args.push("--allowed-tools", allowedTools.join(","));
 	args.push(...(config.extraArgs ?? []));
 	args.push(normalizeAcpxAgent(config.agent));
@@ -937,11 +1002,30 @@ function terminateChildProcessTree(child: ReturnType<typeof nodeSpawn>, signal: 
 	child.kill(signal);
 }
 
+const ACPX_TERMINATION_WAIT_MS = 100;
+
 function terminateChildProcessTreeWithEscalation(child: ReturnType<typeof nodeSpawn>): void {
 	terminateChildProcessTree(child, "SIGTERM");
 	const escalation = setTimeout(() => terminateChildProcessTree(child, "SIGKILL"), 1000);
 	escalation.unref?.();
 	child.once("close", () => clearTimeout(escalation));
+}
+
+function waitForAcpxChildTermination(child: ChildProcess): Promise<void> {
+	if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+	const { promise, resolve } = Promise.withResolvers<void>();
+	let settled = false;
+	const finish = (): void => {
+		if (settled) return;
+		settled = true;
+		clearTimeout(timer);
+		child.off("close", finish);
+		resolve();
+	};
+	const timer = setTimeout(finish, ACPX_TERMINATION_WAIT_MS);
+	timer.unref?.();
+	child.once("close", finish);
+	return promise;
 }
 
 function acpxAgentProcessBasenames(agent: string): string[] {
@@ -1135,6 +1219,45 @@ async function procCommandMatchesAgent(
 	}
 }
 
+const ACPX_CLEANUP_GRACE_MS = 1000;
+const ACPX_CLEANUP_POLL_MS = 25;
+
+function acpxCleanupProcessExists(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (
+			error instanceof Error &&
+			"code" in error &&
+			(error as NodeJS.ErrnoException).code !== undefined &&
+			(error as NodeJS.ErrnoException).code !== "ESRCH"
+		);
+	}
+}
+
+async function terminateAcpxAgentProcess(pid: number): Promise<void> {
+	try {
+		process.kill(pid, "SIGTERM");
+	} catch {
+		return;
+	}
+	const deadline = performance.now() + ACPX_CLEANUP_GRACE_MS;
+	while (acpxCleanupProcessExists(pid)) {
+		const remainingMs = deadline - performance.now();
+		if (remainingMs <= 0) break;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setTimeout(resolve, Math.min(ACPX_CLEANUP_POLL_MS, remainingMs));
+		await promise;
+	}
+	if (!acpxCleanupProcessExists(pid)) return;
+	try {
+		process.kill(pid, "SIGKILL");
+	} catch {
+		// Already exited.
+	}
+}
+
 async function cleanupAcpxAgentProcesses(agent: string, runId: string): Promise<void> {
 	const basenames = new Set(acpxAgentProcessBasenames(agent));
 	if (basenames.size === 0) return;
@@ -1168,21 +1291,7 @@ async function cleanupAcpxAgentProcesses(agent: string, runId: string): Promise<
 		});
 		return;
 	}
-	for (const pid of pids) {
-		try {
-			process.kill(pid, "SIGTERM");
-		} catch {
-			// Already gone or not ours to signal.
-		}
-		const escalation = setTimeout(() => {
-			try {
-				process.kill(pid, "SIGKILL");
-			} catch {
-				// Already exited.
-			}
-		}, 1000);
-		escalation.unref?.();
-	}
+	await Promise.all(pids.map(terminateAcpxAgentProcess));
 }
 
 interface AcpxParsedJsonOutput {
@@ -1403,7 +1512,9 @@ function runAcpxAttempt(
 		let stdout = "";
 		let stderr = "";
 		let settled = false;
-		let aborted = false;
+		let timer: NodeJS.Timeout | undefined;
+		let cleanup: Promise<void> | undefined;
+		let terminationError: Error | undefined;
 		const child = nodeSpawn(bin, args, {
 			cwd,
 			env: acpxEnv(config, runId),
@@ -1411,26 +1522,34 @@ function runAcpxAttempt(
 			detached: process.platform !== "win32",
 			windowsHide: true,
 		});
-		const finish = async (fn: () => void, waitForCleanup = true): Promise<void> => {
+		const finish = async (fn: () => void, cleanupWait: "all" | "termination" | "none" = "all"): Promise<void> => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
 			signal?.removeEventListener("abort", onAbort);
-			const cleanup = cleanupAcpxAgentProcesses(config.agent, runId).catch(() => undefined);
-			if (waitForCleanup) await cleanup;
-			else void cleanup;
+			cleanup ??= trackAcpxCleanupBarrier(
+				config.agent,
+				cleanupAcpxAgentProcesses(config.agent, runId),
+			);
+			if (cleanupWait === "all") await cleanup;
+			if (cleanupWait === "termination") await waitForAcpxChildTermination(child);
 			fn();
 		};
-		const onAbort = (): void => {
-			aborted = true;
+		const terminate = (error: Error): void => {
+			if (settled || terminationError) return;
+			terminationError = error;
 			terminateChildProcessTreeWithEscalation(child);
+			void finish(() => reject(error), "termination");
 		};
+		const onAbort = (): void => terminate(new Error(`${config.agent} via ACPX aborted`));
 		if (signal?.aborted) onAbort();
 		else signal?.addEventListener("abort", onAbort, { once: true });
-		const timer = setTimeout(() => {
-			terminateChildProcessTreeWithEscalation(child);
-			void finish(() => reject(new Error(`${config.agent} via ACPX timeout after ${Math.ceil(remainingMs)}ms`)), false);
-		}, remainingMs);
+		if (!terminationError) {
+			timer = setTimeout(
+				() => terminate(new Error(`${config.agent} via ACPX timeout after ${Math.ceil(remainingMs)}ms`)),
+				remainingMs,
+			);
+		}
 		child.stdout?.setEncoding("utf8");
 		child.stderr?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk) => {
@@ -1440,57 +1559,60 @@ function runAcpxAttempt(
 			stderr += String(chunk);
 		});
 		child.on("error", (error) => {
-			void finish(() => reject(error));
+			if (!terminationError) void finish(() => reject(error));
 		});
 		child.on(
 			"close",
 			(code) =>
-				void finish(() => {
-					if (aborted) {
-						reject(new Error(`${config.agent} via ACPX aborted`));
-						return;
-					}
-					if (code !== 0) {
-						reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
-						return;
-					}
-					let text: string | undefined;
-					let parsed: AcpxParsedJsonOutput | undefined;
-					try {
-						if (outputFormat === "json") {
-							parsed = parseAcpxJsonOutput(stdout, config);
-							text = parsed.text;
-						} else {
-							text = stdout.trim();
-						}
-					} catch (error) {
-						reject(error);
-						return;
-					}
-					if (!text) {
-						if (parsed && (!parsed.finalSeen || parsed.sideEffects)) {
-							reject(new Error(`${config.agent} via ACPX JSON output did not include a final response`));
+				void finish(
+					() => {
+						if (terminationError) {
+							reject(terminationError);
 							return;
 						}
-						reject(
-							new AcpxEmptyResponseError(config.agent, {
-								exitCode: 0,
-								stdoutBytes: Buffer.byteLength(stdout),
-								stderrBytes: Buffer.byteLength(stderr),
-								format: outputFormat,
-								durationMs: performance.now() - startedAt,
-								sideEffects: parsed?.sideEffects ?? false,
-								...(parsed?.sessionId ? { sessionId: parsed.sessionId } : {}),
-								...(parsed?.stopReason ? { stopReason: parsed.stopReason } : {}),
-								...(parsed?.usage || quietUsage(stderr) ? { usage: parsed?.usage ?? quietUsage(stderr) } : {}),
-							}),
-						);
-						return;
-					}
-					resolve(text);
-				}),
+						if (code !== 0) {
+							reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
+							return;
+						}
+						let text: string | undefined;
+						let parsed: AcpxParsedJsonOutput | undefined;
+						try {
+							if (outputFormat === "json") {
+								parsed = parseAcpxJsonOutput(stdout, config);
+								text = parsed.text;
+							} else {
+								text = stdout.trim();
+							}
+						} catch (error) {
+							reject(error);
+							return;
+						}
+						if (!text) {
+							if (parsed && (!parsed.finalSeen || parsed.sideEffects)) {
+								reject(new Error(`${config.agent} via ACPX JSON output did not include a final response`));
+								return;
+							}
+							reject(
+								new AcpxEmptyResponseError(config.agent, {
+									exitCode: 0,
+									stdoutBytes: Buffer.byteLength(stdout),
+									stderrBytes: Buffer.byteLength(stderr),
+									format: outputFormat,
+									durationMs: performance.now() - startedAt,
+									sideEffects: parsed?.sideEffects ?? false,
+									...(parsed?.sessionId ? { sessionId: parsed.sessionId } : {}),
+									...(parsed?.stopReason ? { stopReason: parsed.stopReason } : {}),
+									...(parsed?.usage || quietUsage(stderr) ? { usage: parsed?.usage ?? quietUsage(stderr) } : {}),
+								}),
+							);
+							return;
+						}
+						resolve(text);
+					},
+					"none",
+				),
 		);
-		child.stdin?.end(prompt);
+		if (!terminationError) child.stdin?.end(prompt);
 	});
 }
 
@@ -1520,45 +1642,74 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 					);
 				}
 				const attemptConfig = attempt === 0 ? config : { ...config, mode: "exec" as const, session: undefined };
-				try {
-					return await withLlmConcurrency(
-						() => {
-							const acquiredRemainingMs = deadline - performance.now();
-							if (acquiredRemainingMs <= 1) {
-								if (lastEmpty) {
-									throw formatEmptyResponseError(
-										config.agent,
-										lastEmpty.diagnostics,
-										attempt - 1,
-										performance.now() - startedAt,
-									);
-								}
-								throw new Error(
-									`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
+				while (true) {
+					try {
+						const cleanupGeneration = await waitForAcpxCleanupBarrier(
+							attemptConfig.agent,
+							deadline,
+							timeoutMs,
+							signal,
+						);
+						signal?.throwIfAborted();
+						const postCleanupRemainingMs = deadline - performance.now();
+						if (postCleanupRemainingMs <= 1) {
+							if (lastEmpty) {
+								throw formatEmptyResponseError(
+									config.agent,
+									lastEmpty.diagnostics,
+									attempt - 1,
+									performance.now() - startedAt,
 								);
 							}
-							return runAcpxAttempt(attemptConfig, prompt, acquiredRemainingMs, signal);
-						},
-						remainingMs,
-						"acpx",
-						signal,
-					);
-				} catch (error) {
-					if (!(error instanceof AcpxEmptyResponseError)) throw error;
-					lastEmpty = error;
-					if (attempt >= retries) {
-						throw formatEmptyResponseError(config.agent, error.diagnostics, attempt, performance.now() - startedAt);
+							throw new Error(
+								`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
+							);
+						}
+						return await withLlmConcurrency(
+							async () => {
+								signal?.throwIfAborted();
+								const acquiredRemainingMs = deadline - performance.now();
+								if (acquiredRemainingMs <= 1) {
+									if (lastEmpty) {
+										throw formatEmptyResponseError(
+											config.agent,
+											lastEmpty.diagnostics,
+											attempt - 1,
+											performance.now() - startedAt,
+										);
+									}
+									throw new Error(
+										`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
+									);
+								}
+								if (acpxCleanupGeneration(attemptConfig.agent) !== cleanupGeneration) {
+									throw ACPX_RETRY_ADMISSION;
+								}
+								return runAcpxAttempt(attemptConfig, prompt, acquiredRemainingMs, signal);
+							},
+							postCleanupRemainingMs,
+							"acpx",
+							signal,
+						);
+					} catch (error) {
+						if (error === ACPX_RETRY_ADMISSION) continue;
+						if (!(error instanceof AcpxEmptyResponseError)) throw error;
+						lastEmpty = error;
+						if (attempt >= retries) {
+							throw formatEmptyResponseError(config.agent, error.diagnostics, attempt, performance.now() - startedAt);
+						}
+						const delayMs = calculateAcpxRetryDelayMs(attempt);
+						logger.warn("inference", "Retrying sterile ACPX empty response", {
+							agent: config.agent,
+							attempt: attempt + 1,
+							delayMs,
+							format: error.diagnostics.format,
+							sessionId: error.diagnostics.sessionId ?? "unknown",
+							stopReason: error.diagnostics.stopReason ?? "unknown",
+						});
+						await waitForAcpxRetry(config.agent, delayMs, deadline, signal);
+						break;
 					}
-					const delayMs = calculateAcpxRetryDelayMs(attempt);
-					logger.warn("inference", "Retrying sterile ACPX empty response", {
-						agent: config.agent,
-						attempt: attempt + 1,
-						delayMs,
-						format: error.diagnostics.format,
-						sessionId: error.diagnostics.sessionId ?? "unknown",
-						stopReason: error.diagnostics.stopReason ?? "unknown",
-					});
-					await waitForAcpxRetry(config.agent, delayMs, deadline, signal);
 				}
 			}
 			throw new Error(`${config.agent} via ACPX retry loop exhausted`);
