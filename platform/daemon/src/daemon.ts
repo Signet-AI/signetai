@@ -2063,10 +2063,10 @@ async function main() {
 				maxCheckpointsPerSession: memoryCfg.pipelineV2.continuity.maxCheckpointsPerSession,
 			}),
 		);
-	}
-	const restoredSessions = restorePersistedSessions();
-	if (restoredSessions.active > 0 || restoredSessions.expired > 0 || restoredSessions.ended > 0) {
-		logger.info("session-tracker", "Restored durable session lifecycle state", restoredSessions);
+		const restoredSessions = restorePersistedSessions();
+		if (restoredSessions.active > 0 || restoredSessions.expired > 0 || restoredSessions.ended > 0) {
+			logger.info("session-tracker", "Restored durable session lifecycle state", restoredSessions);
+		}
 	}
 	logFdSnapshot("post-db-init");
 	startEventLoopMonitor();
@@ -2224,10 +2224,12 @@ async function main() {
 				});
 			}
 		});
-		for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
-			if (source.enabled) {
-				// Server readiness must not wait on best-effort telemetry, but shutdown must drain it.
-				void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
+		if (!memoryCfg.pipelineV2.paused) {
+			for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
+				if (source.enabled) {
+					// Server readiness must not wait on best-effort telemetry, but shutdown must drain it.
+					void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
+				}
 			}
 		}
 
@@ -2573,7 +2575,8 @@ async function main() {
 				startAcpDeliveryReconciliation();
 			}
 
-			nativeMemoryBridgeStartTimer = setTimeout(() => {
+			if (!deferredMemoryCfg.pipelineV2.paused)
+				nativeMemoryBridgeStartTimer = setTimeout(() => {
 				nativeMemoryBridgeStartTimer = null;
 				const deferredMemoryCfg = loadMemoryConfig(AGENTS_DIR);
 				if (shuttingDown || deferredMemoryCfg.pipelineV2.paused) return;
@@ -2682,7 +2685,7 @@ async function main() {
 						});
 				}
 			}, 30_000);
-			nativeMemoryBridgeStartTimer.unref?.();
+			nativeMemoryBridgeStartTimer?.unref?.();
 
 			const startupCfg = loadMemoryConfig(AGENTS_DIR);
 			if (!startupCfg.pipelineV2.paused && startupCfg.embedding.provider !== "none") {

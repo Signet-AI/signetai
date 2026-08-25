@@ -74,6 +74,13 @@ describe("daemon production DB owner wiring", () => {
 		expect(source).toContain(
 			"if (!memoryCfg.pipelineV2.paused) {\n\t\t// Clean accumulated crash-loop damage through the owner.",
 		);
+		expect(source).toContain("const restoredSessions = restorePersistedSessions();");
+		expect(source).toContain(
+			"if (!memoryCfg.pipelineV2.paused) {\n\t\t\tfor (const source of loadSourcesConfig(AGENTS_DIR).sources)",
+		);
+		expect(source).toContain(
+			"if (!deferredMemoryCfg.pipelineV2.paused)\n\t\t\t\tnativeMemoryBridgeStartTimer = setTimeout",
+		);
 	});
 
 	it("keeps post-ready integrity maintenance incremental and checkpointed", async () => {
