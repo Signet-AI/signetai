@@ -1645,7 +1645,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
 			});
 		}
-	} else {
+	} else if (!pipelinePaused) {
 		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);
 	}
 
@@ -2333,16 +2333,18 @@ async function main() {
 
 		initCheckpointFlush(getDbAccessor());
 
-		schedulerHandle = startSchedulerWorker(getDbAccessor());
-		if (!transcriptCaptureWorkerHandle) {
-			transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
-		}
-		if (!transcriptRecoveryWorkerHandle) {
-			transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(
-				getDbAccessor(),
-				AGENTS_DIR,
-				resolveDaemonAgentId(),
-			);
+		if (!liveMemoryCfg.pipelineV2.paused) {
+			schedulerHandle = startSchedulerWorker(getDbAccessor());
+			if (!transcriptCaptureWorkerHandle) {
+				transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
+			}
+			if (!transcriptRecoveryWorkerHandle) {
+				transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(
+					getDbAccessor(),
+					AGENTS_DIR,
+					resolveDaemonAgentId(),
+				);
+			}
 		}
 
 		checkpointPruneTimer = setInterval(() => {

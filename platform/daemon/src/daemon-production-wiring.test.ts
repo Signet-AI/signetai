@@ -38,7 +38,7 @@ describe("daemon production DB owner wiring", () => {
 		expect(source).toContain("new Worker(workerPath);");
 	});
 
-	it("keeps background imports and source indexing dormant while paused", async () => {
+	it("keeps autonomous background work dormant while paused", async () => {
 		const source = await Bun.file(daemonSourceUrl).text();
 
 		expect(source).toContain("if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return 0;");
@@ -56,6 +56,13 @@ describe("daemon production DB owner wiring", () => {
 		);
 		expect(source).toContain("const deferredMemoryCfg = loadMemoryConfig(AGENTS_DIR);");
 		expect(source).toContain("resolveEmbeddingBridgeOptions(deferredMemoryCfg.embedding, fetchEmbedding)");
+		expect(source).toContain(
+			"if (!liveMemoryCfg.pipelineV2.paused) {\n\t\t\tschedulerHandle = startSchedulerWorker",
+		);
+		expect(source).toContain("transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker");
+		expect(source).toContain(
+			"} else if (!pipelinePaused) {\n\t\tensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);",
+		);
 	});
 
 	it("keeps post-ready integrity maintenance incremental and checkpointed", async () => {
