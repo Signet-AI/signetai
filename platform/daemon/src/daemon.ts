@@ -2154,7 +2154,7 @@ async function main() {
 		});
 	}
 
-	syncAgentRoster(AGENTS_DIR);
+	if (!memoryCfg.pipelineV2.paused) syncAgentRoster(AGENTS_DIR);
 
 	invalidateTraversalCache();
 

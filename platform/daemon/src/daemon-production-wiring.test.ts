@@ -81,6 +81,7 @@ describe("daemon production DB owner wiring", () => {
 		expect(source).toContain(
 			"if (!deferredMemoryCfg.pipelineV2.paused)\n\t\t\t\tnativeMemoryBridgeStartTimer = setTimeout",
 		);
+		expect(source).toContain("if (!memoryCfg.pipelineV2.paused) syncAgentRoster(AGENTS_DIR);");
 	});
 
 	it("keeps post-ready integrity maintenance incremental and checkpointed", async () => {
