@@ -260,7 +260,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			recordIndexOperation,
 		});
 
-		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: job.status === "queued", job }, 202);
 	});
 
 	app.post("/api/sources/discord", async (c) => {
@@ -320,7 +320,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			recordIndexOperation,
 		});
 
-		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: job.status === "queued", job }, 202);
 	});
 
 	app.get("/api/sources/:sourceId/snapshot", (c) => {
@@ -459,7 +459,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			recordIndexOperation,
 		});
 
-		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: job.status === "queued", job }, 202);
 	});
 
 	app.delete("/api/sources/:sourceId", async (c) => {
@@ -529,6 +529,15 @@ function isSourceImportBlocked(sourceId: string): boolean {
 function enqueueSourceIndexJob(input: SourceIndexJobInput): SourceIndexJob {
 	const job = beginSourceIndexJob(input.source.id);
 	if (job.id.startsWith("source-index:")) routeSourceJobs.set(input.source.id, { job, input });
+	if (loadMemoryConfig(input.agentsDir).pipelineV2.paused) {
+		pauseSourceIndexJob(input.source.id, job.id, {
+			pauseReason: "pipeline_paused",
+			resumeFrontier: null,
+			scanned: job.scanned ?? 0,
+			indexed: job.indexed ?? 0,
+		});
+		return getSourceIndexJob(input.source.id) ?? job;
+	}
 	scheduleSourceIndexJob(input, job, 0);
 	return job;
 }
@@ -561,6 +570,15 @@ async function recordSourceIndexTelemetryBestEffort(
 async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob): Promise<void> {
 	const startedAt = Date.now();
 	const agentId = resolveDaemonAgentId();
+	if (loadMemoryConfig(input.agentsDir).pipelineV2.paused) {
+		pauseSourceIndexJob(input.source.id, job.id, {
+			pauseReason: "pipeline_paused",
+			resumeFrontier: null,
+			scanned: job.scanned ?? 0,
+			indexed: job.indexed ?? 0,
+		});
+		return;
+	}
 	if (isSourceIndexInFlight(input.source.id)) {
 		scheduleSourceIndexJob(input, job, 50);
 		return;
@@ -582,7 +600,8 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 				source: input.source,
 				agentsDir: input.agentsDir,
 				agentId,
-				shouldContinue: () => isCurrentSourceIndexJob(input.source.id, job.id),
+				shouldContinue: () =>
+					!loadMemoryConfig(input.agentsDir).pipelineV2.paused && isCurrentSourceIndexJob(input.source.id, job.id),
 				onProgress: (event) => {
 					if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 					updateSourceIndexJobProgress(input.source.id, job.id, event);
@@ -596,6 +615,15 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 					}
 				},
 			});
+			if (loadMemoryConfig(input.agentsDir).pipelineV2.paused) {
+				pauseSourceIndexJob(input.source.id, job.id, {
+					pauseReason: "pipeline_paused",
+					resumeFrontier: null,
+					scanned: result.scanned,
+					indexed: result.indexed,
+				});
+				return;
+			}
 			if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 			if (result.failures.length > 0) {
 				const accepted = Math.max(0, result.indexed - result.failures.length);
@@ -650,11 +678,21 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 					statusMessage: event.status,
 				});
 			},
-			shouldContinue: () => isCurrentSourceIndexJob(input.source.id, job.id),
+			shouldContinue: () =>
+				!loadMemoryConfig(input.agentsDir).pipelineV2.paused && isCurrentSourceIndexJob(input.source.id, job.id),
 		});
 		const indexed = await bridge.syncExisting();
-		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		const syncResult = bridge.getLastSyncResult?.();
+		if (loadMemoryConfig(input.agentsDir).pipelineV2.paused) {
+			pauseSourceIndexJob(input.source.id, job.id, {
+				pauseReason: "pipeline_paused",
+				resumeFrontier: null,
+				scanned: syncResult?.scanned ?? 0,
+				indexed: syncResult?.indexed ?? indexed,
+			});
+			return;
+		}
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		const paused = syncResult?.pausedSources.find((result) => result.sourceId === input.source.id);
 		if (syncResult?.status === "paused" && paused) {
 			pauseSourceIndexJob(input.source.id, job.id, {

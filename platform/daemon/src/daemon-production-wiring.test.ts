@@ -31,6 +31,31 @@ describe("daemon production DB owner wiring", () => {
 		expect(source).not.toContain("recallDbOwner");
 	});
 
+	it("does not retain the synthesis worker while the pipeline is paused", async () => {
+		const source = await Bun.file(daemonSourceUrl).text();
+
+		expect(source).toContain("let synthWorker: Worker | null = null;\n\tif (!memoryCfg.pipelineV2.paused) {");
+		expect(source).toContain("new Worker(workerPath);");
+	});
+
+	it("keeps background imports and source indexing dormant while paused", async () => {
+		const source = await Bun.file(daemonSourceUrl).text();
+
+		expect(source).toContain("if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return 0;");
+		expect(source).toContain("nativeMemoryBridgeStartTimer = setTimeout(() => {");
+		expect(source).toContain("clearTimeout(nativeMemoryBridgeStartTimer);");
+		expect(source).not.toContain("ingestedMemoryFiles");
+		expect(source).toContain('if (!startupCfg.pipelineV2.paused && startupCfg.embedding.provider !== "none")');
+		expect(source).toContain(
+			"if (!loadMemoryConfig(AGENTS_DIR).pipelineV2.paused)\n\t\t\t\tvacuumConversionHandle",
+		);
+		expect(source).toContain("const liveMemoryCfg = loadMemoryConfig(AGENTS_DIR);");
+		expect(source).toContain("await startPipelineRuntime(liveMemoryCfg, telemetryCollector);");
+		expect(source).toContain(
+			"if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;\n\t\ttry {\n\t\t\tawait cleanupSourceDeletionTombstones",
+		);
+	});
+
 	it("keeps post-ready integrity maintenance incremental and checkpointed", async () => {
 		const source = await Bun.file(daemonSourceUrl).text();
 

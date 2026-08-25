@@ -12,6 +12,7 @@ import {
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { dbOwnerBatch, ownerStatement } from "../db-owner-runtime";
+import { loadMemoryConfig } from "../memory-config";
 import { hashNormalizedBody } from "../memory-lineage";
 import type {
 	NativeMemoryBridgeHandle,
@@ -450,6 +451,36 @@ describe("Sources routes", () => {
 
 		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
 		expect(loadSourcesConfig(dir).sources[0]?.id).toBe(body.source.id);
+	});
+
+	it("pauses source indexing before bridge startup when the pipeline is paused", async () => {
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    paused: true
+`,
+		);
+		expect(loadMemoryConfig(dir).pipelineV2.paused).toBe(true);
+		let syncStarted = false;
+		const res = await makeApp({ onSyncStart: () => (syncStarted = true) }).request("/api/sources/obsidian", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ path: vault, name: "Paused Route Vault" }),
+		});
+
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as { queued: boolean; source: { id: string } };
+		expect(body.queued).toBe(false);
+		await waitFor(() => getSourceIndexJob(body.source.id)?.status === "paused");
+		expect(syncStarted).toBe(false);
+		expect(getSourceIndexJob(body.source.id)).toMatchObject({
+			status: "paused",
+			partial: true,
+			scanned: 0,
+			indexed: 0,
+			pauseReason: "pipeline_paused",
+		});
 	});
 
 	it("reports a provider outage as paused partial progress without stamping freshness", async () => {

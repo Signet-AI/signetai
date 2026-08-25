@@ -367,11 +367,7 @@ setupDashboardRoutes(app);
 
 let watcher: ReturnType<typeof watch> | null = null;
 let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
-
-// Fast in-process cache layered on top of the persistent legacy_markdown_imports
-// manifest. The DB manifest is the authoritative restart-safe skip state;
-// this map only avoids duplicate work within a single daemon lifetime.
-const ingestedMemoryFiles = new Map<string, string>();
+let nativeMemoryBridgeStartTimer: NodeJS.Timeout | null = null;
 const LEGACY_MARKDOWN_IMPORTER_VERSION = 1;
 const MEMORY_IMPORT_POLL_MS = 30_000;
 
@@ -877,6 +873,7 @@ function memoryIdFromRememberResponse(value: unknown): string | null {
 }
 
 async function ingestMemoryMarkdown(filePath: string): Promise<number> {
+	if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return 0;
 	if (filePath.endsWith("MEMORY.md")) return 0;
 
 	const filenameWithExt = basename(filePath);
@@ -1017,7 +1014,6 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 	}
 
 	if (transientFailures > 0) {
-		ingestedMemoryFiles.delete(filePath);
 		await writeLegacyMarkdownImportState({
 			filePath,
 			state: fileState,
@@ -1027,7 +1023,6 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 			error: `${transientFailures} transient chunk import failure(s)`,
 		});
 	} else {
-		ingestedMemoryFiles.set(filePath, hash);
 		await writeLegacyMarkdownImportState({
 			filePath,
 			state: fileState,
@@ -1102,6 +1097,7 @@ function sleep(ms: number): Promise<void> {
 function startMemoryImportPoller(): void {
 	if (memoryImportTimer !== null) return;
 	memoryImportTimer = setInterval(() => {
+		if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;
 		if (memoryImportInFlight) return;
 		memoryImportInFlight = true;
 		importExistingMemoryFiles()
@@ -1776,6 +1772,10 @@ async function cleanup() {
 		clearTimeout(syncTimer);
 		syncTimer = null;
 	}
+	if (nativeMemoryBridgeStartTimer !== null) {
+		clearTimeout(nativeMemoryBridgeStartTimer);
+		nativeMemoryBridgeStartTimer = null;
+	}
 	stopMemoryImportPoller();
 	stopStaleSessionSweeper();
 	stopAcpDeliveryReconciliation();
@@ -2077,20 +2077,23 @@ async function main() {
 	// put it before binding the HTTP server: its lifecycle-state delete uses the
 	// bounded async writer and must not make readiness depend on that queue.
 
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
 	const workerPath = existsSync(bundled)
 		? bundled
 		: (resolveEmbeddedWorkerPath("synthesis-render-worker") ?? join(__dirname, "synthesis-render-worker.ts"));
 	let synthWorker: Worker | null = null;
-	try {
-		synthWorker = new Worker(workerPath);
-	} catch (err) {
-		logger.warn(
-			"daemon",
-			"synthesis worker creation failed — using sync rendering",
-			err instanceof Error ? err : undefined,
-		);
+	if (!memoryCfg.pipelineV2.paused) {
+		try {
+			synthWorker = new Worker(workerPath);
+		} catch (err) {
+			logger.warn(
+				"daemon",
+				"synthesis worker creation failed — using sync rendering",
+				err instanceof Error ? err : undefined,
+			);
+		}
 	}
 	let synthWorkerReady = false;
 	if (synthWorker) {
@@ -2162,7 +2165,6 @@ async function main() {
 
 	await ensureArchitectureDoc();
 
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	let telemetryCollector: TelemetryCollector | undefined;
 	if (memoryCfg.pipelineV2.telemetryEnabled && !telemetryDisabledByEnv()) {
 		const posthogApiKey = memoryCfg.pipelineV2.telemetry.posthogApiKey;
@@ -2325,7 +2327,8 @@ async function main() {
 	const startPostReadyRuntime = async (): Promise<void> => {
 		await deferredRuntimeGate.waitForIntegrity();
 		reportStartupGrace();
-		await startPipelineRuntime(memoryCfg, telemetryCollector);
+		const liveMemoryCfg = loadMemoryConfig(AGENTS_DIR);
+		await startPipelineRuntime(liveMemoryCfg, telemetryCollector);
 		logFdSnapshot("post-pipeline");
 
 		initCheckpointFlush(getDbAccessor());
@@ -2407,6 +2410,7 @@ async function main() {
 	// Cleanup is retryable maintenance. It must not hold up pipeline startup if
 	// the async writer is blocked or unavailable.
 	deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
+		if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;
 		try {
 			await cleanupSourceDeletionTombstones(AGENTS_DIR);
 		} catch (error) {
@@ -2457,6 +2461,7 @@ async function main() {
 		});
 		logger.info("daemon", "Daemon ready");
 		deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
+			if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;
 			const maintenance = dbOwnerMaintenanceHandle;
 			if (maintenance === null) throw new Error("DB owner maintenance is unavailable for FTS startup recovery");
 			const result = await completeFtsStartupRecovery({
@@ -2472,10 +2477,12 @@ async function main() {
 		deferredRuntimeScheduler.scheduleIntegrity(async (): Promise<void> => {
 			logFdSnapshot("server-ready");
 			writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("running"));
-			vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor(), { owner: dbOwnerClient ?? undefined });
+			if (!loadMemoryConfig(AGENTS_DIR).pipelineV2.paused)
+				vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor(), { owner: dbOwnerClient ?? undefined });
 			const owner = dbOwnerClient;
 			if (owner === null) throw new Error("DB owner is unavailable for incremental integrity maintenance");
 			const runIntegritySlice = async (): Promise<void> => {
+				if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;
 				const result = await runIncrementalDatabaseIntegrityCheck({
 					owner,
 					checkpointKey: "database.quick-check",
@@ -2494,7 +2501,10 @@ async function main() {
 						lastObject: result.lastObject,
 					});
 				}
-				if (result.phase === "running" || result.phase === "timed_out" || result.phase === "unavailable") {
+				if (
+					!loadMemoryConfig(AGENTS_DIR).pipelineV2.paused &&
+					(result.phase === "running" || result.phase === "timed_out" || result.phase === "unavailable")
+				) {
 					const timer = setTimeout(
 						() => {
 							void runIntegritySlice().catch((error) => {
@@ -2540,15 +2550,19 @@ async function main() {
 				}
 			} catch {}
 
-			importExistingMemoryFiles().catch((e) => {
-				const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
-				logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
-			});
-			startMemoryImportPoller();
+			if (!memoryCfg.pipelineV2.paused) {
+				void importExistingMemoryFiles().catch((e) => {
+					const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+					logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
+				});
+				startMemoryImportPoller();
+			}
 			startStaleSessionSweeper();
 			startAcpDeliveryReconciliation();
 
-			setTimeout(() => {
+			nativeMemoryBridgeStartTimer = setTimeout(() => {
+				nativeMemoryBridgeStartTimer = null;
+				if (shuttingDown || loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;
 				if (!nativeMemoryBridge) {
 					const startupSourceJobs = new Map<string, string>();
 					for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
@@ -2654,9 +2668,10 @@ async function main() {
 						});
 				}
 			}, 30_000);
+			nativeMemoryBridgeStartTimer.unref?.();
 
 			const startupCfg = loadMemoryConfig(AGENTS_DIR);
-			if (startupCfg.embedding.provider !== "none") {
+			if (!startupCfg.pipelineV2.paused && startupCfg.embedding.provider !== "none") {
 				checkEmbeddingProvider(startupCfg.embedding)
 					.then((embeddingStatus) => {
 						if (!embeddingStatus.available) {
