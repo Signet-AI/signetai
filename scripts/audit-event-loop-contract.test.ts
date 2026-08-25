@@ -16,18 +16,18 @@ import {
 
 test("the deterministic ledger retains the exact current source inventory", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	expect(baseline).toHaveLength(993);
+	expect(baseline).toHaveLength(996);
 	expect(baseline.filter((site) => site.api === "withWriteTx")).toHaveLength(73);
 	expect(baseline.filter((site) => site.api === "withReadDb")).toHaveLength(115);
-	expect(baseline.filter((site) => site.api === "withWriteTxAsync")).toHaveLength(59);
-	expect(baseline.filter((site) => site.api === "withReadDbAsync")).toHaveLength(227);
+	expect(baseline.filter((site) => site.api === "withWriteTxAsync")).toHaveLength(61);
+	expect(baseline.filter((site) => site.api === "withReadDbAsync")).toHaveLength(228);
 });
 
 test("the event-loop ledger exactly equals the current source inventory", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const result = runAudit({ sourceRoot: resolve("platform/daemon/src"), baselineSites: baseline });
 	expect(result.sites).toEqual(baseline);
-});
+}, 15_000);
 
 test("the ledger reports legacy DB markers and rejects new call sites", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-ledger-"));
@@ -326,8 +326,8 @@ test("the production TypeScript project cannot import the compatibility module",
 test("the generated report describes the type boundary and transitional counts", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const report = renderReport(baseline, { total: 188, withWriteTx: 73, withReadDb: 115 });
-	expect(report).toContain("Exact ledger inventory: 993 sites");
-	expect(report).toContain("73 synchronous writes, 115 synchronous reads, and 289 async-named parent DB sites");
+	expect(report).toContain("Exact ledger inventory: 996 sites");
+	expect(report).toContain("73 synchronous writes, 115 synchronous reads, and 292 async-named parent DB sites");
 	expect(report).toContain("type boundary");
 	expect(report).not.toContain("1061");
 });

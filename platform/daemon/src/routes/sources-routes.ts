@@ -11,6 +11,7 @@ import {
 	addDiscordSource,
 	addGitHubSource,
 	addObsidianSource,
+	addWebSource,
 	loadSourcesConfig,
 	markSourceIndexed,
 	removeSourceIfGeneration,
@@ -123,6 +124,11 @@ interface AddGitHubSourceBody {
 	readonly labels?: readonly string[];
 	readonly docPaths?: readonly string[];
 	readonly maxItemsPerRepo?: number;
+}
+
+interface AddWebSourceBody {
+	readonly url?: string;
+	readonly name?: string;
 }
 
 interface PickDirectoryBody {
@@ -459,6 +465,37 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			recordIndexOperation,
 		});
 
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+	});
+
+	app.post("/api/sources/web", async (c) => {
+		let body: AddWebSourceBody = {};
+		try {
+			const parsed = (await c.req.json()) as unknown;
+			body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as AddWebSourceBody) : {};
+		} catch {
+			recordSourceConnectionFailure("web", "invalid configuration");
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		const result = addWebSource(
+			{
+				url: typeof body.url === "string" ? body.url : "",
+				name: typeof body.name === "string" ? body.name : undefined,
+			},
+			agentsDir,
+		);
+		if (result.ok === false) {
+			recordSourceConnectionFailure("web", result.error);
+			return c.json({ error: result.error }, 400);
+		}
+		await recordSourceConnected(result.source, resolveDaemonAgentId());
+		const job = enqueueSourceIndexJob({
+			source: result.source,
+			agentsDir,
+			startBridge,
+			purgeNativeSource,
+			recordIndexOperation,
+		});
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 	});
 
@@ -962,7 +999,7 @@ function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
 					source.kind === "obsidian" ? source.root : undefined,
 				),
 			};
-		}, "routes/sources-routes.ts:906");
+		}, "routes/sources-routes.ts:943");
 	} catch {
 		return { artifacts: 0, chunks: 0, indexed: 0, hasEligibleUnconsumedEvidence: false };
 	}
@@ -980,12 +1017,13 @@ function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceS
 				: { status: "clear" as const, issues: [] };
 		const artifactSummary = artifactHealthSummary(source, agentId);
 		const discordSummary = discordHealthSummary(source, agentId);
+		const sourceFailures = source.kind === "discord" ? { total: 0, recoverable: 0 } : artifactSummary.failures;
 		const semantic = semanticHealthSummary(source, agentId);
 		const importExtraction = source.kind === "import" ? readImportedSourceOutcome(source.id, agentId) : undefined;
 		const orphanChunks = sourceOrphanChunks(source, agentId);
 		const hasDegradation =
 			permission.status === "denied" ||
-			discordSummary.failures.total > 0 ||
+			sourceFailures.total > 0 ||
 			discordSummary.checkpoints.partial > 0 ||
 			discordSummary.checkpoints.stale > 0 ||
 			artifactSummary.deletedArtifacts > 0 ||
@@ -1004,7 +1042,7 @@ function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceS
 			latestArtifactAt: artifactSummary.latestArtifactAt,
 			latestCheckpointAt: discordSummary.latestCheckpointAt,
 			chunkCoverage: stats.artifacts > 0 ? Math.min(1, stats.chunks / stats.artifacts) : stats.chunks > 0 ? 1 : 0,
-			failures: discordSummary.failures,
+			failures: source.kind === "discord" ? discordSummary.failures : sourceFailures,
 			checkpoints: discordSummary.checkpoints,
 			purge: {
 				deletedArtifacts: artifactSummary.deletedArtifacts,
@@ -1061,7 +1099,7 @@ function sourceOrphanChunks(source: SignetSourceEntry, agentId: string): number 
 				`${chunkPrefix}\uffff`,
 			) as SourceChunkHealthRow[];
 		return chunks.filter((chunk) => !sourceChunkMatchesLiveArtifact(source, chunk, livePaths)).length;
-	}, "routes/sources-routes.ts:1045");
+	}, "routes/sources-routes.ts:1083");
 }
 
 function liveSourceArtifactPaths(db: ReadDb, source: SignetSourceEntry, agentId: string): ReadonlySet<string> {
@@ -1152,6 +1190,7 @@ function artifactHealthSummary(
 ): {
 	readonly latestArtifactAt: string | null;
 	readonly deletedArtifacts: number;
+	readonly failures: { readonly total: number; readonly recoverable: number };
 } {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
@@ -1177,6 +1216,7 @@ function artifactHealthSummary(
 			return {
 				latestArtifactAt: stringOrNull(row?.latestArtifactAt),
 				deletedArtifacts: numberOrZero(row?.deletedArtifacts),
+				failures: sourceFailureHealthFromDb(db, source, agentId),
 			};
 		}
 		const row = db
@@ -1191,8 +1231,27 @@ function artifactHealthSummary(
 		return {
 			latestArtifactAt: stringOrNull(row?.latestArtifactAt),
 			deletedArtifacts: numberOrZero(row?.deletedArtifacts),
+			failures: sourceFailureHealthFromDb(db, source, agentId),
 		};
-	}, "routes/sources-routes.ts:1157");
+	}, "routes/sources-routes.ts:1196");
+}
+
+function sourceFailureHealthFromDb(
+	db: import("../db-accessor").ReadDb,
+	source: SignetSourceEntry,
+	agentId: string,
+): { readonly total: number; readonly recoverable: number } {
+	const rows = db
+		.prepare(
+			`SELECT source_meta_json
+			   FROM memory_artifacts
+			  WHERE agent_id = ? AND source_id = ?
+			    AND source_kind = ? AND COALESCE(is_deleted, 0) = 0`,
+		)
+		.all(agentId, source.id, `source_${source.kind}_failure`) as Array<{ source_meta_json: string | null }>;
+	let recoverable = 0;
+	for (const row of rows) if (parseJsonObject(row.source_meta_json)?.recoverable === true) recoverable++;
+	return { total: rows.length, recoverable };
 }
 
 interface DiscordHealthSummary {
@@ -1251,7 +1310,7 @@ function discordHealthSummary(source: SignetSourceEntry, agentId: string): Disco
 			failures: { total: failures, recoverable },
 			checkpoints: { total: checkpoints, partial, stale },
 		};
-	}, "routes/sources-routes.ts:1220");
+	}, "routes/sources-routes.ts:1279");
 }
 
 function semanticHealthSummary(source: SignetSourceEntry, agentId: string): SourceHealth["semantic"] {
@@ -1289,7 +1348,7 @@ function semanticHealthSummary(source: SignetSourceEntry, agentId: string): Sour
 			total: entities + aspects + attributes + dependencies + communities,
 			documentEntityId: documentEntity?.id ?? null,
 		};
-	}, "routes/sources-routes.ts:1259");
+	}, "routes/sources-routes.ts:1318");
 }
 
 function countSourceRows(

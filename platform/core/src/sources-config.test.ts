@@ -11,11 +11,13 @@ import {
 	addGitHubSource,
 	addImportedSource,
 	addObsidianSource,
+	addWebSource,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
 	parseDiscordSettings,
 	parseGitHubSettings,
+	parseWebSettings,
 	removeSource,
 	removeSourceIfGeneration,
 } from "./sources-config";
@@ -32,6 +34,42 @@ function tmp(): string {
 }
 
 describe("sources-config", () => {
+	it("adds and upserts a validated public web source", () => {
+		const agentsDir = tmp();
+		const first = addWebSource(
+			{ url: "https://example.com/article#tracking", now: "2026-01-01T00:00:00.000Z" },
+			agentsDir,
+		);
+		expect(first.ok).toBe(true);
+		if (first.ok === false) throw new Error(first.error);
+		expect(first.source.kind).toBe("web");
+		expect(first.source.root).toBe("https://example.com/article");
+		expect(parseWebSettings(first.source.providerSettings).url).toBe(first.source.root);
+		const second = addWebSource(
+			{ url: "https://example.com/article", name: "Example", now: "2026-01-02T00:00:00.000Z" },
+			agentsDir,
+		);
+		expect(second.ok).toBe(true);
+		if (second.ok === false) throw new Error(second.error);
+		expect(second.created).toBe(false);
+		expect(second.source.generation).toBe(first.source.generation);
+		expect(second.source.name).toBe("Example");
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("rejects unsafe web source targets", () => {
+		const agentsDir = tmp();
+		for (const url of [
+			"javascript:alert(1)",
+			"file:///tmp/a",
+			"http://127.0.0.1/a",
+			"http://localhost/a",
+			"http://169.254.169.254/latest",
+		]) {
+			const result = addWebSource({ url }, agentsDir);
+			expect(result).toEqual({ ok: false, error: "Web page URL must be a public http(s) URL" });
+		}
+	});
 	it("adds an Obsidian vault source as read-only config", () => {
 		const agentsDir = tmp();
 		const vault = join(agentsDir, "vault");

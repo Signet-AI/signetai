@@ -348,6 +348,7 @@ export {
 	addGitHubSource,
 	addImportedSource,
 	addObsidianSource,
+	addWebSource,
 	DEFAULT_DISCORD_DESKTOP_CACHE_PATH,
 	DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
@@ -365,6 +366,8 @@ export {
 	markSourceIndexed,
 	parseDiscordSettings,
 	parseGitHubSettings,
+	parseWebSettings,
+	normalizePublicWebUrl,
 	removeSource,
 	removeSourceIfGeneration,
 	saveSourcesConfig,
@@ -375,6 +378,7 @@ export type {
 	AddImportedSourceInput,
 	AddImportedSourceResult,
 	AddObsidianSourceInput,
+	AddWebSourceInput,
 	AddSourceResult,
 	DiscordSourceSettings,
 	DiscordSourceSyncMode,
@@ -388,6 +392,7 @@ export type {
 	SignetSourceMode,
 	SignetSourceProviderSettings,
 	SignetSourcesConfig,
+	WebSourceSettings,
 } from "./sources-config";
 export {
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
