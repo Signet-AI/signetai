@@ -63,6 +63,14 @@ describe("daemon production DB owner wiring", () => {
 		expect(source).toContain(
 			"} else if (!pipelinePaused) {\n\t\tensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);",
 		);
+		expect(source).toContain("if (!pipelinePaused && !transcriptCaptureWorkerHandle)");
+		expect(source).toContain("if (!memoryCfg.pipelineV2.paused) {\n\t\tstartSessionCleanup();");
+		expect(source).toContain(
+			"if (!liveMemoryCfg.pipelineV2.paused) {\n\t\t\tcheckpointPruneTimer = setInterval",
+		);
+		expect(source).toContain(
+			"if (!deferredMemoryCfg.pipelineV2.paused) {\n\t\t\t\tstartStaleSessionSweeper();",
+		);
 	});
 
 	it("keeps post-ready integrity maintenance incremental and checkpointed", async () => {

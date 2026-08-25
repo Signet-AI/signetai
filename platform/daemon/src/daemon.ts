@@ -1123,6 +1123,7 @@ function stopMemoryImportPoller(): void {
 function startStaleSessionSweeper(): void {
 	if (staleSessionSweepTimer !== null) return;
 	staleSessionSweepTimer = setInterval(() => {
+		if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;
 		// Keep each timer tick small. The sweep is single-flight and yields
 		// between finalizations, so a large abandoned-session backlog cannot
 		// monopolize the daemon or fan out downstream capture work.
@@ -1148,6 +1149,7 @@ function stopStaleSessionSweeper(): void {
 function startAcpDeliveryReconciliation(): void {
 	if (acpDeliveryReconciliationTimer !== null) return;
 	acpDeliveryReconciliationTimer = setInterval(() => {
+		if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;
 		try {
 			const reconciled = reconcileAcpDeliveries();
 			if (reconciled > 0) logger.info("daemon", "Reconciled abandoned ACP delivery attempts", { reconciled });
@@ -1534,7 +1536,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	});
 
 	reloadAuthState(AGENTS_DIR);
-	if (!transcriptCaptureWorkerHandle) {
+	if (!pipelinePaused && !transcriptCaptureWorkerHandle) {
 		transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
 	}
 
@@ -2045,20 +2047,23 @@ async function main() {
 	// owner process, not merely behind an async function on this isolate.
 	dbOwnerClient = createDbOwnerClient({ dbPath: MEMORY_DB, sqlitePath: sqliteRuntime.choice?.path });
 	await dbOwnerClient.initialize(AGENTS_DIR);
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	const { extensionPath: initExtensionPath } = getVectorRuntimeStatus();
 	initDbAccessorLite(MEMORY_DB, initExtensionPath ?? "");
 	setSessionClaimStore(createSessionClaimStore(getDbAccessor()));
-	startSessionCleanup();
-	// Formal TTL lifecycle (#902): when stale-session cleanup evicts a claim
-	// whose harness never sent session-end, checkpoint the residual continuity
-	// state and mark the retained transcript complete instead of silently
-	// dropping the in-memory lifecycle state.
-	setSessionEvictionHandler(
-		createTtlEvictionHandler({
-			accessor: getDbAccessor(),
-			maxCheckpointsPerSession: loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity.maxCheckpointsPerSession,
-		}),
-	);
+	if (!memoryCfg.pipelineV2.paused) {
+		startSessionCleanup();
+		// Formal TTL lifecycle (#902): when stale-session cleanup evicts a claim
+		// whose harness never sent session-end, checkpoint the residual continuity
+		// state and mark the retained transcript complete instead of silently
+		// dropping the in-memory lifecycle state.
+		setSessionEvictionHandler(
+			createTtlEvictionHandler({
+				accessor: getDbAccessor(),
+				maxCheckpointsPerSession: memoryCfg.pipelineV2.continuity.maxCheckpointsPerSession,
+			}),
+		);
+	}
 	const restoredSessions = restorePersistedSessions();
 	if (restoredSessions.active > 0 || restoredSessions.expired > 0 || restoredSessions.ended > 0) {
 		logger.info("session-tracker", "Restored durable session lifecycle state", restoredSessions);
@@ -2077,7 +2082,6 @@ async function main() {
 	// put it before binding the HTTP server: its lifecycle-state delete uses the
 	// bounded async writer and must not make readiness depend on that queue.
 
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
 	const workerPath = existsSync(bundled)
@@ -2347,19 +2351,21 @@ async function main() {
 			}
 		}
 
-		checkpointPruneTimer = setInterval(() => {
-			try {
-				const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
-				if (cfg.enabled) {
-					pruneCheckpoints(getDbAccessor(), cfg.retentionDays);
+		if (!liveMemoryCfg.pipelineV2.paused) {
+			checkpointPruneTimer = setInterval(() => {
+				try {
+					const pipelineCfg = loadMemoryConfig(AGENTS_DIR).pipelineV2;
+					if (!pipelineCfg.paused && pipelineCfg.continuity.enabled) {
+						pruneCheckpoints(getDbAccessor(), pipelineCfg.continuity.retentionDays);
+					}
+				} catch (err) {
+					logger.warn("daemon", "Checkpoint pruning failed", {
+						error: err instanceof Error ? err.message : String(err),
+					});
 				}
-			} catch (err) {
-				logger.warn("daemon", "Checkpoint pruning failed", {
-					error: err instanceof Error ? err.message : String(err),
-				});
-			}
-		}, 3600_000);
-		setCheckpointPruneTimer(checkpointPruneTimer);
+			}, 3600_000);
+			setCheckpointPruneTimer(checkpointPruneTimer);
+		}
 
 		startGitSyncTimer();
 		initUpdateSystem(CURRENT_VERSION, AGENTS_DIR, (preferredExecutablePath) => {
@@ -2560,8 +2566,10 @@ async function main() {
 				});
 				startMemoryImportPoller();
 			}
-			startStaleSessionSweeper();
-			startAcpDeliveryReconciliation();
+			if (!deferredMemoryCfg.pipelineV2.paused) {
+				startStaleSessionSweeper();
+				startAcpDeliveryReconciliation();
+			}
 
 			nativeMemoryBridgeStartTimer = setTimeout(() => {
 				nativeMemoryBridgeStartTimer = null;
