@@ -5,20 +5,29 @@
  */
 import { sourceLogo } from "@/components/icons";
 import { type ImportSourcesResponse, api } from "@/lib/api";
-import { cn } from "@/lib/utils";
-import { FolderOpen, Loader2, RotateCcw, Upload, X } from "lucide-react";
+import { ArrowLeft, FolderOpen, Globe, Loader2, RotateCcw, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-type SourceKind = "files" | "obsidian" | "github" | "discord";
+type SourceKind = "files" | "web" | "obsidian" | "github" | "discord";
+type SourceStep = "choose" | "configure";
 
-const KINDS: readonly { id: SourceKind; label: string; namePlaceholder: string }[] = [
-	{ id: "files", label: "Files", namePlaceholder: "" },
+const IMPORT_KINDS: readonly { id: "files" | "web"; label: string; description: string }[] = [
+	{ id: "files", label: "Files", description: "Import documents and notes" },
+	{ id: "web", label: "Web page", description: "Extract a readable page from a public URL" },
+];
+
+const CONNECT_KINDS: readonly { id: "obsidian" | "github" | "discord"; label: string; namePlaceholder: string }[] = [
 	{ id: "obsidian", label: "Obsidian", namePlaceholder: "Research Vault" },
 	{ id: "github", label: "GitHub", namePlaceholder: "Signet GitHub" },
 	{ id: "discord", label: "Discord", namePlaceholder: "Team Discord" },
 ];
 
 const FIELD: Record<Exclude<SourceKind, "files">, { label: string; placeholder: string; hint: string }> = {
+	web: {
+		label: "Public URL",
+		placeholder: "https://example.com/article",
+		hint: "Only public http(s) pages are fetched. Signet stores the extracted Markdown with the original URL.",
+	},
 	obsidian: {
 		label: "Vault path",
 		placeholder: "/home/nicholai/Notes/Research",
@@ -38,9 +47,21 @@ const FIELD: Record<Exclude<SourceKind, "files">, { label: string; placeholder: 
 
 function validate(kind: Exclude<SourceKind, "files">, target: string, tokenRef: string): string | null {
 	const value = target.trim();
+	if (kind === "web") {
+		try {
+			const url = new URL(value);
+			if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password)
+				return "Enter a public http(s) URL";
+			if (["localhost", "127.0.0.1", "::1"].includes(url.hostname.toLowerCase()))
+				return "Private and local URLs are not allowed";
+			return null;
+		} catch {
+			return "Enter a valid public http(s) URL";
+		}
+	}
 	if (kind === "obsidian") {
 		if (!value) return "Vault path is required";
-		if (!/^(?:[A-Za-z]:[\\/]|[\/])/.test(value)) return "Vault path must be absolute";
+		if (!/^(?:[A-Za-z]:[\\/]|[\\/])/.test(value)) return "Vault path must be absolute";
 		return null;
 	}
 	if (kind === "github") {
@@ -54,6 +75,7 @@ function validate(kind: Exclude<SourceKind, "files">, target: string, tokenRef: 
 
 function KindIcon({ kind }: { readonly kind: SourceKind }) {
 	if (kind === "files") return <Upload className="size-6" />;
+	if (kind === "web") return <Globe className="size-6" />;
 	return sourceLogo(kind, { className: "size-6" });
 }
 
@@ -67,6 +89,7 @@ export function ConnectSourceDialog({
 	onConnected: () => void;
 }) {
 	const inputRef = useRef<HTMLInputElement>(null);
+	const [step, setStep] = useState<SourceStep>("choose");
 	const [kind, setKind] = useState<SourceKind>("files");
 	const [target, setTarget] = useState("");
 	const [name, setName] = useState("");
@@ -81,6 +104,7 @@ export function ConnectSourceDialog({
 
 	useEffect(() => {
 		if (!open) return;
+		setStep("choose");
 		setKind("files");
 		setTarget("");
 		setName("");
@@ -173,11 +197,13 @@ export function ConnectSourceDialog({
 		setError(null);
 		const displayName = name.trim() || undefined;
 		const body =
-			kind === "obsidian"
-				? { root: target.trim(), name: displayName }
-				: kind === "github"
-					? { repo: target.trim(), name: displayName, tokenRef: tokenRef.trim() || undefined }
-					: { guildId: target.trim(), name: displayName, tokenRef: tokenRef.trim() };
+			kind === "web"
+				? { url: target.trim() }
+				: kind === "obsidian"
+					? { root: target.trim(), name: displayName }
+					: kind === "github"
+						? { repo: target.trim(), name: displayName, tokenRef: tokenRef.trim() || undefined }
+						: { guildId: target.trim(), name: displayName, tokenRef: tokenRef.trim() };
 		const response = await api.addSource(kind, body);
 		setBusy(false);
 		if (!response.ok) {
@@ -194,7 +220,7 @@ export function ConnectSourceDialog({
 	};
 
 	const selectedCount = files.length + desktopPaths.length;
-	const submitDisabled = busy || (kind === "files" && selectedCount === 0);
+	const submitDisabled = busy || (kind === "files" && selectedCount === 0) || (kind === "web" && !target.trim());
 
 	return (
 		<div
@@ -209,33 +235,74 @@ export function ConnectSourceDialog({
 		>
 			<dialog open className="cs-panel" aria-modal="true" aria-label="Connect a source">
 				<header className="cs-head">
-					<span className="cs-title">Connect a source</span>
+					<div className="flex items-center gap-2">
+						{step === "configure" && (
+							<button
+								type="button"
+								className="cs-close"
+								onClick={() => setStep("choose")}
+								disabled={busy}
+								aria-label="Back to source types"
+							>
+								<ArrowLeft className="size-4" />
+							</button>
+						)}
+						<span className="cs-title">
+							{step === "choose" ? "Add a source" : `Set up ${kind === "web" ? "Web page" : kind}`}
+						</span>
+					</div>
 					<button type="button" className="cs-close" onClick={onClose} disabled={busy} aria-label="Close">
 						<X className="size-4" />
 					</button>
 				</header>
 				<div className="cs-body">
-					<div className="cs-picker">
-						{KINDS.map((item) => (
-							<button
-								key={item.id}
-								type="button"
-								aria-pressed={kind === item.id}
-								className={cn("cs-pick", kind === item.id && "is-on")}
-								onClick={() => {
-									setKind(item.id);
-									setError(null);
-								}}
-							>
-								<span className="cs-pick__ic">
-									<KindIcon kind={item.id} />
-								</span>
-								<span className="cs-pick__label">{item.label}</span>
-							</button>
-						))}
-					</div>
-
-					{kind === "files" ? (
+					{step === "choose" ? (
+						<div className="flex flex-col gap-4" data-testid="source-kind-step">
+							<div>
+								<div className="text-[12px] font-semibold">Import</div>
+								<div className="mt-2 grid grid-cols-2 gap-2">
+									{IMPORT_KINDS.map((item) => (
+										<button
+											key={item.id}
+											type="button"
+											className="cs-pick flex min-h-20 flex-col items-start gap-1.5 p-3 text-left"
+											onClick={() => {
+												setKind(item.id);
+												setStep("configure");
+												setError(null);
+											}}
+										>
+											<span className="flex items-center gap-2">
+												<KindIcon kind={item.id} />
+												<span className="font-medium">{item.label}</span>
+											</span>
+											<span className="text-[10px] text-muted-foreground">{item.description}</span>
+										</button>
+									))}
+								</div>
+							</div>
+							<div>
+								<div className="text-[12px] font-semibold">Connect</div>
+								<div className="mt-2 grid grid-cols-3 gap-2">
+									{CONNECT_KINDS.map((item) => (
+										<button
+											key={item.id}
+											type="button"
+											className="cs-pick flex min-h-20 flex-col items-center justify-center gap-1.5 p-2"
+											onClick={() => {
+												setKind(item.id);
+												setStep("configure");
+												setError(null);
+											}}
+										>
+											<KindIcon kind={item.id} />
+											<span className="font-medium">{item.label}</span>
+										</button>
+									))}
+								</div>
+							</div>
+						</div>
+					) : kind === "files" ? (
 						<>
 							<button
 								type="button"
@@ -345,17 +412,19 @@ export function ConnectSourceDialog({
 								</div>
 								<span className="cs-field__hint">{FIELD[kind].hint}</span>
 							</div>
-							<div className="cs-field">
-								<span className="cs-field__label">Name</span>
-								<input
-									className="cs-field__input"
-									value={name}
-									onChange={(event) => setName(event.target.value)}
-									placeholder={KINDS.find((item) => item.id === kind)?.namePlaceholder}
-									aria-label="Display name (optional)"
-								/>
-							</div>
-							{kind !== "obsidian" && (
+							{kind !== "web" && (
+								<div className="cs-field">
+									<span className="cs-field__label">Name</span>
+									<input
+										className="cs-field__input"
+										value={name}
+										onChange={(event) => setName(event.target.value)}
+										placeholder={CONNECT_KINDS.find((item) => item.id === kind)?.namePlaceholder}
+										aria-label="Display name (optional)"
+									/>
+								</div>
+							)}
+							{kind !== "obsidian" && kind !== "web" && (
 								<div className="cs-field">
 									<span className="cs-field__label">Token ref{kind === "github" ? " (optional)" : ""}</span>
 									<input
@@ -373,13 +442,20 @@ export function ConnectSourceDialog({
 					{error && <div className="cs-error">{error}</div>}
 				</div>
 				<footer className="cs-foot">
-					<button type="button" className="cs-btn-ghost" onClick={onClose} disabled={busy}>
-						{kind === "files" ? "Close" : "Cancel"}
+					<button
+						type="button"
+						className="cs-btn-ghost"
+						onClick={step === "choose" ? onClose : () => setStep("choose")}
+						disabled={busy}
+					>
+						{step === "choose" ? "Close" : "Back"}
 					</button>
-					<button type="button" className="cs-btn-primary" onClick={submit} disabled={submitDisabled}>
-						{busy && <Loader2 className="size-3.5 animate-spin" />}
-						{kind === "files" ? "Import & index" : "Connect & index"}
-					</button>
+					{step === "configure" && (
+						<button type="button" className="cs-btn-primary" onClick={submit} disabled={submitDisabled}>
+							{busy && <Loader2 className="size-3.5 animate-spin" />}
+							{kind === "files" ? "Import & index" : kind === "web" ? "Add & index" : "Connect & index"}
+						</button>
+					)}
 				</footer>
 			</dialog>
 		</div>

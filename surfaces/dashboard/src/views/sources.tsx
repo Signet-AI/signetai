@@ -19,6 +19,7 @@ const HEALTH_STYLES: Record<string, string> = {
 function RootIcon({ kind }: { kind: string }) {
 	const cls = "size-[13px] shrink-0 text-[oklch(0.55_0_0)] [html:not(.dark)_&]:text-[oklch(0.45_0_0)]";
 	if (kind === "github") return <GitBranch className={cls} aria-hidden="true" />;
+	if (kind === "web") return <Globe className={cls} aria-hidden="true" />;
 	if (kind === "discord" || kind === "slack") return <Globe className={cls} aria-hidden="true" />;
 	return <Folder className={cls} aria-hidden="true" />;
 }

@@ -9,6 +9,7 @@ import { type Root, createRoot } from "react-dom/client";
 import { SourcesView } from "./sources";
 
 const originalImportSources = api.importSources;
+const originalAddSource = api.addSource;
 const originalPickFiles = api.pickFiles;
 const originalGetSourceSnapshot = api.getSourceSnapshot;
 const originalRemoveSource = api.removeSource;
@@ -91,6 +92,7 @@ beforeEach(() => {
 
 afterAll(() => {
 	api.importSources = originalImportSources;
+	api.addSource = originalAddSource;
 	api.pickFiles = originalPickFiles;
 	api.getSourceSnapshot = originalGetSourceSnapshot;
 	api.removeSource = originalRemoveSource;
@@ -221,8 +223,9 @@ describe("sources grouping", () => {
 
 		await click(entries[0]);
 		expect(mounted.container.querySelector("dialog.cs-panel")).not.toBeNull();
+		await click(button(mounted.container, "Files"));
 		expect(button(mounted.container, "Choose one or more files")).not.toBeNull();
-		expect(mounted.container.querySelector('[aria-pressed="true"]')?.textContent).toContain("Files");
+		expect(mounted.container.textContent).toContain("Set up files");
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();
@@ -231,7 +234,7 @@ describe("sources grouping", () => {
 	test("selecting a connector keeps its existing field and submit contract", async () => {
 		const mounted = await mount(<ConnectSourceDialog open onClose={() => undefined} onConnected={() => undefined} />);
 		await click(button(mounted.container, "GitHub"));
-		expect(mounted.container.querySelector('[aria-pressed="true"]')?.textContent).toContain("GitHub");
+		expect(mounted.container.textContent).toContain("Set up github");
 		expect(mounted.container.querySelector('[aria-label="Repository"]')).not.toBeNull();
 		expect(button(mounted.container, "Connect & index").disabled).toBe(false);
 
@@ -242,8 +245,22 @@ describe("sources grouping", () => {
 		mounted.container.remove();
 	});
 
+	test("web import setup is URL-only and shows provenance guidance", async () => {
+		const mounted = await mount(<ConnectSourceDialog open onClose={() => undefined} onConnected={() => undefined} />);
+		await click(button(mounted.container, "Web page"));
+
+		expect(mounted.container.querySelector('[aria-label="Public URL"]')).not.toBeNull();
+		expect(mounted.container.textContent).toContain("Only public http(s) pages are fetched");
+		expect(mounted.container.textContent).not.toContain("Display name");
+		expect(mounted.container.textContent).not.toContain("Token ref");
+
+		await act(async () => mounted.root.unmount());
+		mounted.container.remove();
+	});
+
 	test("desktop file picking preserves filesystem paths and duplicate mode through import", async () => {
 		const mounted = await mount(<ConnectSourceDialog open onClose={() => undefined} onConnected={() => undefined} />);
+		await click(button(mounted.container, "Files"));
 		await click(button(mounted.container, "Choose from desktop"));
 		expect(mounted.container.textContent).toContain("notes.md · desktop path");
 		await click(button(mounted.container, "Import & index"));

@@ -831,6 +831,7 @@ export const api = {
 		const tokenRef = typeof ps.tokenRef === "string" && ps.tokenRef ? ps.tokenRef : undefined;
 		const bodies: Record<string, unknown> = {
 			obsidian: { root: source.root, name: source.name, excludeGlobs: source.excludeGlobs },
+			web: { url: source.root },
 			github: { repos: Array.isArray(ps.repos) ? ps.repos : [], tokenRef, name: source.name },
 			discord: { guildIds: Array.isArray(ps.guildIds) ? ps.guildIds : [], tokenRef, name: source.name },
 		};

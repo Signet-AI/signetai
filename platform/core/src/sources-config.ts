@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { homedir, platform } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 
-export type SignetSourceKind = "obsidian" | (string & {});
+export type SignetSourceKind = "obsidian" | "web" | (string & {});
 export type SignetSourceMode = "read-only";
 export type SignetSourceProviderSettings = Readonly<Record<string, unknown>>;
 
@@ -40,6 +40,16 @@ export interface AddObsidianSourceInput {
 	readonly root: string;
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
+	readonly now?: string;
+}
+
+export interface WebSourceSettings {
+	readonly url: string;
+}
+
+export interface AddWebSourceInput {
+	readonly url: string;
+	readonly name?: string;
 	readonly now?: string;
 }
 
@@ -209,12 +219,52 @@ export function addObsidianSource(input: AddObsidianSourceInput, agentsDir = get
 	return withSourcesConfigLock(agentsDir, () => addObsidianSourceUnlocked(input, agentsDir));
 }
 
+export function addWebSource(input: AddWebSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addWebSourceUnlocked(input, agentsDir));
+}
+
 export function addDiscordSource(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	return withSourcesConfigLock(agentsDir, () => addDiscordSourceUnlocked(input, agentsDir));
 }
 
 export function addGitHubSource(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	return withSourcesConfigLock(agentsDir, () => addGitHubSourceUnlocked(input, agentsDir));
+}
+
+function addWebSourceUnlocked(input: AddWebSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	try {
+		const url = normalizePublicWebUrl(input.url);
+		if (!url) return { ok: false, error: "Web page URL must be a public http(s) URL" };
+		const now = input.now ?? new Date().toISOString();
+		const config = loadSourcesConfigForWrite(agentsDir);
+		const sourceId = `web:${createHash("sha256").update(url).digest("hex").slice(0, 16)}`;
+		const existing = config.sources.find((source) => source.id === sourceId);
+		const source: SignetSourceEntry = {
+			id: sourceId,
+			generation: existing?.generation ?? newSourceGeneration(),
+			kind: "web",
+			name: cleanName(input.name) ?? existing?.name ?? new URL(url).hostname,
+			root: url,
+			enabled: true,
+			mode: "read-only",
+			createdAt: existing?.createdAt ?? now,
+			updatedAt: now,
+			providerSettings: { url },
+		};
+		saveSourcesConfig(
+			{
+				version: SOURCES_CONFIG_VERSION,
+				sources: existing
+					? config.sources.map((entry) => (entry.id === existing.id ? source : entry))
+					: [...config.sources, source],
+			},
+			agentsDir,
+		);
+		return { ok: true, source, created: !existing };
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
 }
 
 export function addImportedSource(input: AddImportedSourceInput, agentsDir = getAgentsDir()): AddImportedSourceResult {
@@ -446,6 +496,14 @@ export function parseGitHubSettings(raw?: SignetSourceProviderSettings): GitHubS
 		maxItemsPerRepo:
 			cleanPositiveInteger(raw?.maxItemsPerRepo, MAX_GITHUB_MAX_ITEMS_PER_REPO) ?? DEFAULT_GITHUB_MAX_ITEMS_PER_REPO,
 	};
+}
+
+export function parseWebSettings(raw?: SignetSourceProviderSettings): WebSourceSettings {
+	const value = raw?.url;
+	if (typeof value !== "string") throw new Error("Web source has no URL");
+	const url = normalizePublicWebUrl(value);
+	if (!url) throw new Error("Web source URL must be a public http(s) URL");
+	return { url };
 }
 
 function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettings | { readonly error: string } {
@@ -791,6 +849,98 @@ function isFileExistsError(err: unknown): boolean {
 function cleanName(value: string | undefined): string | null {
 	const trimmed = value?.trim();
 	return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+/** Normalize the configured target and reject obvious SSRF destinations. The daemon
+ * repeats this check after every redirect and resolves hostnames before fetching. */
+export function normalizePublicWebUrl(value: string): string | null {
+	const trimmed = value.trim();
+	if (!trimmed || trimmed.length > 2048) return null;
+	let parsed: URL;
+	try {
+		parsed = new URL(trimmed);
+	} catch {
+		return null;
+	}
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+	if (parsed.username || parsed.password || !parsed.hostname) return null;
+	const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+	if (
+		host === "localhost" ||
+		host.endsWith(".localhost") ||
+		host === "local" ||
+		host === "broadcasthost" ||
+		host.endsWith(".local") ||
+		host.endsWith(".internal") ||
+		host.endsWith(".home.arpa") ||
+		host.endsWith(".test") ||
+		host.endsWith(".invalid") ||
+		host === "metadata.google.internal" ||
+		host === "metadata.google.com" ||
+		isUnsafeWebIp(host)
+	)
+		return null;
+	parsed.hostname = host;
+	parsed.hash = "";
+	return parsed.toString();
+}
+
+function isUnsafeWebIp(host: string): boolean {
+	const ipv4 = /^(\d{1,3})(?:\.(\d{1,3})){3}$/.exec(host);
+	if (ipv4) {
+		const octets = host.split(".").map(Number);
+		if (octets.some((octet) => octet > 255)) return true;
+		const [a, b] = octets;
+		return (
+			a === 0 ||
+			a === 10 ||
+			a === 127 ||
+			(a === 169 && b === 254) ||
+			(a === 172 && b >= 16 && b <= 31) ||
+			(a === 192 && b === 168) ||
+			(a === 100 && b >= 64 && b <= 127) ||
+			(a === 198 && (b === 18 || b === 19)) ||
+			(a === 198 && b === 51) ||
+			(a === 203 && b === 0)
+		);
+	}
+	if (host.includes(":")) {
+		const normalized = host.toLowerCase();
+		const mapped = normalized.match(/^::ffff:(?:([0-9a-f]{1,4}):([0-9a-f]{1,4})|([0-9.]+))$/);
+		if (mapped) {
+			const hexA = mapped[1] ? Number.parseInt(mapped[1], 16) : 0;
+			const hexB = mapped[2] ? Number.parseInt(mapped[2], 16) : 0;
+			const mappedOctets = mapped[3]
+				? mapped[3].split(".").map(Number)
+				: [hexA >>> 8, hexA & 255, hexB >>> 8, hexB & 255];
+			if (mappedOctets.length === 4) {
+				const [a, b] = mappedOctets;
+				if (
+					a === 0 ||
+					a === 10 ||
+					a === 127 ||
+					(a === 169 && b === 254) ||
+					(a === 172 && b >= 16 && b <= 31) ||
+					(a === 192 && b === 168)
+				)
+					return true;
+			}
+		}
+		return (
+			normalized === "::" ||
+			normalized === "::1" ||
+			normalized.startsWith("fc") ||
+			normalized.startsWith("fd") ||
+			normalized.startsWith("fe8") ||
+			normalized.startsWith("fe9") ||
+			normalized.startsWith("fea") ||
+			normalized.startsWith("feb") ||
+			normalized.startsWith("::ffff:127.") ||
+			normalized.startsWith("::ffff:10.") ||
+			normalized.startsWith("::ffff:192.168.")
+		);
+	}
+	return false;
 }
 
 function cleanExcludeGlobs(values: readonly string[] | undefined): readonly string[] | null {
