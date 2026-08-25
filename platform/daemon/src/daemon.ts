@@ -2550,7 +2550,8 @@ async function main() {
 				}
 			} catch {}
 
-			if (!memoryCfg.pipelineV2.paused) {
+			const deferredMemoryCfg = loadMemoryConfig(AGENTS_DIR);
+			if (!deferredMemoryCfg.pipelineV2.paused) {
 				void importExistingMemoryFiles().catch((e) => {
 					const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
 					logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
@@ -2562,7 +2563,8 @@ async function main() {
 
 			nativeMemoryBridgeStartTimer = setTimeout(() => {
 				nativeMemoryBridgeStartTimer = null;
-				if (shuttingDown || loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;
+				const deferredMemoryCfg = loadMemoryConfig(AGENTS_DIR);
+				if (shuttingDown || deferredMemoryCfg.pipelineV2.paused) return;
 				if (!nativeMemoryBridge) {
 					const startupSourceJobs = new Map<string, string>();
 					for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
@@ -2581,7 +2583,7 @@ async function main() {
 						sourceCleanupEnabled: true,
 						shouldCleanupSource: (source) => source.harness !== "obsidian",
 						sourceGraphEnabled: true,
-						...resolveEmbeddingBridgeOptions(memoryCfg.embedding, fetchEmbedding),
+						...resolveEmbeddingBridgeOptions(deferredMemoryCfg.embedding, fetchEmbedding),
 						onFileIndexed: (event) => {
 							const sourceId = event.source.sourceId;
 							if (!sourceId) return;

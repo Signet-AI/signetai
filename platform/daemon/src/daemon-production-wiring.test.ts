@@ -54,6 +54,8 @@ describe("daemon production DB owner wiring", () => {
 		expect(source).toContain(
 			"if (loadMemoryConfig(AGENTS_DIR).pipelineV2.paused) return;\n\t\ttry {\n\t\t\tawait cleanupSourceDeletionTombstones",
 		);
+		expect(source).toContain("const deferredMemoryCfg = loadMemoryConfig(AGENTS_DIR);");
+		expect(source).toContain("resolveEmbeddingBridgeOptions(deferredMemoryCfg.embedding, fetchEmbedding)");
 	});
 
 	it("keeps post-ready integrity maintenance incremental and checkpointed", async () => {
