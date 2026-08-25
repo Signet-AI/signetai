@@ -2074,9 +2074,11 @@ async function main() {
 
 	dbOwnerMaintenanceHandle = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient });
 	registerDbOwnerMaintenance(dbOwnerMaintenanceHandle);
-	// Clean accumulated crash-loop damage through the owner. This remains a
-	// deferred call, so owner startup and the bounded drain never delay readiness.
-	runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
+	if (!memoryCfg.pipelineV2.paused) {
+		// Clean accumulated crash-loop damage through the owner. This remains a
+		// deferred call, so owner startup and the bounded drain never delay readiness.
+		runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
+	}
 
 	// Source-deletion cleanup runs in the post-ready deferred lane below. Do not
 	// put it before binding the HTTP server: its lifecycle-state delete uses the

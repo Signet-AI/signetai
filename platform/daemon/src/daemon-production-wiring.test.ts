@@ -71,6 +71,9 @@ describe("daemon production DB owner wiring", () => {
 		expect(source).toContain(
 			"if (!deferredMemoryCfg.pipelineV2.paused) {\n\t\t\t\tstartStaleSessionSweeper();",
 		);
+		expect(source).toContain(
+			"if (!memoryCfg.pipelineV2.paused) {\n\t\t// Clean accumulated crash-loop damage through the owner.",
+		);
 	});
 
 	it("keeps post-ready integrity maintenance incremental and checkpointed", async () => {
