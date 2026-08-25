@@ -22,6 +22,15 @@ describe("daemon production DB owner wiring", () => {
 		expect(source).toContain("ownerMaintenance: dbOwnerMaintenanceHandle ?? undefined,");
 	});
 
+	it("shares the generic read lane with recall and leaves unused lanes unstarted", async () => {
+		const source = await Bun.file(daemonSourceUrl).text();
+
+		expect(source).toContain("registerMemoryRoutes(app, { getRecallOwner: () => dbOwnerClient ?? undefined });");
+		expect(source).toContain("await dbOwnerClient.initialize(AGENTS_DIR);");
+		expect(source).not.toContain("await dbOwnerClient.start();");
+		expect(source).not.toContain("recallDbOwner");
+	});
+
 	it("keeps post-ready integrity maintenance incremental and checkpointed", async () => {
 		const source = await Bun.file(daemonSourceUrl).text();
 

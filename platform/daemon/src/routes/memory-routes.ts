@@ -131,8 +131,10 @@ export interface MemoryRoutesDeps {
 	readonly fetchEmbedding?: typeof fetchEmbedding;
 	readonly getInferenceRouterOrNull?: typeof getInferenceRouterOrNull;
 	readonly memoryCaptureAdmission?: ConcurrencyAdmission;
-	/** Dedicated owner read lane. When set, recall never touches daemon SQLite. */
+	/** Owner read lane. When set, recall never touches daemon SQLite. */
 	readonly recallOwner?: DbOwnerClient;
+	/** Resolves the daemon's shared owner after startup. */
+	readonly getRecallOwner?: () => DbOwnerClient | undefined;
 }
 
 function contentSafetyForInspection(db: ReadDb, agentId: string, memoryId: string, content: unknown) {
@@ -758,11 +760,12 @@ export function createMemoryCaptureAdmissionMiddleware(
 export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
 	const aggregateRecallFn = deps.aggregateRecall ?? aggregateRecall;
 	const hybridRecallFn = deps.hybridRecall ?? hybridRecall;
-	const recallOwner = deps.recallOwner;
+	const resolveRecallOwner = (): DbOwnerClient | undefined => deps.getRecallOwner?.() ?? deps.recallOwner;
 	const routeRecall = async (
 		params: RecallParams,
 		config: ResolvedMemoryConfig,
 		embedFn: Parameters<typeof hybridRecall>[2],
+		recallOwner = resolveRecallOwner(),
 	): Promise<RecallResponse> => {
 		if (recallOwner !== undefined) return await hybridRecallThroughDbOwner(recallOwner, params, config);
 		return await hybridRecallFn(params, config, embedFn);
@@ -3363,6 +3366,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 			if (denied) return denied;
 		}
+		const recallOwner = resolveRecallOwner();
 
 		const configuredCfg = loadMemoryConfig(AGENTS_DIR);
 		const cfg =
@@ -3440,6 +3444,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							params,
 							cfg,
 							recallAttributedEmbedFn(fetchEmbeddingFn, agentId, recordRouteOperationFailure(c)),
+							recallOwner,
 						);
 			const requestedMinScore = (body as { readonly minScore?: unknown }).minScore;
 			const returnedResult = applyRecallScoreThreshold(
@@ -3494,6 +3499,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const project = c.req.query("project");
 		const includeRecalled = c.req.query("includeRecalled") ?? c.req.query("include_recalled");
 
+		const recallOwner = resolveRecallOwner();
 		const configuredCfg = loadMemoryConfig(AGENTS_DIR);
 		const cfg = recallOwner !== undefined ? configuredCfg : await withActiveEmbeddingConfig(configuredCfg);
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
@@ -3534,6 +3540,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				params,
 				cfg,
 				recallAttributedEmbedFn(fetchEmbedding, agentId, recordRouteOperationFailure(c)),
+				recallOwner,
 			);
 			recordRecallQaTelemetry({
 				route: "GET /api/memory/search",

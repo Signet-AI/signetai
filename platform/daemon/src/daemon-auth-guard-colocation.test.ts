@@ -89,14 +89,6 @@ describe("auth guard co-location", () => {
 		return new Hono();
 	}
 
-	it("passes the resolved SQLite runtime to the recall owner", async () => {
-		const { createRecallDbOwnerOptions } = await import("./daemon");
-		expect(createRecallDbOwnerOptions("/tmp/custom-libsqlite3.dylib")).toEqual({
-			dbPath: join(tmpDir, "memory", "memories.db"),
-			sqlitePath: "/tmp/custom-libsqlite3.dylib",
-			workerRole: "recall",
-		});
-	});
 
 	async function status(app: InstanceType<typeof import("hono").Hono>, method: string, path: string): Promise<number> {
 		const res = await app.request(path, { method });
@@ -237,7 +229,7 @@ inference:
 			}
 		});
 
-		it("keeps generic recall failures at HTTP 500", async () => {
+		it("uses the shared dynamic recall owner for generic failures", async () => {
 			const state = await import("./routes/state.js");
 			const { Hono } = await import("hono");
 			const { createAuthMiddleware, createToken } = await import("./auth");
@@ -246,8 +238,15 @@ inference:
 			if (!secret) throw new Error("expected auth secret for team-mode recall test");
 			const token = createToken(secret, { sub: "internal-recall", role: "readonly", scope: {} }, 60);
 			const app = new Hono();
+			const owner = rejectingRecallOwner(new Error("database read failed"));
+			let ownerResolutions = 0;
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
-			registerMemoryRoutes(app, { recallOwner: rejectingRecallOwner(new Error("database read failed")) });
+			registerMemoryRoutes(app, {
+				getRecallOwner: () => {
+					ownerResolutions++;
+					return owner;
+				},
+			});
 			const response = await app.request("/api/memory/recall", {
 				method: "POST",
 				headers: {
@@ -259,7 +258,9 @@ inference:
 
 			expect(response.status).toBe(500);
 			expect(await response.json()).toEqual({ error: "Recall failed", results: [] });
+			expect(ownerResolutions).toBe(1);
 		});
+
 
 		it("records the FTS cause for a partial direct recall", async () => {
 			const state = await import("./routes/state.js");
