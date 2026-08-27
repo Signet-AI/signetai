@@ -732,20 +732,14 @@ const DEFAULT_ACPX_EMPTY_RESPONSE_RETRY_DELAY_MS = 100;
 const MAX_ACPX_EMPTY_RESPONSE_RETRY_DELAY_MS = 2_000;
 
 const acpxCleanupBarriers = new Map<string, Promise<void>>();
-const acpxCleanupGenerations = new Map<string, number>();
-const ACPX_RETRY_ADMISSION = Symbol("acpx retry admission");
+const acpxAdmissionBarriers = new Map<string, Promise<void>>();
 
 function acpxCleanupKey(agent: string): string {
 	return normalizeAcpxAgent(agent).toLowerCase();
 }
 
-function acpxCleanupGeneration(agent: string): number {
-	return acpxCleanupGenerations.get(acpxCleanupKey(agent)) ?? 0;
-}
-
 function trackAcpxCleanupBarrier(agent: string, cleanup: Promise<void>): Promise<void> {
 	const key = acpxCleanupKey(agent);
-	acpxCleanupGenerations.set(key, acpxCleanupGeneration(agent) + 1);
 	const settledCleanup = cleanup.catch(() => undefined);
 	const predecessor = acpxCleanupBarriers.get(key);
 	const barrier = predecessor ? Promise.all([predecessor, settledCleanup]).then(() => undefined) : settledCleanup;
@@ -756,21 +750,54 @@ function trackAcpxCleanupBarrier(agent: string, cleanup: Promise<void>): Promise
 	return barrier;
 }
 
-async function waitForAcpxCleanupBarrier(
+interface AcpxAdmissionLease {
+	readonly ready: Promise<void>;
+	release(): void;
+}
+
+function reserveAcpxAdmission(agent: string): AcpxAdmissionLease {
+	const key = acpxCleanupKey(agent);
+	const predecessors = [acpxAdmissionBarriers.get(key), acpxCleanupBarriers.get(key)].filter(
+		(value): value is Promise<void> => value !== undefined,
+	);
+	const ready = predecessors.length === 0 ? Promise.resolve() : Promise.all(predecessors).then(() => undefined);
+	let resolveOwn!: () => void;
+	let released = false;
+	const own = new Promise<void>((resolve) => {
+		resolveOwn = resolve;
+	});
+	const barrier = ready.then(() => own);
+	acpxAdmissionBarriers.set(key, barrier);
+	void barrier.then(() => {
+		if (acpxAdmissionBarriers.get(key) === barrier) acpxAdmissionBarriers.delete(key);
+	});
+	return {
+		ready,
+		release: () => {
+			if (released) return;
+			released = true;
+			resolveOwn();
+		},
+	};
+}
+
+async function waitForAcpxAdmission(
+	lease: AcpxAdmissionLease,
 	agent: string,
 	deadline: number,
 	timeoutMs: number,
 	signal: AbortSignal | undefined,
-): Promise<number> {
-	const key = acpxCleanupKey(agent);
-	while (true) {
-		const barrier = acpxCleanupBarriers.get(key);
-		if (!barrier) return acpxCleanupGeneration(agent);
-		signal?.throwIfAborted();
-		const remainingMs = deadline - performance.now();
-		if (remainingMs <= 1) {
-			throw new Error(`${agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
-		}
+): Promise<void> {
+	if (signal?.aborted) {
+		lease.release();
+		signal.throwIfAborted();
+	}
+	const remainingMs = deadline - performance.now();
+	if (remainingMs <= 1) {
+		lease.release();
+		throw new Error(`${agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
+	}
+	try {
 		await new Promise<void>((resolve, reject) => {
 			let settled = false;
 			const finish = (fn: () => void): void => {
@@ -784,15 +811,29 @@ async function waitForAcpxCleanupBarrier(
 			const timer = setTimeout(
 				() =>
 					finish(() =>
-						reject(new Error(`${agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`)),
+						reject(
+							new Error(`${agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`),
+						),
 					),
 				remainingMs,
 			);
 			timer.unref?.();
 			signal?.addEventListener("abort", onAbort, { once: true });
-			void barrier.then(() => finish(resolve));
+			void lease.ready.then(() => finish(resolve));
 		});
-		if (acpxCleanupBarriers.get(key) === barrier) return acpxCleanupGeneration(agent);
+	} catch (error) {
+		lease.release();
+		throw error;
+	}
+}
+
+/** Wait for the currently tracked orphan cleanup for an ACPX agent. */
+export async function waitForAcpxCleanup(agent: string): Promise<void> {
+	while (true) {
+		const barrier = acpxCleanupBarriers.get(acpxCleanupKey(agent));
+		if (!barrier) return;
+		await barrier;
+		if (acpxCleanupBarriers.get(acpxCleanupKey(agent)) === barrier) return;
 	}
 }
 
@@ -1503,6 +1544,7 @@ function runAcpxAttempt(
 	prompt: string,
 	remainingMs: number,
 	signal: AbortSignal | undefined,
+	onCleanup?: (cleanup: Promise<void>) => void,
 ): Promise<string> {
 	const { bin, args, cwd } = buildAcpxCommand(config, remainingMs);
 	const outputFormat = resolveAcpxFormat(config);
@@ -1527,10 +1569,8 @@ function runAcpxAttempt(
 			settled = true;
 			clearTimeout(timer);
 			signal?.removeEventListener("abort", onAbort);
-			cleanup ??= trackAcpxCleanupBarrier(
-				config.agent,
-				cleanupAcpxAgentProcesses(config.agent, runId),
-			);
+			cleanup ??= trackAcpxCleanupBarrier(config.agent, cleanupAcpxAgentProcesses(config.agent, runId));
+			onCleanup?.(cleanup);
 			if (cleanupWait === "all") await cleanup;
 			if (cleanupWait === "termination") await waitForAcpxChildTermination(child);
 			fn();
@@ -1564,53 +1604,50 @@ function runAcpxAttempt(
 		child.on(
 			"close",
 			(code) =>
-				void finish(
-					() => {
-						if (terminationError) {
-							reject(terminationError);
+				void finish(() => {
+					if (terminationError) {
+						reject(terminationError);
+						return;
+					}
+					if (code !== 0) {
+						reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
+						return;
+					}
+					let text: string | undefined;
+					let parsed: AcpxParsedJsonOutput | undefined;
+					try {
+						if (outputFormat === "json") {
+							parsed = parseAcpxJsonOutput(stdout, config);
+							text = parsed.text;
+						} else {
+							text = stdout.trim();
+						}
+					} catch (error) {
+						reject(error);
+						return;
+					}
+					if (!text) {
+						if (parsed && (!parsed.finalSeen || parsed.sideEffects)) {
+							reject(new Error(`${config.agent} via ACPX JSON output did not include a final response`));
 							return;
 						}
-						if (code !== 0) {
-							reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
-							return;
-						}
-						let text: string | undefined;
-						let parsed: AcpxParsedJsonOutput | undefined;
-						try {
-							if (outputFormat === "json") {
-								parsed = parseAcpxJsonOutput(stdout, config);
-								text = parsed.text;
-							} else {
-								text = stdout.trim();
-							}
-						} catch (error) {
-							reject(error);
-							return;
-						}
-						if (!text) {
-							if (parsed && (!parsed.finalSeen || parsed.sideEffects)) {
-								reject(new Error(`${config.agent} via ACPX JSON output did not include a final response`));
-								return;
-							}
-							reject(
-								new AcpxEmptyResponseError(config.agent, {
-									exitCode: 0,
-									stdoutBytes: Buffer.byteLength(stdout),
-									stderrBytes: Buffer.byteLength(stderr),
-									format: outputFormat,
-									durationMs: performance.now() - startedAt,
-									sideEffects: parsed?.sideEffects ?? false,
-									...(parsed?.sessionId ? { sessionId: parsed.sessionId } : {}),
-									...(parsed?.stopReason ? { stopReason: parsed.stopReason } : {}),
-									...(parsed?.usage || quietUsage(stderr) ? { usage: parsed?.usage ?? quietUsage(stderr) } : {}),
-								}),
-							);
-							return;
-						}
-						resolve(text);
-					},
-					"none",
-				),
+						reject(
+							new AcpxEmptyResponseError(config.agent, {
+								exitCode: 0,
+								stdoutBytes: Buffer.byteLength(stdout),
+								stderrBytes: Buffer.byteLength(stderr),
+								format: outputFormat,
+								durationMs: performance.now() - startedAt,
+								sideEffects: parsed?.sideEffects ?? false,
+								...(parsed?.sessionId ? { sessionId: parsed.sessionId } : {}),
+								...(parsed?.stopReason ? { stopReason: parsed.stopReason } : {}),
+								...(parsed?.usage || quietUsage(stderr) ? { usage: parsed?.usage ?? quietUsage(stderr) } : {}),
+							}),
+						);
+						return;
+					}
+					resolve(text);
+				}, "none"),
 		);
 		if (!terminationError) child.stdin?.end(prompt);
 	});
@@ -1642,74 +1679,59 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 					);
 				}
 				const attemptConfig = attempt === 0 ? config : { ...config, mode: "exec" as const, session: undefined };
-				while (true) {
-					try {
-						const cleanupGeneration = await waitForAcpxCleanupBarrier(
-							attemptConfig.agent,
-							deadline,
-							timeoutMs,
-							signal,
+				const admission = reserveAcpxAdmission(attemptConfig.agent);
+				let cleanup: Promise<void> | undefined;
+				try {
+					await waitForAcpxAdmission(admission, attemptConfig.agent, deadline, timeoutMs, signal);
+					signal?.throwIfAborted();
+					const postAdmissionRemainingMs = deadline - performance.now();
+					if (postAdmissionRemainingMs <= 1) {
+						throw new Error(
+							`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
 						);
-						signal?.throwIfAborted();
-						const postCleanupRemainingMs = deadline - performance.now();
-						if (postCleanupRemainingMs <= 1) {
-							if (lastEmpty) {
-								throw formatEmptyResponseError(
-									config.agent,
-									lastEmpty.diagnostics,
-									attempt - 1,
-									performance.now() - startedAt,
+					}
+					const result = await withLlmConcurrency(
+						async () => {
+							signal?.throwIfAborted();
+							const acquiredRemainingMs = deadline - performance.now();
+							if (acquiredRemainingMs <= 1) {
+								throw new Error(
+									`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
 								);
 							}
-							throw new Error(
-								`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
-							);
-						}
-						return await withLlmConcurrency(
-							async () => {
-								signal?.throwIfAborted();
-								const acquiredRemainingMs = deadline - performance.now();
-								if (acquiredRemainingMs <= 1) {
-									if (lastEmpty) {
-										throw formatEmptyResponseError(
-											config.agent,
-											lastEmpty.diagnostics,
-											attempt - 1,
-											performance.now() - startedAt,
-										);
-									}
-									throw new Error(
-										`${config.agent} via ACPX timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`,
-									);
-								}
-								if (acpxCleanupGeneration(attemptConfig.agent) !== cleanupGeneration) {
-									throw ACPX_RETRY_ADMISSION;
-								}
-								return runAcpxAttempt(attemptConfig, prompt, acquiredRemainingMs, signal);
-							},
-							postCleanupRemainingMs,
-							"acpx",
-							signal,
-						);
-					} catch (error) {
-						if (error === ACPX_RETRY_ADMISSION) continue;
-						if (!(error instanceof AcpxEmptyResponseError)) throw error;
-						lastEmpty = error;
-						if (attempt >= retries) {
-							throw formatEmptyResponseError(config.agent, error.diagnostics, attempt, performance.now() - startedAt);
-						}
-						const delayMs = calculateAcpxRetryDelayMs(attempt);
-						logger.warn("inference", "Retrying sterile ACPX empty response", {
-							agent: config.agent,
-							attempt: attempt + 1,
-							delayMs,
-							format: error.diagnostics.format,
-							sessionId: error.diagnostics.sessionId ?? "unknown",
-							stopReason: error.diagnostics.stopReason ?? "unknown",
-						});
-						await waitForAcpxRetry(config.agent, delayMs, deadline, signal);
-						break;
+							return runAcpxAttempt(attemptConfig, prompt, acquiredRemainingMs, signal, (barrier) => {
+								cleanup = barrier;
+							});
+						},
+						postAdmissionRemainingMs,
+						"acpx",
+						signal,
+					);
+					if (cleanup) void cleanup.then(admission.release, admission.release);
+					else admission.release();
+					return result;
+				} catch (error) {
+					if (!(error instanceof AcpxEmptyResponseError)) {
+						if (cleanup) void cleanup.then(admission.release, admission.release);
+						else admission.release();
+						throw error;
 					}
+					await cleanup?.catch(() => undefined);
+					admission.release();
+					lastEmpty = error;
+					if (attempt >= retries) {
+						throw formatEmptyResponseError(config.agent, error.diagnostics, attempt, performance.now() - startedAt);
+					}
+					const delayMs = calculateAcpxRetryDelayMs(attempt);
+					logger.warn("inference", "Retrying sterile ACPX empty response", {
+						agent: config.agent,
+						attempt: attempt + 1,
+						delayMs,
+						format: error.diagnostics.format,
+						sessionId: error.diagnostics.sessionId ?? "unknown",
+						stopReason: error.diagnostics.stopReason ?? "unknown",
+					});
+					await waitForAcpxRetry(config.agent, delayMs, deadline, signal);
 				}
 			}
 			throw new Error(`${config.agent} via ACPX retry loop exhausted`);

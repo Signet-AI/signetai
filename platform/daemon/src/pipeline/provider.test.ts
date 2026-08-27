@@ -22,6 +22,7 @@ import {
 	configureLlmConcurrency,
 	createAcpxProvider,
 	getLlmConcurrencyStatus,
+	waitForAcpxCleanup,
 	withLlmConcurrency,
 } from "./provider";
 import { logger } from "../logger";
@@ -143,14 +144,14 @@ printf '  acpx answer  \\n'
 			expect(readFileSync(promptPath, "utf-8")).toBe("hello acpx");
 			expect(readFileSync(hooksPath, "utf-8")).toBe("1|false");
 			expect(readFileSync(cwdPath, "utf-8")).toBe(realpathSync(join(root, ".daemon", "acpx-background")));
-			await expect(createAcpxProvider({ agent: "codex", bin, terminal: "disabled" }).generate("hello", { timeoutMs: 1000 })).resolves.toBe(
-				"acpx answer",
-			);
+			await expect(
+				createAcpxProvider({ agent: "codex", bin, terminal: "disabled" }).generate("hello", { timeoutMs: 1000 }),
+			).resolves.toBe("acpx answer");
 			expect(readFileSync(argsPath, "utf-8").trim().split("\n")).toContain("--no-terminal");
 			for (const terminal of [true, "inherit"] as const) {
-				await expect(createAcpxProvider({ agent: "codex", bin, terminal }).generate("hello", { timeoutMs: 1000 })).resolves.toBe(
-					"acpx answer",
-				);
+				await expect(
+					createAcpxProvider({ agent: "codex", bin, terminal }).generate("hello", { timeoutMs: 1000 }),
+				).resolves.toBe("acpx answer");
 				expect(readFileSync(argsPath, "utf-8").trim().split("\n")).not.toContain("--no-terminal");
 			}
 		} finally {
@@ -828,6 +829,42 @@ printf 'ok\\n'
 		}
 	});
 
+	it("regression: same-agent admission serializes spawn before the global permit", async () => {
+		const root = join(tmpdir(), `signet-acpx-admission-toctou-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const bin = join(root, "fake-acpx.sh");
+		const startsPath = join(root, "starts.txt");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+prompt=$(cat)
+printf '%s\\n' "$prompt" >> ${JSON.stringify(startsPath)}
+if [[ "$prompt" == "first" ]]; then sleep 0.3; fi
+printf '%s\\n' "$prompt"
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousConcurrencyLimit = getLlmConcurrencyStatus().limit;
+		let first: Promise<string> | undefined;
+		let second: Promise<string> | undefined;
+		try {
+			configureLlmConcurrency(2);
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			first = provider.generate("first", { timeoutMs: 3_000 });
+			await waitForPath(startsPath);
+			second = provider.generate("second", { timeoutMs: 3_000 });
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(readFileSync(startsPath, "utf-8").trim().split("\n")).toEqual(["first"]);
+			await expect(first).resolves.toBe("first");
+			await expect(second).resolves.toBe("second");
+			expect(readFileSync(startsPath, "utf-8").trim().split("\n")).toEqual(["first", "second"]);
+		} finally {
+			await Promise.allSettled([first, second]);
+			configureLlmConcurrency(previousConcurrencyLimit);
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("regression: same-agent cleanup re-admission does not hold the only global permit", async () => {
 		const root = join(tmpdir(), `signet-acpx-cleanup-readmit-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const procRoot = join(root, "proc");
@@ -881,9 +918,6 @@ printf '%s\\n' "$prompt"
 			first = codex.generate("first", { timeoutMs: 3_000 });
 			sameAgent = codex.generate("same-agent", { timeoutMs: 3_000 });
 			unrelated = claude.generate("unrelated", { timeoutMs: 3_000 });
-			await waitForLlmConcurrencyStatus(1, 3);
-			expect(getLlmConcurrencyStatus().pending).toBe(3);
-
 			releaseBlocker.resolve();
 			await blocker;
 			await waitForPath(join(escapedProc, "cmdline"));
@@ -1092,6 +1126,7 @@ printf 'ok\\n'
 		try {
 			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
 			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			await waitForAcpxCleanup("codex");
 		} finally {
 			process.kill = previousKill;
 			logger.warn = previousWarn;
@@ -1150,6 +1185,7 @@ printf 'ok\\n'
 		try {
 			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
 			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			await waitForAcpxCleanup("codex");
 		} finally {
 			process.kill = previousKill;
 			logger.warn = previousWarn;
@@ -1228,6 +1264,7 @@ printf 'ok\\n'
 		try {
 			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
 			await expect(provider.generate("hello", { timeoutMs: 5000 })).resolves.toBe("ok");
+			await waitForAcpxCleanup("codex");
 			psCallCount = Number(readFileSync(psCalls, "utf-8").trim());
 		} finally {
 			process.kill = previousKill;
@@ -1300,6 +1337,7 @@ printf 'ok\\n'
 		try {
 			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
 			await expect(provider.generate("hello", { timeoutMs: 5_000 })).resolves.toBe("ok");
+			await waitForAcpxCleanup("codex");
 			elapsedMs = performance.now() - startedAt;
 			spawnedPids = readSpawnedPids();
 		} finally {
@@ -1366,7 +1404,9 @@ sleep 30
 		chmodSync(bin, 0o755);
 		const writer = nodeSpawn("bash", ["-c", `sleep 0.25; printf 'not-codex\\0' > ${JSON.stringify(cmdlinePath)}`]);
 		const writerClosed =
-			writer.exitCode === null ? new Promise<void>((resolve) => writer.once("close", () => resolve())) : Promise.resolve();
+			writer.exitCode === null
+				? new Promise<void>((resolve) => writer.once("close", () => resolve()))
+				: Promise.resolve();
 		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
 		const previousPlatform = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
 		process.env.SIGNET_ACPX_PROC_ROOT = procRoot;
@@ -1592,7 +1632,6 @@ printf 'ok\n'
 		}
 	});
 
-
 	it("regression: timeout starts escaped-stdio cleanup but releases its permit after a bounded termination wait", async () => {
 		const root = join(tmpdir(), `signet-acpx-escaped-stdio-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const procRoot = join(root, "proc");
@@ -1681,7 +1720,9 @@ touch ${JSON.stringify(holderReadyPath)}
 
 			await cleanupStarted.promise;
 			retry = provider.generate("retry", { timeoutMs: 5_000 });
-			unrelated = createAcpxProvider({ agent: "claude-code", bin, hooks: "disabled" }).generate("unrelated", { timeoutMs: 5_000 });
+			unrelated = createAcpxProvider({ agent: "claude-code", bin, hooks: "disabled" }).generate("unrelated", {
+				timeoutMs: 5_000,
+			});
 			await expect(unrelated).resolves.toBe("unrelated answer");
 			// The run-id barrier is active even if the bounded child wait has already released the permit.
 			expect(existsSync(retryRanPath)).toBe(false);
