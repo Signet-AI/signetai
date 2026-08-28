@@ -7,7 +7,6 @@
  *
  * The daemon must be running — tool handlers call the daemon's HTTP API.
  */
-
 import { runMcpStdio } from "./mcp-stdio-runtime.js";
 
 await runMcpStdio();
