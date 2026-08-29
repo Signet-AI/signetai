@@ -48,7 +48,6 @@
 		"acpx": "0.13.0",
 		"better-sqlite3": "^11.0.0",
 		"chokidar": "^4.0.0",
-		"cron-parser": "^5.5.0",
 		"graphology": "^0.26.0",
 		"graphology-communities-louvain": "^2.0.2",
 		"graphology-types": "^0.24.8",

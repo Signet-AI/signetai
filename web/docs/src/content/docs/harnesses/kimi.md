@@ -35,4 +35,4 @@ Kimi hook commands receive their payload on standard input. Manage identity and 
 
 ## Remove the integration
 
-Run setup again without Kimi selected, or use the connector uninstall command exposed by the connector tooling. Uninstall removes only Signet-owned hooks, the Signet MCP entry, and the Signet skills link. Kimi is supported for setup, hooks, MCP, and ACPX inference. It is not currently a scheduled-task harness.
+Run setup again without Kimi selected, or use the connector uninstall command exposed by the connector tooling. Uninstall removes only Signet-owned hooks, the Signet MCP entry, and the Signet skills link. Kimi is supported for setup, hooks, MCP, and ACPX inference.

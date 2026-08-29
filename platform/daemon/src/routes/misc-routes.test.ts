@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Hono } from "hono";
+import { registerMiscRoutes } from "./misc-routes";
 import { loadDashboardIdentity } from "./dashboard-identity";
 
 function withWorkspace(fn: (dir: string) => void): void {
@@ -37,5 +39,23 @@ describe("dashboard identity", () => {
 				vibe: "direct",
 			});
 		});
+	});
+
+	test("keeps scheduled task endpoints removed", async () => {
+		const app = new Hono();
+		registerMiscRoutes(app);
+		const endpoints: readonly (readonly [string, string])[] = [
+			["GET", "/api/tasks"],
+			["POST", "/api/tasks"],
+			["GET", "/api/tasks/task-id"],
+			["PATCH", "/api/tasks/task-id"],
+			["DELETE", "/api/tasks/task-id"],
+			["POST", "/api/tasks/task-id/run"],
+			["GET", "/api/tasks/task-id/runs"],
+			["GET", "/api/tasks/task-id/stream"],
+		];
+		for (const [method, path] of endpoints) {
+			expect((await app.request(path, { method })).status).toBe(404);
+		}
 	});
 });

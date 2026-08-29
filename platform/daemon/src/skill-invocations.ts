@@ -2,7 +2,7 @@ import { getDbAccessor } from "./db-accessor.js";
 import { countChanges } from "./db-helpers.js";
 import { logger } from "./logger.js";
 
-export type SkillInvocationSource = "agent" | "scheduler" | "api";
+export type SkillInvocationSource = "agent" | "api";
 
 export interface SkillInvocationRecord {
 	readonly skillName: string;

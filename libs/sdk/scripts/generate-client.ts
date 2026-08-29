@@ -74,7 +74,7 @@ function toMethodName(route: Route): string {
 
 /**
  * Extract path parameters from route
- * Example: /api/tasks/:id → ["id"]
+ * Example: /api/items/:id → ["id"]
  */
 function extractParams(path: string): readonly string[] {
 	const params: string[] = [];

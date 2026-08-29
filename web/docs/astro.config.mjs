@@ -70,7 +70,6 @@ export default defineConfig({
 						{ label: "Documents", slug: "documents" },
 						{ label: "Skills", slug: "skills" },
 						{ label: "Secrets", slug: "secrets" },
-						{ label: "Scheduled tasks", slug: "scheduling" },
 						{ label: "Hermes and OpenClaw", slug: "ai-memory-hermes-openclaw" },
 					],
 				},

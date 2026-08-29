@@ -9,9 +9,6 @@ import { SignetClientP2 } from "./client-p2.js";
 import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
 import { SignetTransport } from "./transport.js";
 import type {
-	AggregateRecallUsage,
-	AggregateRecallUsageStage,
-	BatchModifyItemResult,
 	BatchModifyResponse,
 	BitwardenConnectResult,
 	BitwardenMigrationResult,
@@ -25,8 +22,6 @@ import type {
 	DocumentDeleteResult,
 	DocumentListResponse,
 	DocumentRecord,
-	DreamingCacheAccounting,
-	DreamingCacheAccountingTotals,
 	EmbeddingHealthResponse,
 	EmbeddingProjectionResponse,
 	EmbeddingStatusResponse,
@@ -63,7 +58,6 @@ import type {
 	SdkRecallOptions,
 	SecretExecJob,
 	SecretExecOptions,
-	SecretExecResult,
 	SecretListResponse,
 	SessionInfo,
 	SessionListResponse,
@@ -74,14 +68,6 @@ import type {
 	SkillListResponse,
 	SkillSearchResponse,
 	StatusResponse,
-	TaskCreatePayload,
-	TaskCreateResult,
-	TaskGetResponse,
-	TaskListResponse,
-	TaskRecord,
-	TaskRun,
-	TaskRunListResponse,
-	TaskUpdatePayload,
 	TelemetryEventsResponse,
 	TelemetryStatsResponse,
 	TimelineExportResponse,
@@ -812,115 +798,6 @@ export class SignetClient extends SignetClientHelpers {
 		return this.transport.post<{ success: boolean; config: GitConfig }>("/api/git/config", patch);
 	}
 
-	// --- Tasks/Scheduler ---
-
-	/**
-	 * List all scheduled tasks.
-	 *
-	 * @example
-	 * ```typescript
-	 * const { tasks, presets } = await client.listTasks();
-	 * console.log(tasks.filter(t => t.enabled));
-	 * console.log(presets["@hourly"]); // "0 * * * *"
-	 * ```
-	 */
-	async listTasks(): Promise<TaskListResponse> {
-		return this.transport.get<TaskListResponse>("/api/tasks");
-	}
-
-	/**
-	 * Create a new scheduled task.
-	 *
-	 * @example
-	 * ```typescript
-	 * const result = await client.createTask({
-	 *   name: "Daily Report",
-	 *   prompt: "Generate daily report",
-	 *   cronExpression: "0 9 * * *",
-	 *   harness: "claude-code"
-	 * });
-	 * console.log(result.id, result.nextRunAt);
-	 * ```
-	 */
-	async createTask(payload: TaskCreatePayload): Promise<TaskCreateResult> {
-		return this.transport.post<TaskCreateResult>("/api/tasks", payload);
-	}
-
-	/**
-	 * Get a single task with recent runs.
-	 *
-	 * @example
-	 * ```typescript
-	 * const { task, runs } = await client.getTask("task-abc-123");
-	 * console.log(task.name, runs[0]?.status);
-	 * ```
-	 */
-	async getTask(id: string): Promise<TaskGetResponse> {
-		return this.transport.get<TaskGetResponse>(`/api/tasks/${id}`);
-	}
-
-	/**
-	 * Update a task.
-	 *
-	 * @example
-	 * ```typescript
-	 * await client.updateTask("task-abc-123", {
-	 *   enabled: false,
-	 *   prompt: "Updated prompt"
-	 * });
-	 * ```
-	 */
-	async updateTask(id: string, patch: TaskUpdatePayload): Promise<{ success: boolean }> {
-		return this.transport.patch<{ success: boolean }>(`/api/tasks/${id}`, patch);
-	}
-
-	/**
-	 * Delete a task.
-	 *
-	 * @example
-	 * ```typescript
-	 * await client.deleteTask("task-abc-123");
-	 * ```
-	 */
-	async deleteTask(id: string): Promise<{ success: boolean }> {
-		return this.transport.del<{ success: boolean }>(`/api/tasks/${id}`);
-	}
-
-	/**
-	 * Trigger an immediate task run.
-	 *
-	 * @example
-	 * ```typescript
-	 * const result = await client.runTask("task-abc-123");
-	 * console.log(result.runId, result.status);
-	 * ```
-	 */
-	async runTask(id: string): Promise<{ runId: string; status: "running" }> {
-		return this.transport.post<{ runId: string; status: "running" }>(`/api/tasks/${id}/run`, {});
-	}
-
-	/**
-	 * Get paginated run history for a task.
-	 *
-	 * @example
-	 * ```typescript
-	 * const runs = await client.listTaskRuns("task-abc-123", { limit: 20, offset: 0 });
-	 * console.log(runs.runs.length, runs.total, runs.hasMore);
-	 * ```
-	 */
-	async listTaskRuns(
-		id: string,
-		opts?: {
-			readonly limit?: number;
-			readonly offset?: number;
-		},
-	): Promise<TaskRunListResponse> {
-		return this.transport.get<TaskRunListResponse>(`/api/tasks/${id}/runs`, {
-			limit: opts?.limit,
-			offset: opts?.offset,
-		});
-	}
-
 	// --- Secrets ---
 
 	/**
@@ -1307,7 +1184,6 @@ export type {
 	AccountingCoverageTotals,
 	AccountingProvenance,
 	AccountingSummaryProvenance,
-	BatchModifyItemResult,
 	BatchModifyResponse,
 	CheckpointListResponse,
 	ConfigListResponse,
@@ -1318,8 +1194,6 @@ export type {
 	DocumentDeleteResult,
 	DocumentListResponse,
 	DocumentRecord,
-	DreamingCacheAccounting,
-	DreamingCacheAccountingTotals,
 	EmbeddingHealthResponse,
 	EmbeddingProjectionResponse,
 	EmbeddingStatusResponse,
@@ -1375,8 +1249,6 @@ export type {
 	PluginSurfaceBase,
 	PluginSurfaceSummary,
 	PluginToolSummary,
-	AggregateRecallUsage,
-	AggregateRecallUsageStage,
 	RecallResponse,
 	RecallResult,
 	RecoverResult,
@@ -1384,7 +1256,6 @@ export type {
 	RememberResult,
 	SecretExecJob,
 	SecretExecOptions,
-	SecretExecResult,
 	SecretListResponse,
 	SessionInfo,
 	SessionListResponse,
@@ -1397,14 +1268,6 @@ export type {
 	SkillMeta,
 	SkillSearchResponse,
 	StatusResponse,
-	TaskCreatePayload,
-	TaskCreateResult,
-	TaskGetResponse,
-	TaskListResponse,
-	TaskRecord,
-	TaskRun,
-	TaskRunListResponse,
-	TaskUpdatePayload,
 	TelemetryEventsResponse,
 	TelemetryStatsResponse,
 	TimelineExportResponse,

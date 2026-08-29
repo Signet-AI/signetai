@@ -99,7 +99,7 @@ Mutations blocked by the kill switch return `503`.
 | [Sessions and hooks API](/api/sessions-hooks/) | Harness hook and session lifecycle endpoints. |
 | [Operations API](/api/operations/) | Git sync, updates, diagnostics, repair, and pipeline operation endpoints. |
 | [Knowledge and ontology API](/api/knowledge-ontology/) | Knowledge navigation, ontology proposal, dreaming, and checkpoint endpoints. |
-| [Telemetry and logs API](/api/telemetry-logs/) | Analytics, telemetry, log, MCP, and scheduled task endpoints. |
+| [Telemetry and logs API](/api/telemetry-logs/) | Analytics, telemetry, log, and MCP endpoints. |
 | [Additional route inventory](/api/route-inventory/) | Support, dashboard, repair, marketplace, and runtime routes not expanded in the main API reference. |
 
 ## Maintenance

@@ -57,7 +57,7 @@ curl -fsS http://127.0.0.1:3850/health/ready
 curl -fsS http://127.0.0.1:3850/api/diagnostics
 ```
 
-Then test the feature you depend on: a bounded recall, a provider route, a remote connector authentication check, or a scheduled task dry run. A green version command does not prove the daemon's workspace, migration, inference route, or connector are healthy.
+Then test the feature you depend on: a bounded recall, a provider route, or a remote connector authentication check. A green version command does not prove the daemon's workspace, migration, inference route, or connector are healthy.
 
 ## Rollback and incident handling
 

@@ -11,8 +11,7 @@ ACP and ACPX Integration
 *Signet handles identity, memory, routing, and policy. ACPX handles how to talk to agent harnesses.*
 
 > **Current status:** Signet has a first-class `executor: acpx` inference
-> backend for daemon/background inference. The older “scheduler uses raw
-> `Bun.spawn` through ACPX” plan is obsolete.
+> backend for daemon/background inference.
 
 This document explains the current ACPX integration, how to configure it, what
 it deliberately does *not* do yet, and how it relates to longer-term Agent
@@ -273,8 +272,6 @@ The current ACPX backend is deliberately narrow. It does **not** yet implement:
   abstraction.
 - A `signet acp --agent <name>` ACP server/proxy command.
 - `platform/daemon/src/acp-bridge/`.
-- Scheduler task spawning through ACPX session management.
-- `acpxRecordId` persistence in task/session tables.
 - Dashboard views of ACPX sessions, queues, or typed ACP events.
 
 Those ideas were part of the older phase plan. They remain plausible future

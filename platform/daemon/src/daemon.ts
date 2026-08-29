@@ -191,7 +191,6 @@ import {
 	countActiveWorkers,
 	setRuntimePressureEnvelope,
 } from "./runtime-pressure";
-import { startSchedulerWorker } from "./scheduler";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpointsAsync } from "./session-checkpoints";
 import { createSessionClaimStore } from "./session-claims";
 import {
@@ -315,7 +314,6 @@ let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
 let vacuumConversionHandle: VacuumConversionHandle | null = null;
 let embeddingPromotionRestart: Promise<void> | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
-let schedulerHandle: { stop(): Promise<void> } | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
 let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 // These are mirrored into state.ts via setters for read access by
@@ -1584,13 +1582,6 @@ async function stopPipelineRuntime(): Promise<void> {
 		reflectionWorkerHandle = null;
 	}
 
-	if (schedulerHandle) {
-		try {
-			await schedulerHandle.stop();
-		} catch {}
-		schedulerHandle = null;
-	}
-
 	if (transcriptRecoveryWorkerHandle) {
 		try {
 			await transcriptRecoveryWorkerHandle.stop();
@@ -2788,7 +2779,6 @@ async function main() {
 
 		initCheckpointFlush(getDbAccessor());
 
-		schedulerHandle = startSchedulerWorker(getDbAccessor());
 		if (!transcriptCaptureWorkerHandle) {
 			transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
 		}

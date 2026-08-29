@@ -359,38 +359,6 @@ export class GeneratedClient {
 		return this.transport.post<unknown>("/api/update/run", opts);
 	}
 
-	async getApiTasksByIdStream(id: string, query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>(`/api/tasks/${id}/stream`, query);
-	}
-
-	async getApiTasks(query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>("/api/tasks", query);
-	}
-
-	async postApiTasks(opts?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.post<unknown>("/api/tasks", opts);
-	}
-
-	async getApiTasksById(id: string, query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>(`/api/tasks/${id}`, query);
-	}
-
-	async patchApiTasksById(id: string, opts?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.patch<unknown>(`/api/tasks/${id}`, opts);
-	}
-
-	async deleteApiTasksById(id: string, query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.del<unknown>(`/api/tasks/${id}`, query);
-	}
-
-	async postApiTasksByIdRun(id: string, opts?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.post<unknown>(`/api/tasks/${id}/run`, opts);
-	}
-
-	async getApiTasksByIdRuns(id: string, query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>(`/api/tasks/${id}/runs`, query);
-	}
-
 	async getApiStatus(query?: Record<string, unknown>): Promise<unknown> {
 		return this.transport.get<unknown>("/api/status", query);
 	}

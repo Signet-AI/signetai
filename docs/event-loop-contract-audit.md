@@ -10,7 +10,7 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 - Async-named DB sites: 186
 - Async-named ON-PARENT DB sites: 184
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 516
+- Synchronous filesystem/process sites: 515
 - Compile-visible legacy DB sites remaining: 164
   - `withWriteTx`: 65
   - `withReadDb`: 99

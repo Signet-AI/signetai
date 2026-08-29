@@ -3,7 +3,7 @@ title: "Daemon"
 description: "Operate the Signet daemon: lifecycle, network binding, health, logs, and runtime boundaries."
 ---
 
-The Signet daemon owns the HTTP API, dashboard, workspace database, background workers, scheduler, diagnostics, telemetry, and harness-facing services. Its default local address is `http://127.0.0.1:3850`.
+The Signet daemon owns the HTTP API, dashboard, workspace database, background workers, diagnostics, telemetry, and harness-facing services. Its default local address is `http://127.0.0.1:3850`.
 
 ## Lifecycle
 
@@ -71,7 +71,6 @@ Do not assume a file watcher makes every configuration key live. Use `/api/statu
 | `/api/pipeline/status`                                    | Pipeline state and runtime configuration summary.         |
 | `/api/diagnostics`                                        | Health report for authenticated operators where required. |
 | `/api/repair/*`                                           | Explicit repair actions with admin protection.            |
-| `/api/tasks/*`                                            | Scheduled task configuration, runs, and output stream.    |
 | `/api/analytics/*`, `/api/telemetry/*`, `/api/timeline/*` | Operational metrics and investigation surfaces.           |
 
 The full request and response surface is in [HTTP API](/api/). Do not automate against a dashboard rendering when an API endpoint exists.
@@ -85,10 +84,6 @@ signet daemon logs
 ```
 
 If the daemon will not start, capture the exact validation error and preserve the workspace before changing data. Do not delete the SQLite database, auth secret, or PID file as a routine recovery step.
-
-## Scheduler
-
-The daemon scheduler evaluates recurring tasks and starts the configured local harness command. It supports Claude Code, Codex, and OpenCode task harnesses, limits concurrent runs, and marks interrupted runs failed during daemon startup recovery. See [Scheduled Tasks](/scheduling/).
 
 ## Persistent deployment
 

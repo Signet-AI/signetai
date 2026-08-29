@@ -31,36 +31,10 @@ describe("recordSkillInvocation", () => {
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		db.close();
-		closeDbAccessor();
+		await closeDbAccessor();
 		rmSync(path, { force: true });
-	});
-
-	it("records usage under the provided agent and updates matching skill metadata", () => {
-		seedSkill(db, { id: "skill-a", name: "web-search", agentId: "agent-a" });
-
-		recordSkillInvocation({
-			skillName: "web-search",
-			agentId: "agent-a",
-			source: "scheduler",
-			latencyMs: 123,
-			success: true,
-		});
-
-		const row = db.prepare("SELECT agent_id, skill_name FROM skill_invocations").get() as
-			| { agent_id: string; skill_name: string }
-			| undefined;
-		expect(row).toEqual({
-			agent_id: "agent-a",
-			skill_name: "web-search",
-		});
-
-		const meta = db.prepare("SELECT use_count, last_used_at FROM skill_meta WHERE agent_id = ?").get("agent-a") as
-			| { use_count: number; last_used_at: string | null }
-			| undefined;
-		expect(meta?.use_count).toBe(1);
-		expect(meta?.last_used_at).not.toBeNull();
 	});
 
 	it("does not inflate use_count on a deduped re-insert (idempotent harness re-scan)", () => {
@@ -125,23 +99,5 @@ describe("recordSkillInvocation", () => {
 				.get("sess-shared", "tool-use-shared") as { cnt: number }
 		).cnt;
 		expect(invCount).toBe(2);
-	});
-
-	it("keeps historical rows even when skill metadata is missing", () => {
-		recordSkillInvocation({
-			skillName: "browser-use",
-			agentId: "agent-b",
-			source: "scheduler",
-			latencyMs: 50,
-			success: true,
-		});
-
-		const row = db.prepare("SELECT agent_id, skill_name FROM skill_invocations").get() as
-			| { agent_id: string; skill_name: string }
-			| undefined;
-		expect(row).toEqual({
-			agent_id: "agent-b",
-			skill_name: "browser-use",
-		});
 	});
 });

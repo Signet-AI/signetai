@@ -68,7 +68,6 @@ export type LogCategory =
 	| "connectors" // Connector management
 	| "documents" // Document ingestion
 	| "projection" // UMAP projection computation
-	| "scheduler" // Task scheduler
 	| "os" // Signet OS app tray and system operations
 	| "changelog" // Changelog, roadmap, and README serving
 	| "auth" // Authentication and authorization

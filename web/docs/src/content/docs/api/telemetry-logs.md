@@ -1,9 +1,9 @@
 ---
 title: "Telemetry and logs API"
-description: "Analytics, telemetry, log, MCP, and scheduled task endpoints."
+description: "Analytics, telemetry, log, and MCP endpoints."
 ---
 
-Analytics, telemetry, log, MCP, and scheduled task endpoints.
+Analytics, telemetry, log, and MCP endpoints.
 
 [Back to HTTP API overview](/api/).
 
@@ -571,101 +571,3 @@ context for 30 seconds.
 **GET /mcp** — Open an SSE stream for server-initiated notifications.
 
 **DELETE /mcp** — Terminate MCP session (no-op in stateless mode).
-
-
-## Scheduled Tasks
-
-### GET /api/tasks
-
-List all scheduled tasks with their last run status.
-
-**Response**
-
-```json
-{
-  "tasks": [{
-    "id": "uuid",
-    "name": "Review open PRs",
-    "prompt": "Review all open pull requests",
-    "cron_expression": "0 9 * * *",
-    "harness": "claude-code",
-    "working_directory": "/path/to/project",
-    "enabled": 1,
-    "last_run_at": "2026-02-23T09:00:00Z",
-    "next_run_at": "2026-02-24T09:00:00Z",
-    "last_run_status": "completed",
-    "last_run_exit_code": 0
-  }],
-  "presets": [
-    {"label": "Every 15 min", "expression": "*/15 * * * *"},
-    {"label": "Hourly", "expression": "0 * * * *"},
-    {"label": "Daily 9am", "expression": "0 9 * * *"},
-    {"label": "Weekly Mon 9am", "expression": "0 9 * * 1"}
-  ]
-}
-```
-
-### POST /api/tasks
-
-Create a new scheduled task.
-
-**Request body**
-
-```json
-{
-  "name": "Review open PRs",
-  "prompt": "Review all open pull requests and summarize findings",
-  "cronExpression": "0 9 * * *",
-  "harness": "claude-code",
-  "workingDirectory": "/path/to/project"
-}
-```
-
-**Response** (201)
-
-```json
-{"id": "uuid", "nextRunAt": "2026-02-24T09:00:00Z"}
-```
-
-### GET /api/tasks/:id
-
-Get a single task with its 20 most recent runs.
-
-### PATCH /api/tasks/:id
-
-Update a task's name, prompt, cron, harness, working directory, or enabled state.
-
-### DELETE /api/tasks/:id
-
-Delete a task and all its run history (cascade).
-
-### POST /api/tasks/:id/run
-
-Trigger an immediate manual run. Returns 202 with `runId`. Returns 409 if
-the task already has a running execution. Skill usage analytics are
-attributed using non-breaking task scope hints when available.
-
-### GET /api/tasks/:id/runs
-
-Paginated run history. Supports `limit` and `offset` query parameters.
-
-### GET /api/tasks/:id/stream
-
-Server-Sent Events stream of live task output. Replays buffered output on
-connect, then streams new events in real time. Sends keepalive comments
-every 15 seconds.
-
-**Event types**
-
-| Type           | Description                              |
-|----------------|------------------------------------------|
-| `connected`    | Initial connection confirmation           |
-| `run-started`  | A run has begun (includes `runId`)        |
-| `run-output`   | Stdout or stderr chunk (`stream` field)   |
-| `run-completed`| Run finished (includes `exitCode`)        |
-
-```
-Content-Type: text/event-stream
-Cache-Control: no-cache
-Connection: keep-alive
-```

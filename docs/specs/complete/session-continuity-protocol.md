@@ -178,7 +178,7 @@ New file with core checkpoint operations:
 **`pruneCheckpoints(db, retentionDays)`**
 - Delete checkpoints older than retentionDays
 - Keep the most recent checkpoint per session_key within the retention window
-- **Called from daemon scheduler/maintenance loop, NOT session-tracker**
+- **Called from the daemon maintenance loop, NOT session-tracker**
 
 ### 4. Buffered checkpoint writes
 
@@ -291,10 +291,10 @@ Read-only endpoints behind auth middleware:
 - `GET /api/checkpoints/:sessionKey` — all checkpoints for a specific session
 - Apply auth scope + rate limiting consistent with other `/api/*` routes
 
-### 11. Checkpoint pruning: daemon scheduler
+### 11. Checkpoint pruning: daemon maintenance
 
-Wire `pruneCheckpoints()` into the existing daemon maintenance/scheduler loop
-(see `platform/daemon/src/scheduler/`), NOT into session-tracker cleanup.
+Wire `pruneCheckpoints()` into the existing daemon maintenance loop
+(see the daemon maintenance implementation), NOT into session-tracker cleanup.
 Run on the same cadence as other maintenance tasks.
 
 ## Platform Support Matrix

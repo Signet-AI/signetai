@@ -129,14 +129,13 @@ native `EventSource` with headers, so auth is pumped manually).
 | `installSkill` / `uninstallSkill` | POST/DELETE | `/api/skills/{name}` | Install/remove |
 | `getSkillAnalytics` | GET | `/api/skills/analytics` | Usage analytics |
 
-### 1.8 Plugins, Graphiq, Marketplace (MCP + reviews), Tasks
+### 1.8 Plugins, Graphiq, Marketplace (MCP + reviews)
 | Domain | Methods | Paths | Purpose |
 |---|---|---|---|
 | Plugins | GET/POST/PATCH | `/api/plugins`, `/api/plugins/{id}`, `…/diagnostics`, `…/audit` | Plugin enable/disable, diagnostics, audit log |
 | Graphiq | GET/POST | `/api/graphiq/{status,install,update,uninstall,index}` | Code indexer lifecycle |
 | Marketplace MCP | GET/POST/PUT/DELETE | `/api/marketplace/mcp{,/browse,/detail,/install,/register,/tools,/test,/{id}}` | MCP server marketplace |
 | Marketplace reviews | GET/POST/DELETE | `/api/marketplace/reviews{,/config,/sync,/{id}}` | Reviews + Cloudflare worker sync |
-| Tasks | GET/POST/PUT/DELETE | `/api/tasks{,/{id},/{id}/run,/{id}/runs}` | Scheduled/cortex tasks |
 
 ### 1.9 Pipeline, harnesses, inference, MCP analytics, OS
 | Fn | Method | Path | Purpose |
@@ -241,7 +240,6 @@ what is *not* being rebuilt yet and where future mockup work would slot in.
 | **Graphiq** (code indexer lifecycle) | `/api/graphiq/*` | none |
 | **Marketplace — MCP servers** (browse/install/register/test) | `/api/marketplace/mcp/*` | none |
 | **Marketplace — reviews** (+ Cloudflare worker sync) | `/api/marketplace/reviews/*` | none |
-| **Tasks / Cortex** (create/run/schedule) | `/api/tasks/*` | "Cortex buffer" label only (dreaming) |
 | **Pipeline control** (status graph, pause/resume) | `/api/pipeline/*` | none |
 | **Logs viewer** (live SSE tail) | `/api/logs/stream` | none |
 | **Sessions / Black-box traces / hook bypass** | `/api/sessions/*`, `/api/sessions/{key}/bypass` | none |
