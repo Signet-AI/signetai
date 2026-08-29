@@ -30,6 +30,32 @@ test("the event-loop ledger exactly equals the current source inventory", () => 
 	expect(result.sites).toEqual(baseline);
 });
 
+test("classifies database callbacks by execution home rather than async API spelling", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-execution-home-"));
+	try {
+		const call = (path: string): string => `getDbAccessor().withReadDbAsync((db) => db, { siteToken: "${path}:1" });\n`;
+		writeFileSync(join(root, "parent.ts"), call("parent.ts"));
+		writeFileSync(join(root, "db-owner-worker.ts"), call("db-owner-worker.ts"));
+		const first = runAudit({ sourceRoot: root });
+		expect(first.executionHome).toEqual({ total: 2, onParent: 1, offParent: 1 });
+		expect(first.executionHomeSites.map((site) => [site.path, site.executionHome])).toEqual([
+			["db-owner-worker.ts", "off-parent"],
+			["parent.ts", "on-parent"],
+		]);
+		expect(first.violations.filter((violation) => violation.kind === "new-parent-execution-site")).toHaveLength(1);
+		writeFileSync(join(root, "new-parent.ts"), call("new-parent.ts"));
+		const second = runAudit({
+			sourceRoot: root,
+			baselineSites: first.sites.filter((site) => site.path !== "new-parent.ts"),
+		});
+		expect(second.violations.filter((violation) => violation.kind === "new-parent-execution-site")).toEqual([
+			expect.objectContaining({ path: "new-parent.ts", api: "withReadDbAsync" }),
+		]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("the ledger reports legacy DB markers and rejects new call sites", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-ledger-"));
 	try {
@@ -329,8 +355,13 @@ test("the generated report describes the type boundary and transitional counts",
 	const report = renderReport(baseline, { total: 169, withWriteTx: 65, withReadDb: 104 });
 	expect(report).toContain("Exact ledger inventory: 981 sites");
 	expect(report).toContain("65 synchronous writes, 104 synchronous reads, and 296 async-named parent DB sites");
+	expect(report).toContain("Database accessor sites classified: 465");
+	expect(report).toContain("ON-PARENT callback execution: 463");
+	expect(report).toContain("OFF-PARENT callback execution: 2");
+	expect(report).toMatch(/`db-owner-worker\.ts:\d+` \(withReadDbAsync\)/);
+	expect(report).toMatch(/`daemon\.ts:\d+` \(withReadDbAsync\)/);
 	expect(report).toContain("type boundary");
-	expect(report).not.toContain("1061");
+	expect(report).not.toContain("Exact ledger inventory: 1061 sites");
 });
 
 const countBaseline = (total: number, withReadDb: number, withWriteTx: number): LegacyDbCountBaseline => ({

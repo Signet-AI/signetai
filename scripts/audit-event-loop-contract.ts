@@ -33,6 +33,7 @@ export const SYNC_APIS = [
 
 export type SyncApi = (typeof SYNC_APIS)[number];
 export type SiteCategory = "pre-readiness-bootstrap" | "cli-only" | "isolated-worker" | "hot-path";
+export type ExecutionHome = "on-parent" | "off-parent";
 const LEGACY_DB_APIS = ["withWriteTx", "withReadDb"] as const;
 type LegacyDbApi = (typeof LEGACY_DB_APIS)[number];
 const ATTRIBUTED_DB_APIS = [
@@ -55,6 +56,11 @@ export interface AuditSite {
 	readonly category: SiteCategory;
 }
 
+/** A database site classified by the process that executes its callback. */
+export interface ExecutionHomeSite extends AuditSite {
+	readonly executionHome: ExecutionHome;
+}
+
 export interface ImportBoundaryViolation {
 	readonly kind: "import-boundary";
 	readonly path: string;
@@ -69,6 +75,20 @@ export interface LegacyDbAccessViolation {
 	readonly line: number;
 	readonly api: LegacyDbApi;
 	readonly message: string;
+}
+
+export interface ParentExecutionSiteViolation {
+	readonly kind: "new-parent-execution-site";
+	readonly path: string;
+	readonly line: number;
+	readonly api: Exclude<AttributedDbApi, LegacyDbApi>;
+	readonly message: string;
+}
+
+export interface ExecutionHomeCounts {
+	readonly total: number;
+	readonly onParent: number;
+	readonly offParent: number;
 }
 
 export interface LegacyDbAccessCounts {
@@ -126,11 +146,14 @@ export interface AuditResult {
 	readonly violations: readonly (
 		| ImportBoundaryViolation
 		| LegacyDbAccessViolation
+		| ParentExecutionSiteViolation
 		| UnmarkedLegacyDbAccessViolation
 		| MissingLegacyDbSiteTokenViolation
 		| MissingAsyncDbSiteTokenViolation
 	)[];
 	readonly legacyDbAccess: LegacyDbAccessCounts;
+	readonly executionHomeSites: readonly ExecutionHomeSite[];
+	readonly executionHome: ExecutionHomeCounts;
 }
 
 interface BaselineFile {
@@ -152,6 +175,12 @@ const DEFAULT_COUNT_BASELINE = "scripts/legacy-sync-db-baseline.json";
 const DEFAULT_REPORT = "docs/event-loop-contract-audit.md";
 const SYNC_COMPAT_MODULE = "db-accessor-sync";
 const SOURCE_MODULE_EXTENSIONS = [".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".jsx", ".tsx"] as const;
+/**
+ * These are the only source entrypoints proven to run in the DB-owner process.
+ * Shared modules stay ON-PARENT because they can also be called by the HTTP
+ * daemon; an async name is not evidence of a process boundary.
+ */
+const OFF_PARENT_ENTRYPOINTS = new Set(["db-owner-worker.ts"]);
 const LEGACY_MARKER = /@ts-expect-error LEGACY_SYNC_DB_ACCESS: (withReadDb|withWriteTx)/g;
 const MARKER_LINE = /LEGACY_SYNC_DB_ACCESS/;
 /**
@@ -469,6 +498,29 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 	return { sites, unmarked, missingSiteTokens };
 }
 
+/**
+ * Classify database accessor sites by the process that executes their callback.
+ * Direct accessor calls are ON-PARENT unless the source is the explicit
+ * DB-owner process entrypoint. Shared modules remain ON-PARENT when they can
+ * also be reached from the HTTP daemon.
+ */
+export function classifyExecutionHomes(sites: readonly AuditSite[]): readonly ExecutionHomeSite[] {
+	return sites.flatMap((site) => {
+		if (!ATTRIBUTED_DB_APIS.includes(site.api as AttributedDbApi)) return [];
+		return [
+			{
+				...site,
+				executionHome: OFF_PARENT_ENTRYPOINTS.has(site.path) ? "off-parent" : "on-parent",
+			},
+		];
+	});
+}
+
+export function countExecutionHomes(sites: readonly ExecutionHomeSite[]): ExecutionHomeCounts {
+	const onParent = sites.filter((site) => site.executionHome === "on-parent").length;
+	return { total: sites.length, onParent, offParent: sites.length - onParent };
+}
+
 /** A synchronous DB call site with no LEGACY_SYNC_DB_ACCESS marker within the marker window. */
 export interface UnmarkedCallSite {
 	readonly path: string;
@@ -526,6 +578,34 @@ function findNewLegacyDbAccessViolations(
 			line: site.line,
 			api: site.api as LegacyDbApi,
 			message: `${site.path}:${site.line} adds synchronous ${site.api}() beyond the committed legacy migration ledger; LEGACY_SYNC_DB_ACCESS cannot authorize new callers`,
+		});
+	}
+	return violations;
+}
+
+function findNewParentExecutionSiteViolations(
+	sites: readonly ExecutionHomeSite[],
+	baselineSites: readonly AuditSite[],
+): ParentExecutionSiteViolation[] {
+	const baselineKeys = occurrenceKeys(
+		classifyExecutionHomes(baselineSites).filter((site) => site.executionHome === "on-parent"),
+	);
+	const seen = new Map<string, number>();
+	const violations: ParentExecutionSiteViolation[] = [];
+	for (const site of sites) {
+		// New synchronous calls already have their legacy-ledger violation. This
+		// rule is the additional guard for the fake-async class.
+		if (site.executionHome !== "on-parent" || LEGACY_DB_APIS.includes(site.api as LegacyDbApi)) continue;
+		const base = siteKey(site);
+		const occurrence = (seen.get(base) ?? 0) + 1;
+		seen.set(base, occurrence);
+		if (baselineKeys.has(`${base}\u0000${occurrence}`)) continue;
+		violations.push({
+			kind: "new-parent-execution-site",
+			path: site.path,
+			line: site.line,
+			api: site.api as Exclude<AttributedDbApi, LegacyDbApi>,
+			message: `${site.path}:${site.line} adds ON-PARENT ${site.api}() beyond the committed execution-home ledger; route the callback through the DB-owner IPC boundary instead`,
 		});
 	}
 	return violations;
@@ -619,15 +699,19 @@ export function writeCountBaseline(
 export function runAudit(options: AuditOptions): AuditResult {
 	const { sites, unmarked, missingSiteTokens } = findLegacyDbAccessSites(options.sourceRoot);
 	const baselineSites = options.baselineSites ?? [];
+	const executionHomeSites = classifyExecutionHomes(sites);
 	return {
 		sites,
 		violations: [
 			...findImportBoundaryViolations(options.sourceRoot, new Set(options.allowedSyncCompatImporters ?? [])),
 			...findNewLegacyDbAccessViolations(sites, baselineSites),
+			...findNewParentExecutionSiteViolations(executionHomeSites, baselineSites),
 			...findUnmarkedLegacyDbAccess(unmarked),
 			...missingSiteTokens,
 		],
 		legacyDbAccess: countLegacyDbAccess(options.sourceRoot),
+		executionHomeSites,
+		executionHome: countExecutionHomes(executionHomeSites),
 	};
 }
 
@@ -655,6 +739,14 @@ export function renderReport(baselineSites: readonly AuditSite[], legacyDbAccess
 	);
 	const filesystemProcessCount =
 		baselineSites.length - (counts.get("withReadDb") ?? 0) - (counts.get("withWriteTx") ?? 0) - asyncDbCount;
+	const executionHomeSites = classifyExecutionHomes(baselineSites);
+	const executionHome = countExecutionHomes(executionHomeSites);
+	const executionHomeList = (home: ExecutionHome): string => {
+		const sites = executionHomeSites.filter((site) => site.executionHome === home);
+		return sites.length === 0
+			? "- None"
+			: sites.map((site) => `- \`${site.path}:${site.line}\` (${site.api})`).join("\n");
+	};
 	return `# Event-loop synchronous contract audit
 
 This report is generated from the deterministic migration ledger in \`scripts/event-loop-contract-baseline.json\`. Phase A enforces the type boundary structurally: production code receives an async-only \`DbAccessor\`, while the synchronous compatibility module lives outside the daemon production \`src/\` tree and is rejected by the production TypeScript project's \`rootDir\`. The AST import and call checks remain belt-and-suspenders diagnostics, and new synchronous DB call sites fail closed through exact ledger matching.
@@ -671,6 +763,23 @@ This report is generated from the deterministic migration ledger in \`scripts/ev
   - \`withReadDb\`: ${legacyDbAccess.withReadDb}
 
 The ${baselineSites.length.toLocaleString("en-US")}-site inventory excludes test, benchmark, generated, and \`__tests__\` fixtures and includes every synchronous filesystem, process, and database call, including async-named parent DB callbacks. The ${counts.get("withWriteTx") ?? 0} synchronous writes, ${counts.get("withReadDb") ?? 0} synchronous reads, and ${asyncDbCount} async-named parent DB sites are the complete database-call inventory; ${legacyDbAccess.total} compatibility DB operations remain transitional callers for the later migration phase. Those compatibility calls are marked with \`@ts-expect-error LEGACY_SYNC_DB_ACCESS\`, so the compiler reports every remaining site without forcing this phase to migrate them.
+
+## Execution-home inventory
+
+- Database accessor sites classified: ${executionHome.total}
+- ON-PARENT callback execution: ${executionHome.onParent}
+- OFF-PARENT callback execution: ${executionHome.offParent}
+- Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
+
+The classifier follows execution home, not API spelling. A direct accessor callback is ON-PARENT unless its source is the explicit DB-owner process entrypoint; shared modules remain ON-PARENT when they can also be reached from the HTTP daemon. Owner IPC helpers named dbOwner, owner, or ThroughDbOwner are already off-parent by construction because their SQL statements execute in the owner child rather than through a local accessor callback.
+
+### ON-PARENT sites
+
+${executionHomeList("on-parent")}
+
+### OFF-PARENT sites
+
+${executionHomeList("off-parent")}
 
 ## A3 Slice 2 migration notes
 
@@ -703,6 +812,9 @@ function main(): void {
 	console.log(`Ledger inventory: ${baselineSites.length}`);
 	console.log(
 		`Legacy DB sites: ${result.legacyDbAccess.total} (${result.legacyDbAccess.withWriteTx} writes, ${result.legacyDbAccess.withReadDb} reads)`,
+	);
+	console.log(
+		`Execution home: ${result.executionHome.onParent} ON-PARENT, ${result.executionHome.offParent} OFF-PARENT`,
 	);
 	const ratchet = evaluateCountRatchet(result.legacyDbAccess, countBaseline);
 	if (ratchet.status === "increase") {
