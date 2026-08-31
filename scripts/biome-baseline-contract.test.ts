@@ -41,6 +41,7 @@ test("Biome gate excludes generated output and runs in pull requests", async () 
 		"!**/generated",
 		"!**/*.generated.*",
 		"!scripts/event-loop-contract-baseline.json",
+		"!scripts/architecture-baseline.json",
 	]) {
 		expect(biomeConfig.files.includes).toContain(pattern);
 	}
