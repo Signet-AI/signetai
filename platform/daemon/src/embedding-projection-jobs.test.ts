@@ -6,9 +6,11 @@ import {
 	ProjectionJobManager,
 	ProjectionWorkerCancelledError,
 	ProjectionWorkerTimeoutError,
+	runBoundedProjectionJob,
 	runProjectionWorker,
 } from "./embedding-projection-jobs";
 import type { ProjectionWorkerInput } from "./embedding-projection-worker";
+import type { ProjectionResult } from "./umap-projection";
 
 function vectorHex(values: readonly number[]): string {
 	return Buffer.from(new Float32Array(values).buffer).toString("hex");
@@ -62,6 +64,17 @@ describe("embedding projection worker boundary", () => {
 		const source = readFileSync(join(import.meta.dir, "routes/memory-routes.ts"), "utf8");
 		expect(source).toContain('app.use("/api/embeddings", async (c, next) =>');
 		expect(source).toContain('requirePermission("recall", authConfig)(c, next)');
+		const projectionStart = source.indexOf('app.get("/api/embeddings/projection",');
+		const projectionRoute = source.slice(projectionStart, source.indexOf("// POST /api/documents", projectionStart));
+		expect(projectionRoute).toContain("ownerBatchHandle");
+		expect(projectionRoute).not.toContain("runWriteTxAsync");
+		const cancellationRoute = source.slice(
+			source.indexOf('app.delete("/api/embeddings/projection/:jobId"'),
+			projectionStart,
+		);
+		expect(cancellationRoute).toContain(
+			'return c.json({ status: "cancelled", jobId: job.jobId, dimensions: job.dimensions });',
+		);
 	});
 
 	test("runs projection in the worker process and returns a bounded result", async () => {
@@ -114,6 +127,45 @@ describe("embedding projection worker boundary", () => {
 		handles.push(handle);
 		await expect(handle.result).rejects.toBeInstanceOf(ProjectionWorkerTimeoutError);
 	});
+
+	test("bounds the complete job when the DB-owner snapshot is held", async () => {
+		let cancellationCalls = 0;
+		const startedAt = performance.now();
+		const handle = runBoundedProjectionJob(
+			async (control) => {
+				control.onCancel(() => {
+					cancellationCalls += 1;
+				});
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				return input();
+			},
+			{ deadlineMs: 30 },
+		);
+
+		await expect(handle.result).rejects.toBeInstanceOf(ProjectionWorkerTimeoutError);
+		expect(performance.now() - startedAt).toBeLessThan(80);
+		expect(cancellationCalls).toBe(1);
+	});
+
+	test("cancels a job while its DB-owner snapshot is in flight", async () => {
+		let cancellationCalls = 0;
+		const startedAt = performance.now();
+		const handle = runBoundedProjectionJob(
+			async (control) => {
+				control.onCancel(() => {
+					cancellationCalls += 1;
+				});
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				return input();
+			},
+			{ deadlineMs: 2_000 },
+		);
+
+		handle.cancel();
+		await expect(handle.result).rejects.toBeInstanceOf(ProjectionWorkerCancelledError);
+		expect(performance.now() - startedAt).toBeLessThan(50);
+		expect(cancellationCalls).toBe(1);
+	});
 });
 
 describe("ProjectionJobManager", () => {
@@ -125,7 +177,9 @@ describe("ProjectionJobManager", () => {
 		const run = () => {
 			active += 1;
 			peak = Math.max(peak, active);
-			const result = new Promise((resolve) => resolvers.push(() => resolve({ nodes: [], edges: [] })));
+			const result = new Promise<ProjectionResult>((resolve) =>
+				resolvers.push(() => resolve({ nodes: [], edges: [] })),
+			);
 			return { result, cancel: () => undefined };
 		};
 		const first = manager.start("same", 2, run);

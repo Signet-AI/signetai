@@ -80,7 +80,10 @@ export async function runEmbeddingProjectionWorker(): Promise<void> {
 		await new Promise<void>(() => setInterval(() => undefined, 1_000));
 	}
 	const result = computeProjectionWorkerInput(input);
-	process.stdout.write(`${JSON.stringify({ type: "result", result })}\n`);
+	// Keep the already-serialized payload available to the parent so it can
+	// publish it through the DB owner without serializing a large projection in
+	// the daemon event loop a second time.
+	process.stdout.write(`${JSON.stringify({ type: "result" })}\n${JSON.stringify(result)}\n`);
 }
 
 const entrypoint = process.argv[1] ?? "";

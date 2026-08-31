@@ -130,10 +130,11 @@ Poll with the same endpoint and `?jobId=...`. Poll responses use
 a hard 10-second deadline) or `error`; when the two-job global capacity is
 full, new work returns `429` with `status: "overloaded"`.
 
-Cancel an active job with `DELETE /api/embeddings/projection/:jobId`.
-Cancellation kills the worker and returns `status: "cancelled"`. Only
-successful worker results are written to `umap_cache`; cache writes are never
-performed for timeout, cancellation, or failure.
+Cancel an active job with `DELETE /api/embeddings/projection/:jobId`. A successful
+cancellation returns `200` with `status: "cancelled"`; an unknown job returns
+`404`. Cancellation kills the worker and cancels any in-flight DB-owner read or
+write. Only successful worker results are written to `umap_cache`; cache writes
+are never performed for timeout, cancellation, or failure.
 
 **Response (ready)**
 
