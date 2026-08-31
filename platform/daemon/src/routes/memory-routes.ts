@@ -1155,7 +1155,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						},
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1158" },
+				{ siteToken: "routes/memory-routes.ts:1099" },
 			);
 
 			return c.json(result);
@@ -1200,7 +1200,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						)
 						.map(({ agent_id: _agentId, ...row }) => row);
 				},
-				{ siteToken: "routes/memory-routes.ts:1203" },
+				{ siteToken: "routes/memory-routes.ts:1179" },
 			);
 			return c.json({ memories });
 		} catch (e) {
@@ -1310,7 +1310,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						highUsed: filterSafe(highUsed).map(({ agent_id: _agentId, ...row }) => row),
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1313" },
+				{ siteToken: "routes/memory-routes.ts:1234" },
 			);
 			return c.json({ agentId, minSessions, limit, ...slices });
 		} catch (e) {
@@ -1512,7 +1512,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							return publicRow;
 						});
 				},
-				{ siteToken: "routes/memory-routes.ts:1515" },
+				{ siteToken: "routes/memory-routes.ts:1445" },
 			);
 
 			recordRecallOutcome({
@@ -2368,7 +2368,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					: null;
 				return { row, safety };
 			},
-			{ siteToken: "routes/memory-routes.ts:2371" },
+			{ siteToken: "routes/memory-routes.ts:2340" },
 		);
 		const row = memoryRead.row;
 
@@ -2561,7 +2561,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				// order — creation time is.
 				return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version);
 			},
-			{ siteToken: "routes/memory-routes.ts:2564" },
+			{ siteToken: "routes/memory-routes.ts:2519" },
 		);
 
 		return c.json({
@@ -3793,7 +3793,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						}),
 					);
 				},
-				{ siteToken: "routes/memory-routes.ts:3796" },
+				{ siteToken: "routes/memory-routes.ts:3770" },
 			);
 
 			const rowMap = new Map(rows.map((r) => [r.id, r]));
@@ -3888,7 +3888,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3891" },
+				{ siteToken: "routes/memory-routes.ts:3851" },
 			);
 
 			const embeddings = rows.map((row) => ({
