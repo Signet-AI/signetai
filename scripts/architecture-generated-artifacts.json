@@ -9,7 +9,7 @@
 		},
 		{
 			"path": "integrations/opencode/connector/src/plugin-bundle.ts",
-			"owner": "@signet/opencode-plugin",
+			"owner": "@signet/connector-opencode",
 			"source": "integrations/opencode/plugin",
 			"generatedBy": "integrations/opencode/connector/scripts/embed-plugin.ts"
 		},

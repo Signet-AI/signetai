@@ -22,27 +22,53 @@ test("the committed baseline reproduces the current source and package inventory
 	expect(current.summary.packages).toBe(34);
 });
 
-test("the pull-request workflow runs a trusted evaluator against the candidate", () => {
+test("the pull-request workflow uses a protected evaluator and clean candidate archive", () => {
 	const workflow = readFileSync(join(import.meta.dir, "../.github/workflows/architecture-ratchet.yml"), "utf8");
-	expect(workflow).toContain("on:\n  pull_request:");
-	expect(workflow).toContain("run: bun test scripts/audit-architecture-contract.test.ts");
-	expect(workflow).toContain("git archive");
+	expect(workflow).toContain("on:\n  pull_request_target:");
+	expect(workflow).not.toContain("on:\n  pull_request:");
+	expect(workflow).toContain("name: Architecture audit and ratchet");
+	expect(workflow).toContain("ref: ${{" + " github.event.pull_request.base.sha }}");
+	expect(workflow).toContain("TRUSTED_AUDITOR: ${{" + " github.workspace }}/scripts/audit-architecture-contract.ts");
+	expect(workflow).toContain('test -f "$TRUSTED_AUDITOR"');
+	expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$BASE_SHA"');
+	expect(workflow).toContain('git init --quiet "$CANDIDATE_REPO"');
+	expect(workflow).toContain('git -C "$CANDIDATE_REPO" fetch --no-tags --depth=1 candidate "$HEAD_SHA"');
+	expect(workflow).toContain('git -C "$CANDIDATE_REPO" archive "$HEAD_SHA" | tar -x -C "$CANDIDATE_ROOT"');
+	expect(workflow).toContain('git archive "$BASE_SHA" | tar -x -C "$BASE_ROOT"');
+	expect(workflow).not.toContain("CANDIDATE_ROOT: ${{" + " github.workspace }}");
+	expect(workflow).not.toContain("TRUSTED_AUDITOR_COMMIT");
+	expect(workflow).not.toContain('git show "$TRUSTED_AUDITOR_COMMIT');
+	expect(workflow).not.toContain("TRUSTED_AUDITOR: ${{ github.event.pull_request.head.sha");
+	expect(workflow).not.toContain('git -C "$CANDIDATE_REPO" show');
+	expect(workflow).toContain(
+		"if: github.event_name == 'push'\n        run: bun test scripts/audit-architecture-contract.test.ts",
+	);
 	expect(workflow).toContain("github.event.pull_request.base.sha");
 	expect(workflow).toContain("TRUSTED_AUDITOR");
-	expect(workflow).toContain("TRUSTED_AUDITOR_COMMIT: 42017f87518556d3a94151100f7329232a94e0de");
-	expect(workflow).toContain(
-		'git show "$TRUSTED_AUDITOR_COMMIT:scripts/audit-architecture-contract.ts" > "$TRUSTED_AUDITOR"',
-	);
 	expect(workflow).toContain("await import(pathToFileURL(trustedAuditor).href)");
 	expect(workflow).toContain("candidateRoot");
 	expect(workflow).toContain(
-		"analyzeSourceTree({ root: baseRoot, sourceRoot: baseRoot, validateGeneratedArtifacts: false })",
+		"analyzeSourceTree({\n              root: baseRoot,\n              sourceRoot: baseRoot,\n              validateGeneratedArtifacts: false,\n            })",
 	);
 	expect(workflow).toContain(
-		"analyzeSourceTree({ root: candidateRoot, sourceRoot: candidateRoot, validateGeneratedArtifacts: true })",
+		"analyzeSourceTree({\n              root: candidateRoot,\n              sourceRoot: candidateRoot,\n              validateGeneratedArtifacts: true,\n            })",
 	);
 	expect(workflow).toContain("compareArchitectureRatchet(candidate, protectedBase)");
 	expect(workflow).toContain("bun run audit:architecture");
+	const targetAuditStart = workflow.indexOf("Audit pull request from a protected evaluator");
+	const targetAuditEnd = workflow.indexOf("- name: Enforce architecture ratchet on main", targetAuditStart);
+	expect(targetAuditStart).toBeGreaterThanOrEqual(0);
+	expect(targetAuditEnd).toBeGreaterThan(targetAuditStart);
+	const targetAudit = workflow.slice(targetAuditStart, targetAuditEnd);
+	expect(targetAudit).not.toContain("bun install");
+	expect(targetAudit).not.toContain("bun test");
+	expect(targetAudit).not.toContain("bun run build");
+	const protectedArchive = targetAudit.indexOf('git archive "$BASE_SHA"');
+	const candidateArchive = targetAudit.indexOf('git -C "$CANDIDATE_REPO" archive "$HEAD_SHA"');
+	const evaluator = targetAudit.indexOf("bun -e '");
+	expect(protectedArchive).toBeGreaterThanOrEqual(0);
+	expect(candidateArchive).toBeGreaterThan(protectedArchive);
+	expect(evaluator).toBeGreaterThan(candidateArchive);
 	expect(workflow).not.toContain(
 		'import { analyzeSourceTree, writeBaseline } from "./scripts/audit-architecture-contract"',
 	);
@@ -96,11 +122,12 @@ test("manifested outputs are measured and excluded from handwritten source files
 		writeFileSync(join(root, "normal-output.ts"), normalOutput);
 		writeFileSync(join(root, "handwritten.ts"), "export const handwritten = true;\n");
 		mkdirSync(join(root, "src"));
+		writeFileSync(join(root, "src", "source.txt"), "source\n");
 		writeFileSync(join(root, "src", "fixture-bundle.ts"), bundleOutput);
 		mkdirSync(join(root, "scripts"));
 		writeFileSync(
 			join(root, "scripts", "generate.ts"),
-			'import { join } from "node:path";\nimport { writeFileSync } from "node:fs";\n// Architecture provenance: source=src\n// src outputs missing-output.ts, normal-output.ts, and fixture-bundle.ts\nconst normal = join(__dirname, "..", "normal-output.ts");\nconst bundle = join(__dirname, "..", "src", "fixture-bundle.ts");\nconst missing = join(__dirname, "..", "missing-output.ts");\nwriteFileSync(normal, "");\nwriteFileSync(bundle, "");\nwriteFileSync(missing, "");\n',
+			'import { join } from "node:path";\nimport { readFileSync, writeFileSync } from "node:fs";\n// Architecture provenance: source=src\n// src outputs missing-output.ts, normal-output.ts, and fixture-bundle.ts\nconst source = join(__dirname, "..", "src", "source.txt");\nreadFileSync(source, "utf8");\nconst normal = join(__dirname, "..", "normal-output.ts");\nconst bundle = join(__dirname, "..", "src", "fixture-bundle.ts");\nconst missing = join(__dirname, "..", "missing-output.ts");\nwriteFileSync(normal, "");\nwriteFileSync(bundle, "");\nwriteFileSync(missing, "");\n',
 		);
 		writeFileSync(
 			join(root, "scripts", "architecture-generated-artifacts.json"),
@@ -164,6 +191,84 @@ test("protected comparison fails closed for an unmanifested generated-path cycle
 			const candidate = analyzeSourceTree({ root: candidateRoot, sourceRoot: candidateRoot });
 			compareArchitectureRatchet(candidate, protectedBase);
 		}).toThrow("Generated artifact generated/a.ts matches generated-path");
+	} finally {
+		rmSync(baseRoot, { recursive: true, force: true });
+		rmSync(candidateRoot, { recursive: true, force: true });
+	}
+});
+
+test("protected history allowlists generated artifacts before candidate manifests can hide them", () => {
+	const baseRoot = mkdtempSync(join(tmpdir(), "architecture-protected-artifact-base-"));
+	const candidateRoot = mkdtempSync(join(tmpdir(), "architecture-protected-artifact-candidate-"));
+	try {
+		for (const root of [baseRoot, candidateRoot]) {
+			writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture-root" }));
+			mkdirSync(join(root, "src"));
+			mkdirSync(join(root, "scripts"));
+			writeFileSync(join(root, "src", "input.txt"), "trusted input\n");
+		}
+		const baseGenerator = [
+			'import { readFileSync, writeFileSync } from "node:fs";',
+			'import { join } from "node:path";',
+			"// Architecture provenance: source=src",
+			'readFileSync(join(__dirname, "..", "src", "input.txt"), "utf8");',
+			'writeFileSync(join(__dirname, "..", "output.ts"), "");',
+		].join("\n");
+		writeFileSync(join(baseRoot, "scripts", "generate.ts"), baseGenerator);
+		writeFileSync(
+			join(candidateRoot, "scripts", "generate.ts"),
+			[
+				baseGenerator,
+				'writeFileSync(join(__dirname, "..", "generated", "hidden.ts"), "");',
+				'writeFileSync(join(__dirname, "..", "generated", "other.ts"), "");',
+			].join("\n"),
+		);
+		mkdirSync(join(candidateRoot, "generated"));
+		writeFileSync(
+			join(candidateRoot, "generated", "hidden.ts"),
+			'// Auto-generated by scripts/generate.ts\n// Architecture provenance: generatedBy=scripts/generate.ts\nimport "./other";\n',
+		);
+		writeFileSync(
+			join(candidateRoot, "generated", "other.ts"),
+			'// Auto-generated by scripts/generate.ts\n// Architecture provenance: generatedBy=scripts/generate.ts\nimport "./hidden";\n',
+		);
+		writeFileSync(
+			join(candidateRoot, "scripts", "architecture-generated-artifacts.json"),
+			JSON.stringify({
+				version: 1,
+				artifacts: [
+					{
+						path: "generated/hidden.ts",
+						owner: "fixture-root",
+						source: "src",
+						generatedBy: "scripts/generate.ts",
+					},
+					{
+						path: "generated/other.ts",
+						owner: "fixture-root",
+						source: "src",
+						generatedBy: "scripts/generate.ts",
+					},
+				],
+			}),
+		);
+		const protectedBase = analyzeSourceTree({
+			root: baseRoot,
+			sourceRoot: baseRoot,
+			validateGeneratedArtifacts: false,
+		});
+		const candidate = analyzeSourceTree({ root: candidateRoot, sourceRoot: candidateRoot });
+		expect(protectedBase.protectedGeneratedArtifactManifest).toContainEqual({
+			path: "output.ts",
+			owner: "fixture-root",
+			source: "src",
+			generatedBy: "scripts/generate.ts",
+		});
+		expect(candidate.sourceFiles.map((file) => file.path)).not.toContain("generated/hidden.ts");
+		expect(candidate.sourceFiles.map((file) => file.path)).not.toContain("generated/other.ts");
+		expect(compareArchitectureRatchet(candidate, protectedBase)).toContain(
+			"generated artifact manifest entry generated/hidden.ts is not present in protected history",
+		);
 	} finally {
 		rmSync(baseRoot, { recursive: true, force: true });
 		rmSync(candidateRoot, { recursive: true, force: true });
@@ -348,7 +453,7 @@ test("manifested build materialization does not churn the canonical baseline", (
 		writeFileSync(join(root, "source", "entry.ts"), "export const entry = true;\n");
 		writeFileSync(
 			join(root, "scripts", "generate.ts"),
-			'import { join } from "node:path";\nimport { writeFileSync } from "node:fs";\n// Architecture provenance: source=source\n// source outputs generated.ts\nwriteFileSync(join(__dirname, "..", "generated.ts"), "");\n',
+			'import { join } from "node:path";\nimport { readFileSync, writeFileSync } from "node:fs";\n// Architecture provenance: source=source\n// source outputs generated.ts\nreadFileSync(join(__dirname, "..", "source", "entry.ts"), "utf8");\nwriteFileSync(join(__dirname, "..", "generated.ts"), "");\n',
 		);
 		writeFileSync(
 			join(root, "scripts", "architecture-generated-artifacts.json"),
@@ -577,6 +682,59 @@ test("ImportEquals bindings prevent local require calls from becoming runtime ed
 		const inventory = analyzeSourceTree({ root, sourceRoot: root });
 		expect(inventory.sourceEdges.filter((edge) => edge.kind === "require")).toHaveLength(0);
 		expect(inventory.computedLoads).toContainEqual(expect.objectContaining({ kind: "require", path: "loader.ts" }));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("ambient CommonJS require aliases and documented global forms retain runtime provenance", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-ambient-require-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				"const alias = require;",
+				'alias("./target");',
+				'globalThis.require("./target");',
+				"const bound = require.bind(null);",
+				'bound("./target");',
+				"const { require: destructured } = globalThis;",
+				'destructured("./target");',
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.kind === "require")).toHaveLength(4);
+		expect(inventory.sourceEdges).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "require", specifier: "./target", to: "target.ts", runtime: true }),
+			]),
+		);
+		expect(inventory.computedLoads).toHaveLength(0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("shadowed and reassigned ambient require forms fail closed into the computed ledger", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-ambient-require-shadow-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				"let alias = require;",
+				"alias = (_path: string) => undefined;",
+				'alias("./target");',
+				"const globalThis = { require: (_path: string) => undefined };",
+				'globalThis.require("./target");',
+				"const require = (_path: string) => undefined;",
+				'require.bind(null)("./target");',
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.kind === "require")).toHaveLength(0);
+		expect(inventory.computedLoads.filter((load) => load.kind === "require")).toHaveLength(3);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -895,10 +1053,11 @@ test("manifest output paths resolve new URL targets exactly", () => {
 		writeFileSync(
 			join(root, "scripts", "generate.ts"),
 			[
-				'import { writeFileSync } from "node:fs";',
+				'import { readFileSync, writeFileSync } from "node:fs";',
 				'import { join } from "node:path";',
 				'import { fileURLToPath } from "node:url";',
 				"// Architecture provenance: source=src/real-source.ts",
+				'readFileSync(join(__dirname, "..", "src", "real-source.ts"), "utf8");',
 				'const output = join(fileURLToPath(new URL("./fake-dir", import.meta.url)), "child.ts");',
 				'writeFileSync(output, "");',
 			].join("\n"),
