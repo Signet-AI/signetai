@@ -154,6 +154,7 @@ import { up as embeddingIndexProgress } from "./143-embedding-index-progress";
 import { up as memoryJobLeaseToken } from "./144-memory-job-lease-token";
 import { up as dreamingEvidenceReviews } from "./145-dreaming-evidence-reviews";
 import { up as sourceTranscriptImport } from "./146-source-transcript-import";
+import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1332,6 +1333,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "session_transcripts", column: "source_meta_json" },
 			],
 		},
+	},
+	{
+		version: 147,
+		name: "source-import-replay-file-slots",
+		up: sourceImportReplayFileSlots,
+		artifacts: { tables: ["source_import_files"] },
 	},
 ];
 
