@@ -242,7 +242,7 @@ const FTS_HOURLY_BUDGET = 5;
 
 async function withRepairWriteTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
 	if (accessor.withWriteTxAsync) {
-		return accessor.withWriteTxAsync(fn, { siteToken: "repair-actions.ts:220" });
+		return accessor.withWriteTxAsync(fn, { siteToken: "repair-actions.ts:245" });
 	}
 	throw new Error("async write API is unavailable");
 }
@@ -458,7 +458,7 @@ export async function checkFtsConsistency(
 				tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
 			};
 		},
-		{ siteToken: "repair-actions.ts:414" },
+		{ siteToken: "repair-actions.ts:439" },
 	);
 
 	// If FTS table is missing entirely, report it (startup self-heal
@@ -755,7 +755,7 @@ export async function getEmbeddingGapStats(accessor: DbAccessor, agentId?: strin
 				repair,
 			};
 		},
-		{ siteToken: "repair-actions.ts:699" },
+		{ siteToken: "repair-actions.ts:724" },
 	);
 }
 
@@ -767,10 +767,10 @@ export async function getEmbeddingRepairStats(
 	const gap = await getEmbeddingGapStats(accessor, agentId);
 	const migration = await accessor.withReadDbAsync(
 		async (db) => countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
-		{ siteToken: "repair-actions.ts:743" },
+		{ siteToken: "repair-actions.ts:768" },
 	);
 	const orphaned = await accessor.withReadDbAsync(async (db) => countOrphanedEmbeddings(db, agentId), {
-		siteToken: "repair-actions.ts:747",
+		siteToken: "repair-actions.ts:772",
 	});
 	return { gap, migration, orphaned };
 }
@@ -807,7 +807,7 @@ async function reembedMissingMemoriesBatch(
 		async (db) => {
 			return listUnembeddedMemories(db, batchSize, agentId) as UnembeddedRow[];
 		},
-		{ siteToken: "repair-actions.ts:781" },
+		{ siteToken: "repair-actions.ts:806" },
 	);
 
 	if (unembedded.length === 0) {
@@ -1013,7 +1013,7 @@ export async function reembedMissingMemories(
 	// profile the durable index actually owns, before doing any work.
 	const resolvedEmbeddingCfg = await accessor.withReadDbAsync(
 		async (db) => resolveActiveEmbeddingConfig(db, embeddingCfg),
-		{ siteToken: "repair-actions.ts:991" },
+		{ siteToken: "repair-actions.ts:1014" },
 	);
 
 	const initialStats = await getEmbeddingGapStats(accessor, agentId);
@@ -1166,7 +1166,7 @@ export async function reembedModelMigration(
 			sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
 			liveVecDimensions: readVecDimensions(db),
 		}),
-		{ siteToken: "repair-actions.ts:1139" },
+		{ siteToken: "repair-actions.ts:1162" },
 	);
 	const vecDimensionMismatch = liveVecDimensions !== null && liveVecDimensions !== embeddingCfg.dimensions;
 	const details = {
@@ -1640,7 +1640,7 @@ export async function getDedupStats(accessor: DbAccessor, agentId = "default"): 
 				totalActive: totalRow.n,
 			};
 		},
-		{ siteToken: "repair-actions.ts:1588" },
+		{ siteToken: "repair-actions.ts:1611" },
 	);
 }
 
@@ -1904,7 +1904,7 @@ export async function deduplicateMemories(
 				cnt: number;
 			}>;
 		},
-		{ siteToken: "repair-actions.ts:1776" },
+		{ siteToken: "repair-actions.ts:1878" },
 	);
 
 	if (dryRun) {
@@ -2074,7 +2074,7 @@ async function findSemanticDuplicates(
 				visibility: string | null;
 			}>;
 		},
-		{ siteToken: "repair-actions.ts:1910" },
+		{ siteToken: "repair-actions.ts:2055" },
 	);
 
 	for (const candidate of candidates) {
@@ -2126,7 +2126,7 @@ async function findSemanticDuplicates(
 					})
 					.map((r) => ({ id: r.source_id }));
 			},
-			{ siteToken: "repair-actions.ts:1930" },
+			{ siteToken: "repair-actions.ts:2084" },
 		);
 
 		if (neighbors.length > 0) {
@@ -2179,7 +2179,7 @@ export async function pruneChunkGroupEntities(
 					)
 					.get(agentId) as { n: number }
 			).n,
-		{ siteToken: "repair-actions.ts:2002" },
+		{ siteToken: "repair-actions.ts:2173" },
 	);
 
 	if (options?.dryRun) {
@@ -2271,7 +2271,7 @@ export async function pruneSingletonExtractedEntities(
 				 LIMIT ?`,
 				)
 				.all(agentId, maxMentions, batchSize) as { id: string }[],
-		{ siteToken: "repair-actions.ts:2059" },
+		{ siteToken: "repair-actions.ts:2247" },
 	);
 
 	if (options?.dryRun) {
@@ -2431,7 +2431,7 @@ export async function pruneGenericEntities(
 			}
 			return candidates;
 		},
-		{ siteToken: "repair-actions.ts:2187" },
+		{ siteToken: "repair-actions.ts:2404" },
 	);
 
 	if (options?.dryRun ?? true) {
@@ -2632,7 +2632,7 @@ export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityChe
 			const fullCheck = readIntegrityCheck(db, "integrity_check");
 			return { ok: fullCheck.ok, messages: fullCheck.messages, quickCheck, fullCheck };
 		},
-		{ siteToken: "repair-actions.ts:2385" },
+		{ siteToken: "repair-actions.ts:2629" },
 	);
 }
 

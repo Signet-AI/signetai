@@ -373,7 +373,7 @@ export function registerRepairRoutes(
 					totalBytes: stats?.total_bytes ?? 0,
 					byReason: Object.fromEntries(byReason.map((r) => [r.archived_reason ?? "unknown", r.count])),
 				};
-			}, "routes/repair-routes.ts:313"),
+			}, "routes/repair-routes.ts:339"),
 		);
 	});
 
@@ -382,7 +382,7 @@ export function registerRepairRoutes(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		const result = getDbAccessor().withWriteTx(
 			(db: import("../db-accessor").WriteDb) => clusterEntities(db, agentId),
-			"routes/repair-routes.ts:357",
+			"routes/repair-routes.ts:383",
 		);
 		return c.json(result);
 	});
@@ -415,7 +415,7 @@ export function registerRepairRoutes(
 			 LIMIT ?`,
 					)
 					.all(agentId, batchSize) as Array<{ id: string; content: string }>,
-			"routes/repair-routes.ts:381",
+			"routes/repair-routes.ts:407",
 		);
 
 		if (unlinked.length === 0) {
@@ -463,7 +463,7 @@ export function registerRepairRoutes(
 				).cnt;
 
 				return { linked, entities, aspects, attributes, linkedMemories, remaining };
-			}, "routes/repair-routes.ts:412");
+			}, "routes/repair-routes.ts:438");
 			const projectedRemaining = Math.max(0, preview.remaining - preview.linkedMemories);
 			return c.json({
 				action: "relink-entities",
@@ -488,7 +488,7 @@ export function registerRepairRoutes(
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			const result = accessor.withWriteTx(
 				(db: import("../db-accessor").WriteDb) => linkMemoryToEntities(db, mem.id, mem.content, agentId),
-				"routes/repair-routes.ts:463",
+				"routes/repair-routes.ts:489",
 			);
 			linked += result.linked;
 			entities += result.entityIds.length;
@@ -509,7 +509,7 @@ export function registerRepairRoutes(
 						)
 						.get(agentId) as { cnt: number }
 				).cnt,
-			"routes/repair-routes.ts:474",
+			"routes/repair-routes.ts:500",
 		);
 
 		return c.json({
@@ -552,7 +552,7 @@ export function registerRepairRoutes(
 			 LIMIT ?`,
 					)
 					.all(batchSize) as Array<{ id: string; content: string }>,
-			"routes/repair-routes.ts:518",
+			"routes/repair-routes.ts:544",
 		);
 
 		if (unhinted.length === 0) {
@@ -572,7 +572,7 @@ export function registerRepairRoutes(
 				enqueue(db, mem.id, mem.content);
 				enqueued++;
 			}
-		}, "routes/repair-routes.ts:544");
+		}, "routes/repair-routes.ts:570");
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const remaining = accessor.withReadDb(
@@ -586,7 +586,7 @@ export function registerRepairRoutes(
 						)
 						.get() as { cnt: number }
 				).cnt,
-			"routes/repair-routes.ts:552",
+			"routes/repair-routes.ts:578",
 		);
 
 		return c.json({
@@ -622,7 +622,7 @@ export function registerRepairRoutes(
 		const dead = getDbAccessor().withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				findDeadMemories(db, { maxConfidence, maxAccessDays, limit, agentId: resolveRepairAgentId(c) }),
-			"routes/repair-routes.ts:593",
+			"routes/repair-routes.ts:622",
 		);
 		return c.json({ count: dead.length, memories: dead });
 	});
