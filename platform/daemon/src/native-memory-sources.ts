@@ -23,7 +23,7 @@ import {
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { hasDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
-import { awaitEmbeddingProviderAvailable } from "./embedding-circuit-breaker";
+import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
 import {
 	nativeSourceSyncKey,
 	persistNativeSourceSyncState,
@@ -1337,6 +1337,7 @@ export function startNativeMemoryBridge(
 	const sourceWorker = createNativeSourceWorker({
 		onScanStarted: () => options.onSourceWorkerScanStarted?.(),
 	});
+	const workerOwnedProviderFailures = new Set<string>();
 	let cancelRequested = false;
 	let lastSyncResult: NativeMemorySyncResult = { status: "complete", scanned: 0, indexed: 0, pausedSources: [] };
 
@@ -1381,6 +1382,36 @@ export function startNativeMemoryBridge(
 				const rootExists = await pathExists(source.root, source, agentId);
 				const dbAvailable = hasDbAccessor();
 				const syncState = rootExists && dbAvailable ? await readNativeSourceSyncState(agentId, source, signal) : null;
+				if (
+					sourceNeedsProvider(source, options) &&
+					options.workerOwnedIndexing &&
+					workerOwnedProviderFailures.has(durableKey)
+				) {
+					const embeddingConfig = options.embeddingConfig;
+					const providerKey = `${embeddingConfig?.provider}:${embeddingConfig?.model}:${embeddingConfig?.base_url ?? ""}`;
+					const provider = await awaitEmbeddingProviderAvailable(providerKey, undefined, 10_000);
+					if (!provider.available) {
+						await persistNativeSourceSyncState({
+							agentId,
+							source,
+							status: "paused",
+							pauseReason: "provider_unavailable",
+							signal,
+						});
+						sourceResult = {
+							sourceKey: durableKey,
+							sourceId: source.sourceId,
+							status: "paused",
+							scanned: 0,
+							indexed: 0,
+							resumeFrontier: syncState?.checkpointPath ?? null,
+							pauseReason: "provider_unavailable",
+						};
+						pausedSources.push(sourceResult);
+						continue;
+					}
+					workerOwnedProviderFailures.delete(durableKey);
+				}
 				if (sourceNeedsProvider(source, options) && !options.workerOwnedIndexing) {
 					const provider = await sourceProviderGate(agentId, options, signal);
 					if (!provider.available) {
@@ -1494,6 +1525,14 @@ export function startNativeMemoryBridge(
 								syncCheckpointOnProviderFailure: retryCheckpoint,
 								onEmbeddingStatus: (status) => {
 									embeddingStatus = status;
+									if (status === "embeddings pending - provider down" && options.workerOwnedIndexing) {
+										const embeddingConfig = options.embeddingConfig;
+										if (embeddingConfig !== undefined) {
+											const providerKey = `${embeddingConfig.provider}:${embeddingConfig.model}:${embeddingConfig.base_url ?? ""}`;
+											recordEmbeddingProviderFailure(providerKey, 10_000);
+											workerOwnedProviderFailures.add(durableKey);
+										}
+									}
 									options.onEmbeddingStatus?.(status);
 								},
 							});

@@ -29,6 +29,7 @@ import type {
 	DbOwnerVectorSearchPayload,
 } from "./db-owner-protocol";
 import type { EmbeddingConfig } from "./memory-config";
+import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
 import { vectorToBlob } from "./db-helpers";
 import {
 	DB_OWNER_MAX_DEADLINE_MS,
@@ -627,6 +628,27 @@ export function runDbOwnerWorker(): void {
 		if (embedding === undefined || input.sourceId === null || embedding.config.provider === "none")
 			return { embedded: 0, skipped: 0, providerUnavailable: false };
 		const { fetchEmbedding } = await import("./embedding-fetch");
+		const providerKey = `${embedding.config.provider}:${embedding.config.model}:${embedding.config.base_url ?? ""}`;
+		let providerGate: Awaited<ReturnType<typeof awaitEmbeddingProviderAvailable>> | null = null;
+		const ensureProviderAvailable = async (): Promise<boolean> => {
+			if (providerGate !== null) return providerGate.available;
+			let probeFailed = false;
+			providerGate = await awaitEmbeddingProviderAvailable(
+				providerKey,
+				async () => {
+					probeFailed = false;
+					const probe = await fetchEmbedding("", embedding.config as EmbeddingConfig, "document", {
+						usage: { source: "artifact-index", agentId: input.agentId },
+						onFailure: (cause) => {
+							probeFailed = cause === "provider_unavailable" || cause === "timeout";
+						},
+					});
+					return Boolean(probe?.length) && !probeFailed;
+				},
+				10_000,
+			);
+			return providerGate.available;
+		};
 		const vecSchema = database
 			.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vec_embeddings'")
 			.get() as { sql?: string } | null;
@@ -659,6 +681,12 @@ export function runDbOwnerWorker(): void {
 				skipped++;
 				continue;
 			}
+			if (!(await ensureProviderAvailable()))
+				return {
+					embedded,
+					skipped: embedding.chunks.length - embedded,
+					providerUnavailable: true,
+				};
 			let failureCause = "provider_unavailable";
 			const vector = await fetchEmbedding(chunk.chunkText, embedding.config as EmbeddingConfig, "document", {
 				usage: { source: "artifact-index", agentId: input.agentId },
@@ -667,12 +695,14 @@ export function runDbOwnerWorker(): void {
 				},
 			});
 			if (vector === null || vector.length === 0) {
-				if (failureCause === "provider_unavailable" || failureCause === "timeout")
+				if (failureCause === "provider_unavailable" || failureCause === "timeout") {
+					recordEmbeddingProviderFailure(providerKey, 10_000);
 					return {
 						embedded,
 						skipped: embedding.chunks.length - embedded,
 						providerUnavailable: true,
 					};
+				}
 				skipped++;
 				continue;
 			}

@@ -1426,6 +1426,82 @@ describe("native memory sources", () => {
 		}
 	});
 
+	it("bounds worker-owned provider probes across a multi-file outage", async () => {
+		const root = join(dir, "worker-owned-provider-vault");
+		mkdirSync(join(root, "notes"), { recursive: true });
+		const files = ["A.md", "B.md", "C.md"].map((name) => join(root, "notes", name));
+		for (const [index, file] of files.entries())
+			writeFileSync(file, `# Note ${index}\n\nThis source remains safe while embeddings are unavailable.\n`);
+		const source = obsidianNativeMemorySource(root, "Worker-owned Provider Vault", "obsidian:worker-owned-provider");
+		let providerCalls = 0;
+		const provider = Bun.serve({
+			port: 0,
+			fetch: () => {
+				providerCalls++;
+				return new Response("provider unavailable", { status: 503 });
+			},
+		});
+		const bridge = startNativeMemoryBridge([source], {
+			agentId: "agent-worker-owned-provider",
+			pollIntervalMs: 0,
+			maxFilesPerScan: files.length,
+			workerOwnedIndexing: true,
+			embeddingConfig: {
+				provider: "openai",
+				model: "worker-owned-outage",
+				dimensions: 3,
+				base_url: `http://127.0.0.1:${provider.port}/v1`,
+				api_key: "test",
+			},
+			fetchEmbedding: async () => [9, 9, 9],
+		});
+		try {
+			expect(await bridge.syncExisting()).toBe(1);
+			expect(providerCalls).toBe(1);
+			expect(bridge.getLastSyncResult()).toMatchObject({
+				status: "paused",
+				pausedSources: [{ pauseReason: "provider_unavailable", scanned: 1, indexed: 1 }],
+			});
+			expect(await bridge.syncExisting()).toBe(0);
+			expect(providerCalls).toBe(1);
+			expect(bridge.getLastSyncResult()).toMatchObject({
+				status: "paused",
+				pausedSources: [{ pauseReason: "provider_unavailable", scanned: 0, indexed: 0 }],
+			});
+			const rows = await dbOwnerQuery<readonly { readonly source_path: string }[]>(
+				ownerStatement(
+					"SELECT source_path FROM memory_artifacts WHERE agent_id = ? ORDER BY source_path",
+					["agent-worker-owned-provider"],
+					"all",
+				),
+				{ operation: "test.worker-owned-provider.artifacts", lane: "read" },
+			);
+			expect(rows).toHaveLength(1);
+			const graphRows = await dbOwnerQuery<readonly { readonly count: number }[]>(
+				ownerStatement(
+					"SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND entity_type = 'source_document'",
+					["agent-worker-owned-provider"],
+					"all",
+				),
+				{ operation: "test.worker-owned-provider.graph", lane: "read" },
+			);
+			expect(graphRows[0]?.count).toBeGreaterThan(0);
+			const checkpoint = await dbOwnerQuery<readonly { readonly frontier: string | null; readonly complete: number }[]>(
+				ownerStatement(
+					"SELECT frontier, complete FROM source_sync_checkpoints WHERE agent_id = ? AND source_key = ? AND phase = 'content'",
+					["agent-worker-owned-provider", `agent-worker-owned-provider:obsidian:${root}`],
+					"all",
+				),
+				{ operation: "test.worker-owned-provider.checkpoint", lane: "read" },
+			);
+			expect(checkpoint[0]?.complete).toBe(0);
+			expect(JSON.parse(checkpoint[0]?.frontier ?? "[]")).toEqual(expect.arrayContaining(files));
+		} finally {
+			await bridge.close();
+			provider.stop();
+		}
+	});
+
 	it("leaves a provider-failed descriptor pending for restart after a mid-batch failure", async () => {
 		const root = join(dir, "mid-batch-provider-vault");
 		const file = join(root, "permanent", "Pending.md");
