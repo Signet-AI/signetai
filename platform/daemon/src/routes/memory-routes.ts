@@ -10,7 +10,8 @@ import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
 import type { DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS } from "../db-owner-protocol";
-import { dbOwnerQuery } from "../db-owner-runtime";
+import { dbOwnerQuery, getDbRecallOwner } from "../db-owner-runtime";
+import { ownerReadAll, ownerReadOne } from "../db-owner-sql";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
 import { normalizeAndHashContent } from "../content-normalization";
 import { type ReadDb, type WriteDb, getDbAccessor, runWriteTxAsync, prepareTypedStatement } from "../db-accessor";
@@ -65,12 +66,24 @@ import {
 	txRecoverMemory,
 	txSupersedeMemory,
 } from "../transactions";
-import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "../umap-projection";
+import {
+	buildProjectionWhere,
+	cacheProjection,
+	parseCachedProjection,
+	type ProjectionFilters,
+} from "../umap-projection";
+import {
+	PROJECTION_DEADLINE_MS,
+	PROJECTION_MAX_ROWS,
+	ProjectionAdmissionError,
+	ProjectionJobManager,
+	ProjectionWorkerCancelledError,
+	runProjectionWorker,
+} from "../embedding-projection-jobs";
 import {
 	AGENTS_DIR,
 	INTERNAL_SELF_HOST,
 	PORT,
-	PROJECTION_ERROR_TTL_MS,
 	authBatchForgetLimiter,
 	authConfig,
 	authForgetLimiter,
@@ -78,8 +91,6 @@ import {
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
 	hasMemoriesSessionIdColumnCache,
-	projectionErrors,
-	projectionInFlight,
 } from "./state";
 
 import {
@@ -119,7 +130,7 @@ async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<Res
 	return {
 		...cfg,
 		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
-			siteToken: "routes/memory-routes.ts:121",
+			siteToken: "routes/memory-routes.ts:132",
 		}),
 	};
 }
@@ -129,6 +140,115 @@ export const MEMORY_CAPTURE_MAX_IN_FLIGHT = 8;
 const FORGET_CONFIRM_THRESHOLD = 25;
 const SOFT_DELETE_RETENTION_DAYS = 30;
 const SOFT_DELETE_RETENTION_MS = SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const projectionJobs = new ProjectionJobManager();
+
+const PROJECTION_FROM_SQL = `
+	FROM embeddings e
+	INNER JOIN memories m ON m.id = e.source_id
+	WHERE e.source_type = 'memory'
+  AND e.vector IS NOT NULL AND typeof(e.vector) = 'blob' AND length(e.vector) > 0
+`;
+const PROJECTION_SNAPSHOT_BATCH = 32;
+
+interface ProjectionSnapshotRow {
+	readonly id: string;
+	readonly content: string;
+	readonly who: string | null;
+	readonly importance: number | null;
+	readonly type: string | null;
+	readonly tags: string | null;
+	readonly pinned: number | null;
+	readonly source_type: string | null;
+	readonly source_id: string | null;
+	readonly created_at: string;
+	readonly vectorHex: string;
+	readonly dimensions: number | null;
+}
+
+interface ProjectionSnapshot {
+	readonly rows: readonly ProjectionSnapshotRow[];
+	readonly total: number;
+	readonly limit: number;
+	readonly offset: number;
+	readonly hasMore: boolean;
+}
+
+async function loadProjectionSnapshot(
+	owner: DbOwnerClient,
+	filters: ProjectionFilters | undefined,
+	requestedLimit: number | undefined,
+	offset: number,
+): Promise<ProjectionSnapshot> {
+	const { clause, params } = buildProjectionWhere(filters);
+	const limit = Math.min(requestedLimit ?? PROJECTION_MAX_ROWS, PROJECTION_MAX_ROWS);
+	const countPromise = ownerReadOne<{ readonly count: number }>(
+		owner,
+		`SELECT COUNT(*) AS count ${PROJECTION_FROM_SQL}${clause}`,
+		params,
+		{ operation: "embedding_projection.count", deadlineMs: 2_000, estimatedWorkUnits: 1 },
+	);
+	const rows: ProjectionSnapshotRow[] = [];
+	let nextOffset = offset;
+	while (rows.length < limit) {
+		const pageLimit = Math.min(PROJECTION_SNAPSHOT_BATCH, limit - rows.length);
+		const page = await ownerReadAll<ProjectionSnapshotRow>(
+			owner,
+			`SELECT m.id, substr(m.content, 1, 4096) AS content, m.who, m.importance, m.type, m.tags, m.pinned,
+			        m.source_type, m.source_id, m.created_at, hex(e.vector) AS vectorHex, e.dimensions
+			 ${PROJECTION_FROM_SQL}${clause} ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,
+			[...params, pageLimit, nextOffset],
+			{ operation: "embedding_projection.snapshot", deadlineMs: 5_000, estimatedWorkUnits: pageLimit },
+		);
+		rows.push(...page);
+		nextOffset += page.length;
+		if (page.length < pageLimit) break;
+	}
+	const countRow = await countPromise;
+	const total = countRow !== null && typeof countRow.count === "number" ? countRow.count : 0;
+	return { rows, total, limit, offset, hasMore: offset + rows.length < total };
+}
+
+function projectionFiltersFromQuery(filters: {
+	readonly query: string | undefined;
+	readonly who: readonly string[];
+	readonly types: readonly string[];
+	readonly sourceTypes: readonly string[];
+	readonly tags: readonly string[];
+	readonly pinned: boolean | undefined;
+	readonly since: string | undefined;
+	readonly until: string | undefined;
+	readonly importanceMin: number | undefined;
+	readonly importanceMax: number | undefined;
+}): ProjectionFilters | undefined {
+	const value: ProjectionFilters = filters;
+	return Object.values(value).some((item) => (Array.isArray(item) ? item.length > 0 : item !== undefined))
+		? value
+		: undefined;
+}
+
+function projectionJobResponse(job: ReturnType<typeof projectionJobs.get>): Response | null {
+	if (job === null) return null;
+	const metadata = {
+		jobId: job.jobId,
+		dimensions: job.dimensions,
+		...(job.total !== undefined ? { total: job.total } : {}),
+		...(job.count !== undefined ? { count: job.count } : {}),
+		...(job.limit !== undefined ? { limit: job.limit } : {}),
+		...(job.offset !== undefined ? { offset: job.offset } : {}),
+		...(job.hasMore !== undefined ? { hasMore: job.hasMore } : {}),
+		...(job.sampled !== undefined ? { sampled: job.sampled } : {}),
+	};
+	if (job.status === "ready" && job.result !== undefined) {
+		return Response.json({ status: "ready", ...metadata, nodes: job.result.nodes, edges: job.result.edges });
+	}
+	if (job.status === "timeout")
+		return Response.json({ status: "timeout", ...metadata, message: job.message }, { status: 504 });
+	if (job.status === "cancelled")
+		return Response.json({ status: "cancelled", ...metadata, message: job.message }, { status: 409 });
+	if (job.status === "error")
+		return Response.json({ status: "error", ...metadata, message: job.message }, { status: 500 });
+	return Response.json({ status: job.status, ...metadata }, { status: 202 });
+}
 
 export interface MemoryRoutesDeps {
 	readonly aggregateRecall?: typeof aggregateRecall;
@@ -801,6 +921,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.use("/api/memory/recall", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
+	app.use("/api/embeddings", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/embeddings/*", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
 
 	async function recordRequestOperation(
 		c: Context,
@@ -1078,7 +1204,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						},
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1022" },
+				{ siteToken: "routes/memory-routes.ts:1148" },
 			);
 
 			return c.json(result);
@@ -1123,7 +1249,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						)
 						.map(({ agent_id: _agentId, ...row }) => row);
 				},
-				{ siteToken: "routes/memory-routes.ts:1102" },
+				{ siteToken: "routes/memory-routes.ts:1228" },
 			);
 			return c.json({ memories });
 		} catch (e) {
@@ -1233,7 +1359,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						highUsed: filterSafe(highUsed).map(({ agent_id: _agentId, ...row }) => row),
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1157" },
+				{ siteToken: "routes/memory-routes.ts:1283" },
 			);
 			return c.json({ agentId, minSessions, limit, ...slices });
 		} catch (e) {
@@ -1263,7 +1389,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						readPolicy: agentScope.readPolicy,
 						policyGroup: agentScope.policyGroup ?? undefined,
 					}),
-				{ siteToken: "routes/memory-routes.ts:1258" },
+				{ siteToken: "routes/memory-routes.ts:1384" },
 			);
 			return c.json(timeline);
 		} catch (e) {
@@ -1435,7 +1561,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							return publicRow;
 						});
 				},
-				{ siteToken: "routes/memory-routes.ts:1368" },
+				{ siteToken: "routes/memory-routes.ts:1494" },
 			);
 
 			recordRecallOutcome({
@@ -1669,7 +1795,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1670" },
+				{ siteToken: "routes/memory-routes.ts:1796" },
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
@@ -1677,7 +1803,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const existingChunks = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1678" },
+				{ siteToken: "routes/memory-routes.ts:1804" },
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1711,7 +1837,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				contentHashes.add(plan.normalized.contentHash);
 				const byHash = await getDbAccessor().withReadDbAsync(
 					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "routes/memory-routes.ts:1712" },
+					{ siteToken: "routes/memory-routes.ts:1838" },
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1918,7 +2044,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1919" },
+						{ siteToken: "routes/memory-routes.ts:2045" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -2047,7 +2173,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:2044" },
+					{ siteToken: "routes/memory-routes.ts:2170" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -2291,7 +2417,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					: null;
 				return { row, safety };
 			},
-			{ siteToken: "routes/memory-routes.ts:2263" },
+			{ siteToken: "routes/memory-routes.ts:2389" },
 		);
 		const row = memoryRead.row;
 
@@ -2484,7 +2610,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				// order — creation time is.
 				return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version);
 			},
-			{ siteToken: "routes/memory-routes.ts:2442" },
+			{ siteToken: "routes/memory-routes.ts:2568" },
 		);
 
 		return c.json({
@@ -3651,7 +3777,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
         LIMIT 1
       `)
 						.get(id) as { vector: Buffer } | undefined,
-				{ siteToken: "routes/memory-routes.ts:3641" },
+				{ siteToken: "routes/memory-routes.ts:3767" },
 			);
 
 			if (!embeddingRow) {
@@ -3673,7 +3799,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3675",
+							siteToken: "routes/memory-routes.ts:3801",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3716,7 +3842,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						}),
 					);
 				},
-				{ siteToken: "routes/memory-routes.ts:3693" },
+				{ siteToken: "routes/memory-routes.ts:3819" },
 			);
 
 			const rowMap = new Map(rows.map((r) => [r.id, r]));
@@ -3811,7 +3937,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3774" },
+				{ siteToken: "routes/memory-routes.ts:3900" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3863,7 +3989,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3859" },
+			{ siteToken: "routes/memory-routes.ts:3985" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3876,7 +4002,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3877" },
+			{ siteToken: "routes/memory-routes.ts:4003" },
 		);
 		return c.json(report);
 	});
@@ -3884,10 +4010,22 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	// =========================================================================
 	// GET /api/embeddings/projection
 	// =========================================================================
+	app.delete("/api/embeddings/projection/:jobId", (c) => {
+		const job = projectionJobs.cancel(c.req.param("jobId"));
+		if (job === null) return c.json({ status: "not_found" }, 404);
+		return c.json({ status: "cancelled", jobId: job.jobId, dimensions: job.dimensions }, 409);
+	});
+
 	app.get("/api/embeddings/projection", async (c) => {
+		const requestedJobId = parseOptionalString(c.req.query("jobId"));
+		if (requestedJobId !== undefined) {
+			const response = projectionJobResponse(projectionJobs.get(requestedJobId));
+			return response ?? c.json({ status: "not_found", jobId: requestedJobId }, 404);
+		}
+
 		const dimParam = c.req.query("dimensions");
 		const nComponents: 2 | 3 = dimParam === "3" ? 3 : 2;
-		const limit = parseOptionalBoundedInt(c.req.query("limit"), 1, 5000);
+		const limit = parseOptionalBoundedInt(c.req.query("limit"), 1, PROJECTION_MAX_ROWS);
 		const offset = parseOptionalBoundedInt(c.req.query("offset"), 0, 100000) ?? 0;
 
 		const query = parseOptionalString(c.req.query("q"));
@@ -3922,130 +4060,120 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			importanceMax = swap;
 		}
 
-		const hasFilters =
-			query !== undefined ||
-			whoFilters.length > 0 ||
-			typeFilters.length > 0 ||
-			sourceTypeFilters.length > 0 ||
-			tagFilters.length > 0 ||
-			pinned !== undefined ||
-			since !== undefined ||
-			until !== undefined ||
-			importanceMin !== undefined ||
-			importanceMax !== undefined;
-		const useCachedProjection = !hasFilters && limit === undefined && offset === 0;
+		const filters = projectionFiltersFromQuery({
+			query,
+			who: whoFilters,
+			types: typeFilters,
+			sourceTypes: sourceTypeFilters,
+			tags: tagFilters,
+			pinned,
+			since,
+			until,
+			importanceMin,
+			importanceMax,
+		});
+		const useCachedProjection = filters === undefined && limit === undefined && offset === 0;
+		const owner = recallOwner ?? (await getDbRecallOwner());
 
-		if (!useCachedProjection) {
-			try {
-				const projection = await getDbAccessor().withReadDbAsync(
-					async (db) =>
-						computeProjectionForQuery(db, nComponents, {
-							limit,
-							offset,
-							filters: hasFilters
-								? {
-										query,
-										who: whoFilters,
-										types: typeFilters,
-										sourceTypes: sourceTypeFilters,
-										tags: tagFilters,
-										pinned,
-										since,
-										until,
-										importanceMin,
-										importanceMax,
-									}
-								: undefined,
-						}),
-					{ siteToken: "routes/memory-routes.ts:3940" },
-				);
-
+		if (useCachedProjection) {
+			const [cachedRow, countRow] = await Promise.all([
+				ownerReadOne<{
+					readonly dimensions: number;
+					readonly embedding_count: number;
+					readonly payload: string;
+					readonly created_at: string;
+				}>(
+					owner,
+					"SELECT dimensions, embedding_count, payload, created_at FROM umap_cache WHERE dimensions = ? LIMIT 1",
+					[nComponents],
+					{ operation: "embedding_projection.cache", deadlineMs: 2_000, estimatedWorkUnits: 1 },
+				),
+				ownerReadOne<{ readonly count: number }>(
+					owner,
+					"SELECT COUNT(*) AS count FROM embeddings WHERE source_type = 'memory' AND typeof(vector) = 'blob'",
+					[],
+					{ operation: "embedding_projection.count", deadlineMs: 2_000, estimatedWorkUnits: 1 },
+				),
+			]);
+			const cached = parseCachedProjection(cachedRow);
+			const total = countRow?.count ?? 0;
+			if (cached !== null && cached.embeddingCount === total) {
 				return c.json({
 					status: "ready",
 					dimensions: nComponents,
-					count: projection.count,
-					total: projection.total,
-					limit: projection.limit,
-					offset: projection.offset,
-					hasMore: projection.hasMore,
-					nodes: projection.result.nodes,
-					edges: projection.result.edges,
+					count: cached.result.nodes.length,
+					total,
+					limit: PROJECTION_MAX_ROWS,
+					offset: 0,
+					hasMore: total > PROJECTION_MAX_ROWS,
+					sampled: total > PROJECTION_MAX_ROWS,
+					nodes: cached.result.nodes,
+					edges: cached.result.edges,
+					cachedAt: cached.cachedAt,
 				});
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				return c.json({ status: "error", message }, 500);
 			}
 		}
 
-		const { cached, total } = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				const cachedResult = getCachedProjection(db, nComponents);
-				const countRow = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
-				const count =
-					typeof countRow === "object" && countRow !== null && "count" in countRow && typeof countRow.count === "number"
-						? countRow.count
-						: 0;
-				return { cached: cachedResult, total: count };
-			},
-			{ siteToken: "routes/memory-routes.ts:3980" },
-		);
-
-		if (cached !== null && cached.embeddingCount === total) {
-			return c.json({
-				status: "ready",
-				dimensions: nComponents,
-				count: total,
-				total,
-				limit: total,
-				offset: 0,
-				hasMore: false,
-				nodes: cached.result.nodes,
-				edges: cached.result.edges,
-				cachedAt: cached.cachedAt,
-			});
-		}
-
-		const recentError = projectionErrors.get(nComponents);
-		if (recentError) {
-			if (Date.now() > recentError.expires) {
-				projectionErrors.delete(nComponents);
-			} else {
-				return c.json({ status: "error", message: recentError.message }, 500);
-			}
-		}
-
-		if (!projectionInFlight.has(nComponents)) {
-			projectionErrors.delete(nComponents);
-			const computation = (async () => {
-				try {
-					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:4021",
+		const snapshotLimit = Math.min(limit ?? PROJECTION_MAX_ROWS, PROJECTION_MAX_ROWS);
+		const key = JSON.stringify({ dimensions: nComponents, limit: snapshotLimit, offset, filters });
+		try {
+			const job = projectionJobs.start(
+				key,
+				nComponents,
+				() => {
+					let worker: ReturnType<typeof runProjectionWorker> | null = null;
+					let cancelled = false;
+					const snapshotPromise = loadProjectionSnapshot(owner, filters, snapshotLimit, offset);
+					const result = snapshotPromise.then(async (snapshot) => {
+						if (cancelled) throw new ProjectionWorkerCancelledError();
+						projectionJobs.updateMetadataByKey(key, {
+							total: snapshot.total,
+							count: snapshot.rows.length,
+							limit: snapshot.limit,
+							offset: snapshot.offset,
+							hasMore: snapshot.hasMore,
+							sampled: snapshot.hasMore,
+						});
+						worker = runProjectionWorker(
+							{ dimensions: nComponents, rows: snapshot.rows },
+							{ timeoutMs: PROJECTION_DEADLINE_MS },
+						);
+						const projection = await worker.result;
+						if (useCachedProjection) {
+							await runWriteTxAsync(getDbAccessor(), (db) =>
+								cacheProjection(db, nComponents, projection, snapshot.total),
+							);
+						}
+						return projection;
 					});
-					const count = await getDbAccessor().withReadDbAsync(
-						async (db) => {
-							const row = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
-							return typeof row === "object" && row !== null && "count" in row && typeof row.count === "number"
-								? row.count
-								: 0;
+					return {
+						result,
+						cancel: () => {
+							cancelled = true;
+							worker?.cancel();
 						},
-						{ siteToken: "routes/memory-routes.ts:4024" },
-					);
-					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
-				} catch (err) {
-					const msg = err instanceof Error ? err.message : String(err);
-					logger.error("projection", "UMAP computation failed", err instanceof Error ? err : new Error(msg));
-					projectionErrors.set(nComponents, {
-						message: msg,
-						expires: Date.now() + PROJECTION_ERROR_TTL_MS,
-					});
-				} finally {
-					projectionInFlight.delete(nComponents);
-				}
-			})();
-			projectionInFlight.set(nComponents, computation);
+					};
+				},
+				{ limit: snapshotLimit, offset },
+			);
+			return c.json(
+				{
+					status: "accepted",
+					jobId: job.jobId,
+					dimensions: nComponents,
+					limit: snapshotLimit,
+					offset,
+				},
+				202,
+			);
+		} catch (error) {
+			if (error instanceof ProjectionAdmissionError) {
+				return c.json({ status: "overloaded", message: error.message }, 429);
+			}
+			const message = error instanceof Error ? error.message : String(error);
+			logger.error("projection", "UMAP computation failed", error instanceof Error ? error : new Error(message));
+			return c.json({ status: "error", message }, 500);
 		}
-
-		return c.json({ status: "computing", dimensions: nComponents }, 202);
 	});
 
 	// =========================================================================

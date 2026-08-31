@@ -249,7 +249,7 @@ function buildKnnEdges(projected: readonly number[][], k: number): [number, numb
 // Row type + validation
 // ---------------------------------------------------------------------------
 
-interface EmbeddingRow {
+export interface EmbeddingProjectionRow {
 	id: string;
 	content: string;
 	who: string | null;
@@ -268,7 +268,7 @@ function isBlob(v: unknown): v is Uint8Array {
 	return v instanceof Uint8Array || Buffer.isBuffer(v);
 }
 
-function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
+function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingProjectionRow | null {
 	const { id, content, created_at, vector } = raw;
 	if (typeof id !== "string" || typeof content !== "string" || typeof created_at !== "string" || !isBlob(vector)) {
 		return null;
@@ -312,7 +312,7 @@ function normalizeFilterValues(values: readonly string[] | undefined): string[] 
 	return [...new Set(normalized)];
 }
 
-function buildProjectionWhere(filters: ProjectionFilters | undefined): {
+export function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 	clause: string;
 	params: unknown[];
 } {
@@ -386,7 +386,7 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 }
 
 interface ProjectionRowsResult {
-	readonly rows: EmbeddingRow[];
+	readonly rows: EmbeddingProjectionRow[];
 	/** Stable DB COUNT using typeof(e.vector)='blob' for dashboard display; over-fetch-by-1 sentinel for hasMore. */
 	readonly total: number;
 	readonly offset: number;
@@ -413,7 +413,7 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 	}
 
 	const rawRows = db.prepare(sql).all(...rowParams) as Record<string, unknown>[];
-	const rows = rawRows.map(toEmbeddingRow).filter((row): row is EmbeddingRow => row !== null);
+	const rows = rawRows.map(toEmbeddingRow).filter((row): row is EmbeddingProjectionRow => row !== null);
 	const trimmedRows = requestedLimit !== null ? rows.slice(0, requestedLimit) : rows;
 
 	let effectiveTotal: number;
@@ -442,7 +442,7 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 }
 
 function buildNodesFromRows(
-	rows: readonly EmbeddingRow[],
+	rows: readonly EmbeddingProjectionRow[],
 	xs: readonly number[],
 	ys: readonly number[],
 	zs: readonly number[] | null,
@@ -466,7 +466,10 @@ function buildNodesFromRows(
 	});
 }
 
-function computeProjectionFromRows(rows: readonly EmbeddingRow[], nComponents: 2 | 3): ProjectionResult {
+export function computeProjectionFromRows(
+	rows: readonly EmbeddingProjectionRow[],
+	nComponents: 2 | 3,
+): ProjectionResult {
 	if (rows.length === 0) return { nodes: [], edges: [] };
 	if (rows.length === 1) {
 		return {
@@ -552,9 +555,22 @@ export function getCachedProjection(db: ReadDb, nComponents: 2 | 3): CachedProje
 		return null;
 	}
 
+	return parseCachedProjection({ payload, embedding_count: embeddingCount, created_at: cachedAt });
+}
+
+export function parseCachedProjection(raw: unknown): CachedProjection | null {
+	if (raw === null || typeof raw !== "object") return null;
+	const row = raw as Record<string, unknown>;
+	if (
+		typeof row.payload !== "string" ||
+		typeof row.embedding_count !== "number" ||
+		typeof row.created_at !== "string"
+	) {
+		return null;
+	}
 	try {
-		const result: ProjectionResult = JSON.parse(payload);
-		return { result, embeddingCount, cachedAt };
+		const result: ProjectionResult = JSON.parse(row.payload);
+		return { result, embeddingCount: row.embedding_count, cachedAt: row.created_at };
 	} catch {
 		return null;
 	}

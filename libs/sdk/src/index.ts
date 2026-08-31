@@ -576,10 +576,24 @@ export class SignetClient extends SignetClientHelpers {
 	 * }
 	 * ```
 	 */
-	async getEmbeddingProjection(opts?: { readonly dimensions?: 2 | 3 }): Promise<EmbeddingProjectionResponse> {
+	async getEmbeddingProjection(opts?: {
+		readonly dimensions?: 2 | 3;
+		readonly jobId?: string;
+		readonly limit?: number;
+		readonly offset?: number;
+	}): Promise<EmbeddingProjectionResponse> {
 		return this.transport.get<EmbeddingProjectionResponse>("/api/embeddings/projection", {
 			dimensions: opts?.dimensions,
+			jobId: opts?.jobId,
+			limit: opts?.limit,
+			offset: opts?.offset,
 		});
+	}
+
+	async cancelEmbeddingProjection(jobId: string): Promise<{ readonly status: "cancelled"; readonly jobId: string }> {
+		return this.transport.del<{ readonly status: "cancelled"; readonly jobId: string }>(
+			`/api/embeddings/projection/${jobId}`,
+		);
 	}
 
 	// --- Harnesses ---

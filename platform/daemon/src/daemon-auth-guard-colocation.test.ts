@@ -415,6 +415,23 @@ inference:
 			expect(body.error).toContain("validUntil must be after validFrom");
 		});
 
+		it("GET /api/embeddings/projection requires recall permission", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware } = await import("./auth");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode projection test");
+
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerMemoryRoutes(app);
+			const res = await app.request("/api/embeddings/projection");
+
+			expect(res.status).toBe(401);
+			const body = (await res.json()) as { error?: string };
+			expect(body.error).toContain("authentication required");
+		});
+
 		it("POST /api/memory/recall aggregate save requires remember permission", async () => {
 			const app = await makeApp();
 			const state = await import("./routes/state.js");
