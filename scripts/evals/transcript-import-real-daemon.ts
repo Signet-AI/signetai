@@ -94,6 +94,14 @@ async function start(env: Record<string, string> = {}) {
 			SIGNET_TELEMETRY_OPTOUT: "1",
 			SIGNET_DAEMON_ENTRYPOINT: "1",
 			SIGNET_AGENT_ID: agent,
+			// Keep native watcher discovery inside this eval workspace. The daemon's
+			// production defaults intentionally inspect the user's configured homes;
+			// inheriting the evaluator's HOME would contaminate agent/source counts.
+			HOME: root,
+			HERMES_HOME: join(root, ".hermes"),
+			XDG_CONFIG_HOME: join(root, ".config"),
+			XDG_DATA_HOME: join(root, ".local", "share"),
+			XDG_STATE_HOME: join(root, ".local", "state"),
 			...env,
 		},
 		stdio: ["ignore", "pipe", "pipe"],
