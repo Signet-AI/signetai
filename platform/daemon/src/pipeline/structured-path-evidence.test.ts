@@ -2,10 +2,29 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
 import type { ReadDb } from "../db-accessor";
-import { findStructuredClaimCandidates, scoreStructuredPathEvidence } from "./structured-path-evidence";
+import type { DbOwnerClient } from "../db-owner-client";
+import type { DbOwnerRequest } from "../db-owner-client";
+import {
+	findStructuredClaimCandidates,
+	scoreStructuredPathEvidence,
+	scoreStructuredPathEvidenceViaOwner,
+} from "./structured-path-evidence";
 
 function asReadDb(db: Database): ReadDb {
 	return db as unknown as ReadDb;
+}
+
+function asOwner(db: Database, operations: string[]): DbOwnerClient {
+	return {
+		submit<Result>(request: DbOwnerRequest, options: { readonly operation: string; readonly deadlineMs: number }) {
+			if (request.kind !== "query") throw new Error("test owner only supports query requests");
+			operations.push(options.operation);
+			const params = request.statement.params ?? [];
+			const statement = db.prepare(request.statement.sql);
+			const value = request.statement.result === "all" ? statement.all(...params) : statement.get(...params);
+			return { result: Promise.resolve(value as Result) } as never;
+		},
+	} as unknown as DbOwnerClient;
 }
 
 describe("structured path evidence", () => {
@@ -177,6 +196,29 @@ describe("structured path evidence", () => {
 		expect(candidates.map((row) => row.id)).toEqual(["attr-artbat-invoice"]);
 		expect(candidates[0]?.content).toContain("€1,000");
 		expect(candidates[0]?.content).toContain("€2,000");
+	});
+
+	it("runs owner-bound evidence scoring through the DB owner", async () => {
+		seedMemory("mem-owner", "The user prefers owner-bound graph evidence.");
+		seedAttribute({
+			id: "attr-owner",
+			memoryId: "mem-owner",
+			aspect: "preferences",
+			group: "owner_boundary",
+			claim: "owner_reads_only",
+			content: "Prefers owner-bound graph evidence.",
+		});
+
+		const operations: string[] = [];
+		const scores = await scoreStructuredPathEvidenceViaOwner(
+			asOwner(db, operations),
+			["mem-owner"],
+			"owner-bound graph evidence",
+			"memorybench",
+		);
+
+		expect(scores.get("mem-owner") ?? 0).toBeGreaterThan(0);
+		expect(operations).toEqual(["memory-search.structured-path-evidence"]);
 	});
 
 	it("returns an empty map when there are no candidate IDs", () => {

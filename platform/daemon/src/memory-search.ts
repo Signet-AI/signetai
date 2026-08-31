@@ -40,9 +40,9 @@ import { buildAgentScopeClause } from "./memory-access-scope";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
 import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
-import { constructContextBlocks } from "./pipeline/context-construction";
+import { constructContextBlocksViaOwner } from "./pipeline/context-construction";
 import { DEFAULT_DAMPENING, type ScoredRow, applyDampening } from "./pipeline/dampening";
-import { getGraphBoostIds, tokenizeGraphQuery } from "./pipeline/graph-search";
+import { getGraphBoostIdsViaOwner, tokenizeGraphQuery } from "./pipeline/graph-search";
 import {
 	type resolveFocalEntities,
 	resolveFocalEntitiesViaOwner,
@@ -60,9 +60,9 @@ import {
 } from "./pipeline/structured-evidence";
 import {
 	type StructuredClaimCandidate,
-	findStructuredClaimCandidates,
-	findStructuredPathCandidates,
-	scoreStructuredPathEvidence,
+	findStructuredClaimCandidatesViaOwner,
+	findStructuredPathCandidatesViaOwner,
+	scoreStructuredPathEvidenceViaOwner,
 } from "./pipeline/structured-path-evidence";
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
@@ -1101,7 +1101,7 @@ async function buildSourceChunkVectorHits(
 				deadlineMs: 5_000,
 			},
 		);
-		const hasSafetyLedger = safetyTable == null ? false : true;
+		const hasSafetyLedger = safetyTable != null;
 		const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
 		const safetyJoin = hasSafetyLedger
 			? "LEFT JOIN memory_content_safety mcs ON mcs.agent_id = ? AND mcs.source_kind = 'source_chunk' AND mcs.source_id = e.id"
@@ -1538,6 +1538,19 @@ export async function hybridRecall(
 		graphOwner ??= await getDbOwner(getDbAccessorPath());
 		return graphOwner;
 	};
+	const graphOwnerReadAll = async <Row extends object>(
+		sql: string,
+		params: readonly unknown[],
+		operation: string,
+		estimatedWorkUnits = 200,
+	): Promise<ReadonlyArray<Row>> =>
+		await ownerReadAll<Row>(await getGraphOwner(), sql, params, {
+			operation,
+			lane: "read",
+			workloadClass: "foreground",
+			deadlineMs: 30_000,
+			estimatedWorkUnits,
+		});
 	const recordGraphResult = (result: {
 		readonly timedOut: boolean;
 		readonly error?: { readonly code: string | number | null; readonly message: string };
@@ -1551,8 +1564,8 @@ export async function hybridRecall(
 			graphDegradation = "graph_traversal_failed";
 			graphError = {
 				channel: "graph_traversal",
-				code: result.error.code,
-				message: result.error.message,
+				code: "graph_traversal_failed",
+				message: "Knowledge graph traversal was unavailable.",
 			};
 		}
 	};
@@ -1918,19 +1931,13 @@ export async function hybridRecall(
 	if (cfg.pipelineV2.graph.enabled) {
 		try {
 			const agentId = params.agentId ?? "default";
-			const candidates = await timings.timeAsync(
-				"structured_path_candidates",
-				async () =>
-					await getDbAccessor().withReadDbAsync(
-						async (db) =>
-							findStructuredPathCandidates(db, query, agentId, {
-								limit: cfg.search.top_k,
-								minScore,
-								filterSql: filter.sql,
-								filterArgs: filter.args,
-							}),
-						{ siteToken: "memory-search.ts:1924" },
-					),
+			const candidates = await timings.timeAsync("structured_path_candidates", async () =>
+				findStructuredPathCandidatesViaOwner(await getGraphOwner(), query, agentId, {
+					limit: cfg.search.top_k,
+					minScore,
+					filterSql: filter.sql,
+					filterArgs: filter.args,
+				}),
 			);
 			for (const [id, score] of candidates) structuredCandidateMap.set(id, score);
 		} catch (e) {
@@ -1941,17 +1948,11 @@ export async function hybridRecall(
 		if (canUseOntologyClaimRecall(params) && temporalCandidateSet.size === 0 && !temporal.meta) {
 			try {
 				const agentId = params.agentId ?? "default";
-				ontologyClaimCandidates = await timings.timeAsync(
-					"ontology_claim_candidates",
-					async () =>
-						await getDbAccessor().withReadDbAsync(
-							async (db) =>
-								findStructuredClaimCandidates(db, query, agentId, {
-									limit: cfg.search.top_k,
-									minScore,
-								}),
-							{ siteToken: "memory-search.ts:1947" },
-						),
+				ontologyClaimCandidates = await timings.timeAsync("ontology_claim_candidates", async () =>
+					findStructuredClaimCandidatesViaOwner(await getGraphOwner(), query, agentId, {
+						limit: cfg.search.top_k,
+						minScore,
+					}),
 				);
 			} catch (e) {
 				logger.warn("memory", "Ontology claim candidate search failed (non-fatal)", {
@@ -2068,19 +2069,15 @@ export async function hybridRecall(
 								const ph = ids.map(() => "?").join(", ");
 								let embRows: Array<{ source_id: string; vector: Buffer | null }> = [];
 								try {
-									embRows = await getDbAccessor().withReadDbAsync(
-										async (db) =>
-											db
-												.prepare(
-													`SELECT source_id, vector FROM embeddings
-												 WHERE source_id IN (${ph}) AND vector IS NOT NULL`,
-												)
-												.all(...ids) as Array<{
-												source_id: string;
-												vector: Buffer | null;
-											}>,
-										{ siteToken: "memory-search.ts:2071" },
-									);
+									embRows = [
+										...(await graphOwnerReadAll<{ source_id: string; vector: Buffer | null }>(
+											`SELECT source_id, vector FROM embeddings
+											 WHERE source_id IN (${ph}) AND vector IS NOT NULL`,
+											ids,
+											"memory-search.traversal.embedding-rescore",
+											ids.length,
+										)),
+									];
 								} catch (e) {
 									logger.warn("memory", "Traversal embedding re-scoring failed (non-fatal)", {
 										error: e instanceof Error ? e.message : String(e),
@@ -2159,14 +2156,10 @@ export async function hybridRecall(
 		// --- Graph boost: pull up memories linked via knowledge graph ---
 		if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.graph.boostWeight > 0) {
 			try {
-				const graphResult = await timings.timeAsync(
-					"graph_boost",
-					async () =>
-						await getDbAccessor().withReadDbAsync(
-							async (db) => getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs, params.agentId),
-							{ siteToken: "memory-search.ts:2165" },
-						),
-				);
+				const graphResult = await timings.timeAsync("graph_boost", async () => {
+					const owner = await getGraphOwner();
+					return await getGraphBoostIdsViaOwner(query, owner, cfg.pipelineV2.graph.boostTimeoutMs, params.agentId);
+				});
 				if (graphResult.graphLinkedIds.size > 0) {
 					const gw = cfg.pipelineV2.graph.boostWeight;
 					for (const s of scored) {
@@ -2227,30 +2220,27 @@ export async function hybridRecall(
 								const placeholders = missingIds.map(() => "?").join(", ");
 								let baseRows: Array<{ id: string; traversal_score: number }> = [];
 								try {
-									baseRows = await getDbAccessor().withReadDbAsync(
-										async (db) =>
-											db
-												.prepare(
-													`SELECT
-													 m.id,
-													 COALESCE(MAX(ea.importance), m.importance, 0.5) AS traversal_score
-											 FROM memories m
-											 LEFT JOIN entity_attributes ea
-											   ON ea.memory_id = m.id
-											  AND ea.agent_id = ?
-											  AND ea.status = 'active'
-											 WHERE m.id IN (${placeholders})
-											   AND m.is_deleted = 0
-											   ${memorySupersessionSql(db)}
-											 ${filter.sql}
-											 GROUP BY m.id, m.importance`,
-												)
-												.all(agentId, ...missingIds, ...filter.args) as Array<{
-												id: string;
-												traversal_score: number;
-											}>,
-										{ siteToken: "memory-search.ts:2230" },
-									);
+									baseRows = [
+										...(await graphOwnerReadAll<{ id: string; traversal_score: number }>(
+											`SELECT
+											 m.id,
+											 COALESCE(MAX(ea.importance), m.importance, 0.5) AS traversal_score
+										 FROM memories m
+										 LEFT JOIN entity_attributes ea
+										   ON ea.memory_id = m.id
+										  AND ea.agent_id = ?
+										  AND ea.status = 'active'
+										 WHERE m.id IN (${placeholders})
+										   AND m.is_deleted = 0
+										   AND m.superseded_by IS NULL
+										   AND m.stale_at IS NULL
+										   ${filter.sql}
+										 GROUP BY m.id, m.importance`,
+											[agentId, ...missingIds, ...filter.args],
+											"memory-search.traversal.candidate-hydration",
+											missingIds.length,
+										)),
+									];
 								} catch (e) {
 									logger.warn("memory", "KA traversal candidate hydration failed (non-fatal)", {
 										error: e instanceof Error ? e.message : String(e),
@@ -2323,7 +2313,7 @@ export async function hybridRecall(
 								 WHERE id IN (${placeholders})`,
 							)
 							.all(...candidateIds) as Array<{ id: string; content: string }>,
-					{ siteToken: "memory-search.ts:2318" },
+					{ siteToken: "memory-search.ts:2308" },
 				);
 				for (const row of contentRows) {
 					const score = scoreTemporalTopicEvidence(query, row.content);
@@ -2361,15 +2351,11 @@ export async function hybridRecall(
 			const candidates = [...byId.values()];
 			try {
 				const agentId = params.agentId ?? "default";
-				const structured = await getDbAccessor().withReadDbAsync(
-					async (db) =>
-						scoreStructuredPathEvidence(
-							db,
-							candidates.map((row) => row.id),
-							query,
-							agentId,
-						),
-					{ siteToken: "memory-search.ts:2364" },
+				const structured = await scoreStructuredPathEvidenceViaOwner(
+					await getGraphOwner(),
+					candidates.map((row) => row.id),
+					query,
+					agentId,
 				);
 				for (const [id, score] of structured) {
 					structuredEvidenceMap.set(id, score);
@@ -2405,7 +2391,7 @@ export async function hybridRecall(
 									 WHERE id IN (${placeholders})`,
 								)
 								.all(...coverageIds) as Array<{ id: string; content: string }>,
-						{ siteToken: "memory-search.ts:2400" },
+						{ siteToken: "memory-search.ts:2386" },
 					);
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
@@ -2455,7 +2441,7 @@ export async function hybridRecall(
 						id: string;
 						content: string;
 					}>,
-				{ siteToken: "memory-search.ts:2447" },
+				{ siteToken: "memory-search.ts:2433" },
 			);
 			const contentMap = new Map(contentRows.map((r) => [r.id, r.content]));
 
@@ -2535,7 +2521,7 @@ export async function hybridRecall(
 						content: string;
 						type: string;
 					}>,
-				{ siteToken: "memory-search.ts:2526" },
+				{ siteToken: "memory-search.ts:2512" },
 			);
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
 
@@ -2544,18 +2530,15 @@ export async function hybridRecall(
 			const degrees = new Map<string, number>();
 
 			if (cfg.pipelineV2.graph.enabled) {
-				const links = await getDbAccessor().withReadDbAsync(
-					async (db) =>
-						db
-							.prepare(
-								`SELECT memory_id, entity_id FROM memory_entity_mentions
-								 WHERE memory_id IN (${dampenPh})`,
-							)
-							.all(...dampenIds) as Array<{
-							memory_id: string;
-							entity_id: string;
-						}>,
-					{ siteToken: "memory-search.ts:2547" },
+				const links = await graphOwnerReadAll<{
+					memory_id: string;
+					entity_id: string;
+				}>(
+					`SELECT memory_id, entity_id FROM memory_entity_mentions
+					 WHERE memory_id IN (${dampenPh})`,
+					dampenIds,
+					"memory-search.dampening.links",
+					dampenIds.length,
 				);
 
 				const entityIds = new Set<string>();
@@ -2573,20 +2556,17 @@ export async function hybridRecall(
 				if (entityIds.size > 0) {
 					const eidList = [...entityIds];
 					const eidPh = eidList.map(() => "?").join(", ");
-					const degreeRows = await getDbAccessor().withReadDbAsync(
-						async (db) =>
-							db
-								.prepare(
-									`SELECT entity_id, COUNT(*) AS cnt
-									 FROM memory_entity_mentions
-									 WHERE entity_id IN (${eidPh})
-									 GROUP BY entity_id`,
-								)
-								.all(...eidList) as Array<{
-								entity_id: string;
-								cnt: number;
-							}>,
-						{ siteToken: "memory-search.ts:2576" },
+					const degreeRows = await graphOwnerReadAll<{
+						entity_id: string;
+						cnt: number;
+					}>(
+						`SELECT entity_id, COUNT(*) AS cnt
+						 FROM memory_entity_mentions
+						 WHERE entity_id IN (${eidPh})
+						 GROUP BY entity_id`,
+						eidList,
+						"memory-search.dampening.degrees",
+						eidList.length,
 					);
 					for (const row of degreeRows) {
 						degrees.set(row.entity_id, row.cnt);
@@ -2833,7 +2813,7 @@ export async function hybridRecall(
 						scope: string | null;
 						agent_id: string | null;
 					}>,
-				{ siteToken: "memory-search.ts:2813" },
+				{ siteToken: "memory-search.ts:2793" },
 			),
 	);
 
@@ -2847,7 +2827,7 @@ export async function hybridRecall(
 					content: row.content,
 				}),
 			),
-		{ siteToken: "memory-search.ts:2840" },
+		{ siteToken: "memory-search.ts:2820" },
 	);
 	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
@@ -3035,61 +3015,66 @@ export async function hybridRecall(
 	if (decisionIds.length > 0 && cfg.pipelineV2.graph.enabled) {
 		const rationaleStart = performance.now();
 		try {
-			const supplementary = await getDbAccessor().withReadDbAsync(
-				async (db) => {
-					// Find entities linked to decision memories
-					const dPlaceholders = decisionIds.map(() => "?").join(", ");
-					const entityIds = db
-						.prepare(
-							`SELECT DISTINCT entity_id FROM memory_entity_mentions
-							 WHERE memory_id IN (${dPlaceholders})`,
-						)
-						.all(...decisionIds) as Array<{ entity_id: string }>;
-
-					if (entityIds.length === 0) return [];
-
-					// Find rationale memories linked to same entities
-					const ePlaceholders = entityIds.map(() => "?").join(", ");
-					const eIds = entityIds.map((r) => r.entity_id);
-
-					const queried = db
-						.prepare(
-							`SELECT DISTINCT m.id, m.content, m.type, m.tags, m.pinned,
-						        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
-							 FROM memory_entity_mentions mem
-							 JOIN memories m ON m.id = mem.memory_id
-							 WHERE mem.entity_id IN (${ePlaceholders})
-							   AND m.type = 'rationale'
-							   AND m.is_deleted = 0
-							   ${memorySupersessionSql(db)}
-							   ${filter.sql}
-							 LIMIT 10`,
-						)
-						.all(...eIds, ...filter.args) as Array<{
-						id: string;
-						content: string;
-						type: string;
-						tags: string | null;
-						pinned: number;
-						importance: number;
-						who: string;
-						project: string | null;
-						created_at: string;
-						visibility?: string | null;
-						scope?: string | null;
-						agent_id: string | null;
-					}>;
-					return queried.filter((row) =>
-						isMemoryContentContextEligible(db, {
-							agentId: row.agent_id?.trim() || "default",
-							sourceKind: "memory",
-							sourceId: row.id,
-							content: row.content,
-						}),
-					);
-				},
-				{ siteToken: "memory-search.ts:3038" },
+			const dPlaceholders = decisionIds.map(() => "?").join(", ");
+			const entityIds = await graphOwnerReadAll<{ entity_id: string }>(
+				`SELECT DISTINCT entity_id FROM memory_entity_mentions
+				 WHERE memory_id IN (${dPlaceholders})`,
+				decisionIds,
+				"memory-search.rationale.entities",
+				decisionIds.length,
 			);
+			const supplementary =
+				entityIds.length === 0
+					? []
+					: await (async () => {
+							const eIds = entityIds.map((row) => row.entity_id);
+							const ePlaceholders = eIds.map(() => "?").join(", ");
+							const safetyTable = await graphOwnerReadAll<{ name: string }>(
+								"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety'",
+								[],
+								"memory-search.rationale.safety-table",
+								1,
+							);
+							const safetyJoin =
+								safetyTable.length > 0
+									? "LEFT JOIN memory_content_safety mcs ON mcs.agent_id = m.agent_id AND mcs.source_kind = 'memory' AND mcs.source_id = m.id"
+									: "";
+							const safetyFilter =
+								safetyTable.length > 0
+									? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))"
+									: "";
+							return await graphOwnerReadAll<{
+								id: string;
+								content: string;
+								type: string;
+								tags: string | null;
+								pinned: number;
+								importance: number;
+								who: string;
+								project: string | null;
+								created_at: string;
+								visibility?: string | null;
+								scope?: string | null;
+								agent_id: string | null;
+							}>(
+								`SELECT DISTINCT m.id, m.content, m.type, m.tags, m.pinned,
+						        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
+						 FROM memory_entity_mentions mem
+						 JOIN memories m ON m.id = mem.memory_id
+						 ${safetyJoin}
+						 WHERE mem.entity_id IN (${ePlaceholders})
+						   AND m.type = 'rationale'
+						   AND m.is_deleted = 0
+						   AND m.superseded_by IS NULL
+						   AND m.stale_at IS NULL
+						   ${filter.sql}
+						   ${safetyFilter}
+						 LIMIT 10`,
+								[...eIds, ...filter.args],
+								"memory-search.rationale.memories",
+								10,
+							);
+						})();
 
 			for (const r of supplementary) {
 				if (results.length >= limit) break;
@@ -3137,90 +3122,71 @@ export async function hybridRecall(
 				const owner = await getGraphOwner();
 				const focal = await getFocalEntities(owner, agentId);
 				if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });
-				const ctx = await getDbAccessor().withReadDbAsync(
-					async (db) => {
-						if (focal.entityIds.length === 0) return null;
+				const ctx = await (async () => {
+					if (focal.entityIds.length === 0) return null;
+					let eids = focal.entityIds;
+					if (params.scope !== undefined || params.project) {
+						const ph = eids.map(() => "?").join(", ");
+						const scoped = await graphOwnerReadAll<{ entity_id: string }>(
+							`SELECT DISTINCT mem.entity_id
+							 FROM memory_entity_mentions mem
+							 JOIN memories m ON m.id = mem.memory_id
+							 WHERE mem.entity_id IN (${ph})
+							   AND m.is_deleted = 0
+							   AND m.superseded_by IS NULL
+							   AND m.stale_at IS NULL
+							   ${filter.sql}`,
+							[...eids, ...filter.args],
+							"memory-search.entity-context.scope",
+							eids.length,
+						);
+						eids = scoped.map((row) => row.entity_id);
+						if (eids.length === 0) return null;
+					}
 
-						// Project/scope-constrained recall should not let broad focal
-						// entities pull in structural context from outside that slice.
-						let eids = focal.entityIds;
-						if (params.scope !== undefined || params.project) {
-							const ph = eids.map(() => "?").join(", ");
-							const sr = db
-								.prepare(
-									`SELECT DISTINCT mem.entity_id
-								 FROM memory_entity_mentions mem
-								 JOIN memories m ON m.id = mem.memory_id
-								 WHERE mem.entity_id IN (${ph})
-								   AND m.is_deleted = 0${memorySupersessionSql(db)}${filter.sql}`,
-								)
-								.all(...eids, ...filter.args) as Array<{ entity_id: string }>;
-							eids = sr.map((r) => r.entity_id);
-							if (eids.length === 0) return null;
+					const placeholders = eids.map(() => "?").join(", ");
+					const entities = await graphOwnerReadAll<{ id: string; name: string; entity_type: string }>(
+						`SELECT id, name, entity_type FROM entities WHERE id IN (${placeholders})`,
+						eids,
+						"memory-search.entity-context.entities",
+						eids.length,
+					);
+					const structured = [];
+					for (const entity of entities) {
+						const aspects = await graphOwnerReadAll<{ id: string; name: string }>(
+							`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
+							 WHERE entity_id = ? AND agent_id = ?
+							 ORDER BY weight DESC LIMIT 10`,
+							[entity.id, agentId],
+							"memory-search.entity-context.aspects",
+							10,
+						);
+						const contextAspects = [];
+						for (const aspect of aspects) {
+							const attrs = await graphOwnerReadAll<{
+								content: string;
+								status: string;
+								importance: number;
+								memory_id: string | null;
+							}>(
+								`SELECT content, status, importance, memory_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
+								 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
+								 ORDER BY importance DESC LIMIT 5`,
+								[aspect.id, agentId],
+								"memory-search.entity-context.attributes",
+								5,
+							);
+							const attributes = attrs
+								.filter((attr) => scanMemoryContent(attr.content).contextEligible)
+								.map((attr) => ({ content: attr.content, status: attr.status, importance: attr.importance }));
+							if (attributes.length > 0) contextAspects.push({ name: aspect.name, attributes });
 						}
-
-						const placeholders = eids.map(() => "?").join(", ");
-						const entities = db
-							.prepare(
-								`SELECT id, name, entity_type FROM entities
-							 WHERE id IN (${placeholders})`,
-							)
-							.all(...eids) as Array<{
-							id: string;
-							name: string;
-							entity_type: string;
-						}>;
-
-						const structured = entities
-							.map((ent) => {
-								const aspects = db
-									.prepare(
-										`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
-								 WHERE entity_id = ? AND agent_id = ?
-								 ORDER BY weight DESC LIMIT 10`,
-									)
-									.all(ent.id, agentId) as Array<{ id: string; name: string }>;
-
-								return {
-									name: ent.name,
-									type: ent.entity_type,
-									aspects: aspects
-										.map((asp) => {
-											const attrs = db
-												.prepare(
-													`SELECT content, status, importance, memory_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
-									 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
-										 ORDER BY importance DESC LIMIT 5`,
-												)
-												.all(asp.id, agentId) as Array<{
-												content: string;
-												status: string;
-												importance: number;
-												memory_id: string | null;
-											}>;
-											return {
-												name: asp.name,
-												attributes: attrs.filter((attr) =>
-													attr.memory_id
-														? isMemoryContentContextEligible(db, {
-																agentId,
-																sourceKind: "memory",
-																sourceId: attr.memory_id,
-																content: attr.content,
-															})
-														: scanMemoryContent(attr.content).contextEligible,
-												),
-											};
-										})
-										.filter((a) => a.attributes.length > 0),
-								};
-							})
-							.filter((e) => e.aspects.length > 0);
-
-						return { eids, structured };
-					},
-					{ siteToken: "memory-search.ts:3140" },
-				);
+						if (contextAspects.length > 0) {
+							structured.push({ name: entity.name, type: entity.entity_type, aspects: contextAspects });
+						}
+					}
+					return { eids, structured };
+				})();
 
 				if (ctx) {
 					entityContext = ctx.structured;
@@ -3246,10 +3212,7 @@ export async function hybridRecall(
 		try {
 			const agentId = params.agentId ?? "default";
 			const cap = Math.max(3, Math.ceil(limit * 0.3));
-			const blocks = await getDbAccessor().withReadDbAsync(
-				async (db) => constructContextBlocks(db, agentId, focalEids, cap),
-				{ siteToken: "memory-search.ts:3249" },
-			);
+			const blocks = await constructContextBlocksViaOwner(await getGraphOwner(), agentId, focalEids, cap);
 			const now = new Date().toISOString();
 			const minReal = results.length > 0 ? Math.min(...results.map((r) => r.score)) : 0.5;
 			const maxConstructed = Math.max(0.01, minReal - 0.01);

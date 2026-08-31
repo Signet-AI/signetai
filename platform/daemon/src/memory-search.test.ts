@@ -175,6 +175,66 @@ describe("hybridRecall", () => {
 		expect(hydrationBlock).not.toContain("recordGraphResult");
 	});
 
+	it("keeps graph-associated recall reads off parent SQLite", async () => {
+		const now = new Date().toISOString();
+		await getDbAccessor().withWriteTxAsync(async (db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+				 VALUES ('graph-owner-memory', 'Signet owner-bound graph memory', 'fact', 'default', ?, ?, 'test')`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('graph-owner-entity', 'Signet', 'signet', 'project', 'default', 10, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('graph-owner-aspect', 'graph-owner-entity', 'default', 'context', 'context', 0.9, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+					confidence, importance, status, created_at, updated_at
+				) VALUES ('graph-owner-attribute', 'graph-owner-aspect', 'default', 'graph-owner-memory',
+					'attribute', 'Signet owner-bound graph memory', 'signet owner-bound graph memory', 1, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+		});
+
+		const accessor = getDbAccessor();
+		const originalWithReadDbAsync = accessor.withReadDbAsync;
+		const parentGraphReads: string[] = [];
+		accessor.withReadDbAsync = async (fn, options) => {
+			const source = String(fn);
+			if (
+				/(memory_entity_mentions|entity_attributes|entity_aspects|entity_dependencies|FROM entities|FROM relations)/.test(
+					source,
+				)
+			) {
+				parentGraphReads.push(source);
+			}
+			return await originalWithReadDbAsync(fn, options);
+		};
+
+		try {
+			const result = await hybridRecall(
+				{
+					query: "Signet",
+					keywordQuery: "Signet",
+					limit: 5,
+					agentId: "default",
+					readPolicy: "isolated",
+					trackRecallAccess: false,
+				},
+				testCfg({ graph: true, traversal: true }),
+				async () => null,
+			);
+			expect(result.results.map((row) => row.id)).toContain("graph-owner-memory");
+		} finally {
+			accessor.withReadDbAsync = originalWithReadDbAsync;
+		}
+
+		expect(parentGraphReads).toEqual([]);
+	});
+
 	function seedUnbackedOntologyClaim(opts: {
 		readonly id: string;
 		readonly agentId?: string;
