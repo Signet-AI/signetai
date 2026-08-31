@@ -140,7 +140,7 @@ function resolveSiteToken(siteToken: SyncDbCallSiteToken | undefined): string {
 	if (cached !== undefined) return cached;
 	const kind = classifySyncDbSiteToken(siteToken);
 	if (kind === null) return UNATTRIBUTED_SITE;
-	const resolved = kind === "semantic" ? siteToken : `${SITE_TOKEN_PREFIX}${siteToken}`;
+	const resolved = kind === "semantic" || siteToken.startsWith("/") ? siteToken : `${SITE_TOKEN_PREFIX}${siteToken}`;
 	siteTokenCache.set(siteToken, resolved);
 	return resolved;
 }
