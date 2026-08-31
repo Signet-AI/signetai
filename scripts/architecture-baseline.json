@@ -2558,7 +2558,7 @@
 			{
 				"id": "module:platform/core/src/llm-model-catalog.ts",
 				"path": "platform/core/src/llm-model-catalog.ts",
-				"lines": 95,
+				"lines": 111,
 				"logicalStatements": 8,
 				"exports": 6,
 				"topLevelMutableBindings": 0,
@@ -6788,7 +6788,7 @@
 			{
 				"id": "module:platform/daemon/src/inference-oauth.ts",
 				"path": "platform/daemon/src/inference-oauth.ts",
-				"lines": 396,
+				"lines": 399,
 				"logicalStatements": 199,
 				"exports": 14,
 				"topLevelMutableBindings": 0,
@@ -10193,8 +10193,8 @@
 			{
 				"id": "module:scripts/audit-architecture-contract.ts",
 				"path": "scripts/audit-architecture-contract.ts",
-				"lines": 1515,
-				"logicalStatements": 753,
+				"lines": 1617,
+				"logicalStatements": 781,
 				"exports": 17,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -11543,8 +11543,8 @@
 			{
 				"id": "module:surfaces/cli/src/features/setup-connect.ts",
 				"path": "surfaces/cli/src/features/setup-connect.ts",
-				"lines": 164,
-				"logicalStatements": 57,
+				"lines": 190,
+				"logicalStatements": 63,
 				"exports": 8,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -11723,7 +11723,7 @@
 			{
 				"id": "module:surfaces/cli/src/features/setup.ts",
 				"path": "surfaces/cli/src/features/setup.ts",
-				"lines": 1795,
+				"lines": 1796,
 				"logicalStatements": 772,
 				"exports": 2,
 				"topLevelMutableBindings": 0,
@@ -11828,7 +11828,7 @@
 			{
 				"id": "module:surfaces/cli/src/lib/dream-attach.ts",
 				"path": "surfaces/cli/src/lib/dream-attach.ts",
-				"lines": 491,
+				"lines": 498,
 				"logicalStatements": 306,
 				"exports": 13,
 				"topLevelMutableBindings": 0,
@@ -29330,7 +29330,7 @@
 				"line": 1
 			},
 			{
-				"id": "platform/daemon/src/inference-oauth.ts:import:type:@earendil-works/pi-ai:0621cf01d44b0cff:1",
+				"id": "platform/daemon/src/inference-oauth.ts:import:type:@earendil-works/pi-ai:f6287fcbd2f4b9f4:1",
 				"from": "platform/daemon/src/inference-oauth.ts",
 				"to": null,
 				"specifier": "@earendil-works/pi-ai",
@@ -45719,7 +45719,7 @@
 				"line": 11
 			},
 			{
-				"id": "surfaces/cli/src/features/setup-connect.ts:import:type:@earendil-works/pi-ai:ff83240b16bdeb06:1",
+				"id": "surfaces/cli/src/features/setup-connect.ts:import:type:@earendil-works/pi-ai:451a833e8d1450c1:1",
 				"from": "surfaces/cli/src/features/setup-connect.ts",
 				"to": null,
 				"specifier": "@earendil-works/pi-ai",
@@ -46763,7 +46763,7 @@
 				"line": 2
 			},
 			{
-				"id": "surfaces/cli/src/lib/dream-attach.ts:import:runtime:@earendil-works/pi-tui:bcd559275158bc79:1",
+				"id": "surfaces/cli/src/lib/dream-attach.ts:import:runtime:@earendil-works/pi-tui:8f81ca8c3983907d:1",
 				"from": "surfaces/cli/src/lib/dream-attach.ts",
 				"to": null,
 				"specifier": "@earendil-works/pi-tui",
@@ -46778,16 +46778,16 @@
 				"specifier": "./daemon.js",
 				"kind": "import",
 				"runtime": false,
-				"line": 3
+				"line": 10
 			},
 			{
-				"id": "surfaces/cli/src/lib/dream-attach.ts:import:type:@earendil-works/pi-tui:a3c03e0a842c3597:1",
+				"id": "surfaces/cli/src/lib/dream-attach.ts:import:type:@earendil-works/pi-tui:a5e6aa6beef05484:1",
 				"from": "surfaces/cli/src/lib/dream-attach.ts",
 				"to": null,
 				"specifier": "@earendil-works/pi-tui",
 				"kind": "import",
 				"runtime": false,
-				"line": 2
+				"line": 9
 			},
 			{
 				"id": "surfaces/cli/src/lib/git.ts:import:runtime:@signet/core:1ee481c18d6df91f:1",
@@ -52195,8 +52195,8 @@
 		],
 		"summary": {
 			"files": 930,
-			"lines": 268332,
-			"logicalStatements": 96783,
+			"lines": 268487,
+			"logicalStatements": 96817,
 			"runtimeEdges": 1998,
 			"allEdges": 2593,
 			"unresolvedEdges": 1525,
