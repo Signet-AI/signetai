@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { findSqliteVecExtension, vectorSearchWithMetadata } from "@signet/core";
 import {
@@ -31,6 +31,7 @@ import type {
 import type { EmbeddingConfig } from "./memory-config";
 import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
 import { vectorToBlob } from "./db-helpers";
+import { createProjectionSnapshotArtifact } from "./embedding-projection-snapshot";
 import {
 	DB_OWNER_MAX_DEADLINE_MS,
 	DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS,
@@ -959,6 +960,35 @@ export function runDbOwnerWorker(): void {
 	}
 
 	async function execute(job: DbOwnerJob, context: JobExecutionContext): Promise<unknown> {
+		if (job.request.kind === "embedding_projection_snapshot") {
+			let descriptor: ReturnType<typeof createProjectionSnapshotArtifact> | undefined;
+			db.exec("BEGIN");
+			try {
+				descriptor = createProjectionSnapshotArtifact(
+					db,
+					job.request.input.principal,
+					job.request.input.request,
+					job.request.input.outputDirectory,
+				);
+				db.exec("COMMIT");
+				context.committed = true;
+				return descriptor;
+			} catch (error) {
+				if (descriptor !== undefined) {
+					try {
+						unlinkSync(descriptor.path);
+					} catch {
+						// Best-effort cleanup when the transaction cannot commit.
+					}
+				}
+				try {
+					db.exec("ROLLBACK");
+				} catch {
+					// Preserve the original snapshot failure.
+				}
+				throw error;
+			}
+		}
 		if (job.request.kind === "initialize") return await executeInitialization(job.request.agentsDir, context);
 		if (job.request.kind === "query") {
 			return job.request.statement.readonly

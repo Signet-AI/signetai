@@ -9,6 +9,7 @@ import { MIGRATIONS } from "../platform/core/src/migrations";
 
 const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_NATIVE_EMBEDDING_SMOKE === "1";
+const projectionSmokeEnabled = process.env.SIGNET_NATIVE_PROJECTION_SMOKE === "1";
 const dbOwnerSmokeEnabled = process.env.SIGNET_DB_OWNER_SMOKE === "1";
 const dreamingTokenSmokeEnabled = process.env.SIGNET_DREAMING_TOKEN_SMOKE === "1";
 const tempDirs: string[] = [];
@@ -250,8 +251,71 @@ describe("native embedding smoke teardown", () => {
 
 describe("compiled native embedding runtime", () => {
 	const smoke = enabled ? test : test.skip;
+	const projectionSmoke = projectionSmokeEnabled ? test : test.skip;
 	const dreamingTokenSmoke = dreamingTokenSmokeEnabled ? test : test.skip;
 	const dbOwnerSmoke = dbOwnerSmokeEnabled ? test : test.skip;
+
+	projectionSmoke(
+		"dispatches the projection worker and enforces native cancellation",
+		async () => {
+			const binary = nativeSmokeBinary();
+			if (!existsSync(binary))
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+			const row = (id: string, vector: string) => ({
+				id,
+				content: id,
+				who: null,
+				importance: null,
+				type: null,
+				tags: null,
+				pinned: null,
+				source_type: "memory",
+				source_id: id,
+				created_at: "2026-01-01T00:00:00.000Z",
+				vectorHex: vector,
+				dimensions: 3,
+			});
+			const input = {
+				dimensions: 2,
+				rows: [row("one", "0000803f0000000000000000"), row("two", "000000000000803f00000000")],
+			};
+			const child = spawn(binary, [], {
+				env: { ...process.env, SIGNET_EMBEDDING_PROJECTION_WORKER: "1", SIGNET_TELEMETRY_OPTOUT: "1" },
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			children.push(child);
+			let output = "";
+			child.stdout.setEncoding("utf8");
+			child.stdout.on("data", (chunk: string) => {
+				output += chunk;
+			});
+			child.stderr.resume();
+			child.stdin.end(`${JSON.stringify(input)}\n`);
+			const result = await waitForJsonEvent(
+				() => output,
+				(event) => Array.isArray(event.nodes) && Array.isArray(event.edges),
+				30_000,
+			);
+			expect(result).toMatchObject({ nodes: [{ id: "one" }, { id: "two" }], edges: [[0, 1]] });
+
+			const held = spawn(binary, [], {
+				env: {
+					...process.env,
+					SIGNET_EMBEDDING_PROJECTION_WORKER: "1",
+					SIGNET_PROJECTION_WORKER_HOLD: "1",
+					SIGNET_TELEMETRY_OPTOUT: "1",
+				},
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			children.push(held);
+			held.stdin.end(`${JSON.stringify(input)}\n`);
+			await Bun.sleep(50);
+			held.kill("SIGKILL");
+			await new Promise<void>((resolve) => held.once("close", () => resolve()));
+			children.splice(children.indexOf(held), 1);
+		},
+		60_000,
+	);
 
 	dreamingTokenSmoke(
 		"loads the embedded tokenizer WASM across sequential Dreaming cache workers",

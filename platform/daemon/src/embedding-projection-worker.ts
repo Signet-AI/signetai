@@ -1,5 +1,15 @@
+import { readFileSync, statSync } from "node:fs";
+import { isAbsolute, relative } from "node:path";
 import { createInterface } from "node:readline";
 import { computeProjectionFromRows, type EmbeddingProjectionRow, type ProjectionResult } from "./umap-projection";
+import {
+	PROJECTION_CONTENT_MAX_CHARS,
+	PROJECTION_MAX_ROWS,
+	PROJECTION_SNAPSHOT_MAX_BYTES,
+	PROJECTION_VECTOR_DIMENSIONS,
+	type ProjectionSnapshotDescriptor,
+	type ProjectionSnapshotWire,
+} from "./embedding-projection-contract";
 
 export interface ProjectionWorkerRow extends Omit<EmbeddingProjectionRow, "vector"> {
 	readonly vectorHex: string;
@@ -31,27 +41,66 @@ function parseInput(value: unknown): ProjectionWorkerInput {
 	if (typeof value !== "object" || value === null)
 		throw new ProjectionWorkerInputError("projection worker input is not an object");
 	const input = value as Record<string, unknown>;
-	if (input.dimensions !== 2 && input.dimensions !== 3) {
-		throw new ProjectionWorkerInputError("projection worker dimensions must be 2 or 3");
+	if (input.version === 1 && typeof input.path === "string" && typeof input.outputDirectory === "string") {
+		const descriptor = input as unknown as ProjectionSnapshotDescriptor;
+		if (!isAbsolute(descriptor.path) || relative(descriptor.outputDirectory, descriptor.path).startsWith(".."))
+			throw new ProjectionWorkerInputError("projection snapshot path is outside its artifact directory");
+		let bytes: Buffer;
+		try {
+			const stat = statSync(descriptor.path);
+			if (stat.size > PROJECTION_SNAPSHOT_MAX_BYTES) throw new Error("snapshot exceeds byte bound");
+			bytes = readFileSync(descriptor.path);
+		} catch (error) {
+			throw new ProjectionWorkerInputError(
+				`projection snapshot could not be read: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		let wire: ProjectionSnapshotWire;
+		try {
+			wire = JSON.parse(bytes.toString("utf8")) as ProjectionSnapshotWire;
+		} catch {
+			throw new ProjectionWorkerInputError("projection snapshot is not valid JSON");
+		}
+		if (
+			wire.version !== 1 ||
+			!Array.isArray(wire.rows) ||
+			typeof wire.request !== "object" ||
+			wire.request === null ||
+			(wire.request.dimensions !== 2 && wire.request.dimensions !== 3)
+		)
+			throw new ProjectionWorkerInputError("projection snapshot is invalid");
+		return parseInput({ dimensions: wire.request.dimensions, rows: wire.rows });
 	}
+	if (input.dimensions !== 2 && input.dimensions !== 3)
+		throw new ProjectionWorkerInputError("projection worker dimensions must be 2 or 3");
 	if (!Array.isArray(input.rows)) throw new ProjectionWorkerInputError("projection worker rows are missing");
+	if (input.rows.length > PROJECTION_MAX_ROWS)
+		throw new ProjectionWorkerInputError(`projection worker rows exceed ${PROJECTION_MAX_ROWS}`);
 	const rows = input.rows.map((raw, index) => {
 		if (typeof raw !== "object" || raw === null)
 			throw new ProjectionWorkerInputError(`projection worker row ${index} is invalid`);
 		const row = raw as Record<string, unknown>;
-		if (typeof row.vectorHex !== "string")
-			throw new ProjectionWorkerInputError(`projection worker row ${index} has no vector`);
+		if (typeof row.vectorHex !== "string" || !/^(?:[0-9a-f]{2})+$/i.test(row.vectorHex))
+			throw new ProjectionWorkerInputError(`projection worker row ${index} has no valid vector`);
+		if (row.vectorHex.length > PROJECTION_VECTOR_DIMENSIONS * 8)
+			throw new ProjectionWorkerInputError(`projection worker row ${index} exceeds vector bound`);
+		const content = typeof row.content === "string" ? row.content : "";
+		if (content.length > PROJECTION_CONTENT_MAX_CHARS)
+			throw new ProjectionWorkerInputError(`projection worker row ${index} exceeds content bound`);
+		const id = typeof row.id === "string" ? row.id : "";
+		if (!id || typeof row.created_at !== "string")
+			throw new ProjectionWorkerInputError(`projection worker row ${index} metadata is invalid`);
 		return {
-			id: String(row.id ?? ""),
-			content: String(row.content ?? ""),
+			id,
+			content,
 			who: typeof row.who === "string" ? row.who : null,
-			importance: typeof row.importance === "number" ? row.importance : null,
+			importance: typeof row.importance === "number" && Number.isFinite(row.importance) ? row.importance : null,
 			type: typeof row.type === "string" ? row.type : null,
 			tags: typeof row.tags === "string" ? row.tags : null,
 			pinned: typeof row.pinned === "number" ? row.pinned : null,
 			source_type: typeof row.source_type === "string" ? row.source_type : null,
 			source_id: typeof row.source_id === "string" ? row.source_id : null,
-			created_at: String(row.created_at ?? ""),
+			created_at: row.created_at,
 			vectorHex: row.vectorHex,
 			dimensions: typeof row.dimensions === "number" ? row.dimensions : null,
 		};

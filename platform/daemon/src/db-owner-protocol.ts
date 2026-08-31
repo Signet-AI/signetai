@@ -213,8 +213,15 @@ export interface DbOwnerSourceEvidenceEligibility {
 	readonly legacyObsidianRoot?: string;
 }
 
+export interface DbOwnerProjectionSnapshotRequest {
+	readonly principal: import("./embedding-projection-contract").ProjectionPrincipal;
+	readonly request: import("./embedding-projection-contract").ProjectionRequest;
+	readonly outputDirectory: string;
+}
+
 export type DbOwnerRequest =
 	| { readonly kind: "initialize"; readonly agentsDir?: string }
+	| { readonly kind: "embedding_projection_snapshot"; readonly input: DbOwnerProjectionSnapshotRequest }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
 	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
 	| {
