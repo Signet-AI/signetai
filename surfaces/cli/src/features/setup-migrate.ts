@@ -42,6 +42,7 @@ import {
 	readRecord,
 	readString,
 } from "./setup-shared.js";
+import { withSetupPrompt } from "./setup-terminal.js";
 import type { SetupDeps } from "./setup-types.js";
 
 export function detectedHarnessesForExistingSetup(
@@ -317,12 +318,14 @@ export async function runExistingSetupWizard(
 		runMigrations(db);
 		db.close();
 
-		let protection = await enforceSetupProtection({
-			basePath,
-			nonInteractive: options?.nonInteractive === true,
-			allowUnprotectedWorkspace: options?.allowUnprotectedWorkspace === true,
-			createLocalBackup: options?.createLocalBackup === true,
-		});
+		let protection = await withSetupPrompt(spinner, () =>
+			enforceSetupProtection({
+				basePath,
+				nonInteractive: options?.nonInteractive === true,
+				allowUnprotectedWorkspace: options?.allowUnprotectedWorkspace === true,
+				createLocalBackup: options?.createLocalBackup === true,
+			}),
+		);
 
 		let importResult: ImportResult | null = null;
 		if (detection.hasMemoryDir && detection.memoryLogCount > 0) {
@@ -462,7 +465,9 @@ export async function runExistingSetupWizard(
 				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		} else {
-			const launchNow = await confirm({ message: "Open the dashboard?", default: true });
+			const launchNow = await withSetupPrompt(spinner, () =>
+				confirm({ message: "Open the dashboard?", default: true }),
+			);
 			if (launchNow) {
 				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}

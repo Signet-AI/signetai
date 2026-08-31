@@ -28,6 +28,7 @@ import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import { formatWorkspaceSourceRepoSync, readErr, readRecord } from "./setup-shared.js";
+import { withSetupPrompt } from "./setup-terminal.js";
 import type { SetupDeps } from "./setup-types.js";
 
 export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext, deps: SetupDeps): Promise<void> {
@@ -228,12 +229,14 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		// users can audit exactly what is recorded and sent.
 		let telemetryEnabled = true;
 		if (!context.nonInteractive) {
-			telemetryEnabled = await import("@inquirer/prompts").then(({ confirm }) =>
-				confirm({
-					message:
-						"Help improve Signet by sharing anonymous usage statistics (version and command names) with PostHog? No memory content, code, arguments, paths, or personal data. Events are logged to ~/.agents/.daemon/telemetry/events.jsonl and, when remote delivery is configured and the workspace database is available, queued locally before best-effort delivery; disable anytime with telemetryEnabled: false.",
-					default: true,
-				}),
+			telemetryEnabled = await withSetupPrompt(spinner, () =>
+				import("@inquirer/prompts").then(({ confirm }) =>
+					confirm({
+						message:
+							"Help improve Signet by sharing anonymous usage statistics (version and command names) with PostHog? No memory content, code, arguments, paths, or personal data. Events are logged to ~/.agents/.daemon/telemetry/events.jsonl and, when remote delivery is configured and the workspace database is available, queued locally before best-effort delivery; disable anytime with telemetryEnabled: false.",
+						default: true,
+					}),
+				),
 			);
 		}
 		// The daemon reads telemetryEnabled from memory.pipelineV2 — writing it
@@ -300,13 +303,15 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			db.close();
 		}
 
-		let protection = await enforceSetupProtection({
-			basePath: context.basePath,
-			nonInteractive: context.nonInteractive,
-			allowUnprotectedWorkspace: context.allowUnprotectedWorkspace,
-			createLocalBackup: context.createLocalBackup,
-			assumeOpenClawLinked: plan.configureOpenClawWs && context.openclawConfigCount > 0,
-		});
+		let protection = await withSetupPrompt(spinner, () =>
+			enforceSetupProtection({
+				basePath: context.basePath,
+				nonInteractive: context.nonInteractive,
+				allowUnprotectedWorkspace: context.allowUnprotectedWorkspace,
+				createLocalBackup: context.createLocalBackup,
+				assumeOpenClawLinked: plan.configureOpenClawWs && context.openclawConfigCount > 0,
+			}),
+		);
 
 		spinner.text = "Configuring harness hooks...";
 		// Hooks are installed before the daemon starts. This is safe because
@@ -447,8 +452,8 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 			}
 		} else {
-			const launchNow = await import("@inquirer/prompts").then(({ confirm }) =>
-				confirm({ message: "Open the dashboard?", default: true }),
+			const launchNow = await withSetupPrompt(spinner, () =>
+				import("@inquirer/prompts").then(({ confirm }) => confirm({ message: "Open the dashboard?", default: true })),
 			);
 			if (launchNow) {
 				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
