@@ -7,7 +7,7 @@ import {
 	getSyncDbCallSitesForWindow,
 	resetSyncDbAttribution,
 } from "./sync-db-attribution";
-import { classifySyncDbSiteToken } from "./sync-db-site-token";
+import { classifySyncDbSiteToken, normalizeSyncDbSiteToken } from "./sync-db-site-token";
 
 afterEach(() => {
 	resetSyncDbAttribution();
@@ -77,5 +77,25 @@ describe("sync DB attribution", () => {
 		expect(classifySyncDbSiteToken("//dist/daemon.js:54")).toBeNull();
 		expect(classifySyncDbSiteToken("/dist//daemon.js:54")).toBeNull();
 		expect(classifySyncDbSiteToken("dir//file.ts:12")).toBeNull();
+	});
+
+	test("normalizes Windows absolute source locations without accepting duplicate separators", () => {
+		const driveBackslash = String.raw`C:\work\daemon.js:54`;
+		const uncBackslash = String.raw`\\server\share\daemon.js:54`;
+		const duplicateDriveSeparator = String.raw`C:\\work\daemon.js:54`;
+		const duplicateUncSeparator = String.raw`\\server\\share\daemon.js:54`;
+
+		expect(classifySyncDbSiteToken("C:/work/daemon.js:54")).toBe("source-location");
+		expect(classifySyncDbSiteToken(driveBackslash)).toBe("source-location");
+		expect(classifySyncDbSiteToken("/C:/work/daemon.js:54")).toBe("source-location");
+		expect(classifySyncDbSiteToken(uncBackslash)).toBe("source-location");
+		expect(normalizeSyncDbSiteToken(driveBackslash)).toBe("/C:/work/daemon.js:54");
+		expect(normalizeSyncDbSiteToken("/C:/work/daemon.js:54")).toBe("/C:/work/daemon.js:54");
+		expect(normalizeSyncDbSiteToken(uncBackslash)).toBe("/UNC/server/share/daemon.js:54");
+		expect(classifySyncDbSiteToken(duplicateDriveSeparator)).toBeNull();
+		expect(classifySyncDbSiteToken(duplicateUncSeparator)).toBeNull();
+
+		const token = beginSyncDbCall("withWriteTxAsync", 1_000, "C:/work/daemon.js:54");
+		expect(token.siteId).toBe("withWriteTxAsync@/C:/work/daemon.js:54");
 	});
 });
