@@ -54,6 +54,7 @@ export interface SourceModule {
 	readonly logicalStatements: number;
 	readonly exports: number;
 	readonly topLevelMutableBindings: number;
+	readonly typeEscapes: number;
 	readonly runtimeFanIn: number;
 	readonly runtimeFanOut: number;
 	readonly runtimeCallsitesIn: number;
@@ -104,6 +105,7 @@ export interface ArchitectureInventory {
 		readonly packages: number;
 		readonly packageRuntimeCycles: number;
 		readonly packageAllCycles: number;
+		readonly typeEscapes: number;
 	};
 }
 
@@ -183,12 +185,16 @@ function isSourceFile(path: string): boolean {
 }
 
 function generatedArtifactReason(
+	_manifested: GeneratedArtifactManifestEntry | undefined,
+): GeneratedArtifact["reason"] | null {
+	return _manifested === undefined ? null : "manifested-output";
+}
+
+function unmanifestedGeneratedReason(
 	path: string,
 	source: string,
-	manifested: GeneratedArtifactManifestEntry | undefined,
-): GeneratedArtifact["reason"] | null {
+): Exclude<GeneratedArtifact["reason"], "manifested-output"> | null {
 	const normalized = normalizedPath(path);
-	if (manifested !== undefined) return "manifested-output";
 	if (normalized.includes("/generated/")) return "generated-path";
 	if ((normalized.endsWith("-bundle.ts") || normalized.endsWith(".bundle.ts")) && normalized.includes("/src/"))
 		return "bundle-name";
@@ -474,6 +480,38 @@ function predeclareLoopBinding(
 	for (const declaration of initializer.declarations) bindDeclaration(scope, declaration);
 }
 
+function bindingInitializer(scope: StaticScope, name: string): ts.Expression | null | undefined {
+	let current: StaticScope | undefined = scope;
+	while (current !== undefined) {
+		if (current.bindings.has(name)) return current.bindings.get(name);
+		current = current.parent;
+	}
+	return undefined;
+}
+
+function importsCreateRequire(sourceFile: ts.SourceFile): boolean {
+	return sourceFile.statements.some(
+		(statement) =>
+			ts.isImportDeclaration(statement) &&
+			ts.isStringLiteral(statement.moduleSpecifier) &&
+			(statement.moduleSpecifier.text === "node:module" || statement.moduleSpecifier.text === "module") &&
+			statement.importClause?.namedBindings !== undefined &&
+			ts.isNamedImports(statement.importClause.namedBindings) &&
+			statement.importClause.namedBindings.elements.some(
+				(element) => (element.propertyName ?? element.name).text === "createRequire",
+			),
+	);
+}
+
+function isRuntimeRequire(expression: ts.Expression, scope: StaticScope, sourceFile: ts.SourceFile): boolean {
+	if (!ts.isIdentifier(expression) || expression.text !== "require") return false;
+	const initializer = bindingInitializer(scope, "require");
+	if (initializer === undefined) return true;
+	if (initializer === null || !importsCreateRequire(sourceFile) || !ts.isCallExpression(initializer)) return false;
+	const callee = unwrapExpression(initializer.expression);
+	return ts.isIdentifier(callee) && callee.text === "createRequire";
+}
+
 function staticString(
 	expression: ts.Expression,
 	scope: StaticScope,
@@ -547,6 +585,20 @@ function countExports(sourceFile: ts.SourceFile): number {
 			count++;
 		if (ts.isExportDeclaration(statement)) count++;
 	}
+	return count;
+}
+
+function countTypeEscapes(sourceFile: ts.SourceFile, source: string): number {
+	let count = (source.match(/@ts-(?:ignore|expect-error)\b/g) ?? []).length;
+	const visit = (node: ts.Node): void => {
+		if (ts.isNonNullExpression(node)) count++;
+		if (ts.isAsExpression(node)) {
+			if (node.type.kind === ts.SyntaxKind.AnyKeyword) count++;
+			if (ts.isAsExpression(node.expression)) count++;
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
 	return count;
 }
 
@@ -679,7 +731,13 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 			const relative = relativePath(root, path);
 			const manifested = manifestedByPath.get(relative);
 			if (manifested !== undefined) materializedManifestPaths.add(relative);
-			const reason = generatedArtifactReason(path, source, manifested);
+			const unmanifestedReason = unmanifestedGeneratedReason(path, source);
+			if (manifested === undefined && unmanifestedReason !== null) {
+				throw new Error(
+					`Generated artifact ${relative} matches ${unmanifestedReason} but is not listed in scripts/architecture-generated-artifacts.json`,
+				);
+			}
+			const reason = generatedArtifactReason(manifested);
 			return reason === null
 				? []
 				: [
@@ -705,10 +763,7 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 		)
 		.sort((a, b) => a.path.localeCompare(b.path));
 	const paths = candidates.filter(
-		(path) =>
-			isSourceFile(path) &&
-			generatedArtifactReason(path, readFileSync(path, "utf8"), manifestedByPath.get(relativePath(root, path))) ===
-				null,
+		(path) => isSourceFile(path) && generatedArtifactReason(manifestedByPath.get(relativePath(root, path))) === null,
 	);
 	const pathSet = new Set(paths);
 	const modules = new Map<string, SourceModule>();
@@ -730,6 +785,7 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 			logicalStatements: countStatements(sourceFile),
 			exports: countExports(sourceFile),
 			topLevelMutableBindings: countTopLevelMutableBindings(sourceFile),
+			typeEscapes: countTypeEscapes(sourceFile, source),
 			runtimeFanIn: 0,
 			runtimeFanOut: 0,
 			runtimeCallsitesIn: 0,
@@ -823,9 +879,10 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 						: ts.isIdentifier(expression) && expression.text === "require"
 							? "require"
 							: null;
+				const runtimeRequire = kind !== "require" || isRuntimeRequire(expression, currentScope, sourceFile);
 				if (kind !== null && argument !== undefined) {
 					const value = staticString(argument, currentScope);
-					if (value === null) {
+					if (value === null || !runtimeRequire) {
 						const identityBase = nodeIdentity(id, `computed:${kind}`, node, sourceFile);
 						const occurrence = (computedOccurrences.get(identityBase) ?? 0) + 1;
 						computedOccurrences.set(identityBase, occurrence);
@@ -906,6 +963,7 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 			packages: packageGraph.packages.length,
 			packageRuntimeCycles: packageRuntimeCycles.length,
 			packageAllCycles: packageAllCycles.length,
+			typeEscapes: sourceModules.reduce((total, module) => total + module.typeEscapes, 0),
 		},
 	};
 }
@@ -967,6 +1025,7 @@ Generated by \`${GENERATED_FROM}\`. This report is an inventory, not a claim tha
 - Computed runtime loads: ${inventory.summary.computedLoads.toLocaleString("en-US")}
 - Workspace packages: ${inventory.summary.packages}
 - Workspace package edges: ${inventory.packageAllEdges.length} total, ${inventory.packageRuntimeEdges.length} runtime
+- Type escapes tracked: ${inventory.summary.typeEscapes}
 - Generated/bundled artifacts measured separately: ${inventory.generatedArtifacts.length} total; ${measuredManifestCount} of ${inventory.generatedArtifactManifest.length} manifested outputs found
 
 ## Cycle ledger
@@ -1014,10 +1073,11 @@ ${topFanIn.map((module) => `- \`${module.path}\`: ${module.runtimeFanIn} incomin
 
 ## Ratchet interpretation
 
-- Runtime source cycles have a zero budget.
-- Type-inclusive SCCs are a deletion-only ledger: ordinary changes may remove nodes or edges, but may not add or expand an existing SCC.
-- Computed loads require an explicit owner and contract; they are not silently omitted from the graph.
-- Module metrics and resolved edge identities are baseline data for the next enforcement slice. This A0 artifact does not pretend that a report alone blocks a pull request.
+- Runtime source and workspace package cycles have a zero budget.
+- Type-inclusive SCCs, computed loads, forbidden layer edges, and ambient routes/state.ts importers are deletion-only ledgers.
+- Handwritten module logical statements, public exports, and tracked type escapes may not grow; new handwritten modules are capped at 500 logical statements.
+- Generated/bundled files are excluded only when their ownership is proven by the generated-artifact manifest.
+- bun run audit:architecture compares this inventory with the committed baseline and is the blocking pull-request architecture gate.
 `;
 }
 
@@ -1040,6 +1100,117 @@ export function canonicalizeBaselineInventory(inventory: ArchitectureInventory):
 	};
 }
 
+const NEW_MODULE_STATEMENT_LIMIT = 500;
+
+function edgeKey(edge: Pick<SourceEdge, "from" | "to" | "kind" | "runtime">): string {
+	return `${edge.from}\u0000${edge.to ?? ""}\u0000${edge.kind}\u0000${edge.runtime ? "runtime" : "type"}`;
+}
+
+function sourceLayerViolation(edge: SourceEdge, modules: ReadonlyMap<string, SourceModule>): string | null {
+	if (edge.to === null) return null;
+	const from = modules.get(edge.from);
+	const to = modules.get(edge.to);
+	if (from === undefined || to === undefined || from.layer === "composition-root") return null;
+	const importsRoute = to.layer === "routes" && from.layer !== "routes";
+	const importsCompositionRoot = to.path.endsWith("/daemon.ts");
+	const importsDashboard = to.path.includes("surfaces/dashboard/") && !from.path.includes("surfaces/dashboard/");
+	const importsConcreteRegistry =
+		(to.path.endsWith("/source-providers.ts") || to.path.endsWith("/providers/registry.ts")) &&
+		from.layer !== "adapters";
+	if (!importsRoute && !importsCompositionRoot && !importsDashboard && !importsConcreteRegistry) return null;
+	return `${edge.from} -> ${edge.to} (${edge.kind})`;
+}
+
+function forbiddenLayerEdges(inventory: ArchitectureInventory): readonly string[] {
+	const modules = new Map(inventory.sourceFiles.map((module) => [module.path, module]));
+	return [
+		...new Set(
+			inventory.sourceEdges.flatMap((edge) => {
+				const violation = sourceLayerViolation(edge, modules);
+				return violation === null ? [] : [violation];
+			}),
+		),
+	].sort((a, b) => a.localeCompare(b));
+}
+
+function routeStateImporters(inventory: ArchitectureInventory): readonly string[] {
+	return [
+		...new Set(
+			inventory.sourceEdges
+				.filter((edge) => edge.to?.endsWith("platform/daemon/src/routes/state.ts") === true)
+				.map((edge) => edge.from),
+		),
+	].sort((a, b) => a.localeCompare(b));
+}
+
+function cycleNodeSets(cycles: readonly Cycle[]): readonly ReadonlySet<string>[] {
+	return cycles.map((cycle) => new Set(cycle.nodes));
+}
+
+export function compareArchitectureRatchet(
+	current: ArchitectureInventory,
+	baseline: ArchitectureInventory,
+): readonly string[] {
+	const findings: string[] = [];
+	if (current.runtimeCycles.length > 0 || current.summary.runtimeCycles > 0)
+		findings.push("runtime source cycles exceed the zero budget");
+	if (current.summary.packageRuntimeCycles > 0 || current.summary.packageAllCycles > 0)
+		findings.push("workspace package dependency cycles exceed the zero budget");
+
+	const baselineTypeCycles = cycleNodeSets(baseline.typeCycles);
+	for (const cycle of current.typeCycles) {
+		const nodes = new Set(cycle.nodes);
+		if (!baselineTypeCycles.some((existing) => [...nodes].every((node) => existing.has(node)))) {
+			findings.push(`new or expanded type-inclusive SCC ${cycle.id}: ${cycle.nodes.join(", ")}`);
+		}
+	}
+
+	const baselineComputedLoads = new Set(baseline.computedLoads.map((load) => load.id));
+	for (const load of current.computedLoads) {
+		if (!baselineComputedLoads.has(load.id)) findings.push(`new computed runtime load ${load.path}:${load.line}`);
+	}
+
+	const baselineModules = new Map(baseline.sourceFiles.map((module) => [module.path, module]));
+	for (const module of current.sourceFiles) {
+		const previous = baselineModules.get(module.path);
+		if (previous === undefined) {
+			if (module.logicalStatements > NEW_MODULE_STATEMENT_LIMIT)
+				findings.push(
+					`new handwritten module ${module.path} has ${module.logicalStatements} logical statements (limit ${NEW_MODULE_STATEMENT_LIMIT})`,
+				);
+			if (module.typeEscapes > 0) findings.push(`new type escapes in ${module.path}: ${module.typeEscapes}`);
+			continue;
+		}
+		if (module.logicalStatements > previous.logicalStatements)
+			findings.push(
+				`module growth in ${module.path}: ${previous.logicalStatements} -> ${module.logicalStatements} logical statements`,
+			);
+		if (module.exports > previous.exports)
+			findings.push(`public-surface growth in ${module.path}: ${previous.exports} -> ${module.exports} exports`);
+		if (module.typeEscapes > (previous.typeEscapes ?? 0))
+			findings.push(`type-escape growth in ${module.path}: ${previous.typeEscapes ?? 0} -> ${module.typeEscapes}`);
+	}
+
+	const currentLayerEdges = new Set(forbiddenLayerEdges(current));
+	const baselineLayerEdges = new Set(forbiddenLayerEdges(baseline));
+	for (const edge of currentLayerEdges) {
+		if (!baselineLayerEdges.has(edge)) findings.push(`new forbidden source-layer edge ${edge}`);
+	}
+	const currentStateImporters = new Set(routeStateImporters(current));
+	const baselineStateImporters = new Set(routeStateImporters(baseline));
+	for (const importer of currentStateImporters) {
+		if (!baselineStateImporters.has(importer)) findings.push(`new routes/state.ts importer ${importer}`);
+	}
+
+	const baselineEdges = new Set(baseline.sourceEdges.map(edgeKey));
+	for (const edge of current.sourceEdges) {
+		if (edge.to !== null && edge.kind === "require" && !baselineEdges.has(edgeKey(edge))) {
+			findings.push(`new runtime require edge ${edge.from} -> ${edge.to}`);
+		}
+	}
+	return findings.sort((a, b) => a.localeCompare(b));
+}
+
 export function writeBaseline(
 	inventory: ArchitectureInventory,
 	baselinePath = BASELINE_PATH,
@@ -1056,7 +1227,8 @@ export function writeBaseline(
 
 function main(): void {
 	const inventory = analyzeSourceTree();
-	if (process.argv.includes("--write-baseline")) writeBaseline(inventory);
+	const writesBaseline = process.argv.includes("--write-baseline");
+	if (writesBaseline) writeBaseline(inventory);
 	console.log(`Architecture source files: ${inventory.summary.files}`);
 	console.log(`Source edges: ${inventory.summary.allEdges} total, ${inventory.summary.runtimeEdges} runtime`);
 	console.log(`Computed loads: ${inventory.summary.computedLoads}`);
@@ -1064,8 +1236,18 @@ function main(): void {
 		`Source cycles: ${inventory.summary.runtimeCycles} runtime, ${inventory.summary.typeCycles} type-inclusive`,
 	);
 	console.log(`Workspace packages: ${inventory.summary.packages}`);
-	if (process.argv.includes("--write-baseline")) console.log(`Baseline written: ${relativePath(ROOT, BASELINE_PATH)}`);
-	if (inventory.summary.runtimeCycles > 0) process.exitCode = 1;
+	if (writesBaseline) {
+		console.log(`Baseline written: ${relativePath(ROOT, BASELINE_PATH)}`);
+		return;
+	}
+	const findings = compareArchitectureRatchet(inventory, loadBaseline());
+	if (findings.length > 0) {
+		console.error("Architecture ratchet violations:");
+		for (const finding of findings) console.error(`- ${finding}`);
+		process.exitCode = 1;
+	} else {
+		console.log("Architecture ratchet: baseline respected");
+	}
 }
 
 if (import.meta.main) main();
