@@ -24,6 +24,45 @@ describe("daemon route extraction refactor", () => {
 		expect(isSessionCleanupRunning()).toBe(false);
 	});
 
+	it("does not install process failure handlers when imported as a library", () => {
+		const testDir = join(tmpdir(), `signet-daemon-import-${Date.now()}`);
+		mkdirSync(testDir, { recursive: true });
+		try {
+			const daemonUrl = new URL("./daemon.ts", import.meta.url).href;
+			const script = `
+				const events = ["SIGINT", "SIGTERM", "uncaughtException", "unhandledRejection"];
+				await import(${JSON.stringify(daemonUrl)});
+				const handlers = Object.fromEntries(events.map((event) => [
+					event,
+					process.listeners(event).filter((listener) => listener.name.startsWith("onDaemon")).length,
+				]));
+				process.stdout.write("DAEMON_PROCESS_HANDLERS=" + JSON.stringify(handlers) + "\\n");
+				process.exit(0);
+			`;
+			const child = Bun.spawnSync({
+				cmd: [process.execPath, "-e", script],
+				env: { ...process.env, SIGNET_DAEMON_ENTRYPOINT: "0", SIGNET_PATH: testDir },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(child.exitCode).toBe(0);
+			const output = new TextDecoder().decode(child.stdout);
+			const record = output
+				.split("\n")
+				.find((line) => line.startsWith("DAEMON_PROCESS_HANDLERS="))
+				?.slice("DAEMON_PROCESS_HANDLERS=".length);
+			expect(record).toBeDefined();
+			expect(JSON.parse(record as string)).toEqual({
+				SIGINT: 0,
+				SIGTERM: 0,
+				uncaughtException: 0,
+				unhandledRejection: 0,
+			});
+		} finally {
+			rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
 	it("reloadAuthState is idempotent and produces consistent auth state", async () => {
 		const state = await import("./routes/state.js");
 
