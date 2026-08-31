@@ -279,7 +279,7 @@ try {
 		[agent],
 	).count;
 	const importedIds = dbOne(
-		"SELECT COUNT(DISTINCT id) count FROM session_transcripts WHERE agent_id = ? AND source_id IS NOT NULL",
+		"SELECT COUNT(DISTINCT session_key) count FROM session_transcripts WHERE agent_id = ? AND source_id IS NOT NULL",
 		[agent],
 	).count;
 	record(importedSessions === importedIds, "no-duplicate-session-record-ids", { importedSessions, importedIds });
