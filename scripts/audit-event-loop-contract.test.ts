@@ -16,12 +16,12 @@ import {
 
 test("the deterministic ledger retains the exact current source inventory", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	expect(baseline).toHaveLength(902);
+	expect(baseline).toHaveLength(882);
 	expect(baseline.filter((site) => site.api === "withWriteTx")).toHaveLength(65);
 	expect(baseline.filter((site) => site.api === "withReadDb")).toHaveLength(99);
 	expect(baseline.filter((site) => site.api === "withWriteTxAsync")).toHaveLength(50);
 	expect(baseline.filter((site) => site.api === "withWriteDbAsync")).toHaveLength(2);
-	expect(baseline.filter((site) => site.api === "withReadDbAsync")).toHaveLength(167);
+	expect(baseline.filter((site) => site.api === "withReadDbAsync")).toHaveLength(147);
 });
 
 test("the event-loop ledger exactly equals the current source inventory", () => {
@@ -353,16 +353,16 @@ test("the production TypeScript project cannot import the compatibility module",
 test("the generated report describes the type boundary and transitional counts", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const report = renderReport(baseline, { total: 169, withWriteTx: 65, withReadDb: 104 });
-	expect(report).toContain("Exact ledger inventory: 902 sites");
-	expect(report).toContain("65 synchronous writes, 99 synchronous reads, and 222 async-named DB sites");
-	expect(report).toContain("Async-named ON-PARENT DB sites: 220");
+	expect(report).toContain("Exact ledger inventory: 882 sites");
+	expect(report).toContain("65 synchronous writes, 99 synchronous reads, and 202 async-named DB sites");
+	expect(report).toContain("Async-named ON-PARENT DB sites: 200");
 	expect(report).toContain("Async-named OFF-PARENT DB sites: 2");
 	expect(report).not.toContain("async-named parent DB sites");
 	expect(report).toContain(
-		"The async-named DB counts above separate the 220 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
+		"The async-named DB counts above separate the 200 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
 	);
-	expect(report).toContain("Database accessor sites classified: 386");
-	expect(report).toContain("ON-PARENT callback execution: 384");
+	expect(report).toContain("Database accessor sites classified: 366");
+	expect(report).toContain("ON-PARENT callback execution: 364");
 	expect(report).toContain("OFF-PARENT callback execution: 2");
 	expect(report).toMatch(/`db-owner-worker\.ts:\d+` \(withReadDbAsync\)/);
 	expect(report).not.toMatch(/`daemon\.ts:\d+` \(withReadDbAsync\)/);

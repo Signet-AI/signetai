@@ -186,7 +186,7 @@ function rowToTaskMeta(r: Record<string, unknown>): TaskMeta {
 // ---------------------------------------------------------------------------
 
 export async function getAspectsForEntity(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
 ): Promise<readonly EntityAspect[]> {
@@ -209,7 +209,7 @@ export async function getAspectsForEntity(
 // ---------------------------------------------------------------------------
 
 export async function getAttributesForAspect(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	aspectId: string,
 	agentId: string,
 ): Promise<readonly EntityAttribute[]> {
@@ -232,7 +232,7 @@ export async function getAttributesForAspect(
  * This is the query that enforces the "constraints always surface" invariant.
  */
 export async function getConstraintsForEntity(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
 ): Promise<readonly EntityAttribute[]> {
@@ -259,7 +259,7 @@ export async function getConstraintsForEntity(
 // ---------------------------------------------------------------------------
 
 export async function getEntityDependencyById(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	params: { readonly id: string; readonly agentId: string },
 ): Promise<EntityDependency | null> {
 	const row = await dbOwnerQuery<Record<string, unknown> | null>(
@@ -274,7 +274,7 @@ export async function getEntityDependencyById(
 }
 
 export async function getDependenciesFrom(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
 ): Promise<readonly EntityDependency[]> {
@@ -297,7 +297,7 @@ export async function getDependenciesFrom(
 }
 
 export async function getDependenciesTo(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	entityId: string,
 	agentId: string,
 ): Promise<readonly EntityDependency[]> {
@@ -324,7 +324,7 @@ export async function getDependenciesTo(
 // ---------------------------------------------------------------------------
 
 export async function getPinnedEntities(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	agentId: string,
 ): Promise<ReadonlyArray<PinnedEntitySummary>> {
 	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
@@ -398,7 +398,7 @@ export async function upsertTaskMeta(accessor: DbAccessor, params: UpsertTaskMet
 	});
 }
 
-export async function getTaskMeta(accessor: DbAccessor, entityId: string, agentId: string): Promise<TaskMeta | null> {
+export async function getTaskMeta(_accessor: DbAccessor, entityId: string, agentId: string): Promise<TaskMeta | null> {
 	const row = await dbOwnerQuery<Record<string, unknown> | null>(
 		{
 			sql: "SELECT * FROM task_meta WHERE entity_id = ? AND agent_id = ?",
@@ -573,7 +573,7 @@ export interface EntityKnowledgeTree {
 }
 
 export async function resolveNamedEntity(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	input: {
 		readonly agentId: string;
 		readonly name: string;
@@ -762,7 +762,7 @@ export async function getKnowledgeEntityByName(
 }
 
 export async function listEntityAliases(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
 		readonly entityId: string;
@@ -1165,7 +1165,7 @@ export async function listEntityAttributesByPath(
 }
 
 export async function listKnowledgeEntities(
-	accessor: DbAccessor,
+	_accessor: DbAccessor,
 	params: {
 		readonly agentId: string;
 		readonly type?: string;

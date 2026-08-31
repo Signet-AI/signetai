@@ -1467,157 +1467,19 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 193,
+      "line": 833,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:knowledge.entity-knowledge-tree.read"
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 218,
+      "line": 1945,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 243,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 271,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 287,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 312,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 340,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 422,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 605,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 783,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 814,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 841,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 994,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1058,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1140,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1204,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1291,
-      "api": "withReadDbAsync",
-      "source": "const row = await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1401,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(async (db) => readEntityAspectsWithCounts(db, entityId, agentId), {",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1418,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1463,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1602,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "knowledge-graph.ts",
-      "line": 1984,
-      "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:knowledge.graph-constellation.read"
     },
     {
       "path": "lifecycle.ts",
