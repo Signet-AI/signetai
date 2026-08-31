@@ -45,6 +45,42 @@ export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRow
 		throw new Error("failed to reconcile vec_embeddings before source purge");
 	}
 	let purged = embeddingIds.length;
+	// Imported transcripts are evidence owned by the source. Remove the body and
+	// ledger rows together; the source config tombstone is retained by the
+	// lifecycle caller for audit/replay purposes.
+	if (tableHasColumn(db, "session_transcripts", "source_id")) {
+		purged += countChanges(
+			db
+				.prepare(`DELETE FROM session_transcripts WHERE ${agentWhere}source_id = ?`)
+				.run(...(input.agentId ? [input.agentId] : []), sourceId),
+		);
+	}
+	if (tableExists(db, "source_import_jobs")) {
+		purged += countChanges(
+			db
+				.prepare(
+					`DELETE FROM source_import_jobs WHERE ${agentWhere}id IN (SELECT job_id FROM source_import_files WHERE source_id = ?)`,
+				)
+				.run(...(input.agentId ? [input.agentId] : []), sourceId),
+		);
+	}
+	for (const table of ["source_import_records", "source_import_files"] as const) {
+		if (!tableExists(db, table)) continue;
+		purged += countChanges(
+			db
+				.prepare(`DELETE FROM ${table} WHERE ${agentWhere}source_id = ?`)
+				.run(...(input.agentId ? [input.agentId] : []), sourceId),
+		);
+	}
+	if (tableExists(db, "transcript_import_conversations")) {
+		purged += countChanges(
+			db
+				.prepare(
+					`UPDATE transcript_import_conversations SET state = 'removed', updated_at = datetime('now') WHERE ${agentWhere}owner_source_id = ? AND state != 'removed'`,
+				)
+				.run(...(input.agentId ? [input.agentId] : []), sourceId),
+		);
+	}
 	if (embeddingIds.length > 0) {
 		const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
 		for (const id of embeddingIds) stmt.run(id);
