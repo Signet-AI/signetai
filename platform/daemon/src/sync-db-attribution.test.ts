@@ -40,6 +40,13 @@ describe("sync DB attribution", () => {
 		void token;
 	});
 
+	test("latches a stable semantic site token without a source-line dependency", () => {
+		const token = beginSyncDbCall("withReadDb", 1_000, "db:memory.projection.ledger");
+
+		expect(getSyncDbCallSitesForWindow(1_000, 2_000)).toEqual(["withReadDb@db:memory.projection.ledger"]);
+		void token;
+	});
+
 	test("keeps an invalid site token explicitly unattributed", () => {
 		const token = beginSyncDbCall("withReadDb", 1_000, "not-a-site");
 		endSyncDbCall(token, 1_051);
