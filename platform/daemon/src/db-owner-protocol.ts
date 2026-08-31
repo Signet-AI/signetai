@@ -213,6 +213,28 @@ export interface DbOwnerSourceEvidenceEligibility {
 	readonly legacyObsidianRoot?: string;
 }
 
+import type { CompletedTranscriptCommit } from "./transcript-import-commit";
+
+export interface DbOwnerTranscriptBulkCommit {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly harness: string;
+	readonly commits: readonly CompletedTranscriptCommit[];
+}
+export interface DbOwnerTranscriptImportControl {
+	readonly agentId: string;
+	readonly jobId: string;
+	readonly control: "pause" | "resume" | "retry" | "cancel";
+}
+export interface DbOwnerTranscriptImportReconcile {
+	readonly agentId: string;
+	readonly jobId: string;
+}
+export interface DbOwnerTranscriptImportPurge {
+	readonly agentId: string;
+	readonly sourceId: string;
+}
+
 export type DbOwnerRequest =
 	| { readonly kind: "initialize"; readonly agentsDir?: string }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
@@ -243,6 +265,10 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_artifact_upsert"; readonly input: DbOwnerSourceArtifactUpsert }
 	| { readonly kind: "source_artifact_upsert_batch"; readonly input: readonly DbOwnerSourceArtifactUpsert[] }
 	| { readonly kind: "source_evidence_eligibility"; readonly input: DbOwnerSourceEvidenceEligibility }
+	| { readonly kind: "transcript_bulk_commit"; readonly input: DbOwnerTranscriptBulkCommit }
+	| { readonly kind: "transcript_import_control"; readonly input: DbOwnerTranscriptImportControl }
+	| { readonly kind: "transcript_import_reconcile"; readonly input: DbOwnerTranscriptImportReconcile }
+	| { readonly kind: "transcript_import_purge"; readonly input: DbOwnerTranscriptImportPurge }
 	| { readonly kind: "dreaming_hygiene_attention"; readonly input: DbOwnerDreamingHygieneAttention }
 	| { readonly kind: "dreaming_surprisal_attention"; readonly input: DbOwnerDreamingSurprisalAttention }
 	| { readonly kind: "dreaming_episodic_backlog"; readonly input: DbOwnerDreamingEpisodicBacklog }
