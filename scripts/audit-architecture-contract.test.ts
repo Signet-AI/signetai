@@ -266,3 +266,32 @@ test("nested-block var shadowing keeps computed runtime loads in the ledger", ()
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("loop bindings do not leak into the enclosing scope after the loop", () => {
+	const root = mkdtempSync(join("/mnt/work/hermes-scratch", "architecture-loop-scope-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				'const path = "./target";',
+				'export function loadFor() { for (const path = "./other"; false; ) {} return import(path); }',
+				"export function loadForIn() { for (const path in { other: true }) {} return import(path); }",
+				'export function loadForOf() { for (const path of ["./other"]) {} return import(path); }',
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.computedLoads).toHaveLength(0);
+		expect(inventory.sourceEdges.filter((edge) => edge.kind === "dynamic-import")).toHaveLength(3);
+		expect(inventory.sourceEdges).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "dynamic-import", specifier: "./target", to: "target.ts", runtime: true }),
+			]),
+		);
+		expect(inventory.sourceEdges).not.toContainEqual(
+			expect.objectContaining({ kind: "dynamic-import", specifier: "./other", runtime: true }),
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
