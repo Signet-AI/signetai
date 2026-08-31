@@ -23,7 +23,7 @@ describe("pipeline model routes", () => {
 		const ids = body.models.map((model) => model.id);
 		expect(ids).toContain("gpt-5.4-mini");
 		expect(ids).toContain("haiku");
-		expect(ids).toContain("google/gemini-2.5-flash");
+		expect(ids).toContain("opencode/gemini-3-flash");
 		expect(ids).not.toContain("gpt-5-codex");
 		expect(ids).not.toContain("gpt-5-codex-mini");
 	});
@@ -34,12 +34,13 @@ describe("pipeline model routes", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as Record<string, Array<{ id: string }>>;
 		expect(body.codex.map((model) => model.id)).toEqual([
+			"gpt-5.3-codex-spark",
 			"gpt-5.4-mini",
 			"gpt-5.4",
 			"gpt-5.5",
-			"gpt-5.3-codex",
-			"gpt-5.3-codex-spark",
-			"gpt-5.2",
+			"gpt-5.6-luna",
+			"gpt-5.6-sol",
+			"gpt-5.6-terra",
 		]);
 		expect(body.acpx.map((model) => model.id)).toContain("gpt-5.4-mini");
 	});

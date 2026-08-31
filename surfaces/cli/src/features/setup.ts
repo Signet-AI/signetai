@@ -85,7 +85,8 @@ function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string
 
 /**
  * Pick a model from a list of pi-ai model options. Plain select for short
- * lists, searchable `search` prompt for large ones (e.g. openrouter's 253) so
+ * lists, searchable `search` prompt for large ones (e.g. OpenRouter's full
+ * provider catalog) so
  * the user can type to find what they want — all results are shown, not capped.
  */
 async function pickModel(

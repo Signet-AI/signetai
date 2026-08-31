@@ -43,8 +43,8 @@
 	"homepage": "https://signetai.sh",
 	"dependencies": {
 		"@signet/core": "workspace:*",
-		"@earendil-works/pi-ai": "0.83.0",
-		"@earendil-works/pi-tui": "0.83.0",
+		"@earendil-works/pi-ai": "0.84.4",
+		"@earendil-works/pi-tui": "0.84.4",
 		"@signet/connector-claude-code": "workspace:*",
 		"@signet/connector-codex": "workspace:*",
 		"@signet/connector-forge": "workspace:*",

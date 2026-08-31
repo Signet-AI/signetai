@@ -1,5 +1,12 @@
-import { Key, ProcessTerminal, TUI, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { Component } from "@earendil-works/pi-tui";
+import {
+	Key,
+	ProcessTerminal,
+	TuiMainScreen,
+	matchesKey,
+	truncateToWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { DaemonStreamResult } from "./daemon.js";
 
 const MAX_VIEW_LINE_CHARS = 16_000;
@@ -483,7 +490,7 @@ export function createDreamingAttachTui(view: DreamingAttachView): {
 	readonly terminal: ProcessTerminal;
 } {
 	const terminal = new ProcessTerminal();
-	const tui = new TUI(terminal);
+	const tui = new TuiMainScreen(terminal);
 	tui.addChild(view);
 	tui.setFocus(view);
 	return { tui, terminal };

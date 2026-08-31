@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type {
-	AuthInteraction,
 	OAuthAuth,
 	OAuthCredentials,
 	OAuthPrompt,
 	OAuthSelectPrompt,
+	ProviderAuthInteraction,
 } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { logger } from "./logger";
@@ -195,7 +195,10 @@ export async function resolveOAuthCredential(providerId: string): Promise<Resolv
 		let resolved = credentials;
 		try {
 			if (resolved.expires <= Date.now()) {
-				const refreshed = await provider.oauth.refresh({ ...resolved, type: "oauth" });
+				const refreshed = await provider.oauth.refresh(
+					{ ...resolved, type: "oauth" },
+					AbortSignal.timeout(OAUTH_SESSION_TTL_MS),
+				);
 				resolved = { refresh: refreshed.refresh, access: refreshed.access, expires: refreshed.expires };
 			}
 		} catch (error) {
@@ -288,7 +291,7 @@ export function startOAuthLogin(
 			const timeout = setTimeout(() => abortOAuthLogin(sessionId, "Login session expired"), OAUTH_SESSION_TTL_MS);
 			timeout.unref?.();
 
-			const callbacks: AuthInteraction = {
+			const callbacks: ProviderAuthInteraction = {
 				signal: abortController.signal,
 				notify: (event) => {
 					if (event.type === "auth_url")

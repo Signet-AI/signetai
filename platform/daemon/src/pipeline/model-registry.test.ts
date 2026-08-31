@@ -35,7 +35,7 @@ describe("static model registry", () => {
 		const acpx = getAvailableModels("acpx").map((model) => model.id);
 		expect(acpx).toContain("gpt-5.4-mini");
 		expect(acpx).toContain("haiku");
-		expect(acpx).toContain("google/gemini-2.5-flash");
+		expect(acpx).toContain("opencode/gemini-3-flash");
 		expect(acpx).not.toContain("gpt-5-codex");
 		expect(acpx).not.toContain("gpt-5-codex-mini");
 	});
@@ -43,12 +43,13 @@ describe("static model registry", () => {
 	it("groups checked catalog entries by provider", () => {
 		const byProvider = getModelsByProvider();
 		expect(byProvider.codex.map((model) => model.id)).toEqual([
+			"gpt-5.3-codex-spark",
 			"gpt-5.4-mini",
 			"gpt-5.4",
 			"gpt-5.5",
-			"gpt-5.3-codex",
-			"gpt-5.3-codex-spark",
-			"gpt-5.2",
+			"gpt-5.6-luna",
+			"gpt-5.6-sol",
+			"gpt-5.6-terra",
 		]);
 		expect(byProvider.acpx.map((model) => model.id)).toContain("gpt-5.4-mini");
 	});

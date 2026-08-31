@@ -68,7 +68,7 @@ describe("buildSetupPipeline", () => {
 describe("buildSetupInference", () => {
 	it("defaults ACPX models from the selected harness, not the ACPX provider bucket", () => {
 		expect(defaultAcpxModel(["codex"], ["acpx"])).toBe("gpt-5.4-mini");
-		expect(defaultAcpxModel(["opencode"], ["acpx"])).toBe("google/gemini-2.5-flash");
+		expect(defaultAcpxModel(["opencode"], ["acpx"])).toBe("opencode/gemini-3-flash");
 		expect(defaultAcpxModel(["claude-code"], ["acpx"])).toBe("haiku");
 		expect(defaultAcpxModel(["kimi"], ["acpx"])).toBe("haiku");
 
@@ -82,7 +82,7 @@ describe("buildSetupInference", () => {
 			buildSetupInference("acpx", undefined, ["opencode"], ["acpx"], "/usr/local/bin/bunx")?.targets["background-acpx"],
 		).toMatchObject({
 			acpx: { agent: "opencode" },
-			models: { default: { model: "google/gemini-2.5-flash" } },
+			models: { default: { model: "opencode/gemini-3-flash" } },
 		});
 		expect(
 			buildSetupInference("acpx", undefined, ["kimi"], ["acpx"], "/usr/local/bin/bunx")?.targets["background-acpx"],
@@ -95,7 +95,7 @@ describe("buildSetupInference", () => {
 	it("writes ACPX as explicit inference routing with the selected harness agent", () => {
 		const inference = buildSetupInference(
 			"acpx",
-			"google/gemini-2.5-flash",
+			"opencode/gemini-3-flash",
 			["opencode", "codex"],
 			[],
 			"/usr/local/bin/bunx",
