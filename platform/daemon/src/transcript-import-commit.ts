@@ -21,6 +21,8 @@ export interface CompletedTranscriptEvidence {
 	}[];
 	readonly contentHash: string;
 	readonly sourceMetaJson: string | null;
+	/** Managed relative path of the staged import file, when imported. */
+	readonly sourcePath: string | null;
 }
 
 export interface CompletedTranscriptCommit extends CompletedTranscriptEvidence {
@@ -45,6 +47,7 @@ export function buildCompletedTranscriptCommit(
 		readonly sourceId: string;
 		readonly sourceRecordId: string;
 		readonly sourceMetaJson?: string | null;
+		readonly sourcePath?: string | null;
 	},
 ): CompletedTranscriptCommit {
 	const identity = canonicalTranscriptIdentity(record);
@@ -64,6 +67,7 @@ export function buildCompletedTranscriptCommit(
 		messages: record.messages,
 		contentHash: identity.contentHash,
 		sourceMetaJson: input.sourceMetaJson ?? null,
+		sourcePath: input.sourcePath ?? null,
 		externalIdentity,
 		canonicalId: identity.canonicalId,
 		canonicalKey: identity.canonicalKey,
@@ -87,6 +91,9 @@ export function canonicalTranscriptLine(commit: CompletedTranscriptCommit): stri
 		source_id: commit.sourceId,
 		source_record_id: commit.sourceRecordId,
 		content_hash: commit.contentHash,
+		source_path: commit.sourcePath,
+		source_meta_json:
+			commit.sourceMetaJson ?? (commit.sourcePath === null ? null : JSON.stringify({ managedPath: commit.sourcePath })),
 		messages: commit.messages,
 	})}\n`;
 }

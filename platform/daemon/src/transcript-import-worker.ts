@@ -18,7 +18,7 @@ export interface TranscriptImportWorkerOptions {
 	readonly workspaceRoot?: string;
 	readonly pressure?: () => boolean;
 	readonly yield?: () => Promise<void>;
-	readonly onBatch?: (jobId: string) => Promise<void>;
+	readonly onBatch?: (jobId: string, sourceId: string) => Promise<void>;
 	readonly pollMs?: number;
 }
 type Job = { id: string; state: ImportJobState; generation?: number; control_request?: string | null };
@@ -93,6 +93,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 			jobId: job.id,
 			payload: { view: "files" },
 		});
+		const committedSources = new Set<string>();
 		for (const file of files) {
 			if (!active) return;
 			const path = join(root, file.managed_path);
@@ -119,7 +120,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					payload: { fileId: file.id },
 				});
 			}
-			await commitPending(job.id, file, path);
+			if (await commitPending(job.id, file, path)) committedSources.add(file.source_id);
 		}
 		await options.store.run({
 			kind: "source_import",
@@ -128,9 +129,10 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 			jobId: job.id,
 			payload: {},
 		});
-		await options.onBatch?.(job.id);
+		for (const sourceId of committedSources) await options.onBatch?.(job.id, sourceId);
 	};
-	const commitPending = async (jobId: string, file: File, path: string): Promise<void> => {
+	const commitPending = async (jobId: string, file: File, path: string): Promise<boolean> => {
+		let committed = false;
 		for (;;) {
 			const rows = await options.store.run<Row[]>({
 				kind: "source_import",
@@ -139,7 +141,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 				jobId,
 				payload: { view: "pending", fileId: file.id, limit: TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch },
 			});
-			if (!rows.length) return;
+			if (!rows.length) return committed;
 			const commits = [];
 			for (const row of rows) {
 				try {
@@ -161,6 +163,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 								agentId: options.agentId,
 								sourceId: row.source_id,
 								sourceRecordId: row.id,
+								sourcePath: file.managed_path,
 							}),
 						);
 					} finally {
@@ -195,6 +198,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 						jobId,
 						payload: { commits: batch },
 					});
+					committed = true;
 				}
 			}
 		}
