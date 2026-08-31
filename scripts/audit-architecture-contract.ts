@@ -433,7 +433,15 @@ function predeclareVarBindings(node: ts.Node, scope: StaticScope): void {
 
 function predeclareScopeBindings(node: ts.Node, scope: StaticScope): void {
 	const visit = (candidate: ts.Node): void => {
-		if (candidate !== node && (isFunctionLike(candidate) || ts.isBlock(candidate) || ts.isCaseBlock(candidate))) {
+		if (
+			candidate !== node &&
+			(isFunctionLike(candidate) ||
+				ts.isBlock(candidate) ||
+				ts.isCaseBlock(candidate) ||
+				ts.isForStatement(candidate) ||
+				ts.isForInStatement(candidate) ||
+				ts.isForOfStatement(candidate))
+		) {
 			if (ts.isFunctionDeclaration(candidate) || ts.isClassDeclaration(candidate) || ts.isEnumDeclaration(candidate))
 				bindDeclaration(scope, candidate);
 			return;
