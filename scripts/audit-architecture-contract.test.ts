@@ -29,6 +29,10 @@ test("the pull-request workflow runs a trusted evaluator against the candidate",
 	expect(workflow).toContain("git archive");
 	expect(workflow).toContain("github.event.pull_request.base.sha");
 	expect(workflow).toContain("TRUSTED_AUDITOR");
+	expect(workflow).toContain("TRUSTED_AUDITOR_COMMIT: 42017f87518556d3a94151100f7329232a94e0de");
+	expect(workflow).toContain(
+		'git show "$TRUSTED_AUDITOR_COMMIT:scripts/audit-architecture-contract.ts" > "$TRUSTED_AUDITOR"',
+	);
 	expect(workflow).toContain("await import(pathToFileURL(trustedAuditor).href)");
 	expect(workflow).toContain("candidateRoot");
 	expect(workflow).toContain("compareArchitectureRatchet(candidate, protectedBase)");
