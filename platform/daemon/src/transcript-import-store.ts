@@ -13,7 +13,7 @@ export type ImportJobState =
 	| "failed";
 export interface ImportStoreOperation {
 	readonly kind: "source_import";
-	readonly operation: "create_job" | "checkpoint" | "record_batch" | "reconcile" | "lease" | "control";
+	readonly operation: "create_job" | "checkpoint" | "record_batch" | "reconcile" | "lease" | "control" | "list";
 	readonly agentId: string;
 	readonly jobId: string;
 	readonly payload: Readonly<Record<string, unknown>>;

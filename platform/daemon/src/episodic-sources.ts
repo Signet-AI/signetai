@@ -301,11 +301,20 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 	const completedAt = hasCompleted ? "st.completed_at" : "NULL";
 	const capturedAt = `COALESCE(${completedAt}, ${updatedAt}, st.created_at)`;
 	const orderBy = `${capturedAt} DESC, st.created_at DESC`;
+	const hasSourceId = tableHasColumn(db, "session_transcripts", "source_id");
+	const hasSourceRecordId = tableHasColumn(db, "session_transcripts", "source_record_id");
+	const hasSourceMeta = tableHasColumn(db, "session_transcripts", "source_meta_json");
+	const hasContentHash = tableHasColumn(db, "session_transcripts", "content_hash");
+	const sourceId = hasSourceId ? "st.source_id" : "NULL";
+	const sourceRecordId = hasSourceRecordId ? "st.source_record_id" : "NULL";
+	const sourceMeta = hasSourceMeta ? "st.source_meta_json" : "NULL";
+	const contentHash = hasContentHash ? "st.content_hash" : "NULL";
 	const completed = hasCompleted ? "st.completed_at IS NOT NULL" : "0";
 	const row = db
 		.prepare(
 			`SELECT st.session_key, st.content, st.harness, st.project, st.created_at, ${updatedAt} AS updated_at,
-			        ${completedAt} AS completed_at, ${completed} AS completed
+			        ${completedAt} AS completed_at, ${completed} AS completed, ${sourceId} AS source_id,
+			        ${sourceRecordId} AS source_record_id, ${sourceMeta} AS source_meta_json, ${contentHash} AS content_hash
 			 FROM session_transcripts AS st
 			 WHERE st.agent_id = ? AND st.session_key IN (${placeholders})
 			 ORDER BY ${orderBy}
@@ -321,6 +330,10 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 				readonly updated_at: string | null;
 				readonly completed_at: string | null;
 				readonly completed: number;
+				readonly source_id: string | null;
+				readonly source_record_id: string | null;
+				readonly source_meta_json: string | null;
+				readonly content_hash: string | null;
 		  }
 		| undefined;
 	if (!row) return null;
@@ -339,8 +352,11 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 		id: row.session_key,
 		content: row.content,
 		sourceKind: "transcript",
-		sourceId: row.session_key,
-		sourceEntryId: null,
+		sourceId: row.source_record_id ?? row.session_key,
+		sourceEntryId: row.source_id,
+		sourceRevision: row.source_id
+			? (row.content_hash ?? row.completed_at ?? row.updated_at ?? row.created_at)
+			: (row.completed_at ?? row.updated_at ?? row.created_at),
 		sourcePath: null,
 		project: row.project,
 		harness: row.harness,
