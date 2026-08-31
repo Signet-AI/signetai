@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /** Real-daemon acceptance eval for transcript import (#1814). */
 import { spawn, type ChildProcess } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 
@@ -191,19 +191,35 @@ async function waitCompleted(jobId: string) {
 }
 async function waitForDatabaseOwnershipRelease(): Promise<void> {
 	for (let i = 0; i < 200; i++) {
-		try {
-			const probe = new Database(join(root, "memory", "memories.db"));
+		const ownerPids: string[] = [];
+		for (const entry of await readdir("/proc")) {
+			if (!/^\d+$/.test(entry)) continue;
 			try {
-				probe.exec("PRAGMA busy_timeout = 0");
-				probe.exec("BEGIN IMMEDIATE");
-				probe.exec("ROLLBACK");
-			} finally {
-				probe.close();
+				const [cmdline, environment] = await Promise.all([
+					readFile(`/proc/${entry}/cmdline`, "utf8"),
+					readFile(`/proc/${entry}/environ`, "utf8"),
+				]);
+				if (cmdline.includes("db-owner-worker") && environment.includes(`SIGNET_PATH=${root}\0`)) ownerPids.push(entry);
+			} catch {
+				// The process can exit between /proc enumeration and readback.
 			}
-			return;
-		} catch {
-			await Bun.sleep(50);
 		}
+		if (ownerPids.length === 0) {
+			try {
+				const probe = new Database(join(root, "memory", "memories.db"));
+				try {
+					probe.exec("PRAGMA busy_timeout = 0");
+					probe.exec("BEGIN IMMEDIATE");
+					probe.exec("ROLLBACK");
+				} finally {
+					probe.close();
+				}
+				return;
+			} catch {
+				// Owner exit and SQLite lock release are separate observable events.
+			}
+		}
+		await Bun.sleep(50);
 	}
 	throw new Error("database ownership was not released within 10 seconds");
 }
@@ -246,6 +262,7 @@ try {
 	record(rejectedDone.job.pending === 0, "rejection-zero-pending", rejectedDone.job);
 
 	await stop();
+	await waitForDatabaseOwnershipRelease();
 	await start({ SIGNET_TRANSCRIPT_IMPORT_FAILPOINT: "after-fs-before-db" });
 	const crash = await importFile(corpus(40, "crash"), "crash.jsonl");
 	await waitForFailpoint("transcript-import-failpoint-fired", 86);
