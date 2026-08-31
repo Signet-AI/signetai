@@ -699,7 +699,11 @@ function aliasTargets(specifier: string, aliases: readonly PathAlias[]): readonl
 	const alias = matching[0];
 	if (alias === undefined) return null;
 	const wildcard = specifier.slice(alias.prefix.length, specifier.length - alias.suffix.length);
-	return alias.targets.map((target) => resolve(alias.baseUrl, target.replace("*", wildcard)));
+	return alias.targets.map((target) => {
+		const wildcardIndex = target.indexOf("*");
+		if (wildcardIndex === -1) return resolve(alias.baseUrl, target);
+		return resolve(alias.baseUrl, target.slice(0, wildcardIndex) + wildcard + target.slice(wildcardIndex + 1));
+	});
 }
 
 function resolveFilePath(base: string, files: ReadonlySet<string>): string | null {
