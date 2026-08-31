@@ -10,6 +10,10 @@
  * retained.
  */
 
+import { classifySyncDbSiteToken, type SyncDbCallSiteToken } from "./sync-db-site-token";
+
+export type { SyncDbCallSiteToken } from "./sync-db-site-token";
+
 export type SyncDbCallKind =
 	| "withReadDb"
 	| "withWriteTx"
@@ -19,8 +23,6 @@ export type SyncDbCallKind =
 	| "checkpointWalAsync"
 	| "incrementalVacuumAsync"
 	| "vacuumConversionAsync";
-export type SyncDbCallSiteToken = string;
-
 export interface SyncDbCallToken {
 	readonly sequence: number;
 	readonly siteId: string;
@@ -136,8 +138,9 @@ function resolveSiteToken(siteToken: SyncDbCallSiteToken | undefined): string {
 	if (siteToken === undefined) return UNATTRIBUTED_SITE;
 	const cached = siteTokenCache.get(siteToken);
 	if (cached !== undefined) return cached;
-	if (!/^[^:]+(?:\/[^:]+)*:\d+$/.test(siteToken)) return UNATTRIBUTED_SITE;
-	const resolved = `${SITE_TOKEN_PREFIX}${siteToken}`;
+	const kind = classifySyncDbSiteToken(siteToken);
+	if (kind === null) return UNATTRIBUTED_SITE;
+	const resolved = kind === "semantic" ? siteToken : `${SITE_TOKEN_PREFIX}${siteToken}`;
 	siteTokenCache.set(siteToken, resolved);
 	return resolved;
 }
@@ -255,7 +258,8 @@ export function captureSyncDbCallSiteToken(): SyncDbCallSiteToken | undefined {
 	const site = captureCallerSite();
 	if (site === UNATTRIBUTED_SITE) return undefined;
 	const prefixIndex = site.lastIndexOf(SITE_TOKEN_PREFIX);
-	return prefixIndex >= 0 ? site.slice(prefixIndex + SITE_TOKEN_PREFIX.length) : site;
+	const token = prefixIndex >= 0 ? site.slice(prefixIndex + SITE_TOKEN_PREFIX.length) : site;
+	return classifySyncDbSiteToken(token) === null ? undefined : (token as SyncDbCallSiteToken);
 }
 
 /** Return site ids whose synchronous interval overlapped the observed stall. */
