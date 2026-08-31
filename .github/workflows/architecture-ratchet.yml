@@ -1,0 +1,32 @@
+name: Architecture ratchet
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Architecture audit and ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+        run: bun install --frozen-lockfile
+
+      - name: Architecture contract tests
+        run: bun test scripts/audit-architecture-contract.test.ts
+
+      - name: Enforce architecture ratchet
+        run: bun run audit:architecture
