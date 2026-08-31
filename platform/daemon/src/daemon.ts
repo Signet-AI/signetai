@@ -142,6 +142,7 @@ import {
 	stopPipeline,
 } from "./pipeline";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
+import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobsAsync } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
@@ -2815,7 +2816,17 @@ async function main() {
 				store: createOwnerTranscriptImportStore(),
 				agentId: resolveDaemonAgentId(),
 				workspaceRoot: AGENTS_DIR,
-				onBatch: async () => undefined,
+				onBatch: async (_jobId, sourceId) => {
+					await getDbAccessor().withWriteTxAsync((db) => {
+						enqueueDreamingAttentionInTx(db, {
+							agentId: resolveDaemonAgentId(),
+							kind: "evidence_requeue",
+							subjectRef: `source:${sourceId}`,
+							details: { sourceId, reason: "transcript-import-committed" },
+							priority: 50,
+						});
+					});
+				},
 			});
 		}
 

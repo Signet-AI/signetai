@@ -264,6 +264,8 @@ export function pendingDreamingEvidenceContinuations(
 	const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 50);
 	const transcriptUpdatedAt = tableHasColumn(db, "session_transcripts", "updated_at") ? "st.updated_at" : "NULL";
 	const transcriptCompletedAt = tableHasColumn(db, "session_transcripts", "completed_at") ? "st.completed_at" : "NULL";
+	const transcriptSourceId = tableHasColumn(db, "session_transcripts", "source_id") ? "st.source_id" : "NULL";
+	const transcriptContentHash = tableHasColumn(db, "session_transcripts", "content_hash") ? "st.content_hash" : "NULL";
 	const transcriptRevision = `COALESCE(${transcriptCompletedAt}, ${transcriptUpdatedAt}, st.created_at)`;
 	const reviewedPredicate = tableExists(db, "dreaming_evidence_reviews")
 		? `AND NOT EXISTS (
@@ -311,7 +313,8 @@ export function pendingDreamingEvidenceContinuations(
 			       SELECT 1 FROM session_transcripts st
 			       WHERE st.agent_id = dec.agent_id AND st.session_key = dec.source_id
 			         AND dec.source_captured_at = ${transcriptRevision}
-			         AND dec.source_entry_id = '' AND dec.source_revision = ${transcriptRevision}
+			         AND dec.source_entry_id = COALESCE(${transcriptSourceId}, '')
+			         AND dec.source_revision = CASE WHEN ${transcriptSourceId} IS NULL OR ${transcriptSourceId} = '' THEN ${transcriptRevision} ELSE COALESCE(${transcriptContentHash}, ${transcriptRevision}) END
 			     ))
 			     OR (dec.source_kind = 'summary' AND EXISTS (
 			       SELECT 1 FROM session_summaries ss
@@ -345,57 +348,61 @@ export function pendingDreamingEvidenceContinuations(
 	});
 }
 
-/** Narrow truthful completion query for one configured source. */
+/** Count current, eligible source-owned evidence using the same delivery frontier and terminal review rules as Dreaming scans. */
+export function countEligibleUnconsumedEvidenceForSource(
+	db: ReadDb,
+	agentId: string,
+	sourceEntryId: string,
+	_legacyObsidianRoot?: string,
+): number {
+	if (!tableExists(db, "dreaming_evidence_consumption")) return 1;
+	const legacyRootPrefix = _legacyObsidianRoot?.replace(/\\/g, "/").replace(/\/$/, "") ?? null;
+	const candidates: Array<{ kind: EpisodicSourceKind; id: string }> = [
+		...(
+			db
+				.prepare(
+					`SELECT source_path AS id FROM memory_artifacts
+					 WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0 AND length(content) > 0
+					   AND (source_id = ? OR (? IS NOT NULL AND harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))`,
+				)
+				.all(
+					agentId,
+					sourceEntryId,
+					legacyRootPrefix,
+					legacyRootPrefix ?? "",
+					`${legacyRootPrefix ?? ""}/\uffff`,
+				) as Array<{ id: string }>
+		).map((row) => ({ kind: "artifact" as const, id: row.id })),
+		...(
+			db
+				.prepare(
+					"SELECT session_key AS id FROM session_transcripts WHERE agent_id = ? AND source_id = ? AND completed_at IS NOT NULL",
+				)
+				.all(agentId, sourceEntryId) as Array<{ id: string }>
+		).map((row) => ({ kind: "transcript" as const, id: row.id })),
+	];
+	return candidates.reduce((count, candidate) => {
+		const source = readEpisodicSource(db, { agentId, from: `${candidate.kind}:${candidate.id}` });
+		if (source === null) return count;
+		const reviewed =
+			tableExists(db, "dreaming_evidence_reviews") &&
+			db
+				.prepare(
+					`SELECT 1 FROM dreaming_evidence_reviews WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
+				)
+				.get(agentId, source.kind, source.id, source.capturedAt, sourceIdentity(source), sourceRevision(source)) !=
+				null;
+		return reviewed || deliveredOffsetForSource(db, agentId, source) >= renderDreamingEvidence(source).length
+			? count
+			: count + 1;
+	}, 0);
+}
+
 export function sourceHasEligibleUnconsumedEvidence(
 	db: ReadDb,
 	agentId: string,
 	sourceEntryId: string,
 	legacyObsidianRoot?: string,
 ): boolean {
-	if (!tableExists(db, "dreaming_evidence_consumption")) return true;
-	const legacyRootPrefix = legacyObsidianRoot?.replace(/\\/g, "/").replace(/\/$/, "");
-	const rows = db
-		.prepare(
-			`SELECT ma.source_path FROM memory_artifacts ma
-			 WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
-			   AND length(ma.content) > 0
-			   AND (
-			     ma.source_id = ?
-			     OR (
-			       ? IS NOT NULL AND ma.harness = 'obsidian' AND ma.source_id IS NULL
-			       AND ma.source_path >= ? AND ma.source_path < ?
-			     )
-			   )
-			   AND (ma.source_sha256 IS NULL OR ma.source_sha256 = ''
-			        OR (ma.agent_id, ma.source_path) = (
-			          SELECT ma2.agent_id, ma2.source_path FROM memory_artifacts ma2
-			          WHERE ma2.agent_id = ma.agent_id AND COALESCE(ma2.is_deleted, 0) = 0
-			            AND ma2.source_sha256 = ma.source_sha256
-			            AND COALESCE(ma2.source_id, '') = COALESCE(ma.source_id, '')
-			          ORDER BY ma2.captured_at DESC, ma2.source_path ASC
-			          LIMIT 1
-			        ))
-			 ORDER BY ma.source_path ASC`,
-		)
-		.all(
-			agentId,
-			sourceEntryId,
-			legacyRootPrefix ?? null,
-			legacyRootPrefix ?? "",
-			`${legacyRootPrefix ?? ""}/\uffff`,
-		) as Array<{ source_path: string }>;
-	return rows.some((row) => {
-		const source = readEpisodicSource(db, { agentId, from: `artifact:${row.source_path}` });
-		if (source === null) return false;
-		const reviewed =
-			tableExists(db, "dreaming_evidence_reviews") &&
-			db
-				.prepare(
-					`SELECT 1 FROM dreaming_evidence_reviews
-					 WHERE agent_id = ? AND source_kind = 'artifact' AND source_id = ?
-					   AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
-				)
-				.get(agentId, source.id, source.capturedAt, sourceIdentity(source), sourceRevision(source)) != null;
-		return !reviewed && deliveredOffsetForSource(db, agentId, source) < renderDreamingEvidence(source).length;
-	});
+	return countEligibleUnconsumedEvidenceForSource(db, agentId, sourceEntryId, legacyObsidianRoot) > 0;
 }
