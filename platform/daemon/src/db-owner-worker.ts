@@ -371,6 +371,12 @@ export function runDbOwnerWorker(): void {
 			throw new RangeError("invalid transcript commit batch");
 		db.exec("BEGIN IMMEDIATE");
 		try {
+			const lease = db
+				.prepare(
+					"SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying')",
+				)
+				.get(request.input.jobId, request.input.agentId, request.input.generation, request.input.leaseToken);
+			if (lease == null) throw new Error("stale import lease");
 			const result = commitCompletedTranscriptBatchInTx(db as never, request.input.commits);
 			commit(context);
 			return result;

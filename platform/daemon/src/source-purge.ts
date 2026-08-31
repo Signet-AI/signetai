@@ -20,10 +20,26 @@ const SOURCE_OWNED_GRAPH_TABLES = [
 export async function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): Promise<number> {
 	const sourceId = input.sourceId.trim();
 	if (!sourceId) return 0;
+	let managedPaths: string[] = [];
+	try {
+		managedPaths = (
+			await getDbAccessor().withReadDbAsync(
+				(db) =>
+					db
+						.prepare(
+							`SELECT managed_path FROM source_import_files WHERE ${input.agentId ? "agent_id = ? AND " : ""}source_id = ?`,
+						)
+						.all(...(input.agentId ? [input.agentId] : []), sourceId) as Array<{ managed_path: string }>,
+			)
+		).map((row) => row.managed_path);
+	} catch {
+		// Older databases do not have import ledgers.
+	}
 	await purgeTranscriptImportFilesystem(
 		process.env.SIGNET_PATH ?? `${process.env.HOME ?? "."}/.agents`,
 		sourceId,
 		input.agentId,
+		managedPaths,
 	);
 	return await runWriteTxAsync(getDbAccessor(), (db) => purgeSourceOwnedRowsInTx(db, input));
 }
