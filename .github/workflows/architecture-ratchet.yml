@@ -38,6 +38,7 @@ jobs:
         run: |
           git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
           git fetch --no-tags origin "$TRUSTED_AUDITOR_COMMIT"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/node_modules"
           git show "$TRUSTED_AUDITOR_COMMIT:scripts/audit-architecture-contract.ts" > "$TRUSTED_AUDITOR"
           mkdir -p "$BASE_ROOT"
           git archive "${{ github.event.pull_request.base.sha }}" | tar -x -C "$BASE_ROOT"
