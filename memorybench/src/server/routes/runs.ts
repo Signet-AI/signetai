@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { CheckpointManager } from "../../orchestrator/checkpoint"
 import { orchestrator } from "../../orchestrator"
-import { wsManager } from "../index"
 import { activeRuns, startRun, endRun, requestStop, isRunActive, getRunState } from "../runState"
+import type { EventBroadcaster } from "../websocket"
 import { createBenchmark } from "../../benchmarks"
 import type { ProviderName } from "../../types/provider"
 import type { BenchmarkName } from "../../types/benchmark"
@@ -30,7 +30,11 @@ function json(data: unknown, status = 200): Response {
   })
 }
 
-export async function handleRunsRoutes(req: Request, url: URL): Promise<Response | null> {
+export async function handleRunsRoutes(
+  req: Request,
+  url: URL,
+  events: EventBroadcaster
+): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
 
@@ -271,18 +275,21 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
       startRun(runId, benchmark)
 
-      runBenchmark({
-        provider: provider as ProviderName,
-        benchmark: benchmark as BenchmarkName,
-        runId,
-        judgeModel,
-        answeringModel,
-        limit,
-        sampling,
-        concurrency,
-        force: sourceRunId ? false : force,
-        fromPhase: fromPhase as PhaseId | undefined,
-      }).finally(() => {
+      runBenchmark(
+        {
+          provider: provider as ProviderName,
+          benchmark: benchmark as BenchmarkName,
+          runId,
+          judgeModel,
+          answeringModel,
+          limit,
+          sampling,
+          concurrency,
+          force: sourceRunId ? false : force,
+          fromPhase: fromPhase as PhaseId | undefined,
+        },
+        events
+      ).finally(() => {
         endRun(runId)
       })
 
@@ -366,20 +373,23 @@ function getRunStatus(checkpoint: any, summary: any): string {
   return "partial"
 }
 
-async function runBenchmark(options: {
-  provider: ProviderName
-  benchmark: BenchmarkName
-  runId: string
-  judgeModel: string
-  answeringModel?: string
-  limit?: number
-  sampling?: SamplingConfig
-  concurrency?: ConcurrencyConfig
-  force?: boolean
-  fromPhase?: PhaseId
-}) {
+async function runBenchmark(
+  options: {
+    provider: ProviderName
+    benchmark: BenchmarkName
+    runId: string
+    judgeModel: string
+    answeringModel?: string
+    limit?: number
+    sampling?: SamplingConfig
+    concurrency?: ConcurrencyConfig
+    force?: boolean
+    fromPhase?: PhaseId
+  },
+  events: EventBroadcaster
+) {
   try {
-    wsManager.broadcast({
+    events.broadcast({
       type: "run_started",
       runId: options.runId,
       provider: options.provider,
@@ -401,7 +411,7 @@ async function runBenchmark(options: {
       phases,
     })
 
-    wsManager.broadcast({
+    events.broadcast({
       type: "run_complete",
       runId: options.runId,
     })
@@ -415,7 +425,7 @@ async function runBenchmark(options: {
       checkpointManager.updateStatus(checkpoint, "failed")
     }
 
-    wsManager.broadcast({
+    events.broadcast({
       type: wasStoppedByUser ? "run_stopped" : "error",
       runId: options.runId,
       message,

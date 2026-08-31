@@ -1,8 +1,8 @@
 import { existsSync, readdirSync } from "fs"
 import { CheckpointManager } from "../../orchestrator/checkpoint"
 import { batchManager } from "../../orchestrator/batch"
-import { wsManager } from "../index"
 import { getRunState } from "../runState"
+import type { EventBroadcaster } from "../websocket"
 import type { ProviderName } from "../../types/provider"
 import type { BenchmarkName } from "../../types/benchmark"
 import type { SamplingConfig } from "../../types/checkpoint"
@@ -56,7 +56,11 @@ function getCompareState(compareId: string): CompareState | undefined {
   return activeCompares.get(compareId)
 }
 
-export async function handleCompareRoutes(req: Request, url: URL): Promise<Response | null> {
+export async function handleCompareRoutes(
+  req: Request,
+  url: URL,
+  events: EventBroadcaster
+): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
 
@@ -152,14 +156,17 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
       }
 
       // Initialize comparison and wait for manifest + checkpoints to be created
-      const { compareId } = await initializeComparison({
-        providers: providers as ProviderName[],
-        benchmark: benchmark as BenchmarkName,
-        judgeModel,
-        answeringModel,
-        sampling,
-        force,
-      })
+      const { compareId } = await initializeComparison(
+        {
+          providers: providers as ProviderName[],
+          benchmark: benchmark as BenchmarkName,
+          judgeModel,
+          answeringModel,
+          sampling,
+          force,
+        },
+        events
+      )
 
       return json({ message: "Comparison started", compareId })
     } catch (e) {
@@ -279,7 +286,7 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
     }
 
     // Broadcast stop event
-    wsManager.broadcast({
+    events.broadcast({
       type: "compare_stopping",
       compareId,
     })
@@ -302,7 +309,7 @@ export async function handleCompareRoutes(req: Request, url: URL): Promise<Respo
     }
 
     // Resume the comparison
-    resumeComparison(compareId)
+    resumeComparison(compareId, events)
 
     return json({ message: "Comparison resumed", compareId })
   }
@@ -374,14 +381,17 @@ function getRunStatus(checkpoint: any, summary: any): string {
   return "partial"
 }
 
-async function initializeComparison(options: {
-  providers: ProviderName[]
-  benchmark: BenchmarkName
-  judgeModel: string
-  answeringModel: string
-  sampling?: SamplingConfig
-  force?: boolean
-}): Promise<{ compareId: string }> {
+async function initializeComparison(
+  options: {
+    providers: ProviderName[]
+    benchmark: BenchmarkName
+    judgeModel: string
+    answeringModel: string
+    sampling?: SamplingConfig
+    force?: boolean
+  },
+  events: EventBroadcaster
+): Promise<{ compareId: string }> {
   // Only await manifest creation - this is fast
   const manifest = await batchManager.createManifest(options)
   const compareId = manifest.compareId
@@ -392,7 +402,7 @@ async function initializeComparison(options: {
     manifest.runs.map((r) => r.runId)
   )
 
-  wsManager.broadcast({
+  events.broadcast({
     type: "compare_started",
     compareId,
     benchmark: options.benchmark,
@@ -403,13 +413,13 @@ async function initializeComparison(options: {
   batchManager
     .executeRuns(manifest)
     .then(() => {
-      wsManager.broadcast({
+      events.broadcast({
         type: "compare_complete",
         compareId,
       })
     })
     .catch((error) => {
-      wsManager.broadcast({
+      events.broadcast({
         type: "error",
         compareId,
         message: error instanceof Error ? error.message : "Unknown error",
@@ -422,7 +432,7 @@ async function initializeComparison(options: {
   return { compareId }
 }
 
-async function resumeComparison(compareId: string) {
+async function resumeComparison(compareId: string, events: EventBroadcaster) {
   try {
     const manifest = batchManager.loadManifest(compareId)
     if (!manifest) {
@@ -435,20 +445,20 @@ async function resumeComparison(compareId: string) {
       manifest.runs.map((r) => r.runId)
     )
 
-    wsManager.broadcast({
+    events.broadcast({
       type: "compare_resumed",
       compareId,
     })
 
     await batchManager.resume(compareId)
 
-    wsManager.broadcast({
+    events.broadcast({
       type: "compare_complete",
       compareId,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
-    wsManager.broadcast({
+    events.broadcast({
       type: "error",
       compareId,
       message,

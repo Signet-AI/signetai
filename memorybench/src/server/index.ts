@@ -48,9 +48,9 @@ export async function startServer(options: ServerOptions): Promise<void> {
         let response: Response | null = null
 
         if (url.pathname.startsWith("/api/runs")) {
-          response = await handleRunsRoutes(req, url)
+          response = await handleRunsRoutes(req, url, wsManager)
         } else if (url.pathname.startsWith("/api/compare")) {
-          response = await handleCompareRoutes(req, url)
+          response = await handleCompareRoutes(req, url, wsManager)
         } else if (
           url.pathname.startsWith("/api/benchmarks") ||
           url.pathname.startsWith("/api/providers") ||
