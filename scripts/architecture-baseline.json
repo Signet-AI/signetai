@@ -9598,8 +9598,8 @@
 			{
 				"id": "module:scripts/audit-architecture-contract.ts",
 				"path": "scripts/audit-architecture-contract.ts",
-				"lines": 796,
-				"logicalStatements": 348,
+				"lines": 825,
+				"logicalStatements": 357,
 				"exports": 15,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 0,
@@ -9984,6 +9984,20 @@
 				"runtimeFanOut": 3,
 				"runtimeCallsitesIn": 0,
 				"runtimeCallsitesOut": 3,
+				"dynamicSites": 0,
+				"layer": "domain"
+			},
+			{
+				"id": "module:scripts/prepare-dashboard-bundle.ts",
+				"path": "scripts/prepare-dashboard-bundle.ts",
+				"lines": 50,
+				"logicalStatements": 29,
+				"exports": 0,
+				"topLevelMutableBindings": 0,
+				"runtimeFanIn": 0,
+				"runtimeFanOut": 0,
+				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -42298,6 +42312,42 @@
 				"line": 13
 			},
 			{
+				"id": "scripts/prepare-dashboard-bundle.ts:import:runtime:node:child_process:de031540f29dc342:1",
+				"from": "scripts/prepare-dashboard-bundle.ts",
+				"to": null,
+				"specifier": "node:child_process",
+				"kind": "import",
+				"runtime": true,
+				"line": 1
+			},
+			{
+				"id": "scripts/prepare-dashboard-bundle.ts:import:runtime:node:fs:a5caaa2114558613:1",
+				"from": "scripts/prepare-dashboard-bundle.ts",
+				"to": null,
+				"specifier": "node:fs",
+				"kind": "import",
+				"runtime": true,
+				"line": 2
+			},
+			{
+				"id": "scripts/prepare-dashboard-bundle.ts:import:runtime:node:path:ccdfdf0805903df8:1",
+				"from": "scripts/prepare-dashboard-bundle.ts",
+				"to": null,
+				"specifier": "node:path",
+				"kind": "import",
+				"runtime": true,
+				"line": 3
+			},
+			{
+				"id": "scripts/prepare-dashboard-bundle.ts:import:runtime:node:url:6f847a28953090d9:1",
+				"from": "scripts/prepare-dashboard-bundle.ts",
+				"to": null,
+				"specifier": "node:url",
+				"kind": "import",
+				"runtime": true,
+				"line": 4
+			},
+			{
 				"id": "scripts/probe-signet-mcp.ts:import:runtime:node:child_process:14080636ca300837:1",
 				"from": "scripts/probe-signet-mcp.ts",
 				"to": null,
@@ -50381,7 +50431,8 @@
 					"turbo",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/claude-code/connector",
@@ -50395,7 +50446,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/codex/connector",
@@ -50409,7 +50461,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/codex/plugin",
@@ -50420,7 +50473,8 @@
 					"@signet/connector-codex"
 				],
 				"devDependencies": [],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/forge/connector",
@@ -50434,7 +50488,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/gemini/connector",
@@ -50448,7 +50503,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/hermes-agent/connector",
@@ -50462,7 +50518,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/kimi/connector",
@@ -50476,7 +50533,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/oh-my-pi/connector",
@@ -50490,7 +50548,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/oh-my-pi/extension",
@@ -50505,7 +50564,8 @@
 					"bun-types",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/openclaw/connector",
@@ -50519,7 +50579,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/openclaw/memory-adapter",
@@ -50535,7 +50596,8 @@
 				],
 				"peerDependencies": [
 					"openclaw"
-				]
+				],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/opencode/connector",
@@ -50550,7 +50612,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/opencode/plugin",
@@ -50567,7 +50630,8 @@
 				],
 				"peerDependencies": [
 					"@opencode-ai/plugin"
-				]
+				],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/pi/connector",
@@ -50581,7 +50645,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/pi/extension",
@@ -50597,7 +50662,8 @@
 					"bun-types",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/pi/extension-base",
@@ -50608,7 +50674,8 @@
 					"@signet/lifecycle-proof"
 				],
 				"devDependencies": [],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "integrations/unreal/plugin",
@@ -50616,7 +50683,8 @@
 				"name": "@signet/unreal-plugin",
 				"dependencies": [],
 				"devDependencies": [],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "libs/connector-base",
@@ -50631,7 +50699,8 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "libs/lifecycle-proof",
@@ -50639,7 +50708,8 @@
 				"name": "@signet/lifecycle-proof",
 				"dependencies": [],
 				"devDependencies": [],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "libs/sdk",
@@ -50654,7 +50724,8 @@
 				"peerDependencies": [
 					"react",
 					"zod"
-				]
+				],
+				"optionalDependencies": []
 			},
 			{
 				"id": "memorybench",
@@ -50679,7 +50750,8 @@
 					"prettier",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "memorybench/ui",
@@ -50705,7 +50777,8 @@
 					"tailwindcss",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "platform/core",
@@ -50724,7 +50797,15 @@
 					"@types/node",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": [
+					"better-sqlite3",
+					"sqlite-vec-darwin-arm64",
+					"sqlite-vec-darwin-x64",
+					"sqlite-vec-linux-arm64",
+					"sqlite-vec-linux-x64",
+					"sqlite-vec-windows-x64"
+				]
 			},
 			{
 				"id": "platform/daemon",
@@ -50763,7 +50844,10 @@
 					"@types/yauzl",
 					"esbuild"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": [
+					"@signet/native"
+				]
 			},
 			{
 				"id": "platform/native",
@@ -50773,7 +50857,8 @@
 				"devDependencies": [
 					"@napi-rs/cli"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "surfaces/browser-extension",
@@ -50784,7 +50869,8 @@
 					"@types/chrome",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "surfaces/cli",
@@ -50814,7 +50900,10 @@
 				"devDependencies": [
 					"@types/better-sqlite3"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": [
+					"better-sqlite3"
+				]
 			},
 			{
 				"id": "surfaces/dashboard",
@@ -50851,7 +50940,8 @@
 					"typescript",
 					"vite"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "surfaces/desktop",
@@ -50868,7 +50958,8 @@
 					"electron-builder",
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "surfaces/tray",
@@ -50878,7 +50969,8 @@
 				"devDependencies": [
 					"typescript"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "web/docs",
@@ -50895,7 +50987,8 @@
 					"typescript",
 					"wrangler"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "web/marketing",
@@ -50942,7 +51035,8 @@
 					"unified",
 					"wrangler"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			},
 			{
 				"id": "web/workers/reviews",
@@ -50953,7 +51047,8 @@
 					"@cloudflare/workers-types",
 					"wrangler"
 				],
-				"peerDependencies": []
+				"peerDependencies": [],
+				"optionalDependencies": []
 			}
 		],
 		"packageRuntimeEdges": [
@@ -51084,6 +51179,10 @@
 			{
 				"from": "platform/daemon",
 				"to": "platform/core"
+			},
+			{
+				"from": "platform/daemon",
+				"to": "platform/native"
 			},
 			{
 				"from": "surfaces/cli",
@@ -51288,6 +51387,10 @@
 				"to": "platform/core"
 			},
 			{
+				"from": "platform/daemon",
+				"to": "platform/native"
+			},
+			{
 				"from": "surfaces/cli",
 				"to": "integrations/claude-code/connector"
 			},
@@ -51345,12 +51448,12 @@
 			}
 		],
 		"summary": {
-			"files": 934,
-			"lines": 268229,
-			"logicalStatements": 96537,
+			"files": 935,
+			"lines": 268308,
+			"logicalStatements": 96575,
 			"runtimeEdges": 1787,
 			"allEdges": 2376,
-			"unresolvedEdges": 1753,
+			"unresolvedEdges": 1757,
 			"dynamicLiteralSites": 51,
 			"computedLoads": 2,
 			"runtimeCycles": 0,
