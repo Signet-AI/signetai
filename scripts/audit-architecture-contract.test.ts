@@ -241,3 +241,28 @@ test("shadowed bindings keep computed runtime loads in the ledger", () => {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("nested-block var shadowing keeps computed runtime loads in the ledger", () => {
+	const root = mkdtempSync(join("/mnt/work/hermes-scratch", "architecture-var-scope-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				'const path = "./target";',
+				"export function load(runtimePath: string) {",
+				"	return import(path);",
+				"	if (globalThis) { var path = runtimePath; }",
+				"}",
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.computedLoads).toHaveLength(1);
+		expect(inventory.computedLoads[0]?.kind).toBe("dynamic-import");
+		expect(inventory.sourceEdges).not.toContainEqual(
+			expect.objectContaining({ kind: "dynamic-import", specifier: "./target", to: "target.ts", runtime: true }),
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
