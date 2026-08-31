@@ -65,6 +65,14 @@ jobs:
 
       - name: Build workspace dependencies
         run: bun run build
+
+      # Source-run e2e guard: use a valid configured workspace for the native
+      # embedding /health probe and assert explicit incomplete workspaces fail
+      # closed before the daemon can recreate state.
+      - name: Source daemon /health isolation e2e
+        working-directory: platform/daemon
+        run: bun test src/native-embedding-eventloop-isolation.test.ts
+
       # Unit guard: proves the main-thread adapter never blocks while the
       # embedding worker is stuck (the ★ non-blocking invariant), plus RPC
       # bounds, crash/exit handling, and sync status. The compiled-binary
