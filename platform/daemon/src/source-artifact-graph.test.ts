@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
@@ -12,6 +12,12 @@ import {
 } from "./source-artifact-graph";
 import { purgeSourceOwnedRows } from "./source-purge";
 import { txIngestEnvelope } from "./transactions";
+
+it("routes transcript source purge through the DB owner boundary", () => {
+	const source = readFileSync(new URL("./source-purge.ts", import.meta.url), "utf8");
+	expect(source).toContain("dbOwnerTranscriptImportPurge");
+	expect(source).not.toContain("withReadDbAsync");
+});
 
 const DREAMING_CONFIG: DreamingConfig = {
 	tokenThreshold: 1,

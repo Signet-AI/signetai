@@ -993,7 +993,11 @@ export function runDbOwnerWorker(): void {
 		}
 		const embedding = await getDbAccessor().withReadDbAsync(
 			async (db) => resolveActiveEmbeddingConfig(db, config.embedding),
+<<<<<<< ours
 			{ siteToken: "db:recall.embedding.config.read", operation: "recall.resolve-active-embedding" },
+=======
+			{ siteToken: "db-owner-worker.ts:975" },
+>>>>>>> theirs
 		);
 		const query = payload.query;
 		const queryEmbedding =
@@ -1026,7 +1030,11 @@ export function runDbOwnerWorker(): void {
 		const { getDbAccessor } = await import("./db-accessor");
 		return await getDbAccessor().withReadDbAsync(
 			(db) => vectorSearchWithMetadata(db, new Float32Array(payload.queryEmbedding), payload.options),
+<<<<<<< ours
 			{ siteToken: "db:recall.vector.search.read", operation: "recall.vector-search" },
+=======
+			{ siteToken: "db-owner-worker.ts:1008" },
+>>>>>>> theirs
 		);
 	}
 
