@@ -1,5 +1,5 @@
 export interface ConcurrencyConfig {
-  default: number
+  default?: number
   ingest?: number
   indexing?: number
   search?: number

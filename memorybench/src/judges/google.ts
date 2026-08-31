@@ -1,5 +1,5 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
-import { generateText } from "ai"
+import { generateText, type LanguageModel } from "ai"
 import type { Judge, JudgeConfig, JudgeInput, JudgeResult } from "../types/judge"
 import type { ProviderPrompts } from "../types/prompts"
 import { buildJudgePrompt, parseJudgeResponse, getJudgePrompt } from "./base"
@@ -46,7 +46,7 @@ export class GoogleJudge implements Judge {
     return getJudgePrompt(questionType, providerPrompts)
   }
 
-  getModel() {
+  getModel(): LanguageModel {
     if (!this.client || !this.modelConfig) throw new Error("Judge not initialized")
     return this.client(this.modelConfig.id)
   }

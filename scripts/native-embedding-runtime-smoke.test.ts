@@ -10,6 +10,7 @@ import { MIGRATIONS } from "../platform/core/src/migrations";
 const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_NATIVE_EMBEDDING_SMOKE === "1";
 const dbOwnerSmokeEnabled = process.env.SIGNET_DB_OWNER_SMOKE === "1";
+const dreamingTokenSmokeEnabled = process.env.SIGNET_DREAMING_TOKEN_SMOKE === "1";
 const tempDirs: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 const CHILD_KILL_REAP_MS = 2_000;
@@ -249,7 +250,31 @@ describe("native embedding smoke teardown", () => {
 
 describe("compiled native embedding runtime", () => {
 	const smoke = enabled ? test : test.skip;
+	const dreamingTokenSmoke = dreamingTokenSmokeEnabled ? test : test.skip;
 	const dbOwnerSmoke = dbOwnerSmokeEnabled ? test : test.skip;
+
+	dreamingTokenSmoke(
+		"loads the embedded tokenizer WASM inside the Dreaming token worker",
+		() => {
+			const binary = nativeSmokeBinary();
+			if (!existsSync(binary)) {
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+			}
+			const result = spawnSync(binary, [], {
+				env: {
+					...process.env,
+					SIGNET_DREAMING_TOKEN_WORKER_SMOKE: "1",
+					SIGNET_TELEMETRY_OPTOUT: "1",
+				},
+				encoding: "utf8",
+				timeout: 30_000,
+			});
+			if (result.error) throw result.error;
+			expect(result.status).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual({ type: "dreaming-token-count", count: 625 });
+		},
+		30_000,
+	);
 
 	dbOwnerSmoke(
 		"dispatches the embedded DB owner through the compiled binary",
@@ -383,11 +408,8 @@ describe("compiled native embedding runtime", () => {
 				SIGNET_BIND: "127.0.0.1",
 				SIGNET_SKIP_AGENT_REGISTER: "1",
 			};
-			// biome-ignore lint/performance/noDelete: prove the binary materializes its own embedded connector tree
 			delete daemonEnv.SIGNET_CONNECTOR_ASSETS_DIR;
-			// biome-ignore lint/performance/noDelete: avoid source-install connector fallbacks
 			delete daemonEnv.SIGNET_DIR;
-			// biome-ignore lint/performance/noDelete: prove the binary serves its own embedded dashboard, not a leaked on-disk dir
 			delete daemonEnv.SIGNET_DASHBOARD_DIR;
 
 			const child = spawn(binary, [], { env: daemonEnv, stdio: ["ignore", "pipe", "pipe"] });
@@ -416,7 +438,6 @@ describe("compiled native embedding runtime", () => {
 				expect(applied.map((migration) => migration.version)).toEqual(MIGRATIONS.map((migration) => migration.version));
 
 				const cliEnv = { ...daemonEnv };
-				// biome-ignore lint/performance/noDelete: run the CLI rather than another daemon entrypoint
 				delete cliEnv.SIGNET_DAEMON_ENTRYPOINT;
 				const sync = spawnSync(binary, ["sync"], {
 					cwd: home,

@@ -5,6 +5,7 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\" \"ui/**/*.tsx\" \"ui/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"ui/**/*.tsx\" \"ui/**/*.ts\""
   },

@@ -30,7 +30,7 @@ function generateRunId(): string {
 
 export function parseIngestArgs(args: string[]): IngestArgs | null {
   const parsed: Partial<IngestArgs> = {}
-  const concurrency: Partial<ConcurrencyConfig> = {}
+  const concurrency: ConcurrencyConfig = {}
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -104,7 +104,7 @@ export function parseIngestArgs(args: string[]): IngestArgs | null {
   }
 
   if (Object.keys(concurrency).length > 0) {
-    parsed.concurrency = concurrency as ConcurrencyConfig
+    parsed.concurrency = concurrency
   }
 
   return parsed as IngestArgs

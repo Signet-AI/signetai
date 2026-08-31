@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { countTokens, estimateTokens, resetTokenizerStats, tokenizerStats } from "./pipeline/tokenizer";
+import {
+	countTokens,
+	estimateTokens,
+	resetTokenizerStats,
+	tokenizerStats,
+	truncateToTokens,
+} from "./pipeline/tokenizer";
 
 describe("tokenizer", () => {
 	it("estimates tokens from characters without encoding", () => {
@@ -20,5 +26,13 @@ describe("tokenizer", () => {
 		countTokens("some text");
 		expect(tokenizerStats.encodeCalls).toBe(1);
 		expect(tokenizerStats.encodeChars).toBe("some text".length);
+	});
+
+	it("preserves valid UTF-8 while truncating at exact token boundaries", () => {
+		const truncated = truncateToTokens("Résumé 東京 🚀 carries multilingual evidence", 7);
+
+		expect(countTokens(truncated)).toBeLessThanOrEqual(7);
+		expect(truncated).not.toContain("�");
+		expect(truncateToTokens("🚀x", 1)).toBe("");
 	});
 });

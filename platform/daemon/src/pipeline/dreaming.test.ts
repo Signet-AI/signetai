@@ -283,7 +283,7 @@ describe("Dreaming", () => {
 		expect(latencies.length).toBeGreaterThan(2);
 	});
 
-	it("drains oversized evidence only after every delivered fragment completes (#1430)", async () => {
+	it("drains oversized evidence within budget only after every delivered fragment completes (#1430, #1715)", async () => {
 		seedTranscript(db, "s1", "x".repeat(5_000));
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		let prompt = "";
