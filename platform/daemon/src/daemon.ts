@@ -2201,40 +2201,44 @@ function requestShutdown(reason: string, exitCode: number, error?: unknown, runC
 		});
 }
 
-process.on("SIGINT", () => {
+function onDaemonSigint(): void {
 	requestShutdown("signal:SIGINT", 0);
-});
+}
 
-process.on("SIGTERM", () => {
+function onDaemonSigterm(): void {
 	requestShutdown("signal:SIGTERM", 0);
-});
+}
 
-process.on("uncaughtException", (err) => {
-	logger.error("daemon", "Uncaught exception", err);
-	// Sanitized crash report: truncated message, home-stripped stack frames,
-	// uptime. No memory content. Joinable to the install's heartbeat context.
-	telemetryRef?.record("error.occurred", sanitizeCrashError(err, process.uptime() * 1000));
-	requestShutdown("error:uncaughtException", 1, err);
-});
+function onDaemonUncaughtException(error: Error): void {
+	logger.error("daemon", "Uncaught exception", error);
+	telemetryRef?.record("error.occurred", sanitizeCrashError(error, process.uptime() * 1000));
+	requestShutdown("error:uncaughtException", 1, error);
+}
 
-process.on("unhandledRejection", (reason) => {
+function onDaemonUnhandledRejection(reason: unknown): void {
 	logger.error(
 		"daemon",
 		"Unhandled rejection",
 		reason instanceof Error ? reason : undefined,
 		reason instanceof Error ? undefined : { reason: String(reason) },
 	);
-	// Sanitized crash report for rejections too (primitives degrade to a
-	// truncated string).
 	telemetryRef?.record("error.occurred", sanitizeCrashError(reason, process.uptime() * 1000));
 	requestShutdown("error:unhandledRejection", 1, reason);
-});
+}
+
+function installDaemonProcessHandlers(): void {
+	process.on("SIGINT", onDaemonSigint);
+	process.on("SIGTERM", onDaemonSigterm);
+	process.on("uncaughtException", onDaemonUncaughtException);
+	process.on("unhandledRejection", onDaemonUnhandledRejection);
+}
 
 // ============================================================================
 // Main
 // ============================================================================
 
 async function main() {
+	installDaemonProcessHandlers();
 	logger.info("daemon", "Signet Daemon starting");
 	logger.info("daemon", `File logging to ${logger.logFilePath}`);
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
