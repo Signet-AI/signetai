@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { analyzeSourceTree, loadBaseline } from "./audit-architecture-contract";
+import { analyzeSourceTree, loadBaseline, renderReport } from "./audit-architecture-contract";
 
 test("the committed baseline reproduces the current source and package inventory", () => {
 	const baseline = loadBaseline();
@@ -40,12 +40,70 @@ test("structural edge identities survive unrelated line insertion", () => {
 test("the source graph separates type-only cycles from runtime cycles", () => {
 	const root = mkdtempSync(join("/mnt/work/hermes-scratch", "architecture-cycle-"));
 	try {
-		writeFileSync(join(root, "a.ts"), 'import type { B } from "./b"; export type A = B;\n');
-		writeFileSync(join(root, "b.ts"), 'import type { A } from "./a"; export type B = A;\n');
+		writeFileSync(join(root, "a.ts"), 'export { type B } from "./b";\n');
+		writeFileSync(join(root, "b.ts"), 'export { type A } from "./a";\n');
 		const inventory = analyzeSourceTree({ root, sourceRoot: root });
 		expect(inventory.summary.runtimeCycles).toBe(0);
 		expect(inventory.summary.typeCycles).toBe(1);
 		expect(inventory.typeCycles[0]?.nodes).toEqual(["a.ts", "b.ts"]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("manifested outputs are measured and excluded from handwritten source files", () => {
+	const root = mkdtempSync(join("/mnt/work/hermes-scratch", "architecture-artifacts-"));
+	try {
+		writeFileSync(join(root, "normal-output.ts"), "export const generated = true;\n");
+		writeFileSync(join(root, "handwritten.ts"), "export const handwritten = true;\n");
+		mkdirSync(join(root, "src"));
+		writeFileSync(join(root, "src", "fixture-bundle.ts"), "export const bundled = true;\n");
+		mkdirSync(join(root, "scripts"));
+		writeFileSync(
+			join(root, "scripts", "architecture-generated-artifacts.json"),
+			JSON.stringify({
+				version: 1,
+				artifacts: [
+					{ path: "missing-output.ts", owner: "fixture", source: "fixture", generatedBy: "fixture" },
+					{ path: "normal-output.ts", owner: "fixture", source: "fixture", generatedBy: "fixture" },
+				],
+			}),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.generatedArtifacts).toContainEqual({
+			path: "normal-output.ts",
+			lines: 2,
+			bytes: 31,
+			reason: "bundle-name",
+		});
+		expect(inventory.generatedArtifacts).toContainEqual({
+			path: "src/fixture-bundle.ts",
+			lines: 2,
+			bytes: 29,
+			reason: "bundle-name",
+		});
+		expect(inventory.sourceFiles.map((file) => file.path)).toEqual(["handwritten.ts"]);
+		expect(renderReport(inventory)).toContain("`missing-output.ts`");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("optional workspace dependencies are included in runtime and all package graphs", () => {
+	const root = mkdtempSync(join("/mnt/work/hermes-scratch", "architecture-packages-"));
+	try {
+		writeFileSync(
+			join(root, "package.json"),
+			JSON.stringify({ name: "fixture-root", optionalDependencies: { "fixture-child": "workspace:*" } }),
+		);
+		mkdirSync(join(root, "packages", "child"), { recursive: true });
+		writeFileSync(join(root, "packages", "child", "package.json"), JSON.stringify({ name: "fixture-child" }));
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.packages.find((item) => item.name === "fixture-root")?.optionalDependencies).toEqual([
+			"fixture-child",
+		]);
+		expect(inventory.packageRuntimeEdges).toContainEqual({ from: "", to: "packages/child" });
+		expect(inventory.packageAllEdges).toContainEqual({ from: "", to: "packages/child" });
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
