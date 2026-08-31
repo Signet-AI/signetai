@@ -78,7 +78,7 @@ test("manifested outputs are measured and excluded from handwritten source files
 		mkdirSync(join(root, "scripts"));
 		writeFileSync(
 			join(root, "scripts", "generate.ts"),
-			"// src outputs missing-output.ts, normal-output.ts, and fixture-bundle.ts\n",
+			'import { join } from "node:path";\nimport { writeFileSync } from "node:fs";\n// src outputs missing-output.ts, normal-output.ts, and fixture-bundle.ts\nconst normal = join(__dirname, "..", "normal-output.ts");\nconst bundle = join(__dirname, "..", "src", "fixture-bundle.ts");\nconst missing = join(__dirname, "..", "missing-output.ts");\nwriteFileSync(normal, "");\nwriteFileSync(bundle, "");\nwriteFileSync(missing, "");\n',
 		);
 		writeFileSync(
 			join(root, "scripts", "architecture-generated-artifacts.json"),
@@ -137,7 +137,10 @@ test("manifest provenance rejects a handwritten file hidden by a fake entry", ()
 		writeFileSync(join(root, "handwritten.ts"), "export const handwritten = true;\n");
 		mkdirSync(join(root, "src"));
 		mkdirSync(join(root, "scripts"));
-		writeFileSync(join(root, "scripts", "generate.ts"), "// src outputs handwritten.ts\n");
+		writeFileSync(
+			join(root, "scripts", "generate.ts"),
+			'import { join } from "node:path";\nimport { writeFileSync } from "node:fs";\n// src produces handwritten.ts\nconst output = join(__dirname, "..", "handwritten.ts");\nwriteFileSync(output, "");\n',
+		);
 		writeFileSync(
 			join(root, "scripts", "architecture-generated-artifacts.json"),
 			JSON.stringify({
@@ -225,7 +228,10 @@ test("manifested build materialization does not churn the canonical baseline", (
 		mkdirSync(join(root, "source"));
 		mkdirSync(join(root, "scripts"));
 		writeFileSync(join(root, "source", "entry.ts"), "export const entry = true;\n");
-		writeFileSync(join(root, "scripts", "generate.ts"), "// source outputs generated.ts\n");
+		writeFileSync(
+			join(root, "scripts", "generate.ts"),
+			'import { join } from "node:path";\nimport { writeFileSync } from "node:fs";\n// source outputs generated.ts\nwriteFileSync(join(__dirname, "..", "generated.ts"), "");\n',
+		);
 		writeFileSync(
 			join(root, "scripts", "architecture-generated-artifacts.json"),
 			JSON.stringify({
@@ -423,4 +429,134 @@ test("ratchet rejects new forbidden layer edges and routes/state importers", () 
 			expect.stringContaining("new routes/state.ts importer platform/core/src/package-manager.ts"),
 		]),
 	);
+});
+
+test("configured tsconfig path aliases participate in runtime SCC detection", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-alias-cycle-"));
+	try {
+		writeFileSync(
+			join(root, "tsconfig.json"),
+			JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["./*"] } } }),
+		);
+		writeFileSync(join(root, "a.ts"), 'import { b } from "@/b";\nexport const a = b;\n');
+		writeFileSync(join(root, "b.ts"), 'import { a } from "@/a";\nexport const b = a;\n');
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.to !== null)).toHaveLength(2);
+		expect(inventory.summary.runtimeCycles).toBe(1);
+		expect(inventory.sourceEdges.filter((edge) => edge.to === null)).toHaveLength(0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("ImportEquals bindings prevent local require calls from becoming runtime edges", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-import-equals-"));
+	try {
+		writeFileSync(join(root, "fake.ts"), "export const fake = true;\n");
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(join(root, "loader.ts"), 'import require = require("./fake");\nrequire("./target");\n');
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.kind === "require")).toHaveLength(0);
+		expect(inventory.computedLoads).toContainEqual(expect.objectContaining({ kind: "require", path: "loader.ts" }));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("only the lexical canonical createRequire binding enables runtime require edges", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-create-require-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				'import { createRequire as canonical } from "node:module";',
+				"function createRequire(_url: unknown) { return (_path: string) => undefined; }",
+				"const require = createRequire(import.meta.url);",
+				'require("./target");',
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.kind === "require")).toHaveLength(0);
+		expect(inventory.computedLoads).toContainEqual(expect.objectContaining({ kind: "require", path: "loader.ts" }));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("lexical fake createRequire bindings stay computed even with an unaliased canonical import", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-create-require-shadow-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				'import { createRequire } from "node:module";',
+				"function load() {",
+				"	const require = createRequire(import.meta.url);",
+				'	require("./target");',
+				"	function createRequire(_url: unknown) { return (_path: string) => undefined; }",
+				"}",
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.kind === "require")).toHaveLength(0);
+		expect(inventory.computedLoads).toContainEqual(expect.objectContaining({ kind: "require", path: "loader.ts" }));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("named export-list growth trips the public-surface ratchet", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-export-list-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const one = true;\nexport const two = true;\n");
+		writeFileSync(join(root, "consumer.ts"), 'export { one } from "./target";\n');
+		const baseline = analyzeSourceTree({ root, sourceRoot: root });
+		writeFileSync(join(root, "consumer.ts"), 'export { one, two } from "./target";\n');
+		const current = analyzeSourceTree({ root, sourceRoot: root });
+		expect(current.sourceFiles.find((file) => file.path === "consumer.ts")?.exports).toBe(2);
+		expect(compareArchitectureRatchet(current, baseline)).toContain(
+			"public-surface growth in consumer.ts: 1 -> 2 exports",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("manifest output paths must match the generator's resolved write target", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-manifest-output-"));
+	try {
+		writeFileSync(join(root, "package.json"), JSON.stringify({ name: "@signet/sdk" }));
+		mkdirSync(join(root, "platform", "daemon", "src"), { recursive: true });
+		mkdirSync(join(root, "libs", "sdk", "scripts"), { recursive: true });
+		mkdirSync(join(root, "libs", "sdk", "src", "generated"), { recursive: true });
+		writeFileSync(join(root, "platform", "daemon", "src", "daemon.ts"), "export const daemon = true;\n");
+		writeFileSync(
+			join(root, "libs", "sdk", "scripts", "generate-client.ts"),
+			'import { join } from "node:path";\nimport { writeFileSync } from "node:fs";\n// generated from daemon.ts\nwriteFileSync(join(__dirname, "..", "src", "generated", "client.ts"), "");\n',
+		);
+		writeFileSync(
+			join(root, "client.ts"),
+			"/**\n * AUTO-GENERATED FILE — DO NOT EDIT\n * Generated by generate-client.ts\n */\nexport const hidden = true;\n",
+		);
+		mkdirSync(join(root, "scripts"));
+		writeFileSync(
+			join(root, "scripts", "architecture-generated-artifacts.json"),
+			JSON.stringify({
+				version: 1,
+				artifacts: [
+					{
+						path: "client.ts",
+						owner: "@signet/sdk",
+						source: "platform/daemon/src/daemon.ts",
+						generatedBy: "libs/sdk/scripts/generate-client.ts",
+					},
+				],
+			}),
+		);
+		expect(() => analyzeSourceTree({ root, sourceRoot: root })).toThrow("does not write its exact output client.ts");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
