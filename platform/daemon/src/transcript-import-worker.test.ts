@@ -157,6 +157,85 @@ test("owner store persists inventory and terminal counters in the migrated datab
 	}
 });
 
+test("migrated DB crash recovery finalizes pending records after filesystem write without duplicate canonical evidence", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-fs-before-db-recovery-"));
+	const dbPath = join(root, "memory", "memories.db");
+	const oldOwner = process.env.SIGNET_DB_OWNER_WORKER;
+	process.env.SIGNET_DB_OWNER_WORKER = "1";
+	closeDbAccessor();
+	await mkdir(join(root, "memory"), { recursive: true });
+	initDbAccessor(dbPath, { agentsDir: root });
+	const store = createOwnerTranscriptImportStore();
+	const jobId = "crash-job";
+	const fileId = "crash-file";
+	const sourceId = "import:crash-source";
+	const agentId = "crash-agent";
+	const raw = valid("crash");
+	try {
+		await createJob(store, { jobId, agentId });
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"UPDATE source_import_jobs SET state = 'running', total = 1, pending = 0, lease_token = 'stale' WHERE id = ?",
+			).run(jobId);
+			db.prepare(
+				"INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,state,record_count,checkpoint_ordinal,checkpoint_byte_offset) VALUES (?,?,?,?,0,'crash.jsonl',?,'completed',1,1,?)",
+			).run(
+				fileId,
+				jobId,
+				sourceId,
+				agentId,
+				`imports/transcripts/${sourceId}/source.jsonl`,
+				Buffer.byteLength(raw + "\n"),
+			);
+			db.prepare(
+				"INSERT INTO source_import_records (id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_offset,byte_length,raw_hash,status) VALUES (?,?,?,?,?,?,?,?,?,?, 'pending')",
+			).run(`${jobId}:${fileId}:1`, jobId, fileId, sourceId, agentId, 1, 1, 0, Buffer.byteLength(raw), "raw-hash");
+		});
+		await mkdir(join(root, "imports", "transcripts", sourceId), { recursive: true });
+		await writeFile(join(root, "imports", "transcripts", sourceId, "source.jsonl"), `${raw}\n`);
+		const parsed = JSON.parse(raw);
+		const { signetExportV1Adapter } = await import("./transcript-import-adapter");
+		const { buildCompletedTranscriptCommit, canonicalTranscriptLine } = await import("./transcript-import-commit");
+		const commit = buildCompletedTranscriptCommit(signetExportV1Adapter.parse(parsed), {
+			agentId,
+			sourceId,
+			sourceRecordId: `${jobId}:${fileId}:1`,
+			sourcePath: `imports/transcripts/${sourceId}/source.jsonl`,
+		});
+		await mkdir(join(root, "transcripts"), { recursive: true });
+		await writeFile(join(root, "transcripts", "canonical.jsonl"), canonicalTranscriptLine(commit));
+		const worker = startTranscriptImportWorker({ store, agentId, workspaceRoot: root, pollMs: 1 });
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		await worker.stop();
+		const state = await getDbAccessor().withReadDbAsync(
+			(db) =>
+				db.prepare("SELECT state, imported, pending, lease_token FROM source_import_jobs WHERE id = ?").get(jobId) as {
+					state: string;
+					imported: number;
+					pending: number;
+					lease_token: string | null;
+				},
+		);
+		const counts = await getDbAccessor().withReadDbAsync(
+			(db) =>
+				db
+					.prepare("SELECT status, COUNT(*) AS count FROM source_import_records WHERE job_id = ? GROUP BY status")
+					.all(jobId) as Array<{ status: string; count: number }>,
+		);
+		const canonical = await (await import("node:fs/promises")).readFile(
+			join(root, "transcripts", "canonical.jsonl"),
+			"utf8",
+		);
+		expect(state).toEqual({ state: "completed", imported: 1, pending: 0, lease_token: null });
+		expect(counts).toEqual([{ status: "imported", count: 1 }]);
+		expect(canonical.trim().split("\n")).toHaveLength(1);
+	} finally {
+		closeDbAccessor();
+		if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+		else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
+		await rm(root, { recursive: true, force: true });
+	}
+});
 test("filesystem purge removes only the selected agent source and staged data", async () => {
 	const root = await mkdtemp(join(tmpdir(), "signet-import-purge-"));
 	try {

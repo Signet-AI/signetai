@@ -98,6 +98,53 @@ export function canonicalTranscriptLine(commit: CompletedTranscriptCommit): stri
 	})}\n`;
 }
 
+/** Insert the durable transcript exactly once when recovering a committing claim. */
+function insertSessionTranscriptIfMissing(db: WriteDb, commit: CompletedTranscriptCommit): void {
+	const existing = db
+		.prepare("SELECT 1 FROM session_transcripts WHERE session_key = ? AND agent_id = ? LIMIT 1")
+		.get(commit.canonicalKey, commit.agentId);
+	if (existing) return;
+	const content = serializeCompletedTranscriptMessages(commit.messages);
+	const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as Array<{ name: string }>;
+	const names = new Set(columns.map((column) => column.name));
+	const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at"];
+	const values: unknown[] = [
+		commit.canonicalKey,
+		content,
+		commit.harness,
+		commit.project,
+		commit.agentId,
+		commit.capturedAt,
+	];
+	if (names.has("updated_at")) {
+		insertColumns.push("updated_at");
+		values.push(commit.capturedAt);
+	}
+	if (names.has("completed_at")) {
+		insertColumns.push("completed_at");
+		values.push(commit.capturedAt);
+	}
+	if (names.has("content_hash")) {
+		insertColumns.push("content_hash");
+		values.push(commit.contentHash);
+	}
+	if (names.has("source_id")) {
+		insertColumns.push("source_id");
+		values.push(commit.sourceId);
+	}
+	if (names.has("source_record_id")) {
+		insertColumns.push("source_record_id");
+		values.push(commit.sourceRecordId);
+	}
+	if (names.has("source_meta_json")) {
+		insertColumns.push("source_meta_json");
+		values.push(commit.sourceMetaJson);
+	}
+	db.prepare(
+		`INSERT INTO session_transcripts (${insertColumns.join(",")}) VALUES (${insertColumns.map(() => "?").join(",")})`,
+	).run(...values);
+}
+
 /** Owner-side atomic DB prepare/finalize operation. Filesystem finalization is separate and replay-safe by recordId. */
 export function commitCompletedTranscriptBatchInTx(
 	db: WriteDb,
@@ -113,56 +160,26 @@ export function commitCompletedTranscriptBatchInTx(
 			| { conversation_fingerprint: string; canonical_id: string; canonical_key: string; state: string }
 			| undefined;
 		if (existing) {
-			if (existing.conversation_fingerprint === commit.contentHash) {
-				results.push({ outcome: "duplicate", canonicalId: existing.canonical_id, sessionKey: existing.canonical_key });
-			} else {
+			if (existing.conversation_fingerprint !== commit.contentHash) {
 				results.push({
 					outcome: "conversation_identity_conflict",
 					canonicalId: existing.canonical_id,
 					sessionKey: existing.canonical_key,
 				});
+				continue;
+			}
+			if (existing.state === "committing") {
+				insertSessionTranscriptIfMissing(db, commit);
+				db.prepare(
+					"UPDATE transcript_import_conversations SET state = 'committed', updated_at = datetime('now') WHERE agent_id = ? AND external_identity = ? AND state = 'committing'",
+				).run(commit.agentId, commit.externalIdentity);
+				results.push({ outcome: "imported", canonicalId: existing.canonical_id, sessionKey: existing.canonical_key });
+			} else {
+				results.push({ outcome: "duplicate", canonicalId: existing.canonical_id, sessionKey: existing.canonical_key });
 			}
 			continue;
 		}
-		const content = serializeCompletedTranscriptMessages(commit.messages);
-		const columns = db.prepare("PRAGMA table_info(session_transcripts)").all() as Array<{ name: string }>;
-		const names = new Set(columns.map((column) => column.name));
-		const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at"];
-		const values: unknown[] = [
-			commit.canonicalKey,
-			content,
-			commit.harness,
-			commit.project,
-			commit.agentId,
-			commit.capturedAt,
-		];
-		if (names.has("updated_at")) {
-			insertColumns.push("updated_at");
-			values.push(commit.capturedAt);
-		}
-		if (names.has("completed_at")) {
-			insertColumns.push("completed_at");
-			values.push(commit.capturedAt);
-		}
-		if (names.has("content_hash")) {
-			insertColumns.push("content_hash");
-			values.push(commit.contentHash);
-		}
-		if (names.has("source_id")) {
-			insertColumns.push("source_id");
-			values.push(commit.sourceId);
-		}
-		if (names.has("source_record_id")) {
-			insertColumns.push("source_record_id");
-			values.push(commit.sourceRecordId);
-		}
-		if (names.has("source_meta_json")) {
-			insertColumns.push("source_meta_json");
-			values.push(commit.sourceMetaJson);
-		}
-		db.prepare(
-			`INSERT INTO session_transcripts (${insertColumns.join(",")}) VALUES (${insertColumns.map(() => "?").join(",")})`,
-		).run(...values);
+		insertSessionTranscriptIfMissing(db, commit);
 		db.prepare(`INSERT INTO transcript_import_conversations
 			(agent_id, external_identity, canonical_key, conversation_fingerprint, canonical_id, owner_source_id, owner_record_id, state, content_hash, harness, timestamp)
 			VALUES (?, ?, ?, ?, ?, ?, ?, 'committed', ?, ?, ?)`).run(
