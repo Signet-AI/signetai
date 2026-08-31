@@ -1,11 +1,23 @@
 import { sourceLogo } from "@/components/icons";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
 import { Surface } from "@/components/ui/surface";
-import { type SignetSource, type SourceHealth, type SourceIndexJob, api } from "@/lib/api";
+import { type SignetSource, type SourceHealth, type SourceImportJob, type SourceIndexJob, api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { useView } from "@/lib/view-context";
-import { Check, Copy, Download, Folder, GitBranch, Globe, Plus, RotateCw, Trash2, X } from "lucide-react";
+import {
+	Check,
+	Copy,
+	Download,
+	Folder,
+	GitBranch,
+	Globe,
+	MessageSquare,
+	Plus,
+	RotateCw,
+	Trash2,
+	X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 const HEALTH_STYLES: Record<string, string> = {
@@ -27,6 +39,12 @@ function RootIcon({ kind }: { kind: string }) {
 export function SourcesView() {
 	const { data, refresh } = useAsync(() => api.getSources(), { intervalMs: 30000 });
 	const sources = data?.sources;
+	const { data: importsData, refresh: refreshImports } = useAsync(() => api.getSourceImports(), { intervalMs: 5000 });
+	const imports = importsData?.data?.imports ?? [];
+	const refreshAll = () => {
+		refresh();
+		refreshImports();
+	};
 	const [connectOpen, setConnectOpen] = useState(false);
 	const { connectSourceRequested, clearConnectSource } = useView();
 
@@ -79,6 +97,9 @@ export function SourcesView() {
 					<span className="text-[12.5px] font-medium">Connect a source</span>
 					<span className="font-mono text-[9.5px] text-muted-foreground">Obsidian · GitHub · Discord</span>
 				</button>
+				{imports.map((job) => (
+					<TranscriptImportCard key={job.id} job={job} onMutate={refreshAll} />
+				))}
 				{importedSources.length > 0 && <ImportedDocumentsCard documents={importedSources} onMutate={refresh} />}
 				{connectedSources.map((source) => (
 					<SourceCard key={source.id} source={source} onMutate={refresh} />
@@ -89,6 +110,91 @@ export function SourcesView() {
 	);
 }
 
+function TranscriptImportCard({ job, onMutate }: { job: SourceImportJob; onMutate: () => void }) {
+	const { data: detail } = useAsync(() => api.getSourceImport(job.id), { intervalMs: 3000 });
+	const current = detail?.data?.job ?? job;
+	const files = detail?.data?.files ?? job.files ?? [];
+	const terminal = ["completed", "completed_with_rejections", "cancelled", "failed"].includes(current.state);
+	const control = async (action: "pause" | "resume" | "retry" | "cancel") => {
+		await api.controlSourceImport(job.id, action);
+		onMutate();
+	};
+	return (
+		<Surface
+			data-testid="transcript-import-job"
+			aria-label={`Transcript import ${current.id}`}
+			className="sig-src-card flex flex-col gap-2.5 p-4"
+		>
+			<div className="flex items-center gap-3">
+				<MessageSquare className="size-5" />
+				<div className="min-w-0 flex-1">
+					<div className="text-[14px] font-semibold">Agent transcripts</div>
+					<div className="truncate font-mono text-[9.5px] text-muted-foreground">job {current.id}</div>
+				</div>
+				<span className="font-mono text-[10px]">{current.state}</span>
+			</div>
+			<div className="grid grid-cols-2 gap-2 font-mono text-[10px]">
+				<MiniStat value={String(current.imported ?? 0)} label="imported" />
+				<MiniStat value={String(current.rejected ?? 0)} label="rejected" />
+				<MiniStat value={String(current.pending ?? 0)} label="pending" />
+				<MiniStat value="—" label="dreaming" />
+			</div>
+			{files.length > 0 && (
+				<ul aria-label="Transcript import files" className="flex flex-col gap-1 font-mono text-[10px]">
+					{files.map((file) => (
+						<li key={file.id} className="flex justify-between gap-2">
+							<span className="truncate">{file.name ?? file.id}</span>
+							<span>{file.state ?? "pending"}</span>
+						</li>
+					))}
+				</ul>
+			)}
+			{!terminal && (
+				<div className="flex gap-1">
+					{current.state === "paused" ? (
+						<ActionButton label="Resume" onClick={() => void control("resume")}>
+							<RotateCw className="size-3" />
+						</ActionButton>
+					) : (
+						<ActionButton label="Pause" onClick={() => void control("pause")}>
+							<X className="size-3" />
+						</ActionButton>
+					)}
+					<ActionButton label="Retry" onClick={() => void control("retry")}>
+						<RotateCw className="size-3" />
+					</ActionButton>
+					<ActionButton label="Cancel" danger onClick={() => void control("cancel")}>
+						<X className="size-3" />
+					</ActionButton>
+				</div>
+			)}
+			<div className="flex gap-2 font-mono text-[10px]">
+				<button type="button" className="underline" onClick={() => void downloadImportData(current.id, "rejections")}>
+					Download rejections
+				</button>
+				<button type="button" className="underline" onClick={() => void showReconciliation(current.id)}>
+					Reconciliation
+				</button>
+			</div>
+		</Surface>
+	);
+}
+
+async function downloadImportData(jobId: string, kind: "rejections"): Promise<void> {
+	const data = await api.getSourceImportRejections(jobId);
+	if (!data) return;
+	const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = `${jobId}-${kind}.json`;
+	link.click();
+	URL.revokeObjectURL(url);
+}
+
+async function showReconciliation(jobId: string): Promise<void> {
+	const data = await api.getSourceImportReconciliation(jobId);
+	if (data) window.alert(JSON.stringify(data.reconciliation));
+}
 function ImportedDocumentsCard({ documents, onMutate }: { documents: readonly SignetSource[]; onMutate: () => void }) {
 	const totals = documents.reduce(
 		(acc, source) => ({

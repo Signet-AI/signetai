@@ -85,6 +85,27 @@ async function mutateJSON<T extends { error?: string }>(
 	}
 }
 
+async function postSourceImport(
+	agentId: string,
+	files: readonly File[],
+	duplicateMode: "skip" | "replace" | "reimport" = "skip",
+): Promise<ApiReadResult<SourceImportJob>> {
+	const descriptors = files.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
+	try {
+		const res = await fetch(`${API_BASE}/api/sources/imports?agentId=${encodeURIComponent(agentId)}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json", Accept: "application/json", ...authHeaders() },
+			body: JSON.stringify({ schemaId: "signet-export", duplicateMode, files: descriptors }),
+		});
+		const body = await res.json().catch(() => null);
+		return res.ok
+			? { data: body as SourceImportJob, error: null }
+			: { data: null, error: typeof body?.error === "string" ? body.error : `request failed (${res.status})` };
+	} catch {
+		return { data: null, error: "request failed" };
+	}
+}
+
 // ── Types (derived from real daemon responses) ──────────────────────────────
 
 export interface ConfigFile {
@@ -421,6 +442,32 @@ export interface SourceIndexJob {
 	readonly indexed?: number;
 	readonly currentPath?: string;
 	readonly error?: string;
+}
+
+export interface SourceImportJob {
+	readonly id: string;
+	readonly jobId?: string;
+	readonly agent_id?: string;
+	readonly kind: "import";
+	readonly schema_id?: string;
+	readonly state: string;
+	readonly total?: number;
+	readonly imported?: number;
+	readonly duplicate?: number;
+	readonly rejected?: number;
+	readonly pending?: number;
+	readonly files?: readonly SourceImportFile[];
+}
+export interface SourceImportFile {
+	readonly id: string;
+	readonly name?: string;
+	readonly state?: string;
+	readonly size_bytes?: number;
+	readonly content_hash?: string;
+	readonly checkpoint_byte_offset?: number;
+}
+export interface SourceImportsResponse {
+	readonly imports: readonly SourceImportJob[];
 }
 
 export interface SourcesResponse {
@@ -789,6 +836,51 @@ export const api = {
 
 	// Sources
 	getSources: () => getJSON<SourcesResponse>("/api/sources"),
+	getSourceImports: () => getJSONResult<SourceImportsResponse>("/api/sources/imports"),
+	getSourceImport: (jobId: string) =>
+		getJSONResult<{ job: SourceImportJob; files: SourceImportFile[] }>(
+			`/api/sources/imports/${encodeURIComponent(jobId)}`,
+		),
+	createSourceImport: (
+		agentId: string,
+		files: readonly File[],
+		duplicateMode: "skip" | "replace" | "reimport" = "skip",
+	) => postSourceImport(agentId, files, duplicateMode),
+	uploadSourceImportFile: async (
+		agentId: string,
+		jobId: string,
+		fileId: string,
+		file: File,
+	): Promise<ApiReadResult<unknown>> => {
+		try {
+			const res = await fetch(
+				`${API_BASE}/api/sources/imports/${encodeURIComponent(jobId)}/files/${encodeURIComponent(fileId)}?agentId=${encodeURIComponent(agentId)}`,
+				{
+					method: "PUT",
+					headers: { "Content-Type": "application/jsonl", "x-file-name": file.name, ...authHeaders() },
+					body: file.stream(),
+				},
+			);
+			const body = await res.json().catch(() => null);
+			return res.ok
+				? { data: body, error: null }
+				: { data: null, error: body?.error ?? `request failed (${res.status})` };
+		} catch {
+			return { data: null, error: "request failed" };
+		}
+	},
+	controlSourceImport: (jobId: string, action: "start" | "pause" | "resume" | "retry" | "cancel") =>
+		postJSON<{ jobId: string; control: string; changed: boolean }>(
+			`/api/sources/imports/${encodeURIComponent(jobId)}/${action}`,
+		),
+	getSourceImportRejections: (jobId: string) =>
+		getJSON<{ jobId: string; rejections: readonly unknown[] }>(
+			`/api/sources/imports/${encodeURIComponent(jobId)}/rejections`,
+		),
+	getSourceImportReconciliation: (jobId: string) =>
+		getJSON<{ jobId: string; reconciliation: readonly unknown[] }>(
+			`/api/sources/imports/${encodeURIComponent(jobId)}/reconciliation`,
+		),
 	importSources: async (
 		files: readonly File[],
 		duplicateMode: "skip" | "replace" | "reimport" = "skip",

@@ -1,3 +1,4 @@
+import { createReadStream } from "node:fs";
 import type { SignetSourceEntry } from "@signet/core";
 import type { Command } from "commander";
 import {
@@ -8,13 +9,20 @@ import {
 	addObsidianVaultSource,
 	exportConfiguredSourceSnapshot,
 	importConfiguredSourceSnapshot,
+	controlTranscriptImport,
+	importTranscriptFiles,
 	listSources,
 	removeConfiguredSource,
 } from "../features/sources.js";
-import type { DaemonApiCall } from "../lib/daemon.js";
+import type { DaemonApiCall, DaemonFetchResult, DaemonStreamResult } from "../lib/daemon.js";
 
 export interface RegisterSourcesCommandsDeps extends SourcesDeps {
 	readonly secretApiCall?: DaemonApiCall;
+	readonly fetchDaemonResult?: <T>(
+		path: string,
+		opts?: RequestInit & { timeout?: number },
+	) => Promise<DaemonFetchResult<T>>;
+	readonly fetchDaemonRaw?: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 }
 
 function collect(value: string, previous: string[]): string[] {
@@ -23,6 +31,71 @@ function collect(value: string, previous: string[]): string[] {
 
 export function registerSourcesCommands(program: Command, deps: RegisterSourcesCommandsDeps): void {
 	const sources = program.command("sources").description("Manage external read-only knowledge sources");
+
+	const importCommand = sources
+		.command("import <files...>")
+		.description("Stage Agent transcript JSONL files as a durable import job")
+		.requiredOption("--kind <kind>", "Import kind (transcripts)")
+		.requiredOption("--schema <schema>", "Input schema (signet)")
+		.requiredOption("--agent <id>", "Target agent id")
+		.option("--json", "Emit daemon-shaped JSON");
+	importCommand.action((files: string[], options: { kind: string; schema: string; agent: string; json?: boolean }) =>
+		importTranscriptFiles(files, options, {
+			createDaemonImport: deps.fetchDaemonResult
+				? async (body) => {
+						const result = await deps.fetchDaemonResult?.(
+							`/api/sources/imports?agentId=${encodeURIComponent(options.agent)}`,
+							{ method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } },
+						);
+						return result as DaemonFetchResult<import("../features/sources.js").SourceImportCreateResponse>;
+					}
+				: undefined,
+			uploadDaemonImportFile: deps.fetchDaemonRaw
+				? async (jobId, fileId, fileName) => {
+						const result = await deps.fetchDaemonRaw?.(
+							`/api/sources/imports/${encodeURIComponent(jobId)}/files/${encodeURIComponent(fileId)}?agentId=${encodeURIComponent(options.agent)}`,
+							{
+								method: "PUT",
+								headers: { "Content-Type": "application/jsonl", "x-file-name": fileName },
+								body: createReadStream(fileName) as unknown as BodyInit,
+								...({ duplex: "half" } as unknown as RequestInit),
+							},
+						);
+						return result as DaemonStreamResult;
+					}
+				: undefined,
+			fetchDaemonImport: deps.fetchDaemonResult
+				? async <T>(path: string, opts?: RequestInit) => {
+						const result = await deps.fetchDaemonResult?.(
+							`${path}${path.includes("?") ? "&" : "?"}agentId=${encodeURIComponent(options.agent)}`,
+							opts,
+						);
+						return result as DaemonFetchResult<T>;
+					}
+				: undefined,
+		}),
+	);
+
+	const imports = sources.command("imports");
+
+	for (const action of ["list", "status", "pause", "resume", "retry", "cancel"] as const) {
+		const command = imports
+			.command(action === "list" ? "list" : `${action} <jobId>`)
+			.requiredOption("--agent <id>", "Target agent id")
+			.option("--watch", "Poll until terminal (status only)")
+			.option("--json", "Emit daemon-shaped JSON");
+		command.action((jobId: string | undefined, options: { agent: string; watch?: boolean; json?: boolean }) =>
+			controlTranscriptImport(action, jobId, options, {
+				fetchDaemonImport: deps.fetchDaemonResult
+					? async <T>(path: string, opts?: RequestInit) =>
+							deps.fetchDaemonResult?.(
+								`${path}${path.includes("?") ? "&" : "?"}agentId=${encodeURIComponent(options.agent)}`,
+								opts,
+							) as Promise<DaemonFetchResult<T>>
+					: undefined,
+			}),
+		);
+	}
 
 	sources
 		.command("list")

@@ -5,15 +5,16 @@
  */
 import { sourceLogo } from "@/components/icons";
 import { type ImportSourcesResponse, api } from "@/lib/api";
-import { ArrowLeft, FolderOpen, Globe, Loader2, RotateCcw, Upload, X } from "lucide-react";
+import { ArrowLeft, FolderOpen, Globe, Loader2, MessageSquare, RotateCcw, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-type SourceKind = "files" | "web" | "obsidian" | "github" | "discord";
+type SourceKind = "files" | "web" | "transcripts" | "obsidian" | "github" | "discord";
 type SourceStep = "choose" | "configure";
 
-const IMPORT_KINDS: readonly { id: "files" | "web"; label: string; description: string }[] = [
+const IMPORT_KINDS: readonly { id: "files" | "web" | "transcripts"; label: string; description: string }[] = [
 	{ id: "files", label: "Files", description: "Import documents and notes" },
 	{ id: "web", label: "Web page", description: "Extract a readable page from a public URL" },
+	{ id: "transcripts", label: "Agent transcripts", description: "Import lossless JSONL transcript exports" },
 ];
 
 const CONNECT_KINDS: readonly { id: "obsidian" | "github" | "discord"; label: string; namePlaceholder: string }[] = [
@@ -27,6 +28,11 @@ const FIELD: Record<Exclude<SourceKind, "files">, { label: string; placeholder: 
 		label: "Public URL",
 		placeholder: "https://example.com/article",
 		hint: "Only public http(s) pages are fetched. Signet stores the extracted Markdown with the original URL.",
+	},
+	transcripts: {
+		label: "Target agent",
+		placeholder: "Select an agent",
+		hint: "Embedded agent_id is provenance only; the selected target owns this import.",
 	},
 	obsidian: {
 		label: "Vault path",
@@ -76,6 +82,7 @@ function validate(kind: Exclude<SourceKind, "files">, target: string, tokenRef: 
 function KindIcon({ kind }: { readonly kind: SourceKind }) {
 	if (kind === "files") return <Upload className="size-6" />;
 	if (kind === "web") return <Globe className="size-6" />;
+	if (kind === "transcripts") return <MessageSquare className="size-6" />;
 	return sourceLogo(kind, { className: "size-6" });
 }
 
@@ -101,6 +108,15 @@ export function ConnectSourceDialog({
 	const [browsing, setBrowsing] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [result, setResult] = useState<ImportSourcesResponse | null>(null);
+	const [transcriptJobId, setTranscriptJobId] = useState<string | null>(null);
+	const [agents, setAgents] = useState<readonly { id: string; name: string }[]>([]);
+
+	useEffect(() => {
+		if (!open) return;
+		void api.getAgents().then((response) => {
+			if (response.data) setAgents(response.data.agents.map((agent) => ({ id: agent.id, name: agent.name })));
+		});
+	}, [open]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -116,6 +132,7 @@ export function ConnectSourceDialog({
 		setBrowsing(false);
 		setError(null);
 		setResult(null);
+		setTranscriptJobId(null);
 		if (inputRef.current) inputRef.current.value = "";
 	}, [open]);
 
@@ -139,6 +156,55 @@ export function ConnectSourceDialog({
 	};
 
 	const importFiles = async (targetFiles: readonly File[], targetPaths: readonly string[] = []) => {
+		if (kind === "transcripts") {
+			if (!targetFiles.length) {
+				setError("Choose one or more JSONL transcript files");
+				return;
+			}
+			const selectedAgent = target.trim();
+			const problem = validate(kind, selectedAgent, "");
+			if (problem) {
+				setError(problem);
+				return;
+			}
+			setBusy(true);
+			setError(null);
+			const created = await api.createSourceImport(selectedAgent, targetFiles, duplicateMode);
+			if (!created.data) {
+				setBusy(false);
+				setError(created.error ?? "Could not create import job");
+				return;
+			}
+			const jobId = created.data.jobId ?? created.data.id;
+			if (!jobId) {
+				setBusy(false);
+				setError("Daemon returned no job ID");
+				return;
+			}
+			setTranscriptJobId(jobId);
+			for (const [index, file] of targetFiles.entries()) {
+				const fileId = created.data.files?.[index]?.id;
+				if (!fileId) {
+					setBusy(false);
+					setError(`Job ${jobId}: daemon returned no file id for ${file.name}`);
+					return;
+				}
+				const uploaded = await api.uploadSourceImportFile(selectedAgent, jobId, fileId, file);
+				if (uploaded.error) {
+					setBusy(false);
+					setError(`Job ${jobId}: ${uploaded.error}`);
+					return;
+				}
+			}
+			const started = await api.controlSourceImport(jobId, "start");
+			setBusy(false);
+			if (!started) {
+				setError(`Job ${jobId}: could not start import`);
+				return;
+			}
+			onConnected();
+			return;
+		}
 		if (targetFiles.length === 0 && targetPaths.length === 0) return;
 		if (busy) return;
 		setBusy(true);
@@ -187,7 +253,7 @@ export function ConnectSourceDialog({
 	};
 
 	const connect = async () => {
-		if (kind === "files") return;
+		if (kind === "files" || kind === "transcripts") return;
 		const problem = validate(kind, target, tokenRef);
 		if (problem) {
 			setError(problem);
@@ -215,12 +281,16 @@ export function ConnectSourceDialog({
 	};
 
 	const submit = () => {
-		if (kind === "files") void importFiles(files, desktopPaths);
+		if (kind === "files" || kind === "transcripts") void importFiles(files, desktopPaths);
 		else void connect();
 	};
 
 	const selectedCount = files.length + desktopPaths.length;
-	const submitDisabled = busy || (kind === "files" && selectedCount === 0) || (kind === "web" && !target.trim());
+	const submitDisabled =
+		busy ||
+		(kind === "files" && selectedCount === 0) ||
+		(kind === "transcripts" && (selectedCount === 0 || !target.trim())) ||
+		(kind === "web" && !target.trim());
 
 	return (
 		<div
@@ -248,7 +318,9 @@ export function ConnectSourceDialog({
 							</button>
 						)}
 						<span className="cs-title">
-							{step === "choose" ? "Add a source" : `Set up ${kind === "web" ? "Web page" : kind}`}
+							{step === "choose"
+								? "Add a source"
+								: `Set up ${kind === "web" ? "Web page" : kind === "transcripts" ? "Agent transcripts" : kind}`}
 						</span>
 					</div>
 					<button type="button" className="cs-close" onClick={onClose} disabled={busy} aria-label="Close">
@@ -302,7 +374,7 @@ export function ConnectSourceDialog({
 								</div>
 							</div>
 						</div>
-					) : kind === "files" ? (
+					) : kind === "files" || kind === "transcripts" ? (
 						<>
 							<button
 								type="button"
@@ -311,8 +383,12 @@ export function ConnectSourceDialog({
 								disabled={busy}
 							>
 								<Upload className="size-5" />
-								<span className="text-xs font-medium">Choose one or more files</span>
-								<span className="font-mono text-[9px]">JSON · Markdown · CSV · HTML · documents</span>
+								<span className="text-xs font-medium">
+									{kind === "transcripts" ? "Choose JSONL transcript files" : "Choose one or more files"}
+								</span>
+								<span className="font-mono text-[9px]">
+									{kind === "transcripts" ? "Signet export JSONL" : "JSON · Markdown · CSV · HTML · documents"}
+								</span>
 							</button>
 							<button type="button" className="cs-btn-ghost self-center" onClick={chooseDesktop} disabled={busy}>
 								Choose from desktop
@@ -325,6 +401,27 @@ export function ConnectSourceDialog({
 								accept=".txt,.md,.markdown,.json,.html,.htm,.csv,.doc,.docx,.docm,.odt,.rtf,.pdf,.ppt,.pptx,.ppsx,.odp,.epub,.xls,.xlsx,.xlsm,.ods"
 								onChange={(event) => choose(event.target.files)}
 							/>
+							{kind === "transcripts" && (
+								<label className="cs-field">
+									<span className="cs-field__label">Target agent</span>
+									<select
+										className="cs-field__input"
+										value={target}
+										onChange={(event) => setTarget(event.target.value)}
+										disabled={busy}
+										required
+										aria-label="Target agent"
+									>
+										<option value="">Select a live agent</option>
+										{agents.map((agent) => (
+											<option key={agent.id} value={agent.id}>
+												{agent.name} ({agent.id})
+											</option>
+										))}
+									</select>
+									<span className="cs-field__hint">{FIELD.transcripts.hint}</span>
+								</label>
+							)}
 							{selectedCount > 0 && (
 								<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 font-mono text-[10px]">
 									{files.map((file) => (
@@ -352,6 +449,11 @@ export function ConnectSourceDialog({
 									<option value="reimport">Import as a new source</option>
 								</select>
 							</label>
+							{transcriptJobId && (
+								<div className="cs-field__hint" aria-live="polite">
+									Import job created: <code>{transcriptJobId}</code>
+								</div>
+							)}
 							{busy && (
 								<div className="cs-field__hint" aria-live="polite">
 									Importing {selectedCount} {selectedCount === 1 ? "file" : "files"}…
@@ -453,7 +555,11 @@ export function ConnectSourceDialog({
 					{step === "configure" && (
 						<button type="button" className="cs-btn-primary" onClick={submit} disabled={submitDisabled}>
 							{busy && <Loader2 className="size-3.5 animate-spin" />}
-							{kind === "files" ? "Import & index" : kind === "web" ? "Add & index" : "Connect & index"}
+							{kind === "files" || kind === "transcripts"
+								? "Import & index"
+								: kind === "web"
+									? "Add & index"
+									: "Connect & index"}
 						</button>
 					)}
 				</footer>
