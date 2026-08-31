@@ -28,23 +28,39 @@ jobs:
       - name: Architecture contract tests
         run: bun test scripts/audit-architecture-contract.test.ts
 
-      - name: Fetch protected base architecture baseline
+      - name: Generate protected base inventory and enforce architecture ratchet
         if: github.event_name == 'pull_request'
+        env:
+          BASE_ROOT: ${{ runner.temp }}/architecture-base
+          CANDIDATE_ROOT: ${{ github.workspace }}
+          TRUSTED_AUDITOR: ${{ runner.temp }}/architecture-base/scripts/audit-architecture-contract.ts
         run: |
           git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
-          mkdir -p "$RUNNER_TEMP/architecture-base"
-          git archive "${{ github.event.pull_request.base.sha }}" | tar -x -C "$RUNNER_TEMP/architecture-base"
-          mkdir -p "$RUNNER_TEMP/architecture-base/web/docs" "$RUNNER_TEMP/architecture-base/web/marketing"
-          ln -s "$GITHUB_WORKSPACE/web/docs/node_modules" "$RUNNER_TEMP/architecture-base/web/docs/node_modules"
-          ln -s "$GITHUB_WORKSPACE/web/marketing/node_modules" "$RUNNER_TEMP/architecture-base/web/marketing/node_modules"
-          BASE_ROOT="$RUNNER_TEMP/architecture-base" \
-            BASELINE_PATH="$RUNNER_TEMP/architecture-baseline.json" \
-            bun -e 'import { analyzeSourceTree, writeBaseline } from "./scripts/audit-architecture-contract"; const root = process.env.BASE_ROOT; const baseline = process.env.BASELINE_PATH; if (root === undefined || baseline === undefined) throw new Error("missing protected baseline paths"); writeBaseline(analyzeSourceTree({ root, sourceRoot: root, validateGeneratedArtifacts: false }), baseline, `${baseline}.md`);'
+          mkdir -p "$BASE_ROOT"
+          git archive "${{ github.event.pull_request.base.sha }}" | tar -x -C "$BASE_ROOT"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$BASE_ROOT/node_modules"
+          mkdir -p "$BASE_ROOT/web/docs" "$BASE_ROOT/web/marketing"
+          ln -s "$GITHUB_WORKSPACE/web/docs/node_modules" "$BASE_ROOT/web/docs/node_modules"
+          ln -s "$GITHUB_WORKSPACE/web/marketing/node_modules" "$BASE_ROOT/web/marketing/node_modules"
+          bun -e '
+            import { pathToFileURL } from "node:url";
+            const trustedAuditor = process.env.TRUSTED_AUDITOR;
+            const baseRoot = process.env.BASE_ROOT;
+            const candidateRoot = process.env.CANDIDATE_ROOT;
+            if (trustedAuditor === undefined || baseRoot === undefined || candidateRoot === undefined)
+              throw new Error("missing protected architecture audit paths");
+            const { analyzeSourceTree, compareArchitectureRatchet } = await import(pathToFileURL(trustedAuditor).href);
+            const protectedBase = analyzeSourceTree({ root: baseRoot, sourceRoot: baseRoot, validateGeneratedArtifacts: false });
+            const candidate = analyzeSourceTree({ root: candidateRoot, sourceRoot: candidateRoot, validateGeneratedArtifacts: false });
+            const findings = compareArchitectureRatchet(candidate, protectedBase);
+            if (findings.length > 0) {
+              console.error("Architecture ratchet violations:");
+              for (const finding of findings) console.error(`- ${finding}`);
+              process.exit(1);
+            }
+            console.log("Architecture ratchet: protected base respected");
+          '
 
-      - name: Enforce architecture ratchet
-        run: |
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            bun run audit:architecture -- --baseline-path="$RUNNER_TEMP/architecture-baseline.json"
-          else
-            bun run audit:architecture
-          fi
+      - name: Enforce architecture ratchet on main
+        if: github.event_name != 'pull_request'
+        run: bun run audit:architecture

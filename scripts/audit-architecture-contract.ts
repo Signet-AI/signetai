@@ -140,6 +140,24 @@ const BASELINE_PATH = join(ROOT, "scripts/architecture-baseline.json");
 const REPORT_PATH = join(ROOT, "docs/architecture-audit.md");
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".cts", ".mts"] as const;
 const RESOLUTION_EXTENSIONS = [".ts", ".tsx", ".cts", ".mts", ".js", ".jsx", ".mjs", ".cjs"] as const;
+const ASSIGNMENT_OPERATORS = new Set([
+	"=",
+	"+=",
+	"-=",
+	"*=",
+	"/=",
+	"%=",
+	"&=",
+	"|=",
+	"^=",
+	"<<=",
+	">>=",
+	">>>=",
+	"**=",
+	"&&=",
+	"||=",
+	"??=",
+]);
 const EXCLUDED_DIRECTORY_NAMES = new Set([
 	".git",
 	"node_modules",
@@ -268,24 +286,7 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 	const source = readFileSync(generatorPath, "utf8");
 	const sourceFile = ts.createSourceFile(generatorPath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 	const outputs = new Set<string>();
-	const assignmentOperators = new Set([
-		"=",
-		"+=",
-		"-=",
-		"*=",
-		"/=",
-		"%=",
-		"&=",
-		"|=",
-		"^=",
-		"<<=",
-		">>=",
-		">>>=",
-		"**=",
-		"&&=",
-		"||=",
-		"??=",
-	]);
+
 	const staticPath = (
 		expression: ts.Expression,
 		scope: StaticScope,
@@ -401,11 +402,11 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 				: (flags & ts.NodeFlags.Let) === 0
 					? nearestVarScope(currentScope)
 					: currentScope;
-			bindPattern(bindingScope, node.name, isConst && ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
+			bindPattern(bindingScope, node.name, ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
 		}
 		if (
 			ts.isBinaryExpression(node) &&
-			assignmentOperators.has(node.operatorToken.getText(sourceFile)) &&
+			ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)) &&
 			ts.isIdentifier(node.left)
 		)
 			invalidateBinding(currentScope, node.left.text);
@@ -603,6 +604,11 @@ function isCanonicalPathHelperName(name: string): name is CanonicalPathHelper {
 interface StaticBinding {
 	readonly initializer: ts.Expression | null;
 	readonly canonicalCreateRequire: boolean;
+	readonly canonicalCreateRequireFactory?: boolean;
+	readonly invalidatedCreateRequireFactory?: boolean;
+	readonly canonicalCreateRequireResult?: boolean;
+	readonly invalidatedCreateRequireResult?: boolean;
+	readonly canonicalModuleNamespace?: boolean;
 	readonly canonicalWriteFileSync?: boolean;
 	readonly canonicalFsNamespace?: boolean;
 	readonly canonicalPathHelper?: CanonicalPathHelper;
@@ -636,14 +642,27 @@ function bindPattern(
 	canonicalCreateRequire = false,
 	canonicalWriteFileSync = false,
 	canonicalFsNamespace = false,
+	canonicalModuleNamespace = false,
 ): void {
 	if (ts.isIdentifier(name)) {
-		scope.bindings.set(name.text, {
+		const binding: StaticBinding = {
 			initializer,
 			canonicalCreateRequire,
+			canonicalModuleNamespace,
 			canonicalWriteFileSync,
 			canonicalFsNamespace,
-		});
+		};
+		scope.bindings.set(name.text, binding);
+		const canonicalFactory = isCanonicalCreateRequire(scope, name.text);
+		const canonicalResult = isCanonicalCreateRequireResult(scope, name.text);
+		const invalidatedResult = isPotentialInvalidatedCreateRequireResult(scope, name.text);
+		if (canonicalFactory || canonicalResult || invalidatedResult)
+			scope.bindings.set(name.text, {
+				...binding,
+				canonicalCreateRequireFactory: canonicalFactory,
+				canonicalCreateRequireResult: canonicalResult,
+				invalidatedCreateRequireResult: invalidatedResult,
+			});
 		return;
 	}
 	for (const element of name.elements) {
@@ -655,12 +674,11 @@ function bindPattern(
 function bindDeclaration(scope: StaticScope, declaration: ts.Declaration): void {
 	if (ts.isVariableDeclaration(declaration) && ts.isVariableDeclarationList(declaration.parent)) {
 		const flags = declaration.parent.flags;
-		const isConst = (flags & ts.NodeFlags.Const) !== 0;
 		const isVar = (flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)) === 0;
 		bindPattern(
 			isVar ? nearestVarScope(scope) : scope,
 			declaration.name,
-			isConst && ts.isIdentifier(declaration.name) ? (declaration.initializer ?? null) : null,
+			ts.isIdentifier(declaration.name) ? (declaration.initializer ?? null) : null,
 		);
 		return;
 	}
@@ -729,6 +747,7 @@ function predeclareScopeBindings(node: ts.Node, scope: StaticScope): void {
 				scope.bindings.set(clause.namedBindings.name.text, {
 					initializer: null,
 					canonicalCreateRequire: false,
+					canonicalModuleNamespace: moduleSpecifier === "node:module" || moduleSpecifier === "module",
 					canonicalFsNamespace: isNodeFs,
 					canonicalPathNamespace: isNodePath,
 					canonicalUrlNamespace: isNodeUrl,
@@ -791,8 +810,46 @@ function resolveBinding(scope: StaticScope, name: string): { scope: StaticScope;
 	return undefined;
 }
 
-function isCanonicalCreateRequire(scope: StaticScope, name: string): boolean {
-	return resolveBinding(scope, name)?.binding.canonicalCreateRequire === true;
+function isCanonicalCreateRequire(scope: StaticScope, name: string, resolving = new Set<string>()): boolean {
+	if (resolving.has(name)) return false;
+	const resolved = resolveBinding(scope, name);
+	if (resolved === undefined) return false;
+	if (resolved.binding.invalidatedCreateRequireFactory === true) return false;
+	if (resolved.binding.canonicalCreateRequire) return true;
+	const initializer = resolved.binding.initializer;
+	if (initializer === null) return false;
+	const unwrapped = unwrapExpression(initializer);
+	if (!ts.isIdentifier(unwrapped)) return false;
+	const nextResolving = new Set(resolving);
+	nextResolving.add(name);
+	return isCanonicalCreateRequire(resolved.scope, unwrapped.text, nextResolving);
+}
+
+function isCanonicalModuleNamespace(scope: StaticScope, name: string): boolean {
+	return resolveBinding(scope, name)?.binding.canonicalModuleNamespace === true;
+}
+
+function isCanonicalCreateRequireCall(expression: ts.Expression, scope: StaticScope): boolean {
+	const callee = unwrapExpression(expression);
+	if (ts.isIdentifier(callee)) return isCanonicalCreateRequire(scope, callee.text);
+	return (
+		ts.isPropertyAccessExpression(callee) &&
+		ts.isIdentifier(callee.expression) &&
+		callee.name.text === "createRequire" &&
+		isCanonicalModuleNamespace(scope, callee.expression.text)
+	);
+}
+
+function isPotentialInvalidatedCreateRequireResult(scope: StaticScope, name: string): boolean {
+	const resolved = resolveBinding(scope, name);
+	if (resolved === undefined || resolved.binding.initializer === null) return false;
+	const initializer = resolved.binding.initializer;
+	if (!ts.isCallExpression(initializer)) return false;
+	const callee = unwrapExpression(initializer.expression);
+	return (
+		ts.isIdentifier(callee) &&
+		resolveBinding(resolved.scope, callee.text)?.binding.invalidatedCreateRequireFactory === true
+	);
 }
 
 function isCanonicalWriteFileSync(scope: StaticScope, name: string): boolean {
@@ -824,6 +881,15 @@ function invalidateBinding(scope: StaticScope, name: string): void {
 	resolved.scope.bindings.set(name, {
 		initializer: null,
 		canonicalCreateRequire: false,
+		canonicalCreateRequireFactory: false,
+		invalidatedCreateRequireFactory:
+			resolved.binding.canonicalCreateRequireFactory === true ||
+			resolved.binding.invalidatedCreateRequireFactory === true,
+		canonicalCreateRequireResult: false,
+		invalidatedCreateRequireResult:
+			resolved.binding.canonicalCreateRequireResult === true ||
+			resolved.binding.invalidatedCreateRequireResult === true,
+		canonicalModuleNamespace: false,
 		canonicalWriteFileSync: false,
 		canonicalFsNamespace: false,
 		canonicalPathHelper: undefined,
@@ -833,23 +899,34 @@ function invalidateBinding(scope: StaticScope, name: string): void {
 	});
 }
 
+function isCanonicalCreateRequireResult(scope: StaticScope, name: string, resolving = new Set<string>()): boolean {
+	if (resolving.has(name)) return false;
+	const resolved = resolveBinding(scope, name);
+	if (resolved === undefined || resolved.binding.initializer === null) return false;
+	const initializer = resolved.binding.initializer;
+	const unwrapped = unwrapExpression(initializer);
+	if (ts.isCallExpression(unwrapped) && isCanonicalCreateRequireCall(unwrapped.expression, resolved.scope)) return true;
+	if (!ts.isIdentifier(unwrapped)) return false;
+	const nextResolving = new Set(resolving);
+	nextResolving.add(name);
+	return isCanonicalCreateRequireResult(resolved.scope, unwrapped.text, nextResolving);
+}
+
 function isRuntimeRequire(expression: ts.Expression, scope: StaticScope): boolean {
 	if (!ts.isIdentifier(expression)) return false;
 	const requireBinding = resolveBinding(scope, expression.text);
 	if (requireBinding === undefined) return expression.text === "require";
-	const initializer = requireBinding.binding.initializer;
-	if (initializer === null || !ts.isCallExpression(initializer)) return false;
-	const callee = unwrapExpression(initializer.expression);
-	return ts.isIdentifier(callee) && isCanonicalCreateRequire(requireBinding.scope, callee.text);
+	if (requireBinding.binding.invalidatedCreateRequireResult === true) return false;
+	if (requireBinding.binding.canonicalCreateRequireResult === true) return true;
+	return isCanonicalCreateRequireResult(requireBinding.scope, expression.text);
 }
 
 function isRequireLikeCall(expression: ts.Expression, scope: StaticScope): boolean {
-	if (!ts.isIdentifier(expression) || expression.text === "require") return ts.isIdentifier(expression);
+	if (!ts.isIdentifier(expression)) return false;
+	if (expression.text === "require") return true;
 	const binding = resolveBinding(scope, expression.text)?.binding;
-	const initializer = binding?.initializer;
-	if (initializer === null || initializer === undefined || !ts.isCallExpression(initializer)) return false;
-	const callee = unwrapExpression(initializer.expression);
-	return ts.isIdentifier(callee) && isCanonicalCreateRequire(scope, callee.text);
+	if (binding?.invalidatedCreateRequireResult === true || binding?.canonicalCreateRequireResult === true) return true;
+	return isCanonicalCreateRequireResult(scope, expression.text);
 }
 
 function staticString(
@@ -891,6 +968,7 @@ function staticString(
 
 interface PathAlias {
 	readonly configDirectory: string;
+	readonly projectFiles: ReadonlySet<string>;
 	readonly prefix: string;
 	readonly suffix: string;
 	readonly hasWildcard: boolean;
@@ -931,6 +1009,7 @@ function loadPathAliases(root: string): readonly PathAlias[] {
 		const compilerOptions = parsed.options;
 		const paths = compilerOptions.paths;
 		if (paths === undefined) continue;
+		const projectFiles = new Set(parsed.fileNames.map((fileName) => resolve(fileName)));
 		const baseUrl = compilerOptions.baseUrl ?? dirname(configPath);
 		for (const [pattern, value] of Object.entries(paths)) {
 			if (!Array.isArray(value) || !value.every((item): item is string => typeof item === "string"))
@@ -938,6 +1017,7 @@ function loadPathAliases(root: string): readonly PathAlias[] {
 			const wildcard = pattern.indexOf("*");
 			aliases.push({
 				configDirectory: dirname(configPath),
+				projectFiles,
 				prefix: wildcard < 0 ? pattern : pattern.slice(0, wildcard),
 				suffix: wildcard < 0 ? "" : pattern.slice(wildcard + 1),
 				hasWildcard: wildcard >= 0,
@@ -950,9 +1030,7 @@ function loadPathAliases(root: string): readonly PathAlias[] {
 }
 
 function aliasesForFile(path: string, aliases: readonly PathAlias[]): readonly PathAlias[] {
-	const matching = aliases.filter(
-		(alias) => path === alias.configDirectory || path.startsWith(`${alias.configDirectory}${sep}`),
-	);
+	const matching = aliases.filter((alias) => alias.projectFiles.has(path));
 	const configDirectory = matching.sort((a, b) => b.configDirectory.length - a.configDirectory.length)[0]
 		?.configDirectory;
 	return configDirectory === undefined ? [] : matching.filter((alias) => alias.configDirectory === configDirectory);
@@ -985,13 +1063,19 @@ function resolveFilePath(base: string, files: ReadonlySet<string>): string | nul
 	const sourceBase = RESOLUTION_EXTENSIONS.includes(extension as (typeof RESOLUTION_EXTENSIONS)[number])
 		? base.slice(0, -extension.length)
 		: base;
+	const preferredExtension = extension === ".cjs" ? ".cts" : extension === ".mjs" ? ".mts" : null;
+	const extensionCandidates = [
+		...(preferredExtension === null ? [] : [`${sourceBase}${preferredExtension}`]),
+		...RESOLUTION_EXTENSIONS.map((item) => `${sourceBase}${item}`),
+	];
 	const candidates = [
 		base,
+		...(preferredExtension === null ? [] : [`${sourceBase}${preferredExtension}`]),
 		sourceBase,
-		...RESOLUTION_EXTENSIONS.map((item) => `${sourceBase}${item}`),
+		...extensionCandidates,
 		...RESOLUTION_EXTENSIONS.map((item) => join(sourceBase, `index${item}`)),
 	];
-	for (const candidate of candidates) if (files.has(candidate)) return candidate;
+	for (const candidate of new Set(candidates)) if (files.has(candidate)) return candidate;
 	return null;
 }
 
@@ -1336,8 +1420,26 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 					: (flags & ts.NodeFlags.Let) === 0
 						? nearestVarScope(currentScope)
 						: currentScope;
-				bindPattern(bindingScope, node.name, isConst && ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
+				bindPattern(bindingScope, node.name, ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
 			}
+			if (
+				ts.isBinaryExpression(node) &&
+				ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)) &&
+				ts.isIdentifier(node.left)
+			)
+				invalidateBinding(currentScope, node.left.text);
+			if (
+				ts.isPrefixUnaryExpression(node) &&
+				(node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+				ts.isIdentifier(node.operand)
+			)
+				invalidateBinding(currentScope, node.operand.text);
+			if (
+				ts.isPostfixUnaryExpression(node) &&
+				ts.isIdentifier(node.operand) &&
+				(node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+			)
+				invalidateBinding(currentScope, node.operand.text);
 			if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
 				addEdge("import", node.moduleSpecifier.text, node, !isTypeOnlyImport(node));
 			}
