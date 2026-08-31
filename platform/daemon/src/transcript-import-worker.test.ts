@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendCanonical, startTranscriptImportWorker, purgeTranscriptImportFilesystem } from "./transcript-import-worker";
+import {
+	appendCanonical,
+	startTranscriptImportWorker,
+	purgeTranscriptImportFilesystem,
+} from "./transcript-import-worker";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { createJob, createOwnerTranscriptImportStore } from "./transcript-import-store";
 import type { ImportStore, ImportStoreOperation } from "./transcript-import-store";
@@ -206,7 +210,7 @@ test("migrated DB crash recovery finalizes pending records after filesystem writ
 				sourceId,
 				agentId,
 				`imports/transcripts/${sourceId}/source.jsonl`,
-				Buffer.byteLength(raw + "\n"),
+				Buffer.byteLength(`${raw}\n`),
 			);
 			db.prepare(
 				"INSERT INTO source_import_records (id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_offset,byte_length,raw_hash,status) VALUES (?,?,?,?,?,?,?,?,?,?, 'pending')",
@@ -280,6 +284,50 @@ test("filesystem purge removes only the selected agent source and staged data", 
 		expect(aggregate).toContain('"id":"b"');
 		expect(aggregate).not.toContain('"id":"a"');
 	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("source purge audit attempts retain source identity after import ledgers are removed", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-audit-tombstone-"));
+	const dbPath = join(root, "memory", "memories.db");
+	const oldOwner = process.env.SIGNET_DB_OWNER_WORKER;
+	process.env.SIGNET_DB_OWNER_WORKER = "1";
+	closeDbAccessor();
+	await mkdir(join(root, "memory"), { recursive: true });
+	initDbAccessor(dbPath, { agentsDir: root });
+	const store = createOwnerTranscriptImportStore();
+	try {
+		await createJob(store, { jobId: "audit-job", agentId: "audit-agent" });
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,state) VALUES ('audit-file','audit-job','audit-source','audit-agent',0,'source.jsonl','imports/transcripts/audit-source/source.jsonl','completed')",
+			).run();
+			db.prepare(
+				"INSERT INTO source_import_records (id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_offset,byte_length,raw_hash,status) VALUES ('audit-record','audit-job','audit-file','audit-source','audit-agent',1,1,0,1,'hash','pending')",
+			).run();
+		});
+		await store.run({
+			kind: "source_import",
+			operation: "reject",
+			agentId: "audit-agent",
+			jobId: "audit-job",
+			payload: { recordId: "audit-record", code: "malformed" },
+		});
+		const attempt = await getDbAccessor().withReadDbAsync(
+			(db) =>
+				db
+					.prepare("SELECT source_id, outcome FROM source_import_record_attempts WHERE record_id = ?")
+					.get("audit-record") as {
+					source_id: string;
+					outcome: string;
+				},
+		);
+		expect(attempt).toEqual({ source_id: "audit-source", outcome: "rejected" });
+	} finally {
+		closeDbAccessor();
+		if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+		else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
 		await rm(root, { recursive: true, force: true });
 	}
 });

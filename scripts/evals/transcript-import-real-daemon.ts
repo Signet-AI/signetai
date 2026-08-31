@@ -329,9 +329,10 @@ try {
 		first.sourceId,
 	]).count;
 	record(after === 0, "source-purge-session-rows", after);
-	const tombstone = dbOne("SELECT COUNT(*) count FROM source_import_records WHERE source_id = ?", [
-		first.sourceId,
-	]).count;
+	const tombstone = dbOne(
+		"SELECT COUNT(*) count FROM source_import_record_attempts WHERE agent_id = ? AND source_id = ?",
+		[agent, first.sourceId],
+	).count;
 	record(tombstone > 0, "audit-tombstones-retained", tombstone);
 	details.jobs = [firstDone.job, replayDone.job, rejectedDone.job, crashDone.job];
 	details.reconciliation = reconRows;
