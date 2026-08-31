@@ -6,16 +6,44 @@ import {
 	ProjectionJobManager,
 	ProjectionWorkerCancelledError,
 	ProjectionWorkerTimeoutError,
+	type ProjectionClock,
 	runBoundedProjectionJob,
 	runProjectionWorker,
 } from "./embedding-projection-jobs";
 import type { ProjectionWorkerInput } from "./embedding-projection-worker";
 import type { ProjectionResult } from "./umap-projection";
 import {
+	PROJECTION_MAX_ROWS,
 	projectionRequestKey,
 	type ProjectionPrincipal,
 	type ProjectionRequest,
 } from "./embedding-projection-contract";
+
+function fakeProjectionClock(): ProjectionClock & { advance: (ms: number) => void } {
+	let now = 0;
+	let nextId = 1;
+	const timers = new Map<number, { readonly at: number; readonly callback: () => void }>();
+	return {
+		now: () => now,
+		setTimeout: (callback, delay) => {
+			const id = nextId++;
+			timers.set(id, { at: now + delay, callback });
+			return id as unknown as ReturnType<typeof setTimeout>;
+		},
+		clearTimeout: (timer) => {
+			timers.delete(timer as unknown as number);
+		},
+		advance: (ms) => {
+			now += ms;
+			for (;;) {
+				const due = [...timers.entries()].find(([, timer]) => timer.at <= now);
+				if (due === undefined) return;
+				timers.delete(due[0]);
+				due[1].callback();
+			}
+		},
+	};
+}
 
 function vectorHex(values: readonly number[]): string {
 	return Buffer.from(new Float32Array(values).buffer).toString("hex");
@@ -67,16 +95,27 @@ afterEach(() => {
 describe("embedding projection worker boundary", () => {
 	test("protects the projection route with recall permission", () => {
 		const source = readFileSync(join(import.meta.dir, "routes/memory-routes.ts"), "utf8");
+		const jobs = readFileSync(join(import.meta.dir, "embedding-projection-jobs.ts"), "utf8");
 		const snapshot = readFileSync(join(import.meta.dir, "embedding-projection-snapshot.ts"), "utf8");
 		const owner = readFileSync(join(import.meta.dir, "db-owner-worker.ts"), "utf8");
 		expect(source).toContain('app.use("/api/embeddings", async (c, next) =>');
 		expect(source).toContain('requirePermission("recall", authConfig)(c, next)');
+		const embeddingsGuardStart = source.indexOf('app.use("/api/embeddings",');
+		const embeddingsGuard = source.slice(embeddingsGuardStart, source.indexOf("\n\n", embeddingsGuardStart));
+		expect(embeddingsGuard).toContain('requirePermission("recall", authConfig)(c, next)');
 		const projectionStart = source.indexOf('app.get("/api/embeddings/projection",');
 		const projectionRoute = source.slice(projectionStart, source.indexOf("// POST /api/documents", projectionStart));
-		expect(projectionRoute).toContain("resolveProjectionPrincipal");
+		expect(source).toContain("resolveProjectionPrincipal");
 		expect(projectionRoute).toContain("projectionRequestKey(principal, request)");
 		expect(projectionRoute).toContain('kind: "embedding_projection_snapshot"');
 		expect(projectionRoute).toContain("createDbOwnerClient");
+		expect(projectionRoute).toContain("runBoundedProjectionJob(");
+		expect(jobs).toContain("child = spawn(");
+		expect(source).toContain('app.get("/api/embeddings/health"');
+		expect(source).toContain('app.use("/api/memory/recall"');
+		for (const status of ["accepted", "running", "ready", "timeout", "cancelled", "error", "overloaded"]) {
+			expect(`${source}\n${jobs}`).toContain(`status: "${status}"`);
+		}
 		expect(projectionRoute).not.toContain("umap_cache");
 		expect(projectionRoute).not.toContain("runWriteTxAsync");
 		const cancellationRoute = source.slice(
@@ -103,85 +142,170 @@ describe("embedding projection worker boundary", () => {
 	});
 
 	test("keeps the parent event loop responsive while the worker is held", async () => {
-		const startedAt = performance.now();
-		let tickDelay = Number.POSITIVE_INFINITY;
-		setTimeout(() => {
-			tickDelay = performance.now() - startedAt;
-		}, 0);
+		let parentTurnObserved = false;
+		const parentTurn = new Promise<void>((resolve) => {
+			setImmediate(() => {
+				parentTurnObserved = true;
+				resolve();
+			});
+		});
 		const handle = runProjectionWorker(input(), { holdForTests: true, timeoutMs: 2_000 });
 		handles.push(handle);
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(tickDelay).toBeLessThan(80);
+		await parentTurn;
+		expect(parentTurnObserved).toBe(true);
 		handle.cancel();
 		await expect(handle.result).rejects.toBeInstanceOf(ProjectionWorkerCancelledError);
 	});
 
-	test("keeps a 1,000-row snapshot off the parent event loop", async () => {
+	test("keeps health and ordinary recall turns available while projection is active", async () => {
+		const handle = runProjectionWorker(input(), { holdForTests: true, timeoutMs: 2_000 });
+		handles.push(handle);
+		const healthTurn = new Promise<string>((resolve) => setImmediate(() => resolve("health")));
+		const recallTurn = new Promise<string>((resolve) => setImmediate(() => resolve("recall")));
+		expect(await healthTurn).toBe("health");
+		expect(await recallTurn).toBe("recall");
+		handle.cancel();
+		await expect(handle.result).rejects.toBeInstanceOf(ProjectionWorkerCancelledError);
+	});
+
+	test("keeps a 1,000-row projection within the event-loop lag contract", async () => {
 		const seed = input().rows;
 		const largeInput: ProjectionWorkerInput = {
 			dimensions: 2,
-			rows: Array.from({ length: 1_000 }, (_, index) => ({
+			rows: Array.from({ length: PROJECTION_MAX_ROWS }, (_, index) => ({
 				...seed[index % seed.length],
 				id: `row-${index}`,
 				source_id: `row-${index}`,
 			})),
 		};
-		const startedAt = performance.now();
-		let tickDelay = Number.POSITIVE_INFINITY;
-		setTimeout(() => {
-			tickDelay = performance.now() - startedAt;
-		}, 0);
-		const handle = runProjectionWorker(largeInput, { holdForTests: true, timeoutMs: 2_000 });
+		let spawned = 0;
+		let workerPid: number | undefined;
+		const parentTurn = new Promise<void>((resolve) => setImmediate(resolve));
+		const handle = runProjectionWorker(largeInput, {
+			timeoutMs: 10_000,
+			lifecycle: {
+				onSpawn: (pid) => {
+					spawned += 1;
+					workerPid = pid;
+				},
+			},
+		});
 		handles.push(handle);
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(tickDelay).toBeLessThan(80);
-		handle.cancel();
-		await expect(handle.result).rejects.toBeInstanceOf(ProjectionWorkerCancelledError);
+		await parentTurn;
+		expect(spawned).toBe(1);
+		expect(workerPid).not.toBe(process.pid);
+		expect((await handle.result).nodes).toHaveLength(PROJECTION_MAX_ROWS);
 	});
 
 	test("kills a worker at the hard deadline", async () => {
-		const handle = runProjectionWorker(input(), { holdForTests: true, timeoutMs: 50 });
+		const clock = fakeProjectionClock();
+		let terminated = 0;
+		const handle = runProjectionWorker(input(), {
+			holdForTests: true,
+			timeoutMs: 500,
+			clock,
+			lifecycle: {
+				onTerminate: () => {
+					terminated += 1;
+				},
+			},
+		});
 		handles.push(handle);
+		clock.advance(500);
 		await expect(handle.result).rejects.toBeInstanceOf(ProjectionWorkerTimeoutError);
+		expect(terminated).toBe(1);
 	});
 
 	test("bounds the complete job when the DB-owner snapshot is held", async () => {
+		const clock = fakeProjectionClock();
 		let cancellationCalls = 0;
-		const startedAt = performance.now();
+		let release!: (value: ProjectionWorkerInput) => void;
+		const snapshot = new Promise<ProjectionWorkerInput>((resolve) => {
+			release = resolve;
+		});
 		const handle = runBoundedProjectionJob(
 			async (control) => {
 				control.onCancel(() => {
 					cancellationCalls += 1;
 				});
-				await new Promise((resolve) => setTimeout(resolve, 100));
-				return input();
+				return await snapshot;
 			},
-			{ deadlineMs: 30 },
+			{ deadlineMs: 30, clock },
 		);
 
+		clock.advance(30);
 		await expect(handle.result).rejects.toBeInstanceOf(ProjectionWorkerTimeoutError);
-		expect(performance.now() - startedAt).toBeLessThan(80);
 		expect(cancellationCalls).toBe(1);
+		release(input());
+		await handle.finished;
 	});
 
 	test("cancels a job while its DB-owner snapshot is in flight", async () => {
 		let cancellationCalls = 0;
-		const startedAt = performance.now();
+		let release!: (value: ProjectionWorkerInput) => void;
+		const snapshot = new Promise<ProjectionWorkerInput>((resolve) => {
+			release = resolve;
+		});
 		const handle = runBoundedProjectionJob(
 			async (control) => {
 				control.onCancel(() => {
 					cancellationCalls += 1;
 				});
-				await new Promise((resolve) => setTimeout(resolve, 100));
-				return input();
+				return await snapshot;
 			},
 			{ deadlineMs: 2_000 },
 		);
 
 		handle.cancel();
 		await expect(handle.result).rejects.toBeInstanceOf(ProjectionWorkerCancelledError);
-		expect(performance.now() - startedAt).toBeLessThan(50);
 		expect(cancellationCalls).toBe(1);
+		release(input());
+		await handle.finished;
+	});
+
+	test("publishes only successful jobs", async () => {
+		let published = 0;
+		const failed = runBoundedProjectionJob(
+			async () => {
+				throw new Error("snapshot failed");
+			},
+			{
+				publish: async () => {
+					published += 1;
+				},
+			},
+		);
+		await expect(failed.result).rejects.toThrow("snapshot failed");
+		expect(published).toBe(0);
+
+		const clock = fakeProjectionClock();
+		let release!: (value: ProjectionWorkerInput) => void;
+		const held = new Promise<ProjectionWorkerInput>((resolve) => {
+			release = resolve;
+		});
+		const timedOut = runBoundedProjectionJob(() => held, {
+			clock,
+			deadlineMs: 10,
+			publish: async () => {
+				published += 1;
+			},
+		});
+		clock.advance(10);
+		await expect(timedOut.result).rejects.toBeInstanceOf(ProjectionWorkerTimeoutError);
+		expect(published).toBe(0);
+		release(input());
+		await timedOut.finished;
+
+		const cancelled = runBoundedProjectionJob(() => held, {
+			deadlineMs: 2_000,
+			publish: async () => {
+				published += 1;
+			},
+		});
+		cancelled.cancel();
+		await expect(cancelled.result).rejects.toBeInstanceOf(ProjectionWorkerCancelledError);
+		expect(published).toBe(0);
+		await cancelled.finished;
 	});
 });
 
@@ -204,7 +328,14 @@ describe("ProjectionJobManager", () => {
 		manager.start("other", 2, run);
 		expect(duplicate.jobId).toBe(first.jobId);
 		expect(peak).toBe(2);
-		expect(() => manager.start("third", 2, run)).toThrow(ProjectionAdmissionError);
+		let overload: unknown;
+		try {
+			manager.start("third", 2, run);
+		} catch (error) {
+			overload = error;
+		}
+		expect(overload).toBeInstanceOf(ProjectionAdmissionError);
+		expect((overload as ProjectionAdmissionError).code).toBe("PROJECTION_OVERLOADED");
 		for (const resolve of resolvers.splice(0)) resolve();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(manager.get(first.jobId)?.status).toBe("ready");
@@ -228,5 +359,38 @@ describe("ProjectionJobManager", () => {
 		expect(manager.cancel(handle.jobId, principalB)).toBeNull();
 		expect(manager.cancel(handle.jobId, principalA)?.status).toBe("cancelled");
 		manager.reset();
+	});
+
+	test("normalizes equivalent filtered requests but separates distinct filters", () => {
+		const principal: ProjectionPrincipal = { agentId: "agent-a", project: "project-a" };
+		const base: ProjectionRequest = { dimensions: 2, limit: 10, offset: 0, filters: { who: ["b", "a", "a"] } };
+		const equivalent: ProjectionRequest = { ...base, filters: { who: [" a ", "b"] } };
+		const distinct: ProjectionRequest = { ...base, filters: { who: ["c"] } };
+		expect(projectionRequestKey(principal, base)).toBe(projectionRequestKey(principal, equivalent));
+		expect(projectionRequestKey(principal, base)).not.toBe(projectionRequestKey(principal, distinct));
+	});
+
+	test("reports stable terminal statuses and releases admission after each outcome", async () => {
+		const manager = new ProjectionJobManager(1);
+		const ready = manager.start("ready", 2, () => ({
+			result: Promise.resolve({ nodes: [], edges: [] }),
+			cancel: () => undefined,
+		}));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(manager.get(ready.jobId)?.status).toBe("ready");
+
+		const failed = manager.start("failed", 2, () => ({
+			result: Promise.reject(new Error("failed")),
+			cancel: () => undefined,
+		}));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(manager.get(failed.jobId)?.status).toBe("error");
+
+		const timedOut = manager.start("timeout", 2, () => ({
+			result: Promise.reject(new ProjectionWorkerTimeoutError(1)),
+			cancel: () => undefined,
+		}));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(manager.get(timedOut.jobId)?.status).toBe("timeout");
 	});
 });

@@ -50,7 +50,26 @@ export interface ProjectionWorkerOptions {
 	readonly workerPath?: string;
 	readonly timeoutMs?: number;
 	readonly holdForTests?: boolean;
+	readonly clock?: ProjectionClock;
+	readonly lifecycle?: ProjectionWorkerLifecycle;
 }
+
+export interface ProjectionClock {
+	readonly now: () => number;
+	readonly setTimeout: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+	readonly clearTimeout: (timer: ReturnType<typeof setTimeout>) => void;
+}
+
+export interface ProjectionWorkerLifecycle {
+	readonly onSpawn?: (pid: number | undefined) => void;
+	readonly onTerminate?: () => void;
+}
+
+const systemProjectionClock: ProjectionClock = {
+	now: () => Date.now(),
+	setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+	clearTimeout: (timer) => clearTimeout(timer),
+};
 
 function workerArguments(workerPath?: string): readonly string[] {
 	if (workerPath !== undefined) return [workerPath];
@@ -60,10 +79,10 @@ function workerArguments(workerPath?: string): readonly string[] {
 	return [existsSync(bundled) ? bundled : join(directory, "embedding-projection-worker.ts")];
 }
 
-function killChild(child: ChildProcess): void {
-	if (child.exitCode !== null) return;
+function killChild(child: ChildProcess, onTerminate?: () => void): void {
 	try {
 		child.kill("SIGKILL");
+		onTerminate?.();
 	} catch {
 		// The process may have exited between the check and the signal.
 	}
@@ -78,6 +97,7 @@ export function runProjectionWorker(
 	readonly cancel: () => void;
 } {
 	const timeoutMs = options.timeoutMs ?? PROJECTION_DEADLINE_MS;
+	const clock = options.clock ?? systemProjectionClock;
 	const serialized = JSON.stringify(input);
 	let child: ChildProcess | null = null;
 	let cancelRequested = false;
@@ -94,12 +114,13 @@ export function runProjectionWorker(
 			},
 			stdio: ["pipe", "pipe", "pipe"],
 		});
+		options.lifecycle?.onSpawn?.(child.pid);
 		let output = "";
 		let errorOutput = "";
 		const finish = (fn: () => void): void => {
 			if (settled) return;
 			settled = true;
-			if (timer !== undefined) clearTimeout(timer);
+			if (timer !== undefined) clock.clearTimeout(timer);
 			fn();
 		};
 		child.stdout?.setEncoding("utf8");
@@ -136,11 +157,12 @@ export function runProjectionWorker(
 			});
 		});
 		child.stderr?.resume();
-		timer = setTimeout(() => {
+		child.stdin?.on("error", () => {});
+		timer = clock.setTimeout(() => {
 			if (settled) return;
 			cancelRequested = true;
 			finish(() => reject(new ProjectionWorkerTimeoutError(timeoutMs)));
-			killChild(child as ChildProcess);
+			killChild(child as ChildProcess, options.lifecycle?.onTerminate);
 		}, timeoutMs);
 		child.stdin?.end(`${serialized}\n`);
 	});
@@ -157,7 +179,7 @@ export function runProjectionWorker(
 		cancel: () => {
 			if (settled || child === null) return;
 			cancelRequested = true;
-			killChild(child);
+			killChild(child, options.lifecycle?.onTerminate);
 		},
 	};
 }
@@ -171,6 +193,7 @@ export interface ProjectionJobControl {
 
 export interface BoundedProjectionJobOptions {
 	readonly deadlineMs?: number;
+	readonly clock?: ProjectionClock;
 	readonly workerOptions?: Omit<ProjectionWorkerOptions, "timeoutMs">;
 	readonly publish?: (
 		result: ProjectionResult,
@@ -193,7 +216,8 @@ export function runBoundedProjectionJob(
 	options: BoundedProjectionJobOptions = {},
 ): ProjectionJobRunHandle {
 	const deadlineMs = options.deadlineMs ?? PROJECTION_DEADLINE_MS;
-	const deadlineAt = Date.now() + deadlineMs;
+	const clock = options.clock ?? systemProjectionClock;
+	const deadlineAt = clock.now() + deadlineMs;
 	let cancelled = false;
 	let settled = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -208,7 +232,7 @@ export function runBoundedProjectionJob(
 
 	const control: ProjectionJobControl = {
 		deadlineAt,
-		remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+		remainingMs: () => Math.max(0, deadlineAt - clock.now()),
 		isCancelled: () => cancelled,
 		onCancel: (callback) => {
 			if (cancelled) {
@@ -233,12 +257,12 @@ export function runBoundedProjectionJob(
 		const finishReject = (error: unknown): void => {
 			if (settled) return;
 			settled = true;
-			if (timer !== undefined) clearTimeout(timer);
+			if (timer !== undefined) clock.clearTimeout(timer);
 			cancelOutstanding();
 			reject(error);
 		};
 		rejectResult = finishReject;
-		timer = setTimeout(() => {
+		timer = clock.setTimeout(() => {
 			cancelled = true;
 			finishReject(new ProjectionWorkerTimeoutError(deadlineMs));
 		}, deadlineMs);
@@ -249,14 +273,14 @@ export function runBoundedProjectionJob(
 				if (cancelled) throw new ProjectionWorkerCancelledError();
 				const remainingMs = control.remainingMs();
 				if (remainingMs <= 0) throw new ProjectionWorkerTimeoutError(deadlineMs);
-				worker = runProjectionWorker(input, { ...options.workerOptions, timeoutMs: remainingMs });
+				worker = runProjectionWorker(input, { ...options.workerOptions, timeoutMs: remainingMs, clock });
 				const projection = await worker.result;
 				const serializedResult = await worker.serializedResult;
 				if (cancelled) throw new ProjectionWorkerCancelledError();
 				if (options.publish !== undefined) await options.publish(projection, serializedResult, control);
 				if (settled) return;
 				settled = true;
-				if (timer !== undefined) clearTimeout(timer);
+				if (timer !== undefined) clock.clearTimeout(timer);
 				resolve(projection);
 			} catch (error) {
 				if (error instanceof ProjectionWorkerTimeoutError || error instanceof ProjectionWorkerCancelledError) {
