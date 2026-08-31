@@ -365,6 +365,7 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
 interface StaticScope {
 	readonly parent: StaticScope | undefined;
 	readonly bindings: Map<string, ts.Expression | null>;
+	readonly isVarScope: boolean;
 }
 
 function isFunctionLike(node: ts.Node): node is ts.FunctionLikeDeclaration {
@@ -392,9 +393,11 @@ function bindPattern(scope: StaticScope, name: ts.BindingName, initializer: ts.E
 
 function bindDeclaration(scope: StaticScope, declaration: ts.Declaration): void {
 	if (ts.isVariableDeclaration(declaration) && ts.isVariableDeclarationList(declaration.parent)) {
-		const isConst = (declaration.parent.flags & ts.NodeFlags.Const) !== 0;
+		const flags = declaration.parent.flags;
+		const isConst = (flags & ts.NodeFlags.Const) !== 0;
+		const isVar = (flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)) === 0;
 		bindPattern(
-			scope,
+			isVar ? nearestVarScope(scope) : scope,
 			declaration.name,
 			isConst && ts.isIdentifier(declaration.name) ? (declaration.initializer ?? null) : null,
 		);
@@ -408,6 +411,24 @@ function bindDeclaration(scope: StaticScope, declaration: ts.Declaration): void 
 	) {
 		bindPattern(scope, declaration.name, null);
 	}
+}
+
+function nearestVarScope(scope: StaticScope): StaticScope {
+	let current = scope;
+	while (!current.isVarScope && current.parent !== undefined) current = current.parent;
+	return current;
+}
+
+function predeclareVarBindings(node: ts.Node, scope: StaticScope): void {
+	const visit = (candidate: ts.Node): void => {
+		if (candidate !== node && isFunctionLike(candidate)) return;
+		if (ts.isVariableDeclaration(candidate) && ts.isVariableDeclarationList(candidate.parent)) {
+			const flags = candidate.parent.flags;
+			if ((flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)) === 0) bindDeclaration(scope, candidate);
+		}
+		ts.forEachChild(candidate, visit);
+	};
+	visit(node);
 }
 
 function predeclareScopeBindings(node: ts.Node, scope: StaticScope): void {
@@ -736,8 +757,9 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 		const visit = (node: ts.Node, scope: StaticScope): void => {
 			let currentScope = scope;
 			if (isFunctionLike(node)) {
-				currentScope = { parent: scope, bindings: new Map() };
+				currentScope = { parent: scope, bindings: new Map(), isVarScope: true };
 				for (const parameter of node.parameters) bindPattern(currentScope, parameter.name, null);
+				predeclareVarBindings(node, currentScope);
 			} else if (
 				ts.isSourceFile(node) ||
 				ts.isBlock(node) ||
@@ -747,17 +769,28 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 				ts.isForInStatement(node) ||
 				ts.isForOfStatement(node)
 			) {
-				currentScope = { parent: scope, bindings: new Map() };
+				currentScope = {
+					parent: scope,
+					bindings: new Map(),
+					isVarScope: ts.isSourceFile(node),
+				};
 				if (ts.isSourceFile(node) || ts.isBlock(node) || ts.isCaseBlock(node))
 					predeclareScopeBindings(node, currentScope);
+				if (ts.isSourceFile(node)) predeclareVarBindings(node, currentScope);
 				if (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node))
 					predeclareLoopBinding(node, currentScope);
 			}
 			if (ts.isCatchClause(node) && node.variableDeclaration !== undefined)
 				bindPattern(currentScope, node.variableDeclaration.name, null);
 			if (ts.isVariableDeclaration(node) && ts.isVariableDeclarationList(node.parent)) {
-				const isConst = (node.parent.flags & ts.NodeFlags.Const) !== 0;
-				bindPattern(currentScope, node.name, isConst && ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
+				const flags = node.parent.flags;
+				const isConst = (flags & ts.NodeFlags.Const) !== 0;
+				const bindingScope = isConst
+					? currentScope
+					: (flags & ts.NodeFlags.Let) === 0
+						? nearestVarScope(currentScope)
+						: currentScope;
+				bindPattern(bindingScope, node.name, isConst && ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
 			}
 			if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
 				addEdge("import", node.moduleSpecifier.text, node, !isTypeOnlyImport(node));
@@ -802,7 +835,7 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 			}
 			ts.forEachChild(node, (child) => visit(child, currentScope));
 		};
-		visit(sourceFile, { parent: undefined, bindings: new Map() });
+		visit(sourceFile, { parent: undefined, bindings: new Map(), isVarScope: true });
 	}
 	const sourceModules = [...modules.values()]
 		.map((module) => ({
