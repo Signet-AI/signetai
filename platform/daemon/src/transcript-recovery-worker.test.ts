@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+import { spawn } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -786,4 +788,71 @@ describe("transcript recovery worker", () => {
 		) as Array<{ transcript_path: string }>;
 		expect(jobs.map((job) => job.transcript_path)).toEqual([firstPath, secondPath]);
 	});
+
+	it("closes the recovery database when its daemon parent is killed", async () => {
+		const databasePath = join(dir, "recovery-lock.db");
+		const childPath = join(dir, "locking-recovery-child.ts");
+		const harnessPath = join(dir, "recovery-parent-harness.ts");
+		const childPidPath = join(dir, "locking-child.pid");
+		const supervisorPidPath = join(dir, "recovery-supervisor.pid");
+		writeFileSync(
+			childPath,
+			[
+				'import { Database } from "bun:sqlite";',
+				'import { writeFileSync } from "node:fs";',
+				`const db = new Database(${JSON.stringify(databasePath)});`,
+				'db.exec("CREATE TABLE IF NOT EXISTS lifecycle_lock (value INTEGER)");',
+				'db.exec("BEGIN IMMEDIATE");',
+				'db.prepare("INSERT INTO lifecycle_lock (value) VALUES (1)").run();',
+				`writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+				"setInterval(() => {}, 1_000);",
+			].join("\n"),
+		);
+		const supervisorPath = join(dirname(fileURLToPath(import.meta.url)), "transcript-recovery-supervisor.ts");
+		writeFileSync(
+			harnessPath,
+			[
+				'import { spawn } from "node:child_process";',
+				`const supervisor = spawn(process.execPath, [${JSON.stringify(supervisorPath)}], {`,
+				`env: { ...process.env, SIGNET_TRANSCRIPT_RECOVERY_CHILD_PATH: ${JSON.stringify(childPath)} },`,
+				'stdio: ["pipe", "ignore", "ignore"],',
+				"});",
+				`require("node:fs").writeFileSync(${JSON.stringify(supervisorPidPath)}, String(supervisor.pid));`,
+				"setInterval(() => {}, 1_000);",
+			].join("\n"),
+		);
+		const parent = spawn(process.execPath, [harnessPath], { stdio: "ignore" });
+		try {
+			for (let attempt = 0; attempt < 200 && !existsSync(childPidPath); attempt++) await Bun.sleep(5);
+			expect(existsSync(childPidPath)).toBe(true);
+			parent.kill("SIGKILL");
+			let childAlive = true;
+			for (let attempt = 0; attempt < 200 && childAlive; attempt++) {
+				try {
+					process.kill(Number(readFileSync(childPidPath, "utf8")), 0);
+				} catch {
+					childAlive = false;
+				}
+				if (childAlive) await Bun.sleep(5);
+			}
+			expect(childAlive).toBe(false);
+			let supervisorAlive = true;
+			try {
+				process.kill(Number(readFileSync(supervisorPidPath, "utf8")), 0);
+			} catch {
+				supervisorAlive = false;
+			}
+			expect(supervisorAlive).toBe(false);
+			const database = new Database(databasePath);
+			try {
+				database.exec("PRAGMA busy_timeout = 1000");
+				database.exec("BEGIN IMMEDIATE");
+				database.exec("ROLLBACK");
+			} finally {
+				database.close();
+			}
+		} finally {
+			parent.kill("SIGKILL");
+		}
+	}, 15_000);
 });

@@ -16,9 +16,13 @@ function agent(c: Context): string | null {
 	return requested === undefined || requested === resolved ? resolved : null;
 }
 function bodyStream(request: Request): AsyncIterable<Uint8Array> {
-	if (request.body === null) throw new Error("request body is required");
+	// Bun's server Request clone does not preserve the streamed upload body here:
+	// the clone's reader reaches EOF even though the original body is non-empty.
+	// Consume the one-shot server stream directly; staging remains byte-streamed.
+	const body = request.body;
+	if (body === null) throw new Error("request body is required");
 	return (async function* (): AsyncGenerator<Uint8Array> {
-		const reader = request.body?.getReader();
+		const reader = body.getReader();
 		if (reader === undefined) throw new Error("request body is required");
 		let total = 0;
 		try {
@@ -127,7 +131,7 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 		try {
 			staged = await stageTranscriptStream(
 				process.env.SIGNET_PATH ?? `${process.env.HOME}/.agents`,
-				sourceId.replaceAll(":", "-"),
+				`${sourceId.replaceAll(":", "-")}-${jobId}-${fileId}`,
 				bodyStream(c.req.raw),
 			);
 		} catch (error) {

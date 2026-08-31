@@ -121,6 +121,11 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 				],
 				result: "run" as const,
 			});
+			statements.push({
+				sql: "UPDATE source_import_jobs SET total = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ?), updated_at = datetime('now') WHERE id = ? AND agent_id = ?",
+				params: [operation.jobId, operation.agentId, operation.jobId, operation.agentId],
+				result: "run" as const,
+			});
 			return (await dbOwnerTransaction(statements, {
 				operation: "sources.import.store.record-batch",
 				lane: "write",

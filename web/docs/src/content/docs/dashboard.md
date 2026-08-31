@@ -54,6 +54,13 @@ The dashboard connect form intentionally exposes only a small set of fields. In 
 
 For the source lifecycle and import behavior, see [Sources](/sources/). For HTTP request and response shapes, see [Documents and sources API](/api/documents-sources/).
 
+The Sources dashboard distinguishes file-import job progress from Dreaming
+attention and consumption. It shows the job id immediately, per-file states,
+imported/duplicate/rejected/pending counts, bounded rejection details, and
+reconciliation. Pause, resume, retry, and cancel call the daemon controls; the
+browser does not maintain a second client-only queue. The target agent is
+required, and any embedded transcript agent id is displayed as provenance only.
+
 ## Serving behavior
 
 The daemon serves the built dashboard as a generic static SPA. Its dashboard handler passes `/api/*`, `/health`, and `/sse` through to their own handlers; remaining extensionless paths fall back to `index.html`.

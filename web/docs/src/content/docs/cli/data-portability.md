@@ -39,6 +39,33 @@ Transcript export writes JSONL to standard output by default, or to `--output`. 
 
 Transcripts can contain credentials, personal data, and private project context. Review access controls before using an export for training or analysis.
 
+### Importing exported transcripts
+
+`signet sources import <files...> --kind transcripts --schema signet --agent <id>`
+streams the current `signet export transcripts` JSONL shape into a durable daemon
+job. `signet sources imports list|status|pause|resume|retry|cancel` reads or
+controls that job. The daemon records per-line hashes, byte checkpoints,
+statuses, rejection codes, and reconciliation counters; it does not store raw
+transcript bodies in the ledgers.
+
+The adapter is `signet-export` version `1`. It preserves exact whitespace,
+multiline messages, `user`/`assistant`/`system`/`tool`/`unknown` roles, projects,
+historical timestamps, and source provenance. `--agent` is the target scope;
+an embedded `agent_id` is not an authorization or routing override. Same
+identity plus same content is `duplicate`; same identity plus changed content is
+`conversation_identity_conflict`. Blank lines are counted separately from
+rejected lines.
+
+Limits are one active job/file, 25 records per DB batch, 8 MiB per canonical
+batch, 16 MiB per record, 4 MiB per message, and 50,000 messages. States are
+`staging`, `inventorying`, `queued`, `running`, `paused`, `completed`,
+`completed_with_rejections`, and `cancelled`. Restart recovers leases and byte
+offsets. The terminal reconciliation invariant is `total = imported + duplicate
++ rejected + pending` with `pending = 0`. Exact corpus replay produces
+duplicates, not new evidence. Source removal purges staged/canonical/source
+rows, while bounded audit fingerprints/tombstones remain; derived knowledge is
+handled as unsupported/stale by the normal Dreaming review path.
+
 ## Schema and vector migrations
 
 ```bash

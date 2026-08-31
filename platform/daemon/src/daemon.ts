@@ -2081,7 +2081,7 @@ async function cleanup() {
 	const renderWorker = getSynthesisRenderWorker();
 	if (renderWorker !== null) {
 		setSynthesisRenderWorker(null);
-		renderWorker.terminate().catch((e) => {
+		await renderWorker.terminate().catch((e) => {
 			logger.debug("daemon", "render worker terminate failed", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -2928,22 +2928,17 @@ async function main() {
 	const createBoundedServer = (...args: Parameters<typeof nodeCreateServer>) => {
 		const server = nodeCreateServer(...args);
 		server.on("request", (req, res) => {
-			let bytes = 0;
-			let aborted = false;
-			req.on("data", (chunk: Buffer) => {
-				if (aborted) return;
-				bytes += chunk.length;
-				if (bytes > REQUEST_BODY_LIMIT) {
-					aborted = true;
-					logger.warn("http", "Request body exceeded limit", { bytes, limit: REQUEST_BODY_LIMIT });
-					if (!res.headersSent) {
-						res.writeHead(413, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: "payload too large" }), () => {
-							req.socket?.destroy();
-						});
-					}
-				}
-			});
+			// Never attach a data listener here. Node switches the request into
+			// flowing mode and drains the one-shot stream before Hono can consume
+			// it. Streamed routes (notably transcript imports) enforce their own
+			// limits while reading the body. Content-Length is the only safe
+			// pre-read check at this layer; chunked bodies are checked downstream.
+			const declared = Number(req.headers["content-length"] ?? 0);
+			if (declared > REQUEST_BODY_LIMIT && !res.headersSent) {
+				logger.warn("http", "Request body exceeded declared limit", { bytes: declared, limit: REQUEST_BODY_LIMIT });
+				res.writeHead(413, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "payload too large" }), () => req.socket?.destroy());
+			}
 		});
 		return server;
 	};

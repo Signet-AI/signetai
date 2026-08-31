@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /** Real-daemon acceptance eval for transcript import (#1814). */
 import { spawn, type ChildProcess } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, readFile, readlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 
@@ -196,9 +196,6 @@ async function waitForDatabaseOwnershipRelease(): Promise<void> {
 		for (const entry of await readdir("/proc")) {
 			if (!/^\d+$/.test(entry)) continue;
 			try {
-				const environment = await readFile(`/proc/${entry}/environ`, "utf8");
-				const exactOwnerPath = `SIGNET_DB_OWNER_DB_PATH=${dbPath}\0`;
-				const ownsByEnvironment = environment.includes(exactOwnerPath);
 				let ownsByOpenFile = false;
 				for (const fd of await readdir(`/proc/${entry}/fd`)) {
 					try {
@@ -211,7 +208,7 @@ async function waitForDatabaseOwnershipRelease(): Promise<void> {
 						// The descriptor can close between enumeration and readback.
 					}
 				}
-				if (ownsByEnvironment || ownsByOpenFile) holders.push(entry);
+				if (ownsByOpenFile) holders.push(entry);
 			} catch {
 				// The process can exit between /proc enumeration and readback.
 			}

@@ -697,7 +697,7 @@ export function startTranscriptRecoveryWorker(
 				SIGNET_TRANSCRIPT_RECOVERY_CHILD_PATH: childPath,
 				SIGNET_TRANSCRIPT_RECOVERY_INPUT: JSON.stringify({ basePath, agentId, options: scanOptions }),
 			},
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["pipe", "pipe", "pipe"],
 		});
 		activeChild = child;
 		return await new Promise<TranscriptRecoveryScanResult>((resolve, reject) => {
@@ -785,6 +785,7 @@ export function startTranscriptRecoveryWorker(
 			timer = null;
 			const scanToStop = activeScan;
 			if (scanToStop === null) return;
+			activeChild?.stdin?.end();
 			signalActiveProcesses("SIGTERM");
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
 			const stoppedGracefully = await Promise.race([
