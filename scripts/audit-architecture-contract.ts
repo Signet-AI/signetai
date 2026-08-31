@@ -504,7 +504,7 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 				? []
 				: [
 						{
-							path: relativePath(sourceRoot, path),
+							path: relativePath(root, path),
 							lines: source.split("\n").length,
 							bytes: Buffer.byteLength(source),
 							reason,
