@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startTranscriptImportWorker, purgeTranscriptImportFilesystem } from "./transcript-import-worker";
+import { appendCanonical, startTranscriptImportWorker, purgeTranscriptImportFilesystem } from "./transcript-import-worker";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { createJob, createOwnerTranscriptImportStore } from "./transcript-import-store";
 import type { ImportStore, ImportStoreOperation } from "./transcript-import-store";
@@ -103,6 +103,27 @@ test("worker inventories, rereads, appends canonical evidence, and is replay-saf
 			"utf8",
 		);
 		expect(canonical.trim().split("\n")).toHaveLength(2);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("canonical append removes a lock whose recorded owner process is gone", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-stale-lock-"));
+	try {
+		const { signetExportV1Adapter } = await import("./transcript-import-adapter");
+		const { buildCompletedTranscriptCommit } = await import("./transcript-import-commit");
+		const commit = buildCompletedTranscriptCommit(signetExportV1Adapter.parse(JSON.parse(valid("stale-lock"))), {
+			agentId: "agent-a",
+			sourceId: "source-a",
+			sourceRecordId: "record-a",
+		});
+		const digest = (await import("node:crypto")).createHash("sha256").update("agent-a\0h").digest("hex").slice(0, 24);
+		const lock = join(root, "transcripts", `${digest}.jsonl.lock`);
+		await mkdir(lock, { recursive: true });
+		await writeFile(join(lock, "owner"), "99999999\\n");
+		await appendCanonical(root, "agent-a", "h", [commit]);
+		expect(await readdir(join(root, "transcripts"))).toContain(`${digest}.jsonl`);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
