@@ -75,6 +75,7 @@ describe("sync DB attribution", () => {
 		expect(classifySyncDbSiteToken("/dist/daemon.js:54")).toBe("source-location");
 		expect(classifySyncDbSiteToken("dir/file.ts:12")).toBe("source-location");
 		expect(classifySyncDbSiteToken("//dist/daemon.js:54")).toBeNull();
+		expect(classifySyncDbSiteToken("/dist//daemon.js:54")).toBeNull();
 		expect(classifySyncDbSiteToken("dir//file.ts:12")).toBeNull();
 	});
 });
