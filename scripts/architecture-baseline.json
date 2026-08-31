@@ -113,7 +113,7 @@
 			{
 				"id": "module:integrations/oh-my-pi/connector/scripts/embed-extension.ts",
 				"path": "integrations/oh-my-pi/connector/scripts/embed-extension.ts",
-				"lines": 46,
+				"lines": 48,
 				"logicalStatements": 14,
 				"exports": 0,
 				"topLevelMutableBindings": 0,
@@ -263,7 +263,7 @@
 			{
 				"id": "module:integrations/opencode/connector/scripts/embed-plugin.ts",
 				"path": "integrations/opencode/connector/scripts/embed-plugin.ts",
-				"lines": 46,
+				"lines": 48,
 				"logicalStatements": 15,
 				"exports": 0,
 				"topLevelMutableBindings": 0,
@@ -353,7 +353,7 @@
 			{
 				"id": "module:integrations/pi/connector/scripts/embed-extension.ts",
 				"path": "integrations/pi/connector/scripts/embed-extension.ts",
-				"lines": 46,
+				"lines": 48,
 				"logicalStatements": 14,
 				"exports": 0,
 				"topLevelMutableBindings": 0,
@@ -608,7 +608,7 @@
 			{
 				"id": "module:libs/sdk/scripts/generate-client.ts",
 				"path": "libs/sdk/scripts/generate-client.ts",
-				"lines": 212,
+				"lines": 214,
 				"logicalStatements": 99,
 				"exports": 0,
 				"topLevelMutableBindings": 0,
@@ -10193,8 +10193,8 @@
 			{
 				"id": "module:scripts/audit-architecture-contract.ts",
 				"path": "scripts/audit-architecture-contract.ts",
-				"lines": 1617,
-				"logicalStatements": 781,
+				"lines": 1662,
+				"logicalStatements": 801,
 				"exports": 17,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -52195,8 +52195,8 @@
 		],
 		"summary": {
 			"files": 930,
-			"lines": 268487,
-			"logicalStatements": 96817,
+			"lines": 268540,
+			"logicalStatements": 96837,
 			"runtimeEdges": 1998,
 			"allEdges": 2593,
 			"unresolvedEdges": 1525,
