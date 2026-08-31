@@ -3151,6 +3151,20 @@ export async function hybridRecall(
 						"memory-search.entity-context.entities",
 						eids.length,
 					);
+					const safetyTable = await graphOwnerReadAll<{ name: string }>(
+						"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety'",
+						[],
+						"memory-search.entity-context.safety-table",
+						1,
+					);
+					const safetyJoin =
+						safetyTable.length > 0
+							? "LEFT JOIN memory_content_safety safety ON safety.agent_id = ea.agent_id AND safety.source_kind = 'memory' AND safety.source_id = ea.memory_id"
+							: "";
+					const safetySelect =
+						safetyTable.length > 0
+							? ", safety.status AS safety_status, safety.context_eligible AS safety_context_eligible"
+							: "";
 					const structured = [];
 					for (const entity of entities) {
 						const aspects = await graphOwnerReadAll<{ id: string; name: string }>(
@@ -3168,16 +3182,25 @@ export async function hybridRecall(
 								status: string;
 								importance: number;
 								memory_id: string | null;
+								safety_status?: string | null;
+								safety_context_eligible?: number | null;
 							}>(
-								`SELECT content, status, importance, memory_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
-								 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
-								 ORDER BY importance DESC LIMIT 5`,
+								`SELECT ea.content, ea.status, ea.importance, ea.memory_id${safetySelect}
+								 FROM entity_attributes ea ${safetyJoin}
+								 WHERE ea.aspect_id = ? AND ea.agent_id = ? AND ea.status = 'active'
+								 ORDER BY ea.importance DESC LIMIT 5`,
 								[aspect.id, agentId],
 								"memory-search.entity-context.attributes",
 								5,
 							);
 							const attributes = attrs
-								.filter((attr) => scanMemoryContent(attr.content).contextEligible)
+								.filter(
+									(attr) =>
+										scanMemoryContent(attr.content).contextEligible &&
+										(!attr.memory_id ||
+											attr.safety_status == null ||
+											(attr.safety_status === "clean" && attr.safety_context_eligible === 1)),
+								)
 								.map((attr) => ({ content: attr.content, status: attr.status, importance: attr.importance }));
 							if (attributes.length > 0) contextAspects.push({ name: aspect.name, attributes });
 						}

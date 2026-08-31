@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import type { DbOwnerJobHandle, DbOwnerRequest, DbOwnerSubmitOptions } from "./db-owner-client";
+import { getDbOwner } from "./db-owner-runtime";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
@@ -235,37 +237,39 @@ describe("hybridRecall", () => {
 		expect(parentGraphReads).toEqual([]);
 	});
 
-	it("does not report a post-traversal parent read failure as graph degradation", async () => {
+	it("does not report an owner post-traversal read failure as graph degradation", async () => {
 		const now = new Date().toISOString();
 		await getDbAccessor().withWriteTxAsync(async (db) => {
 			db.prepare(
 				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
-				 VALUES ('graph-parent-failure-memory', 'Signet graph parent failure memory', 'fact', 'default', ?, ?, 'test')`,
+				 VALUES ('graph-owner-failure-memory', 'Signet graph owner failure memory', 'fact', 'default', ?, ?, 'test')`,
 			).run(now, now);
 			db.prepare(
 				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-				 VALUES ('graph-parent-failure-entity', 'Signet', 'signet', 'project', 'default', 10, ?, ?)`,
+				 VALUES ('graph-owner-failure-entity', 'Signet', 'signet', 'project', 'default', 10, ?, ?)`,
 			).run(now, now);
 			db.prepare(
 				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
-				 VALUES ('graph-parent-failure-aspect', 'graph-parent-failure-entity', 'default', 'context', 'context', 0.9, ?, ?)`,
+				 VALUES ('graph-owner-failure-aspect', 'graph-owner-failure-entity', 'default', 'context', 'context', 0.9, ?, ?)`,
 			).run(now, now);
 			db.prepare(
 				`INSERT INTO entity_attributes (
 					id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
 					confidence, importance, status, created_at, updated_at
-				) VALUES ('graph-parent-failure-attribute', 'graph-parent-failure-aspect', 'default',
-					'graph-parent-failure-memory', 'attribute', 'Signet graph parent failure memory',
-					'signet graph parent failure memory', 1, 0.9, 'active', ?, ?)`,
+				) VALUES ('graph-owner-failure-attribute', 'graph-owner-failure-aspect', 'default',
+					'graph-owner-failure-memory', 'attribute', 'Signet graph owner failure memory',
+					'signet graph owner failure memory', 1, 0.9, 'active', ?, ?)`,
 			).run(now, now);
 		});
 
-		const accessor = getDbAccessor();
-		const originalWithReadDbAsync = accessor.withReadDbAsync;
-		accessor.withReadDbAsync = async (fn, options) => {
-			if (options?.siteToken === "memory-search.ts:2512")
-				throw new Error("injected post-traversal parent read failure");
-			return await originalWithReadDbAsync(fn, options);
+		const owner = await getDbOwner();
+		const originalSubmit = owner.submit.bind(owner);
+		let injected = false;
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			const handle = originalSubmit<Result>(request, options);
+			if (options.operation !== "memory-search.traversal.embedding-rescore") return handle;
+			injected = true;
+			return { ...handle, result: Promise.reject(new Error("injected owner embedding read failure")) };
 		};
 
 		try {
@@ -279,14 +283,62 @@ describe("hybridRecall", () => {
 					trackRecallAccess: false,
 				},
 				testCfg({ graph: true, traversal: true }),
-				async () => null,
+				async () => unitVector(),
 			);
-			expect(result.results.map((row) => row.id)).toContain("graph-parent-failure-memory");
+			expect(result.results.map((row) => row.id)).toContain("graph-owner-failure-memory");
+			expect(injected).toBe(true);
 			expect(result.meta.graphPartial).toBeUndefined();
 			expect(result.meta.graphError).toBeUndefined();
 		} finally {
-			accessor.withReadDbAsync = originalWithReadDbAsync;
+			owner.submit = originalSubmit;
 		}
+	});
+
+	it("excludes clean-looking graph entity context when persisted memory safety blocks it", async () => {
+		const now = new Date().toISOString();
+		await getDbAccessor().withWriteTxAsync(async (db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+				 VALUES ('graph-unsafe-memory', 'Signet clean-looking memory', 'fact', 'default', ?, ?, 'test')`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('graph-unsafe-entity', 'Signet', 'signet', 'project', 'default', 10, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('graph-unsafe-aspect', 'graph-unsafe-entity', 'default', 'context', 'context', 0.9, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+					confidence, importance, status, created_at, updated_at
+				) VALUES ('graph-unsafe-attribute', 'graph-unsafe-aspect', 'default',
+					'graph-unsafe-memory', 'attribute', 'Signet clean-looking memory',
+					'signet clean-looking memory', 1, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO memory_content_safety (
+					agent_id, source_kind, source_id, status, context_eligible,
+					reasons_json, policy_version, scanned_at
+				) VALUES ('default', 'memory', 'graph-unsafe-memory', 'tainted', 0, '[]', 'test', ?)`,
+			).run(now);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "Signet",
+				keywordQuery: "Signet",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				trackRecallAccess: false,
+			},
+			testCfg({ graph: true, traversal: true }),
+			async () => null,
+		);
+
+		expect(result.entities).toBeUndefined();
 	});
 
 	function seedUnbackedOntologyClaim(opts: {
