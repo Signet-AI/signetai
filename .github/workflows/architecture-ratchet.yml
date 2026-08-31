@@ -33,9 +33,12 @@ jobs:
         env:
           BASE_ROOT: ${{ runner.temp }}/architecture-base
           CANDIDATE_ROOT: ${{ github.workspace }}
-          TRUSTED_AUDITOR: ${{ runner.temp }}/architecture-base/scripts/audit-architecture-contract.ts
+          TRUSTED_AUDITOR_COMMIT: 42017f87518556d3a94151100f7329232a94e0de
+          TRUSTED_AUDITOR: ${{ runner.temp }}/trusted-audit-architecture-contract.ts
         run: |
           git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+          git fetch --no-tags origin "$TRUSTED_AUDITOR_COMMIT"
+          git show "$TRUSTED_AUDITOR_COMMIT:scripts/audit-architecture-contract.ts" > "$TRUSTED_AUDITOR"
           mkdir -p "$BASE_ROOT"
           git archive "${{ github.event.pull_request.base.sha }}" | tar -x -C "$BASE_ROOT"
           ln -s "$GITHUB_WORKSPACE/node_modules" "$BASE_ROOT/node_modules"
