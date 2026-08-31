@@ -123,6 +123,7 @@ const workerEntries = [
 	["synthesis-render-worker", "platform/daemon/src/synthesis-render-worker.ts"],
 	["database-integrity-worker", "platform/daemon/src/database-integrity-worker.ts"],
 	["db-owner-worker", "platform/daemon/src/db-owner-worker.ts"],
+	["embedding-projection-worker", "platform/daemon/src/embedding-projection-worker.ts"],
 	["native-memory-source-worker", "platform/daemon/src/native-memory-source-worker.ts"],
 	// Native ONNX embedding runs in a worker so model download / WASM compile /
 	// inference can never block the daemon's main event loop (see
@@ -434,6 +435,9 @@ if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PR
 } else if (process.env.SIGNET_DB_OWNER_WORKER) {
 	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
 	runDbOwnerWorker();
+} else if (process.env.SIGNET_EMBEDDING_PROJECTION_WORKER) {
+	const { runEmbeddingProjectionWorker } = await import("../platform/daemon/src/embedding-projection-worker");
+	await runEmbeddingProjectionWorker();
 } else if (process.env.SIGNET_NATIVE_SOURCE_WORKER) {
 	const { runNativeSourceWorker } = await import("../platform/daemon/src/native-memory-source-worker");
 	runNativeSourceWorker();
