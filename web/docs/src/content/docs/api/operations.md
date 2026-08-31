@@ -326,6 +326,14 @@ Administrative repair operations. All require `admin` permission. Operations
 are rate-limited internally by the repair limiter and return `429` when the
 limit is exceeded.
 
+Unless an endpoint explicitly documents otherwise, repair reads and writes are
+scoped to the resolved `agentId`. Pass `agentId` in the request body or query
+string; when omitted, the daemon's configured agent is used. Project, scope,
+and visibility dimensions are also preserved by deduplication. Operator/admin
+authorization bypasses only the autonomous feature toggle, not admission,
+cooldown, hourly, or destructive-scope checks. Invalid bounded repair inputs
+return `400`.
+
 ### POST /api/repair/requeue-dead
 
 Requeue extraction jobs stuck in a terminal-failed state. Typically used
@@ -422,9 +430,14 @@ Rate-limited — returns `429` when the limit is exceeded.
 ```json
 {
   "batchSize": 50,
-  "dryRun": false
+  "dryRun": false,
+  "agentId": "default"
 }
 ```
+
+`agentId` scopes selection and embedding-coverage checks to one agent; when
+omitted, the daemon's configured agent is used. `batchSize` is finite, positive,
+and server-bounded. The same scope is revalidated before each write.
 
 `batchSize` defaults to `50`. `dryRun: true` reports what would be
 embedded without calling the embedding provider.
@@ -519,13 +532,21 @@ Rate-limited. Requires `admin` permission.
   "batchSize": 50,
   "dryRun": false,
   "semanticEnabled": false,
-  "semanticThreshold": 0.95
+  "semanticThreshold": 0.95,
+  "agentId": "default",
+  "project": "app",
+  "scope": "workspace",
+  "visibility": "private"
 }
 ```
 
-All fields are optional. `dryRun: true` reports what would be deduplicated
-without making changes. `semanticEnabled` adds vector-similarity dedup on
-top of hash-based dedup.
+All fields are optional. `agentId` defaults to the daemon's configured agent;
+project, scope, and visibility further narrow the operation when supplied.
+Exact and semantic deduplication never crosses these identity dimensions, and
+writes revalidate them in the transaction. `dryRun: true` reports what would be
+deduplicated without making changes. `semanticEnabled` adds vector-similarity
+dedup on top of hash-based deduplication. Invalid or oversized batch values
+return `400`.
 
 **Response**
 
@@ -537,6 +558,33 @@ top of hash-based dedup.
   "message": "deduplicated 7 memories"
 }
 ```
+
+### POST /api/repair/prune-chunk-groups
+
+Deletes a bounded batch of `chunk_group` entities for the resolved agent.
+`batchSize` must be a positive integer no greater than the server maximum.
+Use `dryRun: true` to inspect the count without mutation.
+
+### POST /api/repair/prune-singleton-entities
+
+Deletes a bounded batch of extracted entities with no graph materialization.
+The operation is agent-scoped. `batchSize` is a positive server-bounded integer
+and `maxMentions` is an integer in the bounded singleton policy range; invalid
+values return `400`.
+
+### GET /api/repair/dead-memories
+
+Previews low-confidence or stale memories for the resolved agent. The preview
+uses the same confidence, age, access, and importance predicate enforced by the
+apply route.
+
+### POST /api/repair/dead-memories/forget
+
+Soft-deletes only IDs that still satisfy the dead-memory predicate for the
+resolved agent. The write is revalidated transactionally, so IDs that changed
+scope, importance, confidence, or access state are skipped. The response and
+audit event count canonical memory rows, not trigger side effects, and retain
+the repair actor, reason, request ID, and scope.
 
 ### POST /api/repair/relink-entities
 

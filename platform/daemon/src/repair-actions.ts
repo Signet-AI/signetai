@@ -56,6 +56,11 @@ export interface RepairContext {
 	readonly actor: string;
 	readonly actorType: "operator" | "agent" | "daemon";
 	readonly requestId?: string;
+	/** Resolved data scope used for admission and destructive actions. */
+	readonly agentId?: string;
+	readonly project?: string | null;
+	readonly scope?: string | null;
+	readonly visibility?: string | null;
 }
 
 export interface RepairResult {
@@ -97,17 +102,30 @@ interface RateLimiterEntry {
 }
 
 export interface RateLimiter {
-	check(action: string, cooldownMs: number, hourlyBudget: number): RepairGateCheck;
-	record(action: string): void;
+	check(action: string, cooldownMs: number, hourlyBudget: number, scopeKey?: string): RepairGateCheck;
+	record(action: string, scopeKey?: string): void;
+}
+
+function limiterKey(action: string, scopeKey?: string): string {
+	return `${action}:${scopeKey ?? "process"}`;
+}
+
+function repairScopeKey(ctx: RepairContext): string {
+	return JSON.stringify({
+		agentId: ctx.agentId ?? "default",
+		project: ctx.project ?? null,
+		scope: ctx.scope ?? null,
+		visibility: ctx.visibility ?? null,
+	});
 }
 
 export function createRateLimiter(): RateLimiter {
 	const state = new Map<string, RateLimiterEntry>();
 
 	return {
-		check(action: string, cooldownMs: number, hourlyBudget: number): RepairGateCheck {
+		check(action: string, cooldownMs: number, hourlyBudget: number, scopeKey?: string): RepairGateCheck {
 			const now = Date.now();
-			const entry = state.get(action);
+			const entry = state.get(limiterKey(action, scopeKey));
 
 			if (!entry) return { allowed: true };
 
@@ -131,12 +149,13 @@ export function createRateLimiter(): RateLimiter {
 			return { allowed: true };
 		},
 
-		record(action: string): void {
+		record(action: string, scopeKey?: string): void {
 			const now = Date.now();
-			const entry = state.get(action);
+			const key = limiterKey(action, scopeKey);
+			const entry = state.get(key);
 
 			if (!entry) {
-				state.set(action, {
+				state.set(key, {
 					lastRunAt: now,
 					hourlyCount: 1,
 					hourResetAt: now + 60 * 60 * 1000,
@@ -172,7 +191,8 @@ export function checkRepairGate(
 		return { allowed: false, reason: "autonomous.frozen is set" };
 	}
 
-	// Agents require autonomous.enabled; operators and daemon bypass this check
+	// Agents require autonomous.enabled; operator privilege only bypasses that
+	// feature toggle. Every actor still consumes runtime admission capacity.
 	if (ctx.actorType === "agent" && !cfg.autonomous.enabled) {
 		return {
 			allowed: false,
@@ -180,12 +200,7 @@ export function checkRepairGate(
 		};
 	}
 
-	// Operators and daemon bypass rate limiting — only agents are throttled
-	if (ctx.actorType === "operator" || ctx.actorType === "daemon") {
-		return { allowed: true };
-	}
-
-	return limiter.check(action, cooldownMs, hourlyBudget);
+	return limiter.check(action, cooldownMs, hourlyBudget, repairScopeKey(ctx));
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +215,17 @@ function writeRepairAudit(db: WriteDb, action: string, ctx: RepairContext, affec
 		newContent: null,
 		changedBy: ctx.actor,
 		reason: ctx.reason,
-		metadata: JSON.stringify({ repairAction: action, affected, message }),
+		metadata: JSON.stringify({
+			repairAction: action,
+			affected,
+			message,
+			scope: {
+				agentId: ctx.agentId ?? "default",
+				project: ctx.project ?? null,
+				scope: ctx.scope ?? null,
+				visibility: ctx.visibility ?? null,
+			},
+		}),
 		createdAt: new Date().toISOString(),
 		actorType: ctx.actorType,
 		requestId: ctx.requestId,
@@ -314,7 +339,7 @@ export async function requeueDeadJobs(
 		return { affected, preview: [] as readonly string[], totalMatching: selected.totalMatching };
 	});
 
-	if (!dryRun) limiter.record(action);
+	if (!dryRun) limiter.record(action, repairScopeKey(ctx));
 	logger.info("pipeline", "repair: requeued dead memory jobs", {
 		affected: result.affected,
 		dryRun,
@@ -369,7 +394,7 @@ export async function releaseStaleLeases(
 		};
 	});
 
-	limiter.record(action);
+	limiter.record(action, repairScopeKey(ctx));
 	logger.info("pipeline", "repair: released stale leases", {
 		affected: result.recovered.total,
 		pending: result.recovered.pending,
@@ -439,7 +464,7 @@ export async function checkFtsConsistency(
 	// If FTS table is missing entirely, report it (startup self-heal
 	// via ensureFtsTable should have caught this, but handle gracefully)
 	if (ftsMissing) {
-		limiter.record(action);
+		limiter.record(action, repairScopeKey(ctx));
 		const msg = repair
 			? "FTS index state missing — restart daemon to trigger self-healing rebuild"
 			: "FTS index state missing — run with repair=true or restart daemon";
@@ -458,7 +483,7 @@ export async function checkFtsConsistency(
 	if (tokenizerDrift) {
 		if (repair) {
 			if (ftsRebuildInFlight) {
-				limiter.record(action);
+				limiter.record(action, repairScopeKey(ctx));
 				return {
 					action,
 					success: true,
@@ -493,7 +518,7 @@ export async function checkFtsConsistency(
 			ftsMismatchPendingRebuild = false;
 		}
 
-		limiter.record(action);
+		limiter.record(action, repairScopeKey(ctx));
 		const message = repair
 			? "FTS tokenizer drift detected — recreated with unicode61 tokenizer"
 			: "FTS tokenizer drift detected — run with repair=true to recreate";
@@ -524,7 +549,7 @@ export async function checkFtsConsistency(
 		const confirmed = ctx.actorType === "operator" || ftsMismatchPendingRebuild;
 		if (confirmed) {
 			if (ftsRebuildInFlight) {
-				limiter.record(action);
+				limiter.record(action, repairScopeKey(ctx));
 				return {
 					action,
 					success: true,
@@ -569,7 +594,7 @@ export async function checkFtsConsistency(
 		ftsMismatchPendingRebuild = false;
 	}
 
-	limiter.record(action);
+	limiter.record(action, repairScopeKey(ctx));
 
 	const message = mismatch
 		? rebuilt
@@ -615,7 +640,7 @@ export async function triggerRetentionSweep(
 	}
 
 	await retentionHandle.sweep();
-	limiter.record(action);
+	limiter.record(action, repairScopeKey(ctx));
 
 	logger.info("pipeline", "repair: retention sweep triggered", {
 		actor: ctx.actor,
@@ -904,9 +929,8 @@ async function reembedMissingMemoriesBatch(
 				 WHERE source_type = 'memory' AND source_id = ?
 				   AND content_hash <> ?`,
 			).run(memory.id, contentHash);
-			const result = db
-				.prepare(
-					`INSERT INTO embeddings
+			db.prepare(
+				`INSERT INTO embeddings
 					 (id, content_hash, vector, dimensions, source_type,
 					  source_id, chunk_text, created_at, agent_id)
 					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)
@@ -916,8 +940,7 @@ async function reembedMissingMemoriesBatch(
 					   source_type = excluded.source_type,
 					   chunk_text = excluded.chunk_text,
 					   created_at = excluded.created_at`,
-				)
-				.run(embId, contentHash, blob, vector.length, memory.id, memory.content, now, memoryAgentId);
+			).run(embId, contentHash, blob, vector.length, memory.id, memory.content, now, memoryAgentId);
 			// Resolve actual embedding ID (may differ from embId on conflict)
 			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 				| { id: string }
@@ -1095,7 +1118,7 @@ export async function reembedMissingMemories(
 			writeRepairAudit(db, action, ctx, written, msg);
 		});
 
-		limiter.record(action);
+		limiter.record(action, repairScopeKey(ctx));
 		logger.info("pipeline", "repair: re-embedded missing memories", {
 			affected: written,
 			attempted,
@@ -1350,7 +1373,7 @@ export async function reembedModelMigration(
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
-		limiter.record(action);
+		limiter.record(action, repairScopeKey(ctx));
 	}
 	return {
 		action,
@@ -1411,7 +1434,7 @@ export async function cleanOrphanedEmbeddings(
 		return count;
 	});
 
-	limiter.record(action);
+	limiter.record(action, repairScopeKey(ctx));
 	logger.info("pipeline", "repair: cleaned orphaned embeddings", {
 		affected,
 		actor: ctx.actor,
@@ -1550,7 +1573,7 @@ export async function resyncVectorIndex(
 		};
 	}
 
-	limiter.record(action);
+	limiter.record(action, repairScopeKey(ctx));
 	const affected = stats.inserted + stats.deleted;
 	const message =
 		stats.skipped > 0
@@ -1584,24 +1607,32 @@ export interface DedupStats {
 	readonly totalActive: number;
 }
 
-export async function getDedupStats(accessor: DbAccessor): Promise<DedupStats> {
+export async function getDedupStats(accessor: DbAccessor, agentId = "default"): Promise<DedupStats> {
 	return await accessor.withReadDbAsync(
 		async (db) => {
 			const row = db
 				.prepare(
 					`SELECT COUNT(*) AS clusters, COALESCE(SUM(excess), 0) AS excess_total
 				 FROM (
-					SELECT content_hash, COUNT(*) - 1 AS excess
+					SELECT content_hash,
+					       COALESCE(NULLIF(agent_id, ''), 'default'),
+					       COALESCE(project, ''), COALESCE(scope, ''), COALESCE(visibility, 'global'),
+					       COUNT(*) - 1 AS excess
 					FROM memories
 					WHERE is_deleted = 0 AND pinned = 0 AND manual_override = 0
 					  AND content_hash IS NOT NULL
-					GROUP BY content_hash
+					  AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+					GROUP BY content_hash, 2, 3, 4, 5
 					HAVING COUNT(*) > 1
 				 )`,
 				)
-				.get() as { clusters: number; excess_total: number } | undefined;
+				.get(agentId) as { clusters: number; excess_total: number } | undefined;
 
-			const totalRow = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0").get() as { n: number };
+			const totalRow = db
+				.prepare(
+					"SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0 AND COALESCE(NULLIF(agent_id, ''), 'default') = ?",
+				)
+				.get(agentId) as { n: number };
 
 			return {
 				exactClusters: row?.clusters ?? 0,
@@ -1621,6 +1652,10 @@ interface DedupCandidate {
 	readonly id: string;
 	readonly content: string;
 	readonly content_hash: string;
+	readonly agent_id: string | null;
+	readonly project: string | null;
+	readonly scope: string | null;
+	readonly visibility: string | null;
 	readonly tags: string | null;
 	readonly importance: number;
 	readonly access_count: number;
@@ -1674,6 +1709,14 @@ function processCluster(
 	}
 
 	if (candidates.length < 2) return null;
+	const scopeKey = (candidate: DedupCandidate) =>
+		JSON.stringify({
+			agentId: candidate.agent_id || "default",
+			project: candidate.project ?? "",
+			scope: candidate.scope ?? "",
+			visibility: candidate.visibility ?? "global",
+		});
+	if (new Set(candidates.map(scopeKey)).size !== 1) return null;
 
 	// Score and pick keeper
 	let bestIdx = 0;
@@ -1697,7 +1740,21 @@ function processCluster(
 	}
 
 	if (mergedTags !== keeper.tags) {
-		db.prepare("UPDATE memories SET tags = ?, updated_at = ? WHERE id = ?").run(mergedTags, now, keeper.id);
+		db.prepare(
+			`UPDATE memories SET tags = ?, updated_at = ?
+			 WHERE id = ? AND is_deleted = 0
+			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND COALESCE(project, '') = ? AND COALESCE(scope, '') = ?
+			   AND COALESCE(visibility, 'global') = ?`,
+		).run(
+			mergedTags,
+			now,
+			keeper.id,
+			keeper.agent_id || "default",
+			keeper.project ?? "",
+			keeper.scope ?? "",
+			keeper.visibility ?? "global",
+		);
 	}
 
 	// Audit keeper
@@ -1711,6 +1768,12 @@ function processCluster(
 		metadata: JSON.stringify({
 			mergedFrom: losers.map((l) => l.id),
 			mergedTags,
+			scope: {
+				agentId: keeper.agent_id || "default",
+				project: keeper.project ?? null,
+				scope: keeper.scope ?? null,
+				visibility: keeper.visibility ?? "global",
+			},
 		}),
 		createdAt: now,
 		actorType: ctx.actorType,
@@ -1719,10 +1782,20 @@ function processCluster(
 
 	// Soft-delete losers
 	for (const loser of losers) {
-		db.prepare("UPDATE memories SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?").run(
+		db.prepare(
+			`UPDATE memories SET is_deleted = 1, deleted_at = ?, updated_at = ?
+			 WHERE id = ? AND is_deleted = 0
+			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND COALESCE(project, '') = ? AND COALESCE(scope, '') = ?
+			   AND COALESCE(visibility, 'global') = ?`,
+		).run(
 			now,
 			now,
 			loser.id,
+			loser.agent_id || "default",
+			loser.project ?? "",
+			loser.scope ?? "",
+			loser.visibility ?? "global",
 		);
 
 		insertHistoryEvent(db, {
@@ -1752,6 +1825,10 @@ export async function deduplicateMemories(
 		semanticThreshold?: number;
 		dryRun?: boolean;
 		semanticEnabled?: boolean;
+		agentId?: string;
+		project?: string | null;
+		scope?: string | null;
+		visibility?: string | null;
 	},
 ): Promise<DedupResult> {
 	const action = "deduplicateMemories";
@@ -1768,25 +1845,64 @@ export async function deduplicateMemories(
 	}
 
 	const batchSize = options?.batchSize ?? cfg.repair.dedupBatchSize;
+	if (!Number.isInteger(batchSize) || batchSize <= 0 || batchSize > MAX_BATCH_HARD_CAP) {
+		return {
+			action,
+			success: false,
+			affected: 0,
+			clusters: 0,
+			message: "batchSize must be a positive integer <= 1000",
+		};
+	}
 	const semanticThreshold = options?.semanticThreshold ?? cfg.repair.dedupSemanticThreshold;
+	if (!Number.isFinite(semanticThreshold) || semanticThreshold < 0 || semanticThreshold > 1) {
+		return { action, success: false, affected: 0, clusters: 0, message: "semanticThreshold must be between 0 and 1" };
+	}
 	const dryRun = options?.dryRun ?? false;
 	const semanticEnabled = options?.semanticEnabled ?? false;
+	const agentId = options?.agentId ?? ctx.agentId ?? "default";
+	const project = options?.project ?? ctx.project;
+	const scope = options?.scope ?? ctx.scope;
+	const visibility = options?.visibility ?? ctx.visibility;
+	const dimensionFilters = [
+		["project", project],
+		["scope", scope],
+		["visibility", visibility],
+	].filter((entry): entry is [string, string] => entry[1] !== undefined && entry[1] !== null);
+	const dimensionWhere = dimensionFilters
+		.map(([column]) => `AND COALESCE(${column}, ${column === "visibility" ? "'global'" : "''"}) = ?`)
+		.join(" ");
+	const dimensionArgs = dimensionFilters.map(([, value]) => value);
 
 	// Phase 1: Exact hash clusters
 	const hashClusters = await accessor.withReadDbAsync(
 		async (db) => {
 			return db
 				.prepare(
-					`SELECT content_hash, COALESCE(scope, '__NULL__') AS scope_key, COUNT(*) AS cnt
-				 FROM memories
-				 WHERE is_deleted = 0 AND pinned = 0 AND manual_override = 0
-				   AND content_hash IS NOT NULL
-				 GROUP BY content_hash, scope_key
-				 HAVING COUNT(*) > 1
-				 ORDER BY cnt DESC
-				 LIMIT ?`,
+					`SELECT content_hash,
+					        COALESCE(NULLIF(agent_id, ''), 'default') AS agent_id,
+					        COALESCE(project, '') AS project,
+					        COALESCE(scope, '') AS scope,
+					        COALESCE(visibility, 'global') AS visibility,
+					        COUNT(*) AS cnt
+					 FROM memories
+					 WHERE is_deleted = 0 AND pinned = 0 AND manual_override = 0
+					   AND content_hash IS NOT NULL
+					   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+					   ${dimensionWhere}
+					 GROUP BY content_hash, agent_id, project, scope, visibility
+					 HAVING COUNT(*) > 1
+					 ORDER BY cnt DESC
+					 LIMIT ?`,
 				)
-				.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
+				.all(agentId, ...dimensionArgs, batchSize) as Array<{
+				content_hash: string;
+				agent_id: string;
+				project: string;
+				scope: string;
+				visibility: string;
+				cnt: number;
+			}>;
 		},
 		{ siteToken: "repair-actions.ts:1776" },
 	);
@@ -1795,10 +1911,18 @@ export async function deduplicateMemories(
 		const totalExcess = hashClusters.reduce((sum, c) => sum + c.cnt - 1, 0);
 		let semanticClusterCount = 0;
 		if (semanticEnabled) {
-			const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize);
+			const semanticClusters = await findSemanticDuplicates(
+				accessor,
+				semanticThreshold,
+				batchSize,
+				agentId,
+				project,
+				scope,
+				visibility,
+			);
 			semanticClusterCount = semanticClusters.length;
 		}
-		limiter.record(action);
+		limiter.record(action, repairScopeKey(ctx));
 		const parts = [`${hashClusters.length} exact cluster(s), ${totalExcess} excess duplicate(s)`];
 		if (semanticEnabled) {
 			parts.push(`${semanticClusterCount} semantic cluster(s)`);
@@ -1818,19 +1942,21 @@ export async function deduplicateMemories(
 	// Process exact hash clusters (scope-aware: only dedup within same scope)
 	for (const cluster of hashClusters) {
 		const removed = await withRepairWriteTx(accessor, (db) => {
-			const scopeFilter = cluster.scope_key === "__NULL__" ? "AND scope IS NULL" : "AND scope = ?";
-			const scopeArgs = cluster.scope_key === "__NULL__" ? [] : [cluster.scope_key];
 			const candidates = db
 				.prepare(
 					`SELECT id, content, content_hash, tags, importance,
+							agent_id, project, scope, visibility,
 							access_count, update_count, updated_at, pinned, manual_override
 					 FROM memories
 					 WHERE content_hash = ? AND is_deleted = 0
 					   AND pinned = 0 AND manual_override = 0
-					   ${scopeFilter}
+					   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+					   AND COALESCE(project, '') = ?
+					   AND COALESCE(scope, '') = ?
+					   AND COALESCE(visibility, 'global') = ?
 					 ORDER BY importance DESC`,
 				)
-				.all(cluster.content_hash, ...scopeArgs) as DedupCandidate[];
+				.all(cluster.content_hash, agentId, cluster.project, cluster.scope, cluster.visibility) as DedupCandidate[];
 
 			const result = processCluster(db, candidates, ctx);
 			return result?.removed ?? 0;
@@ -1844,7 +1970,15 @@ export async function deduplicateMemories(
 
 	// Phase 2: Semantic clusters (only if exact phase didn't fill batch)
 	if (semanticEnabled && totalClusters < batchSize) {
-		const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize - totalClusters);
+		const semanticClusters = await findSemanticDuplicates(
+			accessor,
+			semanticThreshold,
+			batchSize - totalClusters,
+			agentId,
+			project,
+			scope,
+			visibility,
+		);
 
 		for (const cluster of semanticClusters) {
 			const removed = await withRepairWriteTx(accessor, (db) => {
@@ -1853,11 +1987,14 @@ export async function deduplicateMemories(
 				const candidates = db
 					.prepare(
 						`SELECT id, content, content_hash, tags, importance,
+								agent_id, project, scope, visibility,
 								access_count, update_count, updated_at, pinned, manual_override
 						 FROM memories
-						 WHERE id IN (${placeholders}) AND is_deleted = 0`,
+						 WHERE id IN (${placeholders}) AND is_deleted = 0
+						   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+						   ${dimensionWhere}`,
 					)
-					.all(...ids) as DedupCandidate[];
+					.all(...ids, agentId, ...dimensionArgs) as DedupCandidate[];
 
 				const result = processCluster(db, candidates, ctx);
 				return result?.removed ?? 0;
@@ -1870,7 +2007,7 @@ export async function deduplicateMemories(
 		}
 	}
 
-	limiter.record(action);
+	limiter.record(action, repairScopeKey(ctx));
 	const msg = `deduplicated ${totalRemoved} memory/memories across ${totalClusters} cluster(s)`;
 
 	logger.info("pipeline", "repair: deduplication complete", {
@@ -1894,31 +2031,48 @@ export async function deduplicateMemories(
 // Semantic duplicate finder
 // ---------------------------------------------------------------------------
 
-interface SemanticCandidate {
-	readonly id: string;
-	readonly embeddingId: string;
-}
-
 async function findSemanticDuplicates(
 	accessor: DbAccessor,
 	threshold: number,
 	maxClusters: number,
+	agentId: string,
+	project: string | null | undefined,
+	scope: string | null | undefined,
+	visibility: string | null | undefined,
 ): Promise<Array<Array<{ id: string }>>> {
 	const clusters: Array<Array<{ id: string }>> = [];
 	const seen = new Set<string>();
+	const filters = [
+		["m.project", project],
+		["m.scope", scope],
+		["m.visibility", visibility],
+	].filter((entry): entry is [string, string] => entry[1] !== undefined && entry[1] !== null);
+	const optionalWhere = filters
+		.map(([column]) => `AND COALESCE(${column}, ${column === "m.visibility" ? "'global'" : "''"}) = ?`)
+		.join(" ");
+	const optionalArgs = filters.map(([, value]) => value);
 
 	const candidates = await accessor.withReadDbAsync(
 		async (db) => {
 			return db
 				.prepare(
-					`SELECT m.id, e.id AS embedding_id
+					`SELECT m.id, e.id AS embedding_id, m.agent_id, m.project, m.scope, m.visibility
 				 FROM memories m
 				 JOIN embeddings e ON e.source_type = 'memory' AND e.source_id = m.id
 				 WHERE m.is_deleted = 0 AND m.pinned = 0 AND m.manual_override = 0
+				 AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
+				 ${optionalWhere}
 				 ORDER BY m.created_at ASC
 				 LIMIT 500`,
 				)
-				.all() as Array<{ id: string; embedding_id: string }>;
+				.all(agentId, ...optionalArgs) as Array<{
+				id: string;
+				embedding_id: string;
+				agent_id: string | null;
+				project: string | null;
+				scope: string | null;
+				visibility: string | null;
+			}>;
 		},
 		{ siteToken: "repair-actions.ts:1910" },
 	);
@@ -1946,9 +2100,22 @@ async function findSemanticDuplicates(
 					 JOIN memories m ON e.source_id = m.id
 					 WHERE v.embedding MATCH ? AND k = 6
 					   AND m.is_deleted = 0 AND m.pinned = 0 AND m.manual_override = 0
+					   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
+					   AND COALESCE(m.project, '') = COALESCE(?, '')
+					   AND COALESCE(m.scope, '') = COALESCE(?, '')
+					   AND COALESCE(m.visibility, 'global') = COALESCE(?, 'global')
 					 ORDER BY v.distance`,
 					)
-					.all(queryVec) as Array<{ source_id: string; distance: number }>;
+					.all(
+						queryVec,
+						candidate.agent_id ?? "default",
+						candidate.project,
+						candidate.scope,
+						candidate.visibility,
+					) as Array<{
+					source_id: string;
+					distance: number;
+				}>;
 
 				// Convert distance to cosine similarity and filter
 				return rows
@@ -1989,7 +2156,7 @@ export async function pruneChunkGroupEntities(
 	cfg: PipelineV2Config,
 	ctx: RepairContext,
 	limiter: RateLimiter,
-	options?: { batchSize?: number; dryRun?: boolean },
+	options?: { batchSize?: number; dryRun?: boolean; agentId?: string },
 ): Promise<RepairResult> {
 	const action = "pruneChunkGroupEntities";
 	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 5);
@@ -1998,10 +2165,20 @@ export async function pruneChunkGroupEntities(
 	}
 
 	const batchSize = options?.batchSize ?? 500;
+	const agentId = options?.agentId ?? ctx.agentId ?? "default";
+	if (!Number.isInteger(batchSize) || batchSize <= 0 || batchSize > MAX_BATCH_HARD_CAP) {
+		return { action, success: false, affected: 0, message: "batchSize must be a positive integer <= 1000" };
+	}
 
 	const total = await accessor.withReadDbAsync(
 		async (db) =>
-			(db.prepare("SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group'").get() as { n: number }).n,
+			(
+				db
+					.prepare(
+						"SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group' AND COALESCE(NULLIF(agent_id, ''), 'default') = ?",
+					)
+					.get(agentId) as { n: number }
+			).n,
 		{ siteToken: "repair-actions.ts:2002" },
 	);
 
@@ -2015,7 +2192,11 @@ export async function pruneChunkGroupEntities(
 	}
 
 	const affected = await withRepairWriteTx(accessor, (db) => {
-		const ids = db.prepare("SELECT id FROM entities WHERE entity_type = 'chunk_group' LIMIT ?").all(batchSize) as {
+		const ids = db
+			.prepare(
+				"SELECT id FROM entities WHERE entity_type = 'chunk_group' AND COALESCE(NULLIF(agent_id, ''), 'default') = ? LIMIT ?",
+			)
+			.all(agentId, batchSize) as {
 			id: string;
 		}[];
 		if (ids.length === 0) return 0;
@@ -2025,7 +2206,7 @@ export async function pruneChunkGroupEntities(
 		return ids.length;
 	});
 
-	limiter.record(action);
+	limiter.record(action, repairScopeKey(ctx));
 	logger.info("pipeline", "repair: pruned chunk_group entities", { affected, actor: ctx.actor });
 	return { action, success: true, affected, message: `deleted ${affected} chunk_group entities` };
 }
@@ -2045,7 +2226,7 @@ export async function pruneSingletonExtractedEntities(
 	cfg: PipelineV2Config,
 	ctx: RepairContext,
 	limiter: RateLimiter,
-	options?: { batchSize?: number; dryRun?: boolean; maxMentions?: number },
+	options?: { batchSize?: number; dryRun?: boolean; maxMentions?: number; agentId?: string },
 ): Promise<RepairResult> {
 	const action = "pruneSingletonExtractedEntities";
 	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 10);
@@ -2055,6 +2236,13 @@ export async function pruneSingletonExtractedEntities(
 
 	const batchSize = options?.batchSize ?? 200;
 	const maxMentions = options?.maxMentions ?? 1;
+	const agentId = options?.agentId ?? ctx.agentId ?? "default";
+	if (!Number.isInteger(batchSize) || batchSize <= 0 || batchSize > MAX_BATCH_HARD_CAP) {
+		return { action, success: false, affected: 0, message: "batchSize must be a positive integer <= 1000" };
+	}
+	if (!Number.isInteger(maxMentions) || maxMentions < 0 || maxMentions > 10) {
+		return { action, success: false, affected: 0, message: "maxMentions must be an integer between 0 and 10" };
+	}
 
 	const candidates = await accessor.withReadDbAsync(
 		async (db) =>
@@ -2062,7 +2250,8 @@ export async function pruneSingletonExtractedEntities(
 				.prepare(
 					`SELECT e.id FROM entities e
 				 WHERE e.entity_type = 'extracted'
-				   AND e.mentions <= ?
+				 AND COALESCE(NULLIF(e.agent_id, ''), 'default') = ?
+				 AND e.mentions <= ?
 				   AND NOT EXISTS (SELECT 1 FROM entity_aspects WHERE entity_id = e.id LIMIT 1)
 				   AND NOT EXISTS (
 				     -- Entity has no attributes connected via aspects (non-null aspect_id path)
@@ -2081,7 +2270,7 @@ export async function pruneSingletonExtractedEntities(
 				   )
 				 LIMIT ?`,
 				)
-				.all(maxMentions, batchSize) as { id: string }[],
+				.all(agentId, maxMentions, batchSize) as { id: string }[],
 		{ siteToken: "repair-actions.ts:2059" },
 	);
 
@@ -2100,20 +2289,48 @@ export async function pruneSingletonExtractedEntities(
 
 	const affected = await withRepairWriteTx(accessor, (db) => {
 		const ids = candidates.map((r) => r.id);
-		const placeholders = ids.map(() => "?").join(",");
+		const scopedIds = db
+			.prepare(
+				`SELECT id FROM entities
+				 WHERE id IN (${ids.map(() => "?").join(",")})
+				   AND entity_type = 'extracted'
+				   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+				   AND mentions <= ?
+				   AND NOT EXISTS (SELECT 1 FROM entity_aspects WHERE entity_id = entities.id)
+				   AND NOT EXISTS (
+				     SELECT 1 FROM entity_attributes ea
+				     JOIN entity_aspects asp ON asp.id = ea.aspect_id
+				     WHERE asp.entity_id = entities.id
+				   )
+				   AND NOT EXISTS (
+				     SELECT 1 FROM entity_attributes ea
+				     WHERE ea.aspect_id IS NULL
+				       AND ea.memory_id IN (SELECT memory_id FROM memory_entity_mentions WHERE entity_id = entities.id)
+				   )`,
+			)
+			.all(...ids, agentId, maxMentions) as Array<{ id: string }>;
+		if (scopedIds.length === 0) return 0;
+		const scopedIdValues = scopedIds.map((row) => row.id);
+		const placeholders = scopedIdValues.map(() => "?").join(",");
 		// Clean mention links (no FK cascade)
-		db.prepare(`DELETE FROM memory_entity_mentions WHERE entity_id IN (${placeholders})`).run(...ids);
+		db.prepare(`DELETE FROM memory_entity_mentions WHERE entity_id IN (${placeholders})`).run(...scopedIdValues);
 		// Clean relations (no FK cascade)
 		db.prepare(
 			`DELETE FROM relations WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
-		).run(...ids, ...ids);
+		).run(...scopedIdValues, ...scopedIdValues);
 		// Delete entities — cascades entity_aspects and entity_dependencies
-		db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids);
-		writeRepairAudit(db, action, ctx, ids.length, `deleted ${ids.length} singleton extracted entities`);
-		return ids.length;
+		db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...scopedIdValues);
+		writeRepairAudit(
+			db,
+			action,
+			ctx,
+			scopedIdValues.length,
+			`deleted ${scopedIdValues.length} singleton extracted entities`,
+		);
+		return scopedIdValues.length;
 	});
 
-	limiter.record(action);
+	limiter.record(action, repairScopeKey(ctx));
 	logger.info("pipeline", "repair: pruned singleton extracted entities", {
 		affected,
 		actor: ctx.actor,
@@ -2247,7 +2464,7 @@ export async function pruneGenericEntities(
 		return ids.length;
 	});
 
-	limiter.record(action);
+	limiter.record(action, repairScopeKey(ctx));
 	logger.info("pipeline", "repair: pruned generic/non-concrete entities", {
 		affected,
 		agentId,
@@ -2279,6 +2496,8 @@ export interface DeadMemoryOpts {
 	readonly maxAccessDays?: number;
 	/** Max rows to return. Default: 200. */
 	readonly limit?: number;
+	/** Restrict the candidate set to one agent. */
+	readonly agentId?: string;
 }
 
 /**
@@ -2293,12 +2512,16 @@ export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMem
 	const maxConf = opts.maxConfidence ?? DEAD_MEMORY_DEFAULT_CONFIDENCE;
 	const maxDays = opts.maxAccessDays ?? DEAD_MEMORY_DEFAULT_ACCESS_DAYS;
 	const limit = opts.limit ?? 200;
+	const agentFilter = opts.agentId === undefined ? "" : " AND COALESCE(NULLIF(agent_id, ''), 'default') = ?";
+	const args =
+		opts.agentId === undefined ? [maxConf, maxDays, maxDays, limit] : [opts.agentId, maxConf, maxDays, maxDays, limit];
 
 	const rows = db
 		.prepare(
 			`SELECT id, content, confidence, last_accessed, importance
 			 FROM memories
 			 WHERE is_deleted = 0
+			   ${agentFilter}
 			   AND importance <= 0.8
 			   AND (
 			     confidence < ?
@@ -2308,7 +2531,7 @@ export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMem
 			 ORDER BY confidence ASC, last_accessed ASC NULLS FIRST
 			 LIMIT ?`,
 		)
-		.all(maxConf, maxDays, maxDays, limit) as Array<{
+		.all(...args) as Array<{
 		id: string;
 		content: string;
 		confidence: number;
@@ -2333,27 +2556,48 @@ export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMem
  * Soft-delete a batch of memories by ID in a single transaction.
  * Returns the number actually deleted (skips already-deleted).
  */
-export async function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[]): Promise<number> {
+export async function forgetDeadMemories(
+	accessor: DbAccessor,
+	ids: readonly string[],
+	opts: DeadMemoryOpts & { readonly ctx?: RepairContext } = {},
+): Promise<number> {
 	if (ids.length === 0) return 0;
 	const now = new Date().toISOString();
+	const maxConf = opts.maxConfidence ?? DEAD_MEMORY_DEFAULT_CONFIDENCE;
+	const maxDays = opts.maxAccessDays ?? DEAD_MEMORY_DEFAULT_ACCESS_DAYS;
+	const agentFilter = opts.agentId === undefined ? "" : " AND COALESCE(NULLIF(agent_id, ''), 'default') = ?";
+	const ctx = opts.ctx ?? {
+		actor: "api",
+		reason: "dead-memory hygiene",
+		actorType: "daemon" as const,
+	};
 	return await withRepairWriteTx(accessor, (db) => {
-		const stmt = db.prepare("UPDATE memories SET is_deleted = 1, deleted_at = ? WHERE id = ? AND is_deleted = 0");
+		const eligible = db.prepare(
+			`SELECT id FROM memories
+			 WHERE id = ? AND is_deleted = 0${agentFilter}
+			   AND importance <= 0.8
+			   AND (confidence < ?
+			     OR (last_accessed IS NULL AND julianday('now') - julianday(created_at) > ?)
+			     OR (last_accessed IS NOT NULL AND julianday('now') - julianday(last_accessed) > ?))`,
+		);
+		const stmt = db.prepare(
+			`UPDATE memories SET is_deleted = 1, deleted_at = ?, updated_at = ?
+			 WHERE id = ? AND is_deleted = 0${agentFilter}
+			   AND importance <= 0.8
+			   AND (confidence < ?
+			     OR (last_accessed IS NULL AND julianday('now') - julianday(created_at) > ?)
+			     OR (last_accessed IS NOT NULL AND julianday('now') - julianday(last_accessed) > ?))`,
+		);
 		let total = 0;
 		for (const id of ids) {
-			total += countChanges(stmt.run(now, id));
+			const agentArgs = opts.agentId === undefined ? [] : [opts.agentId];
+			const match = eligible.get(id, ...agentArgs, maxConf, maxDays, maxDays);
+			if (!match) continue;
+			stmt.run(now, now, id, ...agentArgs, maxConf, maxDays, maxDays);
+			total++;
 		}
-		writeRepairAudit(
-			db,
-			"forget-dead-memories",
-			{
-				actor: "api",
-				reason: "dead-memory hygiene",
-				actorType: "daemon",
-				requestId: undefined,
-			},
-			total,
-			`soft-deleted ${total} dead memories`,
-		);
+		if (total === 0) return 0;
+		writeRepairAudit(db, "forget-dead-memories", ctx, total, `soft-deleted ${total} dead memories`);
 		return total;
 	});
 }
@@ -2707,7 +2951,7 @@ export async function cancelObsoleteJobs(
 		return { affected, preview: previewIds, totalMatching };
 	});
 
-	if (!dryRun) limiter.record(action);
+	if (!dryRun) limiter.record(action, repairScopeKey(ctx));
 	logger.info("pipeline", "repair: cancelled obsolete jobs", {
 		affected: result.affected,
 		dryRun,
@@ -2855,7 +3099,7 @@ export async function pruneTerminalJobs(
 		return { affected, preview: previewIds, totalMatching };
 	});
 
-	if (!dryRun) limiter.record(action);
+	if (!dryRun) limiter.record(action, repairScopeKey(ctx));
 	logger.info("pipeline", "repair: pruned terminal jobs", {
 		affected: result.affected,
 		dryRun,

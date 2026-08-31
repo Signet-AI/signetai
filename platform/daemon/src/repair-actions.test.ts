@@ -20,6 +20,8 @@ import {
 	cleanOrphanedEmbeddings,
 	createRateLimiter,
 	deduplicateMemories,
+	findDeadMemories,
+	forgetDeadMemories,
 	getDedupStats,
 	getEmbeddingGapStats,
 	pruneGenericEntities,
@@ -308,7 +310,6 @@ describe("createRateLimiter", () => {
 	});
 
 	it("resets hourly count after the hour window expires", async () => {
-		const limiter = createRateLimiter();
 		// Record, then directly verify that a past hourResetAt causes reset.
 		// We can observe this indirectly: record with budget=1, then once
 		// the hour resets the check should pass with cooldown=0.
@@ -358,6 +359,15 @@ describe("checkRepairGate", () => {
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
 		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(true);
+	});
+
+	it("applies cooldown admission to operators per agent scope", async () => {
+		const limiter = createRateLimiter();
+		const ctx = { ...CTX_OPERATOR, agentId: "agent-a" };
+		limiter.record("a", JSON.stringify({ agentId: "agent-a", project: null, scope: null, visibility: null }));
+		const result = checkRepairGate(TEST_CFG, ctx, limiter, "a", 60_000, 10);
+		expect(result.allowed).toBe(false);
+		expect(result.reason).toMatch(/cooldown active/);
 	});
 });
 
@@ -707,6 +717,46 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 			expect(countMemoryByStatus("dead")).toBe(1001);
 			expect(countSummaryByStatus("dead")).toBe(1001);
 		});
+	});
+});
+
+describe("dead memory hygiene", () => {
+	it("scopes candidates and revalidates the deletion predicate", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = new Date().toISOString();
+		const insert = db.prepare(
+			`INSERT INTO memories (id, content, confidence, importance, agent_id, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'test')`,
+		);
+		insert.run("dead-a", "dead", 0.01, 0.5, "agent-a", "fact", now, now);
+		insert.run("dead-b", "dead", 0.01, 0.5, "agent-b", "fact", now, now);
+		insert.run("protected-a", "protected", 0.01, 0.9, "agent-a", "fact", now, now);
+
+		try {
+			expect(findDeadMemories(db as unknown as ReadDb, { agentId: "agent-a" }).map((row) => row.id)).toEqual([
+				"dead-a",
+			]);
+			expect(
+				await forgetDeadMemories(accessor, ["dead-a", "dead-b", "protected-a"], {
+					agentId: "agent-a",
+					ctx: { ...CTX_OPERATOR, agentId: "agent-a" },
+				}),
+			).toBe(1);
+			expect(
+				(db.prepare("SELECT is_deleted FROM memories WHERE id = 'dead-a'").get() as { is_deleted: number }).is_deleted,
+			).toBe(1);
+			expect(
+				(db.prepare("SELECT is_deleted FROM memories WHERE id = 'dead-b'").get() as { is_deleted: number }).is_deleted,
+			).toBe(0);
+			expect(
+				(db.prepare("SELECT is_deleted FROM memories WHERE id = 'protected-a'").get() as { is_deleted: number })
+					.is_deleted,
+			).toBe(0);
+		} finally {
+			db.close();
+		}
 	});
 });
 
@@ -2290,6 +2340,32 @@ describe("deduplicateMemories", () => {
 			.prepare("SELECT id FROM memories WHERE content_hash = 'hash-dup' AND is_deleted = 1")
 			.all() as Array<{ id: string }>;
 		expect(deleted).toHaveLength(2);
+	});
+
+	it("does not deduplicate another agent's identical hash", async () => {
+		insertMemory(db, "agent-a-1", "agent-a", "hash-cross-agent");
+		insertMemory(db, "agent-a-2", "agent-a", "hash-cross-agent");
+		insertMemory(db, "agent-b-1", "agent-b", "hash-cross-agent");
+
+		const result = await deduplicateMemories(
+			accessor,
+			{ ...TEST_CFG, repair: { ...TEST_CFG.repair, dedupCooldownMs: 0 } },
+			{ ...CTX_OPERATOR, agentId: "agent-a" },
+			createRateLimiter(),
+		);
+
+		expect(result.affected).toBe(1);
+		expect(
+			db.prepare("SELECT is_deleted FROM memories WHERE id = 'agent-b-1'").get() as { is_deleted: number },
+		).toEqual({ is_deleted: 0 });
+	});
+
+	it("rejects invalid dedup bounds before querying", async () => {
+		const result = await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			batchSize: -1,
+		});
+		expect(result.success).toBe(false);
+		expect(result.message).toMatch(/batchSize/);
 	});
 
 	it("merges tags from all duplicates into the keeper", async () => {
