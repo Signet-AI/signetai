@@ -507,6 +507,31 @@ test("lexical fake createRequire bindings stay computed even with an unaliased c
 	}
 });
 
+test("outer canonical createRequire provenance survives an inner shadow", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-create-require-outer-scope-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				'import { createRequire } from "node:module";',
+				"const require = createRequire(import.meta.url);",
+				"function load() {",
+				"function createRequire(_url: unknown) { return (_path: string) => undefined; }",
+				'return require("./target");',
+				"}",
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges).toContainEqual(
+			expect.objectContaining({ kind: "require", specifier: "./target", to: "target.ts", runtime: true }),
+		);
+		expect(inventory.computedLoads).not.toContainEqual(expect.objectContaining({ kind: "require", path: "loader.ts" }));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("named export-list growth trips the public-surface ratchet", () => {
 	const root = mkdtempSync(join(tmpdir(), "architecture-export-list-"));
 	try {
@@ -518,6 +543,66 @@ test("named export-list growth trips the public-surface ratchet", () => {
 		expect(current.sourceFiles.find((file) => file.path === "consumer.ts")?.exports).toBe(2);
 		expect(compareArchitectureRatchet(current, baseline)).toContain(
 			"public-surface growth in consumer.ts: 1 -> 2 exports",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("manifest output paths require a canonical writeFileSync binding", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-manifest-writer-provenance-"));
+	try {
+		writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture-root" }));
+		mkdirSync(join(root, "src"));
+		mkdirSync(join(root, "scripts"));
+		writeFileSync(
+			join(root, "scripts", "generate.ts"),
+			[
+				'import { writeFileSync as realWriteFileSync } from "node:fs";',
+				'import { join } from "node:path";',
+				"// generates files under src",
+				"{",
+				"const writeFileSync = (_path: string, _content: string) => undefined;",
+				'writeFileSync(join(__dirname, "fake.ts"), "");',
+				"}",
+				'realWriteFileSync(join(__dirname, "actual.ts"), "");',
+			].join("\n"),
+		);
+		writeFileSync(
+			join(root, "scripts", "architecture-generated-artifacts.json"),
+			JSON.stringify({
+				version: 1,
+				artifacts: [
+					{
+						path: "scripts/fake.ts",
+						owner: "fixture-root",
+						source: "src",
+						generatedBy: "scripts/generate.ts",
+					},
+				],
+			}),
+		);
+		expect(() => analyzeSourceTree({ root, sourceRoot: root })).toThrow(
+			"does not write its exact output scripts/fake.ts",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("non-wildcard path aliases do not match longer specifiers", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-exact-alias-"));
+	try {
+		writeFileSync(
+			join(root, "tsconfig.json"),
+			JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@core": ["./core"] } } }),
+		);
+		writeFileSync(join(root, "core.ts"), 'import { value } from "./consumer";\nexport const core = value;\n');
+		writeFileSync(join(root, "consumer.ts"), 'import { core } from "@core-extra";\nexport const value = core;\n');
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.summary.runtimeCycles).toBe(0);
+		expect(inventory.sourceEdges).toContainEqual(
+			expect.objectContaining({ from: "consumer.ts", specifier: "@core-extra", to: null }),
 		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

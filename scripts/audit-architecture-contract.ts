@@ -263,14 +263,55 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 		}
 		return null;
 	};
-	const visit = (node: ts.Node): void => {
+	const visit = (node: ts.Node, scope: StaticScope): void => {
+		let currentScope = scope;
+		if (isFunctionLike(node)) {
+			currentScope = { parent: scope, bindings: new Map(), isVarScope: true };
+			for (const parameter of node.parameters) bindPattern(currentScope, parameter.name, null);
+			predeclareVarBindings(node, currentScope);
+			predeclareFunctionBindings(node, currentScope);
+		} else if (
+			ts.isSourceFile(node) ||
+			ts.isBlock(node) ||
+			ts.isCaseBlock(node) ||
+			ts.isCatchClause(node) ||
+			ts.isForStatement(node) ||
+			ts.isForInStatement(node) ||
+			ts.isForOfStatement(node)
+		) {
+			currentScope = {
+				parent: scope,
+				bindings: new Map(),
+				isVarScope: ts.isSourceFile(node),
+			};
+			if (ts.isSourceFile(node) || ts.isBlock(node) || ts.isCaseBlock(node))
+				predeclareScopeBindings(node, currentScope);
+			if (ts.isSourceFile(node)) predeclareVarBindings(node, currentScope);
+			if (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node))
+				predeclareLoopBinding(node, currentScope);
+		}
+		if (ts.isCatchClause(node) && node.variableDeclaration !== undefined)
+			bindPattern(currentScope, node.variableDeclaration.name, null);
 		if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined)
 			bindings.set(node.name.text, node.initializer);
+		if (ts.isVariableDeclaration(node) && ts.isVariableDeclarationList(node.parent)) {
+			const flags = node.parent.flags;
+			const isConst = (flags & ts.NodeFlags.Const) !== 0;
+			const bindingScope = isConst
+				? currentScope
+				: (flags & ts.NodeFlags.Let) === 0
+					? nearestVarScope(currentScope)
+					: currentScope;
+			bindPattern(bindingScope, node.name, isConst && ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
+		}
 		if (ts.isCallExpression(node)) {
 			const callee = unwrapExpression(node.expression);
 			const isWriteFileSync =
-				(ts.isIdentifier(callee) && callee.text === "writeFileSync") ||
-				(ts.isPropertyAccessExpression(callee) && callee.name.text === "writeFileSync");
+				(ts.isIdentifier(callee) && isCanonicalWriteFileSync(currentScope, callee.text)) ||
+				(ts.isPropertyAccessExpression(callee) &&
+					ts.isIdentifier(callee.expression) &&
+					callee.name.text === "writeFileSync" &&
+					isCanonicalFsNamespace(currentScope, callee.expression.text));
 			if (isWriteFileSync) {
 				const outputArgument = node.arguments[0];
 				if (outputArgument !== undefined) {
@@ -279,9 +320,9 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 				}
 			}
 		}
-		ts.forEachChild(node, visit);
+		ts.forEachChild(node, (child) => visit(child, currentScope));
 	};
-	visit(sourceFile);
+	visit(sourceFile, { parent: undefined, bindings: new Map(), isVarScope: true });
 	if (outputs.size === 0)
 		throw new Error(
 			`Generated artifact generator has no statically verifiable output path: ${relativePath(root, generatorPath)}`,
@@ -439,6 +480,8 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
 interface StaticBinding {
 	readonly initializer: ts.Expression | null;
 	readonly canonicalCreateRequire: boolean;
+	readonly canonicalWriteFileSync?: boolean;
+	readonly canonicalFsNamespace?: boolean;
 }
 
 interface StaticScope {
@@ -464,9 +507,16 @@ function bindPattern(
 	name: ts.BindingName,
 	initializer: ts.Expression | null,
 	canonicalCreateRequire = false,
+	canonicalWriteFileSync = false,
+	canonicalFsNamespace = false,
 ): void {
 	if (ts.isIdentifier(name)) {
-		scope.bindings.set(name.text, { initializer, canonicalCreateRequire });
+		scope.bindings.set(name.text, {
+			initializer,
+			canonicalCreateRequire,
+			canonicalWriteFileSync,
+			canonicalFsNamespace,
+		});
 		return;
 	}
 	for (const element of name.elements) {
@@ -532,19 +582,29 @@ function predeclareScopeBindings(node: ts.Node, scope: StaticScope): void {
 		}
 		if (ts.isImportDeclaration(candidate) && candidate.importClause !== undefined) {
 			const clause = candidate.importClause;
+			const moduleSpecifier = ts.isStringLiteral(candidate.moduleSpecifier) ? candidate.moduleSpecifier.text : null;
+			const isNodeFs = moduleSpecifier === "node:fs" || moduleSpecifier === "fs";
 			if (clause.name !== undefined)
-				scope.bindings.set(clause.name.text, { initializer: null, canonicalCreateRequire: false });
+				scope.bindings.set(clause.name.text, {
+					initializer: null,
+					canonicalCreateRequire: false,
+					canonicalFsNamespace: false,
+				});
 			if (clause.namedBindings !== undefined && ts.isNamespaceImport(clause.namedBindings)) {
-				scope.bindings.set(clause.namedBindings.name.text, { initializer: null, canonicalCreateRequire: false });
+				scope.bindings.set(clause.namedBindings.name.text, {
+					initializer: null,
+					canonicalCreateRequire: false,
+					canonicalFsNamespace: isNodeFs,
+				});
 			} else if (clause.namedBindings !== undefined && ts.isNamedImports(clause.namedBindings)) {
 				for (const element of clause.namedBindings.elements) {
+					const importedName = (element.propertyName ?? element.name).text;
 					const isCanonicalCreateRequire =
-						ts.isStringLiteral(candidate.moduleSpecifier) &&
-						(candidate.moduleSpecifier.text === "node:module" || candidate.moduleSpecifier.text === "module") &&
-						(element.propertyName ?? element.name).text === "createRequire";
+						(moduleSpecifier === "node:module" || moduleSpecifier === "module") && importedName === "createRequire";
 					scope.bindings.set(element.name.text, {
 						initializer: null,
 						canonicalCreateRequire: isCanonicalCreateRequire,
+						canonicalWriteFileSync: isNodeFs && importedName === "writeFileSync",
 					});
 				}
 			}
@@ -581,33 +641,36 @@ function predeclareFunctionBindings(node: ts.FunctionLikeDeclaration, scope: Sta
 	}
 }
 
-function bindingInitializer(scope: StaticScope, name: string): ts.Expression | null | undefined {
+function resolveBinding(scope: StaticScope, name: string): { scope: StaticScope; binding: StaticBinding } | undefined {
 	let current: StaticScope | undefined = scope;
 	while (current !== undefined) {
 		const binding = current.bindings.get(name);
-		if (binding !== undefined) return binding.initializer;
+		if (binding !== undefined) return { scope: current, binding };
 		current = current.parent;
 	}
 	return undefined;
 }
 
 function isCanonicalCreateRequire(scope: StaticScope, name: string): boolean {
-	let current: StaticScope | undefined = scope;
-	while (current !== undefined) {
-		const binding = current.bindings.get(name);
-		if (binding !== undefined) return binding.canonicalCreateRequire;
-		current = current.parent;
-	}
-	return false;
+	return resolveBinding(scope, name)?.binding.canonicalCreateRequire === true;
+}
+
+function isCanonicalWriteFileSync(scope: StaticScope, name: string): boolean {
+	return resolveBinding(scope, name)?.binding.canonicalWriteFileSync === true;
+}
+
+function isCanonicalFsNamespace(scope: StaticScope, name: string): boolean {
+	return resolveBinding(scope, name)?.binding.canonicalFsNamespace === true;
 }
 
 function isRuntimeRequire(expression: ts.Expression, scope: StaticScope): boolean {
 	if (!ts.isIdentifier(expression) || expression.text !== "require") return false;
-	const initializer = bindingInitializer(scope, "require");
-	if (initializer === undefined) return true;
+	const requireBinding = resolveBinding(scope, "require");
+	if (requireBinding === undefined) return true;
+	const initializer = requireBinding.binding.initializer;
 	if (initializer === null || !ts.isCallExpression(initializer)) return false;
 	const callee = unwrapExpression(initializer.expression);
-	return ts.isIdentifier(callee) && isCanonicalCreateRequire(scope, callee.text);
+	return ts.isIdentifier(callee) && isCanonicalCreateRequire(requireBinding.scope, callee.text);
 }
 
 function staticString(
@@ -651,6 +714,7 @@ interface PathAlias {
 	readonly configDirectory: string;
 	readonly prefix: string;
 	readonly suffix: string;
+	readonly hasWildcard: boolean;
 	readonly baseUrl: string;
 	readonly targets: readonly string[];
 }
@@ -675,6 +739,7 @@ function loadPathAliases(root: string): readonly PathAlias[] {
 				configDirectory: dirname(configPath),
 				prefix: wildcard < 0 ? pattern : pattern.slice(0, wildcard),
 				suffix: wildcard < 0 ? "" : pattern.slice(wildcard + 1),
+				hasWildcard: wildcard >= 0,
 				baseUrl,
 				targets: value,
 			});
@@ -694,11 +759,19 @@ function aliasesForFile(path: string, aliases: readonly PathAlias[]): readonly P
 
 function aliasTargets(specifier: string, aliases: readonly PathAlias[]): readonly string[] | null {
 	const matching = aliases
-		.filter((alias) => specifier.startsWith(alias.prefix) && specifier.endsWith(alias.suffix))
+		.filter((alias) =>
+			alias.hasWildcard
+				? specifier.length >= alias.prefix.length + alias.suffix.length &&
+					specifier.startsWith(alias.prefix) &&
+					specifier.endsWith(alias.suffix)
+				: specifier === alias.prefix,
+		)
 		.sort((a, b) => b.prefix.length + b.suffix.length - (a.prefix.length + a.suffix.length));
 	const alias = matching[0];
 	if (alias === undefined) return null;
-	const wildcard = specifier.slice(alias.prefix.length, specifier.length - alias.suffix.length);
+	const wildcard = alias.hasWildcard
+		? specifier.slice(alias.prefix.length, specifier.length - alias.suffix.length)
+		: "";
 	return alias.targets.map((target) => {
 		const wildcardIndex = target.indexOf("*");
 		if (wildcardIndex === -1) return resolve(alias.baseUrl, target);
