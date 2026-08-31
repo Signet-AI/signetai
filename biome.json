@@ -30,6 +30,7 @@
 			"!**/memorybench/dist",
 			"!**/memorybench/node_modules",
 			"!scripts/event-loop-contract-baseline.json",
+			"!scripts/architecture-baseline.json",
 			"!**/.bench"
 		]
 	},
