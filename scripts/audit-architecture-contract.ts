@@ -225,21 +225,50 @@ function hasGeneratedMarker(source: string): boolean {
 function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<string> {
 	const source = readFileSync(generatorPath, "utf8");
 	const sourceFile = ts.createSourceFile(generatorPath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-	const bindings = new Map<string, ts.Expression>();
 	const outputs = new Set<string>();
-	const staticPath = (expression: ts.Expression, resolving = new Set<string>()): string | null => {
+	const assignmentOperators = new Set([
+		"=",
+		"+=",
+		"-=",
+		"*=",
+		"/=",
+		"%=",
+		"&=",
+		"|=",
+		"^=",
+		"<<=",
+		">>=",
+		">>>=",
+		"**=",
+		"&&=",
+		"||=",
+		"??=",
+	]);
+	const staticPath = (
+		expression: ts.Expression,
+		scope: StaticScope,
+		resolving = new Set<StaticBinding>(),
+	): string | null => {
 		const unwrapped = unwrapExpression(expression);
 		if (ts.isStringLiteral(unwrapped) || ts.isNoSubstitutionTemplateLiteral(unwrapped)) return unwrapped.text;
 		if (ts.isIdentifier(unwrapped)) {
-			if (unwrapped.text === "__dirname") return dirname(generatorPath);
-			const initializer = bindings.get(unwrapped.text);
-			if (initializer === undefined || resolving.has(unwrapped.text)) return null;
+			const resolved = resolveBinding(scope, unwrapped.text);
+			if (resolved === undefined) return unwrapped.text === "__dirname" ? dirname(generatorPath) : null;
+			const { binding, scope: definingScope } = resolved;
+			if (binding.initializer === null || resolving.has(binding)) return null;
 			const nextResolving = new Set(resolving);
-			nextResolving.add(unwrapped.text);
-			return staticPath(initializer, nextResolving);
+			nextResolving.add(binding);
+			return staticPath(binding.initializer, definingScope, nextResolving);
 		}
+		if (
+			ts.isPropertyAccessExpression(unwrapped) &&
+			unwrapped.name.text === "url" &&
+			ts.isMetaProperty(unwrapped.expression) &&
+			unwrapped.expression.getText(sourceFile) === "import.meta"
+		)
+			return generatorPath;
 		if (ts.isNewExpression(unwrapped) && ts.isIdentifier(unwrapped.expression) && unwrapped.expression.text === "URL") {
-			return dirname(generatorPath);
+			return resolveBinding(scope, "URL") === undefined ? dirname(generatorPath) : null;
 		}
 		if (!ts.isCallExpression(unwrapped)) return null;
 		const callee = unwrapExpression(unwrapped.expression);
@@ -248,20 +277,30 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 			: ts.isPropertyAccessExpression(callee)
 				? callee.name.text
 				: null;
+		const helper =
+			calleeName === null
+				? null
+				: ts.isIdentifier(callee)
+					? canonicalPathHelper(scope, callee.text, calleeName)
+					: ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)
+						? isCanonicalPathHelperName(calleeName) &&
+							((calleeName === "fileURLToPath" && isCanonicalUrlNamespace(scope, callee.expression.text)) ||
+								(calleeName !== "fileURLToPath" && isCanonicalPathNamespace(scope, callee.expression.text)))
+							? calleeName
+							: null
+						: null;
+		if (helper === null || !isCanonicalPathHelperName(helper)) return null;
 		const values: string[] = [];
-		const argumentsValue = unwrapped.arguments.map((argument) => staticPath(argument, resolving));
+		const argumentsValue = unwrapped.arguments.map((argument) => staticPath(argument, scope, resolving));
 		for (const value of argumentsValue) {
 			if (value === null) return null;
 			values.push(value);
 		}
-		if (calleeName === "join") return join(...values);
-		if (calleeName === "resolve") return resolve(...values);
-		if (calleeName === "dirname") return dirname(values[0] ?? generatorPath);
-		if (calleeName === "fileURLToPath") {
-			const argument = unwrapped.arguments[0];
-			return argument !== undefined && ts.isNewExpression(argument) ? dirname(generatorPath) : generatorPath;
-		}
-		return null;
+		if (helper === "join") return join(...values);
+		if (helper === "resolve") return resolve(...values);
+		if (helper === "dirname") return dirname(values[0] ?? generatorPath);
+		const argument = unwrapped.arguments[0];
+		return argument !== undefined && ts.isNewExpression(argument) ? dirname(generatorPath) : generatorPath;
 	};
 	const visit = (node: ts.Node, scope: StaticScope): void => {
 		let currentScope = scope;
@@ -292,8 +331,6 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 		}
 		if (ts.isCatchClause(node) && node.variableDeclaration !== undefined)
 			bindPattern(currentScope, node.variableDeclaration.name, null);
-		if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined)
-			bindings.set(node.name.text, node.initializer);
 		if (ts.isVariableDeclaration(node) && ts.isVariableDeclarationList(node.parent)) {
 			const flags = node.parent.flags;
 			const isConst = (flags & ts.NodeFlags.Const) !== 0;
@@ -304,6 +341,24 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 					: currentScope;
 			bindPattern(bindingScope, node.name, isConst && ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
 		}
+		if (
+			ts.isBinaryExpression(node) &&
+			assignmentOperators.has(node.operatorToken.getText(sourceFile)) &&
+			ts.isIdentifier(node.left)
+		)
+			invalidateBinding(currentScope, node.left.text);
+		if (
+			ts.isPrefixUnaryExpression(node) &&
+			(node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+			ts.isIdentifier(node.operand)
+		)
+			invalidateBinding(currentScope, node.operand.text);
+		if (
+			ts.isPostfixUnaryExpression(node) &&
+			ts.isIdentifier(node.operand) &&
+			(node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+		)
+			invalidateBinding(currentScope, node.operand.text);
 		if (ts.isCallExpression(node)) {
 			const callee = unwrapExpression(node.expression);
 			const isWriteFileSync =
@@ -315,7 +370,7 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 			if (isWriteFileSync) {
 				const outputArgument = node.arguments[0];
 				if (outputArgument !== undefined) {
-					const output = staticPath(outputArgument);
+					const output = staticPath(outputArgument, currentScope);
 					if (output !== null) outputs.add(resolve(root, output));
 				}
 			}
@@ -477,11 +532,21 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
 	return current;
 }
 
+type CanonicalPathHelper = "join" | "resolve" | "dirname" | "fileURLToPath";
+
+function isCanonicalPathHelperName(name: string): name is CanonicalPathHelper {
+	return name === "join" || name === "resolve" || name === "dirname" || name === "fileURLToPath";
+}
+
 interface StaticBinding {
 	readonly initializer: ts.Expression | null;
 	readonly canonicalCreateRequire: boolean;
 	readonly canonicalWriteFileSync?: boolean;
 	readonly canonicalFsNamespace?: boolean;
+	readonly canonicalPathHelper?: CanonicalPathHelper;
+	readonly canonicalUrlHelper?: "fileURLToPath";
+	readonly canonicalPathNamespace?: boolean;
+	readonly canonicalUrlNamespace?: boolean;
 }
 
 interface StaticScope {
@@ -584,6 +649,8 @@ function predeclareScopeBindings(node: ts.Node, scope: StaticScope): void {
 			const clause = candidate.importClause;
 			const moduleSpecifier = ts.isStringLiteral(candidate.moduleSpecifier) ? candidate.moduleSpecifier.text : null;
 			const isNodeFs = moduleSpecifier === "node:fs" || moduleSpecifier === "fs";
+			const isNodePath = moduleSpecifier === "node:path" || moduleSpecifier === "path";
+			const isNodeUrl = moduleSpecifier === "node:url" || moduleSpecifier === "url";
 			if (clause.name !== undefined)
 				scope.bindings.set(clause.name.text, {
 					initializer: null,
@@ -595,6 +662,8 @@ function predeclareScopeBindings(node: ts.Node, scope: StaticScope): void {
 					initializer: null,
 					canonicalCreateRequire: false,
 					canonicalFsNamespace: isNodeFs,
+					canonicalPathNamespace: isNodePath,
+					canonicalUrlNamespace: isNodeUrl,
 				});
 			} else if (clause.namedBindings !== undefined && ts.isNamedImports(clause.namedBindings)) {
 				for (const element of clause.namedBindings.elements) {
@@ -605,6 +674,9 @@ function predeclareScopeBindings(node: ts.Node, scope: StaticScope): void {
 						initializer: null,
 						canonicalCreateRequire: isCanonicalCreateRequire,
 						canonicalWriteFileSync: isNodeFs && importedName === "writeFileSync",
+						canonicalPathHelper: isNodePath && isCanonicalPathHelperName(importedName) ? importedName : undefined,
+						canonicalUrlHelper: isNodeUrl && importedName === "fileURLToPath" ? importedName : undefined,
+						canonicalUrlNamespace: false,
 					});
 				}
 			}
@@ -661,6 +733,36 @@ function isCanonicalWriteFileSync(scope: StaticScope, name: string): boolean {
 
 function isCanonicalFsNamespace(scope: StaticScope, name: string): boolean {
 	return resolveBinding(scope, name)?.binding.canonicalFsNamespace === true;
+}
+
+function isCanonicalPathNamespace(scope: StaticScope, name: string): boolean {
+	return resolveBinding(scope, name)?.binding.canonicalPathNamespace === true;
+}
+
+function isCanonicalUrlNamespace(scope: StaticScope, name: string): boolean {
+	return resolveBinding(scope, name)?.binding.canonicalUrlNamespace === true;
+}
+
+function canonicalPathHelper(scope: StaticScope, name: string, helper: string): CanonicalPathHelper | null {
+	if (!isCanonicalPathHelperName(helper)) return null;
+	const binding = resolveBinding(scope, name)?.binding;
+	const canonicalHelper = helper === "fileURLToPath" ? binding?.canonicalUrlHelper : binding?.canonicalPathHelper;
+	return canonicalHelper === helper ? helper : null;
+}
+
+function invalidateBinding(scope: StaticScope, name: string): void {
+	const resolved = resolveBinding(scope, name);
+	if (resolved === undefined) return;
+	resolved.scope.bindings.set(name, {
+		initializer: null,
+		canonicalCreateRequire: false,
+		canonicalWriteFileSync: false,
+		canonicalFsNamespace: false,
+		canonicalPathHelper: undefined,
+		canonicalUrlHelper: undefined,
+		canonicalPathNamespace: false,
+		canonicalUrlNamespace: false,
+	});
 }
 
 function isRuntimeRequire(expression: ts.Expression, scope: StaticScope): boolean {

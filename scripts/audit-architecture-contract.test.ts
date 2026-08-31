@@ -549,6 +549,123 @@ test("named export-list growth trips the public-surface ratchet", () => {
 	}
 });
 
+test("manifest output paths resolve identifiers in their lexical defining scope", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-manifest-output-scope-"));
+	try {
+		writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture-root" }));
+		mkdirSync(join(root, "src"));
+		mkdirSync(join(root, "scripts"));
+		writeFileSync(
+			join(root, "scripts", "generate.ts"),
+			[
+				'import { writeFileSync } from "node:fs";',
+				'import { join } from "node:path";',
+				'const output = join(__dirname, "real.ts");',
+				"function later() {",
+				'\tconst output = join(__dirname, "fake.ts");',
+				"}",
+				"// src output",
+				'writeFileSync(output, "");',
+			].join("\n"),
+		);
+		writeFileSync(
+			join(root, "scripts", "architecture-generated-artifacts.json"),
+			JSON.stringify({
+				version: 1,
+				artifacts: [
+					{
+						path: "scripts/fake.ts",
+						owner: "fixture-root",
+						source: "src",
+						generatedBy: "scripts/generate.ts",
+					},
+				],
+			}),
+		);
+		expect(() => analyzeSourceTree({ root, sourceRoot: root })).toThrow(
+			"does not write its exact output scripts/fake.ts",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("manifest output paths reject mutable or reassigned bindings", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-manifest-output-mutable-"));
+	try {
+		writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture-root" }));
+		mkdirSync(join(root, "src"));
+		mkdirSync(join(root, "scripts"));
+		writeFileSync(
+			join(root, "scripts", "generate.ts"),
+			[
+				'import { writeFileSync } from "node:fs";',
+				'import { join } from "node:path";',
+				'let output = join(__dirname, "real.ts");',
+				'output = join(__dirname, "fake.ts");',
+				"// src output",
+				'writeFileSync(output, "");',
+			].join("\n"),
+		);
+		writeFileSync(
+			join(root, "scripts", "architecture-generated-artifacts.json"),
+			JSON.stringify({
+				version: 1,
+				artifacts: [
+					{
+						path: "scripts/fake.ts",
+						owner: "fixture-root",
+						source: "src",
+						generatedBy: "scripts/generate.ts",
+					},
+				],
+			}),
+		);
+		expect(() => analyzeSourceTree({ root, sourceRoot: root })).toThrow(
+			"Generated artifact generator has no statically verifiable output path",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("manifest output paths require canonical path helper provenance", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-manifest-path-helper-"));
+	try {
+		writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture-root" }));
+		mkdirSync(join(root, "src"));
+		mkdirSync(join(root, "scripts"));
+		writeFileSync(
+			join(root, "scripts", "generate.ts"),
+			[
+				'import { writeFileSync } from "node:fs";',
+				'const join = (_dir: string, _name: string) => "/outside/actual.ts";',
+				"// src output",
+				'writeFileSync(join(__dirname, "output.ts"), "");',
+			].join("\n"),
+		);
+		writeFileSync(
+			join(root, "scripts", "architecture-generated-artifacts.json"),
+			JSON.stringify({
+				version: 1,
+				artifacts: [
+					{
+						path: "scripts/output.ts",
+						owner: "fixture-root",
+						source: "src",
+						generatedBy: "scripts/generate.ts",
+					},
+				],
+			}),
+		);
+		expect(() => analyzeSourceTree({ root, sourceRoot: root })).toThrow(
+			"Generated artifact generator has no statically verifiable output path",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("manifest output paths require a canonical writeFileSync binding", () => {
 	const root = mkdtempSync(join(tmpdir(), "architecture-manifest-writer-provenance-"));
 	try {
