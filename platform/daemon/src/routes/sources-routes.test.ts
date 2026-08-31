@@ -32,7 +32,7 @@ import {
 } from "../source-index-progress";
 import { registerImportRoutes } from "./import-routes";
 import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./sources-routes";
-import { setWebDnsLookupForTest } from "../web-source-provider";
+import { setWebDnsLookupForTest, setWebRequestForTest } from "../web-source-provider";
 import { setActiveTelemetry, type TelemetryCollector } from "../telemetry";
 import { recordSourceConnected, type SourceIndexTelemetryInput } from "../source-lifecycle-telemetry";
 
@@ -62,6 +62,7 @@ describe("Sources routes", () => {
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
 		setWebDnsLookupForTest(null);
+		setWebRequestForTest(null);
 		setActiveTelemetry(undefined);
 		clearSourceIndexProgressForTests();
 		closeDbAccessor();
@@ -641,13 +642,13 @@ describe("Sources routes", () => {
 		setWebDnsLookupForTest((async () => [
 			{ address: "93.184.216.34", family: 4 },
 		]) as typeof import("node:dns/promises").lookup);
-		globalThis.fetch = mock(() =>
+		setWebRequestForTest(() =>
 			Promise.resolve(
 				new Response("<html><body><article><h1>Route Web</h1><p>Route content.</p></article></body></html>", {
 					headers: { "content-type": "text/html" },
 				}),
 			),
-		) as typeof fetch;
+		);
 		const res = await makeApp().request("/api/sources/web", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },

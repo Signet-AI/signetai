@@ -11,7 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addWebSource } from "../../platform/core/src/index";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../../platform/daemon/src/db-accessor";
-import { webSourceProvider, setWebDnsLookupForTest } from "../../platform/daemon/src/web-source-provider";
+import {
+	webSourceProvider,
+	setWebDnsLookupForTest,
+	setWebRequestForTest,
+} from "../../platform/daemon/src/web-source-provider";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 const dir = mkdtempSync(join(tmpdir(), "signet-web-source-eval-"));
@@ -22,11 +26,13 @@ initDbAccessor(join(dir, "memory", "memories.db"));
 setWebDnsLookupForTest((async () => [
 	{ address: "93.184.216.34", family: 4 },
 ]) as typeof import("node:dns/promises").lookup);
-globalThis.fetch = (async () =>
-	new Response(
-		"<html><head><title>Eval article</title><meta name='author' content='Eval Author'><link rel='canonical' href='https://example.com/eval'></head><body><article><h1>Eval article</h1><p>Fixed source-backed content for the Web page import evaluation.</p></article></body></html>",
-		{ headers: { "content-type": "text/html; charset=utf-8" } },
-	)) as typeof fetch;
+setWebRequestForTest(
+	async () =>
+		new Response(
+			"<html><head><title>Eval article</title><meta name='author' content='Eval Author'><link rel='canonical' href='https://example.com/eval'></head><body><article><h1>Eval article</h1><p>Fixed source-backed content for the Web page import evaluation.</p></article></body></html>",
+			{ headers: { "content-type": "text/html; charset=utf-8" } },
+		),
+);
 
 let passed = false;
 try {
@@ -60,7 +66,7 @@ try {
 		markdownAndProvenance:
 			page?.content.includes("Fixed source-backed content") === true &&
 			page.source_external_id === "https://example.com/eval",
-		canonicalPath: page?.source_path === "web://example.com/eval",
+		canonicalPath: page?.source_path === `web://source/${encodeURIComponent(added.source.id)}/example.com/eval`,
 		graphIndexed: graphDocs > 0,
 	};
 	passed = Object.values(checks).every(Boolean);
@@ -69,6 +75,7 @@ try {
 	console.error(error instanceof Error ? error.message : String(error));
 } finally {
 	setWebDnsLookupForTest(null);
+	setWebRequestForTest(null);
 	closeDbAccessor();
 	rmSync(dir, { recursive: true, force: true });
 	if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");

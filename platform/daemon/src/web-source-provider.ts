@@ -1,5 +1,9 @@
 import { lookup } from "node:dns/promises";
 import { createHash } from "node:crypto";
+import { request as httpRequest } from "node:http";
+import { isIP } from "node:net";
+import { Readable } from "node:stream";
+import { request as httpsRequest } from "node:https";
 import {
 	normalizePublicWebUrl,
 	type SignetSourceEntry,
@@ -24,9 +28,30 @@ export const WEB_MAX_EXTRACTED_CHARS = 750_000;
 
 const ALLOWED_CONTENT_TYPES = new Set(["text/html", "application/xhtml+xml"]);
 let webDnsLookup: typeof lookup = lookup;
+let webFetchTimeoutMs = WEB_FETCH_TIMEOUT_MS;
+
+interface WebRequestOptions {
+	readonly signal: AbortSignal;
+	readonly address: string;
+	readonly family: 4 | 6;
+	readonly method: "GET";
+	readonly headers: Readonly<Record<string, string>>;
+}
+
+type WebRequest = (url: string, options: WebRequestOptions) => Promise<Response>;
+
+let webRequest: WebRequest = requestPinnedWebPage;
 
 export function setWebDnsLookupForTest(resolver: typeof lookup | null): void {
 	webDnsLookup = resolver ?? lookup;
+}
+
+export function setWebRequestForTest(requester: WebRequest | null): void {
+	webRequest = requester ?? requestPinnedWebPage;
+}
+
+export function setWebFetchTimeoutForTest(timeoutMs: number | null): void {
+	webFetchTimeoutMs = timeoutMs ?? WEB_FETCH_TIMEOUT_MS;
 }
 
 export interface WebFetchResult {
@@ -77,7 +102,7 @@ async function syncWebSource(context: SourceProviderSyncContext): Promise<Source
 		const fetched = await fetchPublicWebPage(requestedUrl);
 		if (!context.shouldContinue()) return { indexed: 0, scanned: 0, total: 1, failures: [] };
 		const extracted = await extractWebPage(fetched);
-		const sourcePath = webSourcePath(extracted.finalUrl);
+		const sourcePath = webSourcePath(context.source.id, extracted.finalUrl);
 		const content = webMarkdownContent(extracted, fetched);
 		await indexExternalMemoryArtifact({
 			agentId: context.agentId,
@@ -150,83 +175,86 @@ export async function fetchPublicWebPage(requestedUrl: string): Promise<WebFetch
 	}
 	let currentUrl = normalized;
 	for (let redirects = 0; redirects <= WEB_MAX_REDIRECTS; redirects++) {
-		await assertPublicWebHost(currentUrl);
+		const resolvedAddress = await assertPublicWebHost(currentUrl);
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), WEB_FETCH_TIMEOUT_MS);
-		timer.unref?.();
-		let response: Response;
+		const timer = setTimeout(() => controller.abort(), webFetchTimeoutMs);
 		try {
-			response = await fetch(currentUrl, {
-				method: "GET",
-				redirect: "manual",
+			const response = await webRequest(currentUrl, {
+				...resolvedAddress,
 				signal: controller.signal,
+				method: "GET",
 				headers: {
 					Accept: "text/html,application/xhtml+xml;q=0.9",
 					"User-Agent": "Signet/1 web-source",
 				},
 			});
+
+			if (response.status >= 300 && response.status < 400) {
+				cancelResponseBody(response);
+				const location = response.headers.get("location");
+				if (!location)
+					throw new WebSourceFetchError("Web page redirect did not include a destination", { code: "redirect" });
+				const next = normalizePublicWebUrl(new URL(location, currentUrl).toString());
+				if (!next) {
+					throw new WebSourceFetchError("Web page redirect points to an unsafe destination", {
+						code: "unsafe_redirect",
+						recoverable: false,
+						metadata: { from: currentUrl },
+					});
+				}
+				if (redirects === WEB_MAX_REDIRECTS)
+					throw new WebSourceFetchError(`Web page exceeded the ${WEB_MAX_REDIRECTS}-redirect limit`, {
+						code: "redirect_limit",
+					});
+				currentUrl = next;
+				continue;
+			}
+			if (!response.ok) {
+				cancelResponseBody(response);
+				throw new WebSourceFetchError(`Web page returned HTTP ${response.status}`, {
+					code: "http_status",
+					metadata: { url: currentUrl, status: response.status },
+				});
+			}
+			const contentType = (response.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase() ?? "";
+			if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+				cancelResponseBody(response);
+				throw new WebSourceFetchError(`Web page content type is not HTML: ${contentType}`, {
+					code: "content_type",
+					recoverable: false,
+					metadata: { url: currentUrl, contentType },
+				});
+			}
+			const declaredBytes = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+			if (Number.isFinite(declaredBytes) && declaredBytes > WEB_MAX_RESPONSE_BYTES) {
+				cancelResponseBody(response);
+				throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
+					code: "response_size",
+					recoverable: false,
+					metadata: { url: currentUrl, contentLength: declaredBytes },
+				});
+			}
+			const { html, bytes } = await readBoundedResponse(response, currentUrl, controller.signal);
+			return {
+				requestedUrl: normalized,
+				finalUrl: currentUrl,
+				contentType: contentType || "text/html",
+				html,
+				responseBytes: bytes,
+				redirects,
+			};
 		} catch (error) {
+			if (error instanceof WebSourceFetchError) throw error;
 			const detail = error instanceof Error ? error.message : String(error);
 			throw new WebSourceFetchError(
 				controller.signal.aborted
-					? `Web page request timed out after ${WEB_FETCH_TIMEOUT_MS}ms`
+					? `Web page request timed out after ${webFetchTimeoutMs}ms`
 					: `Web page request failed: ${detail}`,
 				{ code: controller.signal.aborted ? "timeout" : "fetch_failed", metadata: { url: currentUrl } },
 			);
 		} finally {
 			clearTimeout(timer);
 		}
-
-		if (response.status >= 300 && response.status < 400) {
-			const location = response.headers.get("location");
-			if (!location)
-				throw new WebSourceFetchError("Web page redirect did not include a destination", { code: "redirect" });
-			const next = normalizePublicWebUrl(new URL(location, currentUrl).toString());
-			if (!next) {
-				throw new WebSourceFetchError("Web page redirect points to an unsafe destination", {
-					code: "unsafe_redirect",
-					recoverable: false,
-					metadata: { from: currentUrl },
-				});
-			}
-			if (redirects === WEB_MAX_REDIRECTS)
-				throw new WebSourceFetchError(`Web page exceeded the ${WEB_MAX_REDIRECTS}-redirect limit`, {
-					code: "redirect_limit",
-				});
-			currentUrl = next;
-			continue;
-		}
-		if (!response.ok) {
-			throw new WebSourceFetchError(`Web page returned HTTP ${response.status}`, {
-				code: "http_status",
-				metadata: { url: currentUrl, status: response.status },
-			});
-		}
-		const contentType = (response.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase() ?? "";
-		if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
-			throw new WebSourceFetchError(`Web page content type is not HTML: ${contentType}`, {
-				code: "content_type",
-				recoverable: false,
-				metadata: { url: currentUrl, contentType },
-			});
-		}
-		const declaredBytes = Number.parseInt(response.headers.get("content-length") ?? "", 10);
-		if (Number.isFinite(declaredBytes) && declaredBytes > WEB_MAX_RESPONSE_BYTES) {
-			throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
-				code: "response_size",
-				recoverable: false,
-				metadata: { url: currentUrl, contentLength: declaredBytes },
-			});
-		}
-		const { html, bytes } = await readBoundedResponse(response, currentUrl);
-		return {
-			requestedUrl: normalized,
-			finalUrl: currentUrl,
-			contentType: contentType || "text/html",
-			html,
-			responseBytes: bytes,
-			redirects,
-		};
 	}
 	throw new WebSourceFetchError("Web page redirect handling failed", { code: "redirect" });
 }
@@ -234,72 +262,179 @@ export async function fetchPublicWebPage(requestedUrl: string): Promise<WebFetch
 async function readBoundedResponse(
 	response: Response,
 	url: string,
+	signal: AbortSignal,
 ): Promise<{ readonly html: string; readonly bytes: number }> {
-	if (!response.body) {
-		const text = await response.text();
-		const bytes = new TextEncoder().encode(text).byteLength;
-		if (bytes > WEB_MAX_RESPONSE_BYTES) {
-			throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
-				code: "response_size",
-				recoverable: false,
-				metadata: { url, bytes },
-			});
-		}
-		return { html: text, bytes };
-	}
-	const reader = response.body.getReader();
-	const chunks: Uint8Array[] = [];
-	let bytes = 0;
+	const abort = createAbortPromise(signal);
 	try {
-		while (true) {
-			const next = await reader.read();
-			if (next.done) break;
-			const chunk = next.value instanceof Uint8Array ? next.value : new Uint8Array(next.value);
-			bytes += chunk.byteLength;
+		if (!response.body) {
+			const text = await Promise.race([response.text(), abort.promise]);
+			const bytes = new TextEncoder().encode(text).byteLength;
 			if (bytes > WEB_MAX_RESPONSE_BYTES) {
-				await reader.cancel();
 				throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
 					code: "response_size",
 					recoverable: false,
 					metadata: { url, bytes },
 				});
 			}
-			chunks.push(chunk);
+			return { html: text, bytes };
 		}
+		const reader = response.body.getReader();
+		const chunks: Uint8Array[] = [];
+		let bytes = 0;
+		try {
+			while (true) {
+				const next = await Promise.race([reader.read(), abort.promise]);
+				if (next.done) break;
+				const chunk = next.value instanceof Uint8Array ? next.value : new Uint8Array(next.value);
+				bytes += chunk.byteLength;
+				if (bytes > WEB_MAX_RESPONSE_BYTES) {
+					void reader.cancel().catch(() => {});
+					throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
+						code: "response_size",
+						recoverable: false,
+						metadata: { url, bytes },
+					});
+				}
+				chunks.push(chunk);
+			}
+		} finally {
+			if (signal.aborted) void reader.cancel().catch(() => {});
+			reader.releaseLock();
+		}
+		const combined = new Uint8Array(bytes);
+		let offset = 0;
+		for (const chunk of chunks) {
+			combined.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		return { html: new TextDecoder().decode(combined), bytes };
 	} finally {
-		reader.releaseLock();
+		abort.cleanup();
 	}
-	const combined = new Uint8Array(bytes);
-	let offset = 0;
-	for (const chunk of chunks) {
-		combined.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	return { html: new TextDecoder().decode(combined), bytes };
 }
 
-async function assertPublicWebHost(url: string): Promise<void> {
+interface ResolvedWebAddress {
+	readonly address: string;
+	readonly family: 4 | 6;
+}
+
+async function assertPublicWebHost(url: string): Promise<ResolvedWebAddress> {
 	const parsed = new URL(url);
-	const addresses = await webDnsLookup(parsed.hostname, { all: true, verbatim: true }).catch((error) => {
+	const hostname = withoutIpv6Brackets(parsed.hostname);
+	const addresses = await webDnsLookup(hostname, { all: true, verbatim: true }).catch((error) => {
 		throw new WebSourceFetchError(`Unable to resolve public web host ${parsed.hostname}`, {
 			code: "dns",
-			metadata: { host: parsed.hostname, detail: error instanceof Error ? error.message : String(error) },
+			metadata: { host: hostname, detail: error instanceof Error ? error.message : String(error) },
 		});
 	});
+	if (addresses.length === 0) {
+		throw new WebSourceFetchError(`Unable to resolve public web host ${hostname}`, {
+			code: "dns",
+			metadata: { host: hostname },
+		});
+	}
+	let selected: ResolvedWebAddress | null = null;
 	for (const address of addresses) {
-		if (isUnsafeResolvedAddress(address.address)) {
+		const normalizedAddress = withoutIpv6Brackets(address.address);
+		const family = isIP(normalizedAddress);
+		if ((family !== 4 && family !== 6) || isUnsafeResolvedAddress(normalizedAddress)) {
 			throw new WebSourceFetchError("Web page host resolves to a private or local address", {
 				code: "unsafe_target",
 				recoverable: false,
-				metadata: { host: parsed.hostname, address: address.address },
+				metadata: { host: hostname, address: normalizedAddress },
 			});
 		}
+		selected ??= { address: normalizedAddress, family };
 	}
+	return selected as ResolvedWebAddress;
 }
 
 function isUnsafeResolvedAddress(address: string): boolean {
-	const normalized = normalizePublicWebUrl(address.includes(":") ? `https://[${address}]` : `https://${address}`);
+	const normalizedAddress = withoutIpv6Brackets(address);
+	const family = isIP(normalizedAddress);
+	if (family !== 4 && family !== 6) return true;
+	const normalized = normalizePublicWebUrl(
+		family === 6 ? `https://[${normalizedAddress}]` : `https://${normalizedAddress}`,
+	);
 	return normalized === null;
+}
+
+function withoutIpv6Brackets(hostname: string): string {
+	return hostname.replace(/^\[|\]$/g, "");
+}
+
+function createAbortPromise(signal: AbortSignal): { readonly promise: Promise<never>; readonly cleanup: () => void } {
+	let onAbort = () => {};
+	const promise = new Promise<never>((_, reject) => {
+		onAbort = () => {
+			const reason = signal.reason;
+			reject(reason instanceof Error ? reason : new Error("Web response aborted"));
+		};
+		if (signal.aborted) onAbort();
+		else signal.addEventListener("abort", onAbort, { once: true });
+	});
+	return {
+		promise,
+		cleanup: () => signal.removeEventListener("abort", onAbort),
+	};
+}
+
+function cancelResponseBody(response: Response): void {
+	try {
+		void response.body?.cancel().catch(() => {});
+	} catch {
+		// The response may already be consumed or cancelled.
+	}
+}
+
+async function requestPinnedWebPage(url: string, options: WebRequestOptions): Promise<Response> {
+	const parsed = new URL(url);
+	const hostname = withoutIpv6Brackets(parsed.hostname);
+	const lookupPinned: NonNullable<import("node:net").TcpSocketConnectOpts["lookup"]> = (
+		_hostname,
+		lookupOptions,
+		callback,
+	) => {
+		if (lookupOptions.all) callback(null, [{ address: options.address, family: options.family }]);
+		else callback(null, options.address, options.family);
+	};
+	const requestOptions = {
+		agent: false,
+		family: options.family,
+		headers: { ...options.headers, Host: parsed.host },
+		hostname,
+		lookup: lookupPinned,
+		method: options.method,
+		path: `${parsed.pathname || "/"}${parsed.search}`,
+		port: parsed.port ? Number(parsed.port) : undefined,
+		signal: options.signal,
+		...(parsed.protocol === "https:" && isIP(hostname) === 0 ? { servername: hostname } : {}),
+	};
+	return await new Promise<Response>((resolve, reject) => {
+		const onResponse = (message: import("node:http").IncomingMessage) => {
+			const headers = new Headers();
+			for (const [name, value] of Object.entries(message.headers)) {
+				if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+			}
+			const body = Readable.toWeb(message) as unknown as ReadableStream<Uint8Array>;
+			options.signal.addEventListener("abort", () => message.destroy(abortReason(options.signal)), { once: true });
+			resolve(
+				new Response(body, {
+					status: message.statusCode ?? 500,
+					statusText: message.statusMessage ?? "",
+					headers,
+				}),
+			);
+		};
+		const request =
+			parsed.protocol === "https:" ? httpsRequest(requestOptions, onResponse) : httpRequest(requestOptions, onResponse);
+		request.once("error", reject);
+		request.end();
+	});
+}
+
+function abortReason(signal: AbortSignal): Error {
+	return signal.reason instanceof Error ? signal.reason : new Error("Web request aborted");
 }
 
 interface ExtractedWebPage {
@@ -318,6 +453,8 @@ interface ExtractedWebPage {
 
 async function extractWebPage(fetched: WebFetchResult): Promise<ExtractedWebPage> {
 	const { document } = parseHTML(fetched.html);
+	const canonicalLink = canonicalLinkHref(document);
+	removeMalformedCanonicalLink(document, canonicalLink, fetched.finalUrl);
 	const result = (await Defuddle(document, fetched.finalUrl, {
 		markdown: true,
 		separateMarkdown: true,
@@ -327,7 +464,7 @@ async function extractWebPage(fetched: WebFetchResult): Promise<ExtractedWebPage
 	const markdown = (result.contentMarkdown ?? result.content ?? "").trim();
 	if (!markdown)
 		throw new WebSourceFetchError("Defuddle could not extract readable page content", { code: "empty_content" });
-	const canonicalUrl = canonicalUrlFromDefuddle(result, fetched.finalUrl);
+	const canonicalUrl = canonicalUrlFromDefuddle(result, fetched.finalUrl, canonicalLink);
 	const boundedMarkdown = markdown.slice(0, WEB_MAX_EXTRACTED_CHARS);
 	return {
 		title: boundedString(result.title, "Untitled web page", 500),
@@ -356,13 +493,41 @@ async function extractWebPage(fetched: WebFetchResult): Promise<ExtractedWebPage
 	};
 }
 
-function canonicalUrlFromDefuddle(result: DefuddleResponse, fallback: string): string | null {
+function canonicalUrlFromDefuddle(
+	result: DefuddleResponse,
+	fallback: string,
+	canonicalLink: string | undefined,
+): string | null {
+	if (canonicalLink !== undefined) return normalizeCanonicalUrl(canonicalLink, fallback);
 	const canonical = result.metaTags?.find(
 		(tag) => tag.name?.toLowerCase() === "canonical" || tag.property?.toLowerCase() === "og:url",
 	)?.content;
-	if (!canonical) return null;
-	const normalized = normalizePublicWebUrl(new URL(canonical, fallback).toString());
-	return normalized ?? null;
+	return normalizeCanonicalUrl(canonical, fallback);
+}
+
+function canonicalLinkHref(document: Document): string | undefined {
+	const link = Array.from(document.querySelectorAll("link")).find((candidate) =>
+		(candidate.getAttribute("rel") ?? "").split(/\s+/).some((token) => token.toLowerCase() === "canonical"),
+	);
+	return link?.getAttribute("href") ?? (link ? "" : undefined);
+}
+
+function removeMalformedCanonicalLink(document: Document, href: string | undefined, fallback: string): void {
+	if (href === undefined || normalizeCanonicalUrl(href, fallback) !== null) return;
+	const link = Array.from(document.querySelectorAll("link")).find((candidate) =>
+		(candidate.getAttribute("rel") ?? "").split(/\s+/).some((token) => token.toLowerCase() === "canonical"),
+	);
+	link?.remove();
+}
+
+function normalizeCanonicalUrl(value: string | null | undefined, fallback: string): string | null {
+	const candidate = value?.trim();
+	if (!candidate) return null;
+	try {
+		return normalizePublicWebUrl(new URL(candidate, fallback).toString());
+	} catch {
+		return null;
+	}
 }
 
 function webMarkdownContent(page: ExtractedWebPage, fetched: WebFetchResult): string {
@@ -383,9 +548,9 @@ function webMarkdownContent(page: ExtractedWebPage, fetched: WebFetchResult): st
 	return `${frontmatter}\n\n# ${page.title}\n\nSource: ${page.canonicalUrl ?? page.finalUrl}\n\n${page.markdown}`;
 }
 
-function webSourcePath(url: string): string {
+function webSourcePath(sourceId: string, url: string): string {
 	const parsed = new URL(url);
-	return `web://${parsed.host}${parsed.pathname || "/"}${parsed.search}`;
+	return `web://source/${encodeURIComponent(sourceId)}/${parsed.host}${parsed.pathname || "/"}${parsed.search}`;
 }
 
 function boundedString(value: unknown, fallback: string, max: number): string {
