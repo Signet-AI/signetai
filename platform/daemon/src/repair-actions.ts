@@ -2400,7 +2400,7 @@ export async function pruneGenericEntities(
 	}
 
 	const batchSize = Math.max(1, Math.min(Math.floor(options?.batchSize ?? 100), 500));
-	const agentId = options?.agentId ?? "default";
+	const agentId = options?.agentId ?? ctx.agentId ?? "default";
 	const candidates = await accessor.withReadDbAsync(
 		async (db) => {
 			const candidates: GenericEntityCandidate[] = [];
@@ -2453,15 +2453,34 @@ export async function pruneGenericEntities(
 
 	const affected = await withRepairWriteTx(accessor, (db) => {
 		const ids = candidates.map((row) => row.id);
-		deleteEntityGraphRows(db, ids);
+		const placeholders = ids.map(() => "?").join(",");
+		// Revalidate every destructive predicate in the write transaction. The
+		// candidate scan is a separate read, so ownership or protection may have
+		// changed before this transaction acquires the write lock.
+		const currentCandidates = db
+			.prepare(
+				`SELECT e.id, e.name, e.entity_type
+				 FROM entities e
+				 WHERE e.id IN (${placeholders})
+				   AND COALESCE(NULLIF(e.agent_id, ''), 'default') = ?
+				   AND COALESCE(e.pinned, 0) = 0
+				   AND e.entity_type NOT IN ('skill')
+				   AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)`,
+			)
+			.all(...ids, agentId) as GenericEntityCandidate[];
+		const scopedIds = currentCandidates
+			.filter((row) => !classifyEntityQuality(row.name, row.entity_type).ok)
+			.map((row) => row.id);
+		if (scopedIds.length === 0) return 0;
+		deleteEntityGraphRows(db, scopedIds);
 		writeRepairAudit(
 			db,
 			action,
 			ctx,
-			ids.length,
-			`deleted ${ids.length} generic/non-concrete entities for agent ${agentId}`,
+			scopedIds.length,
+			`deleted ${scopedIds.length} generic/non-concrete entities for agent ${agentId}`,
 		);
-		return ids.length;
+		return scopedIds.length;
 	});
 
 	limiter.record(action, repairScopeKey(ctx));
@@ -2632,7 +2651,7 @@ export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityChe
 			const fullCheck = readIntegrityCheck(db, "integrity_check");
 			return { ok: fullCheck.ok, messages: fullCheck.messages, quickCheck, fullCheck };
 		},
-		{ siteToken: "repair-actions.ts:2629" },
+		{ siteToken: "repair-actions.ts:2648" },
 	);
 }
 

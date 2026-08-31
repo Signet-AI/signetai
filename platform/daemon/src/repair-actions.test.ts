@@ -411,6 +411,76 @@ describe("pruneGenericEntities", () => {
 		}
 	});
 
+	it("uses the context agent when no explicit agent option is supplied", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = new Date().toISOString();
+
+		try {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, 'person', ?, 0, 0, ?, ?)`,
+			).run("ent-agent-a", "Sender", "sender", "agent-a", now, now);
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, 'person', ?, 0, 0, ?, ?)`,
+			).run("ent-agent-b", "Sender", "sender", "agent-b", now, now);
+
+			const result = await pruneGenericEntities(
+				accessor,
+				TEST_CFG,
+				{ ...CTX_OPERATOR, agentId: "agent-a" },
+				createRateLimiter(),
+				{
+					dryRun: false,
+				},
+			);
+
+			expect(result.affected).toBe(1);
+			expect(db.prepare("SELECT id FROM entities ORDER BY id").all()).toEqual([{ id: "ent-agent-b" }]);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("revalidates ownership and protection predicates before deleting a read-selected entity", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO entities
+			 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+			 VALUES ('ent-reassigned', 'Sender', 'sender', 'person', 'agent-a', 0, 0, ?, ?)`,
+		).run(now, now);
+		const accessor = asAccessor(db, () => {
+			db.prepare(
+				"UPDATE entities SET agent_id = 'agent-b', pinned = 1, name = 'Specific Person' WHERE id = 'ent-reassigned'",
+			).run();
+		});
+
+		try {
+			const result = await pruneGenericEntities(
+				accessor,
+				TEST_CFG,
+				{ ...CTX_OPERATOR, agentId: "agent-a" },
+				createRateLimiter(),
+				{
+					dryRun: false,
+				},
+			);
+
+			expect(result.affected).toBe(0);
+			expect(db.prepare("SELECT agent_id FROM entities WHERE id = 'ent-reassigned'").get()).toEqual({
+				agent_id: "agent-b",
+			});
+		} finally {
+			db.close();
+		}
+	});
+
 	it("prunes Markdown-polluted and standalone structural nodes while preserving specific names", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
