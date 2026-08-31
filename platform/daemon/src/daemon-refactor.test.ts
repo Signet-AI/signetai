@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSessionCleanupRunning, stopSessionCleanup } from "./session-tracker";
@@ -58,6 +58,33 @@ describe("daemon route extraction refactor", () => {
 				uncaughtException: 0,
 				unhandledRejection: 0,
 			});
+		} finally {
+			rmSync(testDir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not persist plugin registry state when imported for routes", () => {
+		const testDir = join(tmpdir(), `signet-daemon-plugin-import-${Date.now()}`);
+		mkdirSync(testDir, { recursive: true });
+		try {
+			const daemonUrl = new URL("./daemon.ts", import.meta.url).href;
+			const registryPath = join(testDir, ".daemon", "plugins", "registry-v1.json");
+			const script = `
+				const { existsSync } = await import("node:fs");
+				await import(${JSON.stringify(daemonUrl)});
+				process.stdout.write("DAEMON_PLUGIN_REGISTRY=" + String(existsSync(${JSON.stringify(registryPath)})) + "\\n");
+				process.exit(0);
+			`;
+			const child = Bun.spawnSync({
+				cmd: [process.execPath, "-e", script],
+				env: { ...process.env, SIGNET_DAEMON_ENTRYPOINT: "0", SIGNET_PATH: testDir },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(child.exitCode).toBe(0);
+			const output = new TextDecoder().decode(child.stdout);
+			expect(output).toContain("DAEMON_PLUGIN_REGISTRY=false");
+			expect(existsSync(registryPath)).toBe(false);
 		} finally {
 			rmSync(testDir, { recursive: true, force: true });
 		}
