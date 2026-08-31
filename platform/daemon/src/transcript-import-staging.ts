@@ -31,15 +31,41 @@ export async function stageTranscriptStream(
 			if (!(chunk instanceof Uint8Array)) throw new Error("stream chunk must be bytes");
 			sizeBytes += chunk.byteLength;
 			hash.update(chunk);
-			if (!stream.write(chunk))
+			if (!stream.write(chunk)) {
 				await new Promise<void>((resolvePromise, reject) => {
-					stream.once("drain", resolvePromise);
-					stream.once("error", reject);
+					const cleanup = (): void => {
+						stream.removeListener("drain", onDrain);
+						stream.removeListener("error", onError);
+					};
+					const onDrain = (): void => {
+						cleanup();
+						resolvePromise();
+					};
+					const onError = (error: Error): void => {
+						cleanup();
+						reject(error);
+					};
+					stream.once("drain", onDrain);
+					stream.once("error", onError);
 				});
+			}
 		}
 		await new Promise<void>((resolvePromise, reject) => {
-			stream.end(() => resolvePromise());
-			stream.once("error", reject);
+			const cleanup = (): void => {
+				stream.removeListener("finish", onFinish);
+				stream.removeListener("error", onError);
+			};
+			const onFinish = (): void => {
+				cleanup();
+				resolvePromise();
+			};
+			const onError = (error: Error): void => {
+				cleanup();
+				reject(error);
+			};
+			stream.once("finish", onFinish);
+			stream.once("error", onError);
+			stream.end();
 		});
 		const fd = await import("node:fs/promises").then((fs) => fs.open(partial, "r+"));
 		try {

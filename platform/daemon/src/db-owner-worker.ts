@@ -129,12 +129,16 @@ export function runDbOwnerWorker(): void {
 		}
 	}
 	const parentPid = process.ppid;
-	const parentWatch = setInterval(() => {
-		// A test harness can disappear without sending the protocol shutdown
-		// command. Do not let its owner survive as an orphan indefinitely.
-		if (process.ppid !== parentPid) process.exit(0);
-	}, 250);
-	parentWatch.unref();
+	let db = undefined as unknown as SqliteDatabase;
+	let parentWatch: ReturnType<typeof setInterval> | undefined;
+	const closeAndExit = (code: number): never => {
+		if (parentWatch !== undefined) clearInterval(parentWatch);
+		try {
+			if (db !== undefined) db.close();
+		} finally {
+			process.exit(code);
+		}
+	};
 
 	function send(event: DbOwnerEvent): void {
 		process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -157,7 +161,6 @@ export function runDbOwnerWorker(): void {
 	}
 
 	const sqlitePath = process.env.SIGNET_DB_OWNER_SQLITE_PATH ?? process.env.SIGNET_SQLITE_PATH;
-	let db: SqliteDatabase;
 	try {
 		if (sqlitePath !== undefined && existsSync(sqlitePath) && typeof Database.setCustomSQLite === "function") {
 			Database.setCustomSQLite(sqlitePath);
@@ -168,9 +171,15 @@ export function runDbOwnerWorker(): void {
 		if (vecExtension !== null) loadSqliteVecIfAvailable(db, vecExtension);
 	} catch (error) {
 		send({ type: "fatal", error: serializeError(error) });
-		process.exit(1);
-		return;
+		closeAndExit(1);
 	}
+	if (db === undefined) closeAndExit(1);
+	parentWatch = setInterval(() => {
+		// SIGKILL bypasses daemon cleanup. Close the owner database as soon as
+		// its control-process parent disappears, before exiting as an orphan.
+		if (process.ppid !== parentPid) closeAndExit(0);
+	}, 50);
+	parentWatch.unref();
 
 	const BUSY_RETRIES = 3;
 	const BUSY_BACKOFF_MS = 50;
@@ -1232,9 +1241,8 @@ export function runDbOwnerWorker(): void {
 
 	function handle(command: DbOwnerCommand): void {
 		if (command.type === "shutdown") {
-			clearInterval(parentWatch);
-			db.close();
-			process.exit(0);
+			closeAndExit(0);
+			return;
 		}
 		if (command.type === "cancel") {
 			if (!shouldRecordDbOwnerCancellation(command.jobId, activeJobId, foregroundQueue, maintenanceQueue)) return;
@@ -1300,6 +1308,12 @@ export function runDbOwnerWorker(): void {
 				process.exitCode = 1;
 			}
 		}
+	});
+	process.stdin.on("end", () => {
+		// The daemon owns this pipe. If it is killed before it can send the
+		// protocol shutdown command, close SQLite immediately rather than
+		// leaving an orphan owner holding the eval workspace database lock.
+		closeAndExit(0);
 	});
 
 	void activeJobId;
