@@ -177,13 +177,15 @@ test("semantic DB site tokens are unique and reject malformed identifiers", () =
 		writeFileSync(
 			join(root, "semantic.ts"),
 			[
-				'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:memory.shared" });',
-				'getDbAccessor().withWriteTxAsync((db) => db, { siteToken: "db:memory.shared" });',
+				'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:memory.shared.read" });',
+				'getDbAccessor().withWriteTxAsync((db) => db, { siteToken: "db:memory.shared.read" });',
 				'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:Memory Invalid" });',
 			].join("\n"),
 		);
 		const result = runAudit({ sourceRoot: root });
-		expect(result.violations.filter((item) => item.kind === "duplicate-semantic-db-site-token")).toHaveLength(2);
+		expect(result.violations.filter((item) => item.kind === "duplicate-db-site-token")).toEqual([
+			expect.objectContaining({ path: "semantic.ts", line: 1, token: "db:memory.shared.read" }),
+		]);
 		expect(result.violations.filter((item) => item.kind === "missing-async-db-site-token")).toEqual([
 			expect.objectContaining({ path: "semantic.ts", line: 3 }),
 		]);

@@ -2011,21 +2011,24 @@
       "line": 1032,
       "api": "withReadDbAsync",
       "source": "const ready = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:memory.reindex.schema"
     },
     {
       "path": "memory-lineage.ts",
       "line": 1053,
       "api": "withReadDbAsync",
       "source": "const dbPaths = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:memory.reindex.paths"
     },
     {
       "path": "memory-lineage.ts",
       "line": 1334,
       "api": "withReadDbAsync",
       "source": "const row = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:memory.manifest.find"
     },
     {
       "path": "memory-lineage.ts",
@@ -2053,35 +2056,40 @@
       "line": 1753,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:memory.projection.thread-heads"
     },
     {
       "path": "memory-lineage.ts",
       "line": 1809,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:memory.projection.top-memories"
     },
     {
       "path": "memory-lineage.ts",
       "line": 1857,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:memory.projection.temporal-nodes"
     },
     {
       "path": "memory-lineage.ts",
       "line": 1948,
       "api": "withReadDbAsync",
       "source": "rows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:memory.projection.ledger"
     },
     {
       "path": "memory-lineage.ts",
       "line": 2291,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:memory.session.paths"
     },
     {
       "path": "memory-lineage.ts",
@@ -2095,7 +2103,8 @@
       "line": 2347,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:memory.noise.sessions"
     },
     {
       "path": "memory-search-telemetry.ts",
