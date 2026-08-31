@@ -9,11 +9,10 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveDefaultBasePath } from "@signet/core";
+import { type McpProbeResult, resolveDefaultBasePath } from "@signet/core";
 import { createEvent, eventBus } from "./event-bus";
 import { getWidgetProvider } from "./llm";
 import { logger } from "./logger";
-import { loadProbeResult } from "./mcp-probe";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -254,8 +253,7 @@ export function deleteCachedWidget(serverId: string): boolean {
 // Main generation
 // ---------------------------------------------------------------------------
 
-export async function generateWidgetHtml(serverId: string): Promise<string> {
-	const probe = loadProbeResult(serverId);
+export async function generateWidgetHtml(serverId: string, probe: McpProbeResult | null): Promise<string> {
 	if (!probe) {
 		throw new Error(`No probe result found for server: ${serverId}`);
 	}

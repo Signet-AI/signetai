@@ -6,6 +6,7 @@ import type { Hono } from "hono";
 
 import { createEvent, eventBus } from "../event-bus";
 import { logger } from "../logger";
+import { loadProbeResult } from "../mcp-probe";
 import { deleteCachedWidget, generateWidgetHtml, loadCachedWidget, widgetDir } from "../widget-gen";
 
 /**
@@ -41,7 +42,7 @@ export function mountWidgetRoutes(app: Hono): void {
 		}
 
 		// Spawn async generation — don't block the response
-		generateWidgetHtml(serverId).catch((err) => {
+		generateWidgetHtml(serverId, loadProbeResult(serverId)).catch((err) => {
 			const msg = err instanceof Error ? err.message : String(err);
 			logger.warn("widget", `Async widget generation failed for ${serverId}`, {
 				error: msg,

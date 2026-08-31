@@ -108,4 +108,10 @@ describe("owner transport purity", () => {
 
 		expect(graph).not.toContain('from "./pipeline/dreaming"');
 	});
+
+	it("keeps widget generation independent of MCP probe persistence", () => {
+		const widget = source("./widget-gen.ts");
+
+		expect(widget).not.toContain('from "./mcp-probe"');
+	});
 });
