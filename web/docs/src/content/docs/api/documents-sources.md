@@ -243,6 +243,50 @@ Transcript imports are a separate durable API; they do not use the synchronous
 and `cancel` are durable controls. All routes require `modify` permission and
 fail closed when `agentId` is not the daemon's resolved target agent.
 
+### POST /api/sources/imports
+
+Creates a durable transcript import job.
+
+### GET /api/sources/imports
+
+Lists transcript import jobs for the resolved agent.
+
+### GET /api/sources/imports/:jobId
+
+Returns one job and its staged files.
+
+### PUT /api/sources/imports/:jobId/files/:fileId
+
+Streams one JSONL file into the staged slot.
+
+### POST /api/sources/imports/:jobId/start
+
+Queues the staged job for inventory and commit.
+
+### POST /api/sources/imports/:jobId/pause
+
+Requests a pause at the next bounded worker checkpoint.
+
+### POST /api/sources/imports/:jobId/resume
+
+Resumes a paused job.
+
+### POST /api/sources/imports/:jobId/retry
+
+Retries interrupted or retryable records in a job.
+
+### POST /api/sources/imports/:jobId/cancel
+
+Cancels a job and terminalizes remaining pending records.
+
+### GET /api/sources/imports/:jobId/rejections
+
+Lists rejected records and bounded rejection codes.
+
+### GET /api/sources/imports/:jobId/reconciliation
+
+Returns the durable status-count reconciliation.
+
 The only accepted adapter is `signet-export` version `1` (`source: "signet"`).
 Each line is classified exactly once as `imported`, `duplicate`, or `rejected`;
 blank lines are counted separately. Validation rejects malformed JSON, unknown
