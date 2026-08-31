@@ -307,6 +307,9 @@ jobs:
           # embedding smoke is disabled. This must fail if the worker asset is
           # missing from the release binary.
           SIGNET_DB_OWNER_SMOKE: "1"
+          # Exact Dreaming backlog accounting must resolve its embedded WASM
+          # asset from inside the compiled binary and its materialized worker.
+          SIGNET_DREAMING_TOKEN_SMOKE: "1"
           # Dreaming must launch its scoped MCP server from the compiled binary
           # without resolving a JavaScript entrypoint under /$bunfs.
           SIGNET_DREAMING_MCP_SMOKE: "1"

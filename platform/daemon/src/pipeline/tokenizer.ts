@@ -10,10 +10,17 @@
  * vocabulary-load cost once per daemon process.
  */
 
-import { Tiktoken } from "js-tiktoken/lite";
-import cl100k_base from "js-tiktoken/ranks/cl100k_base";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { get_encoding, init } from "tiktoken/init";
 
-const tok = new Tiktoken(cl100k_base);
+const tokenizerWasmOverride = process.env.SIGNET_TIKTOKEN_WASM_PATH?.trim();
+const tokenizerWasmPath = tokenizerWasmOverride || createRequire(import.meta.url).resolve("tiktoken/tiktoken_bg.wasm");
+await init(async (imports) => WebAssembly.instantiate(await readFile(tokenizerWasmPath), imports));
+const tok = get_encoding("cl100k_base");
+const decoder = new TextDecoder("utf-8", { fatal: true });
+
+export { tokenizerWasmPath };
 
 /**
  * Cheap character-based token estimate (~4 chars per token) for budget
@@ -57,5 +64,14 @@ export function truncateToTokens(text: string, limit: number): string {
 	if (limit < 1) return "";
 	const tokens = tok.encode(text);
 	if (tokens.length <= limit) return text;
-	return tok.decode(tokens.slice(0, limit)).trimEnd();
+	let tokenCount = Math.min(limit, tokens.length);
+	while (tokenCount > 0) {
+		try {
+			return decoder.decode(tok.decode(tokens.slice(0, tokenCount))).trimEnd();
+		} catch (error) {
+			if (!(error instanceof TypeError)) throw error;
+			tokenCount -= 1;
+		}
+	}
+	return "";
 }

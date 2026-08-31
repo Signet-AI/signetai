@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
+import { tokenizerWasmPath } from "./tokenizer";
 
 export interface DreamingBacklogTokenEntry {
 	readonly key: string;
@@ -138,7 +139,9 @@ export class DreamingBacklogTokenCache {
 
 	private ensureWorker(): DreamingTokenWorkerLike {
 		if (this.worker !== null) return this.worker;
-		const worker = new Worker(resolveWorkerPath()) as unknown as DreamingTokenWorkerLike;
+		const worker = new Worker(resolveWorkerPath(), {
+			workerData: { tokenizerWasmPath },
+		}) as unknown as DreamingTokenWorkerLike;
 		worker.unref?.();
 		worker.on("message", (message) => {
 			const pending = this.pending.get(message.requestId);
