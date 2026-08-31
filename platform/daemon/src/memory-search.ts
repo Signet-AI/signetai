@@ -1929,7 +1929,7 @@ export async function hybridRecall(
 								filterSql: filter.sql,
 								filterArgs: filter.args,
 							}),
-						{ siteToken: "memory-search.ts:1861" },
+						{ siteToken: "memory-search.ts:1924" },
 					),
 			);
 			for (const [id, score] of candidates) structuredCandidateMap.set(id, score);
@@ -1950,7 +1950,7 @@ export async function hybridRecall(
 									limit: cfg.search.top_k,
 									minScore,
 								}),
-							{ siteToken: "memory-search.ts:1884" },
+							{ siteToken: "memory-search.ts:1947" },
 						),
 				);
 			} catch (e) {
@@ -2077,7 +2077,7 @@ export async function hybridRecall(
 											source_id: string;
 											vector: Buffer | null;
 										}>,
-									{ siteToken: "memory-search.ts:2012" },
+									{ siteToken: "memory-search.ts:2069" },
 								);
 								const qv = queryVecF32;
 								for (const row of embRows) {
@@ -2157,7 +2157,7 @@ export async function hybridRecall(
 					async () =>
 						await getDbAccessor().withReadDbAsync(
 							async (db) => getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs, params.agentId),
-							{ siteToken: "memory-search.ts:2100" },
+							{ siteToken: "memory-search.ts:2158" },
 						),
 				);
 				if (graphResult.graphLinkedIds.size > 0) {
@@ -2240,7 +2240,7 @@ export async function hybridRecall(
 											id: string;
 											traversal_score: number;
 										}>,
-									{ siteToken: "memory-search.ts:2169" },
+									{ siteToken: "memory-search.ts:2221" },
 								);
 
 								for (const row of baseRows) {
@@ -2309,7 +2309,7 @@ export async function hybridRecall(
 								 WHERE id IN (${placeholders})`,
 							)
 							.all(...candidateIds) as Array<{ id: string; content: string }>,
-					{ siteToken: "memory-search.ts:2251" },
+					{ siteToken: "memory-search.ts:2304" },
 				);
 				for (const row of contentRows) {
 					const score = scoreTemporalTopicEvidence(query, row.content);
@@ -2355,7 +2355,7 @@ export async function hybridRecall(
 							query,
 							agentId,
 						),
-					{ siteToken: "memory-search.ts:2297" },
+					{ siteToken: "memory-search.ts:2350" },
 				);
 				for (const [id, score] of structured) {
 					structuredEvidenceMap.set(id, score);
@@ -2391,7 +2391,7 @@ export async function hybridRecall(
 									 WHERE id IN (${placeholders})`,
 								)
 								.all(...coverageIds) as Array<{ id: string; content: string }>,
-						{ siteToken: "memory-search.ts:2333" },
+						{ siteToken: "memory-search.ts:2386" },
 					);
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
@@ -2441,7 +2441,7 @@ export async function hybridRecall(
 						id: string;
 						content: string;
 					}>,
-				{ siteToken: "memory-search.ts:2380" },
+				{ siteToken: "memory-search.ts:2433" },
 			);
 			const contentMap = new Map(contentRows.map((r) => [r.id, r.content]));
 
@@ -2521,7 +2521,7 @@ export async function hybridRecall(
 						content: string;
 						type: string;
 					}>,
-				{ siteToken: "memory-search.ts:2459" },
+				{ siteToken: "memory-search.ts:2512" },
 			);
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
 
@@ -2541,7 +2541,7 @@ export async function hybridRecall(
 							memory_id: string;
 							entity_id: string;
 						}>,
-					{ siteToken: "memory-search.ts:2480" },
+					{ siteToken: "memory-search.ts:2533" },
 				);
 
 				const entityIds = new Set<string>();
@@ -2572,7 +2572,7 @@ export async function hybridRecall(
 								entity_id: string;
 								cnt: number;
 							}>,
-						{ siteToken: "memory-search.ts:2509" },
+						{ siteToken: "memory-search.ts:2562" },
 					);
 					for (const row of degreeRows) {
 						degrees.set(row.entity_id, row.cnt);
@@ -2819,7 +2819,7 @@ export async function hybridRecall(
 						scope: string | null;
 						agent_id: string | null;
 					}>,
-				{ siteToken: "memory-search.ts:2746" },
+				{ siteToken: "memory-search.ts:2799" },
 			),
 	);
 
@@ -2833,7 +2833,7 @@ export async function hybridRecall(
 					content: row.content,
 				}),
 			),
-		{ siteToken: "memory-search.ts:2773" },
+		{ siteToken: "memory-search.ts:2826" },
 	);
 	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
@@ -3074,7 +3074,7 @@ export async function hybridRecall(
 						}),
 					);
 				},
-				{ siteToken: "memory-search.ts:2971" },
+				{ siteToken: "memory-search.ts:3024" },
 			);
 
 			for (const r of supplementary) {
@@ -3205,7 +3205,7 @@ export async function hybridRecall(
 
 						return { eids, structured };
 					},
-					{ siteToken: "memory-search.ts:3071" },
+					{ siteToken: "memory-search.ts:3126" },
 				);
 
 				if (ctx) {
@@ -3234,7 +3234,7 @@ export async function hybridRecall(
 			const cap = Math.max(3, Math.ceil(limit * 0.3));
 			const blocks = await getDbAccessor().withReadDbAsync(
 				async (db) => constructContextBlocks(db, agentId, focalEids, cap),
-				{ siteToken: "memory-search.ts:3180" },
+				{ siteToken: "memory-search.ts:3235" },
 			);
 			const now = new Date().toISOString();
 			const minReal = results.length > 0 ? Math.min(...results.map((r) => r.score)) : 0.5;
