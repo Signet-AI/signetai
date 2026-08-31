@@ -11,6 +11,11 @@ import {
 } from "./embedding-projection-jobs";
 import type { ProjectionWorkerInput } from "./embedding-projection-worker";
 import type { ProjectionResult } from "./umap-projection";
+import {
+	projectionRequestKey,
+	type ProjectionPrincipal,
+	type ProjectionRequest,
+} from "./embedding-projection-contract";
 
 function vectorHex(values: readonly number[]): string {
 	return Buffer.from(new Float32Array(values).buffer).toString("hex");
@@ -62,19 +67,31 @@ afterEach(() => {
 describe("embedding projection worker boundary", () => {
 	test("protects the projection route with recall permission", () => {
 		const source = readFileSync(join(import.meta.dir, "routes/memory-routes.ts"), "utf8");
+		const snapshot = readFileSync(join(import.meta.dir, "embedding-projection-snapshot.ts"), "utf8");
+		const owner = readFileSync(join(import.meta.dir, "db-owner-worker.ts"), "utf8");
 		expect(source).toContain('app.use("/api/embeddings", async (c, next) =>');
 		expect(source).toContain('requirePermission("recall", authConfig)(c, next)');
 		const projectionStart = source.indexOf('app.get("/api/embeddings/projection",');
 		const projectionRoute = source.slice(projectionStart, source.indexOf("// POST /api/documents", projectionStart));
-		expect(projectionRoute).toContain("ownerBatchHandle");
+		expect(projectionRoute).toContain("resolveProjectionPrincipal");
+		expect(projectionRoute).toContain("projectionRequestKey(principal, request)");
+		expect(projectionRoute).toContain('kind: "embedding_projection_snapshot"');
+		expect(projectionRoute).toContain("createDbOwnerClient");
+		expect(projectionRoute).not.toContain("umap_cache");
 		expect(projectionRoute).not.toContain("runWriteTxAsync");
 		const cancellationRoute = source.slice(
 			source.indexOf('app.delete("/api/embeddings/projection/:jobId"'),
 			projectionStart,
 		);
-		expect(cancellationRoute).toContain(
-			'return c.json({ status: "cancelled", jobId: job.jobId, dimensions: job.dimensions });',
-		);
+		expect(cancellationRoute).toContain('projectionJobs.cancel(c.req.param("jobId"), principalResult.principal)');
+		expect(cancellationRoute).toContain("}, 200);");
+		expect(cancellationRoute).toContain("projectionJobResponse(job)");
+		expect(snapshot).toContain("m.agent_id");
+		expect(snapshot).toContain("ORDER BY m.created_at DESC, m.id DESC");
+		expect(snapshot).toContain("substr(e.vector, 1,");
+		expect(snapshot).toContain("PROJECTION_SNAPSHOT_MAX_BYTES");
+		expect(owner).toContain('job.request.kind === "embedding_projection_snapshot"');
+		expect(owner).toContain('db.exec("BEGIN")');
 	});
 
 	test("runs projection in the worker process and returns a bounded result", async () => {
@@ -192,5 +209,24 @@ describe("ProjectionJobManager", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(manager.get(first.jobId)?.status).toBe("ready");
 		expect(peak).toBe(2);
+	});
+
+	test("does not expose or cancel a job across principals", () => {
+		const manager = new ProjectionJobManager(2);
+		const principalA: ProjectionPrincipal = { agentId: "agent-a", project: "project-a" };
+		const principalB: ProjectionPrincipal = { agentId: "agent-b", project: "project-b" };
+		const request: ProjectionRequest = { dimensions: 2, limit: 2, offset: 0, filters: {} };
+		const key = projectionRequestKey(principalA, request);
+		const handle = manager.start(
+			key,
+			2,
+			() => ({ result: new Promise<ProjectionResult>(() => undefined), cancel: () => undefined }),
+			{},
+			principalA,
+		);
+		expect(manager.get(handle.jobId, principalB)).toBeNull();
+		expect(manager.cancel(handle.jobId, principalB)).toBeNull();
+		expect(manager.cancel(handle.jobId, principalA)?.status).toBe("cancelled");
+		manager.reset();
 	});
 });

@@ -126,15 +126,17 @@ A cache hit returns `status: "ready"`. A cache miss is admitted with
 ```
 
 Poll with the same endpoint and `?jobId=...`. Poll responses use
-`accepted`, `running`, or `ready`. Failed jobs report `timeout` (the worker has
-a hard 10-second deadline) or `error`; when the two-job global capacity is
-full, new work returns `429` with `status: "overloaded"`.
+`accepted`, `running`, or `ready`. Failed jobs report `timeout`, `cancelled`,
+or `error` as typed status-resource responses with HTTP `200`; the complete
+snapshot-plus-worker job has a hard 10-second deadline. When the two-job global
+capacity is full, new work returns `429` with `status: "overloaded"`.
 
 Cancel an active job with `DELETE /api/embeddings/projection/:jobId`. A successful
-cancellation returns `200` with `status: "cancelled"`; an unknown job returns
-`404`. Cancellation kills the worker and cancels any in-flight DB-owner read or
-write. Only successful worker results are written to `umap_cache`; cache writes
-are never performed for timeout, cancellation, or failure.
+cancellation returns `200` with `status: "cancelled"`; an unknown or foreign
+job returns `404`. Cancellation kills the worker and closes the disposable
+projection DB owner, including any in-flight snapshot. Successful results are
+kept in a bounded in-memory ready cache; timeout, cancellation, and failure
+never publish cache entries.
 
 **Response (ready)**
 

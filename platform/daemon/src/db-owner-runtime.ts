@@ -149,6 +149,7 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 	}
 	switch (request.kind) {
 		case "initialize":
+		case "embedding_projection_snapshot":
 		case "recall":
 		case "source_snapshot_import":
 		case "source_graph_index":

@@ -1,15 +1,22 @@
+import { randomUUID } from "node:crypto";
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 import type { ProjectionResult } from "./umap-projection";
+import {
+	PROJECTION_JOB_STATUS_TTL_MS,
+	PROJECTION_MAX_IN_FLIGHT,
+	PROJECTION_JOB_DEADLINE_MS,
+	PROJECTION_JOB_STATUS_MAX_ENTRIES,
+	PROJECTION_READY_CACHE_MAX_ENTRIES,
+} from "./embedding-projection-contract";
+export { PROJECTION_MAX_IN_FLIGHT, PROJECTION_MAX_ROWS } from "./embedding-projection-contract";
+export const PROJECTION_DEADLINE_MS = PROJECTION_JOB_DEADLINE_MS;
+export const PROJECTION_JOB_TTL_MS = PROJECTION_JOB_STATUS_TTL_MS;
+import type { ProjectionPrincipal, ProjectionSnapshotDescriptor } from "./embedding-projection-contract";
 import type { ProjectionWorkerInput } from "./embedding-projection-worker";
-
-export const PROJECTION_MAX_ROWS = 1_000;
-export const PROJECTION_MAX_IN_FLIGHT = 2;
-export const PROJECTION_DEADLINE_MS = 10_000;
-export const PROJECTION_JOB_TTL_MS = 60_000;
 
 export class ProjectionWorkerTimeoutError extends Error {
 	readonly code = "PROJECTION_TIMEOUT" as const;
@@ -63,7 +70,7 @@ function killChild(child: ChildProcess): void {
 }
 
 export function runProjectionWorker(
-	input: ProjectionWorkerInput,
+	input: ProjectionWorkerInput | ProjectionSnapshotDescriptor,
 	options: ProjectionWorkerOptions = {},
 ): {
 	readonly result: Promise<ProjectionResult>;
@@ -170,13 +177,21 @@ export interface BoundedProjectionJobOptions {
 		serializedResult: string,
 		control: ProjectionJobControl,
 	) => Promise<void>;
+	readonly cleanup?: (input: ProjectionWorkerInput | ProjectionSnapshotDescriptor) => void | Promise<void>;
+}
+
+export interface ProjectionJobRunHandle {
+	readonly result: Promise<ProjectionResult>;
+	readonly cancel: () => void;
+	/** Resolves after cancellation cleanup has released all child resources. */
+	readonly finished?: Promise<void>;
 }
 
 /** Run snapshot, compute, and optional publication under one killable deadline. */
 export function runBoundedProjectionJob(
-	load: (control: ProjectionJobControl) => Promise<ProjectionWorkerInput>,
+	load: (control: ProjectionJobControl) => Promise<ProjectionWorkerInput | ProjectionSnapshotDescriptor>,
 	options: BoundedProjectionJobOptions = {},
-): { readonly result: Promise<ProjectionResult>; readonly cancel: () => void } {
+): ProjectionJobRunHandle {
 	const deadlineMs = options.deadlineMs ?? PROJECTION_DEADLINE_MS;
 	const deadlineAt = Date.now() + deadlineMs;
 	let cancelled = false;
@@ -184,6 +199,11 @@ export function runBoundedProjectionJob(
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let rejectResult: ((error: unknown) => void) | undefined;
 	let worker: ReturnType<typeof runProjectionWorker> | null = null;
+	let loadedInput: ProjectionWorkerInput | ProjectionSnapshotDescriptor | undefined;
+	let finishResources!: () => void;
+	const finished = new Promise<void>((resolve) => {
+		finishResources = resolve;
+	});
 	const cancellationCallbacks: Array<() => void> = [];
 
 	const control: ProjectionJobControl = {
@@ -225,6 +245,7 @@ export function runBoundedProjectionJob(
 		void (async () => {
 			try {
 				const input = await load(control);
+				loadedInput = input;
 				if (cancelled) throw new ProjectionWorkerCancelledError();
 				const remainingMs = control.remainingMs();
 				if (remainingMs <= 0) throw new ProjectionWorkerTimeoutError(deadlineMs);
@@ -251,12 +272,19 @@ export function runBoundedProjectionJob(
 					return;
 				}
 				finishReject(error);
+			} finally {
+				try {
+					if (loadedInput !== undefined && options.cleanup !== undefined) await options.cleanup(loadedInput);
+				} finally {
+					finishResources();
+				}
 			}
 		})();
 	});
 
 	return {
 		result,
+		finished,
 		cancel: () => {
 			if (settled) return;
 			cancelled = true;
@@ -284,13 +312,13 @@ export interface ProjectionJobStatus {
 }
 
 interface ProjectionJob extends ProjectionJobStatus {
+	readonly principal?: ProjectionPrincipal;
 	readonly cancel: () => void;
 	readonly expiresAt: number;
 }
 
 export class ProjectionJobManager {
 	private readonly jobs = new Map<string, ProjectionJob>();
-	private sequence = 0;
 	private active = 0;
 
 	constructor(private readonly maxInFlight = PROJECTION_MAX_IN_FLIGHT) {}
@@ -298,14 +326,15 @@ export class ProjectionJobManager {
 	start(
 		key: string,
 		dimensions: 2 | 3,
-		run: () => { readonly result: Promise<ProjectionResult>; readonly cancel: () => void },
+		run: () => ProjectionJobRunHandle,
 		metadata: Pick<ProjectionJobStatus, "total" | "count" | "limit" | "offset" | "hasMore" | "sampled"> = {},
+		principal?: ProjectionPrincipal,
 	): ProjectionJobStatus {
 		this.prune();
 		const existing = this.jobs.get(key);
 		if (existing !== undefined && (existing.status === "accepted" || existing.status === "running")) return existing;
 		if (this.active >= this.maxInFlight) throw new ProjectionAdmissionError();
-		const jobId = `projection-${Date.now()}-${this.sequence++}`;
+		const jobId = `projection-${randomUUID()}`;
 		const started: ProjectionJob = {
 			jobId,
 			key,
@@ -313,12 +342,13 @@ export class ProjectionJobManager {
 			createdAt: new Date().toISOString(),
 			dimensions,
 			...metadata,
+			...(principal === undefined ? {} : { principal }),
 			cancel: () => undefined,
 			expiresAt: Date.now() + PROJECTION_JOB_TTL_MS,
 		};
 		this.jobs.set(key, started);
 		this.active += 1;
-		let handle: { readonly result: Promise<ProjectionResult>; readonly cancel: () => void };
+		let handle: ProjectionJobRunHandle;
 		try {
 			handle = run();
 		} catch (error) {
@@ -333,38 +363,68 @@ export class ProjectionJobManager {
 		}
 		const running = { ...started, status: "running" as const, cancel: handle.cancel };
 		this.jobs.set(key, running);
+		const finished =
+			handle.finished ??
+			handle.result.then(
+				() => undefined,
+				() => undefined,
+			);
 		void handle.result.then(
 			(result) => {
-				this.active = Math.max(0, this.active - 1);
-				const current = this.jobs.get(key);
-				if (current?.jobId !== jobId) return;
-				this.jobs.set(key, { ...current, status: "ready", result, expiresAt: Date.now() + PROJECTION_JOB_TTL_MS });
+				void finished.then(() => {
+					this.active = Math.max(0, this.active - 1);
+					const current = this.jobs.get(key);
+					if (current?.jobId !== jobId) return;
+					this.jobs.set(key, { ...current, status: "ready", result, expiresAt: Date.now() + PROJECTION_JOB_TTL_MS });
+				});
 			},
 			(error: unknown) => {
-				this.active = Math.max(0, this.active - 1);
-				const current = this.jobs.get(key);
-				if (current?.jobId !== jobId) return;
-				const status: ProjectionJobState =
-					error instanceof ProjectionWorkerTimeoutError
-						? "timeout"
-						: error instanceof ProjectionWorkerCancelledError
-							? "cancelled"
-							: "error";
-				this.jobs.set(key, {
-					...current,
-					status,
-					message: error instanceof Error ? error.message : String(error),
-					expiresAt: Date.now() + PROJECTION_JOB_TTL_MS,
+				void finished.then(() => {
+					this.active = Math.max(0, this.active - 1);
+					const current = this.jobs.get(key);
+					if (current?.jobId !== jobId) return;
+					const status: ProjectionJobState =
+						error instanceof ProjectionWorkerTimeoutError
+							? "timeout"
+							: error instanceof ProjectionWorkerCancelledError
+								? "cancelled"
+								: "error";
+					this.jobs.set(key, {
+						...current,
+						status,
+						message: error instanceof Error ? error.message : String(error),
+						expiresAt: Date.now() + PROJECTION_JOB_TTL_MS,
+					});
 				});
 			},
 		);
 		return running;
 	}
 
-	get(jobId: string): ProjectionJobStatus | null {
+	get(jobId: string, principal?: ProjectionPrincipal): ProjectionJobStatus | null {
 		this.prune();
-		for (const job of this.jobs.values()) if (job.jobId === jobId) return job;
+		for (const job of this.jobs.values()) {
+			if (job.jobId !== jobId) continue;
+			if (
+				principal !== undefined &&
+				(job.principal?.agentId !== principal.agentId || job.principal?.project !== principal.project)
+			)
+				return null;
+			return job;
+		}
 		return null;
+	}
+
+	getByKey(key: string, principal?: ProjectionPrincipal): ProjectionJobStatus | null {
+		this.prune();
+		const job = this.jobs.get(key);
+		if (job === undefined) return null;
+		if (
+			principal !== undefined &&
+			(job.principal?.agentId !== principal.agentId || job.principal?.project !== principal.project)
+		)
+			return null;
+		return job;
 	}
 
 	updateMetadata(
@@ -386,9 +446,14 @@ export class ProjectionJobManager {
 		if (job !== undefined) this.jobs.set(key, { ...job, ...metadata });
 	}
 
-	cancel(jobId: string): ProjectionJobStatus | null {
+	cancel(jobId: string, principal?: ProjectionPrincipal): ProjectionJobStatus | null {
 		for (const job of this.jobs.values()) {
 			if (job.jobId !== jobId) continue;
+			if (
+				principal !== undefined &&
+				(job.principal?.agentId !== principal.agentId || job.principal?.project !== principal.project)
+			)
+				return null;
 			if (job.status === "accepted" || job.status === "running") {
 				job.cancel();
 				const cancelled = { ...job, status: "cancelled" as const, message: "Embedding projection was cancelled" };
@@ -409,5 +474,16 @@ export class ProjectionJobManager {
 	private prune(): void {
 		const now = Date.now();
 		for (const [key, job] of this.jobs) if (job.expiresAt <= now) this.jobs.delete(key);
+		const terminal = [...this.jobs.entries()].filter(([, job]) => job.status === "ready");
+		while (terminal.length > PROJECTION_READY_CACHE_MAX_ENTRIES) {
+			const oldest = terminal.shift();
+			if (oldest !== undefined) this.jobs.delete(oldest[0]);
+		}
+		const statuses = [...this.jobs.entries()];
+		while (statuses.length > PROJECTION_JOB_STATUS_MAX_ENTRIES) {
+			const oldest = statuses.shift();
+			if (oldest !== undefined && oldest[1].status !== "accepted" && oldest[1].status !== "running")
+				this.jobs.delete(oldest[0]);
+		}
 	}
 }
