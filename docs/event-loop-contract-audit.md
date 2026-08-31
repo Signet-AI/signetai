@@ -4,23 +4,23 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 853 sites
+- Exact ledger inventory: 864 sites
 - Synchronous `withWriteTx()` sites: 65
 - Synchronous `withReadDb()` sites: 99
-- Async-named DB sites: 173
-- Async-named ON-PARENT DB sites: 171
+- Async-named DB sites: 184
+- Async-named ON-PARENT DB sites: 182
 - Async-named OFF-PARENT DB sites: 2
 - Synchronous filesystem/process sites: 515
 - Compile-visible legacy DB sites remaining: 164
   - `withWriteTx`: 65
   - `withReadDb`: 99
 
-The 853-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 65 synchronous writes, 99 synchronous reads, and 164 async-named DB sites are the complete database-call inventory; 164 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 171 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 864-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 65 synchronous writes, 99 synchronous reads, and 184 async-named DB sites are the complete database-call inventory; 164 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 182 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 361
-- ON-PARENT callback execution: 359
+- Database accessor sites classified: 348
+- ON-PARENT callback execution: 346
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -121,21 +121,21 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `memory-search-telemetry.ts:321` (withReadDbAsync)
 - `memory-search.ts:1924` (withReadDbAsync)
 - `memory-search.ts:1947` (withReadDbAsync)
-- `memory-search.ts:2069` (withReadDbAsync)
-- `memory-search.ts:2158` (withReadDbAsync)
-- `memory-search.ts:2221` (withReadDbAsync)
-- `memory-search.ts:2304` (withReadDbAsync)
-- `memory-search.ts:2350` (withReadDbAsync)
-- `memory-search.ts:2386` (withReadDbAsync)
-- `memory-search.ts:2433` (withReadDbAsync)
-- `memory-search.ts:2512` (withReadDbAsync)
-- `memory-search.ts:2533` (withReadDbAsync)
-- `memory-search.ts:2562` (withReadDbAsync)
-- `memory-search.ts:2799` (withReadDbAsync)
-- `memory-search.ts:2826` (withReadDbAsync)
-- `memory-search.ts:3024` (withReadDbAsync)
-- `memory-search.ts:3126` (withReadDbAsync)
-- `memory-search.ts:3235` (withReadDbAsync)
+- `memory-search.ts:2071` (withReadDbAsync)
+- `memory-search.ts:2165` (withReadDbAsync)
+- `memory-search.ts:2230` (withReadDbAsync)
+- `memory-search.ts:2318` (withReadDbAsync)
+- `memory-search.ts:2364` (withReadDbAsync)
+- `memory-search.ts:2400` (withReadDbAsync)
+- `memory-search.ts:2447` (withReadDbAsync)
+- `memory-search.ts:2526` (withReadDbAsync)
+- `memory-search.ts:2547` (withReadDbAsync)
+- `memory-search.ts:2576` (withReadDbAsync)
+- `memory-search.ts:2813` (withReadDbAsync)
+- `memory-search.ts:2840` (withReadDbAsync)
+- `memory-search.ts:3038` (withReadDbAsync)
+- `memory-search.ts:3140` (withReadDbAsync)
+- `memory-search.ts:3249` (withReadDbAsync)
 - `obsidian-source-embeddings.ts:629` (withReadDb)
 - `obsidian-source-embeddings.ts:665` (withWriteTx)
 - `obsidian-source-embeddings.ts:681` (withReadDb)
@@ -194,19 +194,10 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/dreaming-worker.ts:148` (withReadDbAsync)
 - `pipeline/dreaming-worker.ts:227` (withReadDbAsync)
 - `pipeline/dreaming-worker.ts:247` (withReadDbAsync)
-- `pipeline/graph-traversal.ts:99` (withReadDbAsync)
+- `pipeline/graph-traversal.ts:101` (withReadDbAsync)
 - `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:346` (withReadDbAsync)
 - `db:maintenance.dead-memory-count.read` (withReadDbAsync)
-- `pipeline/prospective-index.ts:284` (withWriteDbAsync)
-- `pipeline/prospective-index.ts:300` (withWriteDbAsync)
-- `pipeline/prospective-index.ts:336` (withWriteTxAsync)
-- `pipeline/prospective-index.ts:394` (withWriteTxAsync)
-- `pipeline/prospective-index.ts:412` (withWriteTxAsync)
-- `pipeline/prospective-index.ts:436` (withWriteTxAsync)
-- `pipeline/prospective-index.ts:459` (withWriteTxAsync)
-- `pipeline/prospective-index.ts:485` (withWriteTxAsync)
-- `pipeline/prospective-index.ts:590` (withWriteTxAsync)
 - `pipeline/reflection-worker.ts:368` (withReadDb)
 - `pipeline/reflection-worker.ts:401` (withReadDb)
 - `pipeline/reflection-worker.ts:463` (withWriteTx)
@@ -316,10 +307,6 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/telemetry-routes.ts:265` (withReadDb)
 - `routes/utils.ts:437` (withReadDb)
 - `routes/utils.ts:525` (withReadDb)
-- `scheduler/worker.ts:107` (withWriteTxAsync)
-- `scheduler/worker.ts:131` (withReadDbAsync)
-- `scheduler/worker.ts:202` (withWriteTxAsync)
-- `scheduler/worker.ts:291` (withWriteTxAsync)
 - `session-checkpoints.ts:112` (withWriteTxAsync)
 - `session-checkpoints.ts:180` (withWriteTx)
 - `session-checkpoints.ts:297` (withReadDb)
@@ -390,8 +377,8 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 
 ### OFF-PARENT sites
 
-- `db-owner-worker.ts:876` (withReadDbAsync)
-- `db-owner-worker.ts:909` (withReadDbAsync)
+- `db-owner-worker.ts:885` (withReadDbAsync)
+- `db-owner-worker.ts:918` (withReadDbAsync)
 
 ## A3 Slice 2 migration notes
 

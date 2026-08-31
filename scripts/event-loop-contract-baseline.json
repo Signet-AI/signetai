@@ -2127,105 +2127,105 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2069,
+      "line": 2071,
       "api": "withReadDbAsync",
-      "source": "const embRows = await getDbAccessor().withReadDbAsync(",
+      "source": "embRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2158,
+      "line": 2165,
       "api": "withReadDbAsync",
       "source": "await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2221,
+      "line": 2230,
       "api": "withReadDbAsync",
-      "source": "const baseRows = await getDbAccessor().withReadDbAsync(",
+      "source": "baseRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2304,
+      "line": 2318,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2350,
+      "line": 2364,
       "api": "withReadDbAsync",
       "source": "const structured = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2386,
+      "line": 2400,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2433,
+      "line": 2447,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2512,
+      "line": 2526,
       "api": "withReadDbAsync",
       "source": "const dampenRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2533,
+      "line": 2547,
       "api": "withReadDbAsync",
       "source": "const links = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2562,
+      "line": 2576,
       "api": "withReadDbAsync",
       "source": "const degreeRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2799,
+      "line": 2813,
       "api": "withReadDbAsync",
       "source": "await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 2826,
+      "line": 2840,
       "api": "withReadDbAsync",
       "source": "const safeRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 3024,
+      "line": 3038,
       "api": "withReadDbAsync",
       "source": "const supplementary = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 3126,
+      "line": 3140,
       "api": "withReadDbAsync",
       "source": "const ctx = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "memory-search.ts",
-      "line": 3235,
+      "line": 3249,
       "api": "withReadDbAsync",
       "source": "const blocks = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
@@ -2869,7 +2869,7 @@
     },
     {
       "path": "pipeline/graph-traversal.ts",
-      "line": 99,
+      "line": 101,
       "api": "withReadDbAsync",
       "source": "await withReadDbAsync(source, (db) => db.prepare(sql).all(...params) as ReadonlyArray<Row>);",
       "category": "hot-path"
