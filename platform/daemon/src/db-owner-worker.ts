@@ -323,6 +323,19 @@ export function runDbOwnerWorker(): void {
 		}
 		return withBusyRetry(() => {
 			const results = statements.map((statement) => executeStatement({ ...statement, transactional: false }, context));
+			for (let i = 0; i < results.length; i++) {
+				const statement = statements[i];
+				const result = results[i];
+				if (
+					statement?.requireChanges === true &&
+					typeof result === "object" &&
+					result !== null &&
+					"changes" in result &&
+					result.changes === 0
+				) {
+					throw new Error("DB owner transaction precondition changed zero rows");
+				}
+			}
 			return enforceResultLimit({ sql: "DB_OWNER_TRANSACTION", result: "all" }, results) as readonly unknown[];
 		}, context);
 	}
