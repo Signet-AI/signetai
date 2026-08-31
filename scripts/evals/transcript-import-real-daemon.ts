@@ -285,7 +285,7 @@ try {
 	record(importedSessions === importedIds, "no-duplicate-session-record-ids", { importedSessions, importedIds });
 	const foreign = dbOne("SELECT COUNT(*) count FROM session_transcripts WHERE agent_id = ?", [foreignAgent]).count;
 	record(foreign === 0, "embedded-agent-does-not-escape-scope", foreign);
-	const old = dbOne("SELECT COUNT(*) count FROM session_transcripts WHERE agent_id = ? AND timestamp LIKE '2020-%'", [
+	const old = dbOne("SELECT COUNT(*) count FROM session_transcripts WHERE agent_id = ? AND created_at LIKE '2020-%'", [
 		agent,
 	]).count;
 	record(old > 0, "historical-timestamps-preserved", old);
