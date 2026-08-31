@@ -1,0 +1,112 @@
+import { expect, it, beforeEach, afterEach } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Hono } from "hono";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { registerTranscriptImportRoutes } from "./transcript-import-routes";
+
+let dir = "";
+let oldPath: string | undefined;
+let oldAgent: string | undefined;
+
+beforeEach(() => {
+	dir = mkdtempSync(join(tmpdir(), "signet-transcript-routes-"));
+	mkdirSync(join(dir, "memory"), { recursive: true });
+	oldPath = process.env.SIGNET_PATH;
+	oldAgent = process.env.SIGNET_AGENT_ID;
+	process.env.SIGNET_PATH = dir;
+	process.env.SIGNET_AGENT_ID = "transcript-test-agent";
+	closeDbAccessor();
+	initDbAccessor(join(dir, "memory", "memories.db"));
+});
+
+afterEach(() => {
+	closeDbAccessor();
+	if (oldPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+	else process.env.SIGNET_PATH = oldPath;
+	if (oldAgent === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+	else process.env.SIGNET_AGENT_ID = oldAgent;
+	rmSync(dir, { recursive: true, force: true });
+});
+
+function app(): Hono {
+	const instance = new Hono();
+	registerTranscriptImportRoutes(instance);
+	return instance;
+}
+
+it("serializes concurrent uploads for one reserved file without leaving a reservation orphan", async () => {
+	const created = await app().request("/api/sources/imports", {
+		method: "POST",
+		body: JSON.stringify({ files: [{ name: "conversation.jsonl" }] }),
+		headers: { "content-type": "application/json" },
+	});
+	expect(created.status).toBe(201);
+	const job = (await created.json()) as { jobId: string; files: Array<{ id: string }> };
+	const fileId = job.files[0]?.id as string;
+	const payload =
+		'{"source":"signet","id":"one","harness":"h","agent_id":"embedded","session_key":"one","timestamp":"2024-01-01T00:00:00Z","message_count":1,"messages":[{"role":"user","content":"hello"}]}\n';
+	const slow = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			controller.enqueue(new TextEncoder().encode(payload));
+			controller.close();
+		},
+	});
+	const first = app().request(`/api/sources/imports/${job.jobId}/files/${fileId}`, {
+		method: "PUT",
+		body: slow,
+	} as RequestInit);
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	const second = await app().request(`/api/sources/imports/${job.jobId}/files/${fileId}`, {
+		method: "PUT",
+		body: payload,
+	} as RequestInit);
+	const firstResponse = await first;
+	expect([201, 409]).toContain(firstResponse.status);
+	expect([201, 409]).toContain(second.status);
+	expect(new Set([firstResponse.status, second.status])).toEqual(new Set([201, 409]));
+	const rows = getDbAccessor().withReadDb(
+		(db) =>
+			db.prepare("SELECT source_id, managed_path, state FROM source_import_files WHERE id = ?").all(fileId) as Array<{
+				source_id: string;
+				managed_path: string;
+				state: string;
+			}>,
+	);
+	expect(rows).toHaveLength(1);
+	expect(rows[0]).toMatchObject({ state: "ready" });
+	expect(rows[0]?.source_id).not.toStartWith("reserved:");
+	expect(rows[0]?.managed_path).toContain(`imports/transcripts/`);
+	expect(rows[0]?.managed_path).toContain(fileId);
+});
+
+it("retry increments generation and returns recoverable rejected records to pending", async () => {
+	const created = await app().request("/api/sources/imports", {
+		method: "POST",
+		body: JSON.stringify({ files: [{ name: "conversation.jsonl" }] }),
+		headers: { "content-type": "application/json" },
+	});
+	const job = (await created.json()) as { jobId: string; files: Array<{ id: string }> };
+	const fileId = job.files[0]?.id as string;
+	await getDbAccessor().withWriteTxAsync((db) => {
+		db.prepare("UPDATE source_import_jobs SET state = 'running', lease_token = 'old-lease' WHERE id = ?").run(
+			job.jobId,
+		);
+		db.prepare("UPDATE source_import_files SET state = 'completed' WHERE id = ?").run(fileId);
+		db.prepare(
+			"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status, rejection_code) VALUES ('retry-record', ?, ?, 'source', 'transcript-test-agent', 1, 1, 0, 1, 'hash', 'rejected', 'provider_error')",
+		).run(job.jobId, fileId);
+	});
+	const response = await app().request(`/api/sources/imports/${job.jobId}/retry`, { method: "POST" });
+	expect(response.status).toBe(200);
+	const row = await getDbAccessor().withReadDbAsync((db) =>
+		db.prepare("SELECT generation, lease_token, control_request FROM source_import_jobs WHERE id = ?").get(job.jobId),
+	);
+	const record = await getDbAccessor().withReadDbAsync((db) =>
+		db.prepare("SELECT status, rejection_code FROM source_import_records WHERE id = 'retry-record'").get(),
+	);
+	expect(row).toEqual({ generation: 1, lease_token: null, control_request: null });
+	expect(record).toEqual({ status: "pending", rejection_code: null });
+});

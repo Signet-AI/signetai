@@ -288,6 +288,96 @@ test("filesystem purge removes only the selected agent source and staged data", 
 	}
 });
 
+test("filesystem purge removes the ledger-reserved managed upload path", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-managed-purge-"));
+	try {
+		const managedPath = "imports/transcripts/job/file/source.jsonl";
+		await mkdir(join(root, "imports", "transcripts", "job", "file"), { recursive: true });
+		await writeFile(join(root, managedPath), "staged");
+		await purgeTranscriptImportFilesystem(root, "import:job:file", "agent-a", [managedPath]);
+		expect(await Bun.file(join(root, managedPath)).exists()).toBe(false);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("active pause and cancel controls clear the lease at the checkpoint", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-controls-"));
+	const oldOwner = process.env.SIGNET_DB_OWNER_WORKER;
+	process.env.SIGNET_DB_OWNER_WORKER = "1";
+	closeDbAccessor();
+	await mkdir(join(root, "memory"), { recursive: true });
+	initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
+	const store = createOwnerTranscriptImportStore();
+	try {
+		for (const [jobId, control, expectedState] of [
+			["pause-job", "pause", "paused"],
+			["cancel-job", "cancel", "cancelled"],
+		] as const) {
+			await createJob(store, { jobId, agentId: "agent-a" });
+			await getDbAccessor().withWriteTxAsync((db) =>
+				db
+					.prepare(
+						"UPDATE source_import_jobs SET state = 'running', lease_token = 'lease-a', control_request = ? WHERE id = ?",
+					)
+					.run(control, jobId),
+			);
+			await store.run({
+				kind: "source_import",
+				operation: "control",
+				agentId: "agent-a",
+				jobId,
+				payload: { apply: true, generation: 0, leaseToken: "lease-a" },
+			});
+			const row = await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT state, lease_token FROM source_import_jobs WHERE id = ?").get(jobId),
+			);
+			expect(row).toEqual({ state: expectedState, lease_token: null });
+		}
+	} finally {
+		closeDbAccessor();
+		if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+		else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("stale finalize cannot complete a job after its lease generation changes", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-stale-finalize-"));
+	const oldOwner = process.env.SIGNET_DB_OWNER_WORKER;
+	process.env.SIGNET_DB_OWNER_WORKER = "1";
+	closeDbAccessor();
+	await mkdir(join(root, "memory"), { recursive: true });
+	initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
+	const store = createOwnerTranscriptImportStore();
+	try {
+		await createJob(store, { jobId: "stale-job", agentId: "agent-a" });
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db
+				.prepare(
+					"UPDATE source_import_jobs SET state = 'running', generation = 1, lease_token = 'new-lease' WHERE id = 'stale-job'",
+				)
+				.run(),
+		);
+		await store.run({
+			kind: "source_import",
+			operation: "finalize",
+			agentId: "agent-a",
+			jobId: "stale-job",
+			payload: { generation: 0, leaseToken: "old-lease" },
+		});
+		const row = await getDbAccessor().withReadDbAsync((db) =>
+			db.prepare("SELECT state, generation, lease_token FROM source_import_jobs WHERE id = 'stale-job'").get(),
+		);
+		expect(row).toEqual({ state: "running", generation: 1, lease_token: "new-lease" });
+	} finally {
+		closeDbAccessor();
+		if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+		else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("source purge audit attempts retain source identity after import ledgers are removed", async () => {
 	const root = await mkdtemp(join(tmpdir(), "signet-import-audit-tombstone-"));
 	const dbPath = join(root, "memory", "memories.db");
