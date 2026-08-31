@@ -12,15 +12,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	closeDbAccessor,
-	type DbAccessor,
-	getDbAccessor,
-	initDbAccessor,
-	MAX_READ_CONNECTIONS,
-	type ReadAdmissionOptions,
-	type ReadDb,
-} from "./db-accessor";
+import { closeDbAccessor, getDbAccessor, initDbAccessor, MAX_READ_CONNECTIONS } from "./db-accessor";
 import {
 	getDependenciesFrom,
 	getDependenciesTo,
@@ -572,10 +564,9 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		seedEntity("e-hub", "Hub");
 
 		const accessor = getDbAccessor();
-		// Warm the owner process so startup latency is outside the lease-order
-		// assertion. Wall time below is only a deadlock backstop.
-		await getKnowledgeEntityDetail(accessor, "e-hub", "default");
-
+		// The live base routes getKnowledgeEntityDetail through the DB owner.
+		// Keep this synchronization proof at the accessor boundary where the
+		// lease contract is implemented, rather than wrapping an unused seam.
 		let entered = 0;
 		let releaseCallbacks = (): void => {};
 		let resolveAllEntered = (): void => {};
@@ -585,27 +576,30 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		const allEntered = new Promise<void>((resolve) => {
 			resolveAllEntered = resolve;
 		});
-		const gatedAccessor = {
-			...accessor,
-			async withReadDbAsync<T>(fn: (db: ReadDb) => T | Promise<T>, options?: ReadAdmissionOptions): Promise<T> {
-				return await accessor.withReadDbAsync(async (db) => {
-					const result = fn(db);
+		const requests = Array.from({ length: MAX_READ_CONNECTIONS }, (_, index) =>
+			accessor.withReadDbAsync(
+				async (db) => {
+					// This is the synchronous detail query in the saturated request.
+					db.prepare("SELECT ? AS entity_id").get(index);
 					entered += 1;
 					if (entered === MAX_READ_CONNECTIONS) resolveAllEntered();
 					await callbackGate;
-					return await result;
-				}, options);
-			},
-		} satisfies DbAccessor;
-		const requests = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
-			getKnowledgeEntityDetail(gatedAccessor, "e-hub", "default"),
+					// The structural-density query must be able to acquire a new
+					// lease while the outer callback continuation is still pending.
+					return await accessor.withReadDbAsync((innerDb) => innerDb.prepare("SELECT 1 AS structural_density").get(), {
+						operation: "db:knowledge.structural-density.read",
+					});
+				},
+				{ operation: "db:knowledge.entity-detail.read" },
+			),
 		);
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let pressureVerified = false;
 		try {
 			await Promise.race([
 				allEntered,
 				new Promise<never>((_, reject) => {
-					timer = setTimeout(() => reject(new Error("detail callbacks did not saturate the read pool")), 10_000);
+					timer = setTimeout(() => reject(new Error("detail callbacks did not saturate the read pool")), 2_000);
 				}),
 			]);
 			expect(accessor.getReadPressure()).toMatchObject({
@@ -613,9 +607,12 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 				queued: 0,
 				maxConnections: MAX_READ_CONNECTIONS,
 			});
+			pressureVerified = true;
 		} finally {
 			if (timer !== undefined) clearTimeout(timer);
 			releaseCallbacks();
+			if (!pressureVerified) accessor.close();
+			await Promise.allSettled(requests);
 		}
 		await expect(Promise.all(requests)).resolves.toHaveLength(MAX_READ_CONNECTIONS);
 	});
