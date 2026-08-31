@@ -234,7 +234,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 	};
 }
 
-async function appendCanonical(
+export async function appendCanonical(
 	root: string,
 	agentId: string,
 	harness: string,
@@ -251,14 +251,24 @@ async function appendCanonical(
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 			try {
-				await access(join(lock, "owner"));
+				const owner = (await import("node:fs/promises")).readFile(join(lock, "owner"), "utf8");
+				const ownerPid = Number((await owner).trim());
+				if (Number.isInteger(ownerPid) && ownerPid > 0) {
+					try {
+						process.kill(ownerPid, 0);
+						await new Promise((resolve) => setTimeout(resolve, 5));
+						continue;
+					} catch (probeError) {
+						if ((probeError as NodeJS.ErrnoException).code !== "ESRCH") throw probeError;
+					}
+				}
+				await rm(lock, { recursive: true, force: true });
 			} catch {
-				// A process killed after mkdir and before owner metadata is a stale
-				// lock. Only this worker writes these per-harness lock directories.
+				// A process killed after mkdir or while holding the lock leaves a
+				// stale directory. Only this worker writes these per-harness locks.
 				await rm(lock, { recursive: true, force: true });
 				continue;
 			}
-			await new Promise((resolve) => setTimeout(resolve, 5));
 		}
 	}
 	try {
