@@ -629,7 +629,7 @@ export async function indexObsidianSourceEmbeddings(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const embeddingConfig = getDbAccessor().withReadDb(
 		(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-		"obsidian-source-embeddings.ts:629",
+		"obsidian-source-embeddings.ts:630",
 	);
 	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
@@ -671,7 +671,7 @@ export async function indexObsidianSourceEmbeddings(
 						sourceId: existingChunk.id,
 						content: chunk.chunkText,
 					}),
-				"obsidian-source-embeddings.ts:665",
+				"obsidian-source-embeddings.ts:666",
 			);
 			skipped++;
 			await yielder();
@@ -681,7 +681,7 @@ export async function indexObsidianSourceEmbeddings(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const writeConfig = getDbAccessor().withReadDb(
 			(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-			"obsidian-source-embeddings.ts:681",
+			"obsidian-source-embeddings.ts:682",
 		);
 		let failureCause: PipelineCauseFamily = "provider_unavailable";
 		const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
@@ -760,7 +760,7 @@ export async function indexObsidianSourceEmbeddings(
 				| undefined;
 			syncVecInsert(db, stored?.id ?? embId, vector);
 			return true;
-		}, "obsidian-source-embeddings.ts:715");
+		}, "obsidian-source-embeddings.ts:716");
 		if (!stored) {
 			skipped++;
 			await yielder();
@@ -798,7 +798,7 @@ export async function indexObsidianSourceEmbeddings(
 				const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
 				for (const id of staleIds) stmt.run(id);
 			}
-		}, "obsidian-source-embeddings.ts:776");
+		}, "obsidian-source-embeddings.ts:777");
 
 	return {
 		chunks: chunks.length,
@@ -827,7 +827,7 @@ function existingChunkEmbedding(agentId: string, chunkId: string): { id: string;
 					"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
 				)
 				.get(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
-		"obsidian-source-embeddings.ts:822",
+		"obsidian-source-embeddings.ts:823",
 	) as { id: string; content_hash: string } | undefined;
 	return row ?? null;
 }
@@ -868,7 +868,7 @@ function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): numb
 			changes += result.changes;
 		}
 		return changes;
-	}, "obsidian-source-embeddings.ts:845");
+	}, "obsidian-source-embeddings.ts:846");
 }
 
 function prefixUpperBound(prefix: string): string {

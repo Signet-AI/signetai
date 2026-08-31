@@ -823,21 +823,21 @@
     },
     {
       "path": "db-owner-client.ts",
-      "line": 286,
+      "line": 288,
       "api": "unlinkSync",
       "source": "unlinkSync(cancellationRegistryPath);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-client.ts",
-      "line": 294,
+      "line": 296,
       "api": "appendFileSync",
       "source": "appendFileSync(cancellationRegistryPath, `${jobId}\\n`);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-client.ts",
-      "line": 816,
+      "line": 827,
       "api": "unlinkSync",
       "source": "unlinkSync(cancellationRegistryPath);",
       "category": "hot-path"
@@ -879,7 +879,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 915,
+      "line": 904,
       "api": "withReadDbAsync",
       "source": "const embedding = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -887,7 +887,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 948,
+      "line": 937,
       "api": "withReadDbAsync",
       "source": "return await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -895,21 +895,21 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 958,
+      "line": 947,
       "api": "writeFileSync",
       "source": "writeFileSync(startedMarker, \"started\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 959,
+      "line": 948,
       "api": "existsSync",
       "source": "while (!existsSync(releaseMarker)) await new Promise((resolve) => setTimeout(resolve, 5));",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1053,
+      "line": 1042,
       "api": "writeFileSync",
       "source": "if (activeFile) writeFileSync(activeFile, `${Date.now()}\\n`);",
       "category": "hot-path"
@@ -2318,49 +2318,49 @@
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 629,
+      "line": 630,
       "api": "withReadDb",
       "source": "const embeddingConfig = getDbAccessor().withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 665,
+      "line": 666,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx(",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 681,
+      "line": 682,
       "api": "withReadDb",
       "source": "const writeConfig = getDbAccessor().withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 715,
+      "line": 716,
       "api": "withWriteTx",
       "source": "const stored = getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 776,
+      "line": 777,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 822,
+      "line": 823,
       "api": "withReadDb",
       "source": "const row = getDbAccessor().withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-embeddings.ts",
-      "line": 845,
+      "line": 846,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"
