@@ -218,8 +218,8 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 			return (await dbOwnerTransaction(
 				[
 					{
-						sql: "UPDATE source_import_jobs SET lease_token = NULL, lease_expires_at = NULL, state = CASE WHEN state = 'running' THEN 'queued' ELSE state END, updated_at = datetime('now') WHERE id = ? AND agent_id = ?",
-						params: [operation.jobId, operation.agentId],
+						sql: "UPDATE source_import_jobs SET lease_token = NULL, lease_expires_at = NULL, state = CASE WHEN state IN ('running','inventorying') THEN 'queued' ELSE state END, updated_at = datetime('now') WHERE agent_id = ? AND (? = '*' OR id = ?)",
+						params: [operation.agentId, operation.jobId, operation.jobId],
 						result: "run",
 					},
 				],
