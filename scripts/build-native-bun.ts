@@ -43,6 +43,30 @@ function runBunBuild(args: readonly string[]): void {
 	}
 }
 
+function assertNoUnbundledRelativeRequires(path: string, worker: string): void {
+	const source = readFileSync(path, "utf8");
+	const specifiers = new Set<string>();
+	const pattern = /(?:__)?require[A-Za-z0-9_$]*(?:\.resolve)?\(\s*["'](\.{1,2}[/\\][^"']+)["']\s*\)/g;
+	for (const match of source.matchAll(pattern)) {
+		const specifier = match[1];
+		const normalized = specifier?.replaceAll("\\", "/");
+		// Bun keeps bundled CommonJS modules in an internal registry keyed by
+		// their node_modules path; those calls are not filesystem lookups.
+		if (
+			specifier !== undefined &&
+			normalized !== undefined &&
+			!normalized.endsWith(".node") &&
+			!normalized.includes("/node_modules/")
+		)
+			specifiers.add(specifier);
+	}
+	if (specifiers.size > 0) {
+		throw new Error(
+			`Native worker ${worker} contains unbundled relative require(s): ${[...specifiers].sort().join(", ")}`,
+		);
+	}
+}
+
 function compileTargetFor(targetPlatform: string): string {
 	switch (targetPlatform) {
 		case "linux-x64":
@@ -136,14 +160,9 @@ const nativeAddonAssets = (() => {
 })();
 
 for (const [name, entry] of workerEntries) {
-	runBunBuild([
-		"--target=bun",
-		"--format=esm",
-		"--outfile",
-		join(workerDir, `${name}.mjs`),
-		...nativeExternalArgs,
-		entry,
-	]);
+	const output = join(workerDir, `${name}.mjs`);
+	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeExternalArgs, entry]);
+	assertNoUnbundledRelativeRequires(output, name);
 }
 
 const dashboardAssets = walkFiles(dashboardDir).map((path) => {

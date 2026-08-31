@@ -463,11 +463,11 @@ export function runDbOwnerWorker(): void {
 		return readDreamingEvidenceSourceInDb(db as never, request.input);
 	}
 
-	function executeDreamingPassFinalize(
+	async function executeDreamingPassFinalize(
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_pass_finalize" }>,
 		context: JobExecutionContext,
-	): unknown {
-		const { finalizeDreamingPassInDb } = require("./pipeline/dreaming");
+	): Promise<null> {
+		const { finalizeDreamingPassInDb } = await import("./pipeline/dreaming");
 		return withBusyRetry(() => {
 			finalizeDreamingPassInDb(db as never, request.input);
 			return null;

@@ -24,6 +24,8 @@ on:
       - "platform/daemon/src/native-runtime-assets.ts"
       - "scripts/native-dreaming-mcp-smoke.test.ts"
       - "scripts/native-embedding-runtime-smoke.test.ts"
+      - "scripts/native-dreaming-finalize-smoke.test.ts"
+      - "scripts/native-worker-bundle-contract.test.ts"
       - "scripts/build-native-bun.ts"
       - ".github/workflows/embedding-health-isolation.yml"
   push:
@@ -41,6 +43,8 @@ on:
       - "platform/daemon/src/native-runtime-assets.ts"
       - "scripts/native-dreaming-mcp-smoke.test.ts"
       - "scripts/native-embedding-runtime-smoke.test.ts"
+      - "scripts/native-dreaming-finalize-smoke.test.ts"
+      - "scripts/native-worker-bundle-contract.test.ts"
       - "scripts/build-native-bun.ts"
       - ".github/workflows/embedding-health-isolation.yml"
 
@@ -90,4 +94,4 @@ jobs:
           SIGNET_NATIVE_EMBEDDING_SMOKE: "0"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/signet-linux-x64
           SIGNET_TELEMETRY_OPTOUT: "1"
-        run: bun test scripts/native-embedding-runtime-smoke.test.ts scripts/native-dreaming-mcp-smoke.test.ts
+        run: bun test scripts/native-embedding-runtime-smoke.test.ts scripts/native-dreaming-mcp-smoke.test.ts scripts/native-dreaming-finalize-smoke.test.ts scripts/native-worker-bundle-contract.test.ts

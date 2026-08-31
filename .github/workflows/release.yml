@@ -317,7 +317,7 @@ jobs:
           # The smoke boots a real default-config daemon; keep its telemetry
           # out of the Signet PostHog project.
           SIGNET_TELEMETRY_OPTOUT: "1"
-        run: bun test scripts/native-embedding-runtime-smoke.test.ts scripts/native-dreaming-mcp-smoke.test.ts
+        run: bun test scripts/native-embedding-runtime-smoke.test.ts scripts/native-dreaming-mcp-smoke.test.ts scripts/native-dreaming-finalize-smoke.test.ts scripts/native-worker-bundle-contract.test.ts
 
       - name: Native first-use acceptance
         shell: bash
