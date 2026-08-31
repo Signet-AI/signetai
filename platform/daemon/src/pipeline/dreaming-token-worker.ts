@@ -6,8 +6,9 @@
  * the expensive encodes in this worker instead of the daemon event loop.
  */
 
-import { isMainThread, parentPort } from "node:worker_threads";
-import { countTokens } from "./tokenizer";
+import { readFile } from "node:fs/promises";
+import { isMainThread, parentPort, workerData } from "node:worker_threads";
+import { get_encoding, init } from "tiktoken/init";
 
 interface CountRequest {
 	readonly type: "count";
@@ -26,12 +27,20 @@ if (isMainThread || port === null) {
 	throw new Error("dreaming-token-worker.ts must run in a worker thread");
 }
 
+const data = workerData as { readonly tokenizerWasmPath?: unknown };
+if (typeof data.tokenizerWasmPath !== "string" || data.tokenizerWasmPath.length === 0) {
+	throw new Error("dreaming-token-worker.ts requires a tokenizer WASM path");
+}
+const tokenizerWasmPath = data.tokenizerWasmPath;
+await init(async (imports) => WebAssembly.instantiate(await readFile(tokenizerWasmPath), imports));
+const tokenizer = get_encoding("cl100k_base");
+
 port.on("message", (message: CountRequest) => {
 	if (message.type !== "count") return;
 	const response: CountResponse = {
 		type: "counted",
 		requestId: message.requestId,
-		counts: message.entries.map((entry) => ({ key: entry.key, count: countTokens(entry.text) })),
+		counts: message.entries.map((entry) => ({ key: entry.key, count: tokenizer.encode(entry.text).length })),
 	};
 	port.postMessage(response);
 });
