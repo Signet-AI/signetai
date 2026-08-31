@@ -10193,8 +10193,8 @@
 			{
 				"id": "module:scripts/audit-architecture-contract.ts",
 				"path": "scripts/audit-architecture-contract.ts",
-				"lines": 1878,
-				"logicalStatements": 937,
+				"lines": 2142,
+				"logicalStatements": 1096,
 				"exports": 17,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -51144,7 +51144,7 @@
 			},
 			{
 				"path": "integrations/opencode/connector/src/plugin-bundle.ts",
-				"owner": "@signet/opencode-plugin",
+				"owner": "@signet/connector-opencode",
 				"source": "integrations/opencode/plugin",
 				"generatedBy": "integrations/opencode/connector/scripts/embed-plugin.ts"
 			},
@@ -52264,8 +52264,8 @@
 		],
 		"summary": {
 			"files": 931,
-			"lines": 268885,
-			"logicalStatements": 97007,
+			"lines": 269149,
+			"logicalStatements": 97166,
 			"runtimeEdges": 1999,
 			"allEdges": 2594,
 			"unresolvedEdges": 1530,

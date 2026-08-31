@@ -1,7 +1,7 @@
 name: Architecture ratchet
 
 on:
-  pull_request:
+  pull_request_target:
   push:
     branches: [main]
 
@@ -13,49 +13,95 @@ jobs:
     name: Architecture audit and ratchet
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # pull_request_target executes this workflow from the protected base
+      # revision, never from the candidate workflow definition.
+      - name: Checkout protected pull-request base
+        if: github.event_name == 'pull_request_target'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+
+      - name: Checkout pushed main revision
+        if: github.event_name == 'push'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: package.json
 
-      - name: Install dependencies
+      - name: Install protected dependencies
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
           PUPPETEER_SKIP_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
       - name: Architecture contract tests
+        if: github.event_name == 'push'
         run: bun test scripts/audit-architecture-contract.test.ts
 
-      - name: Generate protected base inventory and enforce architecture ratchet
-        if: github.event_name == 'pull_request'
+      - name: Audit pull request from a protected evaluator and clean candidate archive
+        if: github.event_name == 'pull_request_target'
         env:
           BASE_ROOT: ${{ runner.temp }}/architecture-base
-          CANDIDATE_ROOT: ${{ github.workspace }}
-          TRUSTED_AUDITOR_COMMIT: 42017f87518556d3a94151100f7329232a94e0de
-          TRUSTED_AUDITOR: ${{ runner.temp }}/trusted-audit-architecture-contract.ts
+          CANDIDATE_ROOT: ${{ runner.temp }}/architecture-candidate
+          CANDIDATE_REPO: ${{ runner.temp }}/architecture-candidate-repo
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TRUSTED_AUDITOR: ${{ github.workspace }}/scripts/audit-architecture-contract.ts
         run: |
-          git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
-          git fetch --no-tags origin "$TRUSTED_AUDITOR_COMMIT"
-          ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/node_modules"
-          git show "$TRUSTED_AUDITOR_COMMIT:scripts/audit-architecture-contract.ts" > "$TRUSTED_AUDITOR"
-          mkdir -p "$BASE_ROOT"
-          git archive "${{ github.event.pull_request.base.sha }}" | tar -x -C "$BASE_ROOT"
-          ln -s "$GITHUB_WORKSPACE/node_modules" "$BASE_ROOT/node_modules"
-          mkdir -p "$BASE_ROOT/web/docs" "$BASE_ROOT/web/marketing"
-          ln -s "$GITHUB_WORKSPACE/web/docs/node_modules" "$BASE_ROOT/web/docs/node_modules"
-          ln -s "$GITHUB_WORKSPACE/web/marketing/node_modules" "$BASE_ROOT/web/marketing/node_modules"
+          set -euo pipefail
+          test -f "$TRUSTED_AUDITOR"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+          mkdir -p "$BASE_ROOT" "$CANDIDATE_ROOT"
+          git archive "$BASE_SHA" | tar -x -C "$BASE_ROOT"
+
+          git init --quiet "$CANDIDATE_REPO"
+          git -C "$CANDIDATE_REPO" remote add candidate "$GITHUB_SERVER_URL/$HEAD_REPOSITORY.git"
+          git -C "$CANDIDATE_REPO" fetch --no-tags --depth=1 candidate "$HEAD_SHA"
+          test "$(git -C "$CANDIDATE_REPO" rev-parse FETCH_HEAD)" = "$HEAD_SHA"
+          git -C "$CANDIDATE_REPO" archive "$HEAD_SHA" | tar -x -C "$CANDIDATE_ROOT"
+
+          # Archives intentionally exclude ignored dependencies. The evaluator
+          # never executes candidate code, but its config parser still needs
+          # the protected dependency graph available to both clean trees.
+          for root in "$BASE_ROOT" "$CANDIDATE_ROOT"; do
+            ln -s "$GITHUB_WORKSPACE/node_modules" "$root/node_modules"
+            mkdir -p "$root/web/docs" "$root/web/marketing"
+            ln -s "$GITHUB_WORKSPACE/web/docs/node_modules" "$root/web/docs/node_modules"
+            ln -s "$GITHUB_WORKSPACE/web/marketing/node_modules" "$root/web/marketing/node_modules"
+          done
+
           bun -e '
+            import { existsSync } from "node:fs";
             import { pathToFileURL } from "node:url";
             const trustedAuditor = process.env.TRUSTED_AUDITOR;
             const baseRoot = process.env.BASE_ROOT;
             const candidateRoot = process.env.CANDIDATE_ROOT;
-            if (trustedAuditor === undefined || baseRoot === undefined || candidateRoot === undefined)
+            if (
+              trustedAuditor === undefined ||
+              baseRoot === undefined ||
+              candidateRoot === undefined ||
+              !existsSync(trustedAuditor)
+            )
               throw new Error("missing protected architecture audit paths");
-            const { analyzeSourceTree, compareArchitectureRatchet } = await import(pathToFileURL(trustedAuditor).href);
-            const protectedBase = analyzeSourceTree({ root: baseRoot, sourceRoot: baseRoot, validateGeneratedArtifacts: false });
-            const candidate = analyzeSourceTree({ root: candidateRoot, sourceRoot: candidateRoot, validateGeneratedArtifacts: true });
+            const { analyzeSourceTree, compareArchitectureRatchet } =
+              await import(pathToFileURL(trustedAuditor).href);
+            const protectedBase = analyzeSourceTree({
+              root: baseRoot,
+              sourceRoot: baseRoot,
+              validateGeneratedArtifacts: false,
+            });
+            const candidate = analyzeSourceTree({
+              root: candidateRoot,
+              sourceRoot: candidateRoot,
+              validateGeneratedArtifacts: true,
+            });
             const findings = compareArchitectureRatchet(candidate, protectedBase);
             if (findings.length > 0) {
               console.error("Architecture ratchet violations:");
@@ -66,5 +112,5 @@ jobs:
           '
 
       - name: Enforce architecture ratchet on main
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push'
         run: bun run audit:architecture

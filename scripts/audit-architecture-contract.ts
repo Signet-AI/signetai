@@ -86,6 +86,7 @@ export interface ArchitectureInventory {
 	readonly computedLoads: readonly ComputedLoad[];
 	readonly generatedArtifacts: readonly GeneratedArtifact[];
 	readonly generatedArtifactManifest: readonly GeneratedArtifactManifestEntry[];
+	readonly protectedGeneratedArtifactManifest?: readonly GeneratedArtifactManifestEntry[];
 	readonly runtimeCycles: readonly Cycle[];
 	readonly typeCycles: readonly Cycle[];
 	readonly packages: readonly PackageRecord[];
@@ -127,6 +128,11 @@ interface BaselineFile {
 interface GeneratedArtifactManifestFile {
 	readonly version: 1;
 	readonly artifacts: readonly GeneratedArtifactManifestEntry[];
+}
+
+interface GeneratedGeneratorPaths {
+	readonly outputs: ReadonlySet<string>;
+	readonly inputs: ReadonlySet<string>;
 }
 
 export interface AuditOptions {
@@ -282,10 +288,11 @@ function hasExactProvenanceToken(source: string, key: "source" | "generatedBy", 
 	);
 }
 
-function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<string> {
+function generatedGeneratorPaths(root: string, generatorPath: string): GeneratedGeneratorPaths {
 	const source = readFileSync(generatorPath, "utf8");
 	const sourceFile = ts.createSourceFile(generatorPath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 	const outputs = new Set<string>();
+	const inputs = new Set<string>();
 
 	const staticPath = (
 		expression: ts.Expression,
@@ -402,7 +409,7 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 				: (flags & ts.NodeFlags.Let) === 0
 					? nearestVarScope(currentScope)
 					: currentScope;
-			bindPattern(bindingScope, node.name, ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
+			bindPattern(bindingScope, node.name, node.initializer ?? null);
 		}
 		if (ts.isBinaryExpression(node) && ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)))
 			invalidateAssignmentTarget(currentScope, node.left);
@@ -435,6 +442,19 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 					if (output !== null) outputs.add(resolve(root, output));
 				}
 			}
+			const isReadFileSync =
+				(ts.isIdentifier(callee) && isCanonicalReadFileSync(currentScope, callee.text)) ||
+				(ts.isPropertyAccessExpression(callee) &&
+					ts.isIdentifier(callee.expression) &&
+					callee.name.text === "readFileSync" &&
+					isCanonicalFsNamespace(currentScope, callee.expression.text));
+			if (isReadFileSync) {
+				const inputArgument = node.arguments[0];
+				if (inputArgument !== undefined) {
+					const input = staticPath(inputArgument, currentScope);
+					if (input !== null) inputs.add(resolve(root, input));
+				}
+			}
 		}
 		ts.forEachChild(node, (child) => visit(child, currentScope));
 	};
@@ -443,7 +463,91 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 		throw new Error(
 			`Generated artifact generator has no statically verifiable output path: ${relativePath(root, generatorPath)}`,
 		);
-	return outputs;
+	return { outputs, inputs };
+}
+
+function generatedSourceCandidates(root: string, inputPaths: ReadonlySet<string>): ReadonlySet<string> {
+	const candidates = new Set<string>();
+	for (const inputPath of inputPaths) {
+		const input = relativePath(root, inputPath);
+		if (input.startsWith("../") || input === ".." || input.length === 0) continue;
+		candidates.add(input);
+		const distMarker = "/dist/";
+		const distIndex = input.indexOf(distMarker);
+		if (distIndex > 0) candidates.add(input.slice(0, distIndex));
+		const parent = dirname(input);
+		if (parent !== ".") candidates.add(normalizedPath(parent));
+	}
+	return candidates;
+}
+
+function packageOwner(root: string, path: string): string | null {
+	let directory = dirname(path);
+	while (true) {
+		const packagePath = join(directory, "package.json");
+		if (existsSync(packagePath)) {
+			try {
+				const packageJson = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
+				if (typeof packageJson.name === "string") return packageJson.name;
+			} catch {
+				return null;
+			}
+		}
+		if (directory === root) return null;
+		const parent = dirname(directory);
+		if (parent === directory || !parent.startsWith(root)) return null;
+		directory = parent;
+	}
+}
+
+function protectedGeneratorPaths(root: string): readonly string[] {
+	return walk(root, (path) => {
+		const normalized = relativePath(root, path);
+		const segments = normalized.split("/");
+		const fileName = basename(path).toLowerCase();
+		return (
+			SOURCE_EXTENSIONS.includes(extname(path) as (typeof SOURCE_EXTENSIONS)[number]) &&
+			segments.includes("scripts") &&
+			/(?:generate|embed|codegen|bundle)/.test(fileName)
+		);
+	});
+}
+
+function loadProtectedGeneratedArtifactManifest(root: string): readonly GeneratedArtifactManifestEntry[] {
+	const manifestPath = join(root, "scripts/architecture-generated-artifacts.json");
+	if (existsSync(manifestPath)) return loadGeneratedArtifactManifest(root);
+	const entries: GeneratedArtifactManifestEntry[] = [];
+	for (const generatorPath of protectedGeneratorPaths(root)) {
+		let paths: GeneratedGeneratorPaths;
+		try {
+			paths = generatedGeneratorPaths(root, generatorPath);
+		} catch {
+			continue;
+		}
+		const owner = packageOwner(root, generatorPath);
+		if (owner === null) continue;
+		const sources = [...generatedSourceCandidates(root, paths.inputs)].filter((source) =>
+			existsSync(join(root, source)),
+		);
+		if (sources.length === 0) continue;
+		for (const outputPath of paths.outputs) {
+			const output = relativePath(root, outputPath);
+			if (output.startsWith("../") || output === ".." || output.length === 0) continue;
+			for (const source of sources) {
+				entries.push({
+					path: output,
+					owner,
+					source,
+					generatedBy: relativePath(root, generatorPath),
+				});
+			}
+		}
+	}
+	return [...new Map(entries.map((entry) => [`${entry.path}\u0000${entry.source}`, entry])).values()].sort((a, b) =>
+		`${a.path}\u0000${a.source}\u0000${a.generatedBy}`.localeCompare(
+			`${b.path}\u0000${b.source}\u0000${b.generatedBy}`,
+		),
+	);
 }
 
 function loadGeneratedArtifactManifest(root: string): readonly GeneratedArtifactManifestEntry[] {
@@ -478,8 +582,8 @@ function loadGeneratedArtifactManifest(root: string): readonly GeneratedArtifact
 		if (!existsSync(generatorPath) || !statSync(generatorPath).isFile())
 			throw new Error(`Generated artifact generator is not a file: ${artifact.generatedBy}`);
 		const generatorSource = readFileSync(generatorPath, "utf8");
-		const outputPaths = generatedOutputPaths(root, generatorPath);
-		if (!outputPaths.has(artifactPath)) {
+		const generatorPaths = generatedGeneratorPaths(root, generatorPath);
+		if (!generatorPaths.outputs.has(artifactPath)) {
 			throw new Error(
 				`Generated artifact generator ${artifact.generatedBy} does not write its exact output ${artifact.path}`,
 			);
@@ -499,6 +603,11 @@ function loadGeneratedArtifactManifest(root: string): readonly GeneratedArtifact
 				throw new Error(
 					`Generated artifact ${artifact.path} is materialized without a provenance header naming ${artifact.generatedBy}`,
 				);
+		}
+		if (!generatedSourceCandidates(root, generatorPaths.inputs).has(artifact.source)) {
+			throw new Error(
+				`Generated artifact generator ${artifact.generatedBy} does not read its declared source ${artifact.source}`,
+			);
 		}
 		return artifact;
 	});
@@ -606,8 +715,12 @@ interface StaticBinding {
 	readonly invalidatedCreateRequireFactory?: boolean;
 	readonly canonicalCreateRequireResult?: boolean;
 	readonly invalidatedCreateRequireResult?: boolean;
+	readonly canonicalAmbientRequire?: boolean;
+	readonly ambientRequireLike?: boolean;
+	readonly invalidatedAmbientRequire?: boolean;
 	readonly canonicalModuleNamespace?: boolean;
 	readonly canonicalWriteFileSync?: boolean;
+	readonly canonicalReadFileSync?: boolean;
 	readonly canonicalFsNamespace?: boolean;
 	readonly canonicalPathHelper?: CanonicalPathHelper;
 	readonly canonicalUrlHelper?: "fileURLToPath";
@@ -641,6 +754,8 @@ function bindPattern(
 	canonicalWriteFileSync = false,
 	canonicalFsNamespace = false,
 	canonicalModuleNamespace = false,
+	canonicalAmbientRequire = false,
+	ambientRequireLike = canonicalAmbientRequire,
 ): void {
 	if (ts.isIdentifier(name)) {
 		const binding: StaticBinding = {
@@ -649,23 +764,46 @@ function bindPattern(
 			canonicalModuleNamespace,
 			canonicalWriteFileSync,
 			canonicalFsNamespace,
+			canonicalAmbientRequire,
+			ambientRequireLike,
 		};
 		scope.bindings.set(name.text, binding);
 		const canonicalFactory = isCanonicalCreateRequire(scope, name.text);
 		const canonicalResult = isCanonicalCreateRequireResult(scope, name.text);
 		const invalidatedResult = isPotentialInvalidatedCreateRequireResult(scope, name.text);
-		if (canonicalFactory || canonicalResult || invalidatedResult)
+		const inferredCanonicalAmbientRequire = isCanonicalAmbientRequire(scope, name.text);
+		const potentialAmbientRequire = ambientRequireLike || isPotentialAmbientRequire(scope, name.text);
+		if (
+			canonicalFactory ||
+			canonicalResult ||
+			invalidatedResult ||
+			inferredCanonicalAmbientRequire ||
+			potentialAmbientRequire
+		)
 			scope.bindings.set(name.text, {
 				...binding,
 				canonicalCreateRequireFactory: canonicalFactory,
 				canonicalCreateRequireResult: canonicalResult,
 				invalidatedCreateRequireResult: invalidatedResult,
+				canonicalAmbientRequire: canonicalAmbientRequire || inferredCanonicalAmbientRequire,
+				ambientRequireLike: potentialAmbientRequire,
 			});
 		return;
 	}
 	for (const element of name.elements) {
 		if (ts.isOmittedExpression(element)) continue;
-		if (ts.isBindingElement(element)) bindPattern(scope, element.name, null);
+		if (ts.isBindingElement(element)) {
+			const propertyName = element.propertyName ?? element.name;
+			const unwrappedInitializer = initializer === null ? null : unwrapExpression(initializer);
+			const isGlobalThisRequireShape =
+				unwrappedInitializer !== null &&
+				ts.isIdentifier(propertyName) &&
+				propertyName.text === "require" &&
+				ts.isIdentifier(unwrappedInitializer) &&
+				unwrappedInitializer.text === "globalThis";
+			const isGlobalThisRequire = isGlobalThisRequireShape && resolveBinding(scope, "globalThis") === undefined;
+			bindPattern(scope, element.name, null, false, false, false, false, isGlobalThisRequire, isGlobalThisRequireShape);
+		}
 	}
 }
 
@@ -673,11 +811,7 @@ function bindDeclaration(scope: StaticScope, declaration: ts.Declaration): void 
 	if (ts.isVariableDeclaration(declaration) && ts.isVariableDeclarationList(declaration.parent)) {
 		const flags = declaration.parent.flags;
 		const isVar = (flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)) === 0;
-		bindPattern(
-			isVar ? nearestVarScope(scope) : scope,
-			declaration.name,
-			ts.isIdentifier(declaration.name) ? (declaration.initializer ?? null) : null,
-		);
+		bindPattern(isVar ? nearestVarScope(scope) : scope, declaration.name, declaration.initializer ?? null);
 		return;
 	}
 	if (
@@ -747,6 +881,7 @@ function predeclareScopeBindings(node: ts.Node, scope: StaticScope): void {
 					canonicalCreateRequire: false,
 					canonicalModuleNamespace: moduleSpecifier === "node:module" || moduleSpecifier === "module",
 					canonicalFsNamespace: isNodeFs,
+					canonicalReadFileSync: false,
 					canonicalPathNamespace: isNodePath,
 					canonicalUrlNamespace: isNodeUrl,
 				});
@@ -759,6 +894,7 @@ function predeclareScopeBindings(node: ts.Node, scope: StaticScope): void {
 						initializer: null,
 						canonicalCreateRequire: isCanonicalCreateRequire,
 						canonicalWriteFileSync: isNodeFs && importedName === "writeFileSync",
+						canonicalReadFileSync: isNodeFs && importedName === "readFileSync",
 						canonicalPathHelper: isNodePath && isCanonicalPathHelperName(importedName) ? importedName : undefined,
 						canonicalUrlHelper: isNodeUrl && importedName === "fileURLToPath" ? importedName : undefined,
 						canonicalUrlNamespace: false,
@@ -829,6 +965,96 @@ function isCanonicalCreateRequire(scope: StaticScope, name: string, resolving = 
 	return isCanonicalCreateRequire(resolved.scope, unwrapped.text, nextResolving);
 }
 
+function ambientRequireBindCall(expression: ts.Expression): ts.CallExpression | null {
+	const unwrapped = unwrapExpression(expression);
+	if (!ts.isCallExpression(unwrapped)) return null;
+	const callee = unwrapExpression(unwrapped.expression);
+	if (
+		!ts.isPropertyAccessExpression(callee) ||
+		callee.name.text !== "bind" ||
+		callee.expression === undefined ||
+		unwrapped.arguments.length !== 1 ||
+		unwrapped.arguments[0]?.kind !== ts.SyntaxKind.NullKeyword
+	)
+		return null;
+	return unwrapped;
+}
+
+function isAmbientRequireShape(expression: ts.Expression): boolean {
+	const unwrapped = unwrapExpression(expression);
+	if (ts.isIdentifier(unwrapped) && unwrapped.text === "require") return true;
+	if (
+		ts.isPropertyAccessExpression(unwrapped) &&
+		unwrapped.name.text === "require" &&
+		ts.isIdentifier(unwrapped.expression) &&
+		unwrapped.expression.text === "globalThis"
+	)
+		return true;
+	const bound = ambientRequireBindCall(unwrapped);
+	return bound === null
+		? false
+		: isAmbientRequireShape(unwrapExpression((bound.expression as ts.PropertyAccessExpression).expression));
+}
+
+function isPotentialAmbientRequireExpression(
+	expression: ts.Expression,
+	scope: StaticScope,
+	resolving = new Set<StaticBinding>(),
+): boolean {
+	const unwrapped = unwrapExpression(expression);
+	if (isAmbientRequireShape(unwrapped)) return true;
+	if (!ts.isIdentifier(unwrapped)) return false;
+	return isPotentialAmbientRequire(scope, unwrapped.text, resolving);
+}
+
+function isPotentialAmbientRequire(scope: StaticScope, name: string, resolving = new Set<StaticBinding>()): boolean {
+	const resolved = resolveBinding(scope, name);
+	if (resolved === undefined) return false;
+	const { binding, scope: definingScope } = resolved;
+	if (binding.ambientRequireLike === true || binding.invalidatedAmbientRequire === true) return true;
+	if (binding.initializer === null || resolving.has(binding)) return false;
+	const nextResolving = new Set(resolving);
+	nextResolving.add(binding);
+	return isPotentialAmbientRequireExpression(binding.initializer, definingScope, nextResolving);
+}
+
+function isCanonicalAmbientRequireExpression(
+	expression: ts.Expression,
+	scope: StaticScope,
+	resolving = new Set<StaticBinding>(),
+): boolean {
+	const unwrapped = unwrapExpression(expression);
+	if (ts.isIdentifier(unwrapped) && unwrapped.text === "require") return resolveBinding(scope, "require") === undefined;
+	if (
+		ts.isPropertyAccessExpression(unwrapped) &&
+		unwrapped.name.text === "require" &&
+		ts.isIdentifier(unwrapped.expression) &&
+		unwrapped.expression.text === "globalThis"
+	)
+		return resolveBinding(scope, "globalThis") === undefined;
+	const bound = ambientRequireBindCall(unwrapped);
+	if (bound !== null)
+		return isCanonicalAmbientRequireExpression(
+			unwrapExpression((bound.expression as ts.PropertyAccessExpression).expression),
+			scope,
+			resolving,
+		);
+	if (!ts.isIdentifier(unwrapped)) return false;
+	return isCanonicalAmbientRequire(scope, unwrapped.text, resolving);
+}
+
+function isCanonicalAmbientRequire(scope: StaticScope, name: string, resolving = new Set<StaticBinding>()): boolean {
+	const resolved = resolveBinding(scope, name);
+	if (resolved === undefined) return false;
+	const { binding, scope: definingScope } = resolved;
+	if (binding.invalidatedAmbientRequire === true) return false;
+	if (binding.canonicalAmbientRequire === true) return true;
+	if (binding.initializer === null || resolving.has(binding)) return false;
+	const nextResolving = new Set(resolving);
+	nextResolving.add(binding);
+	return isCanonicalAmbientRequireExpression(binding.initializer, definingScope, nextResolving);
+}
+
 function isCanonicalModuleNamespace(scope: StaticScope, name: string): boolean {
 	return resolveBinding(scope, name)?.binding.canonicalModuleNamespace === true;
 }
@@ -858,6 +1084,10 @@ function isPotentialInvalidatedCreateRequireResult(scope: StaticScope, name: str
 
 function isCanonicalWriteFileSync(scope: StaticScope, name: string): boolean {
 	return resolveBinding(scope, name)?.binding.canonicalWriteFileSync === true;
+}
+
+function isCanonicalReadFileSync(scope: StaticScope, name: string): boolean {
+	return resolveBinding(scope, name)?.binding.canonicalReadFileSync === true;
 }
 
 function isCanonicalFsNamespace(scope: StaticScope, name: string): boolean {
@@ -893,8 +1123,15 @@ function invalidateBinding(scope: StaticScope, name: string): void {
 		invalidatedCreateRequireResult:
 			resolved.binding.canonicalCreateRequireResult === true ||
 			resolved.binding.invalidatedCreateRequireResult === true,
+		canonicalAmbientRequire: false,
+		ambientRequireLike: false,
+		invalidatedAmbientRequire:
+			resolved.binding.canonicalAmbientRequire === true ||
+			resolved.binding.ambientRequireLike === true ||
+			resolved.binding.invalidatedAmbientRequire === true,
 		canonicalModuleNamespace: false,
 		canonicalWriteFileSync: false,
+		canonicalReadFileSync: false,
 		canonicalFsNamespace: false,
 		canonicalPathHelper: undefined,
 		canonicalUrlHelper: undefined,
@@ -950,20 +1187,26 @@ function isCanonicalCreateRequireResult(scope: StaticScope, name: string, resolv
 }
 
 function isRuntimeRequire(expression: ts.Expression, scope: StaticScope): boolean {
-	if (!ts.isIdentifier(expression)) return false;
-	const requireBinding = resolveBinding(scope, expression.text);
-	if (requireBinding === undefined) return expression.text === "require";
+	const unwrapped = unwrapExpression(expression);
+	if (isCanonicalAmbientRequireExpression(unwrapped, scope)) return true;
+	if (!ts.isIdentifier(unwrapped)) return false;
+	const requireBinding = resolveBinding(scope, unwrapped.text);
+	if (requireBinding === undefined) return unwrapped.text === "require";
+	if (requireBinding.binding.invalidatedAmbientRequire === true) return false;
 	if (requireBinding.binding.invalidatedCreateRequireResult === true) return false;
 	if (requireBinding.binding.canonicalCreateRequireResult === true) return true;
-	return isCanonicalCreateRequireResult(requireBinding.scope, expression.text);
+	return isCanonicalCreateRequireResult(requireBinding.scope, unwrapped.text);
 }
 
 function isRequireLikeCall(expression: ts.Expression, scope: StaticScope): boolean {
-	if (!ts.isIdentifier(expression)) return false;
-	if (expression.text === "require") return true;
-	const binding = resolveBinding(scope, expression.text)?.binding;
+	const unwrapped = unwrapExpression(expression);
+	if (isAmbientRequireShape(unwrapped)) return true;
+	if (!ts.isIdentifier(unwrapped)) return false;
+	if (unwrapped.text === "require") return true;
+	const binding = resolveBinding(scope, unwrapped.text)?.binding;
+	if (binding?.invalidatedAmbientRequire === true || binding?.ambientRequireLike === true) return true;
 	if (binding?.invalidatedCreateRequireResult === true || binding?.canonicalCreateRequireResult === true) return true;
-	return isCanonicalCreateRequireResult(scope, expression.text);
+	return isCanonicalCreateRequireResult(scope, unwrapped.text);
 }
 
 function staticString(
@@ -1309,6 +1552,8 @@ function packageRecords(root: string): {
 export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInventory {
 	const root = resolve(options.root ?? ROOT);
 	const sourceRoot = resolve(options.sourceRoot ?? root);
+	const protectedGeneratedArtifactManifest =
+		options.validateGeneratedArtifacts === false ? loadProtectedGeneratedArtifactManifest(root) : undefined;
 	const generatedArtifactManifest =
 		options.validateGeneratedArtifacts === false ? [] : loadGeneratedArtifactManifest(root);
 	const pathAliases = loadPathAliases(root);
@@ -1457,7 +1702,7 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 					: (flags & ts.NodeFlags.Let) === 0
 						? nearestVarScope(currentScope)
 						: currentScope;
-				bindPattern(bindingScope, node.name, ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
+				bindPattern(bindingScope, node.name, node.initializer ?? null);
 			}
 			if (ts.isBinaryExpression(node) && ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)))
 				invalidateAssignmentTarget(currentScope, node.left);
@@ -1563,6 +1808,7 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 		computedLoads: computedLoads.sort((a, b) => a.id.localeCompare(b.id)),
 		generatedArtifacts,
 		generatedArtifactManifest,
+		...(protectedGeneratedArtifactManifest === undefined ? {} : { protectedGeneratedArtifactManifest }),
 		runtimeCycles,
 		typeCycles,
 		packages: packageGraph.packages,
@@ -1775,6 +2021,24 @@ export function compareArchitectureRatchet(
 		findings.push("runtime source cycles exceed the zero budget");
 	if (current.summary.packageRuntimeCycles > 0 || current.summary.packageAllCycles > 0)
 		findings.push("workspace package dependency cycles exceed the zero budget");
+
+	const protectedGeneratedArtifacts = baseline.protectedGeneratedArtifactManifest ?? baseline.generatedArtifactManifest;
+	for (const artifact of current.generatedArtifactManifest) {
+		const protectedArtifact = protectedGeneratedArtifacts.find((candidate) => candidate.path === artifact.path);
+		if (protectedArtifact === undefined) {
+			findings.push(`generated artifact manifest entry ${artifact.path} is not present in protected history`);
+			continue;
+		}
+		if (
+			protectedArtifact.owner !== artifact.owner ||
+			protectedArtifact.source !== artifact.source ||
+			protectedArtifact.generatedBy !== artifact.generatedBy
+		) {
+			findings.push(
+				`generated artifact manifest entry ${artifact.path} does not match protected ownership/dataflow (${artifact.owner}, ${artifact.source}, ${artifact.generatedBy})`,
+			);
+		}
+	}
 
 	const baselineTypeCycles = cycleNodeSets(baseline.typeCycles);
 	for (const cycle of current.typeCycles) {
