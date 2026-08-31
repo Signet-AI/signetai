@@ -155,6 +155,7 @@ import { up as memoryJobLeaseToken } from "./144-memory-job-lease-token";
 import { up as dreamingEvidenceReviews } from "./145-dreaming-evidence-reviews";
 import { up as sourceTranscriptImport } from "./146-source-transcript-import";
 import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
+import { up as sourceImportAttemptProvenance } from "./148-source-import-attempt-provenance";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1339,6 +1340,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "source-import-replay-file-slots",
 		up: sourceImportReplayFileSlots,
 		artifacts: { tables: ["source_import_files"] },
+	},
+	{
+		version: 148,
+		name: "source-import-attempt-provenance",
+		up: sourceImportAttemptProvenance,
+		artifacts: { columns: [{ table: "source_import_record_attempts", column: "source_id" }] },
 	},
 ];
 

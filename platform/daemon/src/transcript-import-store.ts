@@ -152,6 +152,11 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 						params: [p.code as string, p.recordId as string, operation.jobId, operation.agentId],
 						result: "run",
 					},
+					{
+						sql: "INSERT INTO source_import_record_attempts (agent_id,job_id,file_id,record_id,generation,outcome,error_code,source_id) SELECT agent_id,job_id,file_id,id,0,'rejected',?,source_id FROM source_import_records WHERE id = ? AND job_id = ? AND agent_id = ?",
+						params: [p.code as string, p.recordId as string, operation.jobId, operation.agentId],
+						result: "run",
+					},
 				],
 				{ operation: "sources.import.store.reject", lane: "write" },
 			)) as Result;
@@ -179,6 +184,19 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 								commits[i]?.canonicalKey ?? null,
 								commits[i]?.externalIdentity ?? null,
 								commits[i]?.contentHash ?? null,
+								commits[i]?.sourceRecordId ?? "",
+								operation.jobId,
+								operation.agentId,
+							],
+							result: "run",
+						},
+						{
+							sql: "INSERT INTO source_import_record_attempts (agent_id,job_id,file_id,record_id,generation,outcome,error_code,source_id) SELECT agent_id,job_id,file_id,id,0,?,?,source_id FROM source_import_records WHERE id = ? AND job_id = ? AND agent_id = ?",
+							params: [
+								(results[i] as { outcome: string }).outcome,
+								(results[i] as { outcome: string }).outcome === "conversation_identity_conflict"
+									? "conversation_identity_conflict"
+									: null,
 								commits[i]?.sourceRecordId ?? "",
 								operation.jobId,
 								operation.agentId,
