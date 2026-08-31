@@ -22,14 +22,20 @@ test("the committed baseline reproduces the current source and package inventory
 	expect(current.summary.packages).toBe(34);
 });
 
-test("the pull-request workflow runs the canonical blocking audit", () => {
+test("the pull-request workflow runs a trusted evaluator against the candidate", () => {
 	const workflow = readFileSync(join(import.meta.dir, "../.github/workflows/architecture-ratchet.yml"), "utf8");
 	expect(workflow).toContain("on:\n  pull_request:");
 	expect(workflow).toContain("run: bun test scripts/audit-architecture-contract.test.ts");
 	expect(workflow).toContain("git archive");
 	expect(workflow).toContain("github.event.pull_request.base.sha");
-	expect(workflow).toContain('--baseline-path="$RUNNER_TEMP/architecture-baseline.json"');
+	expect(workflow).toContain("TRUSTED_AUDITOR");
+	expect(workflow).toContain("await import(pathToFileURL(trustedAuditor).href)");
+	expect(workflow).toContain("candidateRoot");
+	expect(workflow).toContain("compareArchitectureRatchet(candidate, protectedBase)");
 	expect(workflow).toContain("bun run audit:architecture");
+	expect(workflow).not.toContain(
+		'import { analyzeSourceTree, writeBaseline } from "./scripts/audit-architecture-contract"',
+	);
 	expect(workflow).not.toContain("--write-baseline");
 });
 
@@ -1127,4 +1133,126 @@ test("pull-request ratchets compare against the protected base, not a refreshed 
 	expect(compareArchitectureRatchet(debtAddedToCheckout, protectedBaseline)).toContain(
 		`module growth in ${first.path}: ${first.logicalStatements} -> ${first.logicalStatements + 1} logical statements`,
 	);
+});
+
+test("canonical createRequire factory and result aliases retain runtime provenance", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-create-require-forms-"));
+	try {
+		writeFileSync(join(root, "target.ts"), 'import "./loader";\nexport const target = true;\n');
+		const forms = [
+			["let result", "let req = createRequire(import.meta.url);"],
+			["var result", "var req = createRequire(import.meta.url);"],
+			[
+				"namespace result",
+				'import * as module from "node:module";\nconst req = module.createRequire(import.meta.url);',
+			],
+			["factory alias", "const factory = createRequire;\nconst req = factory(import.meta.url);"],
+		] as const;
+		for (const [name, declaration] of forms) {
+			writeFileSync(
+				join(root, "loader.ts"),
+				[
+					...(name === "namespace result" ? [] : ['import { createRequire } from "node:module";']),
+					declaration,
+					'req("./target");',
+				].join("\n"),
+			);
+			const inventory = analyzeSourceTree({ root, sourceRoot: root });
+			expect(inventory.computedLoads, name).toHaveLength(0);
+			expect(inventory.sourceEdges, name).toContainEqual(
+				expect.objectContaining({ kind: "require", specifier: "./target", to: "target.ts", runtime: true }),
+			);
+			expect(inventory.summary.runtimeCycles, name).toBe(1);
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("reassigned createRequire result aliases remain visible as computed loads", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-create-require-reassignment-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				'import { createRequire } from "node:module";',
+				"let req = createRequire(import.meta.url);",
+				"req = (_path: string) => undefined;",
+				'req("./target");',
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges).not.toContainEqual(expect.objectContaining({ kind: "require", to: "target.ts" }));
+		expect(inventory.computedLoads).toContainEqual(expect.objectContaining({ kind: "require", path: "loader.ts" }));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("reassigned createRequire factory aliases conservatively retain result loads", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-create-require-factory-reassignment-"));
+	try {
+		writeFileSync(join(root, "target.ts"), "export const target = true;\n");
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				'import { createRequire } from "node:module";',
+				"let factory = createRequire;",
+				"factory = (_url: string) => (_path: string) => undefined;",
+				"const req = factory(import.meta.url);",
+				'req("./target");',
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges).not.toContainEqual(expect.objectContaining({ kind: "require", to: "target.ts" }));
+		expect(inventory.computedLoads).toContainEqual(expect.objectContaining({ kind: "require", path: "loader.ts" }));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("path aliases apply to every file in the parsed project, including external files", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-external-alias-cycle-"));
+	try {
+		mkdirSync(join(root, "pkg"));
+		mkdirSync(join(root, "shared"));
+		writeFileSync(
+			join(root, "pkg", "tsconfig.json"),
+			JSON.stringify({
+				compilerOptions: { baseUrl: "..", paths: { "@/*": ["shared/*"] } },
+				include: ["../shared/**/*.ts"],
+			}),
+		);
+		writeFileSync(join(root, "shared", "a.ts"), 'import { b } from "@/b";\nexport const a = b;\n');
+		writeFileSync(join(root, "shared", "b.ts"), 'import { a } from "@/a";\nexport const b = a;\n');
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.to !== null)).toHaveLength(2);
+		expect(inventory.sourceEdges.filter((edge) => edge.to === null)).toHaveLength(0);
+		expect(inventory.summary.runtimeCycles).toBe(1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("explicit cjs and mjs specifiers prefer their TypeScript counterparts before generic sources", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-explicit-module-counterparts-"));
+	try {
+		writeFileSync(join(root, "loader.cts"), 'import "./target.cjs";\nexport const loader = true;\n');
+		writeFileSync(join(root, "target.cts"), 'import "./loader.cts";\nexport const target = true;\n');
+		writeFileSync(join(root, "target.ts"), "export const collision = true;\n");
+		writeFileSync(join(root, "loader.mts"), 'import "./other.mjs";\nexport const loader = true;\n');
+		writeFileSync(join(root, "other.mts"), 'import "./loader.mts";\nexport const other = true;\n');
+		writeFileSync(join(root, "other.ts"), "export const collision = true;\n");
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges).toContainEqual(
+			expect.objectContaining({ from: "loader.cts", specifier: "./target.cjs", to: "target.cts" }),
+		);
+		expect(inventory.sourceEdges).toContainEqual(
+			expect.objectContaining({ from: "loader.mts", specifier: "./other.mjs", to: "other.mts" }),
+		);
+		expect(inventory.summary.runtimeCycles).toBe(2);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
