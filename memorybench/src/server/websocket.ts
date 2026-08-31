@@ -4,7 +4,11 @@ interface ClientInfo {
   subscribedRuns: Set<string>
 }
 
-export class WebSocketManager {
+export interface EventBroadcaster {
+  broadcast(message: object): void
+}
+
+export class WebSocketManager implements EventBroadcaster {
   private clients: Map<ServerWebSocket<unknown>, ClientInfo> = new Map()
 
   addClient(ws: ServerWebSocket<unknown>): void {
