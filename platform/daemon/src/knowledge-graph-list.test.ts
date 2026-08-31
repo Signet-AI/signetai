@@ -12,7 +12,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor, MAX_READ_CONNECTIONS } from "./db-accessor";
+import {
+	closeDbAccessor,
+	type DbAccessor,
+	getDbAccessor,
+	initDbAccessor,
+	MAX_READ_CONNECTIONS,
+	type ReadAdmissionOptions,
+	type ReadDb,
+} from "./db-accessor";
 import {
 	getDependenciesFrom,
 	getDependenciesTo,
@@ -558,26 +566,58 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		expect(detail?.dependencyCount).toBe(3);
 	});
 
-	test("releases the detail lease before nested structural reads", async () => {
+	test("releases every saturated detail lease before nested structural reads (#1758)", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 		seedEntity("e-hub", "Hub");
 
+		const accessor = getDbAccessor();
+		// Warm the owner process so startup latency is outside the lease-order
+		// assertion. Wall time below is only a deadlock backstop.
+		await getKnowledgeEntityDetail(accessor, "e-hub", "default");
+
+		let entered = 0;
+		let releaseCallbacks = (): void => {};
+		let resolveAllEntered = (): void => {};
+		const callbackGate = new Promise<void>((resolve) => {
+			releaseCallbacks = resolve;
+		});
+		const allEntered = new Promise<void>((resolve) => {
+			resolveAllEntered = resolve;
+		});
+		const gatedAccessor = {
+			...accessor,
+			async withReadDbAsync<T>(fn: (db: ReadDb) => T | Promise<T>, options?: ReadAdmissionOptions): Promise<T> {
+				return await accessor.withReadDbAsync(async (db) => {
+					const result = fn(db);
+					entered += 1;
+					if (entered === MAX_READ_CONNECTIONS) resolveAllEntered();
+					await callbackGate;
+					return await result;
+				}, options);
+			},
+		} satisfies DbAccessor;
 		const requests = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
-			getKnowledgeEntityDetail(getDbAccessor(), "e-hub", "default"),
+			getKnowledgeEntityDetail(gatedAccessor, "e-hub", "default"),
 		);
-		const completed = await Promise.race([
-			Promise.all(requests).then(
-				() => true,
-				() => false,
-			),
-			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
-		]);
-		if (!completed) {
-			closeDbAccessor();
-			await Promise.allSettled(requests);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				allEntered,
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(() => reject(new Error("detail callbacks did not saturate the read pool")), 10_000);
+				}),
+			]);
+			expect(accessor.getReadPressure()).toMatchObject({
+				activeLeases: 0,
+				queued: 0,
+				maxConnections: MAX_READ_CONNECTIONS,
+			});
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+			releaseCallbacks();
 		}
-		expect(completed).toBe(true);
+		await expect(Promise.all(requests)).resolves.toHaveLength(MAX_READ_CONNECTIONS);
 	});
 
 	test("returns null for unknown entity id", async () => {
