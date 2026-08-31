@@ -195,11 +195,8 @@ async function waitForDatabaseOwnershipRelease(): Promise<void> {
 		for (const entry of await readdir("/proc")) {
 			if (!/^\d+$/.test(entry)) continue;
 			try {
-				const [cmdline, environment] = await Promise.all([
-					readFile(`/proc/${entry}/cmdline`, "utf8"),
-					readFile(`/proc/${entry}/environ`, "utf8"),
-				]);
-				if (cmdline.includes("db-owner-worker") && environment.includes(`SIGNET_PATH=${root}\0`)) ownerPids.push(entry);
+				const environment = await readFile(`/proc/${entry}/environ`, "utf8");
+				if (environment.includes(`SIGNET_PATH=${root}\0`) && environment.includes("SIGNET_DB_OWNER_WORKER=1\0")) ownerPids.push(entry);
 			} catch {
 				// The process can exit between /proc enumeration and readback.
 			}
