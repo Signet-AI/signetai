@@ -364,7 +364,8 @@ test("the generated report describes the type boundary and transitional counts",
 	expect(report).toContain("Database accessor sites classified: 337");
 	expect(report).toContain("ON-PARENT callback execution: 335");
 	expect(report).toContain("OFF-PARENT callback execution: 2");
-	expect(report).toMatch(/`db-owner-worker\.ts:\d+` \(withReadDbAsync\)/);
+	expect(report).toContain("- `db:recall.embedding.config.read` (withReadDbAsync)");
+	expect(report).toContain("- `db:recall.vector.search.read` (withReadDbAsync)");
 	expect(report).not.toMatch(/`daemon\.ts:\d+` \(withReadDbAsync\)/);
 	expect(report).toContain("type boundary");
 	expect(report).not.toContain("Exact ledger inventory: 997 sites");

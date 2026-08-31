@@ -366,8 +366,8 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 
 ### OFF-PARENT sites
 
-- `db-owner-worker.ts:885` (withReadDbAsync)
-- `db-owner-worker.ts:918` (withReadDbAsync)
+- `db:recall.embedding.config.read` (withReadDbAsync)
+- `db:recall.vector.search.read` (withReadDbAsync)
 
 ## A3 Slice 2 migration notes
 
