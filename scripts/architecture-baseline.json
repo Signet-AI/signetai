@@ -638,8 +638,8 @@
 			{
 				"id": "module:libs/sdk/src/index.ts",
 				"path": "libs/sdk/src/index.ts",
-				"lines": 1414,
-				"logicalStatements": 117,
+				"lines": 1283,
+				"logicalStatements": 110,
 				"exports": 8,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 1,
@@ -708,9 +708,9 @@
 			{
 				"id": "module:libs/sdk/src/types.ts",
 				"path": "libs/sdk/src/types.ts",
-				"lines": 1327,
-				"logicalStatements": 127,
-				"exports": 126,
+				"lines": 1255,
+				"logicalStatements": 119,
+				"exports": 118,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 0,
 				"runtimeFanOut": 0,
@@ -2360,7 +2360,7 @@
 			{
 				"id": "module:platform/core/src/index.ts",
 				"path": "platform/core/src/index.ts",
-				"lines": 692,
+				"lines": 690,
 				"logicalStatements": 81,
 				"exports": 81,
 				"topLevelMutableBindings": 0,
@@ -4936,9 +4936,9 @@
 			{
 				"id": "module:platform/core/src/types.ts",
 				"path": "platform/core/src/types.ts",
-				"lines": 1123,
-				"logicalStatements": 115,
-				"exports": 109,
+				"lines": 1089,
+				"logicalStatements": 109,
+				"exports": 103,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 2,
 				"runtimeFanOut": 0,
@@ -5440,14 +5440,14 @@
 			{
 				"id": "module:platform/daemon/src/daemon.ts",
 				"path": "platform/daemon/src/daemon.ts",
-				"lines": 3434,
-				"logicalStatements": 1535,
+				"lines": 3424,
+				"logicalStatements": 1528,
 				"exports": 6,
-				"topLevelMutableBindings": 29,
+				"topLevelMutableBindings": 28,
 				"runtimeFanIn": 2,
-				"runtimeFanOut": 104,
+				"runtimeFanOut": 103,
 				"runtimeCallsitesIn": 2,
-				"runtimeCallsitesOut": 105,
+				"runtimeCallsitesOut": 104,
 				"dynamicSites": 3,
 				"layer": "composition-root"
 			},
@@ -5552,13 +5552,13 @@
 			{
 				"id": "module:platform/daemon/src/db-owner-maintenance.ts",
 				"path": "platform/daemon/src/db-owner-maintenance.ts",
-				"lines": 927,
-				"logicalStatements": 254,
-				"exports": 20,
+				"lines": 976,
+				"logicalStatements": 261,
+				"exports": 23,
 				"topLevelMutableBindings": 1,
-				"runtimeFanIn": 16,
+				"runtimeFanIn": 17,
 				"runtimeFanOut": 3,
-				"runtimeCallsitesIn": 16,
+				"runtimeCallsitesIn": 17,
 				"runtimeCallsitesOut": 4,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -5594,13 +5594,13 @@
 			{
 				"id": "module:platform/daemon/src/db-owner-runtime.ts",
 				"path": "platform/daemon/src/db-owner-runtime.ts",
-				"lines": 594,
-				"logicalStatements": 35,
+				"lines": 610,
+				"logicalStatements": 40,
 				"exports": 3,
 				"topLevelMutableBindings": 1,
-				"runtimeFanIn": 29,
+				"runtimeFanIn": 30,
 				"runtimeFanOut": 4,
-				"runtimeCallsitesIn": 30,
+				"runtimeCallsitesIn": 31,
 				"runtimeCallsitesOut": 4,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -5612,9 +5612,9 @@
 				"logicalStatements": 30,
 				"exports": 7,
 				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 15,
+				"runtimeFanIn": 18,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 15,
+				"runtimeCallsitesIn": 18,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -5622,7 +5622,7 @@
 			{
 				"id": "module:platform/daemon/src/db-owner-worker.ts",
 				"path": "platform/daemon/src/db-owner-worker.ts",
-				"lines": 1194,
+				"lines": 1203,
 				"logicalStatements": 106,
 				"exports": 3,
 				"topLevelMutableBindings": 0,
@@ -6320,16 +6320,30 @@
 				"layer": "domain"
 			},
 			{
+				"id": "module:platform/daemon/src/inference-oauth-runtime.ts",
+				"path": "platform/daemon/src/inference-oauth-runtime.ts",
+				"lines": 12,
+				"logicalStatements": 3,
+				"exports": 1,
+				"topLevelMutableBindings": 0,
+				"runtimeFanIn": 2,
+				"runtimeFanOut": 0,
+				"runtimeCallsitesIn": 2,
+				"runtimeCallsitesOut": 0,
+				"dynamicSites": 0,
+				"layer": "domain"
+			},
+			{
 				"id": "module:platform/daemon/src/inference-oauth.ts",
 				"path": "platform/daemon/src/inference-oauth.ts",
-				"lines": 404,
+				"lines": 396,
 				"logicalStatements": 199,
 				"exports": 14,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 2,
-				"runtimeFanOut": 2,
+				"runtimeFanOut": 3,
 				"runtimeCallsitesIn": 2,
-				"runtimeCallsitesOut": 2,
+				"runtimeCallsitesOut": 3,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -6448,13 +6462,13 @@
 			{
 				"id": "module:platform/daemon/src/logger.ts",
 				"path": "platform/daemon/src/logger.ts",
-				"lines": 602,
+				"lines": 601,
 				"logicalStatements": 189,
 				"exports": 7,
 				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 97,
+				"runtimeFanIn": 94,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 97,
+				"runtimeCallsitesIn": 94,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -6728,8 +6742,8 @@
 			{
 				"id": "module:platform/daemon/src/memory-search.ts",
 				"path": "platform/daemon/src/memory-search.ts",
-				"lines": 3240,
-				"logicalStatements": 1167,
+				"lines": 3295,
+				"logicalStatements": 1217,
 				"exports": 16,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 8,
@@ -7176,14 +7190,14 @@
 			{
 				"id": "module:platform/daemon/src/pipeline/context-construction.ts",
 				"path": "platform/daemon/src/pipeline/context-construction.ts",
-				"lines": 257,
-				"logicalStatements": 74,
-				"exports": 3,
+				"lines": 404,
+				"logicalStatements": 143,
+				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 1,
-				"runtimeFanOut": 1,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -7498,14 +7512,14 @@
 			{
 				"id": "module:platform/daemon/src/pipeline/graph-search.ts",
 				"path": "platform/daemon/src/pipeline/graph-search.ts",
-				"lines": 143,
-				"logicalStatements": 39,
-				"exports": 3,
+				"lines": 242,
+				"logicalStatements": 73,
+				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 1,
-				"runtimeFanOut": 1,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -7526,9 +7540,9 @@
 			{
 				"id": "module:platform/daemon/src/pipeline/graph-traversal.ts",
 				"path": "platform/daemon/src/pipeline/graph-traversal.ts",
-				"lines": 994,
-				"logicalStatements": 345,
-				"exports": 12,
+				"lines": 1038,
+				"logicalStatements": 351,
+				"exports": 13,
 				"topLevelMutableBindings": 2,
 				"runtimeFanIn": 7,
 				"runtimeFanOut": 2,
@@ -7610,14 +7624,14 @@
 			{
 				"id": "module:platform/daemon/src/pipeline/prospective-index.ts",
 				"path": "platform/daemon/src/pipeline/prospective-index.ts",
-				"lines": 657,
-				"logicalStatements": 259,
+				"lines": 698,
+				"logicalStatements": 245,
 				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 2,
-				"runtimeFanOut": 4,
+				"runtimeFanOut": 5,
 				"runtimeCallsitesIn": 2,
-				"runtimeCallsitesOut": 4,
+				"runtimeCallsitesOut": 5,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -7754,9 +7768,9 @@
 				"logicalStatements": 15,
 				"exports": 2,
 				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 3,
+				"runtimeFanIn": 2,
 				"runtimeFanOut": 1,
-				"runtimeCallsitesIn": 3,
+				"runtimeCallsitesIn": 2,
 				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -7792,14 +7806,14 @@
 			{
 				"id": "module:platform/daemon/src/pipeline/structured-path-evidence.ts",
 				"path": "platform/daemon/src/pipeline/structured-path-evidence.ts",
-				"lines": 514,
-				"logicalStatements": 173,
-				"exports": 4,
+				"lines": 768,
+				"logicalStatements": 212,
+				"exports": 7,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 1,
-				"runtimeFanOut": 1,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -8366,15 +8380,15 @@
 			{
 				"id": "module:platform/daemon/src/routes/misc-routes.ts",
 				"path": "platform/daemon/src/routes/misc-routes.ts",
-				"lines": 1010,
-				"logicalStatements": 398,
+				"lines": 518,
+				"logicalStatements": 252,
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 1,
-				"runtimeFanOut": 15,
+				"runtimeFanOut": 10,
 				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 15,
-				"dynamicSites": 2,
+				"runtimeCallsitesOut": 10,
+				"dynamicSites": 0,
 				"layer": "routes"
 			},
 			{
@@ -8626,90 +8640,6 @@
 				"runtimeFanOut": 0,
 				"runtimeCallsitesIn": 4,
 				"runtimeCallsitesOut": 0,
-				"dynamicSites": 0,
-				"layer": "domain"
-			},
-			{
-				"id": "module:platform/daemon/src/scheduler/cron.ts",
-				"path": "platform/daemon/src/scheduler/cron.ts",
-				"lines": 34,
-				"logicalStatements": 13,
-				"exports": 3,
-				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 2,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 2,
-				"runtimeCallsitesOut": 0,
-				"dynamicSites": 0,
-				"layer": "domain"
-			},
-			{
-				"id": "module:platform/daemon/src/scheduler/index.ts",
-				"path": "platform/daemon/src/scheduler/index.ts",
-				"lines": 5,
-				"logicalStatements": 4,
-				"exports": 4,
-				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 2,
-				"runtimeFanOut": 4,
-				"runtimeCallsitesIn": 2,
-				"runtimeCallsitesOut": 4,
-				"dynamicSites": 0,
-				"layer": "domain"
-			},
-			{
-				"id": "module:platform/daemon/src/scheduler/skill-resolver.ts",
-				"path": "platform/daemon/src/scheduler/skill-resolver.ts",
-				"lines": 52,
-				"logicalStatements": 24,
-				"exports": 1,
-				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 2,
-				"runtimeFanOut": 1,
-				"runtimeCallsitesIn": 2,
-				"runtimeCallsitesOut": 1,
-				"dynamicSites": 0,
-				"layer": "domain"
-			},
-			{
-				"id": "module:platform/daemon/src/scheduler/spawn.ts",
-				"path": "platform/daemon/src/scheduler/spawn.ts",
-				"lines": 211,
-				"logicalStatements": 91,
-				"exports": 4,
-				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 3,
-				"runtimeFanOut": 2,
-				"runtimeCallsitesIn": 3,
-				"runtimeCallsitesOut": 2,
-				"dynamicSites": 0,
-				"layer": "domain"
-			},
-			{
-				"id": "module:platform/daemon/src/scheduler/task-stream.ts",
-				"path": "platform/daemon/src/scheduler/task-stream.ts",
-				"lines": 144,
-				"logicalStatements": 60,
-				"exports": 5,
-				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 2,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 2,
-				"runtimeCallsitesOut": 0,
-				"dynamicSites": 0,
-				"layer": "domain"
-			},
-			{
-				"id": "module:platform/daemon/src/scheduler/worker.ts",
-				"path": "platform/daemon/src/scheduler/worker.ts",
-				"lines": 333,
-				"logicalStatements": 88,
-				"exports": 7,
-				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 1,
-				"runtimeFanOut": 6,
-				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 6,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -8972,9 +8902,9 @@
 				"logicalStatements": 30,
 				"exports": 4,
 				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 4,
+				"runtimeFanIn": 2,
 				"runtimeFanOut": 3,
-				"runtimeCallsitesIn": 4,
+				"runtimeCallsitesIn": 2,
 				"runtimeCallsitesOut": 3,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -9200,20 +9130,6 @@
 				"runtimeFanOut": 3,
 				"runtimeCallsitesIn": 12,
 				"runtimeCallsitesOut": 3,
-				"dynamicSites": 0,
-				"layer": "domain"
-			},
-			{
-				"id": "module:platform/daemon/src/task-scope.ts",
-				"path": "platform/daemon/src/task-scope.ts",
-				"lines": 27,
-				"logicalStatements": 12,
-				"exports": 3,
-				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 1,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -9560,9 +9476,9 @@
 				"logicalStatements": 28,
 				"exports": 2,
 				"topLevelMutableBindings": 0,
-				"runtimeFanIn": 3,
+				"runtimeFanIn": 2,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 3,
+				"runtimeCallsitesIn": 2,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -10858,28 +10774,28 @@
 			{
 				"id": "module:surfaces/cli/src/features/setup-connect.ts",
 				"path": "surfaces/cli/src/features/setup-connect.ts",
-				"lines": 161,
-				"logicalStatements": 55,
+				"lines": 164,
+				"logicalStatements": 57,
 				"exports": 8,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 1,
-				"runtimeFanOut": 1,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
 			{
 				"id": "module:surfaces/cli/src/features/setup-fresh.ts",
 				"path": "surfaces/cli/src/features/setup-fresh.ts",
-				"lines": 478,
-				"logicalStatements": 211,
+				"lines": 483,
+				"logicalStatements": 212,
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 1,
-				"runtimeFanOut": 9,
+				"runtimeFanOut": 10,
 				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 9,
+				"runtimeCallsitesOut": 10,
 				"dynamicSites": 2,
 				"layer": "adapters"
 			},
@@ -10900,14 +10816,14 @@
 			{
 				"id": "module:surfaces/cli/src/features/setup-migrate.ts",
 				"path": "surfaces/cli/src/features/setup-migrate.ts",
-				"lines": 489,
-				"logicalStatements": 221,
+				"lines": 494,
+				"logicalStatements": 222,
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 1,
-				"runtimeFanOut": 8,
+				"runtimeFanOut": 9,
 				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 8,
+				"runtimeCallsitesOut": 9,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -10991,6 +10907,20 @@
 				"runtimeFanIn": 5,
 				"runtimeFanOut": 0,
 				"runtimeCallsitesIn": 5,
+				"runtimeCallsitesOut": 0,
+				"dynamicSites": 0,
+				"layer": "adapters"
+			},
+			{
+				"id": "module:surfaces/cli/src/features/setup-terminal.ts",
+				"path": "surfaces/cli/src/features/setup-terminal.ts",
+				"lines": 22,
+				"logicalStatements": 9,
+				"exports": 2,
+				"topLevelMutableBindings": 0,
+				"runtimeFanIn": 2,
+				"runtimeFanOut": 0,
+				"runtimeCallsitesIn": 2,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -14868,7 +14798,7 @@
 				"specifier": "./errors.js",
 				"kind": "export",
 				"runtime": true,
-				"line": 1299
+				"line": 1176
 			},
 			{
 				"id": "libs/sdk/src/index.ts:export:type:./transport.js:4576a05650bc9358:1",
@@ -14877,16 +14807,16 @@
 				"specifier": "./transport.js",
 				"kind": "export",
 				"runtime": false,
-				"line": 1298
+				"line": 1175
 			},
 			{
-				"id": "libs/sdk/src/index.ts:export:type:./types.js:0351388f5cfae95a:1",
+				"id": "libs/sdk/src/index.ts:export:type:./types.js:f03c7c841ace4c88:1",
 				"from": "libs/sdk/src/index.ts",
 				"to": "libs/sdk/src/types.ts",
 				"specifier": "./types.js",
 				"kind": "export",
 				"runtime": false,
-				"line": 1305
+				"line": 1182
 			},
 			{
 				"id": "libs/sdk/src/index.ts:import:runtime:./client-p2.js:343889f97fbece94:1",
@@ -14934,7 +14864,7 @@
 				"line": 7
 			},
 			{
-				"id": "libs/sdk/src/index.ts:import:type:./types.js:9ff4c55b4bec178c:1",
+				"id": "libs/sdk/src/index.ts:import:type:./types.js:535e89283f607db6:1",
 				"from": "libs/sdk/src/index.ts",
 				"to": "libs/sdk/src/types.ts",
 				"specifier": "./types.js",
@@ -15012,7 +14942,7 @@
 				"specifier": "./types-p2.js",
 				"kind": "export",
 				"runtime": false,
-				"line": 1259
+				"line": 1187
 			},
 			{
 				"id": "memorybench/src/benchmarks/convomem/index.ts:import:runtime:../../utils/logger:4c5546f1d98be75f:1",
@@ -19467,7 +19397,7 @@
 				"specifier": "./agents",
 				"kind": "export",
 				"runtime": true,
-				"line": 501
+				"line": 499
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./connector-types:6906b734d6565c30:1",
@@ -19476,7 +19406,7 @@
 				"specifier": "./connector-types",
 				"kind": "export",
 				"runtime": true,
-				"line": 654
+				"line": 652
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./constants:589ab733f1725105:1",
@@ -19485,7 +19415,7 @@
 				"specifier": "./constants",
 				"kind": "export",
 				"runtime": true,
-				"line": 289
+				"line": 287
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./daemon-url:d88820ac7de0b073:1",
@@ -19494,7 +19424,7 @@
 				"specifier": "./daemon-url",
 				"kind": "export",
 				"runtime": true,
-				"line": 193
+				"line": 191
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./database:e270a7044ec040d2:1",
@@ -19512,7 +19442,7 @@
 				"specifier": "./export",
 				"kind": "export",
 				"runtime": true,
-				"line": 412
+				"line": 410
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./fts-schema:4880a0204a5b7bfa:1",
@@ -19521,7 +19451,7 @@
 				"specifier": "./fts-schema",
 				"kind": "export",
 				"runtime": true,
-				"line": 264
+				"line": 262
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./gitignore:4606209f6b778683:1",
@@ -19530,7 +19460,7 @@
 				"specifier": "./gitignore",
 				"kind": "export",
 				"runtime": true,
-				"line": 328
+				"line": 326
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./graphiq:f9cd7e79d7b26694:1",
@@ -19539,7 +19469,7 @@
 				"specifier": "./graphiq",
 				"kind": "export",
 				"runtime": true,
-				"line": 309
+				"line": 307
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./harness-config:4cbdf68e467bf037:1",
@@ -19548,7 +19478,7 @@
 				"specifier": "./harness-config",
 				"kind": "export",
 				"runtime": true,
-				"line": 192
+				"line": 190
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./identity:901cd7eedb4119b2:1",
@@ -19557,7 +19487,7 @@
 				"specifier": "./identity",
 				"kind": "export",
 				"runtime": true,
-				"line": 433
+				"line": 431
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./import:f7ffeace2537f62a:1",
@@ -19566,7 +19496,7 @@
 				"specifier": "./import",
 				"kind": "export",
 				"runtime": true,
-				"line": 532
+				"line": 530
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./launchd:724d782483f0954e:1",
@@ -19575,7 +19505,7 @@
 				"specifier": "./launchd",
 				"kind": "export",
 				"runtime": true,
-				"line": 195
+				"line": 193
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./llm-model-catalog:ceb1482c6be28569:1",
@@ -19584,7 +19514,7 @@
 				"specifier": "./llm-model-catalog",
 				"kind": "export",
 				"runtime": true,
-				"line": 158
+				"line": 156
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./manifest:b0617ecf1704655e:1",
@@ -19593,7 +19523,7 @@
 				"specifier": "./manifest",
 				"kind": "export",
 				"runtime": true,
-				"line": 165
+				"line": 163
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./markdown:7267ce824d716b67:1",
@@ -19602,7 +19532,7 @@
 				"specifier": "./markdown",
 				"kind": "export",
 				"runtime": true,
-				"line": 545
+				"line": 543
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./memory-content-safety:ab5b7898725494d2:1",
@@ -19611,7 +19541,7 @@
 				"specifier": "./memory-content-safety",
 				"kind": "export",
 				"runtime": true,
-				"line": 168
+				"line": 166
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./memory-context:6701974768737295:1",
@@ -19620,7 +19550,7 @@
 				"specifier": "./memory-context",
 				"kind": "export",
 				"runtime": true,
-				"line": 201
+				"line": 199
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./memory-provenance:d17fbe901ac021e1:1",
@@ -19629,7 +19559,7 @@
 				"specifier": "./memory-provenance",
 				"kind": "export",
 				"runtime": true,
-				"line": 650
+				"line": 648
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./memory:da6c34775dd17af5:1",
@@ -19638,7 +19568,7 @@
 				"specifier": "./memory",
 				"kind": "export",
 				"runtime": true,
-				"line": 167
+				"line": 165
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./migrate:dc0dcf6b9e0dee97:1",
@@ -19647,7 +19577,7 @@
 				"specifier": "./migrate",
 				"kind": "export",
 				"runtime": true,
-				"line": 276
+				"line": 274
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./migration:da32cb97d830b26b:1",
@@ -19656,7 +19586,7 @@
 				"specifier": "./migration",
 				"kind": "export",
 				"runtime": true,
-				"line": 278
+				"line": 276
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./migrations/index:a2fe378987a22f28:1",
@@ -19665,7 +19595,7 @@
 				"specifier": "./migrations/index",
 				"kind": "export",
 				"runtime": true,
-				"line": 429
+				"line": 427
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./network:b3144a3b848b945c:1",
@@ -19674,7 +19604,7 @@
 				"specifier": "./network",
 				"kind": "export",
 				"runtime": true,
-				"line": 182
+				"line": 180
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./oh-my-pi:a08b5448e71ed928:1",
@@ -19683,7 +19613,7 @@
 				"specifier": "./oh-my-pi",
 				"kind": "export",
 				"runtime": true,
-				"line": 480
+				"line": 478
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./ontology-topology:32122a20a4e75b6c:1",
@@ -19692,7 +19622,7 @@
 				"specifier": "./ontology-topology",
 				"kind": "export",
 				"runtime": true,
-				"line": 651
+				"line": 649
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./package-manager:98bffc7bbcbbaaf9:1",
@@ -19701,7 +19631,7 @@
 				"specifier": "./package-manager",
 				"kind": "export",
 				"runtime": true,
-				"line": 628
+				"line": 626
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./pi:f6a22aec88490c47:1",
@@ -19710,7 +19640,7 @@
 				"specifier": "./pi",
 				"kind": "export",
 				"runtime": true,
-				"line": 490
+				"line": 488
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./pipeline-pause:d175648887306937:1",
@@ -19719,7 +19649,7 @@
 				"specifier": "./pipeline-pause",
 				"kind": "export",
 				"runtime": true,
-				"line": 610
+				"line": 608
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./pipeline-providers:1d0bf4f1a6031d37:1",
@@ -19728,7 +19658,7 @@
 				"specifier": "./pipeline-providers",
 				"kind": "export",
 				"runtime": true,
-				"line": 147
+				"line": 145
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./plugins:14c6e8f31746ca8a:1",
@@ -19737,7 +19667,7 @@
 				"specifier": "./plugins",
 				"kind": "export",
 				"runtime": true,
-				"line": 302
+				"line": 300
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./prompt-context:1e2c2d2b8b99f683:1",
@@ -19746,7 +19676,7 @@
 				"specifier": "./prompt-context",
 				"kind": "export",
 				"runtime": true,
-				"line": 290
+				"line": 288
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./recall:9078c9dfce3aa0d7:1",
@@ -19755,7 +19685,7 @@
 				"specifier": "./recall",
 				"kind": "export",
 				"runtime": true,
-				"line": 236
+				"line": 234
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./routing:6834eec66428d528:1",
@@ -19764,7 +19694,7 @@
 				"specifier": "./routing",
 				"kind": "export",
 				"runtime": true,
-				"line": 557
+				"line": 555
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./search:da0838cbf9699ad7:1",
@@ -19773,7 +19703,7 @@
 				"specifier": "./search",
 				"kind": "export",
 				"runtime": true,
-				"line": 221
+				"line": 219
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./secrets-keyring:f36b6379a5ef7929:1",
@@ -19800,7 +19730,7 @@
 				"specifier": "./signet-installation",
 				"kind": "export",
 				"runtime": true,
-				"line": 639
+				"line": 637
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./signet-os-types:748f507cce0b647c:1",
@@ -19809,7 +19739,7 @@
 				"specifier": "./signet-os-types",
 				"kind": "export",
 				"runtime": true,
-				"line": 676
+				"line": 674
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./signet:0acdd68dd39575e3:1",
@@ -19827,7 +19757,7 @@
 				"specifier": "./skill-transcript",
 				"kind": "export",
 				"runtime": true,
-				"line": 528
+				"line": 526
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./skills:4be48d29de63d1d8:1",
@@ -19836,7 +19766,7 @@
 				"specifier": "./skills",
 				"kind": "export",
 				"runtime": true,
-				"line": 513
+				"line": 511
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./soul:0cb27672d18219d9:1",
@@ -19845,7 +19775,7 @@
 				"specifier": "./soul",
 				"kind": "export",
 				"runtime": true,
-				"line": 166
+				"line": 164
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./source-substrate:0bb25335e90416de:1",
@@ -19854,7 +19784,7 @@
 				"specifier": "./source-substrate",
 				"kind": "export",
 				"runtime": true,
-				"line": 395
+				"line": 393
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./sources-config:fe79f701a25ae139:1",
@@ -19863,7 +19793,7 @@
 				"specifier": "./sources-config",
 				"kind": "export",
 				"runtime": true,
-				"line": 349
+				"line": 347
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./sqlite-journal:d0babd384677e9b2:1",
@@ -19881,7 +19811,7 @@
 				"specifier": "./symlinks",
 				"kind": "export",
 				"runtime": true,
-				"line": 620
+				"line": 618
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./telemetry-config:51e4b8132ae1c089:1",
@@ -19893,7 +19823,7 @@
 				"line": 40
 			},
 			{
-				"id": "platform/core/src/index.ts:export:runtime:./types:1db856c1af29fdff:1",
+				"id": "platform/core/src/index.ts:export:runtime:./types:a2b563129fc2e555:1",
 				"from": "platform/core/src/index.ts",
 				"to": "platform/core/src/types.ts",
 				"specifier": "./types",
@@ -19908,7 +19838,7 @@
 				"specifier": "./workspace-source-repo",
 				"kind": "export",
 				"runtime": true,
-				"line": 337
+				"line": 335
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./workspace:fd8755789821f535:1",
@@ -19917,7 +19847,7 @@
 				"specifier": "./workspace",
 				"kind": "export",
 				"runtime": true,
-				"line": 208
+				"line": 206
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./yaml:2f8c9379448c9745:1",
@@ -19926,7 +19856,7 @@
 				"specifier": "./yaml",
 				"kind": "export",
 				"runtime": true,
-				"line": 556
+				"line": 554
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./agents:0ac8532e6b2fa6fa:1",
@@ -19935,7 +19865,7 @@
 				"specifier": "./agents",
 				"kind": "export",
 				"runtime": false,
-				"line": 510
+				"line": 508
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./connector-types:49dbe3d3055fd862:1",
@@ -19944,7 +19874,7 @@
 				"specifier": "./connector-types",
 				"kind": "export",
 				"runtime": false,
-				"line": 660
+				"line": 658
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./daemon-url:4fdf6cc2c320f82b:1",
@@ -19953,7 +19883,7 @@
 				"specifier": "./daemon-url",
 				"kind": "export",
 				"runtime": false,
-				"line": 194
+				"line": 192
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./export:c56b5765111c59ba:1",
@@ -19962,7 +19892,7 @@
 				"specifier": "./export",
 				"kind": "export",
 				"runtime": false,
-				"line": 419
+				"line": 417
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./graphiq:a76c56cbd533cc71:1",
@@ -19971,7 +19901,7 @@
 				"specifier": "./graphiq",
 				"kind": "export",
 				"runtime": false,
-				"line": 323
+				"line": 321
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./identity:7f683eb983ad2ed5:1",
@@ -19980,7 +19910,7 @@
 				"specifier": "./identity",
 				"kind": "export",
 				"runtime": false,
-				"line": 464
+				"line": 462
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./import:c9a472c60d8960f1:1",
@@ -19989,7 +19919,7 @@
 				"specifier": "./import",
 				"kind": "export",
 				"runtime": false,
-				"line": 537
+				"line": 535
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./launchd:1920079e3d477ec2:1",
@@ -19998,7 +19928,7 @@
 				"specifier": "./launchd",
 				"kind": "export",
 				"runtime": false,
-				"line": 200
+				"line": 198
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./llm-model-catalog:2ef415c1b00b65a1:1",
@@ -20007,7 +19937,7 @@
 				"specifier": "./llm-model-catalog",
 				"kind": "export",
 				"runtime": false,
-				"line": 164
+				"line": 162
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./memory-content-safety:02e2ef076b26ea26:1",
@@ -20016,7 +19946,7 @@
 				"specifier": "./memory-content-safety",
 				"kind": "export",
 				"runtime": false,
-				"line": 177
+				"line": 175
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./migrate:63a68e5a0c3c265a:1",
@@ -20025,7 +19955,7 @@
 				"specifier": "./migrate",
 				"kind": "export",
 				"runtime": false,
-				"line": 277
+				"line": 275
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./migration:cfca328a71ed66bf:1",
@@ -20034,7 +19964,7 @@
 				"specifier": "./migration",
 				"kind": "export",
 				"runtime": false,
-				"line": 284
+				"line": 282
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./migrations/index:dde669410843554f:1",
@@ -20043,7 +19973,7 @@
 				"specifier": "./migrations/index",
 				"kind": "export",
 				"runtime": false,
-				"line": 430
+				"line": 428
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./network:e4fdeac4452e8a5f:1",
@@ -20052,7 +19982,7 @@
 				"specifier": "./network",
 				"kind": "export",
 				"runtime": false,
-				"line": 191
+				"line": 189
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./pipeline-pause:14a489cb593a68f1:1",
@@ -20061,7 +19991,7 @@
 				"specifier": "./pipeline-pause",
 				"kind": "export",
 				"runtime": false,
-				"line": 617
+				"line": 615
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./pipeline-providers:a1eef8ea260bc730:1",
@@ -20070,7 +20000,7 @@
 				"specifier": "./pipeline-providers",
 				"kind": "export",
 				"runtime": false,
-				"line": 157
+				"line": 155
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./prompt-context:fcb13458f7cca804:1",
@@ -20079,7 +20009,7 @@
 				"specifier": "./prompt-context",
 				"kind": "export",
 				"runtime": false,
-				"line": 300
+				"line": 298
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./recall:a63089fd858d15d9:1",
@@ -20088,7 +20018,7 @@
 				"specifier": "./recall",
 				"kind": "export",
 				"runtime": false,
-				"line": 248
+				"line": 246
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./routing:d77f74ea72c16c79:1",
@@ -20097,7 +20027,7 @@
 				"specifier": "./routing",
 				"kind": "export",
 				"runtime": false,
-				"line": 578
+				"line": 576
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./secrets-keyring:0f3eed9e68254318:1",
@@ -20124,7 +20054,7 @@
 				"specifier": "./signet-os-types",
 				"kind": "export",
 				"runtime": false,
-				"line": 677
+				"line": 675
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./skill-transcript:9ec847175752ef03:1",
@@ -20133,7 +20063,7 @@
 				"specifier": "./skill-transcript",
 				"kind": "export",
 				"runtime": false,
-				"line": 529
+				"line": 527
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./skills:770651961af4d770:1",
@@ -20142,7 +20072,7 @@
 				"specifier": "./skills",
 				"kind": "export",
 				"runtime": false,
-				"line": 519
+				"line": 517
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./source-substrate:9112d8a32d6b25ed:1",
@@ -20151,7 +20081,7 @@
 				"specifier": "./source-substrate",
 				"kind": "export",
 				"runtime": false,
-				"line": 399
+				"line": 397
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./sources-config:1c58d7e3d0f601f8:1",
@@ -20160,7 +20090,7 @@
 				"specifier": "./sources-config",
 				"kind": "export",
 				"runtime": false,
-				"line": 375
+				"line": 373
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./sqlite-journal:477e342f76130c8f:1",
@@ -20172,13 +20102,13 @@
 				"line": 39
 			},
 			{
-				"id": "platform/core/src/index.ts:export:type:./types:4b38f34663d0070c:1",
+				"id": "platform/core/src/index.ts:export:type:./types:357657af2221c3cc:1",
 				"from": "platform/core/src/index.ts",
 				"to": "platform/core/src/types.ts",
 				"specifier": "./types",
 				"kind": "export",
 				"runtime": false,
-				"line": 71
+				"line": 70
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./workspace-source-repo:e09ce5f53f439059:1",
@@ -20187,7 +20117,7 @@
 				"specifier": "./workspace-source-repo",
 				"kind": "export",
 				"runtime": false,
-				"line": 344
+				"line": 342
 			},
 			{
 				"id": "platform/core/src/launchd.ts:import:runtime:node:fs:36dfb4593d7e77ff:1",
@@ -24426,7 +24356,7 @@
 				"specifier": "./native-embedding",
 				"kind": "dynamic-import",
 				"runtime": true,
-				"line": 1882
+				"line": 1873
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:dynamic-import:runtime:./native-embedding:c91daec41b24953a:2",
@@ -24435,7 +24365,7 @@
 				"specifier": "./native-embedding",
 				"kind": "dynamic-import",
 				"runtime": true,
-				"line": 2061
+				"line": 2052
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:dynamic-import:runtime:node:http:5ca30a5808681a32:1",
@@ -24444,7 +24374,7 @@
 				"specifier": "node:http",
 				"kind": "dynamic-import",
 				"runtime": true,
-				"line": 2897
+				"line": 2887
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./agent-id:bc02fc655ec883c7:1",
@@ -24525,7 +24455,7 @@
 				"specifier": "./daemon-restart",
 				"kind": "import",
 				"runtime": true,
-				"line": 241
+				"line": 240
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./database-integrity:a86e20084b006a53:1",
@@ -24660,7 +24590,7 @@
 				"specifier": "./hooks",
 				"kind": "import",
 				"runtime": true,
-				"line": 242
+				"line": 241
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./http-server:362d95b0bcbe0b8b:1",
@@ -24741,7 +24671,7 @@
 				"specifier": "./mcp",
 				"kind": "import",
 				"runtime": true,
-				"line": 247
+				"line": 246
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./memory-config:05cd3bd62419eab4:1",
@@ -24894,7 +24824,7 @@
 				"specifier": "./routes/app-tray.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 248
+				"line": 247
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/auth-routes.js:67ded5ed3522c2fe:1",
@@ -24903,7 +24833,7 @@
 				"specifier": "./routes/auth-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 249
+				"line": 248
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/changelog.js:d797f8cc66f261b4:1",
@@ -24912,7 +24842,7 @@
 				"specifier": "./routes/changelog.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 250
+				"line": 249
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/connectors-routes.js:aaf516067b070f5b:1",
@@ -24921,7 +24851,7 @@
 				"specifier": "./routes/connectors-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 251
+				"line": 250
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/dashboard.js:071beff6489b6589:1",
@@ -24930,7 +24860,7 @@
 				"specifier": "./routes/dashboard.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 252
+				"line": 251
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/database-diagnostics.js:21ff63e5cc467302:1",
@@ -24939,7 +24869,7 @@
 				"specifier": "./routes/database-diagnostics.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 253
+				"line": 252
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/event-bus.js:672454b25c15b9ac:1",
@@ -24948,7 +24878,7 @@
 				"specifier": "./routes/event-bus.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 254
+				"line": 253
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/git-sync.js:0ebbaed79d7176e4:1",
@@ -24957,7 +24887,7 @@
 				"specifier": "./routes/git-sync.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 255
+				"line": 254
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/graphiq-routes.js:ff38bca165dfdee0:1",
@@ -24966,7 +24896,7 @@
 				"specifier": "./routes/graphiq-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 266
+				"line": 265
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/health.js:08890e36fa6b455c:1",
@@ -24975,7 +24905,7 @@
 				"specifier": "./routes/health.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 267
+				"line": 266
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/hooks-routes.js:0140b7afe006b943:1",
@@ -24984,7 +24914,7 @@
 				"specifier": "./routes/hooks-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 268
+				"line": 267
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/import-routes.js:92501e192e782ac5:1",
@@ -24993,7 +24923,7 @@
 				"specifier": "./routes/import-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 269
+				"line": 268
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/inference.js:7d00ee978d01a936:1",
@@ -25002,7 +24932,7 @@
 				"specifier": "./routes/inference.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 270
+				"line": 269
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/knowledge-routes.js:93ca7489e85fd996:1",
@@ -25011,7 +24941,7 @@
 				"specifier": "./routes/knowledge-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 271
+				"line": 270
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/marketplace-reviews.js:90d5bc5e9208c0bd:1",
@@ -25020,7 +24950,7 @@
 				"specifier": "./routes/marketplace-reviews.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 272
+				"line": 271
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/marketplace.js:31a217424c851e70:1",
@@ -25029,7 +24959,7 @@
 				"specifier": "./routes/marketplace.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 273
+				"line": 272
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/mcp-analytics.js:d9838076d2583cdf:1",
@@ -25038,7 +24968,7 @@
 				"specifier": "./routes/mcp-analytics.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 274
+				"line": 273
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/memory-routes.js:e889e35a0ed1718a:1",
@@ -25047,7 +24977,7 @@
 				"specifier": "./routes/memory-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 275
+				"line": 274
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/misc-routes.js:8e1b92ed606f36fa:1",
@@ -25056,7 +24986,7 @@
 				"specifier": "./routes/misc-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 276
+				"line": 275
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/ontology-routes.js:3c2caec6e348dc17:1",
@@ -25065,7 +24995,7 @@
 				"specifier": "./routes/ontology-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 277
+				"line": 276
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/os-agent.js:f3a566598f6c1151:1",
@@ -25074,7 +25004,7 @@
 				"specifier": "./routes/os-agent.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 278
+				"line": 277
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/os-chat.js:eba6b43a7aa24c93:1",
@@ -25083,7 +25013,7 @@
 				"specifier": "./routes/os-chat.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 279
+				"line": 278
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/pipeline-routes.js:debf25eaeceb3654:1",
@@ -25092,7 +25022,7 @@
 				"specifier": "./routes/pipeline-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 280
+				"line": 279
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/plugins-routes.js:10b7dfd2c108ee64:1",
@@ -25101,7 +25031,7 @@
 				"specifier": "./routes/plugins-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 281
+				"line": 280
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/queue-diagnostics.js:d388ac65e82cd234:1",
@@ -25110,7 +25040,7 @@
 				"specifier": "./routes/queue-diagnostics.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 282
+				"line": 281
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/reflection-routes.js:b36815802b58920d:1",
@@ -25119,7 +25049,7 @@
 				"specifier": "./routes/reflection-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 283
+				"line": 282
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/repair-routes.js:fea579e9ba1bf53e:1",
@@ -25128,7 +25058,7 @@
 				"specifier": "./routes/repair-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 284
+				"line": 283
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/secrets-routes.js:abfadb7238720b13:1",
@@ -25137,7 +25067,7 @@
 				"specifier": "./routes/secrets-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 285
+				"line": 284
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/session-routes.js:d9e19da5ddfe7c5c:1",
@@ -25146,7 +25076,7 @@
 				"specifier": "./routes/session-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 286
+				"line": 285
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/skill-analytics.js:a3ed5913e040fdc7:1",
@@ -25155,7 +25085,7 @@
 				"specifier": "./routes/skill-analytics.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 287
+				"line": 286
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/skills.js:19448c628dd4d5bf:1",
@@ -25164,7 +25094,7 @@
 				"specifier": "./routes/skills.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 288
+				"line": 287
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/sources-routes.js:3fcffd4cb02ed36e:1",
@@ -25173,7 +25103,7 @@
 				"specifier": "./routes/sources-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 289
+				"line": 288
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/state.js:9ca987be769b695a:1",
@@ -25191,7 +25121,7 @@
 				"specifier": "./routes/telemetry-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 294
+				"line": 293
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/utils.js:bb9acd9281a2974b:1",
@@ -25200,7 +25130,7 @@
 				"specifier": "./routes/utils.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 295
+				"line": 294
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/widget.js:3ccfdd564f9aef06:1",
@@ -25209,7 +25139,7 @@
 				"specifier": "./routes/widget.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 296
+				"line": 295
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./runtime-pressure:23a1a6c654ad5515:1",
@@ -25221,22 +25151,13 @@
 				"line": 188
 			},
 			{
-				"id": "platform/daemon/src/daemon.ts:import:runtime:./scheduler:c236e8f9b54adde7:1",
-				"from": "platform/daemon/src/daemon.ts",
-				"to": "platform/daemon/src/scheduler/index.ts",
-				"specifier": "./scheduler",
-				"kind": "import",
-				"runtime": true,
-				"line": 194
-			},
-			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./session-checkpoints:fd8ead3bd790b9f6:1",
 				"from": "platform/daemon/src/daemon.ts",
 				"to": "platform/daemon/src/session-checkpoints.ts",
 				"specifier": "./session-checkpoints",
 				"kind": "import",
 				"runtime": true,
-				"line": 195
+				"line": 194
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./session-claims:dba20d6498a8c28a:1",
@@ -25245,7 +25166,7 @@
 				"specifier": "./session-claims",
 				"kind": "import",
 				"runtime": true,
-				"line": 196
+				"line": 195
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./session-tracker:9557662d07050bbc:1",
@@ -25254,7 +25175,7 @@
 				"specifier": "./session-tracker",
 				"kind": "import",
 				"runtime": true,
-				"line": 197
+				"line": 196
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./session-ttl-finalizer:289a4685a5274f5f:1",
@@ -25263,7 +25184,7 @@
 				"specifier": "./session-ttl-finalizer",
 				"kind": "import",
 				"runtime": true,
-				"line": 205
+				"line": 204
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./single-flight-runner:65ee48bded06ff6b:1",
@@ -25272,7 +25193,7 @@
 				"specifier": "./single-flight-runner",
 				"kind": "import",
 				"runtime": true,
-				"line": 206
+				"line": 205
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./single-instance-lock:708633a2a1729301:1",
@@ -25281,7 +25202,7 @@
 				"specifier": "./single-instance-lock",
 				"kind": "import",
 				"runtime": true,
-				"line": 207
+				"line": 206
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./source-index-progress:b205f69128248f96:1",
@@ -25290,7 +25211,7 @@
 				"specifier": "./source-index-progress",
 				"kind": "import",
 				"runtime": true,
-				"line": 208
+				"line": 207
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./source-lifecycle-telemetry:ff5138c1cf50e22b:1",
@@ -25299,7 +25220,7 @@
 				"specifier": "./source-lifecycle-telemetry",
 				"kind": "import",
 				"runtime": true,
-				"line": 219
+				"line": 218
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./startup-recovery:27bf965e77fb3cd7:1",
@@ -25308,7 +25229,7 @@
 				"specifier": "./startup-recovery",
 				"kind": "import",
 				"runtime": true,
-				"line": 226
+				"line": 225
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./synthesis-worker-protocol:338036aa8e4b996f:1",
@@ -25317,7 +25238,7 @@
 				"specifier": "./synthesis-worker-protocol",
 				"kind": "import",
 				"runtime": true,
-				"line": 297
+				"line": 296
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./system-pressure:0a8700e60810bf14:1",
@@ -25326,7 +25247,7 @@
 				"specifier": "./system-pressure",
 				"kind": "import",
 				"runtime": true,
-				"line": 227
+				"line": 226
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./telemetry:fa29a3b40efd2a72:1",
@@ -25335,7 +25256,7 @@
 				"specifier": "./telemetry",
 				"kind": "import",
 				"runtime": true,
-				"line": 228
+				"line": 227
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./transcript-capture-worker:57c9eecace1e0147:1",
@@ -25344,7 +25265,7 @@
 				"specifier": "./transcript-capture-worker",
 				"kind": "import",
 				"runtime": true,
-				"line": 238
+				"line": 237
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./transcript-recovery-worker:3c6146d92e764f8d:1",
@@ -25353,7 +25274,7 @@
 				"specifier": "./transcript-recovery-worker",
 				"kind": "import",
 				"runtime": true,
-				"line": 239
+				"line": 238
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./update-system:6924dd65f6567bb2:1",
@@ -25362,7 +25283,7 @@
 				"specifier": "./update-system",
 				"kind": "import",
 				"runtime": true,
-				"line": 298
+				"line": 297
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./watcher-ignore:b9b56d95b20d12a1:1",
@@ -25371,7 +25292,7 @@
 				"specifier": "./watcher-ignore",
 				"kind": "import",
 				"runtime": true,
-				"line": 299
+				"line": 298
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:@signet/core:85bf8d5e169137c5:1",
@@ -28416,13 +28337,31 @@
 				"line": 7
 			},
 			{
+				"id": "platform/daemon/src/inference-oauth-runtime.ts:import:runtime:@earendil-works/pi-ai/bun-oauth:d26b7f21778e83b1:1",
+				"from": "platform/daemon/src/inference-oauth-runtime.ts",
+				"to": null,
+				"specifier": "@earendil-works/pi-ai/bun-oauth",
+				"kind": "import",
+				"runtime": true,
+				"line": 1
+			},
+			{
+				"id": "platform/daemon/src/inference-oauth.ts:import:runtime:./inference-oauth-runtime:8f3c2d6002721f63:1",
+				"from": "platform/daemon/src/inference-oauth.ts",
+				"to": "platform/daemon/src/inference-oauth-runtime.ts",
+				"specifier": "./inference-oauth-runtime",
+				"kind": "import",
+				"runtime": true,
+				"line": 12
+			},
+			{
 				"id": "platform/daemon/src/inference-oauth.ts:import:runtime:./logger:c5206b503adc1c37:1",
 				"from": "platform/daemon/src/inference-oauth.ts",
 				"to": "platform/daemon/src/logger.ts",
 				"specifier": "./logger",
 				"kind": "import",
 				"runtime": true,
-				"line": 11
+				"line": 10
 			},
 			{
 				"id": "platform/daemon/src/inference-oauth.ts:import:runtime:./secrets:85fb4b1808ab3c25:1",
@@ -28431,16 +28370,7 @@
 				"specifier": "./secrets",
 				"kind": "import",
 				"runtime": true,
-				"line": 12
-			},
-			{
-				"id": "platform/daemon/src/inference-oauth.ts:import:runtime:@earendil-works/pi-ai/bun-oauth:d26b7f21778e83b1:1",
-				"from": "platform/daemon/src/inference-oauth.ts",
-				"to": null,
-				"specifier": "@earendil-works/pi-ai/bun-oauth",
-				"kind": "import",
-				"runtime": true,
-				"line": 9
+				"line": 11
 			},
 			{
 				"id": "platform/daemon/src/inference-oauth.ts:import:runtime:@earendil-works/pi-ai/providers/all:a2245230d612134a:1",
@@ -28449,7 +28379,7 @@
 				"specifier": "@earendil-works/pi-ai/providers/all",
 				"kind": "import",
 				"runtime": true,
-				"line": 10
+				"line": 9
 			},
 			{
 				"id": "platform/daemon/src/inference-oauth.ts:import:runtime:node:crypto:8f98f29fc1aa01ba:1",
@@ -29781,7 +29711,7 @@
 				"specifier": "./memory-access-scope",
 				"kind": "export",
 				"runtime": true,
-				"line": 278
+				"line": 289
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./content-normalization:107f1c60d722ce54:1",
@@ -29808,7 +29738,7 @@
 				"specifier": "./db-owner-protocol",
 				"kind": "import",
 				"runtime": true,
-				"line": 33
+				"line": 34
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./db-owner-recall:56218c4b9a3271a0:1",
@@ -29817,7 +29747,7 @@
 				"specifier": "./db-owner-recall",
 				"kind": "import",
 				"runtime": true,
-				"line": 30
+				"line": 31
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./db-owner-runtime:3262420c1457cd7f:1",
@@ -29826,7 +29756,7 @@
 				"specifier": "./db-owner-runtime",
 				"kind": "import",
 				"runtime": true,
-				"line": 32
+				"line": 33
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./db-owner-sql:af0a07c7ac088908:1",
@@ -29835,7 +29765,7 @@
 				"specifier": "./db-owner-sql",
 				"kind": "import",
 				"runtime": true,
-				"line": 31
+				"line": 32
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./fts-index-state:c087e9b387c47a6a:1",
@@ -29844,7 +29774,7 @@
 				"specifier": "./fts-index-state",
 				"kind": "import",
 				"runtime": true,
-				"line": 35
+				"line": 36
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./llm:7fe87c8665ec2c0a:1",
@@ -29853,7 +29783,7 @@
 				"specifier": "./llm",
 				"kind": "import",
 				"runtime": true,
-				"line": 36
+				"line": 37
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./logger:c5206b503adc1c37:1",
@@ -29862,7 +29792,7 @@
 				"specifier": "./logger",
 				"kind": "import",
 				"runtime": true,
-				"line": 37
+				"line": 38
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./memory-access-scope:dc1fa06297f04fb2:1",
@@ -29871,7 +29801,7 @@
 				"specifier": "./memory-access-scope",
 				"kind": "import",
 				"runtime": true,
-				"line": 38
+				"line": 39
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./memory-content-safety:169cfa4f880ea4d4:1",
@@ -29880,7 +29810,7 @@
 				"specifier": "./memory-content-safety",
 				"kind": "import",
 				"runtime": true,
-				"line": 40
+				"line": 41
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./native-memory-constants:360e5726aad6583c:1",
@@ -29889,16 +29819,16 @@
 				"specifier": "./native-memory-constants",
 				"kind": "import",
 				"runtime": true,
-				"line": 41
+				"line": 42
 			},
 			{
-				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/context-construction:7ec1991b5f247a06:1",
+				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/context-construction:982f78f9c06877a3:1",
 				"from": "platform/daemon/src/memory-search.ts",
 				"to": "platform/daemon/src/pipeline/context-construction.ts",
 				"specifier": "./pipeline/context-construction",
 				"kind": "import",
 				"runtime": true,
-				"line": 42
+				"line": 43
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/dampening:4bb49c19faeb07b2:1",
@@ -29907,25 +29837,25 @@
 				"specifier": "./pipeline/dampening",
 				"kind": "import",
 				"runtime": true,
-				"line": 43
+				"line": 44
 			},
 			{
-				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/graph-search:9a981cfcb6805886:1",
+				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/graph-search:e80971258524019b:1",
 				"from": "platform/daemon/src/memory-search.ts",
 				"to": "platform/daemon/src/pipeline/graph-search.ts",
 				"specifier": "./pipeline/graph-search",
 				"kind": "import",
 				"runtime": true,
-				"line": 44
+				"line": 45
 			},
 			{
-				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/graph-traversal:20d47d1fa3fbb830:1",
+				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/graph-traversal:63029dce579b49cd:1",
 				"from": "platform/daemon/src/memory-search.ts",
 				"to": "platform/daemon/src/pipeline/graph-traversal.ts",
 				"specifier": "./pipeline/graph-traversal",
 				"kind": "import",
 				"runtime": true,
-				"line": 45
+				"line": 46
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/reranker-embedding:b9d96f8850d05ba7:1",
@@ -29934,7 +29864,7 @@
 				"specifier": "./pipeline/reranker-embedding",
 				"kind": "import",
 				"runtime": true,
-				"line": 52
+				"line": 53
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/reranker-llm:ca0aed3c450f0a83:1",
@@ -29943,7 +29873,7 @@
 				"specifier": "./pipeline/reranker-llm",
 				"kind": "import",
 				"runtime": true,
-				"line": 53
+				"line": 54
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/reranker:a8b7b0e8a192f2dd:1",
@@ -29952,7 +29882,7 @@
 				"specifier": "./pipeline/reranker",
 				"kind": "import",
 				"runtime": true,
-				"line": 51
+				"line": 52
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/stop-words:c53ea0e3600bb71a:1",
@@ -29961,7 +29891,7 @@
 				"specifier": "./pipeline/stop-words",
 				"kind": "import",
 				"runtime": true,
-				"line": 54
+				"line": 55
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/structured-evidence:f00f207ae42a17a9:1",
@@ -29970,16 +29900,16 @@
 				"specifier": "./pipeline/structured-evidence",
 				"kind": "import",
 				"runtime": true,
-				"line": 55
+				"line": 56
 			},
 			{
-				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/structured-path-evidence:04a7dee5f964b686:1",
+				"id": "platform/daemon/src/memory-search.ts:import:runtime:./pipeline/structured-path-evidence:a68d2e78cfa447d6:1",
 				"from": "platform/daemon/src/memory-search.ts",
 				"to": "platform/daemon/src/pipeline/structured-path-evidence.ts",
 				"specifier": "./pipeline/structured-path-evidence",
 				"kind": "import",
 				"runtime": true,
-				"line": 60
+				"line": 61
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./session-recall-dedupe:250ca19e7c31dc00:1",
@@ -29988,7 +29918,7 @@
 				"specifier": "./session-recall-dedupe",
 				"kind": "import",
 				"runtime": true,
-				"line": 66
+				"line": 67
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./source-lifecycle-telemetry:745a72792cd61417:1",
@@ -29997,7 +29927,7 @@
 				"specifier": "./source-lifecycle-telemetry",
 				"kind": "import",
 				"runtime": true,
-				"line": 67
+				"line": 68
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./sql-utils:b55357463f792166:1",
@@ -30006,7 +29936,7 @@
 				"specifier": "./sql-utils",
 				"kind": "import",
 				"runtime": true,
-				"line": 68
+				"line": 69
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./telemetry:0873dffc27d906ab:1",
@@ -30015,7 +29945,7 @@
 				"specifier": "./telemetry",
 				"kind": "import",
 				"runtime": true,
-				"line": 69
+				"line": 70
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:./temporal-recall:ee3473d9399431c8:1",
@@ -30024,7 +29954,7 @@
 				"specifier": "./temporal-recall",
 				"kind": "import",
 				"runtime": true,
-				"line": 70
+				"line": 71
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:runtime:@signet/core:29148558be8b5a59:1",
@@ -30045,13 +29975,22 @@
 				"line": 15
 			},
 			{
+				"id": "platform/daemon/src/memory-search.ts:import:type:./db-owner-client:0beed3b0b4bc9709:1",
+				"from": "platform/daemon/src/memory-search.ts",
+				"to": "platform/daemon/src/db-owner-client.ts",
+				"specifier": "./db-owner-client",
+				"kind": "import",
+				"runtime": false,
+				"line": 30
+			},
+			{
 				"id": "platform/daemon/src/memory-search.ts:import:type:./embedding-profile:29ac731cf584254b:1",
 				"from": "platform/daemon/src/memory-search.ts",
 				"to": "platform/daemon/src/embedding-profile.ts",
 				"specifier": "./embedding-profile",
 				"kind": "import",
 				"runtime": false,
-				"line": 34
+				"line": 35
 			},
 			{
 				"id": "platform/daemon/src/memory-search.ts:import:type:./memory-config:d1dacab43ad913f5:1",
@@ -30060,7 +29999,7 @@
 				"specifier": "./memory-config",
 				"kind": "import",
 				"runtime": false,
-				"line": 39
+				"line": 40
 			},
 			{
 				"id": "platform/daemon/src/memory-synthesis.ts:import:runtime:./db-accessor:03b158140f6621b8:1",
@@ -31341,13 +31280,22 @@
 				"line": 12
 			},
 			{
+				"id": "platform/daemon/src/pipeline/context-construction.ts:import:runtime:../db-owner-sql:1901d7e9e59586a0:1",
+				"from": "platform/daemon/src/pipeline/context-construction.ts",
+				"to": "platform/daemon/src/db-owner-sql.ts",
+				"specifier": "../db-owner-sql",
+				"kind": "import",
+				"runtime": true,
+				"line": 14
+			},
+			{
 				"id": "platform/daemon/src/pipeline/context-construction.ts:import:runtime:../memory-content-safety:49fdd8f7a4d317ad:1",
 				"from": "platform/daemon/src/pipeline/context-construction.ts",
 				"to": "platform/daemon/src/memory-content-safety.ts",
 				"specifier": "../memory-content-safety",
 				"kind": "import",
 				"runtime": true,
-				"line": 14
+				"line": 16
 			},
 			{
 				"id": "platform/daemon/src/pipeline/context-construction.ts:import:runtime:@signet/core:746fdc1cb9dd4290:1",
@@ -31363,6 +31311,15 @@
 				"from": "platform/daemon/src/pipeline/context-construction.ts",
 				"to": "platform/daemon/src/db-accessor.ts",
 				"specifier": "../db-accessor",
+				"kind": "import",
+				"runtime": false,
+				"line": 15
+			},
+			{
+				"id": "platform/daemon/src/pipeline/context-construction.ts:import:type:../db-owner-client:2873d5a425e7ee76:1",
+				"from": "platform/daemon/src/pipeline/context-construction.ts",
+				"to": "platform/daemon/src/db-owner-client.ts",
+				"specifier": "../db-owner-client",
 				"kind": "import",
 				"runtime": false,
 				"line": 13
@@ -32736,13 +32693,22 @@
 				"line": 2
 			},
 			{
+				"id": "platform/daemon/src/pipeline/graph-search.ts:import:runtime:../db-owner-sql:1901d7e9e59586a0:1",
+				"from": "platform/daemon/src/pipeline/graph-search.ts",
+				"to": "platform/daemon/src/db-owner-sql.ts",
+				"specifier": "../db-owner-sql",
+				"kind": "import",
+				"runtime": true,
+				"line": 12
+			},
+			{
 				"id": "platform/daemon/src/pipeline/graph-search.ts:import:runtime:./stop-words:a3dd9807e2325238:1",
 				"from": "platform/daemon/src/pipeline/graph-search.ts",
 				"to": "platform/daemon/src/pipeline/stop-words.ts",
 				"specifier": "./stop-words",
 				"kind": "import",
 				"runtime": true,
-				"line": 11
+				"line": 13
 			},
 			{
 				"id": "platform/daemon/src/pipeline/graph-search.ts:import:type:../db-accessor:593fcf98d8913433:1",
@@ -32752,6 +32718,15 @@
 				"kind": "import",
 				"runtime": false,
 				"line": 10
+			},
+			{
+				"id": "platform/daemon/src/pipeline/graph-search.ts:import:type:../db-owner-client:2873d5a425e7ee76:1",
+				"from": "platform/daemon/src/pipeline/graph-search.ts",
+				"to": "platform/daemon/src/db-owner-client.ts",
+				"specifier": "../db-owner-client",
+				"kind": "import",
+				"runtime": false,
+				"line": 11
 			},
 			{
 				"id": "platform/daemon/src/pipeline/graph-transactions.ts:import:type:../db-accessor:7ebc838b867d48fb:1",
@@ -33285,13 +33260,31 @@
 				"line": 11
 			},
 			{
+				"id": "platform/daemon/src/pipeline/prospective-index.ts:import:runtime:../db-owner-maintenance:a6d7e542c87dfb4e:1",
+				"from": "platform/daemon/src/pipeline/prospective-index.ts",
+				"to": "platform/daemon/src/db-owner-maintenance.ts",
+				"specifier": "../db-owner-maintenance",
+				"kind": "import",
+				"runtime": true,
+				"line": 12
+			},
+			{
+				"id": "platform/daemon/src/pipeline/prospective-index.ts:import:runtime:../db-owner-runtime:60a91774c7678194:1",
+				"from": "platform/daemon/src/pipeline/prospective-index.ts",
+				"to": "platform/daemon/src/db-owner-runtime.ts",
+				"specifier": "../db-owner-runtime",
+				"kind": "import",
+				"runtime": true,
+				"line": 20
+			},
+			{
 				"id": "platform/daemon/src/pipeline/prospective-index.ts:import:runtime:../logger:bb72cf971da12488:1",
 				"from": "platform/daemon/src/pipeline/prospective-index.ts",
 				"to": "platform/daemon/src/logger.ts",
 				"specifier": "../logger",
 				"kind": "import",
 				"runtime": true,
-				"line": 12
+				"line": 21
 			},
 			{
 				"id": "platform/daemon/src/pipeline/prospective-index.ts:import:runtime:../system-pressure:ba78b863e19a2677:1",
@@ -33300,16 +33293,7 @@
 				"specifier": "../system-pressure",
 				"kind": "import",
 				"runtime": true,
-				"line": 14
-			},
-			{
-				"id": "platform/daemon/src/pipeline/prospective-index.ts:import:runtime:./stale-leases:0d4b6d2965ceef7a:1",
-				"from": "platform/daemon/src/pipeline/prospective-index.ts",
-				"to": "platform/daemon/src/pipeline/stale-leases.ts",
-				"specifier": "./stale-leases",
-				"kind": "import",
-				"runtime": true,
-				"line": 15
+				"line": 23
 			},
 			{
 				"id": "platform/daemon/src/pipeline/prospective-index.ts:import:runtime:@signet/core:ddd2acbfbf268042:1",
@@ -33327,7 +33311,7 @@
 				"specifier": "../memory-config",
 				"kind": "import",
 				"runtime": false,
-				"line": 13
+				"line": 22
 			},
 			{
 				"id": "platform/daemon/src/pipeline/provider.ts:export:type:@signet/core:76b72c18589aa6c7:1",
@@ -33825,13 +33809,22 @@
 				"line": 1
 			},
 			{
+				"id": "platform/daemon/src/pipeline/structured-path-evidence.ts:import:runtime:../db-owner-sql:1901d7e9e59586a0:1",
+				"from": "platform/daemon/src/pipeline/structured-path-evidence.ts",
+				"to": "platform/daemon/src/db-owner-sql.ts",
+				"specifier": "../db-owner-sql",
+				"kind": "import",
+				"runtime": true,
+				"line": 3
+			},
+			{
 				"id": "platform/daemon/src/pipeline/structured-path-evidence.ts:import:runtime:./stop-words:a3dd9807e2325238:1",
 				"from": "platform/daemon/src/pipeline/structured-path-evidence.ts",
 				"to": "platform/daemon/src/pipeline/stop-words.ts",
 				"specifier": "./stop-words",
 				"kind": "import",
 				"runtime": true,
-				"line": 2
+				"line": 4
 			},
 			{
 				"id": "platform/daemon/src/pipeline/structured-path-evidence.ts:import:type:../db-accessor:593fcf98d8913433:1",
@@ -33841,6 +33834,15 @@
 				"kind": "import",
 				"runtime": false,
 				"line": 1
+			},
+			{
+				"id": "platform/daemon/src/pipeline/structured-path-evidence.ts:import:type:../db-owner-client:2873d5a425e7ee76:1",
+				"from": "platform/daemon/src/pipeline/structured-path-evidence.ts",
+				"to": "platform/daemon/src/db-owner-client.ts",
+				"specifier": "../db-owner-client",
+				"kind": "import",
+				"runtime": false,
+				"line": 2
 			},
 			{
 				"id": "platform/daemon/src/pipeline/synthesis-worker.ts:import:runtime:../db-accessor:1a2a02ae00ccc57f:1",
@@ -36804,24 +36806,6 @@
 				"line": 6
 			},
 			{
-				"id": "platform/daemon/src/routes/misc-routes.ts:dynamic-import:runtime:../scheduler/spawn.js:bc7af47680e3f395:1",
-				"from": "platform/daemon/src/routes/misc-routes.ts",
-				"to": "platform/daemon/src/scheduler/spawn.ts",
-				"specifier": "../scheduler/spawn.js",
-				"kind": "dynamic-import",
-				"runtime": true,
-				"line": 907
-			},
-			{
-				"id": "platform/daemon/src/routes/misc-routes.ts:dynamic-import:runtime:../skill-invocations.js:2b8e1e8b2f8f9214:1",
-				"from": "platform/daemon/src/routes/misc-routes.ts",
-				"to": "platform/daemon/src/skill-invocations.ts",
-				"specifier": "../skill-invocations.js",
-				"kind": "dynamic-import",
-				"runtime": true,
-				"line": 967
-			},
-			{
 				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:../agent-id.js:2407e8e5605ec0d0:1",
 				"from": "platform/daemon/src/routes/misc-routes.ts",
 				"to": "platform/daemon/src/agent-id.ts",
@@ -36876,40 +36860,13 @@
 				"line": 10
 			},
 			{
-				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:../scheduler:6aba092187bf44f4:1",
-				"from": "platform/daemon/src/routes/misc-routes.ts",
-				"to": "platform/daemon/src/scheduler/index.ts",
-				"specifier": "../scheduler",
-				"kind": "import",
-				"runtime": true,
-				"line": 11
-			},
-			{
-				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:../scheduler/task-stream.js:f8dc46675e939321:1",
-				"from": "platform/daemon/src/routes/misc-routes.ts",
-				"to": "platform/daemon/src/scheduler/task-stream.ts",
-				"specifier": "../scheduler/task-stream.js",
-				"kind": "import",
-				"runtime": true,
-				"line": 19
-			},
-			{
-				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:../task-scope.js:56f064928cbfe7cc:1",
-				"from": "platform/daemon/src/routes/misc-routes.ts",
-				"to": "platform/daemon/src/task-scope.ts",
-				"specifier": "../task-scope.js",
-				"kind": "import",
-				"runtime": true,
-				"line": 20
-			},
-			{
 				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:../update-system.js:eec2f2f4bf453535:1",
 				"from": "platform/daemon/src/routes/misc-routes.ts",
 				"to": "platform/daemon/src/update-system.ts",
 				"specifier": "../update-system.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 21
+				"line": 11
 			},
 			{
 				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:./dashboard-identity.js:9e33b003e4522a1c:1",
@@ -36918,7 +36875,7 @@
 				"specifier": "./dashboard-identity.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 32
+				"line": 22
 			},
 			{
 				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:./state.js:800b3be8cd5142b1:1",
@@ -36927,16 +36884,16 @@
 				"specifier": "./state.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 33
+				"line": 23
 			},
 			{
-				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:./utils.js:fc66bd8287468cba:1",
+				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:./utils.js:dd33ea294d7cbda1:1",
 				"from": "platform/daemon/src/routes/misc-routes.ts",
 				"to": "platform/daemon/src/routes/utils.ts",
 				"specifier": "./utils.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 34
+				"line": 24
 			},
 			{
 				"id": "platform/daemon/src/routes/misc-routes.ts:import:runtime:@signet/core:322128d8e19b76c6:1",
@@ -38946,195 +38903,6 @@
 				"line": 5
 			},
 			{
-				"id": "platform/daemon/src/scheduler/cron.ts:import:runtime:cron-parser:6868c4d231ff6b43:1",
-				"from": "platform/daemon/src/scheduler/cron.ts",
-				"to": null,
-				"specifier": "cron-parser",
-				"kind": "import",
-				"runtime": true,
-				"line": 5
-			},
-			{
-				"id": "platform/daemon/src/scheduler/index.ts:export:runtime:./cron:9188ccdf8c37f13a:1",
-				"from": "platform/daemon/src/scheduler/index.ts",
-				"to": "platform/daemon/src/scheduler/cron.ts",
-				"specifier": "./cron",
-				"kind": "export",
-				"runtime": true,
-				"line": 2
-			},
-			{
-				"id": "platform/daemon/src/scheduler/index.ts:export:runtime:./skill-resolver:78c22626284e2553:1",
-				"from": "platform/daemon/src/scheduler/index.ts",
-				"to": "platform/daemon/src/scheduler/skill-resolver.ts",
-				"specifier": "./skill-resolver",
-				"kind": "export",
-				"runtime": true,
-				"line": 4
-			},
-			{
-				"id": "platform/daemon/src/scheduler/index.ts:export:runtime:./spawn:155f4245d7a78f57:1",
-				"from": "platform/daemon/src/scheduler/index.ts",
-				"to": "platform/daemon/src/scheduler/spawn.ts",
-				"specifier": "./spawn",
-				"kind": "export",
-				"runtime": true,
-				"line": 3
-			},
-			{
-				"id": "platform/daemon/src/scheduler/index.ts:export:runtime:./worker:7fb30a3ddfa32726:1",
-				"from": "platform/daemon/src/scheduler/index.ts",
-				"to": "platform/daemon/src/scheduler/worker.ts",
-				"specifier": "./worker",
-				"kind": "export",
-				"runtime": true,
-				"line": 1
-			},
-			{
-				"id": "platform/daemon/src/scheduler/skill-resolver.ts:import:runtime:../logger:bb72cf971da12488:1",
-				"from": "platform/daemon/src/scheduler/skill-resolver.ts",
-				"to": "platform/daemon/src/logger.ts",
-				"specifier": "../logger",
-				"kind": "import",
-				"runtime": true,
-				"line": 11
-			},
-			{
-				"id": "platform/daemon/src/scheduler/skill-resolver.ts:import:runtime:@signet/core:030a87cd432e8d53:1",
-				"from": "platform/daemon/src/scheduler/skill-resolver.ts",
-				"to": null,
-				"specifier": "@signet/core",
-				"kind": "import",
-				"runtime": true,
-				"line": 10
-			},
-			{
-				"id": "platform/daemon/src/scheduler/skill-resolver.ts:import:runtime:node:fs:e6df18c83a046a88:1",
-				"from": "platform/daemon/src/scheduler/skill-resolver.ts",
-				"to": null,
-				"specifier": "node:fs",
-				"kind": "import",
-				"runtime": true,
-				"line": 8
-			},
-			{
-				"id": "platform/daemon/src/scheduler/skill-resolver.ts:import:runtime:node:path:0f68ccfb98c9e389:1",
-				"from": "platform/daemon/src/scheduler/skill-resolver.ts",
-				"to": null,
-				"specifier": "node:path",
-				"kind": "import",
-				"runtime": true,
-				"line": 9
-			},
-			{
-				"id": "platform/daemon/src/scheduler/spawn.ts:import:runtime:../logger:bb72cf971da12488:1",
-				"from": "platform/daemon/src/scheduler/spawn.ts",
-				"to": "platform/daemon/src/logger.ts",
-				"specifier": "../logger",
-				"kind": "import",
-				"runtime": true,
-				"line": 8
-			},
-			{
-				"id": "platform/daemon/src/scheduler/spawn.ts:import:runtime:../which:1a83cd300f153ee0:1",
-				"from": "platform/daemon/src/scheduler/spawn.ts",
-				"to": "platform/daemon/src/which.ts",
-				"specifier": "../which",
-				"kind": "import",
-				"runtime": true,
-				"line": 9
-			},
-			{
-				"id": "platform/daemon/src/scheduler/spawn.ts:import:runtime:node:child_process:de346086c1cfb03f:1",
-				"from": "platform/daemon/src/scheduler/spawn.ts",
-				"to": null,
-				"specifier": "node:child_process",
-				"kind": "import",
-				"runtime": true,
-				"line": 6
-			},
-			{
-				"id": "platform/daemon/src/scheduler/spawn.ts:import:type:@signet/core:a8c0125677de7cf5:1",
-				"from": "platform/daemon/src/scheduler/spawn.ts",
-				"to": null,
-				"specifier": "@signet/core",
-				"kind": "import",
-				"runtime": false,
-				"line": 7
-			},
-			{
-				"id": "platform/daemon/src/scheduler/worker.ts:import:runtime:../logger:bb72cf971da12488:1",
-				"from": "platform/daemon/src/scheduler/worker.ts",
-				"to": "platform/daemon/src/logger.ts",
-				"specifier": "../logger",
-				"kind": "import",
-				"runtime": true,
-				"line": 10
-			},
-			{
-				"id": "platform/daemon/src/scheduler/worker.ts:import:runtime:../skill-invocations:c4f7057eb1640b9d:1",
-				"from": "platform/daemon/src/scheduler/worker.ts",
-				"to": "platform/daemon/src/skill-invocations.ts",
-				"specifier": "../skill-invocations",
-				"kind": "import",
-				"runtime": true,
-				"line": 11
-			},
-			{
-				"id": "platform/daemon/src/scheduler/worker.ts:import:runtime:./cron:9fd60d75a022b1d6:1",
-				"from": "platform/daemon/src/scheduler/worker.ts",
-				"to": "platform/daemon/src/scheduler/cron.ts",
-				"specifier": "./cron",
-				"kind": "import",
-				"runtime": true,
-				"line": 12
-			},
-			{
-				"id": "platform/daemon/src/scheduler/worker.ts:import:runtime:./skill-resolver:008ff61a94b640c7:1",
-				"from": "platform/daemon/src/scheduler/worker.ts",
-				"to": "platform/daemon/src/scheduler/skill-resolver.ts",
-				"specifier": "./skill-resolver",
-				"kind": "import",
-				"runtime": true,
-				"line": 13
-			},
-			{
-				"id": "platform/daemon/src/scheduler/worker.ts:import:runtime:./spawn:d618da46b6bdb7f0:1",
-				"from": "platform/daemon/src/scheduler/worker.ts",
-				"to": "platform/daemon/src/scheduler/spawn.ts",
-				"specifier": "./spawn",
-				"kind": "import",
-				"runtime": true,
-				"line": 14
-			},
-			{
-				"id": "platform/daemon/src/scheduler/worker.ts:import:runtime:./task-stream:c8b31d53e8459b65:1",
-				"from": "platform/daemon/src/scheduler/worker.ts",
-				"to": "platform/daemon/src/scheduler/task-stream.ts",
-				"specifier": "./task-stream",
-				"kind": "import",
-				"runtime": true,
-				"line": 15
-			},
-			{
-				"id": "platform/daemon/src/scheduler/worker.ts:import:type:../db-accessor:15758711e6d257c7:1",
-				"from": "platform/daemon/src/scheduler/worker.ts",
-				"to": "platform/daemon/src/db-accessor.ts",
-				"specifier": "../db-accessor",
-				"kind": "import",
-				"runtime": false,
-				"line": 9
-			},
-			{
-				"id": "platform/daemon/src/scheduler/worker.ts:import:type:@signet/core:a8c0125677de7cf5:1",
-				"from": "platform/daemon/src/scheduler/worker.ts",
-				"to": null,
-				"specifier": "@signet/core",
-				"kind": "import",
-				"runtime": false,
-				"line": 8
-			},
-			{
 				"id": "platform/daemon/src/secrets.ts:import:runtime:./bitwarden.js:73d7ba8016719572:1",
 				"from": "platform/daemon/src/secrets.ts",
 				"to": "platform/daemon/src/bitwarden.ts",
@@ -40267,15 +40035,6 @@
 				"kind": "import",
 				"runtime": true,
 				"line": 20
-			},
-			{
-				"id": "platform/daemon/src/task-scope.ts:import:type:./db-accessor:fad420036f09993c:1",
-				"from": "platform/daemon/src/task-scope.ts",
-				"to": "platform/daemon/src/db-accessor.ts",
-				"specifier": "./db-accessor",
-				"kind": "import",
-				"runtime": false,
-				"line": 1
 			},
 			{
 				"id": "platform/daemon/src/telemetry.ts:import:runtime:./db-accessor:b13bc4561c43b84c:1",
@@ -44994,6 +44753,15 @@
 				"line": 8
 			},
 			{
+				"id": "surfaces/cli/src/features/setup-connect.ts:import:runtime:../../../../platform/daemon/src/inference-oauth-runtime.js:218bad08d8ccd71a:1",
+				"from": "surfaces/cli/src/features/setup-connect.ts",
+				"to": "platform/daemon/src/inference-oauth-runtime.ts",
+				"specifier": "../../../../platform/daemon/src/inference-oauth-runtime.js",
+				"kind": "import",
+				"runtime": true,
+				"line": 13
+			},
+			{
 				"id": "surfaces/cli/src/features/setup-connect.ts:import:runtime:./setup-inference-connect.js:f90813027aea11f0:1",
 				"from": "surfaces/cli/src/features/setup-connect.ts",
 				"to": "surfaces/cli/src/features/setup-inference-connect.ts",
@@ -45036,7 +44804,7 @@
 				"specifier": "@inquirer/prompts",
 				"kind": "dynamic-import",
 				"runtime": true,
-				"line": 231
+				"line": 233
 			},
 			{
 				"id": "surfaces/cli/src/features/setup-fresh.ts:dynamic-import:runtime:@inquirer/prompts:9aebf451a80cd8b9:2",
@@ -45045,7 +44813,7 @@
 				"specifier": "@inquirer/prompts",
 				"kind": "dynamic-import",
 				"runtime": true,
-				"line": 450
+				"line": 456
 			},
 			{
 				"id": "surfaces/cli/src/features/setup-fresh.ts:import:runtime:../lib/network.js:5d6d5369cad6d40c:1",
@@ -45129,6 +44897,15 @@
 				"line": 30
 			},
 			{
+				"id": "surfaces/cli/src/features/setup-fresh.ts:import:runtime:./setup-terminal.js:bfc9bae5437bfa9d:1",
+				"from": "surfaces/cli/src/features/setup-fresh.ts",
+				"to": "surfaces/cli/src/features/setup-terminal.ts",
+				"specifier": "./setup-terminal.js",
+				"kind": "import",
+				"runtime": true,
+				"line": 31
+			},
+			{
 				"id": "surfaces/cli/src/features/setup-fresh.ts:import:runtime:@signet/connector-openclaw:71970aff28bc8726:1",
 				"from": "surfaces/cli/src/features/setup-fresh.ts",
 				"to": null,
@@ -45198,7 +44975,7 @@
 				"specifier": "./setup-types.js",
 				"kind": "import",
 				"runtime": false,
-				"line": 31
+				"line": 32
 			},
 			{
 				"id": "surfaces/cli/src/features/setup-inference-connect.ts:import:runtime:@earendil-works/pi-ai/providers/all:8bdbe84c23a2394f:1",
@@ -45291,6 +45068,15 @@
 				"line": 35
 			},
 			{
+				"id": "surfaces/cli/src/features/setup-migrate.ts:import:runtime:./setup-terminal.js:bfc9bae5437bfa9d:1",
+				"from": "surfaces/cli/src/features/setup-migrate.ts",
+				"to": "surfaces/cli/src/features/setup-terminal.ts",
+				"specifier": "./setup-terminal.js",
+				"kind": "import",
+				"runtime": true,
+				"line": 45
+			},
+			{
 				"id": "surfaces/cli/src/features/setup-migrate.ts:import:runtime:@inquirer/prompts:b9d77ed3388e72b0:1",
 				"from": "surfaces/cli/src/features/setup-migrate.ts",
 				"to": null,
@@ -45369,7 +45155,7 @@
 				"specifier": "./setup-types.js",
 				"kind": "import",
 				"runtime": false,
-				"line": 45
+				"line": 46
 			},
 			{
 				"id": "surfaces/cli/src/features/setup-pipeline.ts:import:runtime:@signet/core:fbe0d3517a898444:1",
@@ -50846,7 +50632,6 @@
 					"acpx",
 					"better-sqlite3",
 					"chokidar",
-					"cron-parser",
 					"graphology",
 					"graphology-communities-louvain",
 					"graphology-types",
@@ -51470,13 +51255,13 @@
 			}
 		],
 		"summary": {
-			"files": 935,
-			"lines": 268555,
-			"logicalStatements": 96703,
-			"runtimeEdges": 1787,
-			"allEdges": 2376,
-			"unresolvedEdges": 1757,
-			"dynamicLiteralSites": 51,
+			"files": 930,
+			"lines": 267760,
+			"logicalStatements": 96449,
+			"runtimeEdges": 1776,
+			"allEdges": 2367,
+			"unresolvedEdges": 1750,
+			"dynamicLiteralSites": 49,
 			"computedLoads": 2,
 			"runtimeCycles": 0,
 			"typeCycles": 8,
