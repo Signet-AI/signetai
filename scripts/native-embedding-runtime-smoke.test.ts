@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { type Server, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { MIGRATIONS } from "../platform/core/src/migrations";
+import { MIGRATIONS, runMigrations } from "../platform/core/src/migrations";
 
 const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_NATIVE_EMBEDDING_SMOKE === "1";
@@ -64,6 +64,17 @@ function tempDir(): string {
 	const path = mkdtempSync(join(tmpdir(), "signet-native-embedding-smoke-"));
 	tempDirs.push(path);
 	return path;
+}
+
+function initializeSmokeDatabase(workspace: string): void {
+	const memoryDir = join(workspace, "memory");
+	mkdirSync(memoryDir, { recursive: true });
+	const database = new Database(join(memoryDir, "memories.db"));
+	try {
+		runMigrations(database as unknown as Parameters<typeof runMigrations>[0]);
+	} finally {
+		database.close();
+	}
 }
 
 async function freePort(): Promise<number> {
@@ -327,6 +338,7 @@ describe("compiled native embedding runtime", () => {
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native Projection Smoke\nharnesses:\n  - hermes-agent\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: none\n",
 			);
+			initializeSmokeDatabase(workspace);
 			const port = await freePort();
 			const origin = `http://127.0.0.1:${port}`;
 			const daemon = spawn(binary, [], {
@@ -495,6 +507,7 @@ describe("compiled native embedding runtime", () => {
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native Release Smoke\nharnesses:\n  - hermes-agent\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: none\n",
 			);
+			initializeSmokeDatabase(workspace);
 
 			const port = await freePort();
 			const origin = `http://127.0.0.1:${port}`;
@@ -571,6 +584,7 @@ describe("compiled native embedding runtime", () => {
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native Embedding Smoke\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: native\n  model: nomic-embed-text-v1.5\n  dimensions: 768\n",
 			);
+			initializeSmokeDatabase(workspace);
 
 			const port = await freePort();
 			const origin = `http://127.0.0.1:${port}`;
@@ -650,6 +664,7 @@ describe("compiled native embedding runtime", () => {
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native Embedding Isolation Smoke\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: native\n  model: nomic-embed-text-v1.5\n  dimensions: 768\n",
 			);
+			initializeSmokeDatabase(workspace);
 			const [port, blackhole] = await Promise.all([freePort(), blackholeOrigin()]);
 			const origin = `http://127.0.0.1:${port}`;
 			const child = spawn(binary, [], {
@@ -719,6 +734,7 @@ describe("compiled native OAuth sign-in", () => {
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native OAuth Smoke\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: none\n",
 			);
+			initializeSmokeDatabase(workspace);
 			const port = await freePort();
 			const origin = `http://127.0.0.1:${port}`;
 			const child = spawn(binary, [], {
