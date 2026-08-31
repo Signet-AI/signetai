@@ -197,6 +197,43 @@ describe("DB owner client", () => {
 		}
 	});
 
+	test("reaps a fatal owner before allowing replacement startup", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const workerPath = join(database.directory, "fatal-owner-worker.js");
+		writeFileSync(
+			workerPath,
+			[
+				'process.stdin.setEncoding("utf8");',
+				"const newline = String.fromCharCode(10);",
+				'process.stdout.write(JSON.stringify({ type: "ready", pid: process.pid }) + newline);',
+				'process.stdin.on("data", (chunk) => {',
+				"  for (const line of chunk.split(newline)) {",
+				"    if (!line) continue;",
+				"    const command = JSON.parse(line);",
+				'    if (command.type === "submit") process.stdout.write(JSON.stringify({ type: "fatal", error: { name: "TEST_FATAL", message: "owner fatal" } }) + newline);',
+				"  }",
+				"});",
+			].join(String.fromCharCode(10)),
+		);
+		client = createDbOwnerClient({ dbPath: database.path, workerPath });
+		await client.start();
+		const firstPid = client.health().pid;
+		if (firstPid === null) throw new Error("fatal test owner did not publish a pid");
+		const handle = client.submit<readonly { readonly value: number }[]>(
+			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+			{ operation: "fatal-owner-regression", lane: "read", deadlineMs: 5_000 },
+		);
+		await expect(handle.result).rejects.toMatchObject({ message: "owner fatal" });
+		await waitFor(() => !processExists(firstPid));
+		expect(client.health().lanes?.read).toMatchObject({ state: "failed", pid: null });
+
+		await client.start();
+		const replacementPid = client.health().lanes?.read?.pid;
+		expect(replacementPid).not.toBeNull();
+		expect(replacementPid).not.toBe(firstPid);
+	});
+
 	test("rejects when an overridden DB owner startup deadline expires", async () => {
 		const database = makeDb();
 		directory = database.directory;

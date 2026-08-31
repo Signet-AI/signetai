@@ -142,8 +142,13 @@ export class DbOwnerCancelledError extends DbOwnerError {
 }
 
 export class DbOwnerDiedError extends DbOwnerError {
-	constructor(message = "DB owner process died; pending jobs failed closed") {
-		super("DB_OWNER_DIED", message);
+	constructor(
+		message = "DB owner process died; pending jobs failed closed",
+		code: string | number = "DB_OWNER_DIED",
+		causeFamily?: DbOwnerFailureCause,
+		sqliteCode?: string | number,
+	) {
+		super(code, message, causeFamily, sqliteCode);
 		this.name = "DbOwnerDiedError";
 	}
 }
@@ -242,7 +247,7 @@ function ownerIsDead(owner: ChildProcess): boolean {
 	}
 }
 
-function messageFromError(error: DbOwnerSerializedError): Error {
+function messageFromError(error: DbOwnerSerializedError): DbOwnerError {
 	return new DbOwnerError(error.code ?? error.name, error.message, error.causeFamily, error.sqliteCode);
 }
 
@@ -424,12 +429,13 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 			return;
 		}
 		if (event.type === "fatal") {
-			lastError = event.error.message;
-			state = "failed";
-			if (initialization === "running") initialization = "failed";
-			startupReject?.(messageFromError(event.error));
-			startupReject = null;
-			startupResolve = null;
+			const fatalError = messageFromError(event.error);
+			retireOwner(
+				new DbOwnerDiedError(fatalError.message, fatalError.code, fatalError.causeFamily, fatalError.sqliteCode),
+				owner,
+				"failed",
+				true,
+			);
 			return;
 		}
 		const pendingJob = pending.get(event.jobId);
@@ -565,10 +571,11 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 			owner.once("close", (code, signal) => handleExit(owner, code, signal, stderr.trim() || undefined));
 			const timer = setTimeout(() => {
 				if (state !== "ready") {
-					lastError = diagnostic(`DB owner did not become ready within ${timeoutMs}ms`);
-					state = "failed";
-					owner.kill("SIGKILL");
-					startupReject?.(new DbOwnerError("DB_OWNER_START_TIMEOUT", diagnostic(lastError)));
+					const error = new DbOwnerError(
+						"DB_OWNER_START_TIMEOUT",
+						diagnostic(`DB owner did not become ready within ${timeoutMs}ms`),
+					);
+					retireOwner(error, owner, "failed", true);
 				}
 			}, timeoutMs);
 			const resolveStartup = startupResolve;
