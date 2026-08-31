@@ -153,6 +153,7 @@ import { up as sourceSyncFrontier } from "./142-source-sync-frontier";
 import { up as embeddingIndexProgress } from "./143-embedding-index-progress";
 import { up as memoryJobLeaseToken } from "./144-memory-job-lease-token";
 import { up as dreamingEvidenceReviews } from "./145-dreaming-evidence-reviews";
+import { up as sourceTranscriptImport } from "./146-source-transcript-import";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1312,6 +1313,25 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "dreaming-evidence-reviews",
 		up: dreamingEvidenceReviews,
 		artifacts: { tables: ["dreaming_evidence_reviews"] },
+	},
+	{
+		version: 146,
+		name: "source-transcript-import",
+		up: sourceTranscriptImport,
+		artifacts: {
+			tables: [
+				"source_import_jobs",
+				"source_import_files",
+				"source_import_records",
+				"transcript_import_conversations",
+				"source_import_record_attempts",
+			],
+			columns: [
+				{ table: "session_transcripts", column: "source_id" },
+				{ table: "session_transcripts", column: "source_record_id" },
+				{ table: "session_transcripts", column: "source_meta_json" },
+			],
+		},
 	},
 ];
 
