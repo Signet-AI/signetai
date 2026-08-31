@@ -4,23 +4,23 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 865 sites
+- Exact ledger inventory: 853 sites
 - Synchronous `withWriteTx()` sites: 65
 - Synchronous `withReadDb()` sites: 99
-- Async-named DB sites: 186
-- Async-named ON-PARENT DB sites: 184
+- Async-named DB sites: 173
+- Async-named ON-PARENT DB sites: 171
 - Async-named OFF-PARENT DB sites: 2
 - Synchronous filesystem/process sites: 515
 - Compile-visible legacy DB sites remaining: 164
   - `withWriteTx`: 65
   - `withReadDb`: 99
 
-The 865-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 65 synchronous writes, 99 synchronous reads, and 186 async-named DB sites are the complete database-call inventory; 164 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 184 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 853-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 65 synchronous writes, 99 synchronous reads, and 164 async-named DB sites are the complete database-call inventory; 164 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 171 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 350
-- ON-PARENT callback execution: 348
+- Database accessor sites classified: 361
+- ON-PARENT callback execution: 359
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -119,25 +119,23 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `memory-lineage.ts:2355` (withReadDbAsync)
 - `memory-search-telemetry.ts:245` (withWriteTxAsync)
 - `memory-search-telemetry.ts:321` (withReadDbAsync)
-- `memory-search.ts:1861` (withReadDbAsync)
-- `memory-search.ts:1884` (withReadDbAsync)
-- `memory-search.ts:1985` (withReadDbAsync)
-- `memory-search.ts:2012` (withReadDbAsync)
-- `memory-search.ts:2100` (withReadDbAsync)
-- `memory-search.ts:2136` (withReadDbAsync)
-- `memory-search.ts:2169` (withReadDbAsync)
-- `memory-search.ts:2251` (withReadDbAsync)
-- `memory-search.ts:2297` (withReadDbAsync)
-- `memory-search.ts:2333` (withReadDbAsync)
-- `memory-search.ts:2380` (withReadDbAsync)
-- `memory-search.ts:2459` (withReadDbAsync)
-- `memory-search.ts:2480` (withReadDbAsync)
-- `memory-search.ts:2509` (withReadDbAsync)
-- `memory-search.ts:2746` (withReadDbAsync)
-- `memory-search.ts:2773` (withReadDbAsync)
-- `memory-search.ts:2971` (withReadDbAsync)
-- `memory-search.ts:3071` (withReadDbAsync)
-- `memory-search.ts:3180` (withReadDbAsync)
+- `memory-search.ts:1924` (withReadDbAsync)
+- `memory-search.ts:1947` (withReadDbAsync)
+- `memory-search.ts:2069` (withReadDbAsync)
+- `memory-search.ts:2158` (withReadDbAsync)
+- `memory-search.ts:2221` (withReadDbAsync)
+- `memory-search.ts:2304` (withReadDbAsync)
+- `memory-search.ts:2350` (withReadDbAsync)
+- `memory-search.ts:2386` (withReadDbAsync)
+- `memory-search.ts:2433` (withReadDbAsync)
+- `memory-search.ts:2512` (withReadDbAsync)
+- `memory-search.ts:2533` (withReadDbAsync)
+- `memory-search.ts:2562` (withReadDbAsync)
+- `memory-search.ts:2799` (withReadDbAsync)
+- `memory-search.ts:2826` (withReadDbAsync)
+- `memory-search.ts:3024` (withReadDbAsync)
+- `memory-search.ts:3126` (withReadDbAsync)
+- `memory-search.ts:3235` (withReadDbAsync)
 - `obsidian-source-embeddings.ts:629` (withReadDb)
 - `obsidian-source-embeddings.ts:665` (withWriteTx)
 - `obsidian-source-embeddings.ts:681` (withReadDb)
@@ -196,10 +194,19 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/dreaming-worker.ts:148` (withReadDbAsync)
 - `pipeline/dreaming-worker.ts:227` (withReadDbAsync)
 - `pipeline/dreaming-worker.ts:247` (withReadDbAsync)
-- `pipeline/graph-traversal.ts:92` (withReadDbAsync)
+- `pipeline/graph-traversal.ts:99` (withReadDbAsync)
 - `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:346` (withReadDbAsync)
 - `db:maintenance.dead-memory-count.read` (withReadDbAsync)
+- `pipeline/prospective-index.ts:284` (withWriteDbAsync)
+- `pipeline/prospective-index.ts:300` (withWriteDbAsync)
+- `pipeline/prospective-index.ts:336` (withWriteTxAsync)
+- `pipeline/prospective-index.ts:394` (withWriteTxAsync)
+- `pipeline/prospective-index.ts:412` (withWriteTxAsync)
+- `pipeline/prospective-index.ts:436` (withWriteTxAsync)
+- `pipeline/prospective-index.ts:459` (withWriteTxAsync)
+- `pipeline/prospective-index.ts:485` (withWriteTxAsync)
+- `pipeline/prospective-index.ts:590` (withWriteTxAsync)
 - `pipeline/reflection-worker.ts:368` (withReadDb)
 - `pipeline/reflection-worker.ts:401` (withReadDb)
 - `pipeline/reflection-worker.ts:463` (withWriteTx)
@@ -309,6 +316,10 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/telemetry-routes.ts:265` (withReadDb)
 - `routes/utils.ts:437` (withReadDb)
 - `routes/utils.ts:525` (withReadDb)
+- `scheduler/worker.ts:107` (withWriteTxAsync)
+- `scheduler/worker.ts:131` (withReadDbAsync)
+- `scheduler/worker.ts:202` (withWriteTxAsync)
+- `scheduler/worker.ts:291` (withWriteTxAsync)
 - `session-checkpoints.ts:112` (withWriteTxAsync)
 - `session-checkpoints.ts:180` (withWriteTx)
 - `session-checkpoints.ts:297` (withReadDb)
@@ -379,8 +390,8 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 
 ### OFF-PARENT sites
 
-- `db-owner-worker.ts:885` (withReadDbAsync)
-- `db-owner-worker.ts:918` (withReadDbAsync)
+- `db-owner-worker.ts:876` (withReadDbAsync)
+- `db-owner-worker.ts:909` (withReadDbAsync)
 
 ## A3 Slice 2 migration notes
 
