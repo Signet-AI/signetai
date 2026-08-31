@@ -191,6 +191,7 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 
 		expect(result.memoryIds.size).toBe(0);
 		expect(result.constraints).toEqual([]);
+		expect(result.error).toEqual({ code: null, message: "injected traversal failure" });
 		expect(activeReads).toBe(0);
 	});
 

@@ -27,6 +27,7 @@ import {
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { getDbAccessor, getDbAccessorPath, runWriteTxAsync } from "./db-accessor";
+import type { DbOwnerClient } from "./db-owner-client";
 import { vectorSearchThroughDbOwner } from "./db-owner-recall";
 import { ownerBytesFromHex, ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { getDbOwner, getDbRecallOwner } from "./db-owner-runtime";
@@ -46,7 +47,7 @@ import {
 	type resolveFocalEntities,
 	resolveFocalEntitiesViaOwner,
 	setTraversalStatus,
-	traverseKnowledgeGraph,
+	traverseKnowledgeGraphViaOwner,
 } from "./pipeline/graph-traversal";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
@@ -153,6 +154,16 @@ export interface RecallResponse {
 		vectorCompleteness?: VectorSearchCompleteness;
 		/** Maximum canonical rows inspected by a bounded fallback scan. */
 		searchedWindow?: number;
+		/** True when graph traversal timed out or failed after bounded fallback. */
+		graphPartial?: boolean;
+		/** Operational graph failure, when one was observed. */
+		graphError?: {
+			channel: "graph_traversal";
+			code: string | number | null;
+			message: string;
+		};
+		/** Most specific known degradation reason for partial recall. */
+		degradation?: "fts_incomplete" | "graph_traversal_timeout" | "graph_traversal_failed";
 		/**
 		 * True when lexical coverage is known incomplete because FTS rows are
 		 * missing. The response remains successful and may contain bounded bridge
@@ -1449,6 +1460,20 @@ function cosineSimilarity(query: Float32Array, memory: Float32Array): number {
 	return Math.max(0, Math.min(1, dot / denom));
 }
 
+function describeRecallGraphError(error: unknown): {
+	readonly code: string | number | null;
+	readonly message: string;
+} {
+	const code =
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(typeof error.code === "string" || typeof error.code === "number")
+			? error.code
+			: null;
+	return { code, message: error instanceof Error ? error.message : String(error) };
+}
+
 // ---------------------------------------------------------------------------
 // Main search orchestration
 // ---------------------------------------------------------------------------
@@ -1502,9 +1527,35 @@ export async function hybridRecall(
 	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
 	const timings = createRecallTimingCollector();
 	let lexicalSearchPartial = false;
+	let graphPartial = false;
+	let graphError: RecallResponse["meta"]["graphError"];
+	let graphDegradation: RecallResponse["meta"]["degradation"];
 	const selectionSuppressedIds = new Set<string>();
 	const lifecycleSourceResults = new Map<string, { readonly source?: string; readonly source_id?: string }>();
 	const selectionDedupeEnabled = !!params.sessionKey?.trim() && params.includeRecalled !== true;
+	let graphOwner: DbOwnerClient | null = null;
+	const getGraphOwner = async (): Promise<DbOwnerClient> => {
+		graphOwner ??= await getDbOwner(getDbAccessorPath());
+		return graphOwner;
+	};
+	const recordGraphResult = (result: {
+		readonly timedOut: boolean;
+		readonly error?: { readonly code: string | number | null; readonly message: string };
+	}): void => {
+		if (result.timedOut) {
+			graphPartial = true;
+			graphDegradation ??= "graph_traversal_timeout";
+		}
+		if (result.error) {
+			graphPartial = true;
+			graphDegradation = "graph_traversal_failed";
+			graphError = {
+				channel: "graph_traversal",
+				code: result.error.code,
+				message: result.error.message,
+			};
+		}
+	};
 	const suppressPreviouslyRecalledForSelection = <T extends RecallResult>(items: T[]): T[] => {
 		if (!selectionDedupeEnabled || items.length === 0) return items;
 		const deduped = applyRecallDedupe({
@@ -1546,7 +1597,14 @@ export async function hybridRecall(
 			totalReturned: response.results.length,
 			hasSupplementary: response.results.some((row) => row.supplementary === true),
 			noHits: response.results.length === 0,
-			...(lexicalSearchPartial ? { partial: true } : {}),
+			...(lexicalSearchPartial || graphPartial ? { partial: true } : {}),
+			...(graphPartial ? { graphPartial: true } : {}),
+			...(graphError ? { graphError } : {}),
+			...(graphDegradation
+				? { degradation: graphDegradation }
+				: lexicalSearchPartial
+					? { degradation: "fts_incomplete" as const }
+					: {}),
 			...(dedupeMeta.enabled ? { dedupe: dedupeMeta } : {}),
 		};
 		try {
@@ -1579,8 +1637,10 @@ export async function hybridRecall(
 			results: response.results.length,
 			latencyMs: recallTimings.totalMs,
 			truncated: response.results.length >= limit,
-			partial: lexicalSearchPartial,
-			...(lexicalSearchPartial ? { degradation: "fts_incomplete" } : {}),
+			partial: lexicalSearchPartial || graphPartial,
+			...(lexicalSearchPartial || graphPartial
+				? { degradation: graphDegradation ?? (lexicalSearchPartial ? "fts_incomplete" : "graph_traversal_failed") }
+				: {}),
 		});
 		const selectedLifecycleSources = response.results.flatMap((row) => {
 			const source = lifecycleSourceResults.get(row.id);
@@ -1656,9 +1716,12 @@ export async function hybridRecall(
 		graphQueryTokens ??= tokenizeGraphQuery(query);
 		return graphQueryTokens;
 	};
-	const getFocalEntities = async (agentId: string): Promise<ReturnType<typeof resolveFocalEntities>> => {
+	const getFocalEntities = async (
+		owner: DbOwnerClient,
+		agentId: string,
+	): Promise<ReturnType<typeof resolveFocalEntities>> => {
 		if (focalCache?.agentId === agentId) return focalCache.value;
-		const value = await resolveFocalEntitiesViaOwner(await getDbOwner(getDbAccessorPath()), agentId, {
+		const value = await resolveFocalEntitiesViaOwner(owner, agentId, {
 			queryTokens: getGraphQueryTokens(),
 			includePinned: false,
 		});
@@ -1976,29 +2039,23 @@ export async function hybridRecall(
 					const queryTokens = getGraphQueryTokens();
 					if (queryTokens.length > 0) {
 						const agentId = params.agentId ?? "default";
-						const focal = await getFocalEntities(agentId);
+						const owner = await getGraphOwner();
+						const focal = await getFocalEntities(owner, agentId);
+						if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });
 
 						if (focal.entityIds.length > 0) {
-							const traversal = await traverseKnowledgeGraph(
-								focal.entityIds,
-								(readFn) =>
-									getDbAccessor().withReadDbAsync(readFn, {
-										siteToken: "memory-search.ts:1985",
-										operation: "memory.graph-traversal",
-									}),
-								agentId,
-								{
-									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
-									maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
-									maxDependencyHops: traversalCfg.maxDependencyHops,
-									minDependencyStrength: traversalCfg.minDependencyStrength,
-									maxBranching: traversalCfg.maxBranching,
-									maxTraversalPaths: traversalCfg.maxTraversalPaths,
-									minConfidence: traversalCfg.minConfidence,
-									timeoutMs: traversalCfg.timeoutMs,
-									scope: params.scope,
-								},
-							);
+							const traversal = await traverseKnowledgeGraphViaOwner(focal.entityIds, owner, agentId, {
+								maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
+								maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
+								maxDependencyHops: traversalCfg.maxDependencyHops,
+								minDependencyStrength: traversalCfg.minDependencyStrength,
+								maxBranching: traversalCfg.maxBranching,
+								maxTraversalPaths: traversalCfg.maxTraversalPaths,
+								minConfidence: traversalCfg.minConfidence,
+								timeoutMs: traversalCfg.timeoutMs,
+								scope: params.scope,
+							});
+							recordGraphResult(traversal);
 
 							// Cosine re-scoring: when query embedding is available,
 							// blend structural importance with semantic similarity so
@@ -2059,6 +2116,7 @@ export async function hybridRecall(
 						}
 					}
 				} catch (e) {
+					recordGraphResult({ timedOut: false, error: describeRecallGraphError(e) });
 					logger.warn("memory", "Traversal channel failed (non-fatal)", {
 						error: e instanceof Error ? e.message : String(e),
 					});
@@ -2127,28 +2185,22 @@ export async function hybridRecall(
 					const queryTokens = getGraphQueryTokens();
 					if (traversalCfg && queryTokens.length > 0) {
 						const agentId = params.agentId ?? "default";
-						const focal = await getFocalEntities(agentId);
+						const owner = await getGraphOwner();
+						const focal = await getFocalEntities(owner, agentId);
+						if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });
 
 						if (focal.entityIds.length > 0) {
-							const traversal = await traverseKnowledgeGraph(
-								focal.entityIds,
-								(readFn) =>
-									getDbAccessor().withReadDbAsync(readFn, {
-										siteToken: "memory-search.ts:2136",
-										operation: "memory.graph-traversal",
-									}),
-								agentId,
-								{
-									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
-									maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
-									maxDependencyHops: traversalCfg.maxDependencyHops,
-									minDependencyStrength: traversalCfg.minDependencyStrength,
-									maxBranching: traversalCfg.maxBranching,
-									maxTraversalPaths: traversalCfg.maxTraversalPaths,
-									minConfidence: traversalCfg.minConfidence,
-									timeoutMs: traversalCfg.timeoutMs,
-								},
-							);
+							const traversal = await traverseKnowledgeGraphViaOwner(focal.entityIds, owner, agentId, {
+								maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
+								maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
+								maxDependencyHops: traversalCfg.maxDependencyHops,
+								minDependencyStrength: traversalCfg.minDependencyStrength,
+								maxBranching: traversalCfg.maxBranching,
+								maxTraversalPaths: traversalCfg.maxTraversalPaths,
+								minConfidence: traversalCfg.minConfidence,
+								timeoutMs: traversalCfg.timeoutMs,
+							});
+							recordGraphResult(traversal);
 
 							const tw = traversalCfg.boostWeight;
 							const scoredById = new Map(scored.map((row) => [row.id, row]));
@@ -2219,6 +2271,7 @@ export async function hybridRecall(
 					}
 				});
 			} catch (e) {
+				recordGraphResult({ timedOut: false, error: describeRecallGraphError(e) });
 				logger.warn("memory", "KA traversal boost failed (non-fatal)", {
 					error: e instanceof Error ? e.message : String(e),
 				});
@@ -3067,7 +3120,9 @@ export async function hybridRecall(
 			const queryTokens = getGraphQueryTokens();
 			if (queryTokens.length > 0) {
 				const agentId = params.agentId ?? "default";
-				const focal = await getFocalEntities(agentId);
+				const owner = await getGraphOwner();
+				const focal = await getFocalEntities(owner, agentId);
+				if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });
 				const ctx = await getDbAccessor().withReadDbAsync(
 					async (db) => {
 						if (focal.entityIds.length === 0) return null;

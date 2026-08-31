@@ -3506,7 +3506,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			});
 			if (returnedResult.meta.partial === true) {
 				c.header("x-signet-operation-degraded", "1");
-				c.header("x-signet-operation-cause", "fts_index_incomplete");
+				c.header("x-signet-operation-cause", returnedResult.meta.degradation ?? "fts_index_incomplete");
 			}
 			recordFirstUseTelemetry("recall");
 			return c.json(returnedResult);
@@ -3605,7 +3605,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			});
 			if (result.meta.partial === true) {
 				c.header("x-signet-operation-degraded", "1");
-				c.header("x-signet-operation-cause", "fts_index_incomplete");
+				c.header("x-signet-operation-cause", result.meta.degradation ?? "fts_index_incomplete");
 			}
 			return c.json(result);
 		} catch (e) {

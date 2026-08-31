@@ -38,6 +38,13 @@ export interface TraversalResult {
 	readonly activeAspectIds: ReadonlyArray<string>;
 	/** Entity IDs that seeded the walk (needed by context-construction, DP-7) */
 	readonly focalEntityIds: ReadonlyArray<string>;
+	/** Operational failure, when the walk could not complete normally. */
+	readonly error?: TraversalError;
+}
+
+export interface TraversalError {
+	readonly code: string | number | null;
+	readonly message: string;
 }
 
 export interface TraversalConfig {
@@ -113,6 +120,8 @@ export interface FocalEntityResult {
 	readonly entityNames: string[];
 	readonly pinnedEntityIds: string[];
 	readonly source: "project" | "checkpoint" | "query" | "session_key";
+	/** Operational failure, when focal resolution could not complete normally. */
+	readonly error?: TraversalError;
 }
 
 export interface TraversalStatusSnapshot {
@@ -128,6 +137,20 @@ export interface TraversalStatusSnapshot {
 }
 
 let lastTraversalStatus: TraversalStatusSnapshot | null = null;
+
+function describeTraversalError(error: unknown): TraversalError {
+	const code =
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(typeof error.code === "string" || typeof error.code === "number")
+			? error.code
+			: null;
+	return {
+		code,
+		message: error instanceof Error ? error.message : String(error),
+	};
+}
 let traversalTablesAvailableCache: boolean | null = null;
 
 export function setTraversalStatus(snapshot: TraversalStatusSnapshot): void {
@@ -363,12 +386,13 @@ export function resolveFocalEntities(
 			pinnedEntityIds,
 			source,
 		};
-	} catch {
+	} catch (error) {
 		return {
 			entityIds: [],
 			entityNames: [],
 			pinnedEntityIds: [],
 			source: "query",
+			error: describeTraversalError(error),
 		};
 	}
 }
@@ -501,8 +525,14 @@ export async function resolveFocalEntitiesViaOwner(
 			return typeof name === "string" && name.length > 0 ? [name] : [];
 		});
 		return { entityIds, entityNames, pinnedEntityIds, source };
-	} catch {
-		return { entityIds: [], entityNames: [], pinnedEntityIds: [], source: "query" };
+	} catch (error) {
+		return {
+			entityIds: [],
+			entityNames: [],
+			pinnedEntityIds: [],
+			source: "query",
+			error: describeTraversalError(error),
+		};
 	}
 }
 
@@ -812,7 +842,7 @@ async function traverseKnowledgeGraphWithReadAll(
 	agentId: string,
 	config: TraversalConfig,
 ): Promise<TraversalResult> {
-	const empty: TraversalResult = {
+	const empty = (): TraversalResult => ({
 		memoryIds: new Set<string>(),
 		memoryScores: new Map<string, number>(),
 		memoryPaths: new Map<string, TraversalPath>(),
@@ -821,7 +851,7 @@ async function traverseKnowledgeGraphWithReadAll(
 		timedOut: false,
 		activeAspectIds: [],
 		focalEntityIds: [],
-	};
+	});
 
 	try {
 		const tableRows = await readAll<{ readonly name: string }>(
@@ -837,10 +867,10 @@ async function traverseKnowledgeGraphWithReadAll(
 			tableRows.length < 4 ||
 			!["entities", "entity_aspects", "entity_attributes", "entity_dependencies"].every((name) => tableNames.has(name))
 		)
-			return empty;
+			return empty();
 
 		const focalIds = sanitizeEntityIds(focalEntityIds);
-		if (focalIds.length === 0) return empty;
+		if (focalIds.length === 0) return empty();
 
 		const stageYield = yieldEvery(1);
 		const rowYield = yieldEvery(ROW_YIELD_BATCH);
@@ -968,8 +998,8 @@ async function traverseKnowledgeGraphWithReadAll(
 			activeAspectIds: [...phase1.activeAspectIds],
 			focalEntityIds: focalIds,
 		};
-	} catch {
-		return empty;
+	} catch (error) {
+		return { ...empty(), error: describeTraversalError(error) };
 	}
 }
 

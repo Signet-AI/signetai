@@ -154,6 +154,12 @@ describe("hybridRecall", () => {
 		expect(classifyRecallTelemetry(telemetryResponse("ka_traversal"))).toBe("graph");
 	});
 
+	it("keeps both recall traversal branches on the owner boundary", () => {
+		const source = readFileSync(join(import.meta.dir, "memory-search.ts"), "utf-8");
+		expect(source).not.toContain("traverseKnowledgeGraph(");
+		expect(source.match(/traverseKnowledgeGraphViaOwner\(/g) ?? []).toHaveLength(2);
+	});
+
 	function seedUnbackedOntologyClaim(opts: {
 		readonly id: string;
 		readonly agentId?: string;
