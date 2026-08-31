@@ -2,7 +2,7 @@ export type SyncDbSourceLocationToken = `${string}:${number}`;
 export type SyncDbSemanticSiteToken = `db:${string}.${string}.${string}`;
 export type SyncDbCallSiteToken = SyncDbSourceLocationToken | SyncDbSemanticSiteToken;
 
-const SOURCE_LOCATION_TOKEN = /^[^:\s]+(?:\/[^:\s]+)*:\d+$/;
+const SOURCE_LOCATION_TOKEN = /^\/?[^:/\s]+(?:\/[^:/\s]+)*:\d+$/;
 const SEMANTIC_TOKEN = /^db:[a-z0-9]+(?:[.-][a-z0-9]+){2,}$/;
 
 export type SyncDbSiteTokenKind = "source-location" | "semantic";
