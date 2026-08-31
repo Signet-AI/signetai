@@ -123,9 +123,23 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) => inlineStatement(db, request.statement));
 	}
 	if (request.kind === "transaction") {
-		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
-			request.transaction.statements.map((statement) => inlineStatement(db, statement)),
-		);
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			const results = request.transaction.statements.map((statement) => inlineStatement(db, statement));
+			for (let i = 0; i < results.length; i++) {
+				const statement = request.transaction.statements[i];
+				const result = results[i];
+				if (
+					statement?.requireChanges === true &&
+					typeof result === "object" &&
+					result !== null &&
+					"changes" in result &&
+					result.changes === 0
+				) {
+					throw new Error("DB owner transaction precondition changed zero rows");
+				}
+			}
+			return results;
+		});
 	}
 	if (request.kind === "batch") {
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {

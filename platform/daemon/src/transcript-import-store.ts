@@ -257,7 +257,6 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 							p.leaseToken as string,
 						],
 						result: "run",
-						requireChanges: true,
 					},
 				],
 				{ operation: "sources.import.store.finalize", lane: "write" },
