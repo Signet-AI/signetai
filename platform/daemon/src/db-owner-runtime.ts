@@ -551,6 +551,14 @@ export async function dbOwnerTranscriptImportReconcile(
 	return await submitWithAdmission(owner, { kind: "transcript_import_reconcile", input }, { ...options, lane: "read" });
 }
 
+export async function dbOwnerTranscriptImportPurge(
+	input: import("./db-owner-protocol").DbOwnerTranscriptImportPurge,
+	options: DbOwnerSqlOptions,
+): Promise<unknown> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission(owner, { kind: "transcript_import_purge", input }, { ...options, lane: "write" });
+}
+
 export async function dbOwnerSourceArtifactUpsert(
 	input: DbOwnerSourceArtifactUpsert,
 	options: DbOwnerSqlOptions,

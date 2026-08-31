@@ -1,6 +1,7 @@
 import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
 import { getDbAccessor, runWriteTxAsync, type WriteDb } from "./db-accessor";
 import { countChanges, syncVecDeleteByEmbeddingIds, tableExists } from "./db-helpers";
+import { dbOwnerQuery, dbOwnerTranscriptImportPurge, runDbOwnerDomainOperation } from "./db-owner-runtime";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { purgeTranscriptImportFilesystem } from "./transcript-import-worker";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
@@ -22,16 +23,30 @@ export async function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): Pr
 	if (!sourceId) return 0;
 	let managedPaths: string[] = [];
 	try {
-		managedPaths = (
-			await getDbAccessor().withReadDbAsync(
-				(db) =>
-					db
-						.prepare(
-							`SELECT managed_path FROM source_import_files WHERE ${input.agentId ? "agent_id = ? AND " : ""}source_id = ?`,
-						)
-						.all(...(input.agentId ? [input.agentId] : []), sourceId) as Array<{ managed_path: string }>,
-			)
-		).map((row) => row.managed_path);
+		managedPaths = await runDbOwnerDomainOperation(getDbAccessor(), {
+			runWithOwner: async () =>
+				(
+					await dbOwnerQuery<Array<{ managed_path: string }>>(
+						{
+							sql: `SELECT managed_path FROM source_import_files WHERE ${input.agentId ? "agent_id = ? AND " : ""}source_id = ?`,
+							params: input.agentId ? [input.agentId, sourceId] : [sourceId],
+							result: "all",
+							readonly: true,
+						},
+						{ operation: "sources.import.purge-paths", lane: "read" },
+					)
+				).map((row) => row.managed_path),
+			runInline: ({ read }) =>
+				read((db) =>
+					(
+						db
+							.prepare(
+								`SELECT managed_path FROM source_import_files WHERE ${input.agentId ? "agent_id = ? AND " : ""}source_id = ?`,
+							)
+							.all(...(input.agentId ? [input.agentId] : []), sourceId) as Array<{ managed_path: string }>
+					).map((row) => row.managed_path),
+				),
+		});
 	} catch {
 		// Older databases do not have import ledgers.
 	}
@@ -41,6 +56,17 @@ export async function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): Pr
 		input.agentId,
 		managedPaths,
 	);
+	await runDbOwnerDomainOperation(getDbAccessor(), {
+		runWithOwner: async () => {
+			await dbOwnerTranscriptImportPurge(
+				{ agentId: input.agentId ?? "default", sourceId },
+				{ operation: "sources.import.purge", lane: "write" },
+			);
+		},
+		runInline: ({ write }) => {
+			write((db) => purgeSourceOwnedRowsInTx(db, input));
+		},
+	});
 	return await runWriteTxAsync(getDbAccessor(), (db) => purgeSourceOwnedRowsInTx(db, input));
 }
 
@@ -69,42 +95,7 @@ export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRow
 		throw new Error("failed to reconcile vec_embeddings before source purge");
 	}
 	let purged = embeddingIds.length;
-	// Imported transcripts are evidence owned by the source. Remove the body and
-	// ledger rows together; the source config tombstone is retained by the
-	// lifecycle caller for audit/replay purposes.
-	if (tableHasColumn(db, "session_transcripts", "source_id")) {
-		purged += countChanges(
-			db
-				.prepare(`DELETE FROM session_transcripts WHERE ${agentWhere}source_id = ?`)
-				.run(...(input.agentId ? [input.agentId] : []), sourceId),
-		);
-	}
-	if (tableExists(db, "source_import_jobs")) {
-		purged += countChanges(
-			db
-				.prepare(
-					`DELETE FROM source_import_jobs WHERE ${agentWhere}id IN (SELECT job_id FROM source_import_files WHERE source_id = ?)`,
-				)
-				.run(...(input.agentId ? [input.agentId] : []), sourceId),
-		);
-	}
-	for (const table of ["source_import_records", "source_import_files"] as const) {
-		if (!tableExists(db, table)) continue;
-		purged += countChanges(
-			db
-				.prepare(`DELETE FROM ${table} WHERE ${agentWhere}source_id = ?`)
-				.run(...(input.agentId ? [input.agentId] : []), sourceId),
-		);
-	}
-	if (tableExists(db, "transcript_import_conversations")) {
-		purged += countChanges(
-			db
-				.prepare(
-					`UPDATE transcript_import_conversations SET state = 'removed', updated_at = datetime('now') WHERE ${agentWhere}owner_source_id = ? AND state != 'removed'`,
-				)
-				.run(...(input.agentId ? [input.agentId] : []), sourceId),
-		);
-	}
+
 	if (embeddingIds.length > 0) {
 		const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
 		for (const id of embeddingIds) stmt.run(id);
