@@ -63,6 +63,7 @@ import {
 } from "../source-lifecycle-telemetry";
 import { getSourceProvider } from "../source-providers";
 import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
+import { purgeSourceOwnedRows } from "../source-purge";
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;
@@ -479,7 +480,9 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		recordSourceDeletionTombstone(source, sourceAgentId, agentsDir);
 		await removeSourceLifecycleState(source, sourceAgentId);
 		const provider = getSourceProvider(source.kind);
-		const purged = provider ? await purgeSource(provider, source, sourceAgentId, purgeNativeSource) : 0;
+		const purged =
+			(await purgeSourceOwnedRows({ sourceId: source.id, agentId: sourceAgentId })) +
+			(provider ? await purgeSource(provider, source, sourceAgentId, purgeNativeSource) : 0);
 		const result = removeSourceIfGeneration(sourceId, source.generation, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 500);
 		if (!isSourceIndexInFlight(source.id)) clearSourceDeletionTombstone(source, sourceAgentId, agentsDir);
