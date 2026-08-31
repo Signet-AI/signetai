@@ -9598,9 +9598,9 @@
 			{
 				"id": "module:scripts/audit-architecture-contract.ts",
 				"path": "scripts/audit-architecture-contract.ts",
-				"lines": 825,
-				"logicalStatements": 357,
-				"exports": 15,
+				"lines": 979,
+				"logicalStatements": 432,
+				"exports": 16,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 0,
 				"runtimeFanOut": 0,
@@ -41349,7 +41349,7 @@
 				"line": 10
 			},
 			{
-				"id": "scripts/audit-architecture-contract.ts:import:runtime:node:path:7b2f09be28066364:1",
+				"id": "scripts/audit-architecture-contract.ts:import:runtime:node:path:c3456c94de2590b2:1",
 				"from": "scripts/audit-architecture-contract.ts",
 				"to": null,
 				"specifier": "node:path",
@@ -50313,10 +50313,32 @@
 		],
 		"generatedArtifacts": [
 			{
+				"path": "integrations/oh-my-pi/connector/src/extension-bundle.ts",
+				"lines": 0,
+				"bytes": 0,
+				"materialized": false,
+				"reason": "manifested-output"
+			},
+			{
+				"path": "integrations/opencode/connector/src/plugin-bundle.ts",
+				"lines": 0,
+				"bytes": 0,
+				"materialized": false,
+				"reason": "manifested-output"
+			},
+			{
+				"path": "integrations/pi/connector/src/extension-bundle.ts",
+				"lines": 0,
+				"bytes": 0,
+				"materialized": false,
+				"reason": "manifested-output"
+			},
+			{
 				"path": "libs/sdk/src/generated/client.ts",
-				"lines": 586,
-				"bytes": 23109,
-				"reason": "generated-path"
+				"lines": 0,
+				"bytes": 0,
+				"materialized": false,
+				"reason": "manifested-output"
 			}
 		],
 		"generatedArtifactManifest": [
@@ -51449,8 +51471,8 @@
 		],
 		"summary": {
 			"files": 935,
-			"lines": 268308,
-			"logicalStatements": 96575,
+			"lines": 268462,
+			"logicalStatements": 96650,
 			"runtimeEdges": 1787,
 			"allEdges": 2376,
 			"unresolvedEdges": 1757,
