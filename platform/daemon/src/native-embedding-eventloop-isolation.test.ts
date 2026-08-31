@@ -17,6 +17,7 @@
  * event loop can't be starved because the grinding now happens in a worker.
  */
 
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import type { Readable } from "node:stream";
@@ -138,6 +139,13 @@ function tempDir(): string {
 	return dir;
 }
 
+function initializeWorkspaceDatabase(agentsDir: string): void {
+	const databaseDir = join(agentsDir, "memory");
+	mkdirSync(databaseDir, { recursive: true });
+	const database = new Database(join(databaseDir, "memories.db"));
+	database.close();
+}
+
 async function freePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
 		const server = createServer();
@@ -244,6 +252,7 @@ describe("native embedding event-loop isolation (e2e)", () => {
 				"",
 			].join("\n"),
 		);
+		initializeWorkspaceDatabase(agentsDir);
 
 		const [port, blackhole] = await Promise.all([freePort(), blackholeOrigin()]);
 		const origin = `http://127.0.0.1:${port}`;
@@ -306,10 +315,9 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		expect(logText).toMatch(/nomic-embed|Initializing.*nomic|embedding/i);
 	}, 60_000);
 
-	it("starts the DB owner when the fresh workspace has no memory directory", async () => {
+	it("fails closed when an explicit workspace is incomplete", async () => {
 		const agentsDir = tempDir();
 		const port = await freePort();
-		const origin = `http://127.0.0.1:${port}`;
 		expect(readdirSync(agentsDir)).not.toContain("memory");
 
 		const child = spawn(process.execPath, [daemonScript], {
@@ -326,8 +334,11 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		const lifecycle = captureChildLifecycle(child, agentsDir);
 		child.stdout.on("data", () => {});
 
-		await waitForHealth(origin, child, lifecycle);
-		expect(readdirSync(agentsDir)).toContain("memory");
-		expect((await fetch(`${origin}/health`)).ok).toBe(true);
+		const error = await childExitError(child, lifecycle);
+		expect(error.message).toContain("status 1");
+		expect(error.message).toContain("incomplete workspace");
+		expect(error.message).toContain("workspace configuration is missing");
+		expect(error.message).toContain("workspace database is missing");
+		expect(readdirSync(agentsDir)).not.toContain("memory");
 	}, 60_000);
 });
