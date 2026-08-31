@@ -51,16 +51,22 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 		});
 	const root = options.workspaceRoot ?? process.env.SIGNET_PATH ?? join(process.env.HOME ?? ".", ".agents");
 	const run = async (): Promise<void> => {
-		try {
-			await options.store.run({
-				kind: "source_import",
-				operation: "recover",
-				agentId: options.agentId,
-				jobId: "*",
-				payload: {},
-			});
-		} catch {
-			/* A transient owner error must not permanently strand recovery. */
+		// Recovery can race DB-owner startup. Keep retrying the durable reset until
+		// it is accepted; proceeding after one swallowed failure strands jobs with
+		// an old lease and prevents the post-filesystem replay path from running.
+		while (active) {
+			try {
+				await options.store.run({
+					kind: "source_import",
+					operation: "recover",
+					agentId: options.agentId,
+					jobId: "*",
+					payload: {},
+				});
+				break;
+			} catch {
+				await new Promise<void>((resolve) => setTimeout(resolve, 250));
+			}
 		}
 		while (active) {
 			if (options.pressure?.()) {
