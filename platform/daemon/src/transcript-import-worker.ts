@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { open, mkdir, rm, writeFile, readdir, rename } from "node:fs/promises";
+import { access, open, mkdir, rm, writeFile, readdir, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { TRANSCRIPT_IMPORT_LIMITS, signetExportV1Adapter } from "./transcript-import-adapter";
 import { buildCompletedTranscriptCommit, canonicalTranscriptLine } from "./transcript-import-commit";
@@ -110,6 +110,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 							jobId: job.id,
 							payload: { fileId: file.id, sourceId: file.source_id, records, checkpoint },
 						});
+						await maybeCrashDuringInventory(root);
 					},
 				);
 				await options.store.run({
@@ -229,9 +230,18 @@ async function appendCanonical(
 	for (;;) {
 		try {
 			await mkdir(lock);
+			await writeFile(join(lock, "owner"), `${process.pid}\n`, "utf8");
 			break;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			try {
+				await access(join(lock, "owner"));
+			} catch {
+				// A process killed after mkdir and before owner metadata is a stale
+				// lock. Only this worker writes these per-harness lock directories.
+				await rm(lock, { recursive: true, force: true });
+				continue;
+			}
 			await new Promise((resolve) => setTimeout(resolve, 5));
 		}
 	}
@@ -265,6 +275,7 @@ async function appendCanonical(
 		} finally {
 			await source.close();
 		}
+		await maybeCrashAfterCanonicalWrite(root);
 		await rm(temp, { force: true });
 		const directory = await open(dirname(path), "r");
 		try {
@@ -276,6 +287,32 @@ async function appendCanonical(
 		await rm(lock, { recursive: true, force: true });
 	}
 }
+async function maybeCrashDuringInventory(root: string): Promise<void> {
+	if (process.env.SIGNET_TRANSCRIPT_IMPORT_FAILPOINT !== "inventory") return;
+	const marker = join(root, ".daemon", "transcript-import-inventory-failpoint-fired");
+	try {
+		await open(marker, "wx").then((handle) => handle.close());
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+		throw error;
+	}
+	process.stderr.write("transcript-import failpoint: inventory\\n");
+	process.exit(87);
+}
+
+async function maybeCrashAfterCanonicalWrite(root: string): Promise<void> {
+	if (process.env.SIGNET_TRANSCRIPT_IMPORT_FAILPOINT !== "after-fs-before-db") return;
+	const marker = join(root, ".daemon", "transcript-import-failpoint-fired");
+	try {
+		await open(marker, "wx").then((handle) => handle.close());
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+		throw error;
+	}
+	process.stderr.write("transcript-import failpoint: after-fs-before-db\\n");
+	process.exit(86);
+}
+
 async function recover(options: TranscriptImportWorkerOptions): Promise<void> {
 	const jobs = await options.store.run<Job[]>({
 		kind: "source_import",
