@@ -82,6 +82,7 @@ type ReadAll = <Row extends object>(
 	params: readonly unknown[],
 	operation: string,
 	estimatedWorkUnits: number,
+	deadlineAt?: number,
 ) => Promise<ReadonlyArray<Row>>;
 
 async function withReadDbAsync<T>(source: ReadDbSource, fn: (db: ReadDb) => T): Promise<T> {
@@ -95,6 +96,7 @@ function readAllFromSource(source: ReadDbSource): ReadAll {
 		params: readonly unknown[],
 		_operation: string,
 		_estimatedWorkUnits: number,
+		_deadlineAt?: number,
 	): Promise<ReadonlyArray<Row>> =>
 		await withReadDbAsync(source, (db) => db.prepare(sql).all(...params) as ReadonlyArray<Row>);
 }
@@ -105,14 +107,17 @@ function readAllFromOwner(owner: DbOwnerClient): ReadAll {
 		params: readonly unknown[],
 		operation: string,
 		estimatedWorkUnits: number,
-	): Promise<ReadonlyArray<Row>> =>
-		await ownerReadAll<Row>(owner, sql, params, {
+		deadlineAt?: number,
+	): Promise<ReadonlyArray<Row>> => {
+		const deadlineMs = deadlineAt === undefined ? 5_000 : Math.max(1, deadlineAt - Date.now());
+		return await ownerReadAll<Row>(owner, sql, params, {
 			operation,
 			lane: "read",
 			workloadClass: "foreground",
-			deadlineMs: 5_000,
+			deadlineMs,
 			estimatedWorkUnits: Math.max(1, Math.min(1_200, estimatedWorkUnits)),
 		});
+	};
 }
 
 export interface FocalEntityResult {
@@ -580,6 +585,7 @@ async function batchCollectForEntities(
 	agentId: string,
 	config: TraversalConfig,
 	budget: number,
+	deadlineAt?: number,
 ): Promise<{
 	readonly memoryIds: Set<string>;
 	readonly memoryScores: Map<string, number>;
@@ -625,6 +631,7 @@ async function batchCollectForEntities(
 		[...entityIds, agentId, agentId],
 		"session-start.graph-traversal.constraints",
 		Math.max(1, entityIds.length * config.maxAttributesPerAspect),
+		deadlineAt,
 	);
 
 	for (const row of constraintRows) {
@@ -662,6 +669,7 @@ async function batchCollectForEntities(
 		aspectArgs,
 		"session-start.graph-traversal.aspects",
 		Math.max(1, entityIds.length * config.maxAspectsPerEntity),
+		deadlineAt,
 	);
 
 	// Apply maxAspectsPerEntity budget by grouping and slicing
@@ -719,6 +727,7 @@ async function batchCollectForEntities(
 					[...budgetedAspectIds, agentId, ...scopeArgs],
 					"session-start.graph-traversal.attributes",
 					Math.max(1, budgetedAspectIds.length * config.maxAttributesPerAspect),
+					deadlineAt,
 				)),
 			];
 		} else {
@@ -736,6 +745,7 @@ async function batchCollectForEntities(
 					[...budgetedAspectIds, agentId],
 					"session-start.graph-traversal.attributes",
 					Math.max(1, budgetedAspectIds.length * config.maxAttributesPerAspect),
+					deadlineAt,
 				)),
 			];
 		}
@@ -789,6 +799,7 @@ async function batchCollectForEntities(
 					[...entityIds, ...scopeArgs, mentionBudget],
 					"session-start.graph-traversal.mentions",
 					mentionBudget,
+					deadlineAt,
 				)),
 			];
 		} else {
@@ -808,6 +819,7 @@ async function batchCollectForEntities(
 					[...entityIds, mentionBudget],
 					"session-start.graph-traversal.mentions",
 					mentionBudget,
+					deadlineAt,
 				)),
 			];
 		}
@@ -853,6 +865,7 @@ async function traverseKnowledgeGraphWithReadAll(
 		focalEntityIds: [],
 	});
 
+	const deadline = Date.now() + config.timeoutMs;
 	try {
 		const tableRows = await readAll<{ readonly name: string }>(
 			`SELECT name FROM sqlite_master
@@ -861,6 +874,7 @@ async function traverseKnowledgeGraphWithReadAll(
 			[],
 			"session-start.graph-traversal.table-check",
 			4,
+			deadline,
 		);
 		const tableNames = new Set(tableRows.map((row) => row.name));
 		if (
@@ -874,11 +888,10 @@ async function traverseKnowledgeGraphWithReadAll(
 
 		const stageYield = yieldEvery(1);
 		const rowYield = yieldEvery(ROW_YIELD_BATCH);
-		const deadline = Date.now() + config.timeoutMs;
 		const budget = config.maxTraversalPaths;
 
 		// --- Phase 1: Batch-collect for focal entities ---
-		const phase1 = await batchCollectForEntities(readAll, focalIds, agentId, config, budget);
+		const phase1 = await batchCollectForEntities(readAll, focalIds, agentId, config, budget, deadline);
 		let timedOut = Date.now() > deadline;
 
 		await stageYield();
@@ -904,6 +917,7 @@ async function traverseKnowledgeGraphWithReadAll(
 				],
 				"session-start.graph-traversal.dependencies",
 				Math.max(1, config.maxBranching * focalIds.length),
+				deadline,
 			);
 
 			// Filter to hop targets not already visited
@@ -913,7 +927,7 @@ async function traverseKnowledgeGraphWithReadAll(
 
 			if (hopTargetIds.length > 0) {
 				const remainingBudget = budget - phase1.memoryIds.size;
-				const phase2 = await batchCollectForEntities(readAll, hopTargetIds, agentId, config, remainingBudget);
+				const phase2 = await batchCollectForEntities(readAll, hopTargetIds, agentId, config, remainingBudget, deadline);
 
 				// Merge phase2 results into phase1
 				for (const mid of phase2.memoryIds) {

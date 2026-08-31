@@ -2066,19 +2066,26 @@ export async function hybridRecall(
 							if (queryVecF32 && traversal.memoryScores.size > 0) {
 								const ids = [...traversal.memoryScores.keys()];
 								const ph = ids.map(() => "?").join(", ");
-								const embRows = await getDbAccessor().withReadDbAsync(
-									async (db) =>
-										db
-											.prepare(
-												`SELECT source_id, vector FROM embeddings
-											 WHERE source_id IN (${ph}) AND vector IS NOT NULL`,
-											)
-											.all(...ids) as Array<{
-											source_id: string;
-											vector: Buffer | null;
-										}>,
-									{ siteToken: "memory-search.ts:2069" },
-								);
+								let embRows: Array<{ source_id: string; vector: Buffer | null }> = [];
+								try {
+									embRows = await getDbAccessor().withReadDbAsync(
+										async (db) =>
+											db
+												.prepare(
+													`SELECT source_id, vector FROM embeddings
+												 WHERE source_id IN (${ph}) AND vector IS NOT NULL`,
+												)
+												.all(...ids) as Array<{
+												source_id: string;
+												vector: Buffer | null;
+											}>,
+										{ siteToken: "memory-search.ts:2069" },
+									);
+								} catch (e) {
+									logger.warn("memory", "Traversal embedding re-scoring failed (non-fatal)", {
+										error: e instanceof Error ? e.message : String(e),
+									});
+								}
 								const qv = queryVecF32;
 								for (const row of embRows) {
 									if (!row.vector) continue;
@@ -2218,13 +2225,15 @@ export async function hybridRecall(
 
 							if (missingIds.length > 0) {
 								const placeholders = missingIds.map(() => "?").join(", ");
-								const baseRows = await getDbAccessor().withReadDbAsync(
-									async (db) =>
-										db
-											.prepare(
-												`SELECT
-												 m.id,
-												 COALESCE(MAX(ea.importance), m.importance, 0.5) AS traversal_score
+								let baseRows: Array<{ id: string; traversal_score: number }> = [];
+								try {
+									baseRows = await getDbAccessor().withReadDbAsync(
+										async (db) =>
+											db
+												.prepare(
+													`SELECT
+													 m.id,
+													 COALESCE(MAX(ea.importance), m.importance, 0.5) AS traversal_score
 											 FROM memories m
 											 LEFT JOIN entity_attributes ea
 											   ON ea.memory_id = m.id
@@ -2235,13 +2244,18 @@ export async function hybridRecall(
 											   ${memorySupersessionSql(db)}
 											 ${filter.sql}
 											 GROUP BY m.id, m.importance`,
-											)
-											.all(agentId, ...missingIds, ...filter.args) as Array<{
-											id: string;
-											traversal_score: number;
-										}>,
-									{ siteToken: "memory-search.ts:2221" },
-								);
+												)
+												.all(agentId, ...missingIds, ...filter.args) as Array<{
+												id: string;
+												traversal_score: number;
+											}>,
+										{ siteToken: "memory-search.ts:2221" },
+									);
+								} catch (e) {
+									logger.warn("memory", "KA traversal candidate hydration failed (non-fatal)", {
+										error: e instanceof Error ? e.message : String(e),
+									});
+								}
 
 								for (const row of baseRows) {
 									const traversalScore = Math.max(minScore, Math.min(1, row.traversal_score));

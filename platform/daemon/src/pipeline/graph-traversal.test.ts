@@ -66,11 +66,12 @@ function seedGraph(db: Database): void {
 	db.exec(`INSERT INTO memory_entity_mentions VALUES ('m1', 'e1', 0.9)`);
 }
 
-function createTestOwner(db: Database, operations: string[]): DbOwnerClient {
+function createTestOwner(db: Database, operations: string[], deadlines: number[] = []): DbOwnerClient {
 	return {
-		submit<Result>(request: DbOwnerRequest, options: { readonly operation: string }) {
+		submit<Result>(request: DbOwnerRequest, options: { readonly operation: string; readonly deadlineMs: number }) {
 			if (request.kind !== "query") throw new Error("test owner only supports query requests");
 			operations.push(options.operation);
+			deadlines.push(options.deadlineMs);
 			const params = request.statement.params ?? [];
 			if (params.some((param) => typeof param === "object")) throw new Error("unexpected test owner byte parameter");
 			const statement = db.prepare(request.statement.sql);
@@ -213,6 +214,19 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 		expect(result.memoryIds.has("m1")).toBe(true);
 		expect(result.memoryIds.has("m3")).toBe(true);
 		expect(operations.every((operation) => operation.startsWith("session-start.graph-"))).toBe(true);
+	});
+
+	test("passes the traversal deadline budget to every owner query", async () => {
+		const deadlines: number[] = [];
+		const owner = createTestOwner(db, [], deadlines);
+		const result = await traverseKnowledgeGraphViaOwner(["e1"], owner, "default", {
+			...CONFIG,
+			timeoutMs: 50,
+		});
+
+		expect(result.memoryIds.has("m1")).toBe(true);
+		expect(deadlines.length).toBeGreaterThan(0);
+		expect(deadlines.every((deadline) => deadline > 0 && deadline <= 50)).toBe(true);
 	});
 
 	test("falls back to LIKE when the owner FTS index has no matching row", async () => {

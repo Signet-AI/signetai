@@ -160,6 +160,21 @@ describe("hybridRecall", () => {
 		expect(source.match(/traverseKnowledgeGraphViaOwner\(/g) ?? []).toHaveLength(2);
 	});
 
+	it("does not classify post-traversal parent reads as graph failures", () => {
+		const source = readFileSync(join(import.meta.dir, "memory-search.ts"), "utf-8");
+		const embeddingStart = source.indexOf("let embRows:");
+		const embeddingEnd = source.indexOf("const qv = queryVecF32", embeddingStart);
+		const embeddingBlock = source.slice(embeddingStart, embeddingEnd);
+		expect(embeddingBlock).toContain("Traversal embedding re-scoring failed");
+		expect(embeddingBlock).not.toContain("recordGraphResult");
+
+		const hydrationStart = source.indexOf("let baseRows:");
+		const hydrationEnd = source.indexOf("for (const row of baseRows)", hydrationStart);
+		const hydrationBlock = source.slice(hydrationStart, hydrationEnd);
+		expect(hydrationBlock).toContain("KA traversal candidate hydration failed");
+		expect(hydrationBlock).not.toContain("recordGraphResult");
+	});
+
 	function seedUnbackedOntologyClaim(opts: {
 		readonly id: string;
 		readonly agentId?: string;
