@@ -5,7 +5,9 @@ import type { PluginHostV1 } from "../plugins/index.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
 import { authConfig } from "./state.js";
 
-export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {
+export function registerPluginRoutes(app: Hono, host?: PluginHostV1): void {
+	const resolveHost = (): PluginHostV1 => host ?? getDefaultPluginHost();
+
 	// Permission guards
 	app.use("/api/plugins", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
@@ -15,11 +17,11 @@ export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.get("/api/plugins", (c) => {
-		return c.json({ plugins: host.list() });
+		return c.json({ plugins: resolveHost().list() });
 	});
 
 	app.get("/api/plugins/prompt-contributions", (c) => {
-		const contributions = host.promptContributions();
+		const contributions = resolveHost().promptContributions();
 		return c.json({ contributions, activeCount: contributions.length });
 	});
 
@@ -36,13 +38,13 @@ export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.get("/api/plugins/:id/diagnostics", (c) => {
-		const plugin = host.diagnostics(c.req.param("id"));
+		const plugin = resolveHost().diagnostics(c.req.param("id"));
 		if (!plugin) return c.json({ error: "Plugin not found" }, 404);
 		return c.json({ plugin });
 	});
 
 	app.get("/api/plugins/:id", (c) => {
-		const plugin = host.get(c.req.param("id"));
+		const plugin = resolveHost().get(c.req.param("id"));
 		if (!plugin) return c.json({ error: "Plugin not found" }, 404);
 		return c.json(plugin);
 	});
@@ -52,26 +54,10 @@ export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const enabled = parseOptionalBoolean(body.enabled);
 		if (enabled === undefined) return c.json({ error: "enabled is required" }, 400);
-		const plugin = host.setEnabled(c.req.param("id"), enabled);
+		const plugin = resolveHost().setEnabled(c.req.param("id"), enabled);
 		if (!plugin) return c.json({ error: "Plugin not found" }, 404);
 		return c.json({ plugin });
 	});
-}
-
-async function readJsonObject(req: Request): Promise<Record<string, unknown> | null> {
-	const raw = await req.text();
-	if (!raw.trim()) return {};
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (!isRecord(parsed)) return null;
-		return parsed;
-	} catch {
-		return null;
-	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseOptionalBoolean(value: unknown): boolean | undefined {

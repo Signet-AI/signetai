@@ -278,6 +278,7 @@ import { registerOntologyRoutes } from "./routes/ontology-routes.js";
 import { mountOsAgentRoutes } from "./routes/os-agent.js";
 import { mountOsChatRoutes } from "./routes/os-chat.js";
 import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
+import { getDefaultPluginHost } from "./plugins/index.js";
 import { registerPluginRoutes } from "./routes/plugins-routes.js";
 import { registerQueueDiagnosticsRoutes } from "./routes/queue-diagnostics.js";
 import { registerReflectionRoutes } from "./routes/reflection-routes.js";
@@ -2261,6 +2262,10 @@ async function main() {
 	process.on("exit", () => {
 		releaseSingleInstanceLock(lock);
 	});
+
+	// Plugin discovery reads and persists daemon-owned registry state. Initialize
+	// it only after this process owns the daemon lock; route imports stay pure.
+	getDefaultPluginHost();
 
 	const previousLifecycle = readDaemonLifecycle(AGENTS_DIR);
 	lifecycleStartedAt = new Date().toISOString();

@@ -86,7 +86,9 @@ async function resolveOnePasswordToken(explicitToken?: string): Promise<string> 
 	return getSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
 }
 
-export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {
+export function registerSecretRoutes(app: Hono, host?: PluginHostV1): void {
+	const resolveHost = (): PluginHostV1 => host ?? getDefaultPluginHost();
+
 	// Permission guards
 	app.use("/api/secrets", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
@@ -96,7 +98,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.get("/api/secrets", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:list"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:list"]);
 		if (denied) return denied;
 		try {
 			const names = await listSecrets();
@@ -109,7 +111,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.get("/api/secrets/bitwarden/status", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:list"]);
 		if (denied) return denied;
 		const activeProvider = (await getActiveSecretProvider()) === "bitwarden";
 		try {
@@ -124,7 +126,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.post("/api/secrets/bitwarden/connect", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:configure"]);
 		if (denied) return denied;
 		try {
 			const body = await readOptionalJsonObject(c);
@@ -152,7 +154,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.delete("/api/secrets/bitwarden/connect", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:configure"]);
 		if (denied) return denied;
 		try {
 			const sessionDeleted = await deleteSecret(BITWARDEN_SESSION_SECRET);
@@ -172,7 +174,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.post("/api/secrets/bitwarden/provider", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:configure"]);
 		if (denied) return denied;
 		const body = await readOptionalJsonObject(c);
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
@@ -192,7 +194,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.get("/api/secrets/bitwarden/folders", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:list"]);
 		if (denied) return denied;
 		try {
 			const session = await getSecret(BITWARDEN_SESSION_SECRET);
@@ -206,7 +208,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.post("/api/secrets/bitwarden/migrate", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:configure"]);
 		if (denied) return denied;
 		try {
 			const body = await readOptionalJsonObject(c);
@@ -236,7 +238,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.get("/api/secrets/1password/status", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:list"]);
 		if (denied) return denied;
 		try {
 			const configured = hasSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
@@ -265,7 +267,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.post("/api/secrets/1password/connect", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:configure"]);
 		if (denied) return denied;
 		try {
 			const body = await readOptionalJsonObject(c);
@@ -299,7 +301,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.delete("/api/secrets/1password/connect", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:configure"]);
 		if (denied) return denied;
 		try {
 			const deleted = await deleteSecret(ONEPASSWORD_SERVICE_ACCOUNT_SECRET);
@@ -312,7 +314,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.get("/api/secrets/1password/vaults", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:list"]);
 		if (denied) return denied;
 		try {
 			const token = await resolveOnePasswordToken();
@@ -326,7 +328,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.post("/api/secrets/1password/import", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:providers:configure"]);
 		if (denied) return denied;
 		try {
 			const body = await readOptionalJsonObject(c);
@@ -364,7 +366,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.post("/api/secrets/exec", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:exec"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:exec"]);
 		if (denied) return denied;
 		try {
 			const body = (await c.req.json()) as {
@@ -403,7 +405,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.get("/api/secrets/exec/:jobId", (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:exec"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:exec"]);
 		if (denied) return denied;
 		const job = getSecretExecJob(c.req.param("jobId"));
 		if (!job) return c.json({ error: "secret exec job not found" }, 404);
@@ -411,7 +413,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.post("/api/secrets/:name/exec", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:exec"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:exec"]);
 		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
@@ -447,7 +449,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.post("/api/secrets/:name", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:write"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:write"]);
 		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
@@ -466,7 +468,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.delete("/api/secrets/:name", async (c) => {
-		const denied = rejectIfCapabilityDenied(c, host, ["secrets:delete"]);
+		const denied = rejectIfCapabilityDenied(c, resolveHost(), ["secrets:delete"]);
 		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
