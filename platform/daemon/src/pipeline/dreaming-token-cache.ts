@@ -71,6 +71,10 @@ export class DreamingBacklogTokenCache {
 		return this.values.get(agentId) ?? 0;
 	}
 
+	record(agentId: string, count: number): void {
+		this.values.set(agentId, count);
+	}
+
 	hasValue(agentId: string): boolean {
 		return this.values.has(agentId);
 	}
@@ -155,4 +159,21 @@ export class DreamingBacklogTokenCache {
 		this.worker = worker;
 		return worker;
 	}
+}
+
+const dreamingBacklogTokenCache = new DreamingBacklogTokenCache();
+
+export function refreshDreamingBacklogTokenCache(
+	agentId: string,
+	entries: readonly DreamingBacklogTokenEntry[],
+): Promise<number> {
+	return dreamingBacklogTokenCache.refresh(agentId, entries);
+}
+
+export function getDreamingEpisodicTokenBacklogCached(agentId: string): number {
+	return dreamingBacklogTokenCache.get(agentId);
+}
+
+export function recordDreamingEpisodicTokenBacklog(agentId: string, count: number): void {
+	dreamingBacklogTokenCache.record(agentId, count);
 }

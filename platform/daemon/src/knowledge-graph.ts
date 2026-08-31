@@ -25,7 +25,7 @@ import { getDbAccessorPath, type DbAccessor, type ReadDb } from "./db-accessor";
 import { getDbOwner } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import { runWriteTxAsync } from "./db-accessor";
-import { getDreamingEpisodicTokenBacklogCached } from "./pipeline/dreaming";
+import { getDreamingEpisodicTokenBacklogCached } from "./pipeline/dreaming-token-cache";
 
 // ---------------------------------------------------------------------------
 // Helpers

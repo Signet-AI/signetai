@@ -3007,14 +3007,14 @@
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 885,
+      "line": 889,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return { content: \"\", unreadable: false };",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 887,
+      "line": 891,
       "api": "readFileSync",
       "source": "const raw = readFileSync(path, \"utf-8\").trim();",
       "category": "hot-path"

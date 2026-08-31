@@ -102,4 +102,10 @@ describe("owner transport purity", () => {
 		expect(runtime).not.toContain('"./knowledge-graph-hygiene"');
 		expect(runtime).not.toContain('"./pipeline/dreaming');
 	});
+
+	it("keeps the knowledge graph independent of Dreaming composition", () => {
+		const graph = source("./knowledge-graph.ts");
+
+		expect(graph).not.toContain('from "./pipeline/dreaming"');
+	});
 });

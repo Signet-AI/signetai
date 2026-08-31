@@ -77,7 +77,11 @@ import {
 	type DreamingSurprisalSelection,
 	selectDreamingSurprisalInDb,
 } from "./dreaming-surprisal";
-import { DreamingBacklogTokenCache, type DreamingBacklogTokenEntry } from "./dreaming-token-cache";
+import {
+	type DreamingBacklogTokenEntry,
+	recordDreamingEpisodicTokenBacklog,
+	refreshDreamingBacklogTokenCache,
+} from "./dreaming-token-cache";
 import {
 	dreamingLiveEvents,
 	publishDreamingAgentEvent,
@@ -2199,8 +2203,6 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 export const DREAMING_FAILURE_HALT_THRESHOLD = 5;
 export const DREAMING_HALT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 export const DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES = 50;
-const dreamingBacklogTokenCache = new DreamingBacklogTokenCache();
-
 export function isDreamingScopeHalted(state: DreamingState, nowMs = Date.now()): boolean {
 	if (state.consecutiveFailures < DREAMING_FAILURE_HALT_THRESHOLD) return false;
 	const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
@@ -2300,9 +2302,9 @@ function readDreamingEpisodicTokenBacklogEntriesInDb(
  */
 export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string, maxSources?: number): Promise<number> {
 	const read = readDreamingEpisodicTokenBacklogEntriesInDb(db, agentId, maxSources);
-	return dreamingBacklogTokenCache
-		.refresh(agentId, read.entries)
-		.then((count) => (read.truncated ? Number.MAX_SAFE_INTEGER : count));
+	return refreshDreamingBacklogTokenCache(agentId, read.entries).then((count) =>
+		read.truncated ? Number.MAX_SAFE_INTEGER : count,
+	);
 }
 
 export async function getDreamingEpisodicTokenBacklog(
@@ -2320,15 +2322,12 @@ export async function getDreamingEpisodicTokenBacklog(
 		estimatedWorkUnits: maxSources === undefined ? DB_OWNER_MAX_WORK_UNITS : maxSources * 10,
 	};
 	if (ownerMaintenance) return await ownerMaintenance.dreamingEpisodicBacklog(input, options);
-	return await runDbOwnerDomainOperation(accessor, {
+	const count = await runDbOwnerDomainOperation(accessor, {
 		runWithOwner: async (owner) => await ownerDreamingEpisodicBacklog(owner, input, options),
 		runInline: ({ read }) => read((db) => getDreamingEpisodicTokenBacklogInDb(db, input.agentId, input.maxSources)),
 	});
-}
-
-/** Read the last worker-computed value for synchronous dashboard metadata. */
-export function getDreamingEpisodicTokenBacklogCached(agentId: string): number {
-	return dreamingBacklogTokenCache.get(agentId);
+	recordDreamingEpisodicTokenBacklog(agentId, count);
+	return count;
 }
 
 export async function shouldTriggerDreaming(
