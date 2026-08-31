@@ -62,7 +62,8 @@ type Mem0EvaluationSearchOptions = Mem0SearchOptions & {
   enableGraph: false
 }
 
-export function collectMem0EventIds(events: readonly unknown[]): string[] {
+export function collectMem0EventIds(response: unknown): string[] {
+  const events = Array.isArray(response) ? response : [response]
   return events.flatMap((event) => {
     if (typeof event !== "object" || event === null || !("eventId" in event)) return []
     return typeof event.eventId === "string" ? [event.eventId] : []

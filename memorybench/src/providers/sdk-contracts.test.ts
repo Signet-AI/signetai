@@ -9,8 +9,9 @@ describe("provider SDK contract regressions", () => {
       topK: 7,
       enableGraph: false,
     })
-    expect(collectMem0EventIds([{ eventId: "event-1" }, { event_id: "stale-shape" }])).toEqual([
-      "event-1",
+    expect(collectMem0EventIds({ eventId: "event-1", status: "PENDING" })).toEqual(["event-1"])
+    expect(collectMem0EventIds([{ eventId: "event-2" }, { event_id: "stale-shape" }])).toEqual([
+      "event-2",
     ])
   })
 
