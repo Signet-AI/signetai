@@ -145,7 +145,7 @@
 				"path": "integrations/oh-my-pi/extension/src/daemon-client.ts",
 				"lines": 19,
 				"logicalStatements": 5,
-				"exports": 2,
+				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
@@ -175,7 +175,7 @@
 				"path": "integrations/oh-my-pi/extension/src/lifecycle.ts",
 				"lines": 69,
 				"logicalStatements": 14,
-				"exports": 3,
+				"exports": 10,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
@@ -415,7 +415,7 @@
 				"path": "integrations/pi/extension-base/src/index.ts",
 				"lines": 78,
 				"logicalStatements": 7,
-				"exports": 7,
+				"exports": 57,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -520,7 +520,7 @@
 				"path": "integrations/pi/extension/src/lifecycle.ts",
 				"lines": 52,
 				"logicalStatements": 6,
-				"exports": 3,
+				"exports": 10,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
@@ -565,7 +565,7 @@
 				"path": "libs/connector-base/src/index.ts",
 				"lines": 676,
 				"logicalStatements": 233,
-				"exports": 29,
+				"exports": 30,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -685,7 +685,7 @@
 				"path": "libs/sdk/src/index.ts",
 				"lines": 1283,
 				"logicalStatements": 110,
-				"exports": 8,
+				"exports": 109,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
@@ -760,7 +760,7 @@
 				"path": "libs/sdk/src/types.ts",
 				"lines": 1255,
 				"logicalStatements": 119,
-				"exports": 118,
+				"exports": 177,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -820,7 +820,7 @@
 				"path": "memorybench/src/benchmarks/index.ts",
 				"lines": 27,
 				"logicalStatements": 14,
-				"exports": 3,
+				"exports": 6,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 11,
@@ -1120,7 +1120,7 @@
 				"path": "memorybench/src/judges/index.ts",
 				"lines": 26,
 				"logicalStatements": 14,
-				"exports": 4,
+				"exports": 8,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
@@ -1375,7 +1375,7 @@
 				"path": "memorybench/src/providers/index.ts",
 				"lines": 56,
 				"logicalStatements": 20,
-				"exports": 4,
+				"exports": 11,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 7,
@@ -1874,9 +1874,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 2,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 7,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 7,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -1889,9 +1889,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 3,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 3,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -1904,9 +1904,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 7,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 7,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -1919,9 +1919,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -1934,9 +1934,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 3,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 3,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -1949,9 +1949,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 5,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 5,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -1979,9 +1979,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 5,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 5,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -1994,9 +1994,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2009,9 +2009,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2024,9 +2024,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 7,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 7,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2038,9 +2038,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2053,10 +2053,10 @@
 				"exports": 16,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 2,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 2,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2068,9 +2068,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 3,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 3,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2083,9 +2083,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2098,10 +2098,10 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 4,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 4,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2114,9 +2114,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 1,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2128,10 +2128,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2143,9 +2143,9 @@
 				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 4,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 4,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2158,9 +2158,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 3,
 				"runtimeFanOut": 1,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 3,
 				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2173,10 +2173,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 2,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 2,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 4,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 4,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2188,10 +2188,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2203,9 +2203,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 1,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2218,10 +2218,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 1,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 1,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2233,10 +2233,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2248,9 +2248,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2263,10 +2263,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 2,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 2,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -2278,9 +2278,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 2,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 2,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2293,9 +2293,9 @@
 				"exports": 52,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 10,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 10,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2308,9 +2308,9 @@
 				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 14,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 14,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -2378,8 +2378,8 @@
 			{
 				"id": "module:platform/core/src/constants.ts",
 				"path": "platform/core/src/constants.ts",
-				"lines": 21,
-				"logicalStatements": 16,
+				"lines": 39,
+				"logicalStatements": 28,
 				"exports": 8,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -2528,9 +2528,9 @@
 			{
 				"id": "module:platform/core/src/index.ts",
 				"path": "platform/core/src/index.ts",
-				"lines": 690,
+				"lines": 694,
 				"logicalStatements": 81,
-				"exports": 81,
+				"exports": 582,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -4885,7 +4885,7 @@
 				"path": "platform/core/src/migrations/index.ts",
 				"lines": 1654,
 				"logicalStatements": 287,
-				"exports": 5,
+				"exports": 7,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 3,
@@ -5333,9 +5333,9 @@
 			{
 				"id": "module:platform/core/src/workspace.ts",
 				"path": "platform/core/src/workspace.ts",
-				"lines": 296,
-				"logicalStatements": 113,
-				"exports": 11,
+				"lines": 362,
+				"logicalStatements": 144,
+				"exports": 15,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
@@ -5500,7 +5500,7 @@
 				"path": "platform/daemon/src/auth/index.ts",
 				"lines": 34,
 				"logicalStatements": 12,
-				"exports": 12,
+				"exports": 43,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 25,
@@ -5785,7 +5785,7 @@
 				"path": "platform/daemon/src/cross-agent.ts",
 				"lines": 1043,
 				"logicalStatements": 428,
-				"exports": 38,
+				"exports": 40,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 7,
 				"runtimeFanIn": 7,
@@ -5828,8 +5828,8 @@
 			{
 				"id": "module:platform/daemon/src/daemon.ts",
 				"path": "platform/daemon/src/daemon.ts",
-				"lines": 3424,
-				"logicalStatements": 1528,
+				"lines": 3434,
+				"logicalStatements": 1534,
 				"exports": 6,
 				"topLevelMutableBindings": 28,
 				"typeEscapes": 0,
@@ -5935,7 +5935,7 @@
 				"path": "platform/daemon/src/db-owner-client.ts",
 				"lines": 942,
 				"logicalStatements": 495,
-				"exports": 24,
+				"exports": 26,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 6,
@@ -6130,7 +6130,7 @@
 				"path": "platform/daemon/src/dev-daemon.ts",
 				"lines": 8,
 				"logicalStatements": 5,
-				"exports": 1,
+				"exports": 0,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -6640,7 +6640,7 @@
 				"path": "platform/daemon/src/hooks.ts",
 				"lines": 2468,
 				"logicalStatements": 782,
-				"exports": 30,
+				"exports": 39,
 				"topLevelMutableBindings": 2,
 				"typeEscapes": 0,
 				"runtimeFanIn": 4,
@@ -6760,7 +6760,7 @@
 				"path": "platform/daemon/src/index.ts",
 				"lines": 29,
 				"logicalStatements": 4,
-				"exports": 4,
+				"exports": 18,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -6923,8 +6923,8 @@
 			{
 				"id": "module:platform/daemon/src/logger.ts",
 				"path": "platform/daemon/src/logger.ts",
-				"lines": 601,
-				"logicalStatements": 189,
+				"lines": 581,
+				"logicalStatements": 183,
 				"exports": 7,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -7120,7 +7120,7 @@
 				"path": "platform/daemon/src/memory-config.ts",
 				"lines": 1089,
 				"logicalStatements": 254,
-				"exports": 22,
+				"exports": 24,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 21,
@@ -7285,7 +7285,7 @@
 				"path": "platform/daemon/src/migration-integrity-verify.ts",
 				"lines": 430,
 				"logicalStatements": 152,
-				"exports": 19,
+				"exports": 20,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 1,
 				"runtimeFanIn": 2,
@@ -7480,7 +7480,7 @@
 				"path": "platform/daemon/src/ontology-claim-trace.ts",
 				"lines": 1194,
 				"logicalStatements": 361,
-				"exports": 5,
+				"exports": 9,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 1,
 				"runtimeFanIn": 2,
@@ -8095,7 +8095,7 @@
 				"path": "platform/daemon/src/pipeline/index.ts",
 				"lines": 276,
 				"logicalStatements": 99,
-				"exports": 25,
+				"exports": 43,
 				"topLevelMutableBindings": 6,
 				"typeEscapes": 0,
 				"runtimeFanIn": 4,
@@ -8185,7 +8185,7 @@
 				"path": "platform/daemon/src/pipeline/provider.ts",
 				"lines": 1747,
 				"logicalStatements": 922,
-				"exports": 26,
+				"exports": 27,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 6,
@@ -8438,8 +8438,8 @@
 			{
 				"id": "module:platform/daemon/src/plugins/audit.ts",
 				"path": "platform/daemon/src/plugins/audit.ts",
-				"lines": 207,
-				"logicalStatements": 115,
+				"lines": 209,
+				"logicalStatements": 118,
 				"exports": 9,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -8483,8 +8483,8 @@
 			{
 				"id": "module:platform/daemon/src/plugins/host.ts",
 				"path": "platform/daemon/src/plugins/host.ts",
-				"lines": 505,
-				"logicalStatements": 177,
+				"lines": 512,
+				"logicalStatements": 180,
 				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -8500,7 +8500,7 @@
 				"path": "platform/daemon/src/plugins/index.ts",
 				"lines": 68,
 				"logicalStatements": 35,
-				"exports": 10,
+				"exports": 17,
 				"topLevelMutableBindings": 1,
 				"typeEscapes": 0,
 				"runtimeFanIn": 5,
@@ -8828,8 +8828,8 @@
 			{
 				"id": "module:platform/daemon/src/routes/health.ts",
 				"path": "platform/daemon/src/routes/health.ts",
-				"lines": 390,
-				"logicalStatements": 143,
+				"lines": 409,
+				"logicalStatements": 147,
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -9265,7 +9265,7 @@
 				"path": "platform/daemon/src/secrets.ts",
 				"lines": 425,
 				"logicalStatements": 207,
-				"exports": 20,
+				"exports": 39,
 				"topLevelMutableBindings": 3,
 				"typeEscapes": 0,
 				"runtimeFanIn": 11,
@@ -9293,8 +9293,8 @@
 			{
 				"id": "module:platform/daemon/src/service.ts",
 				"path": "platform/daemon/src/service.ts",
-				"lines": 530,
-				"logicalStatements": 208,
+				"lines": 546,
+				"logicalStatements": 214,
 				"exports": 13,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -10045,7 +10045,7 @@
 				"path": "platform/daemon/src/transformers-runtime.ts",
 				"lines": 11,
 				"logicalStatements": 1,
-				"exports": 1,
+				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
@@ -10193,8 +10193,8 @@
 			{
 				"id": "module:scripts/audit-architecture-contract.ts",
 				"path": "scripts/audit-architecture-contract.ts",
-				"lines": 1254,
-				"logicalStatements": 599,
+				"lines": 1438,
+				"logicalStatements": 725,
 				"exports": 17,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -11363,8 +11363,8 @@
 			{
 				"id": "module:surfaces/cli/src/commands/workspace.ts",
 				"path": "surfaces/cli/src/commands/workspace.ts",
-				"lines": 110,
-				"logicalStatements": 57,
+				"lines": 112,
+				"logicalStatements": 60,
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -11380,7 +11380,7 @@
 				"path": "surfaces/cli/src/dev-cli.ts",
 				"lines": 7,
 				"logicalStatements": 4,
-				"exports": 1,
+				"exports": 0,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -11515,7 +11515,7 @@
 				"path": "surfaces/cli/src/features/pipeline-pause.ts",
 				"lines": 170,
 				"logicalStatements": 87,
-				"exports": 6,
+				"exports": 7,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
@@ -11620,7 +11620,7 @@
 				"path": "surfaces/cli/src/features/setup-plan.ts",
 				"lines": 299,
 				"logicalStatements": 64,
-				"exports": 8,
+				"exports": 9,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 1,
@@ -11783,7 +11783,7 @@
 			{
 				"id": "module:surfaces/cli/src/features/workspace.ts",
 				"path": "surfaces/cli/src/features/workspace.ts",
-				"lines": 331,
+				"lines": 326,
 				"logicalStatements": 171,
 				"exports": 7,
 				"topLevelMutableBindings": 0,
@@ -11918,8 +11918,8 @@
 			{
 				"id": "module:surfaces/cli/src/lib/runtime.ts",
 				"path": "surfaces/cli/src/lib/runtime.ts",
-				"lines": 1805,
-				"logicalStatements": 684,
+				"lines": 1815,
+				"logicalStatements": 688,
 				"exports": 47,
 				"topLevelMutableBindings": 3,
 				"typeEscapes": 0,
@@ -11965,7 +11965,7 @@
 				"path": "surfaces/cli/src/lib/workspace.ts",
 				"lines": 43,
 				"logicalStatements": 14,
-				"exports": 7,
+				"exports": 8,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 4,
@@ -11998,10 +11998,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 17,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 17,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12013,10 +12013,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 3,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 3,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12028,10 +12028,10 @@
 				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12043,10 +12043,10 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 2,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 2,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12058,9 +12058,9 @@
 				"exports": 7,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 5,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 5,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12073,10 +12073,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12088,10 +12088,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12103,10 +12103,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 3,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 3,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12118,10 +12118,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12133,10 +12133,10 @@
 				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12148,10 +12148,10 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 6,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 6,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12163,10 +12163,10 @@
 				"exports": 6,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 9,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 9,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12178,10 +12178,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 4,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 4,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12193,10 +12193,10 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 2,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 2,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12208,10 +12208,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 3,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 3,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12223,9 +12223,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12235,13 +12235,13 @@
 				"path": "surfaces/dashboard/src/components/ui/accordion.tsx",
 				"lines": 52,
 				"logicalStatements": 13,
-				"exports": 1,
+				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12250,13 +12250,13 @@
 				"path": "surfaces/dashboard/src/components/ui/attachment.tsx",
 				"lines": 188,
 				"logicalStatements": 27,
-				"exports": 1,
+				"exports": 9,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12265,13 +12265,13 @@
 				"path": "surfaces/dashboard/src/components/ui/avatar.tsx",
 				"lines": 88,
 				"logicalStatements": 16,
-				"exports": 1,
+				"exports": 6,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12280,13 +12280,13 @@
 				"path": "surfaces/dashboard/src/components/ui/badge.tsx",
 				"lines": 41,
 				"logicalStatements": 9,
-				"exports": 1,
+				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12295,13 +12295,13 @@
 				"path": "surfaces/dashboard/src/components/ui/bubble.tsx",
 				"lines": 120,
 				"logicalStatements": 16,
-				"exports": 1,
+				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12310,13 +12310,13 @@
 				"path": "surfaces/dashboard/src/components/ui/button.tsx",
 				"lines": 63,
 				"logicalStatements": 9,
-				"exports": 1,
+				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 8,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 8,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12325,7 +12325,7 @@
 				"path": "surfaces/dashboard/src/components/ui/collapsible.tsx",
 				"lines": 18,
 				"logicalStatements": 9,
-				"exports": 1,
+				"exports": 3,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -12340,13 +12340,13 @@
 				"path": "surfaces/dashboard/src/components/ui/dialog.tsx",
 				"lines": 137,
 				"logicalStatements": 26,
-				"exports": 1,
+				"exports": 10,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 3,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 3,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12355,13 +12355,13 @@
 				"path": "surfaces/dashboard/src/components/ui/dropdown-menu.tsx",
 				"lines": 220,
 				"logicalStatements": 36,
-				"exports": 1,
+				"exports": 15,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12370,13 +12370,13 @@
 				"path": "surfaces/dashboard/src/components/ui/empty.tsx",
 				"lines": 86,
 				"logicalStatements": 16,
-				"exports": 1,
+				"exports": 6,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12385,13 +12385,13 @@
 				"path": "surfaces/dashboard/src/components/ui/input-group.tsx",
 				"lines": 148,
 				"logicalStatements": 24,
-				"exports": 1,
+				"exports": 6,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 4,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 4,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12403,10 +12403,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12415,13 +12415,13 @@
 				"path": "surfaces/dashboard/src/components/ui/kbd.tsx",
 				"lines": 23,
 				"logicalStatements": 6,
-				"exports": 1,
+				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12434,9 +12434,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12445,13 +12445,13 @@
 				"path": "surfaces/dashboard/src/components/ui/marker.tsx",
 				"lines": 62,
 				"logicalStatements": 13,
-				"exports": 1,
+				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12460,13 +12460,13 @@
 				"path": "surfaces/dashboard/src/components/ui/message-scroller.tsx",
 				"lines": 118,
 				"logicalStatements": 19,
-				"exports": 1,
+				"exports": 9,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12475,13 +12475,13 @@
 				"path": "surfaces/dashboard/src/components/ui/message.tsx",
 				"lines": 76,
 				"logicalStatements": 15,
-				"exports": 1,
+				"exports": 6,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12494,9 +12494,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12505,13 +12505,13 @@
 				"path": "surfaces/dashboard/src/components/ui/scroll-area.tsx",
 				"lines": 47,
 				"logicalStatements": 8,
-				"exports": 1,
+				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12520,13 +12520,13 @@
 				"path": "surfaces/dashboard/src/components/ui/select.tsx",
 				"lines": 161,
 				"logicalStatements": 25,
-				"exports": 1,
+				"exports": 10,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12539,9 +12539,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12550,13 +12550,13 @@
 				"path": "surfaces/dashboard/src/components/ui/sheet.tsx",
 				"lines": 106,
 				"logicalStatements": 25,
-				"exports": 1,
+				"exports": 8,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12569,9 +12569,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12584,9 +12584,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12598,9 +12598,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12614,9 +12614,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12628,10 +12628,10 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 7,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 7,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12643,10 +12643,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 2,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 2,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12655,13 +12655,13 @@
 				"path": "surfaces/dashboard/src/components/ui/tabs.tsx",
 				"lines": 72,
 				"logicalStatements": 15,
-				"exports": 1,
+				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12673,10 +12673,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12685,13 +12685,13 @@
 				"path": "surfaces/dashboard/src/components/ui/toggle-group.tsx",
 				"lines": 81,
 				"logicalStatements": 13,
-				"exports": 1,
+				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12700,13 +12700,13 @@
 				"path": "surfaces/dashboard/src/components/ui/toggle.tsx",
 				"lines": 40,
 				"logicalStatements": 8,
-				"exports": 1,
+				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12715,13 +12715,13 @@
 				"path": "surfaces/dashboard/src/components/ui/tooltip.tsx",
 				"lines": 45,
 				"logicalStatements": 13,
-				"exports": 1,
+				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 2,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 2,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12733,10 +12733,10 @@
 				"exports": 3,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -12748,9 +12748,9 @@
 				"exports": 50,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 17,
 				"runtimeFanOut": 1,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 17,
 				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12778,9 +12778,9 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12793,9 +12793,9 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12808,9 +12808,9 @@
 				"exports": 6,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 1,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12823,9 +12823,9 @@
 				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 2,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 2,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12838,9 +12838,9 @@
 				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12853,9 +12853,9 @@
 				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12868,9 +12868,9 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 2,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 2,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12883,9 +12883,9 @@
 				"exports": 15,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12898,9 +12898,9 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12913,9 +12913,9 @@
 				"exports": 3,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 3,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 3,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12928,9 +12928,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 8,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 8,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12943,9 +12943,9 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 1,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 1,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12958,9 +12958,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 49,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 49,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12973,9 +12973,9 @@
 				"exports": 3,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 6,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 6,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "adapters"
@@ -12989,9 +12989,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 3,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 3,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -13003,10 +13003,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 2,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -13018,10 +13018,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 8,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 8,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -13033,10 +13033,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 4,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 4,
 				"dynamicSites": 1,
 				"layer": "adapters"
 			},
@@ -13048,10 +13048,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 8,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 8,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -13063,10 +13063,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 6,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 6,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -13078,10 +13078,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 6,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 6,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -13093,10 +13093,10 @@
 				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 13,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 13,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -13108,10 +13108,10 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 7,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 7,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -13123,10 +13123,10 @@
 				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "adapters"
 			},
@@ -13345,7 +13345,7 @@
 				"path": "surfaces/tray/src/index.ts",
 				"lines": 3,
 				"logicalStatements": 2,
-				"exports": 2,
+				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -13525,13 +13525,13 @@
 				"path": "web/marketing/src/components/ui/badge.tsx",
 				"lines": 41,
 				"logicalStatements": 9,
-				"exports": 1,
+				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13540,13 +13540,13 @@
 				"path": "web/marketing/src/components/ui/button.tsx",
 				"lines": 63,
 				"logicalStatements": 9,
-				"exports": 1,
+				"exports": 2,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeFanIn": 1,
+				"runtimeFanOut": 1,
+				"runtimeCallsitesIn": 1,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13555,13 +13555,13 @@
 				"path": "web/marketing/src/components/ui/card.tsx",
 				"lines": 57,
 				"logicalStatements": 17,
-				"exports": 1,
+				"exports": 7,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13570,7 +13570,7 @@
 				"path": "web/marketing/src/components/ui/collapsible.tsx",
 				"lines": 16,
 				"logicalStatements": 8,
-				"exports": 1,
+				"exports": 3,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
@@ -13585,13 +13585,13 @@
 				"path": "web/marketing/src/components/ui/dialog.tsx",
 				"lines": 137,
 				"logicalStatements": 26,
-				"exports": 1,
+				"exports": 10,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 2,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 2,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13600,13 +13600,13 @@
 				"path": "web/marketing/src/components/ui/dropdown-menu.tsx",
 				"lines": 220,
 				"logicalStatements": 36,
-				"exports": 1,
+				"exports": 15,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13619,9 +13619,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13634,9 +13634,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13649,9 +13649,9 @@
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13660,13 +13660,13 @@
 				"path": "web/marketing/src/components/ui/sheet.tsx",
 				"lines": 108,
 				"logicalStatements": 26,
-				"exports": 1,
+				"exports": 8,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13675,13 +13675,13 @@
 				"path": "web/marketing/src/components/ui/tabs.tsx",
 				"lines": 72,
 				"logicalStatements": 15,
-				"exports": 1,
+				"exports": 5,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13690,13 +13690,13 @@
 				"path": "web/marketing/src/components/ui/tooltip.tsx",
 				"lines": 43,
 				"logicalStatements": 12,
-				"exports": 1,
+				"exports": 4,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 0,
+				"runtimeFanOut": 1,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 0,
+				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
 			},
@@ -13768,9 +13768,9 @@
 				"exports": 1,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
-				"runtimeFanIn": 0,
+				"runtimeFanIn": 11,
 				"runtimeFanOut": 0,
-				"runtimeCallsitesIn": 0,
+				"runtimeCallsitesIn": 11,
 				"runtimeCallsitesOut": 0,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -18919,7 +18919,7 @@
 			{
 				"id": "memorybench/ui/app/compare/[compareId]/page.tsx:import:runtime:@/components/accuracy-bar-chart:4486f66225565296:1",
 				"from": "memorybench/ui/app/compare/[compareId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/accuracy-bar-chart.tsx",
 				"specifier": "@/components/accuracy-bar-chart",
 				"kind": "import",
 				"runtime": true,
@@ -18928,7 +18928,7 @@
 			{
 				"id": "memorybench/ui/app/compare/[compareId]/page.tsx:import:runtime:@/components/circular-progress:a8bc60a49c7d82fb:1",
 				"from": "memorybench/ui/app/compare/[compareId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/circular-progress.tsx",
 				"specifier": "@/components/circular-progress",
 				"kind": "import",
 				"runtime": true,
@@ -18937,7 +18937,7 @@
 			{
 				"id": "memorybench/ui/app/compare/[compareId]/page.tsx:import:runtime:@/components/data-table:78f5a6f30105f0c1:1",
 				"from": "memorybench/ui/app/compare/[compareId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/data-table.tsx",
 				"specifier": "@/components/data-table",
 				"kind": "import",
 				"runtime": true,
@@ -18946,7 +18946,7 @@
 			{
 				"id": "memorybench/ui/app/compare/[compareId]/page.tsx:import:runtime:@/components/empty-state:a0f1f70211b381c7:1",
 				"from": "memorybench/ui/app/compare/[compareId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/empty-state.tsx",
 				"specifier": "@/components/empty-state",
 				"kind": "import",
 				"runtime": true,
@@ -18955,7 +18955,7 @@
 			{
 				"id": "memorybench/ui/app/compare/[compareId]/page.tsx:import:runtime:@/components/tooltip:1962912e85972522:1",
 				"from": "memorybench/ui/app/compare/[compareId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/tooltip.tsx",
 				"specifier": "@/components/tooltip",
 				"kind": "import",
 				"runtime": true,
@@ -18964,7 +18964,7 @@
 			{
 				"id": "memorybench/ui/app/compare/[compareId]/page.tsx:import:runtime:@/lib/api:2539cb079dd4782f:1",
 				"from": "memorybench/ui/app/compare/[compareId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -18973,7 +18973,7 @@
 			{
 				"id": "memorybench/ui/app/compare/[compareId]/page.tsx:import:runtime:@/lib/utils:73aaa8c1be1203f1:1",
 				"from": "memorybench/ui/app/compare/[compareId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19009,7 +19009,7 @@
 			{
 				"id": "memorybench/ui/app/compare/new/page.tsx:import:runtime:@/components/multi-select:958a70aca4d67b4d:1",
 				"from": "memorybench/ui/app/compare/new/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/multi-select.tsx",
 				"specifier": "@/components/multi-select",
 				"kind": "import",
 				"runtime": true,
@@ -19018,7 +19018,7 @@
 			{
 				"id": "memorybench/ui/app/compare/new/page.tsx:import:runtime:@/components/single-select:6f9fc412c96fb421:1",
 				"from": "memorybench/ui/app/compare/new/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/single-select.tsx",
 				"specifier": "@/components/single-select",
 				"kind": "import",
 				"runtime": true,
@@ -19027,7 +19027,7 @@
 			{
 				"id": "memorybench/ui/app/compare/new/page.tsx:import:runtime:@/lib/api:3ba1cbb462160456:1",
 				"from": "memorybench/ui/app/compare/new/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -19063,7 +19063,7 @@
 			{
 				"id": "memorybench/ui/app/compare/page.tsx:import:runtime:@/components/circular-progress:a8bc60a49c7d82fb:1",
 				"from": "memorybench/ui/app/compare/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/circular-progress.tsx",
 				"specifier": "@/components/circular-progress",
 				"kind": "import",
 				"runtime": true,
@@ -19072,7 +19072,7 @@
 			{
 				"id": "memorybench/ui/app/compare/page.tsx:import:runtime:@/components/compare-actions-menu:fa6d48a3437222c6:1",
 				"from": "memorybench/ui/app/compare/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/compare-actions-menu.tsx",
 				"specifier": "@/components/compare-actions-menu",
 				"kind": "import",
 				"runtime": true,
@@ -19081,7 +19081,7 @@
 			{
 				"id": "memorybench/ui/app/compare/page.tsx:import:runtime:@/components/data-table:78f5a6f30105f0c1:1",
 				"from": "memorybench/ui/app/compare/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/data-table.tsx",
 				"specifier": "@/components/data-table",
 				"kind": "import",
 				"runtime": true,
@@ -19090,7 +19090,7 @@
 			{
 				"id": "memorybench/ui/app/compare/page.tsx:import:runtime:@/components/empty-state:16af117ef27dcf7d:1",
 				"from": "memorybench/ui/app/compare/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/empty-state.tsx",
 				"specifier": "@/components/empty-state",
 				"kind": "import",
 				"runtime": true,
@@ -19099,7 +19099,7 @@
 			{
 				"id": "memorybench/ui/app/compare/page.tsx:import:runtime:@/components/filter-bar:b909505b70779f2b:1",
 				"from": "memorybench/ui/app/compare/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/filter-bar.tsx",
 				"specifier": "@/components/filter-bar",
 				"kind": "import",
 				"runtime": true,
@@ -19108,7 +19108,7 @@
 			{
 				"id": "memorybench/ui/app/compare/page.tsx:import:runtime:@/lib/api:1ff5f81fb1b6ec84:1",
 				"from": "memorybench/ui/app/compare/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -19117,7 +19117,7 @@
 			{
 				"id": "memorybench/ui/app/compare/page.tsx:import:runtime:@/lib/utils:73aaa8c1be1203f1:1",
 				"from": "memorybench/ui/app/compare/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19153,7 +19153,7 @@
 			{
 				"id": "memorybench/ui/app/layout.tsx:import:runtime:@/components/providers:b7e9cbcbb84793d7:1",
 				"from": "memorybench/ui/app/layout.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/providers.tsx",
 				"specifier": "@/components/providers",
 				"kind": "import",
 				"runtime": true,
@@ -19162,7 +19162,7 @@
 			{
 				"id": "memorybench/ui/app/layout.tsx:import:runtime:@/components/sidebar:9fbd3d1c557cd87d:1",
 				"from": "memorybench/ui/app/layout.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/sidebar.tsx",
 				"specifier": "@/components/sidebar",
 				"kind": "import",
 				"runtime": true,
@@ -19180,7 +19180,7 @@
 			{
 				"id": "memorybench/ui/app/leaderboard/[id]/page.tsx:import:runtime:@/components/benchmark-results:aeb8a14a63ee0556:1",
 				"from": "memorybench/ui/app/leaderboard/[id]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/benchmark-results.tsx",
 				"specifier": "@/components/benchmark-results",
 				"kind": "import",
 				"runtime": true,
@@ -19189,7 +19189,7 @@
 			{
 				"id": "memorybench/ui/app/leaderboard/[id]/page.tsx:import:runtime:@/lib/api:19dc8809c49234d4:1",
 				"from": "memorybench/ui/app/leaderboard/[id]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -19198,7 +19198,7 @@
 			{
 				"id": "memorybench/ui/app/leaderboard/[id]/page.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/app/leaderboard/[id]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19243,7 +19243,7 @@
 			{
 				"id": "memorybench/ui/app/leaderboard/page.tsx:import:runtime:@/components/data-table:78f5a6f30105f0c1:1",
 				"from": "memorybench/ui/app/leaderboard/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/data-table.tsx",
 				"specifier": "@/components/data-table",
 				"kind": "import",
 				"runtime": true,
@@ -19252,7 +19252,7 @@
 			{
 				"id": "memorybench/ui/app/leaderboard/page.tsx:import:runtime:@/components/dropdown-menu:ae208f36475c2f8b:1",
 				"from": "memorybench/ui/app/leaderboard/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/dropdown-menu.tsx",
 				"specifier": "@/components/dropdown-menu",
 				"kind": "import",
 				"runtime": true,
@@ -19261,7 +19261,7 @@
 			{
 				"id": "memorybench/ui/app/leaderboard/page.tsx:import:runtime:@/components/empty-state:de246b951b868c2f:1",
 				"from": "memorybench/ui/app/leaderboard/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/empty-state.tsx",
 				"specifier": "@/components/empty-state",
 				"kind": "import",
 				"runtime": true,
@@ -19270,7 +19270,7 @@
 			{
 				"id": "memorybench/ui/app/leaderboard/page.tsx:import:runtime:@/components/filter-bar:b909505b70779f2b:1",
 				"from": "memorybench/ui/app/leaderboard/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/filter-bar.tsx",
 				"specifier": "@/components/filter-bar",
 				"kind": "import",
 				"runtime": true,
@@ -19279,7 +19279,7 @@
 			{
 				"id": "memorybench/ui/app/leaderboard/page.tsx:import:runtime:@/lib/api:389ae3860a858957:1",
 				"from": "memorybench/ui/app/leaderboard/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -19315,7 +19315,7 @@
 			{
 				"id": "memorybench/ui/app/runs/[runId]/page.tsx:import:runtime:@/components/benchmark-results:5b9b4c169999cddc:1",
 				"from": "memorybench/ui/app/runs/[runId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/benchmark-results.tsx",
 				"specifier": "@/components/benchmark-results",
 				"kind": "import",
 				"runtime": true,
@@ -19324,7 +19324,7 @@
 			{
 				"id": "memorybench/ui/app/runs/[runId]/page.tsx:import:runtime:@/components/phase-progress:31c1351b12355ffd:1",
 				"from": "memorybench/ui/app/runs/[runId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/phase-progress.tsx",
 				"specifier": "@/components/phase-progress",
 				"kind": "import",
 				"runtime": true,
@@ -19333,7 +19333,7 @@
 			{
 				"id": "memorybench/ui/app/runs/[runId]/page.tsx:import:runtime:@/components/question-list:84a4857c4073b616:1",
 				"from": "memorybench/ui/app/runs/[runId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/question-list.tsx",
 				"specifier": "@/components/question-list",
 				"kind": "import",
 				"runtime": true,
@@ -19342,7 +19342,7 @@
 			{
 				"id": "memorybench/ui/app/runs/[runId]/page.tsx:import:runtime:@/lib/api:265e0e7e725616c6:1",
 				"from": "memorybench/ui/app/runs/[runId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -19351,7 +19351,7 @@
 			{
 				"id": "memorybench/ui/app/runs/[runId]/page.tsx:import:runtime:@/lib/utils:73aaa8c1be1203f1:1",
 				"from": "memorybench/ui/app/runs/[runId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19387,7 +19387,7 @@
 			{
 				"id": "memorybench/ui/app/runs/[runId]/questions/[questionId]/page.tsx:import:runtime:@/lib/api:dbec3eef56af9821:1",
 				"from": "memorybench/ui/app/runs/[runId]/questions/[questionId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -19396,7 +19396,7 @@
 			{
 				"id": "memorybench/ui/app/runs/[runId]/questions/[questionId]/page.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/app/runs/[runId]/questions/[questionId]/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19441,7 +19441,7 @@
 			{
 				"id": "memorybench/ui/app/runs/new/page.tsx:import:runtime:@/components/single-select:6f9fc412c96fb421:1",
 				"from": "memorybench/ui/app/runs/new/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/single-select.tsx",
 				"specifier": "@/components/single-select",
 				"kind": "import",
 				"runtime": true,
@@ -19450,7 +19450,7 @@
 			{
 				"id": "memorybench/ui/app/runs/new/page.tsx:import:runtime:@/lib/api:4a2da2d16a941d86:1",
 				"from": "memorybench/ui/app/runs/new/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -19486,7 +19486,7 @@
 			{
 				"id": "memorybench/ui/app/runs/page.tsx:import:runtime:@/components/circular-progress:a8bc60a49c7d82fb:1",
 				"from": "memorybench/ui/app/runs/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/circular-progress.tsx",
 				"specifier": "@/components/circular-progress",
 				"kind": "import",
 				"runtime": true,
@@ -19495,7 +19495,7 @@
 			{
 				"id": "memorybench/ui/app/runs/page.tsx:import:runtime:@/components/data-table:78f5a6f30105f0c1:1",
 				"from": "memorybench/ui/app/runs/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/data-table.tsx",
 				"specifier": "@/components/data-table",
 				"kind": "import",
 				"runtime": true,
@@ -19504,7 +19504,7 @@
 			{
 				"id": "memorybench/ui/app/runs/page.tsx:import:runtime:@/components/empty-state:101f94c3ab8abec8:1",
 				"from": "memorybench/ui/app/runs/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/empty-state.tsx",
 				"specifier": "@/components/empty-state",
 				"kind": "import",
 				"runtime": true,
@@ -19513,7 +19513,7 @@
 			{
 				"id": "memorybench/ui/app/runs/page.tsx:import:runtime:@/components/filter-bar:b909505b70779f2b:1",
 				"from": "memorybench/ui/app/runs/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/filter-bar.tsx",
 				"specifier": "@/components/filter-bar",
 				"kind": "import",
 				"runtime": true,
@@ -19522,7 +19522,7 @@
 			{
 				"id": "memorybench/ui/app/runs/page.tsx:import:runtime:@/components/run-actions-menu:efafbb85a00fdd0b:1",
 				"from": "memorybench/ui/app/runs/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/run-actions-menu.tsx",
 				"specifier": "@/components/run-actions-menu",
 				"kind": "import",
 				"runtime": true,
@@ -19531,7 +19531,7 @@
 			{
 				"id": "memorybench/ui/app/runs/page.tsx:import:runtime:@/lib/api:5c4dd983a956a4d1:1",
 				"from": "memorybench/ui/app/runs/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -19540,7 +19540,7 @@
 			{
 				"id": "memorybench/ui/app/runs/page.tsx:import:runtime:@/lib/utils:73aaa8c1be1203f1:1",
 				"from": "memorybench/ui/app/runs/page.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19576,7 +19576,7 @@
 			{
 				"id": "memorybench/ui/components/benchmark-results.tsx:import:runtime:@/components/multi-select:958a70aca4d67b4d:1",
 				"from": "memorybench/ui/components/benchmark-results.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/multi-select.tsx",
 				"specifier": "@/components/multi-select",
 				"kind": "import",
 				"runtime": true,
@@ -19585,7 +19585,7 @@
 			{
 				"id": "memorybench/ui/components/benchmark-results.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/components/benchmark-results.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19630,7 +19630,7 @@
 			{
 				"id": "memorybench/ui/components/data-table.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/components/data-table.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19648,7 +19648,7 @@
 			{
 				"id": "memorybench/ui/components/download-toast.tsx:import:runtime:@/lib/api:65d59061e3e30c6e:1",
 				"from": "memorybench/ui/components/download-toast.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -19666,7 +19666,7 @@
 			{
 				"id": "memorybench/ui/components/dropdown-menu.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/components/dropdown-menu.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19720,7 +19720,7 @@
 			{
 				"id": "memorybench/ui/components/multi-select.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/components/multi-select.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19747,7 +19747,7 @@
 			{
 				"id": "memorybench/ui/components/phase-progress.tsx:import:runtime:@/components/tooltip:1962912e85972522:1",
 				"from": "memorybench/ui/components/phase-progress.tsx",
-				"to": null,
+				"to": "memorybench/ui/components/tooltip.tsx",
 				"specifier": "@/components/tooltip",
 				"kind": "import",
 				"runtime": true,
@@ -19756,7 +19756,7 @@
 			{
 				"id": "memorybench/ui/components/phase-progress.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/components/phase-progress.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19801,7 +19801,7 @@
 			{
 				"id": "memorybench/ui/components/question-list.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/components/question-list.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19828,7 +19828,7 @@
 			{
 				"id": "memorybench/ui/components/question-list.tsx:import:type:@/lib/api:14488980a52ccdf3:1",
 				"from": "memorybench/ui/components/question-list.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": false,
@@ -19837,7 +19837,7 @@
 			{
 				"id": "memorybench/ui/components/run-actions-menu.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/components/run-actions-menu.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19900,7 +19900,7 @@
 			{
 				"id": "memorybench/ui/components/single-select.tsx:import:runtime:@/lib/utils:9c7fd2d9f6bb2697:1",
 				"from": "memorybench/ui/components/single-select.tsx",
-				"to": null,
+				"to": "memorybench/ui/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -19979,22 +19979,31 @@
 				"line": 10
 			},
 			{
-				"id": "platform/core/src/constants.ts:import:runtime:os:b415a737543d90bf:1",
+				"id": "platform/core/src/constants.ts:import:runtime:node:fs:15eb4f3a81163bee:1",
 				"from": "platform/core/src/constants.ts",
 				"to": null,
-				"specifier": "os",
+				"specifier": "node:fs",
 				"kind": "import",
 				"runtime": true,
 				"line": 1
 			},
 			{
-				"id": "platform/core/src/constants.ts:import:runtime:path:17546b6a6afa3b26:1",
+				"id": "platform/core/src/constants.ts:import:runtime:node:os:37e1efaea48d980b:1",
 				"from": "platform/core/src/constants.ts",
 				"to": null,
-				"specifier": "path",
+				"specifier": "node:os",
 				"kind": "import",
 				"runtime": true,
 				"line": 2
+			},
+			{
+				"id": "platform/core/src/constants.ts:import:runtime:node:path:7a07849b65b86440:1",
+				"from": "platform/core/src/constants.ts",
+				"to": null,
+				"specifier": "node:path",
+				"kind": "import",
+				"runtime": true,
+				"line": 3
 			},
 			{
 				"id": "platform/core/src/daemon-url.ts:import:runtime:./network.js:1967e3d7b310c61a:1",
@@ -20327,7 +20336,7 @@
 				"specifier": "./agents",
 				"kind": "export",
 				"runtime": true,
-				"line": 499
+				"line": 503
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./connector-types:6906b734d6565c30:1",
@@ -20336,7 +20345,7 @@
 				"specifier": "./connector-types",
 				"kind": "export",
 				"runtime": true,
-				"line": 652
+				"line": 656
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./constants:589ab733f1725105:1",
@@ -20345,7 +20354,7 @@
 				"specifier": "./constants",
 				"kind": "export",
 				"runtime": true,
-				"line": 287
+				"line": 291
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./daemon-url:d88820ac7de0b073:1",
@@ -20372,7 +20381,7 @@
 				"specifier": "./export",
 				"kind": "export",
 				"runtime": true,
-				"line": 410
+				"line": 414
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./fts-schema:4880a0204a5b7bfa:1",
@@ -20381,7 +20390,7 @@
 				"specifier": "./fts-schema",
 				"kind": "export",
 				"runtime": true,
-				"line": 262
+				"line": 266
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./gitignore:4606209f6b778683:1",
@@ -20390,7 +20399,7 @@
 				"specifier": "./gitignore",
 				"kind": "export",
 				"runtime": true,
-				"line": 326
+				"line": 330
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./graphiq:f9cd7e79d7b26694:1",
@@ -20399,7 +20408,7 @@
 				"specifier": "./graphiq",
 				"kind": "export",
 				"runtime": true,
-				"line": 307
+				"line": 311
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./harness-config:4cbdf68e467bf037:1",
@@ -20417,7 +20426,7 @@
 				"specifier": "./identity",
 				"kind": "export",
 				"runtime": true,
-				"line": 431
+				"line": 435
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./import:f7ffeace2537f62a:1",
@@ -20426,7 +20435,7 @@
 				"specifier": "./import",
 				"kind": "export",
 				"runtime": true,
-				"line": 530
+				"line": 534
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./launchd:724d782483f0954e:1",
@@ -20462,7 +20471,7 @@
 				"specifier": "./markdown",
 				"kind": "export",
 				"runtime": true,
-				"line": 543
+				"line": 547
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./memory-content-safety:ab5b7898725494d2:1",
@@ -20489,7 +20498,7 @@
 				"specifier": "./memory-provenance",
 				"kind": "export",
 				"runtime": true,
-				"line": 648
+				"line": 652
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./memory:da6c34775dd17af5:1",
@@ -20507,7 +20516,7 @@
 				"specifier": "./migrate",
 				"kind": "export",
 				"runtime": true,
-				"line": 274
+				"line": 278
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./migration:da32cb97d830b26b:1",
@@ -20516,7 +20525,7 @@
 				"specifier": "./migration",
 				"kind": "export",
 				"runtime": true,
-				"line": 276
+				"line": 280
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./migrations/index:a2fe378987a22f28:1",
@@ -20525,7 +20534,7 @@
 				"specifier": "./migrations/index",
 				"kind": "export",
 				"runtime": true,
-				"line": 427
+				"line": 431
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./network:b3144a3b848b945c:1",
@@ -20543,7 +20552,7 @@
 				"specifier": "./oh-my-pi",
 				"kind": "export",
 				"runtime": true,
-				"line": 478
+				"line": 482
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./ontology-topology:32122a20a4e75b6c:1",
@@ -20552,7 +20561,7 @@
 				"specifier": "./ontology-topology",
 				"kind": "export",
 				"runtime": true,
-				"line": 649
+				"line": 653
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./package-manager:98bffc7bbcbbaaf9:1",
@@ -20561,7 +20570,7 @@
 				"specifier": "./package-manager",
 				"kind": "export",
 				"runtime": true,
-				"line": 626
+				"line": 630
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./pi:f6a22aec88490c47:1",
@@ -20570,7 +20579,7 @@
 				"specifier": "./pi",
 				"kind": "export",
 				"runtime": true,
-				"line": 488
+				"line": 492
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./pipeline-pause:d175648887306937:1",
@@ -20579,7 +20588,7 @@
 				"specifier": "./pipeline-pause",
 				"kind": "export",
 				"runtime": true,
-				"line": 608
+				"line": 612
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./pipeline-providers:1d0bf4f1a6031d37:1",
@@ -20597,7 +20606,7 @@
 				"specifier": "./plugins",
 				"kind": "export",
 				"runtime": true,
-				"line": 300
+				"line": 304
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./prompt-context:1e2c2d2b8b99f683:1",
@@ -20606,7 +20615,7 @@
 				"specifier": "./prompt-context",
 				"kind": "export",
 				"runtime": true,
-				"line": 288
+				"line": 292
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./recall:9078c9dfce3aa0d7:1",
@@ -20615,7 +20624,7 @@
 				"specifier": "./recall",
 				"kind": "export",
 				"runtime": true,
-				"line": 234
+				"line": 238
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./routing:6834eec66428d528:1",
@@ -20624,7 +20633,7 @@
 				"specifier": "./routing",
 				"kind": "export",
 				"runtime": true,
-				"line": 555
+				"line": 559
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./search:da0838cbf9699ad7:1",
@@ -20633,7 +20642,7 @@
 				"specifier": "./search",
 				"kind": "export",
 				"runtime": true,
-				"line": 219
+				"line": 223
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./secrets-keyring:f36b6379a5ef7929:1",
@@ -20660,7 +20669,7 @@
 				"specifier": "./signet-installation",
 				"kind": "export",
 				"runtime": true,
-				"line": 637
+				"line": 641
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./signet-os-types:748f507cce0b647c:1",
@@ -20669,7 +20678,7 @@
 				"specifier": "./signet-os-types",
 				"kind": "export",
 				"runtime": true,
-				"line": 674
+				"line": 678
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./signet:0acdd68dd39575e3:1",
@@ -20687,7 +20696,7 @@
 				"specifier": "./skill-transcript",
 				"kind": "export",
 				"runtime": true,
-				"line": 526
+				"line": 530
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./skills:4be48d29de63d1d8:1",
@@ -20696,7 +20705,7 @@
 				"specifier": "./skills",
 				"kind": "export",
 				"runtime": true,
-				"line": 511
+				"line": 515
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./soul:0cb27672d18219d9:1",
@@ -20714,7 +20723,7 @@
 				"specifier": "./source-substrate",
 				"kind": "export",
 				"runtime": true,
-				"line": 393
+				"line": 397
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./sources-config:fe79f701a25ae139:1",
@@ -20723,7 +20732,7 @@
 				"specifier": "./sources-config",
 				"kind": "export",
 				"runtime": true,
-				"line": 347
+				"line": 351
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./sqlite-journal:d0babd384677e9b2:1",
@@ -20741,7 +20750,7 @@
 				"specifier": "./symlinks",
 				"kind": "export",
 				"runtime": true,
-				"line": 618
+				"line": 622
 			},
 			{
 				"id": "platform/core/src/index.ts:export:runtime:./telemetry-config:51e4b8132ae1c089:1",
@@ -20768,10 +20777,10 @@
 				"specifier": "./workspace-source-repo",
 				"kind": "export",
 				"runtime": true,
-				"line": 335
+				"line": 339
 			},
 			{
-				"id": "platform/core/src/index.ts:export:runtime:./workspace:fd8755789821f535:1",
+				"id": "platform/core/src/index.ts:export:runtime:./workspace:e0d1e678b3e1595a:1",
 				"from": "platform/core/src/index.ts",
 				"to": "platform/core/src/workspace.ts",
 				"specifier": "./workspace",
@@ -20786,7 +20795,7 @@
 				"specifier": "./yaml",
 				"kind": "export",
 				"runtime": true,
-				"line": 554
+				"line": 558
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./agents:0ac8532e6b2fa6fa:1",
@@ -20795,7 +20804,7 @@
 				"specifier": "./agents",
 				"kind": "export",
 				"runtime": false,
-				"line": 508
+				"line": 512
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./connector-types:49dbe3d3055fd862:1",
@@ -20804,7 +20813,7 @@
 				"specifier": "./connector-types",
 				"kind": "export",
 				"runtime": false,
-				"line": 658
+				"line": 662
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./daemon-url:4fdf6cc2c320f82b:1",
@@ -20822,7 +20831,7 @@
 				"specifier": "./export",
 				"kind": "export",
 				"runtime": false,
-				"line": 417
+				"line": 421
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./graphiq:a76c56cbd533cc71:1",
@@ -20831,7 +20840,7 @@
 				"specifier": "./graphiq",
 				"kind": "export",
 				"runtime": false,
-				"line": 321
+				"line": 325
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./identity:7f683eb983ad2ed5:1",
@@ -20840,7 +20849,7 @@
 				"specifier": "./identity",
 				"kind": "export",
 				"runtime": false,
-				"line": 462
+				"line": 466
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./import:c9a472c60d8960f1:1",
@@ -20849,7 +20858,7 @@
 				"specifier": "./import",
 				"kind": "export",
 				"runtime": false,
-				"line": 535
+				"line": 539
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./launchd:1920079e3d477ec2:1",
@@ -20885,7 +20894,7 @@
 				"specifier": "./migrate",
 				"kind": "export",
 				"runtime": false,
-				"line": 275
+				"line": 279
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./migration:cfca328a71ed66bf:1",
@@ -20894,7 +20903,7 @@
 				"specifier": "./migration",
 				"kind": "export",
 				"runtime": false,
-				"line": 282
+				"line": 286
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./migrations/index:dde669410843554f:1",
@@ -20903,7 +20912,7 @@
 				"specifier": "./migrations/index",
 				"kind": "export",
 				"runtime": false,
-				"line": 428
+				"line": 432
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./network:e4fdeac4452e8a5f:1",
@@ -20921,7 +20930,7 @@
 				"specifier": "./pipeline-pause",
 				"kind": "export",
 				"runtime": false,
-				"line": 615
+				"line": 619
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./pipeline-providers:a1eef8ea260bc730:1",
@@ -20939,7 +20948,7 @@
 				"specifier": "./prompt-context",
 				"kind": "export",
 				"runtime": false,
-				"line": 298
+				"line": 302
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./recall:a63089fd858d15d9:1",
@@ -20948,7 +20957,7 @@
 				"specifier": "./recall",
 				"kind": "export",
 				"runtime": false,
-				"line": 246
+				"line": 250
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./routing:d77f74ea72c16c79:1",
@@ -20957,7 +20966,7 @@
 				"specifier": "./routing",
 				"kind": "export",
 				"runtime": false,
-				"line": 576
+				"line": 580
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./secrets-keyring:0f3eed9e68254318:1",
@@ -20984,7 +20993,7 @@
 				"specifier": "./signet-os-types",
 				"kind": "export",
 				"runtime": false,
-				"line": 675
+				"line": 679
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./skill-transcript:9ec847175752ef03:1",
@@ -20993,7 +21002,7 @@
 				"specifier": "./skill-transcript",
 				"kind": "export",
 				"runtime": false,
-				"line": 527
+				"line": 531
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./skills:770651961af4d770:1",
@@ -21002,7 +21011,7 @@
 				"specifier": "./skills",
 				"kind": "export",
 				"runtime": false,
-				"line": 517
+				"line": 521
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./source-substrate:9112d8a32d6b25ed:1",
@@ -21011,7 +21020,7 @@
 				"specifier": "./source-substrate",
 				"kind": "export",
 				"runtime": false,
-				"line": 397
+				"line": 401
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./sources-config:1c58d7e3d0f601f8:1",
@@ -21020,7 +21029,7 @@
 				"specifier": "./sources-config",
 				"kind": "export",
 				"runtime": false,
-				"line": 373
+				"line": 377
 			},
 			{
 				"id": "platform/core/src/index.ts:export:type:./sqlite-journal:477e342f76130c8f:1",
@@ -21047,7 +21056,7 @@
 				"specifier": "./workspace-source-repo",
 				"kind": "export",
 				"runtime": false,
-				"line": 342
+				"line": 346
 			},
 			{
 				"id": "platform/core/src/launchd.ts:import:runtime:node:fs:36dfb4593d7e77ff:1",
@@ -25286,7 +25295,7 @@
 				"specifier": "./native-embedding",
 				"kind": "dynamic-import",
 				"runtime": true,
-				"line": 1873
+				"line": 1875
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:dynamic-import:runtime:./native-embedding:c91daec41b24953a:2",
@@ -25295,7 +25304,7 @@
 				"specifier": "./native-embedding",
 				"kind": "dynamic-import",
 				"runtime": true,
-				"line": 2052
+				"line": 2054
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:dynamic-import:runtime:node:http:5ca30a5808681a32:1",
@@ -25304,7 +25313,7 @@
 				"specifier": "node:http",
 				"kind": "dynamic-import",
 				"runtime": true,
-				"line": 2887
+				"line": 2897
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./agent-id:bc02fc655ec883c7:1",
@@ -25313,7 +25322,7 @@
 				"specifier": "./agent-id",
 				"kind": "import",
 				"runtime": true,
-				"line": 36
+				"line": 38
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./async-yield:dba954a22e91c248:1",
@@ -25322,7 +25331,7 @@
 				"specifier": "./async-yield",
 				"kind": "import",
 				"runtime": true,
-				"line": 37
+				"line": 39
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./auth:c77f7284f4e46e78:1",
@@ -25331,7 +25340,7 @@
 				"specifier": "./auth",
 				"kind": "import",
 				"runtime": true,
-				"line": 38
+				"line": 40
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./bind-with-retry:d97fa65749c91583:1",
@@ -25340,7 +25349,7 @@
 				"specifier": "./bind-with-retry",
 				"kind": "import",
 				"runtime": true,
-				"line": 39
+				"line": 41
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./bun-socket-polyfill:0b4e5547d35a8faa:1",
@@ -25358,7 +25367,7 @@
 				"specifier": "./config-migration",
 				"kind": "import",
 				"runtime": true,
-				"line": 40
+				"line": 42
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./cross-agent:7ec2b1d03fe2c8c7:1",
@@ -25367,7 +25376,7 @@
 				"specifier": "./cross-agent",
 				"kind": "import",
 				"runtime": true,
-				"line": 50
+				"line": 52
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./daemon-migration-startup:72d2992e51b5143e:1",
@@ -25376,7 +25385,7 @@
 				"specifier": "./daemon-migration-startup",
 				"kind": "import",
 				"runtime": true,
-				"line": 62
+				"line": 64
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./daemon-restart:0119db19aaa9bddd:1",
@@ -25385,7 +25394,7 @@
 				"specifier": "./daemon-restart",
 				"kind": "import",
 				"runtime": true,
-				"line": 240
+				"line": 242
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./database-integrity:a86e20084b006a53:1",
@@ -25394,7 +25403,7 @@
 				"specifier": "./database-integrity",
 				"kind": "import",
 				"runtime": true,
-				"line": 63
+				"line": 65
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./db-accessor:253675e402c12499:1",
@@ -25403,7 +25412,7 @@
 				"specifier": "./db-accessor",
 				"kind": "import",
 				"runtime": true,
-				"line": 68
+				"line": 70
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./db-owner-client:2ab9152d75ab6d6b:1",
@@ -25412,7 +25421,7 @@
 				"specifier": "./db-owner-client",
 				"kind": "import",
 				"runtime": true,
-				"line": 84
+				"line": 86
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./db-owner-maintenance:b2ca9d9e6ab94404:1",
@@ -25421,7 +25430,7 @@
 				"specifier": "./db-owner-maintenance",
 				"kind": "import",
 				"runtime": true,
-				"line": 85
+				"line": 87
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./db-owner-runtime:537c62812f5ae600:1",
@@ -25430,7 +25439,7 @@
 				"specifier": "./db-owner-runtime",
 				"kind": "import",
 				"runtime": true,
-				"line": 95
+				"line": 97
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./db-vacuum-worker:b1e24a4e679d00b0:1",
@@ -25439,7 +25448,7 @@
 				"specifier": "./db-vacuum-worker",
 				"kind": "import",
 				"runtime": true,
-				"line": 83
+				"line": 85
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./deferred-runtime-gate:cab0930fa60cc49b:1",
@@ -25448,7 +25457,7 @@
 				"specifier": "./deferred-runtime-gate",
 				"kind": "import",
 				"runtime": true,
-				"line": 94
+				"line": 96
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./embedding-fetch:553b5b720104f246:1",
@@ -25457,7 +25466,7 @@
 				"specifier": "./embedding-fetch",
 				"kind": "import",
 				"runtime": true,
-				"line": 97
+				"line": 99
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./embedding-index-migration:e9bf6efa0a3d5717:1",
@@ -25466,7 +25475,7 @@
 				"specifier": "./embedding-index-migration",
 				"kind": "import",
 				"runtime": true,
-				"line": 98
+				"line": 100
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./embedding-index-state:88b5ca0f89323a0b:1",
@@ -25475,7 +25484,7 @@
 				"specifier": "./embedding-index-state",
 				"kind": "import",
 				"runtime": true,
-				"line": 99
+				"line": 101
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./embedding-tracker:f6e7df875f8f38dd:1",
@@ -25484,7 +25493,7 @@
 				"specifier": "./embedding-tracker",
 				"kind": "import",
 				"runtime": true,
-				"line": 105
+				"line": 107
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./feature-flags:646731ee34f458f1:1",
@@ -25493,7 +25502,7 @@
 				"specifier": "./feature-flags",
 				"kind": "import",
 				"runtime": true,
-				"line": 106
+				"line": 108
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./file-sync:9b01d5ea23c511fb:1",
@@ -25502,7 +25511,7 @@
 				"specifier": "./file-sync",
 				"kind": "import",
 				"runtime": true,
-				"line": 107
+				"line": 109
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./fts-startup-recovery:6961737ed349b55f:1",
@@ -25511,7 +25520,7 @@
 				"specifier": "./fts-startup-recovery",
 				"kind": "import",
 				"runtime": true,
-				"line": 104
+				"line": 106
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./hooks:71687c97daf288a6:1",
@@ -25520,7 +25529,7 @@
 				"specifier": "./hooks",
 				"kind": "import",
 				"runtime": true,
-				"line": 241
+				"line": 243
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./http-server:362d95b0bcbe0b8b:1",
@@ -25529,7 +25538,7 @@
 				"specifier": "./http-server",
 				"kind": "import",
 				"runtime": true,
-				"line": 108
+				"line": 110
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./identity-sync:78af6453cc828230:1",
@@ -25538,7 +25547,7 @@
 				"specifier": "./identity-sync",
 				"kind": "import",
 				"runtime": true,
-				"line": 109
+				"line": 111
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./incremental-database-integrity:9a1e255475eb6baa:1",
@@ -25547,7 +25556,7 @@
 				"specifier": "./incremental-database-integrity",
 				"kind": "import",
 				"runtime": true,
-				"line": 51
+				"line": 53
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./inference-router.js:c917e1ad1a19663d:1",
@@ -25556,7 +25565,7 @@
 				"specifier": "./inference-router.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 110
+				"line": 112
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./internal-fetch:9460a5a328f8bdfc:1",
@@ -25565,7 +25574,7 @@
 				"specifier": "./internal-fetch",
 				"kind": "import",
 				"runtime": true,
-				"line": 115
+				"line": 117
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./lifecycle:4ab8ada2b92324bc:1",
@@ -25574,7 +25583,7 @@
 				"specifier": "./lifecycle",
 				"kind": "import",
 				"runtime": true,
-				"line": 116
+				"line": 118
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./llm:9cc30742489c5a2d:1",
@@ -25583,7 +25592,7 @@
 				"specifier": "./llm",
 				"kind": "import",
 				"runtime": true,
-				"line": 123
+				"line": 125
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./logger:c5206b503adc1c37:1",
@@ -25592,7 +25601,7 @@
 				"specifier": "./logger",
 				"kind": "import",
 				"runtime": true,
-				"line": 124
+				"line": 126
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./mcp:3d5efc71589d743a:1",
@@ -25601,7 +25610,7 @@
 				"specifier": "./mcp",
 				"kind": "import",
 				"runtime": true,
-				"line": 246
+				"line": 248
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./memory-config:05cd3bd62419eab4:1",
@@ -25610,7 +25619,7 @@
 				"specifier": "./memory-config",
 				"kind": "import",
 				"runtime": true,
-				"line": 125
+				"line": 127
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./middleware:cdd3a29b6e63f92d:1",
@@ -25619,7 +25628,7 @@
 				"specifier": "./middleware",
 				"kind": "import",
 				"runtime": true,
-				"line": 126
+				"line": 128
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./migration-integrity-verify:416fa44eb26a9e9b:1",
@@ -25628,7 +25637,7 @@
 				"specifier": "./migration-integrity-verify",
 				"kind": "import",
 				"runtime": true,
-				"line": 57
+				"line": 59
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./native-memory-sources:056158eeed2fc3cb:1",
@@ -25637,7 +25646,7 @@
 				"specifier": "./native-memory-sources",
 				"kind": "import",
 				"runtime": true,
-				"line": 127
+				"line": 129
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./native-runtime-assets:7ff0dd1cf67c0fa7:1",
@@ -25646,7 +25655,7 @@
 				"specifier": "./native-runtime-assets",
 				"kind": "import",
 				"runtime": true,
-				"line": 133
+				"line": 135
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./pipeline:bef7f49de00495f6:1",
@@ -25655,7 +25664,7 @@
 				"specifier": "./pipeline",
 				"kind": "import",
 				"runtime": true,
-				"line": 134
+				"line": 136
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./pipeline/dreaming-worker:815306cba6621453:1",
@@ -25664,7 +25673,7 @@
 				"specifier": "./pipeline/dreaming-worker",
 				"kind": "import",
 				"runtime": true,
-				"line": 143
+				"line": 145
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./pipeline/dreaming:e47d2e9c7a3444b0:1",
@@ -25673,7 +25682,7 @@
 				"specifier": "./pipeline/dreaming",
 				"kind": "import",
 				"runtime": true,
-				"line": 142
+				"line": 144
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./pipeline/extraction-fallback:1a87f9ee6980e94f:1",
@@ -25682,7 +25691,7 @@
 				"specifier": "./pipeline/extraction-fallback",
 				"kind": "import",
 				"runtime": true,
-				"line": 144
+				"line": 146
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./pipeline/graph-traversal:a1acc5c6f9980256:1",
@@ -25691,7 +25700,7 @@
 				"specifier": "./pipeline/graph-traversal",
 				"kind": "import",
 				"runtime": true,
-				"line": 145
+				"line": 147
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./pipeline/model-registry:2a34d128cbaa29f4:1",
@@ -25700,7 +25709,7 @@
 				"specifier": "./pipeline/model-registry",
 				"kind": "import",
 				"runtime": true,
-				"line": 146
+				"line": 148
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./pipeline/provider:602f06097a8b5ad7:1",
@@ -25709,7 +25718,7 @@
 				"specifier": "./pipeline/provider",
 				"kind": "import",
 				"runtime": true,
-				"line": 147
+				"line": 149
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./pipeline/reflection-worker:6440d0e8d44f73d5:1",
@@ -25718,7 +25727,7 @@
 				"specifier": "./pipeline/reflection-worker",
 				"kind": "import",
 				"runtime": true,
-				"line": 148
+				"line": 150
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./pipeline/skill-reconciler:3100ca0e900de5a0:1",
@@ -25727,7 +25736,7 @@
 				"specifier": "./pipeline/skill-reconciler",
 				"kind": "import",
 				"runtime": true,
-				"line": 149
+				"line": 151
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./resource-monitor:5a6c38903dbbf3af:1",
@@ -25736,7 +25745,7 @@
 				"specifier": "./resource-monitor",
 				"kind": "import",
 				"runtime": true,
-				"line": 150
+				"line": 152
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./resource-telemetry:952a832519547c47:1",
@@ -25745,7 +25754,7 @@
 				"specifier": "./resource-telemetry",
 				"kind": "import",
 				"runtime": true,
-				"line": 157
+				"line": 159
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/app-tray.js:fa32a97cb52edfbb:1",
@@ -25754,7 +25763,7 @@
 				"specifier": "./routes/app-tray.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 247
+				"line": 249
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/auth-routes.js:67ded5ed3522c2fe:1",
@@ -25763,7 +25772,7 @@
 				"specifier": "./routes/auth-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 248
+				"line": 250
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/changelog.js:d797f8cc66f261b4:1",
@@ -25772,7 +25781,7 @@
 				"specifier": "./routes/changelog.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 249
+				"line": 251
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/connectors-routes.js:aaf516067b070f5b:1",
@@ -25781,7 +25790,7 @@
 				"specifier": "./routes/connectors-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 250
+				"line": 252
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/dashboard.js:071beff6489b6589:1",
@@ -25790,7 +25799,7 @@
 				"specifier": "./routes/dashboard.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 251
+				"line": 253
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/database-diagnostics.js:21ff63e5cc467302:1",
@@ -25799,7 +25808,7 @@
 				"specifier": "./routes/database-diagnostics.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 252
+				"line": 254
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/event-bus.js:672454b25c15b9ac:1",
@@ -25808,7 +25817,7 @@
 				"specifier": "./routes/event-bus.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 253
+				"line": 255
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/git-sync.js:0ebbaed79d7176e4:1",
@@ -25817,7 +25826,7 @@
 				"specifier": "./routes/git-sync.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 254
+				"line": 256
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/graphiq-routes.js:ff38bca165dfdee0:1",
@@ -25826,7 +25835,7 @@
 				"specifier": "./routes/graphiq-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 265
+				"line": 267
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/health.js:08890e36fa6b455c:1",
@@ -25835,7 +25844,7 @@
 				"specifier": "./routes/health.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 266
+				"line": 268
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/hooks-routes.js:0140b7afe006b943:1",
@@ -25844,7 +25853,7 @@
 				"specifier": "./routes/hooks-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 267
+				"line": 269
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/import-routes.js:92501e192e782ac5:1",
@@ -25853,7 +25862,7 @@
 				"specifier": "./routes/import-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 268
+				"line": 270
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/inference.js:7d00ee978d01a936:1",
@@ -25862,7 +25871,7 @@
 				"specifier": "./routes/inference.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 269
+				"line": 271
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/knowledge-routes.js:93ca7489e85fd996:1",
@@ -25871,7 +25880,7 @@
 				"specifier": "./routes/knowledge-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 270
+				"line": 272
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/marketplace-reviews.js:90d5bc5e9208c0bd:1",
@@ -25880,7 +25889,7 @@
 				"specifier": "./routes/marketplace-reviews.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 271
+				"line": 273
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/marketplace.js:31a217424c851e70:1",
@@ -25889,7 +25898,7 @@
 				"specifier": "./routes/marketplace.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 272
+				"line": 274
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/mcp-analytics.js:d9838076d2583cdf:1",
@@ -25898,7 +25907,7 @@
 				"specifier": "./routes/mcp-analytics.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 273
+				"line": 275
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/memory-routes.js:e889e35a0ed1718a:1",
@@ -25907,7 +25916,7 @@
 				"specifier": "./routes/memory-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 274
+				"line": 276
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/misc-routes.js:8e1b92ed606f36fa:1",
@@ -25916,7 +25925,7 @@
 				"specifier": "./routes/misc-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 275
+				"line": 277
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/ontology-routes.js:3c2caec6e348dc17:1",
@@ -25925,7 +25934,7 @@
 				"specifier": "./routes/ontology-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 276
+				"line": 278
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/os-agent.js:f3a566598f6c1151:1",
@@ -25934,7 +25943,7 @@
 				"specifier": "./routes/os-agent.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 277
+				"line": 279
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/os-chat.js:eba6b43a7aa24c93:1",
@@ -25943,7 +25952,7 @@
 				"specifier": "./routes/os-chat.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 278
+				"line": 280
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/pipeline-routes.js:debf25eaeceb3654:1",
@@ -25952,7 +25961,7 @@
 				"specifier": "./routes/pipeline-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 279
+				"line": 281
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/plugins-routes.js:10b7dfd2c108ee64:1",
@@ -25961,7 +25970,7 @@
 				"specifier": "./routes/plugins-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 280
+				"line": 282
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/queue-diagnostics.js:d388ac65e82cd234:1",
@@ -25970,7 +25979,7 @@
 				"specifier": "./routes/queue-diagnostics.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 281
+				"line": 283
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/reflection-routes.js:b36815802b58920d:1",
@@ -25979,7 +25988,7 @@
 				"specifier": "./routes/reflection-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 282
+				"line": 284
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/repair-routes.js:fea579e9ba1bf53e:1",
@@ -25988,7 +25997,7 @@
 				"specifier": "./routes/repair-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 283
+				"line": 285
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/secrets-routes.js:abfadb7238720b13:1",
@@ -25997,7 +26006,7 @@
 				"specifier": "./routes/secrets-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 284
+				"line": 286
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/session-routes.js:d9e19da5ddfe7c5c:1",
@@ -26006,7 +26015,7 @@
 				"specifier": "./routes/session-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 285
+				"line": 287
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/skill-analytics.js:a3ed5913e040fdc7:1",
@@ -26015,7 +26024,7 @@
 				"specifier": "./routes/skill-analytics.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 286
+				"line": 288
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/skills.js:19448c628dd4d5bf:1",
@@ -26024,7 +26033,7 @@
 				"specifier": "./routes/skills.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 287
+				"line": 289
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/sources-routes.js:3fcffd4cb02ed36e:1",
@@ -26033,7 +26042,7 @@
 				"specifier": "./routes/sources-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 288
+				"line": 290
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/state.js:9ca987be769b695a:1",
@@ -26042,7 +26051,7 @@
 				"specifier": "./routes/state.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 158
+				"line": 160
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/telemetry-routes.js:41a2e34eee9a3859:1",
@@ -26051,7 +26060,7 @@
 				"specifier": "./routes/telemetry-routes.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 293
+				"line": 295
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/utils.js:bb9acd9281a2974b:1",
@@ -26060,7 +26069,7 @@
 				"specifier": "./routes/utils.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 294
+				"line": 296
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./routes/widget.js:3ccfdd564f9aef06:1",
@@ -26069,7 +26078,7 @@
 				"specifier": "./routes/widget.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 295
+				"line": 297
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./runtime-pressure:23a1a6c654ad5515:1",
@@ -26078,7 +26087,7 @@
 				"specifier": "./runtime-pressure",
 				"kind": "import",
 				"runtime": true,
-				"line": 188
+				"line": 190
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./session-checkpoints:fd8ead3bd790b9f6:1",
@@ -26087,7 +26096,7 @@
 				"specifier": "./session-checkpoints",
 				"kind": "import",
 				"runtime": true,
-				"line": 194
+				"line": 196
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./session-claims:dba20d6498a8c28a:1",
@@ -26096,7 +26105,7 @@
 				"specifier": "./session-claims",
 				"kind": "import",
 				"runtime": true,
-				"line": 195
+				"line": 197
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./session-tracker:9557662d07050bbc:1",
@@ -26105,7 +26114,7 @@
 				"specifier": "./session-tracker",
 				"kind": "import",
 				"runtime": true,
-				"line": 196
+				"line": 198
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./session-ttl-finalizer:289a4685a5274f5f:1",
@@ -26114,7 +26123,7 @@
 				"specifier": "./session-ttl-finalizer",
 				"kind": "import",
 				"runtime": true,
-				"line": 204
+				"line": 206
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./single-flight-runner:65ee48bded06ff6b:1",
@@ -26123,7 +26132,7 @@
 				"specifier": "./single-flight-runner",
 				"kind": "import",
 				"runtime": true,
-				"line": 205
+				"line": 207
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./single-instance-lock:708633a2a1729301:1",
@@ -26132,7 +26141,7 @@
 				"specifier": "./single-instance-lock",
 				"kind": "import",
 				"runtime": true,
-				"line": 206
+				"line": 208
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./source-index-progress:b205f69128248f96:1",
@@ -26141,7 +26150,7 @@
 				"specifier": "./source-index-progress",
 				"kind": "import",
 				"runtime": true,
-				"line": 207
+				"line": 209
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./source-lifecycle-telemetry:ff5138c1cf50e22b:1",
@@ -26150,7 +26159,7 @@
 				"specifier": "./source-lifecycle-telemetry",
 				"kind": "import",
 				"runtime": true,
-				"line": 218
+				"line": 220
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./startup-recovery:27bf965e77fb3cd7:1",
@@ -26159,7 +26168,7 @@
 				"specifier": "./startup-recovery",
 				"kind": "import",
 				"runtime": true,
-				"line": 225
+				"line": 227
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./synthesis-worker-protocol:338036aa8e4b996f:1",
@@ -26168,7 +26177,7 @@
 				"specifier": "./synthesis-worker-protocol",
 				"kind": "import",
 				"runtime": true,
-				"line": 296
+				"line": 298
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./system-pressure:0a8700e60810bf14:1",
@@ -26177,7 +26186,7 @@
 				"specifier": "./system-pressure",
 				"kind": "import",
 				"runtime": true,
-				"line": 226
+				"line": 228
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./telemetry:fa29a3b40efd2a72:1",
@@ -26186,7 +26195,7 @@
 				"specifier": "./telemetry",
 				"kind": "import",
 				"runtime": true,
-				"line": 227
+				"line": 229
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./transcript-capture-worker:57c9eecace1e0147:1",
@@ -26195,7 +26204,7 @@
 				"specifier": "./transcript-capture-worker",
 				"kind": "import",
 				"runtime": true,
-				"line": 237
+				"line": 239
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./transcript-recovery-worker:3c6146d92e764f8d:1",
@@ -26204,7 +26213,7 @@
 				"specifier": "./transcript-recovery-worker",
 				"kind": "import",
 				"runtime": true,
-				"line": 238
+				"line": 240
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./update-system:6924dd65f6567bb2:1",
@@ -26213,7 +26222,7 @@
 				"specifier": "./update-system",
 				"kind": "import",
 				"runtime": true,
-				"line": 297
+				"line": 299
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:./watcher-ignore:b9b56d95b20d12a1:1",
@@ -26222,10 +26231,10 @@
 				"specifier": "./watcher-ignore",
 				"kind": "import",
 				"runtime": true,
-				"line": 298
+				"line": 300
 			},
 			{
-				"id": "platform/daemon/src/daemon.ts:import:runtime:@signet/core:85bf8d5e169137c5:1",
+				"id": "platform/daemon/src/daemon.ts:import:runtime:@signet/core:4a40fd75d0439460:1",
 				"from": "platform/daemon/src/daemon.ts",
 				"to": null,
 				"specifier": "@signet/core",
@@ -26240,7 +26249,7 @@
 				"specifier": "@signet/core",
 				"kind": "import",
 				"runtime": true,
-				"line": 49
+				"line": 51
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:chokidar:a54810ee932ec8dd:1",
@@ -26249,7 +26258,7 @@
 				"specifier": "chokidar",
 				"kind": "import",
 				"runtime": true,
-				"line": 34
+				"line": 36
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:hono:911d607523f8971f:1",
@@ -26258,7 +26267,7 @@
 				"specifier": "hono",
 				"kind": "import",
 				"runtime": true,
-				"line": 35
+				"line": 37
 			},
 			{
 				"id": "platform/daemon/src/daemon.ts:import:runtime:node:child_process:ef986b6e29cc847a:1",
@@ -26348,7 +26357,7 @@
 				"specifier": "./diagnostics-queue",
 				"kind": "import",
 				"runtime": false,
-				"line": 96
+				"line": 98
 			},
 			{
 				"id": "platform/daemon/src/database-integrity-worker.ts:import:runtime:node:module:e9174d8c4df197c4:1",
@@ -29663,7 +29672,7 @@
 				"line": 12
 			},
 			{
-				"id": "platform/daemon/src/logger.ts:import:runtime:node:fs:8cc1f748f5e1b305:1",
+				"id": "platform/daemon/src/logger.ts:import:runtime:node:fs:3dd00bc20cbf8d14:1",
 				"from": "platform/daemon/src/logger.ts",
 				"to": null,
 				"specifier": "node:fs",
@@ -29678,7 +29687,7 @@
 				"specifier": "node:os",
 				"kind": "import",
 				"runtime": true,
-				"line": 23
+				"line": 14
 			},
 			{
 				"id": "platform/daemon/src/logger.ts:import:runtime:node:path:b46fc86f7f0cbf96:1",
@@ -29687,7 +29696,7 @@
 				"specifier": "node:path",
 				"kind": "import",
 				"runtime": true,
-				"line": 24
+				"line": 15
 			},
 			{
 				"id": "platform/daemon/src/mcp-probe.ts:import:runtime:./event-bus.js:edf748afeb8e9736:1",
@@ -34892,7 +34901,7 @@
 				"line": 4
 			},
 			{
-				"id": "platform/daemon/src/plugins/audit.ts:import:runtime:@signet/core:030a87cd432e8d53:1",
+				"id": "platform/daemon/src/plugins/audit.ts:import:runtime:@signet/core:bec60c933e38281f:1",
 				"from": "platform/daemon/src/plugins/audit.ts",
 				"to": null,
 				"specifier": "@signet/core",
@@ -34961,7 +34970,7 @@
 				"specifier": "../logger.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 4
+				"line": 9
 			},
 			{
 				"id": "platform/daemon/src/plugins/host.ts:import:runtime:../pipeline/tokenizer.js:a11f9151d237ed48:1",
@@ -34970,7 +34979,7 @@
 				"specifier": "../pipeline/tokenizer.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 5
+				"line": 10
 			},
 			{
 				"id": "platform/daemon/src/plugins/host.ts:import:runtime:./audit.js:95c1633de75b1934:1",
@@ -34979,7 +34988,7 @@
 				"specifier": "./audit.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 6
+				"line": 11
 			},
 			{
 				"id": "platform/daemon/src/plugins/host.ts:import:runtime:./manifest.js:854fdb7a5846897e:1",
@@ -34988,7 +34997,7 @@
 				"specifier": "./manifest.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 7
+				"line": 12
 			},
 			{
 				"id": "platform/daemon/src/plugins/host.ts:import:runtime:./types.js:47a724ca75aff971:1",
@@ -34997,10 +35006,10 @@
 				"specifier": "./types.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 8
+				"line": 13
 			},
 			{
-				"id": "platform/daemon/src/plugins/host.ts:import:runtime:@signet/core:ddb61f4c36ff1787:1",
+				"id": "platform/daemon/src/plugins/host.ts:import:runtime:@signet/core:fa1ffb8411b23ce7:1",
 				"from": "platform/daemon/src/plugins/host.ts",
 				"to": null,
 				"specifier": "@signet/core",
@@ -35033,7 +35042,7 @@
 				"specifier": "./types.js",
 				"kind": "import",
 				"runtime": false,
-				"line": 9
+				"line": 14
 			},
 			{
 				"id": "platform/daemon/src/plugins/index.ts:export:runtime:./audit.js:f0c8373cb08f35e8:1",
@@ -36350,7 +36359,7 @@
 				"line": 30
 			},
 			{
-				"id": "platform/daemon/src/routes/health.ts:import:runtime:@signet/core:a8d904dcc4e0f27d:1",
+				"id": "platform/daemon/src/routes/health.ts:import:runtime:@signet/core:bca8578a197c76fd:1",
 				"from": "platform/daemon/src/routes/health.ts",
 				"to": null,
 				"specifier": "@signet/core",
@@ -39914,7 +39923,7 @@
 				"line": 1
 			},
 			{
-				"id": "platform/daemon/src/service.ts:import:runtime:@signet/core:bcd9a31927cfe6b2:1",
+				"id": "platform/daemon/src/service.ts:import:runtime:@signet/core:a3c78f954d6385f6:1",
 				"from": "platform/daemon/src/service.ts",
 				"to": null,
 				"specifier": "@signet/core",
@@ -46655,7 +46664,7 @@
 				"line": 12
 			},
 			{
-				"id": "surfaces/cli/src/features/workspace.ts:import:runtime:../lib/workspace.js:abd2fb0ec1d3ae64:1",
+				"id": "surfaces/cli/src/features/workspace.ts:import:runtime:../lib/workspace.js:8e9c7647f8fe596c:1",
 				"from": "surfaces/cli/src/features/workspace.ts",
 				"to": "surfaces/cli/src/lib/workspace.ts",
 				"specifier": "../lib/workspace.js",
@@ -46673,7 +46682,7 @@
 				"line": 4
 			},
 			{
-				"id": "surfaces/cli/src/features/workspace.ts:import:runtime:@signet/core:ffd6405e52c21b89:1",
+				"id": "surfaces/cli/src/features/workspace.ts:import:runtime:@signet/core:966f4f6bb20767e6:1",
 				"from": "surfaces/cli/src/features/workspace.ts",
 				"to": null,
 				"specifier": "@signet/core",
@@ -46949,7 +46958,7 @@
 				"specifier": "./inspector-proxy.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 26
+				"line": 28
 			},
 			{
 				"id": "surfaces/cli/src/lib/runtime.ts:import:runtime:./network.js:69d6a649a6a104cf:1",
@@ -46958,7 +46967,7 @@
 				"specifier": "./network.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 27
+				"line": 29
 			},
 			{
 				"id": "surfaces/cli/src/lib/runtime.ts:import:runtime:./workspace.js:67d8da8e9ed92b55:1",
@@ -46967,10 +46976,10 @@
 				"specifier": "./workspace.js",
 				"kind": "import",
 				"runtime": true,
-				"line": 28
+				"line": 30
 			},
 			{
-				"id": "surfaces/cli/src/lib/runtime.ts:import:runtime:@signet/core:b3d4c632cc6ac5ee:1",
+				"id": "surfaces/cli/src/lib/runtime.ts:import:runtime:@signet/core:2ee27b85d638c75f:1",
 				"from": "surfaces/cli/src/lib/runtime.ts",
 				"to": null,
 				"specifier": "@signet/core",
@@ -47143,7 +47152,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/components/shell/sidebar:4feae2d42dc5abfc:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/shell/sidebar.tsx",
 				"specifier": "@/components/shell/sidebar",
 				"kind": "import",
 				"runtime": true,
@@ -47152,7 +47161,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/components/shell/topbar:910110684108a710:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/shell/topbar.tsx",
 				"specifier": "@/components/shell/topbar",
 				"kind": "import",
 				"runtime": true,
@@ -47161,7 +47170,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/components/shell/window-chrome:98c172ad5a926005:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/shell/window-chrome.tsx",
 				"specifier": "@/components/shell/window-chrome",
 				"kind": "import",
 				"runtime": true,
@@ -47170,7 +47179,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/components/ui/sonner:462d08f8b9b3f0b0:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/sonner.tsx",
 				"specifier": "@/components/ui/sonner",
 				"kind": "import",
 				"runtime": true,
@@ -47179,7 +47188,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/components/ui/tooltip:d2910eb07f3f205f:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/tooltip.tsx",
 				"specifier": "@/components/ui/tooltip",
 				"kind": "import",
 				"runtime": true,
@@ -47188,7 +47197,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/lib/settings-context:ee1be065cb1871b3:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/settings-context.tsx",
 				"specifier": "@/lib/settings-context",
 				"kind": "import",
 				"runtime": true,
@@ -47197,7 +47206,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47206,7 +47215,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/lib/view-context:49be606c20bc4f61:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/view-context.tsx",
 				"specifier": "@/lib/view-context",
 				"kind": "import",
 				"runtime": true,
@@ -47215,7 +47224,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/views/agents:5eb84c107c91b14b:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/views/agents.tsx",
 				"specifier": "@/views/agents",
 				"kind": "import",
 				"runtime": true,
@@ -47224,7 +47233,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/views/dreaming:f2ba957649f3fbdc:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/views/dreaming.tsx",
 				"specifier": "@/views/dreaming",
 				"kind": "import",
 				"runtime": true,
@@ -47233,7 +47242,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/views/graph:7213422833902da0:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/views/graph.tsx",
 				"specifier": "@/views/graph",
 				"kind": "import",
 				"runtime": true,
@@ -47242,7 +47251,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/views/home:f2a9a1a6984f311c:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/views/home.tsx",
 				"specifier": "@/views/home",
 				"kind": "import",
 				"runtime": true,
@@ -47251,7 +47260,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/views/memory:d54610b8702e0d86:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/views/memory.tsx",
 				"specifier": "@/views/memory",
 				"kind": "import",
 				"runtime": true,
@@ -47260,7 +47269,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/views/secrets:c17a1f8e9e0a8518:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/views/secrets.tsx",
 				"specifier": "@/views/secrets",
 				"kind": "import",
 				"runtime": true,
@@ -47269,7 +47278,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/views/settings:0266a99a15b71fc9:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/views/settings.tsx",
 				"specifier": "@/views/settings",
 				"kind": "import",
 				"runtime": true,
@@ -47278,7 +47287,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/views/sources:aa38d9756fcba5e7:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/views/sources.tsx",
 				"specifier": "@/views/sources",
 				"kind": "import",
 				"runtime": true,
@@ -47287,7 +47296,7 @@
 			{
 				"id": "surfaces/dashboard/src/app.tsx:import:runtime:@/views/stubs:8126a79818aad50f:1",
 				"from": "surfaces/dashboard/src/app.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/views/stubs.tsx",
 				"specifier": "@/views/stubs",
 				"kind": "import",
 				"runtime": true,
@@ -47305,7 +47314,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/home/daily-brief.tsx:import:runtime:@/components/ui/surface:ac4213fc7ad41a01:1",
 				"from": "surfaces/dashboard/src/components/home/daily-brief.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/surface.tsx",
 				"specifier": "@/components/ui/surface",
 				"kind": "import",
 				"runtime": true,
@@ -47314,7 +47323,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/home/daily-brief.tsx:import:runtime:@/lib/api:eba45e6326a09840:1",
 				"from": "surfaces/dashboard/src/components/home/daily-brief.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -47323,7 +47332,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/home/daily-brief.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/home/daily-brief.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47350,7 +47359,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/home/kpi.tsx:import:runtime:@/components/ui/surface:ac4213fc7ad41a01:1",
 				"from": "surfaces/dashboard/src/components/home/kpi.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/surface.tsx",
 				"specifier": "@/components/ui/surface",
 				"kind": "import",
 				"runtime": true,
@@ -47359,7 +47368,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/home/kpi.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/home/kpi.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47377,7 +47386,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/home/panel.tsx:import:runtime:@/components/ui/surface:ac4213fc7ad41a01:1",
 				"from": "surfaces/dashboard/src/components/home/panel.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/surface.tsx",
 				"specifier": "@/components/ui/surface",
 				"kind": "import",
 				"runtime": true,
@@ -47386,7 +47395,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/home/panel.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/home/panel.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47413,7 +47422,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/mode-toggle.tsx:import:runtime:@/components/ui/button:c1a91b2262f5b75e:1",
 				"from": "surfaces/dashboard/src/components/mode-toggle.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/button.tsx",
 				"specifier": "@/components/ui/button",
 				"kind": "import",
 				"runtime": true,
@@ -47449,7 +47458,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/secrets/add-secret-dialog.tsx:import:runtime:@/lib/api:665227cce145223b:1",
 				"from": "surfaces/dashboard/src/components/secrets/add-secret-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -47458,7 +47467,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/secrets/add-secret-dialog.tsx:import:runtime:@/lib/secret-names:487e859ff3b0a787:1",
 				"from": "surfaces/dashboard/src/components/secrets/add-secret-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/secret-names.ts",
 				"specifier": "@/lib/secret-names",
 				"kind": "import",
 				"runtime": true,
@@ -47494,7 +47503,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/secrets/onepassword-panel.tsx:import:runtime:@/components/ui/switch:8651382235d39482:1",
 				"from": "surfaces/dashboard/src/components/secrets/onepassword-panel.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/switch.tsx",
 				"specifier": "@/components/ui/switch",
 				"kind": "import",
 				"runtime": true,
@@ -47503,7 +47512,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/secrets/onepassword-panel.tsx:import:runtime:@/lib/api:4b3e06df85c993de:1",
 				"from": "surfaces/dashboard/src/components/secrets/onepassword-panel.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -47512,7 +47521,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/secrets/onepassword-panel.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/secrets/onepassword-panel.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47548,7 +47557,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/secrets/secret-card.tsx:import:runtime:@/lib/api:665227cce145223b:1",
 				"from": "surfaces/dashboard/src/components/secrets/secret-card.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -47557,7 +47566,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/secrets/secret-card.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/secrets/secret-card.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47593,7 +47602,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/settings/connect-controller.ts:import:runtime:@/lib/api:280eafc94a2cb5a0:1",
 				"from": "surfaces/dashboard/src/components/settings/connect-controller.ts",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -47602,7 +47611,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/settings/connect-controller.ts:import:runtime:@/lib/inference-keys:e180f0e3bf8c2797:1",
 				"from": "surfaces/dashboard/src/components/settings/connect-controller.ts",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/inference-keys.ts",
 				"specifier": "@/lib/inference-keys",
 				"kind": "import",
 				"runtime": true,
@@ -47620,7 +47629,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/settings/connect-dialog.tsx:import:runtime:@/components/settings/connect-controller:5f9c4180ef2a079f:1",
 				"from": "surfaces/dashboard/src/components/settings/connect-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/settings/connect-controller.ts",
 				"specifier": "@/components/settings/connect-controller",
 				"kind": "import",
 				"runtime": true,
@@ -47629,7 +47638,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/settings/connect-dialog.tsx:import:runtime:@/lib/api:665227cce145223b:1",
 				"from": "surfaces/dashboard/src/components/settings/connect-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -47638,7 +47647,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/settings/connect-dialog.tsx:import:runtime:@/lib/desktop:e574ceb93ab550fa:1",
 				"from": "surfaces/dashboard/src/components/settings/connect-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/desktop.ts",
 				"specifier": "@/lib/desktop",
 				"kind": "import",
 				"runtime": true,
@@ -47647,7 +47656,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/settings/connect-dialog.tsx:import:runtime:@/lib/inference-keys:980f4068083579f0:1",
 				"from": "surfaces/dashboard/src/components/settings/connect-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/inference-keys.ts",
 				"specifier": "@/lib/inference-keys",
 				"kind": "import",
 				"runtime": true,
@@ -47656,7 +47665,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/settings/connect-dialog.tsx:import:runtime:@/lib/oauth-navigation:b301d80c2a7ab45f:1",
 				"from": "surfaces/dashboard/src/components/settings/connect-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/oauth-navigation.ts",
 				"specifier": "@/lib/oauth-navigation",
 				"kind": "import",
 				"runtime": true,
@@ -47665,7 +47674,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/settings/connect-dialog.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/settings/connect-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47692,7 +47701,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/sidebar.tsx:import:runtime:@/components/icons:d0b9f2565bab7426:1",
 				"from": "surfaces/dashboard/src/components/shell/sidebar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/icons.tsx",
 				"specifier": "@/components/icons",
 				"kind": "import",
 				"runtime": true,
@@ -47701,7 +47710,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/sidebar.tsx:import:runtime:@/components/mode-toggle:5f2db9bb2a3a132a:1",
 				"from": "surfaces/dashboard/src/components/shell/sidebar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/mode-toggle.tsx",
 				"specifier": "@/components/mode-toggle",
 				"kind": "import",
 				"runtime": true,
@@ -47710,7 +47719,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/sidebar.tsx:import:runtime:@/components/ui/button:c1a91b2262f5b75e:1",
 				"from": "surfaces/dashboard/src/components/shell/sidebar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/button.tsx",
 				"specifier": "@/components/ui/button",
 				"kind": "import",
 				"runtime": true,
@@ -47719,7 +47728,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/sidebar.tsx:import:runtime:@/components/ui/tooltip:c658c23f33c24260:1",
 				"from": "surfaces/dashboard/src/components/shell/sidebar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/tooltip.tsx",
 				"specifier": "@/components/ui/tooltip",
 				"kind": "import",
 				"runtime": true,
@@ -47728,7 +47737,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/sidebar.tsx:import:runtime:@/lib/api:665227cce145223b:1",
 				"from": "surfaces/dashboard/src/components/shell/sidebar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -47737,7 +47746,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/sidebar.tsx:import:runtime:@/lib/settings-context:f194539ed452abbd:1",
 				"from": "surfaces/dashboard/src/components/shell/sidebar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/settings-context.tsx",
 				"specifier": "@/lib/settings-context",
 				"kind": "import",
 				"runtime": true,
@@ -47746,7 +47755,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/sidebar.tsx:import:runtime:@/lib/use-async:2a0b2802d86aded3:1",
 				"from": "surfaces/dashboard/src/components/shell/sidebar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/use-async.ts",
 				"specifier": "@/lib/use-async",
 				"kind": "import",
 				"runtime": true,
@@ -47755,7 +47764,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/sidebar.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/shell/sidebar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47764,7 +47773,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/sidebar.tsx:import:runtime:@/lib/view-context:fe265af94439f36b:1",
 				"from": "surfaces/dashboard/src/components/shell/sidebar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/view-context.tsx",
 				"specifier": "@/lib/view-context",
 				"kind": "import",
 				"runtime": true,
@@ -47782,7 +47791,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/topbar.tsx:import:runtime:@/components/shell/window-chrome:8469317d4e12e0a0:1",
 				"from": "surfaces/dashboard/src/components/shell/topbar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/shell/window-chrome.tsx",
 				"specifier": "@/components/shell/window-chrome",
 				"kind": "import",
 				"runtime": true,
@@ -47791,7 +47800,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/topbar.tsx:import:runtime:@/lib/platform:6d68c9d23d5403cf:1",
 				"from": "surfaces/dashboard/src/components/shell/topbar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/platform.ts",
 				"specifier": "@/lib/platform",
 				"kind": "import",
 				"runtime": true,
@@ -47800,7 +47809,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/topbar.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/shell/topbar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47809,7 +47818,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/topbar.tsx:import:runtime:@/lib/view-context:49be606c20bc4f61:1",
 				"from": "surfaces/dashboard/src/components/shell/topbar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/view-context.tsx",
 				"specifier": "@/lib/view-context",
 				"kind": "import",
 				"runtime": true,
@@ -47827,7 +47836,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/window-chrome.tsx:import:runtime:@/lib/platform:4a32ae9b21f7eeb3:1",
 				"from": "surfaces/dashboard/src/components/shell/window-chrome.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/platform.ts",
 				"specifier": "@/lib/platform",
 				"kind": "import",
 				"runtime": true,
@@ -47836,7 +47845,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/shell/window-chrome.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/shell/window-chrome.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47854,7 +47863,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/sources/connect-source-dialog.tsx:import:runtime:@/components/icons:5cb03895a5377871:1",
 				"from": "surfaces/dashboard/src/components/sources/connect-source-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/icons.tsx",
 				"specifier": "@/components/icons",
 				"kind": "import",
 				"runtime": true,
@@ -47863,7 +47872,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/sources/connect-source-dialog.tsx:import:runtime:@/lib/api:27fdcdc785a23eba:1",
 				"from": "surfaces/dashboard/src/components/sources/connect-source-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -47872,7 +47881,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/sources/connect-source-dialog.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/sources/connect-source-dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47917,7 +47926,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/accordion.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/accordion.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47953,7 +47962,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/attachment.tsx:import:runtime:@/components/ui/button:c1a91b2262f5b75e:1",
 				"from": "surfaces/dashboard/src/components/ui/attachment.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/button.tsx",
 				"specifier": "@/components/ui/button",
 				"kind": "import",
 				"runtime": true,
@@ -47962,7 +47971,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/attachment.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/attachment.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -47998,7 +48007,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/avatar.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/avatar.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48025,7 +48034,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/badge.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/badge.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48061,7 +48070,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/bubble.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/bubble.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48097,7 +48106,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/button.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/button.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48142,7 +48151,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/dialog.tsx:import:runtime:@/components/ui/button:c1a91b2262f5b75e:1",
 				"from": "surfaces/dashboard/src/components/ui/dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/button.tsx",
 				"specifier": "@/components/ui/button",
 				"kind": "import",
 				"runtime": true,
@@ -48151,7 +48160,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/dialog.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/dialog.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48187,7 +48196,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/dropdown-menu.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/dropdown-menu.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48223,7 +48232,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/empty.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/empty.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48241,7 +48250,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/input-group.tsx:import:runtime:@/components/ui/button:c1a91b2262f5b75e:1",
 				"from": "surfaces/dashboard/src/components/ui/input-group.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/button.tsx",
 				"specifier": "@/components/ui/button",
 				"kind": "import",
 				"runtime": true,
@@ -48250,7 +48259,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/input-group.tsx:import:runtime:@/components/ui/input:6be1c86ae65ad6d4:1",
 				"from": "surfaces/dashboard/src/components/ui/input-group.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/input.tsx",
 				"specifier": "@/components/ui/input",
 				"kind": "import",
 				"runtime": true,
@@ -48259,7 +48268,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/input-group.tsx:import:runtime:@/components/ui/textarea:13678a29817fe7e8:1",
 				"from": "surfaces/dashboard/src/components/ui/input-group.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/textarea.tsx",
 				"specifier": "@/components/ui/textarea",
 				"kind": "import",
 				"runtime": true,
@@ -48268,7 +48277,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/input-group.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/input-group.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48295,7 +48304,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/input.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/input.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48313,7 +48322,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/kbd.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/kbd.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48322,7 +48331,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/label.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/label.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48349,7 +48358,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/marker.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/marker.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48385,7 +48394,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/message-scroller.tsx:import:runtime:@/components/ui/button:c1a91b2262f5b75e:1",
 				"from": "surfaces/dashboard/src/components/ui/message-scroller.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/button.tsx",
 				"specifier": "@/components/ui/button",
 				"kind": "import",
 				"runtime": true,
@@ -48394,7 +48403,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/message-scroller.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/message-scroller.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48430,7 +48439,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/message.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/message.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48448,7 +48457,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/progress.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/progress.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48475,7 +48484,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/scroll-area.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/scroll-area.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48502,7 +48511,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/select.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/select.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48538,7 +48547,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/separator.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/separator.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48565,7 +48574,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/sheet.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/sheet.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48601,7 +48610,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/skeleton.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/skeleton.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48610,7 +48619,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/slider.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/slider.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48664,7 +48673,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/spinner.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/spinner.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48682,7 +48691,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/surface.tsx:import:runtime:@/lib/use-cursor-glow:16f82454e4f19392:1",
 				"from": "surfaces/dashboard/src/components/ui/surface.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/use-cursor-glow.ts",
 				"specifier": "@/lib/use-cursor-glow",
 				"kind": "import",
 				"runtime": true,
@@ -48691,7 +48700,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/surface.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/surface.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48709,7 +48718,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/switch.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/switch.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48736,7 +48745,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/tabs.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/tabs.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48772,7 +48781,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/textarea.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/textarea.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48790,7 +48799,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/toggle-group.tsx:import:runtime:@/components/ui/toggle:9aa4be4a052bcfb8:1",
 				"from": "surfaces/dashboard/src/components/ui/toggle-group.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/toggle.tsx",
 				"specifier": "@/components/ui/toggle",
 				"kind": "import",
 				"runtime": true,
@@ -48799,7 +48808,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/toggle-group.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/toggle-group.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48835,7 +48844,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/toggle.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/toggle.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48871,7 +48880,7 @@
 			{
 				"id": "surfaces/dashboard/src/components/ui/tooltip.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/components/ui/tooltip.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -48898,7 +48907,7 @@
 			{
 				"id": "surfaces/dashboard/src/lib/agent-config.ts:import:runtime:@/lib/api:665227cce145223b:1",
 				"from": "surfaces/dashboard/src/lib/agent-config.ts",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -48997,7 +49006,7 @@
 			{
 				"id": "surfaces/dashboard/src/lib/oauth-navigation.ts:import:type:@/lib/desktop:e48f5ce4e73bed6a:1",
 				"from": "surfaces/dashboard/src/lib/oauth-navigation.ts",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/desktop.ts",
 				"specifier": "@/lib/desktop",
 				"kind": "import",
 				"runtime": false,
@@ -49006,7 +49015,7 @@
 			{
 				"id": "surfaces/dashboard/src/lib/providers.ts:import:type:@/lib/api:22102b6639036760:1",
 				"from": "surfaces/dashboard/src/lib/providers.ts",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": false,
@@ -49069,7 +49078,7 @@
 			{
 				"id": "surfaces/dashboard/src/main.tsx:import:runtime:@/app:e1c6195a5462ec13:1",
 				"from": "surfaces/dashboard/src/main.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/app.tsx",
 				"specifier": "@/app",
 				"kind": "import",
 				"runtime": true,
@@ -49078,7 +49087,7 @@
 			{
 				"id": "surfaces/dashboard/src/main.tsx:import:runtime:@/components/theme-provider:0d7591632e899df4:1",
 				"from": "surfaces/dashboard/src/main.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/theme-provider.tsx",
 				"specifier": "@/components/theme-provider",
 				"kind": "import",
 				"runtime": true,
@@ -49096,7 +49105,7 @@
 			{
 				"id": "surfaces/dashboard/src/main.tsx:import:runtime:@/lib/view-context:8272b5cd8511ec97:1",
 				"from": "surfaces/dashboard/src/main.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/view-context.tsx",
 				"specifier": "@/lib/view-context",
 				"kind": "import",
 				"runtime": true,
@@ -49186,7 +49195,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/agents.tsx:import:runtime:@/components/ui/dialog:5d01948d5a5ce848:1",
 				"from": "surfaces/dashboard/src/views/agents.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/dialog.tsx",
 				"specifier": "@/components/ui/dialog",
 				"kind": "import",
 				"runtime": true,
@@ -49195,7 +49204,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/agents.tsx:import:runtime:@/lib/api:e86c5cb04615a056:1",
 				"from": "surfaces/dashboard/src/views/agents.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -49213,7 +49222,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/dreaming.tsx:import:runtime:@/components/home/panel:b895eebb011d49a6:1",
 				"from": "surfaces/dashboard/src/views/dreaming.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/home/panel.tsx",
 				"specifier": "@/components/home/panel",
 				"kind": "import",
 				"runtime": true,
@@ -49222,7 +49231,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/dreaming.tsx:import:runtime:@/components/ui/badge:51f441819fee147c:1",
 				"from": "surfaces/dashboard/src/views/dreaming.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/badge.tsx",
 				"specifier": "@/components/ui/badge",
 				"kind": "import",
 				"runtime": true,
@@ -49231,7 +49240,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/dreaming.tsx:import:runtime:@/components/ui/button:c1a91b2262f5b75e:1",
 				"from": "surfaces/dashboard/src/views/dreaming.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/button.tsx",
 				"specifier": "@/components/ui/button",
 				"kind": "import",
 				"runtime": true,
@@ -49240,7 +49249,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/dreaming.tsx:import:runtime:@/components/ui/dialog:48d4ef6f63ea28c1:1",
 				"from": "surfaces/dashboard/src/views/dreaming.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/dialog.tsx",
 				"specifier": "@/components/ui/dialog",
 				"kind": "import",
 				"runtime": true,
@@ -49249,7 +49258,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/dreaming.tsx:import:runtime:@/components/ui/surface:ac4213fc7ad41a01:1",
 				"from": "surfaces/dashboard/src/views/dreaming.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/surface.tsx",
 				"specifier": "@/components/ui/surface",
 				"kind": "import",
 				"runtime": true,
@@ -49258,7 +49267,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/dreaming.tsx:import:runtime:@/lib/api:135ce0f2ef7808f5:1",
 				"from": "surfaces/dashboard/src/views/dreaming.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -49267,7 +49276,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/dreaming.tsx:import:runtime:@/lib/use-async:2a0b2802d86aded3:1",
 				"from": "surfaces/dashboard/src/views/dreaming.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/use-async.ts",
 				"specifier": "@/lib/use-async",
 				"kind": "import",
 				"runtime": true,
@@ -49276,7 +49285,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/dreaming.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/views/dreaming.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -49303,7 +49312,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/graph.tsx:dynamic-import:runtime:@/lib/graph-scene:10620c4e82135cfd:1",
 				"from": "surfaces/dashboard/src/views/graph.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/graph-scene.ts",
 				"specifier": "@/lib/graph-scene",
 				"kind": "dynamic-import",
 				"runtime": true,
@@ -49312,7 +49321,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/graph.tsx:import:runtime:@/lib/api:665227cce145223b:1",
 				"from": "surfaces/dashboard/src/views/graph.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -49321,7 +49330,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/graph.tsx:import:runtime:@/lib/use-async:2a0b2802d86aded3:1",
 				"from": "surfaces/dashboard/src/views/graph.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/use-async.ts",
 				"specifier": "@/lib/use-async",
 				"kind": "import",
 				"runtime": true,
@@ -49330,7 +49339,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/graph.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/views/graph.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -49357,7 +49366,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/graph.tsx:import:type:@/lib/graph-scene:07b92629e5202be2:1",
 				"from": "surfaces/dashboard/src/views/graph.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/graph-scene.ts",
 				"specifier": "@/lib/graph-scene",
 				"kind": "import",
 				"runtime": false,
@@ -49366,7 +49375,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/home.tsx:import:runtime:@/components/home/daily-brief:d56506f6525ea00e:1",
 				"from": "surfaces/dashboard/src/views/home.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/home/daily-brief.tsx",
 				"specifier": "@/components/home/daily-brief",
 				"kind": "import",
 				"runtime": true,
@@ -49375,7 +49384,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/home.tsx:import:runtime:@/components/home/kpi:7c596da3b99ab60a:1",
 				"from": "surfaces/dashboard/src/views/home.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/home/kpi.tsx",
 				"specifier": "@/components/home/kpi",
 				"kind": "import",
 				"runtime": true,
@@ -49384,7 +49393,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/home.tsx:import:runtime:@/components/home/panel:b895eebb011d49a6:1",
 				"from": "surfaces/dashboard/src/views/home.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/home/panel.tsx",
 				"specifier": "@/components/home/panel",
 				"kind": "import",
 				"runtime": true,
@@ -49393,7 +49402,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/home.tsx:import:runtime:@/components/icons:5cb03895a5377871:1",
 				"from": "surfaces/dashboard/src/views/home.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/icons.tsx",
 				"specifier": "@/components/icons",
 				"kind": "import",
 				"runtime": true,
@@ -49402,7 +49411,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/home.tsx:import:runtime:@/components/ui/surface:ac4213fc7ad41a01:1",
 				"from": "surfaces/dashboard/src/views/home.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/surface.tsx",
 				"specifier": "@/components/ui/surface",
 				"kind": "import",
 				"runtime": true,
@@ -49411,7 +49420,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/home.tsx:import:runtime:@/lib/api:665227cce145223b:1",
 				"from": "surfaces/dashboard/src/views/home.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -49420,7 +49429,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/home.tsx:import:runtime:@/lib/use-async:2a0b2802d86aded3:1",
 				"from": "surfaces/dashboard/src/views/home.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/use-async.ts",
 				"specifier": "@/lib/use-async",
 				"kind": "import",
 				"runtime": true,
@@ -49429,7 +49438,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/home.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/views/home.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -49456,7 +49465,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/memory.tsx:import:runtime:@/components/icons:5cb03895a5377871:1",
 				"from": "surfaces/dashboard/src/views/memory.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/icons.tsx",
 				"specifier": "@/components/icons",
 				"kind": "import",
 				"runtime": true,
@@ -49465,7 +49474,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/memory.tsx:import:runtime:@/components/ui/surface:ac4213fc7ad41a01:1",
 				"from": "surfaces/dashboard/src/views/memory.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/surface.tsx",
 				"specifier": "@/components/ui/surface",
 				"kind": "import",
 				"runtime": true,
@@ -49474,7 +49483,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/memory.tsx:import:runtime:@/lib/api:9e8283e79d598784:1",
 				"from": "surfaces/dashboard/src/views/memory.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -49483,7 +49492,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/memory.tsx:import:runtime:@/lib/use-async:2a0b2802d86aded3:1",
 				"from": "surfaces/dashboard/src/views/memory.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/use-async.ts",
 				"specifier": "@/lib/use-async",
 				"kind": "import",
 				"runtime": true,
@@ -49492,7 +49501,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/memory.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/views/memory.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -49501,7 +49510,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/memory.tsx:import:runtime:@/lib/view-context:49be606c20bc4f61:1",
 				"from": "surfaces/dashboard/src/views/memory.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/view-context.tsx",
 				"specifier": "@/lib/view-context",
 				"kind": "import",
 				"runtime": true,
@@ -49528,7 +49537,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/secrets.tsx:import:runtime:@/components/secrets/add-secret-dialog:5586479059484a30:1",
 				"from": "surfaces/dashboard/src/views/secrets.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/secrets/add-secret-dialog.tsx",
 				"specifier": "@/components/secrets/add-secret-dialog",
 				"kind": "import",
 				"runtime": true,
@@ -49537,7 +49546,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/secrets.tsx:import:runtime:@/components/secrets/onepassword-panel:17c30a76bf7270cf:1",
 				"from": "surfaces/dashboard/src/views/secrets.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/secrets/onepassword-panel.tsx",
 				"specifier": "@/components/secrets/onepassword-panel",
 				"kind": "import",
 				"runtime": true,
@@ -49546,7 +49555,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/secrets.tsx:import:runtime:@/components/secrets/secret-card:746e99152db5cb96:1",
 				"from": "surfaces/dashboard/src/views/secrets.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/secrets/secret-card.tsx",
 				"specifier": "@/components/secrets/secret-card",
 				"kind": "import",
 				"runtime": true,
@@ -49555,7 +49564,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/secrets.tsx:import:runtime:@/lib/api:665227cce145223b:1",
 				"from": "surfaces/dashboard/src/views/secrets.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -49564,7 +49573,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/secrets.tsx:import:runtime:@/lib/use-async:2a0b2802d86aded3:1",
 				"from": "surfaces/dashboard/src/views/secrets.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/use-async.ts",
 				"specifier": "@/lib/use-async",
 				"kind": "import",
 				"runtime": true,
@@ -49573,7 +49582,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/secrets.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/views/secrets.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -49600,7 +49609,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/components/settings/connect-dialog:4ab6554fc2c1ced0:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/settings/connect-dialog.tsx",
 				"specifier": "@/components/settings/connect-dialog",
 				"kind": "import",
 				"runtime": true,
@@ -49609,7 +49618,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/components/ui/button:c1a91b2262f5b75e:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/button.tsx",
 				"specifier": "@/components/ui/button",
 				"kind": "import",
 				"runtime": true,
@@ -49618,7 +49627,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/components/ui/dialog:5d01948d5a5ce848:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/dialog.tsx",
 				"specifier": "@/components/ui/dialog",
 				"kind": "import",
 				"runtime": true,
@@ -49627,7 +49636,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/components/ui/select:b4cfa499ec386141:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/select.tsx",
 				"specifier": "@/components/ui/select",
 				"kind": "import",
 				"runtime": true,
@@ -49636,7 +49645,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/components/ui/switch:8651382235d39482:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/switch.tsx",
 				"specifier": "@/components/ui/switch",
 				"kind": "import",
 				"runtime": true,
@@ -49645,7 +49654,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/lib/agent-config:0ede184244da837e:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/agent-config.ts",
 				"specifier": "@/lib/agent-config",
 				"kind": "import",
 				"runtime": true,
@@ -49654,7 +49663,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/lib/api:954d2b685f9a1580:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -49663,7 +49672,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/lib/embedding-config:1815149dad90f38b:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/embedding-config.ts",
 				"specifier": "@/lib/embedding-config",
 				"kind": "import",
 				"runtime": true,
@@ -49672,7 +49681,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/lib/inference-route-config:6eb9b0bdfa86c797:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/inference-route-config.ts",
 				"specifier": "@/lib/inference-route-config",
 				"kind": "import",
 				"runtime": true,
@@ -49681,7 +49690,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/lib/providers:ee68d691e6726792:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/providers.ts",
 				"specifier": "@/lib/providers",
 				"kind": "import",
 				"runtime": true,
@@ -49690,7 +49699,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/lib/settings-context:60f14d1e343bbd77:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/settings-context.tsx",
 				"specifier": "@/lib/settings-context",
 				"kind": "import",
 				"runtime": true,
@@ -49699,7 +49708,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/lib/use-async:2a0b2802d86aded3:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/use-async.ts",
 				"specifier": "@/lib/use-async",
 				"kind": "import",
 				"runtime": true,
@@ -49708,7 +49717,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/settings.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/views/settings.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -49735,7 +49744,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/sources.tsx:import:runtime:@/components/icons:5cb03895a5377871:1",
 				"from": "surfaces/dashboard/src/views/sources.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/icons.tsx",
 				"specifier": "@/components/icons",
 				"kind": "import",
 				"runtime": true,
@@ -49744,7 +49753,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/sources.tsx:import:runtime:@/components/sources/connect-source-dialog:0a9d3a8cb96cdaef:1",
 				"from": "surfaces/dashboard/src/views/sources.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/sources/connect-source-dialog.tsx",
 				"specifier": "@/components/sources/connect-source-dialog",
 				"kind": "import",
 				"runtime": true,
@@ -49753,7 +49762,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/sources.tsx:import:runtime:@/components/ui/surface:ac4213fc7ad41a01:1",
 				"from": "surfaces/dashboard/src/views/sources.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/surface.tsx",
 				"specifier": "@/components/ui/surface",
 				"kind": "import",
 				"runtime": true,
@@ -49762,7 +49771,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/sources.tsx:import:runtime:@/lib/api:c2b846c9c3ca3c95:1",
 				"from": "surfaces/dashboard/src/views/sources.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/api.ts",
 				"specifier": "@/lib/api",
 				"kind": "import",
 				"runtime": true,
@@ -49771,7 +49780,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/sources.tsx:import:runtime:@/lib/use-async:2a0b2802d86aded3:1",
 				"from": "surfaces/dashboard/src/views/sources.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/use-async.ts",
 				"specifier": "@/lib/use-async",
 				"kind": "import",
 				"runtime": true,
@@ -49780,7 +49789,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/sources.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "surfaces/dashboard/src/views/sources.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -49789,7 +49798,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/sources.tsx:import:runtime:@/lib/view-context:49be606c20bc4f61:1",
 				"from": "surfaces/dashboard/src/views/sources.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/lib/view-context.tsx",
 				"specifier": "@/lib/view-context",
 				"kind": "import",
 				"runtime": true,
@@ -49816,7 +49825,7 @@
 			{
 				"id": "surfaces/dashboard/src/views/stubs.tsx:import:runtime:@/components/ui/empty:207b11377c769abe:1",
 				"from": "surfaces/dashboard/src/views/stubs.tsx",
-				"to": null,
+				"to": "surfaces/dashboard/src/components/ui/empty.tsx",
 				"specifier": "@/components/ui/empty",
 				"kind": "import",
 				"runtime": true,
@@ -50428,7 +50437,7 @@
 			{
 				"id": "web/marketing/src/components/ui/badge.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/badge.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50464,7 +50473,7 @@
 			{
 				"id": "web/marketing/src/components/ui/button.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/button.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50500,7 +50509,7 @@
 			{
 				"id": "web/marketing/src/components/ui/card.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/card.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50527,7 +50536,7 @@
 			{
 				"id": "web/marketing/src/components/ui/dialog.tsx:import:runtime:@/components/ui/button:c1a91b2262f5b75e:1",
 				"from": "web/marketing/src/components/ui/dialog.tsx",
-				"to": null,
+				"to": "web/marketing/src/components/ui/button.tsx",
 				"specifier": "@/components/ui/button",
 				"kind": "import",
 				"runtime": true,
@@ -50536,7 +50545,7 @@
 			{
 				"id": "web/marketing/src/components/ui/dialog.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/dialog.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50572,7 +50581,7 @@
 			{
 				"id": "web/marketing/src/components/ui/dropdown-menu.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/dropdown-menu.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50608,7 +50617,7 @@
 			{
 				"id": "web/marketing/src/components/ui/input.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/input.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50626,7 +50635,7 @@
 			{
 				"id": "web/marketing/src/components/ui/label.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/label.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50653,7 +50662,7 @@
 			{
 				"id": "web/marketing/src/components/ui/separator.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/separator.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50680,7 +50689,7 @@
 			{
 				"id": "web/marketing/src/components/ui/sheet.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/sheet.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50716,7 +50725,7 @@
 			{
 				"id": "web/marketing/src/components/ui/tabs.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/tabs.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -50752,7 +50761,7 @@
 			{
 				"id": "web/marketing/src/components/ui/tooltip.tsx:import:runtime:@/lib/utils:aa1a0922c1cba919:1",
 				"from": "web/marketing/src/components/ui/tooltip.tsx",
-				"to": null,
+				"to": "web/marketing/src/lib/utils.ts",
 				"specifier": "@/lib/utils",
 				"kind": "import",
 				"runtime": true,
@@ -52186,11 +52195,11 @@
 		],
 		"summary": {
 			"files": 930,
-			"lines": 267942,
-			"logicalStatements": 96563,
-			"runtimeEdges": 1776,
-			"allEdges": 2367,
-			"unresolvedEdges": 1750,
+			"lines": 268255,
+			"logicalStatements": 96755,
+			"runtimeEdges": 1998,
+			"allEdges": 2593,
+			"unresolvedEdges": 1525,
 			"dynamicLiteralSites": 49,
 			"computedLoads": 2,
 			"runtimeCycles": 0,
