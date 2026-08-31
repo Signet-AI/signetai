@@ -238,6 +238,8 @@ import {
 } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
+import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
+import { createOwnerTranscriptImportStore } from "./transcript-import-store";
 
 import { resolveDaemonRestartMode } from "./daemon-restart";
 import {
@@ -319,6 +321,7 @@ let embeddingPromotionRestart: Promise<void> | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
 let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
+let transcriptImportWorkerHandle: TranscriptImportWorkerHandle | null = null;
 // These are mirrored into state.ts via setters for read access by
 // route modules. Only daemon.ts should assign or clear them.
 let telemetryRef: TelemetryCollector | undefined;
@@ -1586,6 +1589,12 @@ async function stopPipelineRuntime(): Promise<void> {
 		reflectionWorkerHandle = null;
 	}
 
+	if (transcriptImportWorkerHandle) {
+		try {
+			await transcriptImportWorkerHandle.stop();
+		} catch {}
+		transcriptImportWorkerHandle = null;
+	}
 	if (transcriptRecoveryWorkerHandle) {
 		try {
 			await transcriptRecoveryWorkerHandle.stop();
@@ -2800,6 +2809,14 @@ async function main() {
 				AGENTS_DIR,
 				resolveDaemonAgentId(),
 			);
+		}
+		if (!transcriptImportWorkerHandle) {
+			transcriptImportWorkerHandle = startTranscriptImportWorker({
+				store: createOwnerTranscriptImportStore(),
+				agentId: resolveDaemonAgentId(),
+				workspaceRoot: AGENTS_DIR,
+				onBatch: async () => undefined,
+			});
 		}
 
 		checkpointPruneTimer = setInterval(() => {

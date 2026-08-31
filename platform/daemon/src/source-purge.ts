@@ -2,6 +2,7 @@ import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
 import { getDbAccessor, runWriteTxAsync, type WriteDb } from "./db-accessor";
 import { countChanges, syncVecDeleteByEmbeddingIds, tableExists } from "./db-helpers";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
+import { purgeTranscriptImportFilesystem } from "./transcript-import-worker";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
 
 interface PurgeSourceOwnedRowsInput {
@@ -17,6 +18,13 @@ const SOURCE_OWNED_GRAPH_TABLES = [
 ] as const;
 
 export async function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): Promise<number> {
+	const sourceId = input.sourceId.trim();
+	if (!sourceId) return 0;
+	await purgeTranscriptImportFilesystem(
+		process.env.SIGNET_PATH ?? `${process.env.HOME ?? "."}/.agents`,
+		sourceId,
+		input.agentId,
+	);
 	return await runWriteTxAsync(getDbAccessor(), (db) => purgeSourceOwnedRowsInTx(db, input));
 }
 
