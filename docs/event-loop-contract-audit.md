@@ -1,6 +1,6 @@
 # Event-loop synchronous contract audit
 
-This report is generated from the deterministic migration ledger in `scripts/event-loop-contract-baseline.json`. Phase A enforces the type boundary structurally: production code receives an async-only `DbAccessor`, while the synchronous compatibility module lives outside the daemon production `src/` tree and is rejected by the production TypeScript project's `rootDir`. The AST import and call checks remain belt-and-suspenders diagnostics, and new synchronous DB call sites fail closed through exact ledger matching.
+This report is generated from the deterministic migration ledger in `scripts/event-loop-contract-baseline.json`. Phase A enforces the type boundary structurally: production code receives an async-only `DbAccessor`, while the synchronous compatibility module lives outside the daemon production `src/` tree and is rejected by the production TypeScript project's `rootDir`. The AST import and call checks remain belt-and-suspenders diagnostics, and new synchronous DB call sites fail closed through exact ledger matching. Migrated DB sites use unique `db:domain.operation.action` IDs as their durable identity; file and line remain diagnostic metadata.
 
 ## Current inventory
 
@@ -219,9 +219,9 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/dreaming-worker.ts:227` (withReadDbAsync)
 - `pipeline/dreaming-worker.ts:247` (withReadDbAsync)
 - `pipeline/graph-traversal.ts:92` (withReadDbAsync)
-- `pipeline/maintenance-worker.ts:148` (withReadDbAsync)
+- `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:346` (withReadDbAsync)
-- `pipeline/maintenance-worker.ts:485` (withReadDbAsync)
+- `db:maintenance.dead-memory-count.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:535` (withReadDbAsync)
 - `pipeline/prospective-index.ts:284` (withWriteDbAsync)
 - `pipeline/prospective-index.ts:300` (withWriteDbAsync)

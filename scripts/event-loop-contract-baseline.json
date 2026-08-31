@@ -931,16 +931,14 @@
       "line": 340,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
-      "category": "hot-path",
-      "siteToken": "db:vacuum.conversion-status.sync-read"
+      "category": "hot-path"
     },
     {
       "path": "db-vacuum.ts",
       "line": 348,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync((db) => readStatusFromDb(toPragmaReadDb(db)), {",
-      "category": "hot-path",
-      "siteToken": "db:vacuum.conversion-status.read"
+      "category": "hot-path"
     },
     {
       "path": "db-vacuum.ts",
@@ -954,8 +952,7 @@
       "line": 498,
       "api": "withWriteTxAsync",
       "source": "await accessor.withWriteTxAsync(",
-      "category": "hot-path",
-      "siteToken": "db:vacuum.conversion-state.mark-running"
+      "category": "hot-path"
     },
     {
       "path": "db-vacuum.ts",
@@ -969,16 +966,14 @@
       "line": 530,
       "api": "withWriteTxAsync",
       "source": "await accessor.withWriteTxAsync(",
-      "category": "hot-path",
-      "siteToken": "db:vacuum.conversion-state.mark-completed"
+      "category": "hot-path"
     },
     {
       "path": "db-vacuum.ts",
       "line": 548,
       "api": "withWriteTxAsync",
       "source": "await accessor.withWriteTxAsync(",
-      "category": "hot-path",
-      "siteToken": "db:vacuum.conversion-state.mark-failed"
+      "category": "hot-path"
     },
     {
       "path": "discord-desktop-cache-source.ts",
