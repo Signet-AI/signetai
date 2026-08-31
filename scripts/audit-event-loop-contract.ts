@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import ts from "typescript";
+import { isSemanticSyncDbCallSiteToken } from "../platform/daemon/src/sync-db-attribution";
 
 /** The synchronous APIs recorded in the migration ledger. */
 export const SYNC_APIS = [
@@ -123,6 +124,15 @@ export interface MissingAsyncDbSiteTokenViolation {
 	readonly message: string;
 }
 
+/** A semantic token reused by multiple DB callbacks would collapse attribution. */
+export interface DuplicateSemanticDbSiteTokenViolation {
+	readonly kind: "duplicate-semantic-db-site-token";
+	readonly path: string;
+	readonly line: number;
+	readonly api: AttributedDbApi;
+	readonly message: string;
+}
+
 /** Committed marker-count snapshot; the ratchet fails when the live count grows past it. */
 export interface LegacyDbCountBaseline {
 	readonly version: 1;
@@ -150,6 +160,7 @@ export interface AuditResult {
 		| UnmarkedLegacyDbAccessViolation
 		| MissingLegacyDbSiteTokenViolation
 		| MissingAsyncDbSiteTokenViolation
+		| DuplicateSemanticDbSiteTokenViolation
 	)[];
 	readonly legacyDbAccess: LegacyDbAccessCounts;
 	readonly executionHomeSites: readonly ExecutionHomeSite[];
@@ -405,10 +416,22 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 	readonly sites: AuditSite[];
 	readonly unmarked: UnmarkedCallSite[];
 	readonly missingSiteTokens: (MissingLegacyDbSiteTokenViolation | MissingAsyncDbSiteTokenViolation)[];
+	readonly semanticSiteTokens: ReadonlyArray<{
+		readonly token: string;
+		readonly path: string;
+		readonly line: number;
+		readonly api: AttributedDbApi;
+	}>;
 } {
 	const sites: AuditSite[] = [];
 	const unmarked: UnmarkedCallSite[] = [];
 	const missingSiteTokens: (MissingLegacyDbSiteTokenViolation | MissingAsyncDbSiteTokenViolation)[] = [];
+	const semanticSiteTokens: Array<{
+		token: string;
+		path: string;
+		line: number;
+		api: AttributedDbApi;
+	}> = [];
 	for (const path of walk(sourceRoot)) {
 		const source = readFileSync(path, "utf8");
 		const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -459,14 +482,17 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 							const tokenArgument = node.arguments[1];
 							const token = tokenArgument === undefined ? null : staticStringValue(tokenArgument, bindings);
 							const expected = `${relativePath}:${line}`;
-							if (token !== expected) {
+							if (token !== expected && (token === null || !isSemanticSyncDbCallSiteToken(token))) {
 								missingSiteTokens.push({
 									kind: "missing-legacy-db-site-token",
 									path: relativePath,
 									line,
 									api: api as LegacyDbApi,
-									message: `${relativePath}:${line} ${api}() must pass its static site token ${JSON.stringify(expected)}; unattributed in-flight DB calls are not allowed`,
+									message: `${relativePath}:${line} ${api}() must pass ${JSON.stringify(expected)} or a static db:domain.operation token; unattributed in-flight DB calls are not allowed`,
 								});
+							}
+							if (token !== null && isSemanticSyncDbCallSiteToken(token)) {
+								semanticSiteTokens.push({ token, path: relativePath, line, api: api as LegacyDbApi });
 							}
 						}
 					}
@@ -478,13 +504,25 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 							const dynamicTokenBoundary = lines
 								.slice(Math.max(0, line - 3), line)
 								.some((candidate) => candidate.includes("DYNAMIC_SITE_TOKEN"));
-							if (!dynamicTokenBoundary && token !== expected) {
+							if (
+								!dynamicTokenBoundary &&
+								token !== expected &&
+								(token === null || !isSemanticSyncDbCallSiteToken(token))
+							) {
 								missingSiteTokens.push({
 									kind: "missing-async-db-site-token",
 									path: relativePath,
 									line,
 									api: api as Exclude<AttributedDbApi, LegacyDbApi>,
-									message: `${relativePath}:${line} ${api}() must pass its static site token ${JSON.stringify(expected)}; unattributed in-flight DB calls are not allowed`,
+									message: `${relativePath}:${line} ${api}() must pass ${JSON.stringify(expected)} or a static db:domain.operation token; unattributed in-flight DB calls are not allowed`,
+								});
+							}
+							if (token !== null && isSemanticSyncDbCallSiteToken(token)) {
+								semanticSiteTokens.push({
+									token,
+									path: relativePath,
+									line,
+									api: api as Exclude<AttributedDbApi, LegacyDbApi>,
 								});
 							}
 						}
@@ -495,7 +533,30 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 		};
 		visit(sourceFile);
 	}
-	return { sites, unmarked, missingSiteTokens };
+	return { sites, unmarked, missingSiteTokens, semanticSiteTokens };
+}
+
+function findDuplicateSemanticSiteTokens(
+	uses: ReadonlyArray<{
+		readonly token: string;
+		readonly path: string;
+		readonly line: number;
+		readonly api: AttributedDbApi;
+	}>,
+): DuplicateSemanticDbSiteTokenViolation[] {
+	const byToken = new Map<string, typeof uses>();
+	for (const use of uses) byToken.set(use.token, [...(byToken.get(use.token) ?? []), use]);
+	return [...byToken.entries()].flatMap(([token, tokenUses]) =>
+		tokenUses.length < 2
+			? []
+			: tokenUses.map((use) => ({
+					kind: "duplicate-semantic-db-site-token" as const,
+					path: use.path,
+					line: use.line,
+					api: use.api,
+					message: `${use.path}:${use.line} reuses semantic DB site token ${JSON.stringify(token)}; semantic attribution IDs must identify exactly one callback`,
+				})),
+	);
 }
 
 /**
@@ -697,7 +758,7 @@ export function writeCountBaseline(
 }
 
 export function runAudit(options: AuditOptions): AuditResult {
-	const { sites, unmarked, missingSiteTokens } = findLegacyDbAccessSites(options.sourceRoot);
+	const { sites, unmarked, missingSiteTokens, semanticSiteTokens } = findLegacyDbAccessSites(options.sourceRoot);
 	const baselineSites = options.baselineSites ?? [];
 	const executionHomeSites = classifyExecutionHomes(sites);
 	return {
@@ -708,6 +769,7 @@ export function runAudit(options: AuditOptions): AuditResult {
 			...findNewParentExecutionSiteViolations(executionHomeSites, baselineSites),
 			...findUnmarkedLegacyDbAccess(unmarked),
 			...missingSiteTokens,
+			...findDuplicateSemanticSiteTokens(semanticSiteTokens),
 		],
 		legacyDbAccess: countLegacyDbAccess(options.sourceRoot),
 		executionHomeSites,

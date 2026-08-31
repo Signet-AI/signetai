@@ -387,7 +387,6 @@
         "graphology-communities-louvain": "^2.0.2",
         "graphology-types": "^0.24.8",
         "hono": "^4.13.0",
-        "js-tiktoken": "^1.0.21",
         "onnxruntime-node": "1.27.0",
         "sharp": "^0.35.3",
         "tiktoken": "^1.0.22",

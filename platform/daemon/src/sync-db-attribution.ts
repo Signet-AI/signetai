@@ -21,6 +21,13 @@ export type SyncDbCallKind =
 	| "vacuumConversionAsync";
 export type SyncDbCallSiteToken = string;
 
+const SEMANTIC_SITE_TOKEN = /^db:[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
+
+/** Stable attribution IDs use the db:domain.operation form instead of source lines. */
+export function isSemanticSyncDbCallSiteToken(value: string): boolean {
+	return SEMANTIC_SITE_TOKEN.test(value);
+}
+
 export interface SyncDbCallToken {
 	readonly sequence: number;
 	readonly siteId: string;
@@ -136,8 +143,11 @@ function resolveSiteToken(siteToken: SyncDbCallSiteToken | undefined): string {
 	if (siteToken === undefined) return UNATTRIBUTED_SITE;
 	const cached = siteTokenCache.get(siteToken);
 	if (cached !== undefined) return cached;
-	if (!/^[^:]+(?:\/[^:]+)*:\d+$/.test(siteToken)) return UNATTRIBUTED_SITE;
-	const resolved = `${SITE_TOKEN_PREFIX}${siteToken}`;
+	const resolved = isSemanticSyncDbCallSiteToken(siteToken)
+		? siteToken
+		: /^[^:]+(?:\/[^:]+)*:\d+$/.test(siteToken)
+			? `${SITE_TOKEN_PREFIX}${siteToken}`
+			: UNATTRIBUTED_SITE;
 	siteTokenCache.set(siteToken, resolved);
 	return resolved;
 }
