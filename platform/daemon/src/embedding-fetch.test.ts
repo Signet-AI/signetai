@@ -75,6 +75,26 @@ describe("fetchEmbedding", () => {
 		});
 	});
 
+	it("accepts non-empty input when an OpenAI-compatible provider rejects empty input", async () => {
+		const inputs: string[] = [];
+		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
+			const input = (JSON.parse(String(init?.body)) as { input: string }).input;
+			inputs.push(input);
+			if (input.trim().length === 0) return Promise.resolve(Response.json({ error: "empty input" }, { status: 400 }));
+			return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+		}) as unknown as typeof fetch;
+		const config = {
+			provider: "openai" as const,
+			model: "text-embedding-3-small",
+			dimensions: 3,
+			base_url: "http://localhost:1234/v1",
+		};
+
+		expect(await fetchEmbedding("", config)).toBeNull();
+		expect(await fetchEmbedding("valid source chunk", config)).toEqual([0.1, 0.2, 0.3]);
+		expect(inputs).toEqual(["", "valid source chunk"]);
+	});
+
 	it("does not record provider-down telemetry when the official OpenAI provider is not configured", async () => {
 		const telemetry = captureTelemetry();
 		setActiveTelemetry(telemetry.collector);

@@ -259,6 +259,8 @@ function oldestAge(first: number | null, second: number | null): number | null {
 
 function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient {
 	let child: ChildProcess | null = null;
+	let activeChildClose: Promise<void> | null = null;
+	let retiredChildClose: Promise<void> | null = null;
 	let startPromise: Promise<void> | null = null;
 	let startupResolve: (() => void) | null = null;
 	let startupReject: ((error: unknown) => void) | null = null;
@@ -385,7 +387,10 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 	): void {
 		if (owner !== null && child !== owner) return;
 		const retired = child;
+		const retiredClose = activeChildClose;
 		child = null;
+		activeChildClose = null;
+		if (retiredClose !== null) retiredChildClose = retiredClose;
 		pid = null;
 		activeJobId = null;
 		input = "";
@@ -559,6 +564,9 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 			child = owner;
+			activeChildClose = new Promise<void>((resolve) => {
+				owner.once("close", () => resolve());
+			});
 			const appendStderr = (chunk: string): void => {
 				stderr = `${stderr}${chunk}`.slice(-8_192);
 			};
@@ -793,23 +801,26 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 	}
 
 	async function close(): Promise<void> {
+		const owner = child;
+		const ownerClose = activeChildClose;
 		closed = true;
-		if (child !== null) {
-			void write(child, { type: "shutdown" }).catch(() => {
+		if (owner !== null) {
+			void write(owner, { type: "shutdown" }).catch(() => {
 				// The close path remains idempotent after an owner crash.
 			});
-			await new Promise<void>((resolve) => {
-				if (child === null) {
-					resolve();
-					return;
+			const forceKillTimer = setTimeout(() => {
+				try {
+					owner.kill("SIGKILL");
+				} catch {
+					// The owner may already have exited.
 				}
-				child.once("close", () => resolve());
-				setTimeout(() => {
-					child?.kill("SIGKILL");
-					resolve();
-				}, 250);
-			});
+			}, 250);
+			if (ownerClose !== null) await ownerClose;
+			clearTimeout(forceKillTimer);
 		}
+		const retiredClose = retiredChildClose;
+		if (retiredClose !== null) await retiredClose;
+		if (retiredChildClose === retiredClose) retiredChildClose = null;
 		state = "closed";
 		rejectAll(new DbOwnerDiedError("DB owner client closed"));
 		try {

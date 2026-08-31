@@ -48,6 +48,10 @@ import {
 	type NativeSourceWorkerSource,
 } from "./native-memory-source-worker";
 
+/** Keep one owner-side source descriptor bounded without using the 5s default. */
+export const NATIVE_MEMORY_OWNER_DEADLINE_MS = 60_000;
+const EMBEDDING_PROVIDER_PROBE_TEXT = "Signet embedding provider health check.";
+
 export interface NativeMemorySource {
 	readonly harness: string;
 	readonly displayName: string;
@@ -1114,6 +1118,7 @@ export async function indexNativeMemoryFile(
 				operation: "sources.native-memory.owner.index",
 				lane: "write",
 				workloadClass: "maintenance",
+				deadlineMs: NATIVE_MEMORY_OWNER_DEADLINE_MS,
 				estimatedWorkUnits: Math.max(1, Math.ceil(content.length / 1024)),
 				signal: options.signal,
 			},
@@ -1310,7 +1315,7 @@ async function sourceProviderGate(
 		async () => {
 			signal?.throwIfAborted();
 			providerFailed = false;
-			const probe = await fetchEmbedding("", embeddingConfig, "document", {
+			const probe = await fetchEmbedding(EMBEDDING_PROVIDER_PROBE_TEXT, embeddingConfig, "document", {
 				usage: { source: "artifact-index", agentId },
 				onFailure: (cause) => {
 					providerFailed = cause === "provider_unavailable" || cause === "timeout";

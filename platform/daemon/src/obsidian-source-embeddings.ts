@@ -27,6 +27,7 @@ import { logger } from "./logger";
 
 export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
 const OBSIDIAN_SOURCE_CHUNK_DELAY_MS = 100;
+const EMBEDDING_PROVIDER_PROBE_TEXT = "Signet embedding provider health check.";
 const OBSIDIAN_CHUNK_SOURCE_TYPES = [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE] as const;
 
 export type SourceEmbeddingFetch = (
@@ -297,7 +298,7 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 	const gate = await awaitEmbeddingProviderAvailable(
 		providerKey,
 		async () => {
-			const probe = await input.fetchEmbedding("", configured, "document", {
+			const probe = await input.fetchEmbedding(EMBEDDING_PROVIDER_PROBE_TEXT, configured, "document", {
 				usage: { source: "artifact-index", agentId: input.agentId },
 				onFailure: (cause) => {
 					probeCause = cause;

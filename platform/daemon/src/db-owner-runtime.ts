@@ -8,6 +8,7 @@ import {
 	createDbOwnerClient,
 	DbOwnerAdmissionError,
 	type DbOwnerClient,
+	type DbOwnerClientOptions,
 	type DbOwnerJobHandle,
 	type DbOwnerSubmitOptions,
 } from "./db-owner-client";
@@ -231,6 +232,7 @@ const clients = new Map<
 		startPromise: Promise<DbOwnerClient> | null;
 	}
 >();
+const retiredClientClosures = new Map<string, Promise<void>>();
 
 async function dbIdentity(dbPath: string): Promise<string> {
 	try {
@@ -241,9 +243,15 @@ async function dbIdentity(dbPath: string): Promise<string> {
 	}
 }
 
-async function startDbOwnerWithRole(dbPath: string, workerRole: "generic" | "recall"): Promise<DbOwnerClient> {
+export async function startDbOwnerWithRole(
+	dbPath: string,
+	workerRole: "generic" | "recall",
+	options: Pick<DbOwnerClientOptions, "workerPath"> = {},
+): Promise<DbOwnerClient> {
 	const identity = await dbIdentity(dbPath);
 	const key = `${workerRole}:${dbPath}`;
+	const retiredClosure = retiredClientClosures.get(key);
+	if (retiredClosure !== undefined) await retiredClosure;
 	const current = clients.get(key);
 	if (
 		current !== undefined &&
@@ -253,11 +261,17 @@ async function startDbOwnerWithRole(dbPath: string, workerRole: "generic" | "rec
 			current.owner.health().state === "failed")
 	) {
 		clients.delete(key);
-		await current.owner.close();
+		const closing = current.owner.close();
+		retiredClientClosures.set(key, closing);
+		try {
+			await closing;
+		} finally {
+			if (retiredClientClosures.get(key) === closing) retiredClientClosures.delete(key);
+		}
 	}
 	let entry = clients.get(key);
 	if (entry === undefined) {
-		entry = { owner: createDbOwnerClient({ dbPath, workerRole }), identity, startPromise: null };
+		entry = { owner: createDbOwnerClient({ dbPath, workerRole, ...options }), identity, startPromise: null };
 		clients.set(key, entry);
 	}
 	if (entry.startPromise !== null) return await entry.startPromise;

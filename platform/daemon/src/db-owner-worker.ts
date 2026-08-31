@@ -623,6 +623,7 @@ export function runDbOwnerWorker(): void {
 	async function executeNativeMemoryEmbeddings(
 		input: DbOwnerNativeMemoryIndex,
 		database: SqliteDatabase,
+		context?: JobExecutionContext,
 	): Promise<NativeMemoryEmbeddingResult> {
 		const embedding = input.embedding;
 		if (embedding === undefined || input.sourceId === null || embedding.config.provider === "none")
@@ -632,21 +633,7 @@ export function runDbOwnerWorker(): void {
 		let providerGate: Awaited<ReturnType<typeof awaitEmbeddingProviderAvailable>> | null = null;
 		const ensureProviderAvailable = async (): Promise<boolean> => {
 			if (providerGate !== null) return providerGate.available;
-			let probeFailed = false;
-			providerGate = await awaitEmbeddingProviderAvailable(
-				providerKey,
-				async () => {
-					probeFailed = false;
-					const probe = await fetchEmbedding("", embedding.config as EmbeddingConfig, "document", {
-						usage: { source: "artifact-index", agentId: input.agentId },
-						onFailure: (cause) => {
-							probeFailed = cause === "provider_unavailable" || cause === "timeout";
-						},
-					});
-					return Boolean(probe?.length) && !probeFailed;
-				},
-				10_000,
-			);
+			providerGate = await awaitEmbeddingProviderAvailable(providerKey, undefined, 10_000);
 			return providerGate.available;
 		};
 		const vecSchema = database
@@ -688,8 +675,10 @@ export function runDbOwnerWorker(): void {
 					providerUnavailable: true,
 				};
 			let failureCause = "provider_unavailable";
+			const timeoutMs = context === undefined ? 30_000 : Math.max(1, Math.min(30_000, context.deadlineAt - Date.now()));
 			const vector = await fetchEmbedding(chunk.chunkText, embedding.config as EmbeddingConfig, "document", {
 				usage: { source: "artifact-index", agentId: input.agentId },
+				timeoutMs,
 				onFailure: (cause) => {
 					failureCause = cause;
 				},
@@ -770,7 +759,7 @@ export function runDbOwnerWorker(): void {
 	}> {
 		const input = request.input;
 		const sourcePath = input.sourcePath.replace(/\\/g, "/");
-		const embeddingResult = await executeNativeMemoryEmbeddings(input, db);
+		const embeddingResult = await executeNativeMemoryEmbeddings(input, db, context);
 
 		const checkpoint = embeddingResult.providerUnavailable
 			? (input.checkpointOnProviderFailure ?? input.checkpoint)

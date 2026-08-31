@@ -1287,18 +1287,21 @@ describe("native memory sources", () => {
 		});
 		let embeddingStarted = false;
 		let providerCalls = 0;
-		let probeCalls = 0;
+		let rejectedEmptyInputs = 0;
 		let embeddingCalls = 0;
 		const embeddingOptions: Pick<NativeMemoryBridgeOptions, "embeddingConfig" | "fetchEmbedding"> = {
 			embeddingConfig: { provider: "native", model: "cross-instance", dimensions: 3, base_url: "", profile: "cross" },
-			fetchEmbedding: async (text: string) => {
+			fetchEmbedding: async (text: string, _cfg, _role, options) => {
 				providerCalls++;
-				if (text.trim().length > 0) {
+				if (text.trim().length === 0) {
+					rejectedEmptyInputs++;
+					options?.onFailure?.("invalid_input");
+					return null;
+				}
+				if (text.includes("source_path:")) {
 					embeddingCalls++;
 					embeddingStarted = true;
 					await embeddingGate;
-				} else {
-					probeCalls++;
 				}
 				return [1, 2, 3];
 			},
@@ -1319,8 +1322,8 @@ describe("native memory sources", () => {
 			expect(embeddingStarted).toBe(true);
 			const manualRun = manualBridge.syncExisting();
 			await Bun.sleep(20);
-			expect(providerCalls).toBe(3); // two availability probes and one file embedding from the polling scan
-			expect(probeCalls).toBe(2);
+			expect(providerCalls).toBe(3); // one non-empty admission check per bridge layer plus one file embedding
+			expect(rejectedEmptyInputs).toBe(0);
 			expect(embeddingCalls).toBe(1);
 			releaseEmbedding();
 			expect(await pollingRun).toBe(1);
@@ -1362,7 +1365,7 @@ describe("native memory sources", () => {
 				},
 				fetchEmbedding: async (text, _cfg, _role, options) => {
 					calls.push(text);
-					if (text.trim().length > 0) {
+					if (text.includes("Checkpoint A") || text.includes("Checkpoint B")) {
 						chunkCalls++;
 						if (failSecond && chunkCalls === 2) {
 							options?.onFailure?.("provider_unavailable");
@@ -1496,6 +1499,55 @@ describe("native memory sources", () => {
 			);
 			expect(checkpoint[0]?.complete).toBe(0);
 			expect(JSON.parse(checkpoint[0]?.frontier ?? "[]")).toEqual(expect.arrayContaining(files));
+		} finally {
+			await bridge.close();
+			provider.stop();
+		}
+	});
+
+	it("uses the first real chunk as worker-owned provider admission", async () => {
+		const root = join(dir, "worker-owned-provider-success-vault");
+		mkdirSync(join(root, "notes"), { recursive: true });
+		const files = ["A.md", "B.md", "C.md"].map((name) => join(root, "notes", name));
+		for (const [index, file] of files.entries())
+			writeFileSync(file, `# Note ${index}\n\nThis source has a provider-safe non-empty chunk.\n`);
+		const source = obsidianNativeMemorySource(
+			root,
+			"Worker-owned Provider Success Vault",
+			"obsidian:worker-owned-provider-success",
+		);
+		const requests: string[] = [];
+		const provider = Bun.serve({
+			port: 0,
+			fetch: async (request) => {
+				const body = (await request.json()) as { readonly input?: string | readonly string[] };
+				const text = typeof body.input === "string" ? body.input : (body.input?.join("\n") ?? "");
+				requests.push(text);
+				if (text.trim().length === 0) return new Response("empty input rejected", { status: 400 });
+				return Response.json({ data: [{ embedding: [1, 2, 3] }] });
+			},
+		});
+		const bridge = startNativeMemoryBridge([source], {
+			agentId: "agent-worker-owned-provider-success",
+			pollIntervalMs: 0,
+			maxFilesPerScan: files.length,
+			sourceGraphEnabled: false,
+			workerOwnedIndexing: true,
+			embeddingConfig: {
+				provider: "openai",
+				model: "worker-owned-success",
+				dimensions: 3,
+				base_url: `http://127.0.0.1:${provider.port}/v1`,
+				api_key: "test",
+			},
+			fetchEmbedding: async () => [9, 9, 9],
+		});
+		try {
+			expect(await bridge.syncExisting()).toBe(files.length);
+			expect(requests).toHaveLength(files.length);
+			expect(requests.every((text) => text.trim().length > 0)).toBe(true);
+			expect(requests.every((text) => text.includes("provider-safe non-empty chunk"))).toBe(true);
+			expect(bridge.getLastSyncResult()).toMatchObject({ status: "complete" });
 		} finally {
 			await bridge.close();
 			provider.stop();

@@ -29,7 +29,7 @@ import { findSqliteVecExtension } from "@signet/core";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { createDbOwnerMaintenance, registerDbOwnerMaintenance } from "./db-owner-maintenance";
 import { recallThroughDbOwner } from "./db-owner-recall";
-import { dbOwnerQuery } from "./db-owner-runtime";
+import { dbOwnerQuery, startDbOwnerWithRole } from "./db-owner-runtime";
 
 function makeDb(): { readonly directory: string; readonly path: string } {
 	const directory = mkdtempSync(join(tmpdir(), "signet-db-owner-"));
@@ -232,6 +232,48 @@ describe("DB owner client", () => {
 		const replacementPid = client.health().lanes?.read?.pid;
 		expect(replacementPid).not.toBeNull();
 		expect(replacementPid).not.toBe(firstPid);
+	});
+
+	test("serializes replacement startup behind retired owner reaping", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const workerPath = join(database.directory, "persistent-fatal-owner-worker.js");
+		writeFileSync(
+			workerPath,
+			[
+				'process.stdin.setEncoding("utf8");',
+				"const newline = String.fromCharCode(10);",
+				'process.stdout.write(JSON.stringify({ type: "ready", pid: process.pid }) + newline);',
+				'process.stdin.on("data", (chunk) => {',
+				"  for (const line of chunk.split(newline)) {",
+				"    if (!line) continue;",
+				"    const command = JSON.parse(line);",
+				'    if (command.type === "submit") process.stdout.write(JSON.stringify({ type: "fatal", error: { name: "TEST_FATAL", message: "owner fatal" } }) + newline);',
+				"  }",
+				"});",
+			].join(String.fromCharCode(10)),
+		);
+
+		const first = await startDbOwnerWithRole(database.path, "generic", { workerPath });
+		client = first;
+		const firstPid = first.health().pid;
+		if (firstPid === null) throw new Error("replacement test owner did not publish a pid");
+		await expect(
+			first.submit(
+				{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+				{ operation: "replacement-owner-regression", lane: "read", deadlineMs: 5_000 },
+			).result,
+		).rejects.toMatchObject({ message: "owner fatal" });
+		await waitFor(() => first.health().state === "failed");
+
+		const [replacementA, replacementB] = await Promise.all([
+			startDbOwnerWithRole(database.path, "generic", { workerPath }),
+			startDbOwnerWithRole(database.path, "generic", { workerPath }),
+		]);
+		expect(replacementA).toBe(replacementB);
+		expect(replacementA.health().state).toBe("ready");
+		expect(replacementA.health().pid).not.toBe(firstPid);
+		expect(processExists(firstPid)).toBe(false);
 	});
 
 	test("rejects when an overridden DB owner startup deadline expires", async () => {
