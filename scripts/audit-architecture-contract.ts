@@ -404,12 +404,10 @@ function generatedOutputPaths(root: string, generatorPath: string): ReadonlySet<
 					: currentScope;
 			bindPattern(bindingScope, node.name, ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
 		}
-		if (
-			ts.isBinaryExpression(node) &&
-			ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)) &&
-			ts.isIdentifier(node.left)
-		)
-			invalidateBinding(currentScope, node.left.text);
+		if (ts.isBinaryExpression(node) && ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)))
+			invalidateAssignmentTarget(currentScope, node.left);
+		if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer))
+			invalidateAssignmentTarget(currentScope, node.initializer);
 		if (
 			ts.isPrefixUnaryExpression(node) &&
 			(node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
@@ -819,6 +817,12 @@ function isCanonicalCreateRequire(scope: StaticScope, name: string, resolving = 
 	const initializer = resolved.binding.initializer;
 	if (initializer === null) return false;
 	const unwrapped = unwrapExpression(initializer);
+	if (ts.isPropertyAccessExpression(unwrapped))
+		return (
+			ts.isIdentifier(unwrapped.expression) &&
+			unwrapped.name.text === "createRequire" &&
+			isCanonicalModuleNamespace(resolved.scope, unwrapped.expression.text)
+		);
 	if (!ts.isIdentifier(unwrapped)) return false;
 	const nextResolving = new Set(resolving);
 	nextResolving.add(name);
@@ -897,6 +901,39 @@ function invalidateBinding(scope: StaticScope, name: string): void {
 		canonicalPathNamespace: false,
 		canonicalUrlNamespace: false,
 	});
+}
+
+function invalidateAssignmentTarget(scope: StaticScope, target: ts.Node): void {
+	if (ts.isIdentifier(target)) {
+		invalidateBinding(scope, target.text);
+		return;
+	}
+	if (
+		ts.isParenthesizedExpression(target) ||
+		ts.isAsExpression(target) ||
+		ts.isTypeAssertionExpression(target) ||
+		ts.isNonNullExpression(target)
+	) {
+		invalidateAssignmentTarget(scope, target.expression);
+		return;
+	}
+	if (ts.isArrayLiteralExpression(target)) {
+		for (const element of target.elements) {
+			if (!ts.isOmittedExpression(element))
+				invalidateAssignmentTarget(scope, ts.isSpreadElement(element) ? element.expression : element);
+		}
+		return;
+	}
+	if (ts.isObjectLiteralExpression(target)) {
+		for (const property of target.properties) {
+			if (ts.isShorthandPropertyAssignment(property)) invalidateAssignmentTarget(scope, property.name);
+			else if (ts.isPropertyAssignment(property)) invalidateAssignmentTarget(scope, property.initializer);
+			else if (ts.isSpreadAssignment(property)) invalidateAssignmentTarget(scope, property.expression);
+		}
+		return;
+	}
+	if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+		invalidateAssignmentTarget(scope, target.left);
 }
 
 function isCanonicalCreateRequireResult(scope: StaticScope, name: string, resolving = new Set<string>()): boolean {
@@ -1422,12 +1459,10 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 						: currentScope;
 				bindPattern(bindingScope, node.name, ts.isIdentifier(node.name) ? (node.initializer ?? null) : null);
 			}
-			if (
-				ts.isBinaryExpression(node) &&
-				ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)) &&
-				ts.isIdentifier(node.left)
-			)
-				invalidateBinding(currentScope, node.left.text);
+			if (ts.isBinaryExpression(node) && ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)))
+				invalidateAssignmentTarget(currentScope, node.left);
+			if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer))
+				invalidateAssignmentTarget(currentScope, node.initializer);
 			if (
 				ts.isPrefixUnaryExpression(node) &&
 				(node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&

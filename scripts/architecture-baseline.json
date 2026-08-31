@@ -10193,8 +10193,8 @@
 			{
 				"id": "module:scripts/audit-architecture-contract.ts",
 				"path": "scripts/audit-architecture-contract.ts",
-				"lines": 1843,
-				"logicalStatements": 908,
+				"lines": 1878,
+				"logicalStatements": 937,
 				"exports": 17,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -52264,8 +52264,8 @@
 		],
 		"summary": {
 			"files": 931,
-			"lines": 268850,
-			"logicalStatements": 96978,
+			"lines": 268885,
+			"logicalStatements": 97007,
 			"runtimeEdges": 1999,
 			"allEdges": 2594,
 			"unresolvedEdges": 1530,

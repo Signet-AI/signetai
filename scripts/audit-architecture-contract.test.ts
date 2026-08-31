@@ -35,6 +35,12 @@ test("the pull-request workflow runs a trusted evaluator against the candidate",
 	);
 	expect(workflow).toContain("await import(pathToFileURL(trustedAuditor).href)");
 	expect(workflow).toContain("candidateRoot");
+	expect(workflow).toContain(
+		"analyzeSourceTree({ root: baseRoot, sourceRoot: baseRoot, validateGeneratedArtifacts: false })",
+	);
+	expect(workflow).toContain(
+		"analyzeSourceTree({ root: candidateRoot, sourceRoot: candidateRoot, validateGeneratedArtifacts: true })",
+	);
 	expect(workflow).toContain("compareArchitectureRatchet(candidate, protectedBase)");
 	expect(workflow).toContain("bun run audit:architecture");
 	expect(workflow).not.toContain(
@@ -143,6 +149,24 @@ test("manifested outputs are measured and excluded from handwritten source files
 		expect(renderReport(inventory)).toContain("`missing-output.ts`");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("protected comparison fails closed for an unmanifested generated-path cycle", () => {
+	const baseRoot = mkdtempSync(join(tmpdir(), "architecture-protected-base-"));
+	const candidateRoot = mkdtempSync(join(tmpdir(), "architecture-generated-cycle-"));
+	try {
+		mkdirSync(join(candidateRoot, "generated"));
+		writeFileSync(join(candidateRoot, "generated", "a.ts"), 'import "./b";\nexport const a = true;\n');
+		writeFileSync(join(candidateRoot, "generated", "b.ts"), 'import "./a";\nexport const b = true;\n');
+		const protectedBase = analyzeSourceTree({ root: baseRoot, sourceRoot: baseRoot });
+		expect(() => {
+			const candidate = analyzeSourceTree({ root: candidateRoot, sourceRoot: candidateRoot });
+			compareArchitectureRatchet(candidate, protectedBase);
+		}).toThrow("Generated artifact generated/a.ts matches generated-path");
+	} finally {
+		rmSync(baseRoot, { recursive: true, force: true });
+		rmSync(candidateRoot, { recursive: true, force: true });
 	}
 });
 
@@ -1150,13 +1174,17 @@ test("canonical createRequire factory and result aliases retain runtime provenan
 				"namespace result",
 				'import * as module from "node:module";\nconst req = module.createRequire(import.meta.url);',
 			],
+			[
+				"namespace factory alias",
+				'import * as module from "node:module";\nconst factory = module.createRequire;\nconst req = factory(import.meta.url);',
+			],
 			["factory alias", "const factory = createRequire;\nconst req = factory(import.meta.url);"],
 		] as const;
 		for (const [name, declaration] of forms) {
 			writeFileSync(
 				join(root, "loader.ts"),
 				[
-					...(name === "namespace result" ? [] : ['import { createRequire } from "node:module";']),
+					...(name.startsWith("namespace") ? [] : ['import { createRequire } from "node:module";']),
 					declaration,
 					'req("./target");',
 				].join("\n"),
@@ -1213,6 +1241,45 @@ test("reassigned createRequire factory aliases conservatively retain result load
 		expect(inventory.computedLoads).toContainEqual(expect.objectContaining({ kind: "require", path: "loader.ts" }));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("destructuring and loop assignment targets invalidate createRequire results and factories", () => {
+	const cases = [
+		["object result", "let req = createRequire(import.meta.url);\n({ req } = fake);\n"],
+		["array result", "let req = createRequire(import.meta.url);\n[req] = [fake];\n"],
+		["for-of result", "let req = createRequire(import.meta.url);\nfor (req of values) {}\n"],
+		["for-in result", "let req = createRequire(import.meta.url);\nfor (req in values) {}\n"],
+		["object factory", "let factory = createRequire;\n({ factory } = fake);\nconst req = factory(import.meta.url);\n"],
+		["array factory", "let factory = createRequire;\n[factory] = [fake];\nconst req = factory(import.meta.url);\n"],
+		[
+			"for-of factory",
+			"let factory = createRequire;\nfor (factory of values) {}\nconst req = factory(import.meta.url);\n",
+		],
+		[
+			"for-in factory",
+			"let factory = createRequire;\nfor (factory in values) {}\nconst req = factory(import.meta.url);\n",
+		],
+	] as const;
+	for (const [name, reassignment] of cases) {
+		const root = mkdtempSync(join(tmpdir(), `architecture-create-require-${name.replaceAll(" ", "-")}-`));
+		try {
+			writeFileSync(join(root, "target.ts"), 'import "./loader";\nexport const target = true;\n');
+			writeFileSync(
+				join(root, "loader.ts"),
+				['import { createRequire } from "node:module";', reassignment, 'req("./target");'].join("\n"),
+			);
+			const inventory = analyzeSourceTree({ root, sourceRoot: root });
+			expect(inventory.sourceEdges, name).not.toContainEqual(
+				expect.objectContaining({ kind: "require", to: "target.ts", runtime: true }),
+			);
+			expect(inventory.computedLoads, name).toContainEqual(
+				expect.objectContaining({ kind: "require", path: "loader.ts" }),
+			);
+			expect(inventory.summary.runtimeCycles, name).toBe(0);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	}
 });
 

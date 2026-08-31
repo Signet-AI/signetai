@@ -55,7 +55,7 @@ jobs:
               throw new Error("missing protected architecture audit paths");
             const { analyzeSourceTree, compareArchitectureRatchet } = await import(pathToFileURL(trustedAuditor).href);
             const protectedBase = analyzeSourceTree({ root: baseRoot, sourceRoot: baseRoot, validateGeneratedArtifacts: false });
-            const candidate = analyzeSourceTree({ root: candidateRoot, sourceRoot: candidateRoot, validateGeneratedArtifacts: false });
+            const candidate = analyzeSourceTree({ root: candidateRoot, sourceRoot: candidateRoot, validateGeneratedArtifacts: true });
             const findings = compareArchitectureRatchet(candidate, protectedBase);
             if (findings.length > 0) {
               console.error("Architecture ratchet violations:");
