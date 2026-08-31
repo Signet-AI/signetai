@@ -64,7 +64,11 @@ function inlineStatement(db: ReadDb | WriteDb, statement: DbOwnerStatement): unk
 	return prepared.run(...params);
 }
 
-async function inlineRequest(accessor: DbAccessor, request: DbOwnerRequest): Promise<unknown> {
+function unreachableInlineRequest(request: never): never {
+	throw new Error(`Unreachable inline DB owner request: ${String(request)}`);
+}
+
+async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerRequest): Promise<unknown> {
 	if (request.kind === "query") {
 		if (request.statement.result === "run") {
 			return invokeAccessor(accessor, "withWriteTx", (db) => inlineStatement(db, request.statement));
@@ -193,10 +197,32 @@ async function inlineRequest(accessor: DbAccessor, request: DbOwnerRequest): Pro
 			vectorSearchWithMetadata(db as never, new Float32Array(request.payload.queryEmbedding), request.payload.options),
 		);
 	}
-	throw new Error(`Unsupported isolated owner request: ${request.kind}`);
+	switch (request.kind) {
+		case "initialize":
+		case "recall":
+		case "source_snapshot_import":
+		case "source_graph_index":
+		case "source_graph_file_purge":
+		case "source_graph_purge":
+		case "source_artifact_index":
+		case "source_native_memory_index":
+		case "source_artifact_purge":
+		case "source_artifact_upsert":
+		case "source_artifact_upsert_batch":
+		case "embedding_migration_progress":
+		case "health_ready":
+		case "diagnostics":
+		case "vector_backfill":
+		case "vacuum_conversion":
+		case "incremental_vacuum":
+		case "sleep":
+			throw new Error(`Unsupported inline owner request: ${request.kind}`);
+		default:
+			return unreachableInlineRequest(request);
+	}
 }
 
-function isolatedOwner(accessor: DbAccessor): DbOwnerClient {
+function inlineOwner(accessor: DbAccessor): DbOwnerClient {
 	const submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
 		const now = Date.now();
 		const job: DbOwnerJob = {
@@ -210,7 +236,7 @@ function isolatedOwner(accessor: DbAccessor): DbOwnerClient {
 			cancellation: "pending",
 			request,
 		};
-		return { job, result: inlineRequest(accessor, request) as Promise<Result>, cancel: () => undefined };
+		return { job, result: executeInlineOwnerRequest(accessor, request) as Promise<Result>, cancel: () => undefined };
 	};
 	return {
 		start: async () => undefined,
@@ -302,18 +328,18 @@ export async function startDbRecallOwner(
 }
 
 async function getCurrentProcessOwner(): Promise<DbOwnerClient> {
-	if (isolatedTestAccessor !== null) return isolatedOwner(isolatedTestAccessor);
+	if (isolatedTestAccessor !== null) return inlineOwner(isolatedTestAccessor);
 	const { getDbAccessor } = await import("./db-accessor");
-	return isolatedOwner(getDbAccessor());
+	return inlineOwner(getDbAccessor());
 }
 
-/** Lazily start an isolated owner when the daemon has not registered its shared owner. */
+/** Resolve the process owner, or the in-process adapter used inside an owner worker. */
 export async function getDbOwner(dbPath?: string): Promise<DbOwnerClient> {
 	if (process.env.SIGNET_DB_OWNER_WORKER === "1") return await getCurrentProcessOwner();
 	const registered = getDbOwnerMaintenance()?.owner;
 	if (registered !== undefined) return registered;
 	if (hasDbAccessor()) return await startDbOwner(getDbAccessorPath());
-	if (isolatedTestAccessor !== null) return isolatedOwner(isolatedTestAccessor);
+	if (isolatedTestAccessor !== null) return inlineOwner(isolatedTestAccessor);
 	return await startDbOwner(dbPath);
 }
 
@@ -321,7 +347,7 @@ export async function getDbOwner(dbPath?: string): Promise<DbOwnerClient> {
 export async function getDbRecallOwner(dbPath?: string): Promise<DbOwnerClient> {
 	if (process.env.SIGNET_DB_OWNER_WORKER === "1") return await getCurrentProcessOwner();
 	if (hasDbAccessor()) return await startDbRecallOwner(getDbAccessorPath());
-	if (isolatedTestAccessor !== null) return isolatedOwner(isolatedTestAccessor);
+	if (isolatedTestAccessor !== null) return inlineOwner(isolatedTestAccessor);
 	return await startDbRecallOwner(dbPath);
 }
 
@@ -330,10 +356,10 @@ export async function getDbRecallOwner(dbPath?: string): Promise<DbOwnerClient> 
  * accessor without opening a second SQLite connection.
  */
 export async function getDbOwnerForAccessor(accessor: DbAccessor): Promise<DbOwnerClient> {
-	if (process.env.SIGNET_DB_OWNER_WORKER === "1") return isolatedOwner(accessor);
+	if (process.env.SIGNET_DB_OWNER_WORKER === "1") return inlineOwner(accessor);
 	if (hasDbAccessor()) return await getDbOwner(getDbAccessorPath());
 	registerDbOwnerIsolatedTestAccessor(accessor);
-	return isolatedOwner(accessor);
+	return inlineOwner(accessor);
 }
 
 export interface DbOwnerSqlOptions {
