@@ -333,35 +333,28 @@
     },
     {
       "path": "daemon.ts",
-      "line": 604,
+      "line": 611,
       "api": "existsSync",
       "source": "if (!existsSync(agentsMdPath)) return;",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 621,
+      "line": 628,
       "api": "existsSync",
       "source": "const existingFiles = files.filter((f) => existsSync(join(AGENTS_DIR, f.name)));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 649,
+      "line": 656,
       "api": "existsSync",
       "source": "if (!existsSync(identityPath)) return \"\";",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 668,
-      "api": "existsSync",
-      "source": "if (activeHarnesses.has(\"opencode\") && existsSync(opencodeDir)) {",
-      "category": "hot-path"
-    },
-    {
-      "path": "daemon.ts",
-      "line": 700,
+      "line": 675,
       "api": "existsSync",
       "source": "if (activeHarnesses.has(\"opencode\") && existsSync(opencodeDir)) {",
       "category": "hot-path"
@@ -370,131 +363,138 @@
       "path": "daemon.ts",
       "line": 707,
       "api": "existsSync",
+      "source": "if (activeHarnesses.has(\"opencode\") && existsSync(opencodeDir)) {",
+      "category": "hot-path"
+    },
+    {
+      "path": "daemon.ts",
+      "line": 714,
+      "api": "existsSync",
       "source": "if (existsSync(geminiDir)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 712,
+      "line": 719,
       "api": "existsSync",
       "source": "if (existsSync(settingsPath)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 713,
+      "line": 720,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(settingsPath, \"utf8\"));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 733,
+      "line": 740,
       "api": "existsSync",
       "source": "if (!existsSync(targetPath)) continue;",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 1298,
+      "line": 1305,
       "api": "existsSync",
       "source": "if (!existsSync(memoryDir)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 1656,
+      "line": 1669,
       "api": "existsSync",
       "source": "if (!existsSync(p)) continue;",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 1658,
+      "line": 1671,
       "api": "readFileSync",
       "source": "const yaml = parseSimpleYaml(readFileSync(p, \"utf-8\")) as Record<string, unknown>;",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 1702,
+      "line": 1715,
       "api": "existsSync",
       "source": "if (!existsSync(path)) continue;",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 1704,
+      "line": 1717,
       "api": "readFileSync",
       "source": "const routing = parseRoutingConfig(parseSimpleYaml(readFileSync(path, \"utf-8\")));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2093,
+      "line": 2106,
       "api": "existsSync",
       "source": "if (existsSync(PID_FILE)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2095,
+      "line": 2108,
       "api": "unlinkSync",
       "source": "unlinkSync(PID_FILE);",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2239,
+      "line": 2252,
       "api": "mkdirSync",
       "source": "mkdirSync(DAEMON_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2240,
+      "line": 2253,
       "api": "mkdirSync",
       "source": "mkdirSync(LOG_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2241,
+      "line": 2254,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(MEMORY_DB), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2403,
+      "line": 2416,
       "api": "existsSync",
       "source": "const workerPath = existsSync(bundled)",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2478,
+      "line": 2491,
       "api": "writeFileSync",
       "source": "writeFileSync(PID_FILE, process.pid.toString());",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3212,
+      "line": 3250,
       "api": "existsSync",
       "source": "if (existsSync(healthStampPath)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3213,
+      "line": 3251,
       "api": "readFileSync",
       "source": "const prev = JSON.parse(readFileSync(healthStampPath, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3216,
+      "line": 3254,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"
@@ -844,42 +844,42 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 125,
+      "line": 126,
       "api": "readFileSync",
       "source": "return readFileSync(cancellationRegistryPath, \"utf8\").includes(`${jobId}\\n`);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 153,
+      "line": 158,
       "api": "writeFileSync",
       "source": "writeFileSync(startupStarted, \"started\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 155,
+      "line": 160,
       "api": "existsSync",
       "source": "while (!existsSync(startupRelease)) Atomics.wait(signal, 0, 0, 5);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 161,
+      "line": 165,
       "api": "existsSync",
       "source": "if (sqlitePath !== undefined && existsSync(sqlitePath) && typeof Database.setCustomSQLite === \"function\") {",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 190,
+      "line": 200,
       "api": "writeFileSync",
       "source": "if (commitMarker !== undefined) writeFileSync(commitMarker, \"started\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 904,
+      "line": 994,
       "api": "withReadDbAsync",
       "source": "const embedding = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -887,7 +887,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 937,
+      "line": 1027,
       "api": "withReadDbAsync",
       "source": "return await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -895,21 +895,21 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 947,
+      "line": 1037,
       "api": "writeFileSync",
       "source": "writeFileSync(startedMarker, \"started\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 948,
+      "line": 1038,
       "api": "existsSync",
       "source": "while (!existsSync(releaseMarker)) await new Promise((resolve) => setTimeout(resolve, 5));",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1042,
+      "line": 1165,
       "api": "writeFileSync",
       "source": "if (activeFile) writeFileSync(activeFile, `${Date.now()}\\n`);",
       "category": "hot-path"
@@ -4413,35 +4413,35 @@
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 824,
+      "line": 827,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 826,
+      "line": 829,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 836,
+      "line": 839,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 838,
+      "line": 841,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\\n`, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 839,
+      "line": 842,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"
