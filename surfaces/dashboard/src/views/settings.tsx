@@ -34,7 +34,7 @@ import {
 import { type SettingsSection, useSettings } from "@/lib/settings-context";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { CheckCircle, Download, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
+import { CheckCircle, Download, ExternalLink, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
@@ -116,6 +116,25 @@ const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
 			</svg>
 		),
 	},
+	{
+		id: "licenses",
+		label: "Licenses",
+		icon: (
+			<svg
+				viewBox="0 0 24 24"
+				width="15"
+				height="15"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth={1.75}
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			>
+				<path d="M6 3h8l4 4v14H6z" />
+				<path d="M14 3v5h5M9 13h6M9 17h4" />
+			</svg>
+		),
+	},
 ];
 
 /** Radix Select rejects empty-string item values; map the "none" choice. */
@@ -175,6 +194,7 @@ export function SettingsModal() {
 						{section === "inference" && <InferenceSection />}
 						{section === "logs" && <LogsSection />}
 						{section === "advanced" && <AdvancedSection />}
+						{section === "licenses" && <LicensesSection />}
 					</div>
 				</div>
 			</DialogContent>
@@ -1438,6 +1458,158 @@ function AdvancedSection() {
 					step={1000}
 				/>
 			</div>
+		</div>
+	);
+}
+
+/* ── Licenses ── */
+
+const DASHBOARD_LICENSES = [
+	{
+		name: "React",
+		packages: "react · react-dom",
+		license: "MIT",
+		href: "https://github.com/facebook/react",
+	},
+	{
+		name: "Radix UI",
+		packages: "radix-ui · @radix-ui/react-slot",
+		license: "MIT",
+		href: "https://github.com/radix-ui/primitives",
+	},
+	{
+		name: "shadcn/ui",
+		packages: "@shadcn/react",
+		license: "MIT",
+		href: "https://github.com/shadcn-ui/ui",
+	},
+	{
+		name: "Tailwind CSS",
+		packages: "tailwindcss · tailwind-merge · clsx",
+		license: "MIT",
+		href: "https://github.com/tailwindlabs/tailwindcss",
+	},
+	{
+		name: "Lucide",
+		packages: "lucide-react",
+		license: "ISC",
+		href: "https://github.com/lucide-icons/lucide",
+	},
+	{
+		name: "Three.js",
+		packages: "three",
+		license: "MIT",
+		href: "https://github.com/mrdoob/three.js",
+	},
+	{
+		name: "Vite",
+		packages: "vite · @vitejs/plugin-react",
+		license: "MIT",
+		href: "https://github.com/vitejs/vite",
+	},
+	{
+		name: "YAML",
+		packages: "yaml",
+		license: "ISC",
+		href: "https://github.com/eemeli/yaml",
+	},
+	{
+		name: "Sonner",
+		packages: "sonner",
+		license: "MIT",
+		href: "https://github.com/emilkowalski/sonner",
+	},
+	{
+		name: "Geist",
+		packages: "@fontsource/geist · @fontsource/geist-mono",
+		license: "OFL-1.1",
+		href: "https://github.com/fontsource/fonts",
+	},
+] as const;
+
+function LicensesSection() {
+	return (
+		<div className="flex flex-col gap-4">
+			<div className="overflow-hidden rounded-[10px] border border-[oklch(0.78_0.12_160/0.24)] bg-[linear-gradient(135deg,oklch(0.78_0.12_160/0.12),transparent_58%)] shadow-[inset_0_1px_0_oklch(1_0_0/0.08)] [html:not(.dark)_&]:border-[oklch(0.45_0.12_160/0.25)] [html:not(.dark)_&]:bg-[linear-gradient(135deg,oklch(0.78_0.12_160/0.11),transparent_58%)]">
+				<div className="flex items-start gap-3 px-4 py-4">
+					<div className="grid size-9 shrink-0 place-items-center rounded-[8px] border border-[oklch(0.78_0.12_160/0.3)] bg-[oklch(0.78_0.12_160/0.12)] text-[oklch(0.78_0.12_160)]">
+						<svg
+							viewBox="0 0 24 24"
+							width="18"
+							height="18"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth={1.5}
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						>
+							<path d="M12 3 4 6v5c0 5.2 3.4 8.4 8 10 4.6-1.6 8-4.8 8-10V6l-8-3z" />
+							<path d="m9 12 2 2 4-4" />
+						</svg>
+					</div>
+					<div className="min-w-0">
+						<div className="font-mono text-[9px] font-semibold uppercase tracking-[0.1em] text-[oklch(0.78_0.12_160)]">
+							Open-source colophon
+						</div>
+						<h2 className="mt-1 text-[15px] font-semibold tracking-tight">A little help from a lot of good people.</h2>
+						<p className="mt-1 max-w-[540px] text-[11.5px] leading-relaxed text-muted-foreground">
+							Signet’s dashboard is assembled from open-source projects. We’re grateful to their maintainers and contributors.
+						</p>
+					</div>
+				</div>
+				<div className="flex flex-wrap items-center justify-between gap-2 border-t border-[oklch(1_0_0/0.07)] px-4 py-2.5 text-[10px] [html:not(.dark)_&]:border-[oklch(0_0_0/0.07)]">
+					<span className="font-mono text-muted-foreground">
+						Signet <span className="text-foreground">Apache-2.0</span>
+					</span>
+					<a
+						href="https://github.com/Signet-AI/signetai/blob/main/THIRD_PARTY_LICENSES.md"
+						target="_blank"
+						rel="noreferrer"
+						className="inline-flex items-center gap-1.5 font-medium text-[oklch(0.78_0.12_160)] transition-colors hover:text-foreground"
+					>
+						Full license inventory <ExternalLink className="size-3" aria-hidden="true" />
+					</a>
+				</div>
+			</div>
+
+			<div>
+				<GroupLabel suffix="direct dashboard dependencies">What’s in the dashboard</GroupLabel>
+				<div className="grid gap-2 sm:grid-cols-2">
+					{DASHBOARD_LICENSES.map((entry) => (
+						<a
+							key={entry.name}
+							href={entry.href}
+							target="_blank"
+							rel="noreferrer"
+							className="group rounded-[8px] border border-[oklch(1_0_0/0.07)] bg-[color-mix(in_oklch,var(--foreground)_2.5%,transparent)] px-3 py-2.5 transition-colors hover:border-[oklch(0.78_0.12_160/0.35)] hover:bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.07)]"
+						>
+							<div className="flex items-center justify-between gap-2">
+								<span className="truncate text-[12px] font-medium">{entry.name}</span>
+								<span className="shrink-0 rounded-[4px] border border-[oklch(0.78_0.12_160/0.25)] px-1.5 py-0.5 font-mono text-[9px] font-semibold text-[oklch(0.78_0.12_160)]">
+									{entry.license}
+								</span>
+							</div>
+							<div className="mt-1 truncate font-mono text-[9.5px] text-muted-foreground group-hover:text-foreground/80">
+								{entry.packages}
+							</div>
+						</a>
+					))}
+				</div>
+			</div>
+
+			<p className="px-1 text-[10.5px] leading-relaxed text-muted-foreground">
+				The list above highlights the dashboard’s direct dependencies. Transitive dependencies, copyright notices, and license
+				links are maintained in the repository’s full&nbsp;
+				<a
+					href="https://github.com/Signet-AI/signetai/blob/main/THIRD_PARTY_LICENSES.md"
+					target="_blank"
+					rel="noreferrer"
+					className="text-foreground underline decoration-[oklch(0.78_0.12_160/0.5)] underline-offset-2 hover:decoration-current"
+				>
+					third-party licenses document
+				</a>
+				.
+			</p>
 		</div>
 	);
 }
