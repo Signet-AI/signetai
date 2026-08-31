@@ -145,7 +145,8 @@ async function importFile(text: string, name: string) {
 			body: JSON.stringify({ schemaId: "signet-export", files: [{ name }] }),
 		})
 	).body;
-	const fileId = crypto.randomUUID();
+	const fileId = (job.files?.[0] as { id: string } | undefined)?.id;
+	if (!fileId) throw new Error("import job did not reserve an upload file");
 	const uploadPath = join(root, `.upload-${fileId}.jsonl`);
 	await writeFile(uploadPath, text, "utf8");
 	const uploadProcess = Bun.spawnSync([
