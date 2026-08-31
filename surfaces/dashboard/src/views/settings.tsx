@@ -129,6 +129,7 @@ const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
 				strokeWidth={1.75}
 				strokeLinecap="round"
 				strokeLinejoin="round"
+				aria-hidden="true"
 			>
 				<path d="M6 3h8l4 4v14H6z" />
 				<path d="M14 3v5h5M9 13h6M9 17h4" />
@@ -1542,6 +1543,7 @@ function LicensesSection() {
 							strokeWidth={1.5}
 							strokeLinecap="round"
 							strokeLinejoin="round"
+							aria-hidden="true"
 						>
 							<path d="M12 3 4 6v5c0 5.2 3.4 8.4 8 10 4.6-1.6 8-4.8 8-10V6l-8-3z" />
 							<path d="m9 12 2 2 4-4" />
@@ -1553,7 +1555,8 @@ function LicensesSection() {
 						</div>
 						<h2 className="mt-1 text-[15px] font-semibold tracking-tight">A little help from a lot of good people.</h2>
 						<p className="mt-1 max-w-[540px] text-[11.5px] leading-relaxed text-muted-foreground">
-							Signet’s dashboard is assembled from open-source projects. We’re grateful to their maintainers and contributors.
+							Signet’s dashboard is assembled from open-source projects. We’re grateful to their maintainers and
+							contributors.
 						</p>
 					</div>
 				</div>
@@ -1598,8 +1601,8 @@ function LicensesSection() {
 			</div>
 
 			<p className="px-1 text-[10.5px] leading-relaxed text-muted-foreground">
-				The list above highlights the dashboard’s direct dependencies. Transitive dependencies, copyright notices, and license
-				links are maintained in the repository’s full&nbsp;
+				The list above highlights the dashboard’s direct dependencies. Transitive dependencies, copyright notices, and
+				license links are maintained in the repository’s full&nbsp;
 				<a
 					href="https://github.com/Signet-AI/signetai/blob/main/THIRD_PARTY_LICENSES.md"
 					target="_blank"
