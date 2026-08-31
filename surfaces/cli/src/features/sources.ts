@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
 	type AddDiscordSourceInput,
@@ -11,7 +12,113 @@ import {
 } from "@signet/core";
 import chalk from "chalk";
 
-export interface SourcesDeps {
+import type { DaemonFetchResult, DaemonStreamResult } from "../lib/daemon.js";
+
+export interface SourceImportDeps {
+	readonly createDaemonImport?: (body: unknown) => Promise<DaemonFetchResult<SourceImportCreateResponse>>;
+	readonly uploadDaemonImportFile?: (jobId: string, fileId: string, fileName: string) => Promise<DaemonStreamResult>;
+	readonly fetchDaemonImport?: <T>(path: string, opts?: RequestInit) => Promise<DaemonFetchResult<T>>;
+}
+
+export interface SourceImportCreateResponse {
+	readonly id?: string;
+	readonly jobId?: string;
+	readonly files?: readonly { readonly id?: string; readonly name?: string }[];
+	readonly [key: string]: unknown;
+}
+
+export interface SourceImportOptions {
+	readonly kind?: string;
+	readonly schema?: string;
+	readonly agent?: string;
+	readonly json?: boolean;
+}
+
+export async function importTranscriptFiles(
+	files: readonly string[],
+	options: SourceImportOptions,
+	deps: SourceImportDeps,
+): Promise<void> {
+	if (options.kind !== "transcripts" || options.schema !== "signet" || !options.agent) {
+		return failImport("--kind transcripts, --schema signet, and --agent <id> are required");
+	}
+	if (!deps.createDaemonImport || !deps.uploadDaemonImportFile || !deps.fetchDaemonImport) {
+		return failImport("transcript imports require the Signet daemon API");
+	}
+	const descriptors = files.map((name) => ({ id: randomUUID(), name }));
+	const created = await deps.createDaemonImport({ schemaId: "signet-export", files: descriptors });
+	if (!created.ok) return failImport(created.error ?? "could not create import job");
+	const jobId = created.data.jobId ?? created.data.id;
+	if (!jobId) return failImport("daemon returned no import job id");
+	printImportOutput({ ...created.data, id: jobId, jobId }, options.json);
+	for (const [index, file] of files.entries()) {
+		const fileId = created.data.files?.[index]?.id ?? descriptors[index]?.id;
+		if (!fileId) return failImport(`daemon returned no file id for ${file}`);
+		const uploaded = await deps.uploadDaemonImportFile(jobId, fileId, file);
+		if (!uploaded.ok) {
+			console.error(
+				`Import job ${jobId} remains inspectable; upload failed for ${file}: ${uploaded.error ?? uploaded.reason}`,
+			);
+			process.exitCode = 1;
+			return;
+		}
+	}
+	const started = await deps.fetchDaemonImport<SourceImportCreateResponse>(
+		`/api/sources/imports/${encodeURIComponent(jobId)}/start`,
+	);
+	if (!started.ok) return failImport(started.error ?? "could not start import job");
+	printImportOutput({ ...started.data, id: jobId, jobId }, options.json);
+}
+
+export async function controlTranscriptImport(
+	action: "list" | "status" | "pause" | "resume" | "retry" | "cancel",
+	jobId: string | undefined,
+	options: SourceImportOptions & { watch?: boolean },
+	deps: SourceImportDeps,
+): Promise<void> {
+	if (!deps.fetchDaemonImport) return failImport("transcript imports require the Signet daemon API");
+	const path =
+		action === "list"
+			? "/api/sources/imports"
+			: `/api/sources/imports/${encodeURIComponent(jobId ?? "")}${action === "status" ? "" : `/${action}`}`;
+	if (options.watch && action === "status") {
+		for (let attempt = 0; attempt < 120; attempt += 1) {
+			const result = await deps.fetchDaemonImport<SourceImportCreateResponse>(
+				path,
+				action === "status" ? undefined : { method: "POST" },
+			);
+			if (!result.ok) return failImport(result.error ?? "status request failed");
+			printImportOutput({ ...result.data, id: jobId, jobId }, options.json);
+			const state = result.data.state;
+			if (state === "completed" || state === "completed_with_rejections" || state === "cancelled" || state === "failed")
+				return;
+			await new Promise((resolve) => setTimeout(resolve, 500));
+		}
+		return failImport("watch stopped after 120 polls");
+	}
+	const result = await deps.fetchDaemonImport<SourceImportCreateResponse>(
+		path,
+		action === "status" || action === "list" ? undefined : { method: "POST" },
+	);
+	if (!result.ok) return failImport(result.error ?? "import request failed");
+	printImportOutput({ ...result.data, ...(jobId ? { id: jobId, jobId } : {}) }, options.json);
+}
+
+function printImportOutput(value: unknown, json = false): void {
+	if (json) console.log(JSON.stringify(value));
+	else
+		console.log(
+			typeof value === "object" && value !== null && "jobId" in value
+				? `Import job ${(value as { jobId?: string }).jobId}`
+				: JSON.stringify(value),
+		);
+}
+function failImport(message: string): void {
+	console.error(chalk.red(`✗ ${message}`));
+	process.exitCode = 1;
+}
+
+export interface SourcesDeps extends SourceImportDeps {
 	readonly agentsDir: string;
 	readonly addDiscordSourceToDaemon?: (input: AddDiscordSourceInput) => Promise<DaemonAddSourceResult>;
 	readonly addGitHubSourceToDaemon?: (input: AddGitHubSourceInput) => Promise<DaemonAddSourceResult>;

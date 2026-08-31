@@ -6,19 +6,25 @@
 import { sourceLogo } from "@/components/icons";
 import { type ImportSourcesResponse, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { FolderOpen, Loader2, RotateCcw, Upload, X } from "lucide-react";
+import { FolderOpen, Loader2, MessageSquare, RotateCcw, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-type SourceKind = "files" | "obsidian" | "github" | "discord";
+type SourceKind = "files" | "transcripts" | "obsidian" | "github" | "discord";
 
 const KINDS: readonly { id: SourceKind; label: string; namePlaceholder: string }[] = [
 	{ id: "files", label: "Files", namePlaceholder: "" },
+	{ id: "transcripts", label: "Agent transcripts (JSONL)", namePlaceholder: "Imported agent transcripts" },
 	{ id: "obsidian", label: "Obsidian", namePlaceholder: "Research Vault" },
 	{ id: "github", label: "GitHub", namePlaceholder: "Signet GitHub" },
 	{ id: "discord", label: "Discord", namePlaceholder: "Team Discord" },
 ];
 
 const FIELD: Record<Exclude<SourceKind, "files">, { label: string; placeholder: string; hint: string }> = {
+	transcripts: {
+		label: "Target agent",
+		placeholder: "Select an agent",
+		hint: "Embedded agent_id is provenance only; the selected target owns this import.",
+	},
 	obsidian: {
 		label: "Vault path",
 		placeholder: "/home/nicholai/Notes/Research",
@@ -38,9 +44,10 @@ const FIELD: Record<Exclude<SourceKind, "files">, { label: string; placeholder: 
 
 function validate(kind: Exclude<SourceKind, "files">, target: string, tokenRef: string): string | null {
 	const value = target.trim();
+	if (kind === "transcripts") return value ? null : "Target agent is required";
 	if (kind === "obsidian") {
 		if (!value) return "Vault path is required";
-		if (!/^(?:[A-Za-z]:[\\/]|[\/])/.test(value)) return "Vault path must be absolute";
+		if (!/^(?:[A-Za-z]:[\\/]|[/])/.test(value)) return "Vault path must be absolute";
 		return null;
 	}
 	if (kind === "github") {
@@ -54,6 +61,7 @@ function validate(kind: Exclude<SourceKind, "files">, target: string, tokenRef: 
 
 function KindIcon({ kind }: { readonly kind: SourceKind }) {
 	if (kind === "files") return <Upload className="size-6" />;
+	if (kind === "transcripts") return <MessageSquare className="size-6" />;
 	return sourceLogo(kind, { className: "size-6" });
 }
 
@@ -78,6 +86,15 @@ export function ConnectSourceDialog({
 	const [browsing, setBrowsing] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [result, setResult] = useState<ImportSourcesResponse | null>(null);
+	const [transcriptJobId, setTranscriptJobId] = useState<string | null>(null);
+	const [agents, setAgents] = useState<readonly { id: string; name: string }[]>([]);
+
+	useEffect(() => {
+		if (!open) return;
+		void api.getAgents().then((response) => {
+			if (response.data) setAgents(response.data.agents.map((agent) => ({ id: agent.id, name: agent.name })));
+		});
+	}, [open]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -115,6 +132,55 @@ export function ConnectSourceDialog({
 	};
 
 	const importFiles = async (targetFiles: readonly File[], targetPaths: readonly string[] = []) => {
+		if (kind === "transcripts") {
+			if (!targetFiles.length) {
+				setError("Choose one or more JSONL transcript files");
+				return;
+			}
+			const selectedAgent = target.trim();
+			const problem = validate(kind, selectedAgent, "");
+			if (problem) {
+				setError(problem);
+				return;
+			}
+			setBusy(true);
+			setError(null);
+			const created = await api.createSourceImport(selectedAgent, targetFiles);
+			if (!created.data) {
+				setBusy(false);
+				setError(created.error ?? "Could not create import job");
+				return;
+			}
+			const jobId = created.data.jobId ?? created.data.id;
+			if (!jobId) {
+				setBusy(false);
+				setError("Daemon returned no job ID");
+				return;
+			}
+			setTranscriptJobId(jobId);
+			for (const [index, file] of targetFiles.entries()) {
+				const fileId = created.data.files?.[index]?.id;
+				if (!fileId) {
+					setBusy(false);
+					setError(`Job ${jobId}: daemon returned no file id for ${file.name}`);
+					return;
+				}
+				const uploaded = await api.uploadSourceImportFile(selectedAgent, jobId, fileId, file);
+				if (uploaded.error) {
+					setBusy(false);
+					setError(`Job ${jobId}: ${uploaded.error}`);
+					return;
+				}
+			}
+			const started = await api.controlSourceImport(jobId, "start");
+			setBusy(false);
+			if (!started) {
+				setError(`Job ${jobId}: could not start import`);
+				return;
+			}
+			onConnected();
+			return;
+		}
 		if (targetFiles.length === 0 && targetPaths.length === 0) return;
 		if (busy) return;
 		setBusy(true);
@@ -189,7 +255,7 @@ export function ConnectSourceDialog({
 	};
 
 	const submit = () => {
-		if (kind === "files") void importFiles(files, desktopPaths);
+		if (kind === "files" || kind === "transcripts") void importFiles(files, desktopPaths);
 		else void connect();
 	};
 
@@ -198,13 +264,10 @@ export function ConnectSourceDialog({
 
 	return (
 		<div
-			className="cs-backdrop"
 			role="presentation"
+			className="cs-backdrop"
 			onClick={(event) => {
 				if (event.target === event.currentTarget && !busy) onClose();
-			}}
-			onKeyDown={(event) => {
-				if (event.key === "Escape" && !busy) onClose();
 			}}
 		>
 			<dialog open className="cs-panel" aria-modal="true" aria-label="Connect a source">
@@ -235,7 +298,7 @@ export function ConnectSourceDialog({
 						))}
 					</div>
 
-					{kind === "files" ? (
+					{kind === "files" || kind === "transcripts" ? (
 						<>
 							<button
 								type="button"
@@ -244,8 +307,12 @@ export function ConnectSourceDialog({
 								disabled={busy}
 							>
 								<Upload className="size-5" />
-								<span className="text-xs font-medium">Choose one or more files</span>
-								<span className="font-mono text-[9px]">JSON · Markdown · CSV · HTML · documents</span>
+								<span className="text-xs font-medium">
+									{kind === "transcripts" ? "Choose JSONL transcript files" : "Choose one or more files"}
+								</span>
+								<span className="font-mono text-[9px]">
+									{kind === "transcripts" ? "Signet export JSONL" : "JSON · Markdown · CSV · HTML · documents"}
+								</span>
 							</button>
 							<button type="button" className="cs-btn-ghost self-center" onClick={chooseDesktop} disabled={busy}>
 								Choose from desktop
@@ -258,20 +325,48 @@ export function ConnectSourceDialog({
 								accept=".txt,.md,.markdown,.json,.html,.htm,.csv,.doc,.docx,.docm,.odt,.rtf,.pdf,.ppt,.pptx,.ppsx,.odp,.epub,.xls,.xlsx,.xlsm,.ods"
 								onChange={(event) => choose(event.target.files)}
 							/>
-							{selectedCount > 0 && (
-								<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 font-mono text-[10px]">
-									{files.map((file) => (
-										<span key={`${file.name}:${file.size}`} className="truncate">
-											{file.name} · {(file.size / 1024).toFixed(0)} KB
-										</span>
+							<label className="cs-field">
+								<span className="cs-field__label">Target agent</span>
+								<select
+									className="cs-field__input"
+									value={target}
+									onChange={(event) => setTarget(event.target.value)}
+									disabled={busy}
+									required={kind === "transcripts"}
+									aria-label="Target agent"
+								>
+									<option value="">Select a live agent</option>
+									{agents.map((agent) => (
+										<option key={agent.id} value={agent.id}>
+											{agent.name} ({agent.id})
+										</option>
 									))}
-									{desktopPaths.map((path) => (
-										<span key={path} className="truncate">
-											{path.split(/[\\/]/).pop() ?? path} · desktop path
-										</span>
-									))}
-								</div>
+								</select>
+								<span className="cs-field__hint">
+									Embedded agent_id is provenance only; selected target agent owns imported data.
+								</span>
+							</label>
+							{kind === "transcripts" && (
+								<label className="cs-field">
+									<span className="cs-field__label">Schema</span>
+									<select className="cs-field__input" defaultValue="signet-export-v1" disabled={busy}>
+										<option value="signet-export-v1">Signet export</option>
+									</select>
+								</label>
 							)}
+
+							<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 font-mono text-[10px]">
+								{files.map((file) => (
+									<span key={`${file.name}:${file.size}`} className="truncate">
+										{file.name} · {(file.size / 1024).toFixed(0)} KB
+									</span>
+								))}
+								{desktopPaths.map((path) => (
+									<span key={path} className="truncate">
+										{path.split(/[\\/]/).pop() ?? path} · desktop path
+									</span>
+								))}
+							</div>
 							<label className="cs-field">
 								<span className="cs-field__label">If a content hash already exists</span>
 								<select
@@ -285,6 +380,11 @@ export function ConnectSourceDialog({
 									<option value="reimport">Import as a new source</option>
 								</select>
 							</label>
+							{transcriptJobId && (
+								<div className="cs-field__hint" aria-live="polite">
+									Import job created: <code>{transcriptJobId}</code>
+								</div>
+							)}
 							{busy && (
 								<div className="cs-field__hint" aria-live="polite">
 									Importing {selectedCount} {selectedCount === 1 ? "file" : "files"}…
@@ -374,11 +474,11 @@ export function ConnectSourceDialog({
 				</div>
 				<footer className="cs-foot">
 					<button type="button" className="cs-btn-ghost" onClick={onClose} disabled={busy}>
-						{kind === "files" ? "Close" : "Cancel"}
+						{kind === "files" || kind === "transcripts" ? "Close" : "Cancel"}
 					</button>
 					<button type="button" className="cs-btn-primary" onClick={submit} disabled={submitDisabled}>
 						{busy && <Loader2 className="size-3.5 animate-spin" />}
-						{kind === "files" ? "Import & index" : "Connect & index"}
+						{kind === "files" || kind === "transcripts" ? "Import & index" : "Connect & index"}
 					</button>
 				</footer>
 			</dialog>
