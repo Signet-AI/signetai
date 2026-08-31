@@ -232,6 +232,56 @@ The default safety bounds are 25 files per request, 25 MiB per file, and 100
 MiB per batch. Each file returns an individual result so a mixed batch can
 partially succeed.
 
+### Durable transcript imports
+
+Transcript imports are a separate durable API; they do not use the synchronous
+`POST /api/sources/import` document importer or `transcript_capture_jobs`.
+`POST /api/sources/imports` creates a job, `PUT
+/api/sources/imports/:jobId/files/:fileId` streams one JSONL file, and `POST
+.../:jobId/start` queues it. `GET .../:jobId`, `.../rejections`, and
+`.../reconciliation` report progress and outcomes. `pause`, `resume`, `retry`,
+and `cancel` are durable controls. All routes require `modify` permission and
+fail closed when `agentId` is not the daemon's resolved target agent.
+
+The only accepted adapter is `signet-export` version `1` (`source: "signet"`).
+Each line is classified exactly once as `imported`, `duplicate`, or `rejected`;
+blank lines are counted separately. Validation rejects malformed JSON, unknown
+roles, count mismatches, missing/nonempty-invalid messages, invalid timestamps,
+and records over 16 MiB or messages over 4 MiB. The hard limits are 25 records
+per database batch, 8 MiB canonical batch, 50,000 messages, and one active
+job/file. The response counters satisfy `total = imported + duplicate +
+rejected + pending` while a job is active and `pending = 0` when terminal.
+
+Imported transcripts preserve message roles (`user`, `assistant`, `system`,
+`tool`, `unknown`), exact content whitespace and newlines, project, and the
+historical timestamp. The selected target agent owns the rows; embedded
+`agent_id` is provenance only. Source identity and content fingerprints make
+same-identity replay a duplicate and same-identity/different-content a
+`conversation_identity_conflict` rejection. Staging is an fsynced managed JSONL
+file under `imports/transcripts/<source-id>/`; canonical harness files and
+`session_transcripts` are written with deterministic IDs. Recovery resumes byte
+checkpoints and replays filesystem writes idempotently before finalizing DB
+ownership.
+
+Removing an import Source purges its staged file, canonical lines,
+`session_transcripts`, artifacts, indexes, aggregates, and consumption/review
+rows. Bounded record fingerprints and audit tombstones remain. Derived
+knowledge is marked unsupported/stale and reviewed by the normal Dreaming path;
+transcript import creates one attention nudge per committed source batch, not
+one Dreaming job per conversation.
+
+**Create response**
+
+```json
+{ "id": "job-uuid", "jobId": "job-uuid", "agentId": "target", "state": "staging" }
+```
+
+**Reconciliation response**
+
+```json
+{ "jobId": "job-uuid", "reconciliation": [{ "status": "imported", "count": 42 }] }
+```
+
 **Response**
 
 ```json

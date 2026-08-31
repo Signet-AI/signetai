@@ -82,7 +82,8 @@
 		"typecheck:turbo": "turbo run typecheck",
 		"bench": "bun scripts/bench-memory.ts",
 		"bench:ingest": "bun scripts/bench-memory.ts ingest",
-		"bench:evaluate": "bun scripts/bench-memory.ts --resume run --from-phase search"
+		"bench:evaluate": "bun scripts/bench-memory.ts --resume run --from-phase search",
+		"eval:transcript-import": "bun scripts/evals/transcript-import-real-daemon.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.5",
