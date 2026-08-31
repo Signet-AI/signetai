@@ -13,6 +13,7 @@ import {
 	type DbOwnerSubmitOptions,
 } from "./db-owner-client";
 import { getDbOwnerMaintenance } from "./db-owner-maintenance";
+import { commitCompletedTranscriptBatchInTx } from "./transcript-import-commit";
 import type {
 	DbOwnerJob,
 	DbOwnerParameter,
@@ -142,6 +143,29 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 			return results;
 		});
 	}
+	if (request.kind === "transcript_bulk_commit") {
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
+			commitCompletedTranscriptBatchInTx(db as never, request.input.commits),
+		);
+	}
+	if (request.kind === "transcript_import_control") {
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
+			db
+				.prepare(
+					"UPDATE source_import_jobs SET control_request = ?, updated_at = datetime('now') WHERE id = ? AND agent_id = ?",
+				)
+				.run(request.input.control, request.input.jobId, request.input.agentId),
+		);
+	}
+	if (request.kind === "transcript_import_reconcile") {
+		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
+			db
+				.prepare(
+					"SELECT COUNT(*) AS total, SUM(status = 'imported') AS imported, SUM(status = 'duplicate') AS duplicate, SUM(status = 'rejected') AS rejected, SUM(status IN ('pending','cancelled')) AS pending FROM source_import_records WHERE job_id = ? AND agent_id = ?",
+				)
+				.get(request.input.jobId, request.input.agentId),
+		);
+	}
 	if (request.kind === "vector_search") {
 		return invokeAccessor(accessor, "withReadDb", (db) =>
 			vectorSearchWithMetadata(db as never, new Float32Array(request.payload.queryEmbedding), request.payload.options),
@@ -175,6 +199,7 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		case "vacuum_conversion":
 		case "incremental_vacuum":
 		case "source_evidence_eligibility":
+		case "transcript_import_purge":
 		case "sleep":
 			throw new Error(`Unsupported inline owner request: ${request.kind}`);
 		default:
@@ -476,6 +501,40 @@ export async function dbOwnerSourceSnapshotImport(
 		{ kind: "source_snapshot_import", input },
 		{ ...options, lane: options.lane ?? "write" },
 	);
+}
+
+export async function dbOwnerTranscriptBulkCommit(
+	input: import("./db-owner-protocol").DbOwnerTranscriptBulkCommit,
+	options: DbOwnerSqlOptions,
+): Promise<readonly unknown[]> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission(
+		owner,
+		{ kind: "transcript_bulk_commit", input },
+		{
+			...options,
+			lane: options.lane ?? "write",
+			estimatedWorkUnits: options.estimatedWorkUnits ?? input.commits.length,
+		},
+	);
+}
+export async function dbOwnerTranscriptImportControl(
+	input: import("./db-owner-protocol").DbOwnerTranscriptImportControl,
+	options: DbOwnerSqlOptions,
+): Promise<unknown> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission(
+		owner,
+		{ kind: "transcript_import_control", input },
+		{ ...options, lane: options.lane ?? "write" },
+	);
+}
+export async function dbOwnerTranscriptImportReconcile(
+	input: import("./db-owner-protocol").DbOwnerTranscriptImportReconcile,
+	options: DbOwnerSqlOptions,
+): Promise<unknown> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission(owner, { kind: "transcript_import_reconcile", input }, { ...options, lane: "read" });
 }
 
 export async function dbOwnerSourceArtifactUpsert(

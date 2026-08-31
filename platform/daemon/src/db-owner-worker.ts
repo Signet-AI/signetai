@@ -13,6 +13,7 @@ import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./mem
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
+import { commitCompletedTranscriptBatchInTx } from "./transcript-import-commit";
 import { getDreamingHygieneCandidatesInDb } from "./knowledge-graph-hygiene";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 import { DREAMING_SURPRISAL_SELECTOR_VERSION, selectDreamingSurprisalInDb } from "./pipeline/dreaming-surprisal";
@@ -351,6 +352,67 @@ export function runDbOwnerWorker(): void {
 	function executeStatementWithoutTransaction(statement: DbOwnerStatement): SqliteRunResult {
 		const params = (statement.params ?? []).map(bindParameter);
 		return db.prepare(statement.sql).run(...params);
+	}
+
+	function executeTranscriptBulkCommit(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "transcript_bulk_commit" }>,
+		context: JobExecutionContext,
+	): unknown {
+		if (request.input.commits.length === 0 || request.input.commits.length > 25)
+			throw new RangeError("invalid transcript commit batch");
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const result = commitCompletedTranscriptBatchInTx(db as never, request.input.commits);
+			commit(context);
+			return result;
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				/* preserve original error */
+			}
+			throw error;
+		}
+	}
+
+	function executeTranscriptImportControl(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "transcript_import_control" }>,
+		context: JobExecutionContext,
+	): unknown {
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const result = db
+				.prepare(
+					"UPDATE source_import_jobs SET control_request = ?, updated_at = datetime('now') WHERE id = ? AND agent_id = ?",
+				)
+				.run(request.input.control, request.input.jobId, request.input.agentId);
+			commit(context);
+			return { changed: result.changes > 0 };
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				/* preserve original error */
+			}
+			throw error;
+		}
+	}
+
+	function executeTranscriptImportReconcile(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "transcript_import_reconcile" }>,
+	): unknown {
+		const row = db
+			.prepare(
+				"SELECT COUNT(*) AS total, SUM(status = 'imported') AS imported, SUM(status = 'duplicate') AS duplicate, SUM(status = 'rejected') AS rejected, SUM(status IN ('pending','cancelled')) AS pending FROM source_import_records WHERE job_id = ? AND agent_id = ?",
+			)
+			.get(request.input.jobId, request.input.agentId) as Record<string, number>;
+		return {
+			total: row.total ?? 0,
+			imported: row.imported ?? 0,
+			duplicate: row.duplicate ?? 0,
+			rejected: row.rejected ?? 0,
+			pending: row.pending ?? 0,
+		};
 	}
 
 	function executeSourceSnapshotImport(
@@ -969,6 +1031,39 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "batch")
 			return executeBatch(job.request.statements, job.request.requireChanges === true, context);
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request, context);
+		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
+		if (job.request.kind === "transcript_import_control") return executeTranscriptImportControl(job.request, context);
+		if (job.request.kind === "transcript_import_reconcile") return executeTranscriptImportReconcile(job.request);
+		if (job.request.kind === "transcript_import_purge") {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const source = job.request.input.sourceId;
+				db.prepare("DELETE FROM session_transcripts WHERE agent_id = ? AND source_id = ?").run(
+					job.request.input.agentId,
+					source,
+				);
+				db.prepare(
+					"UPDATE transcript_import_conversations SET state = 'removed', updated_at = datetime('now') WHERE agent_id = ? AND owner_source_id = ?",
+				).run(job.request.input.agentId, source);
+				db.prepare("DELETE FROM source_import_records WHERE agent_id = ? AND source_id = ?").run(
+					job.request.input.agentId,
+					source,
+				);
+				db.prepare("DELETE FROM source_import_files WHERE agent_id = ? AND source_id = ?").run(
+					job.request.input.agentId,
+					source,
+				);
+				commit(context);
+				return { purged: true };
+			} catch (error) {
+				try {
+					db.exec("ROLLBACK");
+				} catch {
+					/* preserve original error */
+				}
+				throw error;
+			}
+		}
 		if (job.request.kind === "dreaming_hygiene_attention") return executeDreamingHygieneAttention(job.request, context);
 		if (job.request.kind === "dreaming_surprisal_attention")
 			return executeDreamingSurprisalAttention(job.request, context);
