@@ -51,7 +51,17 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 		});
 	const root = options.workspaceRoot ?? process.env.SIGNET_PATH ?? join(process.env.HOME ?? ".", ".agents");
 	const run = async (): Promise<void> => {
-		await recover(options);
+		try {
+			await options.store.run({
+				kind: "source_import",
+				operation: "recover",
+				agentId: options.agentId,
+				jobId: "*",
+				payload: {},
+			});
+		} catch {
+			/* A transient owner error must not permanently strand recovery. */
+		}
 		while (active) {
 			if (options.pressure?.()) {
 				await wait();
@@ -313,7 +323,7 @@ async function maybeCrashAfterCanonicalWrite(root: string): Promise<void> {
 	process.exit(86);
 }
 
-async function recover(options: TranscriptImportWorkerOptions): Promise<void> {
+async function _recover(options: TranscriptImportWorkerOptions): Promise<void> {
 	const jobs = await options.store.run<Job[]>({
 		kind: "source_import",
 		operation: "list",
