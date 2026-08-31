@@ -4,6 +4,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { access, mkdir, mkdtemp, readdir, readlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { ensureUnifiedSchema } from "../../platform/core/src/migration";
+import { runMigrations } from "../../platform/core/src/migrations/index";
 
 const root = await mkdtemp(join("/mnt/work/hermes-scratch/", "1814-import-eval-"));
 const port = 43000 + Math.floor(Math.random() * 1000);
@@ -231,6 +233,13 @@ try {
 	await mkdir(join(root, ".daemon/logs"), { recursive: true });
 	await mkdir(join(root, "memory"), { recursive: true });
 	await writeFile(join(root, "agent.yaml"), "embedding:\n  provider: none\n");
+	const setupDb = new Database(join(root, "memory", "memories.db"));
+	try {
+		ensureUnifiedSchema(setupDb as unknown as Parameters<typeof ensureUnifiedSchema>[0]);
+		runMigrations(setupDb as unknown as Parameters<typeof runMigrations>[0]);
+	} finally {
+		setupDb.close();
+	}
 	await start({ SIGNET_TRANSCRIPT_IMPORT_FAILPOINT: "inventory" });
 	const mixed = corpus(2200, "large");
 	const first = await importFile(mixed, "large.jsonl");
