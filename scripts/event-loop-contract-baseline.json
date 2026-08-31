@@ -931,14 +931,16 @@
       "line": 340,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:vacuum.conversion-status.sync-read"
     },
     {
       "path": "db-vacuum.ts",
       "line": 348,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync((db) => readStatusFromDb(toPragmaReadDb(db)), {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:vacuum.conversion-status.read"
     },
     {
       "path": "db-vacuum.ts",
@@ -952,7 +954,8 @@
       "line": 498,
       "api": "withWriteTxAsync",
       "source": "await accessor.withWriteTxAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:vacuum.conversion-state.mark-running"
     },
     {
       "path": "db-vacuum.ts",
@@ -966,14 +969,16 @@
       "line": 530,
       "api": "withWriteTxAsync",
       "source": "await accessor.withWriteTxAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:vacuum.conversion-state.mark-completed"
     },
     {
       "path": "db-vacuum.ts",
       "line": 548,
       "api": "withWriteTxAsync",
       "source": "await accessor.withWriteTxAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:vacuum.conversion-state.mark-failed"
     },
     {
       "path": "discord-desktop-cache-source.ts",
@@ -3045,7 +3050,8 @@
       "line": 148,
       "api": "withReadDbAsync",
       "source": ": await accessor.withReadDbAsync((db) => db.prepare(sql).all() as Array<{ agent_id: string | null }>, {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:maintenance.graph-agent-scopes.read"
     },
     {
       "path": "pipeline/maintenance-worker.ts",
@@ -3059,7 +3065,8 @@
       "line": 485,
       "api": "withReadDbAsync",
       "source": ": await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:maintenance.dead-memory-count.read"
     },
     {
       "path": "pipeline/maintenance-worker.ts",

@@ -9,7 +9,7 @@
  * another cycle starts.
  */
 
-import type { DbAccessor } from "../db-accessor";
+import type { DbAccessor, SyncDbCallSiteToken } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { ownerQueryAll, ownerQueryOne } from "../db-owner-maintenance";
 import { getFreePageRatio, reclaimIncrementalVacuum } from "../db-vacuum";
@@ -146,7 +146,7 @@ async function getGraphAgentIds(
 				sql,
 			)
 		: await accessor.withReadDbAsync((db) => db.prepare(sql).all() as Array<{ agent_id: string | null }>, {
-				siteToken: "pipeline/maintenance-worker.ts:148",
+				siteToken: "db:maintenance.graph-agent-scopes.read",
 			});
 	const ids = rows.flatMap((row) =>
 		typeof row.agent_id === "string" && row.agent_id.length > 0 ? [row.agent_id] : [],
@@ -338,7 +338,7 @@ export function startMaintenanceWorker(
 	};
 
 	async function doTick(): Promise<MaintenanceCycleResult> {
-		const readDiagnostics = async (siteToken: string): Promise<DiagnosticsReport> =>
+		const readDiagnostics = async (siteToken: SyncDbCallSiteToken): Promise<DiagnosticsReport> =>
 			deps.ownerMaintenance
 				? await deps.ownerMaintenance.diagnostics(tracker.stats)
 				: // Each caller supplies the original static token for this compatibility fallback.
@@ -499,7 +499,7 @@ export function startMaintenanceWorker(
 										DEAD_MEMORY_DEFAULT_ACCESS_DAYS,
 									) as { n: number }
 							).n,
-						{ siteToken: "pipeline/maintenance-worker.ts:485" },
+						{ siteToken: "db:maintenance.dead-memory-count.read" },
 					);
 			const count = typeof countRow === "number" ? countRow : (countRow?.n ?? 0);
 			if (count > 100) {
