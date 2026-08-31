@@ -5933,8 +5933,8 @@
 			{
 				"id": "module:platform/daemon/src/db-owner-client.ts",
 				"path": "platform/daemon/src/db-owner-client.ts",
-				"lines": 942,
-				"logicalStatements": 495,
+				"lines": 960,
+				"logicalStatements": 501,
 				"exports": 26,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -5993,7 +5993,7 @@
 			{
 				"id": "module:platform/daemon/src/db-owner-runtime.ts",
 				"path": "platform/daemon/src/db-owner-runtime.ts",
-				"lines": 610,
+				"lines": 624,
 				"logicalStatements": 40,
 				"exports": 3,
 				"topLevelMutableBindings": 1,
@@ -6023,15 +6023,15 @@
 			{
 				"id": "module:platform/daemon/src/db-owner-worker.ts",
 				"path": "platform/daemon/src/db-owner-worker.ts",
-				"lines": 1203,
-				"logicalStatements": 106,
+				"lines": 1222,
+				"logicalStatements": 107,
 				"exports": 3,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 7,
 				"runtimeFanIn": 0,
-				"runtimeFanOut": 12,
+				"runtimeFanOut": 13,
 				"runtimeCallsitesIn": 0,
-				"runtimeCallsitesOut": 12,
+				"runtimeCallsitesOut": 13,
 				"dynamicSites": 3,
 				"layer": "domain"
 			},
@@ -6238,9 +6238,9 @@
 				"exports": 7,
 				"topLevelMutableBindings": 1,
 				"typeEscapes": 0,
-				"runtimeFanIn": 5,
+				"runtimeFanIn": 6,
 				"runtimeFanOut": 1,
-				"runtimeCallsitesIn": 5,
+				"runtimeCallsitesIn": 6,
 				"runtimeCallsitesOut": 1,
 				"dynamicSites": 0,
 				"layer": "domain"
@@ -7343,9 +7343,9 @@
 			{
 				"id": "module:platform/daemon/src/native-memory-sources.ts",
 				"path": "platform/daemon/src/native-memory-sources.ts",
-				"lines": 1712,
-				"logicalStatements": 640,
-				"exports": 30,
+				"lines": 1756,
+				"logicalStatements": 659,
+				"exports": 31,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
 				"runtimeFanIn": 4,
@@ -7403,8 +7403,8 @@
 			{
 				"id": "module:platform/daemon/src/obsidian-source-embeddings.ts",
 				"path": "platform/daemon/src/obsidian-source-embeddings.ts",
-				"lines": 876,
-				"logicalStatements": 361,
+				"lines": 877,
+				"logicalStatements": 362,
 				"exports": 16,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 7,
@@ -26927,7 +26927,7 @@
 				"line": 5
 			},
 			{
-				"id": "platform/daemon/src/db-owner-runtime.ts:import:runtime:./db-owner-client:10d8410b7bb24649:1",
+				"id": "platform/daemon/src/db-owner-runtime.ts:import:runtime:./db-owner-client:4cf8179c66e45f73:1",
 				"from": "platform/daemon/src/db-owner-runtime.ts",
 				"to": "platform/daemon/src/db-owner-client.ts",
 				"specifier": "./db-owner-client",
@@ -26942,7 +26942,7 @@
 				"specifier": "./db-owner-maintenance",
 				"kind": "import",
 				"runtime": true,
-				"line": 14
+				"line": 15
 			},
 			{
 				"id": "platform/daemon/src/db-owner-runtime.ts:import:runtime:@signet/core:e0389f15b83af3f9:1",
@@ -26987,7 +26987,7 @@
 				"specifier": "./db-owner-protocol",
 				"kind": "import",
 				"runtime": false,
-				"line": 15
+				"line": 16
 			},
 			{
 				"id": "platform/daemon/src/db-owner-sql.ts:import:type:./db-owner-client:0beed3b0b4bc9709:1",
@@ -27014,7 +27014,7 @@
 				"specifier": "./db-helpers",
 				"kind": "import",
 				"runtime": true,
-				"line": 32
+				"line": 33
 			},
 			{
 				"id": "platform/daemon/src/db-owner-worker.ts:import:runtime:./db-owner-protocol:122c83399e9a1991:1",
@@ -27023,7 +27023,16 @@
 				"specifier": "./db-owner-protocol",
 				"kind": "import",
 				"runtime": true,
-				"line": 33
+				"line": 34
+			},
+			{
+				"id": "platform/daemon/src/db-owner-worker.ts:import:runtime:./embedding-circuit-breaker:c64514631db31e45:1",
+				"from": "platform/daemon/src/db-owner-worker.ts",
+				"to": "platform/daemon/src/embedding-circuit-breaker.ts",
+				"specifier": "./embedding-circuit-breaker",
+				"kind": "import",
+				"runtime": true,
+				"line": 32
 			},
 			{
 				"id": "platform/daemon/src/db-owner-worker.ts:import:runtime:./knowledge-graph-hygiene:305d248b2a190032:1",
@@ -27185,7 +27194,7 @@
 				"specifier": "better-sqlite3",
 				"kind": "require",
 				"runtime": true,
-				"line": 87
+				"line": 88
 			},
 			{
 				"id": "platform/daemon/src/db-owner-worker.ts:require:runtime:bun:sqlite:f5bec2b809840451:1",
@@ -27194,7 +27203,7 @@
 				"specifier": "bun:sqlite",
 				"kind": "require",
 				"runtime": true,
-				"line": 82
+				"line": 83
 			},
 			{
 				"id": "platform/daemon/src/db-owner-worker.ts:require:runtime:node:sqlite:7bf26e5277f2ccfa:1",
@@ -27203,7 +27212,7 @@
 				"specifier": "node:sqlite",
 				"kind": "require",
 				"runtime": true,
-				"line": 85
+				"line": 86
 			},
 			{
 				"id": "platform/daemon/src/db-vacuum-worker.ts:import:runtime:./db-owner-maintenance:348796c07414bf73:1",
@@ -31247,7 +31256,7 @@
 				"line": 15
 			},
 			{
-				"id": "platform/daemon/src/native-memory-sources.ts:import:runtime:./embedding-circuit-breaker:270bdb95b224afa6:1",
+				"id": "platform/daemon/src/native-memory-sources.ts:import:runtime:./embedding-circuit-breaker:c64514631db31e45:1",
 				"from": "platform/daemon/src/native-memory-sources.ts",
 				"to": "platform/daemon/src/embedding-circuit-breaker.ts",
 				"specifier": "./embedding-circuit-breaker",
@@ -52195,10 +52204,10 @@
 		],
 		"summary": {
 			"files": 930,
-			"lines": 268540,
-			"logicalStatements": 96837,
-			"runtimeEdges": 1998,
-			"allEdges": 2593,
+			"lines": 268636,
+			"logicalStatements": 96864,
+			"runtimeEdges": 1999,
+			"allEdges": 2594,
 			"unresolvedEdges": 1525,
 			"dynamicLiteralSites": 49,
 			"computedLoads": 2,
