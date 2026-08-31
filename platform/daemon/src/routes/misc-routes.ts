@@ -514,6 +514,4 @@ export function registerMiscRoutes(app: Hono): void {
 		const result = await runUpdateImpl(targetVersion);
 		return c.json(result);
 	});
-
-
 }
