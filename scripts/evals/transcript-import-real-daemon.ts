@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /** Real-daemon acceptance eval for transcript import (#1814). */
 import { spawn, type ChildProcess } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, readlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 
@@ -190,32 +190,33 @@ async function waitCompleted(jobId: string) {
 	throw new Error(`job ${jobId} did not finish`);
 }
 async function waitForDatabaseOwnershipRelease(): Promise<void> {
+	const dbPath = join(root, "memory", "memories.db");
 	for (let i = 0; i < 200; i++) {
-		const ownerPids: string[] = [];
+		const holders: string[] = [];
 		for (const entry of await readdir("/proc")) {
 			if (!/^\d+$/.test(entry)) continue;
 			try {
 				const environment = await readFile(`/proc/${entry}/environ`, "utf8");
-				if (environment.includes(`SIGNET_PATH=${root}\0`) && environment.includes("SIGNET_DB_OWNER_WORKER=1\0")) ownerPids.push(entry);
+				const exactOwnerPath = `SIGNET_DB_OWNER_DB_PATH=${dbPath}\0`;
+				const ownsByEnvironment = environment.includes(exactOwnerPath);
+				let ownsByOpenFile = false;
+				for (const fd of await readdir(`/proc/${entry}/fd`)) {
+					try {
+						const target = await readlink(`/proc/${entry}/fd/${fd}`);
+						if (target === dbPath || target === `${dbPath} (deleted)`) {
+							ownsByOpenFile = true;
+							break;
+						}
+					} catch {
+						// The descriptor can close between enumeration and readback.
+					}
+				}
+				if (ownsByEnvironment || ownsByOpenFile) holders.push(entry);
 			} catch {
 				// The process can exit between /proc enumeration and readback.
 			}
 		}
-		if (ownerPids.length === 0) {
-			try {
-				const probe = new Database(join(root, "memory", "memories.db"));
-				try {
-					probe.exec("PRAGMA busy_timeout = 0");
-					probe.exec("BEGIN IMMEDIATE");
-					probe.exec("ROLLBACK");
-				} finally {
-					probe.close();
-				}
-				return;
-			} catch {
-				// Owner exit and SQLite lock release are separate observable events.
-			}
-		}
+		if (holders.length === 0) return;
 		await Bun.sleep(50);
 	}
 	throw new Error("database ownership was not released within 10 seconds");
