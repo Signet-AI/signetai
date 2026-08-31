@@ -1,6 +1,6 @@
 {
 	"name": "@signet/connector-kimi",
-	"version": "0.214.37",
+	"version": "0.214.45",
 	"description": "Signet connector for Kimi CLI / Kimi Code",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -24,8 +24,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@signet/connector-base": "0.214.37",
-		"@signet/core": "0.214.37"
+		"@signet/connector-base": "0.214.45",
+		"@signet/core": "0.214.45"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",

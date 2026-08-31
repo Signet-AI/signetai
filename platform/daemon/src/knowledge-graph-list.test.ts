@@ -558,26 +558,63 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		expect(detail?.dependencyCount).toBe(3);
 	});
 
-	test("releases the detail lease before nested structural reads", async () => {
+	test("releases every saturated detail lease before nested structural reads (#1758)", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 		seedEntity("e-hub", "Hub");
 
-		const requests = Array.from({ length: MAX_READ_CONNECTIONS }, () =>
-			getKnowledgeEntityDetail(getDbAccessor(), "e-hub", "default"),
-		);
-		const completed = await Promise.race([
-			Promise.all(requests).then(
-				() => true,
-				() => false,
+		const accessor = getDbAccessor();
+		// The live base routes getKnowledgeEntityDetail through the DB owner.
+		// Keep this synchronization proof at the accessor boundary where the
+		// lease contract is implemented, rather than wrapping an unused seam.
+		let entered = 0;
+		let releaseCallbacks = (): void => {};
+		let resolveAllEntered = (): void => {};
+		const callbackGate = new Promise<void>((resolve) => {
+			releaseCallbacks = resolve;
+		});
+		const allEntered = new Promise<void>((resolve) => {
+			resolveAllEntered = resolve;
+		});
+		const requests = Array.from({ length: MAX_READ_CONNECTIONS }, (_, index) =>
+			accessor.withReadDbAsync(
+				async (db) => {
+					// This is the synchronous detail query in the saturated request.
+					db.prepare("SELECT ? AS entity_id").get(index);
+					entered += 1;
+					if (entered === MAX_READ_CONNECTIONS) resolveAllEntered();
+					await callbackGate;
+					// The structural-density query must be able to acquire a new
+					// lease while the outer callback continuation is still pending.
+					return await accessor.withReadDbAsync((innerDb) => innerDb.prepare("SELECT 1 AS structural_density").get(), {
+						operation: "db:knowledge.structural-density.read",
+					});
+				},
+				{ operation: "db:knowledge.entity-detail.read" },
 			),
-			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
-		]);
-		if (!completed) {
-			closeDbAccessor();
+		);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let pressureVerified = false;
+		try {
+			await Promise.race([
+				allEntered,
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(() => reject(new Error("detail callbacks did not saturate the read pool")), 2_000);
+				}),
+			]);
+			expect(accessor.getReadPressure()).toMatchObject({
+				activeLeases: 0,
+				queued: 0,
+				maxConnections: MAX_READ_CONNECTIONS,
+			});
+			pressureVerified = true;
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+			releaseCallbacks();
+			if (!pressureVerified) accessor.close();
 			await Promise.allSettled(requests);
 		}
-		expect(completed).toBe(true);
+		await expect(Promise.all(requests)).resolves.toHaveLength(MAX_READ_CONNECTIONS);
 	});
 
 	test("returns null for unknown entity id", async () => {
