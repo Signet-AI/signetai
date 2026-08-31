@@ -23,7 +23,7 @@ export function up(db: MigrationDb): void {
 			record_count INTEGER NOT NULL DEFAULT 0, blank_count INTEGER NOT NULL DEFAULT 0, malformed_count INTEGER NOT NULL DEFAULT 0,
 			inventory_version INTEGER NOT NULL DEFAULT 1, checkpoint_ordinal INTEGER NOT NULL DEFAULT 0,
 			checkpoint_byte_offset INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-			UNIQUE(job_id, ordinal), UNIQUE(agent_id, source_id)
+			UNIQUE(job_id, ordinal)
 		);
 		CREATE INDEX IF NOT EXISTS idx_source_import_files_job_state ON source_import_files(job_id, state);
 
