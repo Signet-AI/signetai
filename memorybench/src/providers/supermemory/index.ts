@@ -11,6 +11,24 @@ import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
 import { SUPERMEMORY_PROMPTS } from "./prompts"
 
+export type SupermemoryIndexingState = "completed" | "failed" | "pending"
+
+export function classifySupermemoryDocumentStatus(
+  status:
+    | "unknown"
+    | "queued"
+    | "extracting"
+    | "chunking"
+    | "embedding"
+    | "indexing"
+    | "done"
+    | "failed"
+): SupermemoryIndexingState {
+  if (status === "done") return "completed"
+  if (status === "failed") return "failed"
+  return "pending"
+}
+
 export class SupermemoryProvider implements Provider {
   name = "supermemory"
   prompts = SUPERMEMORY_PROMPTS
@@ -83,21 +101,17 @@ export class SupermemoryProvider implements Provider {
       const results = await Promise.allSettled(
         pendingArray.map(async (docId) => {
           const doc = await this.client!.documents.get(docId)
-          if (doc.status === "done" || doc.status === "failed") {
-            const memory = await this.client!.memories.get(docId)
-            return { docId, docStatus: doc.status, memStatus: memory.status }
-          }
-          return { docId, docStatus: doc.status, memStatus: "pending" }
+          return { docId, state: classifySupermemoryDocumentStatus(doc.status) }
         })
       )
 
       for (const res of results) {
         if (res.status === "fulfilled") {
-          const { docId, docStatus, memStatus } = res.value
-          if (docStatus === "failed" || memStatus === "failed") {
+          const { docId, state } = res.value
+          if (state === "failed") {
             pending.delete(docId)
             failedIds.push(docId)
-          } else if (docStatus === "done" && memStatus === "done") {
+          } else if (state === "completed") {
             pending.delete(docId)
             completedIds.push(docId)
           }
@@ -125,11 +139,11 @@ export class SupermemoryProvider implements Provider {
       containerTag: options.containerTag,
       limit: 30,
       threshold: options.threshold || 0.3,
-			searchMode: "hybrid",
-			include: {
-				summaries: true,
-				chunks: true
-      }
+      searchMode: "hybrid",
+      include: {
+        summaries: true,
+        chunks: true,
+      },
     })
 
     return response.results || []

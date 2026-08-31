@@ -37,7 +37,7 @@ function generateRunId(): string {
 
 export function parseRunArgs(args: string[]): RunArgs | null {
   const parsed: Partial<RunArgs> = {}
-  const concurrency: Partial<ConcurrencyConfig> = {}
+  const concurrency: ConcurrencyConfig = {}
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -128,7 +128,7 @@ export function parseRunArgs(args: string[]): RunArgs | null {
   }
 
   if (Object.keys(concurrency).length > 0) {
-    parsed.concurrency = concurrency as ConcurrencyConfig
+    parsed.concurrency = concurrency
   }
 
   return parsed as RunArgs

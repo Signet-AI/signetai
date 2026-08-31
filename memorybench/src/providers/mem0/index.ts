@@ -1,14 +1,15 @@
 import { webcrypto } from "crypto"
 if (typeof window === "undefined") {
-  ;(globalThis as unknown as { window: { crypto: Crypto } }).window = {
-    crypto: webcrypto as Crypto,
-  }
-}
-if (!globalThis.crypto) {
-  globalThis.crypto = webcrypto as Crypto
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { crypto: webcrypto },
+  })
 }
 
-import MemoryClient, { type MemoryOptions, type SearchOptions as Mem0SearchOptions } from "mem0ai"
+import MemoryClient, {
+  type AddMemoryOptions,
+  type SearchMemoryOptions as Mem0SearchOptions,
+} from "mem0ai"
 import type {
   Provider,
   ProviderConfig,
@@ -51,6 +52,31 @@ const CUSTOM_INSTRUCTIONS = `Generate personal memories that follow these guidel
 
 5. Format each memory as a paragraph with a clear narrative structure that captures the person's experience, challenges, and aspirations`
 
+type Mem0EvaluationAddOptions = AddMemoryOptions & {
+  version: "v2"
+  enableGraph: false
+  asyncMode: true
+}
+
+type Mem0EvaluationSearchOptions = Mem0SearchOptions & {
+  enableGraph: false
+}
+
+export function collectMem0EventIds(events: readonly unknown[]): string[] {
+  return events.flatMap((event) => {
+    if (typeof event !== "object" || event === null || !("eventId" in event)) return []
+    return typeof event.eventId === "string" ? [event.eventId] : []
+  })
+}
+
+export function createMem0SearchOptions(options: SearchOptions): Mem0EvaluationSearchOptions {
+  return {
+    filters: { user_id: options.containerTag },
+    topK: options.limit ?? 30,
+    enableGraph: false,
+  }
+}
+
 export class Mem0Provider implements Provider {
   name = "mem0"
   prompts = MEM0_PROMPTS
@@ -66,7 +92,7 @@ export class Mem0Provider implements Provider {
 
     try {
       await this.client.updateProject({
-        custom_instructions: CUSTOM_INSTRUCTIONS,
+        customInstructions: CUSTOM_INSTRUCTIONS,
       })
     } catch (e) {
       logger.warn(`Could not set custom instructions: ${e}`)
@@ -86,11 +112,11 @@ export class Mem0Provider implements Provider {
         content: m.content,
       }))
 
-      const addOptions: MemoryOptions = {
-        user_id: options.containerTag,
+      const addOptions: Mem0EvaluationAddOptions = {
+        userId: options.containerTag,
         version: "v2",
-        enable_graph: false,
-        async_mode: true,
+        enableGraph: false,
+        asyncMode: true,
         metadata: {
           sessionId: session.sessionId,
           timestamp: session.metadata?.date,
@@ -99,12 +125,8 @@ export class Mem0Provider implements Provider {
         },
       }
 
-      const result = (await this.client.add(messages, addOptions)) as Array<{
-        event_id?: string
-      }>
-      for (const event of result) {
-        if (event.event_id) eventIds.push(event.event_id)
-      }
+      const result = await this.client.add(messages, addOptions)
+      eventIds.push(...collectMem0EventIds(result))
     }
     return { documentIds: eventIds }
   }
@@ -175,22 +197,15 @@ export class Mem0Provider implements Provider {
   async search(query: string, options: SearchOptions): Promise<unknown[]> {
     if (!this.client) throw new Error("Provider not initialized")
 
-    const searchOptions: Mem0SearchOptions = {
-      user_id: options.containerTag,
-      top_k: options.limit || 30,
-      enable_graph: false,
-      output_format: "v1.1",
-    }
+    const searchOptions = createMem0SearchOptions(options)
 
     const response = await this.client.search(query, searchOptions)
-
-    const res = response as { results?: unknown[] }
-    return res.results ?? []
+    return response.results
   }
 
   async clear(containerTag: string): Promise<void> {
     if (!this.client) throw new Error("Provider not initialized")
-    await this.client.deleteAll({ user_id: containerTag })
+    await this.client.deleteAll({ userId: containerTag })
     logger.info(`Cleared memories for user: ${containerTag}`)
   }
 }
