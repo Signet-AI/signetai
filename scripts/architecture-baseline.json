@@ -9598,8 +9598,8 @@
 			{
 				"id": "module:scripts/audit-architecture-contract.ts",
 				"path": "scripts/audit-architecture-contract.ts",
-				"lines": 979,
-				"logicalStatements": 432,
+				"lines": 1031,
+				"logicalStatements": 463,
 				"exports": 16,
 				"topLevelMutableBindings": 0,
 				"runtimeFanIn": 0,
@@ -41340,7 +41340,7 @@
 				"line": 9
 			},
 			{
-				"id": "scripts/audit-architecture-contract.ts:import:runtime:node:fs:64fb2f46287615c2:1",
+				"id": "scripts/audit-architecture-contract.ts:import:runtime:node:fs:17c0d6bd1e926ef4:1",
 				"from": "scripts/audit-architecture-contract.ts",
 				"to": null,
 				"specifier": "node:fs",
@@ -51471,8 +51471,8 @@
 		],
 		"summary": {
 			"files": 935,
-			"lines": 268462,
-			"logicalStatements": 96650,
+			"lines": 268514,
+			"logicalStatements": 96681,
 			"runtimeEdges": 1787,
 			"allEdges": 2376,
 			"unresolvedEdges": 1757,
