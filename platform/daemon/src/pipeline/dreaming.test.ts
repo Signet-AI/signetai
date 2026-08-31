@@ -1821,7 +1821,7 @@ describe("Dreaming", () => {
 		).toBe(0);
 	});
 
-	it("records empty and failed bounded-agent passes honestly", async () => {
+	it("records sequential empty, attributed, and failed passes without dropping a token-worker response (#1766)", async () => {
 		const telemetry = captureTelemetry();
 		setActiveTelemetry(telemetry.collector);
 		const empty = await runDreamingAgentPass(
