@@ -10,7 +10,7 @@
  * retained.
  */
 
-import { classifySyncDbSiteToken, type SyncDbCallSiteToken } from "./sync-db-site-token";
+import { classifySyncDbSiteToken, normalizeSyncDbSiteToken, type SyncDbCallSiteToken } from "./sync-db-site-token";
 
 export type { SyncDbCallSiteToken } from "./sync-db-site-token";
 
@@ -115,6 +115,8 @@ function captureCallerSite(): string {
 			parsed.functionName.endsWith("captureCallerSite") ||
 			parsed.functionName.endsWith("beginSyncDbCall") ||
 			parsed.functionName.endsWith("endSyncDbCall") ||
+			parsed.functionName.endsWith("captureSyncDbCallSiteToken") ||
+			parsed.functionName.endsWith("runWriteTxAsync") ||
 			parsed.functionName.endsWith("withReadDb") ||
 			parsed.functionName.endsWith("withWriteTx") ||
 			parsed.functionName.endsWith("withReadDbAsync") ||
@@ -138,9 +140,11 @@ function resolveSiteToken(siteToken: SyncDbCallSiteToken | undefined): string {
 	if (siteToken === undefined) return UNATTRIBUTED_SITE;
 	const cached = siteTokenCache.get(siteToken);
 	if (cached !== undefined) return cached;
-	const kind = classifySyncDbSiteToken(siteToken);
+	const normalized = normalizeSyncDbSiteToken(siteToken);
+	if (normalized === null) return UNATTRIBUTED_SITE;
+	const kind = classifySyncDbSiteToken(normalized);
 	if (kind === null) return UNATTRIBUTED_SITE;
-	const resolved = kind === "semantic" || siteToken.startsWith("/") ? siteToken : `${SITE_TOKEN_PREFIX}${siteToken}`;
+	const resolved = kind === "semantic" || normalized.startsWith("/") ? normalized : `${SITE_TOKEN_PREFIX}${normalized}`;
 	siteTokenCache.set(siteToken, resolved);
 	return resolved;
 }
@@ -257,9 +261,11 @@ export function endSyncDbCall(token: SyncDbCallToken, endedAtMs = Date.now()): v
 export function captureSyncDbCallSiteToken(): SyncDbCallSiteToken | undefined {
 	const site = captureCallerSite();
 	if (site === UNATTRIBUTED_SITE) return undefined;
-	const prefixIndex = site.lastIndexOf(SITE_TOKEN_PREFIX);
-	const token = prefixIndex >= 0 ? site.slice(prefixIndex + SITE_TOKEN_PREFIX.length) : site;
-	return classifySyncDbSiteToken(token) === null ? undefined : (token as SyncDbCallSiteToken);
+	const normalizedSite = normalizeSyncDbSiteToken(site);
+	if (normalizedSite === null) return undefined;
+	const prefixIndex = normalizedSite.lastIndexOf(SITE_TOKEN_PREFIX);
+	const token = prefixIndex >= 0 ? normalizedSite.slice(prefixIndex + SITE_TOKEN_PREFIX.length) : normalizedSite;
+	return normalizeSyncDbSiteToken(token) ?? undefined;
 }
 
 /** Return site ids whose synchronous interval overlapped the observed stall. */
