@@ -4,7 +4,12 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createProjectionSnapshotArtifact } from "./embedding-projection-snapshot";
-import type { ProjectionPrincipal, ProjectionRequest } from "./embedding-projection-contract";
+import {
+	PROJECTION_MAX_ROWS,
+	PROJECTION_SNAPSHOT_MAX_BYTES,
+	type ProjectionPrincipal,
+	type ProjectionRequest,
+} from "./embedding-projection-contract";
 
 const directories: string[] = [];
 
@@ -80,5 +85,58 @@ test("creates a scoped bounded artifact from one owner-side query boundary", () 
 	expect(wire.rows[0]?.content).toHaveLength(256);
 	expect(wire.rows[0]?.vectorHex).toHaveLength(64 * 8);
 	expect(statSync(descriptor.path).mode & 0o777).toBe(0o600);
+	db.close();
+});
+
+test("applies the row cap and deterministic recency sampling contract", () => {
+	const directory = mkdtempSync(join(tmpdir(), "signet-projection-sampling-test-"));
+	directories.push(directory);
+	const db = new Database(":memory:");
+	db.exec(`
+		CREATE TABLE memories (
+			id TEXT PRIMARY KEY, content TEXT, who TEXT, importance REAL, type TEXT, tags TEXT,
+			pinned INTEGER, source_type TEXT, source_id TEXT, created_at TEXT,
+			agent_id TEXT, project TEXT, is_deleted INTEGER DEFAULT 0, superseded_by TEXT
+		);
+		CREATE TABLE embeddings (source_type TEXT, source_id TEXT, vector BLOB, dimensions INTEGER);
+	`);
+	const vector = vectorBytes(64);
+	const insertMemory = db.query(
+		"INSERT INTO memories VALUES (?, ?, NULL, NULL, NULL, NULL, 0, 'memory', ?, ?, 'agent-a', 'project-a', 0, NULL)",
+	);
+	const insertEmbedding = db.query("INSERT INTO embeddings VALUES ('memory', ?, ?, 64)");
+	for (let index = 0; index <= PROJECTION_MAX_ROWS; index += 1) {
+		const id = `row-${String(index).padStart(4, "0")}`;
+		insertMemory.run(id, id, id, "2026-01-01T00:00:00.000Z");
+		insertEmbedding.run(id, vector);
+	}
+
+	const principal: ProjectionPrincipal = { agentId: "agent-a", project: "project-a" };
+	const first = createProjectionSnapshotArtifact(db, principal, request(), directory);
+	const second = createProjectionSnapshotArtifact(db, principal, request(), directory);
+	const firstRows = (JSON.parse(readFileSync(first.path, "utf8")) as { rows: Array<{ id: string }> }).rows;
+	const secondRows = (JSON.parse(readFileSync(second.path, "utf8")) as { rows: Array<{ id: string }> }).rows;
+
+	expect(first.total).toBe(PROJECTION_MAX_ROWS + 1);
+	expect(first.count).toBe(PROJECTION_MAX_ROWS);
+	expect(first.limit).toBe(PROJECTION_MAX_ROWS);
+	expect(first.hasMore).toBe(true);
+	expect(first.sampled).toBe(true);
+	expect(first.sizeBytes).toBeLessThanOrEqual(PROJECTION_SNAPSHOT_MAX_BYTES);
+	expect(firstRows.map((row) => row.id)).toEqual(secondRows.map((row) => row.id));
+	expect(firstRows[0]?.id).toBe("row-1000");
+	expect(firstRows.at(-1)?.id).toBe("row-0001");
+
+	const tail = createProjectionSnapshotArtifact(
+		db,
+		principal,
+		{ ...request(), offset: PROJECTION_MAX_ROWS },
+		directory,
+	);
+	const tailRows = (JSON.parse(readFileSync(tail.path, "utf8")) as { rows: Array<{ id: string }> }).rows;
+	expect(tail.count).toBe(1);
+	expect(tail.hasMore).toBe(false);
+	expect(tail.sampled).toBe(false);
+	expect(tailRows[0]?.id).toBe("row-0000");
 	db.close();
 });
