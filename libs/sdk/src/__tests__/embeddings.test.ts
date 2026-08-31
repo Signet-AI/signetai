@@ -108,4 +108,16 @@ describe("Embeddings API", () => {
 		expect(req.query.dimensions).toBe("2");
 		expect(projection.status).toBe("ready");
 	});
+
+	test("cancelEmbeddingProjection() accepts the successful cancellation response", async () => {
+		const { client } = mockDaemon((req) => {
+			if (req.path === "/api/embeddings/projection/job-123") return { status: "cancelled", jobId: "job-123" };
+			return { ok: true };
+		});
+
+		const result = await client.cancelEmbeddingProjection("job-123");
+
+		expect(lastRequest()).toMatchObject({ method: "DELETE", path: "/api/embeddings/projection/job-123" });
+		expect(result).toEqual({ status: "cancelled", jobId: "job-123" });
+	});
 });

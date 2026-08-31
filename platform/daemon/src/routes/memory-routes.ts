@@ -8,10 +8,10 @@ import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-i
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
-import type { DbOwnerClient } from "../db-owner-client";
+import { DbOwnerCancelledError, DbOwnerDeadlineError, type DbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS } from "../db-owner-protocol";
 import { dbOwnerQuery, getDbRecallOwner } from "../db-owner-runtime";
-import { ownerReadAll, ownerReadOne } from "../db-owner-sql";
+import { ownerBatchHandle, ownerReadAllHandle, ownerReadOne, ownerReadOneHandle } from "../db-owner-sql";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
 import { normalizeAndHashContent } from "../content-normalization";
 import { type ReadDb, type WriteDb, getDbAccessor, runWriteTxAsync, prepareTypedStatement } from "../db-accessor";
@@ -66,19 +66,15 @@ import {
 	txRecoverMemory,
 	txSupersedeMemory,
 } from "../transactions";
-import {
-	buildProjectionWhere,
-	cacheProjection,
-	parseCachedProjection,
-	type ProjectionFilters,
-} from "../umap-projection";
+import { buildProjectionWhere, parseCachedProjection, type ProjectionFilters } from "../umap-projection";
 import {
 	PROJECTION_DEADLINE_MS,
 	PROJECTION_MAX_ROWS,
 	ProjectionAdmissionError,
 	ProjectionJobManager,
 	ProjectionWorkerCancelledError,
-	runProjectionWorker,
+	ProjectionWorkerTimeoutError,
+	runBoundedProjectionJob,
 } from "../embedding-projection-jobs";
 import {
 	AGENTS_DIR,
@@ -173,31 +169,73 @@ interface ProjectionSnapshot {
 	readonly hasMore: boolean;
 }
 
+interface ProjectionSnapshotControl {
+	readonly remainingMs: () => number;
+	readonly isCancelled: () => boolean;
+	readonly onCancel: (callback: () => void) => void;
+}
+
+function projectionOwnerDeadline(control: ProjectionSnapshotControl, operationMs: number): number {
+	const remainingMs = Math.min(operationMs, control.remainingMs());
+	if (remainingMs <= 0) throw new Error("Embedding projection deadline expired before DB owner work started");
+	return Math.max(1, Math.floor(remainingMs));
+}
+
+async function projectionOwnerResult<Result>(
+	control: ProjectionSnapshotControl,
+	handle: { readonly result: Promise<Result>; readonly cancel: () => void },
+): Promise<Result> {
+	control.onCancel(handle.cancel);
+	try {
+		return await handle.result;
+	} catch (error) {
+		if (error instanceof DbOwnerCancelledError || control.isCancelled()) throw new ProjectionWorkerCancelledError();
+		if (error instanceof DbOwnerDeadlineError || control.remainingMs() <= 0)
+			throw new ProjectionWorkerTimeoutError(PROJECTION_DEADLINE_MS);
+		throw error;
+	}
+}
+
 async function loadProjectionSnapshot(
 	owner: DbOwnerClient,
 	filters: ProjectionFilters | undefined,
 	requestedLimit: number | undefined,
 	offset: number,
+	control: ProjectionSnapshotControl,
 ): Promise<ProjectionSnapshot> {
 	const { clause, params } = buildProjectionWhere(filters);
 	const limit = Math.min(requestedLimit ?? PROJECTION_MAX_ROWS, PROJECTION_MAX_ROWS);
-	const countPromise = ownerReadOne<{ readonly count: number }>(
-		owner,
-		`SELECT COUNT(*) AS count ${PROJECTION_FROM_SQL}${clause}`,
-		params,
-		{ operation: "embedding_projection.count", deadlineMs: 2_000, estimatedWorkUnits: 1 },
+	const countPromise = projectionOwnerResult(
+		control,
+		ownerReadOneHandle<{ readonly count: number }>(
+			owner,
+			`SELECT COUNT(*) AS count ${PROJECTION_FROM_SQL}${clause}`,
+			params,
+			{
+				operation: "embedding_projection.count",
+				deadlineMs: projectionOwnerDeadline(control, 2_000),
+				estimatedWorkUnits: 1,
+			},
+		),
 	);
 	const rows: ProjectionSnapshotRow[] = [];
 	let nextOffset = offset;
 	while (rows.length < limit) {
 		const pageLimit = Math.min(PROJECTION_SNAPSHOT_BATCH, limit - rows.length);
-		const page = await ownerReadAll<ProjectionSnapshotRow>(
-			owner,
-			`SELECT m.id, substr(m.content, 1, 4096) AS content, m.who, m.importance, m.type, m.tags, m.pinned,
-			        m.source_type, m.source_id, m.created_at, hex(e.vector) AS vectorHex, e.dimensions
-			 ${PROJECTION_FROM_SQL}${clause} ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,
-			[...params, pageLimit, nextOffset],
-			{ operation: "embedding_projection.snapshot", deadlineMs: 5_000, estimatedWorkUnits: pageLimit },
+		const page = await projectionOwnerResult(
+			control,
+			ownerReadAllHandle<ProjectionSnapshotRow>(
+				owner,
+				`SELECT m.id, substr(m.content, 1, 4096) AS content, m.who, m.importance, m.type, m.tags, m.pinned,
+				        m.source_type, m.source_id, m.created_at, hex(e.vector) AS vectorHex, e.dimensions
+				 ${PROJECTION_FROM_SQL}${clause} ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,
+				[...params, pageLimit, nextOffset],
+				{
+					operation: "embedding_projection.snapshot",
+					deadlineMs: projectionOwnerDeadline(control, 5_000),
+					estimatedWorkUnits: pageLimit,
+				},
+			),
 		);
 		rows.push(...page);
 		nextOffset += page.length;
@@ -4013,7 +4051,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.delete("/api/embeddings/projection/:jobId", (c) => {
 		const job = projectionJobs.cancel(c.req.param("jobId"));
 		if (job === null) return c.json({ status: "not_found" }, 404);
-		return c.json({ status: "cancelled", jobId: job.jobId, dimensions: job.dimensions }, 409);
+		return c.json({ status: "cancelled", jobId: job.jobId, dimensions: job.dimensions });
 	});
 
 	app.get("/api/embeddings/projection", async (c) => {
@@ -4117,43 +4155,52 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const snapshotLimit = Math.min(limit ?? PROJECTION_MAX_ROWS, PROJECTION_MAX_ROWS);
 		const key = JSON.stringify({ dimensions: nComponents, limit: snapshotLimit, offset, filters });
 		try {
+			let snapshotTotal = 0;
 			const job = projectionJobs.start(
 				key,
 				nComponents,
-				() => {
-					let worker: ReturnType<typeof runProjectionWorker> | null = null;
-					let cancelled = false;
-					const snapshotPromise = loadProjectionSnapshot(owner, filters, snapshotLimit, offset);
-					const result = snapshotPromise.then(async (snapshot) => {
-						if (cancelled) throw new ProjectionWorkerCancelledError();
-						projectionJobs.updateMetadataByKey(key, {
-							total: snapshot.total,
-							count: snapshot.rows.length,
-							limit: snapshot.limit,
-							offset: snapshot.offset,
-							hasMore: snapshot.hasMore,
-							sampled: snapshot.hasMore,
-						});
-						worker = runProjectionWorker(
-							{ dimensions: nComponents, rows: snapshot.rows },
-							{ timeoutMs: PROJECTION_DEADLINE_MS },
-						);
-						const projection = await worker.result;
-						if (useCachedProjection) {
-							await runWriteTxAsync(getDbAccessor(), (db) =>
-								cacheProjection(db, nComponents, projection, snapshot.total),
-							);
-						}
-						return projection;
-					});
-					return {
-						result,
-						cancel: () => {
-							cancelled = true;
-							worker?.cancel();
+				() =>
+					runBoundedProjectionJob(
+						async (control) => {
+							const snapshot = await loadProjectionSnapshot(owner, filters, snapshotLimit, offset, control);
+							snapshotTotal = snapshot.total;
+							projectionJobs.updateMetadataByKey(key, {
+								total: snapshot.total,
+								count: snapshot.rows.length,
+								limit: snapshot.limit,
+								offset: snapshot.offset,
+								hasMore: snapshot.hasMore,
+								sampled: snapshot.hasMore,
+							});
+							return { dimensions: nComponents, rows: snapshot.rows };
 						},
-					};
-				},
+						{
+							deadlineMs: PROJECTION_DEADLINE_MS,
+							publish: async (projection, serializedResult, control) => {
+								if (!useCachedProjection) return;
+								const cacheHandle = ownerBatchHandle(
+									owner,
+									[
+										{ sql: "DELETE FROM umap_cache WHERE dimensions = ?", params: [nComponents] },
+										{
+											sql: "INSERT INTO umap_cache (dimensions, embedding_count, payload, created_at) VALUES (?, ?, ?, ?)",
+											params: [nComponents, snapshotTotal, serializedResult, new Date().toISOString()],
+										},
+									],
+									{
+										operation: "embedding_projection.cache_publish",
+										lane: "write",
+										workloadClass: "foreground",
+										deadlineMs: projectionOwnerDeadline(control, 2_000),
+										estimatedWorkUnits: Math.max(1, Math.ceil(serializedResult.length / 65_536)),
+									},
+								);
+								control.onCancel(cacheHandle.cancel);
+								await cacheHandle.result;
+								void projection;
+							},
+						},
+					),
 				{ limit: snapshotLimit, offset },
 			);
 			return c.json(

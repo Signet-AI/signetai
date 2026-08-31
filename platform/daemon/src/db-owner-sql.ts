@@ -1,6 +1,6 @@
 /** Typed SQL helpers for work that must execute inside the DB owner process. */
 
-import type { DbOwnerClient } from "./db-owner-client";
+import type { DbOwnerClient, DbOwnerJobHandle } from "./db-owner-client";
 import type { DbOwnerParameter, DbOwnerRequest, DbOwnerWorkloadClass } from "./db-owner-protocol";
 
 export interface DbOwnerRunResult {
@@ -27,6 +27,14 @@ function parameter(value: unknown): DbOwnerParameter {
 }
 
 function submit<Result>(client: DbOwnerClient, request: DbOwnerRequest, options: DbOwnerSqlOptions): Promise<Result> {
+	return submitHandle<Result>(client, request, options).result;
+}
+
+function submitHandle<Result>(
+	client: DbOwnerClient,
+	request: DbOwnerRequest,
+	options: DbOwnerSqlOptions,
+): DbOwnerJobHandle<Result> {
 	const handle = client.submit<Result>(request, {
 		operation: options.operation,
 		lane: options.lane ?? "maintenance",
@@ -34,7 +42,20 @@ function submit<Result>(client: DbOwnerClient, request: DbOwnerRequest, options:
 		deadlineMs: options.deadlineMs ?? 30_000,
 		estimatedWorkUnits: options.estimatedWorkUnits,
 	});
-	return handle.result;
+	return handle;
+}
+
+export function ownerReadAllHandle<Row extends object>(
+	client: DbOwnerClient,
+	sql: string,
+	params: readonly unknown[] = [],
+	options: DbOwnerSqlOptions,
+): DbOwnerJobHandle<readonly Row[]> {
+	return submitHandle<readonly Row[]>(
+		client,
+		{ kind: "query", statement: { sql, params: params.map(parameter), result: "all" } },
+		{ ...options, lane: "read" },
+	);
 }
 
 export function ownerReadAll<Row extends object>(
@@ -43,9 +64,18 @@ export function ownerReadAll<Row extends object>(
 	params: readonly unknown[] = [],
 	options: DbOwnerSqlOptions,
 ): Promise<readonly Row[]> {
-	return submit<readonly Row[]>(
+	return ownerReadAllHandle<Row>(client, sql, params, options).result;
+}
+
+export function ownerReadOneHandle<Row extends object>(
+	client: DbOwnerClient,
+	sql: string,
+	params: readonly unknown[] = [],
+	options: DbOwnerSqlOptions,
+): DbOwnerJobHandle<Row | null> {
+	return submitHandle<Row | null>(
 		client,
-		{ kind: "query", statement: { sql, params: params.map(parameter), result: "all" } },
+		{ kind: "query", statement: { sql, params: params.map(parameter), result: "get" } },
 		{ ...options, lane: "read" },
 	);
 }
@@ -56,12 +86,7 @@ export async function ownerReadOne<Row extends object>(
 	params: readonly unknown[] = [],
 	options: DbOwnerSqlOptions,
 ): Promise<Row | null> {
-	const result = await submit<Row | null>(
-		client,
-		{ kind: "query", statement: { sql, params: params.map(parameter), result: "get" } },
-		{ ...options, lane: "read" },
-	);
-	return result;
+	return await ownerReadOneHandle<Row>(client, sql, params, options).result;
 }
 
 export function ownerRun(
@@ -86,6 +111,18 @@ export function ownerBatch(
 	}[],
 	options: DbOwnerSqlOptions & { readonly requireChanges?: boolean },
 ): Promise<readonly DbOwnerRunResult[]> {
+	return ownerBatchHandle(client, statements, options).result;
+}
+
+export function ownerBatchHandle(
+	client: DbOwnerClient,
+	statements: readonly {
+		readonly sql: string;
+		readonly params?: readonly unknown[];
+		readonly requireChanges?: boolean;
+	}[],
+	options: DbOwnerSqlOptions & { readonly requireChanges?: boolean },
+): DbOwnerJobHandle<readonly DbOwnerRunResult[]> {
 	const request: DbOwnerRequest = {
 		kind: "batch",
 		statements: statements.map((statement) => ({
@@ -96,7 +133,7 @@ export function ownerBatch(
 		})),
 		requireChanges: options.requireChanges,
 	};
-	return submit<readonly DbOwnerRunResult[]>(client, request, options);
+	return submitHandle<readonly DbOwnerRunResult[]>(client, request, options);
 }
 
 export function ownerBytesFromHex(value: string): Uint8Array {

@@ -65,13 +65,18 @@ function killChild(child: ChildProcess): void {
 export function runProjectionWorker(
 	input: ProjectionWorkerInput,
 	options: ProjectionWorkerOptions = {},
-): { readonly result: Promise<ProjectionResult>; readonly cancel: () => void } {
+): {
+	readonly result: Promise<ProjectionResult>;
+	readonly serializedResult: Promise<string>;
+	readonly cancel: () => void;
+} {
 	const timeoutMs = options.timeoutMs ?? PROJECTION_DEADLINE_MS;
 	const serialized = JSON.stringify(input);
 	let child: ChildProcess | null = null;
 	let cancelRequested = false;
 	let settled = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let serializedOutput: string | null = null;
 
 	const result = new Promise<ProjectionResult>((resolve, reject) => {
 		child = spawn(options.runtimePath ?? process.execPath, workerArguments(options.workerPath), {
@@ -112,10 +117,12 @@ export function runProjectionWorker(
 					return;
 				}
 				try {
-					const message = JSON.parse(output.trim()) as { type?: unknown; result?: ProjectionResult };
-					if (message.type !== "result" || message.result === undefined)
+					const lines = output.trim().split("\n");
+					const message = JSON.parse(lines.shift() ?? "") as { type?: unknown };
+					serializedOutput = lines.join("\n").trim();
+					if (message.type !== "result" || serializedOutput.length === 0)
 						throw new Error("invalid projection worker result");
-					resolve(message.result);
+					resolve(JSON.parse(serializedOutput) as ProjectionResult);
 				} catch (error) {
 					reject(error);
 				}
@@ -133,10 +140,127 @@ export function runProjectionWorker(
 
 	return {
 		result,
+		serializedResult: result.then(
+			() => {
+				if (serializedOutput === null) throw new Error("projection worker did not publish a serialized result");
+				return serializedOutput;
+			},
+			() => "",
+		),
 		cancel: () => {
 			if (settled || child === null) return;
 			cancelRequested = true;
 			killChild(child);
+		},
+	};
+}
+
+export interface ProjectionJobControl {
+	readonly deadlineAt: number;
+	readonly remainingMs: () => number;
+	readonly isCancelled: () => boolean;
+	readonly onCancel: (callback: () => void) => void;
+}
+
+export interface BoundedProjectionJobOptions {
+	readonly deadlineMs?: number;
+	readonly workerOptions?: Omit<ProjectionWorkerOptions, "timeoutMs">;
+	readonly publish?: (
+		result: ProjectionResult,
+		serializedResult: string,
+		control: ProjectionJobControl,
+	) => Promise<void>;
+}
+
+/** Run snapshot, compute, and optional publication under one killable deadline. */
+export function runBoundedProjectionJob(
+	load: (control: ProjectionJobControl) => Promise<ProjectionWorkerInput>,
+	options: BoundedProjectionJobOptions = {},
+): { readonly result: Promise<ProjectionResult>; readonly cancel: () => void } {
+	const deadlineMs = options.deadlineMs ?? PROJECTION_DEADLINE_MS;
+	const deadlineAt = Date.now() + deadlineMs;
+	let cancelled = false;
+	let settled = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let rejectResult: ((error: unknown) => void) | undefined;
+	let worker: ReturnType<typeof runProjectionWorker> | null = null;
+	const cancellationCallbacks: Array<() => void> = [];
+
+	const control: ProjectionJobControl = {
+		deadlineAt,
+		remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+		isCancelled: () => cancelled,
+		onCancel: (callback) => {
+			if (cancelled) {
+				callback();
+				return;
+			}
+			cancellationCallbacks.push(callback);
+		},
+	};
+	const cancelOutstanding = (): void => {
+		for (const callback of cancellationCallbacks) {
+			try {
+				callback();
+			} catch {
+				// The operation may already have settled at the cancellation boundary.
+			}
+		}
+		worker?.cancel();
+	};
+
+	const result = new Promise<ProjectionResult>((resolve, reject) => {
+		const finishReject = (error: unknown): void => {
+			if (settled) return;
+			settled = true;
+			if (timer !== undefined) clearTimeout(timer);
+			cancelOutstanding();
+			reject(error);
+		};
+		rejectResult = finishReject;
+		timer = setTimeout(() => {
+			cancelled = true;
+			finishReject(new ProjectionWorkerTimeoutError(deadlineMs));
+		}, deadlineMs);
+		void (async () => {
+			try {
+				const input = await load(control);
+				if (cancelled) throw new ProjectionWorkerCancelledError();
+				const remainingMs = control.remainingMs();
+				if (remainingMs <= 0) throw new ProjectionWorkerTimeoutError(deadlineMs);
+				worker = runProjectionWorker(input, { ...options.workerOptions, timeoutMs: remainingMs });
+				const projection = await worker.result;
+				const serializedResult = await worker.serializedResult;
+				if (cancelled) throw new ProjectionWorkerCancelledError();
+				if (options.publish !== undefined) await options.publish(projection, serializedResult, control);
+				if (settled) return;
+				settled = true;
+				if (timer !== undefined) clearTimeout(timer);
+				resolve(projection);
+			} catch (error) {
+				if (error instanceof ProjectionWorkerTimeoutError || error instanceof ProjectionWorkerCancelledError) {
+					finishReject(error);
+					return;
+				}
+				if (cancelled) {
+					finishReject(new ProjectionWorkerCancelledError());
+					return;
+				}
+				if (control.remainingMs() <= 0) {
+					finishReject(new ProjectionWorkerTimeoutError(deadlineMs));
+					return;
+				}
+				finishReject(error);
+			}
+		})();
+	});
+
+	return {
+		result,
+		cancel: () => {
+			if (settled) return;
+			cancelled = true;
+			rejectResult?.(new ProjectionWorkerCancelledError());
 		},
 	};
 }
