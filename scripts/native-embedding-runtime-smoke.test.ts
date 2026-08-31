@@ -310,9 +310,45 @@ describe("compiled native embedding runtime", () => {
 			children.push(held);
 			held.stdin.end(`${JSON.stringify(input)}\n`);
 			await Bun.sleep(50);
+			const heldClosed = new Promise<true>((resolve) => held.once("close", () => resolve(true)));
 			held.kill("SIGKILL");
-			await new Promise<void>((resolve) => held.once("close", () => resolve()));
+			expect(await closesWithin(heldClosed, CHILD_KILL_REAP_MS)).toBe(true);
 			children.splice(children.indexOf(held), 1);
+
+			// Reuse the same packaged binary as a real daemon after the forced
+			// worker termination. A healthy response proves cancellation did not
+			// leave the compiled entrypoint or its process resources wedged.
+			const home = tempDir();
+			const workspace = join(home, ".agents");
+			const hermesHome = join(home, ".hermes");
+			mkdirSync(workspace, { recursive: true });
+			mkdirSync(hermesHome, { recursive: true });
+			writeFileSync(
+				join(workspace, "agent.yaml"),
+				"version: 1\nschema: signet/v1\nagent:\n  name: Native Projection Smoke\nharnesses:\n  - hermes-agent\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: none\n",
+			);
+			const port = await freePort();
+			const origin = `http://127.0.0.1:${port}`;
+			const daemon = spawn(binary, [], {
+				env: {
+					...process.env,
+					HOME: home,
+					HERMES_HOME: hermesHome,
+					SIGNET_DAEMON_ENTRYPOINT: "1",
+					SIGNET_PATH: workspace,
+					SIGNET_PORT: String(port),
+					SIGNET_BIND: "127.0.0.1",
+					SIGNET_SKIP_AGENT_REGISTER: "1",
+				},
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			daemon.stdin.end();
+			children.push(daemon);
+			daemon.stdout.resume();
+			daemon.stderr.resume();
+			await waitForHealth(origin, daemon);
+			const health = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(5_000) });
+			expect(health.ok).toBe(true);
 		},
 		60_000,
 	);
