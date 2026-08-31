@@ -400,34 +400,17 @@ if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PR
 	const { runMcpStdio } = await import("../platform/daemon/src/mcp-stdio-runtime");
 	await runMcpStdio();
 } else if (process.env.SIGNET_DREAMING_TOKEN_WORKER_SMOKE) {
-	const { Worker } = await import("node:worker_threads");
-	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/native-runtime-assets");
-	const { tokenizerWasmPath } = await import("../platform/daemon/src/pipeline/tokenizer");
-	const workerPath = resolveEmbeddedWorkerPath("dreaming-token-worker");
-	if (workerPath === null) throw new Error("Dreaming token smoke requires the embedded worker asset");
-	const worker = new Worker(workerPath, { workerData: { tokenizerWasmPath } });
+	const { DreamingBacklogTokenCache } = await import("../platform/daemon/src/pipeline/dreaming-token-cache");
+	const cache = new DreamingBacklogTokenCache();
 	try {
-		const count = await new Promise<number>((resolve, reject) => {
-			const timeout = setTimeout(() => reject(new Error("Dreaming token smoke timed out")), 10_000);
-			worker.once("error", reject);
-			worker.once("message", (message: unknown) => {
-				clearTimeout(timeout);
-				if (typeof message !== "object" || message === null || !("counts" in message)) {
-					reject(new Error("Dreaming token smoke returned an invalid response"));
-					return;
-				}
-				const counts = message.counts;
-				if (!Array.isArray(counts) || typeof counts[0]?.count !== "number") {
-					reject(new Error("Dreaming token smoke returned an invalid count"));
-					return;
-				}
-				resolve(counts[0].count);
-			});
-			worker.postMessage({ type: "count", requestId: 1, entries: [{ key: "smoke", text: "x".repeat(5_000) }] });
-		});
-		process.stdout.write(JSON.stringify({ type: "dreaming-token-count", count }) + "\\n");
+		const first = await cache.refresh("native-smoke", [{ key: "large", text: "x".repeat(5_000) }]);
+		const second = await cache.refresh("native-smoke", [
+			{ key: "large", text: "x".repeat(5_000) },
+			{ key: "later", text: "ok" },
+		]);
+		process.stdout.write(JSON.stringify({ type: "dreaming-token-count", first, second }) + "\\n");
 	} finally {
-		await worker.terminate();
+		cache.stop();
 	}
 } else if (process.env.SIGNET_DB_OWNER_WORKER) {
 	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");

@@ -254,7 +254,7 @@ describe("compiled native embedding runtime", () => {
 	const dbOwnerSmoke = dbOwnerSmokeEnabled ? test : test.skip;
 
 	dreamingTokenSmoke(
-		"loads the embedded tokenizer WASM inside the Dreaming token worker",
+		"loads the embedded tokenizer WASM across sequential Dreaming cache workers",
 		() => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
@@ -271,7 +271,7 @@ describe("compiled native embedding runtime", () => {
 			});
 			if (result.error) throw result.error;
 			expect(result.status).toBe(0);
-			expect(JSON.parse(result.stdout)).toEqual({ type: "dreaming-token-count", count: 625 });
+			expect(JSON.parse(result.stdout)).toEqual({ type: "dreaming-token-count", first: 625, second: 626 });
 		},
 		30_000,
 	);
