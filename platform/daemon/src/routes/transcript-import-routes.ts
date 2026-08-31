@@ -10,6 +10,7 @@ import type { StagedTranscriptFile } from "../transcript-import-staging";
 
 const MAX_FILE_BYTES = 512 * 1024 * 1024;
 const now = (): string => new Date().toISOString();
+const uploadInFlight = new Map<string, Promise<void>>();
 function agent(c: Context): string | null {
 	const resolved = resolveDaemonAgentId();
 	const requested = c.req.query("agentId") ?? c.req.query("agent_id");
@@ -52,15 +53,32 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 		if (input.schemaId !== undefined && input.schemaId !== "signet-export")
 			return c.json({ error: "unsupported schema" }, 400);
 		const jobId = randomUUID();
+		const requestedFiles = (input.files ?? []).map((file) => ({
+			id: randomUUID(),
+			name: file.name?.trim() || "source.jsonl",
+		}));
 		const statements = [
 			{
 				sql: "INSERT INTO source_import_jobs (id,kind,agent_id,schema_id,adapter_version,state,generation,created_at,updated_at) VALUES (?,?,?,?,1,'staging',0,?,?)",
 				params: [jobId, "import", agentId, "signet-export", now(), now()],
 				result: "run" as const,
 			},
+			...requestedFiles.map((file, ordinal) => ({
+				sql: "INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,state) VALUES (?,?,?,?,?,?,?,'staging')",
+				params: [
+					file.id,
+					jobId,
+					`reserved:${jobId}:${file.id}`,
+					agentId,
+					ordinal,
+					file.name,
+					`imports/transcripts/${jobId}/${file.id}/source.jsonl`,
+				],
+				result: "run" as const,
+			})),
 		];
 		await dbOwnerTransaction(statements, { operation: "sources.import.create", lane: "write" });
-		return c.json({ id: jobId, jobId, agentId, state: "staging", files: input.files ?? [] }, 201);
+		return c.json({ id: jobId, jobId, agentId, state: "staging", files: requestedFiles }, 201);
 	});
 	app.get("/api/sources/imports", async (c) => {
 		const agentId = agent(c);
@@ -116,68 +134,91 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 			{ operation: "sources.import.upload.scope", lane: "read" },
 		);
 		if (job == null) return c.json({ error: "import not found or not staging" }, 404);
-		const ordinalRow = await dbOwnerQuery<{ ordinal: number | null }>(
+		const file = await dbOwnerQuery<{ id: string; name: string; ordinal: number; state: string }>(
 			{
-				sql: "SELECT MAX(ordinal) AS ordinal FROM source_import_files WHERE job_id = ? AND agent_id = ?",
-				params: [jobId, agentId],
+				sql: "SELECT id,name,ordinal,state FROM source_import_files WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging'",
+				params: [fileId, jobId, agentId],
 				result: "get",
 				readonly: true,
 			},
-			{ operation: "sources.import.upload.ordinal", lane: "read" },
+			{ operation: "sources.import.upload.file", lane: "read" },
 		);
-		const ordinal = (ordinalRow?.ordinal ?? -1) + 1;
-		const sourceId = `import:${jobId}:${fileId}`;
-		let staged: StagedTranscriptFile;
+		if (file == null) return c.json({ error: "file not found or already uploaded" }, 404);
+		const previous = uploadInFlight.get(fileId) ?? Promise.resolve();
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		uploadInFlight.set(fileId, gate);
+		await previous;
 		try {
-			staged = await stageTranscriptStream(
-				process.env.SIGNET_PATH ?? `${process.env.HOME}/.agents`,
-				`${sourceId.replaceAll(":", "-")}-${jobId}-${fileId}`,
-				bodyStream(c.req.raw),
+			const stillStaging = await dbOwnerQuery<{ id: string }>(
+				{
+					sql: "SELECT id FROM source_import_files WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging'",
+					params: [fileId, jobId, agentId],
+					result: "get",
+					readonly: true,
+				},
+				{ operation: "sources.import.upload.claim", lane: "read" },
 			);
-		} catch (error) {
-			return c.json({ error: error instanceof Error ? error.message : "upload failed" }, 413);
+			if (stillStaging == null) return c.json({ error: "file not found or already uploaded" }, 409);
+			const sourceId = `import:${jobId}:${fileId}`;
+			let staged: StagedTranscriptFile;
+			try {
+				staged = await stageTranscriptStream(
+					process.env.SIGNET_PATH ?? `${process.env.HOME}/.agents`,
+					`${sourceId.replaceAll(":", "-")}-${jobId}-${fileId}`,
+					bodyStream(c.req.raw),
+				);
+			} catch (error) {
+				return c.json({ error: error instanceof Error ? error.message : "upload failed" }, 413);
+			}
+			const added = addImportedSource(
+				{ fileName: "source.jsonl", contentHash: staged.contentHash, format: "jsonl", agentId },
+				process.env.SIGNET_PATH,
+			);
+			if (!added.ok) return c.json({ error: added.error }, 400);
+			await dbOwnerTransaction(
+				[
+					{
+						sql: "UPDATE source_import_files SET source_id = ?, name = ?, managed_path = ?, size_bytes = ?, content_hash = ?, state = 'ready', updated_at = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging'",
+						params: [
+							added.source.id,
+							c.req.header("x-file-name") ?? file.name,
+							staged.managedPath,
+							staged.sizeBytes,
+							staged.contentHash,
+							now(),
+							fileId,
+							jobId,
+							agentId,
+						],
+						result: "run" as const,
+						requireChanges: true,
+					},
+					{
+						sql: "UPDATE source_import_jobs SET updated_at = ? WHERE id = ? AND agent_id = ?",
+						params: [now(), jobId, agentId],
+						result: "run" as const,
+						requireChanges: true,
+					},
+				],
+				{ operation: "sources.import.upload", lane: "write" },
+			);
+			return c.json(
+				{
+					fileId,
+					sourceId: added.source.id,
+					managedPath: staged.managedPath,
+					sizeBytes: staged.sizeBytes,
+					contentHash: staged.contentHash,
+				},
+				201,
+			);
+		} finally {
+			release();
+			if (uploadInFlight.get(fileId) === gate) uploadInFlight.delete(fileId);
 		}
-		const added = addImportedSource(
-			{ fileName: "source.jsonl", contentHash: staged.contentHash, format: "jsonl", agentId },
-			process.env.SIGNET_PATH,
-		);
-		if (!added.ok) return c.json({ error: added.error }, 400);
-		await dbOwnerTransaction(
-			[
-				{
-					sql: "INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,size_bytes,content_hash,state) VALUES (?,?,?,?,?,?,?,?,?,'ready')",
-					params: [
-						fileId,
-						jobId,
-						added.source.id,
-						agentId,
-						ordinal,
-						c.req.header("x-file-name") ?? "source.jsonl",
-						staged.managedPath,
-						staged.sizeBytes,
-						staged.contentHash,
-					],
-					result: "run" as const,
-				},
-				{
-					sql: "UPDATE source_import_jobs SET updated_at = ? WHERE id = ? AND agent_id = ?",
-					params: [now(), jobId, agentId],
-					result: "run" as const,
-					requireChanges: true,
-				},
-			],
-			{ operation: "sources.import.upload", lane: "write" },
-		);
-		return c.json(
-			{
-				fileId,
-				sourceId: added.source.id,
-				managedPath: staged.managedPath,
-				sizeBytes: staged.sizeBytes,
-				contentHash: staged.contentHash,
-			},
-			201,
-		);
 	});
 	for (const control of ["start", "pause", "resume", "retry", "cancel"] as const) {
 		app.post(`/api/sources/imports/:jobId/${control}`, async (c) => {
@@ -188,10 +229,30 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 			const result = await dbOwnerTransaction(
 				[
 					{
-						sql: "UPDATE source_import_jobs SET state = CASE WHEN ? = 'queued' THEN 'queued' ELSE state END, control_request = CASE WHEN ? = 'queued' THEN NULL ELSE ? END, generation = CASE WHEN ? = 'retry' THEN generation + 1 ELSE generation END, updated_at = ? WHERE id = ? AND agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled')",
-						params: [transition, transition, transition, transition, now(), jobId, agentId],
+						sql: "UPDATE source_import_jobs SET state = CASE WHEN ? = 'queued' THEN 'queued' ELSE state END, control_request = CASE WHEN ? = 'queued' THEN NULL WHEN ? = 'retry' THEN NULL ELSE ? END, generation = CASE WHEN ? = 'retry' THEN generation + 1 ELSE generation END, lease_token = CASE WHEN ? = 'retry' THEN NULL ELSE lease_token END, lease_expires_at = CASE WHEN ? = 'retry' THEN NULL ELSE lease_expires_at END, updated_at = ? WHERE id = ? AND agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled')",
+						params: [
+							transition,
+							transition,
+							transition,
+							transition,
+							transition,
+							transition,
+							transition,
+							now(),
+							jobId,
+							agentId,
+						],
 						result: "run" as const,
 					},
+					...(control === "retry"
+						? [
+								{
+									sql: "UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
+									params: [jobId, agentId],
+									result: "run" as const,
+								},
+							]
+						: []),
 				],
 				{ operation: `sources.import.${control}`, lane: "write" },
 			);

@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, open, mkdir, rm, writeFile, readdir, rename } from "node:fs/promises";
+import { open, mkdir, rm, writeFile, readdir, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { TRANSCRIPT_IMPORT_LIMITS, signetExportV1Adapter } from "./transcript-import-adapter";
 import { buildCompletedTranscriptCommit, canonicalTranscriptLine } from "./transcript-import-commit";
 import { inventoryTranscriptFile, type InventoryRecord } from "./transcript-import-inventory";
-import type { ImportJobState, ImportStore } from "./transcript-import-store";
+import type { ImportJobState, ImportStore, ImportStoreOperation } from "./transcript-import-store";
 import { controlImport, reconcileImport } from "./transcript-import-store";
 
 export interface TranscriptImportWorkerHandle {
@@ -21,7 +21,13 @@ export interface TranscriptImportWorkerOptions {
 	readonly onBatch?: (jobId: string, sourceId: string) => Promise<void>;
 	readonly pollMs?: number;
 }
-type Job = { id: string; state: ImportJobState; generation?: number; control_request?: string | null };
+type Job = {
+	id: string;
+	state: ImportJobState;
+	generation?: number;
+	control_request?: string | null;
+	lease_token?: string | null;
+};
 type File = {
 	id: string;
 	job_id: string;
@@ -94,14 +100,43 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 		}
 	};
 	const processJob = async (job: Job): Promise<void> => {
-		const leased = await options.store.run<Job | null>({
+		const leaseToken = randomUUID();
+		const leased = await options.store.run<(Job & { lease_token: string }) | null>({
 			kind: "source_import",
 			operation: "lease",
 			agentId: options.agentId,
 			jobId: job.id,
-			payload: { token: randomUUID(), generation: job.generation ?? 0 },
+			payload: { token: leaseToken, generation: job.generation ?? 0 },
 		});
 		if (!leased) return;
+		const guard = async (): Promise<void> => {
+			const rows = await options.store.run<Job[]>({
+				kind: "source_import",
+				operation: "list",
+				agentId: options.agentId,
+				jobId: job.id,
+				payload: { view: "status" },
+			});
+			const current = rows[0];
+			if (!current) return;
+			if (current.generation !== leased.generation || current.lease_token !== leaseToken)
+				throw new Error("stale import lease");
+			if (current.control_request === "pause" || current.control_request === "cancel") {
+				await options.store.run({
+					kind: "source_import",
+					operation: "control",
+					agentId: options.agentId,
+					jobId: job.id,
+					payload: { apply: true, generation: leased.generation, leaseToken },
+				});
+				throw new Error(`import ${current.control_request}d at checkpoint`);
+			}
+		};
+		const guarded = async <T>(operation: ImportStoreOperation): Promise<T> => {
+			await guard();
+			return options.store.run<T>(operation);
+		};
+		await guard();
 		const files = await options.store.run<File[]>({
 			kind: "source_import",
 			operation: "list",
@@ -119,36 +154,50 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					{ byteOffset: file.checkpoint_byte_offset, ordinal: file.checkpoint_ordinal },
 					TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch,
 					async (records, checkpoint) => {
-						await options.store.run({
+						await guarded<void>({
 							kind: "source_import",
 							operation: "record_batch",
 							agentId: options.agentId,
 							jobId: job.id,
-							payload: { fileId: file.id, sourceId: file.source_id, records, checkpoint },
+							payload: {
+								fileId: file.id,
+								sourceId: file.source_id,
+								records,
+								checkpoint,
+								generation: leased.generation,
+								leaseToken,
+							},
 						});
 						await maybeCrashDuringInventory(root);
 					},
 				);
-				await options.store.run({
+				await guarded<void>({
 					kind: "source_import",
 					operation: "file_complete",
 					agentId: options.agentId,
 					jobId: job.id,
-					payload: { fileId: file.id },
+					payload: { fileId: file.id, generation: leased.generation, leaseToken },
 				});
 			}
-			if (await commitPending(job.id, file, path)) committedSources.add(file.source_id);
+			if (await commitPending(job.id, file, path, guarded, { generation: leased.generation ?? 0, leaseToken }))
+				committedSources.add(file.source_id);
 		}
-		await options.store.run({
+		await guarded<void>({
 			kind: "source_import",
 			operation: "finalize",
 			agentId: options.agentId,
 			jobId: job.id,
-			payload: {},
+			payload: { generation: leased.generation, leaseToken },
 		});
 		for (const sourceId of committedSources) await options.onBatch?.(job.id, sourceId);
 	};
-	const commitPending = async (jobId: string, file: File, path: string): Promise<boolean> => {
+	const commitPending = async (
+		jobId: string,
+		file: File,
+		path: string,
+		guarded: <T>(operation: ImportStoreOperation) => Promise<T>,
+		lease: { generation: number; leaseToken: string },
+	): Promise<boolean> => {
 		let committed = false;
 		for (;;) {
 			const rows = await options.store.run<Row[]>({
@@ -208,12 +257,12 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 				}
 				for (const [harness, batch] of byHarness) {
 					await appendCanonical(root, options.agentId, harness, batch);
-					await options.store.run({
+					await guarded<void>({
 						kind: "source_import",
 						operation: "commit",
 						agentId: options.agentId,
 						jobId,
-						payload: { commits: batch },
+						payload: { commits: batch, generation: lease.generation, leaseToken: lease.leaseToken },
 					});
 					committed = true;
 				}
@@ -267,7 +316,6 @@ export async function appendCanonical(
 				// A process killed after mkdir or while holding the lock leaves a
 				// stale directory. Only this worker writes these per-harness locks.
 				await rm(lock, { recursive: true, force: true });
-				continue;
 			}
 		}
 	}
@@ -369,7 +417,16 @@ function hash(value: string): string {
 }
 
 /** Remove staged source data and rewrite each canonical harness stream once. */
-export async function purgeTranscriptImportFilesystem(root: string, sourceId: string, agentId?: string): Promise<void> {
+export async function purgeTranscriptImportFilesystem(
+	root: string,
+	sourceId: string,
+	agentId?: string,
+	managedPaths: readonly string[] = [],
+): Promise<void> {
+	const safePaths = managedPaths.filter(
+		(path) => path.startsWith("imports/transcripts/") && !path.includes("..") && !path.startsWith("/"),
+	);
+	for (const managedPath of safePaths) await rm(join(root, managedPath), { force: true });
 	await rm(join(root, "imports", "transcripts", sourceId), { recursive: true, force: true });
 	const dir = join(root, "transcripts");
 	let names: string[] = [];

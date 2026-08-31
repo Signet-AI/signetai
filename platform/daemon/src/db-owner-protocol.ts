@@ -217,6 +217,9 @@ import type { CompletedTranscriptCommit } from "./transcript-import-commit";
 
 export interface DbOwnerTranscriptBulkCommit {
 	readonly agentId: string;
+	readonly jobId: string;
+	readonly generation: number;
+	readonly leaseToken: string;
 	readonly sourceId: string;
 	readonly harness: string;
 	readonly commits: readonly CompletedTranscriptCommit[];

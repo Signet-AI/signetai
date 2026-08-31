@@ -52,15 +52,19 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 							? "SELECT * FROM source_import_files WHERE job_id = ? AND agent_id = ? ORDER BY ordinal"
 							: p.view === "pending"
 								? "SELECT id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_offset AS byteOffset,byte_length AS byteLength,raw_hash AS rawHash,status,rejection_code AS rejectionCode FROM source_import_records WHERE job_id = ? AND agent_id = ? AND file_id = ? AND status = 'pending' ORDER BY ordinal LIMIT ?"
-								: p.view === "recovery"
-									? "SELECT * FROM source_import_jobs WHERE agent_id = ? AND state IN ('running','inventorying') ORDER BY created_at ASC LIMIT ?"
-									: "SELECT * FROM source_import_jobs WHERE agent_id = ? AND state IN ('queued','running','inventorying') ORDER BY created_at ASC LIMIT ?",
+								: p.view === "status"
+									? "SELECT * FROM source_import_jobs WHERE id = ? AND agent_id = ?"
+									: p.view === "recovery"
+										? "SELECT * FROM source_import_jobs WHERE agent_id = ? AND state IN ('running','inventorying') ORDER BY created_at ASC LIMIT ?"
+										: "SELECT * FROM source_import_jobs WHERE agent_id = ? AND state IN ('queued','running','inventorying') ORDER BY created_at ASC LIMIT ?",
 					params:
 						p.view === "files"
 							? [operation.jobId, operation.agentId]
 							: p.view === "pending"
 								? [operation.jobId, operation.agentId, p.fileId as string, Number(p.limit ?? 25)]
-								: [operation.agentId, Number(p.limit ?? 100)],
+								: p.view === "status"
+									? [operation.jobId, operation.agentId]
+									: [operation.agentId, Number(p.limit ?? 100)],
 					result: "all",
 					readonly: true,
 				},
@@ -79,8 +83,8 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 		if (operation.operation === "lease")
 			return (await dbOwnerQuery(
 				{
-					sql: "UPDATE source_import_jobs SET state = 'running', lease_token = ?, lease_expires_at = datetime('now','+5 minutes'), started_at = COALESCE(started_at, datetime('now')), updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state = 'queued' RETURNING *",
-					params: [p.token as string, operation.jobId, operation.agentId],
+					sql: "UPDATE source_import_jobs SET state = 'running', lease_token = ?, lease_expires_at = datetime('now','+5 minutes'), started_at = COALESCE(started_at, datetime('now')), updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state = 'queued' AND generation = ? AND control_request IS NULL RETURNING *",
+					params: [p.token as string, operation.jobId, operation.agentId, p.generation as number],
 					result: "get",
 					readonly: false,
 				},
@@ -88,24 +92,32 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 			)) as Result;
 		if (operation.operation === "record_batch") {
 			const records = p.records as InventoryRecord[];
-			const statements = records.map((r) => ({
-				sql: "INSERT OR IGNORE INTO source_import_records (id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_offset,byte_length,raw_hash,status,rejection_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-				params: [
-					`${operation.jobId}:${p.fileId}:${r.ordinal}`,
-					operation.jobId,
-					p.fileId as string,
-					p.sourceId as string,
-					operation.agentId,
-					r.ordinal,
-					r.lineNumber,
-					r.byteOffset,
-					r.byteLength,
-					r.rawHash,
-					r.status,
-					r.rejectionCode ?? null,
-				],
-				result: "run" as const,
-			}));
+			const statements = [
+				{
+					sql: "UPDATE source_import_jobs SET updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying')",
+					params: [operation.jobId, operation.agentId, p.generation as number, p.leaseToken as string],
+					result: "run" as const,
+					requireChanges: true,
+				},
+				...records.map((r) => ({
+					sql: "INSERT OR IGNORE INTO source_import_records (id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_offset,byte_length,raw_hash,status,rejection_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+					params: [
+						`${operation.jobId}:${p.fileId}:${r.ordinal}`,
+						operation.jobId,
+						p.fileId as string,
+						p.sourceId as string,
+						operation.agentId,
+						r.ordinal,
+						r.lineNumber,
+						r.byteOffset,
+						r.byteLength,
+						r.rawHash,
+						r.status,
+						r.rejectionCode ?? null,
+					],
+					result: "run" as const,
+				})),
+			];
 			statements.push({
 				sql: "UPDATE source_import_files SET checkpoint_byte_offset = MAX(checkpoint_byte_offset, ?), checkpoint_ordinal = MAX(checkpoint_ordinal, ?), record_count = (SELECT COUNT(*) FROM source_import_records WHERE file_id = ? AND agent_id = ?), malformed_count = (SELECT COUNT(*) FROM source_import_records WHERE file_id = ? AND agent_id = ? AND status = 'rejected'), state = 'inventorying', updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ? AND checkpoint_ordinal <= ? AND checkpoint_byte_offset <= ?",
 				params: [
@@ -137,8 +149,16 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 			return (await dbOwnerTransaction(
 				[
 					{
-						sql: "UPDATE source_import_files SET state = 'completed', updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ?",
-						params: [p.fileId as string, operation.jobId, operation.agentId],
+						sql: "UPDATE source_import_files SET state = 'completed', updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ? AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ?)",
+						params: [
+							p.fileId as string,
+							operation.jobId,
+							operation.agentId,
+							operation.jobId,
+							operation.agentId,
+							p.generation as number,
+							p.leaseToken as string,
+						],
 						result: "run",
 					},
 				],
@@ -165,6 +185,9 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 			const results = await dbOwnerTranscriptBulkCommit(
 				{
 					agentId: operation.agentId,
+					jobId: operation.jobId,
+					generation: p.generation as number,
+					leaseToken: p.leaseToken as string,
 					sourceId: commits[0]?.sourceId ?? "",
 					harness: commits[0]?.harness ?? "",
 					commits,
@@ -175,7 +198,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 				await dbOwnerTransaction(
 					[
 						{
-							sql: "UPDATE source_import_records SET status = ?, canonical_id = ?, canonical_key = ?, external_identity = ?, conversation_fingerprint = ?, updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ?",
+							sql: "UPDATE source_import_records SET status = ?, canonical_id = ?, canonical_key = ?, external_identity = ?, conversation_fingerprint = ?, updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ? AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ?)",
 							params: [
 								(results[i] as { outcome: string }).outcome === "conversation_identity_conflict"
 									? "rejected"
@@ -187,6 +210,10 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 								commits[i]?.sourceRecordId ?? "",
 								operation.jobId,
 								operation.agentId,
+								operation.jobId,
+								operation.agentId,
+								p.generation as number,
+								p.leaseToken as string,
 							],
 							result: "run",
 						},
@@ -212,7 +239,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 			return (await dbOwnerTransaction(
 				[
 					{
-						sql: "UPDATE source_import_jobs SET state = CASE WHEN (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected') > 0 THEN 'completed_with_rejections' ELSE 'completed' END, imported = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'imported'), duplicate = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'duplicate'), rejected = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected'), pending = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'pending'), lease_token = NULL, lease_expires_at = NULL, completed_at = datetime('now'), reconciled_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND agent_id = ?",
+						sql: "UPDATE source_import_jobs SET state = CASE WHEN (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected') > 0 THEN 'completed_with_rejections' ELSE 'completed' END, imported = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'imported'), duplicate = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'duplicate'), rejected = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected'), pending = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'pending'), lease_token = NULL, lease_expires_at = NULL, completed_at = datetime('now'), reconciled_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ?",
 						params: [
 							operation.jobId,
 							operation.agentId,
@@ -226,8 +253,11 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 							operation.agentId,
 							operation.jobId,
 							operation.agentId,
+							p.generation as number,
+							p.leaseToken as string,
 						],
 						result: "run",
+						requireChanges: true,
 					},
 				],
 				{ operation: "sources.import.store.finalize", lane: "write" },
@@ -247,11 +277,25 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 			return (await dbOwnerTransaction(
 				[
 					{
-						sql: "UPDATE source_import_jobs SET control_request = ?, updated_at = datetime('now') WHERE id = ? AND agent_id = ?",
-						params: [p.control as string, operation.jobId, operation.agentId],
+						sql:
+							p.apply === true
+								? "UPDATE source_import_jobs SET state = CASE WHEN control_request = 'pause' THEN 'paused' WHEN control_request = 'cancel' THEN 'cancelled' ELSE state END, lease_token = CASE WHEN control_request IN ('pause','cancel') THEN NULL ELSE lease_token END, control_request = CASE WHEN control_request IN ('pause','cancel') THEN NULL ELSE control_request END, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ?"
+								: "UPDATE source_import_jobs SET control_request = ?, updated_at = datetime('now') WHERE id = ? AND agent_id = ?",
+						params:
+							p.apply === true
+								? [operation.jobId, operation.agentId, p.generation as number, p.leaseToken as string]
+								: [p.control as string, operation.jobId, operation.agentId],
 						result: "run",
-						requireChanges: true,
 					},
+					...(p.apply === true
+						? [
+								{
+									sql: "UPDATE source_import_records SET status = 'cancelled', rejection_code = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'pending'",
+									params: [operation.jobId, operation.agentId],
+									result: "run" as const,
+								},
+							]
+						: []),
 				],
 				{ operation: "sources.import.store.control", lane: "write" },
 			)) as Result;
