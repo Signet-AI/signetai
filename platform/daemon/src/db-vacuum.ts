@@ -330,14 +330,14 @@ export function getVacuumConversionStatus(accessor: DbAccessor): VacuumConversio
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: import("./db-accessor").ReadDb) => readStatusFromDb(toPragmaReadDb(db)),
-		"db-vacuum.ts:331",
+		"db:vacuum.conversion-status.sync-read",
 	);
 }
 
 /** Async durable conversion-state lookup for background workers. */
 export async function getVacuumConversionStatusAsync(accessor: DbAccessor): Promise<VacuumConversionStatus> {
 	return await accessor.withReadDbAsync((db) => readStatusFromDb(toPragmaReadDb(db)), {
-		siteToken: "db-vacuum.ts:339",
+		siteToken: "db:vacuum.conversion-status.read",
 		operation: "maintenance.vacuum.status",
 	});
 }
@@ -358,7 +358,7 @@ export async function markVacuumConversionRunning(accessor: DbAccessor): Promise
 				lastError: null,
 			});
 		},
-		{ siteToken: "db-vacuum.ts:347", operation: "maintenance.vacuum.mark-running" },
+		{ siteToken: "db:vacuum.conversion-state.mark-running", operation: "maintenance.vacuum.mark-running" },
 	);
 }
 
@@ -377,7 +377,7 @@ export async function markVacuumConversionCompleted(accessor: DbAccessor): Promi
 				lastError: null,
 			});
 		},
-		{ siteToken: "db-vacuum.ts:367", operation: "maintenance.vacuum.mark-completed" },
+		{ siteToken: "db:vacuum.conversion-state.mark-completed", operation: "maintenance.vacuum.mark-completed" },
 	);
 }
 
@@ -396,7 +396,7 @@ export async function markVacuumConversionFailed(accessor: DbAccessor, message: 
 				lastError: message.slice(0, 500),
 			});
 		},
-		{ siteToken: "db-vacuum.ts:386", operation: "maintenance.vacuum.mark-failed" },
+		{ siteToken: "db:vacuum.conversion-state.mark-failed", operation: "maintenance.vacuum.mark-failed" },
 	);
 }
 

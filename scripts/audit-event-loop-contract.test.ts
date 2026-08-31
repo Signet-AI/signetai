@@ -24,10 +24,10 @@ test("the deterministic ledger retains the exact current source inventory", () =
 	expect(baseline.filter((site) => site.api === "withReadDbAsync")).toHaveLength(166);
 });
 
-test("the event-loop ledger exactly equals the current source inventory", () => {
+test("the event-loop ledger exactly matches the current source identities", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const result = runAudit({ sourceRoot: resolve("platform/daemon/src"), baselineSites: baseline });
-	expect(result.sites).toEqual(baseline);
+	expect(occurrenceKeys(result.sites)).toEqual(occurrenceKeys(baseline));
 });
 
 test("classifies database callbacks by execution home rather than async API spelling", () => {
@@ -152,6 +152,38 @@ test("a tokenless async-named DB call fails the attribution coverage rule", () =
 		expect(violation?.path).toBe("missing-token.ts");
 		expect(violation?.api).toBe("withReadDbAsync");
 		expect(violation?.message).toContain('"missing-token.ts:1"');
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("stable semantic DB tokens survive line movement and remain globally unique", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-semantic-site-token-"));
+	try {
+		writeFileSync(
+			join(root, "semantic.ts"),
+			['getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:vacuum.status.read" });', "", ""].join("\n"),
+		);
+		let result = runAudit({ sourceRoot: root });
+		expect(result.violations.filter((item) => item.kind === "missing-async-db-site-token")).toEqual([]);
+		const baseline = result.sites;
+		const originalKeys = occurrenceKeys(result.sites);
+		writeFileSync(
+			join(root, "semantic.ts"),
+			'\n\ngetDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:vacuum.status.read" });\n',
+		);
+		result = runAudit({ sourceRoot: root, baselineSites: baseline });
+		expect(occurrenceKeys(result.sites)).toEqual(originalKeys);
+		expect(result.violations.filter((item) => item.kind === "new-parent-execution-site")).toEqual([]);
+
+		writeFileSync(
+			join(root, "duplicate.ts"),
+			'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:vacuum.status.read" });\n',
+		);
+		result = runAudit({ sourceRoot: root });
+		const duplicate = result.violations.find((item) => item.kind === "duplicate-db-site-token");
+		expect(duplicate?.message).toContain("semantic.ts:3");
+		expect(duplicate?.message).toContain("duplicate.ts:1");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -364,6 +396,8 @@ test("the generated report describes the type boundary and transitional counts",
 	expect(report).toContain("Database accessor sites classified: 383");
 	expect(report).toContain("ON-PARENT callback execution: 381");
 	expect(report).toContain("OFF-PARENT callback execution: 2");
+	expect(report).toContain("durable identity; file and line remain diagnostic metadata");
+	expect(report).toContain("`db:vacuum.conversion-status.read` (withReadDbAsync)");
 	expect(report).toMatch(/`db-owner-worker\.ts:\d+` \(withReadDbAsync\)/);
 	expect(report).not.toMatch(/`daemon\.ts:\d+` \(withReadDbAsync\)/);
 	expect(report).toContain("type boundary");

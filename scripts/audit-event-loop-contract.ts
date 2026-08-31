@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import ts from "typescript";
+import { isSemanticSyncDbSiteToken } from "../platform/daemon/src/sync-db-site-token";
 
 /** The synchronous APIs recorded in the migration ledger. */
 export const SYNC_APIS = [
@@ -54,6 +55,8 @@ export interface AuditSite {
 	readonly api: SyncApi;
 	readonly source: string;
 	readonly category: SiteCategory;
+	/** Stable identity for migrated DB sites; path and line remain diagnostic metadata. */
+	readonly siteToken?: string;
 }
 
 /** A database site classified by the process that executes its callback. */
@@ -123,6 +126,15 @@ export interface MissingAsyncDbSiteTokenViolation {
 	readonly message: string;
 }
 
+/** A semantic attribution ID reused by more than one database call site. */
+export interface DuplicateDbSiteTokenViolation {
+	readonly kind: "duplicate-db-site-token";
+	readonly path: string;
+	readonly line: number;
+	readonly token: string;
+	readonly message: string;
+}
+
 /** Committed marker-count snapshot; the ratchet fails when the live count grows past it. */
 export interface LegacyDbCountBaseline {
 	readonly version: 1;
@@ -150,6 +162,7 @@ export interface AuditResult {
 		| UnmarkedLegacyDbAccessViolation
 		| MissingLegacyDbSiteTokenViolation
 		| MissingAsyncDbSiteTokenViolation
+		| DuplicateDbSiteTokenViolation
 	)[];
 	readonly legacyDbAccess: LegacyDbAccessCounts;
 	readonly executionHomeSites: readonly ExecutionHomeSite[];
@@ -404,11 +417,26 @@ function findImportBoundaryViolations(
 function findLegacyDbAccessSites(sourceRoot: string): {
 	readonly sites: AuditSite[];
 	readonly unmarked: UnmarkedCallSite[];
-	readonly missingSiteTokens: (MissingLegacyDbSiteTokenViolation | MissingAsyncDbSiteTokenViolation)[];
+	readonly siteTokenViolations: (
+		| MissingLegacyDbSiteTokenViolation
+		| MissingAsyncDbSiteTokenViolation
+		| DuplicateDbSiteTokenViolation
+	)[];
 } {
 	const sites: AuditSite[] = [];
 	const unmarked: UnmarkedCallSite[] = [];
-	const missingSiteTokens: (MissingLegacyDbSiteTokenViolation | MissingAsyncDbSiteTokenViolation)[] = [];
+	const siteTokenViolations: (
+		| MissingLegacyDbSiteTokenViolation
+		| MissingAsyncDbSiteTokenViolation
+		| DuplicateDbSiteTokenViolation
+	)[] = [];
+	const semanticTokenSites = new Map<string, Array<{ readonly path: string; readonly line: number }>>();
+	const recordSemanticToken = (token: string | null, path: string, line: number): void => {
+		if (!isSemanticSyncDbSiteToken(token)) return;
+		const locations = semanticTokenSites.get(token) ?? [];
+		locations.push({ path, line });
+		semanticTokenSites.set(token, locations);
+	};
 	for (const path of walk(sourceRoot)) {
 		const source = readFileSync(path, "utf8");
 		const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -439,13 +467,7 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 						? expression.name.getStart(sourceFile)
 						: expression.getStart(sourceFile);
 					const line = lineNumber(sourceFile, position);
-					sites.push({
-						path: relativePath,
-						line,
-						api: api as SyncApi,
-						source: lines[line - 1]?.trim() ?? "",
-						category: "hot-path",
-					});
+					let semanticSiteToken: string | undefined;
 					if (isLegacyDbMemberAccess && LEGACY_DB_APIS.includes(api as LegacyDbApi)) {
 						let marked = false;
 						for (let candidate = line - 1; candidate >= Math.max(1, line - MARKER_WINDOW_LINES); candidate--) {
@@ -459,13 +481,15 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 							const tokenArgument = node.arguments[1];
 							const token = tokenArgument === undefined ? null : staticStringValue(tokenArgument, bindings);
 							const expected = `${relativePath}:${line}`;
-							if (token !== expected) {
-								missingSiteTokens.push({
+							recordSemanticToken(token, relativePath, line);
+							if (isSemanticSyncDbSiteToken(token)) semanticSiteToken = token;
+							if (token !== expected && !isSemanticSyncDbSiteToken(token)) {
+								siteTokenViolations.push({
 									kind: "missing-legacy-db-site-token",
 									path: relativePath,
 									line,
 									api: api as LegacyDbApi,
-									message: `${relativePath}:${line} ${api}() must pass its static site token ${JSON.stringify(expected)}; unattributed in-flight DB calls are not allowed`,
+									message: `${relativePath}:${line} ${api}() must pass ${JSON.stringify(expected)} or a unique stable semantic token such as "db:vacuum.status.read"; unattributed in-flight DB calls are not allowed`,
 								});
 							}
 						}
@@ -475,27 +499,49 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 						if (!isLegacy) {
 							const expected = `${relativePath}:${line}`;
 							const token = staticAsyncSiteToken(node, bindings, api as Exclude<AttributedDbApi, LegacyDbApi>);
+							recordSemanticToken(token, relativePath, line);
+							if (isSemanticSyncDbSiteToken(token)) semanticSiteToken = token;
 							const dynamicTokenBoundary = lines
 								.slice(Math.max(0, line - 3), line)
 								.some((candidate) => candidate.includes("DYNAMIC_SITE_TOKEN"));
-							if (!dynamicTokenBoundary && token !== expected) {
-								missingSiteTokens.push({
+							if (!dynamicTokenBoundary && token !== expected && !isSemanticSyncDbSiteToken(token)) {
+								siteTokenViolations.push({
 									kind: "missing-async-db-site-token",
 									path: relativePath,
 									line,
 									api: api as Exclude<AttributedDbApi, LegacyDbApi>,
-									message: `${relativePath}:${line} ${api}() must pass its static site token ${JSON.stringify(expected)}; unattributed in-flight DB calls are not allowed`,
+									message: `${relativePath}:${line} ${api}() must pass ${JSON.stringify(expected)} or a unique stable semantic token such as "db:vacuum.status.read"; unattributed in-flight DB calls are not allowed`,
 								});
 							}
 						}
 					}
+					sites.push({
+						path: relativePath,
+						line,
+						api: api as SyncApi,
+						source: lines[line - 1]?.trim() ?? "",
+						category: "hot-path",
+						...(semanticSiteToken === undefined ? {} : { siteToken: semanticSiteToken }),
+					});
 				}
 			}
 			ts.forEachChild(node, visit);
 		};
 		visit(sourceFile);
 	}
-	return { sites, unmarked, missingSiteTokens };
+	for (const [token, locations] of semanticTokenSites) {
+		if (locations.length < 2) continue;
+		const first = locations[0];
+		if (first === undefined) continue;
+		siteTokenViolations.push({
+			kind: "duplicate-db-site-token",
+			path: first.path,
+			line: first.line,
+			token,
+			message: `stable DB site token ${JSON.stringify(token)} is reused at ${locations.map((site) => `${site.path}:${site.line}`).join(", ")}; semantic tokens must identify exactly one call site`,
+		});
+	}
+	return { sites, unmarked, siteTokenViolations };
 }
 
 /**
@@ -528,7 +574,8 @@ export interface UnmarkedCallSite {
 	readonly api: LegacyDbApi;
 }
 
-function siteKey(site: Pick<AuditSite, "path" | "api" | "source">): string {
+function siteKey(site: Pick<AuditSite, "path" | "api" | "source" | "siteToken">): string {
+	if (site.siteToken !== undefined) return `semantic\u0000${site.api}\u0000${site.siteToken}`;
 	return `${site.path}\u0000${site.api}\u0000${site.source}`;
 }
 
@@ -697,7 +744,7 @@ export function writeCountBaseline(
 }
 
 export function runAudit(options: AuditOptions): AuditResult {
-	const { sites, unmarked, missingSiteTokens } = findLegacyDbAccessSites(options.sourceRoot);
+	const { sites, unmarked, siteTokenViolations } = findLegacyDbAccessSites(options.sourceRoot);
 	const baselineSites = options.baselineSites ?? [];
 	const executionHomeSites = classifyExecutionHomes(sites);
 	return {
@@ -707,7 +754,7 @@ export function runAudit(options: AuditOptions): AuditResult {
 			...findNewLegacyDbAccessViolations(sites, baselineSites),
 			...findNewParentExecutionSiteViolations(executionHomeSites, baselineSites),
 			...findUnmarkedLegacyDbAccess(unmarked),
-			...missingSiteTokens,
+			...siteTokenViolations,
 		],
 		legacyDbAccess: countLegacyDbAccess(options.sourceRoot),
 		executionHomeSites,
@@ -748,11 +795,11 @@ export function renderReport(baselineSites: readonly AuditSite[], legacyDbAccess
 		const sites = executionHomeSites.filter((site) => site.executionHome === home);
 		return sites.length === 0
 			? "- None"
-			: sites.map((site) => `- \`${site.path}:${site.line}\` (${site.api})`).join("\n");
+			: sites.map((site) => `- \`${site.siteToken ?? `${site.path}:${site.line}`}\` (${site.api})`).join("\n");
 	};
 	return `# Event-loop synchronous contract audit
 
-This report is generated from the deterministic migration ledger in \`scripts/event-loop-contract-baseline.json\`. Phase A enforces the type boundary structurally: production code receives an async-only \`DbAccessor\`, while the synchronous compatibility module lives outside the daemon production \`src/\` tree and is rejected by the production TypeScript project's \`rootDir\`. The AST import and call checks remain belt-and-suspenders diagnostics, and new synchronous DB call sites fail closed through exact ledger matching.
+This report is generated from the deterministic migration ledger in \`scripts/event-loop-contract-baseline.json\`. Phase A enforces the type boundary structurally: production code receives an async-only \`DbAccessor\`, while the synchronous compatibility module lives outside the daemon production \`src/\` tree and is rejected by the production TypeScript project's \`rootDir\`. The AST import and call checks remain belt-and-suspenders diagnostics, and new synchronous DB call sites fail closed through exact ledger matching. Migrated DB sites use unique \`db:domain.operation.action\` IDs as their durable identity; file and line remain diagnostic metadata.
 
 ## Current inventory
 

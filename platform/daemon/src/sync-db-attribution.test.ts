@@ -33,6 +33,13 @@ describe("sync DB attribution", () => {
 		void token;
 	});
 
+	test("latches a stable semantic ID without a source line", () => {
+		const token = beginSyncDbCall("withReadDb", 1_000, "db:vacuum.status.read");
+
+		expect(getSyncDbCallSitesForWindow(1_000, 2_000)).toEqual(["withReadDb@db:vacuum.status.read"]);
+		void token;
+	});
+
 	test("keeps an invalid site token explicitly unattributed", () => {
 		const token = beginSyncDbCall("withReadDb", 1_000, "not-a-site");
 		endSyncDbCall(token, 1_051);
