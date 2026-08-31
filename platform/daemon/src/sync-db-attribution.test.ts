@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	beginSyncDbCall,
+	captureSyncDbCallSiteToken,
 	endSyncDbCall,
 	getSyncDbAttributionMetrics,
 	getSyncDbCallSitesForWindow,
 	resetSyncDbAttribution,
 } from "./sync-db-attribution";
+import { classifySyncDbSiteToken } from "./sync-db-site-token";
 
 afterEach(() => {
 	resetSyncDbAttribution();
@@ -57,5 +59,22 @@ describe("sync DB attribution", () => {
 		expect(metrics.unattributedCalls).toBe(0);
 		expect(metrics.sites).toHaveLength(1);
 		expect(metrics.sites[0]?.siteId).toContain("sync-db-attribution.test.ts:");
+	});
+
+	test("captures source-tree caller tokens before queueing", () => {
+		expect(captureSyncDbCallSiteToken()).toMatch(/^sync-db-attribution\.test\.ts:\d+$/);
+	});
+
+	test("keeps absolute bundled source locations intact in attribution IDs", () => {
+		const token = beginSyncDbCall("withWriteTxAsync", 1_000, "/dist/daemon.js:54");
+
+		expect(token.siteId).toBe("withWriteTxAsync@/dist/daemon.js:54");
+	});
+
+	test("accepts absolute bundled source locations while rejecting malformed paths", () => {
+		expect(classifySyncDbSiteToken("/dist/daemon.js:54")).toBe("source-location");
+		expect(classifySyncDbSiteToken("dir/file.ts:12")).toBe("source-location");
+		expect(classifySyncDbSiteToken("//dist/daemon.js:54")).toBeNull();
+		expect(classifySyncDbSiteToken("dir//file.ts:12")).toBeNull();
 	});
 });
