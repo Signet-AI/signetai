@@ -200,7 +200,7 @@ test("migrated DB crash recovery finalizes pending records after filesystem writ
 		await createJob(store, { jobId, agentId });
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare(
-				"UPDATE source_import_jobs SET state = 'running', total = 1, pending = 0, lease_token = 'stale' WHERE id = ?",
+				"UPDATE source_import_jobs SET state = 'running', total = 1, pending = 0, lease_token = 'stale', lease_expires_at = datetime('now','+5 minutes') WHERE id = ?",
 			).run(jobId);
 			db.prepare(
 				"INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,state,record_count,checkpoint_ordinal,checkpoint_byte_offset) VALUES (?,?,?,?,0,'crash.jsonl',?,'completed',1,1,?)",
@@ -275,6 +275,10 @@ test("filesystem purge removes only the selected agent source and staged data", 
 				JSON.stringify({ id: "c", agent_id: "agent-a", source_id: "source-b" }),
 			].join("\n")}\n`,
 		);
+		const outside = join(root, "escape-marker");
+		await writeFile(outside, "keep");
+		await purgeTranscriptImportFilesystem(root, "../../escape-marker");
+		expect(await Bun.file(outside).exists()).toBe(true);
 		await purgeTranscriptImportFilesystem(root, "source-a", "agent-a");
 		expect(await readdir(join(root, "imports", "transcripts"))).toEqual([]);
 		const aggregate = await (await import("node:fs/promises")).readFile(

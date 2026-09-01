@@ -24,4 +24,23 @@ describe("managed transcript staging", () => {
 			await rm(root, { recursive: true, force: true });
 		}
 	});
+
+	test("removes a partial upload when the body stream fails", async () => {
+		const root = await mkdtemp(join(tmpdir(), "signet-stage-failure-"));
+		try {
+			await expect(
+				stageTranscriptStream(
+					root,
+					"source-2",
+					(async function* () {
+						yield new TextEncoder().encode("partial\n");
+						throw new Error("body stream failed");
+					})(),
+				),
+			).rejects.toThrow("body stream failed");
+			expect(await readdir(join(root, "imports", "transcripts", "source-2"))).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
 });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, rename, stat } from "node:fs/promises";
+import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 
 export interface StagedTranscriptFile {
@@ -67,7 +67,7 @@ export async function stageTranscriptStream(
 			stream.once("error", onError);
 			stream.end();
 		});
-		const fd = await import("node:fs/promises").then((fs) => fs.open(partial, "r+"));
+		const fd = await open(partial, "r+");
 		try {
 			await fd.sync();
 		} finally {
@@ -79,6 +79,7 @@ export async function stageTranscriptStream(
 		return { managedPath: managedRelativePath, sizeBytes, contentHash: hash.digest("hex") };
 	} catch (error) {
 		stream.destroy();
+		await rm(partial, { force: true });
 		throw error;
 	}
 }

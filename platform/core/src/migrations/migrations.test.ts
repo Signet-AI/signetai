@@ -139,7 +139,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(148);
+			expect(applied.version).toBe(149);
 			expect(
 				(db.query("PRAGMA table_info(memory_jobs)").all() as Array<{ name: string }>).some(
 					(column) => column.name === "lease_token",

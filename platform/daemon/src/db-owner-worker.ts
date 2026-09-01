@@ -13,7 +13,12 @@ import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./mem
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
-import { commitCompletedTranscriptBatchInTx } from "./transcript-import-commit";
+import { TRANSCRIPT_IMPORT_LIMITS } from "./transcript-import-adapter";
+import {
+	commitCompletedTranscriptBatchInTx,
+	purgeTranscriptImportSourceInTx,
+	transcriptCommitBatchBytes,
+} from "./transcript-import-commit";
 import { getDreamingHygieneCandidatesInDb } from "./knowledge-graph-hygiene";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 import { DREAMING_SURPRISAL_SELECTOR_VERSION, selectDreamingSurprisalInDb } from "./pipeline/dreaming-surprisal";
@@ -380,8 +385,22 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "transcript_bulk_commit" }>,
 		context: JobExecutionContext,
 	): unknown {
-		if (request.input.commits.length === 0 || request.input.commits.length > 25)
+		if (
+			request.input.commits.length === 0 ||
+			request.input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch
+		)
 			throw new RangeError("invalid transcript commit batch");
+		if (transcriptCommitBatchBytes(request.input.commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
+			throw new RangeError("canonical_batch_too_large");
+		if (
+			request.input.commits.some(
+				(commit) =>
+					commit.agentId !== request.input.agentId ||
+					commit.sourceId !== request.input.sourceId ||
+					commit.harness !== request.input.harness,
+			)
+		)
+			throw new Error("transcript commit provenance does not match owner request");
 		db.exec("BEGIN IMMEDIATE");
 		try {
 			const lease = db
@@ -409,11 +428,48 @@ export function runDbOwnerWorker(): void {
 	): unknown {
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			const result = db
-				.prepare(
-					"UPDATE source_import_jobs SET control_request = ?, updated_at = datetime('now') WHERE id = ? AND agent_id = ?",
-				)
-				.run(request.input.control, request.input.jobId, request.input.agentId);
+			const input = request.input;
+			let result: SqliteRunResult;
+			if (input.apply === true) {
+				result = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = CASE WHEN control_request = 'pause' THEN 'paused' WHEN control_request = 'cancel' THEN 'cancelled' ELSE state END, generation = generation + CASE WHEN control_request IN ('pause','cancel') THEN 1 ELSE 0 END, lease_token = NULL, lease_expires_at = NULL, control_request = NULL, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND control_request IN ('pause','cancel')",
+					)
+					.run(input.jobId, input.agentId, input.generation ?? -1, input.leaseToken ?? "");
+				db.prepare(
+					"UPDATE source_import_records SET status = 'cancelled', rejection_code = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
+				).run(input.jobId, input.agentId, input.jobId, input.agentId);
+			} else if (input.control === "pause") {
+				result = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = CASE WHEN state = 'queued' THEN 'paused' ELSE state END, control_request = CASE WHEN state IN ('running','inventorying') THEN 'pause' ELSE NULL END, generation = CASE WHEN state = 'queued' THEN generation + 1 ELSE generation END, lease_token = CASE WHEN state = 'queued' THEN NULL ELSE lease_token END, lease_expires_at = CASE WHEN state = 'queued' THEN NULL ELSE lease_expires_at END, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state IN ('queued','running','inventorying')",
+					)
+					.run(input.jobId, input.agentId);
+			} else if (input.control === "resume") {
+				result = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = 'queued', control_request = NULL, error = NULL, next_attempt_at = NULL, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state = 'paused' AND EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ?) AND NOT EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ? AND state IN ('staging','failed'))",
+					)
+					.run(input.jobId, input.agentId, input.jobId, input.agentId, input.jobId, input.agentId);
+			} else if (input.control === "retry") {
+				result = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = 'queued', control_request = NULL, generation = generation + 1, lease_token = NULL, lease_expires_at = NULL, error = NULL, next_attempt_at = NULL, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state IN ('failed','completed','completed_with_rejections','paused','queued','running','inventorying') AND EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ?) AND NOT EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ? AND state IN ('staging','failed'))",
+					)
+					.run(input.jobId, input.agentId, input.jobId, input.agentId, input.jobId, input.agentId);
+				db.prepare(
+					"UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
+				).run(input.jobId, input.agentId);
+			} else {
+				result = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = CASE WHEN state IN ('running','inventorying') THEN state ELSE 'cancelled' END, control_request = CASE WHEN state IN ('running','inventorying') THEN 'cancel' ELSE NULL END, generation = generation + CASE WHEN state IN ('running','inventorying') THEN 0 ELSE 1 END, lease_token = CASE WHEN state IN ('running','inventorying') THEN lease_token ELSE NULL END, lease_expires_at = CASE WHEN state IN ('running','inventorying') THEN lease_expires_at ELSE NULL END, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled')",
+					)
+					.run(input.jobId, input.agentId);
+				db.prepare(
+					"UPDATE source_import_records SET status = 'cancelled', rejection_code = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
+				).run(input.jobId, input.agentId, input.jobId, input.agentId);
+			}
 			commit(context);
 			return { changed: result.changes > 0 };
 		} catch (error) {
@@ -1065,24 +1121,13 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "transcript_import_purge") {
 			db.exec("BEGIN IMMEDIATE");
 			try {
-				const source = job.request.input.sourceId;
-				db.prepare("DELETE FROM session_transcripts WHERE agent_id = ? AND source_id = ?").run(
+				const purged = purgeTranscriptImportSourceInTx(
+					db as never,
 					job.request.input.agentId,
-					source,
-				);
-				db.prepare(
-					"UPDATE transcript_import_conversations SET state = 'removed', updated_at = datetime('now') WHERE agent_id = ? AND owner_source_id = ?",
-				).run(job.request.input.agentId, source);
-				db.prepare("DELETE FROM source_import_records WHERE agent_id = ? AND source_id = ?").run(
-					job.request.input.agentId,
-					source,
-				);
-				db.prepare("DELETE FROM source_import_files WHERE agent_id = ? AND source_id = ?").run(
-					job.request.input.agentId,
-					source,
+					job.request.input.sourceId,
 				);
 				commit(context);
-				return { purged: true };
+				return { purged };
 			} catch (error) {
 				try {
 					db.exec("ROLLBACK");

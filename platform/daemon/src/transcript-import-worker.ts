@@ -1,8 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import { open, mkdir, rm, writeFile, readdir, rename } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { open, mkdir, rm, stat, writeFile, readdir, rename } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { TRANSCRIPT_IMPORT_LIMITS, signetExportV1Adapter } from "./transcript-import-adapter";
-import { buildCompletedTranscriptCommit, canonicalTranscriptLine } from "./transcript-import-commit";
+import { resolveDefaultBasePath } from "@signet/core";
+import {
+	buildCompletedTranscriptCommit,
+	canonicalTranscriptLine,
+	splitTranscriptCommitBatches,
+	transcriptCommitBatchBytes,
+	type CompletedTranscriptCommit,
+} from "./transcript-import-commit";
 import { inventoryTranscriptFile, type InventoryRecord } from "./transcript-import-inventory";
 import type { ImportJobState, ImportStore, ImportStoreOperation } from "./transcript-import-store";
 import { controlImport, reconcileImport } from "./transcript-import-store";
@@ -36,6 +43,9 @@ type File = {
 	checkpoint_byte_offset: number;
 	checkpoint_ordinal: number;
 	state: string;
+	size_bytes?: number | null;
+	content_hash?: string | null;
+	error?: string | null;
 };
 type Row = InventoryRecord & {
 	id: string;
@@ -46,6 +56,41 @@ type Row = InventoryRecord & {
 	value?: never;
 };
 
+class SourceChangedError extends Error {
+	readonly code = "source_changed";
+	constructor(message = "staged source changed during import") {
+		super(message);
+		this.name = "SOURCE_CHANGED";
+	}
+}
+
+class ImportDataError extends Error {
+	readonly code = "malformed_record";
+	constructor(message: string) {
+		super(message);
+		this.name = "IMPORT_DATA";
+	}
+}
+
+class TransientImportError extends Error {
+	readonly code = "transient";
+	constructor(message: string, cause?: unknown) {
+		super(message, { cause });
+		this.name = "IMPORT_TRANSIENT";
+	}
+}
+
+function classifyInventoryError(error: unknown): Error {
+	if (error instanceof SourceChangedError || error instanceof ImportDataError || error instanceof TransientImportError)
+		return error;
+	const message = error instanceof Error ? error.message : String(error);
+	const code = (error as NodeJS.ErrnoException).code;
+	if (code === "ENOENT" || message === "checkpoint is beyond file size")
+		return new SourceChangedError(message === "checkpoint is beyond file size" ? message : "staged source is missing");
+	if (message === "oversized_record" || message === "canonical_transcript_corrupt") return new ImportDataError(message);
+	return error instanceof Error ? error : new TransientImportError("unable to inventory staged source", error);
+}
+
 /** Executes imports one job/file at a time. SQLite mutations are delegated to ImportStore. */
 export function startTranscriptImportWorker(options: TranscriptImportWorkerOptions): TranscriptImportWorkerHandle {
 	let active = true;
@@ -55,7 +100,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 		new Promise<void>((resolve) => {
 			wake = resolve;
 		});
-	const root = options.workspaceRoot ?? process.env.SIGNET_PATH ?? join(process.env.HOME ?? ".", ".agents");
+	const root = options.workspaceRoot ?? resolveDefaultBasePath();
 	const run = async (): Promise<void> => {
 		// Recovery can race DB-owner startup. Keep retrying the durable reset until
 		// it is accepted; proceeding after one swallowed failure strands jobs with
@@ -67,7 +112,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					operation: "recover",
 					agentId: options.agentId,
 					jobId: "*",
-					payload: {},
+					payload: { startup: true },
 				});
 				break;
 			} catch {
@@ -109,93 +154,117 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 			payload: { token: leaseToken, generation: job.generation ?? 0 },
 		});
 		if (!leased) return;
-		const guard = async (): Promise<void> => {
-			const rows = await options.store.run<Job[]>({
+		const generation = typeof leased.generation === "number" ? leased.generation : (job.generation ?? 0);
+		const activeLeaseToken = typeof leased.lease_token === "string" ? leased.lease_token : leaseToken;
+		let currentFileId: string | undefined;
+		try {
+			const guard = async (): Promise<void> => {
+				const rows = await options.store.run<Job[]>({
+					kind: "source_import",
+					operation: "list",
+					agentId: options.agentId,
+					jobId: job.id,
+					payload: { view: "status" },
+				});
+				const current = rows[0];
+				if (!current) return;
+				if (
+					(current.generation !== undefined && current.generation !== generation) ||
+					(current.lease_token !== undefined && current.lease_token !== activeLeaseToken)
+				)
+					throw new Error("stale import lease");
+				if (current.control_request === "pause" || current.control_request === "cancel") {
+					await options.store.run({
+						kind: "source_import",
+						operation: "control",
+						agentId: options.agentId,
+						jobId: job.id,
+						payload: { apply: true, generation, leaseToken: activeLeaseToken },
+					});
+					throw new Error(`import ${current.control_request}d at checkpoint`);
+				}
+			};
+			const guarded = async <T>(operation: ImportStoreOperation): Promise<T> => {
+				await guard();
+				return options.store.run<T>(operation);
+			};
+			await guard();
+			const files = await options.store.run<File[]>({
 				kind: "source_import",
 				operation: "list",
 				agentId: options.agentId,
 				jobId: job.id,
-				payload: { view: "status" },
+				payload: { view: "files" },
 			});
-			const current = rows[0];
-			if (!current) return;
-			if (current.generation !== leased.generation || current.lease_token !== leaseToken)
-				throw new Error("stale import lease");
-			if (current.control_request === "pause" || current.control_request === "cancel") {
-				await options.store.run({
-					kind: "source_import",
-					operation: "control",
-					agentId: options.agentId,
-					jobId: job.id,
-					payload: { apply: true, generation: leased.generation, leaseToken },
-				});
-				throw new Error(`import ${current.control_request}d at checkpoint`);
-			}
-		};
-		const guarded = async <T>(operation: ImportStoreOperation): Promise<T> => {
-			await guard();
-			return options.store.run<T>(operation);
-		};
-		await guard();
-		const files = await options.store.run<File[]>({
-			kind: "source_import",
-			operation: "list",
-			agentId: options.agentId,
-			jobId: job.id,
-			payload: { view: "files" },
-		});
-		const committedSources = new Set<string>();
-		for (const file of files) {
-			if (!active) return;
-			const path = join(root, file.managed_path);
-			if (file.state !== "completed") {
-				await inventoryTranscriptFile(
-					path,
-					{ byteOffset: file.checkpoint_byte_offset, ordinal: file.checkpoint_ordinal },
-					TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch,
-					async (records, checkpoint) => {
-						await guarded<void>({
-							kind: "source_import",
-							operation: "record_batch",
-							agentId: options.agentId,
-							jobId: job.id,
-							payload: {
-								fileId: file.id,
-								sourceId: file.source_id,
-								records,
-								checkpoint,
-								generation: leased.generation,
-								leaseToken,
+			for (const file of files) {
+				if (!active) return;
+				currentFileId = file.id;
+				const path = resolveManagedImportPath(root, file.managed_path);
+				if (file.state === "staging") throw new TransientImportError("file_not_ready");
+				if (file.state === "failed") throw new SourceChangedError(file.error ?? "staged file failed");
+				if (!["ready", "inventorying", "completed"].includes(file.state))
+					throw new TransientImportError(`unsupported staged file state: ${file.state}`);
+				if (file.state !== "completed") {
+					await verifyStagedFile(file, path);
+					let inventory: Awaited<ReturnType<typeof inventoryTranscriptFile>>;
+					try {
+						inventory = await inventoryTranscriptFile(
+							path,
+							{ byteOffset: file.checkpoint_byte_offset, ordinal: file.checkpoint_ordinal },
+							TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch,
+							async (records, checkpoint) => {
+								await guarded<void>({
+									kind: "source_import",
+									operation: "record_batch",
+									agentId: options.agentId,
+									jobId: job.id,
+									payload: {
+										fileId: file.id,
+										sourceId: file.source_id,
+										records,
+										checkpoint,
+										generation,
+										leaseToken: activeLeaseToken,
+									},
+								});
+								await maybeCrashDuringInventory(root);
 							},
-						});
-						await maybeCrashDuringInventory(root);
-					},
-				);
-				await guarded<void>({
-					kind: "source_import",
-					operation: "file_complete",
-					agentId: options.agentId,
-					jobId: job.id,
-					payload: { fileId: file.id, generation: leased.generation, leaseToken },
-				});
+						);
+					} catch (error) {
+						throw classifyInventoryError(error);
+					}
+					if (!inventory.complete) throw new SourceChangedError("staged source grew during inventory");
+					await verifyStagedFile(file, path);
+					await guarded<void>({
+						kind: "source_import",
+						operation: "file_complete",
+						agentId: options.agentId,
+						jobId: job.id,
+						payload: { fileId: file.id, generation, leaseToken: activeLeaseToken },
+					});
+				}
+				await commitPending(job.id, file, path, guarded, guard, { generation, leaseToken: activeLeaseToken });
 			}
-			if (await commitPending(job.id, file, path, guarded, { generation: leased.generation ?? 0, leaseToken }))
-				committedSources.add(file.source_id);
+			await guard();
+			const callbackSources = new Set(files.map((file) => file.source_id));
+			for (const sourceId of callbackSources) await options.onBatch?.(job.id, sourceId);
+			await guarded<void>({
+				kind: "source_import",
+				operation: "finalize",
+				agentId: options.agentId,
+				jobId: job.id,
+				payload: { generation, leaseToken: activeLeaseToken },
+			});
+		} catch (error) {
+			await recoverImportJob(options, job.id, generation, activeLeaseToken, error, currentFileId, () => active);
 		}
-		await guarded<void>({
-			kind: "source_import",
-			operation: "finalize",
-			agentId: options.agentId,
-			jobId: job.id,
-			payload: { generation: leased.generation, leaseToken },
-		});
-		for (const sourceId of committedSources) await options.onBatch?.(job.id, sourceId);
 	};
 	const commitPending = async (
 		jobId: string,
 		file: File,
 		path: string,
 		guarded: <T>(operation: ImportStoreOperation) => Promise<T>,
+		guard: () => Promise<void>,
 		lease: { generation: number; leaseToken: string },
 	): Promise<boolean> => {
 		let committed = false;
@@ -208,22 +277,33 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 				payload: { view: "pending", fileId: file.id, limit: TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch },
 			});
 			if (!rows.length) return committed;
-			const commits = [];
+			await verifyStagedFile(file, path);
+			const commits: CompletedTranscriptCommit[] = [];
 			for (const row of rows) {
 				try {
 					const handle = await open(path, "r");
 					const raw = Buffer.alloc(row.byteLength);
 					try {
 						const got = await handle.read(raw, 0, row.byteLength, row.byteOffset);
-						if (got.bytesRead !== row.byteLength) throw new Error("source_changed");
+						if (got.bytesRead !== row.byteLength) throw new SourceChangedError("source record moved or was truncated");
 						const bytes = raw.subarray(0, got.bytesRead);
-						const value = signetExportV1Adapter.parse(
-							JSON.parse(
-								new TextDecoder("utf-8", { fatal: true }).decode(
-									bytes[bytes.length - 1] === 0x0a ? bytes.subarray(0, bytes.length - 1) : bytes,
+						if (/^[a-f0-9]{64}$/u.test(row.rawHash)) {
+							const hashedBytes = bytes[bytes.length - 1] === 0x0a ? bytes.subarray(0, bytes.length - 1) : bytes;
+							const actualHash = createHash("sha256").update(hashedBytes).digest("hex");
+							if (actualHash !== row.rawHash) throw new SourceChangedError("source record hash changed");
+						}
+						let value: ReturnType<typeof signetExportV1Adapter.parse>;
+						try {
+							value = signetExportV1Adapter.parse(
+								JSON.parse(
+									new TextDecoder("utf-8", { fatal: true }).decode(
+										bytes[bytes.length - 1] === 0x0a ? bytes.subarray(0, bytes.length - 1) : bytes,
+									),
 								),
-							),
-						);
+							);
+						} catch (error) {
+							throw new ImportDataError(error instanceof Error ? error.message : "malformed_record");
+						}
 						commits.push(
 							buildCompletedTranscriptCommit(value, {
 								agentId: options.agentId,
@@ -236,12 +316,19 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 						await handle.close();
 					}
 				} catch (error) {
-					await options.store.run({
+					if (!(error instanceof ImportDataError)) throw error;
+					await guarded<void>({
 						kind: "source_import",
 						operation: "reject",
 						agentId: options.agentId,
 						jobId,
-						payload: { recordId: row.id, code: error instanceof Error ? error.message : "source_changed" },
+						payload: {
+							recordId: row.id,
+							sourceId: row.source_id,
+							code: error.message,
+							generation: lease.generation,
+							leaseToken: lease.leaseToken,
+						},
 					});
 				}
 			}
@@ -256,15 +343,26 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					group.push(commit);
 				}
 				for (const [harness, batch] of byHarness) {
-					await appendCanonical(root, options.agentId, harness, batch);
-					await guarded<void>({
-						kind: "source_import",
-						operation: "commit",
-						agentId: options.agentId,
-						jobId,
-						payload: { commits: batch, generation: lease.generation, leaseToken: lease.leaseToken },
-					});
-					committed = true;
+					let commitBatches: CompletedTranscriptCommit[][];
+					try {
+						commitBatches = splitTranscriptCommitBatches(batch);
+					} catch (error) {
+						if (error instanceof RangeError) throw new ImportDataError(error.message);
+						throw error;
+					}
+					for (const commitBatch of commitBatches) {
+						await verifyStagedFile(file, path);
+						await guard();
+						await appendCanonical(root, options.agentId, harness, commitBatch);
+						await guarded<void>({
+							kind: "source_import",
+							operation: "commit",
+							agentId: options.agentId,
+							jobId,
+							payload: { commits: commitBatch, generation: lease.generation, leaseToken: lease.leaseToken },
+						});
+						committed = true;
+					}
 				}
 			}
 		}
@@ -283,12 +381,88 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 	};
 }
 
+async function verifyStagedFile(file: File, path: string): Promise<void> {
+	const expectedSize = typeof file.size_bytes === "number" && file.size_bytes > 0 ? file.size_bytes : null;
+	const expectedHash = typeof file.content_hash === "string" && file.content_hash.length > 0 ? file.content_hash : null;
+	if (expectedSize === null && expectedHash === null) return;
+	let actual: { readonly size: number; readonly hash: string };
+	try {
+		actual = await fingerprintFile(path);
+	} catch (error) {
+		if (error instanceof SourceChangedError) throw error;
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new SourceChangedError("staged source is missing");
+		throw new TransientImportError("unable to verify staged source", error);
+	}
+	if (expectedSize !== null && actual.size !== expectedSize) throw new SourceChangedError("staged source size changed");
+	if (expectedHash !== null && actual.hash !== expectedHash) throw new SourceChangedError("staged source hash changed");
+}
+
+async function fingerprintFile(path: string): Promise<{ readonly size: number; readonly hash: string }> {
+	const handle = await open(path, "r");
+	const digest = createHash("sha256");
+	let size = 0;
+	try {
+		for (;;) {
+			const chunk = Buffer.allocUnsafe(64 * 1024);
+			const result = await handle.read(chunk, 0, chunk.length, null);
+			if (result.bytesRead === 0) break;
+			size += result.bytesRead;
+			digest.update(chunk.subarray(0, result.bytesRead));
+		}
+		const finalInfo = await stat(path);
+		if (finalInfo.size !== size) throw new SourceChangedError("staged source grew while being read");
+		return { size, hash: digest.digest("hex") };
+	} finally {
+		await handle.close();
+	}
+}
+
+async function recoverImportJob(
+	options: TranscriptImportWorkerOptions,
+	jobId: string,
+	generation: number,
+	leaseToken: string,
+	error: unknown,
+	fileId?: string,
+	isActive: () => boolean = () => true,
+): Promise<void> {
+	const message = error instanceof Error ? error.message : String(error);
+	const retryable =
+		!(error instanceof SourceChangedError || error instanceof ImportDataError) &&
+		message !== "canonical_transcript_corrupt";
+	while (isActive()) {
+		if (!message) return;
+		try {
+			await options.store.run({
+				kind: "source_import",
+				operation: "recover",
+				agentId: options.agentId,
+				jobId,
+				payload: {
+					generation,
+					leaseToken,
+					retryable,
+					error: message,
+					...(fileId === undefined ? {} : { fileId }),
+				},
+			});
+			return;
+		} catch {
+			await new Promise<void>((resolve) => setTimeout(resolve, 250));
+		}
+	}
+}
+
 export async function appendCanonical(
 	root: string,
 	agentId: string,
 	harness: string,
 	commits: readonly Parameters<typeof canonicalTranscriptLine>[0][],
 ): Promise<void> {
+	if (commits.length === 0 || commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch)
+		throw new RangeError("invalid transcript commit batch");
+	if (transcriptCommitBatchBytes(commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
+		throw new RangeError("canonical_batch_too_large");
 	const path = join(root, "transcripts", `${hash(`${agentId}\0${harness}`)}.jsonl`);
 	await mkdir(dirname(path), { recursive: true });
 	const lock = `${path}.lock`;
@@ -402,15 +576,31 @@ async function _recover(options: TranscriptImportWorkerOptions): Promise<void> {
 				operation: "recover",
 				agentId: options.agentId,
 				jobId: job.id,
-				payload: {},
+				payload: { startup: true },
 			});
 }
 async function readText(path: string): Promise<string> {
 	try {
 		return await (await import("node:fs/promises")).readFile(path, "utf8");
-	} catch {
-		return "";
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+		throw new TransientImportError("unable to read canonical transcript", error);
 	}
+}
+
+function resolveManagedImportPath(root: string, managedPath: string): string {
+	const rootResolved = resolve(root);
+	const candidate = resolve(rootResolved, managedPath);
+	const relativePath = relative(rootResolved, candidate);
+	const managedPrefix = `${join("imports", "transcripts")}${sep}`;
+	if (
+		!relativePath ||
+		relativePath.startsWith("..") ||
+		isAbsolute(relativePath) ||
+		!relativePath.startsWith(managedPrefix)
+	)
+		throw new SourceChangedError("managed staged path escapes workspace");
+	return candidate;
 }
 function hash(value: string): string {
 	return createHash("sha256").update(value).digest("hex").slice(0, 24);
@@ -423,11 +613,16 @@ export async function purgeTranscriptImportFilesystem(
 	agentId?: string,
 	managedPaths: readonly string[] = [],
 ): Promise<void> {
-	const safePaths = managedPaths.filter(
-		(path) => path.startsWith("imports/transcripts/") && !path.includes("..") && !path.startsWith("/"),
-	);
-	for (const managedPath of safePaths) await rm(join(root, managedPath), { force: true });
-	await rm(join(root, "imports", "transcripts", sourceId), { recursive: true, force: true });
+	for (const managedPath of managedPaths) {
+		try {
+			await rm(resolveManagedImportPath(root, managedPath), { force: true });
+		} catch {
+			// Never follow an invalid ledger path during purge.
+		}
+	}
+	if (!sourceId.includes("/") && !sourceId.includes("\\") && !sourceId.includes("..")) {
+		await rm(join(root, "imports", "transcripts", sourceId), { recursive: true, force: true });
+	}
 	const dir = join(root, "transcripts");
 	let names: string[] = [];
 	try {

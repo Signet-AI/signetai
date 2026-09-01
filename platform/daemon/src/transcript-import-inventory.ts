@@ -130,14 +130,15 @@ export async function inventoryTranscriptFile(
 			}
 		}
 		if (batch.length) await onBatch?.(batch, { byteOffset: offset, ordinal });
+		const finalInfo = await stat(path);
 		return {
 			records,
 			blankLines,
 			malformedLines,
 			nextByteOffset: offset,
 			nextOrdinal: ordinal,
-			bytes: info.size,
-			complete: offset === info.size,
+			bytes: finalInfo.size,
+			complete: offset === finalInfo.size,
 		};
 	} finally {
 		await handle.close();

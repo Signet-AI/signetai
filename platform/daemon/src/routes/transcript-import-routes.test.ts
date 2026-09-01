@@ -82,6 +82,34 @@ it("serializes concurrent uploads for one reserved file without leaving a reserv
 	expect(rows[0]?.managed_path).toContain(fileId);
 });
 
+it("rejects malformed manifests, enforces the 25-file limit, and persists duplicate mode", async () => {
+	for (const body of [
+		null,
+		{ schemaId: null, files: [{ name: "conversation.jsonl" }] },
+		{ duplicateMode: null, files: [{ name: "conversation.jsonl" }] },
+		{ files: Array.from({ length: 26 }, (_, index) => ({ name: `${index}.jsonl` })) },
+	]) {
+		const response = await app().request("/api/sources/imports", {
+			method: "POST",
+			body: JSON.stringify(body),
+			headers: { "content-type": "application/json" },
+		});
+		expect(response.status).toBe(400);
+	}
+	const created = await app().request("/api/sources/imports", {
+		method: "POST",
+		body: JSON.stringify({ duplicateMode: "reimport", files: [{ name: "conversation.jsonl" }] }),
+		headers: { "content-type": "application/json" },
+	});
+	expect(created.status).toBe(201);
+	const job = (await created.json()) as { jobId: string; duplicateMode: string };
+	expect(job.duplicateMode).toBe("reimport");
+	const stored = await getDbAccessor().withReadDbAsync((db) =>
+		db.prepare("SELECT duplicate_mode FROM source_import_jobs WHERE id = ?").get(job.jobId),
+	);
+	expect(stored).toEqual({ duplicate_mode: "reimport" });
+});
+
 it("retry increments generation and returns recoverable rejected records to pending", async () => {
 	const created = await app().request("/api/sources/imports", {
 		method: "POST",

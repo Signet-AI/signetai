@@ -3,6 +3,8 @@ import {
 	buildCompletedTranscriptCommit,
 	canonicalTranscriptLine,
 	serializeCompletedTranscriptMessages,
+	splitTranscriptCommitBatches,
+	transcriptCommitBatchBytes,
 } from "./transcript-import-commit";
 import { signetExportV1Adapter } from "./transcript-import-adapter";
 
@@ -53,5 +55,15 @@ describe("transcript import invariants", () => {
 		expect(buildCompletedTranscriptCommit(record("agent-a"), input)).toEqual(
 			buildCompletedTranscriptCommit(record("agent-a"), input),
 		);
+	});
+	test("splits canonical batches by the complete payload byte budget", () => {
+		const commit = buildCompletedTranscriptCommit(record("agent-a"), {
+			agentId: "agent-a",
+			sourceId: "source-a",
+			sourceRecordId: "record-a",
+		});
+		const oneCommitBytes = transcriptCommitBatchBytes([commit]);
+		expect(splitTranscriptCommitBatches([commit, commit], oneCommitBytes)).toEqual([[commit], [commit]]);
+		expect(() => splitTranscriptCommitBatches([commit], oneCommitBytes - 1)).toThrow("canonical_batch_too_large");
 	});
 });

@@ -13,7 +13,12 @@ import {
 	type DbOwnerSubmitOptions,
 } from "./db-owner-client";
 import { getDbOwnerMaintenance } from "./db-owner-maintenance";
-import { commitCompletedTranscriptBatchInTx } from "./transcript-import-commit";
+import { TRANSCRIPT_IMPORT_LIMITS } from "./transcript-import-adapter";
+import {
+	commitCompletedTranscriptBatchInTx,
+	purgeTranscriptImportSourceInTx,
+	transcriptCommitBatchBytes,
+} from "./transcript-import-commit";
 import type {
 	DbOwnerJob,
 	DbOwnerParameter,
@@ -158,18 +163,87 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		});
 	}
 	if (request.kind === "transcript_bulk_commit") {
-		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
-			commitCompletedTranscriptBatchInTx(db as never, request.input.commits),
-		);
-	}
-	if (request.kind === "transcript_import_control") {
-		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
-			db
+		if (
+			request.input.commits.length === 0 ||
+			request.input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch
+		)
+			throw new RangeError("invalid transcript commit batch");
+		if (transcriptCommitBatchBytes(request.input.commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
+			throw new RangeError("canonical_batch_too_large");
+		if (
+			request.input.commits.some(
+				(commit) =>
+					commit.agentId !== request.input.agentId ||
+					commit.sourceId !== request.input.sourceId ||
+					commit.harness !== request.input.harness,
+			)
+		)
+			throw new Error("transcript commit provenance does not match owner request");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			const lease = db
 				.prepare(
-					"UPDATE source_import_jobs SET control_request = ?, updated_at = datetime('now') WHERE id = ? AND agent_id = ?",
+					"SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying')",
 				)
-				.run(request.input.control, request.input.jobId, request.input.agentId),
+				.get(request.input.jobId, request.input.agentId, request.input.generation, request.input.leaseToken);
+			if (lease == null) throw new Error("stale import lease");
+			return commitCompletedTranscriptBatchInTx(db as never, request.input.commits);
+		});
+	}
+	if (request.kind === "transcript_import_purge")
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
+			purgeTranscriptImportSourceInTx(db as never, request.input.agentId, request.input.sourceId),
 		);
+	if (request.kind === "transcript_import_control") {
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			const input = request.input;
+			let changed = 0;
+			if (input.apply === true) {
+				const result = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = CASE WHEN control_request = 'pause' THEN 'paused' WHEN control_request = 'cancel' THEN 'cancelled' ELSE state END, generation = generation + CASE WHEN control_request IN ('pause','cancel') THEN 1 ELSE 0 END, lease_token = NULL, lease_expires_at = NULL, control_request = NULL, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND control_request IN ('pause','cancel')",
+					)
+					.run(input.jobId, input.agentId, input.generation ?? -1, input.leaseToken ?? "");
+				changed += result.changes;
+			} else if (input.control === "pause") {
+				const queued = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = CASE WHEN state = 'queued' THEN 'paused' ELSE state END, control_request = CASE WHEN state IN ('running','inventorying') THEN 'pause' ELSE NULL END, generation = CASE WHEN state = 'queued' THEN generation + 1 ELSE generation END, lease_token = CASE WHEN state = 'queued' THEN NULL ELSE lease_token END, lease_expires_at = CASE WHEN state = 'queued' THEN NULL ELSE lease_expires_at END, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state IN ('queued','running','inventorying')",
+					)
+					.run(input.jobId, input.agentId);
+				changed += queued.changes;
+			} else if (input.control === "resume") {
+				const result = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = 'queued', control_request = NULL, error = NULL, next_attempt_at = NULL, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state = 'paused' AND EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ?) AND NOT EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ? AND state IN ('staging','failed'))",
+					)
+					.run(input.jobId, input.agentId, input.jobId, input.agentId, input.jobId, input.agentId);
+				changed += result.changes;
+			} else if (input.control === "retry") {
+				const result = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = 'queued', control_request = NULL, generation = generation + 1, lease_token = NULL, lease_expires_at = NULL, error = NULL, next_attempt_at = NULL, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state IN ('failed','completed','completed_with_rejections','paused','queued','running','inventorying') AND EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ?) AND NOT EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ? AND state IN ('staging','failed'))",
+					)
+					.run(input.jobId, input.agentId, input.jobId, input.agentId, input.jobId, input.agentId);
+				changed += result.changes;
+				db.prepare(
+					"UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
+				).run(input.jobId, input.agentId);
+			} else {
+				const result = db
+					.prepare(
+						"UPDATE source_import_jobs SET state = CASE WHEN state IN ('running','inventorying') THEN state ELSE 'cancelled' END, control_request = CASE WHEN state IN ('running','inventorying') THEN 'cancel' ELSE NULL END, generation = generation + CASE WHEN state IN ('running','inventorying') THEN 0 ELSE 1 END, lease_token = CASE WHEN state IN ('running','inventorying') THEN lease_token ELSE NULL END, lease_expires_at = CASE WHEN state IN ('running','inventorying') THEN lease_expires_at ELSE NULL END, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled')",
+					)
+					.run(input.jobId, input.agentId);
+				changed += result.changes;
+			}
+			const cancelled = db
+				.prepare(
+					"UPDATE source_import_records SET status = 'cancelled', rejection_code = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
+				)
+				.run(input.jobId, input.agentId, input.jobId, input.agentId);
+			changed += cancelled.changes;
+			return { changed: changed > 0 };
+		});
 	}
 	if (request.kind === "transcript_import_reconcile") {
 		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) =>
@@ -213,7 +287,6 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		case "vacuum_conversion":
 		case "incremental_vacuum":
 		case "source_evidence_eligibility":
-		case "transcript_import_purge":
 		case "sleep":
 			throw new Error(`Unsupported inline owner request: ${request.kind}`);
 		default:

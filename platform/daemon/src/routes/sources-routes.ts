@@ -15,6 +15,7 @@ import {
 	loadSourcesConfig,
 	markSourceIndexed,
 	removeSourceIfGeneration,
+	resolveDefaultBasePath,
 } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
@@ -182,7 +183,7 @@ export async function stopSourceIndexJobs(): Promise<void> {
 }
 
 export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps = {}): void {
-	const agentsDir = deps.agentsDir ?? process.env.SIGNET_PATH ?? `${homedir()}/.agents`;
+	const agentsDir = deps.agentsDir ?? resolveDefaultBasePath();
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
 	const recordIndexOperation = deps.recordIndexOperation ?? recordSourceIndexOperation;
@@ -782,7 +783,7 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
  * the next boot: tombstone processing must never brick startup.
  */
 export async function cleanupSourceDeletionTombstones(
-	agentsDir = process.env.SIGNET_PATH ?? `${homedir()}/.agents`,
+	agentsDir = resolveDefaultBasePath(),
 	purgeNativeSource: typeof purgeNativeMemorySourceArtifacts = purgeNativeMemorySourceArtifacts,
 ): Promise<void> {
 	const tombstones = loadSourceDeletionTombstones(agentsDir);

@@ -228,6 +228,9 @@ export interface DbOwnerTranscriptImportControl {
 	readonly agentId: string;
 	readonly jobId: string;
 	readonly control: "pause" | "resume" | "retry" | "cancel";
+	readonly generation?: number;
+	readonly leaseToken?: string;
+	readonly apply?: boolean;
 }
 export interface DbOwnerTranscriptImportReconcile {
 	readonly agentId: string;
