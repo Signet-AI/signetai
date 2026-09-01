@@ -146,6 +146,7 @@ export function sourceClassForKind(kind: string): SourceClass {
 		case "browser":
 			return "browser";
 		case "document":
+		case "web":
 			return "document";
 		default:
 			return "other";

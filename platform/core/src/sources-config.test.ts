@@ -11,11 +11,14 @@ import {
 	addGitHubSource,
 	addImportedSource,
 	addObsidianSource,
+	addWebSource,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
+	normalizePublicWebUrl,
 	parseDiscordSettings,
 	parseGitHubSettings,
+	parseWebSettings,
 	removeSource,
 	removeSourceIfGeneration,
 } from "./sources-config";
@@ -32,6 +35,86 @@ function tmp(): string {
 }
 
 describe("sources-config", () => {
+	it("adds and upserts a validated public web source", () => {
+		const agentsDir = tmp();
+		const first = addWebSource(
+			{ url: "https://example.com/article#tracking", now: "2026-01-01T00:00:00.000Z" },
+			agentsDir,
+		);
+		expect(first.ok).toBe(true);
+		if (first.ok === false) throw new Error(first.error);
+		expect(first.source.kind).toBe("web");
+		expect(first.source.root).toBe("https://example.com/article");
+		expect(parseWebSettings(first.source.providerSettings).url).toBe(first.source.root);
+		const second = addWebSource(
+			{ url: "https://example.com/article", name: "Example", now: "2026-01-02T00:00:00.000Z" },
+			agentsDir,
+		);
+		expect(second.ok).toBe(true);
+		if (second.ok === false) throw new Error(second.error);
+		expect(second.created).toBe(false);
+		expect(second.source.generation).toBe(first.source.generation);
+		expect(second.source.name).toBe("Example");
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("rejects unsafe web source targets", () => {
+		const agentsDir = tmp();
+		for (const url of [
+			"javascript:alert(1)",
+			"file:///tmp/a",
+			"http://127.0.0.1/a",
+			"http://localhost/a",
+			"http://169.254.169.254/latest",
+		]) {
+			const result = addWebSource({ url }, agentsDir);
+			expect(result).toEqual({ ok: false, error: "Web page URL must be a public http(s) URL" });
+		}
+	});
+	it("rejects every non-global IP literal, including mapped special-use addresses", () => {
+		const nonGlobalUrls = [
+			"http://0.0.0.0/",
+			"http://10.0.0.1/",
+			"http://100.64.0.1/",
+			"http://127.0.0.1/",
+			"http://169.254.1.1/",
+			"http://172.16.0.1/",
+			"http://192.0.0.1/",
+			"http://192.0.2.1/",
+			"http://192.88.99.1/",
+			"http://192.168.0.1/",
+			"http://192.31.196.1/",
+			"http://192.52.193.1/",
+			"http://192.175.48.1/",
+			"http://198.18.0.1/",
+			"http://198.51.100.1/",
+			"http://203.0.113.1/",
+			"http://224.0.0.1/",
+			"http://240.0.0.1/",
+			"http://255.255.255.255/",
+			"http://[::]/",
+			"http://[::1]/",
+			"http://[::ffff:8.8.8.8]/",
+			"http://[::ffff:6440:1]/",
+			"http://[fc00::1]/",
+			"http://[fd00::1]/",
+			"http://[fe80::1]/",
+			"http://[fec0::1]/",
+			"http://[ff02::1]/",
+			"http://[100::1]/",
+			"http://[2001:100::1]/",
+			"http://[2001:db8::1]/",
+			"http://[2001:30::1]/",
+			"http://[2002:0a00:0001::1]/",
+			"http://[3fff::1]/",
+			"http://[64:ff9b::1]/",
+			"http://[2620:4f:8000::1]/",
+		];
+		for (const url of nonGlobalUrls) expect(normalizePublicWebUrl(url)).toBeNull();
+
+		expect(normalizePublicWebUrl("http://8.8.8.8/")).toBe("http://8.8.8.8/");
+		expect(normalizePublicWebUrl("http://[2001:4860:4860::8888]/")).toBe("http://[2001:4860:4860::8888]/");
+	});
 	it("adds an Obsidian vault source as read-only config", () => {
 		const agentsDir = tmp();
 		const vault = join(agentsDir, "vault");

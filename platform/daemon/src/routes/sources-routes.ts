@@ -11,6 +11,7 @@ import {
 	addDiscordSource,
 	addGitHubSource,
 	addObsidianSource,
+	addWebSource,
 	loadSourcesConfig,
 	markSourceIndexed,
 	removeSourceIfGeneration,
@@ -123,6 +124,11 @@ interface AddGitHubSourceBody {
 	readonly labels?: readonly string[];
 	readonly docPaths?: readonly string[];
 	readonly maxItemsPerRepo?: number;
+}
+
+interface AddWebSourceBody {
+	readonly url?: string;
+	readonly name?: string;
 }
 
 interface PickDirectoryBody {
@@ -462,6 +468,37 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			recordIndexOperation,
 		});
 
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+	});
+
+	app.post("/api/sources/web", async (c) => {
+		let body: AddWebSourceBody = {};
+		try {
+			const parsed = (await c.req.json()) as unknown;
+			body = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as AddWebSourceBody) : {};
+		} catch {
+			recordSourceConnectionFailure("web", "invalid configuration");
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		const result = addWebSource(
+			{
+				url: typeof body.url === "string" ? body.url : "",
+				name: typeof body.name === "string" ? body.name : undefined,
+			},
+			agentsDir,
+		);
+		if (result.ok === false) {
+			recordSourceConnectionFailure("web", result.error);
+			return c.json({ error: result.error }, 400);
+		}
+		await recordSourceConnected(result.source, resolveDaemonAgentId());
+		const job = enqueueSourceIndexJob({
+			source: result.source,
+			agentsDir,
+			startBridge,
+			purgeNativeSource,
+			recordIndexOperation,
+		});
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 	});
 
@@ -962,10 +999,11 @@ async function sourceHealth(source: SignetSourceEntry, agentId: string, stats: S
 			semanticHealthSummary(source, agentId),
 			sourceOrphanChunks(source, agentId),
 		]);
+		const sourceFailures = source.kind === "discord" ? { total: 0, recoverable: 0 } : artifactSummary.failures;
 		const importExtraction = source.kind === "import" ? readImportedSourceOutcome(source.id, agentId) : undefined;
 		const hasDegradation =
 			permission.status === "denied" ||
-			discordSummary.failures.total > 0 ||
+			sourceFailures.total > 0 ||
 			discordSummary.checkpoints.partial > 0 ||
 			discordSummary.checkpoints.stale > 0 ||
 			artifactSummary.deletedArtifacts > 0 ||
@@ -984,7 +1022,7 @@ async function sourceHealth(source: SignetSourceEntry, agentId: string, stats: S
 			latestArtifactAt: artifactSummary.latestArtifactAt,
 			latestCheckpointAt: discordSummary.latestCheckpointAt,
 			chunkCoverage: stats.artifacts > 0 ? Math.min(1, stats.chunks / stats.artifacts) : stats.chunks > 0 ? 1 : 0,
-			failures: discordSummary.failures,
+			failures: source.kind === "discord" ? discordSummary.failures : sourceFailures,
 			checkpoints: discordSummary.checkpoints,
 			purge: {
 				deletedArtifacts: artifactSummary.deletedArtifacts,
@@ -1123,6 +1161,10 @@ async function artifactHealthSummary(
 ): Promise<{
 	readonly latestArtifactAt: string | null;
 	readonly deletedArtifacts: number;
+	readonly failures: {
+		readonly total: number;
+		readonly recoverable: number;
+	};
 }> {
 	const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
 	const sql =
@@ -1136,14 +1178,38 @@ async function artifactHealthSummary(
 			   FROM memory_artifacts WHERE agent_id = ? AND source_id = ?`;
 	const params =
 		source.kind === "obsidian" ? [agentId, source.id, rootPrefix, `${rootPrefix}\uffff`] : [agentId, source.id];
-	const row = await dbOwnerQuery<HealthAggregateRow | undefined>(
-		{ sql, params, result: "get" },
-		{ operation: "sources.health_artifacts", lane: "read", deadlineMs: 3_000 },
-	);
+	const [row, failures] = await Promise.all([
+		dbOwnerQuery<HealthAggregateRow | undefined>(
+			{ sql, params, result: "get" },
+			{ operation: "sources.health_artifacts", lane: "read", deadlineMs: 3_000 },
+		),
+		sourceFailureHealthFromDb(source, agentId),
+	]);
 	return {
 		latestArtifactAt: stringOrNull(row?.latestArtifactAt),
 		deletedArtifacts: numberOrZero(row?.deletedArtifacts),
+		failures,
 	};
+}
+
+async function sourceFailureHealthFromDb(
+	source: SignetSourceEntry,
+	agentId: string,
+): Promise<{ readonly total: number; readonly recoverable: number }> {
+	const rows = await dbOwnerQuery<Array<{ readonly source_meta_json: string | null }>>(
+		{
+			sql: `SELECT source_meta_json
+			   FROM memory_artifacts
+			  WHERE agent_id = ? AND source_id = ?
+			    AND source_kind = ? AND COALESCE(is_deleted, 0) = 0`,
+			params: [agentId, source.id, `source_${source.kind}_failure`],
+			result: "all",
+		},
+		{ operation: "sources.health_failures", lane: "read", deadlineMs: 3_000 },
+	);
+	let recoverable = 0;
+	for (const row of rows) if (parseJsonObject(row.source_meta_json)?.recoverable === true) recoverable++;
+	return { total: rows.length, recoverable };
 }
 
 interface DiscordHealthSummary {

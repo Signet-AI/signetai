@@ -32,6 +32,7 @@ import {
 } from "../source-index-progress";
 import { registerImportRoutes } from "./import-routes";
 import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./sources-routes";
+import { setWebDnsLookupForTest, setWebRequestForTest } from "../web-source-provider";
 import { setActiveTelemetry, type TelemetryCollector } from "../telemetry";
 import { recordSourceConnected, type SourceIndexTelemetryInput } from "../source-lifecycle-telemetry";
 
@@ -60,6 +61,8 @@ describe("Sources routes", () => {
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		setWebDnsLookupForTest(null);
+		setWebRequestForTest(null);
 		setActiveTelemetry(undefined);
 		clearSourceIndexProgressForTests();
 		closeDbAccessor();
@@ -633,6 +636,29 @@ describe("Sources routes", () => {
 		expect(body.source.kind).toBe("github");
 		expect(body.source.providerSettings?.repos).toEqual(["Signet-AI/signetai"]);
 		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("github");
+	});
+
+	it("connects a public Web page through the shared source index job", async () => {
+		setWebDnsLookupForTest((async () => [
+			{ address: "93.184.216.34", family: 4 },
+		]) as typeof import("node:dns/promises").lookup);
+		setWebRequestForTest(() =>
+			Promise.resolve(
+				new Response("<html><body><article><h1>Route Web</h1><p>Route content.</p></article></body></html>", {
+					headers: { "content-type": "text/html" },
+				}),
+			),
+		);
+		const res = await makeApp().request("/api/sources/web", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ url: "https://example.com/route" }),
+		});
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as { source: { kind: string; root: string }; queued: boolean };
+		expect(body.queued).toBe(true);
+		expect(body.source).toMatchObject({ kind: "web", root: "https://example.com/route" });
+		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("web");
 	});
 
 	it("rejects raw Discord tokens at the route boundary", async () => {

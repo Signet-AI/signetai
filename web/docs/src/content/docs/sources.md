@@ -5,7 +5,7 @@ description: "Connect read-only knowledge bases like Obsidian vaults directly in
 
 Sources are external knowledge bases that Signet can read, index, and recall from without turning them into ordinary saved memories.
 
-Sources currently support **Obsidian** vaults, **Discord** guilds, and **GitHub** repositories. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall. Add Discord with a bot-token secret reference and Signet indexes guild topology, channels, threads, members, message windows, and Discord metadata through the same source-owned artifact lifecycle. Add GitHub repositories to index issues, pull requests, discussions, selected Markdown docs, comments, and source failure artifacts through the shared source provider pipeline.
+Sources currently support **Web pages**, **Obsidian** vaults, **Discord** guilds, and **GitHub** repositories. Add a public Web page URL and Signet fetches it through the dedicated web provider, uses Defuddle to extract readable Markdown and page metadata, then stores the result as source-backed evidence. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall. Add Discord with a bot-token secret reference and Signet indexes guild topology, channels, threads, members, message windows, and Discord metadata through the same source-owned artifact lifecycle. Add GitHub repositories to index issues, pull requests, discussions, selected Markdown docs, comments, and source failure artifacts through the shared source provider pipeline.
 
 The important rule is simple: **the source stays canonical**. Signet reads from the vault. It does not edit notes, rewrite frontmatter, create files, or move anything inside the source directory.
 
@@ -19,17 +19,19 @@ Use Sources when you want Signet to recall from:
 - a local folder of Markdown knowledge;
 - documentation or research notes that should stay under their original editor/workflow;
 - future cloud, code, or document connectors.
+- a public article or documentation page that should remain linked to its original URL.
 
 A source hit is marked as source-backed recall, not as a native saved memory. Obsidian recall results include a canonical `source_path` so agents and tools can inspect the original file directly.
 
 ## Use the Dashboard
 
-Open the [Dashboard](/dashboard/) and select **Sources**. The current Sources surface starts with **Connect a source** for Obsidian, GitHub, or Discord, and **Import files** for durable, read-only file imports. Connected-source cards show artifact, chunk, and indexed counts plus source health; they also support re-indexing, snapshot download, and removal.
+Open the [Dashboard](/dashboard/) and select **Sources**. The current Sources surface starts with a two-step **Add a source** dialog. Choose **Import → Files** or **Import → Web page**, or choose **Connect → Obsidian**, **GitHub**, or **Discord**. Connected-source cards show artifact, chunk, and indexed counts plus source health; they also support re-indexing, snapshot download, and removal.
 
 The Dashboard dialog deliberately collects the basic fields only:
 
 | Kind | Required dashboard input | Optional input |
 |---|---|---|
+| Web page | Public `http(s)` URL | None |
 | Obsidian | Absolute vault path | Display name |
 | GitHub | `owner/repo` or `owner/*` | Display name and token secret reference |
 | Discord | Guild ID and bot-token secret reference | Display name |
@@ -45,6 +47,10 @@ Choose **Import files**, select one or more files, choose how duplicates should 
 The current bounds are 25 files per batch, 25 MiB per file, and 100 MiB per batch. Results are reported per file, so a malformed or unsupported file does not hide successful imports from the same batch. Choose **Skip duplicate** to keep the existing import, **Replace and re-index** to replace it and queue indexing again, or **Import as a new source** to retain a second source for the same content.
 
 In a desktop-local session, **Choose from desktop** can return local paths to a loopback daemon. Remote clients must upload file bytes; a remote daemon never treats a path string as permission to read the client’s filesystem.
+
+### Import a Web page
+
+Choose **Import → Web page**, paste a public `http(s)` URL, and select **Add & index**. Signet follows a small bounded redirect chain, rejects loopback/private/link-local destinations, enforces a timeout, HTML content type, and response-size limit, and does not execute page JavaScript. Defuddle’s Node adapter extracts readable Markdown plus bounded title, author, description, publication date, canonical/original URL, site, language, image, and extraction diagnostics. The original HTML is not retained; the normalized Markdown and provenance are stored as a `web` source artifact. RSS feeds are intentionally out of scope for this version.
 
 > TODO: add dark-mode screenshots for the Connect a source and Import files dialogs after capture against a controlled, non-private daemon fixture. This worktree has no such fixture, so no mock or private-path imagery is published here.
 
@@ -327,6 +333,7 @@ The daemon exposes the Sources lifecycle under `/api/sources`:
 | `POST` | `/api/sources/obsidian` | Add/update an Obsidian vault source and index it. |
 | `POST` | `/api/sources/discord` | Add/update a Discord source and queue a shared source index job. |
 | `POST` | `/api/sources/github` | Add/update a GitHub source and queue a shared source index job. |
+| `POST` | `/api/sources/web` | Add/update a public Web page source and queue a shared source index job. |
 | `GET` | `/api/sources/:sourceId/health` | Inspect source health diagnostics used by the dashboard. |
 | `GET` | `/api/sources/:sourceId/snapshot` | Export source-owned artifacts as a Signet source snapshot. |
 | `POST` | `/api/sources/:sourceId/snapshot/import` | Import a Signet source snapshot into an existing source. |
