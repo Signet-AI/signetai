@@ -10193,8 +10193,8 @@
 			{
 				"id": "module:scripts/audit-architecture-contract.ts",
 				"path": "scripts/audit-architecture-contract.ts",
-				"lines": 2142,
-				"logicalStatements": 1096,
+				"lines": 2340,
+				"logicalStatements": 1225,
 				"exports": 17,
 				"topLevelMutableBindings": 0,
 				"typeEscapes": 0,
@@ -10298,8 +10298,8 @@
 			{
 				"id": "module:scripts/build-native-bun.ts",
 				"path": "scripts/build-native-bun.ts",
-				"lines": 473,
-				"logicalStatements": 149,
+				"lines": 492,
+				"logicalStatements": 162,
 				"exports": 0,
 				"topLevelMutableBindings": 1,
 				"typeEscapes": 0,
@@ -52264,8 +52264,8 @@
 		],
 		"summary": {
 			"files": 931,
-			"lines": 269149,
-			"logicalStatements": 97166,
+			"lines": 269366,
+			"logicalStatements": 97308,
 			"runtimeEdges": 1999,
 			"allEdges": 2594,
 			"unresolvedEdges": 1530,

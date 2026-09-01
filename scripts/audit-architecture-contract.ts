@@ -168,11 +168,8 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
 	".git",
 	"node_modules",
 	"dist",
-	"built",
-	"build",
 	"fixtures",
 	"coverage",
-	"target",
 	"references",
 	".native-build",
 	".worktrees",
@@ -374,7 +371,7 @@ function generatedGeneratorPaths(root: string, generatorPath: string): Generated
 		let currentScope = scope;
 		if (isFunctionLike(node)) {
 			currentScope = { parent: scope, bindings: new Map(), isVarScope: true };
-			for (const parameter of node.parameters) bindPattern(currentScope, parameter.name, null);
+			for (const parameter of node.parameters) bindPattern(currentScope, parameter.name, parameter.initializer ?? null);
 			predeclareVarBindings(node, currentScope);
 			predeclareFunctionBindings(node, currentScope);
 		} else if (
@@ -411,10 +408,13 @@ function generatedGeneratorPaths(root: string, generatorPath: string): Generated
 					: currentScope;
 			bindPattern(bindingScope, node.name, node.initializer ?? null);
 		}
-		if (ts.isBinaryExpression(node) && ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)))
-			invalidateAssignmentTarget(currentScope, node.left);
+		if (ts.isBinaryExpression(node) && ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile))) {
+			if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+				assignBindingTarget(currentScope, node.left, node.right);
+			else invalidateAssignmentTarget(currentScope, node.left);
+		}
 		if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer))
-			invalidateAssignmentTarget(currentScope, node.initializer);
+			assignBindingTarget(currentScope, node.initializer, null);
 		if (
 			ts.isPrefixUnaryExpression(node) &&
 			(node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
@@ -746,6 +746,60 @@ function isFunctionLike(node: ts.Node): node is ts.FunctionLikeDeclaration {
 	);
 }
 
+function propertyNameText(name: ts.PropertyName | ts.BindingName): string | null {
+	if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
+	return null;
+}
+
+function objectLiteralPropertyValue(
+	initializer: ts.ObjectLiteralExpression,
+	key: string,
+): ts.Expression | null | undefined {
+	let uncertain = false;
+	let value: ts.Expression | undefined;
+	for (const property of initializer.properties) {
+		if (ts.isSpreadAssignment(property)) {
+			uncertain = true;
+			continue;
+		}
+		if (ts.isShorthandPropertyAssignment(property)) {
+			if (property.name.text === key) value = property.name;
+			continue;
+		}
+		if (!ts.isPropertyAssignment(property)) {
+			uncertain = true;
+			continue;
+		}
+		const propertyKey = propertyNameText(property.name);
+		if (propertyKey === key) value = property.initializer;
+		if (propertyKey === null) uncertain = true;
+	}
+	if (uncertain) return null;
+	return value;
+}
+
+function bindingElementInitializer(
+	initializer: ts.Expression | null,
+	element: ts.BindingElement,
+	index: number,
+): ts.Expression | null {
+	if (initializer === null) return null;
+	const unwrapped = unwrapExpression(initializer);
+	if (ts.isArrayLiteralExpression(unwrapped)) {
+		const sourceElement = unwrapped.elements[index];
+		if (sourceElement === undefined) return element.initializer ?? null;
+		if (ts.isOmittedExpression(sourceElement) || ts.isSpreadElement(sourceElement)) return null;
+		return sourceElement;
+	}
+	if (!ts.isObjectLiteralExpression(unwrapped)) return null;
+	const propertyName = element.propertyName ?? (ts.isIdentifier(element.name) ? element.name : null);
+	if (propertyName === null) return null;
+	const key = propertyNameText(propertyName);
+	if (key === null) return null;
+	const value = objectLiteralPropertyValue(unwrapped, key);
+	return value === undefined ? (element.initializer ?? null) : value;
+}
+
 function bindPattern(
 	scope: StaticScope,
 	name: ts.BindingName,
@@ -756,53 +810,61 @@ function bindPattern(
 	canonicalModuleNamespace = false,
 	canonicalAmbientRequire = false,
 	ambientRequireLike = canonicalAmbientRequire,
+	resolutionScope: StaticScope = scope,
 ): void {
 	if (ts.isIdentifier(name)) {
-		const binding: StaticBinding = {
+		const canonicalFactory =
+			canonicalCreateRequire ||
+			(initializer !== null && isCanonicalCreateRequireFactoryExpression(initializer, resolutionScope));
+		const canonicalResult =
+			initializer !== null && isCanonicalCreateRequireResultExpression(initializer, resolutionScope);
+		const invalidatedResult =
+			initializer !== null && isPotentialInvalidatedCreateRequireResultExpression(initializer, resolutionScope);
+		const inferredCanonicalAmbientRequire =
+			canonicalAmbientRequire ||
+			(initializer !== null && isCanonicalAmbientRequireExpression(initializer, resolutionScope));
+		const potentialAmbientRequire =
+			ambientRequireLike || (initializer !== null && isPotentialAmbientRequireExpression(initializer, resolutionScope));
+		scope.bindings.set(name.text, {
 			initializer,
-			canonicalCreateRequire,
+			canonicalCreateRequire: canonicalCreateRequire,
+			canonicalCreateRequireFactory: canonicalFactory,
+			canonicalCreateRequireResult: canonicalResult,
+			invalidatedCreateRequireResult: invalidatedResult,
 			canonicalModuleNamespace,
 			canonicalWriteFileSync,
 			canonicalFsNamespace,
-			canonicalAmbientRequire,
-			ambientRequireLike,
-		};
-		scope.bindings.set(name.text, binding);
-		const canonicalFactory = isCanonicalCreateRequire(scope, name.text);
-		const canonicalResult = isCanonicalCreateRequireResult(scope, name.text);
-		const invalidatedResult = isPotentialInvalidatedCreateRequireResult(scope, name.text);
-		const inferredCanonicalAmbientRequire = isCanonicalAmbientRequire(scope, name.text);
-		const potentialAmbientRequire = ambientRequireLike || isPotentialAmbientRequire(scope, name.text);
-		if (
-			canonicalFactory ||
-			canonicalResult ||
-			invalidatedResult ||
-			inferredCanonicalAmbientRequire ||
-			potentialAmbientRequire
-		)
-			scope.bindings.set(name.text, {
-				...binding,
-				canonicalCreateRequireFactory: canonicalFactory,
-				canonicalCreateRequireResult: canonicalResult,
-				invalidatedCreateRequireResult: invalidatedResult,
-				canonicalAmbientRequire: canonicalAmbientRequire || inferredCanonicalAmbientRequire,
-				ambientRequireLike: potentialAmbientRequire,
-			});
+			canonicalAmbientRequire: inferredCanonicalAmbientRequire,
+			ambientRequireLike: potentialAmbientRequire,
+		});
 		return;
 	}
-	for (const element of name.elements) {
+	for (const [index, element] of name.elements.entries()) {
 		if (ts.isOmittedExpression(element)) continue;
 		if (ts.isBindingElement(element)) {
-			const propertyName = element.propertyName ?? element.name;
+			const propertyName = element.propertyName ?? (ts.isIdentifier(element.name) ? element.name : null);
 			const unwrappedInitializer = initializer === null ? null : unwrapExpression(initializer);
 			const isGlobalThisRequireShape =
 				unwrappedInitializer !== null &&
-				ts.isIdentifier(propertyName) &&
-				propertyName.text === "require" &&
+				propertyName !== null &&
+				propertyNameText(propertyName) === "require" &&
 				ts.isIdentifier(unwrappedInitializer) &&
 				unwrappedInitializer.text === "globalThis";
-			const isGlobalThisRequire = isGlobalThisRequireShape && resolveBinding(scope, "globalThis") === undefined;
-			bindPattern(scope, element.name, null, false, false, false, false, isGlobalThisRequire, isGlobalThisRequireShape);
+			const isGlobalThisRequire =
+				isGlobalThisRequireShape && resolveBinding(resolutionScope, "globalThis") === undefined;
+			const childInitializer = isGlobalThisRequireShape ? null : bindingElementInitializer(initializer, element, index);
+			bindPattern(
+				scope,
+				element.name,
+				childInitializer,
+				false,
+				false,
+				false,
+				false,
+				isGlobalThisRequire,
+				isGlobalThisRequireShape,
+				resolutionScope,
+			);
 		}
 	}
 }
@@ -1070,6 +1132,36 @@ function isCanonicalCreateRequireCall(expression: ts.Expression, scope: StaticSc
 	);
 }
 
+function isCanonicalCreateRequireFactoryExpression(expression: ts.Expression, scope: StaticScope): boolean {
+	const unwrapped = unwrapExpression(expression);
+	if (ts.isIdentifier(unwrapped)) return isCanonicalCreateRequire(scope, unwrapped.text);
+	return (
+		ts.isPropertyAccessExpression(unwrapped) &&
+		ts.isIdentifier(unwrapped.expression) &&
+		unwrapped.name.text === "createRequire" &&
+		isCanonicalModuleNamespace(scope, unwrapped.expression.text)
+	);
+}
+
+function isCanonicalCreateRequireResultExpression(expression: ts.Expression, scope: StaticScope): boolean {
+	const unwrapped = unwrapExpression(expression);
+	if (ts.isCallExpression(unwrapped)) return isCanonicalCreateRequireCall(unwrapped.expression, scope);
+	if (ts.isIdentifier(unwrapped)) return isCanonicalCreateRequireResult(scope, unwrapped.text);
+	return false;
+}
+
+function isPotentialInvalidatedCreateRequireResultExpression(expression: ts.Expression, scope: StaticScope): boolean {
+	const unwrapped = unwrapExpression(expression);
+	if (ts.isCallExpression(unwrapped)) {
+		const callee = unwrapExpression(unwrapped.expression);
+		return (
+			ts.isIdentifier(callee) && resolveBinding(scope, callee.text)?.binding.invalidatedCreateRequireFactory === true
+		);
+	}
+	if (ts.isIdentifier(unwrapped)) return isPotentialInvalidatedCreateRequireResult(scope, unwrapped.text);
+	return false;
+}
+
 function isPotentialInvalidatedCreateRequireResult(scope: StaticScope, name: string): boolean {
 	const resolved = resolveBinding(scope, name);
 	if (resolved === undefined || resolved.binding.initializer === null) return false;
@@ -1171,6 +1263,108 @@ function invalidateAssignmentTarget(scope: StaticScope, target: ts.Node): void {
 	}
 	if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken)
 		invalidateAssignmentTarget(scope, target.left);
+}
+
+interface AssignmentObjectTarget {
+	readonly target: ts.Node;
+	readonly defaultInitializer?: ts.Expression;
+}
+
+function assignmentObjectTarget(property: ts.ObjectLiteralElementLike): AssignmentObjectTarget | null {
+	if (ts.isShorthandPropertyAssignment(property)) {
+		return { target: property.name, defaultInitializer: property.objectAssignmentInitializer };
+	}
+	if (ts.isPropertyAssignment(property)) {
+		if (
+			ts.isBinaryExpression(property.initializer) &&
+			property.initializer.operatorToken.kind === ts.SyntaxKind.EqualsToken
+		)
+			return { target: property.initializer.left, defaultInitializer: property.initializer.right };
+		return { target: property.initializer };
+	}
+	if (ts.isSpreadAssignment(property)) return { target: property.expression };
+	return null;
+}
+
+function assignBindingTarget(scope: StaticScope, target: ts.Node, initializer: ts.Expression | null): void {
+	if (ts.isIdentifier(target)) {
+		if (initializer === null) {
+			invalidateBinding(scope, target.text);
+			return;
+		}
+		const canonicalFactory = isCanonicalCreateRequireFactoryExpression(initializer, scope);
+		const canonicalResult = isCanonicalCreateRequireResultExpression(initializer, scope);
+		const canonicalAmbient = isCanonicalAmbientRequireExpression(initializer, scope);
+		if (!canonicalFactory && !canonicalResult && !canonicalAmbient) {
+			invalidateBinding(scope, target.text);
+			return;
+		}
+		const bindingScope = resolveBinding(scope, target.text)?.scope ?? scope;
+		bindPattern(
+			bindingScope,
+			target,
+			initializer,
+			canonicalFactory,
+			false,
+			false,
+			false,
+			canonicalAmbient,
+			canonicalAmbient,
+			scope,
+		);
+		return;
+	}
+	if (
+		ts.isParenthesizedExpression(target) ||
+		ts.isAsExpression(target) ||
+		ts.isTypeAssertionExpression(target) ||
+		ts.isNonNullExpression(target)
+	) {
+		assignBindingTarget(scope, target.expression, initializer);
+		return;
+	}
+	if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+		assignBindingTarget(scope, target.left, target.right);
+		return;
+	}
+	if (ts.isArrayLiteralExpression(target)) {
+		const source = initializer === null ? null : unwrapExpression(initializer);
+		if (source === null || !ts.isArrayLiteralExpression(source)) {
+			invalidateAssignmentTarget(scope, target);
+			return;
+		}
+		if (source.elements.some((element) => ts.isSpreadElement(element))) {
+			invalidateAssignmentTarget(scope, target);
+			return;
+		}
+		for (const [index, element] of target.elements.entries()) {
+			if (ts.isOmittedExpression(element)) continue;
+			const targetNode = ts.isSpreadElement(element) ? element.expression : element;
+			const sourceElement = source.elements[index];
+			const sourceValue =
+				sourceElement === undefined || ts.isOmittedExpression(sourceElement) || ts.isSpreadElement(sourceElement)
+					? null
+					: sourceElement;
+			assignBindingTarget(scope, targetNode, sourceValue);
+		}
+		return;
+	}
+	if (ts.isObjectLiteralExpression(target)) {
+		const source = initializer === null ? null : unwrapExpression(initializer);
+		const sourceObject = source !== null && ts.isObjectLiteralExpression(source) ? source : null;
+		for (const property of target.properties) {
+			const assignment = assignmentObjectTarget(property);
+			if (assignment === null) continue;
+			const key =
+				ts.isSpreadAssignment(property) || property.name === undefined ? null : propertyNameText(property.name);
+			let sourceValue: ts.Expression | null = null;
+			if (sourceObject !== null && key !== null) {
+				const value = objectLiteralPropertyValue(sourceObject, key);
+				sourceValue = value === undefined ? (assignment.defaultInitializer ?? null) : value;
+			}
+			assignBindingTarget(scope, assignment.target, sourceValue);
+		}
+	}
 }
 
 function isCanonicalCreateRequireResult(scope: StaticScope, name: string, resolving = new Set<string>()): boolean {
@@ -1667,7 +1861,8 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 			let currentScope = scope;
 			if (isFunctionLike(node)) {
 				currentScope = { parent: scope, bindings: new Map(), isVarScope: true };
-				for (const parameter of node.parameters) bindPattern(currentScope, parameter.name, null);
+				for (const parameter of node.parameters)
+					bindPattern(currentScope, parameter.name, parameter.initializer ?? null);
 				predeclareVarBindings(node, currentScope);
 				predeclareFunctionBindings(node, currentScope);
 			} else if (
@@ -1704,10 +1899,13 @@ export function analyzeSourceTree(options: AuditOptions = {}): ArchitectureInven
 						: currentScope;
 				bindPattern(bindingScope, node.name, node.initializer ?? null);
 			}
-			if (ts.isBinaryExpression(node) && ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile)))
-				invalidateAssignmentTarget(currentScope, node.left);
+			if (ts.isBinaryExpression(node) && ASSIGNMENT_OPERATORS.has(node.operatorToken.getText(sourceFile))) {
+				if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+					assignBindingTarget(currentScope, node.left, node.right);
+				else invalidateAssignmentTarget(currentScope, node.left);
+			}
 			if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer))
-				invalidateAssignmentTarget(currentScope, node.initializer);
+				assignBindingTarget(currentScope, node.initializer, null);
 			if (
 				ts.isPrefixUnaryExpression(node) &&
 				(node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&

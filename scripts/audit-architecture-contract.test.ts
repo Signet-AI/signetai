@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,7 +23,7 @@ test("the committed baseline reproduces the current source and package inventory
 	expect(current.summary.packages).toBe(34);
 });
 
-test("the pull-request workflow uses a protected evaluator and clean candidate archive", () => {
+test("the pull-request workflow uses a protected evaluator and clean candidate checkout", () => {
 	const workflow = readFileSync(join(import.meta.dir, "../.github/workflows/architecture-ratchet.yml"), "utf8");
 	expect(workflow).toContain("on:\n  pull_request_target:");
 	expect(workflow).not.toContain("on:\n  pull_request:");
@@ -33,7 +34,8 @@ test("the pull-request workflow uses a protected evaluator and clean candidate a
 	expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$BASE_SHA"');
 	expect(workflow).toContain('git init --quiet "$CANDIDATE_REPO"');
 	expect(workflow).toContain('git -C "$CANDIDATE_REPO" fetch --no-tags --depth=1 candidate "$HEAD_SHA"');
-	expect(workflow).toContain('git -C "$CANDIDATE_REPO" archive "$HEAD_SHA" | tar -x -C "$CANDIDATE_ROOT"');
+	expect(workflow).toContain('git -C "$CANDIDATE_REPO" --work-tree="$CANDIDATE_ROOT" read-tree --reset -u "$HEAD_SHA"');
+	expect(workflow).not.toContain('git -C "$CANDIDATE_REPO" archive "$HEAD_SHA"');
 	expect(workflow).toContain('git archive "$BASE_SHA" | tar -x -C "$BASE_ROOT"');
 	expect(workflow).not.toContain("CANDIDATE_ROOT: ${{" + " github.workspace }}");
 	expect(workflow).not.toContain("TRUSTED_AUDITOR_COMMIT");
@@ -64,15 +66,43 @@ test("the pull-request workflow uses a protected evaluator and clean candidate a
 	expect(targetAudit).not.toContain("bun test");
 	expect(targetAudit).not.toContain("bun run build");
 	const protectedArchive = targetAudit.indexOf('git archive "$BASE_SHA"');
-	const candidateArchive = targetAudit.indexOf('git -C "$CANDIDATE_REPO" archive "$HEAD_SHA"');
+	const candidateCheckout = targetAudit.indexOf(
+		'git -C "$CANDIDATE_REPO" --work-tree="$CANDIDATE_ROOT" read-tree --reset -u "$HEAD_SHA"',
+	);
 	const evaluator = targetAudit.indexOf("bun -e '");
 	expect(protectedArchive).toBeGreaterThanOrEqual(0);
-	expect(candidateArchive).toBeGreaterThan(protectedArchive);
-	expect(evaluator).toBeGreaterThan(candidateArchive);
+	expect(candidateCheckout).toBeGreaterThan(protectedArchive);
+	expect(evaluator).toBeGreaterThan(candidateCheckout);
 	expect(workflow).not.toContain(
 		'import { analyzeSourceTree, writeBaseline } from "./scripts/audit-architecture-contract"',
 	);
 	expect(workflow).not.toContain("--write-baseline");
+});
+
+test("clean candidate checkout materializes tracked files ignored by git archive", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-clean-candidate-checkout-"));
+	try {
+		const repository = join(root, "repository");
+		const candidate = join(root, "candidate");
+		execFileSync("git", ["init", "--quiet", repository]);
+		execFileSync("git", ["-C", repository, "config", "user.email", "architecture-test@example.invalid"]);
+		execFileSync("git", ["-C", repository, "config", "user.name", "Architecture Test"]);
+		writeFileSync(join(repository, ".gitattributes"), "hidden.ts export-ignore\n");
+		writeFileSync(join(repository, "visible.ts"), "export const visible = true;\n");
+		writeFileSync(join(repository, "hidden.ts"), "export const hidden = true;\n");
+		execFileSync("git", ["-C", repository, "add", "--all"]);
+		execFileSync("git", ["-C", repository, "commit", "--quiet", "-m", "fixture"]);
+		const commit = execFileSync("git", ["-C", repository, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+		const archive = execFileSync("git", ["-C", repository, "archive", commit]);
+		const archivedPaths = execFileSync("tar", ["-tf", "-"], { input: archive, encoding: "utf8" });
+		expect(archivedPaths).not.toContain("hidden.ts");
+
+		mkdirSync(candidate);
+		execFileSync("git", ["-C", repository, `--work-tree=${candidate}`, "read-tree", "--reset", "-u", commit]);
+		expect(readFileSync(join(candidate, "hidden.ts"), "utf8")).toContain("hidden");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("structural edge identities survive unrelated line insertion", () => {
@@ -711,6 +741,31 @@ test("ambient CommonJS require aliases and documented global forms retain runtim
 			]),
 		);
 		expect(inventory.computedLoads).toHaveLength(0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("ambient CommonJS assignments and default parameters retain runtime provenance", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-ambient-require-assignment-"));
+	try {
+		writeFileSync(join(root, "target.ts"), 'import "./loader";\nexport const target = true;\n');
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				"let alias;",
+				"alias = require;",
+				'alias("./target");',
+				"function load(loader = require) {",
+				'	loader("./target");',
+				"}",
+				"load();",
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.kind === "require" && edge.to === "target.ts")).toHaveLength(2);
+		expect(inventory.computedLoads.filter((load) => load.kind === "require")).toHaveLength(0);
+		expect(inventory.summary.runtimeCycles).toBe(1);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -1360,6 +1415,59 @@ test("canonical createRequire factory and result aliases retain runtime provenan
 	}
 });
 
+test("createRequire assignments and default parameters retain runtime provenance", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-create-require-assignment-"));
+	try {
+		writeFileSync(join(root, "target.ts"), 'import "./loader";\nexport const target = true;\n');
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				'import { createRequire } from "node:module";',
+				"let factory;",
+				"factory = createRequire;",
+				"let req;",
+				"req = factory(import.meta.url);",
+				'req("./target");',
+				"function load(factory = createRequire, req = factory(import.meta.url)) {",
+				'	req("./target");',
+				"}",
+				"load();",
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.kind === "require" && edge.to === "target.ts")).toHaveLength(2);
+		expect(inventory.computedLoads.filter((load) => load.kind === "require")).toHaveLength(0);
+		expect(inventory.summary.runtimeCycles).toBe(1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("destructuring assignments propagate canonical loader provenance", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-loader-destructuring-assignment-"));
+	try {
+		writeFileSync(join(root, "target.ts"), 'import "./loader";\nexport const target = true;\n');
+		writeFileSync(
+			join(root, "loader.ts"),
+			[
+				'import { createRequire } from "node:module";',
+				"let ambient;",
+				"({ ambient } = { ambient: require });",
+				'ambient("./target");',
+				"let req;",
+				"[req] = [createRequire(import.meta.url)];",
+				'req("./target");',
+			].join("\n"),
+		);
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceEdges.filter((edge) => edge.kind === "require" && edge.to === "target.ts")).toHaveLength(2);
+		expect(inventory.computedLoads.filter((load) => load.kind === "require")).toHaveLength(0);
+		expect(inventory.summary.runtimeCycles).toBe(1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("reassigned createRequire result aliases remain visible as computed loads", () => {
 	const root = mkdtempSync(join(tmpdir(), "architecture-create-require-reassignment-"));
 	try {
@@ -1439,6 +1547,42 @@ test("destructuring and loop assignment targets invalidate createRequire results
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
+	}
+});
+
+test("tracked TypeScript under target, build, and built remains in the audited source graph", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-excluded-source-directories-"));
+	try {
+		for (const directory of ["target", "build", "built"]) {
+			mkdirSync(join(root, directory));
+			writeFileSync(join(root, directory, "entry.ts"), `import "./hidden";\nexport const entry = true;\n`);
+			writeFileSync(join(root, directory, "hidden.ts"), `import "./entry";\nexport const hidden = true;\n`);
+		}
+		const inventory = analyzeSourceTree({ root, sourceRoot: root });
+		expect(inventory.sourceFiles.map((file) => file.path)).toEqual([
+			"build/entry.ts",
+			"build/hidden.ts",
+			"built/entry.ts",
+			"built/hidden.ts",
+			"target/entry.ts",
+			"target/hidden.ts",
+		]);
+		expect(inventory.summary.runtimeCycles).toBe(3);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("generated-looking TypeScript under excluded directory names is validated", () => {
+	const root = mkdtempSync(join(tmpdir(), "architecture-excluded-generated-source-"));
+	try {
+		mkdirSync(join(root, "target"));
+		writeFileSync(join(root, "target", "hidden.ts"), "// AUTO-GENERATED FILE\nexport const hidden = true;\n");
+		expect(() => analyzeSourceTree({ root, sourceRoot: root })).toThrow(
+			"Generated artifact target/hidden.ts matches generated-marker",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
 	}
 });
 

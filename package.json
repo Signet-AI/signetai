@@ -1,6 +1,6 @@
 {
 	"name": "signet",
-	"version": "0.214.45",
+	"version": "0.214.46",
 	"private": true,
 	"packageManager": "bun@1.3.11",
 	"description": "Local-first identity, memory, and secrets for AI agents",
