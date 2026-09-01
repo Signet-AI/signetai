@@ -25,6 +25,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { type Server, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadMemoryConfig } from "./memory-config";
 
 type TestChild = ChildProcessByStdio<null, Readable, Readable>;
 
@@ -159,11 +160,18 @@ async function freePort(): Promise<number> {
 	});
 }
 
+type BlackholeEndpoint = {
+	readonly origin: string;
+	readonly connectionCount: () => number;
+};
+
 /** A TCP server that accepts connections but never responds — makes an HTTP
  *  fetch hang indefinitely on response headers (a stalled CDN), hermetically. */
-async function blackholeOrigin(): Promise<string> {
+async function blackholeOrigin(): Promise<BlackholeEndpoint> {
 	return new Promise((resolve, reject) => {
+		let connectionCount = 0;
 		const server = createServer((socket) => {
+			connectionCount += 1;
 			// Hold the connection open without ever writing a response.
 			socket.on("error", () => {});
 		});
@@ -172,9 +180,21 @@ async function blackholeOrigin(): Promise<string> {
 			const address = server.address();
 			if (address === null || typeof address === "string") return reject(new Error("no port"));
 			servers.push(server);
-			resolve(`http://127.0.0.1:${address.port}`);
+			resolve({
+				origin: `http://127.0.0.1:${address.port}`,
+				connectionCount: () => connectionCount,
+			});
 		});
 	});
+}
+
+async function waitForBlackholeConnection(endpoint: BlackholeEndpoint, deadlineMs = 60_000): Promise<void> {
+	const deadline = Date.now() + deadlineMs;
+	while (Date.now() < deadline) {
+		if (endpoint.connectionCount() > 0) return;
+		await Bun.sleep(100);
+	}
+	throw new Error(`native embedding worker did not reach the blackhole within ${deadlineMs}ms`);
 }
 
 async function waitForHealth(
@@ -236,7 +256,7 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		await expect(result).rejects.toThrow(/status unknown, signal SIGTERM/);
 	});
 
-	// Generous timeout: daemon startup + a 5s probe window.
+	// Generous timeout: daemon startup + deferred native startup + a 5s probe window.
 	it("/health stays within SLA while the embedding worker is stuck on a model download", async () => {
 		const agentsDir = tempDir();
 		writeFileSync(
@@ -245,14 +265,19 @@ describe("native embedding event-loop isolation (e2e)", () => {
 				"memory:",
 				"  pipelineV2:",
 				"    enabled: false",
-				"  embedding:",
-				"    provider: native",
-				"    model: nomic-ai/nomic-embed-text-v1.5",
-				"    dimensions: 768",
+				"embedding:",
+				"  provider: native",
+				"  model: nomic-ai/nomic-embed-text-v1.5",
+				"  dimensions: 768",
 				"",
 			].join("\n"),
 		);
 		initializeWorkspaceDatabase(agentsDir);
+		expect(loadMemoryConfig(agentsDir).embedding).toMatchObject({
+			provider: "native",
+			model: "nomic-ai/nomic-embed-text-v1.5",
+			dimensions: 768,
+		});
 
 		const [port, blackhole] = await Promise.all([freePort(), blackholeOrigin()]);
 		const origin = `http://127.0.0.1:${port}`;
@@ -265,7 +290,7 @@ describe("native embedding event-loop isolation (e2e)", () => {
 				SIGNET_BIND: "127.0.0.1",
 				// Redirect the transformers model fetch to the blackhole so the
 				// embedding worker's first-run download hangs for the whole probe.
-				SIGNET_EMBEDDING_REMOTE_HOST: blackhole,
+				SIGNET_EMBEDDING_REMOTE_HOST: blackhole.origin,
 				// Avoid crosstalk with the user's real daemon/services.
 				SIGNET_DAEMON_ENTRYPOINT: "1",
 			},
@@ -279,9 +304,14 @@ describe("native embedding event-loop isolation (e2e)", () => {
 
 		await waitForHealth(origin, child, lifecycle);
 
-		// The daemon's startup probe (daemon.ts) fires checkEmbeddingProvider
-		// at boot, so the embedding worker is now grinding against the
-		// blackhole. Poll /health through the window and assert the SLA.
+		// The daemon's deferred startup probe (daemon.ts) invokes
+		// checkNativeProvider after the initial health handshake. Waiting for the
+		// blackhole connection proves the native path was entered before this
+		// test evaluates the event-loop SLA.
+		await waitForBlackholeConnection(blackhole);
+		expect(blackhole.connectionCount()).toBeGreaterThan(0);
+
+		// Poll /health through the stuck native-init window and assert the SLA.
 		const samples: number[] = [];
 		const probeDeadline = Date.now() + 5_000;
 		while (Date.now() < probeDeadline) {
@@ -297,23 +327,7 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		// while the embedding worker is hung. (Before the fix this timed out.)
 		const max = Math.max(...samples);
 		expect(max).toBeLessThan(1_000);
-
-		// Prove the embedding worker actually started its (stuck) init against
-		// the blackhole — otherwise this test could pass trivially with the
-		// provider idle. The handle forwards worker logs through the daemon
-		// logger, which writes to the agents-dir log.
-		const logDir = join(agentsDir, ".daemon", "logs");
-		let logText = "";
-		try {
-			for (const name of readdirSync(logDir)) {
-				if (name.endsWith(".log")) logText += readFileSync(join(logDir, name), "utf8");
-			}
-		} catch {
-			// logs may live elsewhere on some platforms; the SLA assertion above
-			// is the load-bearing guard.
-		}
-		expect(logText).toMatch(/nomic-embed|Initializing.*nomic|embedding/i);
-	}, 60_000);
+	}, 120_000);
 
 	it("fails closed when an explicit workspace is incomplete", async () => {
 		const agentsDir = tempDir();

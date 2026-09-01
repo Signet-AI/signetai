@@ -17,6 +17,7 @@ on:
       - "platform/daemon/src/embedding-fetch.ts"
       - "platform/daemon/src/embedding-health.ts"
       - "platform/daemon/src/routes/utils.ts"
+      - "platform/daemon/src/routes/health.ts"
       - "platform/daemon/src/daemon.ts"
       - "platform/daemon/src/db-owner*.ts"
       - "platform/daemon/src/mcp-stdio*.ts"
@@ -37,6 +38,7 @@ on:
       - "platform/daemon/src/embedding-fetch.ts"
       - "platform/daemon/src/embedding-health.ts"
       - "platform/daemon/src/routes/utils.ts"
+      - "platform/daemon/src/routes/health.ts"
       - "platform/daemon/src/daemon.ts"
       - "platform/daemon/src/db-owner*.ts"
       - "platform/daemon/src/mcp-stdio*.ts"
@@ -101,7 +103,7 @@ jobs:
         env:
           SIGNET_DB_OWNER_SMOKE: "1"
           SIGNET_DREAMING_MCP_SMOKE: "1"
-          SIGNET_NATIVE_EMBEDDING_SMOKE: "0"
+          SIGNET_NATIVE_EMBEDDING_SMOKE: "1"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/signet-linux-x64
           SIGNET_TELEMETRY_OPTOUT: "1"
         run: bun test scripts/native-embedding-runtime-smoke.test.ts scripts/native-dreaming-mcp-smoke.test.ts scripts/native-dreaming-finalize-smoke.test.ts scripts/native-worker-bundle-contract.test.ts

@@ -65,6 +65,13 @@ function tempDir(): string {
 	return path;
 }
 
+function initializeWorkspaceDatabase(workspace: string): void {
+	const memoryDir = join(workspace, "memory");
+	mkdirSync(memoryDir, { recursive: true });
+	const database = new Database(join(memoryDir, "memories.db"));
+	database.close();
+}
+
 async function freePort(): Promise<number> {
 	const server = createServer();
 	await new Promise<void>((resolve, reject) => {
@@ -134,11 +141,22 @@ async function stopChild(
 
 const blackholeServers: Server[] = [];
 
+type BlackholeEndpoint = {
+	readonly origin: string;
+	readonly connectionCount: () => number;
+};
+
+type ChildWithExitCode = {
+	readonly exitCode: number | null;
+};
+
 /** TCP server that accepts a connection but never responds — makes an HTTP
  *  model fetch hang on response headers (a stalled CDN), hermetically. */
-async function blackholeOrigin(): Promise<string> {
+async function blackholeOrigin(): Promise<BlackholeEndpoint> {
 	return new Promise((resolve, reject) => {
+		let connectionCount = 0;
 		const server = createServer((socket) => {
+			connectionCount += 1;
 			socket.on("error", () => {});
 		});
 		server.once("error", reject);
@@ -146,9 +164,27 @@ async function blackholeOrigin(): Promise<string> {
 			const address = server.address();
 			if (address === null || typeof address === "string") return reject(new Error("blackhole did not bind"));
 			blackholeServers.push(server);
-			resolve(`http://127.0.0.1:${address.port}`);
+			resolve({
+				origin: `http://127.0.0.1:${address.port}`,
+				connectionCount: () => connectionCount,
+			});
 		});
 	});
+}
+
+async function waitForBlackholeConnection(
+	endpoint: BlackholeEndpoint,
+	child: ChildWithExitCode,
+	deadlineMs = 60_000,
+): Promise<void> {
+	const deadline = Date.now() + deadlineMs;
+	while (Date.now() < deadline) {
+		if (endpoint.connectionCount() > 0) return;
+		if (child.exitCode !== null)
+			throw new Error(`native daemon exited before native embedding init (status ${child.exitCode})`);
+		await Bun.sleep(100);
+	}
+	throw new Error(`native embedding worker did not reach the blackhole within ${deadlineMs}ms`);
 }
 
 afterEach(async () => {
@@ -395,6 +431,7 @@ describe("compiled native embedding runtime", () => {
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native Release Smoke\nharnesses:\n  - hermes-agent\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: none\n",
 			);
+			initializeWorkspaceDatabase(workspace);
 
 			const port = await freePort();
 			const origin = `http://127.0.0.1:${port}`;
@@ -471,6 +508,7 @@ describe("compiled native embedding runtime", () => {
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native Embedding Smoke\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: native\n  model: nomic-embed-text-v1.5\n  dimensions: 768\n",
 			);
+			initializeWorkspaceDatabase(workspace);
 
 			const port = await freePort();
 			const origin = `http://127.0.0.1:${port}`;
@@ -550,6 +588,7 @@ describe("compiled native embedding runtime", () => {
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native Embedding Isolation Smoke\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: native\n  model: nomic-embed-text-v1.5\n  dimensions: 768\n",
 			);
+			initializeWorkspaceDatabase(workspace);
 			const [port, blackhole] = await Promise.all([freePort(), blackholeOrigin()]);
 			const origin = `http://127.0.0.1:${port}`;
 			const child = spawn(binary, [], {
@@ -561,7 +600,7 @@ describe("compiled native embedding runtime", () => {
 					SIGNET_BIND: "127.0.0.1",
 					// Redirect the transformers model fetch at the blackhole so the
 					// embedding worker's first-run download hangs for the window.
-					SIGNET_EMBEDDING_REMOTE_HOST: blackhole,
+					SIGNET_EMBEDDING_REMOTE_HOST: blackhole.origin,
 					OLLAMA_HOST: "http://127.0.0.1:1",
 				},
 				stdio: ["ignore", "pipe", "pipe"],
@@ -573,6 +612,8 @@ describe("compiled native embedding runtime", () => {
 
 			try {
 				await waitForHealth(origin, child);
+				await waitForBlackholeConnection(blackhole, child);
+				expect(blackhole.connectionCount()).toBeGreaterThan(0);
 				const samples: number[] = [];
 				const deadline = Date.now() + 5_000;
 				while (Date.now() < deadline) {
@@ -619,6 +660,7 @@ describe("compiled native OAuth sign-in", () => {
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native OAuth Smoke\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: none\n",
 			);
+			initializeWorkspaceDatabase(workspace);
 			const port = await freePort();
 			const origin = `http://127.0.0.1:${port}`;
 			const child = spawn(binary, [], {
