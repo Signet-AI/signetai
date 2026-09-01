@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-01
+- Features: add third-party license colophon.
+
 ### 2026-08-31
 - Bug fixes: bundle Dreaming finalizer; refresh event-loop contract baseline; harden native memory provider gating; repair event-loop audit site tokens; bound native source embedding outages; abort OAuth prompts on callback completion; pass abort signal to pi-ai OAuth; update pi-ai model registry; preserve fresh workspace startup; fail closed on malformed workspace pointers; create startup state after workspace preflight; preflight workspace before daemon probes; fail closed when configured workspace disappears; preserve graph context safety; keep graph recall reads on db owner; bound owner traversal deadlines; route memory recall traversal through db owner; pause setup spinner while prompting; cover compiled CLI OAuth setup; preserve non-task type exports; make owner lease retries idempotent; record backlog mirror on the owner-maintenance branch (#1759 re-verdict finding); isolate Dreaming token worker requests; bound exact Dreaming token accounting; enforce provider SDK contracts; bound sync DB site token matching; repair boundary test structure after rebase (balanced describes); restore wave-5 source-evidence helper + classify it in inline dispatch; repair boundary test structure; resolve wave-5 + foundation merge — realign contract inventory to 899/219/217/383; make lifecycle close recovery robust; reopen accessor lifecycle between closes; close DB lifecycle registrations atomically; require DB owner for vacuum work; realign contract test assertions to wave-5 inventory (902/220/384); L1 wave 5 — routes clusters owner-routed (memory/sources/misc + imported-source-outcome); repair compiled first-use path.
 - Refactoring: route wave 7 workers through db owner; route knowledge graph reads through db owner; stabilize DB attribution IDs; isolate server composition root; separate widget generation from probe persistence; isolate Dreaming backlog cache; move owner-local Dreaming execution; make inline owner dispatch exhaustive; isolate DB foundation lifecycle; isolate migration contract.
@@ -29,10 +32,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-08-25
 - Bug fixes: kill delayed recovery targets; harden transcript recovery shutdown; rebase recovery site tokens after retry-bounding edit; bound transcript recovery retries.
 
-### 2026-08-23
-- Bug fixes: rebase site tokens after vacuum space-guard edit; allow unknown migration backup space; harden vector backfill and migration cursors; validate backup cursors and quarantine only malformed vectors; legacy backup classification and quarantined backfill; verifiable bridge state and equipped backfill; ordered verdicts, blocked children, yielding backfill; process-wide corruption block and recoverable verification; progress-capable backfill and corruption-safe maintenance; pre-init corruption gate and owner-spanning backfill; fail-close corrupt writes and defer heavy backfill; gate runtime writers and vacuum on verification outcome; preserve unverified rollback points and bound backfill; admissible scan budgets and regular-file backup inventory; uncapped size budgets, staged startup fencing, safe destinations; unblock runtime on scheduled verify and test production deadline; honest scan exclusion and crash-safe backup resume; monotonic corruption latch and verified backup resume; serialize verify maintenance and keep backup lifecycle honest; keep corruption verdicts and startup budgets honest; scope verify outcomes honestly and confirm prune results; severity-merge integrity states and retry verify gate setup; bind migration budgets to owner deadline and surface verify failures; harden migration backup recovery status; close migration startup races; upgrade checkpoint attempt_count column before first reference; preserve unverified rollback point and scope verify checkpoint per generation; lint-clean probe handles; no non-null assertions; complete r6 bounded-verify and absolute-deadline fixes; make post-migration verification full-equivalent and resume admission-closed; scope artifact verification and close probe write gap; close admission gaps flagged in review of #1709; bound startup migration work behind admission guarantees.
-
 ## Release Ledger
+
+## [0.215.0] - 2026-09-01
+
+Release summary: 1 feature.
+Tag range: `v0.214.46..v0.215.0`.
+
+### Features
+
+- **dashboard**: add third-party license colophon (#1718)
 
 ## [0.214.46] - 2026-08-31
 
