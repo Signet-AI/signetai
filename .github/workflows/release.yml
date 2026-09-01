@@ -303,6 +303,10 @@ jobs:
           # Release CI validates the compiled binary and event-loop isolation
           # separately. Avoid external model downloads and Hugging Face rate limits.
           SIGNET_NATIVE_EMBEDDING_SMOKE: "0"
+          # Exercise the projection worker asset from the compiled release
+          # binary: bounded compute, forced cancellation, and post-cancel
+          # daemon health are covered by this gated smoke.
+          SIGNET_NATIVE_PROJECTION_SMOKE: "1"
           # Keep the compiled DB-owner dispatch gate on even when the broader
           # embedding smoke is disabled. This must fail if the worker asset is
           # missing from the release binary.

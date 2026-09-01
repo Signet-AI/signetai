@@ -342,10 +342,6 @@ export interface OpenClawHeartbeatData {
 export let openClawHeartbeat: { timestamp: string; data: OpenClawHeartbeatData } | null = null;
 export const OPENCLAW_STALE_MS = 10 * 60 * 1000;
 
-// Projection state
-export const projectionInFlight = new Map<number, Promise<void>>();
-export const projectionErrors = new Map<number, { message: string; expires: number }>();
-export const PROJECTION_ERROR_TTL_MS = 30_000;
 export const hasMemoriesSessionIdColumnCache: boolean | null = null;
 
 // Auth state
@@ -457,7 +453,7 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	const report = getDbAccessor().withReadDb(
 		(db: import("../db-accessor").ReadDb) =>
 			getDiagnostics(db, providerTracker, getUpdateState(), buildOpenClawHealth(), diagnosticsOptions),
-		"routes/state.ts:457",
+		"routes/state.ts:453",
 	);
 	diagnosticsCache = {
 		report,

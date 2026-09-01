@@ -108,4 +108,65 @@ describe("Embeddings API", () => {
 		expect(req.query.dimensions).toBe("2");
 		expect(projection.status).toBe("ready");
 	});
+
+	test("cancelEmbeddingProjection() accepts the successful cancellation response", async () => {
+		const { client } = mockDaemon((req) => {
+			if (req.path === "/api/embeddings/projection/job-123")
+				return { status: "cancelled", jobId: "job-123", dimensions: 2 };
+			return { ok: true };
+		});
+
+		const result = await client.cancelEmbeddingProjection("job-123");
+
+		expect(lastRequest()).toMatchObject({ method: "DELETE", path: "/api/embeddings/projection/job-123" });
+		expect(result).toEqual({ status: "cancelled", jobId: "job-123", dimensions: 2 });
+	});
+
+	test("cancelEmbeddingProjection() exposes ready, timeout, and error terminal responses", async () => {
+		const responses: unknown[] = [
+			{
+				status: "ready",
+				jobId: "job-123",
+				dimensions: 2,
+				count: 1,
+				total: 1,
+				limit: 1,
+				offset: 0,
+				hasMore: false,
+				sampled: false,
+				nodes: [{ id: "m1", x: 0, y: 0 }],
+				edges: [],
+			},
+			{
+				status: "timeout",
+				jobId: "job-123",
+				dimensions: 2,
+				message: "Embedding projection exceeded its deadline",
+				code: "PROJECTION_TIMEOUT",
+			},
+			{
+				status: "error",
+				jobId: "job-123",
+				dimensions: 2,
+				message: "Projection worker failed",
+				code: "PROJECTION_ERROR",
+			},
+		];
+		const { client } = mockDaemon(() => responses.shift());
+
+		const ready = await client.cancelEmbeddingProjection("job-123");
+		if (ready.status !== "ready") throw new Error(`Expected ready response, got ${ready.status}`);
+		expect(ready.jobId).toBe("job-123");
+		expect(ready.nodes).toHaveLength(1);
+
+		const timeout = await client.cancelEmbeddingProjection("job-123");
+		if (timeout.status !== "timeout") throw new Error(`Expected timeout response, got ${timeout.status}`);
+		expect(timeout.message).toContain("deadline");
+		expect(timeout.code).toBe("PROJECTION_TIMEOUT");
+
+		const error = await client.cancelEmbeddingProjection("job-123");
+		if (error.status !== "error") throw new Error(`Expected error response, got ${error.status}`);
+		expect(error.message).toBe("Projection worker failed");
+		expect(error.code).toBe("PROJECTION_ERROR");
+	});
 });

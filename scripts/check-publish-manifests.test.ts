@@ -23,7 +23,8 @@ describe("check-publish-manifests", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf-8");
 
-		expect(workflow).toContain("  workflow_dispatch:\n  push:");
+		expect(workflow).toContain("  workflow_dispatch:");
+		expect(workflow).toContain("  push:");
 	});
 
 	test("does not ship the retired threaded extraction worker", () => {
@@ -136,6 +137,32 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("bun run build:native-bun");
 		expect(workflow).toContain('./dist/native/"$RELEASE_ASSET" --help');
 		expect(workflow).not.toContain("if: matrix.platform != 'linux-arm64'");
+	});
+
+	test("packages the projection worker in daemon and native release paths", () => {
+		const root = join(import.meta.dir, "..");
+		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
+		const daemonManifest = JSON.parse(readFileSync(join(root, "platform", "daemon", "package.json"), "utf-8")) as {
+			files?: string[];
+		};
+		const nativeBuild = readFileSync(join(root, "scripts", "build-native-bun.ts"), "utf-8");
+		const nativeSmoke = readFileSync(join(root, "scripts", "native-embedding-runtime-smoke.test.ts"), "utf-8");
+		const releaseWorkflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf-8");
+
+		expect(daemonBuild).toContain('entrypoint: "./src/embedding-projection-worker.ts"');
+		expect(daemonBuild).toContain('outfile: "./dist/embedding-projection-worker.js"');
+		expect(daemonManifest.files).toContain("dist");
+		expect(nativeBuild).toContain(
+			'["embedding-projection-worker", "platform/daemon/src/embedding-projection-worker.ts"]',
+		);
+		expect(nativeBuild).toContain("process.env.SIGNET_EMBEDDING_PROJECTION_WORKER");
+		expect(nativeBuild).toContain("runEmbeddingProjectionWorker()");
+		expect(nativeSmoke).toContain('SIGNET_NATIVE_PROJECTION_SMOKE === "1"');
+		expect(nativeSmoke).toContain("dispatches the projection worker and enforces native cancellation");
+		expect(nativeSmoke).toContain("SIGNET_PROJECTION_WORKER_HOLD");
+		expect(nativeSmoke).toContain("Reuse the same packaged binary as a real daemon");
+		expect(releaseWorkflow).toContain('SIGNET_NATIVE_PROJECTION_SMOKE: "1"');
+		expect(releaseWorkflow).toContain("scripts/native-embedding-runtime-smoke.test.ts");
 	});
 
 	test("trims native Signet version overrides before package metadata fallback", () => {

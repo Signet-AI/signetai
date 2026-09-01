@@ -769,25 +769,58 @@ export interface EmbeddingProjectionReadyResponse {
 	readonly limit: number;
 	readonly offset: number;
 	readonly hasMore: boolean;
+	readonly sampled: boolean;
 	readonly nodes: readonly EmbeddingProjectionNode[];
 	readonly edges: readonly EmbeddingProjectionEdge[];
 	readonly cachedAt?: string;
 }
 
-export interface EmbeddingProjectionComputingResponse {
-	readonly status: "computing";
+export interface EmbeddingProjectionAcceptedResponse {
+	readonly status: "accepted" | "running";
+	readonly jobId: string;
+	readonly dimensions: 2 | 3;
+	readonly limit: number;
+	readonly offset: number;
+}
+
+export interface EmbeddingProjectionFailureResponse {
+	readonly status: "timeout" | "cancelled" | "error" | "overloaded";
+	readonly message: string;
+	readonly jobId?: string;
+}
+
+export interface EmbeddingProjectionCancelledResponse {
+	readonly status: "cancelled";
+	readonly jobId: string;
 	readonly dimensions: 2 | 3;
 }
 
-export interface EmbeddingProjectionErrorResponse {
-	readonly status: "error";
+interface EmbeddingProjectionCancellationTimeoutResponse {
+	readonly status: "timeout";
+	readonly jobId: string;
+	readonly dimensions: 2 | 3;
 	readonly message: string;
+	readonly code: "PROJECTION_TIMEOUT";
 }
+
+interface EmbeddingProjectionCancellationErrorResponse {
+	readonly status: "error";
+	readonly jobId: string;
+	readonly dimensions: 2 | 3;
+	readonly message: string;
+	readonly code: "PROJECTION_ERROR";
+}
+
+export type EmbeddingProjectionCancellationResponse =
+	| EmbeddingProjectionCancelledResponse
+	| (EmbeddingProjectionReadyResponse & { readonly jobId: string })
+	| EmbeddingProjectionCancellationTimeoutResponse
+	| EmbeddingProjectionCancellationErrorResponse;
 
 export type EmbeddingProjectionResponse =
 	| EmbeddingProjectionReadyResponse
-	| EmbeddingProjectionComputingResponse
-	| EmbeddingProjectionErrorResponse;
+	| EmbeddingProjectionAcceptedResponse
+	| EmbeddingProjectionFailureResponse;
 
 // Harness types
 

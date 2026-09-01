@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { applyRecallScoreThreshold, scanMemoryContent, vectorSearchWithMetadata } from "@signet/core";
@@ -8,12 +8,19 @@ import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-i
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
-import type { DbOwnerClient } from "../db-owner-client";
+import { DbOwnerCancelledError, type DbOwnerClient, createDbOwnerClient } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS } from "../db-owner-protocol";
 import { dbOwnerQuery } from "../db-owner-runtime";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
 import { normalizeAndHashContent } from "../content-normalization";
-import { type ReadDb, type WriteDb, getDbAccessor, runWriteTxAsync, prepareTypedStatement } from "../db-accessor";
+import {
+	type ReadDb,
+	type WriteDb,
+	getDbAccessor,
+	getDbAccessorPath,
+	runWriteTxAsync,
+	prepareTypedStatement,
+} from "../db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
@@ -65,12 +72,22 @@ import {
 	txRecoverMemory,
 	txSupersedeMemory,
 } from "../transactions";
-import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "../umap-projection";
+import { ProjectionAdmissionError, ProjectionJobManager, runBoundedProjectionJob } from "../embedding-projection-jobs";
+import {
+	PROJECTION_MAX_OFFSET,
+	PROJECTION_MAX_ROWS,
+	PROJECTION_JOB_DEADLINE_MS,
+	normalizeProjectionFilters,
+	projectionRequestKey,
+	type ProjectionPrincipal,
+	type ProjectionRequest,
+	type ProjectionFilters,
+	type ProjectionSnapshotDescriptor,
+} from "../embedding-projection-contract";
 import {
 	AGENTS_DIR,
 	INTERNAL_SELF_HOST,
 	PORT,
-	PROJECTION_ERROR_TTL_MS,
 	authBatchForgetLimiter,
 	authConfig,
 	authForgetLimiter,
@@ -78,8 +95,6 @@ import {
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
 	hasMemoriesSessionIdColumnCache,
-	projectionErrors,
-	projectionInFlight,
 } from "./state";
 
 import {
@@ -119,7 +134,7 @@ async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<Res
 	return {
 		...cfg,
 		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
-			siteToken: "routes/memory-routes.ts:121",
+			siteToken: "routes/memory-routes.ts:136",
 		}),
 	};
 }
@@ -129,6 +144,62 @@ export const MEMORY_CAPTURE_MAX_IN_FLIGHT = 8;
 const FORGET_CONFIRM_THRESHOLD = 25;
 const SOFT_DELETE_RETENTION_DAYS = 30;
 const SOFT_DELETE_RETENTION_MS = SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const projectionJobs = new ProjectionJobManager();
+
+const PROJECTION_SNAPSHOT_DIRECTORY = join(AGENTS_DIR, ".daemon", "embedding-projection-snapshots");
+
+function projectionFiltersFromQuery(filters: {
+	readonly query: string | undefined;
+	readonly who: readonly string[];
+	readonly types: readonly string[];
+	readonly sourceTypes: readonly string[];
+	readonly tags: readonly string[];
+	readonly pinned: boolean | undefined;
+	readonly since: string | undefined;
+	readonly until: string | undefined;
+	readonly importanceMin: number | undefined;
+	readonly importanceMax: number | undefined;
+}): ProjectionFilters | undefined {
+	const value: ProjectionFilters = filters;
+	return Object.values(value).some((item) => (Array.isArray(item) ? item.length > 0 : item !== undefined))
+		? value
+		: undefined;
+}
+
+function resolveProjectionPrincipal(c: Context): { principal: ProjectionPrincipal } | { response: Response } {
+	const scopedAgent = resolveMemoryScopedAgentId(c, {
+		agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+		sessionKey: c.req.header("x-signet-session-key"),
+	});
+	if (scopedAgent.error) return { response: c.json({ status: "forbidden", message: scopedAgent.error }, 403) };
+	const scopedProject = resolveScopedProject(c, parseOptionalString(c.req.query("project")));
+	if (scopedProject.error) return { response: c.json({ status: "forbidden", message: scopedProject.error }, 403) };
+	return { principal: { agentId: scopedAgent.agentId, project: scopedProject.project ?? null } };
+}
+
+function projectionJobResponse(job: ReturnType<typeof projectionJobs.get>): Response | null {
+	if (job === null) return null;
+	const metadata = {
+		jobId: job.jobId,
+		dimensions: job.dimensions,
+		...(job.total !== undefined ? { total: job.total } : {}),
+		...(job.count !== undefined ? { count: job.count } : {}),
+		...(job.limit !== undefined ? { limit: job.limit } : {}),
+		...(job.offset !== undefined ? { offset: job.offset } : {}),
+		...(job.hasMore !== undefined ? { hasMore: job.hasMore } : {}),
+		...(job.sampled !== undefined ? { sampled: job.sampled } : {}),
+	};
+	if (job.status === "ready" && job.result !== undefined) {
+		return Response.json({ status: "ready", ...metadata, nodes: job.result.nodes, edges: job.result.edges });
+	}
+	if (job.status === "timeout")
+		return Response.json({ status: "timeout", ...metadata, message: job.message, code: "PROJECTION_TIMEOUT" });
+	if (job.status === "cancelled")
+		return Response.json({ status: "cancelled", ...metadata, message: job.message, code: "PROJECTION_CANCELLED" });
+	if (job.status === "error")
+		return Response.json({ status: "error", ...metadata, message: job.message, code: "PROJECTION_ERROR" });
+	return Response.json({ status: job.status, ...metadata }, { status: 202 });
+}
 
 export interface MemoryRoutesDeps {
 	readonly aggregateRecall?: typeof aggregateRecall;
@@ -801,6 +872,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.use("/api/memory/recall", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
+	app.use("/api/embeddings", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/embeddings/*", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
 
 	async function recordRequestOperation(
 		c: Context,
@@ -1078,7 +1155,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						},
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1022" },
+				{ siteToken: "routes/memory-routes.ts:1099" },
 			);
 
 			return c.json(result);
@@ -1123,7 +1200,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						)
 						.map(({ agent_id: _agentId, ...row }) => row);
 				},
-				{ siteToken: "routes/memory-routes.ts:1102" },
+				{ siteToken: "routes/memory-routes.ts:1179" },
 			);
 			return c.json({ memories });
 		} catch (e) {
@@ -1233,7 +1310,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						highUsed: filterSafe(highUsed).map(({ agent_id: _agentId, ...row }) => row),
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1157" },
+				{ siteToken: "routes/memory-routes.ts:1234" },
 			);
 			return c.json({ agentId, minSessions, limit, ...slices });
 		} catch (e) {
@@ -1263,7 +1340,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						readPolicy: agentScope.readPolicy,
 						policyGroup: agentScope.policyGroup ?? undefined,
 					}),
-				{ siteToken: "routes/memory-routes.ts:1258" },
+				{ siteToken: "routes/memory-routes.ts:1335" },
 			);
 			return c.json(timeline);
 		} catch (e) {
@@ -1435,7 +1512,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							return publicRow;
 						});
 				},
-				{ siteToken: "routes/memory-routes.ts:1368" },
+				{ siteToken: "routes/memory-routes.ts:1445" },
 			);
 
 			recordRecallOutcome({
@@ -1669,7 +1746,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1670" },
+				{ siteToken: "routes/memory-routes.ts:1747" },
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
@@ -1677,7 +1754,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const existingChunks = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1678" },
+				{ siteToken: "routes/memory-routes.ts:1755" },
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1711,7 +1788,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				contentHashes.add(plan.normalized.contentHash);
 				const byHash = await getDbAccessor().withReadDbAsync(
 					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "routes/memory-routes.ts:1712" },
+					{ siteToken: "routes/memory-routes.ts:1789" },
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1918,7 +1995,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1919" },
+						{ siteToken: "routes/memory-routes.ts:1996" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -2047,7 +2124,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:2044" },
+					{ siteToken: "routes/memory-routes.ts:2121" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -2291,7 +2368,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					: null;
 				return { row, safety };
 			},
-			{ siteToken: "routes/memory-routes.ts:2263" },
+			{ siteToken: "routes/memory-routes.ts:2340" },
 		);
 		const row = memoryRead.row;
 
@@ -2484,7 +2561,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				// order — creation time is.
 				return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version);
 			},
-			{ siteToken: "routes/memory-routes.ts:2442" },
+			{ siteToken: "routes/memory-routes.ts:2519" },
 		);
 
 		return c.json({
@@ -3651,7 +3728,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
         LIMIT 1
       `)
 						.get(id) as { vector: Buffer } | undefined,
-				{ siteToken: "routes/memory-routes.ts:3641" },
+				{ siteToken: "routes/memory-routes.ts:3718" },
 			);
 
 			if (!embeddingRow) {
@@ -3673,7 +3750,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3675",
+							siteToken: "routes/memory-routes.ts:3752",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3716,7 +3793,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						}),
 					);
 				},
-				{ siteToken: "routes/memory-routes.ts:3693" },
+				{ siteToken: "routes/memory-routes.ts:3770" },
 			);
 
 			const rowMap = new Map(rows.map((r) => [r.id, r]));
@@ -3811,7 +3888,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3774" },
+				{ siteToken: "routes/memory-routes.ts:3851" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3863,7 +3940,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3859" },
+			{ siteToken: "routes/memory-routes.ts:3936" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3876,7 +3953,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3877" },
+			{ siteToken: "routes/memory-routes.ts:3954" },
 		);
 		return c.json(report);
 	});
@@ -3884,11 +3961,50 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	// =========================================================================
 	// GET /api/embeddings/projection
 	// =========================================================================
+	app.delete("/api/embeddings/projection/:jobId", (c) => {
+		const principalResult = resolveProjectionPrincipal(c);
+		if ("response" in principalResult) return principalResult.response;
+		const job = projectionJobs.cancel(c.req.param("jobId"), principalResult.principal);
+		if (job === null) return c.json({ status: "not_found", code: "PROJECTION_JOB_NOT_FOUND" }, 404);
+		if (job.status === "accepted" || job.status === "running" || job.status === "cancelled") {
+			return c.json({ status: "cancelled", jobId: job.jobId, dimensions: job.dimensions }, 200);
+		}
+		const response = projectionJobResponse(job);
+		return response ?? c.json({ status: "not_found", code: "PROJECTION_JOB_NOT_FOUND" }, 404);
+	});
+
 	app.get("/api/embeddings/projection", async (c) => {
+		const principalResult = resolveProjectionPrincipal(c);
+		if ("response" in principalResult) return principalResult.response;
+		const principal = principalResult.principal;
+		const requestedJobId = parseOptionalString(c.req.query("jobId"));
+		if (requestedJobId !== undefined) {
+			const response = projectionJobResponse(projectionJobs.get(requestedJobId, principal));
+			return response ?? c.json({ status: "not_found", jobId: requestedJobId, code: "PROJECTION_JOB_NOT_FOUND" }, 404);
+		}
+
 		const dimParam = c.req.query("dimensions");
+		if (dimParam !== undefined && dimParam !== "2" && dimParam !== "3")
+			return c.json(
+				{ status: "error", code: "PROJECTION_INVALID_DIMENSIONS", message: "dimensions must be 2 or 3" },
+				400,
+			);
 		const nComponents: 2 | 3 = dimParam === "3" ? 3 : 2;
-		const limit = parseOptionalBoundedInt(c.req.query("limit"), 1, 5000);
-		const offset = parseOptionalBoundedInt(c.req.query("offset"), 0, 100000) ?? 0;
+		const rawLimit = c.req.query("limit");
+		const limit =
+			rawLimit === undefined ? PROJECTION_MAX_ROWS : parseOptionalBoundedInt(rawLimit, 1, PROJECTION_MAX_ROWS);
+		if (limit === undefined)
+			return c.json(
+				{ status: "error", code: "PROJECTION_INVALID_LIMIT", message: "limit must be an integer from 1 to 1000" },
+				400,
+			);
+		const rawOffset = c.req.query("offset");
+		const offset = rawOffset === undefined ? 0 : parseOptionalBoundedInt(rawOffset, 0, PROJECTION_MAX_OFFSET);
+		if (offset === undefined)
+			return c.json(
+				{ status: "error", code: "PROJECTION_INVALID_OFFSET", message: "offset must be a non-negative integer" },
+				400,
+			);
 
 		const query = parseOptionalString(c.req.query("q"));
 		const whoFilters = [...new Set([...parseCsvQuery(c.req.query("who")), ...parseCsvQuery(c.req.query("harness"))])];
@@ -3922,130 +4038,111 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			importanceMax = swap;
 		}
 
-		const hasFilters =
-			query !== undefined ||
-			whoFilters.length > 0 ||
-			typeFilters.length > 0 ||
-			sourceTypeFilters.length > 0 ||
-			tagFilters.length > 0 ||
-			pinned !== undefined ||
-			since !== undefined ||
-			until !== undefined ||
-			importanceMin !== undefined ||
-			importanceMax !== undefined;
-		const useCachedProjection = !hasFilters && limit === undefined && offset === 0;
-
-		if (!useCachedProjection) {
-			try {
-				const projection = await getDbAccessor().withReadDbAsync(
-					async (db) =>
-						computeProjectionForQuery(db, nComponents, {
-							limit,
-							offset,
-							filters: hasFilters
-								? {
-										query,
-										who: whoFilters,
-										types: typeFilters,
-										sourceTypes: sourceTypeFilters,
-										tags: tagFilters,
-										pinned,
-										since,
-										until,
-										importanceMin,
-										importanceMax,
-									}
-								: undefined,
-						}),
-					{ siteToken: "routes/memory-routes.ts:3940" },
-				);
-
-				return c.json({
-					status: "ready",
-					dimensions: nComponents,
-					count: projection.count,
-					total: projection.total,
-					limit: projection.limit,
-					offset: projection.offset,
-					hasMore: projection.hasMore,
-					nodes: projection.result.nodes,
-					edges: projection.result.edges,
-				});
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				return c.json({ status: "error", message }, 500);
-			}
-		}
-
-		const { cached, total } = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				const cachedResult = getCachedProjection(db, nComponents);
-				const countRow = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
-				const count =
-					typeof countRow === "object" && countRow !== null && "count" in countRow && typeof countRow.count === "number"
-						? countRow.count
-						: 0;
-				return { cached: cachedResult, total: count };
-			},
-			{ siteToken: "routes/memory-routes.ts:3980" },
+		const filters = normalizeProjectionFilters(
+			projectionFiltersFromQuery({
+				query,
+				who: whoFilters,
+				types: typeFilters,
+				sourceTypes: sourceTypeFilters,
+				tags: tagFilters,
+				pinned,
+				since,
+				until,
+				importanceMin,
+				importanceMax,
+			}),
 		);
-
-		if (cached !== null && cached.embeddingCount === total) {
-			return c.json({
-				status: "ready",
-				dimensions: nComponents,
-				count: total,
-				total,
-				limit: total,
-				offset: 0,
-				hasMore: false,
-				nodes: cached.result.nodes,
-				edges: cached.result.edges,
-				cachedAt: cached.cachedAt,
-			});
-		}
-
-		const recentError = projectionErrors.get(nComponents);
-		if (recentError) {
-			if (Date.now() > recentError.expires) {
-				projectionErrors.delete(nComponents);
-			} else {
-				return c.json({ status: "error", message: recentError.message }, 500);
+		const request: ProjectionRequest = { dimensions: nComponents, limit, offset, filters };
+		const key = projectionRequestKey(principal, request);
+		const existing = projectionJobs.getByKey(key, principal);
+		if (existing !== null) {
+			if (
+				existing.status === "ready" ||
+				existing.status === "timeout" ||
+				existing.status === "cancelled" ||
+				existing.status === "error"
+			) {
+				return projectionJobResponse(existing) as Response;
 			}
+			return c.json({ status: existing.status, jobId: existing.jobId, dimensions: nComponents, limit, offset }, 202);
 		}
 
-		if (!projectionInFlight.has(nComponents)) {
-			projectionErrors.delete(nComponents);
-			const computation = (async () => {
-				try {
-					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:4021",
+		try {
+			const job = projectionJobs.start(
+				key,
+				nComponents,
+				() => {
+					const owner = createDbOwnerClient({
+						dbPath: getDbAccessorPath(),
+						workerRole: "generic",
+						startupTimeoutMs: PROJECTION_JOB_DEADLINE_MS,
 					});
-					const count = await getDbAccessor().withReadDbAsync(
-						async (db) => {
-							const row = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
-							return typeof row === "object" && row !== null && "count" in row && typeof row.count === "number"
-								? row.count
-								: 0;
+					return runBoundedProjectionJob(
+						async (control) => {
+							control.onCancel(() => {
+								void owner.close();
+							});
+							try {
+								await owner.start();
+								if (control.isCancelled()) throw new DbOwnerCancelledError("projection");
+								const handle = owner.submit<ProjectionSnapshotDescriptor>(
+									{
+										kind: "embedding_projection_snapshot",
+										input: { principal, request, outputDirectory: PROJECTION_SNAPSHOT_DIRECTORY },
+									},
+									{
+										operation: "embedding_projection.snapshot",
+										lane: "read",
+										workloadClass: "foreground",
+										deadlineMs: Math.max(1, control.remainingMs()),
+										estimatedWorkUnits: Math.max(1, Math.ceil(limit / 100)),
+									},
+								);
+								control.onCancel(handle.cancel);
+								const descriptor = await owner.awaitResult(handle, Math.max(1, control.remainingMs()));
+								projectionJobs.updateMetadataByKey(key, {
+									total: descriptor.total,
+									count: descriptor.count,
+									limit: descriptor.limit,
+									offset: descriptor.offset,
+									hasMore: descriptor.hasMore,
+									sampled: descriptor.sampled,
+								});
+								return descriptor;
+							} catch (error) {
+								await owner.close().catch(() => undefined);
+								throw error;
+							}
 						},
-						{ siteToken: "routes/memory-routes.ts:4024" },
+						{
+							deadlineMs: PROJECTION_JOB_DEADLINE_MS,
+							cleanup: async (input) => {
+								if ("path" in input) {
+									try {
+										unlinkSync(input.path);
+									} catch {
+										/* owner may have failed before creating the artifact */
+									}
+								}
+								await owner.close();
+							},
+						},
 					);
-					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
-				} catch (err) {
-					const msg = err instanceof Error ? err.message : String(err);
-					logger.error("projection", "UMAP computation failed", err instanceof Error ? err : new Error(msg));
-					projectionErrors.set(nComponents, {
-						message: msg,
-						expires: Date.now() + PROJECTION_ERROR_TTL_MS,
-					});
-				} finally {
-					projectionInFlight.delete(nComponents);
-				}
-			})();
-			projectionInFlight.set(nComponents, computation);
+				},
+				{ limit, offset },
+				principal,
+			);
+			return c.json({ status: job.status, jobId: job.jobId, dimensions: nComponents, limit, offset }, 202);
+		} catch (error) {
+			if (error instanceof ProjectionAdmissionError)
+				return c.json(
+					{ status: "overloaded", code: "PROJECTION_OVERLOADED", message: error.message, retryAfterMs: 250 },
+					{ status: 429, headers: { "Retry-After": "1" } },
+				);
+			const message = error instanceof Error ? error.message : String(error);
+			logger.error("projection", "UMAP computation failed", error instanceof Error ? error : new Error(message));
+			return c.json({ status: "error", code: "PROJECTION_ERROR", message }, 500);
 		}
-
-		return c.json({ status: "computing", dimensions: nComponents }, 202);
 	});
 
 	// =========================================================================
