@@ -789,6 +789,34 @@ export interface EmbeddingProjectionFailureResponse {
 	readonly jobId?: string;
 }
 
+export interface EmbeddingProjectionCancelledResponse {
+	readonly status: "cancelled";
+	readonly jobId: string;
+	readonly dimensions: 2 | 3;
+}
+
+interface EmbeddingProjectionCancellationTimeoutResponse {
+	readonly status: "timeout";
+	readonly jobId: string;
+	readonly dimensions: 2 | 3;
+	readonly message: string;
+	readonly code: "PROJECTION_TIMEOUT";
+}
+
+interface EmbeddingProjectionCancellationErrorResponse {
+	readonly status: "error";
+	readonly jobId: string;
+	readonly dimensions: 2 | 3;
+	readonly message: string;
+	readonly code: "PROJECTION_ERROR";
+}
+
+export type EmbeddingProjectionCancellationResponse =
+	| EmbeddingProjectionCancelledResponse
+	| (EmbeddingProjectionReadyResponse & { readonly jobId: string })
+	| EmbeddingProjectionCancellationTimeoutResponse
+	| EmbeddingProjectionCancellationErrorResponse;
+
 export type EmbeddingProjectionResponse =
 	| EmbeddingProjectionReadyResponse
 	| EmbeddingProjectionAcceptedResponse

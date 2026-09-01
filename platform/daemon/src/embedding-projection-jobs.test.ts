@@ -97,6 +97,7 @@ describe("embedding projection worker boundary", () => {
 		const source = readFileSync(join(import.meta.dir, "routes/memory-routes.ts"), "utf8");
 		const jobs = readFileSync(join(import.meta.dir, "embedding-projection-jobs.ts"), "utf8");
 		const snapshot = readFileSync(join(import.meta.dir, "embedding-projection-snapshot.ts"), "utf8");
+		const contract = readFileSync(join(import.meta.dir, "embedding-projection-contract.ts"), "utf8");
 		const owner = readFileSync(join(import.meta.dir, "db-owner-worker.ts"), "utf8");
 		expect(source).toContain('app.use("/api/embeddings", async (c, next) =>');
 		expect(source).toContain('requirePermission("recall", authConfig)(c, next)');
@@ -125,7 +126,9 @@ describe("embedding projection worker boundary", () => {
 		expect(cancellationRoute).toContain('projectionJobs.cancel(c.req.param("jobId"), principalResult.principal)');
 		expect(cancellationRoute).toContain("}, 200);");
 		expect(cancellationRoute).toContain("projectionJobResponse(job)");
-		expect(snapshot).toContain("m.agent_id");
+		expect(contract).toContain("m.agent_id");
+		expect(contract).toContain("m.visibility != 'archived'");
+		expect(contract).toContain("m.stale_at IS NULL");
 		expect(snapshot).toContain("ORDER BY m.created_at DESC, m.id DESC");
 		expect(snapshot).toContain("substr(e.vector, 1,");
 		expect(snapshot).toContain("PROJECTION_SNAPSHOT_MAX_BYTES");

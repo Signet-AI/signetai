@@ -115,7 +115,7 @@ export function projectionRequestKey(principal: ProjectionPrincipal, request: Pr
 export function projectionScopeClause(principal: ProjectionPrincipal): { clause: string; params: (string | null)[] } {
 	return {
 		clause:
-			" AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ? AND (? IS NULL OR m.project = ?) AND COALESCE(m.is_deleted, 0) = 0 AND (m.superseded_by IS NULL OR m.superseded_by = '')",
+			" AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ? AND (? IS NULL OR m.project = ?) AND COALESCE(m.is_deleted, 0) = 0 AND (m.superseded_by IS NULL OR m.superseded_by = '') AND m.visibility != 'archived' AND m.stale_at IS NULL",
 		params: [principal.agentId, principal.project, principal.project],
 	};
 }

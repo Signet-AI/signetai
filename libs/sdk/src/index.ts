@@ -23,6 +23,7 @@ import type {
 	DocumentListResponse,
 	DocumentRecord,
 	EmbeddingHealthResponse,
+	EmbeddingProjectionCancellationResponse,
 	EmbeddingProjectionResponse,
 	EmbeddingStatusResponse,
 	FeaturesResponse,
@@ -590,10 +591,8 @@ export class SignetClient extends SignetClientHelpers {
 		});
 	}
 
-	async cancelEmbeddingProjection(jobId: string): Promise<{ readonly status: "cancelled"; readonly jobId: string }> {
-		return this.transport.del<{ readonly status: "cancelled"; readonly jobId: string }>(
-			`/api/embeddings/projection/${jobId}`,
-		);
+	async cancelEmbeddingProjection(jobId: string): Promise<EmbeddingProjectionCancellationResponse> {
+		return this.transport.del<EmbeddingProjectionCancellationResponse>(`/api/embeddings/projection/${jobId}`);
 	}
 
 	// --- Harnesses ---
@@ -1214,6 +1213,7 @@ export type {
 	DreamingCacheAccounting,
 	DreamingCacheAccountingTotals,
 	EmbeddingHealthResponse,
+	EmbeddingProjectionCancellationResponse,
 	EmbeddingProjectionResponse,
 	EmbeddingStatusResponse,
 	FeaturesResponse,

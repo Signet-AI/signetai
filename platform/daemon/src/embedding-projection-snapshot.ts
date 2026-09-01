@@ -7,6 +7,7 @@ import {
 	PROJECTION_MAX_ROWS,
 	PROJECTION_SNAPSHOT_MAX_BYTES,
 	PROJECTION_VECTOR_DIMENSIONS,
+	projectionScopeClause,
 	type ProjectionPrincipal,
 	type ProjectionRequest,
 	type ProjectionSnapshotDescriptor,
@@ -81,9 +82,8 @@ export function createProjectionSnapshotArtifact(
 ): ProjectionSnapshotDescriptor {
 	const limit = Math.min(PROJECTION_MAX_ROWS, request.limit);
 	const { clause, params } = whereFilters(request.filters);
-	const scope =
-		" AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ? AND (? IS NULL OR m.project = ?) AND COALESCE(m.is_deleted, 0) = 0 AND (m.superseded_by IS NULL OR m.superseded_by = '')";
-	const scopedParams = [principal.agentId, principal.project, principal.project, ...params];
+	const { clause: scope, params: scopeParams } = projectionScopeClause(principal);
+	const scopedParams = [...scopeParams, ...params];
 	const from = `FROM embeddings e INNER JOIN memories m ON m.id = e.source_id WHERE e.source_type = 'memory' AND e.vector IS NOT NULL AND typeof(e.vector) = 'blob' AND length(e.vector) >= 4${scope}${clause}`;
 	const countRow = db.prepare(`SELECT COUNT(*) AS count ${from}`).get(...scopedParams) as
 		| { count?: number }
