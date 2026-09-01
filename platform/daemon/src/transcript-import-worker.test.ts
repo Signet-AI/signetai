@@ -352,6 +352,42 @@ test("canonical purge waits for an in-flight append and removes its source witho
 		await rm(root, { recursive: true, force: true });
 	}
 });
+test("canonical purge serializes a first append even when its file does not exist yet", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-purge-first-append-"));
+	try {
+		const { buildCompletedTranscriptCommit } = await import("./transcript-import-commit");
+		const { signetExportV1Adapter } = await import("./transcript-import-adapter");
+		const commit = buildCompletedTranscriptCommit(signetExportV1Adapter.parse(JSON.parse(valid("first-append"))), {
+			agentId: "agent-a",
+			sourceId: "source-a",
+			sourceRecordId: "first-append",
+		});
+		let enteredResolve!: () => void;
+		const entered = new Promise<void>((resolve) => {
+			enteredResolve = resolve;
+		});
+		let releaseResolve!: () => void;
+		const release = new Promise<void>((resolve) => {
+			releaseResolve = resolve;
+		});
+		const append = appendCanonical(root, "agent-a", "h", [commit], async () => {
+			enteredResolve();
+			await release;
+		});
+		await entered;
+		const purge = purgeTranscriptImportFilesystem(root, "source-a", "agent-a");
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		releaseResolve();
+		await Promise.all([append, purge]);
+		const names = (await readdir(join(root, "transcripts"))).filter((name) => name.endsWith(".jsonl"));
+		expect(names).toHaveLength(1);
+		const [name] = names;
+		if (!name) throw new Error("canonical transcript file missing");
+		expect(await Bun.file(join(root, "transcripts", name)).text()).toBe("");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
 
 test("active pause and cancel controls clear the lease at the checkpoint", async () => {
 	const root = await mkdtemp(join(tmpdir(), "signet-import-controls-"));

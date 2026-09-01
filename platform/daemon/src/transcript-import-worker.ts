@@ -465,46 +465,56 @@ export async function appendCanonical(
 		throw new RangeError("canonical_batch_too_large");
 	const path = join(root, "transcripts", `${hash(`${agentId}\0${harness}`)}.jsonl`);
 	await mkdir(dirname(path), { recursive: true });
-	await withCanonicalTranscriptLock(path, async () => {
-		const existing = await readText(path);
-		const ids = new Set<string>();
-		for (const line of existing.split("\n")) {
-			if (!line) continue;
-			try {
-				const id = (JSON.parse(line) as { id?: unknown }).id;
-				if (typeof id === "string") ids.add(id);
-			} catch {
-				throw new Error("canonical_transcript_corrupt");
-			}
-		}
-		const missing = commits.filter((commit) => !ids.has(commit.recordId));
-		if (!missing.length) return;
-		await beforeWrite?.();
-		const temp = `${path}.append-${randomUUID()}`;
-		const payload = missing.map(canonicalTranscriptLine).join("");
-		const staged = await open(temp, "wx");
-		try {
-			await staged.writeFile(payload);
-			await staged.sync();
-		} finally {
-			await staged.close();
-		}
-		const source = await open(path, "a+");
-		try {
-			await source.writeFile(payload);
-			await source.sync();
-		} finally {
-			await source.close();
-		}
-		await maybeCrashAfterCanonicalWrite(root);
-		await rm(temp, { force: true });
-		const directory = await open(dirname(path), "r");
-		try {
-			await directory.sync();
-		} finally {
-			await directory.close();
-		}
-	});
+	await withTranscriptFilesystemLock(
+		root,
+		async () =>
+			await withCanonicalTranscriptLock(path, async () => {
+				const existing = await readText(path);
+				const ids = new Set<string>();
+				for (const line of existing.split("\n")) {
+					if (!line) continue;
+					try {
+						const id = (JSON.parse(line) as { id?: unknown }).id;
+						if (typeof id === "string") ids.add(id);
+					} catch {
+						throw new Error("canonical_transcript_corrupt");
+					}
+				}
+				const missing = commits.filter((commit) => !ids.has(commit.recordId));
+				if (!missing.length) return;
+				await beforeWrite?.();
+				const temp = `${path}.append-${randomUUID()}`;
+				const payload = missing.map(canonicalTranscriptLine).join("");
+				const staged = await open(temp, "wx");
+				try {
+					await staged.writeFile(payload);
+					await staged.sync();
+				} finally {
+					await staged.close();
+				}
+				const source = await open(path, "a+");
+				try {
+					await source.writeFile(payload);
+					await source.sync();
+				} finally {
+					await source.close();
+				}
+				await maybeCrashAfterCanonicalWrite(root);
+				await rm(temp, { force: true });
+				const directory = await open(dirname(path), "r");
+				try {
+					await directory.sync();
+				} finally {
+					await directory.close();
+				}
+			}),
+	);
+}
+
+async function withTranscriptFilesystemLock<Result>(root: string, operation: () => Promise<Result>): Promise<Result> {
+	const directory = join(root, "transcripts");
+	await mkdir(directory, { recursive: true });
+	return await withCanonicalTranscriptLock(join(directory, ".filesystem"), operation);
 }
 
 async function withCanonicalTranscriptLock<Result>(path: string, operation: () => Promise<Result>): Promise<Result> {
@@ -620,50 +630,52 @@ export async function purgeTranscriptImportFilesystem(
 	agentId?: string,
 	managedPaths: readonly string[] = [],
 ): Promise<void> {
-	for (const managedPath of managedPaths) {
-		try {
-			await rm(resolveManagedImportPath(root, managedPath), { force: true });
-		} catch {
-			// Never follow an invalid ledger path during purge.
-		}
-	}
-	if (!sourceId.includes("/") && !sourceId.includes("\\") && !sourceId.includes("..")) {
-		await rm(join(root, "imports", "transcripts", sourceId), { recursive: true, force: true });
-	}
-	const dir = join(root, "transcripts");
-	let names: string[] = [];
-	try {
-		names = await readdir(dir);
-	} catch {
-		return;
-	}
-	for (const name of names.filter((entry) => entry.endsWith(".jsonl"))) {
-		const path = join(dir, name);
-		await withCanonicalTranscriptLock(path, async () => {
-			const input = await readText(path);
-			const kept = input
-				.split(/(?<=\n)/u)
-				.filter((line) => {
-					try {
-						const value = JSON.parse(line) as { source_id?: unknown; agent_id?: unknown };
-						return !(value.source_id === sourceId && (agentId === undefined || value.agent_id === agentId));
-					} catch {
-						return true;
-					}
-				})
-				.join("");
-			if (kept === input) return;
-			const temp = `${path}.purge-${randomUUID()}`;
-			await writeFile(temp, kept, { flag: "w" });
-			const fd = await open(temp, "r+");
+	await withTranscriptFilesystemLock(root, async () => {
+		for (const managedPath of managedPaths) {
 			try {
-				await fd.sync();
-			} finally {
-				await fd.close();
+				await rm(resolveManagedImportPath(root, managedPath), { force: true });
+			} catch {
+				// Never follow an invalid ledger path during purge.
 			}
-			await rename(temp, path);
-		});
-	}
+		}
+		if (!sourceId.includes("/") && !sourceId.includes("\\") && !sourceId.includes("..")) {
+			await rm(join(root, "imports", "transcripts", sourceId), { recursive: true, force: true });
+		}
+		const dir = join(root, "transcripts");
+		let names: string[] = [];
+		try {
+			names = await readdir(dir);
+		} catch {
+			return;
+		}
+		for (const name of names.filter((entry) => entry.endsWith(".jsonl"))) {
+			const path = join(dir, name);
+			await withCanonicalTranscriptLock(path, async () => {
+				const input = await readText(path);
+				const kept = input
+					.split(/(?<=\n)/u)
+					.filter((line) => {
+						try {
+							const value = JSON.parse(line) as { source_id?: unknown; agent_id?: unknown };
+							return !(value.source_id === sourceId && (agentId === undefined || value.agent_id === agentId));
+						} catch {
+							return true;
+						}
+					})
+					.join("");
+				if (kept === input) return;
+				const temp = `${path}.purge-${randomUUID()}`;
+				await writeFile(temp, kept, { flag: "w" });
+				const fd = await open(temp, "r+");
+				try {
+					await fd.sync();
+				} finally {
+					await fd.close();
+				}
+				await rename(temp, path);
+			});
+		}
+	});
 }
 export function importWorkerBatchSize(): number {
 	return TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch;
