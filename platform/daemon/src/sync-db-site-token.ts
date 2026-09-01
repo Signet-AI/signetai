@@ -6,8 +6,8 @@ export type SyncDbCallSiteToken =
 	| SyncDbWindowsSourceLocationToken
 	| SyncDbSemanticSiteToken;
 
-const SOURCE_LOCATION_TOKEN = /^\/?[^:/\s]+(?:\/[^:/\s]+)*:\d+$/;
-const WINDOWS_DRIVE_SOURCE_LOCATION_TOKEN = /^\/[A-Za-z]:\/[^:/\s]+(?:\/[^:/\s]+)*:\d+$/;
+const SOURCE_LOCATION_TOKEN = /^\/?[^:/]+(?:\/[^:/]+)*:\d+$/;
+const WINDOWS_DRIVE_SOURCE_LOCATION_TOKEN = /^\/[A-Za-z]:\/[^:/]+(?:\/[^:/]+)*:\d+$/;
 const SEMANTIC_TOKEN = /^db:[a-z0-9]+(?:[.-][a-z0-9]+){2,}$/;
 
 export type SyncDbSiteTokenKind = "source-location" | "semantic";
@@ -16,9 +16,22 @@ function isSourceLocationToken(token: string): boolean {
 	return SOURCE_LOCATION_TOKEN.test(token) || WINDOWS_DRIVE_SOURCE_LOCATION_TOKEN.test(token);
 }
 
-function isWindowsPathRemainder(value: string): boolean {
+function isSafePathRemainder(value: string): boolean {
 	if (value.length === 0 || value.startsWith("/") || value.endsWith("/") || value.includes("//")) return false;
-	return value.split("/").every((segment) => segment.length > 0 && !segment.includes(":") && !/\s/.test(segment));
+	return value
+		.split("/")
+		.every((segment) => segment.length > 0 && !segment.includes(":") && !hasControlCharacter(segment));
+}
+
+function hasControlCharacter(value: string): boolean {
+	return [...value].some((character) => {
+		const codePoint = character.codePointAt(0);
+		return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+	});
+}
+
+function isWindowsPathRemainder(value: string): boolean {
+	return isSafePathRemainder(value);
 }
 
 function normalizeSourcePath(path: string): string | null {
@@ -34,7 +47,8 @@ function normalizeSourcePath(path: string): string | null {
 		return `/UNC/${remainder}`;
 	}
 	if (path.includes("\\")) return null;
-	return path;
+	const remainder = path.startsWith("/") ? path.slice(1) : path;
+	return isSafePathRemainder(remainder) ? path : null;
 }
 
 export function normalizeSyncDbSiteToken(token: string): SyncDbCallSiteToken | null {

@@ -13,6 +13,21 @@ afterEach(() => {
 	resetSyncDbAttribution();
 });
 
+type ErrorWithPrepareStackTrace = typeof Error & {
+	prepareStackTrace?: (...args: unknown[]) => string;
+};
+
+function withPreparedStack<T>(stack: string, action: () => T): T {
+	const errorConstructor = Error as ErrorWithPrepareStackTrace;
+	const previous = errorConstructor.prepareStackTrace;
+	errorConstructor.prepareStackTrace = () => stack;
+	try {
+		return action();
+	} finally {
+		errorConstructor.prepareStackTrace = previous;
+	}
+}
+
 describe("sync DB attribution", () => {
 	test("keeps fast calls on the timestamp-only path", () => {
 		const token = beginSyncDbCall("withReadDb", 1_000);
@@ -97,5 +112,40 @@ describe("sync DB attribution", () => {
 
 		const token = beginSyncDbCall("withWriteTxAsync", 1_000, "C:/work/daemon.js:54");
 		expect(token.siteId).toBe("withWriteTxAsync@/C:/work/daemon.js:54");
+	});
+
+	test("captures valid Windows source locations with spaces before queueing", () => {
+		const stack = [
+			"Error",
+			"    at captureCallerSite (C:/repo/platform/daemon/src/sync-db-attribution.ts:110:1)",
+			"    at captureSyncDbCallSiteToken (C:/repo/platform/daemon/src/sync-db-attribution.ts:262:1)",
+			"    at runWriteTxAsync (C:/repo/platform/daemon/src/db-accessor.ts:3029:1)",
+			"    at caller (C:/Program Files/Signet/daemon.js:54:1)",
+		].join("\n");
+
+		expect(classifySyncDbSiteToken("C:/Program Files/Signet/daemon.js:54")).toBe("source-location");
+		expect(normalizeSyncDbSiteToken("C:/Program Files/Signet/daemon.js:54")).toBe(
+			"/C:/Program Files/Signet/daemon.js:54",
+		);
+		const siteToken = withPreparedStack(stack, () => captureSyncDbCallSiteToken());
+
+		expect(siteToken).toBe("/C:/Program Files/Signet/daemon.js:54");
+		const token = beginSyncDbCall("withWriteTxAsync", 1_000, siteToken);
+		expect(token.siteId).toBe("withWriteTxAsync@/C:/Program Files/Signet/daemon.js:54");
+	});
+
+	test("does not attribute anonymous raw-backslash internal frames", () => {
+		const stack = [
+			"Error",
+			String.raw`    at captureCallerSite (C:\repo\platform\daemon\src\sync-db-attribution.ts:110:1)`,
+			String.raw`    at C:\repo\platform\daemon\src\db-accessor.ts:2789:1`,
+		].join("\n");
+		const token = beginSyncDbCall("withWriteTxAsync", 1_000);
+
+		withPreparedStack(stack, () => endSyncDbCall(token, 1_051));
+
+		expect(getSyncDbCallSitesForWindow(1_000, 1_051)).toEqual(["withWriteTxAsync@unattributed"]);
+		expect(getSyncDbAttributionMetrics().unattributedCalls).toBe(1);
+		expect(getSyncDbAttributionMetrics().sites).toEqual([]);
 	});
 });
