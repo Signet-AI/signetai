@@ -81,27 +81,32 @@ let unattributedDurationMs = 0;
 let unattributedSlowDurationMs = 0;
 
 function normalizeFileName(value: string): string {
+	let normalized = value;
 	if (value.startsWith("file://")) {
 		try {
-			return decodeURIComponent(new URL(value).pathname);
+			normalized = decodeURIComponent(new URL(value).pathname);
 		} catch {
-			return value.slice("file://".length);
+			normalized = value.slice("file://".length);
 		}
 	}
-	return value;
+	return normalized.replaceAll("\\", "/");
 }
 
 function parseFrame(
 	line: string,
 ): { readonly file: string; readonly line: number; readonly functionName: string } | null {
-	const match = /(?:\(|\s)((?:file:\/\/)?[^()\s]+):(\d+):\d+\)?$/.exec(line);
+	const parenthesizedMatch = /\(((?:file:\/\/)?[^()]+):(\d+):\d+\)?$/.exec(line);
+	const bareMatch = /^\s*at\s+((?:file:\/\/)?[^()]+):(\d+):\d+\)?$/.exec(line);
+	const match = parenthesizedMatch ?? bareMatch;
 	if (!match) return null;
 	const lineNumber = Number.parseInt(match[2] ?? "", 10);
 	if (!Number.isInteger(lineNumber) || lineNumber <= 0) return null;
-	const functionName = line
-		.replace(/\s+\([^()]+\)$/, "")
-		.replace(/^\s*at\s+/, "")
-		.trim();
+	const functionName = parenthesizedMatch
+		? line
+				.replace(/\s+\([^()]+\)$/, "")
+				.replace(/^\s*at\s+/, "")
+				.trim()
+		: "";
 	return { file: normalizeFileName(match[1] ?? ""), line: lineNumber, functionName };
 }
 
