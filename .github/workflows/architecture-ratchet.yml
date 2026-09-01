@@ -43,7 +43,7 @@ jobs:
         if: github.event_name == 'push'
         run: bun test scripts/audit-architecture-contract.test.ts
 
-      - name: Audit pull request from a protected evaluator and clean candidate archive
+      - name: Audit pull request from a protected evaluator and clean candidate checkout
         if: github.event_name == 'pull_request_target'
         env:
           BASE_ROOT: ${{ runner.temp }}/architecture-base
@@ -65,11 +65,13 @@ jobs:
           git -C "$CANDIDATE_REPO" remote add candidate "$GITHUB_SERVER_URL/$HEAD_REPOSITORY.git"
           git -C "$CANDIDATE_REPO" fetch --no-tags --depth=1 candidate "$HEAD_SHA"
           test "$(git -C "$CANDIDATE_REPO" rev-parse FETCH_HEAD)" = "$HEAD_SHA"
-          git -C "$CANDIDATE_REPO" archive "$HEAD_SHA" | tar -x -C "$CANDIDATE_ROOT"
+          # Materialize the fetched tree with git's index, not git archive.
+          # Candidate-controlled export-ignore attributes must not be able to
+          # hide source from the trusted evaluator.
+          git -C "$CANDIDATE_REPO" --work-tree="$CANDIDATE_ROOT" read-tree --reset -u "$HEAD_SHA"
 
-          # Archives intentionally exclude ignored dependencies. The evaluator
-          # never executes candidate code, but its config parser still needs
-          # the protected dependency graph available to both clean trees.
+          # The evaluator never executes candidate code, but its config parser
+          # still needs the protected dependency graph available to both clean trees.
           for root in "$BASE_ROOT" "$CANDIDATE_ROOT"; do
             ln -s "$GITHUB_WORKSPACE/node_modules" "$root/node_modules"
             mkdir -p "$root/web/docs" "$root/web/marketing"
