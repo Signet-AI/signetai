@@ -1,6 +1,26 @@
 /** Regression coverage for #1718: the Licenses modal must stay reachable and accurately scoped. */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { DASHBOARD_LICENSES } from "@/lib/dashboard-licenses";
+import { Window } from "happy-dom";
+import { act } from "react";
+import { type Root, createRoot } from "react-dom/client";
+import { LicensesSection } from "./settings";
+
+let domWindow: Window;
+
+beforeAll(() => {
+	(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+	domWindow = new Window();
+	for (const key of Object.getOwnPropertyNames(domWindow)) {
+		if (!(key in globalThis)) {
+			(globalThis as Record<string, unknown>)[key] = (domWindow as unknown as Record<string, unknown>)[key];
+		}
+	}
+});
+
+afterAll(() => {
+	domWindow.close();
+});
 
 const EXPECTED_ATTRIBUTIONS: Record<string, { license: string; href: string }> = {
 	"@fontsource/geist": { license: "OFL-1.1", href: "https://github.com/fontsource/font-files" },
@@ -37,6 +57,31 @@ function packageNames(): string[] {
 
 function entryForPackage(packageName: string) {
 	return DASHBOARD_LICENSES.find((entry) => entry.packages.split(" · ").includes(packageName));
+}
+
+async function mountLicenses(viewportWidth: number): Promise<{
+	readonly container: HTMLDivElement;
+	readonly unmount: () => Promise<void>;
+}> {
+	Object.defineProperty(domWindow, "innerWidth", { configurable: true, value: viewportWidth });
+	const container = document.createElement("div");
+	container.dataset.viewportWidth = String(viewportWidth);
+	container.style.width = `${viewportWidth}px`;
+	container.style.overflowX = "hidden";
+	document.body.appendChild(container);
+	const root: Root = createRoot(container);
+	await act(async () => {
+		root.render(<LicensesSection />);
+	});
+	return {
+		container,
+		unmount: async () => {
+			await act(async () => {
+				root.unmount();
+			});
+			container.remove();
+		},
+	};
 }
 
 async function inventoryRows(): Promise<Map<string, { range: string; license: string; href: string }>> {
@@ -89,6 +134,24 @@ describe("dashboard license inventory", () => {
 });
 
 describe("dashboard Licenses modal layout", () => {
+	test("keeps every card shrinkable at the failing mobile viewport widths", async () => {
+		for (const viewportWidth of [280, 320]) {
+			const mounted = await mountLicenses(viewportWidth);
+			const cards = [...mounted.container.querySelectorAll<HTMLAnchorElement>("a.group")];
+
+			expect(mounted.container.dataset.viewportWidth).toBe(String(viewportWidth));
+			expect(cards).toHaveLength(DASHBOARD_LICENSES.length);
+			for (const card of cards) {
+				// This is the DOM contract that lets a one-column mobile grid item
+				// shrink below its long-content min-content width. Without it, the
+				// card expands past the modal's scroll body at 280/320px.
+				expect(card.classList.contains("min-w-0")).toBe(true);
+			}
+
+			await mounted.unmount();
+		}
+	});
+
 	test("pins mobile layout, navigation, safe links, and direct-only scope", async () => {
 		const source = await Bun.file(new URL("./settings.tsx", import.meta.url)).text();
 		const licensesStart = source.indexOf("function LicensesSection()");

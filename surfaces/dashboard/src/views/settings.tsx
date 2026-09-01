@@ -1470,7 +1470,7 @@ function AdvancedSection() {
 
 /* ── Licenses ── */
 
-function LicensesSection() {
+export function LicensesSection() {
 	return (
 		<div className="flex flex-col gap-4">
 			<div className="overflow-hidden rounded-[10px] border border-[oklch(0.78_0.12_160/0.24)] bg-[linear-gradient(135deg,oklch(0.78_0.12_160/0.12),transparent_58%)] shadow-[inset_0_1px_0_oklch(1_0_0/0.08)] [html:not(.dark)_&]:border-[oklch(0.45_0.12_160/0.25)] [html:not(.dark)_&]:bg-[linear-gradient(135deg,oklch(0.78_0.12_160/0.11),transparent_58%)]">
@@ -1526,7 +1526,7 @@ function LicensesSection() {
 							href={entry.href}
 							target="_blank"
 							rel="noopener noreferrer"
-							className="group rounded-[8px] border border-[oklch(1_0_0/0.07)] bg-[color-mix(in_oklch,var(--foreground)_2.5%,transparent)] px-3 py-2.5 transition-colors hover:border-[oklch(0.78_0.12_160/0.35)] hover:bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.07)]"
+							className="group min-w-0 rounded-[8px] border border-[oklch(1_0_0/0.07)] bg-[color-mix(in_oklch,var(--foreground)_2.5%,transparent)] px-3 py-2.5 transition-colors hover:border-[oklch(0.78_0.12_160/0.35)] hover:bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.07)]"
 						>
 							<div className="flex items-center justify-between gap-2">
 								<span className="truncate text-[12px] font-medium">{entry.name}</span>
