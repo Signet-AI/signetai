@@ -14,6 +14,8 @@ on:
     paths:
       - "platform/daemon/src/native-embedding*.ts"
       - "platform/daemon/src/embedding-worker*.ts"
+      - "platform/daemon/src/memory-config.ts"
+      - "platform/daemon/src/transformers-runtime.ts"
       - "platform/daemon/src/embedding-fetch.ts"
       - "platform/daemon/src/embedding-health.ts"
       - "platform/daemon/src/routes/utils.ts"
@@ -35,6 +37,8 @@ on:
     paths:
       - "platform/daemon/src/native-embedding*.ts"
       - "platform/daemon/src/embedding-worker*.ts"
+      - "platform/daemon/src/memory-config.ts"
+      - "platform/daemon/src/transformers-runtime.ts"
       - "platform/daemon/src/embedding-fetch.ts"
       - "platform/daemon/src/embedding-health.ts"
       - "platform/daemon/src/routes/utils.ts"
