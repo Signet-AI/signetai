@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { isIP } from "node:net";
 import { Readable } from "node:stream";
+import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import { request as httpsRequest } from "node:https";
 import {
 	normalizePublicWebUrl,
@@ -103,6 +104,7 @@ async function syncWebSource(context: SourceProviderSyncContext): Promise<Source
 		if (!context.shouldContinue()) return { indexed: 0, scanned: 0, total: 1, failures: [] };
 		const extracted = await extractWebPage(fetched);
 		const sourcePath = webSourcePath(context.source.id, extracted.finalUrl);
+		const sourceParentPath = `web://${new URL(extracted.finalUrl).host}`;
 		const content = webMarkdownContent(extracted, fetched);
 		await indexExternalMemoryArtifact({
 			agentId: context.agentId,
@@ -110,7 +112,7 @@ async function syncWebSource(context: SourceProviderSyncContext): Promise<Source
 			sourceId: context.source.id,
 			sourceRoot: context.source.root,
 			sourceExternalId: extracted.canonicalUrl ?? extracted.finalUrl,
-			sourceParentPath: `web://${new URL(extracted.finalUrl).host}`,
+			sourceParentPath,
 			sourcePath,
 			sourceKind: "source_web_page",
 			sourceMtimeMs: Date.parse(extracted.published ?? "") || Date.now(),
@@ -139,13 +141,14 @@ async function syncWebSource(context: SourceProviderSyncContext): Promise<Source
 			sourceId: context.source.id,
 			sourceKind: "source_web_page",
 			sourceRoot: context.source.root,
-			sourceParentPath: `web://${new URL(extracted.finalUrl).host}`,
+			sourceParentPath,
 			sourcePath,
 			displayName: extracted.title,
 			content,
 		});
 		indexed = 1;
 		await purgeStaleWebArtifacts(context.source.id, context.agentId, syncStartedAt, new Set([sourcePath]));
+		await purgeStaleWebDocumentReferences(context.source.id, context.agentId, new Set([sourceParentPath]));
 		await purgeStaleWebFailureArtifacts(context.source.id, context.agentId);
 		context.onProgress?.({ scanned: 1, total: 1, indexed, currentPath: sourcePath });
 		return { indexed, scanned: 1, total: 1, failures };
@@ -174,20 +177,28 @@ export async function fetchPublicWebPage(requestedUrl: string): Promise<WebFetch
 		});
 	}
 	let currentUrl = normalized;
-	for (let redirects = 0; redirects <= WEB_MAX_REDIRECTS; redirects++) {
-		const resolvedAddress = await assertPublicWebHost(currentUrl);
-		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), webFetchTimeoutMs);
-		try {
-			const response = await webRequest(currentUrl, {
-				...resolvedAddress,
-				signal: controller.signal,
-				method: "GET",
-				headers: {
-					Accept: "text/html,application/xhtml+xml;q=0.9",
-					"User-Agent": "Signet/1 web-source",
-				},
-			});
+	const controller = new AbortController();
+	const timeoutError = new WebSourceFetchError(`Web page request timed out after ${webFetchTimeoutMs}ms`, {
+		code: "timeout",
+	});
+	const timer = setTimeout(() => controller.abort(timeoutError), webFetchTimeoutMs);
+	const abort = createAbortPromise(controller.signal);
+	try {
+		for (let redirects = 0; redirects <= WEB_MAX_REDIRECTS; redirects++) {
+			const resolvedAddress = await Promise.race([assertPublicWebHost(currentUrl), abort.promise]);
+			const response = await Promise.race([
+				webRequest(currentUrl, {
+					...resolvedAddress,
+					signal: controller.signal,
+					method: "GET",
+					headers: {
+						Accept: "text/html,application/xhtml+xml;q=0.9",
+						"Accept-Encoding": "identity",
+						"User-Agent": "Signet/1 web-source",
+					},
+				}),
+				abort.promise,
+			]);
 
 			if (response.status >= 300 && response.status < 400) {
 				cancelResponseBody(response);
@@ -234,7 +245,8 @@ export async function fetchPublicWebPage(requestedUrl: string): Promise<WebFetch
 					metadata: { url: currentUrl, contentLength: declaredBytes },
 				});
 			}
-			const { html, bytes } = await readBoundedResponse(response, currentUrl, controller.signal);
+			const contentEncoding = parseContentEncoding(response, currentUrl);
+			const { html, bytes } = await readBoundedResponse(response, currentUrl, controller.signal, contentEncoding);
 			return {
 				requestedUrl: normalized,
 				finalUrl: currentUrl,
@@ -243,74 +255,138 @@ export async function fetchPublicWebPage(requestedUrl: string): Promise<WebFetch
 				responseBytes: bytes,
 				redirects,
 			};
-		} catch (error) {
-			if (error instanceof WebSourceFetchError) throw error;
-			const detail = error instanceof Error ? error.message : String(error);
-			throw new WebSourceFetchError(
-				controller.signal.aborted
-					? `Web page request timed out after ${webFetchTimeoutMs}ms`
-					: `Web page request failed: ${detail}`,
-				{ code: controller.signal.aborted ? "timeout" : "fetch_failed", metadata: { url: currentUrl } },
-			);
-		} finally {
-			clearTimeout(timer);
 		}
+		throw new WebSourceFetchError("Web page redirect handling failed", { code: "redirect" });
+	} catch (error) {
+		if (error instanceof WebSourceFetchError) throw error;
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new WebSourceFetchError(
+			controller.signal.aborted
+				? `Web page request timed out after ${webFetchTimeoutMs}ms`
+				: `Web page request failed: ${detail}`,
+			{ code: controller.signal.aborted ? "timeout" : "fetch_failed", metadata: { url: currentUrl } },
+		);
+	} finally {
+		clearTimeout(timer);
+		abort.cleanup();
 	}
-	throw new WebSourceFetchError("Web page redirect handling failed", { code: "redirect" });
 }
 
 async function readBoundedResponse(
 	response: Response,
 	url: string,
 	signal: AbortSignal,
+	contentEncoding: WebContentEncoding | null,
 ): Promise<{ readonly html: string; readonly bytes: number }> {
 	const abort = createAbortPromise(signal);
 	try {
+		let rawBytes: Uint8Array;
 		if (!response.body) {
 			const text = await Promise.race([response.text(), abort.promise]);
-			const bytes = new TextEncoder().encode(text).byteLength;
-			if (bytes > WEB_MAX_RESPONSE_BYTES) {
-				throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
-					code: "response_size",
-					recoverable: false,
-					metadata: { url, bytes },
-				});
-			}
-			return { html: text, bytes };
-		}
-		const reader = response.body.getReader();
-		const chunks: Uint8Array[] = [];
-		let bytes = 0;
-		try {
-			while (true) {
-				const next = await Promise.race([reader.read(), abort.promise]);
-				if (next.done) break;
-				const chunk = next.value instanceof Uint8Array ? next.value : new Uint8Array(next.value);
-				bytes += chunk.byteLength;
-				if (bytes > WEB_MAX_RESPONSE_BYTES) {
-					void reader.cancel().catch(() => {});
-					throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
-						code: "response_size",
-						recoverable: false,
-						metadata: { url, bytes },
-					});
+			rawBytes = new TextEncoder().encode(text);
+		} else {
+			const reader = response.body.getReader();
+			const chunks: Uint8Array[] = [];
+			let bytes = 0;
+			try {
+				while (true) {
+					const next = await Promise.race([reader.read(), abort.promise]);
+					if (next.done) break;
+					const chunk = next.value instanceof Uint8Array ? next.value : new Uint8Array(next.value);
+					bytes += chunk.byteLength;
+					if (bytes > WEB_MAX_RESPONSE_BYTES) {
+						void reader.cancel().catch(() => {});
+						throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
+							code: "response_size",
+							recoverable: false,
+							metadata: { url, bytes },
+						});
+					}
+					chunks.push(chunk);
 				}
-				chunks.push(chunk);
+			} finally {
+				if (signal.aborted) void reader.cancel().catch(() => {});
+				reader.releaseLock();
 			}
-		} finally {
-			if (signal.aborted) void reader.cancel().catch(() => {});
-			reader.releaseLock();
+			rawBytes = new Uint8Array(bytes);
+			let offset = 0;
+			for (const chunk of chunks) {
+				rawBytes.set(chunk, offset);
+				offset += chunk.byteLength;
+			}
 		}
-		const combined = new Uint8Array(bytes);
-		let offset = 0;
-		for (const chunk of chunks) {
-			combined.set(chunk, offset);
-			offset += chunk.byteLength;
+		const decodedBytes = contentEncoding ? await decodeResponseBody(rawBytes, contentEncoding, url, signal) : rawBytes;
+		if (decodedBytes.byteLength > WEB_MAX_RESPONSE_BYTES) {
+			throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
+				code: "response_size",
+				recoverable: false,
+				metadata: { url, bytes: decodedBytes.byteLength, contentEncoding },
+			});
 		}
-		return { html: new TextDecoder().decode(combined), bytes };
+		return { html: new TextDecoder().decode(decodedBytes), bytes: rawBytes.byteLength };
 	} finally {
 		abort.cleanup();
 	}
+}
+
+type WebContentEncoding = "br" | "deflate" | "gzip";
+
+function parseContentEncoding(response: Response, url: string): WebContentEncoding | null {
+	const header = response.headers.get("content-encoding")?.trim().toLowerCase();
+	if (!header || header === "identity") return null;
+	const encodings = header
+		.split(",")
+		.map((encoding) => encoding.trim())
+		.filter(Boolean);
+	if (encodings.length === 1 && (encodings[0] === "br" || encodings[0] === "deflate" || encodings[0] === "gzip")) {
+		return encodings[0];
+	}
+	cancelResponseBody(response);
+	throw new WebSourceFetchError(`Web page content encoding is unsupported: ${header}`, {
+		code: "content_encoding",
+		recoverable: false,
+		metadata: { url, contentEncoding: header },
+	});
+}
+
+async function decodeResponseBody(
+	bytes: Uint8Array,
+	encoding: WebContentEncoding,
+	url: string,
+	signal: AbortSignal,
+): Promise<Uint8Array> {
+	const decoder = encoding === "br" ? createBrotliDecompress() : encoding === "gzip" ? createGunzip() : createInflate();
+	const chunks: Uint8Array[] = [];
+	let decodedBytes = 0;
+	const onAbort = () => decoder.destroy(abortReason(signal));
+	if (signal.aborted) throw abortReason(signal);
+	signal.addEventListener("abort", onAbort, { once: true });
+	try {
+		decoder.end(bytes);
+		for await (const chunk of decoder) {
+			const decodedChunk = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+			decodedBytes += decodedChunk.byteLength;
+			if (decodedBytes > WEB_MAX_RESPONSE_BYTES) {
+				decoder.destroy();
+				throw new WebSourceFetchError(`Web page response exceeds the ${WEB_MAX_RESPONSE_BYTES}-byte limit`, {
+					code: "response_size",
+					recoverable: false,
+					metadata: { url, bytes: decodedBytes, contentEncoding: encoding },
+				});
+			}
+			chunks.push(decodedChunk);
+		}
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+		if (!decoder.destroyed) decoder.destroy();
+	}
+	const output = new Uint8Array(decodedBytes);
+	let offset = 0;
+	for (const chunk of chunks) {
+		output.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return output;
 }
 
 interface ResolvedWebAddress {
@@ -453,8 +529,7 @@ interface ExtractedWebPage {
 
 async function extractWebPage(fetched: WebFetchResult): Promise<ExtractedWebPage> {
 	const { document } = parseHTML(fetched.html);
-	const canonicalLink = canonicalLinkHref(document);
-	removeMalformedCanonicalLink(document, canonicalLink, fetched.finalUrl);
+	const canonicalLink = removeMalformedCanonicalLink(document, canonicalLinkHref(document), fetched.finalUrl);
 	const result = (await Defuddle(document, fetched.finalUrl, {
 		markdown: true,
 		separateMarkdown: true,
@@ -512,12 +587,17 @@ function canonicalLinkHref(document: Document): string | undefined {
 	return link?.getAttribute("href") ?? (link ? "" : undefined);
 }
 
-function removeMalformedCanonicalLink(document: Document, href: string | undefined, fallback: string): void {
-	if (href === undefined || normalizeCanonicalUrl(href, fallback) !== null) return;
+function removeMalformedCanonicalLink(
+	document: Document,
+	href: string | undefined,
+	fallback: string,
+): string | undefined {
+	if (href === undefined || normalizeCanonicalUrl(href, fallback) !== null) return href;
 	const link = Array.from(document.querySelectorAll("link")).find((candidate) =>
 		(candidate.getAttribute("rel") ?? "").split(/\s+/).some((token) => token.toLowerCase() === "canonical"),
 	);
 	link?.remove();
+	return undefined;
 }
 
 function normalizeCanonicalUrl(value: string | null | undefined, fallback: string): string | null {
@@ -567,7 +647,7 @@ async function writeFailureArtifact(
 		harness: WEB_HARNESS,
 		sourceId: source.id,
 		sourceRoot: source.root,
-		sourceExternalId: `failure:${failure.failedAt}:${failure.message}`,
+		sourceExternalId: `failure:${failureFingerprint(failure)}`,
 		sourcePath: failureArtifactPath(source, failure),
 		sourceKind: "source_web_failure",
 		sourceMtimeMs: Date.parse(failure.failedAt) || Date.now(),
@@ -578,14 +658,17 @@ async function writeFailureArtifact(
 	return 1;
 }
 
-function failureArtifactPath(source: SignetSourceEntry, failure: SourceFailureState): string {
-	const fingerprint = createHash("sha256")
+function failureFingerprint(failure: SourceFailureState): string {
+	return createHash("sha256")
 		.update(failure.message)
 		.update("\0")
 		.update(JSON.stringify(failure.metadata ?? {}))
 		.digest("hex")
 		.slice(0, 16);
-	return `web://source/${source.id}/failures/${encodeURIComponent(failure.failedAt)}-${fingerprint}`;
+}
+
+function failureArtifactPath(source: SignetSourceEntry, failure: SourceFailureState): string {
+	return `web://source/${source.id}/failures/${failureFingerprint(failure)}`;
 }
 
 function toFailureState(source: SignetSourceEntry, error: unknown): SourceFailureState {
@@ -633,6 +716,29 @@ async function purgeStaleWebArtifacts(
 		),
 		{ operation: "sources.web.purge_stale", lane: "write", deadlineMs: 30_000, estimatedWorkUnits: staleRows.length },
 	);
+}
+
+async function purgeStaleWebDocumentReferences(
+	sourceId: string,
+	agentId: string,
+	seenPaths: ReadonlySet<string>,
+): Promise<void> {
+	if (seenPaths.size === 0) return;
+	const placeholders = [...seenPaths].map(() => "?").join(", ");
+	const rows = await dbOwnerQuery<Array<{ readonly source_path: string }>>(
+		{
+			sql: `SELECT source_path FROM entities
+			 WHERE agent_id = ? AND source_id = ? AND source_kind = 'source_web_page'
+			   AND entity_type = 'source_document_reference'
+			   AND source_path NOT IN (${placeholders})`,
+			params: [agentId, sourceId, ...seenPaths],
+			result: "all",
+		},
+		{ operation: "sources.web.purge_stale_references", lane: "read", deadlineMs: 5_000 },
+	);
+	for (const row of rows) {
+		await purgeSourceArtifactStructureAsync({ agentId, sourceId, sourcePath: row.source_path });
+	}
 }
 
 async function purgeStaleWebFailureArtifacts(sourceId: string, agentId: string): Promise<void> {

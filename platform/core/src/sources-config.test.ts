@@ -15,6 +15,7 @@ import {
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
+	normalizePublicWebUrl,
 	parseDiscordSettings,
 	parseGitHubSettings,
 	parseWebSettings,
@@ -69,6 +70,50 @@ describe("sources-config", () => {
 			const result = addWebSource({ url }, agentsDir);
 			expect(result).toEqual({ ok: false, error: "Web page URL must be a public http(s) URL" });
 		}
+	});
+	it("rejects every non-global IP literal, including mapped special-use addresses", () => {
+		const nonGlobalUrls = [
+			"http://0.0.0.0/",
+			"http://10.0.0.1/",
+			"http://100.64.0.1/",
+			"http://127.0.0.1/",
+			"http://169.254.1.1/",
+			"http://172.16.0.1/",
+			"http://192.0.0.1/",
+			"http://192.0.2.1/",
+			"http://192.88.99.1/",
+			"http://192.168.0.1/",
+			"http://192.31.196.1/",
+			"http://192.52.193.1/",
+			"http://192.175.48.1/",
+			"http://198.18.0.1/",
+			"http://198.51.100.1/",
+			"http://203.0.113.1/",
+			"http://224.0.0.1/",
+			"http://240.0.0.1/",
+			"http://255.255.255.255/",
+			"http://[::]/",
+			"http://[::1]/",
+			"http://[::ffff:8.8.8.8]/",
+			"http://[::ffff:6440:1]/",
+			"http://[fc00::1]/",
+			"http://[fd00::1]/",
+			"http://[fe80::1]/",
+			"http://[fec0::1]/",
+			"http://[ff02::1]/",
+			"http://[100::1]/",
+			"http://[2001:100::1]/",
+			"http://[2001:db8::1]/",
+			"http://[2001:30::1]/",
+			"http://[2002:0a00:0001::1]/",
+			"http://[3fff::1]/",
+			"http://[64:ff9b::1]/",
+			"http://[2620:4f:8000::1]/",
+		];
+		for (const url of nonGlobalUrls) expect(normalizePublicWebUrl(url)).toBeNull();
+
+		expect(normalizePublicWebUrl("http://8.8.8.8/")).toBe("http://8.8.8.8/");
+		expect(normalizePublicWebUrl("http://[2001:4860:4860::8888]/")).toBe("http://[2001:4860:4860::8888]/");
 	});
 	it("adds an Obsidian vault source as read-only config", () => {
 		const agentsDir = tmp();

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addWebSource } from "@signet/core";
@@ -189,11 +190,73 @@ describe("web-source-provider", () => {
 		expect(bodyAborted).toBe(true);
 	});
 
+	it("bounds a resolver that never settles by the fetch deadline", async () => {
+		setWebFetchTimeoutForTest(25);
+		setWebDnsLookupForTest(
+			(async () => await new Promise<never>(() => undefined)) as typeof import("node:dns/promises").lookup,
+		);
+
+		const outcome = await Promise.race([
+			fetchPublicWebPage("https://example.com/stalled-dns").then(
+				() => ({ kind: "resolved" as const }),
+				(error) => ({ kind: "error" as const, error }),
+			),
+			Bun.sleep(200).then(() => ({ kind: "test-timeout" as const })),
+		]);
+		expect(outcome).toMatchObject({ kind: "error", error: { code: "timeout" } });
+	});
+
+	it("decodes bounded gzip, brotli, and deflate responses before extraction", async () => {
+		const html = "<html><body><article><h1>Encoded page</h1><p>Readable encoded body.</p></article></body></html>";
+		const encodedResponses = [
+			["gzip", gzipSync(html)],
+			["br", brotliCompressSync(html)],
+			["deflate", deflateSync(html)],
+		] as const;
+
+		for (const [encoding, body] of encodedResponses) {
+			setWebRequestForTest(async (_url, options) => {
+				expect(options.headers["Accept-Encoding"]).toBe("identity");
+				return new Response(body, {
+					headers: { "content-type": "text/html", "content-encoding": encoding },
+				});
+			});
+			const fetched = await fetchPublicWebPage(`https://example.com/${encoding}`);
+			expect(fetched.html).toBe(html);
+		}
+	});
+
+	it("upserts repeated identical failure artifacts instead of accumulating active duplicates", async () => {
+		setWebRequestForTest(async () => new Response("denied", { status: 403 }));
+		const added = addWebSource({ url: "https://example.com/repeated-failure" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		const context = {
+			source: added.source,
+			agentsDir: dir,
+			agentId: "web-test-agent",
+			shouldContinue: () => true,
+		};
+		await webSourceProvider.sync?.(context);
+		await Bun.sleep(5);
+		await webSourceProvider.sync?.(context);
+		const failures = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT source_path, source_external_id FROM memory_artifacts WHERE agent_id = ? AND source_id = ? AND source_kind = 'source_web_failure' AND COALESCE(is_deleted, 0) = 0",
+					)
+					.all("web-test-agent", added.source.id) as Array<{ source_path: string; source_external_id: string }>,
+		);
+		expect(failures).toHaveLength(1);
+		expect(failures[0]?.source_external_id).toMatch(/^failure:[0-9a-f]{16}$/);
+	});
+
 	it("treats a malformed canonical link as absent", async () => {
 		setWebRequestForTest(
 			async () =>
 				new Response(
-					"<html><head><link rel='canonical' href='http://[broken'></head><body><article><h1>Malformed canonical</h1><p>Readable body.</p></article></body></html>",
+					"<html><head><link rel='canonical' href='http://[broken'><meta property='og:url' content='https://example.com/og-fallback'></head><body><article><h1>Malformed canonical</h1><p>Readable body.</p></article></body></html>",
 					{ headers: { "content-type": "text/html" } },
 				),
 		);
@@ -215,8 +278,47 @@ describe("web-source-provider", () => {
 					)
 					.get(added.source.id) as Record<string, string> | undefined,
 		);
-		expect(page?.source_external_id).toBe("https://example.com/malformed");
-		expect(page?.source_meta_json).toContain('"canonicalUrl":null');
+		expect(page?.source_external_id).toBe("https://example.com/og-fallback");
+		expect(page?.source_meta_json).toContain('"canonicalUrl":"https://example.com/og-fallback"');
+	});
+
+	it("reconciles stale redirected host references within the source scope", async () => {
+		let syncCount = 0;
+		const pageHtml = "<html><body><article><h1>Redirected article</h1><p>Current body.</p></article></body></html>";
+		setWebRequestForTest(async (url) => {
+			if (url === "https://example.com/redirect-start") {
+				syncCount += 1;
+				return new Response(null, {
+					status: 302,
+					headers: {
+						location: syncCount === 1 ? "https://old.example.com/article" : "https://new.example.com/article",
+					},
+				});
+			}
+			return new Response(pageHtml, { headers: { "content-type": "text/html" } });
+		});
+		const added = addWebSource({ url: "https://example.com/redirect-start" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		const context = {
+			source: added.source,
+			agentsDir: dir,
+			agentId: "web-test-agent",
+			shouldContinue: () => true,
+		};
+		await webSourceProvider.sync?.(context);
+		await Bun.sleep(5);
+		await webSourceProvider.sync?.(context);
+
+		const references = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT source_path FROM entities WHERE agent_id = ? AND source_id = ? AND entity_type = 'source_document_reference' ORDER BY source_path",
+					)
+					.all("web-test-agent", added.source.id) as Array<{ source_path: string }>,
+		);
+		expect(references).toEqual([{ source_path: "web://new.example.com" }]);
 	});
 
 	it("keeps redirected aliases isolated by source ownership", async () => {

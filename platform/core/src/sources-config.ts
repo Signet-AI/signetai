@@ -885,62 +885,131 @@ export function normalizePublicWebUrl(value: string): string | null {
 	return parsed.toString();
 }
 
+const NON_GLOBAL_IPV4_RANGES: readonly (readonly [number, number])[] = [
+	[0x00000000, 0x00ffffff], // This network
+	[0x0a000000, 0x0affffff], // Private use
+	[0x64400000, 0x647fffff], // Shared address space
+	[0x7f000000, 0x7fffffff], // Loopback
+	[0xa9fe0000, 0xa9feffff], // Link-local
+	[0xac100000, 0xac1fffff], // Private use
+	[0xc0000000, 0xc00000ff], // IETF protocol assignments
+	[0xc0000200, 0xc00002ff], // Documentation
+	[0xc01fc400, 0xc01fc4ff], // AS112-v4
+	[0xc034c100, 0xc034c1ff], // AMT
+	[0xc0586300, 0xc05863ff], // 6to4 anycast
+	[0xc0a80000, 0xc0a8ffff], // Private use
+	[0xc0af3000, 0xc0af30ff], // Direct Delegation AS112 Service
+	[0xc6120000, 0xc613ffff], // Benchmarking
+	[0xc6336400, 0xc63364ff], // Documentation
+	[0xcb007100, 0xcb0071ff], // Documentation
+	[0xe0000000, 0xffffffff], // Multicast and reserved
+];
+
+const NON_GLOBAL_IPV6_RANGES: readonly (readonly [string, number])[] = [
+	["::", 96], // IPv4-compatible and unspecified
+	["::ffff:0:0", 96], // IPv4-mapped
+	["100::", 64], // Discard-only
+	["100:0:0:1::", 64], // Dummy IPv6 prefix
+	["2001::", 23], // IETF protocol assignments
+	["2001:0::", 32], // Teredo
+	["2001:1::", 32], // IETF protocol assignments
+	["2001:2::", 48], // Benchmarking
+	["2001:3::", 32], // IETF protocol assignments
+	["2001:4:112::", 48], // AS112-v6
+	["2001:8::", 32], // 6to4 anycast
+	["2001:10::", 28], // ORCHID
+	["2001:20::", 28], // ORCHIDv2
+	["2001:30::", 28], // Drone Remote ID protocol entity tags
+	["2001:db8::", 32], // Documentation
+	["3fff::", 20], // Documentation
+	["64:ff9b::", 96], // Well-known prefix for IPv4/IPv6 translation
+	["64:ff9b:1::", 48], // Local-use prefix for IPv4/IPv6 translation
+	["2620:4f:8000::", 48], // Direct Delegation AS112 Service
+	["fc00::", 7], // Unique local
+	["fe80::", 10], // Link-local
+	["fec0::", 10], // Deprecated site-local
+	["ff00::", 8], // Multicast
+];
+
 function isUnsafeWebIp(host: string): boolean {
-	const ipv4 = /^(\d{1,3})(?:\.(\d{1,3})){3}$/.exec(host);
-	if (ipv4) {
-		const octets = host.split(".").map(Number);
-		if (octets.some((octet) => octet > 255)) return true;
-		const [a, b] = octets;
-		return (
-			a === 0 ||
-			a === 10 ||
-			a === 127 ||
-			(a === 169 && b === 254) ||
-			(a === 172 && b >= 16 && b <= 31) ||
-			(a === 192 && b === 168) ||
-			(a === 100 && b >= 64 && b <= 127) ||
-			(a === 198 && (b === 18 || b === 19)) ||
-			(a === 198 && b === 51) ||
-			(a === 203 && b === 0)
-		);
+	if (/^[0-9.]+$/.test(host)) {
+		const address = parseIpv4Address(host);
+		return address === null || isNonGlobalIpv4(address);
 	}
 	if (host.includes(":")) {
-		const normalized = host.toLowerCase();
-		const mapped = normalized.match(/^::ffff:(?:([0-9a-f]{1,4}):([0-9a-f]{1,4})|([0-9.]+))$/);
-		if (mapped) {
-			const hexA = mapped[1] ? Number.parseInt(mapped[1], 16) : 0;
-			const hexB = mapped[2] ? Number.parseInt(mapped[2], 16) : 0;
-			const mappedOctets = mapped[3]
-				? mapped[3].split(".").map(Number)
-				: [hexA >>> 8, hexA & 255, hexB >>> 8, hexB & 255];
-			if (mappedOctets.length === 4) {
-				const [a, b] = mappedOctets;
-				if (
-					a === 0 ||
-					a === 10 ||
-					a === 127 ||
-					(a === 169 && b === 254) ||
-					(a === 172 && b >= 16 && b <= 31) ||
-					(a === 192 && b === 168)
-				)
-					return true;
-			}
-		}
-		return (
-			normalized === "::" ||
-			normalized === "::1" ||
-			normalized.startsWith("fc") ||
-			normalized.startsWith("fd") ||
-			normalized.startsWith("fe8") ||
-			normalized.startsWith("fe9") ||
-			normalized.startsWith("fea") ||
-			normalized.startsWith("feb") ||
-			normalized.startsWith("::ffff:127.") ||
-			normalized.startsWith("::ffff:10.") ||
-			normalized.startsWith("::ffff:192.168.")
-		);
+		const address = parseIpv6Address(host);
+		return address === null || isNonGlobalIpv6(address);
 	}
 	return false;
+}
+
+function parseIpv4Address(host: string): number | null {
+	const octets = host.split(".");
+	if (octets.length !== 4) return null;
+	let address = 0;
+	for (const octet of octets) {
+		if (!/^\d{1,3}$/.test(octet)) return null;
+		const value = Number(octet);
+		if (value > 255) return null;
+		address = address * 256 + value;
+	}
+	return address;
+}
+
+function isNonGlobalIpv4(address: number): boolean {
+	return NON_GLOBAL_IPV4_RANGES.some(([start, end]) => address >= start && address <= end);
+}
+
+function parseIpv6Address(host: string): bigint | null {
+	const normalized = host.toLowerCase();
+	if (normalized.includes("%")) return null;
+	const sections = normalized.split("::");
+	if (sections.length > 2) return null;
+	const head = sections[0] ? parseIpv6Sections(sections[0].split(":"), sections.length === 1) : [];
+	const tail = sections.length === 2 && sections[1] ? parseIpv6Sections(sections[1].split(":"), true) : [];
+	if (head === null || tail === null) return null;
+	const words =
+		sections.length === 2
+			? [...head, ...Array.from({ length: 8 - head.length - tail.length }, () => 0), ...tail]
+			: [...head];
+	if (words.length !== 8) return null;
+	return words.reduce((address, word) => address * 0x10000n + BigInt(word), 0n);
+}
+
+function parseIpv6Sections(sections: readonly string[], allowIpv4Tail: boolean): number[] | null {
+	const words: number[] = [];
+	for (const [index, section] of sections.entries()) {
+		if (section.includes(".")) {
+			if (!allowIpv4Tail || index !== sections.length - 1) return null;
+			const ipv4 = parseIpv4Address(section);
+			if (ipv4 === null) return null;
+			words.push(Math.floor(ipv4 / 0x10000), ipv4 % 0x10000);
+			continue;
+		}
+		if (!/^[0-9a-f]{1,4}$/.test(section)) return null;
+		words.push(Number.parseInt(section, 16));
+	}
+	return words;
+}
+
+function isNonGlobalIpv6(address: bigint): boolean {
+	const globalUnicastStart = 0x20000000000000000000000000000000n;
+	const globalUnicastEnd = 0x3fffffffffffffffffffffffffffffffn;
+	if (address < globalUnicastStart || address > globalUnicastEnd) return true;
+	if (NON_GLOBAL_IPV6_RANGES.some(([network, prefix]) => matchesIpv6Cidr(address, network, prefix))) return true;
+	if (matchesIpv6Cidr(address, "2002::", 16)) {
+		const embeddedIpv4 = Number((address >> 80n) & 0xffffffffn);
+		if (isNonGlobalIpv4(embeddedIpv4)) return true;
+	}
+	return false;
+}
+
+function matchesIpv6Cidr(address: bigint, network: string, prefix: number): boolean {
+	const parsedNetwork = parseIpv6Address(network);
+	if (parsedNetwork === null) return false;
+	const hostBits = 128 - prefix;
+	const mask = ((1n << 128n) - 1n) ^ ((1n << BigInt(hostBits)) - 1n);
+	return (address & mask) === (parsedNetwork & mask);
 }
 
 function cleanExcludeGlobs(values: readonly string[] | undefined): readonly string[] | null {
