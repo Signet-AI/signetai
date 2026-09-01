@@ -258,6 +258,28 @@ describe("sources grouping", () => {
 		mounted.container.remove();
 	});
 
+	test("transcript imports send the selected duplicate mode to the daemon", async () => {
+		const calls: RequestInit[] = [];
+		const previousFetch = globalThis.fetch;
+		globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+			calls.push(init ?? {});
+			return new Response(
+				JSON.stringify({ id: "job-1", jobId: "job-1", kind: "import", state: "staging", files: [] }),
+				{ status: 201 },
+			);
+		}) as typeof fetch;
+		try {
+			const result = await api.createSourceImport("agent-a", [new File(["{}"], "transcript.jsonl")], "reimport");
+			expect(result.error).toBeNull();
+			expect(JSON.parse(String(calls[0]?.body))).toMatchObject({
+				schemaId: "signet-export",
+				duplicateMode: "reimport",
+			});
+		} finally {
+			globalThis.fetch = previousFetch;
+		}
+	});
+
 	test("desktop file picking preserves filesystem paths and duplicate mode through import", async () => {
 		const mounted = await mount(<ConnectSourceDialog open onClose={() => undefined} onConnected={() => undefined} />);
 		await click(button(mounted.container, "Files"));
