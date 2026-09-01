@@ -31,10 +31,11 @@ import {
 	secretNameFor,
 	titleCase,
 } from "@/lib/providers";
+import { DASHBOARD_LICENSES } from "@/lib/dashboard-licenses";
 import { type SettingsSection, useSettings } from "@/lib/settings-context";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { CheckCircle, Download, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
+import { CheckCircle, Download, ExternalLink, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
@@ -116,6 +117,26 @@ const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
 			</svg>
 		),
 	},
+	{
+		id: "licenses",
+		label: "Licenses",
+		icon: (
+			<svg
+				viewBox="0 0 24 24"
+				width="15"
+				height="15"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth={1.75}
+				strokeLinecap="round"
+				strokeLinejoin="round"
+				aria-hidden="true"
+			>
+				<path d="M6 3h8l4 4v14H6z" />
+				<path d="M14 3v5h5M9 13h6M9 17h4" />
+			</svg>
+		),
+	},
 ];
 
 /** Radix Select rejects empty-string item values; map the "none" choice. */
@@ -126,11 +147,14 @@ export function SettingsModal() {
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogContent
-				className="sig-modal flex h-[560px] max-h-[calc(100vh-48px)] w-[840px] max-w-[calc(100vw-48px)] gap-0 overflow-hidden rounded-[12px] border border-[oklch(1_0_0/0.1)] bg-card p-0 sm:max-w-[840px] max-sm:h-[calc(100vh-24px)] max-sm:max-w-[calc(100vw-24px)] max-sm:flex-col [html:not(.dark)_&]:border-[oklch(0_0_0/0.1)]"
+				className="sig-modal flex h-[560px] max-h-[calc(100vh-48px)] w-[840px] max-w-[calc(100vw-48px)] gap-0 overflow-hidden rounded-[12px] border border-[oklch(1_0_0/0.1)] bg-card p-0 sm:max-w-[calc(100vw-48px)] lg:max-w-[840px] max-sm:h-[calc(100vh-24px)] max-sm:max-w-[calc(100vw-24px)] max-sm:flex-col [html:not(.dark)_&]:border-[oklch(0_0_0/0.1)]"
 				showCloseButton={false}
 			>
 				{/* internal sidebar */}
-				<aside className="flex w-[220px] shrink-0 flex-col gap-1 border-r border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--background)_60%,var(--card))] p-3 pt-4.5 max-sm:h-auto max-sm:w-full max-sm:flex-row max-sm:items-center max-sm:justify-between max-sm:gap-0 max-sm:border-b max-sm:border-r-0 max-sm:p-2 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
+				<aside
+					aria-label="Settings sections"
+					className="flex w-[220px] shrink-0 flex-col gap-1 border-r border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--background)_60%,var(--card))] p-3 pt-4.5 max-sm:grid max-sm:grid-cols-5 max-sm:h-auto max-sm:w-full max-sm:items-stretch max-sm:gap-0 max-sm:border-b max-sm:border-r-0 max-sm:p-2 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]"
+				>
 					<div className="px-2.5 pb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground max-sm:hidden">
 						Settings
 					</div>
@@ -139,8 +163,9 @@ export function SettingsModal() {
 							key={n.id}
 							type="button"
 							onClick={() => setSection(n.id)}
+							aria-current={section === n.id ? "page" : undefined}
 							className={cn(
-								"flex items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-2 text-left text-[13px] transition-colors max-sm:gap-0.5 max-sm:px-0.5 max-sm:py-1.5 max-sm:text-[10px]",
+								"flex min-w-0 items-center gap-2.5 rounded-[var(--radius)] px-2.5 py-2 text-left text-[13px] transition-colors max-sm:flex-col max-sm:justify-center max-sm:gap-0.5 max-sm:px-0.5 max-sm:py-1.5 max-sm:text-[10px] max-sm:whitespace-nowrap",
 								section === n.id
 									? "bg-[color-mix(in_oklch,var(--foreground)_9%,transparent)] font-medium text-foreground shadow-[inset_0_1px_0_oklch(1_0_0/0.08)]"
 									: "text-muted-foreground hover:bg-[color-mix(in_oklch,var(--foreground)_6%,transparent)] hover:text-foreground",
@@ -152,7 +177,7 @@ export function SettingsModal() {
 					))}
 				</aside>
 
-				<div className="flex min-w-0 flex-1 flex-col">
+				<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 					<DialogHeader className="flex-row items-center justify-between border-b border-[oklch(1_0_0/0.06)] px-5 py-4 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
 						<DialogTitle className="text-[15px] font-semibold tracking-tight">
 							{NAV.find((n) => n.id === section)?.label}
@@ -170,11 +195,12 @@ export function SettingsModal() {
 						</div>
 					</DialogHeader>
 
-					<div className="min-h-0 flex-1 overflow-y-auto p-5">
+					<div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-none">
 						{section === "network" && <NetworkSection />}
 						{section === "inference" && <InferenceSection />}
 						{section === "logs" && <LogsSection />}
 						{section === "advanced" && <AdvancedSection />}
+						{section === "licenses" && <LicensesSection />}
 					</div>
 				</div>
 			</DialogContent>
@@ -1438,6 +1464,98 @@ function AdvancedSection() {
 					step={1000}
 				/>
 			</div>
+		</div>
+	);
+}
+
+/* ── Licenses ── */
+
+export function LicensesSection() {
+	return (
+		<div className="flex flex-col gap-4">
+			<div className="overflow-hidden rounded-[10px] border border-[oklch(0.78_0.12_160/0.24)] bg-[linear-gradient(135deg,oklch(0.78_0.12_160/0.12),transparent_58%)] shadow-[inset_0_1px_0_oklch(1_0_0/0.08)] [html:not(.dark)_&]:border-[oklch(0.45_0.12_160/0.25)] [html:not(.dark)_&]:bg-[linear-gradient(135deg,oklch(0.78_0.12_160/0.11),transparent_58%)]">
+				<div className="flex items-start gap-3 px-4 py-4">
+					<div className="grid size-9 shrink-0 place-items-center rounded-[8px] border border-[oklch(0.78_0.12_160/0.3)] bg-[oklch(0.78_0.12_160/0.12)] text-[oklch(0.78_0.12_160)]">
+						<svg
+							viewBox="0 0 24 24"
+							width="18"
+							height="18"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth={1.5}
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M12 3 4 6v5c0 5.2 3.4 8.4 8 10 4.6-1.6 8-4.8 8-10V6l-8-3z" />
+							<path d="m9 12 2 2 4-4" />
+						</svg>
+					</div>
+					<div className="min-w-0">
+						<div className="font-mono text-[9px] font-semibold uppercase tracking-[0.1em] text-[oklch(0.78_0.12_160)]">
+							Open-source colophon
+						</div>
+						<h2 className="mt-1 text-[15px] font-semibold tracking-tight">A little help from a lot of good people.</h2>
+						<p className="mt-1 max-w-[540px] text-[11.5px] leading-relaxed text-muted-foreground">
+							Signet’s dashboard is assembled from open-source projects. We’re grateful to their maintainers and
+							contributors.
+						</p>
+					</div>
+				</div>
+				<div className="flex flex-wrap items-center justify-between gap-2 border-t border-[oklch(1_0_0/0.07)] px-4 py-2.5 text-[10px] [html:not(.dark)_&]:border-[oklch(0_0_0/0.07)]">
+					<span className="font-mono text-muted-foreground">
+						Signet <span className="text-foreground">Apache-2.0</span>
+					</span>
+					<a
+						href="https://github.com/Signet-AI/signetai/blob/main/THIRD_PARTY_LICENSES.md"
+						target="_blank"
+						rel="noopener noreferrer"
+						className="inline-flex items-center gap-1.5 font-medium text-[oklch(0.78_0.12_160)] transition-colors hover:text-foreground"
+					>
+						Full direct dependency inventory <ExternalLink className="size-3" aria-hidden="true" />
+					</a>
+				</div>
+			</div>
+
+			<div>
+				<GroupLabel suffix="all external direct runtime + build dependencies">What’s in the dashboard</GroupLabel>
+				<div className="grid gap-2 sm:grid-cols-2">
+					{DASHBOARD_LICENSES.map((entry) => (
+						<a
+							key={entry.name}
+							href={entry.href}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="group min-w-0 rounded-[8px] border border-[oklch(1_0_0/0.07)] bg-[color-mix(in_oklch,var(--foreground)_2.5%,transparent)] px-3 py-2.5 transition-colors hover:border-[oklch(0.78_0.12_160/0.35)] hover:bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] [html:not(.dark)_&]:border-[oklch(0_0_0/0.07)]"
+						>
+							<div className="flex items-center justify-between gap-2">
+								<span className="truncate text-[12px] font-medium">{entry.name}</span>
+								<span className="shrink-0 rounded-[4px] border border-[oklch(0.78_0.12_160/0.25)] px-1.5 py-0.5 font-mono text-[9px] font-semibold text-[oklch(0.78_0.12_160)]">
+									{entry.license}
+								</span>
+							</div>
+							<div className="mt-1 truncate font-mono text-[9.5px] text-muted-foreground group-hover:text-foreground/80">
+								{entry.packages}
+							</div>
+						</a>
+					))}
+				</div>
+			</div>
+
+			<p className="px-1 text-[10.5px] leading-relaxed text-muted-foreground">
+				The cards above cover all external direct runtime and build dependencies used by the dashboard. The repository’s
+				full direct dependency inventory records their manifest ranges and canonical license texts; transitive
+				dependency notices are not included. See the&nbsp;
+				<a
+					href="https://github.com/Signet-AI/signetai/blob/main/THIRD_PARTY_LICENSES.md"
+					target="_blank"
+					rel="noopener noreferrer"
+					className="text-foreground underline decoration-[oklch(0.78_0.12_160/0.5)] underline-offset-2 hover:decoration-current"
+				>
+					direct dependency inventory
+				</a>
+				.
+			</p>
 		</div>
 	);
 }
