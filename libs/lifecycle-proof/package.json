@@ -1,6 +1,6 @@
 {
 	"name": "@signet/lifecycle-proof",
-	"version": "0.214.46",
+	"version": "0.215.0",
 	"private": true,
 	"description": "Cross-harness lifecycle invariant proof helpers",
 	"type": "module",
