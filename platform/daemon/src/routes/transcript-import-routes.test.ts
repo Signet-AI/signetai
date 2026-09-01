@@ -8,12 +8,14 @@ import { registerTranscriptImportRoutes } from "./transcript-import-routes";
 
 let dir = "";
 let oldPath: string | undefined;
+let oldWorkspace: string | undefined;
 let oldAgent: string | undefined;
 
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "signet-transcript-routes-"));
 	mkdirSync(join(dir, "memory"), { recursive: true });
 	oldPath = process.env.SIGNET_PATH;
+	oldWorkspace = process.env.SIGNET_WORKSPACE;
 	oldAgent = process.env.SIGNET_AGENT_ID;
 	process.env.SIGNET_PATH = dir;
 	process.env.SIGNET_AGENT_ID = "transcript-test-agent";
@@ -25,6 +27,8 @@ afterEach(() => {
 	closeDbAccessor();
 	if (oldPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	else process.env.SIGNET_PATH = oldPath;
+	if (oldWorkspace === undefined) Reflect.deleteProperty(process.env, "SIGNET_WORKSPACE");
+	else process.env.SIGNET_WORKSPACE = oldWorkspace;
 	if (oldAgent === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 	else process.env.SIGNET_AGENT_ID = oldAgent;
 	rmSync(dir, { recursive: true, force: true });
@@ -137,4 +141,92 @@ it("retry increments generation and returns recoverable rejected records to pend
 	);
 	expect(row).toEqual({ generation: 1, lease_token: null, control_request: null });
 	expect(record).toEqual({ status: "pending", rejection_code: null });
+});
+
+it("keeps a multi-file import retryable after one upload body fails", async () => {
+	const created = await app().request("/api/sources/imports", {
+		method: "POST",
+		body: JSON.stringify({ files: [{ name: "first.jsonl" }, { name: "second.jsonl" }] }),
+		headers: { "content-type": "application/json" },
+	});
+	expect(created.status).toBe(201);
+	const job = (await created.json()) as { jobId: string; files: Array<{ id: string }> };
+	const firstFileId = job.files[0]?.id as string;
+	const secondFileId = job.files[1]?.id as string;
+	const failedBody = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.error(new Error("simulated upload failure"));
+		},
+	});
+	const failedUpload = await app().request(`/api/sources/imports/${job.jobId}/files/${firstFileId}`, {
+		method: "PUT",
+		body: failedBody,
+	} as RequestInit);
+	expect(failedUpload.status).toBe(500);
+
+	const payload = (id: string) =>
+		`${JSON.stringify({
+			source: "signet",
+			id,
+			harness: "h",
+			agent_id: "embedded",
+			session_key: id,
+			timestamp: "2024-01-01T00:00:00Z",
+			message_count: 1,
+			messages: [{ role: "user", content: id }],
+		})}\n`;
+	const secondUpload = await app().request(`/api/sources/imports/${job.jobId}/files/${secondFileId}`, {
+		method: "PUT",
+		body: payload("second"),
+	} as RequestInit);
+	expect(secondUpload.status).toBe(201);
+	const stillStaging = await getDbAccessor().withReadDbAsync((db) =>
+		db.prepare("SELECT state FROM source_import_jobs WHERE id = ?").get(job.jobId),
+	);
+	expect(stillStaging).toEqual({ state: "staging" });
+
+	const firstRetry = await app().request(`/api/sources/imports/${job.jobId}/files/${firstFileId}`, {
+		method: "PUT",
+		body: payload("first"),
+	} as RequestInit);
+	expect(firstRetry.status).toBe(201);
+	const started = await app().request(`/api/sources/imports/${job.jobId}/start`, { method: "POST" });
+	expect(started.status).toBe(200);
+});
+
+it("uses SIGNET_WORKSPACE as the canonical import root when SIGNET_PATH is absent", async () => {
+	const previousPath = process.env.SIGNET_PATH;
+	Reflect.deleteProperty(process.env, "SIGNET_PATH");
+	process.env.SIGNET_WORKSPACE = dir;
+	try {
+		const created = await app().request("/api/sources/imports", {
+			method: "POST",
+			body: JSON.stringify({ files: [{ name: "workspace.jsonl" }] }),
+			headers: { "content-type": "application/json" },
+		});
+		expect(created.status).toBe(201);
+		const job = (await created.json()) as { jobId: string; files: Array<{ id: string }> };
+		const fileId = job.files[0]?.id as string;
+		const payload = `${JSON.stringify({
+			source: "signet",
+			id: "workspace",
+			harness: "h",
+			agent_id: "embedded",
+			session_key: "workspace",
+			timestamp: "2024-01-01T00:00:00Z",
+			message_count: 1,
+			messages: [{ role: "user", content: "workspace" }],
+		})}\n`;
+		const uploaded = await app().request(`/api/sources/imports/${job.jobId}/files/${fileId}`, {
+			method: "PUT",
+			body: payload,
+		} as RequestInit);
+		expect(uploaded.status).toBe(201);
+		const body = (await uploaded.json()) as { managedPath: string };
+		expect(body.managedPath).toContain("imports/transcripts/");
+		expect(await Bun.file(join(dir, body.managedPath)).exists()).toBe(true);
+	} finally {
+		if (previousPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+		else process.env.SIGNET_PATH = previousPath;
+	}
 });

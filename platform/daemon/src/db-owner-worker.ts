@@ -9,6 +9,7 @@ import {
 	purgeObsidianSourceFileStructureInTx,
 } from "./obsidian-source-graph";
 import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
+import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./memory-lineage";
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
@@ -1174,6 +1175,30 @@ export function runDbOwnerWorker(): void {
 		}
 		if (job.request.kind === "source_artifact_upsert" || job.request.kind === "source_artifact_upsert_batch")
 			return executeSourceArtifactUpsert(job.request, context);
+		if (job.request.kind === "source_purge") {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const input = job.request.input;
+				const purged = purgeSourceOwnedRowsInTx(db as never, {
+					sourceId: input.sourceId,
+					agentId: input.agentId,
+				});
+				const transcriptPurged = purgeTranscriptImportSourceInTx(
+					db as never,
+					input.agentId ?? "default",
+					input.sourceId,
+				);
+				commit(context);
+				return { purged: purged + transcriptPurged };
+			} catch (error) {
+				try {
+					db.exec("ROLLBACK");
+				} catch {
+					/* preserve original error */
+				}
+				throw error;
+			}
+		}
 		if (job.request.kind === "source_evidence_eligibility") return executeSourceEvidenceEligibility(job.request);
 		if (job.request.kind === "vector_search") return await executeVectorSearch(job.request.payload);
 		if (

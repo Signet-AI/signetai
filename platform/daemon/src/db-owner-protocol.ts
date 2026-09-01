@@ -94,6 +94,11 @@ export interface DbOwnerSourceGraphPurge {
 	readonly root: string;
 }
 
+export interface DbOwnerSourcePurge {
+	readonly agentId?: string;
+	readonly sourceId: string;
+}
+
 export interface DbOwnerSourceArtifactPurge {
 	readonly agentId: string;
 	readonly sourceId: string;
@@ -265,6 +270,7 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_index"; readonly input: DbOwnerSourceGraphIndex }
 	| { readonly kind: "source_graph_file_purge"; readonly input: DbOwnerSourceGraphFilePurge }
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
+	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
 	| { readonly kind: "source_artifact_index"; readonly input: DbOwnerSourceArtifactIndex }
 	| { readonly kind: "source_native_memory_index"; readonly input: DbOwnerNativeMemoryIndex }
 	| { readonly kind: "source_artifact_purge"; readonly input: DbOwnerSourceArtifactPurge }

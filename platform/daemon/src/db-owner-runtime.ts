@@ -19,6 +19,7 @@ import {
 	purgeTranscriptImportSourceInTx,
 	transcriptCommitBatchBytes,
 } from "./transcript-import-commit";
+import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import type {
 	DbOwnerJob,
 	DbOwnerParameter,
@@ -27,6 +28,7 @@ import type {
 	DbOwnerSourceGraphFilePurge,
 	DbOwnerSourceGraphIndex,
 	DbOwnerSourceGraphPurge,
+	DbOwnerSourcePurge,
 	DbOwnerSourceSnapshotImport,
 	DbOwnerSourceArtifactIndex,
 	DbOwnerNativeMemoryIndex,
@@ -193,6 +195,15 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
 			purgeTranscriptImportSourceInTx(db as never, request.input.agentId, request.input.sourceId),
 		);
+	if (request.kind === "source_purge")
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			const input = request.input;
+			const sourceInput = { sourceId: input.sourceId, agentId: input.agentId };
+			const purged = purgeSourceOwnedRowsInTx(db as never, sourceInput);
+			return {
+				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId ?? "default", input.sourceId),
+			};
+		});
 	if (request.kind === "transcript_import_control") {
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
 			const input = request.input;
@@ -630,6 +641,18 @@ export async function dbOwnerTranscriptImportPurge(
 ): Promise<unknown> {
 	const owner = await getDbOwner();
 	return await submitWithAdmission(owner, { kind: "transcript_import_purge", input }, { ...options, lane: "write" });
+}
+
+export async function dbOwnerSourcePurge(
+	input: DbOwnerSourcePurge,
+	options: DbOwnerSqlOptions,
+): Promise<{ readonly purged: number }> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission<{ readonly purged: number }>(
+		owner,
+		{ kind: "source_purge", input },
+		{ ...options, lane: options.lane ?? "write" },
+	);
 }
 
 export async function dbOwnerSourceArtifactUpsert(

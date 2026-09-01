@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { open, mkdir, rm, stat, writeFile, readdir, rename } from "node:fs/promises";
+import { open, mkdir, rm, stat, writeFile, readdir, rename, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { TRANSCRIPT_IMPORT_LIMITS, signetExportV1Adapter } from "./transcript-import-adapter";
 import { resolveDefaultBasePath } from "@signet/core";
@@ -352,8 +352,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					}
 					for (const commitBatch of commitBatches) {
 						await verifyStagedFile(file, path);
-						await guard();
-						await appendCanonical(root, options.agentId, harness, commitBatch);
+						await appendCanonical(root, options.agentId, harness, commitBatch, guard);
 						await guarded<void>({
 							kind: "source_import",
 							operation: "commit",
@@ -458,6 +457,7 @@ export async function appendCanonical(
 	agentId: string,
 	harness: string,
 	commits: readonly Parameters<typeof canonicalTranscriptLine>[0][],
+	beforeWrite?: () => Promise<void>,
 ): Promise<void> {
 	if (commits.length === 0 || commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch)
 		throw new RangeError("invalid transcript commit batch");
@@ -465,35 +465,7 @@ export async function appendCanonical(
 		throw new RangeError("canonical_batch_too_large");
 	const path = join(root, "transcripts", `${hash(`${agentId}\0${harness}`)}.jsonl`);
 	await mkdir(dirname(path), { recursive: true });
-	const lock = `${path}.lock`;
-	for (;;) {
-		try {
-			await mkdir(lock);
-			await writeFile(join(lock, "owner"), `${process.pid}\n`, "utf8");
-			break;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			try {
-				const owner = (await import("node:fs/promises")).readFile(join(lock, "owner"), "utf8");
-				const ownerPid = Number((await owner).trim());
-				if (Number.isInteger(ownerPid) && ownerPid > 0) {
-					try {
-						process.kill(ownerPid, 0);
-						await new Promise((resolve) => setTimeout(resolve, 5));
-						continue;
-					} catch (probeError) {
-						if ((probeError as NodeJS.ErrnoException).code !== "ESRCH") throw probeError;
-					}
-				}
-				await rm(lock, { recursive: true, force: true });
-			} catch {
-				// A process killed after mkdir or while holding the lock leaves a
-				// stale directory. Only this worker writes these per-harness locks.
-				await rm(lock, { recursive: true, force: true });
-			}
-		}
-	}
-	try {
+	await withCanonicalTranscriptLock(path, async () => {
 		const existing = await readText(path);
 		const ids = new Set<string>();
 		for (const line of existing.split("\n")) {
@@ -507,6 +479,7 @@ export async function appendCanonical(
 		}
 		const missing = commits.filter((commit) => !ids.has(commit.recordId));
 		if (!missing.length) return;
+		await beforeWrite?.();
 		const temp = `${path}.append-${randomUUID()}`;
 		const payload = missing.map(canonicalTranscriptLine).join("");
 		const staged = await open(temp, "wx");
@@ -531,10 +504,44 @@ export async function appendCanonical(
 		} finally {
 			await directory.close();
 		}
+	});
+}
+
+async function withCanonicalTranscriptLock<Result>(path: string, operation: () => Promise<Result>): Promise<Result> {
+	const lock = `${path}.lock`;
+	for (;;) {
+		try {
+			await mkdir(lock);
+			await writeFile(join(lock, "owner"), `${process.pid}\n`, "utf8");
+			break;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			try {
+				const ownerPid = Number((await readFile(join(lock, "owner"), "utf8")).trim());
+				if (Number.isInteger(ownerPid) && ownerPid > 0) {
+					try {
+						process.kill(ownerPid, 0);
+						await new Promise((resolve) => setTimeout(resolve, 5));
+						continue;
+					} catch (probeError) {
+						if ((probeError as NodeJS.ErrnoException).code !== "ESRCH") throw probeError;
+					}
+				}
+				await rm(lock, { recursive: true, force: true });
+			} catch {
+				// A process killed after mkdir or while holding the lock leaves a
+				// stale directory. Only this worker writes these per-harness locks.
+				await rm(lock, { recursive: true, force: true });
+			}
+		}
+	}
+	try {
+		return await operation();
 	} finally {
 		await rm(lock, { recursive: true, force: true });
 	}
 }
+
 async function maybeCrashDuringInventory(root: string): Promise<void> {
 	if (process.env.SIGNET_TRANSCRIPT_IMPORT_FAILPOINT !== "inventory") return;
 	const marker = join(root, ".daemon", "transcript-import-inventory-failpoint-fired");
@@ -632,28 +639,30 @@ export async function purgeTranscriptImportFilesystem(
 	}
 	for (const name of names.filter((entry) => entry.endsWith(".jsonl"))) {
 		const path = join(dir, name);
-		const input = await readText(path);
-		const kept = input
-			.split(/(?<=\n)/u)
-			.filter((line) => {
-				try {
-					const value = JSON.parse(line) as { source_id?: unknown; agent_id?: unknown };
-					return !(value.source_id === sourceId && (agentId === undefined || value.agent_id === agentId));
-				} catch {
-					return true;
-				}
-			})
-			.join("");
-		if (kept === input) continue;
-		const temp = `${path}.purge-${randomUUID()}`;
-		await writeFile(temp, kept, { flag: "w" });
-		const fd = await open(temp, "r+");
-		try {
-			await fd.sync();
-		} finally {
-			await fd.close();
-		}
-		await rename(temp, path);
+		await withCanonicalTranscriptLock(path, async () => {
+			const input = await readText(path);
+			const kept = input
+				.split(/(?<=\n)/u)
+				.filter((line) => {
+					try {
+						const value = JSON.parse(line) as { source_id?: unknown; agent_id?: unknown };
+						return !(value.source_id === sourceId && (agentId === undefined || value.agent_id === agentId));
+					} catch {
+						return true;
+					}
+				})
+				.join("");
+			if (kept === input) return;
+			const temp = `${path}.purge-${randomUUID()}`;
+			await writeFile(temp, kept, { flag: "w" });
+			const fd = await open(temp, "r+");
+			try {
+				await fd.sync();
+			} finally {
+				await fd.close();
+			}
+			await rename(temp, path);
+		});
 	}
 }
 export function importWorkerBatchSize(): number {

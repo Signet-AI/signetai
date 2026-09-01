@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, mkdir, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ import type { ImportStore, ImportStoreOperation } from "./transcript-import-stor
 import type { InventoryRecord } from "./transcript-import-inventory";
 
 type TestRow = { id: string; source_id: string; status: string; [key: string]: unknown };
-type TestCommit = { sourceId: string; canonicalId: string; canonicalKey: string };
+type TestCommit = { sourceId: string; sourceRecordId: string; canonicalId: string; canonicalKey: string };
 
 const valid = (id: string) =>
 	JSON.stringify({
@@ -305,6 +306,53 @@ test("filesystem purge removes the ledger-reserved managed upload path", async (
 	}
 });
 
+test("canonical purge waits for an in-flight append and removes its source without resurrection", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-purge-race-"));
+	try {
+		const { buildCompletedTranscriptCommit, canonicalTranscriptLine } = await import("./transcript-import-commit");
+		const { signetExportV1Adapter } = await import("./transcript-import-adapter");
+		const make = (id: string, sourceId: string) =>
+			buildCompletedTranscriptCommit(signetExportV1Adapter.parse(JSON.parse(valid(id))), {
+				agentId: "agent-a",
+				sourceId,
+				sourceRecordId: id,
+			});
+		const old = make("old", "source-a");
+		const next = make("next", "source-a");
+		const keep = make("keep", "source-b");
+		const digest = (await import("node:crypto")).createHash("sha256").update("agent-a\0h").digest("hex").slice(0, 24);
+		const canonicalPath = join(root, "transcripts", `${digest}.jsonl`);
+		await mkdir(join(root, "transcripts"), { recursive: true });
+		await writeFile(canonicalPath, `${canonicalTranscriptLine(old)}${canonicalTranscriptLine(keep)}`);
+
+		let enteredResolve!: () => void;
+		const entered = new Promise<void>((resolve) => {
+			enteredResolve = resolve;
+		});
+		let releaseResolve!: () => void;
+		const release = new Promise<void>((resolve) => {
+			releaseResolve = resolve;
+		});
+		const append = appendCanonical(root, "agent-a", "h", [next], async () => {
+			enteredResolve();
+			await release;
+		});
+		await entered;
+		const purge = purgeTranscriptImportFilesystem(root, "source-a", "agent-a");
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		releaseResolve();
+		await Promise.all([append, purge]);
+
+		const lines = (await Bun.file(canonicalPath).text())
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { id: string });
+		expect(lines.map((line) => line.id)).toEqual([keep.recordId]);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("active pause and cancel controls clear the lease at the checkpoint", async () => {
 	const root = await mkdtemp(join(tmpdir(), "signet-import-controls-"));
 	const oldOwner = process.env.SIGNET_DB_OWNER_WORKER;
@@ -326,6 +374,16 @@ test("active pause and cancel controls clear the lease at the checkpoint", async
 					)
 					.run(control, jobId),
 			);
+			if (control === "pause") {
+				await getDbAccessor().withWriteTxAsync((db) => {
+					db.prepare(
+						"INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,state) VALUES ('pause-file','pause-job','pause-source','agent-a',0,'source.jsonl','imports/transcripts/pause-source/source.jsonl','completed')",
+					).run();
+					db.prepare(
+						"INSERT INTO source_import_records (id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_offset,byte_length,raw_hash,status) VALUES ('pause-record','pause-job','pause-file','pause-source','agent-a',1,1,0,1,'hash','pending')",
+					).run();
+				});
+			}
 			await store.run({
 				kind: "source_import",
 				operation: "control",
@@ -337,6 +395,12 @@ test("active pause and cancel controls clear the lease at the checkpoint", async
 				db.prepare("SELECT state, lease_token FROM source_import_jobs WHERE id = ?").get(jobId),
 			);
 			expect(row).toEqual({ state: expectedState, lease_token: null });
+			if (control === "pause") {
+				const pending = await getDbAccessor().withReadDbAsync((db) =>
+					db.prepare("SELECT status, rejection_code FROM source_import_records WHERE id = 'pause-record'").get(),
+				);
+				expect(pending).toEqual({ status: "pending", rejection_code: null });
+			}
 		}
 	} finally {
 		closeDbAccessor();
@@ -363,17 +427,61 @@ test("stale finalize cannot complete a job after its lease generation changes", 
 				)
 				.run(),
 		);
-		await store.run({
-			kind: "source_import",
-			operation: "finalize",
-			agentId: "agent-a",
-			jobId: "stale-job",
-			payload: { generation: 0, leaseToken: "old-lease" },
-		});
+		await expect(
+			store.run({
+				kind: "source_import",
+				operation: "finalize",
+				agentId: "agent-a",
+				jobId: "stale-job",
+				payload: { generation: 0, leaseToken: "old-lease" },
+			}),
+		).rejects.toThrow("precondition");
 		const row = await getDbAccessor().withReadDbAsync((db) =>
 			db.prepare("SELECT state, generation, lease_token FROM source_import_jobs WHERE id = 'stale-job'").get(),
 		);
 		expect(row).toEqual({ state: "running", generation: 1, lease_token: "new-lease" });
+	} finally {
+		closeDbAccessor();
+		if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+		else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("store refuses to finalize while pending records remain", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-pending-finalize-"));
+	const oldOwner = process.env.SIGNET_DB_OWNER_WORKER;
+	process.env.SIGNET_DB_OWNER_WORKER = "1";
+	closeDbAccessor();
+	await mkdir(join(root, "memory"), { recursive: true });
+	initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
+	const store = createOwnerTranscriptImportStore();
+	try {
+		await createJob(store, { jobId: "pending-finalize-job", agentId: "agent-a" });
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"UPDATE source_import_jobs SET state = 'running', pending = 1, lease_token = 'lease-a' WHERE id = 'pending-finalize-job'",
+			).run();
+			db.prepare(
+				"INSERT INTO source_import_files (id, job_id, source_id, agent_id, ordinal, name, managed_path, state) VALUES ('pending-finalize-file', 'pending-finalize-job', 'pending-source', 'agent-a', 0, 'source.jsonl', 'imports/transcripts/pending-source/source.jsonl', 'completed')",
+			).run();
+			db.prepare(
+				"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status) VALUES ('pending-finalize-record', 'pending-finalize-job', 'pending-finalize-file', 'pending-source', 'agent-a', 1, 1, 0, 1, 'hash', 'pending')",
+			).run();
+		});
+		await expect(
+			store.run({
+				kind: "source_import",
+				operation: "finalize",
+				agentId: "agent-a",
+				jobId: "pending-finalize-job",
+				payload: { generation: 0, leaseToken: "lease-a" },
+			}),
+		).rejects.toThrow("precondition");
+		const row = await getDbAccessor().withReadDbAsync((db) =>
+			db.prepare("SELECT state, pending, lease_token FROM source_import_jobs WHERE id = 'pending-finalize-job'").get(),
+		);
+		expect(row).toEqual({ state: "running", pending: 1, lease_token: "lease-a" });
 	} finally {
 		closeDbAccessor();
 		if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
@@ -422,6 +530,201 @@ test("source purge audit attempts retain source identity after import ledgers ar
 		closeDbAccessor();
 		if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
 		else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("staged mutations are rejected before canonical commit", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-staged-mutation-"));
+	const source = "mutable-source";
+	const stagedPath = join(root, "imports", "transcripts", source, "source.jsonl");
+	const raw = `${valid("mutation")}\n`;
+	const originalHash = createHash("sha256").update(raw, "utf8").digest("hex");
+	await mkdir(join(root, "imports", "transcripts", source), { recursive: true });
+	await writeFile(stagedPath, raw);
+	let mutated = false;
+	let done = false;
+	let recovery: Readonly<Record<string, unknown>> | undefined;
+	let commitCalled = false;
+	const store: ImportStore = {
+		run: async <T>(op: ImportStoreOperation) => {
+			if (op.operation === "recover") {
+				if (typeof op.payload.error === "string") {
+					recovery = op.payload;
+					done = true;
+				}
+				return undefined as T;
+			}
+			if (op.operation === "list" && op.payload.view === "work")
+				return (done ? [] : [{ id: "mutation-job", state: "queued", generation: 0 }]) as T;
+			if (op.operation === "lease")
+				return { id: "mutation-job", state: "running", generation: 0, lease_token: "mutation-lease" } as T;
+			if (op.operation === "list" && op.payload.view === "status")
+				return [
+					{
+						id: "mutation-job",
+						state: "running",
+						generation: 0,
+						lease_token: "mutation-lease",
+						control_request: null,
+					},
+				] as T;
+			if (op.operation === "list" && op.payload.view === "files")
+				return [
+					{
+						id: "mutation-file",
+						job_id: "mutation-job",
+						source_id: source,
+						managed_path: `imports/transcripts/${source}/source.jsonl`,
+						checkpoint_byte_offset: 0,
+						checkpoint_ordinal: 0,
+						state: "ready",
+						size_bytes: Buffer.byteLength(raw),
+						content_hash: originalHash,
+					},
+				] as T;
+			if (op.operation === "record_batch") {
+				if (!mutated) {
+					mutated = true;
+					await writeFile(stagedPath, raw.replace("exact", "EXACT"));
+				}
+				return undefined as T;
+			}
+			if (op.operation === "commit") {
+				commitCalled = true;
+				return [] as T;
+			}
+			return undefined as T;
+		},
+	};
+	try {
+		const worker = startTranscriptImportWorker({ store, agentId: "agent-a", workspaceRoot: root, pollMs: 1 });
+		await new Promise((resolve) => setTimeout(resolve, 80));
+		await worker.stop();
+		expect(recovery).toMatchObject({ retryable: false, error: "staged source hash changed", fileId: "mutation-file" });
+		expect(commitCalled).toBe(false);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("owner recovery retries a transient startup failure before polling work", async () => {
+	let recoverAttempts = 0;
+	const store: ImportStore = {
+		run: async <T>(op: ImportStoreOperation) => {
+			if (op.operation === "recover") {
+				recoverAttempts++;
+				if (recoverAttempts === 1) throw new Error("database owner unavailable");
+				return undefined as T;
+			}
+			if (op.operation === "list" && op.payload.view === "work") return [] as T;
+			return undefined as T;
+		},
+	};
+	const worker = startTranscriptImportWorker({ store, agentId: "agent-a", pollMs: 1 });
+	await new Promise((resolve) => setTimeout(resolve, 320));
+	await worker.stop();
+	expect(recoverAttempts).toBeGreaterThanOrEqual(2);
+});
+
+test("callback failure is durably requeued instead of finalizing the import", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-callback-failure-"));
+	const source = "callback-source";
+	const raw = `${valid("callback")}\n`;
+	await mkdir(join(root, "imports", "transcripts", source), { recursive: true });
+	await writeFile(join(root, "imports", "transcripts", source, "source.jsonl"), raw);
+	const records: TestRow[] = [];
+	let fileComplete = false;
+	let done = false;
+	let finalized = false;
+	let recovery: Readonly<Record<string, unknown>> | undefined;
+	const store: ImportStore = {
+		run: async <T>(op: ImportStoreOperation) => {
+			if (op.operation === "recover") {
+				if (typeof op.payload.error === "string") {
+					recovery = op.payload;
+					done = true;
+				}
+				return undefined as T;
+			}
+			if (op.operation === "list" && op.payload.view === "work")
+				return (done ? [] : [{ id: "callback-job", state: "queued", generation: 0 }]) as T;
+			if (op.operation === "lease")
+				return { id: "callback-job", state: "running", generation: 0, lease_token: "callback-lease" } as T;
+			if (op.operation === "list" && op.payload.view === "status")
+				return [
+					{
+						id: "callback-job",
+						state: "running",
+						generation: 0,
+						lease_token: "callback-lease",
+						control_request: null,
+					},
+				] as T;
+			if (op.operation === "list" && op.payload.view === "files")
+				return [
+					{
+						id: "callback-file",
+						job_id: "callback-job",
+						source_id: source,
+						managed_path: `imports/transcripts/${source}/source.jsonl`,
+						checkpoint_byte_offset: 0,
+						checkpoint_ordinal: 0,
+						state: fileComplete ? "completed" : "ready",
+					},
+				] as T;
+			if (op.operation === "record_batch") {
+				for (const record of op.payload.records as InventoryRecord[])
+					records.push({
+						...record,
+						id: `callback-record-${record.ordinal}`,
+						file_id: "callback-file",
+						job_id: "callback-job",
+						source_id: source,
+						status: record.status,
+					});
+				return undefined as T;
+			}
+			if (op.operation === "file_complete") {
+				fileComplete = true;
+				return undefined as T;
+			}
+			if (op.operation === "list" && op.payload.view === "pending")
+				return records.filter((record) => record.status === "pending") as T;
+			if (op.operation === "commit") {
+				for (const commit of op.payload.commits as TestCommit[]) {
+					const record = records.find((candidate) => candidate.id === commit.sourceRecordId);
+					if (record) record.status = "imported";
+				}
+				return (op.payload.commits as TestCommit[]).map((commit) => ({
+					outcome: "imported",
+					canonicalId: commit.canonicalId,
+					sessionKey: commit.canonicalKey,
+				})) as T;
+			}
+			if (op.operation === "finalize") {
+				finalized = true;
+				return undefined as T;
+			}
+			return undefined as T;
+		},
+	};
+	try {
+		const worker = startTranscriptImportWorker({
+			store,
+			agentId: "agent-a",
+			workspaceRoot: root,
+			pollMs: 1,
+			onBatch: async () => {
+				throw new Error("dreaming callback failed");
+			},
+		});
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		await worker.stop();
+		expect(recovery).toMatchObject({ retryable: true, error: "dreaming callback failed", fileId: "callback-file" });
+		expect(finalized).toBe(false);
+		expect(records.filter((record) => record.status === "imported")).toHaveLength(1);
+	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
 });

@@ -59,12 +59,12 @@ async function markUploadFailed(jobId: string, fileId: string, agentId: string, 
 		await dbOwnerTransaction(
 			[
 				{
-					sql: "UPDATE source_import_files SET state = 'failed', error = ?, updated_at = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging'",
+					sql: "UPDATE source_import_files SET state = 'staging', error = ?, updated_at = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging'",
 					params: [message, now(), fileId, jobId, agentId],
 					result: "run" as const,
 				},
 				{
-					sql: "UPDATE source_import_jobs SET state = 'failed', error = ?, updated_at = ? WHERE id = ? AND agent_id = ? AND state = 'staging'",
+					sql: "UPDATE source_import_jobs SET state = 'staging', error = ?, updated_at = ? WHERE id = ? AND agent_id = ? AND state = 'staging'",
 					params: [message, now(), jobId, agentId],
 					result: "run" as const,
 				},
@@ -229,7 +229,7 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 			await dbOwnerTransaction(
 				[
 					{
-						sql: "UPDATE source_import_files SET source_id = ?, name = ?, managed_path = ?, size_bytes = ?, content_hash = ?, state = 'ready', updated_at = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging'",
+						sql: "UPDATE source_import_files SET source_id = ?, name = ?, managed_path = ?, size_bytes = ?, content_hash = ?, state = 'ready', error = NULL, updated_at = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging'",
 						params: [
 							added.source.id,
 							c.req.header("x-file-name") ?? file.name,
@@ -245,7 +245,7 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 						requireChanges: true,
 					},
 					{
-						sql: "UPDATE source_import_jobs SET updated_at = ? WHERE id = ? AND agent_id = ?",
+						sql: "UPDATE source_import_jobs SET error = NULL, updated_at = ? WHERE id = ? AND agent_id = ?",
 						params: [now(), jobId, agentId],
 						result: "run" as const,
 						requireChanges: true,

@@ -15,8 +15,8 @@ import { txIngestEnvelope } from "./transactions";
 
 it("routes transcript source purge through the DB owner boundary", () => {
 	const source = readFileSync(new URL("./source-purge.ts", import.meta.url), "utf8");
-	expect(source).toContain("dbOwnerTranscriptImportPurge");
-	expect(source).not.toContain("withReadDbAsync");
+	expect(source).toContain("dbOwnerSourcePurge");
+	expect(source).not.toContain("runWriteTxAsync");
 });
 
 const DREAMING_CONFIG: DreamingConfig = {

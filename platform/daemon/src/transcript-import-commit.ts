@@ -286,12 +286,17 @@ export function commitCompletedTranscriptBatchInTx(
 }
 
 export function purgeTranscriptImportSourceInTx(db: WriteDb, agentId: string, sourceId: string): number {
+	const invalidatedJobs = db
+		.prepare(
+			"UPDATE source_import_jobs SET state = 'cancelled', generation = generation + 1, control_request = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = datetime('now') WHERE agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled') AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.job_id = source_import_jobs.id AND source_import_files.agent_id = ? AND source_import_files.source_id = ?)",
+		)
+		.run(agentId, agentId, sourceId).changes;
+	let changed = invalidatedJobs;
 	const conversations = db
 		.prepare(
 			"SELECT external_identity, canonical_key FROM transcript_import_conversations WHERE agent_id = ? AND owner_source_id = ?",
 		)
 		.all(agentId, sourceId) as Array<{ external_identity: string; canonical_key: string }>;
-	let changed = 0;
 	for (const conversation of conversations) {
 		const replacement = db
 			.prepare(

@@ -310,7 +310,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 			return (await dbOwnerTransaction(
 				[
 					{
-						sql: "UPDATE source_import_jobs SET state = CASE WHEN (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected') > 0 THEN 'completed_with_rejections' ELSE 'completed' END, imported = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'imported'), duplicate = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'duplicate'), rejected = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected'), pending = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'pending'), lease_token = NULL, lease_expires_at = NULL, completed_at = datetime('now'), reconciled_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ?",
+						sql: "UPDATE source_import_jobs SET state = CASE WHEN (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected') > 0 THEN 'completed_with_rejections' ELSE 'completed' END, imported = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'imported'), duplicate = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'duplicate'), rejected = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected'), pending = (SELECT COUNT(*) FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'pending'), lease_token = NULL, lease_expires_at = NULL, completed_at = datetime('now'), reconciled_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND NOT EXISTS (SELECT 1 FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'pending')",
 						params: [
 							operation.jobId,
 							operation.agentId,
@@ -326,8 +326,11 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 							operation.agentId,
 							p.generation as number,
 							p.leaseToken as string,
+							operation.jobId,
+							operation.agentId,
 						],
 						result: "run",
+						requireChanges: true,
 					},
 				],
 				{ operation: "sources.import.store.finalize", lane: "write" },
