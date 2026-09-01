@@ -153,6 +153,7 @@ import { up as sourceSyncFrontier } from "./142-source-sync-frontier";
 import { up as embeddingIndexProgress } from "./143-embedding-index-progress";
 import { up as memoryJobLeaseToken } from "./144-memory-job-lease-token";
 import { up as dreamingEvidenceReviews } from "./145-dreaming-evidence-reviews";
+import { up as repairRateLimits } from "./146-repair-rate-limits";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1312,6 +1313,26 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "dreaming-evidence-reviews",
 		up: dreamingEvidenceReviews,
 		artifacts: { tables: ["dreaming_evidence_reviews"] },
+	},
+	{
+		version: 146,
+		name: "repair-rate-limits",
+		up: repairRateLimits,
+		artifacts: {
+			tables: ["repair_rate_limits"],
+			columns: [
+				{ table: "repair_rate_limits", column: "action" },
+				{ table: "repair_rate_limits", column: "scope_key" },
+				{ table: "repair_rate_limits", column: "last_run_at" },
+				{ table: "repair_rate_limits", column: "window_started_at" },
+				{ table: "repair_rate_limits", column: "hourly_count" },
+				{ table: "repair_rate_limits", column: "updated_at" },
+				{ table: "repair_rate_limits", column: "lease_id" },
+				{ table: "repair_rate_limits", column: "lease_expires_at" },
+				{ table: "repair_rate_limits", column: "last_error" },
+				{ table: "repair_rate_limits", column: "semantic_cursor" },
+			],
+		},
 	},
 ];
 

@@ -58,6 +58,18 @@ import type {
 // Hooks API (10 methods)
 // ============================================================================
 
+export interface DeduplicateMemoriesOptions {
+	readonly dryRun?: boolean;
+	readonly batchSize?: number;
+	readonly semanticThreshold?: number;
+	readonly semanticEnabled?: boolean;
+	readonly semanticCursor?: string;
+	readonly agentId?: string;
+	readonly project?: string | null;
+	readonly scope?: string | null;
+	readonly visibility?: string | null;
+}
+
 export class SignetClientP2 {
 	constructor(private readonly transport: SignetTransport) {}
 
@@ -625,7 +637,7 @@ export class SignetClientP2 {
 	 * @example
 	 * const result = await client.deduplicateMemories({ dryRun: false });
 	 */
-	async deduplicateMemories(opts?: { readonly dryRun?: boolean }): Promise<DeduplicateResponse> {
+	async deduplicateMemories(opts?: DeduplicateMemoriesOptions): Promise<DeduplicateResponse> {
 		return this.transport.post<DeduplicateResponse>("/api/repair/deduplicate", opts ?? {});
 	}
 

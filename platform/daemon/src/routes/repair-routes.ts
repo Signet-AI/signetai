@@ -18,6 +18,7 @@ import {
 	getDedupStats,
 	getEmbeddingGapStats,
 	integrityCheck,
+	MAX_REEMBED_BATCH,
 	pruneChunkGroupEntities,
 	pruneGenericEntities,
 	pruneSingletonExtractedEntities,
@@ -26,20 +27,29 @@ import {
 	reembedModelMigration,
 	releaseStaleLeases,
 	requeueDeadJobs,
+	triggerRetentionSweep,
 	resyncVectorIndex,
 } from "../repair-actions.js";
 import { which } from "../which.js";
 import { AGENTS_DIR, authConfig, repairLimiter } from "./state.js";
-
-function resolveRepairContext(c: Context): RepairContext {
+function resolveRepairContext(c: Context, body: Readonly<Record<string, unknown>> = {}): RepairContext {
 	const reason = c.req.header("x-signet-reason") ?? "manual repair";
 	const actor = c.req.header("x-signet-actor") ?? "operator";
 	const actorType = (c.req.header("x-signet-actor-type") ?? "operator") as "operator" | "agent" | "daemon";
 	const requestId = c.req.header("x-signet-request-id") ?? crypto.randomUUID();
-	return { reason, actor, actorType, requestId };
+	return {
+		reason,
+		actor,
+		actorType,
+		requestId,
+		agentId: resolveRepairAgentId(c, body),
+		project: readString(body, "project") ?? c.req.query("project"),
+		scope: readString(body, "scope") ?? c.req.query("scope"),
+		visibility: readString(body, "visibility") ?? c.req.query("visibility"),
+	};
 }
 
-function repairHttpStatus(result: RepairResult): 200 | 429 | 500 {
+function repairHttpStatus(result: Pick<RepairResult, "success" | "message">): 200 | 400 | 429 | 500 {
 	if (result.success) return 200;
 	if (
 		/cooldown active|hourly budget exhausted|denied by policy gate|autonomous\.|agents cannot trigger repairs|already in progress/i.test(
@@ -48,6 +58,7 @@ function repairHttpStatus(result: RepairResult): 200 | 429 | 500 {
 	) {
 		return 429;
 	}
+	if (/must be (a positive integer|between 0 and 1|an integer between)/i.test(result.message)) return 400;
 	return 500;
 }
 
@@ -119,44 +130,51 @@ export function registerRepairRoutes(
 	});
 
 	app.post("/api/repair/retention-sweep", async (c) => {
-		const details = await runRetentionSweepOnce(getDbAccessor(), DEFAULT_RETENTION);
-		const affected =
-			details.graphLinksPurged +
-			details.entitiesOrphaned +
-			details.embeddingsPurged +
-			details.tombstonesPurged +
-			details.historyPurged +
-			details.completedJobsPurged +
-			details.deadJobsPurged;
-		return c.json({
-			action: "retention_sweep",
-			success: true,
-			affected,
-			message: `retention sweep completed; ${affected} row(s) purged`,
-			details,
-		});
+		const accessor = getDbAccessor();
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const ctx = resolveRepairContext(c);
+		const result = await triggerRetentionSweep(
+			cfg.pipelineV2,
+			ctx,
+			repairLimiter,
+			{ sweep: () => runRetentionSweepOnce(accessor, DEFAULT_RETENTION) },
+			accessor,
+		);
+		return c.json(result, repairHttpStatus(result));
 	});
 
 	app.get("/api/repair/embedding-gaps", async (c) => {
-		const stats = await getEmbeddingGapStats(getDbAccessor());
+		const stats = await getEmbeddingGapStats(getDbAccessor(), resolveRepairAgentId(c));
 		return c.json(stats);
 	});
 
 	app.post("/api/repair/re-embed", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const ctx = resolveRepairContext(c);
 		let batchSize = 50;
 		let dryRun = false;
 		let fullSweep = false;
 
+		let body: Record<string, unknown> = {};
+
 		try {
-			const body = await c.req.json();
+			body = asRecord(await c.req.json());
+			if (
+				"batchSize" in body &&
+				(typeof body.batchSize !== "number" ||
+					!Number.isFinite(body.batchSize) ||
+					!Number.isInteger(body.batchSize) ||
+					body.batchSize <= 0 ||
+					body.batchSize > MAX_REEMBED_BATCH)
+			) {
+				return c.json({ error: `batchSize must be a positive integer <= ${MAX_REEMBED_BATCH}` }, 400);
+			}
 			if (typeof body.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body.fullSweep === "boolean") fullSweep = body.fullSweep;
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
+		const ctx = resolveRepairContext(c, body);
 
 		const result = await reembedMissingMemories(
 			getDbAccessor(),
@@ -168,7 +186,8 @@ export function registerRepairRoutes(
 			batchSize,
 			dryRun,
 			fullSweep,
-			fullSweep && ctx.actorType === "operator" ? 0 : undefined,
+			undefined,
+			resolveRepairAgentId(c, body),
 		);
 
 		return c.json(result, repairHttpStatus(result));
@@ -177,10 +196,20 @@ export function registerRepairRoutes(
 	app.post("/api/repair/re-embed-migration", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const body = asRecord(await c.req.json().catch(() => ({})));
+		if (
+			"batchSize" in body &&
+			(typeof body.batchSize !== "number" ||
+				!Number.isFinite(body.batchSize) ||
+				!Number.isInteger(body.batchSize) ||
+				body.batchSize <= 0 ||
+				body.batchSize > MAX_REEMBED_BATCH)
+		) {
+			return c.json({ error: `batchSize must be a positive integer <= ${MAX_REEMBED_BATCH}` }, 400);
+		}
 		const result = await reembedModelMigration(
 			getDbAccessor(),
 			cfg.pipelineV2,
-			resolveRepairContext(c),
+			resolveRepairContext(c, body),
 			repairLimiter,
 			fetchEmbedding,
 			cfg.embedding,
@@ -207,28 +236,39 @@ export function registerRepairRoutes(
 	});
 
 	app.get("/api/repair/dedup-stats", async (c) => {
-		const stats = await getDedupStats(getDbAccessor());
+		const stats = await getDedupStats(getDbAccessor(), resolveRepairAgentId(c));
 		return c.json(stats);
 	});
 
 	app.post("/api/repair/deduplicate", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const ctx = resolveRepairContext(c);
 		const options: {
 			batchSize?: number;
-			dryRun?: boolean;
 			semanticThreshold?: number;
+			dryRun?: boolean;
 			semanticEnabled?: boolean;
+			semanticCursor?: string;
+			agentId?: string;
+			project?: string | null;
+			scope?: string | null;
+			visibility?: string | null;
 		} = {};
+		let body: Record<string, unknown> = {};
 		try {
-			const body = await c.req.json();
+			body = asRecord(await c.req.json());
 			if (typeof body?.batchSize === "number") options.batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") options.dryRun = body.dryRun;
 			if (typeof body?.semanticThreshold === "number") options.semanticThreshold = body.semanticThreshold;
 			if (typeof body?.semanticEnabled === "boolean") options.semanticEnabled = body.semanticEnabled;
+			options.semanticCursor = readString(body, "semanticCursor") ?? readString(body, "semantic_cursor");
+			options.agentId = readString(body, "agentId") ?? readString(body, "agent_id");
+			options.project = readString(body, "project") ?? c.req.query("project");
+			options.scope = readString(body, "scope") ?? c.req.query("scope");
+			options.visibility = readString(body, "visibility") ?? c.req.query("visibility");
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
+		const ctx = resolveRepairContext(c, body);
 		const result = await deduplicateMemories(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, options);
 		return c.json(result, repairHttpStatus(result));
 	});
@@ -245,50 +285,8 @@ export function registerRepairRoutes(
 
 	app.post("/api/repair/prune-chunk-groups", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const ctx = resolveRepairContext(c);
 		let batchSize = 500;
 		let dryRun = false;
-		try {
-			const body = await c.req.json();
-			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
-			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
-		} catch {
-			// no body or invalid JSON — use defaults
-		}
-		const result = await pruneChunkGroupEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
-			batchSize,
-			dryRun,
-		});
-		return c.json(result, repairHttpStatus(result));
-	});
-
-	app.post("/api/repair/prune-singleton-entities", async (c) => {
-		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const ctx = resolveRepairContext(c);
-		let batchSize = 200;
-		let dryRun = false;
-		let maxMentions = 1;
-		try {
-			const body = await c.req.json();
-			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
-			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
-			if (typeof body?.maxMentions === "number") maxMentions = body.maxMentions;
-		} catch {
-			// no body or invalid JSON — use defaults
-		}
-		const result = await pruneSingletonExtractedEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
-			batchSize,
-			dryRun,
-			maxMentions,
-		});
-		return c.json(result, repairHttpStatus(result));
-	});
-
-	app.post("/api/repair/prune-generic-entities", async (c) => {
-		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const ctx = resolveRepairContext(c);
-		let batchSize = 100;
-		let dryRun = true;
 		let body: Record<string, unknown> = {};
 		try {
 			body = asRecord(await c.req.json());
@@ -297,6 +295,62 @@ export function registerRepairRoutes(
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
+		const ctx = resolveRepairContext(c, body);
+		const result = await pruneChunkGroupEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+			batchSize,
+			dryRun,
+			agentId: resolveRepairAgentId(c, body),
+		});
+		return c.json(result, repairHttpStatus(result));
+	});
+
+	app.post("/api/repair/prune-singleton-entities", async (c) => {
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		let batchSize = 200;
+		let dryRun = false;
+		let maxMentions = 1;
+		let body: Record<string, unknown> = {};
+		try {
+			body = asRecord(await c.req.json());
+			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
+			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
+			if (typeof body?.maxMentions === "number") maxMentions = body.maxMentions;
+		} catch {
+			// no body or invalid JSON — use defaults
+		}
+		const ctx = resolveRepairContext(c, body);
+		const result = await pruneSingletonExtractedEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+			batchSize,
+			dryRun,
+			maxMentions,
+			agentId: resolveRepairAgentId(c, body),
+		});
+		return c.json(result, repairHttpStatus(result));
+	});
+
+	app.post("/api/repair/prune-generic-entities", async (c) => {
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		let batchSize = 100;
+		let dryRun = true;
+		let body: Record<string, unknown> = {};
+		try {
+			body = asRecord(await c.req.json());
+			if (
+				"batchSize" in body &&
+				(typeof body.batchSize !== "number" ||
+					!Number.isFinite(body.batchSize) ||
+					!Number.isInteger(body.batchSize) ||
+					body.batchSize <= 0 ||
+					body.batchSize > 500)
+			) {
+				return c.json({ error: "batchSize must be a positive integer <= 500" }, 400);
+			}
+			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
+			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
+		} catch {
+			// no body or invalid JSON — use defaults
+		}
+		const ctx = resolveRepairContext(c, body);
 		const agentId = resolveRepairAgentId(c, body);
 		const result = await pruneGenericEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
 			batchSize,
@@ -347,7 +401,7 @@ export function registerRepairRoutes(
 					totalBytes: stats?.total_bytes ?? 0,
 					byReason: Object.fromEntries(byReason.map((r) => [r.archived_reason ?? "unknown", r.count])),
 				};
-			}, "routes/repair-routes.ts:313"),
+			}, "db:routes.repair.cold-stats.read"),
 		);
 	});
 
@@ -356,7 +410,7 @@ export function registerRepairRoutes(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		const result = getDbAccessor().withWriteTx(
 			(db: import("../db-accessor").WriteDb) => clusterEntities(db, agentId),
-			"routes/repair-routes.ts:357",
+			"db:routes.repair.cluster.write",
 		);
 		return c.json(result);
 	});
@@ -389,7 +443,7 @@ export function registerRepairRoutes(
 			 LIMIT ?`,
 					)
 					.all(agentId, batchSize) as Array<{ id: string; content: string }>,
-			"routes/repair-routes.ts:381",
+			"db:routes.repair.relink.select",
 		);
 
 		if (unlinked.length === 0) {
@@ -437,7 +491,7 @@ export function registerRepairRoutes(
 				).cnt;
 
 				return { linked, entities, aspects, attributes, linkedMemories, remaining };
-			}, "routes/repair-routes.ts:412");
+			}, "db:routes.repair.relink.preview");
 			const projectedRemaining = Math.max(0, preview.remaining - preview.linkedMemories);
 			return c.json({
 				action: "relink-entities",
@@ -462,7 +516,7 @@ export function registerRepairRoutes(
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			const result = accessor.withWriteTx(
 				(db: import("../db-accessor").WriteDb) => linkMemoryToEntities(db, mem.id, mem.content, agentId),
-				"routes/repair-routes.ts:463",
+				"db:routes.repair.relink.write",
 			);
 			linked += result.linked;
 			entities += result.entityIds.length;
@@ -483,7 +537,7 @@ export function registerRepairRoutes(
 						)
 						.get(agentId) as { cnt: number }
 				).cnt,
-			"routes/repair-routes.ts:474",
+			"db:routes.repair.relink.remaining",
 		);
 
 		return c.json({
@@ -526,7 +580,7 @@ export function registerRepairRoutes(
 			 LIMIT ?`,
 					)
 					.all(batchSize) as Array<{ id: string; content: string }>,
-			"routes/repair-routes.ts:518",
+			"db:routes.repair.hints.select",
 		);
 
 		if (unhinted.length === 0) {
@@ -546,7 +600,7 @@ export function registerRepairRoutes(
 				enqueue(db, mem.id, mem.content);
 				enqueued++;
 			}
-		}, "routes/repair-routes.ts:544");
+		}, "db:routes.repair.hints.enqueue");
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const remaining = accessor.withReadDb(
@@ -560,7 +614,7 @@ export function registerRepairRoutes(
 						)
 						.get() as { cnt: number }
 				).cnt,
-			"routes/repair-routes.ts:552",
+			"db:routes.repair.hints.remaining",
 		);
 
 		return c.json({
@@ -577,11 +631,14 @@ export function registerRepairRoutes(
 	app.get("/api/repair/dead-memories", (c) => {
 		const maxConfidence = Number(c.req.query("maxConfidence") ?? "0.1");
 		const maxAccessDays = Number(c.req.query("maxAccessDays") ?? "90");
-		const limit = Math.min(Number(c.req.query("limit") ?? "200"), 500);
+		const requestedLimit = Number(c.req.query("limit") ?? "200");
+		const limit = Math.min(requestedLimit, 500);
 		if (
 			!Number.isFinite(maxConfidence) ||
 			!Number.isFinite(maxAccessDays) ||
 			!Number.isFinite(limit) ||
+			!Number.isInteger(maxAccessDays) ||
+			!Number.isInteger(limit) ||
 			maxConfidence < 0 ||
 			maxConfidence > 1 ||
 			maxAccessDays < 0 ||
@@ -591,20 +648,21 @@ export function registerRepairRoutes(
 		}
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const dead = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) => findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
-			"routes/repair-routes.ts:593",
+			(db: import("../db-accessor").ReadDb) =>
+				findDeadMemories(db, { maxConfidence, maxAccessDays, limit, agentId: resolveRepairAgentId(c) }),
+			"db:routes.repair.dead.select",
 		);
 		return c.json({ count: dead.length, memories: dead });
 	});
 
 	app.post("/api/repair/dead-memories/forget", async (c) => {
-		let ids: unknown;
+		let body: Record<string, unknown>;
 		try {
-			const body = await c.req.json();
-			ids = body?.ids;
+			body = asRecord(await c.req.json());
 		} catch {
 			return c.json({ error: "Request body must be JSON with an ids array" }, 400);
 		}
+		const ids = body.ids;
 		if (!Array.isArray(ids) || ids.length === 0) {
 			return c.json({ error: "ids must be a non-empty array" }, 400);
 		}
@@ -615,7 +673,21 @@ export function registerRepairRoutes(
 		if (validIds.length !== ids.length) {
 			return c.json({ error: "All ids must be non-empty strings" }, 400);
 		}
-		const forgotten = forgetDeadMemories(getDbAccessor(), validIds);
+		const maxConfidence = typeof body.maxConfidence === "number" ? body.maxConfidence : undefined;
+		const maxAccessDays = typeof body.maxAccessDays === "number" ? body.maxAccessDays : undefined;
+		if (
+			(maxConfidence !== undefined && (!Number.isFinite(maxConfidence) || maxConfidence < 0 || maxConfidence > 1)) ||
+			(maxAccessDays !== undefined && (!Number.isInteger(maxAccessDays) || maxAccessDays < 0))
+		) {
+			return c.json({ error: "maxConfidence must be 0–1 and maxAccessDays must be a non-negative integer" }, 400);
+		}
+		const ctx = resolveRepairContext(c, body);
+		const forgotten = await forgetDeadMemories(getDbAccessor(), validIds, {
+			agentId: resolveRepairAgentId(c, body),
+			maxConfidence,
+			maxAccessDays,
+			ctx,
+		});
 		return c.json({ forgotten });
 	});
 
@@ -649,8 +721,9 @@ export function registerRepairRoutes(
 			repairLimiter,
 			fetchEmbedding,
 			cfg.embedding,
+			resolveRepairAgentId(c),
 		);
-		return c.json(result);
+		return c.json(result, repairHttpStatus(result));
 	});
 
 	app.get("/api/troubleshoot/commands", (c) => {

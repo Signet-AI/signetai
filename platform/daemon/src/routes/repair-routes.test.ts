@@ -148,6 +148,32 @@ describe("POST /api/repair/relink-entities", () => {
 	});
 });
 
+describe("repair batch validation", () => {
+	it("returns typed 400 responses for invalid generic-prune batches, including dry-run", async () => {
+		for (const batchSize of [-1, 0, 501, 1.5, "50"]) {
+			const response = await makeApp().request("/api/repair/prune-generic-entities", {
+				method: "POST",
+				headers: requestHeaders(),
+				body: JSON.stringify({ batchSize, dryRun: true }),
+			});
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({ error: "batchSize must be a positive integer <= 500" });
+		}
+	});
+
+	it("rejects oversized re-embedding batches before invoking the action", async () => {
+		const response = await makeApp().request("/api/repair/re-embed", {
+			method: "POST",
+			headers: requestHeaders(),
+			body: JSON.stringify({ batchSize: 201 }),
+		});
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "batchSize must be a positive integer <= 200" });
+	});
+});
+
 describe("retired semantic repair routes", () => {
 	it("does not expose structural-backfill after the Dreaming cutover", async () => {
 		const response = await makeApp().request("/api/repair/structural-backfill", {

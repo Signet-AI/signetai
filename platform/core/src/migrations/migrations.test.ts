@@ -28,6 +28,7 @@ import { up as telemetryVersionObservation } from "./119-telemetry-version-obser
 import { up as dreamingEvidenceRetry } from "./122-dreaming-evidence-retry";
 import { up as memoryContentSafety } from "./125-memory-content-safety";
 import { up as dreamingSurprisalAttention } from "./126-dreaming-surprisal-attention";
+import { up as repairRateLimits } from "./146-repair-rate-limits";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -130,6 +131,37 @@ describe("migration framework", () => {
 		expect(uniqueVersions.size).toBe(migrations.length);
 	});
 
+	test("repairs a partial repair-rate-limits table before creating its index", () => {
+		db = createFreshDb();
+		db.exec(
+			"CREATE TABLE repair_rate_limits (action TEXT NOT NULL, scope_key TEXT NOT NULL, PRIMARY KEY (action, scope_key))",
+		);
+		db.prepare("INSERT INTO repair_rate_limits (action, scope_key) VALUES (?, ?)").run("existing", "agent-a");
+
+		repairRateLimits(db);
+		repairRateLimits(db);
+
+		const columns = db.query("PRAGMA table_info(repair_rate_limits)").all() as Array<{ name: string }>;
+		expect(columns.map((column) => column.name)).toEqual([
+			"action",
+			"scope_key",
+			"last_run_at",
+			"window_started_at",
+			"hourly_count",
+			"updated_at",
+			"lease_id",
+			"lease_expires_at",
+			"last_error",
+			"semantic_cursor",
+		]);
+		expect(
+			db.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_repair_rate_limits_updated'").get(),
+		).toEqual({ name: "idx_repair_rate_limits_updated" });
+		expect(db.prepare("SELECT action, scope_key FROM repair_rate_limits").all()).toEqual([
+			{ action: "existing", scope_key: "agent-a" },
+		]);
+	});
+
 	test("fresh DB and upgrades from 138 and shipped 139 apply the repaired tail", () => {
 		for (const version of [138, 139] as const) {
 			db = createFreshDb();
@@ -139,7 +171,10 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(145);
+			expect(applied.version).toBe(MIGRATIONS[MIGRATIONS.length - 1]?.version);
+			expect(
+				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'repair_rate_limits'").get(),
+			).toBeTruthy();
 			expect(
 				(db.query("PRAGMA table_info(memory_jobs)").all() as Array<{ name: string }>).some(
 					(column) => column.name === "lease_token",

@@ -170,6 +170,49 @@ describe("maintenance-worker", () => {
 		db.close();
 	});
 
+	it("keeps autonomous deduplication scoped when embeddings are unavailable", async () => {
+		const db = freshDb();
+		const accessor = asAccessor(db);
+		const tracker = createProviderTracker();
+		db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
+		for (const [id, agentId] of [
+			["dedup-agent-a-1", "agent-a"],
+			["dedup-agent-a-2", "agent-a"],
+			["dedup-agent-b-1", "agent-b"],
+			["dedup-agent-b-2", "agent-b"],
+		] as const) {
+			db.prepare(
+				`INSERT INTO memories
+				 (id, type, content, content_hash, confidence, tags, created_at, updated_at, updated_by, version, manual_override, is_deleted, agent_id)
+				 VALUES (?, 'fact', 'autonomous duplicate fixture', 'autonomous-duplicate-hash', 0.9, '[]', ?, ?, 'test', 1, 0, 0, ?)`,
+			).run(id, now, now, agentId);
+		}
+
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null, undefined, undefined, "agent-a");
+		handle.stop();
+
+		const result = await handle.tick();
+		expect(result.recommendations.map((recommendation) => recommendation.action)).toContain("deduplicateMemories");
+		expect(result.executed).toContainEqual(
+			expect.objectContaining({
+				action: "deduplicateMemories",
+				success: true,
+				affected: 1,
+			}),
+		);
+		expect(
+			db.prepare("SELECT COUNT(*) AS n FROM memories WHERE agent_id = 'agent-a' AND is_deleted = 0").get(),
+		).toEqual({
+			n: 1,
+		});
+		expect(
+			db.prepare("SELECT COUNT(*) AS n FROM memories WHERE agent_id = 'agent-b' AND is_deleted = 0").get(),
+		).toEqual({
+			n: 2,
+		});
+		db.close();
+	});
+
 	it("scopes autonomous missing-vector repair to the maintenance agent", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);

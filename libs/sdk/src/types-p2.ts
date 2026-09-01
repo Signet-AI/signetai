@@ -391,6 +391,7 @@ export interface RepairActionResponse {
 	readonly success: boolean;
 	readonly affected: number;
 	readonly message?: string;
+	readonly details?: Readonly<Record<string, unknown>>;
 }
 
 export interface EmbeddingGapsResponse {
@@ -409,6 +410,7 @@ export interface DedupStatsResponse {
 
 export interface DeduplicateResponse extends RepairActionResponse {
 	readonly duplicatesRemoved: number;
+	readonly clusters?: number;
 }
 
 // ============================================================================

@@ -90,14 +90,9 @@ function count(db: ReadDb, sql: string, ...args: readonly unknown[]): number {
 
 export function countUnembeddedMemories(db: ReadDb, agentId?: string): number {
 	const scope = agentId === undefined ? "" : " AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?";
-	const hashScope =
-		agentId === undefined
-			? ""
-			: ` AND EXISTS (
-			     SELECT 1 FROM memories owner
-			     WHERE owner.id = e.source_id
-			       AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
-			   )`;
+	const hashScope = ` AND COALESCE(NULLIF(e.agent_id, ''),
+		       (SELECT COALESCE(NULLIF(owner.agent_id, ''), 'default') FROM memories owner WHERE owner.id = e.source_id),
+		       'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')`;
 	return count(
 		db,
 		`SELECT COUNT(*) AS n FROM memories m
@@ -118,14 +113,9 @@ export function countUnembeddedMemories(db: ReadDb, agentId?: string): number {
 
 export function listUnembeddedMemories(db: ReadDb, limit: number, agentId?: string): ReadonlyArray<UnembeddedRow> {
 	const scope = agentId === undefined ? "" : " AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?";
-	const hashScope =
-		agentId === undefined
-			? ""
-			: ` AND EXISTS (
-			       SELECT 1 FROM memories owner
-			       WHERE owner.id = e.source_id
-			         AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
-			     )`;
+	const hashScope = ` AND COALESCE(NULLIF(e.agent_id, ''),
+		         (SELECT COALESCE(NULLIF(owner.agent_id, ''), 'default') FROM memories owner WHERE owner.id = e.source_id),
+		         'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')`;
 	return db
 		.prepare(
 			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId

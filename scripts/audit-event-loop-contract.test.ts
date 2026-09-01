@@ -16,12 +16,12 @@ import {
 
 test("the deterministic ledger retains the exact current source inventory", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	expect(baseline).toHaveLength(850);
+	expect(baseline).toHaveLength(857);
 	expect(baseline.filter((site) => site.api === "withWriteTx")).toHaveLength(65);
 	expect(baseline.filter((site) => site.api === "withReadDb")).toHaveLength(99);
-	expect(baseline.filter((site) => site.api === "withWriteTxAsync")).toHaveLength(40);
+	expect(baseline.filter((site) => site.api === "withWriteTxAsync")).toHaveLength(44);
 	expect(baseline.filter((site) => site.api === "withWriteDbAsync")).toHaveLength(0);
-	expect(baseline.filter((site) => site.api === "withReadDbAsync")).toHaveLength(132);
+	expect(baseline.filter((site) => site.api === "withReadDbAsync")).toHaveLength(135);
 });
 
 test("the event-loop ledger exactly equals the current source inventory", () => {
@@ -353,19 +353,18 @@ test("the production TypeScript project cannot import the compatibility module",
 test("the generated report describes the type boundary and transitional counts", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const report = renderReport(baseline, { total: 169, withWriteTx: 65, withReadDb: 104 });
-	expect(report).toContain("Exact ledger inventory: 850 sites");
-	expect(report).toContain("65 synchronous writes, 99 synchronous reads, and 173 async-named DB sites");
-	expect(report).toContain("Async-named ON-PARENT DB sites: 171");
+	expect(report).toContain("Exact ledger inventory: 857 sites");
+	expect(report).toContain("65 synchronous writes, 99 synchronous reads, and 180 async-named DB sites");
+	expect(report).toContain("Async-named ON-PARENT DB sites: 178");
 	expect(report).toContain("Async-named OFF-PARENT DB sites: 2");
 	expect(report).not.toContain("async-named parent DB sites");
 	expect(report).toContain(
-		"The async-named DB counts above separate the 171 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
+		"The async-named DB counts above separate the 178 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
 	);
-	expect(report).toContain("Database accessor sites classified: 337");
-	expect(report).toContain("ON-PARENT callback execution: 335");
+	expect(report).toContain("Database accessor sites classified: 344");
+	expect(report).toContain("ON-PARENT callback execution: 342");
 	expect(report).toContain("OFF-PARENT callback execution: 2");
 	expect(report).toContain("- `db:recall.embedding.config.read` (withReadDbAsync)");
-	expect(report).toContain("- `db:recall.vector.search.read` (withReadDbAsync)");
 	expect(report).not.toMatch(/`daemon\.ts:\d+` \(withReadDbAsync\)/);
 	expect(report).toContain("type boundary");
 	expect(report).not.toContain("Exact ledger inventory: 997 sites");

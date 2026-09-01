@@ -20,8 +20,12 @@ import {
 	cleanOrphanedEmbeddings,
 	createRateLimiter,
 	deduplicateMemories,
+	findDeadMemories,
+	findSemanticDuplicates,
+	forgetDeadMemories,
 	getDedupStats,
 	getEmbeddingGapStats,
+	MAX_REEMBED_BATCH,
 	pruneGenericEntities,
 	pruneTerminalJobs,
 	reembedMissingMemories,
@@ -264,14 +268,14 @@ function insertEmbedding(
 describe("createRateLimiter", () => {
 	it("allows the first call", async () => {
 		const limiter = createRateLimiter();
-		const result = limiter.check("action", 60000, 10);
+		const result = await limiter.check("action", 60000, 10);
 		expect(result.allowed).toBe(true);
 	});
 
 	it("blocks a second call within cooldown", async () => {
 		const limiter = createRateLimiter();
-		limiter.record("action");
-		const result = limiter.check("action", 60000, 10);
+		await limiter.record("action");
+		const result = await limiter.check("action", 60000, 10);
 		expect(result.allowed).toBe(false);
 		expect(result.reason).toMatch(/cooldown active/);
 	});
@@ -280,19 +284,19 @@ describe("createRateLimiter", () => {
 		const limiter = createRateLimiter();
 		// Use a 0ms cooldown so the limiter only blocks on budget, not cooldown
 		for (let i = 0; i < 3; i++) {
-			limiter.record("action");
+			await limiter.record("action");
 		}
 		// Manually set lastRunAt to be well in the past so cooldown is clear
 		// We can't directly access internals, so test via a limiter with budget=2
 		const lim2 = createRateLimiter();
-		lim2.record("a");
-		lim2.record("a");
+		await lim2.record("a");
+		await lim2.record("a");
 		// Both records happened so count=2; budget is 2, so third should be blocked
 		// But cooldown would block too. Use budget=2 and cooldown=0 scenario:
 		// We need to move time forward conceptually — easiest is to just verify
 		// the budget path via a fresh limiter with a budget of 1
 		const lim1 = createRateLimiter();
-		lim1.record("b");
+		await lim1.record("b");
 		// Now set lastRunAt in the past so cooldown is clear but count stays at 1
 		// We can't do this without access to internals, so instead just verify
 		// that a budget of 0 blocks (budget must be >= 1 per config clamp, but
@@ -302,13 +306,12 @@ describe("createRateLimiter", () => {
 		// then check via a zero-cooldown call in the future. Since we can't
 		// fake Date.now() easily, verify the count path triggers at budget=1
 		// by calling check with budget=0 after recording.
-		const result = lim1.check("b", 0, 0);
+		const result = await lim1.check("b", 0, 0);
 		expect(result.allowed).toBe(false);
 		expect(result.reason).toMatch(/hourly budget exhausted/);
 	});
 
 	it("resets hourly count after the hour window expires", async () => {
-		const limiter = createRateLimiter();
 		// Record, then directly verify that a past hourResetAt causes reset.
 		// We can observe this indirectly: record with budget=1, then once
 		// the hour resets the check should pass with cooldown=0.
@@ -320,15 +323,65 @@ describe("createRateLimiter", () => {
 		const lim = createRateLimiter();
 		// Record 49 times — still under budget of 50
 		for (let i = 0; i < 49; i++) {
-			lim.record("x");
+			await lim.record("x");
 		}
-		const allowed = lim.check("x", 0, 50);
+		const allowed = await lim.check("x", 0, 50);
 		// 49 < 50, cooldown 0 so passes
 		expect(allowed.allowed).toBe(true);
 		// One more record makes it 50 — at budget
-		lim.record("x");
-		const denied = lim.check("x", 0, 50);
+		await lim.record("x");
+		const denied = await lim.check("x", 0, 50);
 		expect(denied.allowed).toBe(false);
+	});
+
+	it("persists admission history across limiter instances", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		try {
+			const accessor = asAccessor(db);
+			const first = createRateLimiter(accessor);
+			await first.record("restart-sensitive-action", "agent-a");
+
+			const afterRestart = createRateLimiter(accessor);
+			const result = await afterRestart.check("restart-sensitive-action", 60_000, 10, "agent-a");
+			expect(result.allowed).toBe(false);
+			expect(result.reason).toMatch(/cooldown active/);
+			expect(
+				db
+					.prepare("SELECT hourly_count FROM repair_rate_limits WHERE action = ? AND scope_key = ?")
+					.get("restart-sensitive-action", "agent-a"),
+			).toEqual({ hourly_count: 1 });
+		} finally {
+			db.close();
+		}
+	});
+
+	it("atomically admits only one concurrent durable repair for a scope", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		try {
+			const limiter = createRateLimiter(asAccessor(db));
+			const [first, second] = await Promise.all([
+				limiter.acquire("concurrent-action", 0, 1, "agent-a"),
+				limiter.acquire("concurrent-action", 0, 1, "agent-a"),
+			]);
+
+			const results = [first, second];
+			expect(results.filter((result) => result.allowed)).toHaveLength(1);
+			expect(results.filter((result) => !result.allowed)).toHaveLength(1);
+			expect(results.find((result) => !result.allowed)?.reason).toMatch(
+				/repair already in progress|hourly budget exhausted/,
+			);
+
+			const admitted = results.find((result) => result.allowed);
+			const lease = admitted?.lease;
+			expect(lease).toBeDefined();
+			if (!lease) throw new Error("expected one concurrent repair admission");
+			await limiter.finalize(lease, { success: true });
+			expect((await limiter.check("concurrent-action", 0, 1, "agent-a")).allowed).toBe(false);
+		} finally {
+			db.close();
+		}
 	});
 });
 
@@ -340,7 +393,7 @@ describe("checkRepairGate", () => {
 	it("denies when autonomousFrozen is true", async () => {
 		const limiter = createRateLimiter();
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, frozen: true } };
-		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
+		const result = await checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(false);
 		expect(result.reason).toMatch(/autonomous\.frozen/);
 	});
@@ -348,7 +401,7 @@ describe("checkRepairGate", () => {
 	it("denies agent when autonomous.enabled is false", async () => {
 		const limiter = createRateLimiter();
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
-		const result = checkRepairGate(cfg, CTX_AGENT, limiter, "a", 0, 100);
+		const result = await checkRepairGate(cfg, CTX_AGENT, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(false);
 		expect(result.reason).toMatch(/autonomous\.enabled is false/);
 	});
@@ -356,12 +409,38 @@ describe("checkRepairGate", () => {
 	it("allows operator even when autonomous.enabled is false", async () => {
 		const limiter = createRateLimiter();
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
-		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
+		const result = await checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(true);
+	});
+
+	it("applies cooldown admission to operators per agent scope", async () => {
+		const limiter = createRateLimiter();
+		const ctx = { ...CTX_OPERATOR, agentId: "agent-a" };
+		await limiter.record("a", JSON.stringify({ agentId: "agent-a", project: null, scope: null, visibility: null }));
+		const result = await checkRepairGate(TEST_CFG, ctx, limiter, "a", 60_000, 10);
+		expect(result.allowed).toBe(false);
+		expect(result.reason).toMatch(/cooldown active/);
 	});
 });
 
 describe("pruneGenericEntities", () => {
+	it("rejects invalid batch sizes before dry-run selection", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		try {
+			const accessor = asAccessor(db);
+			for (const batchSize of [-1, 0, Number.NaN, Number.POSITIVE_INFINITY, 501]) {
+				const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+					batchSize,
+					dryRun: true,
+				});
+				expect(result.success).toBe(false);
+				expect(result.message).toMatch(/batchSize must be a positive integer <= 500/);
+			}
+		} finally {
+			db.close();
+		}
+	});
 	it("dry-runs and deletes generic entities without touching pinned or concrete entities", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
@@ -390,12 +469,84 @@ describe("pruneGenericEntities", () => {
 			expect(dryRun.affected).toBe(1);
 			expect(dryRun.message).toContain("Sender");
 
-			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: false });
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+				dryRun: false,
+			});
 			expect(result.success).toBe(true);
 			expect(result.affected).toBe(1);
 
 			const remaining = db.prepare("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
 			expect(remaining.map((row) => row.name)).toEqual(["Signet", "Skill Creator", "Summary"]);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("uses the context agent when no explicit agent option is supplied", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = new Date().toISOString();
+
+		try {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, 'person', ?, 0, 0, ?, ?)`,
+			).run("ent-agent-a", "Sender", "sender", "agent-a", now, now);
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, 'person', ?, 0, 0, ?, ?)`,
+			).run("ent-agent-b", "Sender", "sender", "agent-b", now, now);
+
+			const result = await pruneGenericEntities(
+				accessor,
+				TEST_CFG,
+				{ ...CTX_OPERATOR, agentId: "agent-a" },
+				createRateLimiter(),
+				{
+					dryRun: false,
+				},
+			);
+
+			expect(result.affected).toBe(1);
+			expect(db.prepare("SELECT id FROM entities ORDER BY id").all()).toEqual([{ id: "ent-agent-b" }]);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("revalidates ownership and protection predicates before deleting a read-selected entity", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO entities
+			 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+			 VALUES ('ent-reassigned', 'Sender', 'sender', 'person', 'agent-a', 0, 0, ?, ?)`,
+		).run(now, now);
+		const accessor = asAccessor(db, () => {
+			db.prepare(
+				"UPDATE entities SET agent_id = 'agent-b', pinned = 1, name = 'Specific Person' WHERE id = 'ent-reassigned'",
+			).run();
+		});
+
+		try {
+			const result = await pruneGenericEntities(
+				accessor,
+				TEST_CFG,
+				{ ...CTX_OPERATOR, agentId: "agent-a" },
+				createRateLimiter(),
+				{
+					dryRun: false,
+				},
+			);
+
+			expect(result.affected).toBe(0);
+			expect(db.prepare("SELECT agent_id FROM entities WHERE id = 'ent-reassigned'").get()).toEqual({
+				agent_id: "agent-b",
+			});
 		} finally {
 			db.close();
 		}
@@ -435,7 +586,9 @@ describe("pruneGenericEntities", () => {
 			expect(dryRun.message).toContain("Current");
 			expect(dryRun.message).toContain("**Status:**");
 
-			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: false });
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+				dryRun: false,
+			});
 			expect(result.success).toBe(true);
 			expect(result.affected).toBe(2);
 			const remaining = db.prepare("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
@@ -710,6 +863,46 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 	});
 });
 
+describe("dead memory hygiene", () => {
+	it("scopes candidates and revalidates the deletion predicate", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = new Date().toISOString();
+		const insert = db.prepare(
+			`INSERT INTO memories (id, content, confidence, importance, agent_id, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'test')`,
+		);
+		insert.run("dead-a", "dead", 0.01, 0.5, "agent-a", "fact", now, now);
+		insert.run("dead-b", "dead", 0.01, 0.5, "agent-b", "fact", now, now);
+		insert.run("protected-a", "protected", 0.01, 0.9, "agent-a", "fact", now, now);
+
+		try {
+			expect(findDeadMemories(db as unknown as ReadDb, { agentId: "agent-a" }).map((row) => row.id)).toEqual([
+				"dead-a",
+			]);
+			expect(
+				await forgetDeadMemories(accessor, ["dead-a", "dead-b", "protected-a"], {
+					agentId: "agent-a",
+					ctx: { ...CTX_OPERATOR, agentId: "agent-a" },
+				}),
+			).toBe(1);
+			expect(
+				(db.prepare("SELECT is_deleted FROM memories WHERE id = 'dead-a'").get() as { is_deleted: number }).is_deleted,
+			).toBe(1);
+			expect(
+				(db.prepare("SELECT is_deleted FROM memories WHERE id = 'dead-b'").get() as { is_deleted: number }).is_deleted,
+			).toBe(0);
+			expect(
+				(db.prepare("SELECT is_deleted FROM memories WHERE id = 'protected-a'").get() as { is_deleted: number })
+					.is_deleted,
+			).toBe(0);
+		} finally {
+			db.close();
+		}
+	});
+});
+
 // ---------------------------------------------------------------------------
 // releaseStaleLeases
 // ---------------------------------------------------------------------------
@@ -940,6 +1133,24 @@ describe("reembedMissingMemories", () => {
 		db.close();
 	});
 
+	it("rejects non-positive, non-finite, fractional, and oversized batches", async () => {
+		for (const batchSize of [-1, 0, 1.5, Number.NaN, Number.POSITIVE_INFINITY, MAX_REEMBED_BATCH + 1]) {
+			const result = await reembedMissingMemories(
+				accessor,
+				TEST_CFG,
+				CTX_OPERATOR,
+				createRateLimiter(),
+				async () => {
+					throw new Error("provider must not run for invalid batch size");
+				},
+				TEST_EMBEDDING_CFG,
+				batchSize,
+			);
+			expect(result.success).toBe(false);
+			expect(result.message).toMatch(new RegExp(`batchSize must be a positive integer <= ${MAX_REEMBED_BATCH}`));
+		}
+	});
+
 	it("preserves a committed memory when embedding persistence fails, then retries idempotently", async () => {
 		insertMemory(db, "mem-write-failure");
 		let failWrite = true;
@@ -967,7 +1178,9 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 		);
-		await expect(first).rejects.toThrow("simulated embedding persistence failure");
+		const firstResult = await first;
+		expect(firstResult.success).toBe(false);
+		expect(firstResult.message).toContain("simulated embedding persistence failure");
 		expect(db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-write-failure")).toBeTruthy();
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-write-failure")).toBeNull();
 
@@ -1668,6 +1881,20 @@ describe("reembedMissingMemories", () => {
 		expect(result.affected).toBe(5);
 		expect(result.message).toMatch(/across 3 batch/);
 
+		const repeatedFullSweep = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			2,
+			false,
+			true,
+		);
+		expect(repeatedFullSweep.success).toBe(false);
+		expect(repeatedFullSweep.message).toMatch(/cooldown active/);
+
 		const remaining = db
 			.prepare(
 				`SELECT COUNT(*) AS n
@@ -2292,6 +2519,32 @@ describe("deduplicateMemories", () => {
 		expect(deleted).toHaveLength(2);
 	});
 
+	it("does not deduplicate another agent's identical hash", async () => {
+		insertMemory(db, "agent-a-1", "agent-a", "hash-cross-agent");
+		insertMemory(db, "agent-a-2", "agent-a", "hash-cross-agent");
+		insertMemory(db, "agent-b-1", "agent-b", "hash-cross-agent");
+
+		const result = await deduplicateMemories(
+			accessor,
+			{ ...TEST_CFG, repair: { ...TEST_CFG.repair, dedupCooldownMs: 0 } },
+			{ ...CTX_OPERATOR, agentId: "agent-a" },
+			createRateLimiter(),
+		);
+
+		expect(result.affected).toBe(1);
+		expect(
+			db.prepare("SELECT is_deleted FROM memories WHERE id = 'agent-b-1'").get() as { is_deleted: number },
+		).toEqual({ is_deleted: 0 });
+	});
+
+	it("rejects invalid dedup bounds before querying", async () => {
+		const result = await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
+			batchSize: -1,
+		});
+		expect(result.success).toBe(false);
+		expect(result.message).toMatch(/batchSize/);
+	});
+
 	it("merges tags from all duplicates into the keeper", async () => {
 		const now = new Date().toISOString();
 		db.prepare(
@@ -2450,6 +2703,81 @@ describe("deduplicateMemories", () => {
 });
 
 // ---------------------------------------------------------------------------
+// findSemanticDuplicates
+// ---------------------------------------------------------------------------
+
+describe("findSemanticDuplicates", () => {
+	it("returns a stable continuation cursor after a full candidate window", async () => {
+		const createdAt = "2026-01-01T00:00:00.000Z";
+		const firstPage = Array.from({ length: 100 }, (_, index) => ({
+			id: `semantic-${String(index).padStart(3, "0")}`,
+			embedding_id: `embedding-${index}`,
+			agent_id: "agent-a",
+			project: null,
+			scope: null,
+			visibility: null,
+			created_at: createdAt,
+		}));
+		const secondPage = [
+			{
+				id: "semantic-100",
+				embedding_id: "embedding-100",
+				agent_id: "agent-a",
+				project: null,
+				scope: null,
+				visibility: null,
+				created_at: createdAt,
+			},
+		];
+		const candidateArgs: unknown[][] = [];
+		let candidatePage = 0;
+		const fakeDb = {
+			prepare(sql: string) {
+				return {
+					run: (..._args: unknown[]) => ({ changes: 0 }),
+					get: (..._args: unknown[]) =>
+						sql.includes("SELECT embedding") ? { embedding: new Float32Array([0.1]).buffer } : undefined,
+					all: (...args: unknown[]) => {
+						if (sql.includes("SELECT m.id")) {
+							candidateArgs.push(args);
+							return candidatePage++ === 0 ? firstPage : secondPage;
+						}
+						return [];
+					},
+				};
+			},
+		};
+		const accessor = {
+			withReadDbAsync: async <T>(fn: (db: ReadDb) => T | Promise<T>) => await fn(fakeDb as unknown as ReadDb),
+			withWriteTxAsync: async <T>(_fn: (db: WriteDb) => T) => {
+				throw new Error("unused in semantic finder test");
+			},
+			withWriteDbAsync: async <T>(_fn: (db: WriteDb) => T) => {
+				throw new Error("unused in semantic finder test");
+			},
+			close() {},
+		} as unknown as DbAccessor;
+
+		const first = await findSemanticDuplicates(accessor, 0.9, 100, "agent-a", null, null, null);
+		expect(first.candidates).toBe(100);
+		expect(first.settled).toBe(false);
+		expect(first.nextCursor).toBeString();
+		expect(JSON.parse(first.nextCursor as string)).toEqual({
+			createdAt,
+			id: "semantic-099",
+		});
+		const cursor = first.nextCursor;
+		if (!cursor) throw new Error("expected a semantic continuation cursor");
+
+		const second = await findSemanticDuplicates(accessor, 0.9, 100, "agent-a", null, null, null, cursor);
+		expect(second.candidates).toBe(1);
+		expect(second.settled).toBe(true);
+		expect(second.nextCursor).toBeNull();
+		expect(candidateArgs[1]).toEqual(["agent-a", createdAt, createdAt, "semantic-099"]);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // triggerRetentionSweep
 // ---------------------------------------------------------------------------
 
@@ -2457,7 +2785,7 @@ describe("triggerRetentionSweep", () => {
 	it("calls sweep on the retention handle", async () => {
 		let swept = false;
 		const handle = {
-			sweep() {
+			async sweep() {
 				swept = true;
 			},
 		};
@@ -2467,6 +2795,39 @@ describe("triggerRetentionSweep", () => {
 
 		expect(result.success).toBe(true);
 		expect(swept).toBe(true);
+	});
+
+	it("audits and durably records a routed retention sweep", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		try {
+			const accessor = asAccessor(db);
+			const result = await triggerRetentionSweep(
+				TEST_CFG,
+				CTX_OPERATOR,
+				createRateLimiter(accessor),
+				{ sweep: async () => ({ tombstonesPurged: 2, historyPurged: 1 }) },
+				accessor,
+			);
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(3);
+			expect(repairAuditCount(db, "triggerRetentionSweep")).toBe(2);
+			const auditRows = db
+				.prepare("SELECT metadata FROM memory_history WHERE metadata LIKE ?")
+				.all("%triggerRetentionSweep%") as Array<{ metadata: string }>;
+			expect(auditRows.map((row) => (JSON.parse(row.metadata) as { message: string }).message)).toEqual(
+				expect.arrayContaining([
+					"retention sweep claimed; destructive work starting",
+					"retention sweep purged 3 row(s)",
+				]),
+			);
+			expect(
+				db.prepare("SELECT hourly_count FROM repair_rate_limits WHERE action = ?").get("triggerRetentionSweep"),
+			).toEqual({ hourly_count: 1 });
+		} finally {
+			db.close();
+		}
 	});
 });
 

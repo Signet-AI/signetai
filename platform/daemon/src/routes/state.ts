@@ -362,7 +362,7 @@ export const authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
 // Provider tracker and analytics singletons
 export const providerTracker = createProviderTracker();
 export const analyticsCollector = createAnalyticsCollector();
-export const repairLimiter = createRateLimiter();
+export const repairLimiter = createRateLimiter(() => getDbAccessor());
 
 // Version
 function getDaemonVersion(): string {

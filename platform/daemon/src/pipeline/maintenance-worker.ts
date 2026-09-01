@@ -165,6 +165,7 @@ interface ExecutionDeps {
 	retentionHandle: { sweep(): Promise<unknown> } | null;
 	embedding: EmbeddingRepairDeps | null;
 	ownerMaintenance: DbOwnerMaintenance | null;
+	agentId: string;
 }
 
 export interface EmbeddingRepairDeps {
@@ -190,11 +191,13 @@ async function executeRecommendation(
 			return await checkFtsConsistency(deps.accessor, deps.cfg, ctx, deps.limiter, true, deps.ownerMaintenance);
 		case "triggerRetentionSweep":
 			if (deps.retentionHandle) {
-				return await triggerRetentionSweep(deps.cfg, ctx, deps.limiter, deps.retentionHandle);
+				return await triggerRetentionSweep(deps.cfg, ctx, deps.limiter, deps.retentionHandle, deps.accessor);
 			}
 			return null;
 		case "deduplicateMemories":
-			return await deduplicateMemories(deps.accessor, deps.cfg, ctx, deps.limiter);
+			return await deduplicateMemories(deps.accessor, deps.cfg, ctx, deps.limiter, {
+				agentId: deps.agentId,
+			});
 		case "repairEmbeddingIndex": {
 			if (deps.embedding === null) return null;
 			const embedding = deps.embedding;
@@ -318,11 +321,12 @@ export function startMaintenanceWorker(
 	retentionHandle: { sweep(): Promise<unknown> } | null,
 	embedding?: EmbeddingRepairDeps,
 	ownerMaintenance?: DbOwnerMaintenance,
+	maintenanceAgentId = "default",
 ): MaintenanceHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
 	let inFlight: Promise<MaintenanceCycleResult> | null = null;
-	const limiter = createRateLimiter();
+	const limiter = createRateLimiter(accessor);
 	const haltTracker = createHaltTracker();
 
 	// cfg is captured by value — changes require a pipeline restart.
@@ -335,6 +339,7 @@ export function startMaintenanceWorker(
 		retentionHandle,
 		embedding: embedding ?? null,
 		ownerMaintenance: ownerMaintenance ?? null,
+		agentId: maintenanceAgentId,
 	};
 
 	async function doTick(): Promise<MaintenanceCycleResult> {
@@ -409,6 +414,7 @@ export function startMaintenanceWorker(
 			reason: "autonomous maintenance",
 			actor: "maintenance-worker",
 			actorType: "daemon",
+			agentId: deps.agentId,
 		};
 
 		const preScore = report.composite.score;

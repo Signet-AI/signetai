@@ -23,20 +23,20 @@ describe("embedding coverage queries", () => {
 		db.close();
 	});
 
-	it("treats duplicate-hash memories as already covered", () => {
+	it("does not treat a duplicate hash from another agent as coverage", () => {
 		const now = new Date().toISOString();
 		db.prepare(
-			`INSERT INTO memories (id, content, content_hash, scope, type, created_at, updated_at, updated_by)
-			 VALUES ('mem-a', 'same', 'hash-same', 'scope-a', 'fact', ?, ?, 'test')`,
+			`INSERT INTO memories (id, content, content_hash, scope, agent_id, type, created_at, updated_at, updated_by)
+			 VALUES ('mem-a', 'same', 'hash-same', 'scope-a', 'agent-a', 'fact', ?, ?, 'test')`,
 		).run(now, now);
 		db.prepare(
-			`INSERT INTO memories (id, content, content_hash, scope, type, created_at, updated_at, updated_by)
-			 VALUES ('mem-b', 'same', 'hash-same', 'scope-b', 'fact', ?, ?, 'test')`,
+			`INSERT INTO memories (id, content, content_hash, scope, agent_id, type, created_at, updated_at, updated_by)
+			 VALUES ('mem-b', 'same', 'hash-same', 'scope-b', 'agent-b', 'fact', ?, ?, 'test')`,
 		).run(now, now);
 		insertEmbedding(db, { id: "emb-a", sourceId: "mem-a", contentHash: "hash-same" });
 
-		expect(countUnembeddedMemories(db)).toBe(0);
-		expect(listUnembeddedMemories(db, 10)).toHaveLength(0);
+		expect(countUnembeddedMemories(db)).toBe(1);
+		expect(listUnembeddedMemories(db, 10)).toHaveLength(1);
 	});
 
 	it("still flags stale source-linked embeddings when the content hash changed", () => {

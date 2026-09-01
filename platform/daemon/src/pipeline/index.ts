@@ -210,6 +210,7 @@ export function startPipeline(
 						batchSize: pipelineCfg.embeddingTracker.batchSize,
 					},
 			ownerMaintenance,
+			agentId,
 		);
 	}
 
