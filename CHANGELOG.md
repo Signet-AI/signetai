@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-02
+- Bug fixes: keep owner protocol pure.
+
 ### 2026-09-01
 - Features: add Defuddle web imports (rebased); add third-party license colophon.
 
@@ -29,10 +32,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: async agent-id + dreaming-worker DB admission with scope caching; migrate prospective-index hints writes to async admission.
 - Docs: clarify fallback completeness.
 
-### 2026-08-25
-- Bug fixes: kill delayed recovery targets; harden transcript recovery shutdown; rebase recovery site tokens after retry-bounding edit; bound transcript recovery retries.
-
 ## Release Ledger
+
+## [0.216.1] - 2026-09-02
+
+Release summary: 1 bug fix.
+Tag range: `v0.216.0..v0.216.1`.
+
+### Bug Fixes
+
+- **daemon**: keep owner protocol pure
 
 ## [0.216.0] - 2026-09-01
 
