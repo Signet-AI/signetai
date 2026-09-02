@@ -162,7 +162,7 @@ describe("DB owner recall lane", () => {
 		}
 	});
 
-	test("initializes the owner resolver for configured extraction reranking", async () => {
+	test("keeps one recall owner across slow extraction reranking", async () => {
 		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-reranker-"));
 		previousSignetPath = process.env.SIGNET_PATH;
 		mkdirSync(join(directory, "memory"), { recursive: true });
@@ -178,6 +178,7 @@ describe("DB owner recall lane", () => {
 				if (typeof prompt !== "string" || !prompt.includes("You are a reranker.")) {
 					return new Response(JSON.stringify({ error: "unexpected prompt" }), { status: 400 });
 				}
+				await Bun.sleep(1_100);
 				const scores = [
 					{ id: "owner-fact-a", score: 0.1 },
 					{ id: "owner-fact-a-second", score: 0.9 },
@@ -249,6 +250,14 @@ inference:
 				{ queryEmbedding: null },
 			);
 			expect(routed.results.map((result) => result.id)).toEqual(["owner-fact-a-second", "owner-fact-a"]);
+			const first = client.health();
+			await hybridRecallThroughDbOwner(
+				client,
+				params,
+				{ ...cfg, pipelineV2: { ...cfg.pipelineV2, reranker } },
+				{ queryEmbedding: null },
+			);
+			expect(client.health()).toMatchObject({ state: "ready", generation: first.generation, pid: first.pid });
 		} finally {
 			await client.close();
 		}

@@ -837,7 +837,7 @@
     },
     {
       "path": "db-owner-client.ts",
-      "line": 827,
+      "line": 839,
       "api": "unlinkSync",
       "source": "unlinkSync(cancellationRegistryPath);",
       "category": "hot-path"
@@ -1520,42 +1520,42 @@
     },
     {
       "path": "logger.ts",
-      "line": 328,
+      "line": 330,
       "api": "appendFileSync",
       "source": "appendFileSync(this.currentLogFile, lines);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 351,
+      "line": 353,
       "api": "existsSync",
       "source": "if (!existsSync(this.currentLogFile)) return;",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 353,
+      "line": 355,
       "api": "statSync",
       "source": "const stats = statSync(this.currentLogFile);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 368,
+      "line": 370,
       "api": "renameSync",
       "source": "renameSync(this.currentLogFile, rotatedName);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 384,
+      "line": 386,
       "api": "unlinkSync",
       "source": "unlinkSync(files[i].path);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 530,
+      "line": 532,
       "api": "readFileSync",
       "source": "const content = readFileSync(file.path, \"utf-8\");",
       "category": "hot-path"

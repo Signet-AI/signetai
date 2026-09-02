@@ -275,7 +275,9 @@ export class Logger extends EventEmitter {
 	private write(entry: LogEntry) {
 		// Console output
 		if (this.config.consoleOutput) {
-			console.log(this.formatConsole(entry));
+			const message = this.formatConsole(entry);
+			if (process.env.SIGNET_DB_OWNER_WORKER === "1") console.error(message);
+			else console.log(message);
 		}
 
 		// Buffer for file write
