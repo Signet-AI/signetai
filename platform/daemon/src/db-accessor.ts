@@ -814,7 +814,7 @@ const migrationBackupDeps: MigrationBackupDeps = {
 	statfsSync,
 	unlinkSync,
 	now: Date.now,
-	log: console.log,
+	log: console.error,
 	warn: console.warn,
 };
 
@@ -1992,13 +1992,13 @@ export function ensureFtsTable(db: SqliteDatabase, options: { readonly deferBack
 	const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 
 	if (sql === null) {
-		console.log("[db-accessor] memories_fts missing — recreating FTS5 table");
+		console.error("[db-accessor] memories_fts missing — recreating FTS5 table");
 		createMemoriesFts(db);
 		if (options.deferBackfill !== true) {
 			const backfilled = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
 			if (backfilled.n > 0) {
 				db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
-				console.log(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
+				console.error(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
 			}
 		}
 		if (options.deferBackfill !== true) refreshMemoriesFtsState(db);
@@ -2011,7 +2011,7 @@ export function ensureFtsTable(db: SqliteDatabase, options: { readonly deferBack
 		return;
 	}
 
-	console.log("[db-accessor] memories_fts tokenizer drift detected — recreating FTS5 table");
+	console.error("[db-accessor] memories_fts tokenizer drift detected — recreating FTS5 table");
 	if (options.deferBackfill === true) recreateMemoriesFtsSchema(db);
 	else recreateMemoriesFts(db);
 	if (options.deferBackfill !== true) refreshMemoriesFtsState(db);
@@ -2168,7 +2168,7 @@ export function backfillVecEmbeddings(
 	deadlineAt?: number,
 	options: VecBackfillOptions = {},
 ): void {
-	const log = options.log ?? console.log;
+	const log = options.log ?? console.error;
 	const warn = options.warn ?? console.warn;
 	// Keep quarantine state durable across restarts and exclude it from every
 	// subsequent pending probe. The table contains IDs and diagnostics only.

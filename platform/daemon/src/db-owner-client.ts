@@ -482,8 +482,14 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 			try {
 				handleEvent(owner, JSON.parse(line) as DbOwnerEvent);
 			} catch (error) {
-				lastError = error instanceof Error ? error.message : String(error);
-				state = "failed";
+				const message = error instanceof Error ? error.message : String(error);
+				retireOwner(
+					new DbOwnerDiedError(`DB owner emitted malformed protocol output: ${message}`),
+					owner,
+					"failed",
+					true,
+				);
+				break;
 			}
 		}
 	}
@@ -539,6 +545,12 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 			return;
 		}
 		if (startPromise !== null) return await startPromise;
+		const retiredClose = retiredChildClose;
+		if (retiredClose !== null) {
+			await retiredClose;
+			if (retiredChildClose === retiredClose) retiredChildClose = null;
+			return await start();
+		}
 		const timeoutMs = resolveStartupTimeoutMs(options);
 		state = "starting";
 		lastError = null;
