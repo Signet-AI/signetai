@@ -364,8 +364,81 @@ test("filesystem purge refuses symlinked staged components", async () => {
 		await mkdir(join(outside, "source-a"), { recursive: true });
 		const outsideFile = join(outside, "source-a", "source.jsonl");
 		await writeFile(outsideFile, "keep");
-		await purgeTranscriptImportFilesystem(root, "source-a", "agent-a");
+		await expect(purgeTranscriptImportFilesystem(root, "source-a", "agent-a")).rejects.toThrow("symlink");
 		expect(await Bun.file(outsideFile).text()).toBe("keep");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+		await rm(outside, { recursive: true, force: true });
+	}
+});
+
+test("worker records a symlinked staged file as a nonretryable source change", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-worker-unsafe-staged-"));
+	const outside = await mkdtemp(join(tmpdir(), "signet-import-worker-unsafe-outside-"));
+	const sourceId = "unsafe-source";
+	const stagedPath = join(root, "imports", "transcripts", sourceId, "source.jsonl");
+	const outsidePath = join(outside, "source.jsonl");
+	const contents = `${valid("unsafe")}\n`;
+	let listedWork = false;
+	let leaseToken = "";
+	let commitCalled = false;
+	const recoveries: Array<Record<string, unknown>> = [];
+	const store: ImportStore = {
+		run: async <T>(op: ImportStoreOperation) => {
+			if (op.operation === "recover") {
+				if (typeof op.payload.error === "string") recoveries.push({ ...op.payload });
+				return undefined as T;
+			}
+			if (op.operation === "list" && op.payload.view === "work") {
+				if (listedWork) return [] as T;
+				listedWork = true;
+				return [{ id: "unsafe-job", state: "queued", generation: 0 }] as T;
+			}
+			if (op.operation === "lease") {
+				leaseToken = op.payload.token as string;
+				return { id: "unsafe-job", state: "running", generation: 0, lease_token: leaseToken } as T;
+			}
+			if (op.operation === "list" && op.payload.view === "status")
+				return [{ id: "unsafe-job", state: "running", generation: 0, lease_token: leaseToken }] as T;
+			if (op.operation === "list" && op.payload.view === "files")
+				return [
+					{
+						id: "unsafe-file",
+						job_id: "unsafe-job",
+						source_id: sourceId,
+						managed_path: `imports/transcripts/${sourceId}/source.jsonl`,
+						checkpoint_byte_offset: 0,
+						checkpoint_ordinal: 0,
+						state: "ready",
+						size_bytes: Buffer.byteLength(contents),
+						content_hash: createHash("sha256").update(contents).digest("hex"),
+					},
+				] as T;
+			if (op.operation === "commit") {
+				commitCalled = true;
+				return [] as T;
+			}
+			return [] as T;
+		},
+	};
+
+	try {
+		await mkdir(join(root, "imports", "transcripts", sourceId), { recursive: true });
+		await writeFile(outsidePath, contents);
+		await symlink(outsidePath, stagedPath);
+		const worker = startTranscriptImportWorker({ store, agentId: "agent-a", workspaceRoot: root, pollMs: 1 });
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		await worker.stop();
+
+		expect(recoveries).toHaveLength(1);
+		expect(recoveries[0]).toMatchObject({
+			generation: 0,
+			leaseToken,
+			retryable: false,
+			error: "managed path contains a symlink or non-directory component",
+			fileId: "unsafe-file",
+		});
+		expect(commitCalled).toBe(false);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 		await rm(outside, { recursive: true, force: true });

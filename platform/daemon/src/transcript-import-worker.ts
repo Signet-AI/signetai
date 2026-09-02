@@ -97,6 +97,7 @@ class TransientImportError extends Error {
 function classifyInventoryError(error: unknown): Error {
 	if (error instanceof SourceChangedError || error instanceof ImportDataError || error instanceof TransientImportError)
 		return error;
+	if (error instanceof UnsafeManagedTranscriptPathError) return new SourceChangedError(error.message);
 	const message = error instanceof Error ? error.message : String(error);
 	const code = (error as NodeJS.ErrnoException).code;
 	if (code === "ENOENT" || message === "checkpoint is beyond file size")
@@ -413,6 +414,7 @@ async function verifyStagedFile(root: string, file: File, path: string): Promise
 		actual = await fingerprintFile(root, path);
 	} catch (error) {
 		if (error instanceof SourceChangedError) throw error;
+		if (error instanceof UnsafeManagedTranscriptPathError) throw new SourceChangedError(error.message);
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new SourceChangedError("staged source is missing");
 		throw new TransientImportError("unable to verify staged source", error);
 	}
@@ -451,8 +453,11 @@ async function recoverImportJob(
 ): Promise<void> {
 	const message = error instanceof Error ? error.message : String(error);
 	const retryable =
-		!(error instanceof SourceChangedError || error instanceof ImportDataError) &&
-		message !== "canonical_transcript_corrupt";
+		!(
+			error instanceof SourceChangedError ||
+			error instanceof ImportDataError ||
+			error instanceof UnsafeManagedTranscriptPathError
+		) && message !== "canonical_transcript_corrupt";
 	while (isActive()) {
 		if (!message) return;
 		try {
@@ -690,6 +695,7 @@ async function readText(root: string, path: string): Promise<string> {
 		}
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+		if (error instanceof UnsafeManagedTranscriptPathError) throw new SourceChangedError(error.message);
 		throw new TransientImportError("unable to read canonical transcript", error);
 	}
 }
@@ -709,7 +715,8 @@ export async function purgeTranscriptImportFilesystem(
 		for (const managedPath of managedPaths) {
 			try {
 				await removeStagedTranscriptFile(root, managedPath);
-			} catch {
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 				// Never follow an invalid ledger path during purge.
 			}
 		}
@@ -717,7 +724,8 @@ export async function purgeTranscriptImportFilesystem(
 			const sourceDirectory = join(root, "imports", "transcripts", sourceId);
 			try {
 				await removeContainedTranscriptPath(root, sourceDirectory, { recursive: true, force: true });
-			} catch {
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 				// Never follow an invalid source directory during purge.
 			}
 		}
@@ -725,7 +733,8 @@ export async function purgeTranscriptImportFilesystem(
 		let names: string[] = [];
 		try {
 			names = await readdirContainedTranscriptDirectory(root, dir);
-		} catch {
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 			return;
 		}
 		for (const name of names.filter((entry) => entry.endsWith(".jsonl"))) {
