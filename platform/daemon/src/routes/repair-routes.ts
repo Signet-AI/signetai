@@ -138,28 +138,32 @@ export function registerRepairRoutes(
 	});
 
 	app.get("/api/repair/embedding-gaps", async (c) => {
-		const stats = await getEmbeddingGapStats(getDbAccessor());
+		const accessor = deps.getDbAccessor?.() ?? getDbAccessor();
+		const stats = await getEmbeddingGapStats(accessor, resolveRepairAgentId(c));
 		return c.json(stats);
 	});
 
 	app.post("/api/repair/re-embed", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const accessor = deps.getDbAccessor?.() ?? getDbAccessor();
 		const ctx = resolveRepairContext(c);
 		let batchSize = 50;
 		let dryRun = false;
 		let fullSweep = false;
 
+		let body: Record<string, unknown> = {};
 		try {
-			const body = await c.req.json();
+			body = asRecord(await c.req.json());
 			if (typeof body.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body.fullSweep === "boolean") fullSweep = body.fullSweep;
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
+		const agentId = resolveRepairAgentId(c, body);
 
 		const result = await reembedMissingMemories(
-			getDbAccessor(),
+			accessor,
 			cfg.pipelineV2,
 			ctx,
 			repairLimiter,
@@ -169,6 +173,7 @@ export function registerRepairRoutes(
 			dryRun,
 			fullSweep,
 			fullSweep && ctx.actorType === "operator" ? 0 : undefined,
+			agentId,
 		);
 
 		return c.json(result, repairHttpStatus(result));
