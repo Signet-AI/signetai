@@ -201,7 +201,7 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 			const sourceInput = { sourceId: input.sourceId, agentId: input.agentId };
 			const purged = purgeSourceOwnedRowsInTx(db as never, sourceInput);
 			return {
-				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId ?? "default", input.sourceId),
+				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId),
 			};
 		});
 	if (request.kind === "transcript_import_control") {

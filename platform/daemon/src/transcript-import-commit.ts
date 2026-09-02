@@ -285,54 +285,81 @@ export function commitCompletedTranscriptBatchInTx(
 	return results;
 }
 
-export function purgeTranscriptImportSourceInTx(db: WriteDb, agentId: string, sourceId: string): number {
-	const invalidatedJobs = db
-		.prepare(
-			"UPDATE source_import_jobs SET state = 'cancelled', generation = generation + 1, control_request = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = datetime('now') WHERE agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled') AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.job_id = source_import_jobs.id AND source_import_files.agent_id = ? AND source_import_files.source_id = ?)",
-		)
-		.run(agentId, agentId, sourceId).changes;
+export function purgeTranscriptImportSourceInTx(db: WriteDb, agentId: string | undefined, sourceId: string): number {
+	const invalidatedJobs =
+		agentId !== undefined
+			? db
+					.prepare(
+						"UPDATE source_import_jobs SET state = 'cancelled', generation = generation + 1, control_request = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = datetime('now') WHERE agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled') AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.job_id = source_import_jobs.id AND source_import_files.agent_id = ? AND source_import_files.source_id = ?)",
+					)
+					.run(agentId, agentId, sourceId).changes
+			: db
+					.prepare(
+						"UPDATE source_import_jobs SET state = 'cancelled', generation = generation + 1, control_request = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = datetime('now') WHERE state NOT IN ('completed','completed_with_rejections','cancelled') AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.job_id = source_import_jobs.id AND source_import_files.source_id = ?)",
+					)
+					.run(sourceId).changes;
 	let changed = invalidatedJobs;
-	const conversations = db
-		.prepare(
-			"SELECT external_identity, canonical_key FROM transcript_import_conversations WHERE agent_id = ? AND owner_source_id = ?",
-		)
-		.all(agentId, sourceId) as Array<{ external_identity: string; canonical_key: string }>;
+	const conversations =
+		agentId !== undefined
+			? (db
+					.prepare(
+						"SELECT agent_id, external_identity, canonical_key FROM transcript_import_conversations WHERE agent_id = ? AND owner_source_id = ?",
+					)
+					.all(agentId, sourceId) as Array<{ agent_id: string; external_identity: string; canonical_key: string }>)
+			: (db
+					.prepare(
+						"SELECT agent_id, external_identity, canonical_key FROM transcript_import_conversations WHERE owner_source_id = ?",
+					)
+					.all(sourceId) as Array<{ agent_id: string; external_identity: string; canonical_key: string }>);
 	for (const conversation of conversations) {
 		const replacement = db
 			.prepare(
 				"SELECT id, source_id FROM source_import_records WHERE agent_id = ? AND external_identity = ? AND source_id != ? AND status IN ('imported','duplicate') ORDER BY CASE status WHEN 'imported' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1",
 			)
-			.get(agentId, conversation.external_identity, sourceId) as { id: string; source_id: string } | undefined;
+			.get(conversation.agent_id, conversation.external_identity, sourceId) as
+			| { id: string; source_id: string }
+			| undefined;
 		if (replacement) {
 			changed += Number(
 				db
 					.prepare(
 						"UPDATE transcript_import_conversations SET owner_source_id = ?, owner_record_id = ?, state = 'committed', updated_at = datetime('now') WHERE agent_id = ? AND external_identity = ?",
 					)
-					.run(replacement.source_id, replacement.id, agentId, conversation.external_identity).changes > 0,
+					.run(replacement.source_id, replacement.id, conversation.agent_id, conversation.external_identity).changes >
+					0,
 			);
-			updateSessionTranscriptSource(db, conversation.canonical_key, agentId, replacement.source_id, replacement.id);
+			updateSessionTranscriptSource(
+				db,
+				conversation.canonical_key,
+				conversation.agent_id,
+				replacement.source_id,
+				replacement.id,
+			);
 		} else {
 			changed += Number(
 				db
 					.prepare("DELETE FROM session_transcripts WHERE agent_id = ? AND session_key = ?")
-					.run(agentId, conversation.canonical_key).changes > 0,
+					.run(conversation.agent_id, conversation.canonical_key).changes > 0,
 			);
 			changed += Number(
 				db
 					.prepare(
 						"UPDATE transcript_import_conversations SET state = 'removed', updated_at = datetime('now') WHERE agent_id = ? AND external_identity = ?",
 					)
-					.run(agentId, conversation.external_identity).changes > 0,
+					.run(conversation.agent_id, conversation.external_identity).changes > 0,
 			);
 		}
 	}
-	changed += db
-		.prepare("DELETE FROM source_import_records WHERE agent_id = ? AND source_id = ?")
-		.run(agentId, sourceId).changes;
-	changed += db
-		.prepare("DELETE FROM source_import_files WHERE agent_id = ? AND source_id = ?")
-		.run(agentId, sourceId).changes;
+	changed +=
+		agentId !== undefined
+			? db.prepare("DELETE FROM source_import_records WHERE agent_id = ? AND source_id = ?").run(agentId, sourceId)
+					.changes
+			: db.prepare("DELETE FROM source_import_records WHERE source_id = ?").run(sourceId).changes;
+	changed +=
+		agentId !== undefined
+			? db.prepare("DELETE FROM source_import_files WHERE agent_id = ? AND source_id = ?").run(agentId, sourceId)
+					.changes
+			: db.prepare("DELETE FROM source_import_files WHERE source_id = ?").run(sourceId).changes;
 	return changed;
 }
 

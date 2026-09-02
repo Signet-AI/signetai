@@ -1,21 +1,21 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, rename, rm, stat } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import {
+	mkdirContainedTranscriptDirectory,
+	openContainedTranscriptFile,
+	removeContainedTranscriptPath,
+	renameContainedTranscriptPath,
+	UnsafeManagedTranscriptPathError,
+} from "./transcript-import-safe-fs";
+
+export { UnsafeManagedTranscriptPathError } from "./transcript-import-safe-fs";
 
 export interface StagedTranscriptFile {
 	readonly managedPath: string;
 	readonly sizeBytes: number;
 	readonly contentHash: string;
-}
-
-export class UnsafeManagedTranscriptPathError extends Error {
-	readonly code = "unsafe_managed_transcript_path";
-
-	constructor(message: string) {
-		super(message);
-		this.name = "UNSAFE_MANAGED_TRANSCRIPT_PATH";
-	}
 }
 
 /** Resolve a ledger path only inside imports/transcripts under the workspace. */
@@ -35,42 +35,13 @@ export function resolveManagedTranscriptPath(root: string, managedPath: string):
 	return candidate;
 }
 
-/** Reject symlink components before any operation can follow them. */
-export async function assertNoSymlinkComponents(root: string, candidate: string): Promise<void> {
-	const rootResolved = resolve(root);
-	const candidateResolved = resolve(candidate);
-	const relativePath = relative(rootResolved, candidateResolved);
-	if (relativePath.startsWith("..") || relativePath.includes(`..${sep}`) || relativePath.includes(`${sep}..`))
-		throw new UnsafeManagedTranscriptPathError("managed path escapes workspace");
-
-	let current = rootResolved;
-	for (const component of relativePath ? relativePath.split(sep) : []) {
-		try {
-			const info = await lstat(current);
-			if (info.isSymbolicLink()) throw new UnsafeManagedTranscriptPathError("managed path contains a symlink");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-			throw error;
-		}
-		current = join(current, component);
-	}
+export async function removeStagedTranscriptFile(root: string, managedPath: string): Promise<void> {
+	const candidate = resolveManagedTranscriptPath(root, managedPath);
 	try {
-		const info = await lstat(current);
-		if (info.isSymbolicLink()) throw new UnsafeManagedTranscriptPathError("managed path contains a symlink");
+		await removeContainedTranscriptPath(root, candidate, { force: true });
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
-}
-
-export async function resolveSafeManagedTranscriptPath(root: string, managedPath: string): Promise<string> {
-	const candidate = resolveManagedTranscriptPath(root, managedPath);
-	await assertNoSymlinkComponents(root, candidate);
-	return candidate;
-}
-
-export async function removeStagedTranscriptFile(root: string, managedPath: string): Promise<void> {
-	const candidate = await resolveSafeManagedTranscriptPath(root, managedPath);
-	await rm(candidate, { force: true });
 }
 
 /** Stream raw bytes into a managed path, then fsync and atomically publish it. */
@@ -82,16 +53,14 @@ export async function stageTranscriptStream(
 	if (!/^[A-Za-z0-9_-]+$/.test(sourceId)) throw new Error("invalid source id");
 	const managedRelativePath = join("imports", "transcripts", sourceId, "source.jsonl");
 	const destination = resolveManagedTranscriptPath(root, managedRelativePath);
-	await assertNoSymlinkComponents(root, destination);
-	await mkdir(dirname(destination), { recursive: true });
-	await assertNoSymlinkComponents(root, destination);
+	await mkdirContainedTranscriptDirectory(root, dirname(destination));
 	const partial = `${destination}.partial`;
 	const hash = createHash("sha256");
 	let sizeBytes = 0;
-	let handle: Awaited<ReturnType<typeof open>> | undefined;
+	let handle: FileHandle | undefined;
 	try {
-		await assertNoSymlinkComponents(root, partial);
-		handle = await open(
+		handle = await openContainedTranscriptFile(
+			root,
 			partial,
 			fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
 			0o600,
@@ -105,11 +74,14 @@ export async function stageTranscriptStream(
 		await handle.sync();
 		await handle.close();
 		handle = undefined;
-		await assertNoSymlinkComponents(root, partial);
-		const actual = await stat(partial);
-		if (actual.size !== sizeBytes) throw new Error("staged size verification failed");
-		await assertNoSymlinkComponents(root, destination);
-		await rename(partial, destination);
+		const verification = await openContainedTranscriptFile(root, partial, fsConstants.O_RDONLY);
+		try {
+			const actual = await verification.stat();
+			if (actual.size !== sizeBytes) throw new Error("staged size verification failed");
+		} finally {
+			await verification.close();
+		}
+		await renameContainedTranscriptPath(root, partial, destination);
 		return { managedPath: managedRelativePath, sizeBytes, contentHash: hash.digest("hex") };
 	} catch (error) {
 		if (handle !== undefined) {

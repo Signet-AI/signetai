@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { open, mkdir, rm, readdir, rename } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { TRANSCRIPT_IMPORT_LIMITS, signetExportV1Adapter } from "./transcript-import-adapter";
 import { resolveDefaultBasePath } from "@signet/core";
 import {
@@ -16,11 +15,16 @@ import type { ImportJobState, ImportStore, ImportStoreOperation } from "./transc
 import { controlImport, reconcileImport } from "./transcript-import-store";
 import { withTranscriptImportOperationLock } from "./transcript-import-operation-lock";
 import {
-	assertNoSymlinkComponents,
-	removeStagedTranscriptFile,
-	resolveSafeManagedTranscriptPath,
+	createContainedTranscriptDirectory,
+	mkdirContainedTranscriptDirectory,
+	openContainedTranscriptFile,
+	readdirContainedTranscriptDirectory,
+	removeContainedTranscriptPath,
+	renameContainedTranscriptPath,
+	syncContainedTranscriptDirectory,
 	UnsafeManagedTranscriptPathError,
-} from "./transcript-import-staging";
+} from "./transcript-import-safe-fs";
+import { removeStagedTranscriptFile, resolveManagedTranscriptPath } from "./transcript-import-staging";
 
 export interface TranscriptImportWorkerHandle {
 	readonly running: boolean;
@@ -56,13 +60,15 @@ type File = {
 	error?: string | null;
 };
 type Row = InventoryRecord & {
-	id: string;
-	file_id: string;
-	source_id: string;
-	job_id: string;
-	status: string;
-	value?: never;
+	readonly id: string;
+	readonly file_id: string;
+	readonly source_id: string;
+	readonly job_id: string;
+	readonly status: string;
+	readonly value?: never;
 };
+
+const LOCK_OWNER_GRACE_MS = 1_000;
 
 class SourceChangedError extends Error {
 	readonly code = "source_changed";
@@ -209,7 +215,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 				currentFileId = file.id;
 				let path: string;
 				try {
-					path = await resolveSafeManagedTranscriptPath(root, file.managed_path);
+					path = resolveManagedTranscriptPath(root, file.managed_path);
 				} catch (error) {
 					if (error instanceof UnsafeManagedTranscriptPathError) throw new SourceChangedError(error.message);
 					throw error;
@@ -219,7 +225,6 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 				if (!["ready", "inventorying", "completed"].includes(file.state))
 					throw new TransientImportError(`unsupported staged file state: ${file.state}`);
 				if (file.state !== "completed") {
-					await assertNoSymlinkComponents(root, path);
 					await verifyStagedFile(root, file, path);
 					let inventory: Awaited<ReturnType<typeof inventoryTranscriptFile>>;
 					try {
@@ -244,6 +249,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 								});
 								await maybeCrashDuringInventory(root);
 							},
+							root,
 						);
 					} catch (error) {
 						throw classifyInventoryError(error);
@@ -296,8 +302,7 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 			const commits: CompletedTranscriptCommit[] = [];
 			for (const row of rows) {
 				try {
-					await assertNoSymlinkComponents(root, path);
-					const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+					const handle = await openContainedTranscriptFile(root, path, fsConstants.O_RDONLY);
 					const raw = Buffer.alloc(row.byteLength);
 					try {
 						const got = await handle.read(raw, 0, row.byteLength, row.byteOffset);
@@ -405,8 +410,7 @@ async function verifyStagedFile(root: string, file: File, path: string): Promise
 	if (expectedSize === null && expectedHash === null) return;
 	let actual: { readonly size: number; readonly hash: string };
 	try {
-		await assertNoSymlinkComponents(root, path);
-		actual = await fingerprintFile(path);
+		actual = await fingerprintFile(root, path);
 	} catch (error) {
 		if (error instanceof SourceChangedError) throw error;
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new SourceChangedError("staged source is missing");
@@ -416,8 +420,8 @@ async function verifyStagedFile(root: string, file: File, path: string): Promise
 	if (expectedHash !== null && actual.hash !== expectedHash) throw new SourceChangedError("staged source hash changed");
 }
 
-async function fingerprintFile(path: string): Promise<{ readonly size: number; readonly hash: string }> {
-	const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+async function fingerprintFile(root: string, path: string): Promise<{ readonly size: number; readonly hash: string }> {
+	const handle = await openContainedTranscriptFile(root, path, fsConstants.O_RDONLY);
 	const digest = createHash("sha256");
 	let size = 0;
 	try {
@@ -484,73 +488,65 @@ export async function appendCanonical(
 	if (transcriptCommitBatchBytes(commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
 		throw new RangeError("canonical_batch_too_large");
 	const path = join(root, "transcripts", `${hash(`${agentId}\0${harness}`)}.jsonl`);
-	await assertNoSymlinkComponents(root, dirname(path));
-	await mkdir(dirname(path), { recursive: true });
-	await assertNoSymlinkComponents(root, path);
+	await mkdirContainedTranscriptDirectory(root, dirname(path));
 	await withTranscriptFilesystemLock(
 		root,
 		async () =>
-			await withCanonicalTranscriptLock(path, async () => {
-				await assertNoSymlinkComponents(root, path);
-				const existing = await readText(root, path);
-				const ids = new Set<string>();
-				for (const line of existing.split("\n")) {
-					if (!line) continue;
-					try {
-						const id = (JSON.parse(line) as { id?: unknown }).id;
-						if (typeof id === "string") ids.add(id);
-					} catch {
-						throw new Error("canonical_transcript_corrupt");
+			await withCanonicalTranscriptLock(
+				path,
+				async () => {
+					const existing = await readText(root, path);
+					const ids = new Set<string>();
+					for (const line of existing.split("\n")) {
+						if (!line) continue;
+						try {
+							const id = (JSON.parse(line) as { id?: unknown }).id;
+							if (typeof id === "string") ids.add(id);
+						} catch {
+							throw new Error("canonical_transcript_corrupt");
+						}
 					}
-				}
-				const missing = commits.filter((commit) => !ids.has(commit.recordId));
-				if (!missing.length) return;
-				await beforeWrite?.();
-				const temp = `${path}.append-${randomUUID()}`;
-				const payload = missing.map(canonicalTranscriptLine).join("");
-				await assertNoSymlinkComponents(root, temp);
-				const staged = await open(
-					temp,
-					fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
-					0o600,
-				);
-				try {
-					await staged.writeFile(payload);
-					await staged.sync();
-				} finally {
-					await staged.close();
-				}
-				await assertNoSymlinkComponents(root, path);
-				const source = await open(
-					path,
-					fsConstants.O_RDWR | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW,
-					0o600,
-				);
-				try {
-					await source.writeFile(payload);
-					await source.sync();
-				} finally {
-					await source.close();
-				}
-				await maybeCrashAfterCanonicalWrite(root);
-				await assertNoSymlinkComponents(root, temp);
-				await rm(temp, { force: true });
-				await assertNoSymlinkComponents(root, dirname(path));
-				const directory = await open(dirname(path), "r");
-				try {
-					await directory.sync();
-				} finally {
-					await directory.close();
-				}
-			}),
+					const missing = commits.filter((commit) => !ids.has(commit.recordId));
+					if (!missing.length) return;
+					await beforeWrite?.();
+					const temp = `${path}.append-${randomUUID()}`;
+					const payload = missing.map(canonicalTranscriptLine).join("");
+					const staged = await openContainedTranscriptFile(
+						root,
+						temp,
+						fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+						0o600,
+					);
+					try {
+						await staged.writeFile(payload);
+						await staged.sync();
+					} finally {
+						await staged.close();
+					}
+					const source = await openContainedTranscriptFile(
+						root,
+						path,
+						fsConstants.O_RDWR | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW,
+						0o600,
+					);
+					try {
+						await source.writeFile(payload);
+						await source.sync();
+					} finally {
+						await source.close();
+					}
+					await maybeCrashAfterCanonicalWrite(root);
+					await removeContainedTranscriptPath(root, temp, { force: true });
+					await syncContainedTranscriptDirectory(root, dirname(path));
+				},
+				root,
+			),
 	);
 }
 
 async function withTranscriptFilesystemLock<Result>(root: string, operation: () => Promise<Result>): Promise<Result> {
 	const directory = join(root, "transcripts");
-	await assertNoSymlinkComponents(root, directory);
-	await mkdir(directory, { recursive: true });
-	await assertNoSymlinkComponents(root, directory);
+	await mkdirContainedTranscriptDirectory(root, directory);
 	return await withCanonicalTranscriptLock(join(directory, ".filesystem"), operation, root);
 }
 
@@ -560,13 +556,13 @@ async function withCanonicalTranscriptLock<Result>(
 	root = dirname(path),
 ): Promise<Result> {
 	const lock = `${path}.lock`;
-	await assertNoSymlinkComponents(root, path);
+	let missingOwnerSince: number | undefined;
 	for (;;) {
-		try {
-			await assertNoSymlinkComponents(root, lock);
-			await mkdir(lock);
-			await assertNoSymlinkComponents(root, lock);
-			const owner = await open(
+		const created = await createContainedTranscriptDirectory(root, lock);
+		if (created) {
+			missingOwnerSince = undefined;
+			const owner = await openContainedTranscriptFile(
+				root,
 				join(lock, "owner"),
 				fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
 				0o600,
@@ -577,47 +573,56 @@ async function withCanonicalTranscriptLock<Result>(
 				await owner.close();
 			}
 			break;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+		let ownerContents: string;
+		try {
+			const ownerFile = await openContainedTranscriptFile(root, join(lock, "owner"), fsConstants.O_RDONLY);
 			try {
-				await assertNoSymlinkComponents(root, lock);
-				const ownerFile = await open(join(lock, "owner"), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-				let ownerContents: string;
-				try {
-					ownerContents = await ownerFile.readFile("utf8");
-				} finally {
-					await ownerFile.close();
-				}
-				const ownerPid = Number(ownerContents.trim());
-				if (Number.isInteger(ownerPid) && ownerPid > 0) {
-					try {
-						process.kill(ownerPid, 0);
-						await new Promise((resolve) => setTimeout(resolve, 5));
-						continue;
-					} catch (probeError) {
-						if ((probeError as NodeJS.ErrnoException).code !== "ESRCH") throw probeError;
-					}
-				}
-				await assertNoSymlinkComponents(root, lock);
-				await rm(lock, { recursive: true, force: true });
-			} catch {
-				// A process killed after mkdir or while holding the lock leaves a
-				// stale directory. Only this worker writes these per-harness locks.
-				try {
-					await assertNoSymlinkComponents(root, lock);
-					await rm(lock, { recursive: true, force: true });
-				} catch {
-					// Never follow an invalid lock path.
-				}
+				ownerContents = await ownerFile.readFile("utf8");
+			} finally {
+				await ownerFile.close();
 			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+				const now = Date.now();
+				missingOwnerSince ??= now;
+				if (now - missingOwnerSince >= LOCK_OWNER_GRACE_MS) {
+					try {
+						await removeContainedTranscriptPath(root, lock, { recursive: true, force: true });
+					} catch {
+						// A creator may have completed the owner file between checks.
+					}
+					missingOwnerSince = undefined;
+					continue;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				continue;
+			}
+			throw error;
+		}
+		missingOwnerSince = undefined;
+		const ownerPid = Number(ownerContents.trim());
+		if (Number.isInteger(ownerPid) && ownerPid > 0) {
+			try {
+				process.kill(ownerPid, 0);
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				continue;
+			} catch (probeError) {
+				if ((probeError as NodeJS.ErrnoException).code !== "ESRCH") throw probeError;
+			}
+		}
+		try {
+			await removeContainedTranscriptPath(root, lock, { recursive: true, force: true });
+		} catch {
+			// A process killed after mkdir or while holding the lock can leave a
+			// stale directory. Never follow an invalid lock path.
 		}
 	}
 	try {
 		return await operation();
 	} finally {
 		try {
-			await assertNoSymlinkComponents(root, lock);
-			await rm(lock, { recursive: true, force: true });
+			await removeContainedTranscriptPath(root, lock, { recursive: true, force: true });
 		} catch {
 			// Never follow an invalid lock path during cleanup.
 		}
@@ -627,12 +632,7 @@ async function withCanonicalTranscriptLock<Result>(
 async function maybeCrashDuringInventory(root: string): Promise<void> {
 	if (process.env.SIGNET_TRANSCRIPT_IMPORT_FAILPOINT !== "inventory") return;
 	const marker = join(root, ".daemon", "transcript-import-inventory-failpoint-fired");
-	try {
-		await open(marker, "wx").then((handle) => handle.close());
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
-		throw error;
-	}
+	if (!(await createFailpointMarker(root, marker))) return;
 	process.stderr.write("transcript-import failpoint: inventory\\n");
 	process.exit(87);
 }
@@ -640,14 +640,26 @@ async function maybeCrashDuringInventory(root: string): Promise<void> {
 async function maybeCrashAfterCanonicalWrite(root: string): Promise<void> {
 	if (process.env.SIGNET_TRANSCRIPT_IMPORT_FAILPOINT !== "after-fs-before-db") return;
 	const marker = join(root, ".daemon", "transcript-import-failpoint-fired");
-	try {
-		await open(marker, "wx").then((handle) => handle.close());
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
-		throw error;
-	}
+	if (!(await createFailpointMarker(root, marker))) return;
 	process.stderr.write("transcript-import failpoint: after-fs-before-db\\n");
 	process.exit(86);
+}
+
+async function createFailpointMarker(root: string, marker: string): Promise<boolean> {
+	await mkdirContainedTranscriptDirectory(root, dirname(marker));
+	try {
+		const handle = await openContainedTranscriptFile(
+			root,
+			marker,
+			fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+			0o600,
+		);
+		await handle.close();
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+		throw error;
+	}
 }
 
 async function _recover(options: TranscriptImportWorkerOptions): Promise<void> {
@@ -670,8 +682,7 @@ async function _recover(options: TranscriptImportWorkerOptions): Promise<void> {
 }
 async function readText(root: string, path: string): Promise<string> {
 	try {
-		await assertNoSymlinkComponents(root, path);
-		const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+		const handle = await openContainedTranscriptFile(root, path, fsConstants.O_RDONLY);
 		try {
 			return await handle.readFile("utf8");
 		} finally {
@@ -703,57 +714,56 @@ export async function purgeTranscriptImportFilesystem(
 			}
 		}
 		if (!sourceId.includes("/") && !sourceId.includes("\\") && !sourceId.includes("..")) {
-			const sourceDirectory = resolve(root, "imports", "transcripts", sourceId);
+			const sourceDirectory = join(root, "imports", "transcripts", sourceId);
 			try {
-				await assertNoSymlinkComponents(root, sourceDirectory);
-				await rm(sourceDirectory, { recursive: true, force: true });
+				await removeContainedTranscriptPath(root, sourceDirectory, { recursive: true, force: true });
 			} catch {
 				// Never follow an invalid source directory during purge.
 			}
 		}
 		const dir = join(root, "transcripts");
-		await assertNoSymlinkComponents(root, dir);
 		let names: string[] = [];
 		try {
-			names = await readdir(dir);
+			names = await readdirContainedTranscriptDirectory(root, dir);
 		} catch {
 			return;
 		}
 		for (const name of names.filter((entry) => entry.endsWith(".jsonl"))) {
 			const path = join(dir, name);
-			await assertNoSymlinkComponents(root, path);
-			await withCanonicalTranscriptLock(path, async () => {
-				await assertNoSymlinkComponents(root, path);
-				const input = await readText(root, path);
-				const kept = input
-					.split(/(?<=\n)/u)
-					.filter((line) => {
-						try {
-							const value = JSON.parse(line) as { source_id?: unknown; agent_id?: unknown };
-							return !(value.source_id === sourceId && (agentId === undefined || value.agent_id === agentId));
-						} catch {
-							return true;
-						}
-					})
-					.join("");
-				if (kept === input) return;
-				const temp = `${path}.purge-${randomUUID()}`;
-				await assertNoSymlinkComponents(root, temp);
-				const fd = await open(
-					temp,
-					fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
-					0o600,
-				);
-				try {
-					await fd.writeFile(kept, "utf8");
-					await fd.sync();
-				} finally {
-					await fd.close();
-				}
-				await assertNoSymlinkComponents(root, temp);
-				await assertNoSymlinkComponents(root, path);
-				await rename(temp, path);
-			});
+			await withCanonicalTranscriptLock(
+				path,
+				async () => {
+					const input = await readText(root, path);
+					const kept = input
+						.split(/(?<=\n)/u)
+						.filter((line) => {
+							try {
+								const value = JSON.parse(line) as { source_id?: unknown; agent_id?: unknown };
+								return !(value.source_id === sourceId && (agentId === undefined || value.agent_id === agentId));
+							} catch {
+								return true;
+							}
+						})
+						.join("");
+					if (kept === input) return;
+					const temp = `${path}.purge-${randomUUID()}`;
+					const fd = await openContainedTranscriptFile(
+						root,
+						temp,
+						fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+						0o600,
+					);
+					try {
+						await fd.writeFile(kept, "utf8");
+						await fd.sync();
+					} finally {
+						await fd.close();
+					}
+					await renameContainedTranscriptPath(root, temp, path);
+					await syncContainedTranscriptDirectory(root, dir);
+				},
+				root,
+			);
 		}
 	});
 }

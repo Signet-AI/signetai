@@ -9,27 +9,32 @@ import { withTranscriptImportOperationLock } from "./transcript-import-operation
 export { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 export type { PurgeSourceOwnedRowsInput } from "./source-purge-tx";
 
-const TRANSCRIPT_IMPORT_PURGE_JOB_SQL =
-	"UPDATE source_import_jobs SET state = 'cancelled', generation = generation + 1, control_request = NULL, lease_token = NULL, lease_expires_at = NULL, error = COALESCE(error, 'source deleted'), updated_at = ? WHERE agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled') AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.job_id = source_import_jobs.id AND source_import_files.agent_id = source_import_jobs.agent_id AND source_import_files.source_id = ?)";
-const TRANSCRIPT_IMPORT_PURGE_RECORD_SQL =
-	"UPDATE source_import_records SET status = 'cancelled', rejection_code = 'source_deleted', updated_at = ? WHERE agent_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.id = source_import_records.file_id AND source_import_files.agent_id = source_import_records.agent_id AND source_import_files.source_id = ?)";
-
 /**
  * Invalidate import leases before touching canonical files. The owner-side
  * generation change closes the gap between a worker guard and its DB commit.
  */
-async function invalidateTranscriptImportSource(input: PurgeSourceOwnedRowsInput, agentId: string): Promise<void> {
+async function invalidateTranscriptImportSource(input: PurgeSourceOwnedRowsInput): Promise<void> {
 	const timestamp = new Date().toISOString();
+	const jobSql =
+		input.agentId !== undefined
+			? "UPDATE source_import_jobs SET state = 'cancelled', generation = generation + 1, control_request = NULL, lease_token = NULL, lease_expires_at = NULL, error = COALESCE(error, 'source deleted'), updated_at = ? WHERE agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled') AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.job_id = source_import_jobs.id AND source_import_files.agent_id = source_import_jobs.agent_id AND source_import_files.source_id = ?)"
+			: "UPDATE source_import_jobs SET state = 'cancelled', generation = generation + 1, control_request = NULL, lease_token = NULL, lease_expires_at = NULL, error = COALESCE(error, 'source deleted'), updated_at = ? WHERE state NOT IN ('completed','completed_with_rejections','cancelled') AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.job_id = source_import_jobs.id AND source_import_files.source_id = ?)";
+	const recordSql =
+		input.agentId !== undefined
+			? "UPDATE source_import_records SET status = 'cancelled', rejection_code = 'source_deleted', updated_at = ? WHERE agent_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.id = source_import_records.file_id AND source_import_files.agent_id = source_import_records.agent_id AND source_import_files.source_id = ?)"
+			: "UPDATE source_import_records SET status = 'cancelled', rejection_code = 'source_deleted', updated_at = ? WHERE status = 'pending' AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.id = source_import_records.file_id AND source_import_files.source_id = ?)";
+	const scopedParams =
+		input.agentId !== undefined ? [timestamp, input.agentId, input.sourceId] : [timestamp, input.sourceId];
 	await dbOwnerTransaction(
 		[
 			{
-				sql: TRANSCRIPT_IMPORT_PURGE_JOB_SQL,
-				params: [timestamp, agentId, input.sourceId],
+				sql: jobSql,
+				params: scopedParams,
 				result: "run" as const,
 			},
 			{
-				sql: TRANSCRIPT_IMPORT_PURGE_RECORD_SQL,
-				params: [timestamp, agentId, input.sourceId],
+				sql: recordSql,
+				params: scopedParams,
 				result: "run" as const,
 			},
 		],
@@ -44,7 +49,6 @@ export async function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): Pr
 async function purgeSourceOwnedRowsUnlocked(input: PurgeSourceOwnedRowsInput): Promise<number> {
 	const sourceId = input.sourceId.trim();
 	if (!sourceId) return 0;
-	const agentId = input.agentId ?? "default";
 	let managedPaths: string[] = [];
 	try {
 		managedPaths = await runDbOwnerDomainOperation(getDbAccessor(), {
@@ -52,8 +56,8 @@ async function purgeSourceOwnedRowsUnlocked(input: PurgeSourceOwnedRowsInput): P
 				(
 					await dbOwnerQuery<Array<{ managed_path: string }>>(
 						{
-							sql: `SELECT managed_path FROM source_import_files WHERE ${input.agentId ? "agent_id = ? AND " : ""}source_id = ?`,
-							params: input.agentId ? [input.agentId, sourceId] : [sourceId],
+							sql: `SELECT managed_path FROM source_import_files WHERE ${input.agentId !== undefined ? "agent_id = ? AND " : ""}source_id = ?`,
+							params: input.agentId !== undefined ? [input.agentId, sourceId] : [sourceId],
 							result: "all",
 							readonly: true,
 						},
@@ -65,9 +69,9 @@ async function purgeSourceOwnedRowsUnlocked(input: PurgeSourceOwnedRowsInput): P
 					(
 						db
 							.prepare(
-								`SELECT managed_path FROM source_import_files WHERE ${input.agentId ? "agent_id = ? AND " : ""}source_id = ?`,
+								`SELECT managed_path FROM source_import_files WHERE ${input.agentId !== undefined ? "agent_id = ? AND " : ""}source_id = ?`,
 							)
-							.all(...(input.agentId ? [input.agentId] : []), sourceId) as Array<{ managed_path: string }>
+							.all(...(input.agentId !== undefined ? [input.agentId] : []), sourceId) as Array<{ managed_path: string }>
 					).map((row) => row.managed_path),
 				),
 		});
@@ -75,7 +79,7 @@ async function purgeSourceOwnedRowsUnlocked(input: PurgeSourceOwnedRowsInput): P
 		// Older databases do not have import ledgers.
 	}
 
-	await invalidateTranscriptImportSource({ sourceId }, agentId);
+	await invalidateTranscriptImportSource({ sourceId, agentId: input.agentId });
 	// Source ids are normally generated by the import route, but ledger paths
 	// remain independently gated by purgeTranscriptImportFilesystem.
 	if (!sourceId.includes("/") && !sourceId.includes("\\") && !sourceId.includes("..")) {
@@ -89,7 +93,7 @@ async function purgeSourceOwnedRowsUnlocked(input: PurgeSourceOwnedRowsInput): P
 			write((db) => ({
 				purged:
 					purgeSourceOwnedRowsInTx(db, { sourceId, agentId: input.agentId }) +
-					purgeTranscriptImportSourceInTx(db, agentId, sourceId),
+					purgeTranscriptImportSourceInTx(db, input.agentId, sourceId),
 			})),
 	});
 	return typeof result === "number" ? result : result.purged;

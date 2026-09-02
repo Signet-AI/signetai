@@ -1,5 +1,7 @@
-import { open, stat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { open } from "node:fs/promises";
 import { TRANSCRIPT_IMPORT_LIMITS, signetExportV1Adapter, type SignetExportRecord } from "./transcript-import-adapter";
+import { openContainedTranscriptFile } from "./transcript-import-safe-fs";
 
 export type InventoryStatus = "pending" | "rejected";
 export interface InventoryRecord {
@@ -28,10 +30,14 @@ export async function inventoryTranscriptFile(
 	checkpoint: { readonly byteOffset: number; readonly ordinal: number } = { byteOffset: 0, ordinal: 0 },
 	batchSize = TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch,
 	onBatch?: (records: readonly InventoryRecord[], checkpoint: { byteOffset: number; ordinal: number }) => Promise<void>,
+	workspaceRoot?: string,
 ): Promise<InventoryResult> {
 	if (batchSize < 1 || batchSize > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch)
 		throw new Error("batchSize exceeds bounded import limit");
-	const handle = await open(path, "r");
+	const handle =
+		workspaceRoot === undefined
+			? await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+			: await openContainedTranscriptFile(workspaceRoot, path, fsConstants.O_RDONLY);
 	const records: InventoryRecord[] = [];
 	let buffer = Buffer.alloc(0);
 	let offset = checkpoint.byteOffset;
@@ -43,7 +49,7 @@ export async function inventoryTranscriptFile(
 	let batch: InventoryRecord[] = [];
 	const decoder = new TextDecoder("utf-8", { fatal: true });
 	try {
-		const info = await stat(path);
+		const info = await handle.stat();
 		if (checkpoint.byteOffset > info.size) throw new Error("checkpoint is beyond file size");
 		while (!eof) {
 			const chunk = Buffer.allocUnsafe(64 * 1024);
@@ -130,7 +136,7 @@ export async function inventoryTranscriptFile(
 			}
 		}
 		if (batch.length) await onBatch?.(batch, { byteOffset: offset, ordinal });
-		const finalInfo = await stat(path);
+		const finalInfo = await handle.stat();
 		return {
 			records,
 			blankLines,

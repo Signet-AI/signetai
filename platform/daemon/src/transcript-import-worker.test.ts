@@ -134,6 +134,25 @@ test("canonical append removes a lock whose recorded owner process is gone", asy
 	}
 });
 
+test("canonical append recovers a lock directory left before its owner file", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-ownerless-lock-"));
+	try {
+		const { signetExportV1Adapter } = await import("./transcript-import-adapter");
+		const { buildCompletedTranscriptCommit } = await import("./transcript-import-commit");
+		const commit = buildCompletedTranscriptCommit(signetExportV1Adapter.parse(JSON.parse(valid("ownerless-lock"))), {
+			agentId: "agent-a",
+			sourceId: "source-a",
+			sourceRecordId: "record-a",
+		});
+		const digest = createHash("sha256").update("agent-a\0h").digest("hex").slice(0, 24);
+		await mkdir(join(root, "transcripts", `${digest}.jsonl.lock`), { recursive: true });
+		await appendCanonical(root, "agent-a", "h", [commit]);
+		expect(await readdir(join(root, "transcripts"))).toContain(`${digest}.jsonl`);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("owner store persists inventory and terminal counters in the migrated database", async () => {
 	const root = await mkdtemp(join(tmpdir(), "signet-import-owner-"));
 	const dbPath = join(root, "memory", "memories.db");
@@ -288,6 +307,36 @@ test("filesystem purge removes only the selected agent source and staged data", 
 		);
 		expect(aggregate).toContain('"id":"b"');
 		expect(aggregate).not.toContain('"id":"a"');
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("filesystem purge with omitted agent scope removes shared staged and canonical data for every agent", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-purge-all-agents-"));
+	try {
+		const source = "shared-source";
+		await mkdir(join(root, "imports", "transcripts", source), { recursive: true });
+		await writeFile(join(root, "imports", "transcripts", source, "source.jsonl"), "shared staged");
+		await mkdir(join(root, "transcripts"), { recursive: true });
+		const canonicalPath = join(root, "transcripts", "aggregate.jsonl");
+		await writeFile(
+			canonicalPath,
+			`${[
+				JSON.stringify({ id: "agent-a", agent_id: "agent-a", source_id: source }),
+				JSON.stringify({ id: "agent-b", agent_id: "agent-b", source_id: source }),
+				JSON.stringify({ id: "other", agent_id: "agent-a", source_id: "other-source" }),
+			].join("\n")}\n`,
+		);
+
+		await purgeTranscriptImportFilesystem(root, source);
+
+		expect(await Bun.file(join(root, "imports", "transcripts", source, "source.jsonl")).exists()).toBe(false);
+		const remaining = (await Bun.file(canonicalPath).text())
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { id: string; agent_id: string; source_id: string });
+		expect(remaining).toEqual([{ id: "other", agent_id: "agent-a", source_id: "other-source" }]);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

@@ -1189,11 +1189,7 @@ export function runDbOwnerWorker(): void {
 					sourceId: input.sourceId,
 					agentId: input.agentId,
 				});
-				const transcriptPurged = purgeTranscriptImportSourceInTx(
-					db as never,
-					input.agentId ?? "default",
-					input.sourceId,
-				);
+				const transcriptPurged = purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId);
 				commit(context);
 				return { purged: purged + transcriptPurged };
 			} catch (error) {

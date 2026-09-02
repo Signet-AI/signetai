@@ -20,7 +20,7 @@ export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRow
 	const sourceId = input.sourceId.trim();
 	if (!sourceId) return 0;
 	const embeddingPrefix = `${sourceId}:`;
-	const agentWhere = input.agentId ? "agent_id = ? AND " : "";
+	const agentWhere = input.agentId !== undefined ? "agent_id = ? AND " : "";
 	const embeddingRows = db
 		.prepare(
 			`SELECT id FROM embeddings
@@ -29,7 +29,7 @@ export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRow
 				   AND source_id < ?`,
 		)
 		.all(
-			...(input.agentId ? [input.agentId] : []),
+			...(input.agentId !== undefined ? [input.agentId] : []),
 			SOURCE_CHUNK_SOURCE_TYPE,
 			embeddingPrefix,
 			`${embeddingPrefix}\uffff`,
@@ -48,12 +48,12 @@ export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRow
 	purged += countChanges(
 		db
 			.prepare(`DELETE FROM memory_artifacts WHERE ${agentWhere}source_id = ?`)
-			.run(...(input.agentId ? [input.agentId] : []), sourceId),
+			.run(...(input.agentId !== undefined ? [input.agentId] : []), sourceId),
 	);
 
 	const entityRows = db
 		.prepare(`SELECT id FROM entities WHERE ${agentWhere}source_id = ?`)
-		.all(...(input.agentId ? [input.agentId] : []), sourceId) as Array<{ id: string }>;
+		.all(...(input.agentId !== undefined ? [input.agentId] : []), sourceId) as Array<{ id: string }>;
 	if (entityRows.length > 0) {
 		const stmt = db.prepare("DELETE FROM entity_aspects WHERE entity_id = ?");
 		for (const row of entityRows) purged += countChanges(stmt.run(row.id));
@@ -63,15 +63,15 @@ export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRow
 
 	for (const table of SOURCE_OWNED_GRAPH_TABLES) {
 		if (!tableHasColumn(db, table, "source_id")) continue;
-		if (input.agentId && !tableHasColumn(db, table, "agent_id")) continue;
+		if (input.agentId !== undefined && !tableHasColumn(db, table, "agent_id")) continue;
 		purged += countChanges(
 			db
 				.prepare(`DELETE FROM ${table} WHERE ${agentWhere}source_id = ?`)
-				.run(...(input.agentId ? [input.agentId] : []), sourceId),
+				.run(...(input.agentId !== undefined ? [input.agentId] : []), sourceId),
 		);
 	}
 	if (tableExists(db, "ontology_contradictions")) {
-		if (input.agentId) {
+		if (input.agentId !== undefined) {
 			reconcileOntologyContradictionsInTx(db, { agentId: input.agentId, sourceId });
 		} else {
 			const agents = db

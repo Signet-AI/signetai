@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { openContainedTranscriptFile } from "./transcript-import-safe-fs";
 import { stageTranscriptStream } from "./transcript-import-staging";
 
 describe("managed transcript staging", () => {
@@ -58,6 +60,37 @@ describe("managed transcript staging", () => {
 				),
 			).rejects.toThrow("symlink");
 			expect(await readdir(outside)).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+			await rm(outside, { recursive: true, force: true });
+		}
+	});
+
+	test("keeps a held parent descriptor inside the root when a component is replaced", async () => {
+		const root = await mkdtemp(join(tmpdir(), "signet-stage-race-"));
+		const outside = await mkdtemp(join(tmpdir(), "signet-stage-race-outside-"));
+		const candidate = join(root, "imports", "transcripts", "source-race", "source.jsonl");
+		try {
+			await stageTranscriptStream(
+				root,
+				"source-race",
+				(async function* () {
+					yield new TextEncoder().encode("inside\n");
+				})(),
+			);
+			const outsidePath = join(outside, "transcripts", "source-race", "source.jsonl");
+			await mkdir(join(outside, "transcripts", "source-race"), { recursive: true });
+			await writeFile(outsidePath, "outside\n");
+
+			const handle = await openContainedTranscriptFile(root, candidate, fsConstants.O_RDONLY, undefined, async () => {
+				await rename(join(root, "imports"), join(root, "imports-held"));
+				await symlink(outside, join(root, "imports"));
+			});
+			try {
+				expect(await handle.readFile("utf8")).toBe("inside\n");
+			} finally {
+				await handle.close();
+			}
 		} finally {
 			await rm(root, { recursive: true, force: true });
 			await rm(outside, { recursive: true, force: true });

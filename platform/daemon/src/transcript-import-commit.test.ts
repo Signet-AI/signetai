@@ -106,6 +106,72 @@ describe("transcript import invariants", () => {
 			db.close();
 		}
 	});
+	test("omitted agent scope purges every transcript-import owner", () => {
+		const db = new Database(":memory:");
+		try {
+			db.exec(`
+				CREATE TABLE source_import_jobs (
+					id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, state TEXT NOT NULL,
+					generation INTEGER NOT NULL, control_request TEXT,
+					lease_token TEXT, lease_expires_at TEXT, updated_at TEXT
+				);
+				CREATE TABLE source_import_files (
+					id TEXT PRIMARY KEY, job_id TEXT NOT NULL, source_id TEXT NOT NULL,
+					agent_id TEXT NOT NULL
+				);
+				CREATE TABLE source_import_records (
+					id TEXT PRIMARY KEY, job_id TEXT NOT NULL, file_id TEXT NOT NULL,
+					agent_id TEXT NOT NULL, external_identity TEXT NOT NULL,
+					source_id TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL
+				);
+				CREATE TABLE session_transcripts (
+					session_key TEXT NOT NULL, agent_id TEXT NOT NULL,
+					PRIMARY KEY (agent_id, session_key)
+				);
+				CREATE TABLE transcript_import_conversations (
+					agent_id TEXT NOT NULL, external_identity TEXT NOT NULL,
+					canonical_key TEXT NOT NULL, owner_source_id TEXT NOT NULL, state TEXT NOT NULL, updated_at TEXT,
+					PRIMARY KEY (agent_id, external_identity)
+				);
+			`);
+			for (const agentId of ["agent-a", "agent-b"]) {
+				const suffix = agentId.slice(-1);
+				db.prepare(
+					"INSERT INTO source_import_jobs (id, agent_id, state, generation, lease_token) VALUES (?, ?, 'running', 7, ?)",
+				).run(`purge-job-${suffix}`, agentId, `lease-${suffix}`);
+				db.prepare(
+					"INSERT INTO source_import_files (id, job_id, source_id, agent_id) VALUES (?, ?, 'shared-source', ?)",
+				).run(`purge-file-${suffix}`, `purge-job-${suffix}`, agentId);
+				db.prepare(
+					"INSERT INTO source_import_records (id, job_id, file_id, agent_id, external_identity, source_id, status, updated_at) VALUES (?, ?, ?, ?, ?, 'shared-source', 'imported', '2026-01-01T00:00:00Z')",
+				).run(`purge-record-${suffix}`, `purge-job-${suffix}`, `purge-file-${suffix}`, agentId, `identity-${suffix}`);
+				db.prepare("INSERT INTO session_transcripts (session_key, agent_id) VALUES (?, ?)").run(
+					`session-${suffix}`,
+					agentId,
+				);
+				db.prepare(
+					"INSERT INTO transcript_import_conversations (agent_id, external_identity, canonical_key, owner_source_id, state) VALUES (?, ?, ?, 'shared-source', 'committed')",
+				).run(agentId, `identity-${suffix}`, `session-${suffix}`);
+			}
+
+			expect(purgeTranscriptImportSourceInTx(db as never, undefined, "shared-source")).toBeGreaterThan(0);
+			expect(
+				db.prepare("SELECT agent_id, state, generation, lease_token FROM source_import_jobs ORDER BY agent_id").all(),
+			).toEqual([
+				{ agent_id: "agent-a", state: "cancelled", generation: 8, lease_token: null },
+				{ agent_id: "agent-b", state: "cancelled", generation: 8, lease_token: null },
+			]);
+			expect(db.prepare("SELECT COUNT(*) AS count FROM source_import_files").get()).toEqual({ count: 0 });
+			expect(db.prepare("SELECT COUNT(*) AS count FROM source_import_records").get()).toEqual({ count: 0 });
+			expect(db.prepare("SELECT state FROM transcript_import_conversations ORDER BY agent_id").all()).toEqual([
+				{ state: "removed" },
+				{ state: "removed" },
+			]);
+			expect(db.prepare("SELECT COUNT(*) AS count FROM session_transcripts").get()).toEqual({ count: 0 });
+		} finally {
+			db.close();
+		}
+	});
 	test("splits canonical batches by the complete payload byte budget", () => {
 		const commit = buildCompletedTranscriptCommit(record("agent-a"), {
 			agentId: "agent-a",

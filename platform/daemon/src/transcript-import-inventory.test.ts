@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inventoryTranscriptFile } from "./transcript-import-inventory";
@@ -24,7 +24,9 @@ describe("transcript import inventory invariants", () => {
 		await writeFile(path, `${line("one")}\r\n\n${line("two")}\nnot-json`);
 		try {
 			const batches: number[] = [];
-			const result = await inventoryTranscriptFile(path, undefined, 25, async (batch) => batches.push(batch.length));
+			const result = await inventoryTranscriptFile(path, undefined, 25, async (batch) => {
+				batches.push(batch.length);
+			});
 			expect(result.records).toHaveLength(3);
 			expect(result.blankLines).toBe(1);
 			expect(result.malformedLines).toBe(1);
@@ -35,6 +37,25 @@ describe("transcript import inventory invariants", () => {
 			if (checkpoint == null) throw new Error("missing checkpoint record");
 			const resumed = await inventoryTranscriptFile(path, { byteOffset: checkpoint.byteOffset, ordinal: 1 });
 			expect(resumed.records[0]?.value?.id).toBe("two");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects a final symlink instead of inventorying its target", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "signet-import-final-symlink-"));
+		const target = join(dir, "target.jsonl");
+		const link = join(dir, "source.jsonl");
+		await writeFile(target, `${line("target")}\n`);
+		await symlink(target, link);
+		try {
+			let caught: unknown;
+			try {
+				await inventoryTranscriptFile(link);
+			} catch (error) {
+				caught = error;
+			}
+			expect((caught as NodeJS.ErrnoException | undefined)?.code).toBe("ELOOP");
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}
