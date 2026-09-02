@@ -4,6 +4,7 @@ import { dbOwnerQuery, dbOwnerSourcePurge, dbOwnerTransaction, runDbOwnerDomainO
 import { purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
 import { purgeTranscriptImportFilesystem } from "./transcript-import-worker";
 import { purgeSourceOwnedRowsInTx, type PurgeSourceOwnedRowsInput } from "./source-purge-tx";
+import { withTranscriptImportOperationLock } from "./transcript-import-operation-lock";
 
 export { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 export type { PurgeSourceOwnedRowsInput } from "./source-purge-tx";
@@ -37,6 +38,10 @@ async function invalidateTranscriptImportSource(input: PurgeSourceOwnedRowsInput
 }
 
 export async function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): Promise<number> {
+	return await withTranscriptImportOperationLock("transcript-import", () => purgeSourceOwnedRowsUnlocked(input));
+}
+
+async function purgeSourceOwnedRowsUnlocked(input: PurgeSourceOwnedRowsInput): Promise<number> {
 	const sourceId = input.sourceId.trim();
 	if (!sourceId) return 0;
 	const agentId = input.agentId ?? "default";

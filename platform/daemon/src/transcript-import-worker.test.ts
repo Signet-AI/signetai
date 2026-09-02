@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, mkdir, writeFile, readdir } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -303,6 +303,43 @@ test("filesystem purge removes the ledger-reserved managed upload path", async (
 		expect(await Bun.file(join(root, managedPath)).exists()).toBe(false);
 	} finally {
 		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("filesystem purge refuses symlinked staged components", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-purge-symlink-"));
+	const outside = await mkdtemp(join(tmpdir(), "signet-import-purge-outside-"));
+	try {
+		await mkdir(join(root, "imports"), { recursive: true });
+		await symlink(outside, join(root, "imports", "transcripts"));
+		await mkdir(join(outside, "source-a"), { recursive: true });
+		const outsideFile = join(outside, "source-a", "source.jsonl");
+		await writeFile(outsideFile, "keep");
+		await purgeTranscriptImportFilesystem(root, "source-a", "agent-a");
+		expect(await Bun.file(outsideFile).text()).toBe("keep");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+		await rm(outside, { recursive: true, force: true });
+	}
+});
+
+test("canonical append refuses a symlinked transcript directory", async () => {
+	const root = await mkdtemp(join(tmpdir(), "signet-import-append-symlink-"));
+	const outside = await mkdtemp(join(tmpdir(), "signet-import-append-outside-"));
+	try {
+		const { buildCompletedTranscriptCommit } = await import("./transcript-import-commit");
+		const { signetExportV1Adapter } = await import("./transcript-import-adapter");
+		const commit = buildCompletedTranscriptCommit(signetExportV1Adapter.parse(JSON.parse(valid("append-escape"))), {
+			agentId: "agent-a",
+			sourceId: "source-a",
+			sourceRecordId: "append-escape",
+		});
+		await symlink(outside, join(root, "transcripts"));
+		await expect(appendCanonical(root, "agent-a", "h", [commit])).rejects.toThrow("symlink");
+		expect(await readdir(outside)).toEqual([]);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+		await rm(outside, { recursive: true, force: true });
 	}
 });
 

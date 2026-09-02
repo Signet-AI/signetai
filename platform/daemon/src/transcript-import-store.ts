@@ -394,6 +394,11 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 							params: [operation.jobId, operation.agentId, operation.jobId, operation.agentId],
 							result: "run",
 						},
+						{
+							sql: "UPDATE source_import_files SET state = 'failed', error = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND state IN ('ready','inventorying') AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
+							params: [operation.jobId, operation.agentId, operation.jobId, operation.agentId],
+							result: "run",
+						},
 					],
 					{ operation: "sources.import.store.control.apply", lane: "write" },
 				)) as Result;
@@ -444,7 +449,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 						result: "run",
 					},
 					{
-						sql: "UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
+						sql: "UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE changes() > 0 AND job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
 						params: [operation.jobId, operation.agentId],
 						result: "run",
 					},
@@ -458,6 +463,11 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 					},
 					{
 						sql: "UPDATE source_import_records SET status = 'cancelled', rejection_code = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
+						params: [operation.jobId, operation.agentId, operation.jobId, operation.agentId],
+						result: "run",
+					},
+					{
+						sql: "UPDATE source_import_files SET state = 'failed', error = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND state IN ('ready','inventorying') AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
 						params: [operation.jobId, operation.agentId, operation.jobId, operation.agentId],
 						result: "run",
 					},

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stageTranscriptStream } from "./transcript-import-staging";
@@ -41,6 +41,26 @@ describe("managed transcript staging", () => {
 			expect(await readdir(join(root, "imports", "transcripts", "source-2"))).toEqual([]);
 		} finally {
 			await rm(root, { recursive: true, force: true });
+		}
+	});
+	test("rejects symlinked workspace components without writing outside the root", async () => {
+		const root = await mkdtemp(join(tmpdir(), "signet-stage-symlink-"));
+		const outside = await mkdtemp(join(tmpdir(), "signet-stage-outside-"));
+		try {
+			await symlink(outside, join(root, "imports"));
+			await expect(
+				stageTranscriptStream(
+					root,
+					"source-escape",
+					(async function* () {
+						yield new TextEncoder().encode("must stay inside\n");
+					})(),
+				),
+			).rejects.toThrow("symlink");
+			expect(await readdir(outside)).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+			await rm(outside, { recursive: true, force: true });
 		}
 	});
 });

@@ -1,4 +1,5 @@
 import { expect, it, beforeEach, afterEach } from "bun:test";
+import { loadSourcesConfig } from "@signet/core";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,6 +87,49 @@ it("serializes concurrent uploads for one reserved file without leaving a reserv
 	expect(rows[0]?.managed_path).toContain(fileId);
 });
 
+it("does not finalize an upload after cancellation and removes its staged source", async () => {
+	const created = await app().request("/api/sources/imports", {
+		method: "POST",
+		body: JSON.stringify({ files: [{ name: "cancelled-upload.jsonl" }] }),
+		headers: { "content-type": "application/json" },
+	});
+	expect(created.status).toBe(201);
+	const job = (await created.json()) as { jobId: string; files: Array<{ id: string }> };
+	const fileId = job.files[0]?.id as string;
+	const payload =
+		'{"source":"signet","id":"cancelled-upload","harness":"h","agent_id":"embedded","session_key":"cancelled-upload","timestamp":"2024-01-01T00:00:00Z","message_count":1,"messages":[{"role":"user","content":"hello"}]}\n';
+	const slow = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			controller.enqueue(new TextEncoder().encode(payload));
+			controller.close();
+		},
+	});
+	const upload = app().request(`/api/sources/imports/${job.jobId}/files/${fileId}`, {
+		method: "PUT",
+		body: slow,
+	} as RequestInit);
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	const cancelled = await app().request(`/api/sources/imports/${job.jobId}/cancel`, { method: "POST" });
+	const uploaded = await upload;
+	expect(cancelled.status).toBe(200);
+	expect(uploaded.status).toBe(409);
+	const state = await getDbAccessor().withReadDbAsync((db) =>
+		db.prepare("SELECT state, generation FROM source_import_jobs WHERE id = ?").get(job.jobId),
+	);
+	const file = await getDbAccessor().withReadDbAsync((db) =>
+		db.prepare("SELECT source_id, state FROM source_import_files WHERE id = ?").get(fileId),
+	);
+	expect(state).toEqual({ state: "cancelled", generation: 1 });
+	expect(file).toEqual({ source_id: `reserved:${job.jobId}:${fileId}`, state: "staging" });
+	expect(
+		await Bun.file(
+			join(dir, "imports", "transcripts", `import-${job.jobId}-${fileId}-${job.jobId}-${fileId}`, "source.jsonl"),
+		).exists(),
+	).toBe(false);
+	expect(loadSourcesConfig(dir).sources).toEqual([]);
+});
+
 it("rejects malformed manifests, enforces the 25-file limit, and persists duplicate mode", async () => {
 	for (const body of [
 		null,
@@ -141,6 +185,39 @@ it("retry increments generation and returns recoverable rejected records to pend
 	);
 	expect(row).toEqual({ generation: 1, lease_token: null, control_request: null });
 	expect(record).toEqual({ status: "pending", rejection_code: null });
+});
+
+it("does not reset rejected records when retry is rejected for a cancelled job", async () => {
+	const created = await app().request("/api/sources/imports", {
+		method: "POST",
+		body: JSON.stringify({ files: [{ name: "cancelled.jsonl" }] }),
+		headers: { "content-type": "application/json" },
+	});
+	expect(created.status).toBe(201);
+	const job = (await created.json()) as { jobId: string; files: Array<{ id: string }> };
+	const fileId = job.files[0]?.id as string;
+	await getDbAccessor().withWriteTxAsync((db) => {
+		db.prepare("UPDATE source_import_jobs SET state = 'cancelled', generation = 1 WHERE id = ? AND agent_id = ?").run(
+			job.jobId,
+			"transcript-test-agent",
+		);
+		db.prepare("UPDATE source_import_files SET state = 'completed' WHERE id = ? AND job_id = ?").run(fileId, job.jobId);
+		db.prepare(
+			"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status, rejection_code) VALUES ('cancelled-retry-record', ?, ?, 'source', 'transcript-test-agent', 1, 1, 0, 1, 'hash', 'rejected', 'provider_error')",
+		).run(job.jobId, fileId);
+	});
+
+	const response = await app().request(`/api/sources/imports/${job.jobId}/retry`, { method: "POST" });
+	expect(response.status).toBe(200);
+	expect(await response.json()).toMatchObject({ changed: false });
+	const state = await getDbAccessor().withReadDbAsync((db) =>
+		db.prepare("SELECT state, generation FROM source_import_jobs WHERE id = ?").get(job.jobId),
+	);
+	const record = await getDbAccessor().withReadDbAsync((db) =>
+		db.prepare("SELECT status, rejection_code FROM source_import_records WHERE id = 'cancelled-retry-record'").get(),
+	);
+	expect(state).toEqual({ state: "cancelled", generation: 1 });
+	expect(record).toEqual({ status: "rejected", rejection_code: "provider_error" });
 });
 
 it("keeps a multi-file import retryable after one upload body fails", async () => {

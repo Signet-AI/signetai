@@ -237,7 +237,7 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 					.run(input.jobId, input.agentId, input.jobId, input.agentId, input.jobId, input.agentId);
 				changed += result.changes;
 				db.prepare(
-					"UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
+					"UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE changes() > 0 AND job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
 				).run(input.jobId, input.agentId);
 			} else {
 				const result = db
@@ -253,6 +253,14 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 				)
 				.run(input.jobId, input.agentId, input.jobId, input.agentId);
 			changed += cancelled.changes;
+			if (input.control === "cancel") {
+				const files = db
+					.prepare(
+						"UPDATE source_import_files SET state = 'failed', error = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND state IN ('ready','inventorying') AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
+					)
+					.run(input.jobId, input.agentId, input.jobId, input.agentId);
+				changed += files.changes;
+			}
 			return { changed: changed > 0 };
 		});
 	}

@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { addImportedSource, resolveDefaultBasePath } from "@signet/core";
+import { addImportedSource, removeSourceIfGeneration, resolveDefaultBasePath } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { authConfig } from "./state";
 import { requirePermission } from "../auth";
 import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
-import { stageTranscriptStream } from "../transcript-import-staging";
-import type { StagedTranscriptFile } from "../transcript-import-staging";
+import {
+	removeStagedTranscriptFile,
+	stageTranscriptStream,
+	type StagedTranscriptFile,
+} from "../transcript-import-staging";
+import { withTranscriptImportOperationLock } from "../transcript-import-operation-lock";
 
 const MAX_FILE_BYTES = 512 * 1024 * 1024;
 const MAX_FILES_PER_IMPORT = 25;
@@ -14,6 +18,89 @@ const IMPORT_DUPLICATE_MODES = ["skip", "replace", "reimport"] as const;
 type ImportDuplicateMode = (typeof IMPORT_DUPLICATE_MODES)[number];
 const now = (): string => new Date().toISOString();
 const uploadInFlight = new Map<string, Promise<void>>();
+const TRANSCRIPT_IMPORT_OPERATION_KEY = "transcript-import";
+const uploadedSources = new Map<
+	string,
+	{ readonly sourceId: string; readonly generation?: string; readonly created: boolean }
+>();
+
+function uploadSourceKey(agentId: string, jobId: string, fileId: string): string {
+	return `${agentId}:${jobId}:${fileId}`;
+}
+
+function stagedSourceId(jobId: string, fileId: string): string {
+	const reservedSourceId = `import:${jobId}:${fileId}`;
+	return `${reservedSourceId.replaceAll(":", "-")}-${jobId}-${fileId}`;
+}
+
+function stagedManagedPath(jobId: string, fileId: string): string {
+	return `imports/transcripts/${stagedSourceId(jobId, fileId)}/source.jsonl`;
+}
+
+async function removeStagedPath(root: string, managedPath: string): Promise<void> {
+	await removeStagedTranscriptFile(root, managedPath);
+}
+
+async function rollbackCreatedSource(
+	source: { readonly sourceId: string; readonly generation?: string; readonly created: boolean },
+	root: string,
+	jobId: string,
+	agentId: string,
+): Promise<void> {
+	if (!source.created) return;
+	const references = await dbOwnerQuery<{ count: number }>(
+		{
+			sql: "SELECT COUNT(*) AS count FROM source_import_files WHERE agent_id = ? AND source_id = ? AND job_id != ? AND state != 'failed'",
+			params: [agentId, source.sourceId, jobId],
+			result: "get",
+			readonly: true,
+		},
+		{ operation: "sources.import.rollback.references", lane: "read" },
+	);
+	if ((references?.count ?? 0) > 0) return;
+	const removed = removeSourceIfGeneration(source.sourceId, source.generation, root);
+	if (!removed.ok) throw new Error(removed.error);
+}
+
+async function cleanupCancelledImport(jobId: string, agentId: string): Promise<void> {
+	const job = await dbOwnerQuery<{ state: string }>(
+		{
+			sql: "SELECT state FROM source_import_jobs WHERE id = ? AND agent_id = ?",
+			params: [jobId, agentId],
+			result: "get",
+			readonly: true,
+		},
+		{ operation: "sources.import.cancelled.status", lane: "read" },
+	);
+	if (job?.state !== "cancelled") return;
+	const files = await dbOwnerQuery<Array<{ id: string; source_id: string; managed_path: string }>>(
+		{
+			sql: "SELECT id, source_id, managed_path FROM source_import_files WHERE job_id = ? AND agent_id = ?",
+			params: [jobId, agentId],
+			result: "all",
+			readonly: true,
+		},
+		{ operation: "sources.import.cancelled.files", lane: "read" },
+	);
+	const root = resolveDefaultBasePath();
+	const managedPaths = new Set<string>();
+	const sourceKeys = new Set<string>();
+	for (const file of files) {
+		managedPaths.add(file.managed_path);
+		if (!uploadInFlight.has(uploadSourceKey(agentId, jobId, file.id)))
+			managedPaths.add(stagedManagedPath(jobId, file.id));
+		sourceKeys.add(file.source_id);
+	}
+	for (const managedPath of managedPaths) await removeStagedPath(root, managedPath);
+	for (const file of files) {
+		const key = uploadSourceKey(agentId, jobId, file.id);
+		const source = uploadedSources.get(key);
+		if (source !== undefined && sourceKeys.has(file.source_id)) {
+			await rollbackCreatedSource(source, root, jobId, agentId);
+		}
+		uploadedSources.delete(key);
+	}
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -178,9 +265,9 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 		uploadInFlight.set(uploadKey, gate);
 		await previous;
 		try {
-			const job = await dbOwnerQuery<{ id: string; duplicate_mode?: ImportDuplicateMode }>(
+			const job = await dbOwnerQuery<{ id: string; generation: number; duplicate_mode?: ImportDuplicateMode }>(
 				{
-					sql: "SELECT id,duplicate_mode FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'staging'",
+					sql: "SELECT id,generation,duplicate_mode FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'staging'",
 					params: [jobId, agentId],
 					result: "get",
 					readonly: true,
@@ -199,70 +286,118 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 			);
 			if (file == null) return c.json({ error: "file not found" }, 404);
 			if (file.state !== "staging") return c.json({ error: "file not found or already uploaded" }, 409);
-			const sourceId = `import:${jobId}:${fileId}`;
+			const root = resolveDefaultBasePath();
 			let staged: StagedTranscriptFile;
 			try {
-				staged = await stageTranscriptStream(
-					resolveDefaultBasePath(),
-					`${sourceId.replaceAll(":", "-")}-${jobId}-${fileId}`,
-					bodyStream(c.req.raw),
-				);
+				staged = await stageTranscriptStream(root, stagedSourceId(jobId, fileId), bodyStream(c.req.raw));
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "upload failed";
 				await markUploadFailed(jobId, fileId, agentId, message);
 				return c.json({ error: message }, message === "file exceeds limit" ? 413 : 500);
 			}
-			const added = addImportedSource(
-				{
-					fileName: file.name,
-					contentHash: staged.contentHash,
-					format: "jsonl",
-					agentId,
-					duplicateMode: job.duplicate_mode ?? "skip",
-				},
-				resolveDefaultBasePath(),
-			);
-			if (!added.ok) {
-				await markUploadFailed(jobId, fileId, agentId, added.error);
-				return c.json({ error: added.error }, 400);
-			}
-			await dbOwnerTransaction(
-				[
+			return await withTranscriptImportOperationLock(TRANSCRIPT_IMPORT_OPERATION_KEY, async () => {
+				const currentJob = await dbOwnerQuery<{ state: string; generation: number }>(
 					{
-						sql: "UPDATE source_import_files SET source_id = ?, name = ?, managed_path = ?, size_bytes = ?, content_hash = ?, state = 'ready', error = NULL, updated_at = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging'",
-						params: [
-							added.source.id,
-							c.req.header("x-file-name") ?? file.name,
-							staged.managedPath,
-							staged.sizeBytes,
-							staged.contentHash,
-							now(),
-							fileId,
-							jobId,
-							agentId,
+						sql: "SELECT state,generation FROM source_import_jobs WHERE id = ? AND agent_id = ?",
+						params: [jobId, agentId],
+						result: "get",
+						readonly: true,
+					},
+					{ operation: "sources.import.upload.final-scope", lane: "read" },
+				);
+				const currentFile = await dbOwnerQuery<{ state: string }>(
+					{
+						sql: "SELECT state FROM source_import_files WHERE id = ? AND job_id = ? AND agent_id = ?",
+						params: [fileId, jobId, agentId],
+						result: "get",
+						readonly: true,
+					},
+					{ operation: "sources.import.upload.final-file", lane: "read" },
+				);
+				if (
+					currentJob == null ||
+					currentJob.state !== "staging" ||
+					currentJob.generation !== job.generation ||
+					currentFile?.state !== "staging"
+				) {
+					await removeStagedPath(root, staged.managedPath);
+					return c.json({ error: "import was invalidated during upload" }, 409);
+				}
+
+				const added = addImportedSource(
+					{
+						fileName: file.name,
+						contentHash: staged.contentHash,
+						format: "jsonl",
+						agentId,
+						duplicateMode: job.duplicate_mode ?? "skip",
+					},
+					root,
+				);
+				if (!added.ok) {
+					await removeStagedPath(root, staged.managedPath);
+					await markUploadFailed(jobId, fileId, agentId, added.error);
+					return c.json({ error: added.error }, 400);
+				}
+				try {
+					await dbOwnerTransaction(
+						[
+							{
+								sql: "UPDATE source_import_files SET source_id = ?, name = ?, managed_path = ?, size_bytes = ?, content_hash = ?, state = 'ready', error = NULL, updated_at = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging' AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'staging' AND generation = ?)",
+								params: [
+									added.source.id,
+									c.req.header("x-file-name") ?? file.name,
+									staged.managedPath,
+									staged.sizeBytes,
+									staged.contentHash,
+									now(),
+									fileId,
+									jobId,
+									agentId,
+									jobId,
+									agentId,
+									job.generation,
+								],
+								result: "run" as const,
+								requireChanges: true,
+							},
+							{
+								sql: "UPDATE source_import_jobs SET error = NULL, updated_at = ? WHERE id = ? AND agent_id = ? AND state = 'staging' AND generation = ?",
+								params: [now(), jobId, agentId, job.generation],
+								result: "run" as const,
+								requireChanges: true,
+							},
 						],
-						result: "run" as const,
-						requireChanges: true,
-					},
-					{
-						sql: "UPDATE source_import_jobs SET error = NULL, updated_at = ? WHERE id = ? AND agent_id = ?",
-						params: [now(), jobId, agentId],
-						result: "run" as const,
-						requireChanges: true,
-					},
-				],
-				{ operation: "sources.import.upload", lane: "write" },
-			);
-			return c.json(
-				{
-					fileId,
+						{ operation: "sources.import.upload", lane: "write" },
+					);
+				} catch (error) {
+					await removeStagedPath(root, staged.managedPath);
+					await rollbackCreatedSource(
+						{ sourceId: added.source.id, generation: added.source.generation, created: added.created },
+						root,
+						jobId,
+						agentId,
+					);
+					if (error instanceof Error && error.message.includes("precondition changed zero rows"))
+						return c.json({ error: "import was invalidated during upload" }, 409);
+					throw error;
+				}
+				uploadedSources.set(uploadSourceKey(agentId, jobId, fileId), {
 					sourceId: added.source.id,
-					managedPath: staged.managedPath,
-					sizeBytes: staged.sizeBytes,
-					contentHash: staged.contentHash,
-				},
-				201,
-			);
+					generation: added.source.generation,
+					created: added.created,
+				});
+				return c.json(
+					{
+						fileId,
+						sourceId: added.source.id,
+						managedPath: staged.managedPath,
+						sizeBytes: staged.sizeBytes,
+						contentHash: staged.contentHash,
+					},
+					201,
+				);
+			});
 		} finally {
 			release();
 			if (uploadInFlight.get(uploadKey) === gate) uploadInFlight.delete(uploadKey);
@@ -304,7 +439,7 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 					result: "run",
 				});
 				statements.push({
-					sql: "UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
+					sql: "UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE changes() > 0 AND job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
 					params: [jobId, agentId],
 					result: "run",
 				});
@@ -319,13 +454,24 @@ export function registerTranscriptImportRoutes(app: Hono): void {
 					params: [jobId, agentId, jobId, agentId],
 					result: "run",
 				});
+				statements.push({
+					sql: "UPDATE source_import_files SET state = 'failed', error = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND state IN ('ready','inventorying') AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
+					params: [jobId, agentId, jobId, agentId],
+					result: "run",
+				});
 			}
-			const result = await dbOwnerTransaction(statements, {
-				operation: `sources.import.${control}`,
-				lane: "write",
-			});
-			const first = result[0] as { readonly changes?: number } | undefined;
-			return c.json({ jobId, control, changed: (first?.changes ?? 0) > 0 });
+			const run = async (): Promise<Response> => {
+				const result = await dbOwnerTransaction(statements, {
+					operation: `sources.import.${control}`,
+					lane: "write",
+				});
+				if (control === "cancel") await cleanupCancelledImport(jobId, agentId);
+				const first = result[0] as { readonly changes?: number } | undefined;
+				return c.json({ jobId, control, changed: (first?.changes ?? 0) > 0 });
+			};
+			return control === "cancel"
+				? await withTranscriptImportOperationLock(TRANSCRIPT_IMPORT_OPERATION_KEY, run)
+				: await run();
 		});
 	}
 	for (const suffix of ["rejections", "reconciliation"] as const) {
