@@ -35,11 +35,30 @@ afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
 });
 
-function app(): Hono {
+function app(platform: string = process.platform): Hono {
 	const instance = new Hono();
-	registerTranscriptImportRoutes(instance);
+	registerTranscriptImportRoutes(instance, platform);
 	return instance;
 }
+
+it("returns a structured platform error before creating an unsupported import", async () => {
+	const response = await app("win32").request("/api/sources/imports", {
+		method: "POST",
+		body: JSON.stringify({ files: [{ name: "conversation.jsonl" }] }),
+		headers: { "content-type": "application/json" },
+	});
+	expect(response.status).toBe(501);
+	expect(await response.json()).toEqual({
+		error: "durable transcript imports are unavailable on win32; supported platforms: linux, darwin",
+		code: "transcript_import_unsupported_platform",
+		platform: "win32",
+		supportedPlatforms: ["linux", "darwin"],
+	});
+	const jobs = await getDbAccessor().withReadDbAsync(
+		(db) => db.prepare("SELECT COUNT(*) AS count FROM source_import_jobs").get() as { count: number },
+	);
+	expect(jobs).toEqual({ count: 0 });
+});
 
 it("serializes concurrent uploads for one reserved file without leaving a reservation orphan", async () => {
 	const created = await app().request("/api/sources/imports", {
@@ -72,7 +91,7 @@ it("serializes concurrent uploads for one reserved file without leaving a reserv
 	expect([201, 409]).toContain(firstResponse.status);
 	expect([201, 409]).toContain(second.status);
 	expect(new Set([firstResponse.status, second.status])).toEqual(new Set([201, 409]));
-	const rows = getDbAccessor().withReadDb(
+	const rows = await getDbAccessor().withReadDbAsync(
 		(db) =>
 			db.prepare("SELECT source_id, managed_path, state FROM source_import_files WHERE id = ?").all(fileId) as Array<{
 				source_id: string;

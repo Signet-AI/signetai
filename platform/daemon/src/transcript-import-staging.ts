@@ -7,6 +7,7 @@ import {
 	openContainedTranscriptFile,
 	removeContainedTranscriptPath,
 	renameContainedTranscriptPath,
+	assertTranscriptImportPlatformSupported,
 	UnsafeManagedTranscriptPathError,
 } from "./transcript-import-safe-fs";
 
@@ -36,6 +37,7 @@ export function resolveManagedTranscriptPath(root: string, managedPath: string):
 }
 
 export async function removeStagedTranscriptFile(root: string, managedPath: string): Promise<void> {
+	assertTranscriptImportPlatformSupported();
 	const candidate = resolveManagedTranscriptPath(root, managedPath);
 	try {
 		await removeContainedTranscriptPath(root, candidate, { force: true });
@@ -50,6 +52,7 @@ export async function stageTranscriptStream(
 	sourceId: string,
 	body: AsyncIterable<Uint8Array>,
 ): Promise<StagedTranscriptFile> {
+	assertTranscriptImportPlatformSupported();
 	if (!/^[A-Za-z0-9_-]+$/.test(sourceId)) throw new Error("invalid source id");
 	const managedRelativePath = join("imports", "transcripts", sourceId, "source.jsonl");
 	const destination = resolveManagedTranscriptPath(root, managedRelativePath);

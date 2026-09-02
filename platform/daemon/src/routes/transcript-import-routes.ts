@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { addImportedSource, removeSourceIfGeneration, resolveDefaultBasePath } from "@signet/core";
-import type { Context, Hono } from "hono";
+import type { Context, Hono, Next } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { authConfig } from "./state";
 import { requirePermission } from "../auth";
@@ -11,6 +11,7 @@ import {
 	type StagedTranscriptFile,
 } from "../transcript-import-staging";
 import { withTranscriptImportOperationLock } from "../transcript-import-operation-lock";
+import { getTranscriptImportPlatformError, TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS } from "../transcript-import-safe-fs";
 
 const MAX_FILE_BYTES = 512 * 1024 * 1024;
 const MAX_FILES_PER_IMPORT = 25;
@@ -163,9 +164,28 @@ async function markUploadFailed(jobId: string, fileId: string, agentId: string, 
 	}
 }
 
-export function registerTranscriptImportRoutes(app: Hono): void {
+function transcriptImportPlatformGate(platform: string) {
+	return async (c: Context, next: Next) => {
+		const unsupported = getTranscriptImportPlatformError(platform);
+		if (unsupported === undefined) return await next();
+		return c.json(
+			{
+				error: unsupported.message,
+				code: unsupported.code,
+				platform: unsupported.platform,
+				supportedPlatforms: [...TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS],
+			},
+			501,
+		);
+	};
+}
+
+export function registerTranscriptImportRoutes(app: Hono, platform: string = process.platform): void {
 	app.use("/api/sources/imports", permission("modify"));
 	app.use("/api/sources/imports/*", permission("modify"));
+	const platformGate = transcriptImportPlatformGate(platform);
+	app.use("/api/sources/imports", platformGate);
+	app.use("/api/sources/imports/*", platformGate);
 	app.post("/api/sources/imports", async (c) => {
 		const agentId = agent(c);
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);

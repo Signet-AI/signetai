@@ -243,6 +243,12 @@ Transcript imports are a separate durable API; they do not use the synchronous
 and `cancel` are durable controls. All routes require `modify` permission and
 fail closed when `agentId` is not the daemon's resolved target agent.
 
+The managed transcript filesystem is supported on Linux and macOS. On Windows,
+transcript import endpoints and deletion of an imported Source return `501`
+with `code: "transcript_import_unsupported_platform"`; they do not create,
+mutate, or purge import state. Install or run the daemon on Linux or macOS to
+use durable transcript imports.
+
 ### POST /api/sources/imports
 
 Creates a durable transcript import job.

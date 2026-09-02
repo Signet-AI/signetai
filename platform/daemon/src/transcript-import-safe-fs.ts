@@ -3,6 +3,33 @@ import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
+export const TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS = ["linux", "darwin"] as const;
+export const TRANSCRIPT_IMPORT_UNSUPPORTED_PLATFORM_CODE = "transcript_import_unsupported_platform";
+
+export class UnsupportedTranscriptImportPlatformError extends Error {
+	readonly code = TRANSCRIPT_IMPORT_UNSUPPORTED_PLATFORM_CODE;
+	readonly platform: string;
+	readonly supportedPlatforms = TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS;
+
+	constructor(platform: string) {
+		super(`durable transcript imports are unavailable on ${platform}; supported platforms: linux, darwin`);
+		this.name = "UNSUPPORTED_TRANSCRIPT_IMPORT_PLATFORM";
+		this.platform = platform;
+	}
+}
+
+export function getTranscriptImportPlatformError(
+	platform: string = process.platform,
+): UnsupportedTranscriptImportPlatformError | undefined {
+	if ((TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS as readonly string[]).includes(platform)) return undefined;
+	return new UnsupportedTranscriptImportPlatformError(platform);
+}
+
+export function assertTranscriptImportPlatformSupported(platform: string = process.platform): void {
+	const error = getTranscriptImportPlatformError(platform);
+	if (error !== undefined) throw error;
+}
+
 const DESCRIPTOR_ROOT =
 	process.platform === "linux" ? "/proc/self/fd" : process.platform === "darwin" ? "/dev/fd" : undefined;
 const DIRECTORY_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0) | (fsConstants.O_NOFOLLOW ?? 0);
@@ -18,14 +45,13 @@ export class UnsafeManagedTranscriptPathError extends Error {
 }
 
 function descriptorPath(fd: number, child?: string): string {
-	if (DESCRIPTOR_ROOT === undefined)
-		throw new UnsafeManagedTranscriptPathError("descriptor-relative transcript filesystem is unavailable");
+	if (DESCRIPTOR_ROOT === undefined) throw new UnsupportedTranscriptImportPlatformError(process.platform);
 	return child === undefined ? `${DESCRIPTOR_ROOT}/${fd}` : `${DESCRIPTOR_ROOT}/${fd}/${child}`;
 }
 
 function requireDescriptorFilesystem(): void {
-	if (DESCRIPTOR_ROOT === undefined)
-		throw new UnsafeManagedTranscriptPathError("descriptor-relative transcript filesystem is unavailable");
+	assertTranscriptImportPlatformSupported();
+	if (DESCRIPTOR_ROOT === undefined) throw new UnsupportedTranscriptImportPlatformError(process.platform);
 }
 
 function normalizePathError(error: unknown): unknown {

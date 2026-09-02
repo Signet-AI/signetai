@@ -28,6 +28,11 @@ curl -fsSL https://signetai.sh/install.sh | bash
 - Published native binary platform: Linux x64, Linux arm64, macOS x64,
   macOS arm64, or Windows x64
 
+The published binary supports Windows, but durable transcript imports use
+descriptor-relative filesystem safeguards available only on Linux and macOS.
+Transcript import mutations and deletion of imported Sources return a structured
+`501` platform error on Windows; other Windows package features remain supported.
+
 Windows direct installs should use the npm wrapper. The old PowerShell
 `install.ps1` path has been removed until a native Windows direct installer
 ships.

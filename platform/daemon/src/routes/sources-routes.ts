@@ -66,6 +66,7 @@ import {
 import { getSourceProvider } from "../source-providers";
 import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
 import { purgeSourceOwnedRows } from "../source-purge";
+import { getTranscriptImportPlatformError, TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS } from "../transcript-import-safe-fs";
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;
@@ -149,6 +150,7 @@ export interface RegisterSourcesRoutesDeps {
 	readonly purgeNativeSource?: typeof purgeNativeMemorySourceArtifacts;
 	readonly pickerExecFile?: PickerExecFile;
 	readonly pickerPlatform?: NodeJS.Platform;
+	readonly platform?: NodeJS.Platform;
 	readonly recordIndexOperation?: typeof recordSourceIndexOperation;
 }
 
@@ -189,6 +191,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const recordIndexOperation = deps.recordIndexOperation ?? recordSourceIndexOperation;
 	const pickerExecFile = deps.pickerExecFile ?? execFileAsync;
 	const pickerPlatform = deps.pickerPlatform ?? process.platform;
+	const transcriptImportPlatform = deps.platform ?? process.platform;
 	app.get("/api/sources", async (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();
@@ -511,6 +514,19 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const sourceAgentId = resolveDaemonAgentId();
 		if (source.kind === "import" && source.providerSettings?.agentId !== sourceAgentId)
 			return c.json({ error: "Source not found" }, 404);
+		if (source.kind === "import") {
+			const unsupported = getTranscriptImportPlatformError(transcriptImportPlatform);
+			if (unsupported !== undefined)
+				return c.json(
+					{
+						error: unsupported.message,
+						code: unsupported.code,
+						platform: unsupported.platform,
+						supportedPlatforms: [...TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS],
+					},
+					501,
+				);
+		}
 		// Keep the configured source until lifecycle state and provider artifacts
 		// are gone. The config is the durable retry handle when an owner or purge
 		// operation fails partway through deletion.

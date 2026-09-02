@@ -57,6 +57,11 @@ Whitespace, multiline content, roles, projects, timestamps, and provenance are
 retained exactly. The chosen `--agent` owns the import; an embedded `agent_id`
 does not change scope.
 
+Durable transcript imports and removal of transcript-import Sources require
+Linux or macOS filesystem safeguards. On Windows, the import and removal
+mutations return HTTP `501` with
+`code: "transcript_import_unsupported_platform"` before changing state.
+
 ```bash
 signet sources import ./claude.jsonl ./codex.jsonl --kind transcripts --schema signet --agent my-agent --json
 signet sources imports status <job-id> --agent my-agent --watch --json

@@ -1,7 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import { open } from "node:fs/promises";
 import { TRANSCRIPT_IMPORT_LIMITS, signetExportV1Adapter, type SignetExportRecord } from "./transcript-import-adapter";
-import { openContainedTranscriptFile } from "./transcript-import-safe-fs";
+import { assertTranscriptImportPlatformSupported, openContainedTranscriptFile } from "./transcript-import-safe-fs";
 
 export type InventoryStatus = "pending" | "rejected";
 export interface InventoryRecord {
@@ -32,6 +32,7 @@ export async function inventoryTranscriptFile(
 	onBatch?: (records: readonly InventoryRecord[], checkpoint: { byteOffset: number; ordinal: number }) => Promise<void>,
 	workspaceRoot?: string,
 ): Promise<InventoryResult> {
+	assertTranscriptImportPlatformSupported();
 	if (batchSize < 1 || batchSize > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch)
 		throw new Error("batchSize exceeds bounded import limit");
 	const handle =

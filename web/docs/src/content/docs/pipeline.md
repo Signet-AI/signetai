@@ -43,4 +43,9 @@ work. Removing the source purges imported evidence, canonical lines, indexes,
 and consumption rows while preserving bounded audit tombstones and routing
 derived knowledge through unsupported/stale review.
 
+The managed transcript filesystem currently supports Linux and macOS only. On
+Windows, durable transcript import endpoints and imported-source deletion return
+`501` with `code: "transcript_import_unsupported_platform"` before changing
+import state.
+
 For supported runtime configuration, use [Inference and routing](/configuration/inference-routing/) and [Pipeline configuration](/configuration/pipeline/). This section intentionally does not duplicate operator configuration.

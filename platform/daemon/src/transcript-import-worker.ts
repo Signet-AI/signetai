@@ -22,7 +22,9 @@ import {
 	removeContainedTranscriptPath,
 	renameContainedTranscriptPath,
 	syncContainedTranscriptDirectory,
+	assertTranscriptImportPlatformSupported,
 	UnsafeManagedTranscriptPathError,
+	UnsupportedTranscriptImportPlatformError,
 } from "./transcript-import-safe-fs";
 import { removeStagedTranscriptFile, resolveManagedTranscriptPath } from "./transcript-import-staging";
 
@@ -97,6 +99,7 @@ class TransientImportError extends Error {
 function classifyInventoryError(error: unknown): Error {
 	if (error instanceof SourceChangedError || error instanceof ImportDataError || error instanceof TransientImportError)
 		return error;
+	if (error instanceof UnsupportedTranscriptImportPlatformError) return error;
 	if (error instanceof UnsafeManagedTranscriptPathError) return new SourceChangedError(error.message);
 	const message = error instanceof Error ? error.message : String(error);
 	const code = (error as NodeJS.ErrnoException).code;
@@ -108,6 +111,12 @@ function classifyInventoryError(error: unknown): Error {
 
 /** Executes imports one job/file at a time. SQLite mutations are delegated to ImportStore. */
 export function startTranscriptImportWorker(options: TranscriptImportWorkerOptions): TranscriptImportWorkerHandle {
+	if (process.platform !== "linux" && process.platform !== "darwin")
+		return {
+			running: false,
+			stop: async () => {},
+			nudge: () => {},
+		};
 	let active = true;
 	let wake: (() => void) | undefined;
 	let loopPromise: Promise<void>;
@@ -456,7 +465,8 @@ async function recoverImportJob(
 		!(
 			error instanceof SourceChangedError ||
 			error instanceof ImportDataError ||
-			error instanceof UnsafeManagedTranscriptPathError
+			error instanceof UnsafeManagedTranscriptPathError ||
+			error instanceof UnsupportedTranscriptImportPlatformError
 		) && message !== "canonical_transcript_corrupt";
 	while (isActive()) {
 		if (!message) return;
@@ -488,6 +498,7 @@ export async function appendCanonical(
 	commits: readonly Parameters<typeof canonicalTranscriptLine>[0][],
 	beforeWrite?: () => Promise<void>,
 ): Promise<void> {
+	assertTranscriptImportPlatformSupported();
 	if (commits.length === 0 || commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch)
 		throw new RangeError("invalid transcript commit batch");
 	if (transcriptCommitBatchBytes(commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
@@ -711,6 +722,7 @@ export async function purgeTranscriptImportFilesystem(
 	agentId?: string,
 	managedPaths: readonly string[] = [],
 ): Promise<void> {
+	assertTranscriptImportPlatformSupported();
 	await withTranscriptFilesystemLock(root, async () => {
 		for (const managedPath of managedPaths) {
 			try {

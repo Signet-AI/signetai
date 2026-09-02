@@ -6,6 +6,19 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { ensureUnifiedSchema } from "../../platform/core/src/migration";
 import { runMigrations } from "../../platform/core/src/migrations/index";
+import { TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS } from "../../platform/daemon/src/transcript-import-safe-fs";
+
+if (!(TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS as readonly string[]).includes(process.platform)) {
+	console.log(
+		JSON.stringify({
+			skipped: true,
+			code: "transcript_import_unsupported_platform",
+			platform: process.platform,
+			supportedPlatforms: TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS,
+		}),
+	);
+	process.exit(0);
+}
 
 const root = await mkdtemp(join("/mnt/work/hermes-scratch/", "1814-import-eval-"));
 const port = 43000 + Math.floor(Math.random() * 1000);

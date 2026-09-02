@@ -49,6 +49,10 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 
 Covers Linux x64/arm64, macOS x64/arm64, Docker, and Windows x64 (Windows: use `npm install -g signetai` or Docker).
 
+Durable transcript imports require Linux or macOS filesystem safeguards. The
+Windows package remains supported for other Signet features; transcript import
+mutations and imported-source deletion return a structured `501` platform error.
+
 ### Setup
 
 ```bash

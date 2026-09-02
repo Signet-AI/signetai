@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -90,6 +90,7 @@ describe("Sources routes", () => {
 				options: { readonly timeout: number },
 			) => Promise<{ readonly stdout: string; readonly stderr: string }>;
 			pickerPlatform?: NodeJS.Platform;
+			platform?: NodeJS.Platform;
 		} = {},
 	): Hono {
 		const app = new Hono();
@@ -153,6 +154,7 @@ describe("Sources routes", () => {
 			},
 			pickerExecFile: options.pickerExecFile,
 			pickerPlatform: options.pickerPlatform,
+			platform: options.platform,
 			recordIndexOperation: options.recordIndexOperation,
 		});
 		return app;
@@ -734,6 +736,35 @@ describe("Sources routes", () => {
 				(db) => db.prepare("SELECT COUNT(*) AS count FROM imported_source_lifecycle").get() as { count: number },
 			).count,
 		).toBe(0);
+	});
+	it("rejects imported-source deletion on unsupported platforms before changing state", async () => {
+		process.env.SIGNET_AGENT_ID = "source-owner-a";
+		const added = addImportedSource(
+			{
+				fileName: "windows.json",
+				contentHash: "d".repeat(64),
+				format: "json",
+				agentId: "source-owner-a",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const response = await makeApp({ platform: "win32" }).request(
+			`/api/sources/${encodeURIComponent(added.source.id)}`,
+			{ method: "DELETE" },
+		);
+
+		expect(response.status).toBe(501);
+		expect(await response.json()).toEqual({
+			error: "durable transcript imports are unavailable on win32; supported platforms: linux, darwin",
+			code: "transcript_import_unsupported_platform",
+			platform: "win32",
+			supportedPlatforms: ["linux", "darwin"],
+		});
+		expect(loadSourcesConfig(dir).sources).toEqual([added.source]);
+		expect(existsSync(join(dir, ".daemon", "source-deletion-tombstones.json"))).toBe(false);
 	});
 
 	it("does not expose another agent's imported source through list or read routes", async () => {

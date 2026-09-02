@@ -4413,35 +4413,35 @@
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 865,
+      "line": 881,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 867,
+      "line": 883,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 877,
+      "line": 893,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 879,
+      "line": 895,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\\n`, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 880,
+      "line": 896,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"

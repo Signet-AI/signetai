@@ -56,6 +56,12 @@ identity plus same content is `duplicate`; same identity plus changed content is
 `conversation_identity_conflict`. Blank lines are counted separately from
 rejected lines.
 
+The managed transcript filesystem currently supports Linux and macOS only. On
+Windows, the durable transcript import endpoints return HTTP `501` with
+`code: "transcript_import_unsupported_platform"` before creating or mutating
+an import job. Run the transcript import commands against a Linux or macOS
+Signet daemon; other Windows source and native features remain supported.
+
 Limits are one active job/file, 25 records per DB batch, 8 MiB per canonical
 batch, 16 MiB per record, 4 MiB per message, and 50,000 messages. States are
 `staging`, `inventorying`, `queued`, `running`, `paused`, `completed`,
