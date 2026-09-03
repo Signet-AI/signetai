@@ -160,8 +160,10 @@ describe("maintenance-worker", () => {
 				details: expect.objectContaining({ delegatedAction: "reembedMissingMemories" }),
 			}),
 		);
-		expect((await getEmbeddingGapStats(accessor)).unembedded).toBe(1);
-		expect(await getEmbeddingGapStats(accessor)).toMatchObject({ repair: { batchesStarted: 1, lastAffected: 1 } });
+		expect((await getEmbeddingGapStats(accessor, "default")).unembedded).toBe(1);
+		expect(await getEmbeddingGapStats(accessor, "default")).toMatchObject({
+			repair: { batchesStarted: 1, lastAffected: 1 },
+		});
 		const capped = await handle.tick();
 		expect(capped.executed).toContainEqual(
 			expect.objectContaining({ action: "repairEmbeddingIndex", success: false, affected: 0 }),

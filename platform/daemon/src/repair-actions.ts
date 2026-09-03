@@ -29,6 +29,7 @@ import {
 import {
 	type UnembeddedRow,
 	countEmbeddingMigrationRows,
+	listAllUnembeddedMemories,
 	countUnembeddedMemories,
 	listEmbeddingMigrationRows,
 	listEmbeddingMigrationSources,
@@ -217,7 +218,7 @@ const FTS_HOURLY_BUDGET = 5;
 
 async function withRepairWriteTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
 	if (accessor.withWriteTxAsync) {
-		return accessor.withWriteTxAsync(fn, { siteToken: "repair-actions.ts:220" });
+		return accessor.withWriteTxAsync(fn, { siteToken: "db:repair.write.tx" });
 	}
 	throw new Error("async write API is unavailable");
 }
@@ -433,7 +434,7 @@ export async function checkFtsConsistency(
 				tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
 			};
 		},
-		{ siteToken: "repair-actions.ts:414" },
+		{ siteToken: "repair-actions.ts:415" },
 	);
 
 	// If FTS table is missing entirely, report it (startup self-heal
@@ -694,17 +695,15 @@ function listOrphanedEmbeddingIds(db: WriteDb, limit: number, agentId?: string):
 		.all(...query.args, limit) as Array<{ id: string }>;
 }
 
-export async function getEmbeddingGapStats(accessor: DbAccessor, agentId?: string): Promise<EmbeddingGapStats> {
+export async function getEmbeddingGapStats(accessor: DbAccessor, agentId: string): Promise<EmbeddingGapStats> {
 	const repair = readEmbeddingRepairState(accessor);
 	return await accessor.withReadDbAsync(
 		async (db) => {
 			const totalRow = db
 				.prepare(
-					agentId === undefined
-						? "SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0"
-						: "SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0 AND COALESCE(NULLIF(agent_id, ''), 'default') = ?",
+					"SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0 AND COALESCE(NULLIF(agent_id, ''), 'default') = ?",
 				)
-				.get(...(agentId === undefined ? [] : [agentId])) as { n: number };
+				.get(agentId) as { n: number };
 			const total = totalRow.n;
 			const unembedded = countUnembeddedMemories(db, agentId);
 			const embedded = total - unembedded;
@@ -730,7 +729,7 @@ export async function getEmbeddingGapStats(accessor: DbAccessor, agentId?: strin
 				repair,
 			};
 		},
-		{ siteToken: "repair-actions.ts:699" },
+		{ siteToken: "repair-actions.ts:700" },
 	);
 }
 
@@ -742,10 +741,10 @@ export async function getEmbeddingRepairStats(
 	const gap = await getEmbeddingGapStats(accessor, agentId);
 	const migration = await accessor.withReadDbAsync(
 		async (db) => countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
-		{ siteToken: "repair-actions.ts:743" },
+		{ siteToken: "repair-actions.ts:742" },
 	);
 	const orphaned = await accessor.withReadDbAsync(async (db) => countOrphanedEmbeddings(db, agentId), {
-		siteToken: "repair-actions.ts:747",
+		siteToken: "repair-actions.ts:746",
 	});
 	return { gap, migration, orphaned };
 }
@@ -766,31 +765,74 @@ interface ReembedBatchOutcome {
 	readonly written: number;
 	readonly failed: number;
 	readonly stale: number;
+	readonly crossAgentHashConflicts: number;
 	readonly profileChanged: boolean;
 }
 
 let reembedInProgress = false;
+
+type MissingMemorySelector = (db: ReadDb, limit: number) => ReadonlyArray<UnembeddedRow>;
 
 async function reembedMissingMemoriesBatch(
 	accessor: DbAccessor,
 	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	embeddingCfg: EmbeddingConfig,
 	batchSize: number,
+	agentId: string,
+): Promise<ReembedBatchOutcome> {
+	return reembedMissingMemoriesBatchWithSelector(
+		accessor,
+		embeddingFn,
+		embeddingCfg,
+		batchSize,
+		(db, limit) => listUnembeddedMemories(db, limit, agentId),
+		agentId,
+	);
+}
+
+async function reembedAllMissingMemoriesBatch(
+	accessor: DbAccessor,
+	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
+	embeddingCfg: EmbeddingConfig,
+	batchSize: number,
+): Promise<ReembedBatchOutcome> {
+	return reembedMissingMemoriesBatchWithSelector(
+		accessor,
+		embeddingFn,
+		embeddingCfg,
+		batchSize,
+		listAllUnembeddedMemories,
+	);
+}
+
+async function reembedMissingMemoriesBatchWithSelector(
+	accessor: DbAccessor,
+	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
+	embeddingCfg: EmbeddingConfig,
+	batchSize: number,
+	select: MissingMemorySelector,
 	agentId?: string,
 ): Promise<ReembedBatchOutcome> {
-	const unembedded = await accessor.withReadDbAsync(
-		async (db) => {
-			return listUnembeddedMemories(db, batchSize, agentId) as UnembeddedRow[];
-		},
-		{ siteToken: "repair-actions.ts:781" },
-	);
+	const unembedded = await accessor.withReadDbAsync(async (db) => select(db, batchSize), {
+		siteToken: "db:repair.missing-memory-selection.read",
+	});
+	return reembedMissingMemoriesBatchForRows(accessor, embeddingFn, embeddingCfg, unembedded, agentId);
+}
 
+async function reembedMissingMemoriesBatchForRows(
+	accessor: DbAccessor,
+	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
+	embeddingCfg: EmbeddingConfig,
+	unembedded: ReadonlyArray<UnembeddedRow>,
+	agentId?: string,
+): Promise<ReembedBatchOutcome> {
 	if (unembedded.length === 0) {
 		return {
 			selected: 0,
 			written: 0,
 			failed: 0,
 			stale: 0,
+			crossAgentHashConflicts: 0,
 			profileChanged: false,
 		};
 	}
@@ -820,6 +862,7 @@ async function reembedMissingMemoriesBatch(
 			written: 0,
 			failed: unembedded.length,
 			stale: 0,
+			crossAgentHashConflicts: 0,
 			profileChanged: false,
 		};
 	}
@@ -829,11 +872,12 @@ async function reembedMissingMemoriesBatch(
 		// change the active vector space while this batch is being encoded.
 		// Never commit vectors from the superseded profile.
 		if (!isActiveEmbeddingConfig(db, embeddingCfg)) {
-			return { count: 0, stale: 0, profileChanged: true };
+			return { count: 0, stale: 0, crossAgentHashConflicts: 0, profileChanged: true };
 		}
 		const now = new Date().toISOString();
 		let count = 0;
 		let stale = 0;
+		let crossAgentHashConflicts = 0;
 		// Hoisted outside loop (pattern: db.prepare inside a loop is flagged)
 		const readCurrentMemory = db.prepare(
 			"SELECT content, content_hash, agent_id FROM memories WHERE id = ? AND is_deleted = 0",
@@ -893,7 +937,10 @@ async function reembedMissingMemoriesBatch(
 			const existing = readEmbeddingByHash.get(contentHash) as { id: string; agent_id: string | null } | undefined;
 			if (existing) {
 				const existingAgentId = normalizeRepairAgentId(existing.agent_id);
-				if (existingAgentId !== memoryAgentId) continue;
+				if (existingAgentId !== memoryAgentId) {
+					crossAgentHashConflicts++;
+					continue;
+				}
 			}
 
 			const embId = crypto.randomUUID();
@@ -928,7 +975,7 @@ async function reembedMissingMemoriesBatch(
 			}
 		}
 
-		return { count, stale, profileChanged: false };
+		return { count, stale, crossAgentHashConflicts, profileChanged: false };
 	});
 
 	return {
@@ -936,6 +983,7 @@ async function reembedMissingMemoriesBatch(
 		written: writeOutcome.count,
 		failed: unembedded.length - results.length,
 		stale: writeOutcome.stale,
+		crossAgentHashConflicts: writeOutcome.crossAgentHashConflicts,
 		profileChanged: writeOutcome.profileChanged,
 	};
 }
@@ -953,11 +1001,11 @@ export async function reembedMissingMemories(
 	limiter: RateLimiter,
 	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	embeddingCfg: EmbeddingConfig,
+	agentId: string,
 	batchSize: number = DEFAULT_REEMBED_BATCH,
 	dryRun = false,
 	runToCompletion = false,
 	cooldownMsOverride?: number,
-	agentId?: string,
 ): Promise<RepairResult> {
 	const action = "reembedMissingMemories";
 	const effectiveCooldownMs =
@@ -990,7 +1038,7 @@ export async function reembedMissingMemories(
 	// profile the durable index actually owns, before doing any work.
 	const resolvedEmbeddingCfg = await accessor.withReadDbAsync(
 		async (db) => resolveActiveEmbeddingConfig(db, embeddingCfg),
-		{ siteToken: "repair-actions.ts:991" },
+		{ siteToken: "repair-actions.ts:1039" },
 	);
 
 	const initialStats = await getEmbeddingGapStats(accessor, agentId);
@@ -1027,6 +1075,7 @@ export async function reembedMissingMemories(
 		let written = 0;
 		let failed = 0;
 		let stale = 0;
+		let crossAgentHashConflicts = 0;
 		let batches = 0;
 		let profileChanged = false;
 
@@ -1045,6 +1094,7 @@ export async function reembedMissingMemories(
 			written += outcome.written;
 			failed += outcome.failed;
 			stale += outcome.stale;
+			crossAgentHashConflicts += outcome.crossAgentHashConflicts;
 			batches++;
 			profileChanged ||= outcome.profileChanged;
 			if (outcome.profileChanged) break;
@@ -1073,6 +1123,15 @@ export async function reembedMissingMemories(
 		}
 
 		if (written === 0) {
+			if (crossAgentHashConflicts > 0) {
+				return {
+					action,
+					success: false,
+					affected: 0,
+					message: `${crossAgentHashConflicts} selected memory(s) could not be persisted under the current global uniqueness constraint because their content hash is owned by another agent`,
+					details: { selected: attempted, crossAgentHashConflicts },
+				};
+			}
 			return {
 				action,
 				success: false,
@@ -1090,9 +1149,14 @@ export async function reembedMissingMemories(
 			failed > 0
 				? `re-embedded ${written} of ${attempted} memories ${scope} (${failed} failed, ${remaining} still missing)`
 				: `re-embedded ${written} of ${attempted} memories ${scope} (${remaining} still missing)`;
+		const conflictMessage =
+			crossAgentHashConflicts > 0
+				? `${crossAgentHashConflicts} selected memory(s) could not be persisted because their content hash is owned by another agent under the current global uniqueness constraint`
+				: "";
+		const resultMessage = conflictMessage.length > 0 ? `${msg}; ${conflictMessage}` : msg;
 
 		await withRepairWriteTx(accessor, (db) => {
-			writeRepairAudit(db, action, ctx, written, msg);
+			writeRepairAudit(db, action, ctx, written, resultMessage);
 		});
 
 		limiter.record(action);
@@ -1109,9 +1173,10 @@ export async function reembedMissingMemories(
 
 		return {
 			action,
-			success: true,
+			success: crossAgentHashConflicts === 0,
 			affected: written,
-			message: msg,
+			message: resultMessage,
+			...(crossAgentHashConflicts > 0 ? { details: { selected: attempted, crossAgentHashConflicts } } : {}),
 		};
 	} finally {
 		reembedInProgress = false;
@@ -1143,7 +1208,7 @@ export async function reembedModelMigration(
 			sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
 			liveVecDimensions: readVecDimensions(db),
 		}),
-		{ siteToken: "repair-actions.ts:1139" },
+		{ siteToken: "repair-actions.ts:1204" },
 	);
 	const vecDimensionMismatch = liveVecDimensions !== null && liveVecDimensions !== embeddingCfg.dimensions;
 	const details = {
@@ -1609,7 +1674,7 @@ export async function getDedupStats(accessor: DbAccessor): Promise<DedupStats> {
 				totalActive: totalRow.n,
 			};
 		},
-		{ siteToken: "repair-actions.ts:1588" },
+		{ siteToken: "repair-actions.ts:1653" },
 	);
 }
 
@@ -1788,7 +1853,7 @@ export async function deduplicateMemories(
 				)
 				.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
 		},
-		{ siteToken: "repair-actions.ts:1776" },
+		{ siteToken: "repair-actions.ts:1841" },
 	);
 
 	if (dryRun) {
@@ -1920,7 +1985,7 @@ async function findSemanticDuplicates(
 				)
 				.all() as Array<{ id: string; embedding_id: string }>;
 		},
-		{ siteToken: "repair-actions.ts:1910" },
+		{ siteToken: "db:repair.semantic-duplicates.candidates.read" },
 	);
 
 	for (const candidate of candidates) {
@@ -1959,7 +2024,7 @@ async function findSemanticDuplicates(
 					})
 					.map((r) => ({ id: r.source_id }));
 			},
-			{ siteToken: "repair-actions.ts:1930" },
+			{ siteToken: "repair-actions.ts:1995" },
 		);
 
 		if (neighbors.length > 0) {
@@ -2002,7 +2067,7 @@ export async function pruneChunkGroupEntities(
 	const total = await accessor.withReadDbAsync(
 		async (db) =>
 			(db.prepare("SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group'").get() as { n: number }).n,
-		{ siteToken: "repair-actions.ts:2002" },
+		{ siteToken: "repair-actions.ts:2067" },
 	);
 
 	if (options?.dryRun) {
@@ -2082,7 +2147,7 @@ export async function pruneSingletonExtractedEntities(
 				 LIMIT ?`,
 				)
 				.all(maxMentions, batchSize) as { id: string }[],
-		{ siteToken: "repair-actions.ts:2059" },
+		{ siteToken: "repair-actions.ts:2124" },
 	);
 
 	if (options?.dryRun) {
@@ -2214,7 +2279,7 @@ export async function pruneGenericEntities(
 			}
 			return candidates;
 		},
-		{ siteToken: "repair-actions.ts:2187" },
+		{ siteToken: "repair-actions.ts:2252" },
 	);
 
 	if (options?.dryRun ?? true) {
@@ -2388,7 +2453,7 @@ export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityChe
 			const fullCheck = readIntegrityCheck(db, "integrity_check");
 			return { ok: fullCheck.ok, messages: fullCheck.messages, quickCheck, fullCheck };
 		},
-		{ siteToken: "repair-actions.ts:2385" },
+		{ siteToken: "repair-actions.ts:2450" },
 	);
 }
 
@@ -2399,7 +2464,11 @@ export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityChe
 export interface RebuildIndexesResult {
 	readonly integrity: { ok: boolean; messages: readonly string[] };
 	readonly fts: { repaired: boolean; message: string };
-	readonly embeddings: { reembedded: number; totalMissing: number };
+	readonly embeddings: {
+		readonly reembedded: number;
+		readonly totalMissing: number;
+		readonly crossAgentHashConflicts: number;
+	};
 	readonly summary: string;
 }
 
@@ -2425,7 +2494,7 @@ export async function rebuildDerivedIndexes(
 	const ftsResult = await checkFtsConsistency(accessor, cfg, ctx, limiter, true);
 
 	// Step 2: Re-embed missing memories (batch of 200, not full sweep)
-	const reembedResult = await reembedMissingMemoriesBatch(accessor, embeddingFn, embeddingCfg, 200);
+	const reembedResult = await reembedAllMissingMemoriesBatch(accessor, embeddingFn, embeddingCfg, 200);
 
 	const parts: string[] = [];
 	if (!integrity.ok) {
@@ -2438,12 +2507,20 @@ export async function rebuildDerivedIndexes(
 	} else {
 		parts.push("FTS: consistent");
 	}
-	parts.push(`embeddings: re-embedded ${reembedResult.written} of ${reembedResult.selected} missing`);
+	parts.push(
+		reembedResult.crossAgentHashConflicts > 0
+			? `embeddings: re-embedded ${reembedResult.written} of ${reembedResult.selected} missing; ${reembedResult.crossAgentHashConflicts} selected memory(s) could not be persisted under the current global uniqueness constraint because their content hash is owned by another agent`
+			: `embeddings: re-embedded ${reembedResult.written} of ${reembedResult.selected} missing`,
+	);
 
 	return {
 		integrity,
 		fts: { repaired: ftsResult.affected > 0, message: ftsResult.message },
-		embeddings: { reembedded: reembedResult.written, totalMissing: reembedResult.selected - reembedResult.written },
+		embeddings: {
+			reembedded: reembedResult.written,
+			totalMissing: reembedResult.selected - reembedResult.written,
+			crossAgentHashConflicts: reembedResult.crossAgentHashConflicts,
+		},
 		summary: parts.join(" · "),
 	};
 }

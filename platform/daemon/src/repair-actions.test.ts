@@ -964,6 +964,7 @@ describe("reembedMissingMemories", () => {
 			createRateLimiter(),
 			async () => [0.1, 0.2, 0.3],
 			TEST_EMBEDDING_CFG,
+			"default",
 			1,
 			false,
 		);
@@ -978,6 +979,7 @@ describe("reembedMissingMemories", () => {
 			createRateLimiter(),
 			async () => [0.1, 0.2, 0.3],
 			TEST_EMBEDDING_CFG,
+			"default",
 			1,
 			false,
 		);
@@ -1025,6 +1027,7 @@ describe("reembedMissingMemories", () => {
 				return [0.1, 0.2, 0.3];
 			},
 			rawCfg,
+			"default",
 			10,
 			false,
 		);
@@ -1061,6 +1064,7 @@ describe("reembedMissingMemories", () => {
 				return [0.1, 0.2, 0.3];
 			},
 			TEST_EMBEDDING_CFG,
+			"default",
 			1,
 			false,
 		);
@@ -1104,46 +1108,56 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toHaveLength(0);
 	});
 
-	it("does not overwrite another agent's embedding on a hash conflict", async () => {
-		// Regression for cross-agent hash collisions: the embedding hash is
-		// globally unique, but autonomous repair is agent-scoped. Agent A must
-		// not update Agent B's vector or source fields when both memories share a hash.
+	it("selects a missing agent memory but reports a cross-agent hash conflict", async () => {
+		// The hash is globally unique, but repair selection is agent-scoped.
+		// Agent B's missing memory must be selected without updating Agent A's
+		// existing embedding.
 		ensureVecTable(db);
 		const sharedHash = "cross-agent-shared-hash";
 		insertMemory(db, "mem-a", "agent-a", sharedHash);
 		insertMemory(db, "mem-b", "agent-b", sharedHash);
-		insertMemory(db, "mem-a-unique", "agent-a", "agent-a-unique-hash");
+		insertMemory(db, "mem-b-unique", "agent-b", "agent-b-unique-hash");
 		insertEmbedding(db, {
-			id: "emb-b",
+			id: "emb-a",
 			contentHash: sharedHash,
-			sourceId: "mem-b",
+			sourceId: "mem-a",
 			vector: [0.9, 0.8, 0.7],
-			agentId: "agent-b",
+			agentId: "agent-a",
 		});
 		const before = db
-			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-b'")
+			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-a'")
 			.get();
+		const selected: string[] = [];
 
 		const result = await reembedMissingMemories(
 			accessor,
 			TEST_CFG,
 			CTX_AGENT,
 			createRateLimiter(),
-			async () => [0.1, 0.2, 0.3],
+			async (content) => {
+				selected.push(content);
+				return [0.1, 0.2, 0.3];
+			},
 			TEST_EMBEDDING_CFG,
+			"agent-b",
 			10,
 			false,
 			false,
 			undefined,
-			"agent-a",
 		);
 
-		expect(result.success).toBe(true);
+		expect(selected).toEqual(["content for mem-b", "content for mem-b-unique"]);
+		expect(result.success).toBe(false);
 		expect(result.affected).toBe(1);
-		const repaired = db.prepare("SELECT agent_id FROM embeddings WHERE content_hash = 'agent-a-unique-hash'").get();
-		expect(repaired).toEqual({ agent_id: "agent-a" });
+		expect(result.details).toEqual({ selected: 2, crossAgentHashConflicts: 1 });
+		expect(result.message).toContain("1 selected memory(s) could not be persisted");
+		expect(result.message).toContain("current global uniqueness constraint");
+		expect(result.message).not.toContain("embedding provider returned no vectors");
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(sharedHash)).toEqual([
+			{ source_id: "mem-a" },
+		]);
 		const after = db
-			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-b'")
+			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-a'")
 			.get();
 		expect(after).toEqual(before);
 	});
@@ -1170,6 +1184,7 @@ describe("reembedMissingMemories", () => {
 				return [0.1, 0.2, 0.3];
 			},
 			TEST_EMBEDDING_CFG,
+			"default",
 			1,
 		);
 
@@ -1211,6 +1226,7 @@ describe("reembedMissingMemories", () => {
 				return [0.1, 0.2, 0.3];
 			},
 			TEST_EMBEDDING_CFG,
+			"agent-a",
 			1,
 		);
 
@@ -1235,6 +1251,7 @@ describe("reembedMissingMemories", () => {
 			createRateLimiter(),
 			async () => [0.1, 0.2, 0.3],
 			TEST_EMBEDDING_CFG,
+			"default",
 			1,
 		);
 
@@ -1387,6 +1404,7 @@ describe("reembedMissingMemories", () => {
 				return [0.1, 0.2, 0.3];
 			},
 			TEST_EMBEDDING_CFG,
+			"default",
 			1,
 		);
 
@@ -1423,10 +1441,10 @@ describe("reembedMissingMemories", () => {
 			limiter,
 			async () => [0.1, 0.2, 0.3],
 			TEST_EMBEDDING_CFG,
+			"default",
 			10,
 			false,
 			false,
-			"default",
 		);
 
 		expect(result.success).toBe(true);
@@ -1464,6 +1482,7 @@ describe("reembedMissingMemories", () => {
 			limiter,
 			async () => [0.1, 0.2, 0.3],
 			TEST_EMBEDDING_CFG,
+			"default",
 			10,
 			false,
 		);
@@ -1484,6 +1503,7 @@ describe("reembedMissingMemories", () => {
 			limiter2,
 			async () => [0.1, 0.2, 0.3],
 			TEST_EMBEDDING_CFG,
+			"default",
 			10,
 			false,
 		);
@@ -1524,6 +1544,7 @@ describe("reembedMissingMemories", () => {
 			limiter,
 			async () => [0.1, 0.2, 0.3],
 			TEST_EMBEDDING_CFG,
+			"default",
 			10,
 			false,
 		);
@@ -1565,6 +1586,7 @@ describe("reembedMissingMemories", () => {
 			limiter,
 			async () => [0.4, 0.5, 0.6],
 			TEST_EMBEDDING_CFG,
+			"default",
 			10,
 			false,
 		);
@@ -1600,7 +1622,7 @@ describe("reembedMissingMemories", () => {
 		).run("mem-dup-b", "identical content", "hash-dup", b, b);
 
 		// No embedding yet — both should show as missing
-		const before = await getEmbeddingGapStats(accessor);
+		const before = await getEmbeddingGapStats(accessor, "default");
 		expect(before.unembedded).toBe(2);
 
 		const limiter = createRateLimiter();
@@ -1613,13 +1635,14 @@ describe("reembedMissingMemories", () => {
 			limiter,
 			async () => [0.7, 0.8, 0.9],
 			TEST_EMBEDDING_CFG,
+			"default",
 			10,
 			false,
 		);
 		expect(first.success).toBe(true);
 
 		// After one pass, both should be considered "embedded" via hash match
-		const after = await getEmbeddingGapStats(accessor);
+		const after = await getEmbeddingGapStats(accessor, "default");
 		expect(after.unembedded).toBe(0);
 		const rows = db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all("hash-dup") as Array<{
 			source_id: string;
@@ -1636,6 +1659,7 @@ describe("reembedMissingMemories", () => {
 			limiter2,
 			async () => [0.7, 0.8, 0.9],
 			TEST_EMBEDDING_CFG,
+			"default",
 			10,
 			false,
 		);
@@ -1659,6 +1683,7 @@ describe("reembedMissingMemories", () => {
 			limiter,
 			async () => [0.1, 0.2, 0.3],
 			TEST_EMBEDDING_CFG,
+			"default",
 			2,
 			false,
 			true,
@@ -1691,7 +1716,7 @@ describe("reembedModelMigration", () => {
 			`INSERT INTO memories (id, content, content_hash, embedding_model, type, created_at, updated_at, updated_by) VALUES ('model-a', 'old vector', 'hash-a', 'model-a', 'fact', ?, ?, 'test')`,
 		).run(now, now);
 		insertEmbedding(db, { id: "emb-a", sourceId: "model-a", contentHash: "hash-a", vector: [0.1, 0.2, 0.3] });
-		expect((await getEmbeddingGapStats(accessor)).unembedded).toBe(0);
+		expect((await getEmbeddingGapStats(accessor, "default")).unembedded).toBe(0);
 		const result = await reembedModelMigration(
 			accessor,
 			TEST_CFG,
@@ -1713,7 +1738,7 @@ describe("reembedModelMigration", () => {
 			vectorIndexRebuildRequired: false,
 			target: { provider: "ollama", model: "model-b", dimensions: 3 },
 		});
-		expect((await getEmbeddingGapStats(accessor)).unembedded).toBe(0);
+		expect((await getEmbeddingGapStats(accessor, "default")).unembedded).toBe(0);
 		expect(db.prepare("SELECT embedding_model FROM memories WHERE id = 'model-a'").get()).toEqual({
 			embedding_model: "model-b",
 		});
@@ -2021,7 +2046,7 @@ describe("cleanOrphanedEmbeddings", () => {
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(0);
-		expect((await getEmbeddingGapStats(accessor)).unembedded).toBe(0);
+		expect((await getEmbeddingGapStats(accessor, "default")).unembedded).toBe(0);
 
 		const rows = db.prepare("SELECT id FROM embeddings WHERE id = ?").all("emb-shared") as Array<{ id: string }>;
 		expect(rows).toHaveLength(1);
@@ -2105,7 +2130,7 @@ describe("getEmbeddingGapStats", () => {
 
 	it("reports complete=true and exact 100% when every memory is embedded", async () => {
 		seedCoverage(10, 0);
-		const stats = await getEmbeddingGapStats(accessor);
+		const stats = await getEmbeddingGapStats(accessor, "default");
 		expect(stats.total).toBe(10);
 		expect(stats.embedded).toBe(10);
 		expect(stats.unembedded).toBe(0);
@@ -2119,7 +2144,7 @@ describe("getEmbeddingGapStats", () => {
 		// parity for the issue's stated scenario. The round-up boundary itself
 		// (1 gap -> 99.96% -> old "100.0%") is covered by the test below.
 		seedCoverage(2251, 5);
-		const stats = await getEmbeddingGapStats(accessor);
+		const stats = await getEmbeddingGapStats(accessor, "default");
 		expect(stats.total).toBe(2251);
 		expect(stats.embedded).toBe(2246);
 		expect(stats.unembedded).toBe(5);
@@ -2134,14 +2159,14 @@ describe("getEmbeddingGapStats", () => {
 	it("floors a single gap in a large store below 100% instead of rounding up", async () => {
 		// (2250/2251)*100 = 99.9556% would render as "100.0%" with naive toFixed(1).
 		seedCoverage(2251, 1);
-		const stats = await getEmbeddingGapStats(accessor);
+		const stats = await getEmbeddingGapStats(accessor, "default");
 		expect(stats.unembedded).toBe(1);
 		expect(stats.complete).toBe(false);
 		expect(stats.coverage).toBe("99.9%");
 	});
 
 	it("reports complete coverage on an empty store", async () => {
-		const stats = await getEmbeddingGapStats(accessor);
+		const stats = await getEmbeddingGapStats(accessor, "default");
 		expect(stats.total).toBe(0);
 		expect(stats.embedded).toBe(0);
 		expect(stats.unembedded).toBe(0);
