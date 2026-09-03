@@ -246,6 +246,8 @@ export type DbOwnerRequest =
 	| { readonly kind: "dreaming_hygiene_attention"; readonly input: DbOwnerDreamingHygieneAttention }
 	| { readonly kind: "dreaming_surprisal_attention"; readonly input: DbOwnerDreamingSurprisalAttention }
 	| { readonly kind: "dreaming_episodic_backlog"; readonly input: DbOwnerDreamingEpisodicBacklog }
+	| { readonly kind: "dreaming_episodic_backlog_probe"; readonly input: DbOwnerDreamingEpisodicBacklogProbe }
+	| { readonly kind: "dreaming_episodic_backlog_exists"; readonly input: DbOwnerDreamingEpisodicBacklogExists }
 	| { readonly kind: "dreaming_evidence_search"; readonly input: DbOwnerDreamingEvidenceSearch }
 	| { readonly kind: "dreaming_evidence_source"; readonly input: DbOwnerDreamingEvidenceSource }
 	| { readonly kind: "dreaming_pass_finalize"; readonly input: DbOwnerDreamingPassFinalize }
@@ -308,11 +310,22 @@ export interface DbOwnerDreamingSurprisalAttention {
 	};
 }
 
-/** Bounded episodic backlog probe used by the scheduled Dreaming gate. */
+/** Exact episodic backlog total used by status and diagnostic surfaces. */
 export interface DbOwnerDreamingEpisodicBacklog {
 	readonly agentId: string;
-	/** Maximum number of source records to inspect before treating the backlog as reached. */
-	readonly maxSources?: number;
+}
+
+/** Bounded episodic backlog probe used by the scheduled Dreaming gate. */
+export interface DbOwnerDreamingEpisodicBacklogProbe {
+	readonly agentId: string;
+	readonly tokenThreshold: number;
+	/** Maximum number of source records to inspect before returning indeterminate. */
+	readonly maxSources: number;
+}
+
+/** Presence-only episodic backlog check; it never tokenizes the backlog. */
+export interface DbOwnerDreamingEpisodicBacklogExists {
+	readonly agentId: string;
 }
 
 export interface DbOwnerDreamingEvidenceSearch {
@@ -349,7 +362,7 @@ export interface DbOwnerDreamingPassFinalize {
 	readonly summary: string;
 	readonly rejectedEvidence: readonly unknown[];
 	readonly memoryHeadResult: Record<string, unknown> | null;
-	readonly backlogByScope: readonly { readonly scope: string; readonly backlog: number }[];
+	readonly hasBacklogByScope: readonly { readonly scope: string; readonly hasBacklog: boolean }[];
 	readonly nextWatermarkByScope: readonly { readonly scope: string; readonly watermark: string | null }[];
 }
 

@@ -14,6 +14,8 @@ interface CountRequest {
 	readonly type: "count";
 	readonly requestId: number;
 	readonly entries: readonly { readonly key: string; readonly text: string }[];
+	/** Stop after this many tokens in this batch; the crossing entry is included. */
+	readonly stopAt?: number;
 }
 
 interface CountResponse {
@@ -37,10 +39,18 @@ const tokenizer = get_encoding("cl100k_base");
 
 port.on("message", (message: CountRequest) => {
 	if (message.type !== "count") return;
+	const counts: Array<{ readonly key: string; readonly count: number }> = [];
+	let total = 0;
+	for (const entry of message.entries) {
+		const count = tokenizer.encode(entry.text).length;
+		counts.push({ key: entry.key, count });
+		total += count;
+		if (message.stopAt !== undefined && total >= message.stopAt) break;
+	}
 	const response: CountResponse = {
 		type: "counted",
 		requestId: message.requestId,
-		counts: message.entries.map((entry) => ({ key: entry.key, count: tokenizer.encode(entry.text).length })),
+		counts,
 	};
 	port.postMessage(response);
 });
