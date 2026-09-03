@@ -110,7 +110,39 @@ describe("GET /api/repair/embedding-gaps", () => {
 });
 
 describe("agent authorization for embedding repair routes", () => {
-	it("rejects a target agent outside the authenticated request scope", async () => {
+	it("allows an authorized admin request to propagate its target agent into coverage", async () => {
+		const authConfig = {
+			...parseAuthConfig(undefined, "/tmp/signet-repair-scope-test"),
+			mode: "team" as const,
+		};
+		const claims: TokenClaims = {
+			sub: "admin",
+			scope: { agent: "agent-a" },
+			role: "admin",
+			iat: Math.floor(Date.now() / 1000),
+			exp: Math.floor(Date.now() / 1000) + 3600,
+		};
+		const guarded = new Hono();
+		guarded.use("*", async (c, next) => {
+			c.set("auth", { authenticated: true, claims });
+			await next();
+		});
+		registerRepairRoutes(guarded, {
+			authConfig,
+			getDbAccessor: () => environment.accessor,
+		});
+
+		const response = await guarded.request("/api/repair/embedding-gaps?agentId=agent-b");
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			total: 1,
+			unembedded: 1,
+			embedded: 0,
+			complete: false,
+		});
+	});
+
+	it("rejects an operator before route scope resolution because repair requires admin permission", async () => {
 		const authConfig = {
 			...parseAuthConfig(undefined, "/tmp/signet-repair-scope-test"),
 			mode: "team" as const,
@@ -134,6 +166,7 @@ describe("agent authorization for embedding repair routes", () => {
 
 		const getResponse = await guarded.request("/api/repair/embedding-gaps?agentId=agent-b");
 		expect(getResponse.status).toBe(403);
+		expect(await getResponse.json()).toEqual({ error: "role 'operator' lacks 'admin' permission" });
 
 		const postResponse = await guarded.request("/api/repair/re-embed", {
 			method: "POST",
@@ -141,5 +174,6 @@ describe("agent authorization for embedding repair routes", () => {
 			body: JSON.stringify({ agentId: "agent-b", dryRun: true }),
 		});
 		expect(postResponse.status).toBe(403);
+		expect(await postResponse.json()).toEqual({ error: "role 'operator' lacks 'admin' permission" });
 	});
 });

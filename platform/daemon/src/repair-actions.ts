@@ -837,12 +837,14 @@ async function reembedMissingMemoriesBatchForRows(
 		};
 	}
 
+	const repairable = unembedded.filter((memory) => memory.knownCrossAgentHashConflict !== 1);
+	const knownCrossAgentHashConflicts = unembedded.length - repairable.length;
 	const results: Array<{
 		memory: UnembeddedRow;
 		vector: readonly number[];
 	}> = [];
 
-	for (const mem of unembedded) {
+	for (const mem of repairable) {
 		try {
 			const vec = await embeddingFn(mem.content, embeddingCfg);
 			if (vec) {
@@ -860,9 +862,9 @@ async function reembedMissingMemoriesBatchForRows(
 		return {
 			selected: unembedded.length,
 			written: 0,
-			failed: unembedded.length,
+			failed: repairable.length,
 			stale: 0,
-			crossAgentHashConflicts: 0,
+			crossAgentHashConflicts: knownCrossAgentHashConflicts,
 			profileChanged: false,
 		};
 	}
@@ -981,9 +983,9 @@ async function reembedMissingMemoriesBatchForRows(
 	return {
 		selected: unembedded.length,
 		written: writeOutcome.count,
-		failed: unembedded.length - results.length,
+		failed: repairable.length - results.length,
 		stale: writeOutcome.stale,
-		crossAgentHashConflicts: writeOutcome.crossAgentHashConflicts,
+		crossAgentHashConflicts: knownCrossAgentHashConflicts + writeOutcome.crossAgentHashConflicts,
 		profileChanged: writeOutcome.profileChanged,
 	};
 }
@@ -1038,7 +1040,7 @@ export async function reembedMissingMemories(
 	// profile the durable index actually owns, before doing any work.
 	const resolvedEmbeddingCfg = await accessor.withReadDbAsync(
 		async (db) => resolveActiveEmbeddingConfig(db, embeddingCfg),
-		{ siteToken: "repair-actions.ts:1039" },
+		{ siteToken: "db:repair.active-embedding-config.read" },
 	);
 
 	const initialStats = await getEmbeddingGapStats(accessor, agentId);
@@ -1129,7 +1131,7 @@ export async function reembedMissingMemories(
 					success: false,
 					affected: 0,
 					message: `${crossAgentHashConflicts} selected memory(s) could not be persisted under the current global uniqueness constraint because their content hash is owned by another agent`,
-					details: { selected: attempted, crossAgentHashConflicts },
+					details: { selected: attempted, failed, stale, crossAgentHashConflicts },
 				};
 			}
 			return {
@@ -1176,7 +1178,9 @@ export async function reembedMissingMemories(
 			success: crossAgentHashConflicts === 0,
 			affected: written,
 			message: resultMessage,
-			...(crossAgentHashConflicts > 0 ? { details: { selected: attempted, crossAgentHashConflicts } } : {}),
+			...(crossAgentHashConflicts > 0
+				? { details: { selected: attempted, failed, stale, crossAgentHashConflicts } }
+				: {}),
 		};
 	} finally {
 		reembedInProgress = false;
@@ -1208,7 +1212,7 @@ export async function reembedModelMigration(
 			sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
 			liveVecDimensions: readVecDimensions(db),
 		}),
-		{ siteToken: "repair-actions.ts:1204" },
+		{ siteToken: "db:repair.embedding-migration-selection.read" },
 	);
 	const vecDimensionMismatch = liveVecDimensions !== null && liveVecDimensions !== embeddingCfg.dimensions;
 	const details = {
@@ -1674,7 +1678,7 @@ export async function getDedupStats(accessor: DbAccessor): Promise<DedupStats> {
 				totalActive: totalRow.n,
 			};
 		},
-		{ siteToken: "repair-actions.ts:1653" },
+		{ siteToken: "db:repair.dedup-stats.read" },
 	);
 }
 
@@ -1853,7 +1857,7 @@ export async function deduplicateMemories(
 				)
 				.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
 		},
-		{ siteToken: "repair-actions.ts:1841" },
+		{ siteToken: "db:repair.exact-duplicate-candidates.read" },
 	);
 
 	if (dryRun) {
@@ -2024,7 +2028,7 @@ async function findSemanticDuplicates(
 					})
 					.map((r) => ({ id: r.source_id }));
 			},
-			{ siteToken: "repair-actions.ts:1995" },
+			{ siteToken: "db:repair.semantic-duplicates.neighbors.read" },
 		);
 
 		if (neighbors.length > 0) {
@@ -2067,7 +2071,7 @@ export async function pruneChunkGroupEntities(
 	const total = await accessor.withReadDbAsync(
 		async (db) =>
 			(db.prepare("SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group'").get() as { n: number }).n,
-		{ siteToken: "repair-actions.ts:2067" },
+		{ siteToken: "db:repair.chunk-group-count.read" },
 	);
 
 	if (options?.dryRun) {
@@ -2147,7 +2151,7 @@ export async function pruneSingletonExtractedEntities(
 				 LIMIT ?`,
 				)
 				.all(maxMentions, batchSize) as { id: string }[],
-		{ siteToken: "repair-actions.ts:2124" },
+		{ siteToken: "db:repair.singleton-entity-candidates.read" },
 	);
 
 	if (options?.dryRun) {
@@ -2279,7 +2283,7 @@ export async function pruneGenericEntities(
 			}
 			return candidates;
 		},
-		{ siteToken: "repair-actions.ts:2252" },
+		{ siteToken: "db:repair.generic-entity-candidates.read" },
 	);
 
 	if (options?.dryRun ?? true) {
@@ -2453,7 +2457,7 @@ export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityChe
 			const fullCheck = readIntegrityCheck(db, "integrity_check");
 			return { ok: fullCheck.ok, messages: fullCheck.messages, quickCheck, fullCheck };
 		},
-		{ siteToken: "repair-actions.ts:2450" },
+		{ siteToken: "db:repair.integrity-check.read" },
 	);
 }
 
