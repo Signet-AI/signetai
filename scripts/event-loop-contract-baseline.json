@@ -3113,35 +3113,39 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1039,
+      "line": 1041,
       "api": "withReadDbAsync",
       "source": "const resolvedEmbeddingCfg = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:repair.active-embedding-config.read"
     },
     {
       "path": "repair-actions.ts",
-      "line": 1204,
+      "line": 1208,
       "api": "withReadDbAsync",
       "source": "const { rows, totalMatching, sources, liveVecDimensions } = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:repair.embedding-migration-selection.read"
     },
     {
       "path": "repair-actions.ts",
-      "line": 1653,
+      "line": 1657,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:repair.dedup-stats.read"
     },
     {
       "path": "repair-actions.ts",
-      "line": 1841,
+      "line": 1845,
       "api": "withReadDbAsync",
       "source": "const hashClusters = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:repair.exact-duplicate-candidates.read"
     },
     {
       "path": "repair-actions.ts",
-      "line": 1975,
+      "line": 1979,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3149,38 +3153,43 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1995,
+      "line": 1999,
       "api": "withReadDbAsync",
       "source": "const neighbors = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:repair.semantic-duplicates.neighbors.read"
     },
     {
       "path": "repair-actions.ts",
-      "line": 2067,
+      "line": 2071,
       "api": "withReadDbAsync",
       "source": "const total = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:repair.chunk-group-count.read"
     },
     {
       "path": "repair-actions.ts",
-      "line": 2124,
+      "line": 2128,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:repair.singleton-entity-candidates.read"
     },
     {
       "path": "repair-actions.ts",
-      "line": 2252,
+      "line": 2256,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:repair.generic-entity-candidates.read"
     },
     {
       "path": "repair-actions.ts",
-      "line": 2450,
+      "line": 2454,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:repair.integrity-check.read"
     },
     {
       "path": "resource-monitor.ts",
