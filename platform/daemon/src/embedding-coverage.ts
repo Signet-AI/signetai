@@ -5,6 +5,8 @@ export interface UnembeddedRow {
 	readonly content: string;
 	readonly contentHash: string | null;
 	readonly agentId: string | null;
+	/** SQLite boolean marker for a known global-hash ownership conflict. */
+	readonly knownCrossAgentHashConflict?: 0 | 1;
 }
 
 export interface StaleEmbeddingRow {
@@ -95,6 +97,13 @@ const sameAgentHashOwner = `
 			       AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
 			   )`;
 
+const crossAgentHashConflict = `EXISTS (
+			 SELECT 1 FROM embeddings e
+			 WHERE e.source_type = 'memory'
+			   AND e.content_hash = m.content_hash
+			   AND COALESCE(NULLIF(e.agent_id, ''), 'default') <> COALESCE(NULLIF(m.agent_id, ''), 'default')
+		   )`;
+
 export function countUnembeddedMemories(db: ReadDb, agentId: string): number {
 	return count(
 		db,
@@ -118,7 +127,8 @@ export function countUnembeddedMemories(db: ReadDb, agentId: string): number {
 export function listUnembeddedMemories(db: ReadDb, limit: number, agentId: string): ReadonlyArray<UnembeddedRow> {
 	return db
 		.prepare(
-			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId
+			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
+				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
 			 FROM memories m
 			 WHERE m.is_deleted = 0
 			   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
@@ -132,7 +142,7 @@ export function listUnembeddedMemories(db: ReadDb, limit: number, agentId: strin
 			       AND m.content_hash IS NOT NULL
 			       AND e.content_hash = m.content_hash
 			   )
-			 ORDER BY m.created_at ASC
+			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
 			 LIMIT ?`,
 		)
 		.all(agentId, limit) as UnembeddedRow[];
@@ -159,7 +169,8 @@ export function countAllUnembeddedMemories(db: ReadDb): number {
 export function listAllUnembeddedMemories(db: ReadDb, limit: number): ReadonlyArray<UnembeddedRow> {
 	return db
 		.prepare(
-			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId
+			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
+				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
 			 FROM memories m
 			 WHERE m.is_deleted = 0
 			   AND NOT EXISTS (
@@ -172,7 +183,7 @@ export function listAllUnembeddedMemories(db: ReadDb, limit: number): ReadonlyAr
 			       AND m.content_hash IS NOT NULL
 			       AND e.content_hash = m.content_hash
 			   )
-			 ORDER BY m.created_at ASC
+			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
 			 LIMIT ?`,
 		)
 		.all(limit) as UnembeddedRow[];

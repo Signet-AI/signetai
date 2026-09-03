@@ -1146,10 +1146,10 @@ describe("reembedMissingMemories", () => {
 			undefined,
 		);
 
-		expect(selected).toEqual(["content for mem-b", "content for mem-b-unique"]);
+		expect(selected).toEqual(["content for mem-b-unique"]);
 		expect(result.success).toBe(false);
 		expect(result.affected).toBe(1);
-		expect(result.details).toEqual({ selected: 2, crossAgentHashConflicts: 1 });
+		expect(result.details).toEqual({ selected: 2, failed: 0, stale: 0, crossAgentHashConflicts: 1 });
 		expect(result.message).toContain("1 selected memory(s) could not be persisted");
 		expect(result.message).toContain("current global uniqueness constraint");
 		expect(result.message).not.toContain("embedding provider returned no vectors");
@@ -1160,6 +1160,60 @@ describe("reembedMissingMemories", () => {
 			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-a'")
 			.get();
 		expect(after).toEqual(before);
+	});
+
+	it("does not let a known conflict starve later repairable memories during a full sweep", async () => {
+		ensureVecTable(db);
+		const sharedHash = "starving-cross-agent-hash";
+		insertMemory(db, "mem-owner", "agent-a", sharedHash);
+		insertMemory(db, "mem-conflict", "agent-b", sharedHash);
+		insertMemory(db, "mem-repairable", "agent-b", "agent-b-repairable-hash");
+		const old = new Date(Date.now() - 2_000).toISOString();
+		const newer = new Date(Date.now() - 1_000).toISOString();
+		db.prepare("UPDATE memories SET created_at = ?, updated_at = ? WHERE id = ?").run(old, old, "mem-conflict");
+		db.prepare("UPDATE memories SET created_at = ?, updated_at = ? WHERE id = ?").run(newer, newer, "mem-repairable");
+		insertEmbedding(db, {
+			id: "emb-owner",
+			contentHash: sharedHash,
+			sourceId: "mem-owner",
+			vector: [0.9, 0.8, 0.7],
+			agentId: "agent-a",
+		});
+		const beforeOwner = db
+			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-owner'")
+			.get();
+		const providerInputs: string[] = [];
+
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_AGENT,
+			createRateLimiter(),
+			async (content) => {
+				providerInputs.push(content);
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"agent-b",
+			1,
+			false,
+			true,
+			0,
+		);
+
+		expect(providerInputs).toEqual(["content for mem-repairable"]);
+		expect(result.success).toBe(false);
+		expect(result.affected).toBe(1);
+		expect(result.details).toEqual({ selected: 2, failed: 0, stale: 0, crossAgentHashConflicts: 1 });
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-repairable'").get()).toBeTruthy();
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-conflict'").get()).toBeNull();
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(sharedHash)).toEqual([
+			{ source_id: "mem-owner" },
+		]);
+		const afterOwner = db
+			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-owner'")
+			.get();
+		expect(afterOwner).toEqual(beforeOwner);
 	});
 
 	it("skips stale vectors when content changes during provider work", async () => {
