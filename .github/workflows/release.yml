@@ -109,6 +109,11 @@ jobs:
         if: steps.changes.outputs.skip != 'true'
         run: bun surfaces/cli/src/cli.ts --help > /dev/null
 
+      - name: Native embedding /health isolation (source daemon)
+        if: steps.changes.outputs.skip != 'true'
+        working-directory: platform/daemon
+        run: bun test src/native-embedding-eventloop-isolation.test.ts
+
       - name: Configure Git
         if: steps.changes.outputs.skip != 'true'
         run: |
@@ -278,10 +283,6 @@ jobs:
 
       - name: Build workspace dependencies
         run: bun run build
-
-      - name: Native embedding /health isolation (source daemon)
-        working-directory: platform/daemon
-        run: bun test src/native-embedding-eventloop-isolation.test.ts
 
       - name: Build dashboard assets
         run: bun run build:dashboard
