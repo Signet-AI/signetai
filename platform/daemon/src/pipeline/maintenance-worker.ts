@@ -242,11 +242,11 @@ async function executeRecommendation(
 									deps.limiter,
 									embedding.fetchEmbedding,
 									embedding.cfg,
+									embedding.agentId,
 									batchSize,
 									false,
 									false,
 									undefined,
-									embedding.agentId,
 								)
 							: await reembedModelMigration(
 									deps.accessor,

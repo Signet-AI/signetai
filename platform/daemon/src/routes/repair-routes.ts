@@ -1,5 +1,5 @@
 import type { Context, Hono } from "hono";
-import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
+import { resolveDaemonAgentId } from "../agent-id";
 import { type AuthConfig, requirePermission } from "../auth";
 import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
 import { fetchEmbedding } from "../embedding-fetch.js";
@@ -7,6 +7,7 @@ import { linkMemoryToEntities, previewMemoryEntityLinks } from "../inline-entity
 import { loadMemoryConfig } from "../memory-config.js";
 import { clusterEntities } from "../pipeline/community-detection.js";
 import { DEFAULT_RETENTION, runRetentionSweepOnce } from "../pipeline/retention-worker.js";
+import { resolveScopedAgent } from "../request-scope";
 import {
 	type RepairContext,
 	type RepairResult,
@@ -63,18 +64,6 @@ function readString(record: Readonly<Record<string, unknown>>, key: string): str
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function resolveRepairAgentId(c: Context, body: Readonly<Record<string, unknown>> = {}): string {
-	return resolveAgentId({
-		agentId:
-			readString(body, "agentId") ??
-			readString(body, "agent_id") ??
-			c.req.query("agentId") ??
-			c.req.query("agent_id") ??
-			c.req.header("x-signet-agent-id") ??
-			resolveDaemonAgentId(),
-	});
-}
-
 export function registerRepairRoutes(
 	app: Hono,
 	deps: {
@@ -82,12 +71,14 @@ export function registerRepairRoutes(
 		readonly getDbAccessor?: () => DbAccessor;
 	} = {},
 ): void {
+	const effectiveAuthConfig = deps.authConfig ?? authConfig;
+
 	// Permission guards
 	app.use("/api/repair/*", async (c, next) => {
-		return requirePermission("admin", deps.authConfig ?? authConfig)(c, next);
+		return requirePermission("admin", effectiveAuthConfig)(c, next);
 	});
 	app.use("/api/troubleshoot/*", async (c, next) => {
-		return requirePermission("admin", deps.authConfig ?? authConfig)(c, next);
+		return requirePermission("admin", effectiveAuthConfig)(c, next);
 	});
 
 	app.post("/api/repair/requeue-dead", async (c) => {
@@ -139,7 +130,14 @@ export function registerRepairRoutes(
 
 	app.get("/api/repair/embedding-gaps", async (c) => {
 		const accessor = deps.getDbAccessor?.() ?? getDbAccessor();
-		const stats = await getEmbeddingGapStats(accessor, resolveRepairAgentId(c));
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			effectiveAuthConfig.mode,
+			c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+			resolveDaemonAgentId(),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const stats = await getEmbeddingGapStats(accessor, scoped.agentId);
 		return c.json(stats);
 	});
 
@@ -160,7 +158,17 @@ export function registerRepairRoutes(
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
-		const agentId = resolveRepairAgentId(c, body);
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			effectiveAuthConfig.mode,
+			readString(body, "agentId") ??
+				readString(body, "agent_id") ??
+				c.req.query("agentId") ??
+				c.req.query("agent_id") ??
+				c.req.header("x-signet-agent-id"),
+			resolveDaemonAgentId(),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 		const result = await reembedMissingMemories(
 			accessor,
@@ -169,11 +177,11 @@ export function registerRepairRoutes(
 			repairLimiter,
 			fetchEmbedding,
 			cfg.embedding,
+			scoped.agentId,
 			batchSize,
 			dryRun,
 			fullSweep,
 			fullSweep && ctx.actorType === "operator" ? 0 : undefined,
-			agentId,
 		);
 
 		return c.json(result, repairHttpStatus(result));
@@ -182,6 +190,17 @@ export function registerRepairRoutes(
 	app.post("/api/repair/re-embed-migration", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const body = asRecord(await c.req.json().catch(() => ({})));
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			effectiveAuthConfig.mode,
+			readString(body, "agentId") ??
+				readString(body, "agent_id") ??
+				c.req.query("agentId") ??
+				c.req.query("agent_id") ??
+				c.req.header("x-signet-agent-id"),
+			resolveDaemonAgentId(),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		const result = await reembedModelMigration(
 			getDbAccessor(),
 			cfg.pipelineV2,
@@ -189,7 +208,7 @@ export function registerRepairRoutes(
 			repairLimiter,
 			fetchEmbedding,
 			cfg.embedding,
-			resolveRepairAgentId(c, body),
+			scoped.agentId,
 			typeof body.batchSize === "number" ? body.batchSize : 50,
 			body.dryRun === true,
 			body.all === true,
@@ -302,11 +321,21 @@ export function registerRepairRoutes(
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
-		const agentId = resolveRepairAgentId(c, body);
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			effectiveAuthConfig.mode,
+			readString(body, "agentId") ??
+				readString(body, "agent_id") ??
+				c.req.query("agentId") ??
+				c.req.query("agent_id") ??
+				c.req.header("x-signet-agent-id"),
+			resolveDaemonAgentId(),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		const result = await pruneGenericEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
 			batchSize,
 			dryRun,
-			agentId,
+			agentId: scoped.agentId,
 		});
 		return c.json(result, repairHttpStatus(result));
 	});
@@ -352,16 +381,22 @@ export function registerRepairRoutes(
 					totalBytes: stats?.total_bytes ?? 0,
 					byReason: Object.fromEntries(byReason.map((r) => [r.archived_reason ?? "unknown", r.count])),
 				};
-			}, "routes/repair-routes.ts:313"),
+			}, "db:repair.cold-stats.read"),
 		);
 	});
 
 	app.post("/api/repair/cluster-entities", (c) => {
-		const agentId = resolveRepairAgentId(c);
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			effectiveAuthConfig.mode,
+			c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+			resolveDaemonAgentId(),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		const result = getDbAccessor().withWriteTx(
-			(db: import("../db-accessor").WriteDb) => clusterEntities(db, agentId),
-			"routes/repair-routes.ts:357",
+			(db: import("../db-accessor").WriteDb) => clusterEntities(db, scoped.agentId),
+			"db:repair.cluster-entities.write",
 		);
 		return c.json(result);
 	});
@@ -379,7 +414,17 @@ export function registerRepairRoutes(
 		} catch {
 			// defaults
 		}
-		const agentId = resolveRepairAgentId(c, body);
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			effectiveAuthConfig.mode,
+			readString(body, "agentId") ??
+				readString(body, "agent_id") ??
+				c.req.query("agentId") ??
+				c.req.query("agent_id") ??
+				c.req.header("x-signet-agent-id"),
+			resolveDaemonAgentId(),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		const accessor = deps.getDbAccessor?.() ?? getDbAccessor();
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
@@ -393,8 +438,8 @@ export function registerRepairRoutes(
 			   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)
 			 LIMIT ?`,
 					)
-					.all(agentId, batchSize) as Array<{ id: string; content: string }>,
-			"routes/repair-routes.ts:381",
+					.all(scoped.agentId, batchSize) as Array<{ id: string; content: string }>,
+			"db:repair.relink-entities.select",
 		);
 
 		if (unlinked.length === 0) {
@@ -422,7 +467,7 @@ export function registerRepairRoutes(
 				let linkedMemories = 0;
 
 				for (const mem of unlinked) {
-					const result = previewMemoryEntityLinks(db, mem.id, mem.content, agentId);
+					const result = previewMemoryEntityLinks(db, mem.id, mem.content, scoped.agentId);
 					linked += result.linked;
 					entities += result.entityIds.length;
 					aspects += result.aspects;
@@ -438,11 +483,11 @@ export function registerRepairRoutes(
 			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
 			   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)`,
 						)
-						.get(agentId) as { cnt: number }
+						.get(scoped.agentId) as { cnt: number }
 				).cnt;
 
 				return { linked, entities, aspects, attributes, linkedMemories, remaining };
-			}, "routes/repair-routes.ts:412");
+			}, "db:repair.relink-entities.preview");
 			const projectedRemaining = Math.max(0, preview.remaining - preview.linkedMemories);
 			return c.json({
 				action: "relink-entities",
@@ -466,8 +511,8 @@ export function registerRepairRoutes(
 		for (const mem of unlinked) {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			const result = accessor.withWriteTx(
-				(db: import("../db-accessor").WriteDb) => linkMemoryToEntities(db, mem.id, mem.content, agentId),
-				"routes/repair-routes.ts:463",
+				(db: import("../db-accessor").WriteDb) => linkMemoryToEntities(db, mem.id, mem.content, scoped.agentId),
+				"db:repair.relink-entities.write",
 			);
 			linked += result.linked;
 			entities += result.entityIds.length;
@@ -486,9 +531,9 @@ export function registerRepairRoutes(
 			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
 			   AND id NOT IN (SELECT DISTINCT memory_id FROM memory_entity_mentions)`,
 						)
-						.get(agentId) as { cnt: number }
+						.get(scoped.agentId) as { cnt: number }
 				).cnt,
-			"routes/repair-routes.ts:474",
+			"db:repair.relink-entities.remaining",
 		);
 
 		return c.json({
@@ -531,7 +576,7 @@ export function registerRepairRoutes(
 			 LIMIT ?`,
 					)
 					.all(batchSize) as Array<{ id: string; content: string }>,
-			"routes/repair-routes.ts:518",
+			"db:repair.backfill-hints.select",
 		);
 
 		if (unhinted.length === 0) {
@@ -551,7 +596,7 @@ export function registerRepairRoutes(
 				enqueue(db, mem.id, mem.content);
 				enqueued++;
 			}
-		}, "routes/repair-routes.ts:544");
+		}, "db:repair.backfill-hints.enqueue");
 
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const remaining = accessor.withReadDb(
@@ -565,7 +610,7 @@ export function registerRepairRoutes(
 						)
 						.get() as { cnt: number }
 				).cnt,
-			"routes/repair-routes.ts:552",
+			"db:repair.backfill-hints.remaining",
 		);
 
 		return c.json({
@@ -597,7 +642,7 @@ export function registerRepairRoutes(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const dead = getDbAccessor().withReadDb(
 			(db: import("../db-accessor").ReadDb) => findDeadMemories(db, { maxConfidence, maxAccessDays, limit }),
-			"routes/repair-routes.ts:593",
+			"db:repair.dead-memories.read",
 		);
 		return c.json({ count: dead.length, memories: dead });
 	});
