@@ -77,6 +77,10 @@ jobs:
         working-directory: platform/daemon
         run: bun test src/embedding-worker-handle.test.ts src/native-embedding.test.ts
 
+      - name: Native embedding /health isolation (source daemon)
+        working-directory: platform/daemon
+        run: bun test src/native-embedding-eventloop-isolation.test.ts
+
       # Compiled-binary guard: this is deliberately a separate gate from the
       # embedding smoke. It constructs DbOwnerClient inside the Bun-compiled
       # binary and executes a real owner query, so a missing embedded
