@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb } from "../db-accessor";
+import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "../telemetry";
 import { countTokens, resetTokenizerStats, tokenizerStats } from "../pipeline/tokenizer";
 import {
@@ -12,18 +13,23 @@ import {
 	DREAMING_HALT_COOLDOWN_MS,
 	DREAMING_HYGIENE_AGENT_PROMPT,
 	type DreamingState,
+	type DreamingEpisodicBacklogProbe,
 	_testParseEpisodicCursor,
 	dreamingEarlyExitSummary,
 	enqueueDreamingHygieneAttention,
+	evaluateDreamingTrigger,
 	getDreamingEpisodicTokenBacklog,
 	getDreamingEpisodicTokenBacklogInDb,
 	getDreamingEvidenceExclusions,
 	getDreamingPasses,
 	getDreamingState,
 	getDreamingToolCalls,
+	hasDreamingEpisodicBacklog,
 	isDreamingHaltActive,
 	isDreamingScopeHalted,
 	recordDreamingFailure,
+	probeDreamingEpisodicBacklog,
+	probeDreamingEpisodicBacklogInDb,
 	requestDreamingEvidenceRequeue,
 	runDreamingAgentPass,
 	selectDreamingPassMode,
@@ -45,6 +51,7 @@ import {
 } from "./dreaming-evidence-retry";
 import { readDreamingRunbook } from "./dreaming-runbook";
 import { requestDreamingReviewedEvidenceRequeue } from "./dreaming-evidence-reviews";
+import { getDreamingEpisodicTokenBacklogCached } from "./dreaming-token-cache";
 
 const AGENT = "default";
 
@@ -262,6 +269,8 @@ describe("Dreaming", () => {
 		};
 		const measurePromise = measureLoop();
 
+		const refresh = getDreamingEpisodicTokenBacklog(accessor, AGENT);
+		await expect(refresh).resolves.toBeGreaterThan(0);
 		const pass = runDreamingAgentPass(
 			accessor,
 			{
@@ -852,6 +861,20 @@ describe("Dreaming", () => {
 		});
 		const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(true);
+		expect(
+			await evaluateDreamingTrigger(
+				accessor,
+				cfg,
+				AGENT,
+				{
+					kind: "indeterminate",
+					tokenLowerBound: 0,
+					hasBacklog: true,
+					sourcesScanned: 1,
+				},
+				now,
+			),
+		).toEqual({ trigger: true, reason: "continuation" });
 
 		// A subsequent no-progress pass gets a new id. It may be retried later
 		// through the normal threshold/interval policy, but it cannot spin here.
@@ -1104,7 +1127,60 @@ describe("Dreaming", () => {
 		).toBe(true);
 	});
 
-	it("bounds the scheduled episodic backlog probe without suppressing a large backlog", async () => {
+	it("returns an exact finite total and threshold decision below the source cap", async () => {
+		const agentId = "exact-small";
+		for (let index = 0; index < 3; index += 1) {
+			seedArtifact(
+				db,
+				`imports/${agentId}-${index}.md`,
+				`pending exact source ${index}`,
+				`${agentId}-${index}`,
+				"2026-08-01T00:00:00.000Z",
+				agentId,
+			);
+		}
+		const sources = searchEpisodicSources(db as unknown as ReadDb, { agentId, query: "", limit: null });
+		const expected = sources.reduce((total, source) => total + countTokens(renderDreamingEvidence(source)), 0);
+
+		const exact = await getDreamingEpisodicTokenBacklogInDb(db as unknown as ReadDb, agentId);
+		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, expected, 50);
+		expect(exact).toBe(expected);
+		expect(Number.isSafeInteger(exact)).toBe(true);
+		expect(probe).toEqual({ kind: "exact", tokens: expected, hasBacklog: true, sourcesScanned: 3 });
+		expect(
+			await evaluateDreamingTrigger(
+				accessor,
+				defaultCfg({ tokenThreshold: expected, backfillOnFirstRun: false }),
+				agentId,
+				probe,
+			),
+		).toEqual({ trigger: true, reason: "token-threshold" });
+	});
+
+	it("treats exactly 50 sources as a complete bounded page", async () => {
+		const agentId = "exact-fifty";
+		for (let index = 0; index < 50; index += 1) {
+			seedArtifact(
+				db,
+				`imports/${agentId}-${index}.md`,
+				`pending fifty source ${index}`,
+				`${agentId}-${index}`,
+				"2026-08-01T00:00:00.000Z",
+				agentId,
+			);
+		}
+		const sources = searchEpisodicSources(db as unknown as ReadDb, { agentId, query: "", limit: null });
+		const expected = sources.reduce((total, source) => total + countTokens(renderDreamingEvidence(source)), 0);
+		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, expected + 1, 50);
+		const exact = await getDreamingEpisodicTokenBacklogInDb(db as unknown as ReadDb, agentId);
+
+		expect(sources).toHaveLength(50);
+		expect(probe).toEqual({ kind: "exact", tokens: expected, hasBacklog: true, sourcesScanned: 50 });
+		expect(exact).toBe(expected);
+		expect(Number.isFinite(exact)).toBe(true);
+	});
+
+	it("does not treat a bounded full page as a threshold crossing", async () => {
 		for (let index = 0; index < 51; index += 1) {
 			seedArtifact(
 				db,
@@ -1115,7 +1191,184 @@ describe("Dreaming", () => {
 			);
 		}
 
-		expect(await getDreamingEpisodicTokenBacklogInDb(db as unknown as ReadDb, AGENT, 50)).toBe(Number.MAX_SAFE_INTEGER);
+		const agentId = AGENT;
+		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
+		expect(probe.kind).toBe("indeterminate");
+		if (probe.kind !== "indeterminate") throw new Error("expected an indeterminate bounded probe");
+		expect(probe.tokenLowerBound).toBeGreaterThan(0);
+		expect(Number.isSafeInteger(probe.tokenLowerBound)).toBe(true);
+		expect(probe.hasBacklog).toBe(true);
+		expect(probe.sourcesScanned).toBe(50);
+		expect(
+			await evaluateDreamingTrigger(
+				accessor,
+				defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false }),
+				agentId,
+				probe,
+			),
+		).toEqual({ trigger: false });
+	});
+
+	it("stops a bounded probe after the measured threshold", async () => {
+		const agentId = "threshold-crossed";
+		for (let index = 0; index < 51; index += 1) {
+			seedArtifact(
+				db,
+				`imports/${agentId}-${index}.md`,
+				`pending threshold source ${index}`,
+				`${agentId}-${index}`,
+				"2026-08-01T00:00:00.000Z",
+				agentId,
+			);
+		}
+		const first = searchEpisodicSources(db as unknown as ReadDb, { agentId, query: "", limit: 1 })[0];
+		if (first === undefined) throw new Error("expected a threshold source");
+		const firstTokens = countTokens(renderDreamingEvidence(first));
+		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, firstTokens, 50);
+
+		expect(probe).toEqual({
+			kind: "threshold-reached",
+			tokenLowerBound: firstTokens,
+			hasBacklog: true,
+			sourcesScanned: 1,
+		});
+	});
+
+	it("returns indeterminate when its source budget ends below threshold", async () => {
+		const agentId = "threshold-indeterminate";
+		for (let index = 0; index < 2; index += 1) {
+			seedArtifact(
+				db,
+				`imports/${agentId}-${index}.md`,
+				`pending indeterminate source ${index}`,
+				`${agentId}-${index}`,
+				"2026-08-01T00:00:00.000Z",
+				agentId,
+			);
+		}
+		const first = searchEpisodicSources(db as unknown as ReadDb, { agentId, query: "", limit: 1 })[0];
+		if (first === undefined) throw new Error("expected an indeterminate source");
+		const firstTokens = countTokens(renderDreamingEvidence(first));
+		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, firstTokens + 1, 1);
+
+		expect(probe).toEqual({
+			kind: "indeterminate",
+			tokenLowerBound: firstTokens,
+			hasBacklog: true,
+			sourcesScanned: 1,
+		});
+	});
+
+	it("keeps a partial probe out of the exact aggregate cache", async () => {
+		const agentId = "partial-cache-isolation";
+		seedArtifact(
+			db,
+			`imports/${agentId}-exact.md`,
+			"the exact cached source",
+			`${agentId}-exact`,
+			"2026-08-01T00:00:00.000Z",
+			agentId,
+		);
+		const exact = await getDreamingEpisodicTokenBacklogInDb(db as unknown as ReadDb, agentId);
+		expect(getDreamingEpisodicTokenBacklogCached(agentId)).toBe(exact);
+		for (let index = 0; index < 51; index += 1) {
+			seedArtifact(
+				db,
+				`imports/${agentId}-partial-${index}.md`,
+				`partial source ${index}`,
+				`${agentId}-partial-${index}`,
+				"2026-08-02T00:00:00.000Z",
+				agentId,
+			);
+		}
+		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
+
+		expect(probe.kind).toBe("indeterminate");
+		expect(getDreamingEpisodicTokenBacklogCached(agentId)).toBe(exact);
+	});
+
+	it("keeps owner-routed and inline probe semantics equivalent", async () => {
+		const agentId = "owner-inline-probe";
+		seedArtifact(
+			db,
+			`imports/${agentId}.md`,
+			"owner and inline use the same evidence",
+			agentId,
+			"2026-08-01T00:00:00.000Z",
+			agentId,
+		);
+		const inline = await probeDreamingEpisodicBacklog(accessor, agentId, 100_000);
+		const ownerInputs: Array<{
+			readonly agentId: string;
+			readonly tokenThreshold: number;
+			readonly maxSources: number;
+		}> = [];
+		const existenceInputs: Array<{ readonly agentId: string }> = [];
+		const ownerMaintenance = {
+			dreamingEpisodicBacklogProbe: async (input: (typeof ownerInputs)[number]) => {
+				ownerInputs.push(input);
+				return await probeDreamingEpisodicBacklogInDb(
+					db as unknown as ReadDb,
+					input.agentId,
+					input.tokenThreshold,
+					input.maxSources,
+				);
+			},
+			dreamingEpisodicBacklogExists: async (input: { readonly agentId: string }) => {
+				existenceInputs.push(input);
+				return true;
+			},
+		} as unknown as DbOwnerMaintenance;
+		const owner = await probeDreamingEpisodicBacklog(accessor, agentId, 100_000, ownerMaintenance);
+
+		expect(owner).toEqual(inline);
+		expect(ownerInputs).toEqual([{ agentId, tokenThreshold: 100_000, maxSources: 50 }]);
+		expect(await hasDreamingEpisodicBacklog(accessor, agentId, ownerMaintenance)).toBe(true);
+		expect(existenceInputs).toEqual([{ agentId }]);
+	});
+
+	it("uses backlog existence for max-interval liveness with an indeterminate probe", async () => {
+		const agentId = "max-interval-indeterminate";
+		const now = Date.now();
+		accessor.withWriteTx((tx) => {
+			tx.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
+				agentId,
+				new Date(now - 6 * 60 * 60 * 1_000).toISOString(),
+			);
+		});
+		const probe: DreamingEpisodicBacklogProbe = {
+			kind: "indeterminate",
+			tokenLowerBound: 3,
+			hasBacklog: true,
+			sourcesScanned: 50,
+		};
+
+		expect(
+			await evaluateDreamingTrigger(
+				accessor,
+				defaultCfg({ tokenThreshold: 100_000, maxInterval: 6 * 60 * 60 * 1_000, backfillOnFirstRun: false }),
+				agentId,
+				probe,
+				now,
+			),
+		).toEqual({ trigger: true, reason: "max-interval" });
+	});
+
+	it("labels first-run backfill from real backlog existence", async () => {
+		const agentId = "first-run-backfill";
+		expect(
+			await evaluateDreamingTrigger(
+				accessor,
+				defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: true }),
+				agentId,
+				{
+					kind: "indeterminate",
+					tokenLowerBound: 0,
+					hasBacklog: true,
+					sourcesScanned: 50,
+				},
+			),
+		).toEqual({ trigger: true, reason: "first-run" });
 	});
 
 	it("runs a pass when attention is pending and leaves it for the agent to consume", async () => {
@@ -1129,6 +1382,14 @@ describe("Dreaming", () => {
 			});
 		});
 		expect(await shouldTriggerDreaming(accessor, defaultCfg(), AGENT)).toBe(true);
+		expect(
+			await evaluateDreamingTrigger(accessor, defaultCfg(), AGENT, {
+				kind: "exact",
+				tokens: 0,
+				hasBacklog: false,
+				sourcesScanned: 0,
+			}),
+		).toEqual({ trigger: true, reason: "attention" });
 
 		let prompt = "";
 		const result = await runDreamingAgentPass(
@@ -1924,17 +2185,17 @@ describe("Dreaming", () => {
 		// Hygiene exits on an empty attention queue even while evidence is
 		// pending; content exits on an empty backlog even while attention is
 		// pending; combined modes need both empty; compact never exits.
-		expect(dreamingEarlyExitSummary("incremental-hygiene", false, 100)).toBe("No hygiene attention to process");
-		expect(dreamingEarlyExitSummary("incremental-hygiene", true, 0)).toBeNull();
-		expect(dreamingEarlyExitSummary("incremental-content", true, 0)).toBe("No new episodic evidence to process");
-		expect(dreamingEarlyExitSummary("incremental-content", false, 0, true)).toBeNull();
-		expect(dreamingEarlyExitSummary("incremental-content", false, 1)).toBeNull();
-		expect(dreamingEarlyExitSummary("incremental", false, 0)).toBe(
+		expect(dreamingEarlyExitSummary("incremental-hygiene", false, false)).toBe("No hygiene attention to process");
+		expect(dreamingEarlyExitSummary("incremental-hygiene", true, true)).toBeNull();
+		expect(dreamingEarlyExitSummary("incremental-content", true, false)).toBe("No new episodic evidence to process");
+		expect(dreamingEarlyExitSummary("incremental-content", false, false, true)).toBeNull();
+		expect(dreamingEarlyExitSummary("incremental-content", false, true)).toBeNull();
+		expect(dreamingEarlyExitSummary("incremental", false, false)).toBe(
 			"No new episodic evidence or semantic attention to process",
 		);
-		expect(dreamingEarlyExitSummary("incremental", false, 0, true)).toBeNull();
-		expect(dreamingEarlyExitSummary("incremental", true, 0)).toBeNull();
-		expect(dreamingEarlyExitSummary("compact", false, 0)).toBeNull();
+		expect(dreamingEarlyExitSummary("incremental", false, false, true)).toBeNull();
+		expect(dreamingEarlyExitSummary("incremental", true, false)).toBeNull();
+		expect(dreamingEarlyExitSummary("compact", false, false)).toBeNull();
 	});
 
 	it("uses the mode-specific runbook prompt for focused passes (#1098)", async () => {

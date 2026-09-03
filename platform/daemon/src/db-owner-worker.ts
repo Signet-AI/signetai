@@ -443,10 +443,30 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog" }>,
 	): Promise<number> {
 		// Keep source selection, evidence rendering, and exact token counting out
-		// of the daemon process. The helper enforces the finite source cap before
-		// it materializes any result for the parent.
+		// of the daemon process. The exact operation has no finite source cap.
 		const { getDreamingEpisodicTokenBacklogInDb } = await import("./pipeline/dreaming");
-		return await getDreamingEpisodicTokenBacklogInDb(db as never, request.input.agentId, request.input.maxSources);
+		return await getDreamingEpisodicTokenBacklogInDb(db as never, request.input.agentId);
+	}
+
+	async function executeDreamingEpisodicBacklogProbe(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog_probe" }>,
+	): Promise<unknown> {
+		// The scheduled gate stays bounded and returns structured completeness
+		// instead of turning an incomplete source page into a token count.
+		const { probeDreamingEpisodicBacklogInDb } = await import("./pipeline/dreaming");
+		return await probeDreamingEpisodicBacklogInDb(
+			db as never,
+			request.input.agentId,
+			request.input.tokenThreshold,
+			request.input.maxSources,
+		);
+	}
+
+	async function executeDreamingEpisodicBacklogExists(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog_exists" }>,
+	): Promise<boolean> {
+		const { hasDreamingEpisodicBacklogInDb } = await import("./pipeline/dreaming");
+		return hasDreamingEpisodicBacklogInDb(db as never, request.input.agentId);
 	}
 
 	async function executeDreamingEvidenceSearch(
@@ -973,6 +993,10 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "dreaming_surprisal_attention")
 			return executeDreamingSurprisalAttention(job.request, context);
 		if (job.request.kind === "dreaming_episodic_backlog") return await executeDreamingEpisodicBacklog(job.request);
+		if (job.request.kind === "dreaming_episodic_backlog_probe")
+			return await executeDreamingEpisodicBacklogProbe(job.request);
+		if (job.request.kind === "dreaming_episodic_backlog_exists")
+			return await executeDreamingEpisodicBacklogExists(job.request);
 		if (job.request.kind === "dreaming_evidence_search") return await executeDreamingEvidenceSearch(job.request);
 		if (job.request.kind === "dreaming_evidence_source") return await executeDreamingEvidenceSource(job.request);
 		if (job.request.kind === "dreaming_pass_finalize") return executeDreamingPassFinalize(job.request, context);

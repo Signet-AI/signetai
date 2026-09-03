@@ -162,6 +162,8 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		case "dreaming_hygiene_attention":
 		case "dreaming_surprisal_attention":
 		case "dreaming_episodic_backlog":
+		case "dreaming_episodic_backlog_probe":
+		case "dreaming_episodic_backlog_exists":
 		case "dreaming_evidence_search":
 		case "dreaming_evidence_source":
 		case "dreaming_pass_finalize":

@@ -142,7 +142,7 @@ describe("compiled native Dreaming finalization", () => {
 					summary: "native smoke",
 					rejectedEvidence: [],
 					memoryHeadResult: null,
-					backlogByScope: [],
+					hasBacklogByScope: [],
 					nextWatermarkByScope: [],
 				},
 			});
