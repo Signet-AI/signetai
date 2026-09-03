@@ -19,7 +19,7 @@
     },
     "dist/signetai": {
       "name": "signetai",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet": "bin/signet.js",
         "signet-mcp": "dist/mcp-stdio.js",
@@ -27,27 +27,27 @@
     },
     "dist/signetai-darwin-arm64": {
       "name": "signetai-darwin-arm64",
-      "version": "0.216.2",
+      "version": "0.216.3",
     },
     "dist/signetai-darwin-x64": {
       "name": "signetai-darwin-x64",
-      "version": "0.216.2",
+      "version": "0.216.3",
     },
     "dist/signetai-linux-arm64": {
       "name": "signetai-linux-arm64",
-      "version": "0.216.2",
+      "version": "0.216.3",
     },
     "dist/signetai-linux-x64": {
       "name": "signetai-linux-x64",
-      "version": "0.216.2",
+      "version": "0.216.3",
     },
     "dist/signetai-win32-x64": {
       "name": "signetai-win32-x64",
-      "version": "0.216.2",
+      "version": "0.216.3",
     },
     "integrations/claude-code/connector": {
       "name": "@signet/connector-claude-code",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-claude-code": "bin/install.js",
       },
@@ -62,7 +62,7 @@
     },
     "integrations/codex/connector": {
       "name": "@signet/connector-codex",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-codex": "bin/install.js",
       },
@@ -77,7 +77,7 @@
     },
     "integrations/codex/plugin": {
       "name": "@signet/codex-plugin",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-codex-plugin": "bin/install.js",
       },
@@ -88,7 +88,7 @@
     },
     "integrations/forge/connector": {
       "name": "@signet/connector-forge",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-forge": "bin/install.js",
       },
@@ -103,7 +103,7 @@
     },
     "integrations/gemini/connector": {
       "name": "@signet/connector-gemini",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-gemini": "bin/install.js",
       },
@@ -118,7 +118,7 @@
     },
     "integrations/hermes-agent/connector": {
       "name": "@signet/connector-hermes-agent",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-hermes-agent": "bin/install.js",
       },
@@ -133,7 +133,7 @@
     },
     "integrations/kimi/connector": {
       "name": "@signet/connector-kimi",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-kimi": "bin/install.js",
       },
@@ -148,7 +148,7 @@
     },
     "integrations/oh-my-pi/connector": {
       "name": "@signet/connector-oh-my-pi",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-oh-my-pi": "bin/install.js",
       },
@@ -163,7 +163,7 @@
     },
     "integrations/oh-my-pi/extension": {
       "name": "@signet/oh-my-pi-extension",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "dependencies": {
         "@signet/core": "workspace:*",
         "@signet/pi-extension-base": "workspace:*",
@@ -176,7 +176,7 @@
     },
     "integrations/openclaw/connector": {
       "name": "@signet/connector-openclaw",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-openclaw": "bin/install.js",
       },
@@ -191,7 +191,7 @@
     },
     "integrations/openclaw/memory-adapter": {
       "name": "@signetai/signet-memory-openclaw",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "dependencies": {
         "@sinclair/typebox": "0.34.47",
       },
@@ -209,7 +209,7 @@
     },
     "integrations/opencode/connector": {
       "name": "@signet/connector-opencode",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-opencode": "bin/install.js",
       },
@@ -225,7 +225,7 @@
     },
     "integrations/opencode/plugin": {
       "name": "@signet/opencode-plugin",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -241,7 +241,7 @@
     },
     "integrations/pi/connector": {
       "name": "@signet/connector-pi",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-connector-pi": "bin/install.js",
       },
@@ -256,7 +256,7 @@
     },
     "integrations/pi/extension": {
       "name": "@signet/pi-extension",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "dependencies": {
         "@signet/core": "workspace:*",
         "@signet/pi-extension-base": "workspace:*",
@@ -270,7 +270,7 @@
     },
     "integrations/pi/extension-base": {
       "name": "@signet/pi-extension-base",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "dependencies": {
         "@signet/core": "workspace:*",
         "@signet/lifecycle-proof": "workspace:*",
@@ -278,11 +278,11 @@
     },
     "integrations/unreal/plugin": {
       "name": "@signet/unreal-plugin",
-      "version": "0.216.2",
+      "version": "0.216.3",
     },
     "libs/connector-base": {
       "name": "@signet/connector-base",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "dependencies": {
         "@signet/core": "0.214.36",
         "json5": "^2.2.3",
@@ -295,11 +295,11 @@
     },
     "libs/lifecycle-proof": {
       "name": "@signet/lifecycle-proof",
-      "version": "0.216.2",
+      "version": "0.216.3",
     },
     "libs/sdk": {
       "name": "@signet/sdk",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "devDependencies": {
         "@signet/core": "workspace:*",
         "@types/react": "^19.0.0",
@@ -339,7 +339,7 @@
     },
     "platform/core": {
       "name": "@signet/core",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "dependencies": {
         "@napi-rs/keyring": "1.3.0",
         "libsodium-wrappers": "^0.8.2",
@@ -364,7 +364,7 @@
     },
     "platform/daemon": {
       "name": "@signet/daemon",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": {
         "signet-daemon": "./dist/daemon.js",
         "signet-mcp": "./dist/mcp-stdio.js",
@@ -409,14 +409,14 @@
     },
     "platform/native": {
       "name": "@signet/native",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "devDependencies": {
         "@napi-rs/cli": "^3.5.1",
       },
     },
     "surfaces/browser-extension": {
       "name": "@signet/extension",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "devDependencies": {
         "@types/chrome": "^0.0.287",
         "typescript": "^5.7.0",
@@ -424,7 +424,7 @@
     },
     "surfaces/cli": {
       "name": "@signet/cli",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "bin": "./dist/cli.js",
       "dependencies": {
         "@earendil-works/pi-ai": "0.84.4",
@@ -491,7 +491,7 @@
     },
     "surfaces/desktop": {
       "name": "@signet/desktop",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "dependencies": {
         "@signet/core": "workspace:*",
         "@signet/tray": "workspace:*",
@@ -506,7 +506,7 @@
     },
     "surfaces/tray": {
       "name": "@signet/tray",
-      "version": "0.216.2",
+      "version": "0.216.3",
       "devDependencies": {
         "typescript": "^5.7.0",
       },

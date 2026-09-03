@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-03
-- Bug fixes: avoid embedding conflict starvation; enforce scoped embedding repair; scope legacy embedding repairs.
+- Bug fixes: repair native health fixture; avoid embedding conflict starvation; enforce scoped embedding repair; scope legacy embedding repairs.
 
 ### 2026-09-02
 - Bug fixes: keep owner protocol pure.
@@ -31,6 +31,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: escape dreaming smoke template interpolation (build break); embed GraphIQ installer in native runtime + npm files; route predictive context DB scans through owner; restore scoped focal query fallback; owner-route W5 contention paths; owner-route structural feature reads; owner-route traversal candidate hydration.
 
 ## Release Ledger
+
+## [0.216.3] - 2026-09-03
+
+Release summary: 1 bug fix.
+Tag range: `v0.216.2..v0.216.3`.
+
+### Bug Fixes
+
+- **ci**: repair native health fixture
 
 ## [0.216.2] - 2026-09-03
 
