@@ -6,6 +6,11 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-04
+- Bug fixes: stop retaining backlog text; make backlog probes threshold-aware.
+- Refactoring: simplify backlog probes.
+- Docs: add missing contributors.
+
 ### 2026-09-03
 - Bug fixes: repair native health fixture; avoid embedding conflict starvation; enforce scoped embedding repair; scope legacy embedding repairs.
 
@@ -27,10 +32,25 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-08-29
 - Bug fixes: distinguish async DB execution homes; classify database execution homes; bound scheduled Dreaming backlog probes; extend native owner smoke startup budget; refresh event-loop source baseline; correct DB accessor audit site tokens; route scheduled Dreaming scans to owner.
 
-### 2026-08-28
-- Bug fixes: escape dreaming smoke template interpolation (build break); embed GraphIQ installer in native runtime + npm files; route predictive context DB scans through owner; restore scoped focal query fallback; owner-route W5 contention paths; owner-route structural feature reads; owner-route traversal candidate hydration.
-
 ## Release Ledger
+
+## [0.216.4] - 2026-09-04
+
+Release summary: 2 bug fixes, 1 refactor, and 1 docs update.
+Tag range: `v0.216.3..v0.216.4`.
+
+### Bug Fixes
+
+- **dreaming**: stop retaining backlog text
+- **dreaming**: make backlog probes threshold-aware
+
+### Refactoring
+
+- **dreaming**: simplify backlog probes
+
+### Docs
+
+- **readme**: add missing contributors (#1846)
 
 ## [0.216.3] - 2026-09-03
 
