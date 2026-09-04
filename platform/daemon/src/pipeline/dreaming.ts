@@ -2274,7 +2274,13 @@ function validDreamingBacklogEntry(
 ): DreamingBacklogTokenEntry | null {
 	const offset = offsetOverride ?? (useConsumption ? deliveredOffsetForSource(db, agentId, source) : 0);
 	const text = renderDreamingEvidence(source).slice(offset);
-	return text.length === 0 ? null : { key: `${source.kind}:${source.id}:${offset}`, text };
+	return text.length === 0
+		? null
+		: {
+				key: `${source.kind}:${source.id}:${offset}`,
+				revision: source.sourceRevision ?? source.capturedAt,
+				text,
+			};
 }
 
 function sourceRecordKey(source: EpisodicSourceRecord): string {

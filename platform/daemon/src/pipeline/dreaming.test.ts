@@ -247,6 +247,23 @@ describe("Dreaming", () => {
 		expect(await getDreamingEpisodicTokenBacklog(accessor, leftAgent)).toBe(leftInitial);
 	});
 
+	it("invalidates a cached token count when the source revision changes", async () => {
+		const agentId = "revision-cache";
+		const path = "imports/revision-cache.md";
+		seedArtifact(db, path, "short evidence", "first", "2026-08-01T00:00:00.000Z", agentId);
+		const initial = await getDreamingEpisodicTokenBacklogInDb(db as unknown as ReadDb, agentId);
+
+		db.prepare("UPDATE memory_artifacts SET content = ?, source_sha256 = ? WHERE agent_id = ? AND source_path = ?").run(
+			"substantially longer evidence ".repeat(20),
+			"second",
+			agentId,
+			path,
+		);
+		const revised = await getDreamingEpisodicTokenBacklogInDb(db as unknown as ReadDb, agentId);
+
+		expect(revised).toBeGreaterThan(initial);
+	});
+
 	it("keeps the event loop responsive during a large exact-BPE backlog refresh (#1552, #1543)", async () => {
 		for (let i = 0; i < 50; i += 1) {
 			seedTranscript(
