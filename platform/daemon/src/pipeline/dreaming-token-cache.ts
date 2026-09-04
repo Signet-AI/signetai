@@ -60,7 +60,12 @@ export class DreamingBacklogTokenCache {
 
 	async replaceExactSnapshot(agentId: string, entries: readonly DreamingBacklogTokenEntry[]): Promise<number> {
 		const key = JSON.stringify(["exact", agentId, entries]);
-		return await this.enqueueExact(agentId, key, async () => await this.replaceExactSnapshotNow(agentId, entries));
+		return await this.enqueue(
+			agentId,
+			key,
+			this.exactInflight,
+			async () => await this.replaceExactSnapshotNow(agentId, entries),
+		);
 	}
 
 	async countEntries(
@@ -70,12 +75,12 @@ export class DreamingBacklogTokenCache {
 	): Promise<DreamingBacklogTokenBatchResult> {
 		const stopAt = stopAtTokens === undefined ? undefined : ensureTokenCount(stopAtTokens, "Dreaming token stop limit");
 		const key = JSON.stringify(["batch", agentId, entries, stopAt]);
-		return await this.enqueueBatch(agentId, key, async () => await this.countEntriesNow(agentId, entries, stopAt));
-	}
-
-	/** Compatibility name for callers that perform an authoritative refresh. */
-	async refresh(agentId: string, entries: readonly DreamingBacklogTokenEntry[]): Promise<number> {
-		return await this.replaceExactSnapshot(agentId, entries);
+		return await this.enqueue(
+			agentId,
+			key,
+			this.batchInflight,
+			async () => await this.countEntriesNow(agentId, entries, stopAt),
+		);
 	}
 
 	get(agentId: string): number {
@@ -84,11 +89,6 @@ export class DreamingBacklogTokenCache {
 
 	recordExactTotal(agentId: string, count: number): void {
 		this.values.set(agentId, ensureTokenCount(count, "Dreaming exact token total"));
-	}
-
-	/** Compatibility name; only exact totals may cross this boundary. */
-	record(agentId: string, count: number): void {
-		this.recordExactTotal(agentId, count);
 	}
 
 	hasValue(agentId: string): boolean {
@@ -208,42 +208,24 @@ export class DreamingBacklogTokenCache {
 		}
 	}
 
-	private enqueueExact(agentId: string, key: string, operation: () => Promise<number>): Promise<number> {
-		const active = this.exactInflight.get(key);
-		if (active !== undefined) return active;
-		const prior = this.tails.get(agentId) ?? Promise.resolve();
-		const promise = prior.then(operation, operation);
-		this.exactInflight.set(key, promise);
-		const tail = promise.then(
-			() => undefined,
-			() => undefined,
-		);
-		this.tails.set(agentId, tail);
-		const clear = (): void => {
-			if (this.exactInflight.get(key) === promise) this.exactInflight.delete(key);
-			if (this.tails.get(agentId) === tail) this.tails.delete(agentId);
-		};
-		void promise.then(clear, clear);
-		return promise;
-	}
-
-	private enqueueBatch(
+	private enqueue<Result>(
 		agentId: string,
 		key: string,
-		operation: () => Promise<DreamingBacklogTokenBatchResult>,
-	): Promise<DreamingBacklogTokenBatchResult> {
-		const active = this.batchInflight.get(key);
+		inflight: Map<string, Promise<Result>>,
+		operation: () => Promise<Result>,
+	): Promise<Result> {
+		const active = inflight.get(key);
 		if (active !== undefined) return active;
 		const prior = this.tails.get(agentId) ?? Promise.resolve();
 		const promise = prior.then(operation, operation);
-		this.batchInflight.set(key, promise);
+		inflight.set(key, promise);
 		const tail = promise.then(
 			() => undefined,
 			() => undefined,
 		);
 		this.tails.set(agentId, tail);
 		const clear = (): void => {
-			if (this.batchInflight.get(key) === promise) this.batchInflight.delete(key);
+			if (inflight.get(key) === promise) inflight.delete(key);
 			if (this.tails.get(agentId) === tail) this.tails.delete(agentId);
 		};
 		void promise.then(clear, clear);

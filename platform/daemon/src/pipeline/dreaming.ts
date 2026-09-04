@@ -2260,8 +2260,7 @@ interface DreamingBacklogRead {
 	readonly sourcesScanned: number;
 }
 
-function boundedDreamingBacklogSourceLimit(maxSources: number | undefined): number | null {
-	if (maxSources === undefined) return null;
+function boundedDreamingBacklogSourceLimit(maxSources: number): number {
 	if (!Number.isFinite(maxSources)) throw new RangeError("Dreaming backlog source limit must be finite");
 	return Math.max(1, Math.min(Math.floor(maxSources), DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES));
 }
@@ -2282,6 +2281,25 @@ function sourceRecordKey(source: EpisodicSourceRecord): string {
 	return `${source.kind}:${source.id}`;
 }
 
+function backlogReadFromSources(
+	sources: readonly EpisodicSourceRecord[],
+	sourceLimit: number | null,
+	entryFor: (source: EpisodicSourceRecord) => DreamingBacklogTokenEntry | null,
+): DreamingBacklogRead {
+	const countedSources = sourceLimit === null ? sources : sources.slice(0, sourceLimit);
+	const entries = countedSources.flatMap((source) => {
+		const entry = entryFor(source);
+		return entry === null ? [] : [entry];
+	});
+	const lookahead = sourceLimit === null ? undefined : sources[sourceLimit];
+	return {
+		entries,
+		hasBacklog: entries.length > 0 || (lookahead !== undefined && entryFor(lookahead) !== null),
+		complete: sourceLimit === null || sources.length <= sourceLimit,
+		sourcesScanned: countedSources.length,
+	};
+}
+
 function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimit: number | null): DreamingBacklogRead {
 	const hasConsumption =
 		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_consumption'").get() !=
@@ -2293,19 +2311,9 @@ function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimi
 			excludeDelivered: true,
 			limit: sourceLimit === null ? null : sourceLimit + 1,
 		});
-		const countedSources = sourceLimit === null ? queued : queued.slice(0, sourceLimit);
-		const entries = countedSources.flatMap((source) => {
-			const entry = validDreamingBacklogEntry(db, agentId, source, true);
-			return entry === null ? [] : [entry];
-		});
-		const lookahead = sourceLimit === null ? null : queued[sourceLimit];
-		const lookaheadEntry = lookahead == null ? null : validDreamingBacklogEntry(db, agentId, lookahead, true);
-		return {
-			entries,
-			hasBacklog: entries.length > 0 || lookaheadEntry !== null,
-			complete: sourceLimit === null || queued.length <= sourceLimit,
-			sourcesScanned: entries.length,
-		};
+		return backlogReadFromSources(queued, sourceLimit, (source) =>
+			validDreamingBacklogEntry(db, agentId, source, true),
+		);
 	}
 
 	const state = readDreamingState(db, agentId);
@@ -2331,23 +2339,13 @@ function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimi
 	const resumedSource = resumedEntry !== null && resumed !== null && !resumedIsQueued ? resumed : null;
 	const resumedKey = resumedSource === null ? null : sourceRecordKey(resumedSource);
 	const availableSources = resumedSource === null ? queued : [resumedSource, ...queued];
-	const countedSources = sourceLimit === null ? availableSources : availableSources.slice(0, sourceLimit);
-	const entries = countedSources.flatMap((source) => {
+	return backlogReadFromSources(availableSources, sourceLimit, (source) => {
 		const offset =
 			resumedKey !== null && sourceRecordKey(source) === resumedKey
 				? (state.evidenceCursor?.fragmentOffset ?? 0)
 				: undefined;
-		const entry = validDreamingBacklogEntry(db, agentId, source, false, offset);
-		return entry === null ? [] : [entry];
+		return validDreamingBacklogEntry(db, agentId, source, false, offset);
 	});
-	const lookahead = sourceLimit === null ? null : availableSources[sourceLimit];
-	const lookaheadEntry = lookahead == null ? null : validDreamingBacklogEntry(db, agentId, lookahead, false);
-	return {
-		entries,
-		hasBacklog: entries.length > 0 || lookaheadEntry !== null,
-		complete: sourceLimit === null || availableSources.length <= sourceLimit,
-		sourcesScanned: countedSources.length,
-	};
 }
 
 /**
@@ -2377,7 +2375,6 @@ export function probeDreamingEpisodicBacklogInDb(
 ): Promise<DreamingEpisodicBacklogProbe> {
 	const threshold = ensureDreamingTokenThreshold(tokenThreshold);
 	const sourceLimit = boundedDreamingBacklogSourceLimit(maxSources);
-	if (sourceLimit === null) throw new RangeError("Dreaming backlog probe requires a source limit");
 	const read = readDreamingEpisodicBacklogInDb(db, agentId, sourceLimit);
 	return countDreamingBacklogTokenEntries(agentId, read.entries, read.complete ? undefined : threshold).then(
 		(result) => {
@@ -2473,16 +2470,13 @@ export async function shouldTriggerDreaming(
 	nowMs = Date.now(),
 	episodicTokens?: number,
 ): Promise<boolean> {
-	const signal: DreamingEpisodicBacklogProbe =
-		episodicTokens === undefined
-			? await (async (): Promise<DreamingEpisodicBacklogProbe> => {
-					const [tokens, hasBacklog] = await Promise.all([
-						getDreamingEpisodicTokenBacklog(accessor, agentId),
-						hasDreamingEpisodicBacklog(accessor, agentId),
-					]);
-					return { kind: "exact", tokens, hasBacklog, sourcesScanned: 0 };
-				})()
-			: { kind: "exact", tokens: episodicTokens, hasBacklog: episodicTokens > 0, sourcesScanned: 0 };
+	const tokens = episodicTokens ?? (await getDreamingEpisodicTokenBacklog(accessor, agentId));
+	const signal: DreamingEpisodicBacklogProbe = {
+		kind: "exact",
+		tokens,
+		hasBacklog: tokens > 0,
+		sourcesScanned: 0,
+	};
 	return (await evaluateDreamingTrigger(accessor, cfg, agentId, signal, nowMs)).trigger;
 }
 
