@@ -950,7 +950,7 @@ creature: digital assistant
 		createMemoryDb([{ content: "Planning meeting is Tuesday." }]);
 		const { getDbOwnerForAccessor } = await import("./db-owner-runtime");
 		const { ownerRun } = await import("./db-owner-sql");
-		const { curateMemoryHead } = await import("./memory-head");
+		const { commitCuratedMemoryHead } = await import("./memory-head");
 		const owner = await getDbOwnerForAccessor(getDbAccessor());
 		const options = { operation: "head-hook-fixture", lane: "write" as const };
 		await ownerRun(owner, "UPDATE memories SET id='meeting-head-fixture', memory_kind='episodic'", [], options);
@@ -961,19 +961,16 @@ creature: digital assistant
 			options,
 		);
 		expect(
-			await curateMemoryHead({
+			await commitCuratedMemoryHead({
 				agentId: "default",
 				passId: "head-hook-pass",
 				baseRevision: 0,
 				baseHash: "",
-				content: "Planning meeting is Tuesday.",
 				entries: [
 					{
-						id: "meeting",
+						entryId: "meeting",
 						text: "Planning meeting is Tuesday.",
-						operation: "added",
-						sourceRefs: ["memory:meeting-head-fixture"],
-						supportingQuotes: ["Planning meeting is Tuesday."],
+						support: [{ source_ref: "memory:meeting-head-fixture", quote: "Planning meeting is Tuesday." }],
 					},
 				],
 			}),

@@ -62,7 +62,7 @@ The rendered document has two layers:
 ## Freshness and publication
 
 The daemon's bounded `memory_head` owner operation is the publication and
-freshness boundary for both Dreaming curation inputs. A content pass snapshots
+freshness boundary for `memory_head_commit`, the sole Dreaming head publication tool. A content pass snapshots
 its agent's existing head revision when it starts. Publication requires that
 snapshot and the submitted revision/hash to still match. Reading a newer head
 cannot make an older pass eligible to publish.
@@ -107,6 +107,19 @@ and restore the pre-migration workspace/database backup together with the older
 binary. Restoring only the old binary removes the freshness guarantee. No
 separate dependency index, revision service, or automatic regeneration queue is
 introduced.
+
+`memory_head_commit` takes the complete ordered set of retained entries, each
+with an entry ID, text, and exact source/quote support. The owner renders the
+body and records entry provenance and removals. Deferrals and reasons for no
+change belong in the existing pass log, not a second publication format.
+
+`curate_memory_head` is retired: it is absent from discovery and calls fail as
+unknown capabilities. Internal `curate` owner requests also fail explicitly.
+Callers must submit structured entries to `memory_head_commit`; freeform bodies
+and caller-declared audit operations are no longer accepted. Historical revision
+rows, source references, quotes, and pass counters remain intact; new publications
+use the structured entry audit. No durable-state migration or rewrite is required.
+Rollback to the preceding release can read both existing and new history.
 
 ## Temporal Model
 

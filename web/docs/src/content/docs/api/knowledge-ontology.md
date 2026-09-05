@@ -713,6 +713,13 @@ claim snapshots and their source/evidence metadata without selecting a winner;
 correction still goes through `apply_ontology_ops` and the normal proposal
 governance path.
 
+`memory_head_commit` is the sole working-memory publication capability. Submit
+its complete retained entry set with exact source/quote support and the revision
+and hash from `memory_head_read`, under the active content pass. The owner renders
+the body and records removals for omitted entries. `curate_memory_head` is retired
+and returns 404; historical freeform audit rows remain intact. Record deferrals
+and no-change explanations with `runbook_write`.
+
 ### POST /api/dream/tools/:capability
 
 Invoke one canonical Dreaming capability through the daemon. This is the
