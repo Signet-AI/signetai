@@ -1,37 +1,29 @@
 /** Isolated adapter installation. Connector classes remain the installation authority. */
-import { ClaudeCodeConnector } from "@signet/connector-claude-code";
-import { CodexConnector } from "@signet/connector-codex";
-import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 
-import { ForgeConnector } from "@signet/connector-forge";
-import { GeminiConnector } from "@signet/connector-gemini";
-import { KimiConnector } from "@signet/connector-kimi";
-import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
-import { OpenClawConnector } from "@signet/connector-openclaw";
-import { OpenCodeConnector } from "@signet/connector-opencode";
-import { PiConnector } from "@signet/connector-pi";
 import { resolveGlobalPackagePath, resolvePrimaryPackageManager } from "@signet/core";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const HARNESS_INSTALLERS = {
-	"claude-code": ClaudeCodeConnector,
-	codex: CodexConnector,
-	"hermes-agent": HermesAgentConnector,
-	opencode: OpenCodeConnector,
-	openclaw: OpenClawConnector,
-	gemini: GeminiConnector,
-	pi: PiConnector,
-	"oh-my-pi": OhMyPiConnector,
-	kimi: KimiConnector,
-	forge: ForgeConnector,
+	"claude-code": () => import("@signet/connector-claude-code").then((module) => module.ClaudeCodeConnector),
+	codex: () => import("@signet/connector-codex").then((module) => module.CodexConnector),
+	"hermes-agent": () => import("@signet/connector-hermes-agent").then((module) => module.HermesAgentConnector),
+	opencode: () => import("@signet/connector-opencode").then((module) => module.OpenCodeConnector),
+	openclaw: () => import("@signet/connector-openclaw").then((module) => module.OpenClawConnector),
+	gemini: () => import("@signet/connector-gemini").then((module) => module.GeminiConnector),
+	pi: () => import("@signet/connector-pi").then((module) => module.PiConnector),
+	"oh-my-pi": () => import("@signet/connector-oh-my-pi").then((module) => module.OhMyPiConnector),
+	kimi: () => import("@signet/connector-kimi").then((module) => module.KimiConnector),
+	forge: () => import("@signet/connector-forge").then((module) => module.ForgeConnector),
 };
 
 export async function runHarnessInstallWorker(): Promise<void> {
 	const id = process.env.SIGNET_INSTALL_HARNESS;
-	const Installer =
+	const loadInstaller =
 		id && Object.hasOwn(HARNESS_INSTALLERS, id) ? HARNESS_INSTALLERS[id as keyof typeof HARNESS_INSTALLERS] : null;
+	const Installer = loadInstaller ? await loadInstaller() : null;
 	const connector = Installer ? new Installer() : null;
+	const { OpenClawConnector } = await import("@signet/connector-openclaw");
 	if (!connector) throw new Error("Unsupported harness installation");
 	const workspace = process.env.SIGNET_PATH;
 	if (!workspace) throw new Error("Missing resolved workspace");

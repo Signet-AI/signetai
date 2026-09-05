@@ -93,7 +93,9 @@ export function HomeSourcesPanel({
 					</div>
 				) : (
 					<div className="grid min-h-[72px] place-items-center text-center">
-						<span className="font-mono text-[10px] text-muted-foreground">No sources connected yet. Add a source to begin indexing.</span>
+						<span className="font-mono text-[10px] text-muted-foreground">
+							No sources connected yet. Add a source to begin indexing.
+						</span>
 					</div>
 				)}
 			</section>
@@ -105,8 +107,20 @@ export function HomeSourcesPanel({
 function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: () => void }) {
 	const health = source.health?.status ?? "empty";
 	const failures = source.health?.failures?.total ?? 0;
-	const { copied, confirming, busy, action, message, error, copyRoot, browseRoot, reindex, snapshot, remove, setConfirming } =
-		useSourceActions(source, onMutate);
+	const {
+		copied,
+		confirming,
+		busy,
+		action,
+		message,
+		error,
+		copyRoot,
+		browseRoot,
+		reindex,
+		snapshot,
+		remove,
+		setConfirming,
+	} = useSourceActions(source, onMutate);
 	const format = typeof source.providerSettings?.format === "string" ? source.providerSettings.format : source.kind;
 
 	return (
@@ -116,9 +130,7 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 					{sourceLogo(source.kind, { className: "size-4" }) ?? <Folder className="size-3.5" />}
 				</span>
 				<span className="flex min-w-0 flex-1 flex-col leading-tight">
-					<span className="truncate text-[12px] font-medium">
-						{source.name}
-					</span>
+					<span className="truncate text-[12px] font-medium">{source.name}</span>
 				</span>
 				<span className={cn("flex shrink-0 items-center gap-1 font-mono text-[9px]", HEALTH_STYLES[health])}>
 					<span className="size-1.5 rounded-full bg-current" />
@@ -141,7 +153,7 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 								disabled={busy}
 								title="Choose vault folder"
 								aria-label="Choose vault folder"
-									className="grid size-[22px] shrink-0 place-items-center rounded-[5px] text-muted-foreground hover:bg-[var(--home-interactive)] hover:text-foreground disabled:opacity-40"
+								className="grid size-[22px] shrink-0 place-items-center rounded-[5px] text-muted-foreground hover:bg-[var(--home-interactive)] hover:text-foreground disabled:opacity-40"
 							>
 								<FolderOpen className="size-3" />
 							</button>
@@ -202,7 +214,17 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 						</span>
 					) : (
 						<span role="status" className="font-mono text-[9px] text-muted-foreground">
-							{copied ? "Copied" : action === "reindex" ? "Requesting re-index…" : action === "snapshot" ? "Preparing snapshot…" : action === "browse" ? "Choosing folder…" : action === "remove" ? "Removing…" : message}
+							{copied
+								? "Copied"
+								: action === "reindex"
+									? "Requesting re-index…"
+									: action === "snapshot"
+										? "Preparing snapshot…"
+										: action === "browse"
+											? "Choosing folder…"
+											: action === "remove"
+												? "Removing…"
+												: message}
 						</span>
 					)}
 					<div className="flex shrink-0 gap-0.5">
@@ -218,7 +240,9 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 						) : (
 							<>
 								<ActionButton label="Re-index" onClick={reindex} disabled={busy}>
-									<RotateCw className={cn("size-[13px]", action === "reindex" && "animate-spin motion-reduce:animate-none")} />
+									<RotateCw
+										className={cn("size-[13px]", action === "reindex" && "animate-spin motion-reduce:animate-none")}
+									/>
 								</ActionButton>
 								<ActionButton label="Snapshot" onClick={snapshot} disabled={busy}>
 									<Download className="size-[13px]" />
@@ -662,7 +686,20 @@ function useSourceActions(source: SignetSource, onMutate: () => void) {
 		onMutate();
 	};
 
-	return { copied, confirming, busy, action, message, error, copyRoot, browseRoot, reindex, snapshot, remove, setConfirming };
+	return {
+		copied,
+		confirming,
+		busy,
+		action,
+		message,
+		error,
+		copyRoot,
+		browseRoot,
+		reindex,
+		snapshot,
+		remove,
+		setConfirming,
+	};
 }
 
 function SourceCard({ source, onMutate }: { source: SignetSource; onMutate: () => void }) {
@@ -707,7 +744,7 @@ function SourceCard({ source, onMutate }: { source: SignetSource; onMutate: () =
 					onClick={copyRoot}
 					title="Copy path"
 					aria-label="Copy source root path"
-						className="grid size-[22px] shrink-0 place-items-center rounded-[5px] text-muted-foreground opacity-0 transition-opacity hover:bg-[var(--home-interactive)] hover:text-foreground group-hover/root:opacity-70 hover:!opacity-100"
+					className="grid size-[22px] shrink-0 place-items-center rounded-[5px] text-muted-foreground opacity-0 transition-opacity hover:bg-[var(--home-interactive)] hover:text-foreground group-hover/root:opacity-70 hover:!opacity-100"
 				>
 					{copied ? <Check className="size-3" /> : <Copy className="size-3" />}
 				</button>
@@ -819,9 +856,9 @@ function PipeStrip({
 				className={cn(
 					"shrink-0 rounded-full",
 					compact ? "size-1" : "size-1.5",
-										dot === "amber" && "home-status-warning",
-										dot === "red" && "home-status-danger",
-										dot === "" && "home-status-healthy",
+					dot === "amber" && "home-status-warning",
+					dot === "red" && "home-status-danger",
+					dot === "" && "home-status-healthy",
 				)}
 			/>
 			<div
@@ -833,11 +870,11 @@ function PipeStrip({
 				<div
 					className={cn(
 						"h-full rounded-sm transition-[width] duration-500",
-										fill === "error" || fill === "unhealthy"
-											? "home-status-danger"
-											: fill === "queued" || fill === "degraded"
-												? "home-status-warning"
-												: "home-status-healthy",
+						fill === "error" || fill === "unhealthy"
+							? "home-status-danger"
+							: fill === "queued" || fill === "degraded"
+								? "home-status-warning"
+								: "home-status-healthy",
 					)}
 					style={{ width: `${pct}%` }}
 				/>
@@ -876,7 +913,7 @@ function ActionButton({
 			disabled={disabled}
 			onClick={onClick}
 			className={cn(
-			"grid size-[26px] place-items-center rounded-md text-muted-foreground transition-colors hover:bg-[var(--home-interactive)] hover:text-foreground disabled:opacity-40",
+				"grid size-[26px] place-items-center rounded-md text-muted-foreground transition-colors hover:bg-[var(--home-interactive)] hover:text-foreground disabled:opacity-40",
 				danger && "hover:text-[var(--home-health-unhealthy)]",
 			)}
 		>

@@ -258,21 +258,34 @@ describe("sources grouping", () => {
 	test("Home distinguishes a pending re-index request from completion and reports failure inline", async () => {
 		const original = api.reindexSource;
 		let resolve!: (result: { ok: boolean; error?: string }) => void;
-		api.reindexSource = () => new Promise((done) => { resolve = done; });
+		api.reindexSource = () =>
+			new Promise((done) => {
+				resolve = done;
+			});
 		let refreshes = 0;
 		const mounted = await mount(
 			<ViewProvider>
-				<HomeSourcesPanel sources={[sourceFixture("test", "obsidian", "Test")]} loading={false} onRefresh={() => { refreshes++; }} />
+				<HomeSourcesPanel
+					sources={[sourceFixture("test", "obsidian", "Test")]}
+					loading={false}
+					onRefresh={() => {
+						refreshes++;
+					}}
+				/>
 			</ViewProvider>,
 		);
 		try {
-			await click(mounted.container.querySelector('[aria-label="Re-index"]')!);
+			const reindex = mounted.container.querySelector('[aria-label="Re-index"]');
+			if (!reindex) throw new Error("Re-index action is missing");
+			await click(reindex);
 			expect(mounted.container.textContent).toContain("Requesting re-index…");
-			expect(mounted.container.querySelector('[aria-label="Re-index"] svg')?.classList.contains("animate-spin")).toBe(true);
+			expect(mounted.container.querySelector('[aria-label="Re-index"] svg')?.classList.contains("animate-spin")).toBe(
+				true,
+			);
 			await act(async () => resolve({ ok: true }));
 			expect(mounted.container.textContent).toContain("Re-index requested");
 			expect(refreshes).toBe(1);
-			await click(mounted.container.querySelector('[aria-label="Re-index"]')!);
+			await click(reindex);
 			await act(async () => resolve({ ok: false, error: "Source unavailable" }));
 			expect(mounted.container.querySelector('[role="alert"]')?.textContent).toBe("Source unavailable");
 			expect(mounted.container.textContent).not.toContain("Re-index requested");

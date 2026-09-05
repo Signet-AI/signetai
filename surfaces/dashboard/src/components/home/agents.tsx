@@ -199,7 +199,8 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 
 			{confirmation && (
 				<div role="status" className="mt-2 font-mono text-[10px] text-muted-foreground">
-					Saved access for <strong>{confirmation.name}</strong>; effective scope: {confirmation.effective_scope ?? "unknown"}
+					Saved access for <strong>{confirmation.name}</strong>; effective scope:{" "}
+					{confirmation.effective_scope ?? "unknown"}
 				</div>
 			)}
 		</>
@@ -241,9 +242,7 @@ function AgentDisclosure({
 				<span className="grid size-4 shrink-0 place-items-center text-muted-foreground">
 					<UserRound className="size-3" aria-hidden="true" />
 				</span>
-				<span className="min-w-0 flex-1 truncate text-[12px] font-medium">
-					{displayName}
-				</span>
+				<span className="min-w-0 flex-1 truncate text-[12px] font-medium">{displayName}</span>
 				{active && (
 					<span className="flex shrink-0 items-center gap-1 font-mono text-[9.5px] text-success">
 						<span className="size-1.5 rounded-full bg-success" />
@@ -255,11 +254,12 @@ function AgentDisclosure({
 				<ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/agent:rotate-90" />
 			</summary>
 			<div className="home-agent-detail">
-				<p>
-					{canEdit ? "Access changes require confirmation." : "Memory access is managed by Signet."}
-				</p>
+				<p>{canEdit ? "Access changes require confirmation." : "Memory access is managed by Signet."}</p>
 				{agent.effective_scope && agent.effective_scope !== agent.read_policy && (
-					<dl><dt>Effective scope</dt><dd>{agent.effective_scope}</dd></dl>
+					<dl>
+						<dt>Effective scope</dt>
+						<dd>{agent.effective_scope}</dd>
+					</dl>
 				)}
 
 				{editing ? (
@@ -303,11 +303,7 @@ function AgentDisclosure({
 						</button>
 					</div>
 				) : canEdit ? (
-					<button
-						type="button"
-						onClick={onBeginEdit}
-						className="home-text-action mt-1 h-7 text-[11px]"
-					>
+					<button type="button" onClick={onBeginEdit} className="home-text-action mt-1 h-7 text-[11px]">
 						Edit access
 					</button>
 				) : null}

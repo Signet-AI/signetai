@@ -42,7 +42,12 @@ jobs:
 
       - name: Build daemon dependencies (including installer types)
         shell: bash
-        run: bun run --filter '@signet/core' --filter '@signet/connector-base' --filter '@signet/connector-*' build
+        run: |
+          bun run --filter '@signet/core' --filter '@signet/connector-base' build
+          bun run build:opencode-plugin
+          bun run build:oh-my-pi-extension
+          bun run build:pi-extension
+          bun run --filter '@signet/connector-*' build
 
       - name: Daemon typecheck
         id: tsc
