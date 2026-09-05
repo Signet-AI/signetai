@@ -1,13 +1,13 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import type { DesktopBuildResult, DesktopLinuxInstallResult } from "../features/desktop.js";
+import type { DesktopBuildResult, DesktopInstallResult } from "../features/desktop.js";
 
 interface DesktopDeps {
 	readonly buildDesktopFromSource: (options?: { readonly repo?: string }) => DesktopBuildResult;
 	readonly installDesktopFromSource: (options?: {
 		readonly repo?: string;
 		readonly skipBuild?: boolean;
-	}) => DesktopLinuxInstallResult;
+	}) => DesktopInstallResult;
 }
 
 export function registerDesktopCommands(program: Command, deps: DesktopDeps): void {
@@ -52,11 +52,17 @@ export function registerDesktopCommands(program: Command, deps: DesktopDeps): vo
 				const result = deps.installDesktopFromSource({ repo: options.repo, skipBuild: options.skipBuild });
 				console.log(chalk.green("✓ Signet desktop installed"));
 				console.log(chalk.dim(`  Source:   ${result.repo}`));
-				console.log(chalk.dim(`  AppImage: ${result.appImage}`));
-				console.log(chalk.dim(`  Launcher: ${result.binary}`));
-				console.log(chalk.dim(`  Desktop:  ${result.desktopEntry}`));
-				console.log(chalk.dim(`  Workspace: ${result.workspace}`));
-				console.log(chalk.cyan("\n  Run: signet-desktop"));
+				if ("appImage" in result) {
+					console.log(chalk.dim(`  AppImage: ${result.appImage}`));
+					console.log(chalk.dim(`  Launcher: ${result.binary}`));
+					console.log(chalk.dim(`  Desktop:  ${result.desktopEntry}`));
+					console.log(chalk.dim(`  Workspace: ${result.workspace}`));
+					console.log(chalk.cyan("\n  Run: signet-desktop"));
+				} else {
+					console.log(chalk.dim(`  App:      ${result.appBundle}`));
+					console.log(chalk.dim(`  Workspace: ${result.workspace}`));
+					console.log(chalk.cyan("\n  Run: open Signet.app (or launch from ~/Applications)"));
+				}
 			} catch (err) {
 				console.error(chalk.red("Signet desktop install failed"));
 				console.error(chalk.red(err instanceof Error ? err.message : String(err)));
