@@ -37,6 +37,22 @@ export const MIGRATION_VERIFY_FAILED_STATUS = "failed:integrity-unverified" as c
 
 export type IncrementalIntegrityPhase = "running" | "complete" | "cancelled" | "timed_out" | "unavailable" | "degraded";
 
+const INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS = 1_000;
+const INCREMENTAL_INTEGRITY_RETRY_MAX_DELAY_MS = 30_000;
+
+/** Back off abandoned integrity slices so a blocked owner queue cannot self-fill. */
+export function nextIncrementalIntegrityRetryDelay(phase: IncrementalIntegrityPhase, previousDelayMs: number): number {
+	if (phase !== "timed_out" && phase !== "unavailable") return 0;
+	const previous =
+		Number.isFinite(previousDelayMs) && previousDelayMs >= INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS
+			? previousDelayMs
+			: 0;
+	return Math.min(
+		INCREMENTAL_INTEGRITY_RETRY_MAX_DELAY_MS,
+		previous === 0 ? INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS : previous * 2,
+	);
+}
+
 export interface IncrementalIntegrityProgress extends DatabaseIntegrityProgress {
 	readonly checkpointKey: string;
 	readonly phase: IncrementalIntegrityPhase;

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDbOwnerClient } from "./db-owner-client";
 import {
+	nextIncrementalIntegrityRetryDelay,
 	runIncrementalDatabaseIntegrityCheck,
 	readMigrationVerifyCheckpoint,
 	type IncrementalIntegrityProgress,
@@ -40,6 +41,15 @@ function makeDatabase(): {
 }
 
 describe("incremental database integrity maintenance (#1683)", () => {
+	it("backs off abandoned slices and resets after progress", () => {
+		expect(nextIncrementalIntegrityRetryDelay("timed_out", 0)).toBe(1_000);
+		expect(nextIncrementalIntegrityRetryDelay("timed_out", 1_000)).toBe(2_000);
+		expect(nextIncrementalIntegrityRetryDelay("unavailable", 16_000)).toBe(30_000);
+		expect(nextIncrementalIntegrityRetryDelay("timed_out", 30_000)).toBe(30_000);
+		expect(nextIncrementalIntegrityRetryDelay("running", 8_000)).toBe(0);
+		expect(nextIncrementalIntegrityRetryDelay("complete", 8_000)).toBe(0);
+	});
+
 	it("tolerates concurrent legacy checkpoint upgrades", async () => {
 		const database = makeDatabase();
 		const legacy = new Database(database.path);

@@ -54,6 +54,7 @@ import { clearAllPresence, reconcileAcpDeliveries } from "./cross-agent";
 import {
 	MIGRATION_VERIFY_FAILED_STATUS,
 	MIGRATION_VERIFY_PARKED_STATUS,
+	nextIncrementalIntegrityRetryDelay,
 	readMigrationVerifyCheckpoint,
 	runIncrementalDatabaseIntegrityCheck,
 } from "./incremental-database-integrity";
@@ -94,7 +95,12 @@ import {
 	ownerTransaction,
 	registerDbOwnerMaintenance,
 } from "./db-owner-maintenance";
-import { createDeferredRuntimeGate, createDeferredRuntimeScheduler } from "./deferred-runtime-gate";
+import { ownerReadOne as dbOwnerReadOne } from "./db-owner-sql";
+import {
+	createDeferredRuntimeGate,
+	createDeferredRuntimeScheduler,
+	releaseDeferredRuntimeGateIfSafe,
+} from "./deferred-runtime-gate";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
@@ -956,14 +962,13 @@ async function resolveActiveEmbeddingConfigThroughOwner(
 	operation: string,
 ): Promise<ResolvedMemoryConfig["embedding"]> {
 	if (configured.profile) return configured;
-	const row = await ownerQueryOne<EmbeddingIndexStateRow>(
+	const row = await dbOwnerReadOne<EmbeddingIndexStateRow>(
 		owner,
-		operation,
 		"SELECT active_profile_json, staging_profile_json, state, last_error FROM embedding_index_state WHERE id = 1",
 		[],
-		{ deadlineMs: 5_000 },
+		{ operation, deadlineMs: 5_000 },
 	);
-	return resolveActiveEmbeddingConfigFromState(configured, parseEmbeddingIndexStateRow(row ?? null));
+	return resolveActiveEmbeddingConfigFromState(configured, parseEmbeddingIndexStateRow(row));
 }
 
 async function legacyMarkdownFileState(filePath: string): Promise<LegacyMarkdownFileState | null> {
@@ -1925,25 +1930,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		setEmbeddingTrackerHandle(embeddingTrackerHandle);
 	}
 
-	if (!pipelinePaused) {
-		embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
-			accessor: getDbAccessor(),
-			configured: memoryCfg.embedding,
-			// Re-read agent.yaml each tick so a mid-build config edit restarts
-			// the build against the new profile instead of spinning on the
-			// stale persisted one (#1160).
-			readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
-			fetchEmbedding,
-			checkProvider: checkEmbeddingProvider,
-			owner: dbOwnerClient ?? undefined,
-			pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
-			batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
-			onPromoted: () => {
-				restartAfterEmbeddingPromotion(telemetry);
-			},
-		});
-	}
-
 	if (!pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 		try {
 			dreamingWorkerHandle = startDreamingWorker(
@@ -1976,6 +1962,34 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		} catch (err) {
 			logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
 				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	// Embedding migration is bounded background work. Start Dreaming before its
+	// owner maintenance so a slow provider or staging rebuild cannot prevent the
+	// worker from existing at all during startup.
+	if (!pipelinePaused) {
+		try {
+			embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
+				accessor: getDbAccessor(),
+				configured: memoryCfg.embedding,
+				// Re-read agent.yaml each tick so a mid-build config edit restarts
+				// the build against the new profile instead of spinning on the
+				// stale persisted one (#1160).
+				readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
+				fetchEmbedding,
+				checkProvider: checkEmbeddingProvider,
+				owner: dbOwnerClient ?? undefined,
+				pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
+				batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
+				onPromoted: () => {
+					restartAfterEmbeddingPromotion(telemetry);
+				},
+			});
+		} catch (error) {
+			logger.warn("embedding", "Embedding index migration deferred after startup admission failure", {
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	}
@@ -3007,6 +3021,18 @@ async function main() {
 			port: info.port,
 		});
 		logger.info("daemon", "Daemon ready");
+		const migrationBackupPendingAtReady = pendingMigrationBackupPath(MEMORY_DB) !== null;
+		if (
+			releaseDeferredRuntimeGateIfSafe(deferredRuntimeGate, {
+				migrationBackupPending: migrationBackupPendingAtReady,
+				writesBlocked: migrationIntegrityWritesBlocked,
+			})
+		) {
+			logger.info(
+				"startup-recovery",
+				"Starting post-ready runtime without waiting for background integrity maintenance",
+			);
+		}
 		if (!migrationIntegrityWritesBlocked) {
 			deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
 				const maintenance = dbOwnerMaintenanceHandle;
@@ -3062,6 +3088,7 @@ async function main() {
 			// verification of this generation.
 			let integritySliceTimer: ReturnType<typeof setTimeout> | null = null;
 			let integritySlicePending = false;
+			let integrityRetryDelayMs = 0;
 			let migrationIntegrityGateActive = false;
 			let integrityGateCompleted = false;
 			let migrationWritersAllowed = Promise.resolve(true);
@@ -3085,6 +3112,12 @@ async function main() {
 					integritySlicePending = false;
 					void runIntegritySlice().catch((error) => {
 						logger.error("startup-recovery", "Incremental database integrity continuation rejected", error);
+						integrityRetryDelayMs = nextIncrementalIntegrityRetryDelay("unavailable", integrityRetryDelayMs);
+						if (!migrationIntegrityGateActive && !integrityGateCompleted) {
+							integrityGateCompleted = true;
+							deferredRuntimeGate.completeIntegrity();
+						}
+						scheduleIntegritySlice(integrityRetryDelayMs);
 					});
 				}, delayMs);
 				integritySliceTimer.unref?.();
@@ -3116,9 +3149,11 @@ async function main() {
 						5_000,
 					);
 				} catch (error) {
+					deferMigrationWriters();
+					migrationWritersAllowed = Promise.resolve(false);
 					logger.error(
 						"startup-recovery",
-						"Migration verification checkpoint read failed; retrying verification",
+						"Migration verification checkpoint read failed; retrying verification with writes blocked",
 						error instanceof Error ? error : undefined,
 					);
 					publishMigrationVerifyStatus("degraded", ["degraded:integrity-unverified"]);
@@ -3266,7 +3301,21 @@ async function main() {
 					});
 				}
 				if (result.phase === "running" || result.phase === "timed_out" || result.phase === "unavailable") {
-					scheduleIntegritySlice(result.phase === "running" ? 0 : 1000);
+					integrityRetryDelayMs = nextIncrementalIntegrityRetryDelay(result.phase, integrityRetryDelayMs);
+					if (result.phase !== "running") {
+						const ownerHealth = owner.health();
+						logger.warn("startup-recovery", "Backing off incremental integrity after an unsuccessful owner slice", {
+							phase: result.phase,
+							retryDelayMs: integrityRetryDelayMs,
+							ownerState: ownerHealth.state,
+							activeJobId: ownerHealth.activeJobId,
+							activeWorkloadClass: ownerHealth.activeWorkloadClass,
+							maintenanceQueuedJobs: ownerHealth.lanes?.maintenance.queuedJobs ?? ownerHealth.maintenanceQueuedJobs,
+							foregroundQueuedJobs:
+								ownerHealth.lanes?.maintenance.foregroundQueuedJobs ?? ownerHealth.foregroundQueuedJobs,
+						});
+					}
+					scheduleIntegritySlice(integrityRetryDelayMs);
 				}
 				if (!migrationIntegrityGateActive && !integrityGateCompleted) {
 					integrityGateCompleted = true;
