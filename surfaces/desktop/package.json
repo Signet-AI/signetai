@@ -9,13 +9,14 @@
 	"scripts": {
 		"build:core": "cd ../../platform/core && bun run build",
 		"build:tray": "cd ../tray && bun run build",
+		"build:connectors": "cd ../.. && bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:pi-extension && bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-forge' --filter '@signet/connector-gemini' --filter '@signet/connector-hermes-agent' --filter '@signet/connector-kimi' --filter '@signet/connector-oh-my-pi' --filter '@signet/connector-openclaw' --filter '@signet/connector-opencode' --filter '@signet/connector-pi' build",
 		"build:dashboard": "cd ../../platform/daemon && bun run build:dashboard",
 		"build:daemon": "cd ../../platform/daemon && bun run build",
 		"build:main": "tsc -p tsconfig.json",
 		"stage:runtime": "node scripts/stage-runtime.mjs",
 		"verify:macos": "node scripts/verify-macos-release.mjs release",
 		"build": "bun run build:main",
-		"build:desktop": "bun run build:core && bun run build:tray && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder --publish never",
+		"build:desktop": "bun run build:core && bun run build:tray && bun run build:connectors && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder --publish never",
 		"dev": "bun run build:tray && bun run build:dashboard && bun run build:main && electron .",
 		"typecheck": "bun run build:tray && tsc -p tsconfig.json --noEmit",
 		"test": "bun test"
