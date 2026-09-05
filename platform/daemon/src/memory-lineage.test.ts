@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Tiktoken } from "js-tiktoken/lite";
-import cl100k_base from "js-tiktoken/ranks/cl100k_base";
+import { get_encoding } from "tiktoken/init";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	MEMORY_PROJECTION_MAX_TOKENS,
@@ -20,7 +19,7 @@ import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
 import { recordEmbeddingProviderFailure, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 
-const tok = new Tiktoken(cl100k_base);
+const tok = get_encoding("cl100k_base");
 
 let dir = "";
 let prev: string | undefined;
@@ -98,13 +97,16 @@ describe("memory-lineage", () => {
 			});
 		}
 
+		const renderStartedAt = performance.now();
 		const rendered = (await renderMemoryProjection("default")).content;
+		const renderDurationMs = performance.now() - renderStartedAt;
 
 		expect(rendered).toContain("## Session Ledger (Last 30 Days)");
 		expect(rendered).toContain("older ledger rows clipped:");
 		expect(rendered).not.toContain("/tmp/signetai");
 		expect(tok.encode(rendered).length).toBeLessThanOrEqual(MEMORY_PROJECTION_MAX_TOKENS);
-	});
+		expect(renderDurationMs).toBeLessThan(4_000);
+	}, 15_000);
 
 	it("routes active artifact indexing and deletion writes through the owner", () => {
 		const source = readFileSync(new URL("./memory-lineage.ts", import.meta.url), "utf8");
