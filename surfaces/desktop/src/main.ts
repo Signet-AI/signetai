@@ -48,6 +48,16 @@ function usesNativeWindowFrame(): boolean {
 	return process.env.SIGNET_DESKTOP_NATIVE_FRAME === "1";
 }
 
+/**
+ * macOS keeps native traffic lights over the dashboard's custom topbar via
+ * titleBarStyle: "hiddenInset". A fully frameless window (frame: false) hides
+ * the traffic lights entirely, which is why the dashboard shipped without
+ * native window controls on macOS.
+ */
+function macosTitleBarStyle(): "hiddenInset" | undefined {
+	return process.platform === "darwin" ? "hiddenInset" : undefined;
+}
+
 const MIME: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
 	".js": "text/javascript; charset=utf-8",
@@ -140,6 +150,7 @@ function createMainWindow(): BrowserWindow {
 		minHeight: 600,
 		show: true,
 		frame: usesNativeWindowFrame(),
+		titleBarStyle: macosTitleBarStyle(),
 		title: "Signet",
 		backgroundColor: "#0f0f0f",
 		webPreferences: {

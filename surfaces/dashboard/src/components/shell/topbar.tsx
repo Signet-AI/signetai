@@ -19,6 +19,9 @@ export function Topbar() {
 			className={cn(
 				"sig-drag relative flex h-[56px] shrink-0 items-center border-b border-border/70 bg-background px-4 sm:px-6",
 				platform !== "mac" && "pr-0",
+				// Native traffic lights (titleBarStyle: hiddenInset) sit in the
+				// left ~80px of the macOS title bar; keep content clear of them.
+				platform === "mac" && "pl-20",
 			)}
 		>
 			<button
