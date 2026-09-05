@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-05
+- Bug fixes: recover projection token budget.
+
 ### 2026-09-04
 - Bug fixes: stop retaining backlog text; make backlog probes threshold-aware.
 - Refactoring: simplify backlog probes.
@@ -29,10 +32,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: preserve low-volume scheduling fallback; realign memory-search site tokens after wave-4 relocation; L1 wave 4 owner-routing + audit realignment; track detached boot descendants; close boot-wedge gate review gaps; route pipeline reads through owner; harden boot wedge measurements; route telemetry identity through owner; route extraction retirement to owner; route startup DB work to owner.
 - Refactoring: route wave 2 reads and telemetry through owner.
 
-### 2026-08-29
-- Bug fixes: distinguish async DB execution homes; classify database execution homes; bound scheduled Dreaming backlog probes; extend native owner smoke startup budget; refresh event-loop source baseline; correct DB accessor audit site tokens; route scheduled Dreaming scans to owner.
-
 ## Release Ledger
+
+## [0.216.5] - 2026-09-05
+
+Release summary: 1 bug fix.
+Tag range: `v0.216.4..v0.216.5`.
+
+### Bug Fixes
+
+- **daemon**: recover projection token budget
 
 ## [0.216.4] - 2026-09-04
 
