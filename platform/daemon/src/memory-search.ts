@@ -2270,7 +2270,7 @@ export async function hybridRecall(
 								 WHERE id IN (${placeholders})`,
 							)
 							.all(...candidateIds) as Array<{ id: string; content: string }>,
-					{ siteToken: "memory-search.ts:2308" },
+					{ siteToken: "db:recall.temporal-topic.content" },
 				);
 				for (const row of contentRows) {
 					const score = scoreTemporalTopicEvidence(query, row.content);
@@ -2348,7 +2348,7 @@ export async function hybridRecall(
 									 WHERE id IN (${placeholders})`,
 								)
 								.all(...coverageIds) as Array<{ id: string; content: string }>,
-						{ siteToken: "memory-search.ts:2386" },
+						{ siteToken: "db:recall.facet-coverage.content" },
 					);
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
@@ -2398,7 +2398,7 @@ export async function hybridRecall(
 						id: string;
 						content: string;
 					}>,
-				{ siteToken: "memory-search.ts:2433" },
+				{ siteToken: "db:recall.reranker.content" },
 			);
 			const contentMap = new Map(contentRows.map((r) => [r.id, r.content]));
 
@@ -2478,7 +2478,7 @@ export async function hybridRecall(
 						content: string;
 						type: string;
 					}>,
-				{ siteToken: "memory-search.ts:2512" },
+				{ siteToken: "db:recall.dampening.metadata" },
 			);
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
 
@@ -2770,7 +2770,7 @@ export async function hybridRecall(
 						scope: string | null;
 						agent_id: string | null;
 					}>,
-				{ siteToken: "memory-search.ts:2793" },
+				{ siteToken: "db:recall.final-candidates.hydrate" },
 			),
 	);
 
@@ -2784,7 +2784,7 @@ export async function hybridRecall(
 					content: row.content,
 				}),
 			),
-		{ siteToken: "memory-search.ts:2820" },
+		{ siteToken: "db:recall.final-candidates.safety" },
 	);
 	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is

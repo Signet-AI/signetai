@@ -826,7 +826,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					});
 					return parent ? assembleInheritedContextBlock(db, parent, subagentCfg) : null;
 				},
-				{ siteToken: "hooks.ts:830" },
+				{ siteToken: "db:hooks.session-start.inheritance" },
 			);
 			inheritedSection = block ?? "";
 		} catch (error) {

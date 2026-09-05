@@ -1259,56 +1259,57 @@
     },
     {
       "path": "hooks.ts",
-      "line": 827,
+      "line": 811,
       "api": "existsSync",
       "source": "if (req.sessionKey && existsSync(getMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 830,
+      "line": 814,
       "api": "withReadDbAsync",
       "source": "const block = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:hooks.session-start.inheritance"
     },
     {
       "path": "hooks.ts",
-      "line": 1683,
+      "line": 1667,
       "api": "existsSync",
       "source": "if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 1685,
+      "line": 1669,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2093,
+      "line": 2077,
       "api": "existsSync",
       "source": "if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2095,
+      "line": 2079,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2357,
+      "line": 2341,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2359,
+      "line": 2343,
       "api": "readFileSync",
       "source": "const raw = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
@@ -1639,51 +1640,23 @@
     },
     {
       "path": "memory-candidates.ts",
-      "line": 133,
+      "line": 124,
       "api": "existsSync",
       "source": "if (memoryIds.length === 0 || !existsSync(memoryDbPath)) return [];",
       "category": "hot-path"
     },
     {
       "path": "memory-candidates.ts",
-      "line": 240,
+      "line": 230,
       "api": "existsSync",
       "source": "if (!existsSync(memoryDbPath)) return [];",
       "category": "hot-path"
     },
     {
       "path": "memory-candidates.ts",
-      "line": 328,
+      "line": 318,
       "api": "existsSync",
       "source": "if (!existsSync(memoryDbPath)) return [];",
-      "category": "hot-path"
-    },
-    {
-      "path": "memory-candidates.ts",
-      "line": 466,
-      "api": "existsSync",
-      "source": "if (!existsSync(memoryDbPath)) return [];",
-      "category": "hot-path"
-    },
-    {
-      "path": "memory-candidates.ts",
-      "line": 470,
-      "api": "withReadDb",
-      "source": "const rows: SimpleMemory[] = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "memory-candidates.ts",
-      "line": 506,
-      "api": "existsSync",
-      "source": "if (!existsSync(memoryDbPath)) return [];",
-      "category": "hot-path"
-    },
-    {
-      "path": "memory-candidates.ts",
-      "line": 511,
-      "api": "withReadDb",
-      "source": "const rows: SimpleMemory[] = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path"
     },
     {
@@ -2096,45 +2069,51 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2308,
+      "line": 2265,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:recall.temporal-topic.content"
     },
     {
       "path": "memory-search.ts",
-      "line": 2386,
+      "line": 2343,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:recall.facet-coverage.content"
     },
     {
       "path": "memory-search.ts",
-      "line": 2433,
+      "line": 2390,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:recall.reranker.content"
     },
     {
       "path": "memory-search.ts",
-      "line": 2512,
+      "line": 2469,
       "api": "withReadDbAsync",
       "source": "const dampenRows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:recall.dampening.metadata"
     },
     {
       "path": "memory-search.ts",
-      "line": 2793,
+      "line": 2750,
       "api": "withReadDbAsync",
       "source": "await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:recall.final-candidates.hydrate"
     },
     {
       "path": "memory-search.ts",
-      "line": 2820,
+      "line": 2777,
       "api": "withReadDbAsync",
       "source": "const safeRows = await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:recall.final-candidates.safety"
     },
     {
       "path": "migration-integrity-verify.ts",
