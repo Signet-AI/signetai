@@ -257,7 +257,7 @@
 	.sig-app-frame > header { height: 56px; padding-inline-start: 40px; }
 	/* macOS traffic lights (titleBarStyle: hiddenInset) occupy the left ~78px
 	   of the header; push the logo, nav, and controls past them. */
-	html[data-platform="mac"] .sig-app-frame > header { padding-inline-start: 78px; }
+	html[data-platform="mac"] .sig-app-frame > header { padding-inline-start: 96px; }
 	.sig-app-frame > header > .ml-12 { margin-inline-start: 3rem; margin-left: 3rem; }
 	.sig-app-frame > header > .ml-auto { margin-inline-start: auto; margin-left: auto; }
 	.sig-app-frame[data-view="home"] > header { border-bottom: 0; }
