@@ -52,8 +52,8 @@
         "signet-connector-claude-code": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.214.36",
-        "@signet/core": "0.214.36",
+        "@signet/connector-base": "0.217.3",
+        "@signet/core": "0.217.3",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -67,8 +67,8 @@
         "signet-connector-codex": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.214.36",
-        "@signet/core": "0.214.36",
+        "@signet/connector-base": "0.217.3",
+        "@signet/core": "0.217.3",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -123,8 +123,8 @@
         "signet-connector-hermes-agent": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.214.36",
-        "@signet/core": "0.214.36",
+        "@signet/connector-base": "0.217.3",
+        "@signet/core": "0.217.3",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -284,7 +284,7 @@
       "name": "@signet/connector-base",
       "version": "0.218.0",
       "dependencies": {
-        "@signet/core": "0.214.36",
+        "@signet/core": "0.217.3",
         "json5": "^2.2.3",
         "jsonc-parser": "3.3.1",
       },
@@ -377,6 +377,9 @@
         "@hono/node-server": "^2.1.0",
         "@huggingface/transformers": "^4.2.0",
         "@modelcontextprotocol/sdk": "^1.30.0",
+        "@signet/connector-claude-code": "workspace:*",
+        "@signet/connector-codex": "workspace:*",
+        "@signet/connector-hermes-agent": "workspace:*",
         "@signet/core": "workspace:*",
         "@signet/lifecycle-proof": "workspace:*",
         "acpx": "0.13.0",

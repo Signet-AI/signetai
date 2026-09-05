@@ -124,6 +124,7 @@ const workerEntries = [
 	["database-integrity-worker", "platform/daemon/src/database-integrity-worker.ts"],
 	["db-owner-worker", "platform/daemon/src/db-owner-worker.ts"],
 	["native-memory-source-worker", "platform/daemon/src/native-memory-source-worker.ts"],
+	["harness-install-worker", "platform/daemon/src/harness-install-worker.ts"],
 	// Native ONNX embedding runs in a worker so model download / WASM compile /
 	// inference can never block the daemon's main event loop (see
 	// embedding-worker.ts). Transformers is bundled into this asset; the ONNX
@@ -436,6 +437,9 @@ if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PR
 } else if (process.env.SIGNET_DB_OWNER_WORKER) {
 	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
 	runDbOwnerWorker();
+} else if (process.env.SIGNET_INSTALL_HARNESS) {
+	const { runHarnessInstallWorker } = await import("../platform/daemon/src/harness-install-worker");
+	await runHarnessInstallWorker();
 } else if (process.env.SIGNET_NATIVE_SOURCE_WORKER) {
 	const { runNativeSourceWorker } = await import("../platform/daemon/src/native-memory-source-worker");
 	runNativeSourceWorker();

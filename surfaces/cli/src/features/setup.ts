@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkbox } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
 	IDENTITY_MODES,
@@ -291,20 +290,23 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const basePath = deps.normalizeAgentPath(deps.normalizeStringValue(options.path) ?? deps.AGENTS_DIR);
 	const existing = deps.detectExistingSetup(basePath);
 	if (existing.agentYaml || existing.configYaml || existing.memoryDb) {
-		const changes = Object.entries(options).filter(([key, value]) =>
-			key !== "path" && key !== "openDashboard" && value !== undefined && value !== false &&
-			(!Array.isArray(value) || value.length > 0));
-		if (changes.length) throw new Error("Use --non-interactive to apply configuration flags to an existing workspace, or run signet setup to open its settings.");
+		const changes = Object.entries(options).filter(
+			([key, value]) =>
+				key !== "path" &&
+				key !== "openDashboard" &&
+				value !== undefined &&
+				value !== false &&
+				(!Array.isArray(value) || value.length > 0),
+		);
+		if (changes.length)
+			throw new Error(
+				"Use --non-interactive to apply configuration flags to an existing workspace, or run signet setup to open its settings.",
+			);
 	}
 	console.log(deps.signetBanner());
 	console.log(chalk.dim(`  Workspace: ${basePath}`));
 	if (!existing.agentYaml && !existing.configYaml && !existing.memoryDb) {
-		const harnesses =
-			(options.harness?.length ? options.harness : undefined) ??
-			(await checkbox({
-				message: "Which agent apps should Signet connect to?",
-				choices: SETUP_HARNESS_CHOICES.map((value) => ({ value, name: value })),
-			}));
+		const harnesses = options.harness ?? [];
 		await applySetupOptions(
 			{
 				...options,
@@ -376,8 +378,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			"For headless use, pass --non-interactive with explicit flags, or --file/--json with a setup plan (see --schema).",
 		);
 	}
-
-	
 
 	console.log(deps.signetLogo());
 
@@ -507,8 +507,8 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 			createLocalBackup: options.createLocalBackup === true,
 		});
-		const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
-		const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
+		const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, options);
+		const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, options);
 		if (existing.agentYaml) {
 			writeCapabilitySelection(
 				basePath,
@@ -631,8 +631,8 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			existingEndpoint: existingExtractionEndpoint,
 		});
 
-		const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
-		const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
+		const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, options);
+		const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, options);
 
 		await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 			nonInteractive: true,
@@ -955,10 +955,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	await runFreshSetup(plan, context, deps);
 }
 
-async function resolveGraphiqPluginSelection(
-	basePath: string,
-	options: SetupWizardOptions,
-): Promise<boolean> {
+async function resolveGraphiqPluginSelection(basePath: string, options: SetupWizardOptions): Promise<boolean> {
 	const current = readSetupCorePluginEnabled(basePath, "signet.graphiq");
 	const defaultEnabled = current ?? false;
 	if (options.withGraphiq === true) return true;

@@ -11,12 +11,15 @@ import { SkillsView } from "@/views/stubs";
 import { DreamsView } from "@/views/dreaming";
 import { GraphView } from "@/views/graph";
 
+import { OnboardingModal } from "@/components/onboarding/modal";
+
 export function App() {
 	return (
 		<SettingsProvider>
 			<TooltipProvider delayDuration={200}>
 				<Shell />
 				<SettingsModal />
+				<OnboardingModal />
 				<Toaster />
 			</TooltipProvider>
 		</SettingsProvider>

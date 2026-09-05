@@ -112,3 +112,22 @@ adding or changing daemon routes, update the matching reference file and run
 ## Agent policy
 
 `GET /api/agents/:name` returns the agent's `read_policy`, optional `policy_group`, timestamps, and resolved `effective_scope` (`agent`, `global`, or `group`). `POST /api/agents` and `PATCH /api/agents/:name` accept `isolated`, `shared`, or `group`; `group` requires a group name and the other policies reject one. The daemon validates at the boundary and never falls back to local `agent.yaml` state. `signet agent set` uses PATCH, `signet agent show` uses GET, and `signet agent info` remains a compatibility alias.
+
+## Onboarding
+
+The dashboard modal at `/#setup` uses the existing configuration, inference/OAuth,
+Sources, pipeline, and scoped memory APIs. It does not expose a second setup-plan
+executor. `GET /api/inference/catalog` includes `recommendedModels`, an optional
+provider-to-model-ID map drawn from curated defaults only when the provider's
+current catalog contains that model. Absence requires an explicit model choice.
+
+`POST /api/harnesses/:id/connect` requires admin permission and accepts
+`claude-code`, `codex`, or `hermes-agent`. It installs into the daemon host's agent
+configuration using the same connector implementation as the CLI, with the
+resolved daemon workspace. No request body or arbitrary filesystem path is
+accepted. Success returns `{success: true, id}` after connector verification and
+worker exit. Unsupported IDs return 400, concurrent installation returns 409,
+and failures return 500 with an error. One installation is admitted at a time;
+it has a 30-second deadline and a two-second forced-stop grace period. Cancellation
+or failure may leave partial integration files; retry the same operation to
+reconcile them. Other integrations remain CLI operations.

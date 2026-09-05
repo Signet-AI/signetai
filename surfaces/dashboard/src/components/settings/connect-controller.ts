@@ -137,7 +137,7 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 					case "connected":
 						setPhase({ kind: "saving" });
 						void Promise.resolve()
-							.then(() => optsRef.current.onConnected?.())
+							.then(() => (loginRef.current === handle ? optsRef.current.onConnected?.() : undefined))
 							.then(
 								() => {
 									if (loginRef.current === handle) setPhase({ kind: "connected" });
@@ -167,7 +167,8 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 	}, []);
 
 	const answerPrompt = useCallback(async (value: string) => {
-		const sessionId = loginRef.current?.sessionId;
+		const handle = loginRef.current;
+		const sessionId = handle?.sessionId;
 		const current = phaseRef.current;
 		const prompt = current.kind === "oauth-running" ? current.prompt : undefined;
 		if (!sessionId || !prompt) return;
@@ -175,12 +176,14 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 		try {
 			ok = await completeOAuthInteraction(sessionId, prompt.responseId, value);
 		} catch (error) {
+			if (loginRef.current !== handle) return;
 			setPhase({
 				kind: "error",
 				message: error instanceof Error ? error.message : "Could not reach the daemon.",
 			});
 			return;
 		}
+		if (loginRef.current !== handle) return;
 		if (!ok) {
 			setPhase({ kind: "error", message: "The provider rejected that response. Try again." });
 			return;

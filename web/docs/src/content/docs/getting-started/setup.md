@@ -1,6 +1,6 @@
 ---
 title: "Set up Signet"
-description: "Understand the current setup wizard, identity presets, and workspace boundaries."
+description: "Connect agents, a model, and your existing context through guided onboarding."
 ---
 
 ## Run setup
@@ -9,23 +9,22 @@ description: "Understand the current setup wizard, identity presets, and workspa
 signet setup
 ```
 
-The wizard is interactive by default. If a workspace already exists, it detects and reconfigures that installation. For a new workspace, it can also offer a GitHub import instead of creating a fresh one.
+Setup creates a local workspace when needed, starts or reaches its daemon, and opens a guided modal in the dashboard. Running it again resumes onboarding without resetting your existing configuration. `signet configure` and `signet config` open the same flow.
 
-## What the wizard asks
+## The onboarding flow
 
-The exact branches depend on your answers, but a fresh interactive setup follows this order:
+1. **Welcome** explains what memory carries between conversations.
+2. **Agents** connects Claude Code, Codex, or Hermes on the machine running Signet. Other integrations remain available through non-interactive CLI setup. You may connect an agent later.
+3. **Connection** signs in to a provider, stores an API key, or connects a local model. An explicit **Test and enable memory** action saves the configuration, checks a real model response, and starts automatic processing. Failed saves or tests keep you on this step. Existing frozen or shadow controls are respected.
+4. **Bring your context** optionally connects an Obsidian vault or imports files and [transcript exports](/sources/#agent-transcript-imports). You can add multiple sources. Indexing and import jobs may continue in the background; their reported state is not a claim that semantic processing has completed. Sources provides progress, errors, retry, and removal.
+5. **First memory** saves a private note under your active agent, then retrieves that same note through scoped search.
+6. **Ready** reports the checks that actually completed. Start a new conversation in your agent to check its integration.
 
-1. **Identity mode**: let Signet manage identity files or turn identity management off.
-2. **Identity preset**: when managed identity is selected, choose Minimal, Hermes, OpenClaw, or Custom.
-3. **Agent name** and then selected **harnesses**, including Kimi CLI when it is installed or selected explicitly. OpenClaw adds an opt-in workspace patch and a plugin-or-legacy integration choice when its configuration is detected.
-4. **Description** and optional core plugins: Signet Secrets and GraphIQ.
-5. **Daemon hosting**: local-only, local with Tailscale/network access, or a remote daemon URL. This is the interactive hosting question. `--deployment-type` is not prompted here.
-6. **Embedding search**: built-in, Ollama, OpenAI, or no embeddings, followed by model/search choices when applicable.
-7. **Background inference**, including provider connection or a choice to disable it. The wizard warns that remote APIs can incur usage costs. It can optionally use a distinct provider for aggregate recall.
-8. Optional advanced search and memory settings, Dreaming, Git history, named-agent roster entries, and an Obsidian source.
-9. A rendered plan and final confirmation before files are written.
+Closing and reopening remembers the UI checkpoint in this browser, but rechecks the model connection. Credentials are stored by the daemon, never in the checkpoint. If browser storage is unavailable, the workspace is still preserved.
 
-For unattended systems, use [the non-interactive setup reference](/cli/getting-started/#signet-setup) rather than trying to feed answers to the wizard.
+Fresh interactive setup leaves identity management off and telemetry disabled. Provider processing waits for the explicit enable action. Existing workspaces keep their settings. Sources and advanced configuration remain available after onboarding.
+
+For unattended systems, use [the non-interactive setup reference](/cli/getting-started/#signet-setup). JSON plans and flags still use the CLI's validated setup path; the modal requests existing daemon operations rather than creating a second plan executor. Browser sign-in replaces the retired `extractionConnect` plan field, which now fails validation.
 
 ## Identity modes and presets
 
@@ -39,20 +38,18 @@ Identity management controls Signet-owned prompt files. It does not change the m
 
 Do not copy a fixed workspace tree into a deployment guide. Setup creates `agent.yaml`, the memory database, and only the identity files selected by the chosen mode and preset. Selected harnesses may create or update their own integration files outside the workspace.
 
-## What setup does after approval
-
-For a local daemon, setup initializes `memory/memories.db`, configures the selected harnesses, starts the daemon, and can warm the built-in embedding model. It reports the files actually created and offers to open the dashboard. With `--remote-url`, it records the remote daemon endpoint instead of starting a local process.
-
-If Git is enabled, setup initializes or uses the workspace repository and commits the initial state when it can. If OpenClaw is linked to the workspace, setup requires an origin remote, a new local snapshot, or an explicit non-interactive bypass before it completes.
-
-## Check the result
+## Check and recover
 
 ```bash
 signet status
-signet dashboard
+signet setup
 ```
 
-Use `signet setup` again to reconfigure an existing installation. Use [CLI environment and exit codes](/cli/environment/) before changing workspace variables or running the daemon under service tooling.
+If a browser cannot open, setup prints the dashboard URL with `#setup`. A remote daemon must already be reachable; local agent connections and Obsidian paths refer to its machine. Use the CLI on your agent's machine to configure a remote integration.
+
+A partially written agent integration can be retried: the same connector reconciles its files. Failed configuration saves and connection tests are shown in the modal. A saved memory is not saved again merely because recall is still pending. Inspect or remove it in Memory.
+
+Headless setup retains identity presets, network options, Git protection, roster creation, and explicit source flags. Use `--non-interactive` when supplying configuration changes to an existing workspace; interactive setup will not silently apply those flags. See [CLI environment and exit codes](/cli/environment/) for workspace selection.
 
 ## Source checkouts
 

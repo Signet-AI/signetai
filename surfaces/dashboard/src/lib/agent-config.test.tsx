@@ -212,3 +212,36 @@ describe("agent config store", () => {
 		await harness.unmount();
 	});
 });
+
+test("overlapping saves serialize the newest edit after the in-flight write", async () => {
+	const { store, unmount } = await mountHarness();
+	const previous = globalThis.fetch;
+	let release: () => void = () => {};
+	const firstWrite = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const writes: string[] = [];
+	globalThis.fetch = async (_input, init) => {
+		writes.push(JSON.parse(String(init?.body)).content);
+		if (writes.length === 1) await firstWrite;
+		return Response.json({ success: true });
+	};
+	try {
+		await act(async () => {
+			store.aSetStr(["name"], "first");
+			const first = store.save();
+			store.aSetStr(["name"], "latest");
+			const second = store.save();
+			expect(first).toBe(second);
+			expect(writes).toHaveLength(1);
+			release();
+			expect(await second).toBe(true);
+		});
+		expect(writes).toHaveLength(2);
+		expect(writes[1]).toContain("name: latest");
+	} finally {
+		release();
+		globalThis.fetch = previous;
+		await unmount();
+	}
+});

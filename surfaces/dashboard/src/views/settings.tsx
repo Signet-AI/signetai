@@ -371,7 +371,7 @@ function readAccounts(store: AgentConfigStore): AccountsMap {
  * agent.yaml from disk, so save() must land BEFORE the refresh (mirrors the
  * old Svelte save→invalidate ordering). */
 async function persistProviderChange(store: AgentConfigStore, refreshCatalog: () => void): Promise<void> {
-	await store.save();
+	if (!(await store.save())) throw new Error("Could not save the connection settings. Please retry.");
 	refreshCatalog();
 }
 

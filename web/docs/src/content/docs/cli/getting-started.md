@@ -63,7 +63,7 @@ signet setup --schema
 signet setup --file ./setup-plan.json --dry-run
 ```
 
-Interactive setup requires a TTY. For headless setup, choose one of these modes:
+Interactive setup requires a TTY and opens the dashboard modal. It prints a URL if the browser cannot open. For headless setup, choose one of these modes:
 
 - `--non-interactive` with flags for a scripted setup or reconfiguration.
 - `--file <path>` to apply a JSON setup plan.
@@ -71,7 +71,7 @@ Interactive setup requires a TTY. For headless setup, choose one of these modes:
 - `--schema` to print the JSON Schema accepted by `--file` and `--json`.
 - `--dry-run` to resolve and print a plan without applying it.
 
-A `--file` or `--json` plan is for fresh setup. It does not carry credentials for an interactive provider connection. Reconfigure an existing installation with the wizard or `--non-interactive` flags.
+A `--file` or `--json` plan is for fresh setup. It does not carry credentials for an interactive provider connection. Reconfigure an existing installation in the dashboard or with `--non-interactive` flags. The retired `extractionConnect` plan field is rejected; provider sign-in runs through the daemon from the dashboard.
 
 ### Identity, location, and harness flags
 
@@ -134,7 +134,7 @@ signet configure
 signet config
 ```
 
-This opens the interactive configuration editor for the selected workspace. Use `signet setup` when you need to change onboarding, identity, daemon location, plugins, or harness selection.
+Both commands open the same dashboard onboarding modal as `signet setup`. Advanced settings remain in the dashboard; scripted changes use `signet setup --non-interactive`.
 
 ## `signet index` and `signet graphiq`
 

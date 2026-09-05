@@ -31,7 +31,7 @@ export interface ApiReadResult<T> {
 	readonly details?: unknown;
 }
 
-async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiReadResult<T>> {
+export async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiReadResult<T>> {
 	try {
 		const res = await fetch(`${API_BASE}${path}`, {
 			...init,
@@ -53,9 +53,10 @@ async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiRe
 	}
 }
 
-async function postJSON<T>(path: string, body?: unknown): Promise<T | null> {
+async function postJSON<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T | null> {
 	return getJSON<T>(path, {
 		method: "POST",
+		signal,
 		headers: body ? { "Content-Type": "application/json" } : undefined,
 		body: body ? JSON.stringify(body) : undefined,
 	});
@@ -67,10 +68,12 @@ async function mutateJSON<T extends { error?: string }>(
 	path: string,
 	method: "POST" | "DELETE",
 	body?: unknown,
+	signal?: AbortSignal,
 ): Promise<{ ok: boolean; data: T | null }> {
 	try {
 		const res = await fetch(`${API_BASE}${path}`, {
 			method,
+			signal,
 			headers: {
 				Accept: "application/json",
 				...authHeaders(),
@@ -94,6 +97,7 @@ async function postSourceImport(
 	try {
 		const res = await fetch(`${API_BASE}/api/sources/imports?agentId=${encodeURIComponent(agentId)}`, {
 			method: "POST",
+			signal: AbortSignal.timeout(30_000),
 			headers: { "Content-Type": "application/json", Accept: "application/json", ...authHeaders() },
 			body: JSON.stringify({ schemaId: "signet-export", duplicateMode, files: descriptors }),
 		});
@@ -136,6 +140,7 @@ export interface OAuthProviderStatus extends OAuthProviderMeta {
 export interface InferenceCatalog {
 	providers: readonly string[];
 	models: Record<string, CatalogModel[]>;
+	recommendedModels?: Record<string, string>;
 	modelErrors: Record<string, string>;
 	oauthProviders: readonly OAuthProviderStatus[];
 	acpxAgents: readonly string[];
@@ -864,8 +869,9 @@ export const api = {
 				`${API_BASE}/api/sources/imports/${encodeURIComponent(jobId)}/files/${encodeURIComponent(fileId)}?agentId=${encodeURIComponent(agentId)}`,
 				{
 					method: "PUT",
+					signal: AbortSignal.timeout(5 * 60_000),
 					headers: { "Content-Type": "application/jsonl", "x-file-name": file.name, ...authHeaders() },
-					body: file.stream(),
+					body: file,
 				},
 			);
 			const body = await res.json().catch(() => null);
@@ -879,6 +885,8 @@ export const api = {
 	controlSourceImport: (jobId: string, action: "start" | "pause" | "resume" | "retry" | "cancel") =>
 		postJSON<{ jobId: string; control: string; changed: boolean }>(
 			`/api/sources/imports/${encodeURIComponent(jobId)}/${action}`,
+			undefined,
+			AbortSignal.timeout(30_000),
 		),
 	getSourceImportRejections: (jobId: string) =>
 		getJSON<{ jobId: string; rejections: readonly unknown[] }>(
@@ -971,6 +979,7 @@ export const api = {
 		try {
 			const res = await fetch(`${API_BASE}/api/sources/${kind}`, {
 				method: "POST",
+				signal: AbortSignal.timeout(30_000),
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify(body),
 			});
@@ -1063,6 +1072,7 @@ export const api = {
 		return {
 			providers: c.providers ?? [],
 			models: c.models ?? {},
+			recommendedModels: c.recommendedModels,
 			modelErrors: c.modelErrors ?? {},
 			oauthProviders: c.oauthProviders ?? [],
 			acpxAgents: c.acpxAgents ?? [],
@@ -1078,13 +1088,16 @@ export const api = {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(body),
 		}),
-	executeInferenceProbe: (body: {
-		operation: string;
-		prompt: string;
-		maxTokens: number;
-		timeoutMs: number;
-		refresh: boolean;
-	}) => postJSON<InferenceProbeResult>("/api/inference/execute", body),
+	executeInferenceProbe: (
+		body: {
+			operation: string;
+			prompt: string;
+			maxTokens: number;
+			timeoutMs: number;
+			refresh: boolean;
+		},
+		signal?: AbortSignal,
+	) => postJSON<InferenceProbeResult>("/api/inference/execute", body, signal ?? AbortSignal.timeout(30_000)),
 
 	// Config files (settings: agent.yaml read/write)
 	getConfigFiles: async (): Promise<ConfigFile[]> => {
@@ -1108,10 +1121,15 @@ export const api = {
 	},
 
 	// Secrets vault (provider API keys — values are never read back)
-	putSecret: async (name: string, value: string): Promise<{ ok: boolean; error?: string }> => {
-		const { ok, data } = await mutateJSON<{ error?: string }>(`/api/secrets/${encodeURIComponent(name)}`, "POST", {
-			value,
-		});
+	putSecret: async (name: string, value: string, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> => {
+		const { ok, data } = await mutateJSON<{ error?: string }>(
+			`/api/secrets/${encodeURIComponent(name)}`,
+			"POST",
+			{
+				value,
+			},
+			signal ?? AbortSignal.timeout(30_000),
+		);
 		return { ok, error: ok ? undefined : (data?.error ?? "Failed to store secret") };
 	},
 	deleteSecret: async (name: string): Promise<{ ok: boolean; error?: string }> => {
