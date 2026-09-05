@@ -1245,7 +1245,7 @@
     },
     {
       "path": "harness-install-worker.ts",
-      "line": 46,
+      "line": 38,
       "api": "existsSync",
       "source": "if (!pluginPath || !existsSync(join(pluginPath, \"dist\", \"index.js\")))",
       "category": "hot-path"
@@ -1668,14 +1668,14 @@
     },
     {
       "path": "memory-config.ts",
-      "line": 367,
+      "line": 368,
       "api": "existsSync",
       "source": ".find((path) => existsSync(path));",
       "category": "hot-path"
     },
     {
       "path": "memory-config.ts",
-      "line": 369,
+      "line": 370,
       "api": "readFileSync",
       "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
       "category": "hot-path"
@@ -3191,35 +3191,35 @@
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 393,
+      "line": 397,
       "api": "existsSync",
-      "source": "{ id: \"pi\", name: \"Pi\", path: join(homedir(), \".pi\", \"agent\", \"settings.json\"), exists: existsSync(join(homedir(), \".pi\", \"agent\", \"settings.json\")) },",
+      "source": "exists: existsSync(join(homedir(), \".pi\", \"agent\", \"settings.json\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 394,
+      "line": 403,
       "api": "existsSync",
-      "source": "{ id: \"oh-my-pi\", name: \"Oh My Pi\", path: join(homedir(), \".omp\", \"agent\", \"settings.json\"), exists: existsSync(join(homedir(), \".omp\", \"agent\", \"settings.json\")) },",
+      "source": "exists: existsSync(join(homedir(), \".omp\", \"agent\", \"settings.json\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 395,
+      "line": 409,
       "api": "existsSync",
-      "source": "{ id: \"kimi\", name: \"Kimi\", path: join(homedir(), \".kimi\", \"config.toml\"), exists: existsSync(join(homedir(), \".kimi\", \"config.toml\")) },",
+      "source": "exists: existsSync(join(homedir(), \".kimi\", \"config.toml\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 396,
+      "line": 415,
       "api": "existsSync",
-      "source": "{ id: \"forge\", name: \"ForgeCode\", path: join(homedir(), \".forge\", \"config.yaml\"), exists: existsSync(join(homedir(), \".forge\", \"config.yaml\")) },",
+      "source": "exists: existsSync(join(homedir(), \".forge\", \"config.yaml\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 414,
+      "line": 434,
       "api": "existsSync",
       "source": "if (!existsSync(script)) {",
       "category": "hot-path"
