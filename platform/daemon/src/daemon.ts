@@ -84,7 +84,7 @@ import {
 	setDatabaseIntegrityWritesBlocked,
 } from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum-worker";
-import { createDbOwnerClient, type DbOwnerClient, type DbOwnerClientOptions } from "./db-owner-client";
+import { createDbOwnerClient, type DbOwnerClient, type DbOwnerClientOptions, DbOwnerDeadlineError } from "./db-owner-client";
 import {
 	type DbOwnerMaintenance,
 	createDbOwnerMaintenance,
@@ -2264,6 +2264,13 @@ process.on("unhandledRejection", (reason) => {
 	// Sanitized crash report for rejections too (primitives degrade to a
 	// truncated string).
 	telemetryRef?.record("error.occurred", sanitizeCrashError(reason, process.uptime() * 1000));
+	// A missed DB owner deadline is a bounded-availability degradation by
+	// design: the deadline already cancelled the job and the owner protocol
+	// keeps serving. Some fire-and-forget callers legitimately race these
+	// rejections at startup (deferred maintenance, background recovery), so
+	// killing the process here turns recoverable queue pressure into a crash
+	// loop. Crash on unknown rejections; survive deadline exhaustion.
+	if (reason instanceof DbOwnerDeadlineError) return;
 	requestShutdown("error:unhandledRejection", 1, reason);
 });
 
