@@ -1,6 +1,6 @@
 {
 	"name": "@signet/unreal-plugin",
-	"version": "0.216.7",
+	"version": "0.217.0",
 	"private": true,
 	"description": "Signet Unreal Engine plugin manifest and source checks",
 	"type": "module",

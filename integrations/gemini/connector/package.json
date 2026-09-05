@@ -1,6 +1,6 @@
 {
 	"name": "@signet/connector-gemini",
-	"version": "0.216.7",
+	"version": "0.217.0",
 	"description": "Signet connector for Gemini CLI",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -24,8 +24,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@signet/connector-base": "0.216.7",
-		"@signet/core": "0.216.7"
+		"@signet/connector-base": "0.217.0",
+		"@signet/core": "0.217.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",

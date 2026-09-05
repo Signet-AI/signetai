@@ -7,8 +7,10 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-05
-- Bug fixes: consolidate current memory eligibility; exclude superseded memories from delivered context; reject invalid runtime config; recover projection token budget.
-- Refactoring: unify runtime config parsing.
+- Features: add durable transcript import clients; expose durable transcript imports; add durable transcript import worker lifecycle; add owner-routed transcript commit seam; add transcript import foundation.
+- Bug fixes: gate transcript imports on unsupported platforms; retain transcript import ledgers on unsafe purge; close transcript purge and path escapes; close transcript import escape races; serialize purge with first canonical append; close transcript import lifecycle review gaps; harden transcript import lifecycle; refresh event-loop ledger locations; route transcript DB work through owner; enforce transaction preconditions; use reserved transcript upload slot; enforce lease truth and upload serialization; initialize isolated transcript workspace; retain source audit tombstones; recover stale canonical append locks; retry recovery until db owner is ready; make startup recovery retryable; reconcile filesystem crash recovery; reap recovery children on parent death; recover canonical append lock after crash; close db owner on parent death; make transcript replay file slots unique; converge imported transcript dreaming evidence; stabilize transcript import worker; consolidate current memory eligibility; exclude superseded memories from delivered context; reject invalid runtime config; recover projection token budget.
+- Refactoring: simplify transcript imports; unify runtime config parsing.
+- Docs: document durable transcript endpoints.
 
 ### 2026-09-04
 - Bug fixes: stop retaining backlog text; make backlog probes threshold-aware.
@@ -34,6 +36,54 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: route wave 2 reads and telemetry through owner.
 
 ## Release Ledger
+
+## [0.217.0] - 2026-09-05
+
+Release summary: 5 features, 24 bug fixes, 1 refactor, and 1 docs update.
+Tag range: `v0.216.7..v0.217.0`.
+
+### Features
+
+- **sources**: add durable transcript import clients
+- **daemon**: expose durable transcript imports
+- **daemon**: add durable transcript import worker lifecycle
+- **daemon**: add owner-routed transcript commit seam
+- **import**: add transcript import foundation
+
+### Bug Fixes
+
+- **daemon**: gate transcript imports on unsupported platforms
+- **daemon**: retain transcript import ledgers on unsafe purge
+- **daemon**: close transcript purge and path escapes
+- **daemon**: close transcript import escape races
+- **import**: serialize purge with first canonical append
+- close transcript import lifecycle review gaps
+- harden transcript import lifecycle
+- **ci**: refresh event-loop ledger locations
+- **daemon**: route transcript DB work through owner
+- **daemon**: enforce transaction preconditions
+- **eval**: use reserved transcript upload slot
+- **import**: enforce lease truth and upload serialization
+- **eval**: initialize isolated transcript workspace
+- **import**: retain source audit tombstones
+- **import**: recover stale canonical append locks
+- **import**: retry recovery until db owner is ready
+- **import**: make startup recovery retryable
+- **import**: reconcile filesystem crash recovery
+- **import**: reap recovery children on parent death
+- **import**: recover canonical append lock after crash
+- **daemon**: close db owner on parent death
+- **import**: make transcript replay file slots unique
+- **daemon**: converge imported transcript dreaming evidence
+- **daemon**: stabilize transcript import worker
+
+### Refactoring
+
+- **daemon**: simplify transcript imports
+
+### Docs
+
+- **import**: document durable transcript endpoints
 
 ## [0.216.7] - 2026-09-05
 
