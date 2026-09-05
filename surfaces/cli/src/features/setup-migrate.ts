@@ -35,7 +35,6 @@ import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotPro
 import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
-	formatWorkspaceSourceRepoSync,
 	getEmbeddingDimensions,
 	readErr,
 	readHarnesses,
@@ -129,9 +128,6 @@ export async function runExistingSetupWizard(
 
 		spinner.text = "Syncing built-in skills...";
 		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), basePath);
-
-		spinner.text = "Cloning Signet source checkout...";
-		const sourceRepoSync = await deps.syncWorkspaceSourceRepo(basePath);
 
 		spinner.text = "Creating agent manifest...";
 		const now = new Date().toISOString();
@@ -429,12 +425,6 @@ export async function runExistingSetupWizard(
 			console.log(
 				chalk.dim(`  Skills unified: ${skillsResult.imported} imported, ${skillsResult.symlinked} symlinked`),
 			);
-		}
-
-		const sourceRepoLine = formatWorkspaceSourceRepoSync(sourceRepoSync);
-		if (sourceRepoLine) {
-			console.log();
-			console.log(chalk.dim(sourceRepoLine));
 		}
 
 		if (configuredHarnesses.length > 0) {

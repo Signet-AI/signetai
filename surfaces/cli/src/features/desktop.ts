@@ -111,7 +111,7 @@ function prepareDesktopSourceCheckout(options: DesktopCommandOptions, ctx: Deskt
 	if (explicit || options.skipSourceSync) return resolveDesktopSourceCheckout(options.repo, ctx);
 
 	const workspace = resolveAgentsDir(env).path;
-	const sync = (ctx.syncWorkspaceSourceRepo ?? syncWorkspaceSourceRepo)(workspace);
+	const sync = (ctx.syncWorkspaceSourceRepo ?? syncWorkspaceSourceRepo)(workspace, { cloneIfMissing: true });
 	if (!["cloned", "pulled", "current"].includes(sync.status)) {
 		throw new Error(`Could not update Signet source checkout before desktop build: ${sync.message}`);
 	}

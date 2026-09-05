@@ -53,3 +53,16 @@ signet dashboard
 ```
 
 Use `signet setup` again to reconfigure an existing installation. Use [CLI environment and exit codes](/cli/environment/) before changing workspace variables or running the daemon under service tooling.
+
+## Source checkouts
+
+Setup and workspace migration do not clone the Signet repository. Saving and
+recalling memories use the installed application. `signet sync` and application
+updates maintain an existing workspace checkout but do not create one.
+
+`signet desktop build` or `signet desktop install` explicitly creates the managed
+checkout when needed for a source build. Contributors can also clone the repository
+and pass `--repo` to the desktop command. Existing checkouts, local edits, and
+branches are preserved; this change does not delete or relocate them. If a managed
+desktop checkout was removed, rerun `signet desktop install` to restore its source
+build path before the next automatic desktop update.

@@ -13,6 +13,8 @@ const SOURCE_REPO_SYNC_LOCK_WAIT_MS = 15_000;
 export type WorkspaceSourceRepoStatus = "cloned" | "pulled" | "fetched" | "current" | "skipped" | "error";
 
 export interface WorkspaceSourceRepoSyncOptions {
+	/** Only explicit source builds may create a checkout; routine sync updates existing repositories. */
+	readonly cloneIfMissing?: boolean;
 	readonly gitTimeoutMs?: number;
 	readonly remoteUrl?: string;
 	readonly repoDirName?: string;
@@ -74,12 +76,14 @@ export function syncWorkspaceSourceRepo(
 	workspaceDir: string,
 	options: WorkspaceSourceRepoSyncOptions = {},
 ): WorkspaceSourceRepoSyncResult {
+	const clone = options.cloneIfMissing === true;
 	const timeoutMs = options.gitTimeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
 	const remoteUrl = options.remoteUrl ?? SIGNET_SOURCE_REMOTE_URL;
 	const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir, options.repoDirName);
 	if (!isSafeCloneSource(remoteUrl)) {
 		return unsafeRemoteResult(repoPath);
 	}
+	if (!clone && !existsSync(repoPath)) return missingCheckoutResult(repoPath);
 	if (!isGitAvailable(timeoutMs)) {
 		return gitUnavailableResult(repoPath);
 	}
@@ -93,7 +97,7 @@ export function syncWorkspaceSourceRepo(
 	}
 
 	try {
-		return syncWorkspaceSourceRepoLocked(runGit, workspaceDir, repoPath, remoteUrl, timeoutMs);
+		return syncWorkspaceSourceRepoLocked(runGit, workspaceDir, repoPath, remoteUrl, timeoutMs, clone);
 	} finally {
 		releaseSourceRepoSyncLock(lock.lock);
 	}
@@ -103,12 +107,14 @@ export async function syncWorkspaceSourceRepoAsync(
 	workspaceDir: string,
 	options: WorkspaceSourceRepoSyncOptions = {},
 ): Promise<WorkspaceSourceRepoSyncResult> {
+	const clone = options.cloneIfMissing === true;
 	const timeoutMs = options.gitTimeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
 	const remoteUrl = options.remoteUrl ?? SIGNET_SOURCE_REMOTE_URL;
 	const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir, options.repoDirName);
 	if (!isSafeCloneSource(remoteUrl)) {
 		return unsafeRemoteResult(repoPath);
 	}
+	if (!clone && !existsSync(repoPath)) return missingCheckoutResult(repoPath);
 	if (!(await isGitAvailableAsync(timeoutMs))) {
 		return gitUnavailableResult(repoPath);
 	}
@@ -122,7 +128,7 @@ export async function syncWorkspaceSourceRepoAsync(
 	}
 
 	try {
-		return await syncWorkspaceSourceRepoLocked(runGitAsync, workspaceDir, repoPath, remoteUrl, timeoutMs);
+		return await syncWorkspaceSourceRepoLocked(runGitAsync, workspaceDir, repoPath, remoteUrl, timeoutMs, clone);
 	} finally {
 		releaseSourceRepoSyncLock(lock.lock);
 	}
@@ -134,6 +140,7 @@ function syncWorkspaceSourceRepoLocked(
 	repoPath: string,
 	remoteUrl: string,
 	timeoutMs: number,
+	cloneIfMissing: boolean,
 ): WorkspaceSourceRepoSyncResult;
 function syncWorkspaceSourceRepoLocked(
 	run: typeof runGitAsync,
@@ -141,6 +148,7 @@ function syncWorkspaceSourceRepoLocked(
 	repoPath: string,
 	remoteUrl: string,
 	timeoutMs: number,
+	cloneIfMissing: boolean,
 ): Promise<WorkspaceSourceRepoSyncResult>;
 function syncWorkspaceSourceRepoLocked(
 	run: GitRunner,
@@ -148,8 +156,10 @@ function syncWorkspaceSourceRepoLocked(
 	repoPath: string,
 	remoteUrl: string,
 	timeoutMs: number,
+	cloneIfMissing: boolean,
 ): MaybePromise<WorkspaceSourceRepoSyncResult> {
 	if (!existsSync(repoPath) || isEmptyDirectory(repoPath)) {
+		if (!cloneIfMissing) return missingCheckoutResult(repoPath);
 		const workspaceReady = ensureWorkspaceDir(workspaceDir);
 		if (workspaceReady.ok === false) {
 			return errorResult(repoPath, workspaceReady.message);
@@ -580,6 +590,16 @@ async function sleep(ms: number): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function missingCheckoutResult(repoPath: string): WorkspaceSourceRepoSyncResult {
+	return {
+		status: "skipped",
+		path: repoPath,
+		message: "No Signet source checkout; source builds can create one explicitly",
+		branch: null,
+		defaultBranch: null,
+	};
+}
+
 function unsafeRemoteResult(repoPath: string): WorkspaceSourceRepoSyncResult {
 	return {
 		status: "error",
@@ -826,7 +846,7 @@ function parsePorcelainStatusPath(line: string): string | null {
 	const path = rawPath.includes(renameSeparator)
 		? rawPath.slice(rawPath.lastIndexOf(renameSeparator) + renameSeparator.length)
 		: rawPath;
-	return path.replace(/^\"|\"$/g, "");
+	return path.replace(/^"|"$/g, "");
 }
 
 function readUpstreamBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
