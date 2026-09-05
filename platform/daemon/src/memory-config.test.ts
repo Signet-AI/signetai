@@ -26,6 +26,11 @@ afterEach(() => {
 });
 
 describe("loadDreamingConfig", () => {
+	it("defaults dreaming off and preserves an explicit enable", () => {
+		expect(loadDreamingConfig({}).enabled).toBe(false);
+		expect(loadDreamingConfig({ memory: { dreaming: { enabled: true } } }).enabled).toBe(true);
+	});
+
 	it("defaults and bounds the low-volume backlog maximum wait", () => {
 		expect(loadDreamingConfig({}).maxInterval).toBe(6 * 60 * 60 * 1_000);
 		expect(loadDreamingConfig({ memory: { dreaming: { maxInterval: 1 } } }).maxInterval).toBe(5 * 60 * 1_000);
@@ -457,6 +462,18 @@ network:
 		);
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.embedding.provider).toBe("openai");
+	});
+
+	it("includes install-on retrieval and maintenance defaults when no config exists", () => {
+		const agentsDir = makeTempAgentsDir();
+		const cfg = loadMemoryConfig(agentsDir);
+
+		expect(cfg.search.rehearsal_enabled).toBe(true);
+		expect(cfg.pipelineV2.reranker.enabled).toBe(true);
+		expect(cfg.pipelineV2.graph.enabled).toBe(true);
+		expect(cfg.pipelineV2.autonomous.enabled).toBe(true);
+		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(true);
+		expect(cfg.pipelineV2.autonomous.maintenanceMode).toBe("execute");
 	});
 
 	it("includes pipelineV2 defaults when no config exists", () => {

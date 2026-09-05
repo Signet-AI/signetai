@@ -22,6 +22,7 @@ const CONFIG = {
 } as const;
 
 const DREAMING_CONFIG: DreamingConfig = {
+	enabled: true,
 	tokenThreshold: 100_000,
 	maxInterval: 6 * 60 * 60 * 1_000,
 	timeout: 300_000,

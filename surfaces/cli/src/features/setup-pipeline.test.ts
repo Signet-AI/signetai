@@ -20,9 +20,23 @@ describe("defaultExtractionModel", () => {
 });
 
 describe("buildSetupPipeline", () => {
-	it("writes tuning-only config when extraction is turned off", () => {
+	it("keeps the reranker enabled even when extraction is turned off", () => {
 		expect(buildSetupPipeline("none")).toEqual({
 			enabled: false,
+			reranker: { enabled: true },
+		});
+	});
+
+	it("enables the full pipeline defaults when dreaming is enabled without extraction", () => {
+		expect(buildSetupPipeline("none", true)).toMatchObject({
+			enabled: true,
+			graph: { enabled: true },
+			reranker: { enabled: true },
+			autonomous: {
+				enabled: true,
+				allowUpdateDelete: true,
+				maintenanceMode: "execute",
+			},
 		});
 	});
 

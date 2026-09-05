@@ -44,6 +44,80 @@ import {
 import { withSetupPrompt } from "./setup-terminal.js";
 import type { SetupDeps } from "./setup-types.js";
 
+const RETIRED_PIPELINE_KEYS = [
+	"synthesis",
+	"writeGate",
+	"durability",
+	"writeGateEnabled",
+	"writeGateThreshold",
+	"writeGateContinuityDiscount",
+] as const;
+
+const RETIRED_ROUTING_KEYS = [
+	"extractionProvider",
+	"extractionModel",
+	"extractionEndpoint",
+	"extractionBaseUrl",
+	"extractionFallbackProvider",
+	"extractionCommand",
+	"allowRemoteProviders",
+] as const;
+
+const RETIRED_EXTRACTION_KEYS = [
+	"provider",
+	"model",
+	"endpoint",
+	"baseUrl",
+	"base_url",
+	"fallbackProvider",
+	"command",
+	"allowRemoteProviders",
+] as const;
+
+const MIGRATABLE_LEGACY_PROVIDERS = new Set([
+	"acpx",
+	"anthropic",
+	"claude-code",
+	"codex",
+	"llama-cpp",
+	"ollama",
+	"openai-compatible",
+	"openrouter",
+	"opencode",
+	"kimi",
+]);
+
+function canRemoveLegacyRouting(provider: unknown): boolean {
+	const value = typeof provider === "string" ? provider.trim() : "";
+	return value === "" || value === "none" || MIGRATABLE_LEGACY_PROVIDERS.has(value);
+}
+
+function removeRetiredPipelineSettings(pipeline: Record<string, unknown>): Record<string, unknown> {
+	const cleaned = { ...pipeline };
+	const flatProvider = cleaned.extractionProvider;
+	const preserveFlatRouting = !canRemoveLegacyRouting(flatProvider);
+	for (const key of RETIRED_PIPELINE_KEYS) {
+		Reflect.deleteProperty(cleaned, key);
+	}
+	for (const key of RETIRED_ROUTING_KEYS) {
+		if (preserveFlatRouting && key !== "allowRemoteProviders") continue;
+		Reflect.deleteProperty(cleaned, key);
+	}
+
+	const extraction = readRecord(cleaned.extraction);
+	const preserveNestedRouting = !canRemoveLegacyRouting(extraction.provider);
+	for (const key of RETIRED_EXTRACTION_KEYS) {
+		if (preserveNestedRouting && key !== "allowRemoteProviders") continue;
+		Reflect.deleteProperty(extraction, key);
+	}
+	if (Object.keys(extraction).length > 0) {
+		cleaned.extraction = extraction;
+	} else {
+		Reflect.deleteProperty(cleaned, "extraction");
+	}
+	return cleaned;
+}
+
 export function detectedHarnessesForExistingSetup(
 	detection: SetupDetection,
 	configuredHarnessList: readonly string[],
@@ -79,6 +153,7 @@ export async function runExistingSetupWizard(
 		extractionEndpoint?: string;
 		availableExtractionProviders?: readonly ExtractionProviderChoice[];
 		acpxBin?: string;
+		dreamingEnabled?: boolean;
 		signetSecretsEnabled?: boolean;
 		graphiqEnabled?: boolean;
 		identityMode?: IdentityMode;
@@ -88,6 +163,8 @@ export async function runExistingSetupWizard(
 	const signetSecretsEnabled = options?.signetSecretsEnabled ?? true;
 	const graphiqEnabled = options?.graphiqEnabled ?? false;
 	const identityMode = options?.identityMode ?? "managed";
+	const existingDreamingEnabled = readRecord(readRecord(existingConfig.memory).dreaming).enabled === true;
+	const dreamingEnabled = options?.dreamingEnabled === true || existingDreamingEnabled;
 	let graphiqInstalled = false;
 
 	try {
@@ -182,6 +259,7 @@ export async function runExistingSetupWizard(
 				alpha: 0.7,
 				top_k: 20,
 				min_score: 0.3,
+				rehearsal_enabled: true,
 			},
 		};
 
@@ -216,15 +294,14 @@ export async function runExistingSetupWizard(
 			};
 		}
 
+		const memory = readRecord(config.memory);
 		if (options?.extractionProvider) {
 			const model =
 				options.extractionModel ||
 				(options.extractionProvider === "acpx"
 					? defaultAcpxModel(detectedHarnesses, options.availableExtractionProviders)
 					: defaultExtractionModel(options.extractionProvider));
-			const memory = readRecord(config.memory);
-			memory.pipelineV2 = buildSetupPipeline(options.extractionProvider);
-			config.memory = memory;
+			memory.pipelineV2 = buildSetupPipeline(options.extractionProvider, options.dreamingEnabled === true);
 			const inference = buildSetupInference(
 				options.extractionProvider,
 				model,
@@ -235,22 +312,51 @@ export async function runExistingSetupWizard(
 			);
 			applySetupInferenceRoute(config, inference);
 		}
+		if (dreamingEnabled) {
+			memory.dreaming = { enabled: true };
+			memory.pipelineV2 = buildSetupPipeline(options?.extractionProvider ?? "none", true);
+		}
+		config.memory = memory;
 
 		const agentYamlPath = join(basePath, "agent.yaml");
 		if (existsSync(agentYamlPath)) {
 			const existingCapabilities = readRecord(existingConfig.capabilities);
-			writeFileSync(
-				agentYamlPath,
-				formatYaml({
-					...existingConfig,
-					capabilities: {
-						...existingCapabilities,
-						memory: { ...readRecord(existingCapabilities.memory), enabled: true, autoInject: true, memoryHead: true },
-						secrets: { ...readRecord(existingCapabilities.secrets), enabled: signetSecretsEnabled },
-						identity: { ...readRecord(existingCapabilities.identity), mode: identityMode },
+			const existingSearch = readRecord(existingConfig.search);
+			const updatedConfig: Record<string, unknown> = {
+				...existingConfig,
+				search: {
+					...existingSearch,
+					rehearsal_enabled:
+						typeof existingSearch.rehearsal_enabled === "boolean" ? existingSearch.rehearsal_enabled : true,
+				},
+				capabilities: {
+					...existingCapabilities,
+					memory: { ...readRecord(existingCapabilities.memory), enabled: true, autoInject: true, memoryHead: true },
+					secrets: { ...readRecord(existingCapabilities.secrets), enabled: signetSecretsEnabled },
+					identity: { ...readRecord(existingCapabilities.identity), mode: identityMode },
+				},
+			};
+			if (dreamingEnabled) {
+				const existingMemory = { ...readRecord(existingConfig.memory) };
+				Reflect.deleteProperty(existingMemory, "synthesis");
+				const existingPipeline = removeRetiredPipelineSettings(readRecord(existingMemory.pipelineV2));
+				const pipelineDefaults = buildSetupPipeline(options?.extractionProvider ?? "none", true);
+				updatedConfig.memory = {
+					...existingMemory,
+					dreaming: { ...readRecord(existingMemory.dreaming), enabled: true },
+					pipelineV2: {
+						...existingPipeline,
+						...pipelineDefaults,
+						graph: { ...readRecord(existingPipeline.graph), ...readRecord(pipelineDefaults.graph) },
+						reranker: { ...readRecord(existingPipeline.reranker), ...readRecord(pipelineDefaults.reranker) },
+						autonomous: {
+							...readRecord(existingPipeline.autonomous),
+							...readRecord(pipelineDefaults.autonomous),
+						},
 					},
-				}),
-			);
+				};
+			}
+			writeFileSync(agentYamlPath, formatYaml(updatedConfig));
 		} else {
 			writeFileSync(agentYamlPath, formatYaml(config));
 		}

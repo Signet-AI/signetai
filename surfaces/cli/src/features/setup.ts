@@ -648,6 +648,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			extractionEndpoint: migrationExtractionEndpoint,
 			availableExtractionProviders: availableToolExtractionProviders,
 			acpxBin,
+			dreamingEnabled: options.enableDreaming === true,
 			signetSecretsEnabled,
 			graphiqEnabled,
 		});

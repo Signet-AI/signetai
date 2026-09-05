@@ -341,6 +341,59 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(state.activeProject).toBe(projectPath);
 	});
 
+	it("enables Dreaming defaults and removes retired routing during existing setup", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-dreaming-defaults-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(basePath, "agent.yaml"), "version: 1\n");
+
+		const existingConfig = {
+			memory: {
+				dreaming: { enabled: true },
+				synthesis: { harness: "openclaw" },
+				pipelineV2: {
+					enabled: false,
+					writeGate: { threshold: 0.4 },
+					durability: "transient",
+					extraction: { provider: "claude-code", model: "haiku" },
+					graph: { enabled: false },
+					reranker: { enabled: false },
+					autonomous: { enabled: false, allowUpdateDelete: false, maintenanceMode: "observe" },
+				},
+			},
+		};
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+
+		await runExistingSetupWizard(basePath, fakeDetection(basePath), existingConfig, deps, {
+			nonInteractive: true,
+			skipGit: true,
+			allowUnprotectedWorkspace: true,
+			extractionProvider: "none",
+			signetSecretsEnabled: true,
+		});
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("dreaming:\n    enabled: true");
+		expect(agentYaml).toContain("pipelineV2:\n    enabled: true");
+		expect(agentYaml).toContain("graph:\n      enabled: true");
+		expect(agentYaml).toContain("reranker:\n      enabled: true");
+		expect(agentYaml).toContain("allowUpdateDelete: true");
+		expect(agentYaml).toContain("maintenanceMode: execute");
+		expect(agentYaml).toContain("rehearsal_enabled: true");
+		expect(agentYaml).not.toContain("synthesis:");
+		expect(agentYaml).not.toContain("writeGate:");
+		expect(agentYaml).not.toContain("durability:");
+		expect(agentYaml).not.toContain("provider: claude-code");
+		expect(agentYaml).not.toContain("model: haiku");
+	});
+
 	it("includes Hermes in migration harnesses when detected in ~/.hermes", () => {
 		root = mkdtempSync(join(tmpdir(), "setup-migrate-hermes-default-"));
 		const basePath = join(root, "agents");
@@ -913,6 +966,14 @@ describe("setupWizard headless plan path", () => {
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("dreaming:");
 		expect(agentYaml).toContain("enabled: true");
+		expect(agentYaml).toContain("rehearsal_enabled: true");
+		expect(agentYaml).toContain("pipelineV2:\n    enabled: true");
+		expect(agentYaml).toContain("graph:\n      enabled: true");
+		expect(agentYaml).toContain("reranker:\n      enabled: true");
+		expect(agentYaml).toContain("allowUpdateDelete: true");
+		expect(agentYaml).toContain("maintenanceMode: execute");
+		expect(agentYaml).not.toContain("synthesis:");
+		expect(agentYaml).not.toContain("provider: claude-code");
 	});
 
 	it("rejects a connected cloud extraction target from a headless plan", async () => {

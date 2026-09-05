@@ -33,10 +33,12 @@ export function defaultExtractionModel(provider: DirectExtractionProviderChoice)
 	return defaultPipelineModel(provider);
 }
 
-export function buildSetupPipeline(provider: ExtractionProviderChoice): SetupPipelineConfig {
-	if (provider === "none") {
+export function buildSetupPipeline(provider: string, dreamingEnabled = false): SetupPipelineConfig {
+	const pipelineEnabled = provider !== "none" || dreamingEnabled;
+	if (!pipelineEnabled) {
 		return {
 			enabled: false,
+			reranker: { enabled: true },
 		};
 	}
 

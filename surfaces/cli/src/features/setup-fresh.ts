@@ -134,6 +134,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 				alpha: plan.searchBalance,
 				top_k: plan.searchTopK,
 				min_score: plan.searchMinScore,
+				rehearsal_enabled: true,
 			},
 		};
 
@@ -157,9 +158,9 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 					};
 
 		const memory = readRecord(config.memory);
-		memory.pipelineV2 = buildSetupPipeline(plan.extractionProvider);
+		memory.pipelineV2 = buildSetupPipeline(plan.extractionProvider, plan.dreamingEnabled === true);
 		if (plan.dreamingEnabled) {
-			memory.dreaming = {};
+			memory.dreaming = { enabled: true };
 		}
 		config.memory = memory;
 		const inference = buildSetupInference(
