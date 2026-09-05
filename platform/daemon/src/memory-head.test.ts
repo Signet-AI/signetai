@@ -24,31 +24,21 @@ describe("memory head owner runtime", () => {
 			"INSERT INTO memories (id, content, agent_id, memory_kind, type, visibility, created_at, updated_at) VALUES (?, ?, ?, 'episodic', 'fact', 'private', datetime('now'), datetime('now'))",
 			[id, content, agentId],
 		);
-	async function commit(id: string, text = "Meeting is Tuesday.", agentId = "default", legacy = false) {
+	async function commit(id: string, text = "Meeting is Tuesday.", agentId = "default") {
 		await pass(id, agentId);
 		const base = await snapshot(agentId);
-		const common = { passId: id, agentId, baseRevision: Number(base.revision), baseHash: String(base.hash) };
-		return head(
-			legacy
-				? {
-						action: "curate",
-						input: {
-							...common,
-							content: text,
-							entries: [
-								{ id: "meeting", text, operation: "added", sourceRefs: ["memory:meeting"], supportingQuotes: [text] },
-							],
-						},
-					}
-				: {
-						action: "commit",
-						input: {
-							...common,
-							entries: [{ entryId: "meeting", text, support: [{ source_ref: "memory:meeting", quote: text }] }],
-						},
-					},
-		);
+		return head({
+			action: "commit",
+			input: {
+				passId: id,
+				agentId,
+				baseRevision: Number(base.revision),
+				baseHash: String(base.hash),
+				entries: [{ entryId: "meeting", text, support: [{ source_ref: "memory:meeting", quote: text }] }],
+			},
+		});
 	}
+
 	beforeEach(async () => {
 		root = mkdtempSync(join(tmpdir(), "signet-head-owner-"));
 		mkdirSync(join(root, "memory"));
@@ -78,18 +68,21 @@ describe("memory head owner runtime", () => {
 		await client.close();
 		client = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
 		expect(await snapshot()).toMatchObject({ status: "stale", revision: 2 });
-		expect(await commit("regenerate", "Meeting is Thursday.", "default", true)).toMatchObject({
+		expect(await commit("regenerate", "Meeting is Thursday.", "default")).toMatchObject({
 			ok: true,
 			revision: 3,
 		});
 		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).toContain("Thursday");
-		expect(await snapshot()).toMatchObject({ content: "Meeting is Thursday.", entries: [] });
+		expect(await snapshot()).toMatchObject({
+			content: "- Meeting is Thursday.",
+			entries: [expect.objectContaining({ entry_id: "meeting" })],
+		});
 		expect(
 			await ownerReadOne(client, "SELECT content FROM memory_head_revisions WHERE revision=1", [], options),
 		).toEqual({ content: "- Meeting is Tuesday." });
 	});
 
-	it("fences both curation APIs even when stale work reads a new base after correction", async () => {
+	it("fences a commit even when stale work reads a new base after correction", async () => {
 		await pass("queued");
 		await sql("UPDATE memories SET content='Meeting is Thursday.' WHERE id='meeting'");
 		const base = await snapshot();
@@ -110,32 +103,14 @@ describe("memory head owner runtime", () => {
 				},
 			}),
 		).toMatchObject({ ok: false, code: "STALE_HEAD" });
-		expect(
-			await head({
-				action: "curate",
-				input: {
-					...common,
-					content: "Tuesday",
-					entries: [
-						{
-							id: "meeting",
-							text: "Tuesday",
-							operation: "added",
-							sourceRefs: ["memory:meeting"],
-							supportingQuotes: ["Tuesday"],
-						},
-					],
-				},
-			}),
-		).toMatchObject({ ok: false, code: "STALE_HEAD" });
 		expect(existsSync(join(root, "MEMORY.md"))).toBe(false);
 	});
 
-	it("retains legacy audit operations, rejects retired writers, and preserves authored files", async () => {
+	it("preserves authored files and records structured provenance", async () => {
 		const authored = "# My memory\nKeep this wording.";
 		writeFileSync(join(root, "MEMORY.md"), authored);
 		expect(writeMemoryHead("Unversioned generated text")).toMatchObject({ ok: false, code: "invalid" });
-		expect(await commit("legacy", "Meeting is Tuesday.", "default", true)).toMatchObject({
+		expect(await commit("authored", "Meeting is Tuesday.", "default")).toMatchObject({
 			ok: false,
 			code: "PUBLICATION_PENDING",
 			revision: 1,
@@ -150,11 +125,58 @@ describe("memory head owner runtime", () => {
 		expect(
 			await ownerReadOne(
 				client,
-				"SELECT operation, source_refs_json FROM memory_head_revisions WHERE revision=1",
+				"SELECT operation, provenance_json FROM memory_head_revision_entries WHERE revision=1",
 				[],
 				options,
 			),
-		).toEqual({ operation: "added", source_refs_json: '["memory:meeting"]' });
+		).toEqual({ operation: "add", provenance_json: '[{"source_ref":"memory:meeting","quote":"Meeting is Tuesday."}]' });
+	});
+
+	it("rejects retired owner requests without changing the head", async () => {
+		await pass("retired");
+		await expect(
+			head(
+				JSON.parse(
+					JSON.stringify({
+						action: "curate",
+						input: {
+							passId: "retired",
+							agentId: "default",
+							baseRevision: 0,
+							baseHash: "",
+							content: "Meeting is Tuesday.",
+							entries: [
+								{
+									id: "meeting",
+									text: "Meeting is Tuesday.",
+									operation: "added",
+									sourceRefs: ["memory:meeting"],
+									supportingQuotes: ["Meeting is Tuesday."],
+								},
+							],
+						},
+					}),
+				),
+			),
+		).rejects.toThrow("Unsupported memory head action");
+		expect(await snapshot()).toMatchObject({ revision: 0, status: "stale" });
+		expect(existsSync(join(root, "MEMORY.md"))).toBe(false);
+	});
+
+	it("preserves historical freeform audits when structured publication replaces the head", async () => {
+		await pass("historical");
+		await sql(
+			"INSERT INTO memory_head_revisions (id, agent_id, revision, content, content_hash, rendered_token_count, base_revision, base_hash, pass_id, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json, created_at) VALUES ('old-audit', 'default', 1, 'Meeting is Tuesday.', 'old-hash', 5, 0, '', 'historical', 'meeting', 'Meeting is Tuesday.', 'deferred', '[\"memory:meeting\"]', '[\"Meeting is Tuesday.\"]', datetime('now'))",
+		);
+		await sql(
+			"UPDATE memory_md_heads SET revision=1, content='Meeting is Tuesday.', content_hash='old-hash', revision_id='old-audit', is_current=0 WHERE agent_id='default'",
+		);
+		const before = await ownerReadOne(client, "SELECT * FROM memory_head_revisions WHERE id='old-audit'", [], options);
+		expect(await commit("new-format")).toMatchObject({ ok: true, revision: 2 });
+		expect(await ownerReadOne(client, "SELECT * FROM memory_head_revisions WHERE id='old-audit'", [], options)).toEqual(
+			before,
+		);
+		expect(await snapshot()).toMatchObject({ status: "current", content: "- Meeting is Tuesday." });
 	});
 
 	it("does not invalidate on ingestion or unrelated private changes, but deletion fences pending work", async () => {

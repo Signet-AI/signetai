@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { dirname, join } from "node:path";
 import { scanMemoryContent } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
-import type { MemoryHeadCuration, MemoryHeadRequest } from "./memory-head";
+import type { MemoryHeadRequest } from "./memory-head";
 import { readEpisodicSource } from "./episodic-sources";
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
 import { countTokens } from "./pipeline/tokenizer";
@@ -89,7 +89,8 @@ function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
 }
 
 export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHeadRequest): Record<string, unknown> {
-	const agentId = request.action === "commit" || request.action === "curate" ? request.input.agentId : request.agentId;
+	if (!["read", "inspect", "commit"].includes(request.action)) throw new Error("Unsupported memory head action");
+	const agentId = request.action === "commit" ? request.input.agentId : request.agentId;
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
 	const head = db
 		.prepare("SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?")
@@ -155,15 +156,10 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 	if (
 		input.entries.length > 200 ||
 		Buffer.byteLength(JSON.stringify(input)) > 262144 ||
-		(request.action === "commit"
-			? request.input.entries.some((entry) => entry.support.length > 8)
-			: request.input.entries.some((entry) => entry.sourceRefs.length > 8 || entry.supportingQuotes.length > 8))
+		input.entries.some((entry) => entry.support.length > 8)
 	)
 		return { ok: false, code: "INVALID_HEAD", error: "head input exceeds its bounded budget" };
-	const body =
-		request.action === "curate"
-			? request.input.content.trim()
-			: request.input.entries.map((entry) => `- ${entry.text.trim()}`).join("\n");
+	const body = input.entries.map((entry) => `- ${entry.text.trim()}`).join("\n");
 	const safety = scanMemoryContent(body);
 	if (!body || !safety.contextEligible || countTokens(body) > 1000)
 		return { ok: false, code: "INVALID_HEAD", error: "head must be nonempty, safe, and at most 1000 tokens" };
@@ -171,10 +167,7 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 	// Re-validating unchanged text after invalidation is a new publication, not a no-op.
 	if (head?.is_current === 1 && currentHash === contentHash)
 		return { ok: true, code: "NOOP", revision, hash: contentHash, changed: false, changedIds: [] };
-	const result =
-		request.action === "curate"
-			? commitLegacy(db, request.input, body, contentHash, revision, currentHash)
-			: commitEntries(db, request.input, body, contentHash, revision, currentHash);
+	const result = commitEntries(db, input, body, contentHash, revision, currentHash);
 	if (result.ok) {
 		const now = new Date().toISOString();
 		const revisionId = String(result.revisionId);
@@ -290,68 +283,4 @@ function commitEntries(
 		hash: contentHash,
 		changedIds: input.entries.map((entry) => entry.entryId),
 	};
-}
-
-function commitLegacy(
-	db: WriteDb,
-	input: MemoryHeadCuration,
-	body: string,
-	contentHash: string,
-	revision: number,
-	currentHash: string,
-): Record<string, unknown> {
-	for (const entry of input.entries) {
-		if (!entry.id.trim() || !entry.text.trim())
-			return { ok: false, code: "INVALID_HEAD", error: "entries require id and text" };
-		if (entry.operation === "deferred" || entry.operation === "no-op") continue;
-		if (!entry.sourceRefs.length || !entry.supportingQuotes.length)
-			return { ok: false, code: "INVALID_PROVENANCE", error: "entries require evidence" };
-		const sources = entry.sourceRefs.map((ref) => currentSource(db, input.agentId, ref));
-		if (
-			sources.some((source) => source === null) ||
-			entry.supportingQuotes.some(
-				(quote) =>
-					!quote.trim() ||
-					!sources.some((source) => source !== null && renderDreamingEvidence(source).includes(quote.trim())),
-			)
-		)
-			return { ok: false, code: "INVALID_PROVENANCE", error: "quotes must be current scoped evidence" };
-	}
-	const next = revision + 1;
-	const now = new Date().toISOString();
-	const revisionId = randomUUID();
-	// Keep the legacy operation audit format; both inputs use the same fence/publication.
-	for (const [index, entry] of input.entries.entries())
-		db.prepare(
-			"INSERT INTO memory_head_revisions (id, agent_id, revision, content, content_hash, rendered_token_count, pass_id, base_revision, base_hash, created_at, entry_id, entry_text, operation, source_refs_json, supporting_quotes_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		).run(
-			index === 0 ? revisionId : randomUUID(),
-			input.agentId,
-			next,
-			body,
-			contentHash,
-			countTokens(body),
-			input.passId,
-			revision,
-			currentHash,
-			now,
-			entry.id,
-			entry.text,
-			entry.operation,
-			JSON.stringify(entry.sourceRefs),
-			JSON.stringify(entry.supportingQuotes),
-		);
-	if (!input.entries.length) return { ok: false, code: "INVALID_PROVENANCE", error: "head requires audit entries" };
-
-	db.prepare(
-		"UPDATE dreaming_passes SET head_added=?, head_updated=?, head_removed=?, head_deferred=?, head_no_op=? WHERE id=? AND agent_id=?",
-	).run(
-		...["added", "updated", "removed", "deferred", "no-op"].map(
-			(op) => input.entries.filter((entry) => entry.operation === op).length,
-		),
-		input.passId,
-		input.agentId,
-	);
-
-	return { ok: true, revision: next, revisionId, hash: contentHash, changed: true };
 }

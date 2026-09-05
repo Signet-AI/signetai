@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
+import { runDreamingAgentPass, getDreamingToolCalls } from "./dreaming";
+import { getDbOwnerForAccessor } from "../db-owner-runtime";
+import { ownerRun, ownerReadOne } from "../db-owner-sql";
 import { DREAMING_CAPABILITY_IDS } from "./dreaming-capabilities";
 
 describe("dreaming-agent-tools", () => {
@@ -19,8 +22,8 @@ describe("dreaming-agent-tools", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		rmSync(dir, { recursive: true, force: true });
@@ -107,8 +110,80 @@ describe("dreaming-agent-tools", () => {
 			mode: "incremental-content",
 		});
 		expect(tools.map((tool) => tool.name)).toEqual([...DREAMING_CAPABILITY_IDS]);
-		expect(tools).toHaveLength(15);
+		expect(tools.some((tool) => tool.name === "curate_memory_head")).toBe(false);
 	});
+
+	it("publishes through a content pass and reports a rejected stale commit honestly", async () => {
+		insertEpisodicMemory("head-evidence", "Meeting is Tuesday.");
+		const accessor = getDbAccessor();
+		const owner = await getDbOwnerForAccessor(accessor);
+		const options = { operation: "head-pass-fixture", lane: "write" as const, deadlineMs: 10000 };
+		const cfg = {
+			tokenThreshold: 100000,
+			maxInterval: 3600000,
+			maxInputTokens: 32000,
+			maxOutputTokens: 16000,
+			timeout: 30000,
+			backfillOnFirstRun: true,
+		};
+		for (const corrected of [false, true]) {
+			const result = await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						const invoke = async (name: string, args: unknown) =>
+							readResult(await findTool(input.tools, name).execute(name, args, undefined, undefined, {} as never));
+						const base = await invoke("memory_head_read", { agentId: "owner" });
+						const head = base.head;
+						if (typeof head !== "object" || head === null || !("revision" in head) || !("hash" in head))
+							throw new Error("Missing head revision/hash");
+						if (corrected)
+							await ownerRun(
+								owner,
+								"UPDATE memories SET content='Meeting is Thursday.' WHERE id='head-evidence'",
+								[],
+								options,
+							);
+						const publication = await invoke("memory_head_commit", {
+							agentId: "owner",
+							passId: input.passId,
+							baseRevision: head.revision,
+							baseHash: head.hash,
+							entries: [
+								{
+									entryId: "meeting",
+									text: "Meeting is Tuesday.",
+									support: [{ source_ref: "memory:head-evidence", quote: "Meeting is Tuesday." }],
+								},
+							],
+						});
+						expect(publication).toMatchObject(
+							corrected ? { ok: false, code: "STALE_HEAD" } : { ok: true, code: "COMMITTED" },
+						);
+						return { summary: "Reviewed meeting evidence." };
+					},
+				},
+				cfg,
+				dir,
+				"owner",
+				["owner"],
+				"incremental-content",
+			);
+			expect(result.summary.includes("[memory-head commit missing]")).toBe(corrected);
+			expect(
+				(await getDreamingToolCalls(accessor, "owner", result.passId)).find(
+					(call) => call.toolName === "memory_head_commit",
+				)?.output,
+			).toMatchObject({ ok: !corrected });
+			expect(
+				await ownerReadOne(owner, "SELECT status FROM dreaming_passes WHERE id=?", [result.passId], options),
+			).toEqual({ status: "completed" });
+		}
+		expect(readFileSync(join(dir, "agents/owner/MEMORY.md"), "utf8")).toContain("Meeting is Tuesday.");
+		expect(
+			await ownerReadOne(owner, "SELECT revision, is_current FROM memory_md_heads WHERE agent_id='owner'", [], options),
+		).toEqual({ revision: 2, is_current: 0 });
+	}, 30000);
 
 	it("preserves a retry boundary through the Pi capability after a writer failure (#1414)", async () => {
 		const base = getDbAccessor();
