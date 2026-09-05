@@ -739,6 +739,25 @@ describe("inferType", () => {
 // ============================================================================
 
 describe("handleSessionStart", () => {
+	test.serial("does not inject a pinned superseded memory", async () => {
+		createMemoryDb();
+		const db = openTestDb();
+		const oldId = "hook-superseded-tuesday";
+		const currentId = "hook-current-thursday";
+		db.prepare(
+			"INSERT INTO memories (id, content, who, created_at, updated_at, importance, pinned, agent_id) VALUES (?, ?, 'test', ?, ?, 0.9, 1, 'default')",
+		).run(oldId, "Project Marigold deploys on Tuesdays.", "2026-09-04T10:00:00.000Z", "2026-09-04T10:00:00.000Z");
+		db.prepare(
+			"INSERT INTO memories (id, content, who, created_at, updated_at, importance, agent_id) VALUES (?, ?, 'test', ?, ?, 0.9, 'default')",
+		).run(currentId, "Project Marigold deploys on Thursdays.", "2026-09-04T11:00:00.000Z", "2026-09-04T11:00:00.000Z");
+		db.prepare("UPDATE memories SET superseded_by = ? WHERE id = ?").run(currentId, oldId);
+		db.close();
+
+		const result = await handleSessionStart({ harness: "codex", prompt: "When does Marigold deploy?" });
+		expect(result.inject).toContain("Project Marigold deploys on Thursdays.");
+		expect(result.inject).not.toContain("Project Marigold deploys on Tuesdays.");
+	});
+
 	test.serial("returns default identity when no config files exist", async () => {
 		const result = await handleSessionStart({ harness: "claude-code" });
 
