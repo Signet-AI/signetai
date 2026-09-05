@@ -1,5 +1,5 @@
 import { Dialog } from "radix-ui";
-import { Monitor, Files, MessagesSquare } from "lucide-react";
+import { Monitor, FileText as Files, MessageCircle as MessagesSquare } from "@/components/mingcute-icons";
 import { SignetMark, sourceLogo } from "@/components/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useEffect, useRef, useState } from "react";
@@ -412,7 +412,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 										"Opening your workspace…",
 										"Loading your settings and available connections.",
 									)}
-									<div role="alert">
+									<div className="failure" role="alert">
 										{store.error ??
 											(status.loading || catalog.loading
 												? ""
@@ -904,7 +904,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 									)}
 								</div>
 							)}
-							{(error || store.error) && (
+							{store.ready && status.data && catalog.data && (error || store.error) && (
 								<div className="failure" role="alert">
 									{error ?? store.error}
 								</div>
