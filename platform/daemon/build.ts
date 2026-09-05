@@ -37,6 +37,7 @@ const targets: Array<{
 	{ entrypoint: "./src/database-integrity-worker.ts", outfile: "./dist/database-integrity-worker.js" },
 	{ entrypoint: "./src/db-owner-worker.ts", outfile: "./dist/db-owner-worker.js" },
 	{ entrypoint: "./src/native-memory-source-worker.ts", outfile: "./dist/native-memory-source-worker.js" },
+	{ entrypoint: "./src/embedding-worker.ts", outfile: "./dist/embedding-worker.js" },
 	{ entrypoint: "./src/harness-install-worker.ts", outfile: "./dist/harness-install-worker.js" },
 	{ entrypoint: "./src/pipeline/dreaming-token-worker.ts", outfile: "./dist/dreaming-token-worker.js" },
 	{ entrypoint: "./src/transcript-recovery-child.ts", outfile: "./dist/transcript-recovery-child.js" },
