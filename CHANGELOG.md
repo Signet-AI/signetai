@@ -7,7 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-05
-- Bug fixes: recover projection token budget.
+- Bug fixes: reject invalid runtime config; recover projection token budget.
+- Refactoring: unify runtime config parsing.
 
 ### 2026-09-04
 - Bug fixes: stop retaining backlog text; make backlog probes threshold-aware.
@@ -33,6 +34,19 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: route wave 2 reads and telemetry through owner.
 
 ## Release Ledger
+
+## [0.216.6] - 2026-09-05
+
+Release summary: 1 bug fix and 1 refactor.
+Tag range: `v0.216.5..v0.216.6`.
+
+### Bug Fixes
+
+- **daemon**: reject invalid runtime config
+
+### Refactoring
+
+- **daemon**: unify runtime config parsing
 
 ## [0.216.5] - 2026-09-05
 
