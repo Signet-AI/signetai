@@ -5,11 +5,11 @@
  */
 import { sourceLogo } from "@/components/icons";
 import { type ImportSourcesResponse, api } from "@/lib/api";
-import { ArrowLeft, FolderOpen, Globe, Loader2, MessageSquare, RotateCcw, Upload, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { FolderOpen, Globe, Loader2, MessageCircle, RotateCcw, Upload, X } from "@/components/mingcute-icons";
 import { useEffect, useRef, useState } from "react";
 
 type SourceKind = "files" | "web" | "transcripts" | "obsidian" | "github" | "discord";
-type SourceStep = "choose" | "configure";
 
 const IMPORT_KINDS: readonly { id: "files" | "web" | "transcripts"; label: string; description: string }[] = [
 	{ id: "files", label: "Files", description: "Import documents and notes" },
@@ -47,7 +47,7 @@ const FIELD: Record<Exclude<SourceKind, "files">, { label: string; placeholder: 
 	discord: {
 		label: "Guild ID",
 		placeholder: "123456789012345678",
-		hint: "Requires a bot token stored in Secrets (token ref below)",
+		hint: "Requires a bot token stored in Secrets. Enter the token secret below.",
 	},
 };
 
@@ -59,31 +59,44 @@ function validate(kind: Exclude<SourceKind, "files">, target: string, tokenRef: 
 			if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password)
 				return "Enter a public http(s) URL";
 			if (["localhost", "127.0.0.1", "::1"].includes(url.hostname.toLowerCase()))
-				return "Private and local URLs are not allowed";
+				return "Enter a public http(s) URL";
 			return null;
 		} catch {
 			return "Enter a valid public http(s) URL";
 		}
 	}
 	if (kind === "obsidian") {
-		if (!value) return "Vault path is required";
-		if (!/^(?:[A-Za-z]:[\\/]|[\\/])/.test(value)) return "Vault path must be absolute";
+		if (!value) return "Enter a vault path";
+		if (!/^(?:[A-Za-z]:[\\/]|[\\/])/.test(value)) return "Enter an absolute vault path";
 		return null;
 	}
 	if (kind === "github") {
-		if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_*.-]+$/.test(value)) return "Expected owner/repo or owner/*";
+		if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_*.-]+$/.test(value)) return "Use owner/repo or owner/*";
 		return null;
 	}
-	if (!/^\d{17,20}$/.test(value)) return "Guild ID must be a 17–20 digit snowflake";
-	if (!tokenRef.trim()) return "Token ref is required for Discord";
+	if (!/^\d{17,20}$/.test(value)) return "Enter a 17–20 digit Guild ID";
+	if (!tokenRef.trim()) return "Enter the Discord token secret name";
 	return null;
 }
 
-function KindIcon({ kind }: { readonly kind: SourceKind }) {
-	if (kind === "files") return <Upload className="size-6" />;
-	if (kind === "web") return <Globe className="size-6" />;
-	if (kind === "transcripts") return <MessageSquare className="size-6" />;
-	return sourceLogo(kind, { className: "size-6" });
+function KindIcon({ kind, className = "size-5" }: { readonly kind: SourceKind; readonly className?: string }) {
+	if (kind === "files") return <Upload className={className} />;
+	if (kind === "web") return <Globe className={className} />;
+	if (kind === "transcripts") return <MessageCircle className={className} />;
+	return sourceLogo(kind, { className });
+}
+
+function sourceLabel(kind: SourceKind): string {
+	return [...IMPORT_KINDS, ...CONNECT_KINDS].find((item) => item.id === kind)?.label ?? kind;
+}
+
+function sourceDescription(kind: SourceKind): string {
+	if (kind === "files") return "Import documents and notes";
+	if (kind === "web") return "Extract a readable page from a public URL";
+	if (kind === "transcripts") return "Import lossless JSONL transcript exports";
+	if (kind === "obsidian") return "Index a local vault";
+	if (kind === "github") return "Index repositories and issues";
+	return "Index messages from a Discord server";
 }
 
 export function ConnectSourceDialog({
@@ -96,7 +109,6 @@ export function ConnectSourceDialog({
 	onConnected: () => void;
 }) {
 	const inputRef = useRef<HTMLInputElement>(null);
-	const [step, setStep] = useState<SourceStep>("choose");
 	const [kind, setKind] = useState<SourceKind>("files");
 	const [target, setTarget] = useState("");
 	const [name, setName] = useState("");
@@ -120,7 +132,6 @@ export function ConnectSourceDialog({
 
 	useEffect(() => {
 		if (!open) return;
-		setStep("choose");
 		setKind("files");
 		setTarget("");
 		setName("");
@@ -153,6 +164,12 @@ export function ConnectSourceDialog({
 		setDesktopPaths([]);
 		setResult(null);
 		setError(null);
+	};
+
+	const selectKind = (selected: SourceKind) => {
+		setKind(selected);
+		setError(null);
+		setResult(null);
 	};
 
 	const importFiles = async (targetFiles: readonly File[], targetPaths: readonly string[] = []) => {
@@ -213,7 +230,7 @@ export function ConnectSourceDialog({
 		const response = await api.importSources(targetFiles, duplicateMode, targetPaths);
 		setBusy(false);
 		if (!response.ok || !response.data) {
-			setError(response.error ?? "Import failed");
+			setError(response.error ?? "Unable to import files. Try again.");
 			return;
 		}
 		setResult(response.data);
@@ -225,7 +242,7 @@ export function ConnectSourceDialog({
 		setError(null);
 		const response = await api.pickFiles();
 		if (!response.ok || !response.paths) {
-			setError(response.error ?? "Native file picker unavailable");
+			setError(response.error ?? "Choose files from the browser or desktop app.");
 			return;
 		}
 		setFiles([]);
@@ -248,8 +265,8 @@ export function ConnectSourceDialog({
 		const response = await api.pickDirectory();
 		setBrowsing(false);
 		if (response.ok && response.path) setTarget(response.path);
-		else if (response.unavailable) setError("Native folder picker is only available in the desktop app");
-		else setError("No folder selected");
+		else if (response.unavailable) setError("Choose a folder from the desktop app.");
+		else setError("Select a folder to continue.");
 	};
 
 	const connect = async () => {
@@ -273,7 +290,7 @@ export function ConnectSourceDialog({
 		const response = await api.addSource(kind, body);
 		setBusy(false);
 		if (!response.ok) {
-			setError(response.error ?? "connect failed");
+			setError(response.error ?? "Unable to connect the source. Try again.");
 			return;
 		}
 		onConnected();
@@ -303,78 +320,55 @@ export function ConnectSourceDialog({
 				if (event.key === "Escape" && !busy) onClose();
 			}}
 		>
-			<dialog open className="cs-panel" aria-modal="true" aria-label="Connect a source">
+			<dialog open className="cs-panel cs-panel--source" aria-modal="true" aria-label="Add a source">
 				<header className="cs-head">
-					<div className="flex items-center gap-2">
-						{step === "configure" && (
-							<button
-								type="button"
-								className="cs-close"
-								onClick={() => setStep("choose")}
-								disabled={busy}
-								aria-label="Back to source types"
-							>
-								<ArrowLeft className="size-4" />
-							</button>
-						)}
-						<span className="cs-title">
-							{step === "choose"
-								? "Add a source"
-								: `Set up ${kind === "web" ? "Web page" : kind === "transcripts" ? "Agent transcripts" : kind}`}
-						</span>
-					</div>
+					<span className="cs-title">Add a source</span>
 					<button type="button" className="cs-close" onClick={onClose} disabled={busy} aria-label="Close">
 						<X className="size-4" />
 					</button>
 				</header>
-				<div className="cs-body">
-					{step === "choose" ? (
-						<div className="flex flex-col gap-4" data-testid="source-kind-step">
-							<div>
-								<div className="text-[12px] font-semibold">Import</div>
-								<div className="mt-2 grid grid-cols-2 gap-2">
-									{IMPORT_KINDS.map((item) => (
-										<button
-											key={item.id}
-											type="button"
-											className="cs-pick flex min-h-20 flex-col items-start gap-1.5 p-3 text-left"
-											onClick={() => {
-												setKind(item.id);
-												setStep("configure");
-												setError(null);
-											}}
-										>
-											<span className="flex items-center gap-2">
-												<KindIcon kind={item.id} />
-												<span className="font-medium">{item.label}</span>
-											</span>
-											<span className="text-[10px] text-muted-foreground">{item.description}</span>
-										</button>
-									))}
-								</div>
-							</div>
-							<div>
-								<div className="text-[12px] font-semibold">Connect</div>
-								<div className="mt-2 grid grid-cols-3 gap-2">
-									{CONNECT_KINDS.map((item) => (
-										<button
-											key={item.id}
-											type="button"
-											className="cs-pick flex min-h-20 flex-col items-center justify-center gap-1.5 p-2"
-											onClick={() => {
-												setKind(item.id);
-												setStep("configure");
-												setError(null);
-											}}
-										>
-											<KindIcon kind={item.id} />
-											<span className="font-medium">{item.label}</span>
-										</button>
-									))}
-								</div>
-							</div>
+				<div className="cs-body cs-body--source">
+					<div className="cs-layout">
+						<aside className="cs-source-list" aria-label="Source types">
+						<div className="cs-source-list__title">Sources</div>
+							<div className="cs-source-list__group">Import</div>
+							{IMPORT_KINDS.map((item) => (
+								<button
+									key={item.id}
+									type="button"
+									className={cn("cs-source-item", kind === item.id && "is-on")}
+									onClick={() => selectKind(item.id)}
+									aria-pressed={kind === item.id}
+								>
+									<span className="cs-source-item__icon"><KindIcon kind={item.id} className="size-4" /></span>
+									<span className="cs-source-item__copy">
+										<span className="cs-source-item__label">{item.label}</span>
+										<span className="cs-source-item__description">{item.description}</span>
+									</span>
+								</button>
+							))}
+							<div className="cs-source-list__group">Connect</div>
+							{CONNECT_KINDS.map((item) => (
+								<button
+									key={item.id}
+									type="button"
+									className={cn("cs-source-item", kind === item.id && "is-on")}
+									onClick={() => selectKind(item.id)}
+									aria-pressed={kind === item.id}
+								>
+									<span className="cs-source-item__icon"><KindIcon kind={item.id} className="size-4" /></span>
+									<span className="cs-source-item__copy">
+										<span className="cs-source-item__label">{item.label}</span>
+										<span className="cs-source-item__description">{sourceDescription(item.id)}</span>
+									</span>
+								</button>
+							))}
+						</aside>
+						<section className="cs-options" aria-label={`${sourceLabel(kind)} options`}>
+							<div className="cs-options__head">
+								<div className="cs-options__title">{kind === "files" ? "Import files" : `Connect ${sourceLabel(kind)}`}</div>
 						</div>
-					) : kind === "files" || kind === "transcripts" ? (
+							{kind === "files" || kind === "transcripts" ? (
 						<>
 							<button
 								type="button"
@@ -437,7 +431,7 @@ export function ConnectSourceDialog({
 								</div>
 							)}
 							<label className="cs-field">
-								<span className="cs-field__label">If a content hash already exists</span>
+								<span className="cs-field__label">When a content hash already exists</span>
 								<select
 									className="cs-field__input"
 									value={duplicateMode}
@@ -481,13 +475,13 @@ export function ConnectSourceDialog({
 									{result.failed > 0 && (
 										<button type="button" className="cs-btn-ghost self-start" onClick={retryFailed} disabled={busy}>
 											<RotateCcw className="size-3" />
-											Retry failed
+											Retry failed imports
 										</button>
 									)}
 								</div>
 							)}
 						</>
-					) : (
+							) : (
 						<>
 							<div className="cs-field">
 								<span className="cs-field__label">{FIELD[kind].label}</span>
@@ -528,7 +522,7 @@ export function ConnectSourceDialog({
 							)}
 							{kind !== "obsidian" && kind !== "web" && (
 								<div className="cs-field">
-									<span className="cs-field__label">Token ref{kind === "github" ? " (optional)" : ""}</span>
+									<span className="cs-field__label">Token secret{kind === "github" ? " (optional)" : ""}</span>
 									<input
 										className="cs-field__input"
 										value={tokenRef}
@@ -540,28 +534,24 @@ export function ConnectSourceDialog({
 								</div>
 							)}
 						</>
-					)}
-					{error && <div className="cs-error">{error}</div>}
+							)}
+							{error && <div className="cs-error">{error}</div>}
+						</section>
+					</div>
 				</div>
 				<footer className="cs-foot">
 					<button
 						type="button"
 						className="cs-btn-ghost"
-						onClick={step === "choose" ? onClose : () => setStep("choose")}
+						onClick={onClose}
 						disabled={busy}
 					>
-						{step === "choose" ? "Close" : "Back"}
+						Close
 					</button>
-					{step === "configure" && (
-						<button type="button" className="cs-btn-primary" onClick={submit} disabled={submitDisabled}>
-							{busy && <Loader2 className="size-3.5 animate-spin" />}
-							{kind === "files" || kind === "transcripts"
-								? "Import & index"
-								: kind === "web"
-									? "Add & index"
-									: "Connect & index"}
-						</button>
-					)}
+					<button type="button" className="cs-btn-primary" onClick={submit} disabled={submitDisabled}>
+						{busy && <Loader2 className="size-3.5 animate-spin" />}
+						{kind === "files" || kind === "transcripts" ? "Import & index" : kind === "web" ? "Add & index" : "Connect & index"}
+					</button>
 				</footer>
 			</dialog>
 		</div>

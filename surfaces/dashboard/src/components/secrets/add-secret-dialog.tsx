@@ -5,7 +5,7 @@
  * is posted once and never read back.
  */
 import { useEffect, useState } from "react";
-import { Loader2, X } from "lucide-react";
+import { Loader2, X } from "@/components/mingcute-icons";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { normalizeSecretNameInput, validateSecretName } from "@/lib/secret-names";

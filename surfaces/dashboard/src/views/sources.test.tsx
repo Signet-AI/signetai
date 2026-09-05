@@ -6,7 +6,7 @@ import { ViewProvider } from "@/lib/view-context";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { SourcesView } from "./sources";
+import { HomeSourcesPanel, SourcesView } from "./sources";
 
 const originalImportSources = api.importSources;
 const originalAddSource = api.addSource;
@@ -225,21 +225,73 @@ describe("sources grouping", () => {
 		expect(mounted.container.querySelector("dialog.cs-panel")).not.toBeNull();
 		await click(button(mounted.container, "Files"));
 		expect(button(mounted.container, "Choose one or more files")).not.toBeNull();
-		expect(mounted.container.textContent).toContain("Set up files");
+		expect(mounted.container.textContent).toContain("Import files");
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();
 	});
 
+	test("Home owns source management and defers source stats to disclosure", async () => {
+		const source = sourceFixture("obsidian:home", "obsidian", "Vault");
+		const mounted = await mount(
+			<ViewProvider>
+				<HomeSourcesPanel sources={[source]} loading={false} onRefresh={() => undefined} />
+			</ViewProvider>,
+		);
+
+		expect(mounted.container.textContent).toContain("Vault");
+		expect(mounted.container.querySelector("details")?.open).toBe(false);
+
+		const summary = mounted.container.querySelector("summary");
+		if (!(summary instanceof HTMLElement)) throw new Error("Source disclosure not found");
+		await click(summary);
+		expect(mounted.container.textContent).toContain("artifacts");
+		expect(mounted.container.querySelector('[aria-label="Re-index"]')).not.toBeNull();
+
+		await click(button(mounted.container, "Connect a source"));
+		expect(mounted.container.querySelector("dialog.cs-panel")).not.toBeNull();
+
+		await act(async () => mounted.root.unmount());
+		mounted.container.remove();
+	});
+
+	test("Home distinguishes a pending re-index request from completion and reports failure inline", async () => {
+		const original = api.reindexSource;
+		let resolve!: (result: { ok: boolean; error?: string }) => void;
+		api.reindexSource = () => new Promise((done) => { resolve = done; });
+		let refreshes = 0;
+		const mounted = await mount(
+			<ViewProvider>
+				<HomeSourcesPanel sources={[sourceFixture("test", "obsidian", "Test")]} loading={false} onRefresh={() => { refreshes++; }} />
+			</ViewProvider>,
+		);
+		try {
+			await click(mounted.container.querySelector('[aria-label="Re-index"]')!);
+			expect(mounted.container.textContent).toContain("Requesting re-index…");
+			expect(mounted.container.querySelector('[aria-label="Re-index"] svg')?.classList.contains("animate-spin")).toBe(true);
+			await act(async () => resolve({ ok: true }));
+			expect(mounted.container.textContent).toContain("Re-index requested");
+			expect(refreshes).toBe(1);
+			await click(mounted.container.querySelector('[aria-label="Re-index"]')!);
+			await act(async () => resolve({ ok: false, error: "Source unavailable" }));
+			expect(mounted.container.querySelector('[role="alert"]')?.textContent).toBe("Source unavailable");
+			expect(mounted.container.textContent).not.toContain("Re-index requested");
+		} finally {
+			api.reindexSource = original;
+			await act(async () => mounted.root.unmount());
+			mounted.container.remove();
+		}
+	});
+
 	test("selecting a connector keeps its existing field and submit contract", async () => {
 		const mounted = await mount(<ConnectSourceDialog open onClose={() => undefined} onConnected={() => undefined} />);
 		await click(button(mounted.container, "GitHub"));
-		expect(mounted.container.textContent).toContain("Set up github");
+		expect(mounted.container.textContent).toContain("Connect GitHub");
 		expect(mounted.container.querySelector('[aria-label="Repository"]')).not.toBeNull();
 		expect(button(mounted.container, "Connect & index").disabled).toBe(false);
 
 		await click(button(mounted.container, "Connect & index"));
-		expect(mounted.container.textContent).toContain("Expected owner/repo or owner/*");
+		expect(mounted.container.textContent).toContain("Use owner/repo or owner/*");
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();
@@ -389,8 +441,8 @@ describe("sources grouping", () => {
 		const remove = mounted.container.querySelector('[aria-label="Remove"]');
 		if (!(remove instanceof HTMLElement)) throw new Error("Remove action not found");
 		await click(remove);
-		const confirm = mounted.container.querySelector('[aria-label="Confirm remove"]');
-		if (!(confirm instanceof HTMLElement)) throw new Error("Confirm remove action not found");
+		const confirm = mounted.container.querySelector('[aria-label="Remove source"]');
+		if (!(confirm instanceof HTMLElement)) throw new Error("Remove source action not found");
 		await click(confirm);
 
 		expect(mounted.container.querySelectorAll('[data-testid="imported-documents-card"]')).toHaveLength(1);

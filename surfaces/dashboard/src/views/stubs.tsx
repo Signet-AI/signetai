@@ -1,4 +1,4 @@
-import { SquareTerminal } from "lucide-react";
+import { SquareTerminal } from "@/components/mingcute-icons";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
 
 /**
@@ -26,14 +26,6 @@ export function SkillsView() {
 				title="Skills"
 				description="Installed skills render here. The mockup stages a skill list structure."
 			/>
-		</div>
-	);
-}
-
-export function AgentsView() {
-	return (
-		<div className="flex flex-1 min-h-0 items-center justify-center">
-			<Placeholder title="Agents" description="Agent roster and multi-tenancy controls render here." />
 		</div>
 	);
 }

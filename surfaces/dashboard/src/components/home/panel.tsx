@@ -1,4 +1,4 @@
-import { Filter, Maximize2 } from "lucide-react";
+import { Filter, Maximize2 } from "@/components/mingcute-icons";
 import { Surface } from "@/components/ui/surface";
 import { cn } from "@/lib/utils";
 
@@ -27,16 +27,22 @@ export function Panel({
 	meta,
 	children,
 	className,
+	surface = true,
 }: {
 	title: string;
 	meta?: string;
 	children: React.ReactNode;
 	className?: string;
+	surface?: boolean;
 }) {
-	return (
-		<Surface className={cn("group", className)}>
-			<div className="px-4 pt-3.5">{<PanelHead title={title} meta={meta} />}</div>
-			<div className="px-4 pb-3.5 pt-3">{children}</div>
-		</Surface>
+	const content = (
+		<>
+			<div className={surface ? "px-4 pt-3.5" : undefined}>
+				<PanelHead title={title} meta={meta} />
+			</div>
+			<div className={surface ? "px-4 pb-3.5 pt-3" : "flex min-h-0 flex-1 flex-col pt-3"}>{children}</div>
+		</>
 	);
+
+	return surface ? <Surface className={cn("group", className)}>{content}</Surface> : <section className={cn("group", className)}>{content}</section>;
 }

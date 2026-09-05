@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Monitor, Moon, Sun } from "@/components/mingcute-icons";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const ORDER = ["system", "light", "dark"] as const;
 type Theme = (typeof ORDER)[number];
@@ -14,22 +15,45 @@ type Theme = (typeof ORDER)[number];
 export function ModeToggle() {
 	const { theme, setTheme } = useTheme();
 	const [mounted, setMounted] = useState(false);
-	useEffect(() => setMounted(true), []);
+	const [transitionReady, setTransitionReady] = useState(false);
+
+	useEffect(() => {
+		setMounted(true);
+		let secondFrame = 0;
+		const firstFrame = requestAnimationFrame(() => {
+			secondFrame = requestAnimationFrame(() => setTransitionReady(true));
+		});
+		return () => {
+			cancelAnimationFrame(firstFrame);
+			cancelAnimationFrame(secondFrame);
+		};
+	}, []);
 
 	const current = (ORDER.includes(theme as Theme) ? theme : "system") as Theme;
 	const next = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
-	const Icon = current === "light" ? Sun : current === "dark" ? Moon : Monitor;
+	const visibleTheme = mounted ? current : "light";
+	const switchTheme = () => {
+		document.documentElement.classList.add("sig-theme-switching");
+		setTheme(next);
+		requestAnimationFrame(() => {
+			requestAnimationFrame(() => document.documentElement.classList.remove("sig-theme-switching"));
+		});
+	};
 
 	return (
 		<Button
 			variant="ghost"
 			size="icon"
-			onClick={() => setTheme(next)}
+			onClick={switchTheme}
 			aria-label={`Switch theme (current: ${current})`}
 			title={`Theme: ${current} → ${next}`}
-			className="size-[26px] rounded-[var(--radius)]"
+			className="sig-header-control size-[26px] rounded-[var(--radius)]"
 		>
-			{mounted ? <Icon className="size-3.5" /> : <Sun className="size-3.5" />}
+			<span className="sig-theme-icon-stack" data-ready={transitionReady} aria-hidden="true">
+				<Sun className={cn("sig-theme-icon", visibleTheme === "light" && "is-active")} />
+				<Moon className={cn("sig-theme-icon", visibleTheme === "dark" && "is-active")} />
+				<Monitor className={cn("sig-theme-icon", visibleTheme === "system" && "is-active")} />
+			</span>
 		</Button>
 	);
 }

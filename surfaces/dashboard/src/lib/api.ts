@@ -281,6 +281,12 @@ export interface DaemonStatus {
 	};
 }
 
+export interface DashboardIdentity {
+	name: string;
+	creature: string;
+	vibe: string;
+}
+
 export interface KnowledgeStats {
 	entityCount: number;
 	aspectCount: number;
@@ -645,6 +651,7 @@ export interface DreamStatus {
 
 export const api = {
 	getStatus: () => getJSON<DaemonStatus>("/api/status"),
+	getIdentity: () => getJSON<DashboardIdentity>("/api/identity"),
 	getAgents: () => getJSONResult<AgentsResponse>("/api/agents"),
 	updateAgentScope: async (
 		name: string,

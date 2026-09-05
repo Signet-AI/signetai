@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Surface } from "@/components/ui/surface";
 import { cn } from "@/lib/utils";
 
 export interface KpiData {
@@ -7,72 +6,21 @@ export interface KpiData {
 	value: string;
 	sub?: string;
 	trend?: string;
-	/** Bounded fraction 0..1 — renders a small ring (agents/sources). */
-	ring?: { value: number; sub: string };
-	/** Unbounded stat — renders a live dot (memories/ontology). */
-	live?: boolean;
 }
 
-export function KpiRow({ cards, children }: { cards: KpiData[]; children?: React.ReactNode }) {
+export function KpiFooter({ cards }: { cards: KpiData[] }) {
 	return (
-		<div className="grid shrink-0 grid-cols-2 gap-2.5 sm:grid-cols-4">
-			{cards.map((c) => (
-				<KpiCard key={c.label} {...c} />
-			))}
-			{/* Trailing controls land in row 2, col 1 — mirrors the mockup's
-			    `.kpirow` where `.controls` is the 5th grid item. */}
-			{children}
-		</div>
-	);
-}
-
-function KpiCard({ label, value, sub, trend, ring, live }: KpiData) {
-	return (
-		<Surface className="px-3.25 py-2.75">
-			<div className="mb-1.75 flex items-center justify-between gap-2">
-				<span className="font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
-				{ring && <Ring fraction={ring.value} />}
-				{live && (
-					<span className="size-1.75 shrink-0 rounded-full bg-success shadow-[0_0_0_2px_color-mix(in_oklch,var(--success)_22%,transparent)]" />
-				)}
-			</div>
-			<div className="font-mono text-[19px] font-medium leading-none tracking-tight text-foreground">{value}</div>
-			{sub && (
-				<div className="mt-1 text-[10.5px] text-muted-foreground">
-					{trend && <span className="font-mono text-success">{trend}</span>} {sub}
+		<footer className="home-status-bar" aria-label="System status">
+			{cards.map(({ label, value, sub, trend }, index) => (
+				<div key={label} className="flex min-w-0 items-baseline gap-x-1.5 whitespace-nowrap">
+					{index > 0 && <span className="mr-2 select-none text-muted-foreground/45">·</span>}
+					<span className="text-muted-foreground/70">{label.toLowerCase()}</span>
+					<span className="text-foreground">{value}</span>
+					{trend && <span className="font-medium text-success">{trend}</span>}
+					{sub && <span className="text-muted-foreground/65">{sub}</span>}
 				</div>
-			)}
-		</Surface>
-	);
-}
-
-function Ring({ fraction }: { fraction: number }) {
-	const r = 9;
-	const c = 2 * Math.PI * r;
-	const offset = c * (1 - Math.max(0, Math.min(1, fraction)));
-	return (
-		<svg viewBox="0 0 24 24" className="size-4.5 shrink-0">
-			<circle
-				cx="12"
-				cy="12"
-				r={r}
-				fill="none"
-				strokeWidth={3}
-				stroke="color-mix(in oklch, var(--foreground) 16%, transparent)"
-			/>
-			<circle
-				cx="12"
-				cy="12"
-				r={r}
-				fill="none"
-				strokeWidth={3}
-				stroke="var(--foreground)"
-				strokeLinecap="round"
-				strokeDasharray={c}
-				strokeDashoffset={offset}
-				transform="rotate(-90 12 12)"
-			/>
-		</svg>
+			))}
+		</footer>
 	);
 }
 
@@ -104,10 +52,9 @@ export function ActivityHeatmap({ days }: { days: DayBucket[] }) {
 				aria-label="Memory activity, last 36 weeks"
 				className="grid w-full gap-[3px]"
 				style={{
-					gridTemplateRows: "repeat(7, 1fr)",
+					gridTemplateRows: "repeat(7, auto)",
 					gridAutoFlow: "column",
 					gridAutoColumns: "1fr",
-					aspectRatio: "36 / 7",
 				}}
 			>
 				{days.map((d, i) => (
@@ -115,7 +62,7 @@ export function ActivityHeatmap({ days }: { days: DayBucket[] }) {
 						key={i}
 						title={`${d.date}: ${d.count}`}
 						className={cn(
-							"rounded-[2px] transition-[background-color,transform] duration-[120ms] hover:z-[1] hover:scale-[1.3] hover:outline hover:outline-1 hover:outline-foreground",
+							"aspect-square rounded-[2px] hover:brightness-110",
 							HEATMAP_LEVELS[level(d.count)],
 						)}
 					/>

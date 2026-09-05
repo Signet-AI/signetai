@@ -1,4 +1,4 @@
-import { Network } from "lucide-react";
+import { Network } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";

@@ -1,7 +1,6 @@
-import { Surface } from "@/components/ui/surface";
 import { type DailyReflection, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { ChevronLeft, ChevronRight, RotateCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, RotateCw } from "@/components/mingcute-icons";
 /**
  * Daily brief — daemon-generated plain-language briefs (up to 3/day at 6am in
  * the user's timezone, per pipeline.reflections config): load today's,
@@ -12,10 +11,9 @@ import { ChevronLeft, ChevronRight, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
- * Mockup-sized card: the fake insights in the mockup are all ~210-230 chars
- * (three lines at 16px). The daemon caps generated briefs at 236
+ * Mockup-sized brief: the daemon caps generated briefs at 236 characters
  * (BRIEF_MAX_CHARS in reflection-worker.ts); this mirrors that budget so the
- * card never resizes with generated content. Full text remains on hover.
+ * layout stays stable with generated content. Full text remains on hover.
  */
 const BRIEF_CHAR_BUDGET = 236;
 
@@ -84,7 +82,7 @@ export function DailyBrief({
 				setI(0); // newest brief first
 				setEmptyMsg(null);
 			} else {
-				setEmptyMsg(result.message ?? "No new brief found yet");
+				setEmptyMsg(result.message ?? "No new brief is available yet.");
 			}
 		},
 		[agentId],
@@ -129,7 +127,7 @@ export function DailyBrief({
 			setAnswerText("");
 			setDraftFor(null);
 		} else {
-			setError(result.error ?? "Failed to save answer");
+			setError(result.error ?? "Unable to save your answer. Try again.");
 		}
 	};
 
@@ -137,27 +135,14 @@ export function DailyBrief({
 	const show = (n: number) => setI(((n % items.length) + items.length) % items.length);
 
 	return (
-		<Surface className="flex flex-col gap-3.5 px-4.5 py-3.5">
+		<section className="home-daily-brief flex flex-col gap-3.5">
 			<div className="flex shrink-0 items-center justify-between gap-3">
 				<span className="text-[13px] font-semibold tracking-tight text-foreground">Daily brief</span>
-				<div className="flex items-center gap-2.5">
+				<div className="flex items-center gap-1.5">
 					{items.length > 0 && (
 						<span className="font-mono text-[11px] text-muted-foreground">
 							{pad(clamped)} / {pad(items.length - 1)}
 						</span>
-					)}
-					{items.length > 1 && (
-						<div className="flex gap-[5px]">
-							{items.map((q, idx) => (
-								<i
-									key={q.id}
-									className={cn(
-										"size-[5px] rounded-full transition-colors",
-										idx === clamped ? "bg-foreground" : "bg-border",
-									)}
-								/>
-							))}
-						</div>
 					)}
 					<button
 						type="button"
@@ -165,9 +150,9 @@ export function DailyBrief({
 						title={draftFor ? "Save or cancel your draft before refreshing" : "Generate a new brief"}
 						disabled={generating || loading || draftFor !== null}
 						onClick={() => void generate(1)}
-						className="grid size-6 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+						className="grid size-5 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
 					>
-						<RotateCw className={cn("size-3.5", generating && "animate-spin")} />
+						<RotateCw className={cn("size-3", generating && "animate-spin")} />
 					</button>
 					{items.length > 1 && (
 						<>
@@ -176,32 +161,32 @@ export function DailyBrief({
 								aria-label="Previous brief"
 								disabled={draftFor !== null}
 								onClick={() => show(clamped - 1)}
-								className="grid size-6 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+								className="grid size-5 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
 							>
-								<ChevronLeft className="size-3.5" />
+								<ChevronLeft className="size-3" />
 							</button>
 							<button
 								type="button"
 								aria-label="Next brief"
 								disabled={draftFor !== null}
 								onClick={() => show(clamped + 1)}
-								className="grid size-6 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+								className="grid size-5 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
 							>
-								<ChevronRight className="size-3.5" />
+								<ChevronRight className="size-3" />
 							</button>
 						</>
 					)}
 				</div>
 			</div>
 
-			{loading ? (
+			{loading && current === null ? (
 				<>
-					{/* Height-exact mirror of the loaded layout (text 76.8 / tag 15.8)
-					    so the card never moves on load. */}
+					{/* Height-exact mirror of the loaded layout (text ~74 / tag 15.8)
+					    so the section never moves on load. */}
 					<div className="flex shrink-0 flex-col gap-2.25" aria-label="Loading daily brief">
 						<div>
 							{["100%", "100%", "55%"].map((w, idx) => (
-								<div key={idx} className="flex h-[25.6px] items-center">
+								<div key={idx} className="flex h-[25px] items-center">
 									<span
 										className="block h-4 animate-pulse rounded bg-[color-mix(in_oklch,var(--foreground)_7%,transparent)]"
 										style={{ width: w }}
@@ -217,7 +202,8 @@ export function DailyBrief({
 			) : current ? (
 				<div className="flex shrink-0 flex-col gap-2.25">
 					<div
-						className="insight-text line-clamp-3 text-[16px] leading-[1.6] tracking-[-0.005em] text-foreground"
+						key={current.id}
+						className="insight-text home-brief-copy line-clamp-3 min-h-[74px] text-[17px] leading-[1.45] tracking-[-0.01em] text-foreground"
 						title={current.summary.length > BRIEF_CHAR_BUDGET ? current.summary : undefined}
 					>
 						{budgetText(current.summary, BRIEF_CHAR_BUDGET)}
@@ -241,7 +227,7 @@ export function DailyBrief({
 								}}
 								className="transition-colors hover:text-foreground disabled:opacity-40"
 							>
-								· {generating ? "looking…" : "write back"}
+								· {generating ? "generating…" : "write back"}
 							</button>
 						)}
 						{error && draftFor === null && <span className="text-destructive">{error}</span>}
@@ -296,9 +282,9 @@ export function DailyBrief({
 					<p className="m-0 text-[13px] leading-[1.55] text-muted-foreground">
 						{generating
 							? slow
-								? "Still thinking — generation can take a minute…"
-								: "Generating today's briefs from your recent memories…"
-							: (error ?? emptyMsg ?? "No daily brief yet.")}
+								? "Generation is taking longer than expected. It may take a minute…"
+								: "Generating today's briefs from recent memories…"
+							: (error ?? emptyMsg ?? "No daily brief is available yet.")}
 					</p>
 					{!generating && (
 						<div>
@@ -315,6 +301,6 @@ export function DailyBrief({
 			)}
 
 			{children}
-		</Surface>
+		</section>
 	);
 }
