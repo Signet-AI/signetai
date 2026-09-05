@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
-import { getDbOwner } from "../db-owner-runtime";
 import { searchEpisodicSources } from "../episodic-sources";
 import { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } from "../transcript-capture-worker";
 import { getDreamingToolCalls, runDreamingAgentPass } from "./dreaming";
@@ -364,10 +363,6 @@ describe("MemoryBench Dreaming gate", () => {
 		try {
 			process.env.SIGNET_PATH = dir;
 			initDbAccessor(join(dir, "memory", "memories.db"));
-			const started = performance.now();
-			console.info("capture gate: starting database owner");
-			await getDbOwner();
-			console.info("capture gate: owner ready", performance.now() - started);
 			const corpus = readCorpus();
 			const capturedSessions = corpus.scenarios.flatMap((scenario) =>
 				scenario.sessions.map((session) => ({ scenario, session, agentId: session.agentId ?? scenario.agentId })),
@@ -391,7 +386,6 @@ describe("MemoryBench Dreaming gate", () => {
 
 			let completed = 0;
 			while (await runTranscriptCaptureOnce(getDbAccessor(), dir)) completed++;
-			console.info("capture gate: indexed", completed, performance.now() - started);
 			expect(completed).toBe(capturedSessions.length);
 
 			for (const scenario of corpus.scenarios) {
@@ -418,10 +412,9 @@ describe("MemoryBench Dreaming gate", () => {
 			}
 		} finally {
 			await closeDbAccessor();
-			console.info("capture gate: owner closed");
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
 			rmSync(dir, { recursive: true, force: true });
 		}
-	}, 30_000);
+	}, 30_000); // Includes owner startup (15s deadline), capture, and awaited shutdown.
 });
