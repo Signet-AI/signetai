@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,84 +29,51 @@ async function freePort(): Promise<number> {
 	return port;
 }
 
-async function waitForLive(child: ReturnType<typeof spawn>, port: number): Promise<void> {
+async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 	const deadline = Date.now() + 10_000;
-	while (Date.now() < deadline && child.exitCode === null) {
-		try {
-			const response = await fetch(`http://127.0.0.1:${port}/health/live`, { signal: AbortSignal.timeout(250) });
-			if (response.ok) return;
-		} catch {}
+	while (Date.now() < deadline) {
+		if (await check()) return;
 		await Bun.sleep(50);
 	}
-	throw new Error("daemon did not expose /health/live before timeout");
+	throw new Error("daemon observation timed out");
 }
 
-function captureOutput(child: ReturnType<typeof spawn>): () => string {
+function startDaemon(env: NodeJS.ProcessEnv) {
+	const child = Bun.spawn([process.execPath, daemonScript], {
+		cwd: join(import.meta.dir, "../../.."),
+		env,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
 	let output = "";
-	child.stdout?.on("data", (chunk: Buffer) => {
-		output += chunk.toString();
-	});
-	child.stderr?.on("data", (chunk: Buffer) => {
-		output += chunk.toString();
-	});
-	return () => output;
-}
-
-async function waitForOutput(
-	getOutput: () => string,
-	child: ReturnType<typeof spawn>,
-	needle: string,
-	timeoutMs = 10_000,
-): Promise<string> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline && !getOutput().includes(needle) && child.exitCode === null) {
-		await Bun.sleep(50);
+	async function drain(stream: ReadableStream<Uint8Array>): Promise<void> {
+		for await (const chunk of stream) output += new TextDecoder().decode(chunk);
 	}
-	return getOutput();
+	const drained = Promise.all([drain(child.stdout), drain(child.stderr)]);
+	return {
+		child,
+		output: () => output,
+		async stop() {
+			if (child.exitCode === null) child.kill("SIGTERM");
+			const timer = setTimeout(() => child.kill("SIGKILL"), 12_000);
+			try {
+				await child.exited;
+				await drained;
+			} finally {
+				clearTimeout(timer);
+			}
+		},
+	};
 }
 
-async function stopDaemon(child: ReturnType<typeof spawn>): Promise<void> {
-	if (child.exitCode !== null) return;
-	child.kill("SIGTERM");
-	await new Promise<void>((resolve) => {
-		const timer = setTimeout(() => {
-			child.kill("SIGKILL");
-		}, 12_000);
-		child.once("exit", () => {
-			clearTimeout(timer);
-			resolve();
-		});
-	});
-}
-
-function runDaemon(env: NodeJS.ProcessEnv): Promise<{ code: number | null; output: string }> {
-	return new Promise((resolve, reject) => {
-		const child = spawn(process.execPath, [daemonScript], {
-			cwd: join(import.meta.dir, "../../.."),
-			env,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let output = "";
-		child.stdout?.on("data", (chunk: Buffer) => {
-			output += chunk.toString();
-		});
-		child.stderr?.on("data", (chunk: Buffer) => {
-			output += chunk.toString();
-		});
-		const timer = setTimeout(async () => {
-			await stopDaemon(child);
-			reject(new Error(`daemon did not fail closed in time\n${output}`));
-		}, 10_000);
-		child.once("error", (error) => {
-			clearTimeout(timer);
-			void stopDaemon(child);
-			reject(error);
-		});
-		child.once("exit", (code) => {
-			clearTimeout(timer);
-			resolve({ code, output });
-		});
-	});
+async function runDaemon(env: NodeJS.ProcessEnv): Promise<{ code: number | null; output: string }> {
+	const daemon = startDaemon(env);
+	try {
+		await until(() => daemon.child.exitCode !== null);
+	} finally {
+		await daemon.stop();
+	}
+	return { code: daemon.child.exitCode, output: daemon.output() };
 }
 
 afterEach(() => {
@@ -160,14 +126,15 @@ describe("daemon workspace startup preflight", () => {
 		writeFileSync(configPath, config);
 		const rejected = config.replace("  mode: team", "  mode: config-redaction-sentinel");
 		const port = await freePort();
-		const child = spawn(process.execPath, [daemonScript], {
-			cwd: join(import.meta.dir, "../../.."),
-			env: runtimeEnv(root, workspace, port),
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		const getOutput = captureOutput(child);
+		const daemon = startDaemon(runtimeEnv(root, workspace, port));
 		try {
-			await waitForLive(child, port);
+			await until(async () => {
+				try {
+					return (await fetch(`http://127.0.0.1:${port}/health/live`, { signal: AbortSignal.timeout(250) })).ok;
+				} catch {
+					return false;
+				}
+			});
 			const firstResponse = await fetch(`http://127.0.0.1:${port}/api/memory/recall`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
@@ -177,7 +144,8 @@ describe("daemon workspace startup preflight", () => {
 			expect(firstResponse.status).toBe(401);
 
 			writeFileSync(configPath, rejected);
-			const output = await waitForOutput(getOutput, child, "Rejected runtime config change");
+			await until(() => daemon.output().includes("Rejected runtime config change"));
+			const output = daemon.output();
 			expect(output).toContain("Rejected runtime config change");
 			const afterReload = await fetch(`http://127.0.0.1:${port}/api/memory/recall`, {
 				method: "POST",
@@ -189,9 +157,9 @@ describe("daemon workspace startup preflight", () => {
 			expect(readFileSync(configPath, "utf8")).toBe(rejected);
 			expect(output).not.toContain("config-redaction-sentinel");
 		} finally {
-			await stopDaemon(child);
+			await daemon.stop();
 		}
-		expect(child.exitCode).toBe(0);
+		expect(daemon.child.exitCode).toBe(0);
 		expect(Bun.file(join(workspace, ".daemon", "pid")).exists()).resolves.toBe(false);
 	}, 60_000);
 

@@ -124,12 +124,7 @@ import {
 } from "./lifecycle";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
-import {
-	type ResolvedMemoryConfig,
-	graphWriteCaps,
-	loadMemoryConfig,
-	validateRuntimeConfigFiles,
-} from "./memory-config";
+import { type ResolvedMemoryConfig, graphWriteCaps, loadMemoryConfig, readRuntimeConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import {
 	type NativeMemoryBridgeHandle,
@@ -1454,7 +1449,7 @@ function startFileWatcher() {
 				// Keep the accepted runtime state and its derived reload paths intact
 				// when a newly selected config is invalid. In particular, do not
 				// invalidate routing or auto-commit the rejected document.
-				validateRuntimeConfigFiles(AGENTS_DIR);
+				loadMemoryConfig(AGENTS_DIR);
 			} catch (error) {
 				logger.error(
 					"config",
@@ -2261,7 +2256,7 @@ async function main() {
 	// state. The loader intentionally reports only file and field diagnostics;
 	// malformed user content must never be echoed during startup failure.
 	try {
-		validateRuntimeConfigFiles(AGENTS_DIR);
+		readRuntimeConfig(AGENTS_DIR);
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : "invalid runtime configuration";
 		console.error(`Signet cannot start: ${detail}`);

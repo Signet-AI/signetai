@@ -4,8 +4,6 @@ import { fileURLToPath } from "node:url";
 import {
 	networkModeFromBindHost,
 	normalizeLoopbackHost,
-	parseRuntimeYaml,
-	readNetworkMode,
 	resolveDefaultBasePath,
 	resolveNetworkBinding,
 } from "@signet/core";
@@ -15,7 +13,7 @@ import { getDbAccessor } from "../db-accessor";
 import { type DiagnosticsOptions, type DiagnosticsReport, createProviderTracker, getDiagnostics } from "../diagnostics";
 import type { EmbeddingTrackerHandle } from "../embedding-tracker";
 import { logger } from "../logger";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { type ResolvedMemoryConfig, loadMemoryConfig, readRuntimeConfig } from "../memory-config";
 import { createRateLimiter } from "../repair-actions";
 import type { TelemetryCollector } from "../telemetry";
 import { getUpdateState } from "../update-system";
@@ -148,43 +146,10 @@ export function redactUrlForLogs(url: string | undefined): string | undefined {
 	}
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+export function readConfiguredNetworkBinding(agentsDir: string): { readonly host: string; readonly bind: string } {
+	return resolveNetworkBinding(readRuntimeConfig(agentsDir).network);
 }
 
-export function readConfiguredNetworkBinding(agentsDir: string): {
-	readonly host: string;
-	readonly bind: string;
-} {
-	for (const name of ["agent.yaml", "AGENT.yaml"]) {
-		const path = join(agentsDir, name);
-		if (!existsSync(path)) continue;
-		let parsed: Record<string, unknown>;
-		try {
-			parsed = parseRuntimeYaml(readFileSync(path, "utf-8"));
-		} catch {
-			throw new Error(`${path}: invalid YAML syntax`);
-		}
-		const network = parsed.network;
-		if (network !== undefined && !isRecord(network)) {
-			throw new Error(`${path}: network must be a mapping`);
-		}
-		if (
-			network !== undefined &&
-			isRecord(network) &&
-			network.mode !== undefined &&
-			network.mode !== "localhost" &&
-			network.mode !== "tailscale"
-		) {
-			throw new Error(`${path}: network.mode must be localhost or tailscale`);
-		}
-		return resolveNetworkBinding(readNetworkMode(parsed));
-	}
-
-	return resolveNetworkBinding("localhost");
-}
-
-// Network constants
 export const PORT = parsePort(readEnvTrimmed("SIGNET_PORT"), 3850);
 const NET = readConfiguredNetworkBinding(AGENTS_DIR);
 export const HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_HOST") ?? NET.host);
@@ -476,7 +441,7 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	const report = getDbAccessor().withReadDb(
 		(db: import("../db-accessor").ReadDb) =>
 			getDiagnostics(db, providerTracker, getUpdateState(), buildOpenClawHealth(), diagnosticsOptions),
-		"routes/state.ts:457",
+		"db:diagnostics.cached.read",
 	);
 	diagnosticsCache = {
 		report,
