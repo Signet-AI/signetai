@@ -9,8 +9,6 @@ import {
 	resolveDefaultBasePath,
 	scanMemoryContent,
 } from "@signet/core";
-import { Tiktoken } from "js-tiktoken/lite";
-import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { getAgentScope } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import type { WriteDb } from "./db-accessor";
@@ -29,6 +27,7 @@ import { isMemoryContentContextEligible, upsertMemoryContentSafetyInTx } from ".
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
+import { countTokens } from "./pipeline/tokenizer";
 import { isNoiseSession, isTempProject } from "./session-noise";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
@@ -54,7 +53,6 @@ export const NOISE_PURGE_REASON = "automatic projection cleanup for temp/test se
 const REINDEX_BATCH_SIZE = 50;
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
-let projTok: Tiktoken | null = null;
 const purgeSeen = new Set<string>();
 
 // Incremental index cache: outer key = agentId or "*" for global, inner key = absolute path, value = stat fingerprint
@@ -65,12 +63,6 @@ const lastChangedManifestsByAgent = new Map<string, Set<string>>();
 
 // Tracks which manifest rel paths were referenced in the previous ledger render per agent
 const prevLedgerRefsByAgent = new Map<string, Set<string>>();
-
-function getProjectionTokenizer(): Tiktoken {
-	if (projTok) return projTok;
-	projTok = new Tiktoken(cl100k_base);
-	return projTok;
-}
 
 export type ArtifactKind = "summary" | "transcript" | "compaction" | "manifest";
 type SentenceQuality = "ok" | "fallback";
@@ -317,7 +309,7 @@ function pickAnchor(body: string, project: string | null, harness: string | null
 }
 
 function tokenCount(text: string): number {
-	return getProjectionTokenizer().encode(text).length;
+	return countTokens(text);
 }
 
 function joinParts(parts: ReadonlyArray<string>): string {
@@ -1044,7 +1036,7 @@ async function doReindex(agentId?: string): Promise<void> {
 					.get();
 				return row !== undefined;
 			},
-			{ siteToken: "memory-lineage.ts:1040" },
+			{ siteToken: "db:memory.reindex.schema" },
 		);
 		if (!ready) {
 			stopTimer({ fileCount: files.length });
@@ -1073,7 +1065,7 @@ async function doReindex(agentId?: string): Promise<void> {
 						}>);
 				return rows;
 			},
-			{ siteToken: "memory-lineage.ts:1061" },
+			{ siteToken: "db:memory.reindex.paths" },
 		);
 		if (dbPaths.length > 0) {
 			const root = getAgentsDir();
@@ -1350,7 +1342,7 @@ async function findExistingManifest(agentId: string, sessionId: string): Promise
 					 LIMIT 1`,
 					)
 					.get(agentId, sessionId) as { source_path: string } | undefined,
-			{ siteToken: "memory-lineage.ts:1342" },
+			{ siteToken: "db:memory.manifest.find" },
 		);
 		if (!row) return null;
 		return loadManifest(join(getAgentsDir(), row.source_path));
@@ -1787,7 +1779,7 @@ async function readThreadHeads(agentId: string): Promise<
 					}),
 				);
 			},
-			{ siteToken: "memory-lineage.ts:1761" },
+			{ siteToken: "db:memory.projection.thread-heads" },
 		);
 		return rows.filter(
 			(row) =>
@@ -1840,7 +1832,7 @@ async function readTopMemories(agentId: string): Promise<
 					}),
 				);
 			},
-			{ siteToken: "memory-lineage.ts:1817" },
+			{ siteToken: "db:memory.projection.top-memories" },
 		);
 		return rows.filter((row) => !isNoiseSession({ project: row.project })).slice(0, 8);
 	} catch {
@@ -1893,7 +1885,7 @@ async function readTemporalNodes(agentId: string): Promise<
 					}),
 				);
 			},
-			{ siteToken: "memory-lineage.ts:1865" },
+			{ siteToken: "db:memory.projection.temporal-nodes" },
 		);
 		return rows.filter(
 			(row) =>
@@ -1975,7 +1967,7 @@ async function buildLedger(agentId: string): Promise<ReadonlyArray<LedgerSession
 						content: row.content,
 					}),
 				),
-			{ siteToken: "memory-lineage.ts:1956" },
+			{ siteToken: "db:memory.projection.ledger" },
 		);
 	} catch {
 		rows = [];
@@ -2305,7 +2297,7 @@ export async function removeCanonicalSession(agentId: string, sessionToken: stri
 				 WHERE agent_id = ? AND session_token = ?`,
 				)
 				.all(agentId, sessionToken) as Array<{ source_path: string }>,
-		{ siteToken: "memory-lineage.ts:2299" },
+		{ siteToken: "db:memory.session.paths" },
 	);
 	const paths = rows.map((row) => row.source_path);
 	await runWriteTxAsync(getDbAccessor(), (db) => {
@@ -2369,7 +2361,7 @@ export async function purgeCanonicalNoiseSessions(agentId: string, reason: strin
 				project: string | null;
 				harness: string | null;
 			}>,
-		{ siteToken: "memory-lineage.ts:2355" },
+		{ siteToken: "db:memory.noise.sessions" },
 	);
 	const groups = new Map<
 		string,

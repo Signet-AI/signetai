@@ -157,6 +157,43 @@ test("a tokenless async-named DB call fails the attribution coverage rule", () =
 	}
 });
 
+test("a stable semantic DB site token satisfies attribution without depending on a source line", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-semantic-site-token-"));
+	try {
+		writeFileSync(
+			join(root, "semantic.ts"),
+			'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:memory.projection.ledger" });\n',
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.violations.filter((item) => item.kind === "missing-async-db-site-token")).toEqual([]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("semantic DB site tokens are unique and reject malformed identifiers", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-semantic-site-token-"));
+	try {
+		writeFileSync(
+			join(root, "semantic.ts"),
+			[
+				'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:memory.shared.read" });',
+				'getDbAccessor().withWriteTxAsync((db) => db, { siteToken: "db:memory.shared.read" });',
+				'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:Memory Invalid" });',
+			].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.violations.filter((item) => item.kind === "duplicate-db-site-token")).toEqual([
+			expect.objectContaining({ path: "semantic.ts", line: 1, token: "db:memory.shared.read" }),
+		]);
+		expect(result.violations.filter((item) => item.kind === "missing-async-db-site-token")).toEqual([
+			expect.objectContaining({ path: "semantic.ts", line: 3 }),
+		]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("the scanner detects literal bracket access to legacy DB APIs", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-ledger-"));
 	try {
