@@ -97,3 +97,6 @@
 .onboarding .onboarding-source p { margin-bottom:0; }
 .dark .onboarding img[src$="hermes-agent.svg"],.dark .onboarding img[src$="oh-my-pi.svg"] { filter:invert(1); }
 html:not(.dark) .onboarding img[src$="openai.svg"],html:not(.dark) .onboarding img[src$="forge.svg"],html:not(.dark) .onboarding img[src$="pi.svg"] { filter:invert(1); }
+
+.onboarding .onboarding-source .cs-layout { display:block; }
+.onboarding .onboarding-source .cs-options { padding:0; overflow:visible; gap:10px; }

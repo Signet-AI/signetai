@@ -60,8 +60,7 @@ function validate(kind: Exclude<SourceKind, "files">, target: string, tokenRef: 
 			const url = new URL(value);
 			if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password)
 				return "Enter a public http(s) URL";
-			if (["localhost", "127.0.0.1", "::1"].includes(url.hostname.toLowerCase()))
-				return "Enter a public http(s) URL";
+			if (["localhost", "127.0.0.1", "::1"].includes(url.hostname.toLowerCase())) return "Enter a public http(s) URL";
 			return null;
 		} catch {
 			return "Enter a valid public http(s) URL";
@@ -355,241 +354,261 @@ export function ConnectSourceDialog({
 				</header>
 				<div className="cs-body cs-body--source">
 					<div className="cs-layout">
-						{!embedded && <aside className="cs-source-list" aria-label="Source types">
-						<div className="cs-source-list__title">Sources</div>
-							<div className="cs-source-list__group">Import</div>
-							{IMPORT_KINDS.map((item) => (
-								<button
-									key={item.id}
-									type="button"
-									className={cn("cs-source-item", kind === item.id && "is-on")}
-									onClick={() => selectKind(item.id)}
-									aria-pressed={kind === item.id}
-								>
-									<span className="cs-source-item__icon"><KindIcon kind={item.id} className="size-4" /></span>
-									<span className="cs-source-item__copy">
-										<span className="cs-source-item__label">{item.label}</span>
-										<span className="cs-source-item__description">{item.description}</span>
-									</span>
-								</button>
-							))}
-							<div className="cs-source-list__group">Connect</div>
-							{CONNECT_KINDS.map((item) => (
-								<button
-									key={item.id}
-									type="button"
-									className={cn("cs-source-item", kind === item.id && "is-on")}
-									onClick={() => selectKind(item.id)}
-									aria-pressed={kind === item.id}
-								>
-									<span className="cs-source-item__icon"><KindIcon kind={item.id} className="size-4" /></span>
-									<span className="cs-source-item__copy">
-										<span className="cs-source-item__label">{item.label}</span>
-										<span className="cs-source-item__description">{sourceDescription(item.id)}</span>
-									</span>
-								</button>
-							))}
-						</aside>}
+						{!embedded && (
+							<aside className="cs-source-list" aria-label="Source types">
+								<div className="cs-source-list__title">Sources</div>
+								<div className="cs-source-list__group">Import</div>
+								{IMPORT_KINDS.map((item) => (
+									<button
+										key={item.id}
+										type="button"
+										className={cn("cs-source-item", kind === item.id && "is-on")}
+										onClick={() => selectKind(item.id)}
+										aria-pressed={kind === item.id}
+									>
+										<span className="cs-source-item__icon">
+											<KindIcon kind={item.id} className="size-4" />
+										</span>
+										<span className="cs-source-item__copy">
+											<span className="cs-source-item__label">{item.label}</span>
+											<span className="cs-source-item__description">{item.description}</span>
+										</span>
+									</button>
+								))}
+								<div className="cs-source-list__group">Connect</div>
+								{CONNECT_KINDS.map((item) => (
+									<button
+										key={item.id}
+										type="button"
+										className={cn("cs-source-item", kind === item.id && "is-on")}
+										onClick={() => selectKind(item.id)}
+										aria-pressed={kind === item.id}
+									>
+										<span className="cs-source-item__icon">
+											<KindIcon kind={item.id} className="size-4" />
+										</span>
+										<span className="cs-source-item__copy">
+											<span className="cs-source-item__label">{item.label}</span>
+											<span className="cs-source-item__description">{sourceDescription(item.id)}</span>
+										</span>
+									</button>
+								))}
+							</aside>
+						)}
 						<section className="cs-options" aria-label={`${sourceLabel(kind)} options`}>
 							<div className="cs-options__head">
-								<div className="cs-options__title">{kind === "files" ? "Import files" : `Connect ${sourceLabel(kind)}`}</div>
-						</div>
-							{kind === "files" || kind === "transcripts" ? (
-						<>
-							<button
-								type="button"
-								className="flex min-h-28 w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[oklch(1_0_0/0.14)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] text-muted-foreground hover:border-success hover:text-foreground"
-								onClick={() => inputRef.current?.click()}
-								disabled={busy}
-							>
-								<Upload className="size-5" />
-								<span className="text-xs font-medium">
-									{kind === "transcripts" ? "Choose JSONL transcript files" : "Choose one or more files"}
-								</span>
-								<span className="font-mono text-[9px]">
-									{kind === "transcripts" ? "Signet export JSONL" : "JSON · Markdown · CSV · HTML · documents"}
-								</span>
-							</button>
-							{kind === "files" && (
-								<button type="button" className="cs-btn-ghost self-center" onClick={chooseDesktop} disabled={busy}>
-									Choose from desktop
-								</button>
-							)}
-							<input
-								ref={inputRef}
-								type="file"
-								multiple
-								className="hidden"
-								accept={
-									kind === "transcripts"
-										? ".jsonl"
-										: ".txt,.md,.markdown,.json,.html,.htm,.csv,.doc,.docx,.docm,.odt,.rtf,.pdf,.ppt,.pptx,.ppsx,.odp,.epub,.xls,.xlsx,.xlsm,.ods"
-								}
-								onChange={(event) => choose(event.target.files)}
-							/>
-							{kind === "transcripts" && (
-								<label className="cs-field">
-									<span id="source-target-label" className="cs-field__label">
-										Target agent
-									</span>
-									<Select value={target} onValueChange={setTarget} disabled={busy}>
-										<SelectTrigger aria-label="Target agent" aria-labelledby="source-target-label" className="w-full">
-											<SelectValue placeholder="Choose an agent" />
-										</SelectTrigger>
-										<SelectContent
-											position="popper"
-											className="z-[60] max-h-64 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-										>
-											{agents.map((agent) => (
-												<SelectItem key={agent.id} value={agent.id}>
-													{agent.name} ({agent.id})
-												</SelectItem>
-											))}
-										</SelectContent>
-									</Select>
-									<span className="cs-field__hint">{FIELD.transcripts.hint}</span>
-								</label>
-							)}
-							{embedded && selectedCount > 2 && <span className="cs-field__hint">{selectedCount} files selected</span>}
-							{selectedCount > 0 && (
-								<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 font-mono text-[10px]">
-									{files.slice(0, embedded ? 2 : files.length).map((file) => (
-										<span key={`${file.name}:${file.size}`} className="truncate">
-											{file.name} · {(file.size / 1024).toFixed(0)} KB
-										</span>
-									))}
-									{desktopPaths.slice(0, embedded ? 2 : desktopPaths.length).map((path) => (
-										<span key={path} className="truncate">
-											{path.split(/[\\/]/).pop() ?? path} · desktop path
-										</span>
-									))}
+								<div className="cs-options__title">
+									{kind === "files" ? "Import files" : `Connect ${sourceLabel(kind)}`}
 								</div>
-							)}
-							{!embedded && (
-								<label className="cs-field">
-									<span className="cs-field__label">If a content hash already exists</span>
-									<select
-										className="cs-field__input"
-										value={duplicateMode}
-										onChange={(event) => setDuplicateMode(event.target.value as typeof duplicateMode)}
+							</div>
+							{kind === "files" || kind === "transcripts" ? (
+								<>
+									<button
+										type="button"
+										className="flex min-h-28 w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[oklch(1_0_0/0.14)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] text-muted-foreground hover:border-success hover:text-foreground"
+										onClick={() => inputRef.current?.click()}
 										disabled={busy}
 									>
-										<option value="skip">Skip duplicate</option>
-										<option value="replace">Replace and re-index</option>
-										<option value="reimport">Import as a new source</option>
-									</select>
-								</label>
-							)}
-							{transcriptJobId && (
-								<div className="cs-field__hint" aria-live="polite">
-									Import job created: <code>{transcriptJobId}</code>
-								</div>
-							)}
-							{busy && (
-								<div className="cs-field__hint" aria-live="polite">
-									Importing {selectedCount} {selectedCount === 1 ? "file" : "files"}…
-								</div>
-							)}
-							{result && (
-								<div className="flex flex-col gap-2" aria-live="polite">
-									<div className="cs-field__hint">
-										Imported {result.imported}; failed {result.failed}.
-									</div>
-									<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 text-[10px]">
-										{result.files.map((file) => (
-											<div key={`${file.fileName}:${file.status}`} className="flex items-start justify-between gap-2">
-												<span className="min-w-0 truncate font-mono">{file.fileName}</span>
-												<span className={file.status === "failed" ? "text-destructive" : "text-success"}>
-													{file.status === "failed"
-														? file.error
-														: file.status === "duplicate"
-															? extractionLabel(file.extraction, "duplicate, existing result")
-															: extractionLabel(file.extraction, "indexed")}
+										<Upload className="size-5" />
+										<span className="text-xs font-medium">
+											{kind === "transcripts" ? "Choose JSONL transcript files" : "Choose one or more files"}
+										</span>
+										<span className="font-mono text-[9px]">
+											{kind === "transcripts" ? "Signet export JSONL" : "JSON · Markdown · CSV · HTML · documents"}
+										</span>
+									</button>
+									{kind === "files" && (
+										<button type="button" className="cs-btn-ghost self-center" onClick={chooseDesktop} disabled={busy}>
+											Choose from desktop
+										</button>
+									)}
+									<input
+										ref={inputRef}
+										type="file"
+										multiple
+										className="hidden"
+										accept={
+											kind === "transcripts"
+												? ".jsonl"
+												: ".txt,.md,.markdown,.json,.html,.htm,.csv,.doc,.docx,.docm,.odt,.rtf,.pdf,.ppt,.pptx,.ppsx,.odp,.epub,.xls,.xlsx,.xlsm,.ods"
+										}
+										onChange={(event) => choose(event.target.files)}
+									/>
+									{kind === "transcripts" && (
+										<label className="cs-field">
+											<span id="source-target-label" className="cs-field__label">
+												Target agent
+											</span>
+											<Select value={target} onValueChange={setTarget} disabled={busy}>
+												<SelectTrigger
+													aria-label="Target agent"
+													aria-labelledby="source-target-label"
+													className="w-full"
+												>
+													<SelectValue placeholder="Choose an agent" />
+												</SelectTrigger>
+												<SelectContent
+													position="popper"
+													className="z-[60] max-h-64 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+												>
+													{agents.map((agent) => (
+														<SelectItem key={agent.id} value={agent.id}>
+															{agent.name} ({agent.id})
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+											<span className="cs-field__hint">{FIELD.transcripts.hint}</span>
+										</label>
+									)}
+									{embedded && selectedCount > 2 && (
+										<span className="cs-field__hint">{selectedCount} files selected</span>
+									)}
+									{selectedCount > 0 && (
+										<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 font-mono text-[10px]">
+											{files.slice(0, embedded ? 2 : files.length).map((file) => (
+												<span key={`${file.name}:${file.size}`} className="truncate">
+													{file.name} · {(file.size / 1024).toFixed(0)} KB
 												</span>
+											))}
+											{desktopPaths.slice(0, embedded ? 2 : desktopPaths.length).map((path) => (
+												<span key={path} className="truncate">
+													{path.split(/[\\/]/).pop() ?? path} · desktop path
+												</span>
+											))}
+										</div>
+									)}
+									{!embedded && (
+										<label className="cs-field">
+											<span className="cs-field__label">If a content hash already exists</span>
+											<select
+												className="cs-field__input"
+												value={duplicateMode}
+												onChange={(event) => setDuplicateMode(event.target.value as typeof duplicateMode)}
+												disabled={busy}
+											>
+												<option value="skip">Skip duplicate</option>
+												<option value="replace">Replace and re-index</option>
+												<option value="reimport">Import as a new source</option>
+											</select>
+										</label>
+									)}
+									{transcriptJobId && (
+										<div className="cs-field__hint" aria-live="polite">
+											Import job created: <code>{transcriptJobId}</code>
+										</div>
+									)}
+									{busy && (
+										<div className="cs-field__hint" aria-live="polite">
+											Importing {selectedCount} {selectedCount === 1 ? "file" : "files"}…
+										</div>
+									)}
+									{result && (
+										<div className="flex flex-col gap-2" aria-live="polite">
+											<div className="cs-field__hint">
+												Imported {result.imported}; failed {result.failed}.
 											</div>
-										))}
-									</div>
-									{result.failed > 0 && (
-										<button type="button" className="cs-btn-ghost self-start" onClick={retryFailed} disabled={busy}>
-											<RotateCcw className="size-3" />
-											Retry failed imports
-										</button>
+											<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 text-[10px]">
+												{result.files.map((file) => (
+													<div
+														key={`${file.fileName}:${file.status}`}
+														className="flex items-start justify-between gap-2"
+													>
+														<span className="min-w-0 truncate font-mono">{file.fileName}</span>
+														<span className={file.status === "failed" ? "text-destructive" : "text-success"}>
+															{file.status === "failed"
+																? file.error
+																: file.status === "duplicate"
+																	? extractionLabel(file.extraction, "duplicate, existing result")
+																	: extractionLabel(file.extraction, "indexed")}
+														</span>
+													</div>
+												))}
+											</div>
+											{result.failed > 0 && (
+												<button type="button" className="cs-btn-ghost self-start" onClick={retryFailed} disabled={busy}>
+													<RotateCcw className="size-3" />
+													Retry failed imports
+												</button>
+											)}
+										</div>
 									)}
-								</div>
-							)}
-						</>
+								</>
 							) : (
-						<>
-							<div className="cs-field">
-								<span className="cs-field__label">{FIELD[kind].label}</span>
-								<div className="flex gap-2">
-									<input
-										className="cs-field__input"
-										value={target}
-										onChange={(event) => setTarget(event.target.value)}
-										placeholder={FIELD[kind].placeholder}
-										aria-label={FIELD[kind].label}
-									/>
-									{kind === "obsidian" && (
-										<button
-											type="button"
-											className="cs-browse"
-											onClick={browse}
-											disabled={browsing}
-											title="Browse folders"
-											aria-label="Browse folders"
-										>
-											{browsing ? <Loader2 className="size-3.5 animate-spin" /> : <FolderOpen className="size-3.5" />}
-										</button>
+								<>
+									<div className="cs-field">
+										<span className="cs-field__label">{FIELD[kind].label}</span>
+										<div className="flex gap-2">
+											<input
+												className="cs-field__input"
+												value={target}
+												onChange={(event) => setTarget(event.target.value)}
+												placeholder={FIELD[kind].placeholder}
+												aria-label={FIELD[kind].label}
+											/>
+											{kind === "obsidian" && (
+												<button
+													type="button"
+													className="cs-browse"
+													onClick={browse}
+													disabled={browsing}
+													title="Browse folders"
+													aria-label="Browse folders"
+												>
+													{browsing ? (
+														<Loader2 className="size-3.5 animate-spin" />
+													) : (
+														<FolderOpen className="size-3.5" />
+													)}
+												</button>
+											)}
+										</div>
+										<span className="cs-field__hint">{FIELD[kind].hint}</span>
+									</div>
+									{kind !== "web" && (
+										<div className="cs-field">
+											<span className="cs-field__label">Name</span>
+											<input
+												className="cs-field__input"
+												value={name}
+												onChange={(event) => setName(event.target.value)}
+												placeholder={CONNECT_KINDS.find((item) => item.id === kind)?.namePlaceholder}
+												aria-label="Display name (optional)"
+											/>
+										</div>
 									)}
-								</div>
-								<span className="cs-field__hint">{FIELD[kind].hint}</span>
-							</div>
-							{kind !== "web" && (
-								<div className="cs-field">
-									<span className="cs-field__label">Name</span>
-									<input
-										className="cs-field__input"
-										value={name}
-										onChange={(event) => setName(event.target.value)}
-										placeholder={CONNECT_KINDS.find((item) => item.id === kind)?.namePlaceholder}
-										aria-label="Display name (optional)"
-									/>
-								</div>
-							)}
-							{kind !== "obsidian" && kind !== "web" && (
-								<div className="cs-field">
-									<span className="cs-field__label">Token secret{kind === "github" ? " (optional)" : ""}</span>
-									<input
-										className="cs-field__input"
-										value={tokenRef}
-										onChange={(event) => setTokenRef(event.target.value)}
-										placeholder={kind === "github" ? "GITHUB_TOKEN" : "DISCORD_BOT_TOKEN"}
-										aria-label="Token secret name"
-									/>
-									<span className="cs-field__hint">Name of the secret holding your token</span>
-								</div>
-							)}
-						</>
+									{kind !== "obsidian" && kind !== "web" && (
+										<div className="cs-field">
+											<span className="cs-field__label">Token secret{kind === "github" ? " (optional)" : ""}</span>
+											<input
+												className="cs-field__input"
+												value={tokenRef}
+												onChange={(event) => setTokenRef(event.target.value)}
+												placeholder={kind === "github" ? "GITHUB_TOKEN" : "DISCORD_BOT_TOKEN"}
+												aria-label="Token secret name"
+											/>
+											<span className="cs-field__hint">Name of the secret holding your token</span>
+										</div>
+									)}
+								</>
 							)}
 							{error && <div className="cs-error">{error}</div>}
 						</section>
 					</div>
 				</div>
 				<footer className="cs-foot">
-{!embedded && (
-					<button
-						type="button"
-						className="cs-btn-ghost"
-						onClick={onClose}
-						disabled={busy}
-					>
-						Close
-					</button>
- )}
+					{!embedded && (
+						<button type="button" className="cs-btn-ghost" onClick={onClose} disabled={busy}>
+							Close
+						</button>
+					)}
 					<button type="button" className="cs-btn-primary" onClick={submit} disabled={submitDisabled}>
 						{busy && <Loader2 className="size-3.5 animate-spin" />}
-						{kind === "files" || kind === "transcripts" ? "Import & index" : kind === "web" ? "Add & index" : "Connect & index"}
+						{kind === "files" || kind === "transcripts"
+							? "Import & index"
+							: kind === "web"
+								? "Add & index"
+								: "Connect & index"}
 					</button>
 				</footer>
 			</Panel>

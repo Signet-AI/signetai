@@ -75,7 +75,9 @@ export function HomeView() {
 							A more memorable you.
 						</span>
 					</div>
-					<a href="#setup" className="self-start text-sm underline underline-offset-4">Set up or repair your memory connection</a>
+					<a href="#setup" className="self-start text-sm underline underline-offset-4">
+						Set up or repair your memory connection
+					</a>
 					<DailyBrief agentId={status.data?.agentId} agentSettled={!status.loading} />
 					<div className="home-brief-divider" />
 					<HomeRecentMemories />
@@ -87,11 +89,7 @@ export function HomeView() {
 					</div>
 				</section>
 
-				<section
-					className="home-system"
-					aria-labelledby="system-title"
-					tabIndex={0}
-				>
+				<section className="home-system" aria-labelledby="system-title" tabIndex={0}>
 					<div className="home-page-heading">
 						<h2
 							id="system-title"
@@ -252,9 +250,7 @@ function ReviewActionButton({
 			disabled={disabled}
 			className={cn(
 				"min-w-[74px] whitespace-nowrap rounded-[var(--radius)] border px-2 py-[5px] text-[11.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-				primary
-					? "border-primary bg-primary text-primary-foreground"
-					: "home-review-secondary-action",
+				primary ? "border-primary bg-primary text-primary-foreground" : "home-review-secondary-action",
 			)}
 		>
 			{busy ? "…" : label}

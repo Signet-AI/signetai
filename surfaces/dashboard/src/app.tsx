@@ -31,9 +31,14 @@ function Shell() {
 	const { view } = useView();
 	return (
 		<div className="shell-stage flex h-full min-h-0 flex-col bg-background p-2.5 text-foreground">
-			<main data-view={view} className="sig-app-frame flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[12px] border border-border/80 bg-background">
+			<main
+				data-view={view}
+				className="sig-app-frame flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[12px] border border-border/80 bg-background"
+			>
 				<Topbar />
-				<div className={`sig-content flex min-h-0 flex-1 flex-col ${view === "home" ? "overflow-hidden" : "overflow-auto p-6"}`}>
+				<div
+					className={`sig-content flex min-h-0 flex-1 flex-col ${view === "home" ? "overflow-hidden" : "overflow-auto p-6"}`}
+				>
 					<Activity mode={view === "home" ? "visible" : "hidden"}>
 						<HomeView />
 					</Activity>
