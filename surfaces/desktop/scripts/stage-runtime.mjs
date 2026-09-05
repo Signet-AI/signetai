@@ -153,6 +153,18 @@ export function stageRuntime() {
 	cpSync(resolve(repoRoot, "platform/daemon/dashboard"), resolve(daemonOut, "dashboard"), { recursive: true });
 	cpSync(resolve(repoRoot, "platform/daemon/skills"), resolve(daemonOut, "skills"), { recursive: true });
 
+	// Connector assets that live on disk in the connector package (not bundled
+	// into dist JS). The hermes-agent connector copies its Python plugin from
+	// here during harness install; the desktop daemon points
+	// SIGNET_CONNECTOR_ASSETS_DIR at this tree.
+	const connectorsOut = resolve(daemonOut, "connectors");
+	const hermesPluginSrc = resolve(repoRoot, "integrations/hermes-agent/connector/hermes-plugin");
+	if (existsSync(hermesPluginSrc)) {
+		cpSync(hermesPluginSrc, resolve(connectorsOut, "hermes-agent", "hermes-plugin"), { recursive: true });
+	} else {
+		throw new Error(`Hermes connector plugin source not found: ${hermesPluginSrc}`);
+	}
+
 	const daemonPkg = readJson(daemonPkgPath);
 	const corePkg = readJson(corePkgPath);
 	const vecPkg = platformVecPackage(bunArch);
