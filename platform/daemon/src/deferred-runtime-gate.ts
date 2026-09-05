@@ -32,6 +32,19 @@ export interface DeferredRuntimeScheduler {
 }
 
 /**
+ * Release ordinary startup from the background integrity gate. A retained
+ * migration backup still needs verification before any mutating runtime work.
+ */
+export function releaseDeferredRuntimeGateIfSafe(
+	gate: DeferredRuntimeGate,
+	options: { readonly migrationBackupPending: boolean; readonly writesBlocked: boolean },
+): boolean {
+	if (options.migrationBackupPending || options.writesBlocked) return false;
+	gate.completeIntegrity();
+	return true;
+}
+
+/**
  * Keep post-ready pipeline startup behind the deferred integrity work. Both
  * timers can mature together, but the DB owner must only see one maintenance
  * workload at a time.
