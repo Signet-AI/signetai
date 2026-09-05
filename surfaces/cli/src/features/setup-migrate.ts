@@ -355,6 +355,18 @@ export async function runExistingSetupWizard(
 						},
 					},
 				};
+			} else {
+				const existingMemory = { ...readRecord(existingConfig.memory) };
+				Reflect.deleteProperty(existingMemory, "synthesis");
+				if (Object.hasOwn(existingMemory, "pipelineV2")) {
+					const existingPipeline = removeRetiredPipelineSettings(readRecord(existingMemory.pipelineV2));
+					if (Object.keys(existingPipeline).length > 0) {
+						existingMemory.pipelineV2 = existingPipeline;
+					} else {
+						Reflect.deleteProperty(existingMemory, "pipelineV2");
+					}
+				}
+				updatedConfig.memory = existingMemory;
 			}
 			writeFileSync(agentYamlPath, formatYaml(updatedConfig));
 		} else {
