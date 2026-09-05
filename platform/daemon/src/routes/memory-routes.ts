@@ -38,8 +38,8 @@ import {
 	type RecallParams,
 	type RecallResponse,
 	buildAgentScopeClause,
+	currentMemorySql,
 	hybridRecall,
-	memoryLifecycleSql,
 } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
@@ -3647,7 +3647,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
         INNER JOIN memories m ON m.id = e.source_id
         WHERE e.source_type = 'memory' AND e.source_id = ?
         AND COALESCE(m.source_type, '') != 'aggregate-recall'
-        ${memoryLifecycleSql(db)}
+        ${currentMemorySql("m")}
         LIMIT 1
       `)
 						.get(id) as { vector: Buffer } | undefined,
@@ -3696,7 +3696,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						.prepare(`
 	        SELECT id, content, agent_id, type, tags, confidence, created_at
 	        FROM memories m
-	        WHERE id IN (${placeholders})${memoryLifecycleSql(db)}
+        WHERE id IN (${placeholders})${currentMemorySql("m")}
 	      `)
 						.all(...ids) as Array<{
 						id: string;

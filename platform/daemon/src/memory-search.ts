@@ -697,7 +697,11 @@ function mergeCandidate(
 	}
 }
 
-/** Eligibility for ordinary memory delivery. Lineage/history callers do not use this predicate. */
+/**
+ * Eligibility for ordinary memory delivery. All owner accessors run migrations
+ * before querying, so these lifecycle columns are required. Lineage/history
+ * callers do not use this predicate.
+ */
 export function currentMemorySql(alias = "m"): string {
 	return ` AND ${alias}.is_deleted = 0 AND ${alias}.superseded_by IS NULL AND ${alias}.stale_at IS NULL`;
 }
@@ -738,9 +742,7 @@ async function readLexicalFallbackThroughOwner(
 		 SELECT m.id, (${score.join(" + ")}) AS matches
 		 FROM fallback_scan m
 		 WHERE (${match})
-		   AND m.is_deleted = 0
-		   AND m.superseded_by IS NULL
-		   AND m.stale_at IS NULL
+		   ${currentMemorySql("m")}
 		   ${filter.sql}
 		 ORDER BY matches DESC
 		 LIMIT ?`,
@@ -752,23 +754,6 @@ async function readLexicalFallbackThroughOwner(
 			deadlineMs: 30_000,
 		},
 	);
-}
-
-/**
- * Lifecycle predicate for surfacing memories: deleted, superseded, and stale
- * rows must never reach a caller. Mirrors the gate `authorizeScoredCandidates`
- * applies to standard recall candidates so similarity-search routes (e.g.
- * GET /memory/similar) do not drift from recall semantics.
- *
- * Returns a SQL fragment starting with ` AND ...` (empty when the memories
- * table predates the lifecycle columns). `is_deleted` is unconditional — it
- * has shipped since migration 002 and every accessor runs migrations.
- */
-export function memoryLifecycleSql(
-	_db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
-	alias = "m",
-): string {
-	return currentMemorySql(alias);
 }
 
 async function authorizeScoredCandidates(
@@ -815,9 +800,7 @@ async function authorizeScoredCandidates(
 			 FROM memories m
 			 ${safetyJoin}
 			 WHERE m.id IN (${placeholders})
-			   AND m.is_deleted = 0
-			   AND m.superseded_by IS NULL
-			   AND m.stale_at IS NULL
+			   ${currentMemorySql("m")}
 			   ${filter.sql}
 			   ${hasSafetyLedger ? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))" : ""}`,
 			[...batch, ...filter.args],
@@ -1740,9 +1723,7 @@ export async function hybridRecall(
 					 FROM memories_fts
 					 CROSS JOIN memories m ON memories_fts.rowid = m.rowid
 					 WHERE memories_fts MATCH ?
-					   AND m.is_deleted = 0
-					   AND m.superseded_by IS NULL
-					   AND m.stale_at IS NULL
+					   ${currentMemorySql("m")}
 					   ${filter.sql}
 					 ORDER BY raw_score
 					 LIMIT ?`,
@@ -1816,9 +1797,7 @@ export async function hybridRecall(
 				   CROSS JOIN memories m ON m.id = h.memory_id
 				   WHERE memory_hints_fts MATCH ?
 				     AND h.agent_id = m.agent_id
-				     AND m.is_deleted = 0
-				     AND m.superseded_by IS NULL
-				     AND m.stale_at IS NULL
+				     ${currentMemorySql("m")}
 				     ${filter.sql}
 				   ORDER BY raw_score LIMIT ?`;
 
@@ -2211,9 +2190,7 @@ export async function hybridRecall(
 										  AND ea.agent_id = ?
 										  AND ea.status = 'active'
 										 WHERE m.id IN (${placeholders})
-										   AND m.is_deleted = 0
-										   AND m.superseded_by IS NULL
-										   AND m.stale_at IS NULL
+										   ${currentMemorySql("m")}
 										   ${filter.sql}
 										 GROUP BY m.id, m.importance`,
 											[agentId, ...missingIds, ...filter.args],
@@ -3044,9 +3021,7 @@ export async function hybridRecall(
 						 ${safetyJoin}
 						 WHERE mem.entity_id IN (${ePlaceholders})
 						   AND m.type = 'rationale'
-						   AND m.is_deleted = 0
-						   AND m.superseded_by IS NULL
-						   AND m.stale_at IS NULL
+						   ${currentMemorySql("m")}
 						   ${filter.sql}
 						   ${safetyFilter}
 						 LIMIT 10`,
@@ -3112,9 +3087,7 @@ export async function hybridRecall(
 							 FROM memory_entity_mentions mem
 							 JOIN memories m ON m.id = mem.memory_id
 							 WHERE mem.entity_id IN (${ph})
-							   AND m.is_deleted = 0
-							   AND m.superseded_by IS NULL
-							   AND m.stale_at IS NULL
+							   ${currentMemorySql("m")}
 							   ${filter.sql}`,
 							[...eids, ...filter.args],
 							"memory-search.entity-context.scope",
