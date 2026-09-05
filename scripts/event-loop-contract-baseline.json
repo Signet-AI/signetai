@@ -1259,14 +1259,14 @@
     },
     {
       "path": "hooks.ts",
-      "line": 826,
+      "line": 835,
       "api": "existsSync",
       "source": "if (req.sessionKey && existsSync(getMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 829,
+      "line": 838,
       "api": "withReadDbAsync",
       "source": "const block = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1274,42 +1274,42 @@
     },
     {
       "path": "hooks.ts",
-      "line": 1682,
+      "line": 1691,
       "api": "existsSync",
       "source": "if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 1684,
+      "line": 1693,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2092,
+      "line": 2101,
       "api": "existsSync",
       "source": "if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2094,
+      "line": 2103,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2356,
+      "line": 2365,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2358,
+      "line": 2367,
       "api": "readFileSync",
       "source": "const raw = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
@@ -1330,56 +1330,56 @@
     },
     {
       "path": "identity-context.ts",
-      "line": 73,
+      "line": 104,
       "api": "existsSync",
       "source": "if (!filePath || !existsSync(filePath)) return undefined;",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 76,
+      "line": 106,
       "api": "readFileSync",
-      "source": "const content = readFileSync(filePath, \"utf-8\").trim();",
+      "source": "return budgetIdentityContent(readFileSync(filePath, \"utf-8\").trim(), budget);",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 178,
+      "line": 183,
       "api": "existsSync",
       "source": "if (identityMd && existsSync(identityMd)) {",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 180,
+      "line": 185,
       "api": "readFileSync",
       "source": "return parseIdentityMarkdown(readFileSync(identityMd, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 185,
+      "line": 190,
       "api": "existsSync",
       "source": "if (existsSync(agentYaml)) {",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 187,
+      "line": 192,
       "api": "readFileSync",
       "source": "const content = readFileSync(agentYaml, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 200,
+      "line": 205,
       "api": "existsSync",
       "source": "if (existsSync(rootIdentityMd)) {",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 202,
+      "line": 207,
       "api": "readFileSync",
       "source": "return parseIdentityMarkdown(readFileSync(rootIdentityMd, \"utf-8\"));",
       "category": "hot-path"

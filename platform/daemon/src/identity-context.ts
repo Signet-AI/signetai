@@ -66,39 +66,44 @@ export function readAgentsMd(
 	return readIdentityFile(agentsDir, "AGENTS.md", charBudget, identityFiles);
 }
 
+export function budgetIdentityContent(
+	content: string,
+	budget: Pick<ContextIdentityFileConfig, "maxTokens" | "maxChars" | "budget">,
+): string | undefined {
+	if (!content) return undefined;
+
+	if (budget.maxTokens !== undefined) {
+		if (!Number.isFinite(budget.maxTokens) || budget.maxTokens <= 0) return undefined;
+		const maxTokens = Math.floor(budget.maxTokens);
+		if (countTokens(content) <= maxTokens) return content;
+		// Reserve room for the marker so the final string stays within budget.
+		// If the budget is too small to also flag truncation, cap without the marker
+		// rather than exceed the declared budget.
+		const markerTokens = countTokens(TRUNCATED_MARKER);
+		if (markerTokens >= maxTokens) return truncateToTokens(content, maxTokens);
+		return `${truncateToTokens(content, maxTokens - markerTokens)}${TRUNCATED_MARKER}`;
+	}
+
+	const charBudget = budget.maxChars ?? budget.budget;
+	if (charBudget !== undefined) {
+		if (!Number.isFinite(charBudget) || charBudget <= 0) return undefined;
+		const maxChars = Math.floor(charBudget);
+		if (content.length <= maxChars) return content;
+		const markerChars = TRUNCATED_MARKER.length;
+		if (markerChars >= maxChars) return content.slice(0, maxChars);
+		return `${content.slice(0, maxChars - markerChars)}${TRUNCATED_MARKER}`;
+	}
+
+	return content;
+}
+
 function readIdentityPathWithBudget(
 	filePath: string | undefined,
 	budget: Pick<ContextIdentityFileConfig, "maxTokens" | "maxChars" | "budget">,
 ): string | undefined {
 	if (!filePath || !existsSync(filePath)) return undefined;
-
 	try {
-		const content = readFileSync(filePath, "utf-8").trim();
-		if (!content) return undefined;
-
-		if (budget.maxTokens !== undefined) {
-			if (!Number.isFinite(budget.maxTokens) || budget.maxTokens <= 0) return undefined;
-			const maxTokens = Math.floor(budget.maxTokens);
-			if (countTokens(content) <= maxTokens) return content;
-			// Reserve room for the marker so the final string stays within budget.
-			// If the budget is too small to also flag truncation, cap without the marker
-			// rather than exceed the declared budget.
-			const markerTokens = countTokens(TRUNCATED_MARKER);
-			if (markerTokens >= maxTokens) return truncateToTokens(content, maxTokens);
-			return `${truncateToTokens(content, maxTokens - markerTokens)}${TRUNCATED_MARKER}`;
-		}
-
-		const charBudget = budget.maxChars ?? budget.budget;
-		if (charBudget !== undefined) {
-			if (!Number.isFinite(charBudget) || charBudget <= 0) return undefined;
-			const maxChars = Math.floor(charBudget);
-			if (content.length <= maxChars) return content;
-			const markerChars = TRUNCATED_MARKER.length;
-			if (markerChars >= maxChars) return content.slice(0, maxChars);
-			return `${content.slice(0, maxChars - markerChars)}${TRUNCATED_MARKER}`;
-		}
-
-		return content;
+		return budgetIdentityContent(readFileSync(filePath, "utf-8").trim(), budget);
 	} catch {
 		return undefined;
 	}

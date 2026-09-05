@@ -988,17 +988,21 @@ creature: digital assistant
 		const after = await handleSessionStart({ harness: "claude-code" });
 		expect(after.inject).not.toContain("Tuesday");
 		expect(after.inject).toContain("Thursday");
-		writeAgentYaml(`hooks:
+		mkdirSync(join(TEST_DIR, "agents", "default"), { recursive: true });
+		writeFileSync(join(TEST_DIR, "agents", "default", "MEMORY.md"), readFileSync(join(TEST_DIR, "MEMORY.md")));
+		for (const path of ["MEMORY.md", "agents/default/MEMORY.md"]) {
+			writeAgentYaml(`hooks:
   contextProfiles:
     coding:
       identity:
         files:
-          - path: MEMORY.md
-            maxChars: 20
+          - path: ${path}
+            maxTokens: 200
   harnessProfiles:
     pi: coding
 `);
-		expect((await handleSessionStart({ harness: "pi" })).inject).not.toContain("Tuesday");
+			expect((await handleSessionStart({ harness: "pi" })).inject).not.toContain("Tuesday");
+		}
 	});
 
 	test.serial("includes MEMORY.md as working memory", async () => {
