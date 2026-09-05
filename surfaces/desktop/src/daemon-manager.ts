@@ -301,6 +301,9 @@ export class DaemonManager {
 				SIGNET_PATH: this.#workspacePath,
 				SIGNET_WORKSPACE: this.#workspacePath,
 				SIGNET_DESKTOP: "1",
+				// On-disk connector assets (hermes-agent Python plugin) staged by
+				// stage-runtime; connectors resolve them through this variable.
+				SIGNET_CONNECTOR_ASSETS_DIR: process.env.SIGNET_CONNECTOR_ASSETS_DIR ?? join(daemonRoot(), "connectors"),
 				SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "desktop",
 			},
 		});
