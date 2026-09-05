@@ -30,10 +30,10 @@ function Shell() {
 	useSettingsHotkey();
 	const { view } = useView();
 	return (
-		<div className="shell-stage flex h-full min-h-0 flex-col bg-background p-2.5 text-foreground">
+		<div className="shell-stage flex h-full min-h-0 flex-col bg-background text-foreground">
 			<main
 				data-view={view}
-				className="sig-app-frame flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[12px] border border-border/80 bg-background"
+				className="sig-app-frame flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
 			>
 				<Topbar />
 				<div
