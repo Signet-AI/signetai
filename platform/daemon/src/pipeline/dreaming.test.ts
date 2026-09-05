@@ -57,6 +57,7 @@ const AGENT = "default";
 
 function defaultCfg(overrides?: Partial<DreamingConfig>): DreamingConfig {
 	return {
+		enabled: true,
 		tokenThreshold: 100_000,
 		maxInterval: 6 * 60 * 60 * 1_000,
 		maxInputTokens: 32_000,

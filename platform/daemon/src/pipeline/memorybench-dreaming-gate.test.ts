@@ -44,6 +44,7 @@ function readCorpus(): GateCorpus {
 
 function defaultCfg(): DreamingConfig {
 	return {
+		enabled: true,
 		tokenThreshold: 1,
 		maxInterval: 6 * 60 * 60 * 1_000,
 		maxInputTokens: 32_000,

@@ -82,7 +82,7 @@ memory:
   # Importance decay rate per day (0.95 = 5% decay/day)
   decay_rate: 0.95
   
-  # Pipeline V2 — automatic memory extraction from conversations
+  # Pipeline V2 — retrieval, indexing, maintenance, and Dreaming support
   pipelineV2:
     # Master switch (true = run pipeline workers)
     # When false, shadowMode is ignored and the pipeline is fully disabled.
@@ -97,23 +97,6 @@ memory:
 
     # Freeze all mutations (reads only, no writes/updates/deletes)
     # mutationsFrozen: false
-
-    # Extraction provider and model
-    # Safety: on a VPS, set provider: none unless you explicitly want
-    # background extraction.
-    # Intended usage: Claude Code on haiku, Codex on gpt-5.4-mini with a
-    # Pro/Max subscription, or local Ollama at qwen3:4b or larger.
-    # Remote API extraction can rack up extreme fees fast.
-    extraction:
-      # "none", "claude-code" (Claude CLI), "codex" (Codex CLI),
-      # "opencode" (OpenCode), or "ollama" (local)
-      provider: claude-code
-      model: haiku
-      # endpoint/base_url override (ollama base URL, or OpenCode server URL when provider=opencode)
-      # endpoint: http://127.0.0.1:11434  # ollama
-      # endpoint: http://127.0.0.1:4096   # opencode
-      # timeout: 120000
-      # minConfidence: 0.7
 
     # Knowledge graph — boosts related memories in search results
     graph:
@@ -136,6 +119,10 @@ memory:
     semanticContradictionEnabled: true
 
     # Memory relevance configuration removed (hard-deprecated in 0.112.0)
+
+  # Background semantic consolidation is opt-in during setup.
+  # dreaming:
+  #   enabled: true
 
 # ============================================================================
 # Hooks Configuration

@@ -151,6 +151,13 @@ The daemon reports a Pipeline V2 mode derived from these controls:
 | `autonomous.frozen` | Prevents the scheduled maintenance interval while leaving on-demand inspection available. |
 | `autonomous.maintenanceMode` | Selects whether maintenance recommendations are observed or executed. |
 
+Fresh installs enable rehearsal boosting and reranking by default. Running
+`signet setup --enable-dreaming` also enables the Pipeline V2 runtime, knowledge
+graph, autonomous maintenance, update/delete operations, and executable
+maintenance mode. Retired provider-routing and synthesis settings are not
+written to new configs; migrations remove retired fields from older configs
+when they can be migrated safely before strict loading.
+
 `autonomous.allowUpdateDelete` is not the old extraction decision gate. The
 retired extraction, write-gate, and legacy provider-routing configuration keys
 are rejected as retired; inference provider selection belongs to the canonical

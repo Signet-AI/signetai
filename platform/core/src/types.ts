@@ -533,6 +533,8 @@ export interface DreamingSurprisalConfig {
 }
 
 export interface DreamingConfig {
+	/** Enable the background Dreaming worker. Semantic writes stay off when false. */
+	readonly enabled: boolean;
 	readonly tokenThreshold: number;
 	/** Maximum time that non-empty episodic evidence may wait below the token threshold. */
 	readonly maxInterval: number;

@@ -29,6 +29,7 @@ it("routes transcript source purge through the DB owner boundary", () => {
 });
 
 const DREAMING_CONFIG: DreamingConfig = {
+	enabled: true,
 	tokenThreshold: 1,
 	maxInterval: 6 * 60 * 60 * 1_000,
 	maxInputTokens: 32_000,
