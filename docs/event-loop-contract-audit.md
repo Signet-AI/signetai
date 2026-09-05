@@ -4,18 +4,18 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 850 sites
+- Exact ledger inventory: 846 sites
 - Synchronous `withWriteTx()` sites: 65
 - Synchronous `withReadDb()` sites: 99
 - Async-named DB sites: 173
 - Async-named ON-PARENT DB sites: 171
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 513
+- Synchronous filesystem/process sites: 509
 - Compile-visible legacy DB sites remaining: 164
   - `withWriteTx`: 65
   - `withReadDb`: 99
 
-The 850-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 65 synchronous writes, 99 synchronous reads, and 173 async-named DB sites are the complete database-call inventory; 164 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 171 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 846-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 65 synchronous writes, 99 synchronous reads, and 173 async-named DB sites are the complete database-call inventory; 164 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 171 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
@@ -290,7 +290,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/session-routes.ts:349` (withReadDb)
 - `routes/session-routes.ts:359` (withReadDb)
 - `routes/skill-analytics.ts:121` (withReadDb)
-- `routes/state.ts:457` (withReadDb)
+- `db:diagnostics.cached.read` (withReadDb)
 - `routes/telemetry-routes.ts:200` (withReadDb)
 - `routes/telemetry-routes.ts:221` (withReadDb)
 - `routes/telemetry-routes.ts:265` (withReadDb)

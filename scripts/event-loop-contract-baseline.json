@@ -403,98 +403,98 @@
     },
     {
       "path": "daemon.ts",
-      "line": 1656,
+      "line": 1672,
       "api": "existsSync",
       "source": "if (!existsSync(p)) continue;",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 1658,
+      "line": 1674,
       "api": "readFileSync",
       "source": "const yaml = parseSimpleYaml(readFileSync(p, \"utf-8\")) as Record<string, unknown>;",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 1702,
+      "line": 1718,
       "api": "existsSync",
       "source": "if (!existsSync(path)) continue;",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 1704,
+      "line": 1720,
       "api": "readFileSync",
       "source": "const routing = parseRoutingConfig(parseSimpleYaml(readFileSync(path, \"utf-8\")));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2093,
+      "line": 2108,
       "api": "existsSync",
       "source": "if (existsSync(PID_FILE)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2095,
+      "line": 2110,
       "api": "unlinkSync",
       "source": "unlinkSync(PID_FILE);",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2239,
+      "line": 2268,
       "api": "mkdirSync",
       "source": "mkdirSync(DAEMON_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2240,
+      "line": 2269,
       "api": "mkdirSync",
       "source": "mkdirSync(LOG_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2241,
+      "line": 2270,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(MEMORY_DB), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2403,
+      "line": 2441,
       "api": "existsSync",
       "source": "const workerPath = existsSync(bundled)",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2478,
+      "line": 2516,
       "api": "writeFileSync",
       "source": "writeFileSync(PID_FILE, process.pid.toString());",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3212,
+      "line": 3250,
       "api": "existsSync",
       "source": "if (existsSync(healthStampPath)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3213,
+      "line": 3251,
       "api": "readFileSync",
       "source": "const prev = JSON.parse(readFileSync(healthStampPath, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3216,
+      "line": 3254,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"
@@ -1244,20 +1244,6 @@
       "category": "hot-path"
     },
     {
-      "path": "hooks-config.ts",
-      "line": 289,
-      "api": "existsSync",
-      "source": "if (!existsSync(configPath)) {",
-      "category": "hot-path"
-    },
-    {
-      "path": "hooks-config.ts",
-      "line": 294,
-      "api": "readFileSync",
-      "source": "const content = readFileSync(configPath, \"utf-8\");",
-      "category": "hot-path"
-    },
-    {
       "path": "hooks.ts",
       "line": 501,
       "api": "existsSync",
@@ -1702,16 +1688,16 @@
     },
     {
       "path": "memory-config.ts",
-      "line": 990,
+      "line": 367,
       "api": "existsSync",
-      "source": "if (!existsSync(path)) continue;",
+      "source": ".find((path) => existsSync(path));",
       "category": "hot-path"
     },
     {
       "path": "memory-config.ts",
-      "line": 992,
+      "line": 369,
       "api": "readFileSync",
-      "source": "const yaml = parseSimpleYaml(readFileSync(path, \"utf-8\"));",
+      "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
       "category": "hot-path"
     },
     {
@@ -4479,38 +4465,25 @@
     },
     {
       "path": "routes/state.ts",
-      "line": 157,
-      "api": "existsSync",
-      "source": "if (!existsSync(path)) continue;",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/state.ts",
-      "line": 159,
-      "api": "readFileSync",
-      "source": "return resolveNetworkBinding(readNetworkMode(parseSimpleYaml(readFileSync(path, \"utf-8\"))));",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/state.ts",
-      "line": 384,
+      "line": 368,
       "api": "existsSync",
       "source": "if (!existsSync(candidate)) continue;",
       "category": "hot-path"
     },
     {
       "path": "routes/state.ts",
-      "line": 386,
+      "line": 370,
       "api": "readFileSync",
       "source": "const raw = readFileSync(candidate, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/state.ts",
-      "line": 457,
+      "line": 441,
       "api": "withReadDb",
       "source": "const report = getDbAccessor().withReadDb(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:diagnostics.cached.read"
     },
     {
       "path": "routes/telemetry-routes.ts",

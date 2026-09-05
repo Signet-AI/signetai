@@ -9,7 +9,7 @@ import {
 	migrateRetiredMemoryPipelineRoutingV9,
 	migrateSessionSynthesisRoute,
 } from "./config-migration";
-import { loadMemoryConfig, validateRuntimeConfigFiles } from "./memory-config";
+import { loadMemoryConfig, readRuntimeConfig } from "./memory-config";
 
 function setupDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "signet-legacy-routing-migration-"));
@@ -84,7 +84,7 @@ inference:
 			);
 			// The startup preflight permits this supported legacy input so the
 			// canonical migration can translate it before resolved validation.
-			expect(() => validateRuntimeConfigFiles(dir)).not.toThrow();
+			expect(() => readRuntimeConfig(dir)).not.toThrow();
 			migrateLegacyRoutingToRegistry(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
 
