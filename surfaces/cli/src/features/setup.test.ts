@@ -394,6 +394,49 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(agentYaml).not.toContain("model: haiku");
 	});
 
+	it("removes retired pipeline settings from existing setup even when Dreaming is off", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-retired-settings-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(basePath, "agent.yaml"), "version: 1\n");
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+		await runExistingSetupWizard(
+			basePath,
+			fakeDetection(basePath),
+			{
+				memory: {
+					synthesis: { harness: "openclaw" },
+					pipelineV2: {
+						extractionProvider: "claude-code",
+						extraction: { provider: "claude-code", model: "legacy-model" },
+						writeGate: { threshold: 0.4 },
+					},
+				},
+			},
+			deps,
+			{
+				nonInteractive: true,
+				skipGit: true,
+				allowUnprotectedWorkspace: true,
+				signetSecretsEnabled: true,
+			},
+		);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).not.toContain("synthesis:");
+		expect(agentYaml).not.toContain("pipelineV2:");
+		expect(agentYaml).not.toContain("claude-code");
+		expect(agentYaml).not.toContain("legacy-model");
+	});
+
 	it("includes Hermes in migration harnesses when detected in ~/.hermes", () => {
 		root = mkdtempSync(join(tmpdir(), "setup-migrate-hermes-default-"));
 		const basePath = join(root, "agents");
