@@ -82,6 +82,10 @@ describe("fetchTraversalCandidates (#1250)", () => {
 		insertMemory("memory-other-agent", "agent-a", 0.3);
 		insertMemory("memory-deleted", "agent-a", 0.9, 1);
 		insertMemory("memory-no-attribute", "agent-a", 0.4);
+		insertMemory("memory-superseded", "agent-a", 0.95);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memories SET superseded_by = 'memory-active' WHERE id = 'memory-superseded'").run();
+		});
 		insertAttribute("attribute-a-1", "memory-active", "agent-a", 0.4);
 		insertAttribute("attribute-a-2", "memory-active", "agent-a", 0.9);
 		insertAttribute("attribute-b", "memory-active", "agent-b", 1.0);
@@ -89,7 +93,7 @@ describe("fetchTraversalCandidates (#1250)", () => {
 
 		const rows = await fetchTraversalCandidates(
 			dbPath,
-			["memory-active", "memory-other-agent", "memory-deleted", "memory-no-attribute"],
+			["memory-active", "memory-other-agent", "memory-deleted", "memory-no-attribute", "memory-superseded"],
 			"agent-a",
 		);
 		const byId = new Map(rows.map((row) => [row.id, row]));
@@ -99,6 +103,18 @@ describe("fetchTraversalCandidates (#1250)", () => {
 		expect(byId.get("memory-other-agent")?.effScore).toBe(0.3);
 		expect(byId.get("memory-no-attribute")?.effScore).toBe(0.4);
 		expect(byId.has("memory-deleted")).toBe(false);
+		expect(byId.has("memory-superseded")).toBe(false);
+	});
+
+	test("excludes superseded memories from the ordinary candidate pool", async () => {
+		insertMemory("memory-current", "agent-a", 0.5);
+		insertMemory("memory-old", "agent-a", 0.95);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memories SET superseded_by = 'memory-current' WHERE id = 'memory-old'").run();
+		});
+
+		const rows = await getAllScoredCandidates(dbPath, undefined, 10, "agent-a");
+		expect(rows.map((row) => row.id)).toEqual(["memory-current"]);
 	});
 
 	test("caps the hydration IN list and yields between batches", async () => {
