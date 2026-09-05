@@ -438,13 +438,13 @@ export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): Ep
 export function readRecentEpisodicSources(
 	db: ReadDb,
 	agentId: string,
-	limit: number,
+	limit: number | null,
 	kinds?: readonly EpisodicSourceKind[],
 	newerThan?: string | null,
 	order: "newest" | "oldest" = "newest",
 	cursor?: EpisodicCursor | null,
 ): EpisodicSourceRecord[] {
-	const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 500));
+	const boundedLimit = limit === null ? -1 : Math.max(1, Math.min(Math.floor(limit), 500));
 	const newer = newerThan?.trim() || null;
 	const direction = order === "oldest" ? "ASC" : "DESC";
 	const memoryCursor = cursorPredicate("created_at", "id", "memory", newer, cursor);
@@ -716,7 +716,7 @@ export function readRecentEpisodicSources(
 			}),
 		)
 		.sort((a, b) => compareEpisodicSources(a, b, order))
-		.slice(0, boundedLimit);
+		.slice(0, boundedLimit < 0 ? undefined : boundedLimit);
 }
 
 /** Resolve one episodic record without falling back to semantic memory. */
@@ -857,7 +857,9 @@ export function searchEpisodicSources(
 	},
 ): EpisodicSourceRecord[] {
 	const query = params.query.trim();
-	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 50));
+	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 51));
+	// Scheduled backlog probes request one lookahead row to distinguish a
+	// complete full page from a truncated one.
 	const like = `%${query}%`;
 	// An empty query still lists recent sources (runbook cutoff pattern); the
 	// LIKE below degrades to a match-all and the outer ORDER BY picks newest.

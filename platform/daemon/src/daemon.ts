@@ -124,7 +124,7 @@ import {
 } from "./lifecycle";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
-import { type ResolvedMemoryConfig, graphWriteCaps, loadMemoryConfig } from "./memory-config";
+import { type ResolvedMemoryConfig, graphWriteCaps, loadMemoryConfig, readRuntimeConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import {
 	type NativeMemoryBridgeHandle,
@@ -1449,11 +1449,27 @@ function startFileWatcher() {
 
 	watcher.on("change", (path) => {
 		logger.info("watcher", "File changed", { path });
+		const base = basename(path);
+		const isRuntimeConfig = base === "agent.yaml" || base === "AGENT.yaml" || base === "config.yaml";
+		if (isRuntimeConfig) {
+			try {
+				// Keep the accepted runtime state and its derived reload paths intact
+				// when a newly selected config is invalid. In particular, do not
+				// invalidate routing or auto-commit the rejected document.
+				loadMemoryConfig(AGENTS_DIR);
+			} catch (error) {
+				logger.error(
+					"config",
+					"Rejected runtime config change",
+					error instanceof Error ? error : new Error("invalid runtime configuration"),
+				);
+				return;
+			}
+		}
 		invalidateInferenceConfigForPath(path);
 		scheduleAutoCommit(path);
 
-		const base = basename(path);
-		if (base === "agent.yaml" || base === "AGENT.yaml" || base === "config.yaml") {
+		if (isRuntimeConfig) {
 			try {
 				reloadAuthState(AGENTS_DIR);
 				logger.info("config", "Auth config reloaded from disk");
@@ -1780,7 +1796,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		dimensions: memoryCfg.embedding.dimensions,
 	});
 
-	reloadAuthState(AGENTS_DIR);
 	if (!transcriptCaptureWorkerHandle) {
 		transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
 	}
@@ -2249,6 +2264,20 @@ async function main() {
 		return;
 	}
 
+	// Validate the selected runtime configuration before acquiring the daemon
+	// lock, running migrations, opening the database, or writing lifecycle/PID
+	// state. The loader intentionally reports only file and field diagnostics;
+	// malformed user content must never be echoed during startup failure.
+	try {
+		readRuntimeConfig(AGENTS_DIR);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : "invalid runtime configuration";
+		console.error(`Signet cannot start: ${detail}`);
+		logger.shutdown(false);
+		process.exitCode = 1;
+		return;
+	}
+
 	mkdirSync(DAEMON_DIR, { recursive: true });
 	mkdirSync(LOG_DIR, { recursive: true });
 	mkdirSync(dirname(MEMORY_DB), { recursive: true });
@@ -2293,6 +2322,15 @@ async function main() {
 			error: err instanceof Error ? err.message : String(err),
 		});
 	}
+	// Compatibility migrations translate supported legacy configuration into the
+	// canonical form. Resolve it again before opening the database so migration
+	// output is subject to the same strict runtime validation.
+	const startupMemoryConfig = loadMemoryConfig(AGENTS_DIR);
+	// Apply the validated auth policy before binding the listener. Keeping this
+	// on foreground startup closes the grace period in which middleware could
+	// still hold the module's local-auth default while pipeline workers waited
+	// to start.
+	reloadAuthState(AGENTS_DIR);
 
 	// Expensive schema/FTS initialization must execute in the killable owner
 	// process, not merely behind an async function on this isolate.
@@ -2501,7 +2539,7 @@ async function main() {
 
 	await ensureArchitectureDoc();
 
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const memoryCfg = startupMemoryConfig;
 	let telemetryCollector: TelemetryCollector | undefined;
 	if (!migrationIntegrityWritesBlocked && memoryCfg.pipelineV2.telemetryEnabled && !telemetryDisabledByEnv()) {
 		const posthogApiKey = memoryCfg.pipelineV2.telemetry.posthogApiKey;
@@ -2936,25 +2974,7 @@ async function main() {
 		});
 	}
 
-	const REQUEST_BODY_LIMIT = 10 * 1_048_576;
 	const { createServer: nodeCreateServer } = await import("node:http");
-	const createBoundedServer = (...args: Parameters<typeof nodeCreateServer>) => {
-		const server = nodeCreateServer(...args);
-		server.on("request", (req, res) => {
-			// Never attach a data listener here. Node switches the request into
-			// flowing mode and drains the one-shot stream before Hono can consume
-			// it. Streamed routes (notably transcript imports) enforce their own
-			// limits while reading the body. Content-Length is the only safe
-			// pre-read check at this layer; chunked bodies are checked downstream.
-			const declared = Number(req.headers["content-length"] ?? 0);
-			if (declared > REQUEST_BODY_LIMIT && !res.headersSent) {
-				logger.warn("http", "Request body exceeded declared limit", { bytes: declared, limit: REQUEST_BODY_LIMIT });
-				res.writeHead(413, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ error: "payload too large" }), () => req.socket?.destroy());
-			}
-		});
-		return server;
-	};
 
 	const BIND_MAX_DELAY_MS = 30_000;
 	const BIND_RETRY_BASE_MS = 1000;
@@ -3444,7 +3464,7 @@ async function main() {
 				// Type assertion needed: arrow functions cannot satisfy overloaded
 				// function types. The wrapper passes all args through to nodeCreateServer
 				// so it is correct at runtime for every overload.
-				createServer: createBoundedServer as typeof nodeCreateServer,
+				createServer: nodeCreateServer,
 			}),
 		onBound: (server) => {
 			httpServer = server;

@@ -6,6 +6,18 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-05
+- Bug fixes: consolidate current memory eligibility; exclude superseded memories from delivered context; reject invalid runtime config; recover projection token budget.
+- Refactoring: unify runtime config parsing.
+
+### 2026-09-04
+- Bug fixes: stop retaining backlog text; make backlog probes threshold-aware.
+- Refactoring: simplify backlog probes.
+- Docs: add missing contributors.
+
+### 2026-09-03
+- Bug fixes: repair native health fixture; avoid embedding conflict starvation; enforce scoped embedding repair; scope legacy embedding repairs.
+
 ### 2026-09-02
 - Bug fixes: keep owner protocol pure.
 
@@ -21,18 +33,77 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: preserve low-volume scheduling fallback; realign memory-search site tokens after wave-4 relocation; L1 wave 4 owner-routing + audit realignment; track detached boot descendants; close boot-wedge gate review gaps; route pipeline reads through owner; harden boot wedge measurements; route telemetry identity through owner; route extraction retirement to owner; route startup DB work to owner.
 - Refactoring: route wave 2 reads and telemetry through owner.
 
-### 2026-08-29
-- Bug fixes: distinguish async DB execution homes; classify database execution homes; bound scheduled Dreaming backlog probes; extend native owner smoke startup budget; refresh event-loop source baseline; correct DB accessor audit site tokens; route scheduled Dreaming scans to owner.
-
-### 2026-08-28
-- Bug fixes: escape dreaming smoke template interpolation (build break); embed GraphIQ installer in native runtime + npm files; route predictive context DB scans through owner; restore scoped focal query fallback; owner-route W5 contention paths; owner-route structural feature reads; owner-route traversal candidate hydration.
-
-### 2026-08-27
-- Bug fixes: correct owner-worker site tokens to actual call lines; report fallback scan completeness; refresh event-loop audit ledger; refresh async DB site attribution; harden sqlite-vec fallback contract; preserve semantic recall without sqlite-vec; refresh owner site token baseline; keep owner IPC protocol pure; update event loop ledger for owner backfill; refresh db accessor site tokens; route vector backfill through db owner; repair dreaming accessor site tokens; preserve reviewed evidence scope; close reviewed evidence loops; gate ACPX same-agent re-admission; reap ACPX workers before re-admission; handle SDK v0.3.x vault and field shapes; invalidate agent-scope cache on DB accessor close; clear lease tokens in owner recovery; fence prospective hint job leases; bound hints worker stop tick; bound hints worker shutdown drain; drain pending hints writes on stop; recover failed hints leases; classify hints write errors; retry hints writes after admission failure.
-- Refactoring: async agent-id + dreaming-worker DB admission with scope caching; migrate prospective-index hints writes to async admission.
-- Docs: clarify fallback completeness.
-
 ## Release Ledger
+
+## [0.216.7] - 2026-09-05
+
+Release summary: 2 bug fixes.
+Tag range: `v0.216.6..v0.216.7`.
+
+### Bug Fixes
+
+- consolidate current memory eligibility
+- exclude superseded memories from delivered context
+
+## [0.216.6] - 2026-09-05
+
+Release summary: 1 bug fix and 1 refactor.
+Tag range: `v0.216.5..v0.216.6`.
+
+### Bug Fixes
+
+- **daemon**: reject invalid runtime config
+
+### Refactoring
+
+- **daemon**: unify runtime config parsing
+
+## [0.216.5] - 2026-09-05
+
+Release summary: 1 bug fix.
+Tag range: `v0.216.4..v0.216.5`.
+
+### Bug Fixes
+
+- **daemon**: recover projection token budget
+
+## [0.216.4] - 2026-09-04
+
+Release summary: 2 bug fixes, 1 refactor, and 1 docs update.
+Tag range: `v0.216.3..v0.216.4`.
+
+### Bug Fixes
+
+- **dreaming**: stop retaining backlog text
+- **dreaming**: make backlog probes threshold-aware
+
+### Refactoring
+
+- **dreaming**: simplify backlog probes
+
+### Docs
+
+- **readme**: add missing contributors (#1846)
+
+## [0.216.3] - 2026-09-03
+
+Release summary: 1 bug fix.
+Tag range: `v0.216.2..v0.216.3`.
+
+### Bug Fixes
+
+- **ci**: repair native health fixture
+
+## [0.216.2] - 2026-09-03
+
+Release summary: 3 bug fixes.
+Tag range: `v0.216.1..v0.216.2`.
+
+### Bug Fixes
+
+- **daemon**: avoid embedding conflict starvation
+- **daemon**: enforce scoped embedding repair
+- **daemon**: scope legacy embedding repairs
 
 ## [0.216.1] - 2026-09-02
 

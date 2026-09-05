@@ -423,89 +423,6 @@ export function runDbOwnerWorker(): void {
 		}
 	}
 
-	function executeTranscriptImportControl(
-		request: Extract<DbOwnerJob["request"], { readonly kind: "transcript_import_control" }>,
-		context: JobExecutionContext,
-	): unknown {
-		db.exec("BEGIN IMMEDIATE");
-		try {
-			const input = request.input;
-			let result: SqliteRunResult;
-			if (input.apply === true) {
-				result = db
-					.prepare(
-						"UPDATE source_import_jobs SET state = CASE WHEN control_request = 'pause' THEN 'paused' WHEN control_request = 'cancel' THEN 'cancelled' ELSE state END, generation = generation + CASE WHEN control_request IN ('pause','cancel') THEN 1 ELSE 0 END, lease_token = NULL, lease_expires_at = NULL, control_request = NULL, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND control_request IN ('pause','cancel')",
-					)
-					.run(input.jobId, input.agentId, input.generation ?? -1, input.leaseToken ?? "");
-				db.prepare(
-					"UPDATE source_import_records SET status = 'cancelled', rejection_code = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
-				).run(input.jobId, input.agentId, input.jobId, input.agentId);
-				db.prepare(
-					"UPDATE source_import_files SET state = 'failed', error = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND state IN ('ready','inventorying') AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
-				).run(input.jobId, input.agentId, input.jobId, input.agentId);
-			} else if (input.control === "pause") {
-				result = db
-					.prepare(
-						"UPDATE source_import_jobs SET state = CASE WHEN state = 'queued' THEN 'paused' ELSE state END, control_request = CASE WHEN state IN ('running','inventorying') THEN 'pause' ELSE NULL END, generation = CASE WHEN state = 'queued' THEN generation + 1 ELSE generation END, lease_token = CASE WHEN state = 'queued' THEN NULL ELSE lease_token END, lease_expires_at = CASE WHEN state = 'queued' THEN NULL ELSE lease_expires_at END, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state IN ('queued','running','inventorying')",
-					)
-					.run(input.jobId, input.agentId);
-			} else if (input.control === "resume") {
-				result = db
-					.prepare(
-						"UPDATE source_import_jobs SET state = 'queued', control_request = NULL, error = NULL, next_attempt_at = NULL, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state = 'paused' AND EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ?) AND NOT EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ? AND state IN ('staging','failed'))",
-					)
-					.run(input.jobId, input.agentId, input.jobId, input.agentId, input.jobId, input.agentId);
-			} else if (input.control === "retry") {
-				result = db
-					.prepare(
-						"UPDATE source_import_jobs SET state = 'queued', control_request = NULL, generation = generation + 1, lease_token = NULL, lease_expires_at = NULL, error = NULL, next_attempt_at = NULL, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state IN ('failed','completed','completed_with_rejections','paused','queued','running','inventorying') AND EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ?) AND NOT EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ? AND state IN ('staging','failed'))",
-					)
-					.run(input.jobId, input.agentId, input.jobId, input.agentId, input.jobId, input.agentId);
-				db.prepare(
-					"UPDATE source_import_records SET status = 'pending', rejection_code = NULL, updated_at = datetime('now') WHERE changes() > 0 AND job_id = ? AND agent_id = ? AND status = 'rejected' AND rejection_code NOT IN ('schema_invalid','malformed')",
-				).run(input.jobId, input.agentId);
-			} else {
-				result = db
-					.prepare(
-						"UPDATE source_import_jobs SET state = CASE WHEN state IN ('running','inventorying') THEN state ELSE 'cancelled' END, control_request = CASE WHEN state IN ('running','inventorying') THEN 'cancel' ELSE NULL END, generation = generation + CASE WHEN state IN ('running','inventorying') THEN 0 ELSE 1 END, lease_token = CASE WHEN state IN ('running','inventorying') THEN lease_token ELSE NULL END, lease_expires_at = CASE WHEN state IN ('running','inventorying') THEN lease_expires_at ELSE NULL END, updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled')",
-					)
-					.run(input.jobId, input.agentId);
-				db.prepare(
-					"UPDATE source_import_records SET status = 'cancelled', rejection_code = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
-				).run(input.jobId, input.agentId, input.jobId, input.agentId);
-				db.prepare(
-					"UPDATE source_import_files SET state = 'failed', error = 'cancelled_by_user', updated_at = datetime('now') WHERE job_id = ? AND agent_id = ? AND state IN ('ready','inventorying') AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'cancelled')",
-				).run(input.jobId, input.agentId, input.jobId, input.agentId);
-			}
-			commit(context);
-			return { changed: result.changes > 0 };
-		} catch (error) {
-			try {
-				db.exec("ROLLBACK");
-			} catch {
-				/* preserve original error */
-			}
-			throw error;
-		}
-	}
-
-	function executeTranscriptImportReconcile(
-		request: Extract<DbOwnerJob["request"], { readonly kind: "transcript_import_reconcile" }>,
-	): unknown {
-		const row = db
-			.prepare(
-				"SELECT COUNT(*) AS total, SUM(status = 'imported') AS imported, SUM(status = 'duplicate') AS duplicate, SUM(status = 'rejected') AS rejected, SUM(status IN ('pending','cancelled')) AS pending FROM source_import_records WHERE job_id = ? AND agent_id = ?",
-			)
-			.get(request.input.jobId, request.input.agentId) as Record<string, number>;
-		return {
-			total: row.total ?? 0,
-			imported: row.imported ?? 0,
-			duplicate: row.duplicate ?? 0,
-			rejected: row.rejected ?? 0,
-			pending: row.pending ?? 0,
-		};
-	}
-
 	function executeSourceSnapshotImport(
 		job: Extract<DbOwnerJob["request"], { readonly kind: "source_snapshot_import" }>,
 		context?: JobExecutionContext,
@@ -596,10 +513,30 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog" }>,
 	): Promise<number> {
 		// Keep source selection, evidence rendering, and exact token counting out
-		// of the daemon process. The helper enforces the finite source cap before
-		// it materializes any result for the parent.
+		// of the daemon process. The exact operation has no finite source cap.
 		const { getDreamingEpisodicTokenBacklogInDb } = await import("./pipeline/dreaming");
-		return await getDreamingEpisodicTokenBacklogInDb(db as never, request.input.agentId, request.input.maxSources);
+		return await getDreamingEpisodicTokenBacklogInDb(db as never, request.input.agentId);
+	}
+
+	async function executeDreamingEpisodicBacklogProbe(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog_probe" }>,
+	): Promise<unknown> {
+		// The scheduled gate stays bounded and returns structured completeness
+		// instead of turning an incomplete source page into a token count.
+		const { probeDreamingEpisodicBacklogInDb } = await import("./pipeline/dreaming");
+		return await probeDreamingEpisodicBacklogInDb(
+			db as never,
+			request.input.agentId,
+			request.input.tokenThreshold,
+			request.input.maxSources,
+		);
+	}
+
+	async function executeDreamingEpisodicBacklogExists(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog_exists" }>,
+	): Promise<boolean> {
+		const { hasDreamingEpisodicBacklogInDb } = await import("./pipeline/dreaming");
+		return hasDreamingEpisodicBacklogInDb(db as never, request.input.agentId);
 	}
 
 	async function executeDreamingEvidenceSearch(
@@ -1123,31 +1060,14 @@ export function runDbOwnerWorker(): void {
 			return executeBatch(job.request.statements, job.request.requireChanges === true, context);
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request, context);
 		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
-		if (job.request.kind === "transcript_import_control") return executeTranscriptImportControl(job.request, context);
-		if (job.request.kind === "transcript_import_reconcile") return executeTranscriptImportReconcile(job.request);
-		if (job.request.kind === "transcript_import_purge") {
-			db.exec("BEGIN IMMEDIATE");
-			try {
-				const purged = purgeTranscriptImportSourceInTx(
-					db as never,
-					job.request.input.agentId,
-					job.request.input.sourceId,
-				);
-				commit(context);
-				return { purged };
-			} catch (error) {
-				try {
-					db.exec("ROLLBACK");
-				} catch {
-					/* preserve original error */
-				}
-				throw error;
-			}
-		}
 		if (job.request.kind === "dreaming_hygiene_attention") return executeDreamingHygieneAttention(job.request, context);
 		if (job.request.kind === "dreaming_surprisal_attention")
 			return executeDreamingSurprisalAttention(job.request, context);
 		if (job.request.kind === "dreaming_episodic_backlog") return await executeDreamingEpisodicBacklog(job.request);
+		if (job.request.kind === "dreaming_episodic_backlog_probe")
+			return await executeDreamingEpisodicBacklogProbe(job.request);
+		if (job.request.kind === "dreaming_episodic_backlog_exists")
+			return await executeDreamingEpisodicBacklogExists(job.request);
 		if (job.request.kind === "dreaming_evidence_search") return await executeDreamingEvidenceSearch(job.request);
 		if (job.request.kind === "dreaming_evidence_source") return await executeDreamingEvidenceSource(job.request);
 		if (job.request.kind === "dreaming_pass_finalize") return executeDreamingPassFinalize(job.request, context);

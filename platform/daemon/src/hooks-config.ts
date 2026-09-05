@@ -1,6 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
+import { readRuntimeConfig } from "./memory-config";
 import { logger } from "./logger";
 
 export const DEFAULT_SESSION_START_MAX_INJECT_TOKENS = 12_000;
@@ -285,14 +283,9 @@ function mergeConfig<T extends object>(base: T | undefined, override: T | undefi
 }
 
 export function loadHooksConfig(agentsDir: string): HooksConfig {
-	const configPath = join(agentsDir, "agent.yaml");
-	if (!existsSync(configPath)) {
-		return getDefaultHooksConfig();
-	}
+	const parsed = readRuntimeConfig(agentsDir).yaml;
 
 	try {
-		const content = readFileSync(configPath, "utf-8");
-		const parsed = parseSimpleYaml(content);
 		const hooks = parsed.hooks;
 		if (!hooks || typeof hooks !== "object") {
 			return getDefaultHooksConfig();

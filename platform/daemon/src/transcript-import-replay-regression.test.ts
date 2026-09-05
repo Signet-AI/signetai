@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { initDbAccessor, closeDbAccessor, getDbAccessor } from "./db-accessor";
-import { createJob, createOwnerTranscriptImportStore } from "./transcript-import-store";
+import { createJob } from "./transcript-import-store";
 
 test("replay keeps one configured source identity while allowing a second file slot", async () => {
 	const root = await mkdtemp(join(tmpdir(), "signet-import-replay-schema-"));
@@ -13,9 +13,8 @@ test("replay keeps one configured source identity while allowing a second file s
 		await mkdir(join(root, "memory"), { recursive: true });
 		closeDbAccessor();
 		initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
-		const store = createOwnerTranscriptImportStore();
-		await createJob(store, { jobId: "job-a", agentId: "agent-a" });
-		await createJob(store, { jobId: "job-b", agentId: "agent-a" });
+		await createJob({ jobId: "job-a", agentId: "agent-a" });
+		await createJob({ jobId: "job-b", agentId: "agent-a" });
 		await getDbAccessor().withWriteTxAsync((db) => {
 			for (const job of ["job-a", "job-b"])
 				db.prepare("UPDATE source_import_jobs SET state = 'queued' WHERE id = ?").run(job);

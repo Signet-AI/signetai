@@ -166,7 +166,7 @@ test("owner store persists inventory and terminal counters in the migrated datab
 	const source = "owner-source";
 	try {
 		const store = createOwnerTranscriptImportStore();
-		await createJob(store, { jobId, agentId });
+		await createJob({ jobId, agentId });
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare("UPDATE source_import_jobs SET state = 'queued' WHERE id = ? AND agent_id = ?").run(jobId, agentId);
 		});
@@ -217,7 +217,7 @@ test("migrated DB crash recovery finalizes pending records after filesystem writ
 	const agentId = "crash-agent";
 	const raw = valid("crash");
 	try {
-		await createJob(store, { jobId, agentId });
+		await createJob({ jobId, agentId });
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare(
 				"UPDATE source_import_jobs SET state = 'running', total = 1, pending = 0, lease_token = 'stale', lease_expires_at = datetime('now','+5 minutes') WHERE id = ?",
@@ -561,7 +561,7 @@ test("active pause and cancel controls clear the lease at the checkpoint", async
 			["pause-job", "pause", "paused"],
 			["cancel-job", "cancel", "cancelled"],
 		] as const) {
-			await createJob(store, { jobId, agentId: "agent-a" });
+			await createJob({ jobId, agentId: "agent-a" });
 			await getDbAccessor().withWriteTxAsync((db) =>
 				db
 					.prepare(
@@ -614,7 +614,7 @@ test("stale finalize cannot complete a job after its lease generation changes", 
 	initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
 	const store = createOwnerTranscriptImportStore();
 	try {
-		await createJob(store, { jobId: "stale-job", agentId: "agent-a" });
+		await createJob({ jobId: "stale-job", agentId: "agent-a" });
 		await getDbAccessor().withWriteTxAsync((db) =>
 			db
 				.prepare(
@@ -652,7 +652,7 @@ test("store refuses to finalize while pending records remain", async () => {
 	initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
 	const store = createOwnerTranscriptImportStore();
 	try {
-		await createJob(store, { jobId: "pending-finalize-job", agentId: "agent-a" });
+		await createJob({ jobId: "pending-finalize-job", agentId: "agent-a" });
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare(
 				"UPDATE source_import_jobs SET state = 'running', pending = 1, lease_token = 'lease-a' WHERE id = 'pending-finalize-job'",
@@ -695,7 +695,7 @@ test("source purge audit attempts retain source identity after import ledgers ar
 	initDbAccessor(dbPath, { agentsDir: root });
 	const store = createOwnerTranscriptImportStore();
 	try {
-		await createJob(store, { jobId: "audit-job", agentId: "audit-agent" });
+		await createJob({ jobId: "audit-job", agentId: "audit-agent" });
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare(
 				"INSERT INTO source_import_files (id,job_id,source_id,agent_id,ordinal,name,managed_path,state) VALUES ('audit-file','audit-job','audit-source','audit-agent',0,'source.jsonl','imports/transcripts/audit-source/source.jsonl','completed')",

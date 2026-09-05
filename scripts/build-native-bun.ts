@@ -422,10 +422,12 @@ if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PR
 	const { DreamingBacklogTokenCache } = await import("../platform/daemon/src/pipeline/dreaming-token-cache");
 	const cache = new DreamingBacklogTokenCache();
 	try {
-		const first = await cache.refresh("native-smoke", [{ key: "large", text: "x".repeat(5_000) }]);
-		const second = await cache.refresh("native-smoke", [
-			{ key: "large", text: "x".repeat(5_000) },
-			{ key: "later", text: "ok" },
+		const first = await cache.replaceExactSnapshot("native-smoke", [
+			{ key: "large", revision: "large-v1", text: "x".repeat(5_000) },
+		]);
+		const second = await cache.replaceExactSnapshot("native-smoke", [
+			{ key: "large", revision: "large-v1", text: "x".repeat(5_000) },
+			{ key: "later", revision: "later-v1", text: "ok" },
 		]);
 		process.stdout.write(JSON.stringify({ type: "dreaming-token-count", first, second }) + "\\n");
 	} finally {

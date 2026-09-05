@@ -12,7 +12,6 @@ import {
 } from "./transcript-import-commit";
 import { inventoryTranscriptFile, type InventoryRecord } from "./transcript-import-inventory";
 import type { ImportJobState, ImportStore, ImportStoreOperation } from "./transcript-import-store";
-import { controlImport, reconcileImport } from "./transcript-import-store";
 import { withTranscriptImportOperationLock } from "./transcript-import-operation-lock";
 import {
 	createContainedTranscriptDirectory,
@@ -788,10 +787,3 @@ export async function purgeTranscriptImportFilesystem(
 		}
 	});
 }
-export function importWorkerBatchSize(): number {
-	return TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch;
-}
-export function newImportLeaseToken(): string {
-	return randomUUID();
-}
-export { controlImport, reconcileImport };

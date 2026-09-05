@@ -22,12 +22,15 @@ import {
 	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
 	enqueueDreamingSurprisalAttention,
-	getDreamingEpisodicTokenBacklog,
+	evaluateDreamingTrigger,
+	hasDreamingEpisodicBacklog,
 	isDreamingHaltActive,
+	probeDreamingEpisodicBacklog,
 	recordDreamingFailure,
 	runDreamingAgentPass,
 	selectDreamingPassMode,
-	shouldTriggerDreaming,
+	type DreamingEpisodicBacklogProbe,
+	type DreamingTriggerDecision,
 } from "./dreaming";
 import { DREAMING_CONTENT_ATTENTION_KINDS, hasDreamingAttentionKindInDb } from "./dreaming-attention";
 import { type DreamingEvidenceRetryPolicy, autoRequeueRepairedDreamingEvidence } from "./dreaming-evidence-retry";
@@ -76,6 +79,34 @@ export interface DreamingSchedulerStatus {
 	readonly checkedAt: string | null;
 }
 
+function scheduledTriggerLogData(
+	scopeId: string,
+	decision: Extract<DreamingTriggerDecision, { readonly trigger: true }>,
+	probe: DreamingEpisodicBacklogProbe,
+	threshold: number,
+): Record<string, unknown> {
+	const common = {
+		scopeId,
+		reason: decision.reason,
+		threshold,
+		hasBacklog: probe.hasBacklog,
+		countComplete: probe.kind === "exact",
+		sourcesScanned: probe.sourcesScanned,
+	};
+	return probe.kind === "exact"
+		? { ...common, episodicTokens: probe.tokens }
+		: { ...common, tokenLowerBound: probe.tokenLowerBound };
+}
+
+export function _testDreamingTriggerLogData(
+	scopeId: string,
+	decision: Extract<DreamingTriggerDecision, { readonly trigger: true }>,
+	probe: DreamingEpisodicBacklogProbe,
+	threshold: number,
+): Record<string, unknown> {
+	return scheduledTriggerLogData(scopeId, decision, probe, threshold);
+}
+
 export interface DreamingWorkerOptions {
 	/** Test seam; production always uses the configured inference router. */
 	readonly executorFactory?: (agentId: string) => DreamingAgentExecutor;
@@ -102,7 +133,7 @@ export async function shouldDeferDreamingSweep(
 ): Promise<boolean> {
 	if (ownerMaintenance) return !(await ownerMaintenance.queueIsHealthy());
 	return await accessor.withReadDbAsync((db) => getQueueHealth(db).status !== "healthy", {
-		siteToken: "pipeline/dreaming-worker.ts:104",
+		siteToken: "pipeline/dreaming-worker.ts:135",
 		operation: "dreaming.worker.queue-health",
 	});
 }
@@ -155,7 +186,7 @@ export async function getDreamingWorkerAgentIds(
 					// content (#1094).
 					return db.prepare(sql).all() as Array<{ id: string | null }>;
 				},
-				{ siteToken: "pipeline/dreaming-worker.ts:148", operation: "dreaming.worker.agent-scopes" },
+				{ siteToken: "pipeline/dreaming-worker.ts:179", operation: "dreaming.worker.agent-scopes" },
 			);
 	const ids = new Set<string>([defaultAgentId]);
 	for (const row of rows) {
@@ -225,7 +256,7 @@ export async function selectDreamingCheckMode(
 							[scope, "hygiene"],
 						).then((row) => row != null)
 					: accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"]), {
-							siteToken: "pipeline/dreaming-worker.ts:227",
+							siteToken: "pipeline/dreaming-worker.ts:258",
 							operation: "dreaming.worker.hygiene-attention",
 						}),
 			),
@@ -247,7 +278,7 @@ export async function selectDreamingCheckMode(
 					: accessor.withReadDbAsync(
 							(db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
 							{
-								siteToken: "pipeline/dreaming-worker.ts:247",
+								siteToken: "pipeline/dreaming-worker.ts:278",
 								operation: "dreaming.worker.content-attention",
 							},
 						),
@@ -255,9 +286,9 @@ export async function selectDreamingCheckMode(
 		)
 	).some(Boolean);
 	const backlogs = await Promise.all(
-		scopes.map((scope) => getDreamingEpisodicTokenBacklog(accessor, scope, ownerMaintenance)),
+		scopes.map((scope) => hasDreamingEpisodicBacklog(accessor, scope, ownerMaintenance)),
 	);
-	const hasBacklog = backlogs.some((backlog) => backlog > 0);
+	const hasBacklog = backlogs.some(Boolean);
 	return selectDreamingPassMode(lastScheduled, hasPendingHygieneAttention, hasBacklog, hasPendingContentAttention);
 }
 
@@ -417,14 +448,20 @@ export function startDreamingWorker(
 			try {
 				await enqueueDreamingHygieneAttention(accessor, scopeId, undefined, caps, options.ownerMaintenance);
 				await enqueueDreamingSurprisalAttention(accessor, scopeId, cfg, options.ownerMaintenance);
-				const episodicTokens = await getDreamingEpisodicTokenBacklog(accessor, scopeId, options.ownerMaintenance);
-				if (!(await shouldTriggerDreaming(accessor, cfg, scopeId, Date.now(), episodicTokens))) continue;
-				triggered = true;
-				logger.info("dreaming-worker", "Episodic evidence threshold reached, starting dreaming pass", {
+				const probe = await probeDreamingEpisodicBacklog(
+					accessor,
 					scopeId,
-					episodicTokens,
-					threshold: cfg.tokenThreshold,
-				});
+					cfg.tokenThreshold,
+					options.ownerMaintenance,
+				);
+				const decision = await evaluateDreamingTrigger(accessor, cfg, scopeId, probe, Date.now());
+				if (!decision.trigger) continue;
+				triggered = true;
+				logger.info(
+					"dreaming-worker",
+					"Starting scheduled dreaming pass",
+					scheduledTriggerLogData(scopeId, decision, probe, cfg.tokenThreshold),
+				);
 				break;
 			} catch (e) {
 				if (e instanceof AlreadyRunningError) return;

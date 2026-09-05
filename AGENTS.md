@@ -1,68 +1,201 @@
----
-Repo: "github.com/Signet-AI/signetai"
-Canonical guide: "AGENTS.md (`CLAUDE.md` is a symlink)"
----
-
 # Working in Signet
 
-Signet is a local-first memory and context layer for AI agents. This file is the repo-wide routing guide plus the few gotchas that are costly to rediscover. Load deeper instructions only when the task reaches that area. Follow the nearest scoped `AGENTS.md`, relevant source, and tests; let the user request and surrounding code determine ordinary implementation choices.
+Signet is a local-first memory and context layer for AI agents.
 
-## Start with the checkout
+This file is the only repository-wide policy written for coding agents. It is not a repository map, runbook, changelog, migration ledger, or substitute for the owning code and public contracts.
 
-- Inspect `git status`, the files involved, their callers, and adjacent tests before deciding what should change.
-- Treat current code and executable tests as the source of truth for shipped behavior. Plans, issues, mockups, and specs are useful references, but label planned behavior rather than presenting it as current.
-- Preserve unrelated work. Do not reset, overwrite, rename, or delete changes you did not create unless the user explicitly asks.
-- Never expose secrets in chat, logs, fixtures, generated files, or source.
-- If dependencies are missing, run `bun install` and retry once before reporting the first actionable failure.
+A rule belongs here only when all of the following are true:
 
-## Find the right context
+- it applies across the repository;
+- violating it can materially damage correctness, authority, security, data, compatibility, or the honesty of completion;
+- it is costly or unsafe to rediscover from the owning source;
+- it is expected to survive ordinary file, package, class, and transport changes;
+- two reviewers can determine whether a change obeys it.
 
-| Area | Path | Read when relevant |
-|---|---|---|
-| Core data, DB, search | `platform/core` | `platform/core/AGENTS.md`, `web/docs/src/content/docs/architecture.md`, `web/docs/src/content/docs/sources.md` |
-| Daemon, API, pipeline | `platform/daemon` | `platform/daemon/AGENTS.md`, `web/docs/src/content/docs/api.md`, `web/docs/src/content/docs/auth.md`, `web/docs/src/content/docs/pipeline.md` |
-| Harness integrations | `integrations` | `integrations/AGENTS.md`, `web/docs/src/content/docs/hooks.md`, matching repo under `references/` |
-| CLI and apps | `surfaces` | `surfaces/AGENTS.md`; area source and tests; `web/docs/src/content/docs/dashboard.md` for dashboard work |
-| Reusable packages | `libs`, `plugins`, `dist/signetai` | area `AGENTS.md`, package manifest, and consumers |
-| Benchmarks | `memorybench` | `memorybench/AGENTS.md` and its focused READMEs |
-| Marketing and docs site | `web` | `web/AGENTS.md`; for documentation-site work also read `web/docs/AGENTS.md`, local package scripts, and content source |
-| Repo structure and risk | repository root | `repo.map.yaml`, root `package.json` |
+Otherwise, keep the truth in its owning code, schema, manifest, generated-file header, public documentation, test, or `CONTRIBUTING.md`.
 
-Do not mirror package lists, build chains, routes, or schemas into guidance when the owning manifest, source, or reference document can answer the question directly.
+## Authority and evidence
 
-## Durable data contracts
+Determine intended behavior from, in order:
 
-- User-data operations are agent-scoped. Preserve the agent identity across API (`agentId`), database (`agent_id`), headers, jobs, and derived rows; do not substitute `"default"` when a real identity is known. Carry `visibility` wherever the model supports it.
-- Reject or explicitly authorize cross-agent reads, links, proposal applies, claim updates, and token scopes. Authentication and source-access failures should fail closed.
-- Source artifacts and transcripts are evidence. Derived memories, claims, and relationships may change without rewriting their source evidence. Source-backed rows retain attribution and remain purgeable by source.
-- Workspace resolution is `SIGNET_PATH` → `SIGNET_WORKSPACE` → `$HOME/.agents/`. Internal state belongs in the workspace SQLite database. JSON, JSONL, and text sidecars are for named user-facing artifacts such as import/export, attachments, logs, or backups—not default app state.
-- Runtime reads canonical configuration only. A compatibility migration may rewrite old config into the canonical form, but do not add parallel readers or silent fallback executors.
+1. the explicit current task or accepted product decision;
+2. the repository invariants and active architecture contracts in this file;
+3. a documented public contract or explicitly designated authoritative source;
+4. a deliberate compatibility commitment;
+5. the owning implementation, tests, incidents, issues, plans, and comments as evidence of current behavior and prior intent.
 
-## Verification
+An explicit task may replace a repository invariant or active architecture contract only through **Changing this contract** below.
 
-- Match proof to the risk and the user-visible boundary. A bug fix includes the smallest regression test that would have caught it (see Tests and evals below).
-- Static checks are not runtime proof. Exercise the installed daemon, CLI, desktop shell, integration, browser extension, or generated package when the failure depends on that surface.
-- For dependency-backed behavior, inspect the dependency's current source, types, or official documentation. Test a live external API when the claim depends on its current behavior. If required proof is unavailable, state exactly what is missing instead of guessing.
-- Use focused checks first. Root scripts are defined in `package.json`; common entry points are `bun test`, `bun run lint`, `bun run typecheck`, and `bun run build`.
+Existing behavior does not become intended behavior merely because code and tests agree. A reproduction proves what the program does; it does not by itself prove what the program should do.
 
-## Tests and evals
+When authoritative sources disagree, keep the disagreement visible. Do not silently select one interpretation in code, rewrite a test around it, or present the resulting behavior as settled product intent.
 
-- Do not write tests alongside new features: tests prove that code does what it does, not that what it does is good. Prove new behavior with evals, not tests.
-- New user-facing capabilities ship with a runnable eval: fixed inputs, measurable criteria, and a reproducible score or pass/fail a reviewer can run. An eval that only prints output is a demo, not an eval.
-- Regression tests are for bug fixes only. Every bug fix includes the smallest test that would have caught the bug, and the test names the bug.
-- An invariant test may accompany a feature only when it pins a named contract (agent isolation, evidence immutability, provenance, audit). The test must name the invariant and the failure it prevents. If you cannot name the bug or the invariant, do not write the test.
-- Removed features do not get tests. Retirement is enforced at runtime with loud, actionable errors (retired config keys, removed routes), not by a suite asserting the feature is still gone.
+## Changing this contract
 
-## Documentation parity
+This file constrains ordinary implementation work; it is not an excuse to preserve an architecture that the task explicitly replaces.
 
-- Update behavior, API, schema, and user-facing documentation together when the change affects them. Public documentation lives under `web/docs/src/content/docs/`; keep its API reference aligned with daemon routes.
-- Public copies of root `CONTRIBUTING.md` and `ROADMAP.md` are generated into `web/docs/src/content/docs/`. Edit the root source, then run `bun scripts/sync-root-docs.ts`; do not hand-edit the generated copies.
-- Use `bun scripts/doc-drift.ts` when architecture or migration documentation may have drifted.
+A change may amend a repository invariant or active architecture contract only when it does all of the following in the same coherent change:
 
-## Code and Git
+- names the contract being replaced;
+- defines the replacement authority and execution path;
+- migrates affected callers and durable state where necessary;
+- removes or closes the superseded path;
+- updates this file;
+- proves the replacement across its real runtime boundary.
 
-- Match surrounding code: TypeScript is strict, external boundaries use the existing validation patterns, and public APIs should stay narrow.
-- Use **Signet** for the product and prose; use `signet` for CLI, package, path, and configuration names. Write American English.
-- Branch from `main` as `<username>/<feature>`. Use `type(scope): subject`; reserve `feat:` for user-facing features. Keep one PR to one topic, rebase before landing, and do not create merge commits on `main`.
-- For GitHub issue, PR, and review bodies, pass real multiline text (for example, `-F - <<'EOF'`); do not embed escaped `\n` sequences.
-- See `CONTRIBUTING.md` for fuller contribution and style guidance.
+Do not preserve the old contract in prose while bypassing it in code. Do not treat an incidental implementation change as an architectural amendment.
+
+## Repository invariants
+
+### Evidence remains attributable
+
+Source artifacts, transcripts, and explicit user-authored state are evidence.
+
+Signet may index, summarize, rank, relate, and interpret that evidence. Derived memories, claims, relationships, embeddings, and projections must not silently replace their sources, erase their origin, or become the only surviving copy of user-owned truth.
+
+Any derived state that can influence recall, reasoning, or action must remain attributable, inspectable, correctable, and purgeable through its source lifecycle.
+
+### Identity and scope remain explicit
+
+Every read, write, derivation, deletion, import, export, token operation, and background job runs under a resolved identity and scope.
+
+Identity and scope must survive every layer of the operation. Missing, ambiguous, expired, or unauthorized identity fails closed; it must not silently become `"default"` or broaden to another agent, session, source, or visibility scope.
+
+Cross-agent reads, writes, links, mutations, and token use require explicit authorization.
+
+### Every transition has one authority
+
+Every durable state transition has one canonical authority and one canonical implementation path.
+
+Multiple interfaces may request the transition. They may authenticate, validate, normalize, transport, observe, cache, or project it. They may not independently implement or reinterpret it.
+
+Compatibility code may translate an old input into the canonical operation. It must not preserve a second reader, writer, executor, state owner, or semantic interpretation.
+
+A change is not complete while the displaced path can still execute. Moving, wrapping, renaming, or redistributing code is not simplification unless it reduces authorities, executable paths, mutable owners, or required knowledge.
+
+### Authoritative and derived state remain distinguishable
+
+Indexes, caches, embeddings, graphs, summaries, rankings, materialized views, and generated projections are derived state.
+
+Derived state must be rebuildable from authoritative state. When a change depends on rebuildability, prove it through the relevant rebuild, deletion, export, purge, or recovery path.
+
+If a representation contains information that cannot be rebuilt, it is authoritative state and must have an explicit owner and lifecycle. Performance infrastructure must not become the source of truth by accident.
+
+### Work is bounded and completion is honest
+
+Every background or scale-dependent operation has an identifiable owner, an admission rule, a bounded unit of work, a termination condition or deadline, cancellation behavior, cleanup obligations, and an observable outcome.
+
+Work whose cost grows with the workspace, source corpus, database, or graph must not monopolize the request-serving runtime.
+
+Asynchrony is an execution property, not a function name. Returning a Promise around synchronous work does not move the work across an execution boundary.
+
+Signet must not report success while required work remains detached, resources remain owned, durable state is indeterminate, or cleanup has not reached its declared boundary.
+
+Partial, stale, blocked, degraded, cancelled, and failed states must be represented honestly. Retries are bounded. A fallback may be used only when it preserves the declared contract or makes the resulting degradation explicit; it must not silently change identity, authority, durability, or semantics merely to produce a successful-looking response.
+
+## Active architecture contracts
+
+These are deliberate architectural constraints, not descriptions of incidental file layout. Replacing one requires an explicit amendment under the rule above.
+
+- The daemon owns Signet's core application behavior and durable transitions. The CLI, dashboard, desktop application, SDK packages, and harness integrations are clients or adapters; they do not implement independent versions of core transitions.
+- Exactly one owner process has direct access to a workspace database. Request-serving processes do not open it, receive database handles, execute SQL against it, or import the synchronous database implementation.
+- Database operations cross one bounded asynchronous owner protocol. If the owner becomes unavailable, pending work fails explicitly. No local, legacy, emergency, or compatibility fallback executes the operation elsewhere.
+- Evidence is durably recorded before semantic interpretation derived from that evidence is committed.
+- Dreaming is the sole automatic writer of semantic truth. Ingestion, retention, indexing, embeddings, projections, source synchronization, and maintenance may preserve, transport, or derive supporting state; they do not independently create or rewrite semantic claims.
+- Configuration and workspace selection are normalized once at their owning boundary. Runtime consumers receive canonical values; they do not interpret legacy forms, reproduce environment precedence, or add fallback readers.
+- Compatibility may translate supported legacy input into a canonical operation. Unsupported and retired inputs fail explicitly and must never reactivate retired executors.
+- Authoritative and derived state remain distinguishable through rebuild, deletion, export, source purge, and failure recovery.
+
+## Loading local context
+
+Begin at the affected user-visible surface and follow the actual execution path to its state owner. Read the nearest nested `AGENTS.md` only after the task enters that subtree.
+
+A nested `AGENTS.md` is a local index, not another policy layer. It may identify:
+
+- entry points and actual owners;
+- generated files and their source;
+- focused commands;
+- local external dependencies;
+- non-obvious lifecycle or integration hazards.
+
+It may not define repository-wide architecture, product behavior, compatibility policy, testing philosophy, or sources of truth. It may not restate this file.
+
+Existing nested guidance may not yet follow this rule. Use concrete local facts, but ignore duplicated or conflicting repository-wide policy.
+
+For local mechanical facts, executable source, manifests, schemas, and generated-file headers outrank stale prose. For intended product behavior, existing implementation remains evidence rather than automatic authority.
+
+Do not recursively preload unrelated nested instructions. For repository structure, consult current manifests, imports, exports, and `repo.map.yaml` rather than a directory inventory copied into prose.
+
+## Working method
+
+### Before changing code
+
+- Inspect the checkout and preserve unrelated work.
+- Trace the affected operation through its real path:
+
+  ```text
+  entry point
+  → identity and authorization
+  → orchestration
+  → state owner
+  → durable transition
+  → derived work
+  → observable result
+  → cancellation and cleanup
+  ```
+
+- Identify duplicate implementations, fallbacks, compatibility routes, and retired paths that can perform the same operation.
+- Reproduce the reported behavior when a practical reproduction exists.
+- Establish expected behavior from an authoritative basis before changing implementation or tests.
+- When behavior depends on an external package, harness, protocol, or API, verify its current source, types, generated artifact, or official contract rather than relying on memory.
+
+### While changing code
+
+Make the smallest coherent change, not merely the smallest diff.
+
+Delete code directly displaced by the change. Do not add another wrapper, service, adapter, cache, retry loop, or fallback to compensate for an unclear owner.
+
+File size alone is not an architectural defect. An extraction is justified only when it reduces caller knowledge, gives mutable state a clearer owner, removes duplicated behavior, isolates a real independently testable boundary, reduces the files required to trace the operation, or allows an old path to be deleted.
+
+Validate and bound untrusted input at the external boundary. Authentication, authorization, source access, mutation gates, publishing, and installation integrity fail closed.
+
+Do not expose secrets in source, logs, tests, fixtures, generated files, screenshots, or reports.
+
+### Before reporting completion
+
+Proof must exercise the boundary at which the behavior matters and must be capable of failing against the known-broken implementation.
+
+Use:
+
+- tests for deterministic behavior and invariants;
+- evaluations with fixed inputs and measurable criteria for probabilistic or subjective behavior;
+- real runtime-surface proof for process ownership, lifecycle, cancellation, packaging, generated assets, database isolation, and cleanup.
+
+Run the narrowest meaningful checks first, then broaden according to the affected surface and risk. Use commands declared by the owning package rather than commands copied into this file.
+
+Report:
+
+- the observable behavior changed;
+- the canonical owner and path that now implement it;
+- the displaced path removed, or the explicit reason it remains;
+- the exact checks and runtime surfaces exercised;
+- any proof that remains unavailable.
+
+Do not create a separate report file merely to satisfy this list.
+
+## Documentation and generated files
+
+Update the owning public contract when user-visible behavior, APIs, schemas, configuration, or lifecycle changes.
+
+Do not create a parallel explanation when an authoritative reference already exists. Do not hand-edit generated output; follow its source header or owning package script.
+
+## Code conventions
+
+- Match surrounding syntax and organization without inheriting unnecessary abstraction.
+- TypeScript remains strict.
+- Keep public APIs narrow.
+- Prefer deletion and directness over speculative extensibility.
+- Use **Signet** for the product and prose.
+- Use `signet` for CLI, package, path, and configuration names.
+- Write American English.
+- Follow `CONTRIBUTING.md` for contribution and Git mechanics.

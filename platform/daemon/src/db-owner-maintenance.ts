@@ -18,6 +18,8 @@ import {
 import { createDbOwnerClient } from "./db-owner-client";
 import type {
 	DbOwnerDreamingEpisodicBacklog,
+	DbOwnerDreamingEpisodicBacklogExists,
+	DbOwnerDreamingEpisodicBacklogProbe,
 	DbOwnerDreamingHygieneAttention,
 	DbOwnerDreamingSurprisalAttention,
 	DbOwnerParameter,
@@ -28,6 +30,7 @@ import { DB_OWNER_MAX_RESULT_BYTES, DB_OWNER_MAX_WORK_UNITS } from "./db-owner-p
 import { setFtsIndexIncomplete } from "./fts-index-state";
 import type { EmbeddingIndexMigrationProgress } from "./embedding-index-state";
 import type { DiagnosticsReport, ProviderTracker, QueueHealth } from "./diagnostics";
+import type { DreamingEpisodicBacklogProbe } from "./pipeline/dreaming";
 import type { DreamingSurprisalSelection } from "./pipeline/dreaming-surprisal";
 
 export interface DbOwnerMaintenanceOptions {
@@ -292,12 +295,33 @@ export async function ownerDreamingEpisodicBacklog(
 		owner,
 		{ kind: "dreaming_episodic_backlog", input },
 		"maintenance.dreaming.episodic-backlog",
-		{
-			...options,
-			estimatedWorkUnits:
-				options.estimatedWorkUnits ??
-				(input.maxSources === undefined ? DB_OWNER_MAX_WORK_UNITS : input.maxSources * 10),
-		},
+		{ ...options, estimatedWorkUnits: options.estimatedWorkUnits ?? DB_OWNER_MAX_WORK_UNITS },
+	);
+}
+
+export async function ownerDreamingEpisodicBacklogProbe(
+	owner: DbOwnerClient,
+	input: DbOwnerDreamingEpisodicBacklogProbe,
+	options: DbOwnerMaintenanceOptions = {},
+): Promise<DreamingEpisodicBacklogProbe> {
+	return await runOwnerMaintenanceWithRetry<DreamingEpisodicBacklogProbe>(
+		owner,
+		{ kind: "dreaming_episodic_backlog_probe", input },
+		"maintenance.dreaming.episodic-backlog-probe",
+		{ ...options, estimatedWorkUnits: options.estimatedWorkUnits ?? input.maxSources * 10 },
+	);
+}
+
+export async function ownerDreamingEpisodicBacklogExists(
+	owner: DbOwnerClient,
+	input: DbOwnerDreamingEpisodicBacklogExists,
+	options: DbOwnerMaintenanceOptions = {},
+): Promise<boolean> {
+	return await runOwnerMaintenanceWithRetry<boolean>(
+		owner,
+		{ kind: "dreaming_episodic_backlog_exists", input },
+		"maintenance.dreaming.episodic-backlog-exists",
+		{ ...options, estimatedWorkUnits: options.estimatedWorkUnits ?? 10 },
 	);
 }
 
@@ -385,6 +409,14 @@ export interface DbOwnerMaintenance {
 		input: DbOwnerDreamingEpisodicBacklog,
 		options?: DbOwnerMaintenanceOptions,
 	) => Promise<number>;
+	readonly dreamingEpisodicBacklogProbe: (
+		input: DbOwnerDreamingEpisodicBacklogProbe,
+		options?: DbOwnerMaintenanceOptions,
+	) => Promise<DreamingEpisodicBacklogProbe>;
+	readonly dreamingEpisodicBacklogExists: (
+		input: DbOwnerDreamingEpisodicBacklogExists,
+		options?: DbOwnerMaintenanceOptions,
+	) => Promise<boolean>;
 	readonly embeddingMigrationProgress: (
 		configuredBaseUrl?: string,
 		options?: DbOwnerMaintenanceOptions,
@@ -853,6 +885,14 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 		input: DbOwnerDreamingEpisodicBacklog,
 		maintenanceOptions?: DbOwnerMaintenanceOptions,
 	): Promise<number> => ownerDreamingEpisodicBacklog(owner, input, maintenanceOptions);
+	const dreamingEpisodicBacklogProbe = (
+		input: DbOwnerDreamingEpisodicBacklogProbe,
+		maintenanceOptions?: DbOwnerMaintenanceOptions,
+	): Promise<DreamingEpisodicBacklogProbe> => ownerDreamingEpisodicBacklogProbe(owner, input, maintenanceOptions);
+	const dreamingEpisodicBacklogExists = (
+		input: DbOwnerDreamingEpisodicBacklogExists,
+		maintenanceOptions?: DbOwnerMaintenanceOptions,
+	): Promise<boolean> => ownerDreamingEpisodicBacklogExists(owner, input, maintenanceOptions);
 	const embeddingMigrationProgress = (
 		configuredBaseUrl?: string,
 		maintenanceOptions?: DbOwnerMaintenanceOptions,
@@ -964,6 +1004,8 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 		dreamingHygieneAttention,
 		dreamingSurprisalAttention,
 		dreamingEpisodicBacklog,
+		dreamingEpisodicBacklogProbe,
+		dreamingEpisodicBacklogExists,
 		embeddingMigrationProgress,
 		healthReady,
 		diagnostics,

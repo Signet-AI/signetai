@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
 import {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
 	DEFAULT_PROVIDER_RATE_LIMIT,
@@ -9,15 +10,17 @@ import {
 	DEFAULT_TELEMETRY_POSTHOG_HOST,
 	type DreamingConfig,
 	LOOPBACK_HOST,
+	NETWORK_MODES,
+	type NetworkMode,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
 	TELEMETRY_DEPLOYMENT_ROLES,
 	TELEMETRY_INSTALL_CHANNELS,
-	parseSimpleYaml,
+	parseRuntimeYaml,
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth";
-import type { EmbeddingCostProvider, EmbeddingCostRates } from "./embedding-cost";
+import type { EmbeddingCostRates } from "./embedding-cost";
 import { logger } from "./logger";
 
 export interface EmbeddingConfig {
@@ -313,23 +316,106 @@ function parseOptionalPositive(raw: unknown, min: number, max: number): number |
 	return Math.max(min, Math.min(max, raw));
 }
 
-const EMBEDDING_COST_PROVIDERS: readonly EmbeddingCostProvider[] = [
-	"native",
-	"llama-cpp",
-	"ollama",
-	"openai",
-	"openrouter",
-];
+const cost = z.number().nonnegative().optional();
+const costs = z.object({ native: cost, "llama-cpp": cost, ollama: cost, openai: cost, openrouter: cost });
+const fraction = z.number().min(0).max(1);
+const runtimeSchema = z.object({
+	embedding: z
+		.object({
+			provider: z.enum(["local", "native", "llama-cpp", "ollama", "openai", "none"]).optional(),
+			model: z.string().default("nomic-embed-text-v1.5"),
+			dimensions: z.number().int().positive().default(768),
+			base_url: z.string().optional(),
+			baseUrl: z.string().optional(),
+			endpoint: z.string().optional(),
+			api_key: z.string().optional(),
+			warmNative: z.boolean().default(true),
+			promptSubmitTimeoutMs: z.number().default(DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS),
+			llamaCppMaxInputTokens: z.number().default(DEFAULT_LLAMACPP_MAX_INPUT_TOKENS),
+			costRates: costs.optional(),
+			cost_rates: costs.optional(),
+		})
+		.prefault({}),
+	search: z
+		.object({
+			alpha: fraction.optional(),
+			top_k: z.number().int().positive().default(20),
+			min_score: fraction.optional(),
+			rehearsal_enabled: z.boolean().default(true),
+			rehearsal_weight: fraction.default(0.1),
+			rehearsal_half_life_days: z.number().min(1).max(Number.MAX_SAFE_INTEGER).default(30),
+			temporal_prior_enabled: z.boolean().default(true),
+			temporal_prior_weight: fraction.default(0.15),
+			temporal_prior_half_life_days: z.number().min(1).max(365).default(14),
+		})
+		.prefault({}),
+	memory: z.record(z.string(), z.unknown()).optional(),
+	network: z.object({ mode: z.enum(NETWORK_MODES).default("localhost") }).prefault({}),
+});
 
-function parseEmbeddingCostRates(raw: unknown): EmbeddingCostRates | undefined {
-	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-	const source = raw as Record<string, unknown>;
-	const rates: Partial<Record<EmbeddingCostProvider, number>> = {};
-	for (const provider of EMBEDDING_COST_PROVIDERS) {
-		const value = source[provider];
-		if (typeof value === "number" && Number.isFinite(value) && value >= 0) rates[provider] = value;
+/** Read and normalize the selected runtime document, before legacy pipeline migrations. */
+export function readRuntimeConfig(agentsDir: string): {
+	readonly path: string | undefined;
+	readonly yaml: Record<string, unknown>;
+	readonly embedding: EmbeddingConfig;
+	readonly search: MemorySearchConfig;
+	readonly auth: AuthConfig;
+	readonly network: NetworkMode;
+} {
+	const path = ["agent.yaml", "AGENT.yaml", "config.yaml"]
+		.map((name) => join(agentsDir, name))
+		.find((path) => existsSync(path));
+	try {
+		const yaml = path ? parseRuntimeYaml(readFileSync(path, "utf8")) : {};
+		const result = runtimeSchema.safeParse(yaml);
+		if (!result.success) throw new Error(`${result.error.issues[0]?.path.join(".")} is invalid`);
+		const { embedding, search, network } = result.data;
+		const provider = embedding.provider === "local" ? "native" : (embedding.provider ?? "native");
+		// Preserve the established provider and alpha gates for otherwise valid legacy input.
+		const active = embedding.provider !== undefined && provider !== "none";
+		const endpoint = embedding.base_url ?? embedding.endpoint;
+		const endpoints = {
+			native: "",
+			none: "",
+			ollama: DEFAULT_OLLAMA_BASE_URL,
+			"llama-cpp": DEFAULT_LLAMACPP_BASE_URL,
+			openai: DEFAULT_OPENAI_BASE_URL,
+		};
+		const rates = embedding.costRates ?? embedding.cost_rates;
+		return {
+			path,
+			yaml,
+			network: network.mode,
+			auth: parseAuthConfig(yaml.auth, agentsDir),
+			embedding: {
+				provider,
+				model: active ? embedding.model : "nomic-embed-text-v1.5",
+				dimensions: active ? embedding.dimensions : 768,
+				base_url: active ? (endpoint?.trim() ? endpoint : endpoints[provider]) : "",
+				api_key: active ? embedding.api_key : undefined,
+				warmNative: embedding.warmNative,
+				promptSubmitTimeoutMs: Math.max(
+					MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
+					Math.min(MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS, embedding.promptSubmitTimeoutMs),
+				),
+				llamaCppMaxInputTokens: Math.max(
+					MIN_LLAMACPP_MAX_INPUT_TOKENS,
+					Math.min(MAX_LLAMACPP_MAX_INPUT_TOKENS, embedding.llamaCppMaxInputTokens),
+				),
+				...(rates && Object.keys(rates).length ? { costRates: rates } : {}),
+			},
+			search: {
+				...search,
+				alpha: search.alpha ?? 0.7,
+				top_k: search.alpha === undefined ? 20 : search.top_k,
+				min_score: search.alpha === undefined ? 0.1 : (search.min_score ?? 0.3),
+			},
+		};
+	} catch (error) {
+		throw new MemoryConfigValidationError(
+			`${path ?? join(agentsDir, "agent.yaml")}: ${error instanceof Error ? error.message : "invalid runtime configuration"}`,
+		);
 	}
-	return Object.keys(rates).length > 0 ? rates : undefined;
 }
 
 function clampFraction(raw: unknown, fallback: number): number {
@@ -955,134 +1041,20 @@ export function graphWriteCaps(cfg: ResolvedMemoryConfig): {
 }
 
 export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
-	const defaults: ResolvedMemoryConfig = {
-		embedding: {
-			provider: "native",
-			model: "nomic-embed-text-v1.5",
-			dimensions: 768,
-			base_url: "",
-			promptSubmitTimeoutMs: DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
-			llamaCppMaxInputTokens: DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
-			warmNative: true,
-		},
-		search: {
-			alpha: 0.7,
-			top_k: 20,
-			min_score: 0.1,
-			rehearsal_enabled: true,
-			rehearsal_weight: 0.1,
-			rehearsal_half_life_days: 30,
-			// Default-on is deliberate for #903: explicit freshness language gets
-			// only a bounded near-tie boost, while timeless and ranged queries skip it.
-			temporal_prior_enabled: true,
-			temporal_prior_weight: 0.15,
-			temporal_prior_half_life_days: 14,
-		},
-		pipelineV2: { ...DEFAULT_PIPELINE_V2 },
-		dreaming: { ...DEFAULT_DREAMING },
-		auth: parseAuthConfig(undefined, agentsDir),
-	};
-
-	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml"), join(agentsDir, "config.yaml")];
-	const envWarmNative = envBool("SIGNET_EMBEDDING_WARM_NATIVE");
-
-	for (const path of paths) {
-		if (!existsSync(path)) continue;
-		try {
-			const yaml = parseSimpleYaml(readFileSync(path, "utf-8"));
-			if (isRecord(yaml)) rejectRetiredEmbeddingConfig(yaml);
-			const emb = (yaml.embedding as Record<string, unknown> | undefined) ?? {};
-			const configuredCostRates = parseEmbeddingCostRates(emb.costRates ?? emb.cost_rates);
-			if (configuredCostRates) defaults.embedding.costRates = configuredCostRates;
-			const srch = (yaml.search as Record<string, unknown> | undefined) ?? {};
-
-			defaults.embedding.promptSubmitTimeoutMs = clampPositive(
-				emb.promptSubmitTimeoutMs,
-				MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
-				MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
-				defaults.embedding.promptSubmitTimeoutMs ?? DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
-			);
-			defaults.embedding.llamaCppMaxInputTokens = clampPositive(
-				emb.llamaCppMaxInputTokens,
-				MIN_LLAMACPP_MAX_INPUT_TOKENS,
-				MAX_LLAMACPP_MAX_INPUT_TOKENS,
-				defaults.embedding.llamaCppMaxInputTokens ?? DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
-			);
-			if (typeof emb.warmNative === "boolean") {
-				defaults.embedding.warmNative = emb.warmNative;
-			}
-
-			if (emb.provider === "none") {
-				defaults.embedding.provider = "none";
-			} else if (emb.provider) {
-				const rawProvider = String(emb.provider);
-				defaults.embedding.provider =
-					rawProvider === "local" ? "native" : (rawProvider as "native" | "llama-cpp" | "ollama" | "openai");
-				defaults.embedding.model = (emb.model as string | undefined) ?? defaults.embedding.model;
-				defaults.embedding.dimensions = Number.parseInt(String(emb.dimensions ?? "768"), 10);
-				const explicitBaseUrl =
-					(typeof emb.base_url === "string" ? emb.base_url : undefined) ??
-					(typeof emb.endpoint === "string" ? emb.endpoint : undefined);
-				if (defaults.embedding.provider === "ollama") {
-					defaults.embedding.base_url =
-						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0
-							? explicitBaseUrl
-							: DEFAULT_OLLAMA_BASE_URL;
-				} else if (defaults.embedding.provider === "llama-cpp") {
-					defaults.embedding.base_url =
-						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0
-							? explicitBaseUrl
-							: DEFAULT_LLAMACPP_BASE_URL;
-				} else if (defaults.embedding.provider === "openai") {
-					defaults.embedding.base_url =
-						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0
-							? explicitBaseUrl
-							: DEFAULT_OPENAI_BASE_URL;
-				} else {
-					defaults.embedding.base_url = explicitBaseUrl ?? defaults.embedding.base_url;
-				}
-				defaults.embedding.api_key = emb.api_key as string | undefined;
-			}
-
-			if (srch.alpha !== undefined) {
-				defaults.search.alpha = Number.parseFloat(String(srch.alpha));
-				defaults.search.top_k = Number.parseInt(String(srch.top_k ?? "20"), 10);
-				defaults.search.min_score = Number.parseFloat(String(srch.min_score ?? "0.3"));
-			}
-			if (srch.rehearsal_enabled !== undefined) {
-				defaults.search.rehearsal_enabled = srch.rehearsal_enabled === true;
-			}
-			if (typeof srch.rehearsal_weight === "number") {
-				defaults.search.rehearsal_weight = Math.max(0, Math.min(1, srch.rehearsal_weight));
-			}
-			if (typeof srch.rehearsal_half_life_days === "number") {
-				defaults.search.rehearsal_half_life_days = Math.max(1, srch.rehearsal_half_life_days);
-			}
-			if (srch.temporal_prior_enabled !== undefined) {
-				defaults.search.temporal_prior_enabled = srch.temporal_prior_enabled === true;
-			}
-			if (typeof srch.temporal_prior_weight === "number") {
-				defaults.search.temporal_prior_weight = Math.max(0, Math.min(1, srch.temporal_prior_weight));
-			}
-			if (typeof srch.temporal_prior_half_life_days === "number") {
-				defaults.search.temporal_prior_half_life_days = Math.max(1, Math.min(365, srch.temporal_prior_half_life_days));
-			}
-
-			defaults.pipelineV2 = loadPipelineConfig(yaml);
-			defaults.dreaming = loadDreamingConfig(yaml);
-			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
-
-			break;
-		} catch (error) {
-			if (error instanceof MemoryConfigValidationError || error instanceof PipelineConfigValidationError) {
-				throw error;
-			}
-			// ignore parse errors, try next file
-		}
+	const config = readRuntimeConfig(agentsDir);
+	try {
+		rejectRetiredEmbeddingConfig(config.yaml);
+		const warmNative = envBool("SIGNET_EMBEDDING_WARM_NATIVE");
+		return {
+			embedding: { ...config.embedding, ...(warmNative === undefined ? {} : { warmNative }) },
+			search: config.search,
+			auth: config.auth,
+			pipelineV2: loadPipelineConfig(config.yaml),
+			dreaming: loadDreamingConfig(config.yaml),
+		};
+	} catch (error) {
+		throw new MemoryConfigValidationError(
+			`${config.path ?? join(agentsDir, "agent.yaml")}: ${error instanceof Error ? error.message : "invalid runtime configuration"}`,
+		);
 	}
-	if (envWarmNative !== undefined) {
-		defaults.embedding.warmNative = envWarmNative;
-	}
-
-	return defaults;
 }

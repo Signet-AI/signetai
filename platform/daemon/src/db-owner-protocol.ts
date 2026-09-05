@@ -229,23 +229,6 @@ export interface DbOwnerTranscriptBulkCommit {
 	readonly harness: string;
 	readonly commits: readonly CompletedTranscriptCommit[];
 }
-export interface DbOwnerTranscriptImportControl {
-	readonly agentId: string;
-	readonly jobId: string;
-	readonly control: "pause" | "resume" | "retry" | "cancel";
-	readonly generation?: number;
-	readonly leaseToken?: string;
-	readonly apply?: boolean;
-}
-export interface DbOwnerTranscriptImportReconcile {
-	readonly agentId: string;
-	readonly jobId: string;
-}
-export interface DbOwnerTranscriptImportPurge {
-	readonly agentId: string;
-	readonly sourceId: string;
-}
-
 export type DbOwnerRequest =
 	| { readonly kind: "initialize"; readonly agentsDir?: string }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
@@ -278,12 +261,11 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_artifact_upsert_batch"; readonly input: readonly DbOwnerSourceArtifactUpsert[] }
 	| { readonly kind: "source_evidence_eligibility"; readonly input: DbOwnerSourceEvidenceEligibility }
 	| { readonly kind: "transcript_bulk_commit"; readonly input: DbOwnerTranscriptBulkCommit }
-	| { readonly kind: "transcript_import_control"; readonly input: DbOwnerTranscriptImportControl }
-	| { readonly kind: "transcript_import_reconcile"; readonly input: DbOwnerTranscriptImportReconcile }
-	| { readonly kind: "transcript_import_purge"; readonly input: DbOwnerTranscriptImportPurge }
 	| { readonly kind: "dreaming_hygiene_attention"; readonly input: DbOwnerDreamingHygieneAttention }
 	| { readonly kind: "dreaming_surprisal_attention"; readonly input: DbOwnerDreamingSurprisalAttention }
 	| { readonly kind: "dreaming_episodic_backlog"; readonly input: DbOwnerDreamingEpisodicBacklog }
+	| { readonly kind: "dreaming_episodic_backlog_probe"; readonly input: DbOwnerDreamingEpisodicBacklogProbe }
+	| { readonly kind: "dreaming_episodic_backlog_exists"; readonly input: DbOwnerDreamingEpisodicBacklogExists }
 	| { readonly kind: "dreaming_evidence_search"; readonly input: DbOwnerDreamingEvidenceSearch }
 	| { readonly kind: "dreaming_evidence_source"; readonly input: DbOwnerDreamingEvidenceSource }
 	| { readonly kind: "dreaming_pass_finalize"; readonly input: DbOwnerDreamingPassFinalize }
@@ -346,11 +328,22 @@ export interface DbOwnerDreamingSurprisalAttention {
 	};
 }
 
-/** Bounded episodic backlog probe used by the scheduled Dreaming gate. */
+/** Exact episodic backlog total used by status and diagnostic surfaces. */
 export interface DbOwnerDreamingEpisodicBacklog {
 	readonly agentId: string;
-	/** Maximum number of source records to inspect before treating the backlog as reached. */
-	readonly maxSources?: number;
+}
+
+/** Bounded episodic backlog probe used by the scheduled Dreaming gate. */
+export interface DbOwnerDreamingEpisodicBacklogProbe {
+	readonly agentId: string;
+	readonly tokenThreshold: number;
+	/** Maximum number of source records to inspect before returning indeterminate. */
+	readonly maxSources: number;
+}
+
+/** Presence-only episodic backlog check; it never tokenizes the backlog. */
+export interface DbOwnerDreamingEpisodicBacklogExists {
+	readonly agentId: string;
 }
 
 export interface DbOwnerDreamingEvidenceSearch {
@@ -387,7 +380,7 @@ export interface DbOwnerDreamingPassFinalize {
 	readonly summary: string;
 	readonly rejectedEvidence: readonly unknown[];
 	readonly memoryHeadResult: Record<string, unknown> | null;
-	readonly backlogByScope: readonly { readonly scope: string; readonly backlog: number }[];
+	readonly hasBacklogByScope: readonly { readonly scope: string; readonly hasBacklog: boolean }[];
 	readonly nextWatermarkByScope: readonly { readonly scope: string; readonly watermark: string | null }[];
 }
 

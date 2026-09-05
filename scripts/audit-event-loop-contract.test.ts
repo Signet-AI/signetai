@@ -14,16 +14,6 @@ import {
 	type LegacyDbCountBaseline,
 } from "./audit-event-loop-contract";
 
-test("the deterministic ledger retains the exact current source inventory", () => {
-	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	expect(baseline).toHaveLength(850);
-	expect(baseline.filter((site) => site.api === "withWriteTx")).toHaveLength(65);
-	expect(baseline.filter((site) => site.api === "withReadDb")).toHaveLength(99);
-	expect(baseline.filter((site) => site.api === "withWriteTxAsync")).toHaveLength(40);
-	expect(baseline.filter((site) => site.api === "withWriteDbAsync")).toHaveLength(0);
-	expect(baseline.filter((site) => site.api === "withReadDbAsync")).toHaveLength(132);
-});
-
 test("the event-loop ledger exactly equals the current source inventory", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const result = runAudit({ sourceRoot: resolve("platform/daemon/src"), baselineSites: baseline });
@@ -152,6 +142,43 @@ test("a tokenless async-named DB call fails the attribution coverage rule", () =
 		expect(violation?.path).toBe("missing-token.ts");
 		expect(violation?.api).toBe("withReadDbAsync");
 		expect(violation?.message).toContain('"missing-token.ts:1"');
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a stable semantic DB site token satisfies attribution without depending on a source line", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-semantic-site-token-"));
+	try {
+		writeFileSync(
+			join(root, "semantic.ts"),
+			'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:memory.projection.ledger" });\n',
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.violations.filter((item) => item.kind === "missing-async-db-site-token")).toEqual([]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("semantic DB site tokens are unique and reject malformed identifiers", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-semantic-site-token-"));
+	try {
+		writeFileSync(
+			join(root, "semantic.ts"),
+			[
+				'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:memory.shared.read" });',
+				'getDbAccessor().withWriteTxAsync((db) => db, { siteToken: "db:memory.shared.read" });',
+				'getDbAccessor().withReadDbAsync((db) => db, { siteToken: "db:Memory Invalid" });',
+			].join("\n"),
+		);
+		const result = runAudit({ sourceRoot: root });
+		expect(result.violations.filter((item) => item.kind === "duplicate-db-site-token")).toEqual([
+			expect.objectContaining({ path: "semantic.ts", line: 1, token: "db:memory.shared.read" }),
+		]);
+		expect(result.violations.filter((item) => item.kind === "missing-async-db-site-token")).toEqual([
+			expect.objectContaining({ path: "semantic.ts", line: 3 }),
+		]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -353,16 +380,16 @@ test("the production TypeScript project cannot import the compatibility module",
 test("the generated report describes the type boundary and transitional counts", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const report = renderReport(baseline, { total: 169, withWriteTx: 65, withReadDb: 104 });
-	expect(report).toContain("Exact ledger inventory: 850 sites");
-	expect(report).toContain("65 synchronous writes, 99 synchronous reads, and 173 async-named DB sites");
+	expect(report).toContain(`Exact ledger inventory: ${baseline.length} sites`);
+	expect(report).toContain("65 synchronous writes, 97 synchronous reads, and 173 async-named DB sites");
 	expect(report).toContain("Async-named ON-PARENT DB sites: 171");
 	expect(report).toContain("Async-named OFF-PARENT DB sites: 2");
 	expect(report).not.toContain("async-named parent DB sites");
 	expect(report).toContain(
 		"The async-named DB counts above separate the 171 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
 	);
-	expect(report).toContain("Database accessor sites classified: 337");
-	expect(report).toContain("ON-PARENT callback execution: 335");
+	expect(report).toContain("Database accessor sites classified: 335");
+	expect(report).toContain("ON-PARENT callback execution: 333");
 	expect(report).toContain("OFF-PARENT callback execution: 2");
 	expect(report).toContain("- `db:recall.embedding.config.read` (withReadDbAsync)");
 	expect(report).toContain("- `db:recall.vector.search.read` (withReadDbAsync)");

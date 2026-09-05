@@ -697,29 +697,13 @@ function mergeCandidate(
 	}
 }
 
-function hasColumn(
-	db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
-	table: string,
-	column: string,
-): boolean {
-	try {
-		return db
-			.prepare(`PRAGMA table_info(${table})`)
-			.all()
-			.some((row) => row.name === column);
-	} catch {
-		return false;
-	}
-}
-
-function memorySupersessionSql(
-	db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
-	alias = "m",
-): string {
-	const currentness: string[] = [];
-	if (hasColumn(db, "memories", "superseded_by")) currentness.push(`${alias}.superseded_by IS NULL`);
-	if (hasColumn(db, "memories", "stale_at")) currentness.push(`${alias}.stale_at IS NULL`);
-	return currentness.length > 0 ? ` AND ${currentness.join(" AND ")}` : "";
+/**
+ * Eligibility for ordinary memory delivery. All owner accessors run migrations
+ * before querying, so these lifecycle columns are required. Lineage/history
+ * callers do not use this predicate.
+ */
+export function currentMemorySql(alias = "m"): string {
+	return ` AND ${alias}.is_deleted = 0 AND ${alias}.superseded_by IS NULL AND ${alias}.stale_at IS NULL`;
 }
 
 function lexicalFallbackTerms(keywordQuery: string): string[] {
@@ -758,9 +742,7 @@ async function readLexicalFallbackThroughOwner(
 		 SELECT m.id, (${score.join(" + ")}) AS matches
 		 FROM fallback_scan m
 		 WHERE (${match})
-		   AND m.is_deleted = 0
-		   AND m.superseded_by IS NULL
-		   AND m.stale_at IS NULL
+		   ${currentMemorySql("m")}
 		   ${filter.sql}
 		 ORDER BY matches DESC
 		 LIMIT ?`,
@@ -772,23 +754,6 @@ async function readLexicalFallbackThroughOwner(
 			deadlineMs: 30_000,
 		},
 	);
-}
-
-/**
- * Lifecycle predicate for surfacing memories: deleted, superseded, and stale
- * rows must never reach a caller. Mirrors the gate `authorizeScoredCandidates`
- * applies to standard recall candidates so similarity-search routes (e.g.
- * GET /memory/similar) do not drift from recall semantics.
- *
- * Returns a SQL fragment starting with ` AND ...` (empty when the memories
- * table predates the lifecycle columns). `is_deleted` is unconditional — it
- * has shipped since migration 002 and every accessor runs migrations.
- */
-export function memoryLifecycleSql(
-	db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
-	alias = "m",
-): string {
-	return ` AND ${alias}.is_deleted = 0${memorySupersessionSql(db, alias)}`;
 }
 
 async function authorizeScoredCandidates(
@@ -835,9 +800,7 @@ async function authorizeScoredCandidates(
 			 FROM memories m
 			 ${safetyJoin}
 			 WHERE m.id IN (${placeholders})
-			   AND m.is_deleted = 0
-			   AND m.superseded_by IS NULL
-			   AND m.stale_at IS NULL
+			   ${currentMemorySql("m")}
 			   ${filter.sql}
 			   ${hasSafetyLedger ? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))" : ""}`,
 			[...batch, ...filter.args],
@@ -1760,9 +1723,7 @@ export async function hybridRecall(
 					 FROM memories_fts
 					 CROSS JOIN memories m ON memories_fts.rowid = m.rowid
 					 WHERE memories_fts MATCH ?
-					   AND m.is_deleted = 0
-					   AND m.superseded_by IS NULL
-					   AND m.stale_at IS NULL
+					   ${currentMemorySql("m")}
 					   ${filter.sql}
 					 ORDER BY raw_score
 					 LIMIT ?`,
@@ -1836,9 +1797,7 @@ export async function hybridRecall(
 				   CROSS JOIN memories m ON m.id = h.memory_id
 				   WHERE memory_hints_fts MATCH ?
 				     AND h.agent_id = m.agent_id
-				     AND m.is_deleted = 0
-				     AND m.superseded_by IS NULL
-				     AND m.stale_at IS NULL
+				     ${currentMemorySql("m")}
 				     ${filter.sql}
 				   ORDER BY raw_score LIMIT ?`;
 
@@ -2231,9 +2190,7 @@ export async function hybridRecall(
 										  AND ea.agent_id = ?
 										  AND ea.status = 'active'
 										 WHERE m.id IN (${placeholders})
-										   AND m.is_deleted = 0
-										   AND m.superseded_by IS NULL
-										   AND m.stale_at IS NULL
+										   ${currentMemorySql("m")}
 										   ${filter.sql}
 										 GROUP BY m.id, m.importance`,
 											[agentId, ...missingIds, ...filter.args],
@@ -2313,7 +2270,7 @@ export async function hybridRecall(
 								 WHERE id IN (${placeholders})`,
 							)
 							.all(...candidateIds) as Array<{ id: string; content: string }>,
-					{ siteToken: "memory-search.ts:2308" },
+					{ siteToken: "db:recall.temporal-topic.content" },
 				);
 				for (const row of contentRows) {
 					const score = scoreTemporalTopicEvidence(query, row.content);
@@ -2391,7 +2348,7 @@ export async function hybridRecall(
 									 WHERE id IN (${placeholders})`,
 								)
 								.all(...coverageIds) as Array<{ id: string; content: string }>,
-						{ siteToken: "memory-search.ts:2386" },
+						{ siteToken: "db:recall.facet-coverage.content" },
 					);
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
@@ -2441,7 +2398,7 @@ export async function hybridRecall(
 						id: string;
 						content: string;
 					}>,
-				{ siteToken: "memory-search.ts:2433" },
+				{ siteToken: "db:recall.reranker.content" },
 			);
 			const contentMap = new Map(contentRows.map((r) => [r.id, r.content]));
 
@@ -2521,7 +2478,7 @@ export async function hybridRecall(
 						content: string;
 						type: string;
 					}>,
-				{ siteToken: "memory-search.ts:2512" },
+				{ siteToken: "db:recall.dampening.metadata" },
 			);
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
 
@@ -2796,7 +2753,7 @@ export async function hybridRecall(
 						.prepare(
 							`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
         FROM memories m
-        WHERE m.id IN (${placeholders}) AND m.is_deleted = 0${memorySupersessionSql(db)}${filter.sql}`,
+        WHERE m.id IN (${placeholders})${currentMemorySql("m")}${filter.sql}`,
 						)
 						.all(...topIds, ...filter.args) as Array<{
 						id: string;
@@ -2813,7 +2770,7 @@ export async function hybridRecall(
 						scope: string | null;
 						agent_id: string | null;
 					}>,
-				{ siteToken: "memory-search.ts:2793" },
+				{ siteToken: "db:recall.final-candidates.hydrate" },
 			),
 	);
 
@@ -2827,7 +2784,7 @@ export async function hybridRecall(
 					content: row.content,
 				}),
 			),
-		{ siteToken: "memory-search.ts:2820" },
+		{ siteToken: "db:recall.final-candidates.safety" },
 	);
 	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
@@ -3064,9 +3021,7 @@ export async function hybridRecall(
 						 ${safetyJoin}
 						 WHERE mem.entity_id IN (${ePlaceholders})
 						   AND m.type = 'rationale'
-						   AND m.is_deleted = 0
-						   AND m.superseded_by IS NULL
-						   AND m.stale_at IS NULL
+						   ${currentMemorySql("m")}
 						   ${filter.sql}
 						   ${safetyFilter}
 						 LIMIT 10`,
@@ -3132,9 +3087,7 @@ export async function hybridRecall(
 							 FROM memory_entity_mentions mem
 							 JOIN memories m ON m.id = mem.memory_id
 							 WHERE mem.entity_id IN (${ph})
-							   AND m.is_deleted = 0
-							   AND m.superseded_by IS NULL
-							   AND m.stale_at IS NULL
+							   ${currentMemorySql("m")}
 							   ${filter.sql}`,
 							[...eids, ...filter.args],
 							"memory-search.entity-context.scope",

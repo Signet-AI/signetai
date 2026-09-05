@@ -271,7 +271,9 @@ Queues the staged job for inventory and commit.
 
 ### POST /api/sources/imports/:jobId/pause
 
-Requests a pause at the next bounded worker checkpoint.
+Requests a pause at the next bounded worker checkpoint. A pending cancellation
+takes precedence: pausing that job returns `changed: false` and preserves the
+cancellation request.
 
 ### POST /api/sources/imports/:jobId/resume
 

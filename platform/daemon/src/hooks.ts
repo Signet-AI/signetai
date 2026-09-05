@@ -63,7 +63,7 @@ import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candi
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 
-import { type RecallResponse, type RecallResult, hybridRecall } from "./memory-search";
+import { type RecallResponse, type RecallResult, currentMemorySql, hybridRecall } from "./memory-search";
 import { recordMemorySearchTelemetry } from "./memory-search-telemetry";
 import {
 	type SynthesisRequest,
@@ -626,7 +626,7 @@ async function getRecentMemories(
           (julianday('now') - julianday(m.created_at)) as age_days${safetyProjection}
         FROM memories m
         ${safetyJoin}
-        WHERE m.is_deleted = 0${scope.sql}
+        WHERE 1 = 1${currentMemorySql("m")}${scope.sql}
         ORDER BY
           (m.importance * ${1 - recencyBias}) +
           (1.0 / (1.0 + (julianday('now') - julianday(m.created_at)))) * ${recencyBias}
@@ -664,22 +664,6 @@ async function getRecentMemories(
 		logger.error("hooks", "Failed to query memories", e as Error);
 		return [];
 	}
-}
-
-/**
- * Get memories created after a given timestamp, ordered by recency.
- */
-function _getMemoriesSince(
-	sinceMs: number,
-	limit: number,
-): Array<{
-	id: string;
-	content: string;
-	type: string;
-	importance: number;
-	created_at: string;
-}> {
-	return memoryCandidates.getMemoriesSince(getMemoryDbPath(), sinceMs, limit);
 }
 
 // ============================================================================
@@ -842,7 +826,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					});
 					return parent ? assembleInheritedContextBlock(db, parent, subagentCfg) : null;
 				},
-				{ siteToken: "hooks.ts:830" },
+				{ siteToken: "db:hooks.session-start.inheritance" },
 			);
 			inheritedSection = block ?? "";
 		} catch (error) {

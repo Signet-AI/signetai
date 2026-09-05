@@ -5,6 +5,8 @@ export interface UnembeddedRow {
 	readonly content: string;
 	readonly contentHash: string | null;
 	readonly agentId: string | null;
+	/** SQLite boolean marker for a known global-hash ownership conflict. */
+	readonly knownCrossAgentHashConflict?: 0 | 1;
 }
 
 export interface StaleEmbeddingRow {
@@ -88,63 +90,103 @@ function count(db: ReadDb, sql: string, ...args: readonly unknown[]): number {
 	return row?.n ?? 0;
 }
 
-export function countUnembeddedMemories(db: ReadDb, agentId?: string): number {
-	const scope = agentId === undefined ? "" : " AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?";
-	const hashScope =
-		agentId === undefined
-			? ""
-			: ` AND EXISTS (
+const sameAgentHashOwner = `
+			   AND EXISTS (
 			     SELECT 1 FROM memories owner
 			     WHERE owner.id = e.source_id
 			       AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
 			   )`;
+
+const crossAgentHashConflict = `EXISTS (
+			 SELECT 1 FROM embeddings e
+			 WHERE e.source_type = 'memory'
+			   AND e.content_hash = m.content_hash
+			   AND COALESCE(NULLIF(e.agent_id, ''), 'default') <> COALESCE(NULLIF(m.agent_id, ''), 'default')
+		   )`;
+
+export function countUnembeddedMemories(db: ReadDb, agentId: string): number {
 	return count(
 		db,
 		`SELECT COUNT(*) AS n FROM memories m
-		 WHERE m.is_deleted = 0${scope}
+		 WHERE m.is_deleted = 0
+		   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
 		   AND NOT EXISTS (
 		     SELECT 1 FROM embeddings e
 		     WHERE e.source_type = 'memory' AND e.source_id = m.id
 		   )
 		   AND NOT EXISTS (
 		     SELECT 1 FROM embeddings e
-		     WHERE e.source_type = 'memory'${hashScope}
+		     WHERE e.source_type = 'memory'${sameAgentHashOwner}
 		       AND m.content_hash IS NOT NULL
 		       AND e.content_hash = m.content_hash
 		   )`,
-		...(agentId === undefined ? [] : [agentId]),
+		agentId,
 	);
 }
 
-export function listUnembeddedMemories(db: ReadDb, limit: number, agentId?: string): ReadonlyArray<UnembeddedRow> {
-	const scope = agentId === undefined ? "" : " AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?";
-	const hashScope =
-		agentId === undefined
-			? ""
-			: ` AND EXISTS (
-			       SELECT 1 FROM memories owner
-			       WHERE owner.id = e.source_id
-			         AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
-			     )`;
+export function listUnembeddedMemories(db: ReadDb, limit: number, agentId: string): ReadonlyArray<UnembeddedRow> {
 	return db
 		.prepare(
-			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId
+			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
+				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
 			 FROM memories m
-			 WHERE m.is_deleted = 0${scope}
+			 WHERE m.is_deleted = 0
+			   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
 			   AND NOT EXISTS (
 			     SELECT 1 FROM embeddings e
 			     WHERE e.source_type = 'memory' AND e.source_id = m.id
 			   )
 			   AND NOT EXISTS (
 			     SELECT 1 FROM embeddings e
-			     WHERE e.source_type = 'memory'${hashScope}
+			     WHERE e.source_type = 'memory'${sameAgentHashOwner}
 			       AND m.content_hash IS NOT NULL
 			       AND e.content_hash = m.content_hash
 			   )
-			 ORDER BY m.created_at ASC
+			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
 			 LIMIT ?`,
 		)
-		.all(...(agentId === undefined ? [limit] : [agentId, limit])) as UnembeddedRow[];
+		.all(agentId, limit) as UnembeddedRow[];
+}
+
+export function countAllUnembeddedMemories(db: ReadDb): number {
+	return count(
+		db,
+		`SELECT COUNT(*) AS n FROM memories m
+		 WHERE m.is_deleted = 0
+		   AND NOT EXISTS (
+		     SELECT 1 FROM embeddings e
+		     WHERE e.source_type = 'memory' AND e.source_id = m.id
+		   )
+		   AND NOT EXISTS (
+		     SELECT 1 FROM embeddings e
+		     WHERE e.source_type = 'memory'${sameAgentHashOwner}
+		       AND m.content_hash IS NOT NULL
+		       AND e.content_hash = m.content_hash
+		   )`,
+	);
+}
+
+export function listAllUnembeddedMemories(db: ReadDb, limit: number): ReadonlyArray<UnembeddedRow> {
+	return db
+		.prepare(
+			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
+				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
+			 FROM memories m
+			 WHERE m.is_deleted = 0
+			   AND NOT EXISTS (
+			     SELECT 1 FROM embeddings e
+			     WHERE e.source_type = 'memory' AND e.source_id = m.id
+			   )
+			   AND NOT EXISTS (
+			     SELECT 1 FROM embeddings e
+			     WHERE e.source_type = 'memory'${sameAgentHashOwner}
+			       AND m.content_hash IS NOT NULL
+			       AND e.content_hash = m.content_hash
+			   )
+			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
+			 LIMIT ?`,
+		)
+		.all(limit) as UnembeddedRow[];
 }
 
 export function listStaleEmbeddingRows(

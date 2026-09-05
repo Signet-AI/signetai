@@ -22,15 +22,19 @@ import type {
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import type {
 	DbOwnerDreamingEpisodicBacklog,
+	DbOwnerDreamingEpisodicBacklogExists,
+	DbOwnerDreamingEpisodicBacklogProbe,
 	DbOwnerDreamingEvidenceSource,
 	DbOwnerDreamingHygieneAttention,
 	DbOwnerDreamingPassFinalize,
 	DbOwnerDreamingSurprisalAttention,
 } from "../db-owner-protocol";
 import {
+	ownerDreamingEpisodicBacklog,
+	ownerDreamingEpisodicBacklogExists,
+	ownerDreamingEpisodicBacklogProbe,
 	ownerDreamingHygieneAttention,
 	ownerDreamingSurprisalAttention,
-	ownerDreamingEpisodicBacklog,
 	ownerTransaction,
 	ownerQueryAll,
 	ownerQueryOne,
@@ -79,6 +83,7 @@ import {
 } from "./dreaming-surprisal";
 import {
 	type DreamingBacklogTokenEntry,
+	countDreamingBacklogTokenEntries,
 	recordDreamingEpisodicTokenBacklog,
 	refreshDreamingBacklogTokenCache,
 } from "./dreaming-token-cache";
@@ -92,6 +97,33 @@ import {
 import { countTokens } from "./tokenizer";
 
 export type DreamingMode = "incremental" | "compact" | "incremental-hygiene" | "incremental-content";
+
+export type DreamingEpisodicBacklogProbe =
+	| {
+			readonly kind: "exact";
+			readonly tokens: number;
+			readonly hasBacklog: boolean;
+			readonly sourcesScanned: number;
+	  }
+	| {
+			readonly kind: "threshold-reached";
+			readonly tokenLowerBound: number;
+			readonly hasBacklog: true;
+			readonly sourcesScanned: number;
+	  }
+	| {
+			readonly kind: "indeterminate";
+			readonly tokenLowerBound: number;
+			readonly hasBacklog: boolean;
+			readonly sourcesScanned: number;
+	  };
+
+export type DreamingTriggerDecision =
+	| { readonly trigger: false }
+	| {
+			readonly trigger: true;
+			readonly reason: "first-run" | "attention" | "token-threshold" | "continuation" | "max-interval";
+	  };
 
 /**
  * The focused runbook a scheduled pass follows (#1098): hygiene passes
@@ -1125,17 +1157,17 @@ function dreamingModeAdvancesEvidence(mode: DreamingMode, hasEpisodicWork: boole
 export function dreamingEarlyExitSummary(
 	mode: DreamingMode,
 	hasPendingHygieneAttention: boolean,
-	totalBacklog: number,
+	hasBacklog: boolean,
 	hasPendingContentAttention = false,
 ): string | null {
 	if (mode === "incremental-hygiene") {
 		return hasPendingHygieneAttention ? null : "No hygiene attention to process";
 	}
 	if (mode === "incremental-content") {
-		return totalBacklog === 0 && !hasPendingContentAttention ? "No new episodic evidence to process" : null;
+		return !hasBacklog && !hasPendingContentAttention ? "No new episodic evidence to process" : null;
 	}
 	if (mode === "incremental") {
-		return !hasPendingHygieneAttention && !hasPendingContentAttention && totalBacklog === 0
+		return !hasPendingHygieneAttention && !hasPendingContentAttention && !hasBacklog
 			? "No new episodic evidence or semantic attention to process"
 			: null;
 	}
@@ -1679,18 +1711,18 @@ export async function runDreamingAgentPass(
 				),
 			).then((values) => values.some(Boolean)),
 		]);
-		const backlogByScope = new Map(
+		const hasBacklogByScope = new Map(
 			await Promise.all(
 				scopes.map(
-					async (scope) => [scope, await getDreamingEpisodicTokenBacklog(accessor, scope, ownerMaintenance)] as const,
+					async (scope) => [scope, await hasDreamingEpisodicBacklog(accessor, scope, ownerMaintenance)] as const,
 				),
 			),
 		);
-		const totalBacklog = [...backlogByScope.values()].reduce((total, backlog) => total + backlog, 0);
+		const hasBacklog = [...hasBacklogByScope.values()].some(Boolean);
 		const earlyExitSummary = dreamingEarlyExitSummary(
 			mode,
 			hasPendingHygieneAttention,
-			totalBacklog,
+			hasBacklog,
 			hasPendingContentAttention || (hasPendingAttention && !hasPendingHygieneAttention),
 		);
 		if (earlyExitSummary !== null) {
@@ -1708,9 +1740,9 @@ export async function runDreamingAgentPass(
 			// skip it for the next pass, and a hygiene pass must never
 			// advance the watermark even on an empty backlog (#1098,
 			// #1149).
-			if (dreamingModeAdvancesEvidence(mode, totalBacklog > 0)) {
+			if (dreamingModeAdvancesEvidence(mode, hasBacklog)) {
 				for (const scope of scopes) {
-					if ((backlogByScope.get(scope) ?? 0) > 0) {
+					if (hasBacklogByScope.get(scope) === true) {
 						statements.push(
 							ownerRunStatement(
 								`INSERT INTO dreaming_state
@@ -1919,7 +1951,10 @@ export async function runDreamingAgentPass(
 			summary,
 			rejectedEvidence,
 			memoryHeadResult,
-			backlogByScope: [...backlogByScope].map(([scope, backlog]) => ({ scope, backlog })),
+			hasBacklogByScope: [...hasBacklogByScope].map(([scope, scopeHasBacklog]) => ({
+				scope,
+				hasBacklog: scopeHasBacklog,
+			})),
 			nextWatermarkByScope: [...nextWatermarkByScope].map(([scope, watermark]) => ({ scope, watermark })),
 		};
 		await runDbOwnerDomainOperation(accessor, {
@@ -2184,12 +2219,12 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 	if (
 		dreamingModeAdvancesEvidence(
 			input.mode as DreamingMode,
-			input.backlogByScope.some((item) => item.backlog > 0),
+			input.hasBacklogByScope.some((item) => item.hasBacklog),
 		)
 	) {
 		const watermarks = new Map(input.nextWatermarkByScope.map((item) => [item.scope, item.watermark]));
-		for (const item of input.backlogByScope) {
-			if (item.backlog === 0) continue;
+		for (const item of input.hasBacklogByScope) {
+			if (!item.hasBacklog) continue;
 			resetDreamingTokens(db, item.scope, input.passId, input.mode, null, watermarks.get(item.scope) ?? null);
 		}
 	}
@@ -2220,21 +2255,58 @@ export async function isDreamingHaltActive(
 
 interface DreamingBacklogRead {
 	readonly entries: readonly DreamingBacklogTokenEntry[];
-	readonly truncated: boolean;
+	readonly hasBacklog: boolean;
+	readonly complete: boolean;
+	readonly sourcesScanned: number;
 }
 
-function boundedDreamingBacklogSourceLimit(maxSources: number | undefined): number | null {
-	if (maxSources === undefined) return null;
+function boundedDreamingBacklogSourceLimit(maxSources: number): number {
 	if (!Number.isFinite(maxSources)) throw new RangeError("Dreaming backlog source limit must be finite");
 	return Math.max(1, Math.min(Math.floor(maxSources), DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES));
 }
 
-function readDreamingEpisodicTokenBacklogEntriesInDb(
+function validDreamingBacklogEntry(
 	db: ReadDb,
 	agentId: string,
-	maxSources?: number,
+	source: EpisodicSourceRecord,
+	useConsumption: boolean,
+	offsetOverride?: number,
+): DreamingBacklogTokenEntry | null {
+	const offset = offsetOverride ?? (useConsumption ? deliveredOffsetForSource(db, agentId, source) : 0);
+	const text = renderDreamingEvidence(source).slice(offset);
+	return text.length === 0
+		? null
+		: {
+				key: `${source.kind}:${source.id}:${offset}`,
+				revision: source.sourceRevision ?? source.capturedAt,
+				text,
+			};
+}
+
+function sourceRecordKey(source: EpisodicSourceRecord): string {
+	return `${source.kind}:${source.id}`;
+}
+
+function backlogReadFromSources(
+	sources: readonly EpisodicSourceRecord[],
+	sourceLimit: number | null,
+	entryFor: (source: EpisodicSourceRecord) => DreamingBacklogTokenEntry | null,
 ): DreamingBacklogRead {
-	const sourceLimit = boundedDreamingBacklogSourceLimit(maxSources);
+	const countedSources = sourceLimit === null ? sources : sources.slice(0, sourceLimit);
+	const entries = countedSources.flatMap((source) => {
+		const entry = entryFor(source);
+		return entry === null ? [] : [entry];
+	});
+	const lookahead = sourceLimit === null ? undefined : sources[sourceLimit];
+	return {
+		entries,
+		hasBacklog: entries.length > 0 || (lookahead !== undefined && entryFor(lookahead) !== null),
+		complete: sourceLimit === null || sources.length <= sourceLimit,
+		sourcesScanned: countedSources.length,
+	};
+}
+
+function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimit: number | null): DreamingBacklogRead {
 	const hasConsumption =
 		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_consumption'").get() !=
 		null;
@@ -2243,68 +2315,104 @@ function readDreamingEpisodicTokenBacklogEntriesInDb(
 			agentId,
 			query: "",
 			excludeDelivered: true,
-			// Scheduled probes use the finite page; status and manual paths keep
-			// the exact aggregate by omitting maxSources.
-			limit: sourceLimit,
+			limit: sourceLimit === null ? null : sourceLimit + 1,
 		});
-		return {
-			entries: queued.flatMap((source) => {
-				const offset = deliveredOffsetForSource(db, agentId, source);
-				const remaining = renderDreamingEvidence(source).slice(offset);
-				return remaining.length === 0 ? [] : [{ key: `${source.kind}:${source.id}:${offset}`, text: remaining }];
-			}),
-			truncated: sourceLimit !== null && queued.length >= sourceLimit,
-		};
+		return backlogReadFromSources(queued, sourceLimit, (source) =>
+			validDreamingBacklogEntry(db, agentId, source, true),
+		);
 	}
+
 	const state = readDreamingState(db, agentId);
 	const queued = readRecentEpisodicSources(
 		db,
 		agentId,
-		sourceLimit ?? 500,
+		sourceLimit === null ? null : sourceLimit + 1,
 		DREAMING_EVIDENCE_KINDS,
 		state.evidenceCursor ? null : state.lastPassAt,
 		"newest",
 		state.evidenceCursor,
 	);
 	const resumed =
-		state.evidenceCursor?.fragmentOffset && state.evidenceCursor.kind !== null
+		state.evidenceCursor?.fragmentOffset !== undefined && state.evidenceCursor.kind !== null
 			? readEpisodicSource(db, { agentId, from: `${state.evidenceCursor.kind}:${state.evidenceCursor.id}` })
 			: null;
-	const entries = queued.map((source) => ({
-		key: `${source.kind}:${source.id}:0`,
-		text: renderDreamingEvidence(source),
-	}));
-	if (resumed === null) {
-		return { entries, truncated: sourceLimit !== null && queued.length >= sourceLimit };
-	}
-	const remaining = renderDreamingEvidence(resumed).slice(state.evidenceCursor?.fragmentOffset);
-	const includeResumed = sourceLimit === null || queued.length < sourceLimit;
-	return {
-		entries:
-			remaining.length === 0 || !includeResumed
-				? entries
-				: [
-						...entries,
-						{ key: `${resumed.kind}:${resumed.id}:${state.evidenceCursor?.fragmentOffset ?? 0}`, text: remaining },
-					],
-		truncated: sourceLimit !== null && queued.length >= sourceLimit,
-	};
+	const resumedEntry =
+		resumed === null
+			? null
+			: validDreamingBacklogEntry(db, agentId, resumed, false, state.evidenceCursor?.fragmentOffset ?? 0);
+	const queuedSourceKeys = new Set(queued.map(sourceRecordKey));
+	const resumedIsQueued = resumed !== null && queuedSourceKeys.has(sourceRecordKey(resumed));
+	const resumedSource = resumedEntry !== null && resumed !== null && !resumedIsQueued ? resumed : null;
+	const resumedKey = resumedSource === null ? null : sourceRecordKey(resumedSource);
+	const availableSources = resumedSource === null ? queued : [resumedSource, ...queued];
+	return backlogReadFromSources(availableSources, sourceLimit, (source) => {
+		const offset =
+			resumedKey !== null && sourceRecordKey(source) === resumedKey
+				? (state.evidenceCursor?.fragmentOffset ?? 0)
+				: undefined;
+		return validDreamingBacklogEntry(db, agentId, source, false, offset);
+	});
 }
 
 /**
  * Refresh the exact BPE backlog count without encoding on the daemon thread.
- * Scheduled probes keep database reads and evidence rendering to a finite
- * source page; status and manual paths retain the exact aggregate by omitting
- * the cap. The token worker owns all cl100k encoding and memoizes unchanged
- * source fragments.
- * A scheduled probe returns Number.MAX_SAFE_INTEGER when its finite page is
- * full, preserving the threshold gate without scanning the remaining backlog.
+ * This operation always reads the complete canonical pending set. Scheduled
+ * checks use probeDreamingEpisodicBacklog instead, so an incomplete page can
+ * never overwrite the exact aggregate or masquerade as a token total.
  */
-export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string, maxSources?: number): Promise<number> {
-	const read = readDreamingEpisodicTokenBacklogEntriesInDb(db, agentId, maxSources);
-	return refreshDreamingBacklogTokenCache(agentId, read.entries).then((count) =>
-		read.truncated ? Number.MAX_SAFE_INTEGER : count,
+export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string): Promise<number> {
+	const read = readDreamingEpisodicBacklogInDb(db, agentId, null);
+	return refreshDreamingBacklogTokenCache(agentId, read.entries);
+}
+
+function ensureDreamingTokenThreshold(value: number): number {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new RangeError("Dreaming token threshold must be a finite non-negative safe integer");
+	}
+	return value;
+}
+
+/** Execute the bounded scheduler probe inside the database owner. */
+export function probeDreamingEpisodicBacklogInDb(
+	db: ReadDb,
+	agentId: string,
+	tokenThreshold: number,
+	maxSources: number,
+): Promise<DreamingEpisodicBacklogProbe> {
+	const threshold = ensureDreamingTokenThreshold(tokenThreshold);
+	const sourceLimit = boundedDreamingBacklogSourceLimit(maxSources);
+	const read = readDreamingEpisodicBacklogInDb(db, agentId, sourceLimit);
+	return countDreamingBacklogTokenEntries(agentId, read.entries, read.complete ? undefined : threshold).then(
+		(result) => {
+			if (read.complete) {
+				return {
+					kind: "exact",
+					tokens: result.tokens,
+					hasBacklog: read.hasBacklog,
+					sourcesScanned: read.sourcesScanned,
+				};
+			}
+			if (result.entriesCounted > 0 && result.tokens >= threshold) {
+				return {
+					kind: "threshold-reached",
+					tokenLowerBound: result.tokens,
+					hasBacklog: true,
+					sourcesScanned: result.entriesCounted,
+				};
+			}
+			return {
+				kind: "indeterminate",
+				tokenLowerBound: result.tokens,
+				hasBacklog: read.hasBacklog,
+				sourcesScanned: result.entriesCounted,
+			};
+		},
 	);
+}
+
+/** Read pending evidence presence without tokenizing its content. */
+export function hasDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string): boolean {
+	return readDreamingEpisodicBacklogInDb(db, agentId, 1).hasBacklog;
 }
 
 export async function getDreamingEpisodicTokenBacklog(
@@ -2312,26 +2420,53 @@ export async function getDreamingEpisodicTokenBacklog(
 	agentId: string,
 	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<number> {
-	const maxSources = ownerMaintenance === undefined ? undefined : DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES;
-	const input: DbOwnerDreamingEpisodicBacklog = {
-		agentId,
-		...(maxSources === undefined ? {} : { maxSources }),
-	};
-	const options = {
-		deadlineMs: 60_000,
-		estimatedWorkUnits: maxSources === undefined ? DB_OWNER_MAX_WORK_UNITS : maxSources * 10,
-	};
-	if (ownerMaintenance) {
-		const count = await ownerMaintenance.dreamingEpisodicBacklog(input, options);
-		recordDreamingEpisodicTokenBacklog(agentId, count);
-		return count;
-	}
-	const count = await runDbOwnerDomainOperation(accessor, {
-		runWithOwner: async (owner) => await ownerDreamingEpisodicBacklog(owner, input, options),
-		runInline: ({ read }) => read((db) => getDreamingEpisodicTokenBacklogInDb(db, input.agentId, input.maxSources)),
-	});
+	const input: DbOwnerDreamingEpisodicBacklog = { agentId };
+	const options = { deadlineMs: 60_000, estimatedWorkUnits: DB_OWNER_MAX_WORK_UNITS };
+	const count = ownerMaintenance
+		? await ownerMaintenance.dreamingEpisodicBacklog(input, options)
+		: await runDbOwnerDomainOperation(accessor, {
+				runWithOwner: async (owner) => await ownerDreamingEpisodicBacklog(owner, input, options),
+				runInline: ({ read }) => read((db) => getDreamingEpisodicTokenBacklogInDb(db, input.agentId)),
+			});
 	recordDreamingEpisodicTokenBacklog(agentId, count);
 	return count;
+}
+
+export async function probeDreamingEpisodicBacklog(
+	accessor: DbAccessor,
+	agentId: string,
+	tokenThreshold: number,
+	ownerMaintenance?: DbOwnerMaintenance,
+): Promise<DreamingEpisodicBacklogProbe> {
+	const input: DbOwnerDreamingEpisodicBacklogProbe = {
+		agentId,
+		tokenThreshold: ensureDreamingTokenThreshold(tokenThreshold),
+		maxSources: DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES,
+	};
+	const options = { deadlineMs: 60_000, estimatedWorkUnits: input.maxSources * 10 };
+	const result = ownerMaintenance
+		? await ownerMaintenance.dreamingEpisodicBacklogProbe(input, options)
+		: await runDbOwnerDomainOperation(accessor, {
+				runWithOwner: async (owner) => await ownerDreamingEpisodicBacklogProbe(owner, input, options),
+				runInline: ({ read }) =>
+					read((db) => probeDreamingEpisodicBacklogInDb(db, input.agentId, input.tokenThreshold, input.maxSources)),
+			});
+	if (result.kind === "exact") recordDreamingEpisodicTokenBacklog(agentId, result.tokens);
+	return result;
+}
+
+export async function hasDreamingEpisodicBacklog(
+	accessor: DbAccessor,
+	agentId: string,
+	ownerMaintenance?: DbOwnerMaintenance,
+): Promise<boolean> {
+	const input: DbOwnerDreamingEpisodicBacklogExists = { agentId };
+	const options = { deadlineMs: 30_000, estimatedWorkUnits: 10 };
+	if (ownerMaintenance) return await ownerMaintenance.dreamingEpisodicBacklogExists(input, options);
+	return await runDbOwnerDomainOperation(accessor, {
+		runWithOwner: async (owner) => await ownerDreamingEpisodicBacklogExists(owner, input, options),
+		runInline: ({ read }) => read((db) => hasDreamingEpisodicBacklogInDb(db, input.agentId)),
+	});
 }
 
 export async function shouldTriggerDreaming(
@@ -2342,16 +2477,22 @@ export async function shouldTriggerDreaming(
 	episodicTokens?: number,
 ): Promise<boolean> {
 	const tokens = episodicTokens ?? (await getDreamingEpisodicTokenBacklog(accessor, agentId));
-	return shouldTriggerDreamingAfterBacklog(accessor, cfg, agentId, nowMs, tokens);
+	const signal: DreamingEpisodicBacklogProbe = {
+		kind: "exact",
+		tokens,
+		hasBacklog: tokens > 0,
+		sourcesScanned: 0,
+	};
+	return (await evaluateDreamingTrigger(accessor, cfg, agentId, signal, nowMs)).trigger;
 }
 
-async function shouldTriggerDreamingAfterBacklog(
+export async function evaluateDreamingTrigger(
 	accessor: DbAccessor,
 	cfg: DreamingConfig,
 	agentId: string,
-	nowMs: number,
-	episodicTokens: number,
-): Promise<boolean> {
+	backlog: DreamingEpisodicBacklogProbe,
+	nowMs = Date.now(),
+): Promise<DreamingTriggerDecision> {
 	const state = await getDreamingState(accessor, agentId);
 	const hasAttention =
 		(await ownerQueryOne<{ present: number }>(
@@ -2364,19 +2505,22 @@ async function shouldTriggerDreamingAfterBacklog(
 
 	// Hard halt after repeated consecutive failures: no automatic scheduling
 	// for the cooldown window. Explicit operator triggers bypass this gate.
-	if (isDreamingScopeHalted(state, nowMs)) return false;
+	if (isDreamingScopeHalted(state, nowMs)) return { trigger: false };
 
 	// Back off by wall clock, not by evidence volume. A transient provider outage
 	// must not require exponentially more incoming evidence before recovery.
 	if (state.consecutiveFailures > 0) {
 		const exp = Math.min(state.consecutiveFailures, MAX_FAILURE_BACKOFF_MULTIPLIER);
 		const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
-		if (!Number.isFinite(failedAt) || nowMs - failedAt < FAILURE_BACKOFF_BASE_MS * 2 ** exp) return false;
+		if (!Number.isFinite(failedAt) || nowMs - failedAt < FAILURE_BACKOFF_BASE_MS * 2 ** exp) return { trigger: false };
 	}
 
-	// First run only backfills actual episodic evidence, except for explicit
-	// scoped attention that has been queued for a Dreaming review.
-	if (cfg.backfillOnFirstRun && state.lastPassAt === null) return episodicTokens > 0 || hasAttention;
+	if (hasAttention) return { trigger: true, reason: "attention" };
+
+	// First run only backfills actual pending episodic evidence.
+	if (cfg.backfillOnFirstRun && state.lastPassAt === null) {
+		return backlog.hasBacklog ? { trigger: true, reason: "first-run" } : { trigger: false };
+	}
 	const consumptionTable = await ownerQueryOne<{ present: number }>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.evidence.consumption-schema",
@@ -2384,7 +2528,9 @@ async function shouldTriggerDreamingAfterBacklog(
 		[],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 	);
-	if (hasAttention || episodicTokens >= cfg.tokenThreshold) return true;
+	if (backlog.kind === "threshold-reached" || (backlog.kind === "exact" && backlog.tokens >= cfg.tokenThreshold)) {
+		return { trigger: true, reason: "token-threshold" };
+	}
 	if (consumptionTable !== undefined && state.lastPassId !== null) {
 		const reviewsTable = await ownerQueryOne<{ present: number }>(
 			await getDbOwnerForAccessor(accessor),
@@ -2418,12 +2564,15 @@ async function shouldTriggerDreamingAfterBacklog(
 				[agentId, state.lastPassId],
 				{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 			)) !== undefined;
-		if (hasContinuation) return true;
+		if (hasContinuation) return { trigger: true, reason: "continuation" };
 	}
 
 	// A low-volume stream must not wait indefinitely for the batch ceiling.
 	// This is deliberately a maximum wait rather than an unconditional cron:
 	// empty ledgers never trigger a pass.
 	const lastPassMs = state.lastPassAt === null ? Number.NaN : Date.parse(state.lastPassAt);
-	return episodicTokens > 0 && Number.isFinite(lastPassMs) && nowMs - lastPassMs >= cfg.maxInterval;
+	if (backlog.hasBacklog && Number.isFinite(lastPassMs) && nowMs - lastPassMs >= cfg.maxInterval) {
+		return { trigger: true, reason: "max-interval" };
+	}
+	return { trigger: false };
 }

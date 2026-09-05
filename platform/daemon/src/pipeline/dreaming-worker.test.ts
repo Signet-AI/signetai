@@ -25,6 +25,7 @@ import {
 	selectDreamingCheckMode,
 	shouldDeferDreamingSweep,
 	startDreamingWorker,
+	_testDreamingTriggerLogData,
 } from "./dreaming-worker";
 
 function defaultCfg(overrides?: Partial<DreamingConfig>): DreamingConfig {
@@ -269,7 +270,7 @@ describe("dreaming worker agent scope", () => {
 
 	it("routes the scheduled hygiene scan and backlog probe through the maintenance owner", async () => {
 		let hygieneCalls = 0;
-		let backlogCalls = 0;
+		let probeCalls = 0;
 		let backlogMaxSources = 0;
 		const ownerMaintenance = {
 			queueIsHealthy: async () => true,
@@ -278,23 +279,57 @@ describe("dreaming worker agent scope", () => {
 				return 0;
 			},
 			dreamingSurprisalAttention: async () => null,
-			dreamingEpisodicBacklog: async (input: { readonly agentId: string; readonly maxSources: number }) => {
-				backlogCalls += 1;
+			dreamingEpisodicBacklogProbe: async (input: {
+				readonly agentId: string;
+				readonly tokenThreshold: number;
+				readonly maxSources: number;
+			}) => {
+				probeCalls += 1;
 				backlogMaxSources = input.maxSources;
-				return 0;
+				return { kind: "exact", tokens: 0, hasBacklog: false, sourcesScanned: 0 } as const;
 			},
+			dreamingEpisodicBacklogExists: async () => false,
 		} as unknown as DbOwnerMaintenance;
 		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", {
 			checkIntervalMs: 10,
 			ownerMaintenance,
 		});
 		try {
-			await waitFor(() => hygieneCalls === 1 && backlogCalls === 1, 2_000);
+			await waitFor(() => hygieneCalls === 1 && probeCalls === 1, 2_000);
 			expect(hygieneCalls).toBe(1);
-			expect(backlogCalls).toBe(1);
+			expect(probeCalls).toBe(1);
 			expect(backlogMaxSources).toBe(50);
 		} finally {
 			worker.stop();
+		}
+	});
+
+	it("labels scheduled trigger logs with the decision reason and count semantics", () => {
+		const exact = { kind: "exact", tokens: 42, hasBacklog: true, sourcesScanned: 5 } as const;
+		const partial = { kind: "indeterminate", tokenLowerBound: 12, hasBacklog: true, sourcesScanned: 50 } as const;
+
+		expect(_testDreamingTriggerLogData("scope", { trigger: true, reason: "token-threshold" }, exact, 100)).toEqual({
+			scopeId: "scope",
+			reason: "token-threshold",
+			threshold: 100,
+			hasBacklog: true,
+			countComplete: true,
+			sourcesScanned: 5,
+			episodicTokens: 42,
+		});
+
+		for (const reason of ["attention", "continuation", "max-interval"] as const) {
+			const data = _testDreamingTriggerLogData("scope", { trigger: true, reason }, partial, 100);
+			expect(data).toMatchObject({
+				scopeId: "scope",
+				reason,
+				threshold: 100,
+				hasBacklog: true,
+				countComplete: false,
+				sourcesScanned: 50,
+				tokenLowerBound: 12,
+			});
+			expect(data).not.toHaveProperty("episodicTokens");
 		}
 	});
 

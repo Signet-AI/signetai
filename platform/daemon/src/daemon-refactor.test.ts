@@ -48,8 +48,8 @@ describe("daemon route extraction refactor", () => {
 		}
 	});
 
-	// Exercises the non-local auth path (token mode) end-to-end:
-	// reloadAuthState reads agent.yaml, parses mode=token, and calls
+	// Exercises the non-local auth path (team mode) end-to-end:
+	// reloadAuthState reads agent.yaml, parses mode=team, and calls
 	// loadOrCreateSecret to populate authSecret. A throw would indicate
 	// a parsing or secret-loading failure.
 	//
@@ -58,7 +58,7 @@ describe("daemon route extraction refactor", () => {
 	// runner, so we assert no-throw only. At runtime in the daemon
 	// process, live bindings propagate correctly because state.ts and
 	// daemon.ts share the same module instance.
-	it("reloadAuthState completes without error in token mode", async () => {
+	it("reloadAuthState completes without error in team mode", async () => {
 		expect.assertions(1);
 		const state = await import("./routes/state.js");
 
@@ -70,7 +70,7 @@ describe("daemon route extraction refactor", () => {
 			join(tmpDir, "agent.yaml"),
 			[
 				"auth:",
-				"  mode: token",
+				"  mode: team",
 				"  rateLimits:",
 				"    forget:",
 				"      windowMs: 60000",

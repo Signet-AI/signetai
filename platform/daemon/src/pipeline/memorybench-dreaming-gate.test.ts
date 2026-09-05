@@ -411,10 +411,10 @@ describe("MemoryBench Dreaming gate", () => {
 				}
 			}
 		} finally {
-			closeDbAccessor();
+			await closeDbAccessor();
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
 			rmSync(dir, { recursive: true, force: true });
 		}
-	});
+	}, 30_000); // Includes owner startup (15s deadline), capture, and awaited shutdown.
 });

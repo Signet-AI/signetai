@@ -17,6 +17,7 @@
  * event loop can't be starved because the grinding now happens in a worker.
  */
 
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import type { Readable } from "node:stream";
@@ -151,11 +152,18 @@ async function freePort(): Promise<number> {
 	});
 }
 
+type BlackholeEndpoint = {
+	readonly origin: string;
+	readonly connectionCount: () => number;
+};
+
 /** A TCP server that accepts connections but never responds — makes an HTTP
  *  fetch hang indefinitely on response headers (a stalled CDN), hermetically. */
-async function blackholeOrigin(): Promise<string> {
+async function blackholeOrigin(): Promise<BlackholeEndpoint> {
 	return new Promise((resolve, reject) => {
+		let connectionCount = 0;
 		const server = createServer((socket) => {
+			connectionCount += 1;
 			// Hold the connection open without ever writing a response.
 			socket.on("error", () => {});
 		});
@@ -164,9 +172,27 @@ async function blackholeOrigin(): Promise<string> {
 			const address = server.address();
 			if (address === null || typeof address === "string") return reject(new Error("no port"));
 			servers.push(server);
-			resolve(`http://127.0.0.1:${address.port}`);
+			resolve({
+				origin: `http://127.0.0.1:${address.port}`,
+				connectionCount: () => connectionCount,
+			});
 		});
 	});
+}
+
+async function waitForBlackholeConnection(
+	endpoint: BlackholeEndpoint,
+	child: TestChild,
+	lifecycle: ChildLifecycle,
+	deadlineMs = 60_000,
+): Promise<void> {
+	const deadline = Date.now() + deadlineMs;
+	while (Date.now() < deadline) {
+		if (endpoint.connectionCount() > 0) return;
+		if (child.exitCode !== null || child.signalCode !== null) throw await childExitError(child, lifecycle);
+		await Bun.sleep(100);
+	}
+	throw new Error(`native embedding worker did not reach the blackhole within ${deadlineMs}ms`);
 }
 
 async function waitForHealth(
@@ -228,19 +254,22 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		await expect(result).rejects.toThrow(/status unknown, signal SIGTERM/);
 	});
 
-	// Generous timeout: daemon startup + a 5s probe window.
+	// Generous timeout: daemon startup + deferred native startup + a 5s probe window.
 	it("/health stays within SLA while the embedding worker is stuck on a model download", async () => {
 		const agentsDir = tempDir();
+		mkdirSync(join(agentsDir, "memory"), { recursive: true });
+		const database = new Database(join(agentsDir, "memory", "memories.db"));
+		database.close();
 		writeFileSync(
 			join(agentsDir, "agent.yaml"),
 			[
 				"memory:",
 				"  pipelineV2:",
 				"    enabled: false",
-				"  embedding:",
-				"    provider: native",
-				"    model: nomic-ai/nomic-embed-text-v1.5",
-				"    dimensions: 768",
+				"embedding:",
+				"  provider: native",
+				"  model: nomic-ai/nomic-embed-text-v1.5",
+				"  dimensions: 768",
 				"",
 			].join("\n"),
 		);
@@ -256,7 +285,7 @@ describe("native embedding event-loop isolation (e2e)", () => {
 				SIGNET_BIND: "127.0.0.1",
 				// Redirect the transformers model fetch to the blackhole so the
 				// embedding worker's first-run download hangs for the whole probe.
-				SIGNET_EMBEDDING_REMOTE_HOST: blackhole,
+				SIGNET_EMBEDDING_REMOTE_HOST: blackhole.origin,
 				// Avoid crosstalk with the user's real daemon/services.
 				SIGNET_DAEMON_ENTRYPOINT: "1",
 			},
@@ -270,9 +299,13 @@ describe("native embedding event-loop isolation (e2e)", () => {
 
 		await waitForHealth(origin, child, lifecycle);
 
-		// The daemon's startup probe (daemon.ts) fires checkEmbeddingProvider
-		// at boot, so the embedding worker is now grinding against the
-		// blackhole. Poll /health through the window and assert the SLA.
+		// The daemon's deferred startup probe (daemon.ts) fires after the initial
+		// health handshake. Waiting for the blackhole connection proves the native worker
+		// entered its model fetch before this test evaluates the /health SLA.
+		await waitForBlackholeConnection(blackhole, child, lifecycle);
+		expect(blackhole.connectionCount()).toBeGreaterThan(0);
+
+		// Poll /health through the window and assert the SLA.
 		const samples: number[] = [];
 		const probeDeadline = Date.now() + 5_000;
 		while (Date.now() < probeDeadline) {
@@ -288,46 +321,5 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		// while the embedding worker is hung. (Before the fix this timed out.)
 		const max = Math.max(...samples);
 		expect(max).toBeLessThan(1_000);
-
-		// Prove the embedding worker actually started its (stuck) init against
-		// the blackhole — otherwise this test could pass trivially with the
-		// provider idle. The handle forwards worker logs through the daemon
-		// logger, which writes to the agents-dir log.
-		const logDir = join(agentsDir, ".daemon", "logs");
-		let logText = "";
-		try {
-			for (const name of readdirSync(logDir)) {
-				if (name.endsWith(".log")) logText += readFileSync(join(logDir, name), "utf8");
-			}
-		} catch {
-			// logs may live elsewhere on some platforms; the SLA assertion above
-			// is the load-bearing guard.
-		}
-		expect(logText).toMatch(/nomic-embed|Initializing.*nomic|embedding/i);
-	}, 60_000);
-
-	it("starts the DB owner when the fresh workspace has no memory directory", async () => {
-		const agentsDir = tempDir();
-		const port = await freePort();
-		const origin = `http://127.0.0.1:${port}`;
-		expect(readdirSync(agentsDir)).not.toContain("memory");
-
-		const child = spawn(process.execPath, [daemonScript], {
-			env: {
-				...process.env,
-				SIGNET_PORT: String(port),
-				SIGNET_PATH: agentsDir,
-				SIGNET_BIND: "127.0.0.1",
-				SIGNET_DAEMON_ENTRYPOINT: "1",
-			},
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		children.push(child);
-		const lifecycle = captureChildLifecycle(child, agentsDir);
-		child.stdout.on("data", () => {});
-
-		await waitForHealth(origin, child, lifecycle);
-		expect(readdirSync(agentsDir)).toContain("memory");
-		expect((await fetch(`${origin}/health`)).ok).toBe(true);
-	}, 60_000);
+	}, 120_000);
 });

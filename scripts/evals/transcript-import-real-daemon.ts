@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 /** Real-daemon acceptance eval for transcript import (#1814). */
 import { spawn, type ChildProcess } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, readlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
 import { ensureUnifiedSchema } from "../../platform/core/src/migration";
 import { runMigrations } from "../../platform/core/src/migrations/index";
@@ -20,7 +21,7 @@ if (!(TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS as readonly string[]).includes(proce
 	process.exit(0);
 }
 
-const root = await mkdtemp(join("/mnt/work/hermes-scratch/", "1814-import-eval-"));
+const root = await mkdtemp(join(tmpdir(), "signet-transcript-import-eval-"));
 const port = 43000 + Math.floor(Math.random() * 1000);
 const origin = `http://127.0.0.1:${port}`;
 const agent = "eval-target-agent";
@@ -126,9 +127,9 @@ async function start(env: Record<string, string> = {}) {
 	await waitLive(daemon);
 }
 async function stop(signal: NodeJS.Signals = "SIGKILL") {
-	if (daemon && daemon.exitCode === null) {
+	if (daemon && daemon.exitCode === null && daemon.signalCode === null) {
 		daemon.kill(signal);
-		for (let i = 0; i < 100 && daemon.exitCode === null; i++) await Bun.sleep(50);
+		for (let i = 0; i < 100 && daemon.exitCode === null && daemon.signalCode === null; i++) await Bun.sleep(50);
 	}
 }
 async function waitForFailpoint(marker: string, expectedExit: number): Promise<void> {
@@ -160,32 +161,11 @@ async function importFile(text: string, name: string) {
 	).body;
 	const fileId = (job.files?.[0] as { id: string } | undefined)?.id;
 	if (!fileId) throw new Error("import job did not reserve an upload file");
-	const uploadPath = join(root, `.upload-${fileId}.jsonl`);
-	await writeFile(uploadPath, text, "utf8");
-	const uploadProcess = Bun.spawnSync([
-		"curl",
-		"-sS",
-		"--upload-file",
-		uploadPath,
-		"-H",
-		"content-type: application/jsonl",
-		"-H",
-		`x-file-name: ${name}`,
-		`${origin}/api/sources/imports/${job.jobId}/files/${fileId}?agentId=${agent}`,
-	]);
-	const uploadText = new TextDecoder().decode(uploadProcess.stdout);
-	let uploadBody: { sourceId: string; [key: string]: unknown };
-	try {
-		uploadBody = JSON.parse(uploadText) as { sourceId: string; [key: string]: unknown };
-	} catch {
-		throw new Error(
-			`upload response was not JSON (${uploadProcess.exitCode}): ${uploadText || new TextDecoder().decode(uploadProcess.stderr)}`,
-		);
-	}
-	const uploaded = {
-		status: uploadProcess.exitCode === 0 ? 201 : 599,
-		body: uploadBody,
-	};
+	const uploaded = await req(`/api/sources/imports/${job.jobId}/files/${fileId}?agentId=${agent}`, {
+		method: "PUT",
+		headers: { "content-type": "application/jsonl", "x-file-name": name },
+		body: text,
+	});
 	record(uploaded.status === 201, `upload-${name}`, uploaded.body);
 	record(
 		(await req(`/api/sources/imports/${job.jobId}/start?agentId=${agent}`, { method: "POST" })).status === 200,
@@ -255,7 +235,8 @@ try {
 		setupDb.close();
 	}
 	await start({ SIGNET_TRANSCRIPT_IMPORT_FAILPOINT: "inventory" });
-	const mixed = corpus(2200, "large");
+	const mixed = corpus(2200, "large").replaceAll("reply", "r".repeat(5000));
+	record(Buffer.byteLength(mixed) > 10 * 1_048_576, "upload-exceeds-ordinary-body-limit");
 	const first = await importFile(mixed, "large.jsonl");
 	await waitForFailpoint("transcript-import-inventory-failpoint-fired", 87);
 	record(daemon?.exitCode === 87, "kill-during-inventory", { exit: daemon?.exitCode });
@@ -360,7 +341,6 @@ try {
 	details.jobs = [firstDone.job, replayDone.job, rejectedDone.job, crashDone.job];
 	details.reconciliation = reconRows;
 	const result = { verdict: "pass", checks, details, workspace: root, port };
-	await writeFile("/mnt/work/hermes-scratch/1814-eval-result.json", JSON.stringify(result, null, 2));
 	console.log(JSON.stringify(result, null, 2));
 } catch (error) {
 	const result = {
@@ -373,9 +353,10 @@ try {
 		stderr: stderr.slice(-20),
 		stdout: stdout.slice(-20),
 	};
-	await writeFile("/mnt/work/hermes-scratch/1814-eval-result.json", JSON.stringify(result, null, 2));
 	console.log(JSON.stringify(result, null, 2));
 	process.exitCode = 1;
 } finally {
 	await stop("SIGTERM");
+	await stop("SIGKILL");
+	await rm(root, { recursive: true, force: true });
 }

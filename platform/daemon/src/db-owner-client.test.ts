@@ -353,6 +353,49 @@ describe("DB owner client", () => {
 		expect(client.health()).toMatchObject({ state: "ready", initialization: "ready", databaseReady: true });
 	});
 
+	test("executes exact, bounded, and existence Dreaming backlog requests in the owner", async () => {
+		const database = makeMigratedDb();
+		directory = database.directory;
+		const fixture = new Database(database.path);
+		const timestamp = "2026-08-01T00:00:00.000Z";
+		fixture
+			.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, agent_id, created_at, updated_at, completed_at)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+			)
+			.run("owner-dreaming-source", "owner-routed episodic evidence", "default", timestamp, timestamp, timestamp);
+		fixture.close();
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+
+		const exists = await client.submit<boolean>(
+			{ kind: "dreaming_episodic_backlog_exists", input: { agentId: "default" } },
+			{ operation: "owner-dreaming-backlog-exists", lane: "maintenance", deadlineMs: 30_000 },
+		).result;
+		const probe = await client.submit<{
+			readonly kind: string;
+			readonly tokens?: number;
+			readonly hasBacklog: boolean;
+			readonly sourcesScanned: number;
+		}>(
+			{
+				kind: "dreaming_episodic_backlog_probe",
+				input: { agentId: "default", tokenThreshold: 100_000, maxSources: 50 },
+			},
+			{ operation: "owner-dreaming-backlog-probe", lane: "maintenance", deadlineMs: 60_000 },
+		).result;
+		const exact = await client.submit<number>(
+			{ kind: "dreaming_episodic_backlog", input: { agentId: "default" } },
+			{ operation: "owner-dreaming-backlog-exact", lane: "maintenance", deadlineMs: 60_000 },
+		).result;
+
+		expect(exists).toBe(true);
+		expect(probe).toMatchObject({ kind: "exact", hasBacklog: true, sourcesScanned: 1 });
+		expect(probe.tokens).toBe(exact);
+		expect(exact).toBeGreaterThan(0);
+	});
+
 	test("detects an owner survivor when harness teardown is skipped", async () => {
 		const database = makeDb();
 		directory = database.directory;

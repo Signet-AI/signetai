@@ -326,3 +326,28 @@ it("uses SIGNET_WORKSPACE as the canonical import root when SIGNET_PATH is absen
 		else process.env.SIGNET_PATH = previousPath;
 	}
 });
+
+for (const state of ["running", "inventorying"]) {
+	it(`preserves pending cancellation when pausing a ${state} import`, async () => {
+		const instance = app();
+		const created = await instance.request("/api/sources/imports", {
+			method: "POST",
+			body: JSON.stringify({ files: [{ name: "cancel-first.jsonl" }] }),
+			headers: { "content-type": "application/json" },
+		});
+		const { jobId } = await created.json();
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare("UPDATE source_import_jobs SET state = ?, lease_token = 'lease' WHERE id = ?").run(state, jobId);
+		});
+		const cancelled = await instance.request(`/api/sources/imports/${jobId}/cancel`, { method: "POST" });
+		expect(await cancelled.json()).toMatchObject({ changed: true });
+		const paused = await instance.request(`/api/sources/imports/${jobId}/pause`, { method: "POST" });
+		expect(await paused.json()).toMatchObject({ changed: false });
+		const job = await getDbAccessor().withReadDbAsync((db) =>
+			db
+				.prepare("SELECT state, control_request, generation, lease_token FROM source_import_jobs WHERE id = ?")
+				.get(jobId),
+		);
+		expect(job).toEqual({ state, control_request: "cancel", generation: 0, lease_token: "lease" });
+	});
+}
