@@ -1,4 +1,7 @@
 import { Dialog } from "radix-ui";
+import { Monitor, Files, MessagesSquare } from "lucide-react";
+import { SignetMark, sourceLogo } from "@/components/icons";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useEffect, useRef, useState } from "react";
 import { api, getJSONResult, type Memory } from "@/lib/api";
 import { useAgentConfig } from "@/lib/agent-config";
@@ -17,7 +20,6 @@ interface Harness {
 	name: string;
 	exists: boolean;
 }
-const DIRECT_AGENTS = new Set(["claude-code", "codex", "hermes-agent"]);
 const STEPS = ["Welcome", "Agents", "Connection", "Sources", "First memory", "Ready"];
 
 export function OnboardingModal() {
@@ -203,6 +205,14 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 		if (!(await store.save()))
 			throw new Error("Could not save the model settings. Your previous connection test is no longer valid.");
 	};
+	const signIn = () => {
+		setConnected(false);
+		setError(null);
+		setVerified(false);
+		// A popup is a convenience. The SSE flow also exposes an explicit sign-in link.
+		navigation.open();
+		controller.startOAuth();
+	};
 	const advance = () => {
 		if (step === 0) {
 			setStep(1);
@@ -210,7 +220,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 		}
 		if (step === 1) {
 			void perform(async (signal) => {
-				for (const id of selected.filter((id) => DIRECT_AGENTS.has(id))) {
+				for (const id of selected) {
 					const result = await getJSONResult<{ success: boolean }>(`/api/harnesses/${encodeURIComponent(id)}/connect`, {
 						method: "POST",
 						signal,
@@ -233,8 +243,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 			}
 			if (!local && !connected) {
 				if (oauth) {
-					if (!navigation.open()) setError("Allow the sign-in popup, then try again.");
-					else controller.startOAuth();
+					signIn();
 				} else
 					void perform(async (signal) => {
 						const name = providerKeySecretName(provider);
@@ -382,7 +391,8 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 					<section className="modal" style={{ zIndex: 51 }}>
 						<header className="top">
 							<div className="wordmark">
-								<span aria-hidden="true">⠿</span>signet
+								<SignetMark width={20} height={22} />
+								signet
 							</div>
 							<button
 								type="button"
@@ -425,11 +435,17 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 									{step === 0 && (
 										<>
 											<div className="hero" aria-hidden="true">
-												<div className="app-icon claude">✳︎</div>
+												<div className="app-icon">
+													<img src="/logos/claude.svg" alt="" />
+												</div>
 												<span className="thread" />
-												<div className="memory-node">⠿</div>
+												<div className="memory-node">
+													<SignetMark width={44} height={48} />
+												</div>
 												<span className="thread" />
-												<div className="app-icon codex">⌘</div>
+												<div className="app-icon">
+													<img src="/logos/openai.svg" alt="" />
+												</div>
 											</div>
 											{heading(
 												"A familiar starting point",
@@ -446,32 +462,34 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 												"Where do you work?",
 												"Choose the agents to connect on the machine running Signet. Your existing instructions stay yours.",
 											)}
-											<div className="choices">
-												{harnesses.data?.data?.harnesses
-													.filter((h) => DIRECT_AGENTS.has(h.id))
-													.map((h) => (
-														<button
-															type="button"
-															key={h.id}
-															className={`choice ${selected.includes(h.id) ? "selected" : ""}`}
-															aria-pressed={selected.includes(h.id)}
-															disabled={busy}
-															onClick={() =>
-																setSelected((ids) =>
-																	ids.includes(h.id) ? ids.filter((id) => id !== h.id) : [...ids, h.id],
-																)
-															}
-														>
-															<span className="app-icon">
-																{h.id === "claude-code" ? "✳︎" : h.id === "codex" ? "⌘" : "↗"}
-															</span>
-															<span>
-																<strong>{h.name}</strong>
-																<small>{h.exists ? "Detected on this machine" : "Install Signet integration"}</small>
-															</span>
-															<span className="tick">{selected.includes(h.id) ? "✓" : ""}</span>
-														</button>
-													))}
+											<div className="choices agent-choices">
+												{harnesses.data?.data?.harnesses.map((h) => (
+													<button
+														type="button"
+														key={h.id}
+														className={`choice ${selected.includes(h.id) ? "selected" : ""}`}
+														aria-pressed={selected.includes(h.id)}
+														disabled={busy}
+														onClick={() =>
+															setSelected((ids) =>
+																ids.includes(h.id) ? ids.filter((id) => id !== h.id) : [...ids, h.id],
+															)
+														}
+													>
+														<span className="app-icon">
+															{!["forge", "pi"].includes(h.id) && (
+																<img
+																	src={`/logos/${h.id === "claude-code" ? "claude" : h.id === "codex" ? "openai" : h.id}.svg`}
+																	alt=""
+																/>
+															)}
+														</span>
+														<span>
+															<strong>{h.name}</strong>
+														</span>
+														<span className="tick">{selected.includes(h.id) ? "✓" : ""}</span>
+													</button>
+												))}
 											</div>
 											{harnesses.data?.error && (
 												<div role="alert">
@@ -481,9 +499,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 													</button>
 												</div>
 											)}
-											<p className="fixture">
-												Other agents remain available through the CLI. No selection? You can connect one later.
-											</p>
+											<p className="fixture">Select the tools you use. You can connect more later.</p>
 										</>
 									)}
 									{step === 2 && (
@@ -500,7 +516,11 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 														.map((id) => (
 															<button type="button" className="choice" key={id} onClick={() => chooseProvider(id)}>
 																<span className="app-icon">
-																	{id === "openai-compatible" ? "⌂" : id === "anthropic" ? "✳︎" : "◎"}
+																	{id === "openai-compatible" ? (
+																		<Monitor size={24} />
+																	) : (
+																		<img src={`/logos/${id === "anthropic" ? "claude" : "openai"}.svg`} alt="" />
+																	)}
 																</span>
 																<span>
 																	<strong>{id === "openai-compatible" ? "Local model" : PROVIDER_NAMES[id]}</strong>
@@ -512,27 +532,63 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 																</span>
 															</button>
 														))}
-													<select aria-label="Other provider" value="" onChange={(e) => chooseProvider(e.target.value)}>
-														<option value="">Another provider…</option>
-														{catalog.data.providers.map((id) => (
-															<option key={id} value={id}>
-																{PROVIDER_NAMES[id] ?? id}
-															</option>
-														))}
-													</select>
+													<Select value="" onValueChange={chooseProvider}>
+														<SelectTrigger aria-label="Other provider" className="w-full">
+															<SelectValue placeholder="Another provider…" />
+														</SelectTrigger>
+														<SelectContent
+															position="popper"
+															className="z-[60] max-h-64 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+														>
+															{catalog.data.providers.map((id) => (
+																<SelectItem key={id} value={id}>
+																	{PROVIDER_NAMES[id] ?? id}
+																</SelectItem>
+															))}
+														</SelectContent>
+													</Select>
 												</div>
 											) : (
 												<div className="auth-card">
-													<strong>{providerName}</strong>
+													<div className="connection-heading">
+														{local ? (
+															<Monitor size={24} />
+														) : ["openai-codex", "openai", "anthropic"].includes(provider) ? (
+															<img
+																src={`/logos/${provider === "anthropic" ? "claude" : "openai"}.svg`}
+																alt=""
+																width={24}
+																height={24}
+															/>
+														) : null}
+														<strong>{providerName}</strong>
+													</div>
 													<div className="status">
 														{verified
 															? "Connection checked. Automatic memory started."
 															: connected
-																? "Sign-in saved. Test the model before enabling memory."
+																? "Saved credentials found. Test them, or sign in again below."
 																: local
 																	? "Your model server runs on the same machine as Signet."
 																	: "Relevant text will be sent to this provider to organize memory. Original evidence stays in your workspace."}
 													</div>
+													{oauth && connected && !blocked && (
+														<button type="button" className="muted-link" onClick={signIn}>
+															Sign in again
+														</button>
+													)}
+													{!local && !oauth && connected && !blocked && (
+														<button
+															type="button"
+															className="muted-link"
+															onClick={() => {
+																setConnected(false);
+																setVerified(false);
+															}}
+														>
+															Replace API key
+														</button>
+													)}
 													{!local && !oauth && !connected && (
 														<input
 															className="memory-input"
@@ -544,8 +600,8 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 														/>
 													)}
 													{(local || connected) && !verified && (
-														<details open={local}>
-															<summary className="muted-link">{model ? `Model: ${model}` : "Choose a model"}</summary>
+														<div className="model-field">
+															<div className="fixture">{local ? "Local model server" : "Memory model"}</div>
 															{local ? (
 																<>
 																	<input
@@ -563,24 +619,32 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 																	/>
 																</>
 															) : (
-																<select
-																	aria-label="Memory model"
-																	value={model}
-																	onChange={(e) => setModel(e.target.value)}
-																>
-																	<option value="">Choose a model…</option>
-																	{catalog.data.models[provider]?.map((m) => (
-																		<option key={m.id} value={m.id}>
-																			{m.name}
-																		</option>
-																	))}
-																</select>
+																<Select value={model} onValueChange={setModel}>
+																	<SelectTrigger aria-label="Memory model" className="w-full">
+																		<SelectValue placeholder="Choose a model…" />
+																	</SelectTrigger>
+																	<SelectContent
+																		position="popper"
+																		className="z-[60] max-h-64 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+																	>
+																		{catalog.data.models[provider]?.map((m) => (
+																			<SelectItem key={m.id} value={m.id}>
+																				{m.name}
+																			</SelectItem>
+																		))}
+																	</SelectContent>
+																</Select>
 															)}
-														</details>
+														</div>
 													)}
 													{phase.kind === "oauth-running" && (
 														<div className="status" role="status">
-															{phase.progress ?? "Finish signing in in your browser."}
+															{phase.progress ??
+																(phase.prompt
+																	? ""
+																	: phase.url || phase.deviceCode
+																		? "Finish signing in in your browser."
+																		: "Opening sign-in…")}
 															{safeOAuthHref(phase.url) && (
 																<a href={safeOAuthHref(phase.url) ?? undefined} target="_blank" rel="noreferrer">
 																	{" "}
@@ -670,8 +734,10 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 										<>
 											{heading(
 												"03 / Bring your context",
-												"You’re not starting from zero.",
-												"Bring the notes and conversations you want your agents to remember. You can add more sources anytime.",
+												sourceKind ? "Bring your context." : "You’re not starting from zero.",
+												sourceKind
+													? "Connect your source. Add more anytime."
+													: "Bring the notes and conversations you want your agents to remember.",
 											)}
 											{sourceKind ? (
 												<ConnectSourceDialog
@@ -710,7 +776,13 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 															}}
 														>
 															<span className="app-icon">
-																{item.id === "obsidian" ? "◇" : item.id === "transcripts" ? "≋" : "▤"}
+																{item.id === "transcripts" ? (
+																	<MessagesSquare size={22} />
+																) : item.id === "files" ? (
+																	<Files size={22} />
+																) : (
+																	sourceLogo(item.id, { width: 24, height: 24 })
+																)}
 															</span>
 															<span>
 																<strong>{item.name}</strong>
@@ -722,7 +794,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 											)}
 											<div role="status" className="fixture">
 												{sources.data
-													? sources.data.sources.map((source) => (
+													? sources.data.sources.slice(-2).map((source) => (
 															<div key={source.id}>
 																{source.name}: {source.indexJob?.status ?? (source.enabled ? "registered" : "disabled")}
 																{source.indexJob?.error && ` — ${source.indexJob.error}`}
@@ -799,7 +871,11 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 													? `${selected.length} agent integrations selected`
 													: "Connect an agent when you’re ready"}
 											</div>
-											<div className="receipt">✓ {providerName} answered the connection test</div>
+											<div className="receipt">
+												{verified
+													? `✓ ${providerName} answered the connection test`
+													: "Automatic memory setup deferred"}
+											</div>
 											<div className="receipt">✓ Your first memory was saved and recalled</div>
 											<p className="fixture">
 												Source imports may still be processing. Sources has their current status.
@@ -823,7 +899,8 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 									disabled={blocked}
 									onClick={() => {
 										setError(null);
-										setStep((n) => n - 1);
+										if (step === 3 && sourceKind) setSourceKind(null);
+										else setStep((n) => n - 1);
 									}}
 								>
 									Back
@@ -834,6 +911,21 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 									))}
 								</div>
 							</div>
+							{step === 2 && !verified && (
+								<button
+									type="button"
+									className="back"
+									disabled={busy || phase.kind === "saving"}
+									onClick={() => {
+										controller.cancelOAuth();
+										navigation.close();
+										setError(null);
+										setStep(3);
+									}}
+								>
+									Set up later
+								</button>
+							)}
 							<button
 								type="button"
 								className="primary"

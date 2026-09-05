@@ -41,7 +41,7 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build @signet/core and @signet/daemon
         run: |
-          bun run --filter '@signet/core' --filter '@signet/connector-base' --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-hermes-agent' build
+          bun run --filter '@signet/core' --filter '@signet/connector-base' --filter '@signet/connector-*' build
           bun run --filter '@signet/daemon' build
       - name: Run Phase D acceptance harness
         run: |

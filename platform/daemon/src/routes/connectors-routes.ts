@@ -390,6 +390,10 @@ export function registerConnectorRoutes(app: Hono): void {
 				path: join(homedir(), ".gemini", "settings.json"),
 				exists: existsSync(join(homedir(), ".gemini", "settings.json")),
 			},
+			{ id: "pi", name: "Pi", path: join(homedir(), ".pi", "agent", "settings.json"), exists: existsSync(join(homedir(), ".pi", "agent", "settings.json")) },
+			{ id: "oh-my-pi", name: "Oh My Pi", path: join(homedir(), ".omp", "agent", "settings.json"), exists: existsSync(join(homedir(), ".omp", "agent", "settings.json")) },
+			{ id: "kimi", name: "Kimi", path: join(homedir(), ".kimi", "config.toml"), exists: existsSync(join(homedir(), ".kimi", "config.toml")) },
+			{ id: "forge", name: "ForgeCode", path: join(homedir(), ".forge", "config.yaml"), exists: existsSync(join(homedir(), ".forge", "config.yaml")) },
 		];
 
 		const harnesses = configs.map((config) => ({

@@ -11,6 +11,7 @@ const originalEvent = globalThis.Event;
 const originalCustomEvent = globalThis.CustomEvent;
 let config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
 let saveFails = false;
+let savedOAuth = false;
 const calls: string[] = [];
 // Radix detects the DOM at module load. Other suites import it for SSR;
 // run this browser fixture in its own process so test order cannot hide the modal.
@@ -48,7 +49,25 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			if (path === "/api/harnesses")
 				return Response.json({ harnesses: [{ id: "codex", name: "Codex", exists: true }] });
 			if (path === "/api/inference/catalog")
-				return Response.json({ providers: [], models: {}, oauthProviders: [], acpxAgents: [] });
+				return Response.json({
+					providers: savedOAuth ? ["openai-codex"] : [],
+					models: {},
+					oauthProviders: savedOAuth ? [{ id: "openai-codex", connected: true }] : [],
+					acpxAgents: [],
+				});
+			if (path === "/api/inference/oauth/login/openai-codex") {
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(
+								new TextEncoder().encode('data: {"type":"auth","url":"https://example.com/sign-in"}\n\n'),
+							);
+							init?.signal?.addEventListener("abort", () => controller.close(), { once: true });
+						},
+					}),
+					{ headers: { "Content-Type": "text/event-stream" } },
+				);
+			}
 			if (path === "/api/sources") return Response.json({ sources: [] });
 			if (path === "/api/sources/obsidian") return Response.json({ id: "notes", success: true });
 			if (path.startsWith("/api/sources/imports?")) {
@@ -123,6 +142,52 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		};
 	}
 
+	test("saved OAuth still allows signing in again when popups are blocked", async () => {
+		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
+		savedOAuth = true;
+		const open = window.open;
+		window.open = () => null;
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			await view.click("ChatGPT / Codex");
+			expect(document.body.textContent).toContain("Saved credentials found");
+			await view.click("Sign in again");
+			expect(calls).toContain("POST /api/inference/oauth/login/openai-codex");
+			expect(document.querySelector('a[href="https://example.com/sign-in"]')).not.toBeNull();
+			expect(calls).not.toContain("POST /api/inference/execute");
+			await view.click("Set up later");
+			expect(document.body.textContent).toContain("Bring your context");
+		} finally {
+			await view.close();
+			savedOAuth = false;
+			window.open = open;
+		}
+	});
+
+	test("connection setup can be deferred without enabling inference or reporting a successful probe", async () => {
+		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			const before = config;
+			await view.click("Set up later");
+			expect(config).toBe(before);
+			expect(calls).not.toContain("POST /api/inference/execute");
+			expect(calls).not.toContain("POST /api/pipeline/resume");
+			await view.click("Continue");
+			await view.click("Remember this");
+			await view.click("Recall it");
+			await view.click("Continue");
+			expect(document.body.textContent).toContain("Automatic memory setup deferred");
+			expect(document.body.textContent).not.toContain("answered the connection test");
+		} finally {
+			await view.close();
+		}
+	});
+
 	test("the modal requires a successful save and probe, exposes sources, and recalls scoped evidence", async () => {
 		const view = await mount();
 		try {
@@ -152,8 +217,8 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			expect(next?.disabled).toBe(false);
 			await view.click("Agent transcriptsBulk import");
 			const files = document.querySelector('input[type="file"]');
-			const target = document.querySelector('select[aria-label="Target agent"]');
-			if (!(files instanceof HTMLInputElement) || !(target instanceof HTMLSelectElement))
+			const target = document.querySelector('button[aria-label="Target agent"]');
+			if (!(files instanceof HTMLInputElement) || !(target instanceof HTMLButtonElement))
 				throw new Error("Missing transcript controls");
 			expect(files.accept).toBe(".jsonl");
 			await act(async () => {
@@ -161,8 +226,12 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 				transfer.items.add(new dom.File(["{}\n"], "conversation.jsonl"));
 				files.files = transfer.files;
 				files.dispatchEvent(new Event("change", { bubbles: true }));
-				target.value = "alice";
-				target.dispatchEvent(new Event("change", { bubbles: true }));
+				target.click();
+			});
+			await act(async () => {
+				const option = document.querySelector('[role="option"]');
+				if (!(option instanceof HTMLElement)) throw new Error("Missing agent option");
+				option.click();
 			});
 			await view.click("Import & index");
 			expect(calls).toContain("POST /api/sources/imports/import-job/start");

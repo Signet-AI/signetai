@@ -1,3 +1,4 @@
+import { HARNESS_INSTALLERS } from "../harness-install-worker";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -7,7 +8,7 @@ import { requirePermission } from "../auth";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
 import { AGENTS_DIR, authConfig } from "./state";
 
-const SUPPORTED = new Set(["claude-code", "codex", "hermes-agent"]);
+const SUPPORTED = new Set(Object.keys(HARNESS_INSTALLERS));
 let installing = false;
 let cancelInstall: (() => void) | undefined;
 let installationClosed: Promise<void> = Promise.resolve();

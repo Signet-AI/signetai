@@ -3,6 +3,7 @@
  * centered picker and modal shell. The daemon contracts stay in the api client;
  * this component only chooses the existing transport and submit path.
  */
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { sourceLogo } from "@/components/icons";
 import { type ImportSourcesResponse, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -10,7 +11,6 @@ import { FolderOpen, Globe, Loader2, MessageCircle, RotateCcw, Upload, X } from 
 import { useEffect, useRef, useState } from "react";
 
 export type SourceKind = "files" | "web" | "transcripts" | "obsidian" | "github" | "discord";
-type SourceStep = "choose" | "configure";
 
 const IMPORT_KINDS: readonly { id: "files" | "web" | "transcripts"; label: string; description: string }[] = [
 	{ id: "files", label: "Files", description: "Import documents and notes" },
@@ -140,7 +140,6 @@ export function ConnectSourceDialog({
 
 	useEffect(() => {
 		if (!open) return;
-		setStep(initialKind ? "configure" : "choose");
 		setKind(initialKind ?? "files");
 		setTarget("");
 		setName("");
@@ -356,7 +355,7 @@ export function ConnectSourceDialog({
 				</header>
 				<div className="cs-body cs-body--source">
 					<div className="cs-layout">
-						<aside className="cs-source-list" aria-label="Source types">
+						{!embedded && <aside className="cs-source-list" aria-label="Source types">
 						<div className="cs-source-list__title">Sources</div>
 							<div className="cs-source-list__group">Import</div>
 							{IMPORT_KINDS.map((item) => (
@@ -390,7 +389,7 @@ export function ConnectSourceDialog({
 									</span>
 								</button>
 							))}
-						</aside>
+						</aside>}
 						<section className="cs-options" aria-label={`${sourceLabel(kind)} options`}>
 							<div className="cs-options__head">
 								<div className="cs-options__title">{kind === "files" ? "Import files" : `Connect ${sourceLabel(kind)}`}</div>
@@ -430,52 +429,57 @@ export function ConnectSourceDialog({
 							/>
 							{kind === "transcripts" && (
 								<label className="cs-field">
-									<span className="cs-field__label">Target agent</span>
-									<select
-										className="cs-field__input"
-										value={target}
-										onChange={(event) => setTarget(event.target.value)}
-										disabled={busy}
-										required
-										aria-label="Target agent"
-									>
-										<option value="">Select a live agent</option>
-										{agents.map((agent) => (
-											<option key={agent.id} value={agent.id}>
-												{agent.name} ({agent.id})
-											</option>
-										))}
-									</select>
+									<span id="source-target-label" className="cs-field__label">
+										Target agent
+									</span>
+									<Select value={target} onValueChange={setTarget} disabled={busy}>
+										<SelectTrigger aria-label="Target agent" aria-labelledby="source-target-label" className="w-full">
+											<SelectValue placeholder="Choose an agent" />
+										</SelectTrigger>
+										<SelectContent
+											position="popper"
+											className="z-[60] max-h-64 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+										>
+											{agents.map((agent) => (
+												<SelectItem key={agent.id} value={agent.id}>
+													{agent.name} ({agent.id})
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
 									<span className="cs-field__hint">{FIELD.transcripts.hint}</span>
 								</label>
 							)}
+							{embedded && selectedCount > 2 && <span className="cs-field__hint">{selectedCount} files selected</span>}
 							{selectedCount > 0 && (
 								<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 font-mono text-[10px]">
-									{files.map((file) => (
+									{files.slice(0, embedded ? 2 : files.length).map((file) => (
 										<span key={`${file.name}:${file.size}`} className="truncate">
 											{file.name} · {(file.size / 1024).toFixed(0)} KB
 										</span>
 									))}
-									{desktopPaths.map((path) => (
+									{desktopPaths.slice(0, embedded ? 2 : desktopPaths.length).map((path) => (
 										<span key={path} className="truncate">
 											{path.split(/[\\/]/).pop() ?? path} · desktop path
 										</span>
 									))}
 								</div>
 							)}
-							<label className="cs-field">
-								<span className="cs-field__label">When a content hash already exists</span>
-								<select
-									className="cs-field__input"
-									value={duplicateMode}
-									onChange={(event) => setDuplicateMode(event.target.value as typeof duplicateMode)}
-									disabled={busy}
-								>
-									<option value="skip">Skip duplicate</option>
-									<option value="replace">Replace and re-index</option>
-									<option value="reimport">Import as a new source</option>
-								</select>
-							</label>
+							{!embedded && (
+								<label className="cs-field">
+									<span className="cs-field__label">If a content hash already exists</span>
+									<select
+										className="cs-field__input"
+										value={duplicateMode}
+										onChange={(event) => setDuplicateMode(event.target.value as typeof duplicateMode)}
+										disabled={busy}
+									>
+										<option value="skip">Skip duplicate</option>
+										<option value="replace">Replace and re-index</option>
+										<option value="reimport">Import as a new source</option>
+									</select>
+								</label>
+							)}
 							{transcriptJobId && (
 								<div className="cs-field__hint" aria-live="polite">
 									Import job created: <code>{transcriptJobId}</code>
@@ -573,6 +577,7 @@ export function ConnectSourceDialog({
 					</div>
 				</div>
 				<footer className="cs-foot">
+{!embedded && (
 					<button
 						type="button"
 						className="cs-btn-ghost"
@@ -581,6 +586,7 @@ export function ConnectSourceDialog({
 					>
 						Close
 					</button>
+ )}
 					<button type="button" className="cs-btn-primary" onClick={submit} disabled={submitDisabled}>
 						{busy && <Loader2 className="size-3.5 animate-spin" />}
 						{kind === "files" || kind === "transcripts" ? "Import & index" : kind === "web" ? "Add & index" : "Connect & index"}

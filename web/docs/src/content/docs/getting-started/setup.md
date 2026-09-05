@@ -14,8 +14,8 @@ Setup creates a local workspace when needed, starts or reaches its daemon, and o
 ## The onboarding flow
 
 1. **Welcome** explains what memory carries between conversations.
-2. **Agents** connects Claude Code, Codex, or Hermes on the machine running Signet. Other integrations remain available through non-interactive CLI setup. You may connect an agent later.
-3. **Connection** signs in to a provider, stores an API key, or connects a local model. An explicit **Test and enable memory** action saves the configuration, checks a real model response, and starts automatic processing. Failed saves or tests keep you on this step. Existing frozen or shadow controls are respected.
+2. **Agents** offers Claude Code, Codex, Hermes Agent, OpenCode, OpenClaw, Gemini CLI, Pi, Oh My Pi, Kimi, and ForgeCode. OpenClaw requires its Signet plugin package from CLI setup before connecting here. You may connect an agent later.
+3. **Connection** signs in to a provider, stores an API key, or connects a local model. An explicit **Test and enable memory** action saves the configuration, checks a real model response, and starts automatic processing. Saved credentials can be replaced or signed in again. Failed saves or tests show an error; **Set up later** continues to sources without enabling processing or claiming the connection works. Existing frozen or shadow controls are respected.
 4. **Bring your context** optionally connects an Obsidian vault or imports files and [transcript exports](/sources/#agent-transcript-imports). You can add multiple sources. Indexing and import jobs may continue in the background; their reported state is not a claim that semantic processing has completed. Sources provides progress, errors, retry, and removal.
 5. **First memory** saves a private note under your active agent, then retrieves that same note through scoped search.
 6. **Ready** reports the checks that actually completed. Start a new conversation in your agent to check its integration.

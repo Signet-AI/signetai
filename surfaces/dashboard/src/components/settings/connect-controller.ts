@@ -83,7 +83,9 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 
 	const startOAuth = useCallback(() => {
 		const current = phaseRef.current;
-		if (current.kind !== "method" && current.kind !== "error") return;
+		if (current.kind !== "method" && current.kind !== "error" && current.kind !== "connected") return;
+		loginRef.current?.close();
+		loginRef.current = null;
 		setPhase({ kind: "oauth-running" });
 
 		void (async () => {
