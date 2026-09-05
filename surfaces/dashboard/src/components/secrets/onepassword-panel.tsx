@@ -5,7 +5,16 @@
  * /api/secrets/1password/* (secrets-routes.ts).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Import, Link2, Loader2, RefreshCw, Unlink } from "@/components/mingcute-icons";
+import {
+	Check,
+	ChevronDown,
+	ChevronRight,
+	Import,
+	Link2,
+	Loader2,
+	RefreshCw,
+	Unlink,
+} from "@/components/mingcute-icons";
 import { toast } from "sonner";
 import { api, type OnePasswordStatus, type OnePasswordVault } from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
@@ -106,7 +115,9 @@ export function OnePasswordPanel({ onImported, compact = false }: { onImported: 
 	return (
 		<div
 			className={cn(
-				compact ? "mt-1" : "shrink-0 rounded-[var(--radius)] border border-[oklch(1_0_0/0.05)] bg-card [:root:not(.dark)_&]:border-[oklch(0_0_0/0.06)]",
+				compact
+					? "mt-1"
+					: "shrink-0 rounded-[var(--radius)] border border-[oklch(1_0_0/0.05)] bg-card [:root:not(.dark)_&]:border-[oklch(0_0_0/0.06)]",
 			)}
 		>
 			<div className="flex items-center gap-1 px-3 py-2">

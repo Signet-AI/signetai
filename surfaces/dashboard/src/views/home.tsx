@@ -89,6 +89,7 @@ export function HomeView() {
 					</div>
 				</section>
 
+				{/* biome-ignore lint/a11y/noNoninteractiveTabindex: this independently scrolling panel must be keyboard-scrollable. */}
 				<section className="home-system" aria-labelledby="system-title" tabIndex={0}>
 					<div className="home-page-heading">
 						<h2

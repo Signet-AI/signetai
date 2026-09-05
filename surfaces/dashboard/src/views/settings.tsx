@@ -38,7 +38,16 @@ import { DASHBOARD_LICENSES } from "@/lib/dashboard-licenses";
 import { type SettingsSection, useSettings } from "@/lib/settings-context";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { CheckCircle, Download, ExternalLink, Loader2, RefreshCw, Search, TriangleAlert, X } from "@/components/mingcute-icons";
+import {
+	CheckCircle,
+	Download,
+	ExternalLink,
+	Loader2,
+	RefreshCw,
+	Search,
+	TriangleAlert,
+	X,
+} from "@/components/mingcute-icons";
 import { useEffect, useMemo, useState } from "react";
 
 const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [

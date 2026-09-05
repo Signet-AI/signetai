@@ -44,5 +44,9 @@ export function Panel({
 		</>
 	);
 
-	return surface ? <Surface className={cn("group", className)}>{content}</Surface> : <section className={cn("group", className)}>{content}</section>;
+	return surface ? (
+		<Surface className={cn("group", className)}>{content}</Surface>
+	) : (
+		<section className={cn("group", className)}>{content}</section>
+	);
 }

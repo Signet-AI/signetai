@@ -61,10 +61,7 @@ export function ActivityHeatmap({ days }: { days: DayBucket[] }) {
 					<div
 						key={i}
 						title={`${d.date}: ${d.count}`}
-						className={cn(
-							"aspect-square rounded-[2px] hover:brightness-110",
-							HEATMAP_LEVELS[level(d.count)],
-						)}
+						className={cn("aspect-square rounded-[2px] hover:brightness-110", HEATMAP_LEVELS[level(d.count)])}
 					/>
 				))}
 			</div>
