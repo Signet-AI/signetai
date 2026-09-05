@@ -336,6 +336,15 @@ export async function runExistingSetupWizard(
 					identity: { ...readRecord(existingCapabilities.identity), mode: identityMode },
 				},
 			};
+			if (options?.extractionProvider) {
+				if (Object.hasOwn(config, "inference")) {
+					updatedConfig.inference = config.inference;
+				} else {
+					// Remove only a generated setup route when extraction is disabled;
+					// preserve any user-owned inference configuration.
+					applySetupInferenceRoute(updatedConfig, undefined);
+				}
+			}
 			if (dreamingEnabled) {
 				const existingMemory = { ...readRecord(existingConfig.memory) };
 				Reflect.deleteProperty(existingMemory, "synthesis");

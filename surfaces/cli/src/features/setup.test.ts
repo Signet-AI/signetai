@@ -474,6 +474,34 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(agentYaml).not.toContain("claude-code");
 	});
 
+	it("applies an explicit extraction provider to an existing manifest", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-extraction-provider-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(basePath, "agent.yaml"), "version: 1\n");
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+		await runExistingSetupWizard(basePath, fakeDetection(basePath), {}, deps, {
+			nonInteractive: true,
+			skipGit: true,
+			allowUnprotectedWorkspace: true,
+			extractionProvider: "ollama",
+			extractionModel: "qwen3:4b",
+			signetSecretsEnabled: true,
+		});
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("executor: ollama");
+		expect(agentYaml).toContain("model: qwen3:4b");
+	});
+
 	it("includes Hermes in migration harnesses when detected in ~/.hermes", () => {
 		root = mkdtempSync(join(tmpdir(), "setup-migrate-hermes-default-"));
 		const basePath = join(root, "agents");
