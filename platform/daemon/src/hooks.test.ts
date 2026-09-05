@@ -946,7 +946,63 @@ creature: digital assistant
 		expect(after.last_accessed).toBeNull();
 	});
 
+	test.serial("withholds an invalidated generated head from ordinary and profiled startup", async () => {
+		createMemoryDb([{ content: "Planning meeting is Tuesday." }]);
+		const { getDbOwnerForAccessor } = await import("./db-owner-runtime");
+		const { ownerRun } = await import("./db-owner-sql");
+		const { curateMemoryHead } = await import("./memory-head");
+		const owner = await getDbOwnerForAccessor(getDbAccessor());
+		const options = { operation: "head-hook-fixture", lane: "write" as const };
+		await ownerRun(owner, "UPDATE memories SET id='meeting-head-fixture', memory_kind='episodic'", [], options);
+		await ownerRun(
+			owner,
+			"INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES ('head-hook-pass', 'default', 'incremental-content', 'running')",
+			[],
+			options,
+		);
+		expect(
+			await curateMemoryHead({
+				agentId: "default",
+				passId: "head-hook-pass",
+				baseRevision: 0,
+				baseHash: "",
+				content: "Planning meeting is Tuesday.",
+				entries: [
+					{
+						id: "meeting",
+						text: "Planning meeting is Tuesday.",
+						operation: "added",
+						sourceRefs: ["memory:meeting-head-fixture"],
+						supportingQuotes: ["Planning meeting is Tuesday."],
+					},
+				],
+			}),
+		).toMatchObject({ ok: true });
+		expect((await handleSessionStart({ harness: "claude-code" })).recentContext).toContain("Tuesday");
+		await ownerRun(
+			owner,
+			"UPDATE memories SET content='Planning meeting is Thursday.' WHERE id='meeting-head-fixture'",
+			[],
+			options,
+		);
+		const after = await handleSessionStart({ harness: "claude-code" });
+		expect(after.inject).not.toContain("Tuesday");
+		expect(after.inject).toContain("Thursday");
+		writeAgentYaml(`hooks:
+  contextProfiles:
+    coding:
+      identity:
+        files:
+          - path: MEMORY.md
+            maxChars: 20
+  harnessProfiles:
+    pi: coding
+`);
+		expect((await handleSessionStart({ harness: "pi" })).inject).not.toContain("Tuesday");
+	});
+
 	test.serial("includes MEMORY.md as working memory", async () => {
+		createMemoryDb([]);
 		writeMemoryMd("# Working Memory\n\nCurrently working on hooks migration.");
 
 		const result = await handleSessionStart({ harness: "claude-code" });
@@ -1002,6 +1058,7 @@ hooks:
     pi: noIdentity
 `);
 		writeAgentsMd("Do not include this identity file.");
+		createMemoryDb([]);
 		writeMemoryMd("# Working Memory\n\nKeep this recent context.");
 
 		const result = await handleSessionStart({ harness: "pi" });
@@ -1012,6 +1069,7 @@ hooks:
 
 	test.serial("loads AGENTS.md before MEMORY.md in inject context", async () => {
 		writeAgentsMd("# AGENTS\n\nFollow AGENTS instructions first.");
+		createMemoryDb([]);
 		writeMemoryMd("# Working Memory\n\nThis is working memory context.");
 
 		const result = await handleSessionStart({ harness: "claude-code" });
@@ -1046,6 +1104,7 @@ hooks:
   sessionStart:
     includeIdentity: false
 `);
+		createMemoryDb([]);
 		writeMemoryMd("# Working Memory\n\nMemory remains available.");
 
 		const result = await handleSessionStart({ harness: "test" });

@@ -1,3 +1,4 @@
+import { requestMemoryHead } from "./memory-head";
 /**
  * Signet Hooks System
  *
@@ -797,10 +798,24 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		(!profileHasExplicitIdentityFiles && config.includeRecentContext !== false
 			? readMemoryMd(agentsDir, 10000, identityFiles)
 			: undefined);
-	const memoryMdContent =
-		memoryMdCandidate && scanMemoryContent(memoryMdCandidate).contextEligible ? memoryMdCandidate : undefined;
-	const safeProfileIdentitySections = profileIdentitySections?.filter(
-		(section) => section.path !== "MEMORY.md" || scanMemoryContent(section.content).contextEligible,
+	let memoryMdContent: string | undefined;
+	if (memoryMdCandidate || (!profileHasExplicitIdentityFiles && config.includeRecentContext !== false)) {
+		try {
+			// Classify before clipping: old curated files have no generated marker.
+			const fullContent = readMemoryMd(agentsDir, 262144, identityFiles) ?? memoryMdCandidate ?? "";
+			const inspected = await requestMemoryHead<{ content: string | null; status: string }>({
+				action: "inspect",
+				agentId,
+				content: fullContent,
+			});
+			if (inspected.content && scanMemoryContent(inspected.content).contextEligible)
+				memoryMdContent = inspected.content.slice(0, Math.min(10000, memoryMdCandidate?.length ?? 10000));
+		} catch (error) {
+			logger.warn("hooks", "Working memory withheld: freshness could not be verified", { error: String(error) });
+		}
+	}
+	const safeProfileIdentitySections = profileIdentitySections?.flatMap((section) =>
+		section.path === "MEMORY.md" ? (memoryMdContent ? [{ ...section, content: memoryMdContent }] : []) : [section],
 	);
 
 	const traversalCfg = memoryCfg.pipelineV2.traversal;

@@ -1,3 +1,4 @@
+import { requestMemoryHead } from "./memory-head";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -72,10 +73,23 @@ export async function syncAgentWorkspaces({
 
 	const memoryPath = join(agentsDir, "MEMORY.md");
 	const memoryContent = await readFileIfExists(memoryPath);
-	const sharedIdentity = await composeIdentitySections([
-		join(agentsDir, "USER.md"),
-		...(memoryContent && scanMemoryContent(memoryContent).contextEligible ? [memoryPath] : []),
-	]);
+	let authoredMemory = false;
+	if (memoryContent && scanMemoryContent(memoryContent).contextEligible) {
+		try {
+			authoredMemory = !(
+				await requestMemoryHead<{ generated: boolean }>({
+					action: "inspect",
+					agentId: "default",
+					content: memoryContent,
+				})
+			).generated;
+		} catch {
+			/* Unverified text must not become a durable context copy. */
+		}
+	}
+	const sharedIdentity =
+		(await composeIdentitySections([join(agentsDir, "USER.md")])) +
+		(authoredMemory ? `\n## MEMORY\n\n${memoryContent?.trim()}` : "");
 
 	await forEachInBatches(entries, batchSize, async (name) => {
 		const agentDir = join(agentsRoot, name);

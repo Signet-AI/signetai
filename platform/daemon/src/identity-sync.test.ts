@@ -1,3 +1,4 @@
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +28,7 @@ describe("syncAgentWorkspaces", () => {
 	it("writes composed workspace AGENTS.md using agent overrides and shared identity", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-identity-sync-"));
 		try {
+			initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 			mkdirSync(join(dir, "agents", "writer", "workspace"), { recursive: true });
 			writeFileSync(join(dir, "AGENTS.md"), "# Root Agent\n", "utf-8");
 			writeFileSync(join(dir, "SOUL.md"), "root soul", "utf-8");
@@ -47,7 +49,18 @@ describe("syncAgentWorkspaces", () => {
 			expect(output).toContain("root user");
 			expect(output).toContain("## MEMORY");
 			expect(output).toContain("root memory");
+			// A later sync must remove old generated text already copied into AGENTS.md.
+			const generated = "<!-- generated 2026-09-04 12:00 -->\n\nStale generated Tuesday.";
+			writeFileSync(join(dir, "MEMORY.md"), generated);
+			await syncAgentWorkspaces({ agentsDir: dir });
+			const after = readFileSync(join(dir, "agents", "writer", "workspace", "AGENTS.md"), "utf8");
+			expect(after).not.toContain("## MEMORY");
+			expect(after).not.toContain("Tuesday");
+			expect(after).toContain("root user");
+			expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toBe("# Root Agent\n");
+			expect(readFileSync(join(dir, "MEMORY.md"), "utf8")).toBe(generated);
 		} finally {
+			await closeDbAccessor();
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

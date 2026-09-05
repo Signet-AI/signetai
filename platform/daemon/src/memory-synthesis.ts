@@ -30,8 +30,8 @@ export function getSynthesisWorker(): Worker | null {
 }
 
 /**
- * Write MEMORY.md with backup of previous version.
- * Shared by the synthesis worker and legacy internal callers.
+ * Retired unversioned writer compatibility response.
+ * Dreaming content passes own generated heads.
  */
 export function writeMemoryMd(
 	content: string,

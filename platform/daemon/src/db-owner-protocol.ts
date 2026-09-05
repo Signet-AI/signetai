@@ -230,6 +230,7 @@ export interface DbOwnerTranscriptBulkCommit {
 	readonly commits: readonly CompletedTranscriptCommit[];
 }
 export type DbOwnerRequest =
+	| { readonly kind: "memory_head"; readonly request: import("./memory-head").MemoryHeadRequest }
 	| { readonly kind: "initialize"; readonly agentsDir?: string }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
 	| { readonly kind: "transaction"; readonly transaction: DbOwnerTransaction }
