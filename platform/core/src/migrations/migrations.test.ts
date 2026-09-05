@@ -28,6 +28,8 @@ import { up as telemetryVersionObservation } from "./119-telemetry-version-obser
 import { up as dreamingEvidenceRetry } from "./122-dreaming-evidence-retry";
 import { up as memoryContentSafety } from "./125-memory-content-safety";
 import { up as dreamingSurprisalAttention } from "./126-dreaming-surprisal-attention";
+import { up as sourceTranscriptImport } from "./146-source-transcript-import";
+import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -116,6 +118,62 @@ describe("migration framework", () => {
 		expect(migrations[23].version).toBe(24);
 	});
 
+	test("migration 147 preserves existing replay records when upgrading from migration 146", () => {
+		db = createFreshDb();
+		db.exec(
+			"CREATE TABLE session_transcripts (session_key TEXT, content TEXT, agent_id TEXT, created_at TEXT NOT NULL)",
+		);
+		sourceTranscriptImport(db);
+		db.exec("PRAGMA foreign_keys = ON");
+
+		db.prepare(
+			`INSERT INTO source_import_jobs (id, kind, agent_id, schema_id, adapter_version, state)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+		).run("migration-147-job", "import", "migration-agent", "signet-export", 1, "staging");
+		db.prepare(
+			`INSERT INTO source_import_files
+			  (id, job_id, source_id, agent_id, ordinal, name, managed_path, state)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"migration-147-file",
+			"migration-147-job",
+			"migration-source",
+			"migration-agent",
+			0,
+			"transcript.json",
+			"imports/transcripts/migration-source/source.jsonl",
+			"ready",
+		);
+		db.prepare(
+			`INSERT INTO source_import_records
+			  (id, job_id, file_id, source_id, agent_id, ordinal, line_number,
+			   byte_offset, byte_length, raw_hash, status)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"migration-147-record",
+			"migration-147-job",
+			"migration-147-file",
+			"migration-source",
+			"migration-agent",
+			0,
+			1,
+			0,
+			10,
+			"migration-147-hash",
+			"imported",
+		);
+
+		sourceImportReplayFileSlots(db);
+
+		expect(db.query("SELECT COUNT(*) AS count FROM source_import_files").get()).toEqual({ count: 1 });
+		expect(db.query("SELECT COUNT(*) AS count FROM source_import_records").get()).toEqual({ count: 1 });
+		expect(
+			db
+				.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_source_import_files_job_state'")
+				.get(),
+		).toEqual({ name: "idx_source_import_files_job_state" });
+	});
+
 	test("re-running migrations is idempotent", () => {
 		db = createFreshDb();
 		runMigrations(db);
@@ -139,7 +197,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(145);
+			expect(applied.version).toBe(149);
 			expect(
 				(db.query("PRAGMA table_info(memory_jobs)").all() as Array<{ name: string }>).some(
 					(column) => column.name === "lease_token",

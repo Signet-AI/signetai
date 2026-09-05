@@ -130,6 +130,17 @@ The table includes `session_key`, `content`, `harness`, `project`, `agent_id`,
 `created_at`, `updated_at`, `completed_at`, and `content_hash`. Reads and writes
 are agent-scoped.
 
+Imported completed transcripts additionally carry `source_id`,
+`source_record_id`, and bounded `source_meta_json`. The importer writes a
+lossless typed message representation directly; it does not round-trip through
+role-prefixed text. Its managed staged JSONL is immutable evidence, while
+SQLite stores offsets, hashes, outcomes, and counters for restart. Canonical
+filesystem append happens before DB-owner finalization and is idempotent, so a
+restart after either inventory interruption or filesystem write recovery cannot
+create duplicate session, record, or turn IDs. Source removal purges imported
+evidence and consumption/review rows but retains bounded audit tombstones;
+derived ontology is marked unsupported/stale for normal Dreaming review.
+
 The memory recall endpoint supports `expand: true`. When requested, session
 keys associated with recalled results are batch-looked up in
 `session_transcripts`, and bounded transcript content is joined into the
@@ -253,7 +264,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `128-bounded-queue-diagnostics.ts`.
+`schema_migrations_audit`. The latest migration is `148-source-import-attempt-provenance.ts`.
 
 ### Evidence and semantic state
 

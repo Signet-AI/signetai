@@ -4,6 +4,7 @@
  */
 
 import type { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { createAuthMiddleware, verifyApiKey } from "./auth";
 import { getDbAccessor } from "./db-accessor";
@@ -41,6 +42,18 @@ export function registerGlobalMiddleware(app: Hono): void {
 		const mw = createAuthMiddleware(authConfig, authSecret, (token) => verifyApiKey(getDbAccessor(), token));
 		return mw(c, next);
 	});
+
+	// Transcript uploads enforce their larger limit as they stream into staging.
+	// Other bodies stay bounded even when Transfer-Encoding is chunked.
+	const limitBody = bodyLimit({
+		maxSize: 10 * 1_048_576,
+		onError: (c) => c.json({ error: "payload too large" }, 413),
+	});
+	app.use("*", (c, next) =>
+		c.req.method === "PUT" && /^\/api\/sources\/imports\/[^/]+\/files\/[^/]+$/.test(c.req.path)
+			? next()
+			: limitBody(c, next),
+	);
 
 	// MW-4: Request logging + analytics
 	app.use("*", async (c, next) => {

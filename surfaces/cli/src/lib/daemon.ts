@@ -110,6 +110,8 @@ export function createDaemonClient(
 		opts?: RequestInit & { timeout?: number },
 	) => Promise<DaemonFetchResult<T>>;
 	readonly fetchDaemonStream: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
+	/** Raw request transport for streaming uploads; never serializes the body. */
+	readonly fetchDaemonRaw: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 	readonly secretApiCall: DaemonApiCall;
 } {
 	const url = resolveDaemonClientUrl(port, agentsDir);
@@ -225,6 +227,7 @@ export function createDaemonClient(
 		fetchFromDaemon,
 		fetchDaemonResult,
 		fetchDaemonStream,
+		fetchDaemonRaw: fetchDaemonStream,
 		secretApiCall,
 	};
 }

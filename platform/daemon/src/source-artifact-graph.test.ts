@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
@@ -12,6 +21,12 @@ import {
 } from "./source-artifact-graph";
 import { purgeSourceOwnedRows } from "./source-purge";
 import { txIngestEnvelope } from "./transactions";
+
+it("routes transcript source purge through the DB owner boundary", () => {
+	const source = readFileSync(new URL("./source-purge.ts", import.meta.url), "utf8");
+	expect(source).toContain("dbOwnerSourcePurge");
+	expect(source).not.toContain("runWriteTxAsync");
+});
 
 const DREAMING_CONFIG: DreamingConfig = {
 	tokenThreshold: 1,
@@ -122,6 +137,140 @@ describe("source artifact graph structure", () => {
 				.get("default", "github://example/repo/issues/42"),
 		);
 		expect(row).toEqual({ source_kind: "source_github_issue" });
+	});
+	it("purges transcript-import rows and staged data for every agent when scope is omitted", async () => {
+		const oldOwner = process.env.SIGNET_DB_OWNER_WORKER;
+		process.env.SIGNET_DB_OWNER_WORKER = "1";
+		const sourceId = "shared-transcript-source";
+		const stagedDirectory = join(dir, "imports", "transcripts", sourceId);
+		mkdirSync(stagedDirectory, { recursive: true });
+		writeFileSync(join(stagedDirectory, "source.jsonl"), "staged");
+		try {
+			await getDbAccessor().withWriteTxAsync((db) => {
+				for (const agentId of ["agent-a", "agent-b"]) {
+					const suffix = agentId.slice(-1);
+					db.prepare(
+						"INSERT INTO source_import_jobs (id, kind, agent_id, schema_id, adapter_version, state, generation, lease_token) VALUES (?, 'import', ?, 'signet-export.v1', 1, 'queued', 3, ?)",
+					).run(`shared-job-${suffix}`, agentId, `shared-lease-${suffix}`);
+					db.prepare(
+						"INSERT INTO source_import_files (id, job_id, source_id, agent_id, ordinal, name, managed_path, state) VALUES (?, ?, ?, ?, 0, 'source.jsonl', ?, 'ready')",
+					).run(
+						`shared-file-${suffix}`,
+						`shared-job-${suffix}`,
+						sourceId,
+						agentId,
+						`imports/transcripts/${sourceId}/source.jsonl`,
+					);
+					db.prepare(
+						"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status) VALUES (?, ?, ?, ?, ?, 1, 1, 0, 6, 'staged-hash', 'pending')",
+					).run(`shared-record-${suffix}`, `shared-job-${suffix}`, `shared-file-${suffix}`, sourceId, agentId);
+				}
+			});
+
+			await purgeSourceOwnedRows({ sourceId });
+
+			const rows = await getDbAccessor().withReadDbAsync((db) => ({
+				jobs: db
+					.prepare("SELECT agent_id, state, generation, lease_token FROM source_import_jobs ORDER BY agent_id")
+					.all(),
+				files: (db.prepare("SELECT COUNT(*) AS count FROM source_import_files").get() as { count: number }).count,
+				records: (db.prepare("SELECT COUNT(*) AS count FROM source_import_records").get() as { count: number }).count,
+			}));
+			expect(rows).toEqual({
+				jobs: [
+					{ agent_id: "agent-a", state: "cancelled", generation: 4, lease_token: null },
+					{ agent_id: "agent-b", state: "cancelled", generation: 4, lease_token: null },
+				],
+				files: 0,
+				records: 0,
+			});
+			expect(existsSync(join(stagedDirectory, "source.jsonl"))).toBe(false);
+		} finally {
+			if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+			else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
+		}
+	});
+	it("retains the import ledger when purge cannot safely inspect staged data", async () => {
+		const oldOwner = process.env.SIGNET_DB_OWNER_WORKER;
+		process.env.SIGNET_DB_OWNER_WORKER = "1";
+		const sourceId = "unsafe-transcript-source";
+		const outside = mkdtempSync(join(tmpdir(), "signet-source-purge-unsafe-outside-"));
+		const outsideFile = join(outside, sourceId, "source.jsonl");
+		mkdirSync(join(outside, sourceId), { recursive: true });
+		writeFileSync(outsideFile, "keep");
+		mkdirSync(join(dir, "imports"), { recursive: true });
+		symlinkSync(outside, join(dir, "imports", "transcripts"));
+		try {
+			await getDbAccessor().withWriteTxAsync((db) => {
+				db.prepare(
+					"INSERT INTO source_import_jobs (id, kind, agent_id, schema_id, adapter_version, state, generation, lease_token) VALUES ('unsafe-purge-job', 'import', 'agent-a', 'signet-export.v1', 1, 'queued', 3, 'unsafe-purge-lease')",
+				).run();
+				db.prepare(
+					"INSERT INTO source_import_files (id, job_id, source_id, agent_id, ordinal, name, managed_path, state) VALUES ('unsafe-purge-file', 'unsafe-purge-job', ?, 'agent-a', 0, 'source.jsonl', ?, 'ready')",
+				).run(sourceId, `imports/transcripts/${sourceId}/source.jsonl`);
+				db.prepare(
+					"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status) VALUES ('unsafe-purge-record', 'unsafe-purge-job', 'unsafe-purge-file', ?, 'agent-a', 1, 1, 0, 4, 'staged-hash', 'pending')",
+				).run(sourceId);
+			});
+
+			await expect(purgeSourceOwnedRows({ sourceId })).rejects.toThrow("symlink");
+			const rows = await getDbAccessor().withReadDbAsync((db) => ({
+				job: db
+					.prepare("SELECT state, generation, lease_token FROM source_import_jobs WHERE id = 'unsafe-purge-job'")
+					.get(),
+				files: (db.prepare("SELECT COUNT(*) AS count FROM source_import_files").get() as { count: number }).count,
+				records: (db.prepare("SELECT COUNT(*) AS count FROM source_import_records").get() as { count: number }).count,
+			}));
+			expect(rows).toEqual({
+				job: { state: "cancelled", generation: 4, lease_token: null },
+				files: 1,
+				records: 1,
+			});
+			expect(readFileSync(outsideFile, "utf8")).toBe("keep");
+		} finally {
+			if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+			else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+	it("retains the import ledger when purge encounters a non-ENOENT filesystem failure", async () => {
+		const oldOwner = process.env.SIGNET_DB_OWNER_WORKER;
+		process.env.SIGNET_DB_OWNER_WORKER = "1";
+		const sourceId = "permission-denied-transcript-source";
+		const transcriptsDirectory = join(dir, "imports", "transcripts");
+		mkdirSync(join(transcriptsDirectory, sourceId), { recursive: true });
+		writeFileSync(join(transcriptsDirectory, sourceId, "source.jsonl"), "staged");
+		try {
+			await getDbAccessor().withWriteTxAsync((db) => {
+				db.prepare(
+					"INSERT INTO source_import_jobs (id, kind, agent_id, schema_id, adapter_version, state) VALUES ('permission-purge-job', 'import', 'agent-a', 'signet-export.v1', 1, 'queued')",
+				).run();
+				db.prepare(
+					"INSERT INTO source_import_files (id, job_id, source_id, agent_id, ordinal, name, managed_path, state) VALUES ('permission-purge-file', 'permission-purge-job', ?, 'agent-a', 0, 'source.jsonl', ?, 'ready')",
+				).run(sourceId, `imports/transcripts/${sourceId}/source.jsonl`);
+				db.prepare(
+					"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status) VALUES ('permission-purge-record', 'permission-purge-job', 'permission-purge-file', ?, 'agent-a', 1, 1, 0, 7, 'staged-hash', 'pending')",
+				).run(sourceId);
+			});
+			chmodSync(transcriptsDirectory, 0o000);
+			await expect(purgeSourceOwnedRows({ agentId: "agent-a", sourceId })).rejects.toMatchObject({ code: "EACCES" });
+			const rows = await getDbAccessor().withReadDbAsync((db) => ({
+				job: db
+					.prepare("SELECT state, generation, lease_token FROM source_import_jobs WHERE id = 'permission-purge-job'")
+					.get(),
+				files: (db.prepare("SELECT COUNT(*) AS count FROM source_import_files").get() as { count: number }).count,
+				records: (db.prepare("SELECT COUNT(*) AS count FROM source_import_records").get() as { count: number }).count,
+			}));
+			expect(rows).toEqual({
+				job: { state: "cancelled", generation: 1, lease_token: null },
+				files: 1,
+				records: 1,
+			});
+		} finally {
+			chmodSync(transcriptsDirectory, 0o700);
+			if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+			else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
+		}
 	});
 	it("refreshes and purges graph rows by source artifact path", () => {
 		const base = {

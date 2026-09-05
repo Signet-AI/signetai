@@ -94,6 +94,11 @@ export interface DbOwnerSourceGraphPurge {
 	readonly root: string;
 }
 
+export interface DbOwnerSourcePurge {
+	readonly agentId?: string;
+	readonly sourceId: string;
+}
+
 export interface DbOwnerSourceArtifactPurge {
 	readonly agentId: string;
 	readonly sourceId: string;
@@ -213,6 +218,17 @@ export interface DbOwnerSourceEvidenceEligibility {
 	readonly legacyObsidianRoot?: string;
 }
 
+import type { CompletedTranscriptCommit } from "./transcript-import-commit";
+
+export interface DbOwnerTranscriptBulkCommit {
+	readonly agentId: string;
+	readonly jobId: string;
+	readonly generation: number;
+	readonly leaseToken: string;
+	readonly sourceId: string;
+	readonly harness: string;
+	readonly commits: readonly CompletedTranscriptCommit[];
+}
 export type DbOwnerRequest =
 	| { readonly kind: "initialize"; readonly agentsDir?: string }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }
@@ -237,12 +253,14 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_index"; readonly input: DbOwnerSourceGraphIndex }
 	| { readonly kind: "source_graph_file_purge"; readonly input: DbOwnerSourceGraphFilePurge }
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
+	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
 	| { readonly kind: "source_artifact_index"; readonly input: DbOwnerSourceArtifactIndex }
 	| { readonly kind: "source_native_memory_index"; readonly input: DbOwnerNativeMemoryIndex }
 	| { readonly kind: "source_artifact_purge"; readonly input: DbOwnerSourceArtifactPurge }
 	| { readonly kind: "source_artifact_upsert"; readonly input: DbOwnerSourceArtifactUpsert }
 	| { readonly kind: "source_artifact_upsert_batch"; readonly input: readonly DbOwnerSourceArtifactUpsert[] }
 	| { readonly kind: "source_evidence_eligibility"; readonly input: DbOwnerSourceEvidenceEligibility }
+	| { readonly kind: "transcript_bulk_commit"; readonly input: DbOwnerTranscriptBulkCommit }
 	| { readonly kind: "dreaming_hygiene_attention"; readonly input: DbOwnerDreamingHygieneAttention }
 	| { readonly kind: "dreaming_surprisal_attention"; readonly input: DbOwnerDreamingSurprisalAttention }
 	| { readonly kind: "dreaming_episodic_backlog"; readonly input: DbOwnerDreamingEpisodicBacklog }

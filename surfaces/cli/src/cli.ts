@@ -1070,7 +1070,7 @@ async function ensureDaemonForSecrets(): Promise<boolean> {
 	return ensureDaemonRunning(isDaemonRunning);
 }
 
-const { fetchFromDaemon, fetchDaemonResult, fetchDaemonStream, secretApiCall } = createDaemonClient(
+const { fetchFromDaemon, fetchDaemonResult, fetchDaemonStream, fetchDaemonRaw, secretApiCall } = createDaemonClient(
 	DEFAULT_PORT,
 	AGENTS_DIR,
 );
@@ -1108,6 +1108,8 @@ registerSkillCommands(program, {
 registerSourcesCommands(program, {
 	agentsDir: AGENTS_DIR,
 	secretApiCall,
+	fetchDaemonResult,
+	fetchDaemonRaw,
 });
 
 registerMcpCommands(program, {

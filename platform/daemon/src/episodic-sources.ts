@@ -138,6 +138,16 @@ function readNonEmptyTrimmed(value: unknown): string | null {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function managedSourcePath(meta: string | null): string | null {
+	if (!meta) return null;
+	try {
+		const value = JSON.parse(meta) as { managedPath?: unknown };
+		return readNonEmptyTrimmed(value.managedPath);
+	} catch {
+		return null;
+	}
+}
+
 function tableHasColumn(db: ReadDb, table: string, column: string): boolean {
 	try {
 		const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
@@ -301,11 +311,20 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 	const completedAt = hasCompleted ? "st.completed_at" : "NULL";
 	const capturedAt = `COALESCE(${completedAt}, ${updatedAt}, st.created_at)`;
 	const orderBy = `${capturedAt} DESC, st.created_at DESC`;
+	const hasSourceId = tableHasColumn(db, "session_transcripts", "source_id");
+	const hasSourceRecordId = tableHasColumn(db, "session_transcripts", "source_record_id");
+	const hasSourceMeta = tableHasColumn(db, "session_transcripts", "source_meta_json");
+	const hasContentHash = tableHasColumn(db, "session_transcripts", "content_hash");
+	const sourceId = hasSourceId ? "st.source_id" : "NULL";
+	const sourceRecordId = hasSourceRecordId ? "st.source_record_id" : "NULL";
+	const sourceMeta = hasSourceMeta ? "st.source_meta_json" : "NULL";
+	const contentHash = hasContentHash ? "st.content_hash" : "NULL";
 	const completed = hasCompleted ? "st.completed_at IS NOT NULL" : "0";
 	const row = db
 		.prepare(
 			`SELECT st.session_key, st.content, st.harness, st.project, st.created_at, ${updatedAt} AS updated_at,
-			        ${completedAt} AS completed_at, ${completed} AS completed
+			        ${completedAt} AS completed_at, ${completed} AS completed, ${sourceId} AS source_id,
+			        ${sourceRecordId} AS source_record_id, ${sourceMeta} AS source_meta_json, ${contentHash} AS content_hash
 			 FROM session_transcripts AS st
 			 WHERE st.agent_id = ? AND st.session_key IN (${placeholders})
 			 ORDER BY ${orderBy}
@@ -321,6 +340,10 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 				readonly updated_at: string | null;
 				readonly completed_at: string | null;
 				readonly completed: number;
+				readonly source_id: string | null;
+				readonly source_record_id: string | null;
+				readonly source_meta_json: string | null;
+				readonly content_hash: string | null;
 		  }
 		| undefined;
 	if (!row) return null;
@@ -339,9 +362,12 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 		id: row.session_key,
 		content: row.content,
 		sourceKind: "transcript",
-		sourceId: row.session_key,
-		sourceEntryId: null,
-		sourcePath: null,
+		sourceId: row.source_record_id ?? row.session_key,
+		sourceEntryId: row.source_id,
+		sourceRevision: row.source_id
+			? (row.content_hash ?? row.completed_at ?? row.updated_at ?? row.created_at)
+			: (row.completed_at ?? row.updated_at ?? row.created_at),
+		sourcePath: managedSourcePath(row.source_meta_json),
 		project: row.project,
 		harness: row.harness,
 		capturedAt: row.completed_at ?? row.updated_at ?? row.created_at,
@@ -429,6 +455,14 @@ export function readRecentEpisodicSources(
 	const transcriptCompletedAt = transcriptHasCompleted ? "st.completed_at" : "NULL";
 	const transcriptTime = `COALESCE(${transcriptCompletedAt}, ${transcriptUpdatedAt}, st.created_at)`;
 	const transcriptCompleted = transcriptHasCompleted ? "st.completed_at IS NOT NULL" : "0";
+	const transcriptSourceId = tableHasColumn(db, "session_transcripts", "source_id") ? "st.source_id" : "NULL";
+	const transcriptSourceRecordId = tableHasColumn(db, "session_transcripts", "source_record_id")
+		? "st.source_record_id"
+		: "NULL";
+	const transcriptSourceMeta = tableHasColumn(db, "session_transcripts", "source_meta_json")
+		? "st.source_meta_json"
+		: "NULL";
+	const transcriptContentHash = tableHasColumn(db, "session_transcripts", "content_hash") ? "st.content_hash" : "NULL";
 	const transcriptCursor = cursorPredicate(transcriptTime, "session_key", "transcript", newer, cursor);
 	const summaryCursor = cursorPredicate("latest_at", "id", "summary", newer, cursor);
 	const allowedKinds = kinds ? new Set(kinds) : null;
@@ -585,7 +619,9 @@ export function readRecentEpisodicSources(
 				.prepare(
 					`SELECT st.session_key, st.content, st.harness, st.project, st.created_at,
 					        ${transcriptUpdatedAt} AS updated_at, ${transcriptCompletedAt} AS completed_at,
-					        ${transcriptTime} AS captured_at, ${transcriptCompleted} AS completed
+					        ${transcriptTime} AS captured_at, ${transcriptCompleted} AS completed,
+					        ${transcriptSourceId} AS source_id, ${transcriptSourceRecordId} AS source_record_id,
+					        ${transcriptSourceMeta} AS source_meta_json, ${transcriptContentHash} AS content_hash
 				 FROM session_transcripts AS st
 				 WHERE st.agent_id = ?
 				   AND ${transcriptCompleted}
@@ -605,15 +641,22 @@ export function readRecentEpisodicSources(
 						readonly completed_at: string | null;
 						readonly captured_at: string;
 						readonly completed: number;
+						readonly source_id: string | null;
+						readonly source_record_id: string | null;
+						readonly source_meta_json: string | null;
+						readonly content_hash: string | null;
 					};
 					return {
 						kind: "transcript",
 						id: transcript.session_key,
 						content: transcript.content,
 						sourceKind: "transcript",
-						sourceId: transcript.session_key,
-						sourceEntryId: null,
-						sourcePath: null,
+						sourceId: transcript.source_record_id ?? transcript.session_key,
+						sourceEntryId: transcript.source_id,
+						sourceRevision: transcript.source_id
+							? (transcript.content_hash ?? transcript.captured_at)
+							: transcript.captured_at,
+						sourcePath: managedSourcePath(transcript.source_meta_json),
 						project: transcript.project,
 						harness: transcript.harness,
 						capturedAt:

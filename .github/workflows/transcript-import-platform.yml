@@ -1,0 +1,29 @@
+name: Transcript Import Platform Contract
+
+on:
+  pull_request:
+    paths:
+      - "platform/daemon/src/transcript-import-*.ts"
+      - "platform/daemon/src/routes/transcript-import-routes.ts"
+      - "platform/daemon/src/routes/sources-routes.ts"
+      - ".github/workflows/transcript-import-platform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "platform/daemon/src/transcript-import-*.ts"
+      - "platform/daemon/src/routes/transcript-import-routes.ts"
+      - "platform/daemon/src/routes/sources-routes.ts"
+      - ".github/workflows/transcript-import-platform.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-platform-gate:
+    name: Transcript import Windows platform gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Verify the unsupported-platform contract
+        run: bun test platform/daemon/src/transcript-import-platform.test.ts

@@ -153,6 +153,10 @@ import { up as sourceSyncFrontier } from "./142-source-sync-frontier";
 import { up as embeddingIndexProgress } from "./143-embedding-index-progress";
 import { up as memoryJobLeaseToken } from "./144-memory-job-lease-token";
 import { up as dreamingEvidenceReviews } from "./145-dreaming-evidence-reviews";
+import { up as sourceTranscriptImport } from "./146-source-transcript-import";
+import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
+import { up as sourceImportAttemptProvenance } from "./148-source-import-attempt-provenance";
+import { up as transcriptImportStateMachine } from "./149-transcript-import-state-machine";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1312,6 +1316,49 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "dreaming-evidence-reviews",
 		up: dreamingEvidenceReviews,
 		artifacts: { tables: ["dreaming_evidence_reviews"] },
+	},
+	{
+		version: 146,
+		name: "source-transcript-import",
+		up: sourceTranscriptImport,
+		artifacts: {
+			tables: [
+				"source_import_jobs",
+				"source_import_files",
+				"source_import_records",
+				"transcript_import_conversations",
+				"source_import_record_attempts",
+			],
+			columns: [
+				{ table: "session_transcripts", column: "source_id" },
+				{ table: "session_transcripts", column: "source_record_id" },
+				{ table: "session_transcripts", column: "source_meta_json" },
+			],
+		},
+	},
+	{
+		version: 147,
+		name: "source-import-replay-file-slots",
+		up: sourceImportReplayFileSlots,
+		artifacts: { tables: ["source_import_files"] },
+	},
+	{
+		version: 148,
+		name: "source-import-attempt-provenance",
+		up: sourceImportAttemptProvenance,
+		artifacts: { columns: [{ table: "source_import_record_attempts", column: "source_id" }] },
+	},
+	{
+		version: 149,
+		name: "transcript-import-state-machine",
+		up: transcriptImportStateMachine,
+		artifacts: {
+			columns: [
+				{ table: "source_import_jobs", column: "duplicate_mode" },
+				{ table: "source_import_jobs", column: "next_attempt_at" },
+				{ table: "source_import_files", column: "error" },
+			],
+		},
 	},
 ];
 

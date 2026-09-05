@@ -9,10 +9,17 @@ import {
 	purgeObsidianSourceFileStructureInTx,
 } from "./obsidian-source-graph";
 import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
+import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./memory-lineage";
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
+import { TRANSCRIPT_IMPORT_LIMITS } from "./transcript-import-adapter";
+import {
+	commitCompletedTranscriptBatchInTx,
+	purgeTranscriptImportSourceInTx,
+	transcriptCommitBatchBytes,
+} from "./transcript-import-commit";
 import { getDreamingHygieneCandidatesInDb } from "./knowledge-graph-hygiene";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 import { DREAMING_SURPRISAL_SELECTOR_VERSION, selectDreamingSurprisalInDb } from "./pipeline/dreaming-surprisal";
@@ -128,12 +135,16 @@ export function runDbOwnerWorker(): void {
 		}
 	}
 	const parentPid = process.ppid;
-	const parentWatch = setInterval(() => {
-		// A test harness can disappear without sending the protocol shutdown
-		// command. Do not let its owner survive as an orphan indefinitely.
-		if (process.ppid !== parentPid) process.exit(0);
-	}, 250);
-	parentWatch.unref();
+	let db = undefined as unknown as SqliteDatabase;
+	let parentWatch: ReturnType<typeof setInterval> | undefined;
+	const closeAndExit = (code: number): never => {
+		if (parentWatch !== undefined) clearInterval(parentWatch);
+		try {
+			if (db !== undefined) db.close();
+		} finally {
+			process.exit(code);
+		}
+	};
 
 	function send(event: DbOwnerEvent): void {
 		process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -156,7 +167,6 @@ export function runDbOwnerWorker(): void {
 	}
 
 	const sqlitePath = process.env.SIGNET_DB_OWNER_SQLITE_PATH ?? process.env.SIGNET_SQLITE_PATH;
-	let db: SqliteDatabase;
 	try {
 		if (sqlitePath !== undefined && existsSync(sqlitePath) && typeof Database.setCustomSQLite === "function") {
 			Database.setCustomSQLite(sqlitePath);
@@ -167,9 +177,15 @@ export function runDbOwnerWorker(): void {
 		if (vecExtension !== null) loadSqliteVecIfAvailable(db, vecExtension);
 	} catch (error) {
 		send({ type: "fatal", error: serializeError(error) });
-		process.exit(1);
-		return;
+		closeAndExit(1);
 	}
+	if (db === undefined) closeAndExit(1);
+	parentWatch = setInterval(() => {
+		// SIGKILL bypasses daemon cleanup. Close the owner database as soon as
+		// its control-process parent disappears, before exiting as an orphan.
+		if (process.ppid !== parentPid) closeAndExit(0);
+	}, 50);
+	parentWatch.unref();
 
 	const BUSY_RETRIES = 3;
 	const BUSY_BACKOFF_MS = 50;
@@ -313,6 +329,19 @@ export function runDbOwnerWorker(): void {
 		}
 		return withBusyRetry(() => {
 			const results = statements.map((statement) => executeStatement({ ...statement, transactional: false }, context));
+			for (let i = 0; i < results.length; i++) {
+				const statement = statements[i];
+				const result = results[i];
+				if (
+					statement?.requireChanges === true &&
+					typeof result === "object" &&
+					result !== null &&
+					"changes" in result &&
+					result.changes === 0
+				) {
+					throw new Error("DB owner transaction precondition changed zero rows");
+				}
+			}
 			return enforceResultLimit({ sql: "DB_OWNER_TRANSACTION", result: "all" }, results) as readonly unknown[];
 		}, context);
 	}
@@ -351,6 +380,47 @@ export function runDbOwnerWorker(): void {
 	function executeStatementWithoutTransaction(statement: DbOwnerStatement): SqliteRunResult {
 		const params = (statement.params ?? []).map(bindParameter);
 		return db.prepare(statement.sql).run(...params);
+	}
+
+	function executeTranscriptBulkCommit(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "transcript_bulk_commit" }>,
+		context: JobExecutionContext,
+	): unknown {
+		if (
+			request.input.commits.length === 0 ||
+			request.input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch
+		)
+			throw new RangeError("invalid transcript commit batch");
+		if (transcriptCommitBatchBytes(request.input.commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
+			throw new RangeError("canonical_batch_too_large");
+		if (
+			request.input.commits.some(
+				(commit) =>
+					commit.agentId !== request.input.agentId ||
+					commit.sourceId !== request.input.sourceId ||
+					commit.harness !== request.input.harness,
+			)
+		)
+			throw new Error("transcript commit provenance does not match owner request");
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const lease = db
+				.prepare(
+					"SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying')",
+				)
+				.get(request.input.jobId, request.input.agentId, request.input.generation, request.input.leaseToken);
+			if (lease == null) throw new Error("stale import lease");
+			const result = commitCompletedTranscriptBatchInTx(db as never, request.input.commits);
+			commit(context);
+			return result;
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				/* preserve original error */
+			}
+			throw error;
+		}
 	}
 
 	function executeSourceSnapshotImport(
@@ -989,6 +1059,7 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "batch")
 			return executeBatch(job.request.statements, job.request.requireChanges === true, context);
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request, context);
+		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
 		if (job.request.kind === "dreaming_hygiene_attention") return executeDreamingHygieneAttention(job.request, context);
 		if (job.request.kind === "dreaming_surprisal_attention")
 			return executeDreamingSurprisalAttention(job.request, context);
@@ -1030,6 +1101,26 @@ export function runDbOwnerWorker(): void {
 		}
 		if (job.request.kind === "source_artifact_upsert" || job.request.kind === "source_artifact_upsert_batch")
 			return executeSourceArtifactUpsert(job.request, context);
+		if (job.request.kind === "source_purge") {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const input = job.request.input;
+				const purged = purgeSourceOwnedRowsInTx(db as never, {
+					sourceId: input.sourceId,
+					agentId: input.agentId,
+				});
+				const transcriptPurged = purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId);
+				commit(context);
+				return { purged: purged + transcriptPurged };
+			} catch (error) {
+				try {
+					db.exec("ROLLBACK");
+				} catch {
+					/* preserve original error */
+				}
+				throw error;
+			}
+		}
 		if (job.request.kind === "source_evidence_eligibility") return executeSourceEvidenceEligibility(job.request);
 		if (job.request.kind === "vector_search") return await executeVectorSearch(job.request.payload);
 		if (
@@ -1161,9 +1252,8 @@ export function runDbOwnerWorker(): void {
 
 	function handle(command: DbOwnerCommand): void {
 		if (command.type === "shutdown") {
-			clearInterval(parentWatch);
-			db.close();
-			process.exit(0);
+			closeAndExit(0);
+			return;
 		}
 		if (command.type === "cancel") {
 			if (!shouldRecordDbOwnerCancellation(command.jobId, activeJobId, foregroundQueue, maintenanceQueue)) return;
@@ -1229,6 +1319,12 @@ export function runDbOwnerWorker(): void {
 				process.exitCode = 1;
 			}
 		}
+	});
+	process.stdin.on("end", () => {
+		// The daemon owns this pipe. If it is killed before it can send the
+		// protocol shutdown command, close SQLite immediately rather than
+		// leaving an orphan owner holding the eval workspace database lock.
+		closeAndExit(0);
 	});
 
 	void activeJobId;

@@ -46,6 +46,49 @@ Choose **Import files**, select one or more files, choose how duplicates should 
 
 The current bounds are 25 files per batch, 25 MiB per file, and 100 MiB per batch. Results are reported per file, so a malformed or unsupported file does not hide successful imports from the same batch. Choose **Skip duplicate** to keep the existing import, **Replace and re-index** to replace it and queue indexing again, or **Import as a new source** to retain a second source for the same content.
 
+### Agent transcript imports
+
+Transcript JSONL imports use the durable Sources job, not the synchronous document
+importer. The supported input is the Signet export schema (`signet-export`,
+version `1`): one object per line with `source`, `id`, `harness`, `agent_id`,
+`session_key`, `project`, `timestamp`, exact `message_count`, and typed
+`messages`. Roles are `user`, `assistant`, `system`, `tool`, and `unknown`.
+Whitespace, multiline content, roles, projects, timestamps, and provenance are
+retained exactly. The chosen `--agent` owns the import; an embedded `agent_id`
+does not change scope.
+
+Durable transcript imports and removal of transcript-import Sources require
+Linux or macOS filesystem safeguards. On Windows, the import and removal
+mutations return HTTP `501` with
+`code: "transcript_import_unsupported_platform"` before changing state.
+
+```bash
+signet sources import ./claude.jsonl ./codex.jsonl --kind transcripts --schema signet --agent my-agent --json
+signet sources imports status <job-id> --agent my-agent --watch --json
+signet sources imports pause <job-id> --agent my-agent
+signet sources imports resume <job-id> --agent my-agent
+signet sources imports retry <job-id> --agent my-agent
+signet sources imports cancel <job-id> --agent my-agent
+```
+
+The CLI creates the job before streaming each file and starts it after upload.
+The daemon stages an immutable fsynced JSONL file under the workspace and keeps
+only offsets, hashes, counters, outcomes, and bounded errors in SQLite. Limits
+are one active job/file, 25 records per DB batch, 8 MiB per canonical batch,
+16 MiB per record, 4 MiB per message, and 50,000 messages. Every nonblank line
+is `pending`, then exactly one of `imported`, `duplicate`, or `rejected`.
+Blank lines are counted separately. Same identity and content replays as a
+duplicate; same identity with changed content is rejected as a conflict.
+
+Jobs move through `staging -> inventorying -> queued -> running`, may be
+`paused`, and finish as `completed`, `completed_with_rejections`, or
+`cancelled`. A restart recovers leases and byte checkpoints. Filesystem-first
+canonical writes are verified and replayed without duplicate session, record, or
+turn IDs. Reconciliation exposes the equation `total = imported + duplicate +
+rejected + pending`; terminal jobs have zero pending. Import completion adds one
+Dreaming attention nudge per committed source batch. Dreaming consumption is
+separate and uses its normal delivery/review path.
+
 In a desktop-local session, **Choose from desktop** can return local paths to a loopback daemon. Remote clients must upload file bytes; a remote daemon never treats a path string as permission to read the client’s filesystem.
 
 ### Import a Web page

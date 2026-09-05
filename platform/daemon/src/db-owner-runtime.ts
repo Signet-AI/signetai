@@ -13,6 +13,13 @@ import {
 	type DbOwnerSubmitOptions,
 } from "./db-owner-client";
 import { getDbOwnerMaintenance } from "./db-owner-maintenance";
+import { TRANSCRIPT_IMPORT_LIMITS } from "./transcript-import-adapter";
+import {
+	commitCompletedTranscriptBatchInTx,
+	purgeTranscriptImportSourceInTx,
+	transcriptCommitBatchBytes,
+} from "./transcript-import-commit";
+import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import type {
 	DbOwnerJob,
 	DbOwnerParameter,
@@ -21,6 +28,7 @@ import type {
 	DbOwnerSourceGraphFilePurge,
 	DbOwnerSourceGraphIndex,
 	DbOwnerSourceGraphPurge,
+	DbOwnerSourcePurge,
 	DbOwnerSourceSnapshotImport,
 	DbOwnerSourceArtifactIndex,
 	DbOwnerNativeMemoryIndex,
@@ -122,9 +130,23 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		return await invokeAccessorAsync(accessor, "withReadDbAsync", (db) => inlineStatement(db, request.statement));
 	}
 	if (request.kind === "transaction") {
-		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
-			request.transaction.statements.map((statement) => inlineStatement(db, statement)),
-		);
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			const results = request.transaction.statements.map((statement) => inlineStatement(db, statement));
+			for (let i = 0; i < results.length; i++) {
+				const statement = request.transaction.statements[i];
+				const result = results[i];
+				if (
+					statement?.requireChanges === true &&
+					typeof result === "object" &&
+					result !== null &&
+					"changes" in result &&
+					result.changes === 0
+				) {
+					throw new Error("DB owner transaction precondition changed zero rows");
+				}
+			}
+			return results;
+		});
 	}
 	if (request.kind === "batch") {
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
@@ -142,6 +164,42 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 			return results;
 		});
 	}
+	if (request.kind === "transcript_bulk_commit") {
+		if (
+			request.input.commits.length === 0 ||
+			request.input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch
+		)
+			throw new RangeError("invalid transcript commit batch");
+		if (transcriptCommitBatchBytes(request.input.commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
+			throw new RangeError("canonical_batch_too_large");
+		if (
+			request.input.commits.some(
+				(commit) =>
+					commit.agentId !== request.input.agentId ||
+					commit.sourceId !== request.input.sourceId ||
+					commit.harness !== request.input.harness,
+			)
+		)
+			throw new Error("transcript commit provenance does not match owner request");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			const lease = db
+				.prepare(
+					"SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying')",
+				)
+				.get(request.input.jobId, request.input.agentId, request.input.generation, request.input.leaseToken);
+			if (lease == null) throw new Error("stale import lease");
+			return commitCompletedTranscriptBatchInTx(db as never, request.input.commits);
+		});
+	}
+	if (request.kind === "source_purge")
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			const input = request.input;
+			const sourceInput = { sourceId: input.sourceId, agentId: input.agentId };
+			const purged = purgeSourceOwnedRowsInTx(db as never, sourceInput);
+			return {
+				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId),
+			};
+		});
 	if (request.kind === "vector_search") {
 		return invokeAccessor(accessor, "withReadDb", (db) =>
 			vectorSearchWithMetadata(db as never, new Float32Array(request.payload.queryEmbedding), request.payload.options),
@@ -476,6 +534,33 @@ export async function dbOwnerSourceSnapshotImport(
 	return await submitWithAdmission<{ readonly imported: number }>(
 		owner,
 		{ kind: "source_snapshot_import", input },
+		{ ...options, lane: options.lane ?? "write" },
+	);
+}
+
+export async function dbOwnerTranscriptBulkCommit(
+	input: import("./db-owner-protocol").DbOwnerTranscriptBulkCommit,
+	options: DbOwnerSqlOptions,
+): Promise<readonly unknown[]> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission(
+		owner,
+		{ kind: "transcript_bulk_commit", input },
+		{
+			...options,
+			lane: options.lane ?? "write",
+			estimatedWorkUnits: options.estimatedWorkUnits ?? input.commits.length,
+		},
+	);
+}
+export async function dbOwnerSourcePurge(
+	input: DbOwnerSourcePurge,
+	options: DbOwnerSqlOptions,
+): Promise<{ readonly purged: number }> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission<{ readonly purged: number }>(
+		owner,
+		{ kind: "source_purge", input },
 		{ ...options, lane: options.lane ?? "write" },
 	);
 }

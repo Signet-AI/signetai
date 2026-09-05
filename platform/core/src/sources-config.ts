@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, dirname, resolve } from "node:path";
+import { resolveDefaultBasePath } from "./constants";
 
 export type SignetSourceKind = "obsidian" | "web" | (string & {});
 export type SignetSourceMode = "read-only";
@@ -167,7 +168,7 @@ export const MAX_GITHUB_MAX_ITEMS_PER_REPO = 10_000;
 const VALID_GITHUB_RESOURCE_TYPES = new Set<string>(DEFAULT_GITHUB_RESOURCE_TYPES);
 
 export function getAgentsDir(): string {
-	return process.env.SIGNET_PATH || `${homedir()}/.agents`;
+	return resolveDefaultBasePath();
 }
 
 export function getSourcesConfigPath(agentsDir = getAgentsDir()): string {

@@ -718,6 +718,36 @@ describe("DB owner client", () => {
 		expect(rows).toEqual([{ id: "m1" }]);
 	});
 
+	test("rolls back a transaction when a required precondition changes zero rows", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		const transaction = client.submit(
+			{
+				kind: "transaction",
+				transaction: {
+					statements: [
+						{
+							sql: "INSERT INTO memories (id, content) VALUES (?, ?)",
+							params: ["m2", "rolled back"],
+							result: "run",
+						},
+						{
+							sql: "UPDATE memories SET content = ? WHERE id = ?",
+							params: ["must not persist", "missing"],
+							result: "run",
+							requireChanges: true,
+						},
+					],
+				},
+			},
+			{ operation: "memory.transaction-precondition", lane: "write", deadlineMs: 1_000 },
+		);
+		await expect(transaction.result).rejects.toThrow("DB owner transaction precondition changed zero rows");
+		const rows = await recallThroughDbOwner<{ id: string }>(client, "SELECT id FROM memories ORDER BY id");
+		expect(rows).toEqual([{ id: "m1" }]);
+	});
+
 	test("retires a broken stdin without starving the queue in a retry loop", async () => {
 		const database = makeDb();
 		directory = database.directory;

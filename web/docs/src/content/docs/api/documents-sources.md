@@ -232,6 +232,108 @@ The default safety bounds are 25 files per request, 25 MiB per file, and 100
 MiB per batch. Each file returns an individual result so a mixed batch can
 partially succeed.
 
+### Durable transcript imports
+
+Transcript imports are a separate durable API; they do not use the synchronous
+`POST /api/sources/import` document importer or `transcript_capture_jobs`.
+`POST /api/sources/imports` creates a job, `PUT
+/api/sources/imports/:jobId/files/:fileId` streams one JSONL file, and `POST
+.../:jobId/start` queues it. `GET .../:jobId`, `.../rejections`, and
+`.../reconciliation` report progress and outcomes. `pause`, `resume`, `retry`,
+and `cancel` are durable controls. All routes require `modify` permission and
+fail closed when `agentId` is not the daemon's resolved target agent.
+
+The managed transcript filesystem is supported on Linux and macOS. On Windows,
+transcript import endpoints and deletion of an imported Source return `501`
+with `code: "transcript_import_unsupported_platform"`; they do not create,
+mutate, or purge import state. Install or run the daemon on Linux or macOS to
+use durable transcript imports.
+
+### POST /api/sources/imports
+
+Creates a durable transcript import job.
+
+### GET /api/sources/imports
+
+Lists transcript import jobs for the resolved agent.
+
+### GET /api/sources/imports/:jobId
+
+Returns one job and its staged files.
+
+### PUT /api/sources/imports/:jobId/files/:fileId
+
+Streams one JSONL file into the staged slot.
+
+### POST /api/sources/imports/:jobId/start
+
+Queues the staged job for inventory and commit.
+
+### POST /api/sources/imports/:jobId/pause
+
+Requests a pause at the next bounded worker checkpoint. A pending cancellation
+takes precedence: pausing that job returns `changed: false` and preserves the
+cancellation request.
+
+### POST /api/sources/imports/:jobId/resume
+
+Resumes a paused job.
+
+### POST /api/sources/imports/:jobId/retry
+
+Retries interrupted or retryable records in a job.
+
+### POST /api/sources/imports/:jobId/cancel
+
+Cancels a job and terminalizes remaining pending records.
+
+### GET /api/sources/imports/:jobId/rejections
+
+Lists rejected records and bounded rejection codes.
+
+### GET /api/sources/imports/:jobId/reconciliation
+
+Returns the durable status-count reconciliation.
+
+The only accepted adapter is `signet-export` version `1` (`source: "signet"`).
+Each line is classified exactly once as `imported`, `duplicate`, or `rejected`;
+blank lines are counted separately. Validation rejects malformed JSON, unknown
+roles, count mismatches, missing/nonempty-invalid messages, invalid timestamps,
+and records over 16 MiB or messages over 4 MiB. The hard limits are 25 records
+per database batch, 8 MiB canonical batch, 50,000 messages, and one active
+job/file. The response counters satisfy `total = imported + duplicate +
+rejected + pending` while a job is active and `pending = 0` when terminal.
+
+Imported transcripts preserve message roles (`user`, `assistant`, `system`,
+`tool`, `unknown`), exact content whitespace and newlines, project, and the
+historical timestamp. The selected target agent owns the rows; embedded
+`agent_id` is provenance only. Source identity and content fingerprints make
+same-identity replay a duplicate and same-identity/different-content a
+`conversation_identity_conflict` rejection. Staging is an fsynced managed JSONL
+file under `imports/transcripts/<source-id>/`; canonical harness files and
+`session_transcripts` are written with deterministic IDs. Recovery resumes byte
+checkpoints and replays filesystem writes idempotently before finalizing DB
+ownership.
+
+Removing an import Source purges its staged file, canonical lines,
+`session_transcripts`, artifacts, indexes, aggregates, and consumption/review
+rows. Bounded record fingerprints and audit tombstones remain. Derived
+knowledge is marked unsupported/stale and reviewed by the normal Dreaming path;
+transcript import creates one attention nudge per committed source batch, not
+one Dreaming job per conversation.
+
+**Create response**
+
+```json
+{ "id": "job-uuid", "jobId": "job-uuid", "agentId": "target", "state": "staging" }
+```
+
+**Reconciliation response**
+
+```json
+{ "jobId": "job-uuid", "reconciliation": [{ "status": "imported", "count": 42 }] }
+```
+
 **Response**
 
 ```json

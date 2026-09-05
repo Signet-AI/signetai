@@ -5,6 +5,7 @@ const TRANSCRIPT_RECOVERY_CHILD_GRACE_MS = 4_000;
 async function main(): Promise<void> {
 	const childPath = process.env.SIGNET_TRANSCRIPT_RECOVERY_CHILD_PATH;
 	if (childPath === undefined) throw new Error("Transcript recovery supervisor child path is missing");
+	const parentPid = process.ppid;
 
 	const child = spawn(process.execPath, [childPath], {
 		env: process.env,
@@ -16,6 +17,7 @@ async function main(): Promise<void> {
 	if (child.pid !== undefined) process.stdout.write(`${JSON.stringify({ type: "started", pid: child.pid })}\n`);
 
 	let killTimer: ReturnType<typeof setTimeout> | undefined;
+	let parentWatch: ReturnType<typeof setInterval> | undefined;
 	const killTarget = (): void => {
 		if (child.pid === undefined) return;
 		try {
@@ -46,6 +48,18 @@ async function main(): Promise<void> {
 			killTimer = setTimeout(killTarget, TRANSCRIPT_RECOVERY_CHILD_GRACE_MS);
 		}
 	};
+	const closeAndExit = (): never => {
+		if (parentWatch !== undefined) clearInterval(parentWatch);
+		killTarget();
+		process.exit(0);
+	};
+	parentWatch = setInterval(() => {
+		// SIGKILL bypasses daemon cleanup; the supervisor owns the detached child group.
+		if (process.ppid !== parentPid) closeAndExit();
+	}, 50);
+	parentWatch.unref();
+	process.stdin.once("end", closeAndExit);
+	process.stdin.once("close", closeAndExit);
 	process.once("SIGTERM", () => forward("SIGTERM"));
 	process.once("SIGINT", () => forward("SIGINT"));
 

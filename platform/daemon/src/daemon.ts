@@ -141,7 +141,9 @@ import {
 	startPipeline,
 	stopPipeline,
 } from "./pipeline";
+import { randomUUID } from "node:crypto";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
+import { dbOwnerTransaction } from "./db-owner-runtime";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobsAsync } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
@@ -238,6 +240,8 @@ import {
 } from "./telemetry";
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
+import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
+import { createOwnerTranscriptImportStore } from "./transcript-import-store";
 
 import { resolveDaemonRestartMode } from "./daemon-restart";
 import {
@@ -268,6 +272,7 @@ import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
 import { mountHealthRoutes } from "./routes/health.js";
 import { registerHooksRoutes } from "./routes/hooks-routes.js";
 import { registerImportRoutes } from "./routes/import-routes.js";
+import { registerTranscriptImportRoutes } from "./routes/transcript-import-routes.js";
 import { mountInferenceRoutes } from "./routes/inference.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
 import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
@@ -318,6 +323,7 @@ let embeddingPromotionRestart: Promise<void> | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
 let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
+let transcriptImportWorkerHandle: TranscriptImportWorkerHandle | null = null;
 // These are mirrored into state.ts via setters for read access by
 // route modules. Only daemon.ts should assign or clear them.
 let telemetryRef: TelemetryCollector | undefined;
@@ -524,6 +530,7 @@ registerSecretRoutes(app);
 registerSessionRoutes(app, { gitConfig, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync });
 registerSourcesRoutes(app);
 registerImportRoutes(app);
+registerTranscriptImportRoutes(app);
 registerPipelineRoutes(app);
 registerReflectionRoutes(app);
 registerTelemetryRoutes(app);
@@ -1600,6 +1607,12 @@ async function stopPipelineRuntime(): Promise<void> {
 		reflectionWorkerHandle = null;
 	}
 
+	if (transcriptImportWorkerHandle) {
+		try {
+			await transcriptImportWorkerHandle.stop();
+		} catch {}
+		transcriptImportWorkerHandle = null;
+	}
 	if (transcriptRecoveryWorkerHandle) {
 		try {
 			await transcriptRecoveryWorkerHandle.stop();
@@ -2084,7 +2097,7 @@ async function cleanup() {
 	const renderWorker = getSynthesisRenderWorker();
 	if (renderWorker !== null) {
 		setSynthesisRenderWorker(null);
-		renderWorker.terminate().catch((e) => {
+		await renderWorker.terminate().catch((e) => {
 			logger.debug("daemon", "render worker terminate failed", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -2837,6 +2850,36 @@ async function main() {
 				resolveDaemonAgentId(),
 			);
 		}
+		if (!transcriptImportWorkerHandle) {
+			transcriptImportWorkerHandle = startTranscriptImportWorker({
+				store: createOwnerTranscriptImportStore(),
+				agentId: resolveDaemonAgentId(),
+				workspaceRoot: AGENTS_DIR,
+				onBatch: async (_jobId, sourceId) => {
+					const agentId = resolveDaemonAgentId();
+					const subjectRef = `source:${sourceId}`;
+					const details = JSON.stringify({ sourceId, reason: "transcript-import-committed" });
+					await dbOwnerTransaction(
+						[
+							{
+								sql: `INSERT INTO dreaming_attention
+									(id, agent_id, kind, subject_ref, details_json, priority)
+									VALUES (?, ?, 'evidence_requeue', ?, ?, 50)
+									ON CONFLICT(agent_id, kind, subject_ref) DO UPDATE SET
+									  details_json = excluded.details_json,
+									  priority = MAX(dreaming_attention.priority, excluded.priority),
+									  generation = dreaming_attention.generation + 1,
+									  resolved_at = NULL,
+									  resolved_by_pass_id = NULL`,
+								params: [randomUUID(), agentId, subjectRef, details],
+								result: "run",
+							},
+						],
+						{ operation: "sources.import.dreaming-attention", lane: "write" },
+					);
+				},
+			});
+		}
 
 		checkpointPruneTimer = setInterval(() => {
 			try {
@@ -2931,30 +2974,7 @@ async function main() {
 		});
 	}
 
-	const REQUEST_BODY_LIMIT = 10 * 1_048_576;
 	const { createServer: nodeCreateServer } = await import("node:http");
-	const createBoundedServer = (...args: Parameters<typeof nodeCreateServer>) => {
-		const server = nodeCreateServer(...args);
-		server.on("request", (req, res) => {
-			let bytes = 0;
-			let aborted = false;
-			req.on("data", (chunk: Buffer) => {
-				if (aborted) return;
-				bytes += chunk.length;
-				if (bytes > REQUEST_BODY_LIMIT) {
-					aborted = true;
-					logger.warn("http", "Request body exceeded limit", { bytes, limit: REQUEST_BODY_LIMIT });
-					if (!res.headersSent) {
-						res.writeHead(413, { "Content-Type": "application/json" });
-						res.end(JSON.stringify({ error: "payload too large" }), () => {
-							req.socket?.destroy();
-						});
-					}
-				}
-			});
-		});
-		return server;
-	};
 
 	const BIND_MAX_DELAY_MS = 30_000;
 	const BIND_RETRY_BASE_MS = 1000;
@@ -3444,7 +3464,7 @@ async function main() {
 				// Type assertion needed: arrow functions cannot satisfy overloaded
 				// function types. The wrapper passes all args through to nodeCreateServer
 				// so it is correct at runtime for every overload.
-				createServer: createBoundedServer as typeof nodeCreateServer,
+				createServer: nodeCreateServer,
 			}),
 		onBound: (server) => {
 			httpServer = server;
