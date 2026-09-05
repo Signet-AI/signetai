@@ -84,7 +84,7 @@ describe("fetchTraversalCandidates (#1250)", () => {
 		insertMemory("memory-no-attribute", "agent-a", 0.4);
 		insertMemory("memory-superseded", "agent-a", 0.95);
 		getDbAccessor().withWriteTx((db) => {
-			db.prepare("UPDATE memories SET superseded_by = 'memory-active' WHERE id = 'memory-superseded'").run();
+			db.prepare("UPDATE memories SET pinned = 1, superseded_by = 'memory-active' WHERE id = 'memory-superseded'").run();
 		});
 		insertAttribute("attribute-a-1", "memory-active", "agent-a", 0.4);
 		insertAttribute("attribute-a-2", "memory-active", "agent-a", 0.9);

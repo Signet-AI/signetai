@@ -666,22 +666,6 @@ async function getRecentMemories(
 	}
 }
 
-/**
- * Get memories created after a given timestamp, ordered by recency.
- */
-function _getMemoriesSince(
-	sinceMs: number,
-	limit: number,
-): Array<{
-	id: string;
-	content: string;
-	type: string;
-	importance: number;
-	created_at: string;
-}> {
-	return memoryCandidates.getMemoriesSince(getMemoryDbPath(), sinceMs, limit);
-}
-
 // ============================================================================
 // Hook Handlers
 // ============================================================================

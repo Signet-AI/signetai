@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { type AgentRosterReadPolicy, scanMemoryContent } from "@signet/core";
 import { yieldEvery } from "./async-yield";
-import { getDbAccessor } from "./db-accessor";
 import { getDbOwner } from "./db-owner-runtime";
 import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { logger } from "./logger";
@@ -19,14 +18,6 @@ export interface ScoredMemory {
 	created_at: string;
 	access_count: number;
 	effScore: number;
-}
-
-export interface SimpleMemory {
-	id: string;
-	content: string;
-	type: string;
-	importance: number;
-	created_at: string;
 }
 
 const PREDICTED_CONTEXT_TERM_LIMIT = 6;
@@ -457,78 +448,6 @@ export async function getPredictedContextMemories(
 		logger.warn("hooks", "Predicted context failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
 		});
-		return [];
-	}
-}
-
-export function getRecentMemories(memoryDbPath: string, limit: number, recencyBias = 0.7): SimpleMemory[] {
-	if (!existsSync(memoryDbPath)) return [];
-
-	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const rows: SimpleMemory[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const query = `
-        SELECT
-          id, content, type, importance, created_at,
-          (julianday('now') - julianday(created_at)) as age_days
-        FROM memories
-				WHERE is_deleted = 0 AND superseded_by IS NULL AND stale_at IS NULL
-        ORDER BY
-          (importance * ${1 - recencyBias}) +
-          (1.0 / (1.0 + (julianday('now') - julianday(created_at)))) * ${recencyBias}
-          DESC
-        LIMIT ?
-      `;
-
-			return (db.prepare(query).all(limit) as unknown as Array<SimpleMemory>).filter(
-				(row) => scanMemoryContent(row.content).contextEligible,
-			);
-		}, "memory-candidates.ts:470");
-
-		return rows.map((r) => ({
-			id: r.id,
-			content: r.content,
-			type: r.type || "general",
-			importance: r.importance || 0.5,
-			created_at: r.created_at,
-		}));
-	} catch (e) {
-		logger.error("hooks", "Failed to query memories", e as Error);
-		return [];
-	}
-}
-
-/**
- * Get memories created after a given timestamp, ordered by recency.
- */
-export function getMemoriesSince(memoryDbPath: string, sinceMs: number, limit: number): SimpleMemory[] {
-	if (!existsSync(memoryDbPath)) return [];
-
-	try {
-		const sinceIso = new Date(sinceMs).toISOString();
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const rows: SimpleMemory[] = getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-			const rows = db
-				.prepare(`
-				SELECT id, content, type, importance, created_at
-				FROM memories
-				WHERE is_deleted = 0 AND superseded_by IS NULL AND stale_at IS NULL AND created_at > ?
-				ORDER BY created_at DESC
-				LIMIT ?
-			`)
-				.all(sinceIso, limit) as unknown as Array<SimpleMemory>;
-			return rows.filter((row) => scanMemoryContent(row.content).contextEligible);
-		}, "memory-candidates.ts:511");
-
-		return rows.map((r) => ({
-			id: r.id,
-			content: r.content,
-			type: r.type || "general",
-			importance: r.importance || 0.5,
-			created_at: r.created_at,
-		}));
-	} catch (e) {
-		logger.error("hooks", "Failed to query memories since timestamp", e as Error);
 		return [];
 	}
 }
