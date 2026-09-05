@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-05
-- Bug fixes: reject invalid runtime config; recover projection token budget.
+- Bug fixes: consolidate current memory eligibility; exclude superseded memories from delivered context; reject invalid runtime config; recover projection token budget.
 - Refactoring: unify runtime config parsing.
 
 ### 2026-09-04
@@ -34,6 +34,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: route wave 2 reads and telemetry through owner.
 
 ## Release Ledger
+
+## [0.216.7] - 2026-09-05
+
+Release summary: 2 bug fixes.
+Tag range: `v0.216.6..v0.216.7`.
+
+### Bug Fixes
+
+- consolidate current memory eligibility
+- exclude superseded memories from delivered context
 
 ## [0.216.6] - 2026-09-05
 
