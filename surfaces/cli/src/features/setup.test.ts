@@ -437,6 +437,43 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(agentYaml).not.toContain("legacy-model");
 	});
 
+	it("does not carry retired fields into a new manifest when existing setup lacks agent.yaml", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-new-manifest-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeIdentityTemplates(templatesPath);
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+		await runExistingSetupWizard(
+			basePath,
+			fakeDetection(basePath),
+			{
+				memory: {
+					synthesis: { harness: "openclaw" },
+					pipelineV2: { extractionProvider: "claude-code", writeGate: { threshold: 0.4 } },
+				},
+			},
+			deps,
+			{
+				nonInteractive: true,
+				skipGit: true,
+				allowUnprotectedWorkspace: true,
+				signetSecretsEnabled: true,
+			},
+		);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).not.toContain("synthesis:");
+		expect(agentYaml).not.toContain("pipelineV2:");
+		expect(agentYaml).not.toContain("claude-code");
+	});
+
 	it("includes Hermes in migration harnesses when detected in ~/.hermes", () => {
 		root = mkdtempSync(join(tmpdir(), "setup-migrate-hermes-default-"));
 		const basePath = join(root, "agents");
