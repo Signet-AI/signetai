@@ -30,6 +30,7 @@ import { up as memoryContentSafety } from "./125-memory-content-safety";
 import { up as dreamingSurprisalAttention } from "./126-dreaming-surprisal-attention";
 import { up as sourceTranscriptImport } from "./146-source-transcript-import";
 import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
+import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -188,6 +189,224 @@ describe("migration framework", () => {
 		expect(uniqueVersions.size).toBe(migrations.length);
 	});
 
+	test("migration 150 fences content heads while preserving isolated scope", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.prepare(
+			"INSERT INTO agents (id, name, read_policy, created_at, updated_at) VALUES ('private', 'private', 'isolated', ?, ?)",
+		).run(new Date().toISOString(), new Date().toISOString());
+		db.prepare(
+			"INSERT INTO memory_md_heads (agent_id, content, content_hash, revision, updated_at) VALUES (?, ?, ?, ?, ?)",
+		).run("private", "old", "old-hash", 4, new Date().toISOString());
+		db.prepare(
+			"INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES ('head-fence-pass', 'private', 'incremental-content', 'running')",
+		).run();
+		expect(db.query("SELECT head_base_revision FROM dreaming_passes WHERE id = 'head-fence-pass'").get()).toEqual({
+			head_base_revision: 4,
+		});
+		expect(db.query("SELECT is_current FROM memory_md_heads WHERE agent_id = 'private'").get()).toEqual({
+			is_current: 0,
+		});
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'private'").run();
+		db.prepare(
+			"INSERT INTO memories (id, content, agent_id, created_at, updated_at) VALUES ('private-memory', 'private note', 'private', ?, ?)",
+		).run(new Date().toISOString(), new Date().toISOString());
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'private'").get()).toEqual({
+			revision: 4,
+			is_current: 1,
+		});
+		db.prepare("UPDATE memories SET content = 'changed' WHERE id = 'private-memory'").run();
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'private'").get()).toEqual({
+			revision: 5,
+			is_current: 0,
+		});
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'private'").run();
+		db.exec("BEGIN");
+		db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = 'private-memory'").run();
+		db.exec("ROLLBACK");
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'private'").get()).toEqual({
+			revision: 5,
+			is_current: 1,
+		});
+	});
+
+	test("migration 150 scopes shared invalidation and policy revocation", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		const now = new Date().toISOString();
+		for (const [id, policy, group] of [
+			["agent-a", "isolated", null],
+			["agent-b", "isolated", null],
+			["reader", "shared", null],
+			["group-reader", "group", "team"],
+		] as const) {
+			db.prepare(
+				"INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+			).run(id, id, policy, group, now, now);
+			db.prepare(
+				"INSERT INTO memory_md_heads (agent_id, content, content_hash, revision, updated_at, is_current) VALUES (?, '', '', 7, ?, 1)",
+			).run(id, now);
+		}
+		db.prepare(
+			"INSERT INTO memories (id, content, agent_id, visibility, created_at, updated_at) VALUES ('private-a', 'private', 'agent-a', 'private', ?, ?)",
+		).run(now, now);
+		db.prepare("UPDATE memories SET content = 'changed' WHERE id = 'private-a'").run();
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'agent-a'").get()).toEqual({
+			revision: 8,
+			is_current: 0,
+		});
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'agent-b'").get()).toEqual({
+			revision: 7,
+			is_current: 1,
+		});
+		db.prepare(
+			"INSERT INTO memories (id, content, agent_id, visibility, created_at, updated_at) VALUES ('global-a', 'global', 'agent-a', 'global', ?, ?)",
+		).run(now, now);
+		db.prepare("UPDATE memories SET content = 'changed global' WHERE id = 'global-a'").run();
+		expect(db.query("SELECT is_current FROM memory_md_heads WHERE agent_id = 'reader'").get()).toEqual({
+			is_current: 0,
+		});
+		expect(db.query("SELECT is_current FROM memory_md_heads WHERE agent_id = 'group-reader'").get()).toEqual({
+			is_current: 1,
+		});
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id IN ('agent-a', 'group-reader')").run();
+		db.prepare("UPDATE agents SET policy_group = 'team' WHERE id = 'agent-a'").run();
+		expect(db.query("SELECT is_current FROM memory_md_heads WHERE agent_id = 'group-reader'").get()).toEqual({
+			is_current: 0,
+		});
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'agent-b'").run();
+		db.prepare("UPDATE agents SET read_policy = 'shared' WHERE id = 'agent-b'").run();
+		expect(db.query("SELECT is_current FROM memory_md_heads WHERE agent_id = 'agent-b'").get()).toEqual({
+			is_current: 0,
+		});
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'agent-a'").run();
+		db.prepare("DELETE FROM memories WHERE id = 'private-a'").run();
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'agent-a'").get()).toEqual({
+			revision: 11,
+			is_current: 0,
+		});
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'agent-a'").run();
+		db.prepare(
+			"INSERT INTO memory_artifact_tombstones (agent_id, session_token, removed_at, reason, removed_paths) VALUES ('agent-a', 'purged-session', ?, 'source purge', '[]')",
+		).run(now);
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'agent-a'").get()).toEqual({
+			revision: 12,
+			is_current: 0,
+		});
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'agent-a'").run();
+		db.prepare(
+			"INSERT INTO memory_content_safety (agent_id, source_kind, source_id, status, context_eligible, policy_version, scanned_at) VALUES ('agent-a', 'memory', 'private-a', 'blocked', 0, 'test', ?)",
+		).run(now);
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'agent-a'").get()).toEqual({
+			revision: 13,
+			is_current: 0,
+		});
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'agent-a'").run();
+		db.prepare(
+			"INSERT INTO memory_content_safety (agent_id, source_kind, source_id, status, context_eligible, policy_version, scanned_at) VALUES ('agent-a', 'memory', 'global-a', 'clean', 1, 'test', ?)",
+		).run(now);
+		db.prepare(
+			"UPDATE memory_content_safety SET status = 'blocked' WHERE agent_id = 'agent-a' AND source_id = 'global-a'",
+		).run();
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'agent-a'").get()).toEqual({
+			revision: 14,
+			is_current: 0,
+		});
+		db.prepare(
+			"INSERT INTO imported_source_lifecycle (id, source_id, agent_id, status, reason, removed_at, created_at, updated_at) VALUES ('lifecycle-row', 'source-a', 'agent-a', 'reviewed', 'reviewed', ?, ?, ?)",
+		).run(now, now, now);
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'agent-a'").run();
+		db.prepare("UPDATE imported_source_lifecycle SET status = 'unsupported' WHERE id = 'lifecycle-row'").run();
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'agent-a'").get()).toEqual({
+			revision: 15,
+			is_current: 0,
+		});
+		db.prepare(
+			"INSERT INTO agents (id, name, read_policy, created_at, updated_at) VALUES ('transcript-agent', 'transcript-agent', 'isolated', ?, ?)",
+		).run(now, now);
+		db.prepare(
+			"INSERT INTO memory_md_heads (agent_id, content, content_hash, revision, updated_at, is_current) VALUES ('transcript-agent', '', '', 0, ?, 1)",
+		).run(now);
+		db.prepare(
+			"INSERT INTO session_transcripts (session_key, content, agent_id, created_at, updated_at, completed_at) VALUES ('open-session', 'open', 'transcript-agent', ?, ?, NULL)",
+		).run(now, now);
+		db.prepare("UPDATE session_transcripts SET content = 'append' WHERE session_key = 'open-session'").run();
+		expect(db.query("SELECT revision FROM memory_md_heads WHERE agent_id = 'transcript-agent'").get()).toEqual({
+			revision: 0,
+		});
+		db.prepare("UPDATE session_transcripts SET completed_at = ? WHERE session_key = 'open-session'").run(now);
+		db.prepare("UPDATE session_transcripts SET content = 'closed' WHERE session_key = 'open-session'").run();
+		expect(
+			db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'transcript-agent'").get(),
+		).toEqual({ revision: 1, is_current: 0 });
+		db.prepare(
+			"INSERT INTO memory_md_heads (agent_id, content, content_hash, revision, updated_at, is_current) VALUES ('summary-agent', '', '', 0, ?, 1)",
+		).run(now);
+		db.prepare(
+			"INSERT INTO session_summaries (id, content, depth, kind, earliest_at, latest_at, agent_id, created_at) VALUES ('summary-row', 'summary', 0, 'session', ?, ?, 'summary-agent', ?)",
+		).run(now, now, now);
+		db.prepare("DELETE FROM session_summaries WHERE id = 'summary-row'").run();
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'summary-agent'").get()).toEqual(
+			{ revision: 1, is_current: 0 },
+		);
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'summary-agent'").run();
+		db.prepare(
+			"INSERT INTO session_summaries (id, content, depth, kind, earliest_at, latest_at, agent_id, created_at) VALUES ('promote-row', 'promote', 0, 'session', ?, ?, 'summary-agent', ?)",
+		).run(now, now, now);
+		db.prepare("UPDATE session_summaries SET depth = 1 WHERE id = 'promote-row'").run();
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'summary-agent'").get()).toEqual(
+			{ revision: 2, is_current: 0 },
+		);
+		db.prepare("UPDATE memory_md_heads SET is_current = 1 WHERE agent_id = 'summary-agent'").run();
+		db.prepare(
+			"INSERT INTO session_summaries (id, content, depth, kind, earliest_at, latest_at, agent_id, created_at) VALUES ('rollup-row', 'rollup', 1, 'arc', ?, ?, 'summary-agent', ?)",
+		).run(now, now, now);
+		db.prepare("UPDATE session_summaries SET content = 'rollup updated' WHERE id = 'rollup-row'").run();
+		db.prepare("DELETE FROM session_summaries WHERE id = 'rollup-row'").run();
+		expect(db.query("SELECT revision, is_current FROM memory_md_heads WHERE agent_id = 'summary-agent'").get()).toEqual(
+			{ revision: 2, is_current: 1 },
+		);
+	});
+
+	test("migration 150 preserves legacy head content and history as unverified", () => {
+		db = createFreshDb();
+		for (const migration of MIGRATIONS.slice(0, -1)) migration.up(db);
+		const now = new Date().toISOString();
+		db.prepare(
+			"INSERT INTO memory_md_heads (agent_id, content, content_hash, revision, updated_at) VALUES (?, ?, ?, ?, ?)",
+		).run("legacy-agent", "legacy Tuesday", "legacy-hash", 4, now);
+		db.prepare(
+			"INSERT INTO memory_head_revisions (id, agent_id, revision, content, content_hash, rendered_token_count, pass_id, base_revision, base_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		).run(
+			"legacy-revision",
+			"legacy-agent",
+			4,
+			"legacy Tuesday",
+			"legacy-hash",
+			2,
+			"legacy-pass",
+			3,
+			"prior-hash",
+			now,
+		);
+
+		memoryHeadFreshness(db);
+
+		expect(
+			db
+				.query(
+					"SELECT content, content_hash, revision, is_current FROM memory_md_heads WHERE agent_id = 'legacy-agent'",
+				)
+				.get(),
+		).toEqual({ content: "legacy Tuesday", content_hash: "legacy-hash", revision: 4, is_current: 0 });
+		expect(
+			db.query("SELECT content, content_hash FROM memory_head_revisions WHERE id = 'legacy-revision'").get(),
+		).toEqual({
+			content: "legacy Tuesday",
+			content_hash: "legacy-hash",
+		});
+	});
+
 	test("fresh DB and upgrades from 138 and shipped 139 apply the repaired tail", () => {
 		for (const version of [138, 139] as const) {
 			db = createFreshDb();
@@ -197,7 +416,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(149);
+			expect(applied.version).toBe(150);
 			expect(
 				(db.query("PRAGMA table_info(memory_jobs)").all() as Array<{ name: string }>).some(
 					(column) => column.name === "lease_token",

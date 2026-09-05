@@ -42,7 +42,7 @@ Identity files in your Signet workspace:
 - SOUL.md: personality and values (maintain this)
 - IDENTITY.md: who you are (maintain this)
 - USER.md: who the user is (maintain this)
-- MEMORY.md: auto-generated working memory summary (system-managed)
+- MEMORY.md: inspectable working-memory snapshot; use Signet recall for current evidence
 `
 		: "";
 	return `[signet active]

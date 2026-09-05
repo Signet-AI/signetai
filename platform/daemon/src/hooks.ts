@@ -1,3 +1,5 @@
+import { requestMemoryHead } from "./memory-head";
+import { budgetIdentityContent } from "./identity-context";
 /**
  * Signet Hooks System
  *
@@ -52,7 +54,6 @@ import {
 	readAgentsMd,
 	readContextIdentitySections,
 	readIdentityFile,
-	readMemoryMd,
 	resolveIdentityFiles,
 } from "./identity-context";
 import { propagateMemoryStatus } from "./knowledge-graph";
@@ -764,7 +765,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const identityFiles = resolveIdentityFiles(agentId, agentsDir);
 	const identity = includeIdentity ? loadIdentity(agentsDir, identityFiles) : { name: "Agent" };
 
-	const profileIdentitySections = includeIdentity
+	let profileIdentitySections = includeIdentity
 		? readContextIdentitySections(agentsDir, resolvedHooksConfig.identity, identityFiles)
 		: null;
 	const profileHasExplicitIdentityFiles =
@@ -791,17 +792,40 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					.filter((section): section is { header: string; content: string } => Boolean(section.content))
 			: [];
 
-	// Read MEMORY.md with 10k char budget unless a context profile supplies the identity/context file list.
-	const memoryMdCandidate =
-		profileIdentitySections?.find((section) => section.path === "MEMORY.md")?.content ??
-		(!profileHasExplicitIdentityFiles && config.includeRecentContext !== false
-			? readMemoryMd(agentsDir, 10000, identityFiles)
-			: undefined);
-	const memoryMdContent =
-		memoryMdCandidate && scanMemoryContent(memoryMdCandidate).contextEligible ? memoryMdCandidate : undefined;
-	const safeProfileIdentitySections = profileIdentitySections?.filter(
-		(section) => section.path !== "MEMORY.md" || scanMemoryContent(section.content).contextEligible,
-	);
+	// Apply freshness before the existing identity budget, including agent-local profile paths.
+	async function currentWorkingMemory(path: string, budget: Parameters<typeof budgetIdentityContent>[1]) {
+		try {
+			const inspected = await requestMemoryHead<{ content: string | null }>({
+				action: "inspect",
+				agentId,
+				content: readIdentityFile(agentsDir, path, 262144, identityFiles) ?? "",
+			});
+			return inspected.content && scanMemoryContent(inspected.content).contextEligible
+				? budgetIdentityContent(inspected.content, budget)
+				: undefined;
+		} catch (error) {
+			logger.warn("hooks", "Working memory withheld: freshness could not be verified", { error: String(error) });
+			return undefined;
+		}
+	}
+	const isWorkingMemory = (path: string) => path.split(/[\\/]/).pop() === "MEMORY.md";
+	if (profileIdentitySections) {
+		const sections = await Promise.all(
+			profileIdentitySections.map(async (section) => {
+				if (!isWorkingMemory(section.path)) return section;
+				const budget = resolvedHooksConfig.identity?.files?.find((entry) => entry.path === section.path) ?? {};
+				const content = await currentWorkingMemory(section.path, budget);
+				return content ? { ...section, content } : null;
+			}),
+		);
+		profileIdentitySections = sections.filter((section): section is NonNullable<typeof section> => section !== null);
+	}
+	const memoryMdContent = profileHasExplicitIdentityFiles
+		? profileIdentitySections?.find((section) => isWorkingMemory(section.path))?.content
+		: config.includeRecentContext !== false
+			? await currentWorkingMemory("MEMORY.md", { maxChars: 10000 })
+			: undefined;
+	const safeProfileIdentitySections = profileIdentitySections;
 
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
@@ -1162,7 +1186,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			dynamicParts.push(`\n## ${section.header}\n`);
 			dynamicParts.push(section.content);
 		}
-		if (memoryMdContent && !safeProfileIdentitySections.some((section) => section.path === "MEMORY.md")) {
+		if (memoryMdContent && !safeProfileIdentitySections.some((section) => isWorkingMemory(section.path))) {
 			dynamicParts.push("\n## Working Memory\n");
 			dynamicParts.push(memoryMdContent);
 		}

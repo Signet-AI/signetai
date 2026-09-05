@@ -224,6 +224,7 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		case "dreaming_episodic_backlog_exists":
 		case "dreaming_evidence_search":
 		case "dreaming_evidence_source":
+		case "memory_head":
 		case "dreaming_pass_finalize":
 		case "dreaming_review_due":
 		case "dreaming_evidence_classify":

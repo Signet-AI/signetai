@@ -59,6 +59,55 @@ The rendered document has two layers:
    - parent/child traversal handles
    - transcript/session references for drill-down
 
+## Freshness and publication
+
+The daemon's bounded `memory_head` owner operation is the publication and
+freshness boundary for both Dreaming curation inputs. A content pass snapshots
+its agent's existing head revision when it starts. Publication requires that
+snapshot and the submitted revision/hash to still match. Reading a newer head
+cannot make an older pass eligible to publish.
+
+Corrections, supersession, deletion, source removal, and access revocation
+advance the affected head's revision and mark it stale in the same database
+transaction. The previous text and audit history remain inspectable. Private
+changes leave unrelated isolated heads alone; shared evidence includes readers
+allowed by the roster policy. Safety changes conservatively include shared and
+group readers. New evidence and open-session transcript appends do not invalidate
+heads. Invalidation queues no model work: the next existing Dreaming content
+pass can publish a replacement.
+
+Session startup delivers generated text only from a current scoped database
+head. A stale or unavailable head is withheld; ordinary recall still supplies
+current evidence. This cannot retract text already loaded into an active chat.
+Generated memory is excluded from static harness instruction copies, including
+on the next synchronization of existing managed copies. Harnesses must use their
+Signet session hook or recall integration for current working memory.
+
+Generated `MEMORY.md` files carry an inspection-only marker. They are snapshots,
+not an offline freshness authority. Older timestamp markers and exact historical
+head hashes identify legacy generated files. User-authored files and edits are
+preserved. Edits to a marked, known revision become authored text; remove an
+unknown legacy marker when adopting that snapshot as an explicit authored note. An unavailable owner cannot verify an unmarked legacy file,
+so startup withholds it until verification is available.
+
+Publication admits at most 200 entries, eight evidence references/quotes per
+entry, 256 KiB of input, and 1,000 rendered body tokens. Unversioned synthesis
+writes are retired. A projection failure returns `PUBLICATION_PENDING`; reading
+a still-current head retries only the file projection, without generating text.
+An authored file blocks projection with an explicit pending result; reading the
+head reports that conflict and never overwrites the file.
+The database remains authoritative if a process dies between file replacement
+and transaction completion. Delivery never trusts that file as committed state.
+
+Migration 150 marks pre-existing heads unverified without deleting their text,
+files, or audit history. Existing in-flight passes without a captured revision
+cannot publish. Deploy readers, writers, and the migration together; do not run
+older publishers against the migrated workspace. For rollback, stop the daemon
+and restore the pre-migration workspace/database backup together with the older
+binary. Restoring only the old binary removes the freshness guarantee. No
+separate dependency index, revision service, or automatic regeneration queue is
+introduced.
+
 ## Temporal Model
 
 The existing `session_summaries` DAG remains the temporal backbone, but

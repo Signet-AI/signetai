@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -1054,6 +1055,11 @@ export function runDbOwnerWorker(): void {
 			return job.request.statement.readonly
 				? executeReadOnlyStatement(job.request.statement)
 				: executeStatement(job.request.statement, context);
+		}
+		if (job.request.kind === "memory_head") {
+			const { executeMemoryHead } = await import("./memory-head-owner");
+			const request = job.request.request;
+			return withBusyRetry(() => executeMemoryHead(db as never, dirname(dirname(ownerDbPath)), request), context);
 		}
 		if (job.request.kind === "transaction") return executeTransaction(job.request.transaction.statements, context);
 		if (job.request.kind === "batch")

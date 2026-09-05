@@ -157,6 +157,7 @@ import { up as sourceTranscriptImport } from "./146-source-transcript-import";
 import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
 import { up as sourceImportAttemptProvenance } from "./148-source-import-attempt-provenance";
 import { up as transcriptImportStateMachine } from "./149-transcript-import-state-machine";
+import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1357,6 +1358,17 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "source_import_jobs", column: "duplicate_mode" },
 				{ table: "source_import_jobs", column: "next_attempt_at" },
 				{ table: "source_import_files", column: "error" },
+			],
+		},
+	},
+	{
+		version: 150,
+		name: "memory-head-freshness",
+		up: memoryHeadFreshness,
+		artifacts: {
+			columns: [
+				{ table: "memory_md_heads", column: "is_current" },
+				{ table: "dreaming_passes", column: "head_base_revision" },
 			],
 		},
 	},

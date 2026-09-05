@@ -447,7 +447,10 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			"Read the scoped Dreaming-curated MEMORY.md head.",
 			true,
 			z.object({ agentId: z.string().min(1) }),
-			async ({ agentId: scopeId }) => ({ ok: true, head: await readCuratedMemoryHead(scopeId) }),
+			async ({ agentId: scopeId }) =>
+				scopeId === agentId
+					? { ok: true, head: await readCuratedMemoryHead(scopeId) }
+					: { ok: false, error: "Head scope must match the active agent" },
 		),
 		capability(
 			"memory_head_commit",
@@ -467,7 +470,10 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					}),
 				),
 			}),
-			async (input) => commitCuratedMemoryHead(input),
+			async (input) =>
+				input.agentId === agentId && input.passId === params.passId
+					? commitCuratedMemoryHead(input)
+					: { ok: false, code: "PASS_NOT_AUTHORIZED", error: "Head commit requires the active scoped Dreaming pass" },
 		),
 		capability(
 			"search_entities",
@@ -950,7 +956,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 							passId: z.string().min(1),
 							agentId: z.string().min(1),
 							baseRevision: z.number().int().nonnegative(),
-							baseHash: z.string().length(64),
+							baseHash: z.union([z.literal(""), z.string().length(64)]),
 							content: z.string().trim().min(1),
 							entries: z
 								.array(
@@ -965,7 +971,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 								.max(200),
 						}),
 						async (input) => {
-							if (!params.passId || input.passId !== params.passId)
+							if (!params.passId || input.passId !== params.passId || input.agentId !== agentId)
 								return { ok: false, error: "Head curation requires the active Dreaming pass" };
 							return await curateMemoryHead(input);
 						},

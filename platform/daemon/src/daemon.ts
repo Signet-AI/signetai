@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { requestMemoryHead } from "./memory-head";
 /**
  * Signet Daemon
  * Background service for memory, API, and dashboard hosting
@@ -657,7 +658,18 @@ ${fileList}
 				try {
 					const fileContent = (await readFileAsync(identityPath, "utf8")).trim();
 					if (!fileContent) return "";
-					if (name === "MEMORY.md" && !scanMemoryContent(fileContent).contextEligible) return "";
+					if (
+						name === "MEMORY.md" &&
+						(!scanMemoryContent(fileContent).contextEligible ||
+							(
+								await requestMemoryHead<{ generated: boolean }>({
+									action: "inspect",
+									agentId: "default",
+									content: fileContent,
+								})
+							).generated)
+					)
+						return "";
 					const header = name.replace(".md", "");
 					return `\n## ${header}\n\n${fileContent}`;
 				} catch {
