@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-09-05
 - Features: replace terminal setup with guided dashboard onboarding; refine workspace and icon system; add durable transcript import clients; expose durable transcript imports; add durable transcript import worker lifecycle; add owner-routed transcript commit seam; add transcript import foundation.
-- Bug fixes: keep installer loading out of daemon boot and repair CI gates; integrate onboarding with updated dashboard; unblock onboarding review and use existing brand assets; fence profile memory before applying context budgets; read entries only from the current head revision; fence generated heads by agent and source revision; gate transcript imports on unsupported platforms; retain transcript import ledgers on unsafe purge; close transcript purge and path escapes; close transcript import escape races; serialize purge with first canonical append; close transcript import lifecycle review gaps; harden transcript import lifecycle; refresh event-loop ledger locations; route transcript DB work through owner; enforce transaction preconditions; use reserved transcript upload slot; enforce lease truth and upload serialization; initialize isolated transcript workspace; retain source audit tombstones; recover stale canonical append locks; retry recovery until db owner is ready; make startup recovery retryable; reconcile filesystem crash recovery; reap recovery children on parent death; recover canonical append lock after crash; close db owner on parent death; make transcript replay file slots unique; converge imported transcript dreaming evidence; stabilize transcript import worker; consolidate current memory eligibility; exclude superseded memories from delivered context; reject invalid runtime config; recover projection token budget.
+- Bug fixes: build desktop connector dependencies before daemon; keep installer loading out of daemon boot and repair CI gates; integrate onboarding with updated dashboard; unblock onboarding review and use existing brand assets; fence profile memory before applying context budgets; read entries only from the current head revision; fence generated heads by agent and source revision; gate transcript imports on unsupported platforms; retain transcript import ledgers on unsafe purge; close transcript purge and path escapes; close transcript import escape races; serialize purge with first canonical append; close transcript import lifecycle review gaps; harden transcript import lifecycle; refresh event-loop ledger locations; route transcript DB work through owner; enforce transaction preconditions; use reserved transcript upload slot; enforce lease truth and upload serialization; initialize isolated transcript workspace; retain source audit tombstones; recover stale canonical append locks; retry recovery until db owner is ready; make startup recovery retryable; reconcile filesystem crash recovery; reap recovery children on parent death; recover canonical append lock after crash; close db owner on parent death; make transcript replay file slots unique; converge imported transcript dreaming evidence; stabilize transcript import worker; consolidate current memory eligibility; exclude superseded memories from delivered context; reject invalid runtime config; recover projection token budget.
 - Refactoring: make source cloning explicit; keep one head publication tool; simplify transcript imports; unify runtime config parsing.
 - Docs: document durable transcript endpoints.
 
@@ -36,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: route wave 2 reads and telemetry through owner.
 
 ## Release Ledger
+
+## [0.219.1] - 2026-09-05
+
+Release summary: 1 bug fix.
+Tag range: `v0.219.0..v0.219.1`.
+
+### Bug Fixes
+
+- build desktop connector dependencies before daemon
 
 ## [0.219.0] - 2026-09-05
 
