@@ -2,10 +2,56 @@ import { describe, expect, it } from "bun:test";
 import {
 	createDeferredRuntimeGate,
 	createDeferredRuntimeScheduler,
+	releaseDeferredRuntimeGateIfSafe,
 	scheduleDeferredRuntimeWork,
 } from "./deferred-runtime-gate";
 
 describe("deferred runtime startup contention (#1609)", () => {
+	it("releases ordinary startup without waiting for background integrity", async () => {
+		const gate = createDeferredRuntimeGate();
+		let pipelineStarted = false;
+		const pipeline = gate.waitForIntegrity().then(() => {
+			pipelineStarted = true;
+		});
+
+		expect(
+			releaseDeferredRuntimeGateIfSafe(gate, {
+				migrationBackupPending: false,
+				writesBlocked: false,
+			}),
+		).toBe(true);
+		await pipeline;
+
+		expect(pipelineStarted).toBe(true);
+	});
+
+	it("keeps startup gated while migration verification is required", async () => {
+		const gate = createDeferredRuntimeGate();
+		let pipelineStarted = false;
+		const pipeline = gate.waitForIntegrity().then(() => {
+			pipelineStarted = true;
+		});
+
+		expect(
+			releaseDeferredRuntimeGateIfSafe(gate, {
+				migrationBackupPending: true,
+				writesBlocked: false,
+			}),
+		).toBe(false);
+		expect(
+			releaseDeferredRuntimeGateIfSafe(gate, {
+				migrationBackupPending: false,
+				writesBlocked: true,
+			}),
+		).toBe(false);
+		await Bun.sleep(0);
+		expect(pipelineStarted).toBe(false);
+
+		gate.completeIntegrity();
+		await pipeline;
+		expect(pipelineStarted).toBe(true);
+	});
+
 	it("serializes both 30-second callbacks before pipeline startup", async () => {
 		const gate = createDeferredRuntimeGate();
 		const callbacks: Array<{ readonly callback: () => void; readonly delayMs: number }> = [];
