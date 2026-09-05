@@ -5,13 +5,13 @@
  * /api/secrets/1password/* (secrets-routes.ts).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Import, Link2, Loader2, RefreshCw, Unlink } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Import, Link2, Loader2, RefreshCw, Unlink } from "@/components/mingcute-icons";
 import { toast } from "sonner";
 import { api, type OnePasswordStatus, type OnePasswordVault } from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
-export function OnePasswordPanel({ onImported }: { onImported: () => void }) {
+export function OnePasswordPanel({ onImported, compact = false }: { onImported: () => void; compact?: boolean }) {
 	const [expanded, setExpanded] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [status, setStatus] = useState<OnePasswordStatus>({ configured: false, connected: false, vaults: [] });
@@ -104,7 +104,11 @@ export function OnePasswordPanel({ onImported }: { onImported: () => void }) {
 			: "text-muted-foreground";
 
 	return (
-		<div className="shrink-0 rounded-[var(--radius)] border border-[oklch(1_0_0/0.05)] bg-card [:root:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
+		<div
+			className={cn(
+				compact ? "mt-1" : "shrink-0 rounded-[var(--radius)] border border-[oklch(1_0_0/0.05)] bg-card [:root:not(.dark)_&]:border-[oklch(0_0_0/0.06)]",
+			)}
+		>
 			<div className="flex items-center gap-1 px-3 py-2">
 				<button
 					type="button"
@@ -117,7 +121,7 @@ export function OnePasswordPanel({ onImported }: { onImported: () => void }) {
 					) : (
 						<ChevronRight className="size-3.5 text-muted-foreground" />
 					)}
-					<span className="text-[12px] font-medium">1Password</span>
+					<span className="text-[11px] font-medium">1Password</span>
 					<span className={cn("font-mono text-[10px]", statusColor)}>{statusLabel}</span>
 				</button>
 				<button
@@ -132,7 +136,14 @@ export function OnePasswordPanel({ onImported }: { onImported: () => void }) {
 			</div>
 
 			{expanded && (
-				<div className="flex flex-col gap-3 border-t border-[oklch(1_0_0/0.06)] px-3 py-3 [:root:not(.dark)_&]:border-[oklch(0_0_0/0.06)]">
+				<div
+					className={cn(
+						"flex flex-col gap-3 px-3 py-3",
+						compact
+							? "border-l border-border pl-3"
+							: "border-t border-[oklch(1_0_0/0.06)] [:root:not(.dark)_&]:border-[oklch(0_0_0/0.06)]",
+					)}
+				>
 					{status.connected ? (
 						<div className="font-mono text-[10.5px] text-[oklch(0.72_0.15_150)]">
 							Connected{typeof status.vaultCount === "number" ? ` · ${status.vaultCount} vaults` : ""}

@@ -17,11 +17,11 @@ upstream project for that package; the canonical license texts are listed below.
 | --- | --- | --- | --- |
 | `@fontsource/geist` | `^5.3.0` | SIL Open Font License 1.1 | [Fontsource font files](https://github.com/fontsource/font-files) |
 | `@fontsource/geist-mono` | `^5.3.0` | SIL Open Font License 1.1 | [Fontsource font files](https://github.com/fontsource/font-files) |
+| `@mingcute/react` | `^3.0.2` | Apache-2.0 | [MingCute Icons](https://github.com/mingcute-design/mingcute-icons) |
 | `@radix-ui/react-slot` | `^1.1.2` | MIT | [Radix Primitives](https://github.com/radix-ui/primitives) |
 | `@shadcn/react` | `^0.2.1` | MIT | [shadcn/ui](https://github.com/shadcn-ui/ui) |
 | `class-variance-authority` | `^0.7.1` | Apache-2.0 | [cva](https://github.com/joe-bell/cva) |
 | `clsx` | `^2.1.1` | MIT | [clsx](https://github.com/lukeed/clsx) |
-| `lucide-react` | `^1.26.0` | ISC | [Lucide](https://github.com/lucide-icons/lucide) |
 | `next-themes` | `^0.4.6` | MIT | [next-themes](https://github.com/pacocoursey/next-themes) |
 | `radix-ui` | `^1.6.5` | MIT | [Radix Primitives](https://github.com/radix-ui/primitives) |
 | `react` | `^19.2.0` | MIT | [React](https://github.com/facebook/react) |

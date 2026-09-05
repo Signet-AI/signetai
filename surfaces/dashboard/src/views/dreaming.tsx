@@ -6,7 +6,7 @@ import { Surface } from "@/components/ui/surface";
 import { type DreamPass, type DreamStatus, type DreamToolCall, api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { Activity, AlertCircle, Check, ChevronRight, Loader2, Play, X } from "lucide-react";
+import { Activity, AlertCircle, Check, ChevronRight, Loader2, Play, X } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useState } from "react";
 
 /* ── Formatting helpers ──────────────────────────────────────────────────── */

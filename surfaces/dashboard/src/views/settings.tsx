@@ -1,4 +1,7 @@
 import { ConnectProviderDialog } from "@/components/settings/connect-dialog";
+import { OnePasswordPanel } from "@/components/secrets/onepassword-panel";
+import { AddSecretDialog } from "@/components/secrets/add-secret-dialog";
+import { SecretCard } from "@/components/secrets/secret-card";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -35,7 +38,7 @@ import { DASHBOARD_LICENSES } from "@/lib/dashboard-licenses";
 import { type SettingsSection, useSettings } from "@/lib/settings-context";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { CheckCircle, Download, ExternalLink, Loader2, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
+import { CheckCircle, Download, ExternalLink, Loader2, RefreshCw, Search, TriangleAlert, X } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useState } from "react";
 
 const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
@@ -74,6 +77,25 @@ const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
 			>
 				<path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8" />
 				<circle cx="12" cy="12" r="3" />
+			</svg>
+		),
+	},
+	{
+		id: "secrets",
+		label: "Secrets",
+		icon: (
+			<svg
+				viewBox="0 0 24 24"
+				width="15"
+				height="15"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth={1.75}
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			>
+				<circle cx="7.5" cy="15.5" r="3.5" />
+				<path d="m10.5 13 8.5-8.5M16 6l2 2M18.5 3.5l2 2" />
 			</svg>
 		),
 	},
@@ -198,6 +220,7 @@ export function SettingsModal() {
 					<div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-none">
 						{section === "network" && <NetworkSection />}
 						{section === "inference" && <InferenceSection />}
+						{section === "secrets" && <SecretsSection />}
 						{section === "logs" && <LogsSection />}
 						{section === "advanced" && <AdvancedSection />}
 						{section === "licenses" && <LicensesSection />}
@@ -1464,6 +1487,47 @@ function AdvancedSection() {
 					step={1000}
 				/>
 			</div>
+		</div>
+	);
+}
+
+/* ── Secrets ── */
+
+function SecretsSection() {
+	const secrets = useAsync(() => api.getSecrets());
+	const [adding, setAdding] = useState(false);
+	return (
+		<div className="flex flex-col gap-3">
+			<div className="flex items-center justify-between">
+				<h3 className="text-sm font-semibold">Secrets</h3>
+				<Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+					Add secret
+				</Button>
+			</div>
+			{secrets.loading ? (
+				<p className="text-xs text-muted-foreground">Loading secrets…</p>
+			) : secrets.data ? (
+				<div>
+					{(secrets.data.secrets ?? []).map((name) => (
+						<SecretCard
+							key={name}
+							name={name}
+							provider={secrets.data?.provider ?? "local"}
+							onDeleted={secrets.refresh}
+						/>
+					))}
+				</div>
+			) : (
+				<p className="text-xs text-muted-foreground">Secrets unavailable.</p>
+			)}
+			<AddSecretDialog open={adding} onClose={() => setAdding(false)} onAdded={secrets.refresh} />
+			<div className="px-1.5">
+				<div className="text-[13px] font-medium">Secret backend</div>
+				<p className="mt-0.5 max-w-[560px] text-[11.5px] leading-relaxed text-muted-foreground">
+					Manage external secret providers here. Secret values are never displayed after saving.
+				</p>
+			</div>
+			<OnePasswordPanel onImported={secrets.refresh} />
 		</div>
 	);
 }

@@ -361,6 +361,12 @@
         "sqlite-vec-linux-x64": "^0.1.7-alpha.2",
         "sqlite-vec-windows-x64": "^0.1.7-alpha.2",
       },
+      "peerDependencies": {
+        "better-sqlite3": "*",
+      },
+      "optionalPeers": [
+        "better-sqlite3",
+      ],
     },
     "platform/daemon": {
       "name": "@signet/daemon",
@@ -459,11 +465,11 @@
       "dependencies": {
         "@fontsource/geist": "^5.3.0",
         "@fontsource/geist-mono": "^5.3.0",
+        "@mingcute/react": "^3.0.2",
         "@radix-ui/react-slot": "^1.1.2",
         "@shadcn/react": "^0.2.1",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
-        "lucide-react": "^1.26.0",
         "next-themes": "^0.4.6",
         "radix-ui": "^1.6.5",
         "react": "^19.2.0",
@@ -1115,6 +1121,10 @@
     "@mariozechner/clipboard-win32-x64-msvc": ["@mariozechner/clipboard-win32-x64-msvc@0.3.9", "", { "os": "win32", "cpu": "x64" }, "sha512-ihQC3EufqEY81vhXBgVBtK4prL+wc62zJsSvxrgz7K1hsdt6OObz6v9p3Rn1OG3GJksTTKMJF0u/guMISHPhSA=="],
 
     "@mdx-js/mdx": ["@mdx-js/mdx@3.1.1", "", { "dependencies": { "@types/estree": "^1.0.0", "@types/estree-jsx": "^1.0.0", "@types/hast": "^3.0.0", "@types/mdx": "^2.0.0", "acorn": "^8.0.0", "collapse-white-space": "^2.0.0", "devlop": "^1.0.0", "estree-util-is-identifier-name": "^3.0.0", "estree-util-scope": "^1.0.0", "estree-walker": "^3.0.0", "hast-util-to-jsx-runtime": "^2.0.0", "markdown-extensions": "^2.0.0", "recma-build-jsx": "^1.0.0", "recma-jsx": "^1.0.0", "recma-stringify": "^1.0.0", "rehype-recma": "^1.0.0", "remark-mdx": "^3.0.0", "remark-parse": "^11.0.0", "remark-rehype": "^11.0.0", "source-map": "^0.7.0", "unified": "^11.0.0", "unist-util-position-from-estree": "^2.0.0", "unist-util-stringify-position": "^4.0.0", "unist-util-visit": "^5.0.0", "vfile": "^6.0.0" } }, "sha512-f6ZO2ifpwAQIpzGWaBQT2TXxPv6z3RBzQKpVftEWN78Vl/YweF1uwussDx8ECAXVtr3Rs89fKyG9YlzUs9DyGQ=="],
+
+    "@mingcute/icons": ["@mingcute/icons@3.0.2", "", {}, "sha512-NuDZuZy0B/MmrdoVVOodOURS1qPqgcdSHFPKSG9gPEF6/dr0+zm5pfJs0U7Yta5jjoCdX0WZcVbZOov2tMMPTA=="],
+
+    "@mingcute/react": ["@mingcute/react@3.0.2", "", { "dependencies": { "@mingcute/icons": "3.0.2" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-DqzoUWHHIzetlKgrlAnbRq6qaYLFMjn+RFdh6EIEKxVocCvG6YGSfbR1jm6h05GbTQE/F3OA2iyn8rgEnT4LLg=="],
 
     "@mixmark-io/domino": ["@mixmark-io/domino@2.2.0", "", {}, "sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw=="],
 
@@ -4250,7 +4260,6 @@
 
     "sharp/semver": ["semver@7.8.5", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA=="],
 
-    "signet-dashboard/lucide-react": ["lucide-react@1.28.0", "", { "peerDependencies": { "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-fARAFJULsGuDDydjp6+6blekG/sBIM29TerzLjc9bQUKAcEfrSc4ZQKb25KRz4OMKd87cZTb5dgq0w/T6KufVg=="],
 
     "source-map-support/source-map": ["source-map@0.6.1", "", {}, "sha512-UjgapumWlbMhkBgzT7Ykc5YXUT46F0iKu8SGXq0bcwP5dz/h0Plj6enJqjz1Zbq2l5WaqYnrVbwWOWMyF3F47g=="],
 

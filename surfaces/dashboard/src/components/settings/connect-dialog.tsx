@@ -9,7 +9,7 @@ import { getDesktopBridge } from "@/lib/desktop";
 import { apiKeyFormat, providerKeySecretName } from "@/lib/inference-keys";
 import { createOAuthNavigation, safeOAuthHref, type OAuthNavigation } from "@/lib/oauth-navigation";
 import { cn } from "@/lib/utils";
-import { CheckCircle, Eye, EyeOff, KeyRound, Loader2, TriangleAlert, X } from "lucide-react";
+import { CheckCircle, Eye, EyeOff, KeyRound, Loader2, TriangleAlert, X } from "@/components/mingcute-icons";
 import { useEffect, useRef, useState } from "react";
 
 export interface ConnectableProvider {

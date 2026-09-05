@@ -18,6 +18,12 @@ export const DASHBOARD_LICENSES = [
 		href: "https://github.com/shadcn-ui/ui",
 	},
 	{
+		name: "MingCute Icons",
+		packages: "@mingcute/react",
+		license: "Apache-2.0",
+		href: "https://github.com/mingcute-design/mingcute-icons",
+	},
+	{
 		name: "Class Variance Authority",
 		packages: "class-variance-authority",
 		license: "Apache-2.0",
@@ -28,12 +34,6 @@ export const DASHBOARD_LICENSES = [
 		packages: "clsx",
 		license: "MIT",
 		href: "https://github.com/lukeed/clsx",
-	},
-	{
-		name: "Lucide",
-		packages: "lucide-react",
-		license: "ISC",
-		href: "https://github.com/lucide-icons/lucide",
 	},
 	{
 		name: "next-themes",
