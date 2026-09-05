@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
+import { parseRuntimeYaml } from "@signet/core";
 import { logger } from "./logger";
 
 export const DEFAULT_SESSION_START_MAX_INJECT_TOKENS = 12_000;
@@ -290,9 +290,15 @@ export function loadHooksConfig(agentsDir: string): HooksConfig {
 		return getDefaultHooksConfig();
 	}
 
+	let parsed: Record<string, unknown>;
 	try {
-		const content = readFileSync(configPath, "utf-8");
-		const parsed = parseSimpleYaml(content);
+		parsed = parseRuntimeYaml(readFileSync(configPath, "utf-8"));
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : "invalid YAML syntax";
+		throw new Error(`${configPath}: ${reason}`);
+	}
+
+	try {
 		const hooks = parsed.hooks;
 		if (!hooks || typeof hooks !== "object") {
 			return getDefaultHooksConfig();

@@ -53,6 +53,13 @@ Password login is enabled when `SIGNET_ADMIN_PASSWORD`,
 `SIGNET_ADMIN_PASSWORD_HASH`, or `auth.login.password.passwordHash` is set.
 Plaintext passwords are only accepted from the environment.
 
+The daemon validates the selected runtime YAML before startup and before
+applying a configuration reload. `auth.mode` must be `local`, `team`, or
+`hybrid`; malformed YAML and invalid known authentication fields are rejected
+with file and field diagnostics. Optional fields retain their documented
+defaults, and a rejected reload keeps the previously accepted authentication
+state.
+
 In `"local"` mode the token secret is generated automatically and stored
 at `$SIGNET_WORKSPACE/.daemon/auth-secret`. In `"team"` and `"hybrid"` modes,
 the daemon validates HMAC-signed bearer tokens with role and scope

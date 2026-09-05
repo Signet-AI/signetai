@@ -560,7 +560,7 @@ export {
 } from "./markdown";
 
 // YAML utilities
-export { parseSimpleYaml, formatYaml, parseYamlDocument, stringifyYamlDocument } from "./yaml";
+export { formatYaml, parseRuntimeYaml, parseSimpleYaml, parseYamlDocument, stringifyYamlDocument } from "./yaml";
 export {
 	ROUTING_ACCOUNT_KINDS,
 	ROUTING_TARGET_KINDS,

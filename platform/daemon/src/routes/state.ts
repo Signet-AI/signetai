@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
 	networkModeFromBindHost,
 	normalizeLoopbackHost,
-	parseSimpleYaml,
+	parseRuntimeYaml,
 	readNetworkMode,
 	resolveDefaultBasePath,
 	resolveNetworkBinding,
@@ -148,6 +148,10 @@ export function redactUrlForLogs(url: string | undefined): string | undefined {
 	}
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function readConfiguredNetworkBinding(agentsDir: string): {
 	readonly host: string;
 	readonly bind: string;
@@ -155,11 +159,26 @@ export function readConfiguredNetworkBinding(agentsDir: string): {
 	for (const name of ["agent.yaml", "AGENT.yaml"]) {
 		const path = join(agentsDir, name);
 		if (!existsSync(path)) continue;
+		let parsed: Record<string, unknown>;
 		try {
-			return resolveNetworkBinding(readNetworkMode(parseSimpleYaml(readFileSync(path, "utf-8"))));
+			parsed = parseRuntimeYaml(readFileSync(path, "utf-8"));
 		} catch {
-			// Ignore malformed config and keep scanning fallbacks.
+			throw new Error(`${path}: invalid YAML syntax`);
 		}
+		const network = parsed.network;
+		if (network !== undefined && !isRecord(network)) {
+			throw new Error(`${path}: network must be a mapping`);
+		}
+		if (
+			network !== undefined &&
+			isRecord(network) &&
+			network.mode !== undefined &&
+			network.mode !== "localhost" &&
+			network.mode !== "tailscale"
+		) {
+			throw new Error(`${path}: network.mode must be localhost or tailscale`);
+		}
+		return resolveNetworkBinding(readNetworkMode(parsed));
 	}
 
 	return resolveNetworkBinding("localhost");

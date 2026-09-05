@@ -661,9 +661,8 @@ describe("parseAuthConfig", () => {
 		expect(cfg.sessionTokenTtlSeconds).toBeGreaterThan(0);
 	});
 
-	test("returns defaults for null input", () => {
-		const cfg = parseAuthConfig(null, agentsDir);
-		expect(cfg.mode).toBe("local");
+	test("rejects null auth configuration", () => {
+		expect(() => parseAuthConfig(null, agentsDir)).toThrow("auth must be a mapping");
 	});
 
 	test("parses valid mode from object", () => {
@@ -676,9 +675,9 @@ describe("parseAuthConfig", () => {
 		expect(cfg.mode).toBe("hybrid");
 	});
 
-	test("invalid mode falls back to 'local'", () => {
-		const cfg = parseAuthConfig({ mode: "superuser" }, agentsDir);
-		expect(cfg.mode).toBe("local");
+	test("rejects invalid security mode", () => {
+		expect(() => parseAuthConfig({ mode: "token" }, agentsDir)).toThrow("auth.mode");
+		expect(() => parseAuthConfig({ mode: "superuser" }, agentsDir)).toThrow("auth.mode");
 	});
 
 	test("rate limits parse correctly", () => {
@@ -687,11 +686,10 @@ describe("parseAuthConfig", () => {
 		expect(cfg.rateLimits.forget.max).toBe(10);
 	});
 
-	test("invalid rate limit values fall back to defaults", () => {
-		const cfg = parseAuthConfig({ mode: "team", rateLimits: { forget: { windowMs: -1, max: 0 } } }, agentsDir);
-		// defaults are windowMs: 60_000, max: 30
-		expect(cfg.rateLimits.forget.windowMs).toBe(60_000);
-		expect(cfg.rateLimits.forget.max).toBe(30);
+	test("rejects invalid rate limit values", () => {
+		expect(() =>
+			parseAuthConfig({ mode: "team", rateLimits: { forget: { windowMs: -1, max: 0 } } }, agentsDir),
+		).toThrow("auth.rateLimits.forget.windowMs");
 	});
 
 	test("custom TTL values are parsed", () => {
@@ -721,10 +719,10 @@ describe("parseAuthConfig", () => {
 		expect(cfg.login.saml.enabled).toBe(true);
 	});
 
-	test("non-positive TTL falls back to default", () => {
-		const cfg = parseAuthConfig({ defaultTokenTtlSeconds: 0, sessionTokenTtlSeconds: -5 }, agentsDir);
-		expect(cfg.defaultTokenTtlSeconds).toBeGreaterThan(0);
-		expect(cfg.sessionTokenTtlSeconds).toBeGreaterThan(0);
+	test("rejects non-positive TTL", () => {
+		expect(() => parseAuthConfig({ defaultTokenTtlSeconds: 0, sessionTokenTtlSeconds: -5 }, agentsDir)).toThrow(
+			"auth.defaultTokenTtlSeconds",
+		);
 	});
 });
 

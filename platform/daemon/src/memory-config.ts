@@ -14,7 +14,7 @@ import {
 	type PipelineV2Config,
 	TELEMETRY_DEPLOYMENT_ROLES,
 	TELEMETRY_INSTALL_CHANNELS,
-	parseSimpleYaml,
+	parseRuntimeYaml,
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth";
 import type { EmbeddingCostProvider, EmbeddingCostRates } from "./embedding-cost";
@@ -330,6 +330,131 @@ function parseEmbeddingCostRates(raw: unknown): EmbeddingCostRates | undefined {
 		if (typeof value === "number" && Number.isFinite(value) && value >= 0) rates[provider] = value;
 	}
 	return Object.keys(rates).length > 0 ? rates : undefined;
+}
+
+const EMBEDDING_PROVIDERS = ["local", "native", "llama-cpp", "ollama", "openai", "none"] as const;
+
+function isEmbeddingProvider(value: unknown): value is (typeof EMBEDDING_PROVIDERS)[number] {
+	return EMBEDDING_PROVIDERS.some((provider) => provider === value);
+}
+
+function invalidRuntimeConfig(path: string, field: string, reason: string): never {
+	throw new MemoryConfigValidationError(`${path}: ${field} ${reason}`);
+}
+
+function validateFiniteNumber(value: unknown, path: string, field: string): asserts value is number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		invalidRuntimeConfig(path, field, "must be a finite number");
+	}
+}
+
+function validateRecord(value: unknown, path: string, field: string): Record<string, unknown> | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) invalidRuntimeConfig(path, field, "must be a mapping");
+	return value;
+}
+
+function validateRuntimeConfig(yaml: Record<string, unknown>, path: string): void {
+	const embedding = validateRecord(yaml.embedding, path, "embedding");
+	if (embedding) {
+		if (embedding.provider !== undefined) {
+			if (!isEmbeddingProvider(embedding.provider)) {
+				invalidRuntimeConfig(path, "embedding.provider", "must be a supported provider");
+			}
+		}
+		for (const field of ["model", "base_url", "baseUrl", "endpoint", "api_key"] as const) {
+			if (embedding[field] !== undefined && typeof embedding[field] !== "string") {
+				invalidRuntimeConfig(path, `embedding.${field}`, "must be a string");
+			}
+		}
+		if (embedding.dimensions !== undefined) {
+			validateFiniteNumber(embedding.dimensions, path, "embedding.dimensions");
+			if (!Number.isSafeInteger(embedding.dimensions) || embedding.dimensions <= 0) {
+				invalidRuntimeConfig(path, "embedding.dimensions", "must be a positive integer");
+			}
+		}
+		for (const field of ["promptSubmitTimeoutMs", "llamaCppMaxInputTokens"] as const) {
+			if (embedding[field] !== undefined) validateFiniteNumber(embedding[field], path, `embedding.${field}`);
+		}
+		if (embedding.warmNative !== undefined && typeof embedding.warmNative !== "boolean") {
+			invalidRuntimeConfig(path, "embedding.warmNative", "must be a boolean");
+		}
+		for (const field of ["costRates", "cost_rates"] as const) {
+			const costRates = embedding[field];
+			if (costRates === undefined) continue;
+			if (!isRecord(costRates)) invalidRuntimeConfig(path, `embedding.${field}`, "must be a mapping");
+			for (const provider of EMBEDDING_COST_PROVIDERS) {
+				const value = costRates[provider];
+				if (value === undefined) continue;
+				validateFiniteNumber(value, path, `embedding.${field}.${provider}`);
+				if (value < 0) invalidRuntimeConfig(path, `embedding.${field}.${provider}`, "must be non-negative");
+			}
+		}
+	}
+
+	const search = validateRecord(yaml.search, path, "search");
+	if (search) {
+		const ranges: Readonly<Record<string, readonly [number, number]>> = {
+			alpha: [0, 1],
+			top_k: [1, Number.MAX_SAFE_INTEGER],
+			min_score: [0, 1],
+			rehearsal_weight: [0, 1],
+			rehearsal_half_life_days: [1, Number.MAX_SAFE_INTEGER],
+			temporal_prior_weight: [0, 1],
+			temporal_prior_half_life_days: [1, 365],
+		};
+		for (const [field, [min, max]] of Object.entries(ranges)) {
+			const value = search[field];
+			if (value === undefined) continue;
+			validateFiniteNumber(value, path, `search.${field}`);
+			if (value < min || value > max || (field === "top_k" && !Number.isSafeInteger(value))) {
+				invalidRuntimeConfig(path, `search.${field}`, `must be between ${min} and ${max}`);
+			}
+		}
+		for (const field of ["rehearsal_enabled", "temporal_prior_enabled"] as const) {
+			if (search[field] !== undefined && typeof search[field] !== "boolean") {
+				invalidRuntimeConfig(path, `search.${field}`, "must be a boolean");
+			}
+		}
+	}
+
+	validateRecord(yaml.memory, path, "memory");
+	const network = validateRecord(yaml.network, path, "network");
+	if (network?.mode !== undefined && network.mode !== "localhost" && network.mode !== "tailscale") {
+		invalidRuntimeConfig(path, "network.mode", "must be localhost or tailscale");
+	}
+}
+
+interface SelectedRuntimeConfig {
+	readonly path: string;
+	readonly yaml: Record<string, unknown>;
+}
+
+function readSelectedRuntimeConfig(agentsDir: string): SelectedRuntimeConfig | undefined {
+	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml"), join(agentsDir, "config.yaml")];
+	for (const path of paths) {
+		if (!existsSync(path)) continue;
+		try {
+			return { path, yaml: parseRuntimeYaml(readFileSync(path, "utf-8")) };
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : "invalid YAML";
+			throw new MemoryConfigValidationError(`${path}: ${reason}`);
+		}
+	}
+	return undefined;
+}
+
+/** Validate the selected runtime document before compatibility migrations run. */
+export function validateRuntimeConfigFiles(agentsDir: string): void {
+	const selected = readSelectedRuntimeConfig(agentsDir);
+	if (!selected) return;
+	validateRuntimeConfig(selected.yaml, selected.path);
+	try {
+		parseAuthConfig(selected.yaml.auth, agentsDir);
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : "invalid auth configuration";
+		throw new MemoryConfigValidationError(`${selected.path}: ${reason}`);
+	}
 }
 
 function clampFraction(raw: unknown, fallback: number): number {
@@ -983,14 +1108,14 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 		auth: parseAuthConfig(undefined, agentsDir),
 	};
 
-	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml"), join(agentsDir, "config.yaml")];
 	const envWarmNative = envBool("SIGNET_EMBEDDING_WARM_NATIVE");
 
-	for (const path of paths) {
-		if (!existsSync(path)) continue;
+	const selected = readSelectedRuntimeConfig(agentsDir);
+	if (selected) {
+		const { path, yaml } = selected;
+		validateRuntimeConfig(yaml, path);
+		rejectRetiredEmbeddingConfig(yaml);
 		try {
-			const yaml = parseSimpleYaml(readFileSync(path, "utf-8"));
-			if (isRecord(yaml)) rejectRetiredEmbeddingConfig(yaml);
 			const emb = (yaml.embedding as Record<string, unknown> | undefined) ?? {};
 			const configuredCostRates = parseEmbeddingCostRates(emb.costRates ?? emb.cost_rates);
 			if (configuredCostRates) defaults.embedding.costRates = configuredCostRates;
@@ -1071,13 +1196,10 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			defaults.pipelineV2 = loadPipelineConfig(yaml);
 			defaults.dreaming = loadDreamingConfig(yaml);
 			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
-
-			break;
 		} catch (error) {
-			if (error instanceof MemoryConfigValidationError || error instanceof PipelineConfigValidationError) {
-				throw error;
-			}
-			// ignore parse errors, try next file
+			if (error instanceof MemoryConfigValidationError && error.message.startsWith(`${path}:`)) throw error;
+			const reason = error instanceof Error ? error.message : "invalid runtime configuration";
+			throw new MemoryConfigValidationError(`${path}: ${reason}`);
 		}
 	}
 	if (envWarmNative !== undefined) {
