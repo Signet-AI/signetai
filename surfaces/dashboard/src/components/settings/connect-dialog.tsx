@@ -8,7 +8,6 @@ import { api } from "@/lib/api";
 import { getDesktopBridge } from "@/lib/desktop";
 import { apiKeyFormat, providerKeySecretName } from "@/lib/inference-keys";
 import { createOAuthNavigation, safeOAuthHref, type OAuthNavigation } from "@/lib/oauth-navigation";
-import { cn } from "@/lib/utils";
 import { CheckCircle, Eye, EyeOff, KeyRound, Loader2, TriangleAlert, X } from "@/components/mingcute-icons";
 import { useEffect, useRef, useState } from "react";
 
@@ -65,16 +64,16 @@ export function ConnectProviderDialog({
 	oauthNavigationRef.current = oauthNavigation;
 	const openOAuthWindow = (): boolean => oauthNavigation.open();
 	const navigateOAuthWindow = (url: string): void => oauthNavigation.navigate(url);
-	const closeOAuthWindow = (): void => oauthNavigation.close();
+	const _closeOAuthWindow = (): void => oauthNavigation.close();
 
 	const controller = useConnectController({
 		providerId: provider.id,
 		supportsOAuth: provider.supportsOAuth,
 		supportsApiKey: provider.supportsApiKey,
 		onNavigate: navigateOAuthWindow,
-		onConnected: () => {
+		onConnected: async () => {
 			linkOAuthAccount();
-			void onSaved();
+			await onSaved();
 		},
 	});
 	const { phase } = controller;
@@ -121,8 +120,12 @@ export function ConnectProviderDialog({
 			return;
 		}
 		linkApiKeyAccount(name);
-		void onSaved();
-		controller.finishSaved(true);
+		try {
+			await onSaved();
+			controller.finishSaved(true);
+		} catch (error) {
+			controller.finishSaved(false, error instanceof Error ? error.message : "Could not save the connection.");
+		}
 	};
 
 	const handleDisconnect = async () => {
@@ -184,7 +187,7 @@ export function ConnectProviderDialog({
 						<>
 							<div className="cp-status-line">
 								<span className="cp-dot cp-dot--on" />
-								Connected — credentials are stored and resolving.
+								Sign-in saved. Test the memory connection to verify it works.
 							</div>
 							<button
 								type="button"
@@ -249,7 +252,6 @@ export function ConnectProviderDialog({
 											className="ctrl ctrl--field flex-1"
 											placeholder={phase.prompt.placeholder ?? ""}
 											value={promptInput}
-											autoFocus
 											onChange={(e) => setPromptInput(e.target.value)}
 											onKeyDown={(e) => {
 												if (e.key === "Enter") submitPrompt();
@@ -295,7 +297,6 @@ export function ConnectProviderDialog({
 										type={phase.reveal ? "text" : "password"}
 										placeholder="Paste the key…"
 										value={phase.key}
-										autoFocus
 										autoComplete="off"
 										spellCheck={false}
 										onChange={(e) => controller.setKey(e.target.value)}

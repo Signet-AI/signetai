@@ -1,3 +1,4 @@
+import { createDaemonClient } from "../lib/daemon.js";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
@@ -16,7 +17,6 @@ import { daemonAccessLines } from "../lib/network.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { applyInferenceRoute, buildExtractionRoute, modelOptions } from "./setup-inference-connect.js";
 import {
 	applyAggregateRecallRoute,
 	applySetupInferenceRoute,
@@ -172,25 +172,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		);
 		applySetupInferenceRoute(config, inference);
 
-		// Dashboard-style connected cloud provider: the modern inference.* route is
-		// the source of truth (target + connected account). pipelineV2 stays enabled
-		// so the extraction worker runs; the daemon merges inference.* atop the
-		// legacy base, so this target overrides the legacy extraction target.
-		if (plan.extractionConnect) {
-			applyInferenceRoute(
-				config,
-				buildExtractionRoute({
-					kind: "cloud",
-					executor: plan.extractionConnect.family,
-					family: plan.extractionConnect.family,
-					connectMethod: plan.extractionConnect.connectMethod,
-					// extractionModel comes from the pi-ai model dropdown (non-empty for
-					// connect plans); fall back to the family's first catalog model.
-					model: plan.extractionModel || modelOptions(plan.extractionConnect.family)[0]?.id || "haiku",
-				}),
-			);
-		}
-
 		// Optional distinct provider for aggregate recall (query-time evidence
 		// synthesis). Overlaid on config.inference; the daemon merges it atop the
 		// legacy pipeline.* base, so extraction/session-synthesis are unaffected.
@@ -201,7 +182,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 					plan.aggregateRecallProvider,
 					plan.aggregateRecallModel ?? "",
 					plan.aggregateRecallEndpoint,
-					plan.extractionConnect?.family === "openrouter" && plan.aggregateRecallProvider === "openrouter",
+					false,
 				),
 			);
 		}
@@ -219,23 +200,8 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			config.daemon = { url: plan.daemonUrl };
 		}
 
-		// Anonymous telemetry disclosure (issue #1026 Phase 2). Telemetry is ON
-		// by default; interactive setups get a chance to disable it, and
-		// non-interactive (CI/scripted) setups keep the default. Every recorded
-		// event is mirrored to ~/.agents/.daemon/telemetry/events.jsonl so
-		// users can audit exactly what is recorded and sent.
-		let telemetryEnabled = true;
-		if (!context.nonInteractive) {
-			telemetryEnabled = await withSetupPrompt(spinner, () =>
-				import("@inquirer/prompts").then(({ confirm }) =>
-					confirm({
-						message:
-							"Help improve Signet by sharing anonymous usage statistics (version and command names) with PostHog? No memory content, code, arguments, paths, or personal data. Events are logged to ~/.agents/.daemon/telemetry/events.jsonl and, when remote delivery is configured and the workspace database is available, queued locally before best-effort delivery; disable anytime with telemetryEnabled: false.",
-						default: true,
-					}),
-				),
-			);
-		}
+		// New installations share telemetry only after an explicit opt-in in settings.
+		const telemetryEnabled = false;
 		// The daemon reads telemetryEnabled from memory.pipelineV2 — writing it
 		// at the top level would be silently ignored and the opt-out would not
 		// reach the daemon.
@@ -317,11 +283,13 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		// actual daemon address at runtime via SIGNET_DAEMON_URL, falling back
 		// to the baked default — no live daemon connection is needed here.
 		const configuredHarnesses: string[] = [];
+		const failedHarnesses: string[] = [];
 		for (const harness of plan.harnesses) {
 			try {
 				await deps.configureHarnessHooks(harness, context.basePath, { openclawRuntimePath: plan.openclawRuntimePath });
 				configuredHarnesses.push(harness);
 			} catch (err) {
+				failedHarnesses.push(harness);
 				console.warn(`\n  ⚠ Could not configure ${harness}: ${readErr(err)}`);
 			}
 		}
@@ -354,6 +322,8 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		} else {
 			spinner.text = "Starting daemon...";
 			daemonStarted = await deps.startDaemon(context.basePath);
+			if (!daemonStarted)
+				throw new Error("Could not start Signet. Your workspace was saved; run signet doctor, then retry setup.");
 		}
 
 		if (!remoteDaemon && daemonStarted && plan.embeddingProvider === "native") {
@@ -366,7 +336,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			}
 		}
 
-		spinner.succeed(chalk.green("Signet initialized!"));
+		spinner.succeed(chalk.green("Signet workspace initialized"));
 
 		console.log();
 		console.log(chalk.dim("  Files created:"));
@@ -407,7 +377,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		if (daemonStarted) {
 			console.log();
 			if (remoteDaemon) {
-				console.log(chalk.green(`  ● Using remote daemon: ${plan.daemonUrl}`));
+				console.log(chalk.green(`  Remote daemon configured (not verified): ${plan.daemonUrl}`));
 			} else {
 				console.log(chalk.green("  ● Daemon running"));
 				for (const line of daemonAccessLines(deps.DEFAULT_PORT, plan.networkMode)) {
@@ -416,39 +386,15 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			}
 		}
 
-		// Connect the chosen cloud provider now that the daemon is running (the
-		// daemon owns the secrets store + OAuth endpoints, like the dashboard).
-		if (plan.extractionConnect && context.connectExtraction) {
-			spinner.text = `Connecting ${plan.extractionConnect.family}...`;
-			const ok = await context.connectExtraction();
-			if (ok) {
-				console.log(chalk.green(`  ✓ Connected ${plan.extractionConnect.family}`));
-			} else {
-				console.log(
-					chalk.yellow(
-						`  ⚠ Could not connect ${plan.extractionConnect.family} now — finish connecting via the dashboard.`,
-					),
-				);
-			}
-		}
-
 		console.log();
 		if (committed) {
 			console.log(chalk.dim("  ✓ Changes committed to git"));
 		}
 
-		if (context.nonInteractive) {
-			if (context.openDashboard) {
-				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
-			}
-		} else {
-			const launchNow = await withSetupPrompt(spinner, () =>
-				import("@inquirer/prompts").then(({ confirm }) => confirm({ message: "Open the dashboard?", default: true })),
-			);
-			if (launchNow) {
-				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
-			}
+		if (context.openDashboard) {
+			await openUrlWithFallback(`${createDaemonClient(deps.DEFAULT_PORT, context.basePath).url}/#setup`);
 		}
+		if (failedHarnesses.length) throw new Error(`Workspace saved, but these agent integrations failed: ${failedHarnesses.join(", ")}. Run signet sync to retry, then signet setup.`);
 
 		console.log();
 		printSetupProtectionSummary(protection);
@@ -467,6 +413,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);
-		process.exit(1);
+		throw err;
 	}
 }
