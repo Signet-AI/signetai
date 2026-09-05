@@ -24,6 +24,13 @@ afterEach(() => {
 });
 
 describe("hooks config", () => {
+	test("rejects malformed selected YAML instead of using hook defaults", () => {
+		const dir = makeTempDir();
+		writeFileSync(join(dir, "agent.yaml"), "hooks: [\n");
+
+		expect(() => loadHooksConfig(dir)).toThrow(`${join(dir, "agent.yaml")}: invalid YAML syntax`);
+	});
+
 	test("returns defaults when agent.yaml is absent", () => {
 		const config = loadHooksConfig(makeTempDir());
 

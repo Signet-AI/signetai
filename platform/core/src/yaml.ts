@@ -19,6 +19,38 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
 	}
 }
 
+function isYamlRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Parse a user-owned runtime configuration document.
+ *
+ * Runtime configuration is selected by filename and must fail closed when it
+ * is malformed. Keep parseSimpleYaml lenient for the document and import
+ * callers that intentionally treat malformed input as absent.
+ */
+export function parseRuntimeYaml(text: string): Record<string, unknown> {
+	// Parse through a Document with logging disabled. YAML.parse() emits
+	// warnings through process.emitWarning(), and its pretty warning text can
+	// include the source line (including credentials) even when parsing fails
+	// closed below.
+	let parsed: unknown;
+	try {
+		const document = YAML.parseDocument(text, { logLevel: "silent", prettyErrors: false });
+		if (document.errors.length > 0 || document.warnings.length > 0) {
+			throw new Error("invalid YAML syntax");
+		}
+		parsed = document.toJS();
+	} catch {
+		throw new Error("invalid YAML syntax");
+	}
+	if (!isYamlRecord(parsed)) {
+		throw new Error("top-level document must be a mapping");
+	}
+	return parsed;
+}
+
 /**
  * Parse a full YAML document with the bundled YAML parser.
  *

@@ -87,6 +87,69 @@ function restoreWarmNativeEnv(value: string | undefined): void {
 }
 
 describe("loadMemoryConfig", () => {
+	it("rejects malformed selected YAML without falling back to another config file", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding: [\nauth:\n  mode: team\n");
+		writeFileSync(join(agentsDir, "config.yaml"), "embedding:\n  provider: none\n");
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow(`${join(agentsDir, "agent.yaml")}: invalid YAML syntax`);
+	});
+
+	it("rejects invalid provider, dimensions, and search values with redacted field diagnostics", () => {
+		const agentsDir = makeTempAgentsDir();
+		for (const [field, value] of [
+			["embedding.provider", "potato"],
+			["embedding.dimensions", "banana"],
+			["embedding.costRates.native", "nope"],
+			["embedding.cost_rates.native", "nope"],
+			["search.alpha", "8"],
+			["search.top_k", "-20"],
+			["network.mode", "public"],
+		] as const) {
+			const content = `embedding:
+  api_key: super-secret-value
+  provider: ${field === "embedding.provider" ? value : "none"}
+  dimensions: ${field === "embedding.dimensions" ? value : "768"}
+  ${field === "embedding.costRates.native" ? "costRates" : field === "embedding.cost_rates.native" ? "cost_rates" : "costRates"}:
+    native: ${field.includes("cost") ? value : "0"}
+search:
+  alpha: ${field === "search.alpha" ? value : "0.7"}
+  top_k: ${field === "search.top_k" ? value : "20"}
+network:
+  mode: ${field === "network.mode" ? value : "localhost"}
+`;
+			writeFileSync(join(agentsDir, "agent.yaml"), content);
+			expect(() => loadMemoryConfig(agentsDir)).toThrow(field);
+			expect(() => loadMemoryConfig(agentsDir)).not.toThrow("super-secret-value");
+		}
+	});
+
+	it("preserves valid disabled embedding and team authentication", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: none\nauth:\n  mode: team\n");
+
+		const config = loadMemoryConfig(agentsDir);
+		expect(config.embedding.provider).toBe("none");
+		expect(config.auth.mode).toBe("team");
+	});
+
+	it("keeps documented defaults when optional runtime settings are absent", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "name: Example\n");
+
+		const config = loadMemoryConfig(agentsDir);
+		expect(config.embedding.provider).toBe("native");
+		expect(config.search.alpha).toBe(0.7);
+		expect(config.auth.mode).toBe("local");
+	});
+
+	it("preserves the supported local embedding provider alias", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: local\n");
+
+		expect(loadMemoryConfig(agentsDir).embedding.provider).toBe("native");
+	});
+
 	it("preserves an explicit empty telemetry API key for local-only delivery (#1290)", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(

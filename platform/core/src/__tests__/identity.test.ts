@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +17,7 @@ import {
 	resolveSessionStartTimeoutMs,
 	resolveStartupIdentityFiles,
 } from "../identity";
-import { parseSimpleYaml } from "../yaml";
+import { parseRuntimeYaml, parseSimpleYaml } from "../yaml";
 
 const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
 const ORIGINAL_HOME = process.env.HOME;
@@ -249,6 +250,36 @@ describe("resolveHermesTarget", () => {
 describe("parseSimpleYaml", () => {
 	test("degrades malformed YAML to an empty object", () => {
 		expect(parseSimpleYaml("agent:\n  name: [unterminated")).toEqual({});
+	});
+});
+
+describe("parseRuntimeYaml", () => {
+	test("rejects malformed YAML and non-mapping documents", () => {
+		expect(() => parseRuntimeYaml("agent: [unterminated")).toThrow("invalid YAML syntax");
+		expect(() => parseRuntimeYaml("- value\n")).toThrow("top-level document must be a mapping");
+	});
+
+	test("rejects tagged values without emitting source content to stderr", () => {
+		const yamlModule = new URL("../yaml.ts", import.meta.url).href;
+		const secret = "config-redaction-sentinel";
+		const result = spawnSync(
+			process.execPath,
+			[
+				"-e",
+				`import(${JSON.stringify(yamlModule)}).then(({ parseRuntimeYaml }) => {
+					try {
+						parseRuntimeYaml("auth:\\n  mode: !unexpected ${secret}\\n");
+						process.exitCode = 2;
+					} catch (error) {
+						if (!(error instanceof Error) || error.message !== "invalid YAML syntax") process.exitCode = 3;
+					}
+				});`,
+			],
+			{ encoding: "utf8" },
+		);
+		expect(result.status).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(result.stderr).not.toContain(secret);
 	});
 });
 
