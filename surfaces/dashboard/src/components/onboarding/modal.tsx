@@ -58,7 +58,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 	const [verified, setVerified] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [memory, setMemory] = useState("I prefer short answers with concrete examples.");
+	const [memory, setMemory] = useState("");
 	const [memoryId, setMemoryId] = useState<string | null>(null);
 	const [recalled, setRecalled] = useState<Memory | null>(null);
 	const [sourceKind, setSourceKind] = useState<SourceKind | null>(null);
@@ -391,8 +391,8 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 					<section className="modal" style={{ zIndex: 51 }}>
 						<header className="top">
 							<div className="wordmark">
-								<SignetMark width={20} height={22} />
-								signet
+								<SignetMark width={26} height={28} />
+								Signet
 							</div>
 							<button
 								type="button"
@@ -431,28 +431,27 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 									</button>
 								</>
 							) : (
-								<div className="scene" key={step}>
+								<div className="scene" data-step={step} key={step}>
 									{step === 0 && (
 										<>
-											<div className="hero" aria-hidden="true">
-												<div className="app-icon">
-													<img src="/logos/claude.svg" alt="" />
-												</div>
-												<span className="thread" />
-												<div className="memory-node">
-													<SignetMark width={44} height={48} />
-												</div>
-												<span className="thread" />
-												<div className="app-icon">
-													<img src="/logos/openai.svg" alt="" />
+											<div className="welcome-copy">
+												{heading(
+													"01 / 06",
+													"Your agents should remember you.",
+													"Keep your preferences, decisions, and context with you — even when the conversation or the agent changes.",
+												)}
+												<div className="memory-note">
+													A more
+													<br />
+													memorable you.
 												</div>
 											</div>
-											{heading(
-												"A familiar starting point",
-												"Your agents should remember you.",
-												"Keep your preferences, decisions, and context with you — even when the conversation or the agent changes.",
-											)}
-											<div className="memory-note">Remember once. Pick up anywhere.</div>
+											<div className="hero" aria-hidden="true">
+												<div className="memory-plane plane-back" />
+												<div className="memory-plane plane-middle" />
+												<div className="memory-plane plane-front" />
+												<span className="memory-signal" />
+											</div>
 										</>
 									)}
 									{step === 1 && (
@@ -477,12 +476,12 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 														}
 													>
 														<span className="app-icon">
-															{!["forge", "pi"].includes(h.id) && (
+															{
 																<img
-																	src={`/logos/${h.id === "claude-code" ? "claude" : h.id === "codex" ? "openai" : h.id}.svg`}
+																	src={`/logos/${h.id === "claude-code" ? "claude" : h.id === "codex" ? "openai" : h.id}.${h.id === "kimi" ? "png" : "svg"}`}
 																	alt=""
 																/>
-															)}
+															}
 														</span>
 														<span>
 															<strong>{h.name}</strong>
@@ -538,6 +537,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 														</SelectTrigger>
 														<SelectContent
 															position="popper"
+															align="start"
 															className="z-[60] max-h-64 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
 														>
 															{catalog.data.providers.map((id) => (
@@ -625,6 +625,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 																	</SelectTrigger>
 																	<SelectContent
 																		position="popper"
+																		align="start"
 																		className="z-[60] max-h-64 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
 																	>
 																		{catalog.data.models[provider]?.map((m) => (
@@ -819,20 +820,39 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 										<>
 											{heading(
 												"04 / A first memory",
-												"Try a little continuity.",
-												"Tell Signet something useful. Then retrieve it through your workspace’s memory search.",
+												"What should your agents know about you?",
+												"A preference, a project, or how you like to work. Start with one thing you’d rather not explain again.",
 											)}
 											<div className="chat">
-												<div className="chat-label">{memoryId ? "A fresh recall" : "Something worth remembering"}</div>
 												{!memoryId ? (
 													<>
 														<input
-															className="memory-input"
+															className="memory-input first-memory"
+															placeholder="What’s one thing worth remembering?"
 															aria-label="Your first memory"
 															value={memory}
 															maxLength={240}
 															onChange={(e) => setMemory(e.target.value)}
 														/>
+														<div className="memory-examples" aria-label="Memory examples">
+															{[
+																["How I like answers", "I prefer short answers with concrete examples."],
+																["How I work", "Explain the tradeoffs before recommending an approach."],
+															].map(([label, value]) => (
+																<button
+																	type="button"
+																	key={label}
+																	onClick={() => {
+																		setMemory(value ?? "");
+																		document
+																			.querySelector<HTMLInputElement>('[aria-label="Your first memory"]')
+																			?.focus();
+																	}}
+																>
+																	{label}
+																</button>
+															))}
+														</div>
 														<p className="fixture">
 															This saves a real, private memory for {status.data.agentId}. You can inspect or delete it
 															in Memory.

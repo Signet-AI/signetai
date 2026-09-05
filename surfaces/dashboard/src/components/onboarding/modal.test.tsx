@@ -178,6 +178,12 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			expect(calls).not.toContain("POST /api/inference/execute");
 			expect(calls).not.toContain("POST /api/pipeline/resume");
 			await view.click("Continue");
+			expect(document.querySelector<HTMLInputElement>('[aria-label="Your first memory"]')?.value).toBe("");
+			expect(
+				Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.includes("Remember this"))
+					?.disabled,
+			).toBe(true);
+			await view.click("How I like answers");
 			await view.click("Remember this");
 			await view.click("Recall it");
 			await view.click("Continue");
@@ -236,6 +242,7 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			await view.click("Import & index");
 			expect(calls).toContain("POST /api/sources/imports/import-job/start");
 			await view.click("Continue");
+			await view.click("How I like answers");
 			await view.click("Remember this");
 			await view.click("Recall it");
 			expect(document.body.textContent).toContain("Retrieved evidence");
