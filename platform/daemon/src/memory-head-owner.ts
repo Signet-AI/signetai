@@ -118,14 +118,15 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 			revision: head?.revision ?? 0,
 			hash: head?.content_hash ?? "",
 			revisionId: head?.revision_id ?? null,
+			content: head?.is_current === 1 ? head.content : null,
 			status: head?.is_current === 1 ? "current" : "stale",
 			entries:
 				head?.is_current === 1
 					? db
 							.prepare(
-								"SELECT entry_id, canonical_text, status FROM memory_head_entries WHERE agent_id=? AND status='active' ORDER BY entry_id",
+								"SELECT entry_id, canonical_text, status FROM memory_head_entries WHERE agent_id=? AND status='active' AND last_revision=? ORDER BY entry_id",
 							)
-							.all(agentId)
+							.all(agentId, head.revision)
 					: [],
 		};
 	}

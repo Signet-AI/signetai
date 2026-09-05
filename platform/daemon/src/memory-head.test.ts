@@ -78,8 +78,12 @@ describe("memory head owner runtime", () => {
 		await client.close();
 		client = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
 		expect(await snapshot()).toMatchObject({ status: "stale", revision: 2 });
-		expect(await commit("regenerate", "Meeting is Thursday.")).toMatchObject({ ok: true, revision: 3 });
+		expect(await commit("regenerate", "Meeting is Thursday.", "default", true)).toMatchObject({
+			ok: true,
+			revision: 3,
+		});
 		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).toContain("Thursday");
+		expect(await snapshot()).toMatchObject({ content: "Meeting is Thursday.", entries: [] });
 		expect(
 			await ownerReadOne(client, "SELECT content FROM memory_head_revisions WHERE revision=1", [], options),
 		).toEqual({ content: "- Meeting is Tuesday." });
