@@ -1028,7 +1028,6 @@ registerAppCommands(program, {
 			startDaemon,
 			syncBuiltinSkills,
 			syncNativeEmbeddingModel,
-			syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
 			loadConfiguredHarnesses,
 		}),
 	showDoctor: (options) => showDoctor(options, healthDeps),

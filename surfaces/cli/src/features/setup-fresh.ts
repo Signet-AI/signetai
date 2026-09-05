@@ -27,7 +27,7 @@ import {
 import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
-import { formatWorkspaceSourceRepoSync, readErr, readRecord } from "./setup-shared.js";
+import { readErr, readRecord } from "./setup-shared.js";
 import { withSetupPrompt } from "./setup-terminal.js";
 import type { SetupDeps } from "./setup-types.js";
 
@@ -87,9 +87,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 
 		spinner.text = "Installing built-in skills...";
 		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), context.basePath);
-
-		spinner.text = "Cloning Signet source checkout...";
-		const sourceRepoSync = await deps.syncWorkspaceSourceRepo(context.basePath);
 
 		if (plan.identityMode === "managed") {
 			spinner.text = "Creating agent identity...";
@@ -386,7 +383,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			const special = plan.specialIdentityFiles.some((entry) => entry.path === name) ? " (special session)" : "";
 			console.log(chalk.dim(`    ├── ${name.padEnd(12)}${special}`));
 		}
-		console.log(chalk.dim("    ├── signetai/     Signet source checkout"));
 		console.log(chalk.dim("    └── memory/       database & vectors"));
 
 		console.log();
@@ -406,12 +402,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			for (const harness of configuredHarnesses) {
 				console.log(chalk.dim(`    ✓ ${harness}`));
 			}
-		}
-
-		const sourceRepoLine = formatWorkspaceSourceRepoSync(sourceRepoSync);
-		if (sourceRepoLine) {
-			console.log();
-			console.log(chalk.dim(sourceRepoLine));
 		}
 
 		if (daemonStarted) {

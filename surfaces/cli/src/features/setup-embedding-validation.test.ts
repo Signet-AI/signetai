@@ -67,13 +67,6 @@ function stubDeps(overrides: Partial<SetupDeps> = {}): SetupDeps {
 			status: "current" as const,
 			message: "nomic-ai/nomic-embed-text-v1.5",
 		})),
-		syncWorkspaceSourceRepo: mock(async () => ({
-			status: "current" as const,
-			path: "/tmp/agents/signetai",
-			message: "current",
-			branch: "main",
-			defaultBranch: "main",
-		})),
 		...overrides,
 	};
 }

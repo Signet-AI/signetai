@@ -1,4 +1,4 @@
-import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core";
+import type { SetupDetection } from "@signet/core";
 import type { OpenClawRuntimeChoice } from "./setup-shared.js";
 
 export interface SetupWizardOptions {
@@ -73,7 +73,6 @@ export interface SetupDeps {
 		skillsSourceDir: string,
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
-	readonly syncWorkspaceSourceRepo: (basePath: string) => Promise<WorkspaceSourceRepoSyncResult>;
 	readonly syncNativeEmbeddingModel: (
 		basePath: string,
 	) => Promise<{ readonly status: "updated" | "current" | "skipped" | "error"; readonly message: string }>;

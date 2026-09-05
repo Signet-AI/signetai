@@ -77,13 +77,6 @@ function stubDeps(overrides: Partial<SetupDeps> = {}): SetupDeps {
 		getSkillsSourceDir: mock(() => "/tmp/skills"),
 		syncBuiltinSkills: mock(() => ({ installed: [], updated: [], skipped: [] })),
 		syncNativeEmbeddingModel: mock(async () => ({ status: "current" as const, message: "ready" })),
-		syncWorkspaceSourceRepo: mock(async () => ({
-			status: "current" as const,
-			path: "/tmp/agents/signetai",
-			message: "current",
-			branch: "main",
-			defaultBranch: "main",
-		})),
 		...overrides,
 	};
 }

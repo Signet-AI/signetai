@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	type WorkspaceSourceRepoSyncResult,
 	resolveWorkspaceSourceRepoPath,
 	syncWorkspaceSourceRepo,
+	syncWorkspaceSourceRepoAsync,
 } from "./workspace-source-repo";
 
 const tmpDirs: string[] = [];
@@ -71,10 +72,40 @@ function pushRemoteChange(workDir: string, content: string, message: string): vo
 }
 
 function syncWorkspace(workspaceDir: string, remoteUrl: string): WorkspaceSourceRepoSyncResult {
-	return syncWorkspaceSourceRepo(workspaceDir, { remoteUrl });
+	return syncWorkspaceSourceRepo(workspaceDir, { remoteUrl, cloneIfMissing: true });
 }
 
 describe("syncWorkspaceSourceRepo", () => {
+	it("skips absent checkouts without cloning or creating sync state", async () => {
+		const { remoteUrl } = seedRemote();
+		const workspace = makeTempDir("signet-no-source-");
+		for (const sync of [syncWorkspaceSourceRepo, syncWorkspaceSourceRepoAsync]) {
+			expect(await sync(workspace, { remoteUrl })).toMatchObject({ status: "skipped" });
+			expect(existsSync(resolveWorkspaceSourceRepoPath(workspace))).toBe(false);
+			expect(existsSync(join(workspace, ".daemon"))).toBe(false);
+		}
+	});
+
+	it("does not treat an empty directory as authorization to clone", async () => {
+		const { remoteUrl } = seedRemote();
+		const workspace = makeTempDir("signet-empty-source-");
+		mkdirSync(resolveWorkspaceSourceRepoPath(workspace));
+		for (const sync of [syncWorkspaceSourceRepo, syncWorkspaceSourceRepoAsync])
+			expect(await sync(workspace, { remoteUrl })).toMatchObject({ status: "skipped" });
+		expect(existsSync(join(resolveWorkspaceSourceRepoPath(workspace), ".git"))).toBe(false);
+	});
+
+	it("explicit async creation preserves ordinary maintenance of an existing checkout", async () => {
+		const { remoteUrl, workDir } = seedRemote();
+		const workspace = makeTempDir("signet-explicit-source-");
+		expect(await syncWorkspaceSourceRepoAsync(workspace, { remoteUrl, cloneIfMissing: true })).toMatchObject({
+			status: "cloned",
+		});
+		pushRemoteChange(workDir, "Updated source\n", "update");
+		expect(await syncWorkspaceSourceRepoAsync(workspace, { remoteUrl })).toMatchObject({ status: "pulled" });
+		expect(syncWorkspaceSourceRepo(workspace, { remoteUrl })).toMatchObject({ status: "current" });
+	});
+
 	it("clones the Signet source checkout when the workspace does not have one", () => {
 		const { remoteUrl } = seedRemote();
 		const workspaceDir = makeTempDir("signet-source-workspace-");
@@ -157,7 +188,10 @@ describe("syncWorkspaceSourceRepo", () => {
 	it("rejects unsafe remote URLs before invoking git clone", () => {
 		const workspaceDir = makeTempDir("signet-source-workspace-");
 
-		const result = syncWorkspaceSourceRepo(workspaceDir, { remoteUrl: "--upload-pack=touch /tmp/pwned" });
+		const result = syncWorkspaceSourceRepo(workspaceDir, {
+			cloneIfMissing: true,
+			remoteUrl: "--upload-pack=touch /tmp/pwned",
+		});
 
 		expect(result.status).toBe("error");
 		expect(result.message).toContain("safe git source");
@@ -170,7 +204,7 @@ describe("syncWorkspaceSourceRepo", () => {
 		chmodSync(daemonDir, 0o500);
 
 		try {
-			const result = syncWorkspaceSourceRepo(workspaceDir);
+			const result = syncWorkspaceSourceRepo(workspaceDir, { cloneIfMissing: true });
 
 			expect(result.status).toBe("error");
 			expect(result.message).toContain("failed to acquire source checkout sync lock");
@@ -185,7 +219,7 @@ describe("syncWorkspaceSourceRepo", () => {
 		const workspaceFile = join(root, "workspace-file");
 		writeFileSync(workspaceFile, "not a directory\n");
 
-		const result = syncWorkspaceSourceRepo(workspaceFile);
+		const result = syncWorkspaceSourceRepo(workspaceFile, { cloneIfMissing: true });
 
 		expect(result.status).toBe("error");
 		expect(result.message).toContain("failed to prepare source checkout sync lock directory");

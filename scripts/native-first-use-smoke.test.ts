@@ -1,7 +1,7 @@
 /** Release regression guard for the compiled binary's first-install contract. */
 import { afterEach, describe, expect, test } from "bun:test";
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -108,11 +108,8 @@ describe("compiled native first use", () => {
 			smokeHome = mkdtempSync(join(tmpdir(), "signet-native-first-use-"));
 			const workspace = join(smokeHome, ".agents");
 			const sourceCheckout = join(workspace, "signetai");
-			mkdirSync(sourceCheckout, { recursive: true });
-			// Setup always syncs this optional managed checkout. A non-git marker
-			// keeps the release acceptance hermetic and focused on first use.
-			writeFileSync(join(sourceCheckout, ".release-smoke"), "native first-use smoke\n");
-			const env = smokeEnv(smokeHome, workspace);
+			const gitLog = join(smokeHome, "git-trace.log");
+			const env = { ...smokeEnv(smokeHome, workspace), GIT_TRACE: gitLog, GIT_ALLOW_PROTOCOL: "" };
 			const port = await freePort();
 			const origin = `http://127.0.0.1:${port}`;
 
@@ -145,6 +142,8 @@ describe("compiled native first use", () => {
 				120_000,
 			);
 
+			expect(existsSync(sourceCheckout)).toBe(false);
+			expect(existsSync(gitLog) ? readFileSync(gitLog, "utf8") : "").not.toMatch(/\bgit (clone|fetch|pull)\b/);
 			const agentYaml = readFileSync(join(workspace, "agent.yaml"), "utf8");
 			expect(agentYaml).toContain("embedding:\n  provider: none");
 			let daemonOutput = "";
@@ -169,6 +168,9 @@ describe("compiled native first use", () => {
 			await waitForHealth(origin, daemonChild, () => daemonOutput);
 			const cliEnv = { ...env, SIGNET_DAEMON_URL: origin };
 
+			run(binary, ["sync"], cliEnv, 30000);
+			expect(existsSync(sourceCheckout)).toBe(false);
+			expect(existsSync(gitLog) ? readFileSync(gitLog, "utf8") : "").not.toMatch(/\bgit (clone|fetch|pull)\b/);
 			const doctor = run(binary, ["doctor"], cliEnv, 30_000);
 			expect(doctor).not.toContain("Missing required identity files");
 			const status = parseJsonOutput(run(binary, ["status", "--json"], cliEnv, 30_000));
