@@ -2,12 +2,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Tiktoken } from "js-tiktoken/lite";
-import cl100k_base from "js-tiktoken/ranks/cl100k_base";
+import { get_encoding } from "tiktoken/init";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { curateMemoryHead, MEMORY_HEAD_MAX_TOKENS, writeMemoryHead } from "./memory-head";
 
-const tok = new Tiktoken(cl100k_base);
+const tok = get_encoding("cl100k_base");
 
 let agentsDir = "";
 let prevSignetPath: string | undefined;
