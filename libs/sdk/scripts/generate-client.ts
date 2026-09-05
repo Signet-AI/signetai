@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
+// Architecture provenance: source=platform/daemon/src/daemon.ts
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON_PATH = join(__dirname, "../../../platform/daemon/src/daemon.ts");
 const OUTPUT_DIR = join(__dirname, "../src/generated");
@@ -155,6 +156,7 @@ function generateClient(routes: readonly Route[]): string {
 	return `/**
  * AUTO-GENERATED FILE — DO NOT EDIT
  * Generated from daemon.ts routes by scripts/generate-client.ts
+ * Architecture provenance: generatedBy=libs/sdk/scripts/generate-client.ts
  *
  * This file provides broad coverage of daemon endpoints.
  * Manual helpers live in ../helpers.ts

@@ -1,0 +1,29 @@
+{
+	"version": 1,
+	"artifacts": [
+		{
+			"path": "integrations/oh-my-pi/connector/src/extension-bundle.ts",
+			"owner": "@signet/connector-oh-my-pi",
+			"source": "integrations/oh-my-pi/extension",
+			"generatedBy": "integrations/oh-my-pi/connector/scripts/embed-extension.ts"
+		},
+		{
+			"path": "integrations/opencode/connector/src/plugin-bundle.ts",
+			"owner": "@signet/connector-opencode",
+			"source": "integrations/opencode/plugin",
+			"generatedBy": "integrations/opencode/connector/scripts/embed-plugin.ts"
+		},
+		{
+			"path": "integrations/pi/connector/src/extension-bundle.ts",
+			"owner": "@signet/connector-pi",
+			"source": "integrations/pi/extension",
+			"generatedBy": "integrations/pi/connector/scripts/embed-extension.ts"
+		},
+		{
+			"path": "libs/sdk/src/generated/client.ts",
+			"owner": "@signet/sdk",
+			"source": "platform/daemon/src/daemon.ts",
+			"generatedBy": "libs/sdk/scripts/generate-client.ts"
+		}
+	]
+}

@@ -71,6 +71,7 @@
 		"lint:fix": "biome check --write .",
 		"format": "biome format --write .",
 		"format:check": "biome format .",
+		"audit:architecture": "bun scripts/audit-architecture-contract.ts",
 		"typecheck": "bun run --filter '*' typecheck",
 		"version:sync": "bun scripts/version-sync.ts",
 		"dev:web": "cd web/marketing && bun run dev",
