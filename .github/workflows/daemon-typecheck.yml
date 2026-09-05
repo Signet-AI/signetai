@@ -42,7 +42,7 @@ jobs:
 
       - name: Build daemon dependencies (including installer types)
         shell: bash
-        run: bun run --filter '@signet/core' --filter '@signet/connector-base' --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-hermes-agent' build
+        run: bun run --filter '@signet/core' --filter '@signet/connector-base' --filter '@signet/connector-*' build
 
       - name: Daemon typecheck
         id: tsc

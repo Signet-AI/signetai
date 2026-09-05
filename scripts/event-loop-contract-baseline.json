@@ -1244,6 +1244,13 @@
       "category": "hot-path"
     },
     {
+      "path": "harness-install-worker.ts",
+      "line": 46,
+      "api": "existsSync",
+      "source": "if (!pluginPath || !existsSync(join(pluginPath, \"dist\", \"index.js\")))",
+      "category": "hot-path"
+    },
+    {
       "path": "hooks.ts",
       "line": 502,
       "api": "existsSync",
@@ -3184,7 +3191,35 @@
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 410,
+      "line": 393,
+      "api": "existsSync",
+      "source": "{ id: \"pi\", name: \"Pi\", path: join(homedir(), \".pi\", \"agent\", \"settings.json\"), exists: existsSync(join(homedir(), \".pi\", \"agent\", \"settings.json\")) },",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/connectors-routes.ts",
+      "line": 394,
+      "api": "existsSync",
+      "source": "{ id: \"oh-my-pi\", name: \"Oh My Pi\", path: join(homedir(), \".omp\", \"agent\", \"settings.json\"), exists: existsSync(join(homedir(), \".omp\", \"agent\", \"settings.json\")) },",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/connectors-routes.ts",
+      "line": 395,
+      "api": "existsSync",
+      "source": "{ id: \"kimi\", name: \"Kimi\", path: join(homedir(), \".kimi\", \"config.toml\"), exists: existsSync(join(homedir(), \".kimi\", \"config.toml\")) },",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/connectors-routes.ts",
+      "line": 396,
+      "api": "existsSync",
+      "source": "{ id: \"forge\", name: \"ForgeCode\", path: join(homedir(), \".forge\", \"config.yaml\"), exists: existsSync(join(homedir(), \".forge\", \"config.yaml\")) },",
+      "category": "hot-path"
+    },
+    {
+      "path": "routes/connectors-routes.ts",
+      "line": 414,
       "api": "existsSync",
       "source": "if (!existsSync(script)) {",
       "category": "hot-path"
@@ -3359,7 +3394,7 @@
     },
     {
       "path": "routes/harness-install.ts",
-      "line": 36,
+      "line": 37,
       "api": "existsSync",
       "source": ": [existsSync(built) ? built : join(directory, \"../harness-install-worker.ts\")];",
       "category": "hot-path"
