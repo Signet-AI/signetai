@@ -6,7 +6,7 @@ import { getDbOwner } from "./db-owner-runtime";
 import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { logger } from "./logger";
 import { effectiveScore } from "./memory-classification";
-import { buildAgentScopeClause } from "./memory-search";
+import { buildAgentScopeClause, currentMemorySql } from "./memory-search";
 
 export interface ScoredMemory {
 	id: string;
@@ -193,8 +193,7 @@ export async function fetchTraversalCandidates(
 						 0.5
 					 ) AS effScore${safetySelect}
 				 FROM memories m${safetyJoin}
-				 WHERE m.id IN (${placeholders})
-				   AND m.is_deleted = 0`,
+				 WHERE m.id IN (${placeholders})${currentMemorySql("m")}`,
 				hasSafetyTable ? [agentId, agentId, ...batch] : [agentId, ...batch],
 				{
 					operation: "session-start.traversal-candidate-hydration",
@@ -278,7 +277,7 @@ export async function getAllScoredCandidates(
 			`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
 			        COALESCE(m.access_count, 0) AS access_count
 			 FROM memories m${safetyJoin}
-			 WHERE m.is_deleted = 0${scope.sql}${safetyPredicate}
+				 WHERE 1 = 1${currentMemorySql("m")}${scope.sql}${safetyPredicate}
 			 ORDER BY m.created_at DESC LIMIT ?`,
 			hasSafetyTable ? [agentId, ...scope.args, limit * 3] : [...scope.args, limit * 3],
 			readOptions,
@@ -422,7 +421,7 @@ export async function getPredictedContextMemories(
 			 JOIN memories m ON memories_fts.rowid = m.rowid
 			 ${hasSafetyTable ? "LEFT JOIN memory_content_safety safety ON safety.agent_id = ? AND safety.source_kind = 'memory' AND safety.source_id = m.id" : ""}
 			 WHERE memories_fts MATCH ?
-			   AND m.is_deleted = 0
+			   ${currentMemorySql("m")}
 			   AND m.project = ?
 			   ${scope.sql}
 			 ORDER BY bm25(memories_fts)
@@ -473,7 +472,7 @@ export function getRecentMemories(memoryDbPath: string, limit: number, recencyBi
           id, content, type, importance, created_at,
           (julianday('now') - julianday(created_at)) as age_days
         FROM memories
-        WHERE is_deleted = 0
+				WHERE is_deleted = 0 AND superseded_by IS NULL AND stale_at IS NULL
         ORDER BY
           (importance * ${1 - recencyBias}) +
           (1.0 / (1.0 + (julianday('now') - julianday(created_at)))) * ${recencyBias}
@@ -513,7 +512,7 @@ export function getMemoriesSince(memoryDbPath: string, sinceMs: number, limit: n
 				.prepare(`
 				SELECT id, content, type, importance, created_at
 				FROM memories
-				WHERE is_deleted = 0 AND created_at > ?
+				WHERE is_deleted = 0 AND superseded_by IS NULL AND stale_at IS NULL AND created_at > ?
 				ORDER BY created_at DESC
 				LIMIT ?
 			`)

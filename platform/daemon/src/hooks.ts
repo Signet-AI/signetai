@@ -63,7 +63,7 @@ import { type ScoredMemory, buildActiveConstraintsSection } from "./memory-candi
 import { effectiveScore, inferType, isDuplicate } from "./memory-classification";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 
-import { type RecallResponse, type RecallResult, hybridRecall } from "./memory-search";
+import { type RecallResponse, type RecallResult, currentMemorySql, hybridRecall } from "./memory-search";
 import { recordMemorySearchTelemetry } from "./memory-search-telemetry";
 import {
 	type SynthesisRequest,
@@ -626,7 +626,7 @@ async function getRecentMemories(
           (julianday('now') - julianday(m.created_at)) as age_days${safetyProjection}
         FROM memories m
         ${safetyJoin}
-        WHERE m.is_deleted = 0${scope.sql}
+        WHERE 1 = 1${currentMemorySql("m")}${scope.sql}
         ORDER BY
           (m.importance * ${1 - recencyBias}) +
           (1.0 / (1.0 + (julianday('now') - julianday(m.created_at)))) * ${recencyBias}

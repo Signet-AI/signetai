@@ -697,29 +697,9 @@ function mergeCandidate(
 	}
 }
 
-function hasColumn(
-	db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
-	table: string,
-	column: string,
-): boolean {
-	try {
-		return db
-			.prepare(`PRAGMA table_info(${table})`)
-			.all()
-			.some((row) => row.name === column);
-	} catch {
-		return false;
-	}
-}
-
-function memorySupersessionSql(
-	db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
-	alias = "m",
-): string {
-	const currentness: string[] = [];
-	if (hasColumn(db, "memories", "superseded_by")) currentness.push(`${alias}.superseded_by IS NULL`);
-	if (hasColumn(db, "memories", "stale_at")) currentness.push(`${alias}.stale_at IS NULL`);
-	return currentness.length > 0 ? ` AND ${currentness.join(" AND ")}` : "";
+/** Eligibility for ordinary memory delivery. Lineage/history callers do not use this predicate. */
+export function currentMemorySql(alias = "m"): string {
+	return ` AND ${alias}.is_deleted = 0 AND ${alias}.superseded_by IS NULL AND ${alias}.stale_at IS NULL`;
 }
 
 function lexicalFallbackTerms(keywordQuery: string): string[] {
@@ -785,10 +765,10 @@ async function readLexicalFallbackThroughOwner(
  * has shipped since migration 002 and every accessor runs migrations.
  */
 export function memoryLifecycleSql(
-	db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
+	_db: { prepare: (sql: string) => { all: () => Array<{ name?: unknown }> } },
 	alias = "m",
 ): string {
-	return ` AND ${alias}.is_deleted = 0${memorySupersessionSql(db, alias)}`;
+	return currentMemorySql(alias);
 }
 
 async function authorizeScoredCandidates(
@@ -2796,7 +2776,7 @@ export async function hybridRecall(
 						.prepare(
 							`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
         FROM memories m
-        WHERE m.id IN (${placeholders}) AND m.is_deleted = 0${memorySupersessionSql(db)}${filter.sql}`,
+        WHERE m.id IN (${placeholders})${currentMemorySql("m")}${filter.sql}`,
 						)
 						.all(...topIds, ...filter.args) as Array<{
 						id: string;
