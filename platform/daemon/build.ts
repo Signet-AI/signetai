@@ -3,13 +3,20 @@
  * Aliases native packages that break when bundled (baked paths to .node/.wasm binaries).
  */
 
-const EXTERNAL_BUN = ["better-sqlite3", "@1password/sdk", "onnxruntime-node", "@huggingface/transformers"];
+const EXTERNAL_BUN = [
+	"better-sqlite3",
+	"@1password/sdk",
+	"@firecrawl/anydoc",
+	"onnxruntime-node",
+	"@huggingface/transformers",
+];
 
 const EXTERNAL_NODE = [
 	"better-sqlite3",
 	"bun",
 	"bun:sqlite",
 	"@1password/sdk",
+	"@firecrawl/anydoc",
 	"libsodium-wrappers",
 	"onnxruntime-node",
 	"@huggingface/transformers",

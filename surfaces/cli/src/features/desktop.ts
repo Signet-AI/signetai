@@ -1,11 +1,15 @@
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	closeSync,
 	copyFileSync,
+	cpSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
+	readSync,
 	readdirSync,
 	readlinkSync,
 	renameSync,
@@ -40,6 +44,14 @@ export interface DesktopLinuxInstallResult extends DesktopBuildResult {
 	readonly icon: string;
 	readonly workspace: string;
 }
+
+export interface DesktopMacInstallResult extends DesktopBuildResult {
+	readonly appBundle: string;
+	readonly applicationsDir: string;
+	readonly workspace: string;
+}
+
+export type DesktopInstallResult = DesktopLinuxInstallResult | DesktopMacInstallResult;
 
 interface DesktopCommandContext {
 	readonly cwd?: string;
@@ -135,7 +147,7 @@ export function buildDesktopFromSource(
 export function installDesktopFromSource(
 	options: DesktopInstallOptions = {},
 	ctx: DesktopCommandContext = {},
-): DesktopLinuxInstallResult {
+): DesktopInstallResult {
 	const repo = options.skipBuild
 		? resolveDesktopSourceCheckout(options.repo, ctx)
 		: prepareDesktopSourceCheckout(options, ctx);
@@ -145,13 +157,150 @@ export function installDesktopFromSource(
 	}
 
 	const platform = ctx.platform ?? process.platform;
+	if (platform === "darwin") {
+		return installMacDesktopApp(repo, ctx.home ?? homedir(), workspace);
+	}
 	if (platform !== "linux") {
 		throw new Error(
-			`signet desktop install currently installs native launchers on Linux/Arch only. Build artifacts are in ${desktopReleaseDir(repo)}.`,
+			`signet desktop install supports macOS and Linux installs. Build artifacts are in ${desktopReleaseDir(repo)}.`,
 		);
 	}
 
 	return installLinuxDesktopApp(repo, ctx.home ?? homedir(), workspace);
+}
+
+const MAC_APP_MARKER = "ai.signet.app";
+
+export function installMacDesktopApp(
+	repo: string,
+	home: string,
+	workspace = resolveAgentsDir().path,
+): DesktopMacInstallResult {
+	const releaseDir = desktopReleaseDir(repo);
+	const source = findMacAppBundle(releaseDir, process.arch);
+	if (!source) {
+		throw new Error(
+			`No matching macOS ${process.arch} app bundle found in ${releaseDir}. Run signet desktop build first.`,
+		);
+	}
+
+	const applicationsDir = join(home, "Applications");
+	mkdirSync(applicationsDir, { recursive: true });
+	const appBundle = join(applicationsDir, "Signet.app");
+	replaceManagedAppBundle(source, appBundle);
+
+	return { repo, releaseDir, appBundle, applicationsDir, workspace };
+}
+
+/**
+ * Replaces an installed Signet.app through a staged swap. A pre-existing bundle
+ * is only removed when it is Signet-owned (matching bundle id in its
+ * Info.plist); foreign applications are never touched.
+ */
+function replaceManagedAppBundle(source: string, target: string): void {
+	if (existsSync(target)) {
+		if (!isSignetAppBundle(target)) {
+			throw new Error(
+				`Refusing to replace existing app at ${target} because it is not a Signet app bundle. Remove it first if it is not needed.`,
+			);
+		}
+		rmSync(target, { recursive: true, force: true });
+	}
+	const parent = dirname(target);
+	const tmp = join(parent, `.Signet.app.${process.pid}.${Date.now()}.tmp`);
+	try {
+		cpSync(source, tmp, { recursive: true });
+		renameSync(tmp, target);
+	} catch (err) {
+		rmSync(tmp, { recursive: true, force: true });
+		throw err;
+	}
+}
+
+function isSignetAppBundle(path: string): boolean {
+	try {
+		const plist = readFileSync(join(path, "Contents", "Info.plist"), "utf8");
+		return plist.includes(`<string>${MAC_APP_MARKER}</string>`);
+	} catch {
+		return false;
+	}
+}
+
+function findMacAppBundle(releaseDir: string, arch: string): string | null {
+	if (!existsSync(releaseDir)) return null;
+	let best: { path: string; mtime: number } | null = null;
+	// electron-builder's unpacked output lives in layout directories such as
+	// release/mac/Signet.app or release/mac_arm64/Signet.app; recurse to a
+	// bounded depth and verify the executable's Mach-O architecture so a
+	// foreign-arch artifact is never installed.
+	for (const candidate of macAppBundleCandidates(releaseDir, 3)) {
+		if (!isSignetAppBundle(candidate)) continue;
+		if (!macAppBundleMatchesArch(candidate, arch)) continue;
+		const mtime = statSync(candidate).mtimeMs;
+		if (!best || mtime > best.mtime) {
+			best = { path: candidate, mtime: mtime };
+		}
+	}
+	return best?.path ?? null;
+}
+
+function* macAppBundleCandidates(root: string, depth: number): Generator<string> {
+	if (depth < 0) return;
+	let entries: readonly import("node:fs").Dirent[];
+	try {
+		entries = readdirSync(root, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		if (!entry.isDirectory()) continue;
+		const path = join(root, entry.name);
+		if (entry.name.endsWith(".app")) {
+			yield path;
+			continue;
+		}
+		if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+		yield* macAppBundleCandidates(path, depth - 1);
+	}
+}
+
+/** Reads the Mach-O cputype from the bundle's main executable. */
+function macAppBundleMatchesArch(path: string, arch: string): boolean {
+	const executable = macBundleExecutable(path);
+	if (executable === null) return false;
+	let handle: number;
+	try {
+		handle = openSync(executable, "r");
+	} catch {
+		return false;
+	}
+	try {
+		const header = Buffer.alloc(8);
+		if (readSync(handle, header, 0, 8, 0) !== 8) return false;
+		// The first 4 bytes are the magic; cputype follows. Byte-swapped
+		// (CIGAM) forms mean the file was written in the opposite endianness
+		// from the reader, so swap when reading the cputype field.
+		const magicLE = header.readUInt32LE(0);
+		const magicBE = header.readUInt32BE(0);
+		const CPU_TYPE_X64 = 0x01000007;
+		const CPU_TYPE_ARM64 = 0x0100000c;
+		const expected = arch === "arm64" ? CPU_TYPE_ARM64 : CPU_TYPE_X64;
+		if (magicLE === 0xfeedfacf) return header.readUInt32LE(4) === expected;
+		if (magicBE === 0xfeedfacf) return header.readUInt32BE(4) === expected;
+		return false;
+	} finally {
+		closeSync(handle);
+	}
+}
+
+function macBundleExecutable(path: string): string | null {
+	try {
+		const plist = readFileSync(join(path, "Contents", "Info.plist"), "utf8");
+		const match = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(plist);
+		return match ? join(path, "Contents", "MacOS", match[1]) : null;
+	} catch {
+		return null;
+	}
 }
 
 export function installLinuxDesktopApp(

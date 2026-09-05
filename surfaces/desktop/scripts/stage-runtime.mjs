@@ -1,8 +1,18 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import {
+	chmodSync,
+	cpSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const win = process.platform === "win32";
@@ -129,9 +139,16 @@ export function stageRuntime() {
 	cpSync(bunSrc, bunDest);
 	if (!win) chmodSync(bunDest, 0o755);
 
+	// Stage every built daemon entrypoint and native asset rather than a
+	// hardcoded subset. The daemon resolves its workers (db-owner, harness
+	// install, dreaming tokens, transcript recovery, ...) as siblings of
+	// daemon.js at runtime; missing files here break the packaged app at boot.
 	mkdirSync(resolve(daemonOut, "dist"), { recursive: true });
-	for (const name of ["daemon.js", "mcp-stdio.js", "index.js", "synthesis-render-worker.js"]) {
-		cpSync(resolve(repoRoot, "platform/daemon/dist", name), resolve(daemonOut, "dist", name));
+	const daemonDist = resolve(repoRoot, "platform/daemon/dist");
+	for (const entry of readdirSync(daemonDist)) {
+		if (/\.(js|node|wasm)$/.test(entry)) {
+			cpSync(join(daemonDist, entry), resolve(daemonOut, "dist", entry));
+		}
 	}
 	cpSync(resolve(repoRoot, "platform/daemon/dashboard"), resolve(daemonOut, "dashboard"), { recursive: true });
 	cpSync(resolve(repoRoot, "platform/daemon/skills"), resolve(daemonOut, "skills"), { recursive: true });
@@ -140,7 +157,13 @@ export function stageRuntime() {
 	const corePkg = readJson(corePkgPath);
 	const vecPkg = platformVecPackage(bunArch);
 	const dependencies = {};
-	for (const name of ["@1password/sdk", "@huggingface/transformers", "onnxruntime-node"]) {
+	for (const name of [
+		"@1password/sdk",
+		"@firecrawl/anydoc",
+		"@huggingface/transformers",
+		"onnxruntime-node",
+		"tiktoken",
+	]) {
 		const version = pkgVersion(daemonPkg, name);
 		if (version) dependencies[name] = version;
 	}
