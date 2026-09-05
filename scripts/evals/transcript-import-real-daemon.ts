@@ -246,9 +246,13 @@ try {
 	record(firstDone.job.imported === 2200, "inventory-restart-imported", firstDone.job);
 	record(firstDone.job.pending === 0, "inventory-restart-zero-pending");
 
+	// Onboarding resumes inference before offering imports. It must not stop
+	// the independently owned importer or transcript recovery worker.
+	const resumed = await req("/api/pipeline/resume", { method: "POST" });
+	record(resumed.status === 200, "onboarding-pipeline-resume");
 	const replay = await importFile(mixed, "replay.jsonl");
 	const replayDone = await waitCompleted(replay.jobId);
-	record(replayDone.job.duplicate === 2200, "exact-replay-duplicates", replayDone.job);
+	record(replayDone.job.duplicate === 2200, "exact-replay-duplicates-after-pipeline-restart", replayDone.job);
 	const invalid = `${[
 		line({ id: "unknown-role", session_key: "bad-1", messages: [{ role: "wat", content: "x" }], message_count: 1 }),
 		line({ id: "count-mismatch", session_key: "bad-2", message_count: 9 }),

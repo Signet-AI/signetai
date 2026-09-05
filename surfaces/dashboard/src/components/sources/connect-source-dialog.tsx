@@ -9,7 +9,8 @@ import { cn } from "@/lib/utils";
 import { FolderOpen, Globe, Loader2, MessageCircle, RotateCcw, Upload, X } from "@/components/mingcute-icons";
 import { useEffect, useRef, useState } from "react";
 
-type SourceKind = "files" | "web" | "transcripts" | "obsidian" | "github" | "discord";
+export type SourceKind = "files" | "web" | "transcripts" | "obsidian" | "github" | "discord";
+type SourceStep = "choose" | "configure";
 
 const IMPORT_KINDS: readonly { id: "files" | "web" | "transcripts"; label: string; description: string }[] = [
 	{ id: "files", label: "Files", description: "Import documents and notes" },
@@ -32,7 +33,7 @@ const FIELD: Record<Exclude<SourceKind, "files">, { label: string; placeholder: 
 	transcripts: {
 		label: "Target agent",
 		placeholder: "Select an agent",
-		hint: "Embedded agent_id is provenance only; the selected target owns this import.",
+		hint: "Choose which agent should own these conversations.",
 	},
 	obsidian: {
 		label: "Vault path",
@@ -53,6 +54,7 @@ const FIELD: Record<Exclude<SourceKind, "files">, { label: string; placeholder: 
 
 function validate(kind: Exclude<SourceKind, "files">, target: string, tokenRef: string): string | null {
 	const value = target.trim();
+	if (kind === "transcripts") return value ? null : "Select a target agent";
 	if (kind === "web") {
 		try {
 			const url = new URL(value);
@@ -103,10 +105,16 @@ export function ConnectSourceDialog({
 	open,
 	onClose,
 	onConnected,
+	embedded = false,
+	initialKind,
+	onBusyChange,
 }: {
 	open: boolean;
 	onClose: () => void;
 	onConnected: () => void;
+	embedded?: boolean;
+	initialKind?: SourceKind;
+	onBusyChange?: (busy: boolean) => void;
 }) {
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [kind, setKind] = useState<SourceKind>("files");
@@ -132,7 +140,8 @@ export function ConnectSourceDialog({
 
 	useEffect(() => {
 		if (!open) return;
-		setKind("files");
+		setStep(initialKind ? "configure" : "choose");
+		setKind(initialKind ?? "files");
 		setTarget("");
 		setName("");
 		setTokenRef("");
@@ -145,16 +154,24 @@ export function ConnectSourceDialog({
 		setResult(null);
 		setTranscriptJobId(null);
 		if (inputRef.current) inputRef.current.value = "";
-	}, [open]);
+	}, [open, initialKind]);
 
 	useEffect(() => {
-		if (!open) return;
+		onBusyChange?.(busy || browsing);
+		return () => onBusyChange?.(false);
+	}, [busy, browsing, onBusyChange]);
+
+	useEffect(() => {
+		if (!open || embedded) return;
 		const handleKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape" && !busy) onClose();
+			if (event.key === "Escape" && !busy) {
+				event.stopPropagation();
+				onClose();
+			}
 		};
 		window.addEventListener("keydown", handleKeyDown);
 		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [busy, onClose, open]);
+	}, [busy, onClose, open, embedded]);
 
 	if (!open) return null;
 
@@ -309,18 +326,28 @@ export function ConnectSourceDialog({
 		(kind === "transcripts" && (selectedCount === 0 || !target.trim())) ||
 		(kind === "web" && !target.trim());
 
+	const Panel = embedded ? "div" : "dialog";
 	return (
 		<div
-			className="cs-backdrop"
+			className={embedded ? "onboarding-source" : "cs-backdrop"}
 			role="presentation"
 			onClick={(event) => {
 				if (event.target === event.currentTarget && !busy) onClose();
 			}}
 			onKeyDown={(event) => {
-				if (event.key === "Escape" && !busy) onClose();
+				if (event.key === "Escape" && !busy) {
+					event.stopPropagation();
+					onClose();
+				}
 			}}
 		>
-			<dialog open className="cs-panel cs-panel--source" aria-modal="true" aria-label="Add a source">
+			<Panel
+				open={embedded ? undefined : true}
+				className="cs-panel cs-panel--source"
+				role={embedded ? undefined : "dialog"}
+				aria-modal={embedded ? undefined : true}
+				aria-label="Connect a source"
+			>
 				<header className="cs-head">
 					<span className="cs-title">Add a source</span>
 					<button type="button" className="cs-close" onClick={onClose} disabled={busy} aria-label="Close">
@@ -384,15 +411,21 @@ export function ConnectSourceDialog({
 									{kind === "transcripts" ? "Signet export JSONL" : "JSON · Markdown · CSV · HTML · documents"}
 								</span>
 							</button>
-							<button type="button" className="cs-btn-ghost self-center" onClick={chooseDesktop} disabled={busy}>
-								Choose from desktop
-							</button>
+							{kind === "files" && (
+								<button type="button" className="cs-btn-ghost self-center" onClick={chooseDesktop} disabled={busy}>
+									Choose from desktop
+								</button>
+							)}
 							<input
 								ref={inputRef}
 								type="file"
 								multiple
 								className="hidden"
-								accept=".txt,.md,.markdown,.json,.html,.htm,.csv,.doc,.docx,.docm,.odt,.rtf,.pdf,.ppt,.pptx,.ppsx,.odp,.epub,.xls,.xlsx,.xlsm,.ods"
+								accept={
+									kind === "transcripts"
+										? ".jsonl"
+										: ".txt,.md,.markdown,.json,.html,.htm,.csv,.doc,.docx,.docm,.odt,.rtf,.pdf,.ppt,.pptx,.ppsx,.odp,.epub,.xls,.xlsx,.xlsm,.ods"
+								}
 								onChange={(event) => choose(event.target.files)}
 							/>
 							{kind === "transcripts" && (
@@ -553,7 +586,7 @@ export function ConnectSourceDialog({
 						{kind === "files" || kind === "transcripts" ? "Import & index" : kind === "web" ? "Add & index" : "Connect & index"}
 					</button>
 				</footer>
-			</dialog>
+			</Panel>
 		</div>
 	);
 }

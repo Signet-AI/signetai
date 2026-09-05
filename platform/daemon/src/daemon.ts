@@ -254,6 +254,7 @@ import { mountMcpRoute } from "./mcp";
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { mountChangelogRoutes } from "./routes/changelog.js";
+import { registerHarnessInstallRoutes, stopHarnessInstall } from "./routes/harness-install";
 import { registerConnectorRoutes } from "./routes/connectors-routes.js";
 import { setupDashboardRoutes } from "./routes/dashboard.js";
 import { registerDatabaseDiagnosticsRoutes } from "./routes/database-diagnostics.js";
@@ -525,6 +526,7 @@ registerKnowledgeRoutes(app);
 registerOntologyRoutes(app);
 registerRepairRoutes(app);
 registerConnectorRoutes(app);
+registerHarnessInstallRoutes(app);
 registerPluginRoutes(app);
 registerGraphiqRoutes(app);
 registerSecretRoutes(app);
@@ -1619,18 +1621,6 @@ async function stopPipelineRuntime(): Promise<void> {
 		reflectionWorkerHandle = null;
 	}
 
-	if (transcriptImportWorkerHandle) {
-		try {
-			await transcriptImportWorkerHandle.stop();
-		} catch {}
-		transcriptImportWorkerHandle = null;
-	}
-	if (transcriptRecoveryWorkerHandle) {
-		try {
-			await transcriptRecoveryWorkerHandle.stop();
-		} catch {}
-		transcriptRecoveryWorkerHandle = null;
-	}
 	if (transcriptCaptureWorkerHandle) {
 		try {
 			transcriptCaptureWorkerHandle.stop();
@@ -2022,6 +2012,7 @@ queueMicrotask(() => setRestartPipelineRuntime(restartPipelineRuntime));
 async function cleanup() {
 	setShuttingDown(true);
 	bindAbort.abort();
+	await stopHarnessInstall();
 	logger.info("daemon", "Shutting down");
 
 	if (httpServer) {
@@ -2081,6 +2072,19 @@ async function cleanup() {
 		await flushPendingCheckpoints();
 	} catch {}
 
+	// Source ingestion survives inference reconfiguration; only daemon shutdown drains it.
+	if (transcriptImportWorkerHandle) {
+		try {
+			await transcriptImportWorkerHandle.stop();
+		} catch {}
+		transcriptImportWorkerHandle = null;
+	}
+	if (transcriptRecoveryWorkerHandle) {
+		try {
+			await transcriptRecoveryWorkerHandle.stop();
+		} catch {}
+		transcriptRecoveryWorkerHandle = null;
+	}
 	await stopPipelineRuntime();
 
 	if (dbOwnerMaintenanceHandle !== null) {

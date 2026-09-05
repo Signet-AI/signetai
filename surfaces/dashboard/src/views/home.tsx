@@ -75,6 +75,7 @@ export function HomeView() {
 							A more memorable you.
 						</span>
 					</div>
+					<a href="#setup" className="self-start text-sm underline underline-offset-4">Set up or repair your memory connection</a>
 					<DailyBrief agentId={status.data?.agentId} agentSettled={!status.loading} />
 					<div className="home-brief-divider" />
 					<HomeRecentMemories />

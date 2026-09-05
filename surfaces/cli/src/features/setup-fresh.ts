@@ -394,7 +394,10 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		if (context.openDashboard) {
 			await openUrlWithFallback(`${createDaemonClient(deps.DEFAULT_PORT, context.basePath).url}/#setup`);
 		}
-		if (failedHarnesses.length) throw new Error(`Workspace saved, but these agent integrations failed: ${failedHarnesses.join(", ")}. Run signet sync to retry, then signet setup.`);
+		if (failedHarnesses.length)
+			throw new Error(
+				`Workspace saved, but these agent integrations failed: ${failedHarnesses.join(", ")}. Run signet sync to retry, then signet setup.`,
+			);
 
 		console.log();
 		printSetupProtectionSummary(protection);

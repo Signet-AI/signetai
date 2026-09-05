@@ -1,3 +1,4 @@
+import { MODEL_DEFAULTS } from "@signet/core";
 import {
 	getBuiltinModels as getModels,
 	getBuiltinProviders as getProviders,
@@ -845,8 +846,17 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			}>
 		> = {};
 		const modelErrors: Record<string, string> = {};
+		const recommendedModels: Record<string, string> = {};
 		for (const provider of providers) {
 			try {
+				const available = getModels(provider).filter((m) => m.input.includes("text"));
+				// Reuse the curated default only when this provider actually offers it.
+				const defaultId =
+					provider === "openai-codex" || provider === "openai"
+						? MODEL_DEFAULTS.codex
+						: Object.entries(MODEL_DEFAULTS).find(([id]) => id === provider)?.[1];
+				const preferred = available.find((m) => m.id === defaultId);
+				if (preferred) recommendedModels[provider] = preferred.id;
 				models[provider] = getModels(provider).map((m) => ({
 					id: m.id,
 					name: m.name,
@@ -863,6 +873,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			providers,
 			models,
 			modelErrors,
+			recommendedModels,
 			oauthProviders,
 			// ACPX agent subcommands (acpx <agent> ...). Static — matches the
 			// agents createAcpxProvider drives. Mirrors `acpx --help` subcommands.

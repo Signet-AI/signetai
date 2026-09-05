@@ -40,9 +40,9 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
-      - name: Build @signet/core (daemon imports its compiled types)
+      - name: Build daemon dependencies (including installer types)
         shell: bash
-        run: bun run --filter '@signet/core' build
+        run: bun run --filter '@signet/core' --filter '@signet/connector-base' --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-hermes-agent' build
 
       - name: Daemon typecheck
         id: tsc

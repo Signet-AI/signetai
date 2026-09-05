@@ -125,7 +125,6 @@ describe("setupPlanSchema", () => {
 		).toThrow("extractionConnect");
 	});
 
-
 	it("accepts a multi-agent roster", () => {
 		const plan = basePlan({
 			agents: [
@@ -166,7 +165,6 @@ describe("setupPlanSchema", () => {
 	it("rejects aggregate-recall provider without a model", () => {
 		expect(() => parseSetupPlan(basePlan({ aggregateRecallProvider: "openrouter" }))).toThrow("aggregateRecallModel");
 	});
-
 
 	it("accepts a remote daemon URL", () => {
 		const plan = basePlan({ daemonUrl: "https://signet.remote.example:8443" });

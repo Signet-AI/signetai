@@ -2,7 +2,13 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CONNECTOR_PROVIDERS, resolveLaunchdExecutable, type ConnectorConfig, type SyncCursor } from "@signet/core";
+import {
+	CONNECTOR_PROVIDERS,
+	resolveHermesHomePath,
+	resolveLaunchdExecutable,
+	type ConnectorConfig,
+	type SyncCursor,
+} from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { createFilesystemConnector } from "../connectors/filesystem.js";
@@ -281,7 +287,7 @@ export function registerConnectorRoutes(app: Hono): void {
 								 WHERE source_url LIKE ? ESCAPE '\\'`,
 							)
 							.all(escapeLikePrefix(rootPath)) as ReadonlyArray<{ id: string }>;
-					}, "routes/connectors-routes.ts:277");
+					}, "db:connectors.cascade.documents");
 					const now = new Date().toISOString();
 					for (const doc of docs) {
 						// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
@@ -293,7 +299,7 @@ export function registerConnectorRoutes(app: Hono): void {
 								     updated_at = ?
 								 WHERE id = ?`,
 							).run(now, doc.id);
-						}, "routes/connectors-routes.ts:288");
+						}, "db:connectors.cascade.tombstone");
 					}
 				}
 			}
@@ -329,7 +335,7 @@ export function registerConnectorRoutes(app: Hono): void {
 					)
 					.get(escapeLikePrefix(rootPath)) as { cnt: number } | undefined;
 				return row?.cnt ?? 0;
-			}, "routes/connectors-routes.ts:319");
+			}, "db:connectors.health.documents");
 
 			return c.json({
 				id: connectorRow.id,
@@ -348,6 +354,18 @@ export function registerConnectorRoutes(app: Hono): void {
 
 	app.get("/api/harnesses", async (c) => {
 		const configs = [
+			{
+				name: "Codex",
+				id: "codex",
+				path: join(join(homedir(), ".codex"), "config.toml"),
+				exists: existsSync(join(homedir(), ".codex")),
+			},
+			{
+				name: "Hermes",
+				id: "hermes-agent",
+				path: join(resolveHermesHomePath(), "config.yaml"),
+				exists: existsSync(resolveHermesHomePath()),
+			},
 			{
 				name: "Claude Code",
 				id: "claude-code",

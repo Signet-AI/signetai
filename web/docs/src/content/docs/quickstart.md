@@ -28,7 +28,7 @@ See [Install](/getting-started/install/) for package-manager alternatives and no
 signet setup
 ```
 
-For a new workspace, setup asks how Signet should manage identity, then asks for an identity preset when managed identity is enabled. It asks for an agent name, harnesses, optional core plugins, how the daemon should run (local, Tailscale, or remote), embeddings, background inference, and optional advanced settings before showing the plan for confirmation.
+Setup starts Signet and opens guided dashboard onboarding: connect your agents and a model, optionally bring an Obsidian vault, transcript exports, or files, then save and recall a first memory. Provider processing starts only after your explicit connection test and enable action. See [Set up Signet](/getting-started/setup/) for the flow and recovery steps.
 
 The default Minimal identity preset keeps normal startup context small. Setup creates `AGENTS.md` for that startup context and `DREAMING.md` for Dreaming sessions. Other presets create a different set of identity files; do not assume that every workspace has `SOUL.md`, `USER.md`, `MEMORY.md`, or a hooks directory. See [Set up Signet](/getting-started/setup/) for the preset and workspace details.
 

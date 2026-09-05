@@ -61,7 +61,10 @@
 		"umap-js": "^1.4.0",
 		"yaml": "^2.8.2",
 		"yauzl": "2.10.0",
-		"zod": "^4.3.6"
+		"zod": "^4.3.6",
+		"@signet/connector-claude-code": "workspace:*",
+		"@signet/connector-codex": "workspace:*",
+		"@signet/connector-hermes-agent": "workspace:*"
 	},
 	"optionalDependencies": {
 		"@signet/native": "workspace:*"

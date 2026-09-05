@@ -186,7 +186,11 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.action(deps.migrateSchema);
 	withPath(migrate);
 
-	program.command("configure").alias("config").description("Open setup and connection settings").action(deps.configureAgent);
+	program
+		.command("configure")
+		.alias("config")
+		.description("Open setup and connection settings")
+		.action(deps.configureAgent);
 
 	program
 		.command("sync")
