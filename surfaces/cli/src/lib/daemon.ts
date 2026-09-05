@@ -104,6 +104,8 @@ export function createDaemonClient(
 	agentsDir?: string,
 ): {
 	readonly url: string;
+	/** Whether this client addresses the selected local workspace. */
+	readonly localWorkspace: boolean;
 	readonly fetchFromDaemon: DaemonFetch;
 	readonly fetchDaemonResult: <T>(
 		path: string,
@@ -114,7 +116,12 @@ export function createDaemonClient(
 	readonly fetchDaemonRaw: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 	readonly secretApiCall: DaemonApiCall;
 } {
-	const url = resolveDaemonClientUrl(port, agentsDir);
+	const configUrl = agentsDir ? readDaemonUrlConfig(agentsDir) : undefined;
+	const url = resolveSignetDaemonUrl({ defaultHost: LOOPBACK_HOST, defaultPort: port, configUrl });
+	const localWorkspace =
+		!configUrl &&
+		!process.env.SIGNET_DAEMON_URL?.trim() &&
+		["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname);
 
 	const fetchDaemonResult = async <T>(
 		path: string,
@@ -224,28 +231,13 @@ export function createDaemonClient(
 
 	return {
 		url,
+		localWorkspace,
 		fetchFromDaemon,
 		fetchDaemonResult,
 		fetchDaemonStream,
 		fetchDaemonRaw: fetchDaemonStream,
 		secretApiCall,
 	};
-}
-
-function resolveDaemonClientUrl(port: number, agentsDir?: string): string {
-	const configUrl = agentsDir ? readDaemonUrlConfig(agentsDir) : undefined;
-	try {
-		return resolveSignetDaemonUrl({ defaultHost: LOOPBACK_HOST, defaultPort: port, configUrl });
-	} catch (err) {
-		// A malformed daemon.url must never brick every CLI command (the client is
-		// built at module load). Fall back to env/default resolution and warn.
-		if (configUrl) {
-			console.warn(
-				chalk.yellow(`Ignoring invalid daemon.url "${configUrl}": ${err instanceof Error ? err.message : err}`),
-			);
-		}
-		return resolveSignetDaemonUrl({ defaultHost: LOOPBACK_HOST, defaultPort: port });
-	}
 }
 
 /** Read the persisted `daemon.url` from agent.yaml, if any. */

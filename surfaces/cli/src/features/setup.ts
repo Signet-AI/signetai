@@ -1,6 +1,6 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkbox, confirm, input, password, search, select } from "@inquirer/prompts";
+import { checkbox } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
 	IDENTITY_MODES,
@@ -13,7 +13,6 @@ import {
 	type NetworkMode,
 	disableGraphiqState,
 	formatYaml,
-	modelPresetsForProvider,
 	parseSimpleYaml,
 	readNetworkMode,
 	resolveIdentityModeFromConfig,
@@ -24,16 +23,8 @@ import { validateName } from "../commands/agent.js";
 import { createDaemonClient } from "../lib/daemon.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { runOAuthLogin, storeApiKey, storeOAuthCredentials } from "./setup-connect.js";
-import type { ConnectUi } from "./setup-connect.js";
 import { runFreshSetup } from "./setup-fresh.js";
-import {
-	LOCAL_SERVERS,
-	aggregateRecallProviderIds,
-	apiKeyProviderOptions,
-	modelOptions,
-	oauthProviderOptions,
-} from "./setup-inference-connect.js";
+import { aggregateRecallProviderIds } from "./setup-inference-connect.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
 import { isBareDaemonOrigin, parseSetupPlan, setupPlanJsonSchema } from "./setup-plan.js";
@@ -43,8 +34,6 @@ import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-pro
 import {
 	hasCommand,
 	hasLlamaCppServer,
-	preflightOllamaEmbedding,
-	promptOpenAIEmbeddingModel,
 	resolveCommandPath,
 	validateOllamaModelNonInteractive,
 } from "./setup-providers.js";
@@ -66,7 +55,6 @@ import {
 	failSetupValidation,
 	findUnknownHarnessValues,
 	formatDetectionSummary,
-	getDeploymentExtractionGuidance,
 	getEmbeddingDimensions,
 	hasExistingAgentState,
 	hasExistingIdentityFiles,
@@ -78,142 +66,6 @@ import {
 	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
 import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
-
-function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string; name: string }> {
-	return modelPresetsForProvider(provider).map((preset) => ({ value: preset.value, name: preset.label }));
-}
-
-/**
- * Pick a model from a list of pi-ai model options. Plain select for short
- * lists, searchable `search` prompt for large ones (e.g. OpenRouter's full
- * provider catalog) so
- * the user can type to find what they want — all results are shown, not capped.
- */
-async function pickModel(
-	models: readonly { id: string; name: string }[],
-	prompts: {
-		readonly select: typeof import("@inquirer/prompts").select;
-		readonly search: typeof import("@inquirer/prompts").search;
-		readonly input: typeof import("@inquirer/prompts").input;
-	},
-): Promise<string> {
-	if (models.length === 0) {
-		return (
-			await prompts.input({ message: "Model:", validate: (v) => v.trim().length > 0 || "Enter a model id" })
-		).trim();
-	}
-	const choices = models.map((m) => ({ value: m.id, name: `${m.name} (${m.id})` }));
-	if (models.length <= 12) {
-		return prompts.select({ message: "Model:", choices });
-	}
-	return prompts.search({
-		message: "Model (type to search):",
-		source: (term) => {
-			const t = (term ?? "").trim().toLowerCase();
-			return t ? choices.filter((c) => c.value.toLowerCase().includes(t) || c.name.toLowerCase().includes(t)) : choices;
-		},
-	});
-}
-
-/** Terminal UI for the OAuth dance (pi-ai login callbacks). */
-function connectUi(): ConnectUi {
-	return {
-		openUrl: (url) => {
-			console.log(chalk.cyan(`  Opening browser: ${url}`));
-			void openUrlWithFallback(url);
-		},
-		showDeviceCode: (userCode, verificationUri) => {
-			console.log(chalk.cyan(`  Enter this code at ${verificationUri}:`));
-			console.log(chalk.bold(`    ${userCode}`));
-		},
-		promptText: (message, signal) => input({ message }, { signal }),
-		promptSelect: (message, options, signal) =>
-			select({ message, choices: options.map((o) => ({ value: o.id, name: o.label })) }, { signal }),
-		onProgress: (m) => console.log(chalk.dim(`    ${m}`)),
-	};
-}
-
-/** A captured provider credential (held in the wizard, stored after the daemon starts). */
-interface CapturedCredential {
-	readonly family: string;
-	readonly connectMethod: "api" | "oauth";
-	readonly apiKey?: string;
-	readonly oauthCredentials?: unknown;
-}
-
-/**
- * Connect sub-flow: the user authenticates FIRST (OAuth login via pi-ai, or an
- * API-key prompt), THEN picks a model from the authenticated catalog. pi-ai's
- * login() is self-contained (spins its own callback server), so the OAuth
- * dance runs here in the wizard — no daemon needed. The captured credential
- * is stored after the daemon starts. Returns the decision + credential, or
- * undefined if the user backs out.
- */
-async function pickConnectedProvider(
-	providers: readonly { id: string; name: string }[],
-	connectMethod: "api" | "oauth",
-	prompts: {
-		readonly select: typeof import("@inquirer/prompts").select;
-		readonly search: typeof import("@inquirer/prompts").search;
-		readonly input: typeof import("@inquirer/prompts").input;
-	},
-): Promise<({ family: string; connectMethod: "api" | "oauth"; model: string } & CapturedCredential) | undefined> {
-	const provider = await prompts.select<string>({
-		message: connectMethod === "oauth" ? "Log in with:" : "Provider:",
-		choices: [...providers.map((p) => ({ value: p.id, name: p.name })), { value: "__back__", name: "← back" }],
-	});
-	if (provider === "__back__") return undefined;
-
-	let credential: CapturedCredential;
-	if (connectMethod === "oauth") {
-		console.log();
-		console.log(chalk.cyan(`  Starting ${provider} login…`));
-		try {
-			const oauthCredentials = await runOAuthLogin(connectUi(), provider);
-			credential = { family: provider, connectMethod: "oauth", oauthCredentials };
-			console.log(chalk.green(`  ✓ Logged in to ${provider}`));
-		} catch (err) {
-			console.log(chalk.red(`  ✗ Login failed: ${err instanceof Error ? err.message : err}`));
-			return undefined;
-		}
-	} else {
-		const apiKey = (await password({ message: `Paste your ${provider} API key:`, mask: "*" })).trim();
-		if (!apiKey) return undefined;
-		credential = { family: provider, connectMethod: "api", apiKey };
-	}
-
-	console.log();
-	// Authenticated model list (pi-ai; modifyModels applied for OAuth providers).
-	const model = await pickModel(modelOptions(provider, credential.oauthCredentials as never), prompts);
-	return { family: provider, connectMethod, model, ...credential };
-}
-
-/**
- * Build the post-daemon-start store callback. The login already happened in
- * the wizard (pi-ai's login() captured the credential); this just persists it
- * to the daemon secrets store once the daemon is running. Returns true on
- * success. If no credential was captured (e.g. back-out), it's a no-op true.
- */
-function buildConnectExtraction(
-	basePath: string,
-	port: number,
-	credential: CapturedCredential | undefined,
-): () => Promise<boolean> {
-	return async () => {
-		if (!credential) return true;
-		const client = createDaemonClient(port, basePath);
-		const http = { postJson: (path: string, body: unknown) => client.secretApiCall("POST", path, body) };
-		if (credential.connectMethod === "oauth" && credential.oauthCredentials) {
-			const res = await storeOAuthCredentials(http, credential.family, credential.oauthCredentials as never);
-			return res.ok;
-		}
-		if (credential.connectMethod === "api" && credential.apiKey) {
-			const res = await storeApiKey(http, credential.family, credential.apiKey);
-			return res.ok;
-		}
-		return true;
-	};
-}
 
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:1234/v1";
 
@@ -257,14 +109,6 @@ function cloneSpecialFiles(preset: IdentityPresetName): IdentitySpecialFileEntry
 	return IDENTITY_PRESETS[preset].special.map((entry) => ({ ...entry }));
 }
 
-function toStartupChoice(entry: IdentityContextFileEntry, checked: boolean) {
-	return {
-		value: entry.path,
-		name: `${entry.path}${entry.role ? ` — ${entry.role.replace(/_/g, " ")}` : ""}`,
-		checked,
-	};
-}
-
 function writeCapabilitySelection(
 	basePath: string,
 	existingConfig: Record<string, unknown>,
@@ -304,25 +148,6 @@ function scaffoldIdentityIfNeeded(basePath: string, identityMode: IdentityMode, 
 			writeFileSync(filePath, content);
 		}
 	}
-}
-
-async function promptIdentityMode(defaultIdentityMode: IdentityMode): Promise<IdentityMode> {
-	return select({
-		message: "Should Signet manage agent identity/instruction files?",
-		choices: [
-			{
-				value: "managed",
-				name: "Managed identity — Signet creates and syncs AGENTS/SOUL/IDENTITY/USER files",
-				description: "Best when you want full cross-harness agent continuity.",
-			},
-			{
-				value: "off",
-				name: "Off — use Signet only for memory, recall, sources, and secrets",
-				description: "Best when your harness already owns personality and instructions.",
-			},
-		],
-		default: defaultIdentityMode,
-	});
 }
 
 interface ExtractionEnvironment {
@@ -430,7 +255,7 @@ async function buildHeadlessApplyContext(
 	options: SetupWizardOptions,
 	basePath: string,
 	plan: SetupPlan,
-	deps: SetupDeps,
+	_deps: SetupDeps,
 	existingAgentsDir: boolean,
 ): Promise<SetupApplyContext> {
 	const { availableExtractionProviders, acpxBin } = await probeExtractionEnvironment();
@@ -451,73 +276,69 @@ async function buildHeadlessApplyContext(
 	};
 }
 
-/**
- * Render a SetupPlan as a human-readable, sectioned summary for the interactive
- * review screen. Pure (no side effects); returns a plain string.
- */
-export function renderSetupPlanSummary(plan: SetupPlan): string {
-	const lines: string[] = [
-		chalk.bold("  Setup plan"),
-		chalk.dim(
-			"  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
-		),
-	];
-	const section = (title: string) => {
-		lines.push("");
-		lines.push(chalk.cyan(`  ${title}`));
-	};
-	const row = (label: string, value: string) => lines.push(`    ${label.padEnd(13)}${value}`);
-
-	section("Identity");
-	row("Agent:", plan.agentName);
-	row("Description:", plan.agentDescription);
-	row("Mode:", plan.identityMode === "managed" ? `managed (${plan.identityPreset})` : plan.identityMode);
-
-	section("Harnesses");
-	lines.push(`    ${plan.harnesses.length > 0 ? plan.harnesses.join(", ") : chalk.dim("(none)")}`);
-
-	section("Memory & search");
-	if (plan.embeddingProvider === "none") {
-		row("Embeddings:", chalk.dim("disabled"));
-	} else {
-		row("Embeddings:", `${plan.embeddingProvider} (${plan.embeddingModel}, ${plan.embeddingDimensions}d)`);
+/** Interactive setup boots the workspace; the dashboard owns provider connection. */
+export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
+	if (options.nonInteractive || options.schema || options.file || options.json || options.dryRun) {
+		await applySetupOptions(options, deps);
+		return;
 	}
-	row("Search:", `balance ${plan.searchBalance}, top_k ${plan.searchTopK}, min_score ${plan.searchMinScore}`);
-	row("Memory:", `budget ${plan.memorySessionBudget}, decay ${plan.memoryDecayRate}`);
-
-	section("Extraction");
-	if (plan.extractionProvider === "none") {
-		row("Provider:", chalk.dim("disabled"));
-	} else {
-		row("Provider:", plan.extractionProvider);
-		row("Model:", plan.extractionModel || chalk.dim("(default)"));
-		if (plan.extractionEndpoint) row("Endpoint:", plan.extractionEndpoint);
-	}
-	if (plan.aggregateRecallProvider && plan.aggregateRecallProvider !== plan.extractionProvider) {
-		row(
-			"Aggregate recall:",
-			`${plan.aggregateRecallProvider}${plan.aggregateRecallModel ? ` (${plan.aggregateRecallModel})` : ""}`,
+	if (!process.stdin.isTTY) {
+		failSetupValidation(
+			"signet setup is interactive and requires a TTY.",
+			"For headless use, pass --non-interactive with explicit flags, or --file/--json with a setup plan (see --schema).",
 		);
 	}
-
-	section("Plugins & network");
-	row("Secrets:", plan.signetSecretsEnabled ? "enabled" : "disabled");
-	row("GraphIQ:", plan.graphiqEnabled ? "enabled" : "disabled");
-	row("Network:", plan.networkMode);
-	row("Git:", plan.gitEnabled ? "enabled" : "disabled");
-	if (plan.daemonUrl) row("Daemon:", `remote (${plan.daemonUrl})`);
-	if (plan.dreamingEnabled) row("Dreaming:", "enabled");
-	if (plan.agents && plan.agents.length > 0) {
-		row("Agents:", `${plan.agents.length} (${plan.agents.map((a) => a.name).join(", ")})`);
+	const basePath = deps.normalizeAgentPath(deps.normalizeStringValue(options.path) ?? deps.AGENTS_DIR);
+	const existing = deps.detectExistingSetup(basePath);
+	if (existing.agentYaml || existing.configYaml || existing.memoryDb) {
+		const changes = Object.entries(options).filter(([key, value]) =>
+			key !== "path" && key !== "openDashboard" && value !== undefined && value !== false &&
+			(!Array.isArray(value) || value.length > 0));
+		if (changes.length) throw new Error("Use --non-interactive to apply configuration flags to an existing workspace, or run signet setup to open its settings.");
 	}
-	if (plan.sources && plan.sources.length > 0) {
-		row("Sources:", `${plan.sources.length} obsidian vault(s)`);
+	console.log(deps.signetBanner());
+	console.log(chalk.dim(`  Workspace: ${basePath}`));
+	if (!existing.agentYaml && !existing.configYaml && !existing.memoryDb) {
+		const harnesses =
+			(options.harness?.length ? options.harness : undefined) ??
+			(await checkbox({
+				message: "Which agent apps should Signet connect to?",
+				choices: SETUP_HARNESS_CHOICES.map((value) => ({ value, name: value })),
+			}));
+		await applySetupOptions(
+			{
+				...options,
+				path: basePath,
+				nonInteractive: true,
+				harness: harnesses,
+				identityMode: options.identityMode ?? "off",
+				extractionProvider: options.extractionProvider ?? "none",
+				openDashboard: false,
+			},
+			deps,
+		);
 	}
-
-	return lines.join("\n");
+	const client = createDaemonClient(deps.DEFAULT_PORT, basePath);
+	if (existing.agentYaml || existing.configYaml || existing.memoryDb) {
+		// Resuming onboarding never regenerates configuration or user-authored files.
+		if (client.localWorkspace && !(await deps.startDaemon(basePath))) {
+			throw new Error("Could not start Signet. Run signet doctor for recovery details; your workspace was preserved.");
+		}
+	}
+	const status = await client.fetchDaemonResult<{ agentsDir: string }>("/api/status");
+	if (!status.ok)
+		throw new Error(`Signet is not ready: ${status.error ?? status.reason}. Run signet doctor, then retry setup.`);
+	if (client.localWorkspace && status.data.agentsDir !== basePath)
+		throw new Error(
+			"Another workspace is running at this address. Stop it or select its workspace before continuing setup.",
+		);
+	const url = `${client.url}/#setup`;
+	console.log(chalk.cyan(`  Continue setup: ${url}`));
+	console.log(chalk.dim("  Connect your provider, select a memory model, and test the connection."));
+	await openUrlWithFallback(url);
 }
 
-export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
+async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
 	if (options.schema) {
 		console.log(JSON.stringify(setupPlanJsonSchema(), null, 2));
 		return;
@@ -529,12 +350,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		const explicitPath = deps.normalizeStringValue(options.path);
 		const basePath = deps.normalizeAgentPath(explicitPath ?? deps.AGENTS_DIR);
 		const plan = loadPlanFromOptions(options);
-		if (plan.extractionConnect) {
-			failSetupValidation(
-				"A headless setup plan cannot use extractionConnect because credentials are not part of SetupPlan.",
-				"Use a supported non-interactive extraction provider with its configured credential, or run interactive setup to connect the provider.",
-			);
-		}
 		if (options.dryRun) {
 			console.log(JSON.stringify(plan, null, 2));
 			return;
@@ -562,12 +377,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		);
 	}
 
-	const nonInteractive = options.nonInteractive === true;
-	if (!nonInteractive) {
-		console.log(deps.signetBanner());
-	} else {
-		console.log(deps.signetLogo());
-	}
+	
+
+	console.log(deps.signetLogo());
+
 	console.log();
 	const explicitPath = deps.normalizeStringValue(options.path);
 	let basePath = deps.normalizeAgentPath(explicitPath ?? deps.AGENTS_DIR);
@@ -577,32 +390,18 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		if (!hasExistingAgentState(defaultDetection)) {
 			const openClawWorkspace = detectPreferredOpenClawWorkspace(basePath, deps);
 			if (openClawWorkspace) {
-				if (nonInteractive) {
-					basePath = openClawWorkspace;
-				} else {
-					console.log(chalk.cyan(`  Detected OpenClaw workspace: ${openClawWorkspace}`));
-					const useDetectedWorkspace = await confirm({
-						message: "Use this as the Signet agent directory?",
-						default: true,
-					});
-					if (useDetectedWorkspace) {
-						basePath = openClawWorkspace;
-					}
-					console.log();
-				}
+				basePath = openClawWorkspace;
 			}
 		}
 	}
 
 	const existing = deps.detectExistingSetup(basePath);
 
-	if (nonInteractive) {
-		console.log(chalk.dim("  Running in non-interactive mode"));
-		if (!explicitPath && basePath !== deps.AGENTS_DIR) {
-			console.log(chalk.dim(`  Using detected OpenClaw workspace: ${basePath}`));
-		}
-		console.log();
+	console.log(chalk.dim("  Running in non-interactive mode"));
+	if (!explicitPath && basePath !== deps.AGENTS_DIR) {
+		console.log(chalk.dim(`  Using detected OpenClaw workspace: ${basePath}`));
 	}
+	console.log();
 
 	let existingConfig: Record<string, unknown> = {};
 	if (existing.agentYaml) {
@@ -670,7 +469,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		availableExtractionProviders: availableToolExtractionProviders,
 		acpxBin,
 		detectedProvider,
-		llamaCppServerAvailable,
 	} = await probeExtractionEnvironment();
 
 	if (rawDeploymentType && !requestedDeploymentType) {
@@ -692,7 +490,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		failSetupValidation("--extraction-endpoint must be an http:// or https:// URL.");
 	}
 	const unknownHarnessValues = findUnknownHarnessValues(options.harness, deps);
-	if (nonInteractive && unknownHarnessValues.length > 0) {
+	if (unknownHarnessValues.length > 0) {
 		failNonInteractiveSetup(
 			`Unknown --harness value(s): ${unknownHarnessValues.join(", ")}. Valid choices: ${SETUP_HARNESS_CHOICES.join(", ")}.`,
 		);
@@ -703,144 +501,98 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log(chalk.dim(`    ${basePath}`));
 		console.log();
 
-		if (nonInteractive) {
-			const protection = await enforceSetupProtection({
-				basePath,
-				nonInteractive: true,
-				allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
-				createLocalBackup: options.createLocalBackup === true,
-			});
-			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
-			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
-			if (existing.agentYaml) {
-				writeCapabilitySelection(
-					basePath,
-					existingConfig,
-					configuredIdentityMode ?? existingSetupIdentityMode,
-					signetSecretsEnabled,
-				);
-				scaffoldIdentityIfNeeded(
-					basePath,
-					configuredIdentityMode ?? existingSetupIdentityMode,
-					existingSetupIdentityMode,
-				);
-			}
-			writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
-			if (graphiqEnabled) {
-				await installGraphiqPlugin({ agentsDir: basePath });
-			} else {
-				disableGraphiqState(basePath);
-			}
-
-			const resolvedIdentityMode = configuredIdentityMode ?? existingSetupIdentityMode;
-
-			// When identity mode changes to off, run stale identity cleanup
-			// for all detected and configured harnesses even if --harness was not passed.
-			if (resolvedIdentityMode !== "managed" && existingIdentityMode === "managed") {
-				const h = existing.harnesses;
-				const detectedIds = new Set<string>();
-				if (h.claudeCode) detectedIds.add("claude-code");
-				if (h.openclaw) detectedIds.add("openclaw");
-				if (h.opencode) detectedIds.add("opencode");
-				if (h.forge) detectedIds.add("forge");
-				if (h.codex) detectedIds.add("codex");
-				if (h.kimi) detectedIds.add("kimi");
-				if (h.ohMyPi) detectedIds.add("oh-my-pi");
-				if (h.pi) detectedIds.add("pi");
-				if (h.hermesAgent) detectedIds.add("hermes-agent");
-				if (h.gemini) detectedIds.add("gemini");
-				// Also include harnesses listed in agent.yaml config
-				const configured = deps.loadConfiguredHarnesses?.(basePath) ?? [];
-				for (const id of configured) detectedIds.add(id);
-				for (const harness of detectedIds) {
-					try {
-						await deps.configureHarnessHooks(harness, basePath);
-					} catch {
-						// best-effort cleanup
-					}
-				}
-			}
-
-			const requestedHarnesses = normalizeHarnessList(options.harness, deps);
-			if (requestedHarnesses.length > 0) {
-				// Hooks are installed before the daemon starts. This is safe because
-				// connectors only write static files with a baked-in loopback default.
-				// The installed runtime reads SIGNET_DAEMON_URL at runtime and only
-				// falls back to that default when no explicit override is present.
-				for (const harness of requestedHarnesses) {
-					try {
-						await deps.configureHarnessHooks(harness, basePath);
-					} catch (err) {
-						// best-effort — non-interactive should not fail on hook errors
-						console.warn(
-							chalk.yellow(`  ⚠ Could not configure ${harness}: ${err instanceof Error ? err.message : String(err)}`),
-						);
-					}
-				}
-			}
-
-			const running = await deps.isDaemonRunning();
-			if (!running) {
-				const spinner = ora("Starting daemon...").start();
-				const started = await deps.startDaemon(basePath);
-				if (started) {
-					spinner.succeed("Daemon started");
-				} else {
-					spinner.fail("Failed to start daemon");
-				}
-			}
-
-			if (options.openDashboard === true) {
-				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
-			}
-
-			printSetupProtectionSummary(protection);
-			return;
-		}
-
-		const action = await select({
-			message: "What would you like to do?",
-			choices: [
-				{ value: "dashboard", name: "Launch dashboard" },
-				{ value: "github-import", name: "Import agent config from GitHub" },
-				{ value: "reconfigure", name: "Reconfigure settings" },
-				{ value: "status", name: "View status" },
-				{ value: "exit", name: "Exit" },
-			],
+		const protection = await enforceSetupProtection({
+			basePath,
+			nonInteractive: true,
+			allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
+			createLocalBackup: options.createLocalBackup === true,
 		});
-
-		if (action === "dashboard") {
-			await deps.launchDashboard({ path: basePath });
-			return;
+		const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
+		const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
+		if (existing.agentYaml) {
+			writeCapabilitySelection(
+				basePath,
+				existingConfig,
+				configuredIdentityMode ?? existingSetupIdentityMode,
+				signetSecretsEnabled,
+			);
+			scaffoldIdentityIfNeeded(
+				basePath,
+				configuredIdentityMode ?? existingSetupIdentityMode,
+				existingSetupIdentityMode,
+			);
+		}
+		writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
+		if (graphiqEnabled) {
+			await installGraphiqPlugin({ agentsDir: basePath });
+		} else {
+			disableGraphiqState(basePath);
 		}
 
-		if (action === "github-import") {
-			await deps.importFromGitHub(basePath);
-			return;
+		const resolvedIdentityMode = configuredIdentityMode ?? existingSetupIdentityMode;
+
+		// When identity mode changes to off, run stale identity cleanup
+		// for all detected and configured harnesses even if --harness was not passed.
+		if (resolvedIdentityMode !== "managed" && existingIdentityMode === "managed") {
+			const h = existing.harnesses;
+			const detectedIds = new Set<string>();
+			if (h.claudeCode) detectedIds.add("claude-code");
+			if (h.openclaw) detectedIds.add("openclaw");
+			if (h.opencode) detectedIds.add("opencode");
+			if (h.forge) detectedIds.add("forge");
+			if (h.codex) detectedIds.add("codex");
+			if (h.kimi) detectedIds.add("kimi");
+			if (h.ohMyPi) detectedIds.add("oh-my-pi");
+			if (h.pi) detectedIds.add("pi");
+			if (h.hermesAgent) detectedIds.add("hermes-agent");
+			if (h.gemini) detectedIds.add("gemini");
+			// Also include harnesses listed in agent.yaml config
+			const configured = deps.loadConfiguredHarnesses?.(basePath) ?? [];
+			for (const id of configured) detectedIds.add(id);
+			for (const harness of detectedIds) {
+				try {
+					await deps.configureHarnessHooks(harness, basePath);
+				} catch {
+					// best-effort cleanup
+				}
+			}
 		}
 
-		if (action === "status") {
-			await deps.showStatus({ path: basePath });
-			return;
+		const requestedHarnesses = normalizeHarnessList(options.harness, deps);
+		if (requestedHarnesses.length > 0) {
+			// Hooks are installed before the daemon starts. This is safe because
+			// connectors only write static files with a baked-in loopback default.
+			// The installed runtime reads SIGNET_DAEMON_URL at runtime and only
+			// falls back to that default when no explicit override is present.
+			for (const harness of requestedHarnesses) {
+				try {
+					await deps.configureHarnessHooks(harness, basePath);
+				} catch (err) {
+					// best-effort — non-interactive should not fail on hook errors
+					console.warn(
+						chalk.yellow(`  ⚠ Could not configure ${harness}: ${err instanceof Error ? err.message : String(err)}`),
+					);
+				}
+			}
 		}
 
-		if (action === "exit") {
-			return;
+		const running = await deps.isDaemonRunning();
+		if (!running) {
+			const spinner = ora("Starting daemon...").start();
+			const started = await deps.startDaemon(basePath);
+			if (started) {
+				spinner.succeed("Daemon started");
+			} else {
+				spinner.fail("Failed to start daemon");
+			}
 		}
 
-		const templatesDir = deps.getTemplatesDir();
-		const gitignoreSrc = join(templatesDir, "gitignore.template");
-		const gitignoreDest = join(basePath, ".gitignore");
-		if (existsSync(gitignoreSrc) && !existsSync(gitignoreDest)) {
-			copyFileSync(gitignoreSrc, gitignoreDest);
-			console.log(chalk.dim("  Synced missing: .gitignore"));
+		if (options.openDashboard === true) {
+			await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
 		}
 
-		const skillSyncResult = deps.syncBuiltinSkills(deps.getSkillsSourceDir(), basePath);
-		const syncedBuiltins = skillSyncResult.installed.length + skillSyncResult.updated.length;
-		if (syncedBuiltins > 0) {
-			console.log(chalk.dim(`  Synced built-in skills: ${syncedBuiltins}`));
-		}
+		printSetupProtectionSummary(protection);
+		return;
 	} else if (hasExistingIdentityFiles(existing)) {
 		console.log(chalk.cyan("  Detected existing agent identity"));
 		console.log(chalk.dim(`    ${basePath}`));
@@ -856,260 +608,74 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log(chalk.dim("    5. Keep all existing files unchanged"));
 		console.log();
 
-		if (nonInteractive) {
-			const deploymentType: DeploymentTypeChoice = requestedDeploymentType ?? "local";
-			const existingEmbeddingProvider = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
-			const existingExtractionProvider =
-				deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
-				deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
-			const migrationEmbeddingProvider =
-				requestedEmbeddingProvider ??
-				existingEmbeddingProvider ??
-				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider = resolveSetupExtractionProvider({
-				deploymentType,
-				requestedProvider: requestedExtractionProvider,
-				providerFromConfig: existingExtractionProvider,
-				preserveExisting: true,
-				detectedProvider,
-				availableProviders: availableToolExtractionProviders,
-				preferredHarnesses: normalizedExistingHarnesses,
-			});
-			const migrationExtractionEndpoint = resolveSetupExtractionEndpoint({
-				provider: migrationExtractionProvider,
-				requestedEndpoint: requestedExtractionEndpoint,
-				existingProvider: existingExtractionProvider,
-				existingEndpoint: existingExtractionEndpoint,
-			});
-
-			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
-			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
-
-			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
-				nonInteractive: true,
-				identityMode: configuredIdentityMode ?? existingSetupIdentityMode,
-				openDashboard: options.openDashboard === true,
-				skipGit: options.skipGit === true,
-				allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
-				createLocalBackup: options.createLocalBackup === true,
-				embeddingProvider: migrationEmbeddingProvider,
-				embeddingModel: deps.normalizeStringValue(options.embeddingModel) || undefined,
-				extractionProvider: migrationExtractionProvider,
-				extractionModel: deps.normalizeStringValue(options.extractionModel) || undefined,
-				extractionEndpoint: migrationExtractionEndpoint,
-				availableExtractionProviders: availableToolExtractionProviders,
-				acpxBin,
-				signetSecretsEnabled,
-				graphiqEnabled,
-			});
-			return;
-		}
-
-		const proceed = await confirm({
-			message: "Proceed with Signet setup?",
-			default: true,
+		const deploymentType: DeploymentTypeChoice = requestedDeploymentType ?? "local";
+		const existingEmbeddingProvider = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
+		const existingExtractionProvider =
+			deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
+			deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
+		const migrationEmbeddingProvider =
+			requestedEmbeddingProvider ?? existingEmbeddingProvider ?? defaultEmbeddingProviderForDeployment(deploymentType);
+		const migrationExtractionProvider = resolveSetupExtractionProvider({
+			deploymentType,
+			requestedProvider: requestedExtractionProvider,
+			providerFromConfig: existingExtractionProvider,
+			preserveExisting: true,
+			detectedProvider,
+			availableProviders: availableToolExtractionProviders,
+			preferredHarnesses: normalizedExistingHarnesses,
+		});
+		const migrationExtractionEndpoint = resolveSetupExtractionEndpoint({
+			provider: migrationExtractionProvider,
+			requestedEndpoint: requestedExtractionEndpoint,
+			existingProvider: existingExtractionProvider,
+			existingEndpoint: existingExtractionEndpoint,
 		});
 
-		if (!proceed) {
-			console.log();
-			const manualAction = await select({
-				message: "What would you like to do instead?",
-				choices: [
-					{ value: "fresh", name: "Start fresh (create new identity)" },
-					{ value: "github", name: "Import from GitHub repository" },
-					{ value: "exit", name: "Exit" },
-				],
-			});
+		const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
+		const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
 
-			if (manualAction === "exit") {
-				return;
-			}
-			if (manualAction === "github") {
-				mkdirSync(basePath, { recursive: true });
-				mkdirSync(join(basePath, "memory"), { recursive: true });
-				await deps.importFromGitHub(basePath);
-				return;
-			}
-		} else {
-			console.log();
-			const deploymentType =
-				requestedDeploymentType ??
-				(await select({
-					message: "Where is Signet running?",
-					choices: [
-						{ value: "local", name: "Local machine (dev / personal)" },
-						{ value: "vps", name: "VPS or cloud server (shared / constrained resources)" },
-						{ value: "server", name: "Self-hosted server (dedicated hardware)" },
-					],
-					default: "local",
-				}));
-			if (requestedDeploymentType) {
-				console.log(chalk.dim(`  Using deployment type from CLI: ${requestedDeploymentType}`));
-			}
-			console.log();
-			console.log(chalk.cyan("  Deployment guidance:"));
-			for (const line of getDeploymentExtractionGuidance(deploymentType)) {
-				console.log(chalk.dim(`    ${line}`));
-			}
-			console.log();
-
-			const existingEmbeddingProvider = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
-			const existingExtractionProvider =
-				deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
-				deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
-			const migrationEmbeddingProvider =
-				requestedEmbeddingProvider ??
-				existingEmbeddingProvider ??
-				defaultEmbeddingProviderForDeployment(deploymentType);
-			const migrationExtractionProvider = resolveSetupExtractionProvider({
-				deploymentType,
-				requestedProvider: requestedExtractionProvider,
-				providerFromConfig: existingExtractionProvider,
-				preserveExisting: true,
-				detectedProvider,
-				availableProviders: availableToolExtractionProviders,
-				preferredHarnesses: normalizedExistingHarnesses,
-			});
-			const migrationExtractionEndpoint = resolveSetupExtractionEndpoint({
-				provider: migrationExtractionProvider,
-				requestedEndpoint: requestedExtractionEndpoint,
-				existingProvider: existingExtractionProvider,
-				existingEndpoint: existingExtractionEndpoint,
-			});
-
-			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, false, options);
-			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, false, options);
-			const migrationIdentityMode = configuredIdentityMode ?? (await promptIdentityMode(existingSetupIdentityMode));
-
-			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
-				identityMode: migrationIdentityMode,
-				allowUnprotectedWorkspace: false,
-				createLocalBackup: false,
-				embeddingProvider: migrationEmbeddingProvider,
-				embeddingModel: deps.normalizeStringValue(existingEmbedding.model) || undefined,
-				extractionProvider: migrationExtractionProvider,
-				extractionModel:
-					deps.normalizeStringValue(existingPipeline.extractionModel) ||
-					deps.normalizeStringValue(existingExtraction.model) ||
-					undefined,
-				extractionEndpoint: migrationExtractionEndpoint,
-				availableExtractionProviders: availableToolExtractionProviders,
-				acpxBin,
-				signetSecretsEnabled,
-				graphiqEnabled,
-			});
-			return;
-		}
+		await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
+			nonInteractive: true,
+			identityMode: configuredIdentityMode ?? existingSetupIdentityMode,
+			openDashboard: options.openDashboard === true,
+			skipGit: options.skipGit === true,
+			allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
+			createLocalBackup: options.createLocalBackup === true,
+			embeddingProvider: migrationEmbeddingProvider,
+			embeddingModel: deps.normalizeStringValue(options.embeddingModel) || undefined,
+			extractionProvider: migrationExtractionProvider,
+			extractionModel: deps.normalizeStringValue(options.extractionModel) || undefined,
+			extractionEndpoint: migrationExtractionEndpoint,
+			availableExtractionProviders: availableToolExtractionProviders,
+			acpxBin,
+			signetSecretsEnabled,
+			graphiqEnabled,
+		});
+		return;
 	} else {
 		console.log(chalk.bold("  Let's set up your Signet workspace.\n"));
 
-		const setupMethod = nonInteractive
-			? "new"
-			: await select({
-					message: "How would you like to set up?",
-					choices: [
-						{ value: "new", name: "Create new Signet workspace" },
-						{ value: "github", name: "Import from GitHub repository" },
-					],
-				});
-
-		if (setupMethod === "github") {
-			mkdirSync(basePath, { recursive: true });
-			mkdirSync(join(basePath, "memory"), { recursive: true });
-			await deps.importFromGitHub(basePath);
-			return;
-		}
 		console.log();
 	}
 
-	const defaultIdentityMode: IdentityMode = configuredIdentityMode ?? existingSetupIdentityMode;
-	const identityMode: IdentityMode = nonInteractive
-		? defaultIdentityMode
-		: await promptIdentityMode(defaultIdentityMode);
+	const identityMode: IdentityMode = configuredIdentityMode ?? existingSetupIdentityMode;
 
-	const defaultIdentityPreset: IdentityPresetName = configuredIdentityPreset ?? existingIdentityPreset ?? "minimal";
-	const identityPreset: IdentityPresetName =
-		identityMode === "managed" && !nonInteractive
-			? await select({
-					message: "Identity/context preset:",
-					choices: [
-						{
-							value: "minimal",
-							name: "Minimal — AGENTS.md startup context + DREAMING.md for dreaming sessions",
-							description: "Lowest token use; DREAMING.md is special-session only.",
-						},
-						{
-							value: "hermes",
-							name: "Hermes — SOUL.md primary identity + AGENTS.md/project context",
-							description: "Grounded in Hermes' current SOUL.md and project-context discovery model.",
-						},
-						{
-							value: "openclaw",
-							name: "OpenClaw — rich character-forward identity stack",
-							description: "AGENTS, SOUL, IDENTITY, USER, MEMORY plus special HEARTBEAT/DREAMING/BOOTSTRAP prompts.",
-						},
-						{
-							value: "custom",
-							name: "Custom — choose startup files explicitly",
-							description: "Start from Minimal, then select files and order for token efficiency.",
-						},
-					],
-					default: defaultIdentityPreset,
-				})
-			: defaultIdentityPreset;
+	const identityPreset: IdentityPresetName = configuredIdentityPreset ?? existingIdentityPreset ?? "minimal";
 
-	let startupIdentityFiles = identityMode === "managed" ? cloneStartupFiles(identityPreset) : [];
-	let specialIdentityFiles = identityMode === "managed" ? cloneSpecialFiles(identityPreset) : [];
-	if (identityMode === "managed" && !nonInteractive && identityPreset === "custom") {
-		const availableStartupFiles = [...IDENTITY_PRESETS.openclaw.startup, ...IDENTITY_PRESETS.hermes.startup].filter(
-			(entry, index, entries) => entries.findIndex((candidate) => candidate.path === entry.path) === index,
-		);
-		const selected = await checkbox({
-			message: "Which files should load during normal startup?",
-			choices: availableStartupFiles.map((entry) => toStartupChoice(entry, entry.path === "AGENTS.md")),
-		});
-		startupIdentityFiles = availableStartupFiles.filter((entry) => selected.includes(entry.path));
-		if (startupIdentityFiles.length === 0) startupIdentityFiles = cloneStartupFiles("minimal");
-		specialIdentityFiles = cloneSpecialFiles("custom");
-	}
+	const startupIdentityFiles = identityMode === "managed" ? cloneStartupFiles(identityPreset) : [];
+	const specialIdentityFiles = identityMode === "managed" ? cloneSpecialFiles(identityPreset) : [];
 
 	const configuredName = deps.normalizeStringValue(options.name);
-	const agentName = nonInteractive
-		? configuredName || existingName
-		: await input({
-				message: "What should your agent be called?",
-				default: existingName,
-			});
-
-	const harnessChoices = [
-		{ value: "claude-code", name: "Claude Code (Anthropic CLI)", checked: existingHarnesses.includes("claude-code") },
-		{ value: "codex", name: "Codex", checked: existingHarnesses.includes("codex") },
-		{ value: "kimi", name: "Kimi CLI", checked: existingHarnesses.includes("kimi") },
-		{ value: "opencode", name: "OpenCode", checked: existingHarnesses.includes("opencode") },
-		{ value: "forge", name: "ForgeCode", checked: existingHarnesses.includes("forge") },
-		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },
-		{ value: "oh-my-pi", name: "Oh My Pi", checked: existingHarnesses.includes("oh-my-pi") },
-		{ value: "pi", name: "Pi", checked: existingHarnesses.includes("pi") },
-		{ value: "hermes-agent", name: "Hermes Agent", checked: existingHarnesses.includes("hermes-agent") },
-		{ value: "gemini", name: "Gemini CLI (Google)", checked: existingHarnesses.includes("gemini") },
-	];
+	const agentName = configuredName || existingName;
 
 	let harnesses: HarnessChoice[] = [];
-	if (nonInteractive) {
-		const requestedHarnesses = normalizeHarnessList(options.harness, deps);
 
-		if (requestedHarnesses.length > 0) {
-			harnesses = requestedHarnesses;
-		} else {
-			harnesses = normalizeHarnessList(existingHarnesses, deps);
-		}
+	const requestedHarnesses = normalizeHarnessList(options.harness, deps);
+
+	if (requestedHarnesses.length > 0) {
+		harnesses = requestedHarnesses;
 	} else {
-		console.log();
-		const selectedHarnesses = await checkbox({
-			message: "Which AI platforms do you use?",
-			choices: harnessChoices,
-		});
-		harnesses = normalizeHarnessList(selectedHarnesses, deps);
+		harnesses = normalizeHarnessList(existingHarnesses, deps);
 	}
 
 	let configureOpenClawWs = false;
@@ -1120,48 +686,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		const existingConfigs = connector.getDiscoveredConfigPaths();
 		openclawConfigCount = existingConfigs.length;
 
-		if (nonInteractive) {
-			configureOpenClawWs = options.configureOpenclawWorkspace === true && existingConfigs.length > 0;
-			openclawRuntimePath = deps.normalizeChoice(options.openclawRuntimePath, OPENCLAW_RUNTIME_CHOICES) ?? "plugin";
-		} else {
-			if (existingConfigs.length > 0) {
-				console.log();
-				configureOpenClawWs = await confirm({
-					message: `Set OpenClaw workspace to ${basePath} in ${existingConfigs.length} config file(s)? This can be destructive on OpenClaw uninstall unless backups are configured.`,
-					default: true,
-				});
-			}
-
-			console.log();
-			openclawRuntimePath = await select({
-				message: "OpenClaw integration mode:",
-				choices: [
-					{
-						value: "plugin",
-						name: "Plugin adapter (recommended)",
-						description: "@signetai/signet-memory-openclaw — full lifecycle + memory tools",
-					},
-					{
-						value: "legacy",
-						name: "Legacy hooks",
-						description: "handler.js for /remember, /recall, /context commands",
-					},
-				],
-				default: "plugin",
-			});
-		}
+		configureOpenClawWs = options.configureOpenclawWorkspace === true && existingConfigs.length > 0;
+		openclawRuntimePath = deps.normalizeChoice(options.openclawRuntimePath, OPENCLAW_RUNTIME_CHOICES) ?? "plugin";
 	}
 
 	const configuredDescription = deps.normalizeStringValue(options.description);
-	const agentDescription = nonInteractive
-		? configuredDescription || existingDesc
-		: await input({
-				message: "Short description of your agent:",
-				default: existingDesc,
-			});
+	const agentDescription = configuredDescription || existingDesc;
 
-	const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, nonInteractive, options);
-	const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, nonInteractive, options);
+	const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, options);
+	const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, options);
 
 	// One question covers both how a local daemon binds AND whether to skip a
 	// local daemon entirely in favor of a remote one. (networkMode is irrelevant
@@ -1172,33 +705,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	if (options.remoteUrl && !requestedRemoteUrl) {
 		failSetupValidation("--remote-url must be a bare http:// or https:// origin (no path, query, or credentials).");
 	}
-	if (nonInteractive) {
-		networkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
-		daemonUrl = requestedRemoteUrl ?? undefined;
-	} else {
-		console.log();
-		const hosting = await select({
-			message: "How should the daemon run?",
-			choices: [
-				{ value: "local", name: "Local — this machine (localhost only)" },
-				{ value: "tailscale", name: "Local — this machine (Tailscale / network)" },
-				{ value: "remote", name: "Remote — connect to a daemon elsewhere" },
-			],
-			default: existingNetworkMode === "tailscale" ? "tailscale" : "local",
-		});
-		if (hosting === "remote") {
-			const urlInput = await input({
-				message: "Remote daemon URL:",
-				validate: (value) =>
-					normalizeDaemonOrigin(value) !== undefined ||
-					"Enter a bare http:// or https:// origin (no path, query, or credentials).",
-			});
-			daemonUrl = normalizeDaemonOrigin(urlInput) ?? undefined;
-			networkMode = "localhost"; // no local daemon to bind
-		} else {
-			networkMode = hosting === "tailscale" ? "tailscale" : "localhost";
-		}
-	}
+
+	networkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
+	daemonUrl = requestedRemoteUrl ?? undefined;
 
 	// Deployment type only tailors non-interactive/reconfigure defaults (e.g.
 	// VPS prefers non-local extraction providers). It has no effect in the
@@ -1207,22 +716,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const deploymentType: DeploymentTypeChoice = requestedDeploymentType ?? "local";
 
 	let embeddingProvider: EmbeddingProviderChoice;
-	if (nonInteractive) {
-		const providerFromConfig = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
-		embeddingProvider =
-			requestedEmbeddingProvider ?? providerFromConfig ?? defaultEmbeddingProviderForDeployment(deploymentType);
-	} else {
-		console.log();
-		embeddingProvider = await select({
-			message: "How should memories be embedded for search?",
-			choices: [
-				{ value: "native", name: "Built-in (recommended, no setup required)" },
-				{ value: "ollama", name: "Ollama (local, requires ollama install)" },
-				{ value: "openai", name: "OpenAI API" },
-				{ value: "none", name: "Skip embeddings for now" },
-			],
-		});
-	}
+
+	const providerFromConfig = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
+	embeddingProvider =
+		requestedEmbeddingProvider ?? providerFromConfig ?? defaultEmbeddingProviderForDeployment(deploymentType);
 
 	let embeddingModel = "nomic-embed-text";
 	let embeddingDimensions = 768;
@@ -1231,249 +728,100 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		embeddingModel = "nomic-embed-text-v1.5";
 		embeddingDimensions = 768;
 	} else if (embeddingProvider === "ollama") {
-		if (nonInteractive) {
-			const configuredModel =
-				deps.normalizeStringValue(options.embeddingModel) ||
-				deps.normalizeStringValue(existingEmbedding.model) ||
-				"nomic-embed-text";
-			embeddingModel = configuredModel;
-			embeddingDimensions = getEmbeddingDimensions(configuredModel);
+		const configuredModel =
+			deps.normalizeStringValue(options.embeddingModel) ||
+			deps.normalizeStringValue(existingEmbedding.model) ||
+			"nomic-embed-text";
+		embeddingModel = configuredModel;
+		embeddingDimensions = getEmbeddingDimensions(configuredModel);
 
-			const ollamaCheck = await validateOllamaModelNonInteractive(configuredModel);
-			if (!ollamaCheck.available || !ollamaCheck.modelInstalled) {
-				console.log(chalk.yellow(`  ⚠ ${ollamaCheck.error ?? "Ollama embedding model not available"}`));
-				console.log(chalk.yellow("  Downgrading embedding provider to 'native' (built-in ONNX)."));
-				embeddingProvider = "native";
-				embeddingModel = "nomic-embed-text-v1.5";
-				embeddingDimensions = 768;
-			}
-		} else {
-			console.log();
-			const model = await select({
-				message: "Which embedding model?",
-				choices: [
-					{ value: "nomic-embed-text", name: "nomic-embed-text (768d, recommended)" },
-					{ value: "all-minilm", name: "all-minilm (384d, faster)" },
-					{ value: "mxbai-embed-large", name: "mxbai-embed-large (1024d, better quality)" },
-				],
-			});
-
-			const preflight = await preflightOllamaEmbedding(model);
-			embeddingProvider = preflight.provider;
-			embeddingModel = preflight.model ?? embeddingModel;
-			embeddingDimensions = preflight.dimensions ?? embeddingDimensions;
+		const ollamaCheck = await validateOllamaModelNonInteractive(configuredModel);
+		if (!ollamaCheck.available || !ollamaCheck.modelInstalled) {
+			console.log(chalk.yellow(`  ⚠ ${ollamaCheck.error ?? "Ollama embedding model not available"}`));
+			console.log(chalk.yellow("  Downgrading embedding provider to 'native' (built-in ONNX)."));
+			embeddingProvider = "native";
+			embeddingModel = "nomic-embed-text-v1.5";
+			embeddingDimensions = 768;
 		}
 	} else if (embeddingProvider === "openai") {
-		if (nonInteractive) {
-			const configuredModel =
-				deps.normalizeChoice(options.embeddingModel, ["text-embedding-3-small", "text-embedding-3-large"]) ||
-				deps.normalizeChoice(existingEmbedding.model, ["text-embedding-3-small", "text-embedding-3-large"]) ||
-				"text-embedding-3-small";
-			embeddingModel = configuredModel;
-			embeddingDimensions = getEmbeddingDimensions(configuredModel);
-		} else {
-			const openaiModel = await promptOpenAIEmbeddingModel();
-			embeddingModel = openaiModel.model;
-			embeddingDimensions = openaiModel.dimensions;
-		}
+		const configuredModel =
+			deps.normalizeChoice(options.embeddingModel, ["text-embedding-3-small", "text-embedding-3-large"]) ||
+			deps.normalizeChoice(existingEmbedding.model, ["text-embedding-3-small", "text-embedding-3-large"]) ||
+			"text-embedding-3-small";
+		embeddingModel = configuredModel;
+		embeddingDimensions = getEmbeddingDimensions(configuredModel);
 	}
 
 	const existingSearchBalance = deps.parseSearchBalanceValue(existingSearch.alpha);
 	const requestedSearchBalance = deps.parseSearchBalanceValue(options.searchBalance);
-	const searchBalance = nonInteractive
-		? (requestedSearchBalance ?? existingSearchBalance ?? 0.7)
-		: await select({
-				message: "Search style (semantic vs keyword matching):",
-				choices: [
-					{ value: 0.7, name: "Balanced (70% semantic, 30% keyword) - recommended" },
-					{ value: 0.9, name: "Semantic-heavy (90% semantic, 10% keyword)" },
-					{ value: 0.5, name: "Equal (50/50)" },
-					{ value: 0.3, name: "Keyword-heavy (30% semantic, 70% keyword)" },
-				],
-			});
+	const searchBalance = requestedSearchBalance ?? existingSearchBalance ?? 0.7;
 
 	const existingSetupExtractionProvider =
 		deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
 		deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
 	let extractionProvider: ExtractionProviderChoice;
-	let extractionConnect: { family: string; connectMethod: "api" | "oauth" } | undefined;
-	let extractionCredential: CapturedCredential | undefined;
-	// Declared before the provider-selection block so the connect sub-flow can
-	// assign it (avoids a temporal-dead-zone ReferenceError); the per-provider
-	// model branches below overwrite it for non-connect providers.
 	let extractionModel = "haiku";
-	if (nonInteractive) {
-		extractionProvider = resolveSetupExtractionProvider({
-			deploymentType,
-			requestedProvider: requestedExtractionProvider,
-			providerFromConfig: existingSetupExtractionProvider,
-			preserveExisting: false,
-			detectedProvider,
-			availableProviders: availableToolExtractionProviders,
-			preferredHarnesses: harnesses,
-		});
-	} else {
-		console.log();
-		console.log(chalk.yellow("  Background inference runs continuously — remote APIs can incur usage costs."));
-		console.log();
-		// Loop so a connect sub-flow can return to this menu on "← back".
-		for (;;) {
-			const chosen = await select<string>({
-				message: "Background inference provider:",
-				choices: [
-					{ value: "__oauth__", name: "Log in (Claude Max, ChatGPT, GitHub Copilot)" },
-					{ value: "__apikey__", name: "API key (Anthropic, OpenRouter, OpenAI, …)" },
-					{
-						value: "acpx",
-						name: `ACPX (harness subprocess)${detectedProvider === "acpx" ? " — detected" : ""}`,
-					},
-					{ value: "openai-compatible", name: "Custom endpoint (OpenAI-compatible URL)" },
-					{ value: "none", name: "Disable background inference" },
-				],
-			});
-			if (chosen === "__oauth__") {
-				const connected = await pickConnectedProvider(oauthProviderOptions(), "oauth", { select, search, input });
-				if (connected) {
-					extractionConnect = { family: connected.family, connectMethod: connected.connectMethod };
-					extractionCredential = connected;
-					extractionModel = connected.model;
-					extractionProvider = connected.family as ExtractionProviderChoice;
-					break;
-				}
-			} else if (chosen === "__apikey__") {
-				const connected = await pickConnectedProvider(apiKeyProviderOptions(), "api", { select, search, input });
-				if (connected) {
-					extractionConnect = { family: connected.family, connectMethod: connected.connectMethod };
-					extractionCredential = connected;
-					extractionModel = connected.model;
-					extractionProvider = connected.family as ExtractionProviderChoice;
-					break;
-				}
-			} else {
-				extractionProvider = chosen as ExtractionProviderChoice;
-				break;
-			}
-		}
-	}
 
-	if (extractionConnect) {
-		// Model was chosen in the connect sub-flow; skip the legacy per-provider
-		// model branches (they don't cover the connect families).
-	} else if (extractionProvider === "acpx") {
-		if (nonInteractive) {
-			extractionModel =
-				deps.normalizeStringValue(options.extractionModel) ||
-				deps.normalizeStringValue(existingPipeline.extractionModel) ||
-				deps.normalizeStringValue(existingExtraction.model) ||
-				defaultAcpxModel(harnesses, availableToolExtractionProviders);
-		} else {
-			console.log();
-			extractionModel = await select({
-				message: "Which model should ACPX ask the selected harness to use for background inference?",
-				choices: modelChoices("acpx"),
-			});
-		}
+	extractionProvider = resolveSetupExtractionProvider({
+		deploymentType,
+		requestedProvider: requestedExtractionProvider,
+		providerFromConfig: existingSetupExtractionProvider,
+		preserveExisting: false,
+		detectedProvider,
+		availableProviders: availableToolExtractionProviders,
+		preferredHarnesses: harnesses,
+	});
+
+	if (extractionProvider === "acpx") {
+		extractionModel =
+			deps.normalizeStringValue(options.extractionModel) ||
+			deps.normalizeStringValue(existingPipeline.extractionModel) ||
+			deps.normalizeStringValue(existingExtraction.model) ||
+			defaultAcpxModel(harnesses, availableToolExtractionProviders);
 	} else if (extractionProvider === "claude-code") {
-		if (nonInteractive) {
-			extractionModel =
-				deps.normalizeStringValue(options.extractionModel) ||
-				deps.normalizeStringValue(existingPipeline.extractionModel) ||
-				deps.normalizeStringValue(existingExtraction.model) ||
-				defaultExtractionModel("claude-code");
-		} else {
-			console.log();
-			extractionModel = await select({
-				message: "Which Claude model for extraction?",
-				choices: modelChoices("claude-code"),
-			});
-		}
+		extractionModel =
+			deps.normalizeStringValue(options.extractionModel) ||
+			deps.normalizeStringValue(existingPipeline.extractionModel) ||
+			deps.normalizeStringValue(existingExtraction.model) ||
+			defaultExtractionModel("claude-code");
 	} else if (extractionProvider === "codex") {
-		if (nonInteractive) {
-			extractionModel =
-				deps.normalizeStringValue(options.extractionModel) ||
-				deps.normalizeStringValue(existingPipeline.extractionModel) ||
-				deps.normalizeStringValue(existingExtraction.model) ||
-				defaultExtractionModel("codex");
-		} else {
-			console.log();
-			extractionModel = await select({
-				message: "Which Codex model for extraction?",
-				choices: modelChoices("codex"),
-			});
-		}
+		extractionModel =
+			deps.normalizeStringValue(options.extractionModel) ||
+			deps.normalizeStringValue(existingPipeline.extractionModel) ||
+			deps.normalizeStringValue(existingExtraction.model) ||
+			defaultExtractionModel("codex");
 	} else if (extractionProvider === "opencode") {
-		if (nonInteractive) {
-			extractionModel =
-				deps.normalizeStringValue(options.extractionModel) ||
-				deps.normalizeStringValue(existingPipeline.extractionModel) ||
-				deps.normalizeStringValue(existingExtraction.model) ||
-				defaultExtractionModel("opencode");
-		} else {
-			console.log();
-			extractionModel = await select({
-				message: "Which model for OpenCode extraction? (provider/model format)",
-				choices: modelChoices("opencode"),
-			});
-		}
+		extractionModel =
+			deps.normalizeStringValue(options.extractionModel) ||
+			deps.normalizeStringValue(existingPipeline.extractionModel) ||
+			deps.normalizeStringValue(existingExtraction.model) ||
+			defaultExtractionModel("opencode");
 	} else if (extractionProvider === "openrouter") {
-		if (nonInteractive) {
-			extractionModel =
-				deps.normalizeStringValue(options.extractionModel) ||
-				deps.normalizeStringValue(existingPipeline.extractionModel) ||
-				deps.normalizeStringValue(existingExtraction.model) ||
-				defaultExtractionModel("openrouter");
-		} else {
-			console.log();
-			extractionModel = await select({
-				message: "Which OpenRouter model for extraction? (provider/model format)",
-				choices: modelChoices("openrouter"),
-			});
-		}
+		extractionModel =
+			deps.normalizeStringValue(options.extractionModel) ||
+			deps.normalizeStringValue(existingPipeline.extractionModel) ||
+			deps.normalizeStringValue(existingExtraction.model) ||
+			defaultExtractionModel("openrouter");
 	} else if (extractionProvider === "openai-compatible") {
-		if (nonInteractive) {
-			extractionModel =
-				deps.normalizeStringValue(options.extractionModel) ||
-				deps.normalizeStringValue(existingPipeline.extractionModel) ||
-				deps.normalizeStringValue(existingExtraction.model) ||
-				defaultExtractionModel("openai-compatible");
-		} else {
-			console.log();
-			extractionModel = await select({
-				message: "Which OpenAI-compatible model for extraction?",
-				choices: modelChoices("openai-compatible"),
-			});
-		}
+		extractionModel =
+			deps.normalizeStringValue(options.extractionModel) ||
+			deps.normalizeStringValue(existingPipeline.extractionModel) ||
+			deps.normalizeStringValue(existingExtraction.model) ||
+			defaultExtractionModel("openai-compatible");
 	} else if (extractionProvider === "ollama") {
-		if (nonInteractive) {
-			extractionModel =
-				deps.normalizeStringValue(options.extractionModel) ||
-				deps.normalizeStringValue(existingPipeline.extractionModel) ||
-				deps.normalizeStringValue(existingExtraction.model) ||
-				defaultExtractionModel("ollama");
-		} else {
-			console.log();
-			extractionModel = await select({
-				message: "Which Ollama model for extraction?",
-				choices: modelChoices("ollama"),
-			});
-		}
+		extractionModel =
+			deps.normalizeStringValue(options.extractionModel) ||
+			deps.normalizeStringValue(existingPipeline.extractionModel) ||
+			deps.normalizeStringValue(existingExtraction.model) ||
+			defaultExtractionModel("ollama");
 	}
 
-	let extractionEndpoint = resolveSetupExtractionEndpoint({
+	const extractionEndpoint = resolveSetupExtractionEndpoint({
 		provider: extractionProvider,
 		requestedEndpoint: requestedExtractionEndpoint,
 		existingProvider: existingSetupExtractionProvider,
 		existingEndpoint: existingExtractionEndpoint,
 	});
-	if (!nonInteractive && extractionProvider === "openai-compatible") {
-		console.log();
-		const endpointInput = await input({
-			message: "OpenAI-compatible endpoint:",
-			default: extractionEndpoint ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
-			validate: (value) => normalizeHttpEndpoint(value) !== undefined || "Enter an http:// or https:// URL.",
-		});
-		extractionEndpoint = normalizeHttpEndpoint(endpointInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
-	}
 
 	// Optional distinct provider for aggregate recall (query-time evidence
 	// synthesis). pi-ai-only (no harness subprocess). When unset, aggregate
@@ -1481,92 +829,30 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	let aggregateRecallProvider: string | undefined;
 	let aggregateRecallModel: string | undefined;
 	let aggregateRecallEndpoint: string | undefined;
-	if (nonInteractive) {
-		aggregateRecallProvider =
-			deps.normalizeChoice(options.aggregateRecallProvider, aggregateRecallProviderIds()) ?? undefined ?? undefined;
-		aggregateRecallModel = deps.normalizeStringValue(options.aggregateRecallModel) ?? undefined;
-		aggregateRecallEndpoint =
-			normalizeHttpEndpoint(deps.normalizeStringValue(options.aggregateRecallEndpoint)) ??
-			(aggregateRecallProvider === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT : undefined);
-	} else if (extractionProvider !== "none") {
-		const distinctAggregateRecall = await confirm({
-			message:
-				"Use a different provider for aggregate recall? (query-time evidence synthesis — defaults to your extraction provider)",
-			default: false,
-		});
-		if (distinctAggregateRecall) {
-			console.log();
-			// Fresh setup can safely configure keyless local servers and OpenRouter,
-			// whose existing OPENROUTER_API_KEY environment contract the router uses.
-			// Other cloud families must be connected in the dashboard first.
-			const aggProviders = [{ id: "openrouter", name: "OpenRouter" }, ...LOCAL_SERVERS];
-			aggregateRecallProvider = await select({
-				message: "Aggregate-recall provider:",
-				choices: aggProviders.map((p) => ({ value: p.id, name: p.name })),
-			});
-			console.log();
-			aggregateRecallModel = await pickModel(modelOptions(aggregateRecallProvider), { select, search, input });
-			if (aggregateRecallProvider === "openai-compatible") {
-				const epInput = await input({
-					message: "Aggregate-recall endpoint:",
-					default: DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
-					validate: (value) => normalizeHttpEndpoint(value) !== undefined || "Enter an http:// or https:// URL.",
-				});
-				aggregateRecallEndpoint = normalizeHttpEndpoint(epInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
-			}
-		}
-	}
 
-	const wantAdvanced = nonInteractive
-		? false
-		: await confirm({
-				message: "Configure advanced settings?",
-				default: false,
-			});
+	aggregateRecallProvider =
+		deps.normalizeChoice(options.aggregateRecallProvider, aggregateRecallProviderIds()) ?? undefined ?? undefined;
+	aggregateRecallModel = deps.normalizeStringValue(options.aggregateRecallModel) ?? undefined;
+	aggregateRecallEndpoint =
+		normalizeHttpEndpoint(deps.normalizeStringValue(options.aggregateRecallEndpoint)) ??
+		(aggregateRecallProvider === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT : undefined);
 
-	let searchTopK = deps.parseIntegerValue(existingSearch.top_k) ?? 20;
-	let searchMinScore = deps.parseSearchBalanceValue(existingSearch.min_score) ?? 0.3;
-	let memorySessionBudget = deps.parseIntegerValue(existingMemory.session_budget) ?? 2000;
-	let memoryDecayRate = deps.parseSearchBalanceValue(existingMemory.decay_rate) ?? 0.95;
+	const searchTopK = deps.parseIntegerValue(existingSearch.top_k) ?? 20;
+	const searchMinScore = deps.parseSearchBalanceValue(existingSearch.min_score) ?? 0.3;
+	const memorySessionBudget = deps.parseIntegerValue(existingMemory.session_budget) ?? 2000;
+	const memoryDecayRate = deps.parseSearchBalanceValue(existingMemory.decay_rate) ?? 0.95;
 
-	if (wantAdvanced) {
-		console.log();
-		console.log(chalk.dim("  Advanced settings:\n"));
-
-		const topKInput = await input({ message: "Search candidates per source (top_k):", default: "20" });
-		searchTopK = Number.parseInt(topKInput, 10) || 20;
-
-		const minScoreInput = await input({ message: "Minimum search score threshold (0-1):", default: "0.3" });
-		searchMinScore = Number.parseFloat(minScoreInput) || 0.3;
-
-		const budgetInput = await input({ message: "Session context budget (characters):", default: "2000" });
-		memorySessionBudget = Number.parseInt(budgetInput, 10) || 2000;
-
-		const decayInput = await input({ message: "Memory importance decay rate per day (0-1):", default: "0.95" });
-		memoryDecayRate = Number.parseFloat(decayInput) || 0.95;
-	}
-
-	const dreamingEnabled = nonInteractive
-		? options.enableDreaming === true
-		: await confirm({
-				message: "Enable dreaming (background memory consolidation)?",
-				default: false,
-			});
+	const dreamingEnabled = options.enableDreaming === true;
 
 	let gitEnabled = false;
-	const shouldSkipGit = nonInteractive && options.skipGit === true;
+	const shouldSkipGit = options.skipGit === true;
 
 	if (existing.agentsDir) {
 		if (deps.isGitRepo(basePath)) {
 			gitEnabled = true;
 			console.log(chalk.dim("  Git repo detected. Will create backup commit before changes."));
 		} else if (!shouldSkipGit) {
-			const initGit = nonInteractive
-				? true
-				: await confirm({
-						message: "Initialize git for version history?",
-						default: true,
-					});
+			const initGit = true;
 
 			if (initGit) {
 				const initialized = await deps.gitInit(basePath);
@@ -1579,12 +865,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			}
 		}
 	} else if (!shouldSkipGit) {
-		const initGit = nonInteractive
-			? true
-			: await confirm({
-					message: "Initialize git for version history?",
-					default: true,
-				});
+		const initGit = true;
 		gitEnabled = initGit;
 	}
 
@@ -1592,65 +873,24 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	// a memory read-policy; the daemon reconciles agents.roster into the
 	// `agents` table at boot (syncAgentRoster).
 	const agents: { name: string; memoryPolicy: "isolated" | "shared" | "group"; memoryGroup?: string }[] = [];
-	if (nonInteractive) {
-		const seen = new Set<string>();
-		for (const raw of options.agent ?? []) {
-			const parsed = parseAgentFlag(raw);
-			if (seen.has(parsed.name)) {
-				console.warn(chalk.yellow(`  ⚠ duplicate --agent "${parsed.name}" ignored`));
-				continue;
-			}
-			seen.add(parsed.name);
-			agents.push(parsed);
+
+	const seen = new Set<string>();
+	for (const raw of options.agent ?? []) {
+		const parsed = parseAgentFlag(raw);
+		if (seen.has(parsed.name)) {
+			console.warn(chalk.yellow(`  ⚠ duplicate --agent "${parsed.name}" ignored`));
+			continue;
 		}
-	} else {
-		let adding = await confirm({ message: "Add a named agent to the roster?", default: false });
-		while (adding) {
-			const name = await input({ message: "Agent name:" });
-			if (!name.trim()) break;
-			const nameErr = validateName(name.trim());
-			if (nameErr) {
-				console.log(chalk.yellow(`  ⚠ ${nameErr}`));
-				continue;
-			}
-			if (agents.some((a) => a.name === name.trim())) {
-				console.log(chalk.yellow(`  ⚠ An agent named "${name.trim()}" is already in the roster.`));
-				continue;
-			}
-			const memoryPolicy = await select({
-				message: `Memory policy for ${name}:`,
-				choices: [
-					{ value: "isolated", name: "Isolated — private memory scope" },
-					{ value: "shared", name: "Shared — reads the default agent's memory" },
-					{ value: "group", name: "Group — shared memory scope with a group" },
-				],
-				default: "isolated",
-			});
-			let memoryGroup: string | undefined;
-			if (memoryPolicy === "group") {
-				memoryGroup = (await input({ message: "Group name:", default: name })) || name;
-			}
-			agents.push({ name: name.trim(), memoryPolicy, memoryGroup });
-			adding = await confirm({ message: "Add another agent?", default: false });
-		}
+		seen.add(parsed.name);
+		agents.push(parsed);
 	}
 
 	// Obsidian vault sources (config files the daemon indexes at boot).
 	const sources: { type: "obsidian"; path: string; name?: string }[] = [];
-	if (nonInteractive) {
-		for (const raw of options.obsidianSource ?? []) {
-			const [path, name] = raw.split("::").map((p) => p.trim());
-			if (path) sources.push({ type: "obsidian", path, name: name || undefined });
-		}
-	} else {
-		let addingSource = await confirm({ message: "Connect an Obsidian vault?", default: false });
-		while (addingSource) {
-			const path = await input({ message: "Vault path:", default: basePath });
-			if (!path.trim()) break;
-			const name = (await input({ message: "Source name (optional):" })).trim() || undefined;
-			sources.push({ type: "obsidian", path: path.trim(), name });
-			addingSource = await confirm({ message: "Connect another vault?", default: false });
-		}
+
+	for (const raw of options.obsidianSource ?? []) {
+		const [path, name] = raw.split("::").map((p) => p.trim());
+		if (path) sources.push({ type: "obsidian", path, name: name || undefined });
 	}
 
 	const plan: SetupPlan = {
@@ -1666,7 +906,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionProvider,
 		extractionModel,
 		extractionEndpoint,
-		extractionConnect,
 		aggregateRecallProvider,
 		aggregateRecallModel,
 		aggregateRecallEndpoint,
@@ -1691,16 +930,13 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const context: SetupApplyContext = {
 		basePath,
 		existingAgentsDir: existing.agentsDir,
-		nonInteractive,
+		nonInteractive: true,
 		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 		createLocalBackup: options.createLocalBackup === true,
 		availableExtractionProviders: availableToolExtractionProviders,
 		acpxBin,
 		openclawConfigCount,
 		openDashboard: options.openDashboard === true,
-		connectExtraction: nonInteractive
-			? undefined
-			: buildConnectExtraction(basePath, deps.DEFAULT_PORT, extractionCredential),
 	};
 
 	// Enforce the same cross-field invariants the headless --file path gets via
@@ -1716,80 +952,26 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		return;
 	}
 
-	if (!nonInteractive) {
-		console.log();
-		console.log(renderSetupPlanSummary(plan));
-		console.log();
-		const applyNow = await confirm({ message: "Apply this plan?", default: true });
-		if (!applyNow) {
-			console.log(chalk.dim("  Setup cancelled. No changes were made."));
-			return;
-		}
-	}
-
 	await runFreshSetup(plan, context, deps);
 }
 
 async function resolveGraphiqPluginSelection(
 	basePath: string,
-	nonInteractive: boolean,
 	options: SetupWizardOptions,
 ): Promise<boolean> {
 	const current = readSetupCorePluginEnabled(basePath, "signet.graphiq");
 	const defaultEnabled = current ?? false;
 	if (options.withGraphiq === true) return true;
 	if (options.disableGraphiq === true) return false;
-	if (nonInteractive) return defaultEnabled;
-
-	console.log();
-	console.log(chalk.bold("  Optional code retrieval"));
-	console.log(
-		chalk.dim(
-			"    GraphIQ is a managed plugin for fast local codebase indexing, symbol search, structural context, constants, and blast-radius analysis.",
-		),
-	);
-	console.log(
-		chalk.dim(
-			"    It stores each project index outside Signet memory at <project>/.graphiq/ and Signet only remembers the active indexed project.",
-		),
-	);
-	console.log();
-	return confirm({
-		message: "Install GraphIQ for better code retrieval/context?",
-		default: defaultEnabled,
-	});
+	return defaultEnabled;
 }
 
 async function resolveSignetSecretsCorePluginSelection(
 	basePath: string,
-	nonInteractive: boolean,
 	options: SetupWizardOptions,
 ): Promise<boolean> {
 	const current = readSetupCorePluginEnabled(basePath);
 	const defaultEnabled = current ?? true;
 	if (options.disableSignetSecrets === true) return false;
-	if (nonInteractive) return defaultEnabled;
-
-	console.log();
-	console.log(chalk.bold("  Core plugins"));
-	console.log(
-		chalk.dim(
-			"    Signet Secrets is a bundled core plugin for storing reusable credentials outside chat, memory, logs, and source files.",
-		),
-	);
-	console.log(
-		chalk.dim(
-			"    It connects to Signet's encrypted local store and 1Password references, with value-safe CLI/MCP/SDK helpers and command output redaction.",
-		),
-	);
-	console.log(
-		chalk.dim(
-			"    This is safer than pasting API keys into prompts because agents can list names and run commands with injected values without reading raw secrets.",
-		),
-	);
-	console.log();
-	return confirm({
-		message: "Install and enable the Signet Secrets core plugin?",
-		default: defaultEnabled,
-	});
+	return defaultEnabled;
 }

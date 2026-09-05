@@ -119,27 +119,12 @@ describe("setupPlanSchema", () => {
 		expect(parseSetupPlan(plan).aggregateRecallProvider).toBe("openrouter");
 	});
 
-	it("accepts a connected extraction provider decision", () => {
-		const plan = basePlan({
-			extractionProvider: "anthropic",
-			extractionConnect: { family: "anthropic", connectMethod: "oauth" },
-		});
-		expect(parseSetupPlan(plan).extractionConnect).toEqual({ family: "anthropic", connectMethod: "oauth" });
+	it("rejects the retired credential-capture setup plan field", () => {
+		expect(() =>
+			parseSetupPlan({ ...basePlan(), extractionConnect: { family: "openai-codex", connectMethod: "oauth" } }),
+		).toThrow("extractionConnect");
 	});
 
-	it("rejects a model key on extractionConnect (the model lives in extractionModel)", () => {
-		// Regression: the wizard used to assign the whole {family,connectMethod,model}
-		// object, which the strict schema rejected with 'Unrecognized key: model'.
-		expect(() =>
-			parseSetupPlan(
-				basePlan({
-					extractionProvider: "openai-codex",
-					extractionModel: "gpt-5.5",
-					extractionConnect: { family: "openai-codex", connectMethod: "oauth", model: "gpt-5.5" } as never,
-				}),
-			),
-		).toThrow("model");
-	});
 
 	it("accepts a multi-agent roster", () => {
 		const plan = basePlan({
@@ -182,16 +167,6 @@ describe("setupPlanSchema", () => {
 		expect(() => parseSetupPlan(basePlan({ aggregateRecallProvider: "openrouter" }))).toThrow("aggregateRecallModel");
 	});
 
-	it("rejects a connected provider whose family differs from extractionProvider", () => {
-		expect(() =>
-			parseSetupPlan(
-				basePlan({
-					extractionProvider: "anthropic",
-					extractionConnect: { family: "openrouter", connectMethod: "api" },
-				}),
-			),
-		).toThrow("extractionConnect.family");
-	});
 
 	it("accepts a remote daemon URL", () => {
 		const plan = basePlan({ daemonUrl: "https://signet.remote.example:8443" });

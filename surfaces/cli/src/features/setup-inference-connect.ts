@@ -1,71 +1,5 @@
-/**
- * Provider-connect model for `signet setup` — sources providers and models
- * directly from pi-ai (the SAME catalog the dashboard and daemon use), so
- * there is a single source of truth and no hand-maintained list to drift.
- *
- * The dashboard drives connect through the daemon HTTP API; this module holds
- * the PURE pieces (catalog lookups, naming, config shapes) for unit testing.
- * The imperative connect steps (OAuth SSE, secret writes) live in
- * setup-connect.ts and talk to the daemon the same way the dashboard does.
- *
- * Config shapes are verified against:
- *  - dashboard `InferenceSection.writeTarget` / `ensureAccount`
- *  - dashboard `ConnectProviderDialog.linkAccountForApiKey` / `linkOAuthAccountForProvider`
- *  - daemon `inference-oauth.secretName` (SIGNET_OAUTH_<hex>) and `secrets.putSecret`
- */
-import type { Api, Model, OAuthCredentials } from "@earendil-works/pi-ai";
-import { builtinProviders, getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
-
-export interface ProviderOption {
-	readonly id: string;
-	readonly name: string;
-}
-
-function titleCase(id: string): string {
-	return id
-		.split(/[-_]/)
-		.map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1) : w))
-		.join(" ");
-}
-
-/**
- * Providers that accept a login (OAuth subscription) — from pi-ai's OAuth
- * registry (Claude Max / ChatGPT / GitHub Copilot). These are the only ids the
- * daemon's `/api/inference/oauth/login/:id` will accept.
- */
-export function oauthProviderOptions(): ProviderOption[] {
-	return builtinProviders()
-		.filter((provider) => provider.auth.oauth !== undefined)
-		.map((provider) => ({ id: provider.id, name: provider.name }));
-}
-
-/**
- * Providers that accept a pasted API key — the pi-ai catalog families, minus the
- * OAuth-only subscription providers (which have no API-key surface). anthropic
- * is kept because it accepts BOTH OAuth and an API key.
- */
-export function apiKeyProviderOptions(): ProviderOption[] {
-	return builtinProviders()
-		.filter((provider) => provider.auth.apiKey !== undefined)
-		.map((provider) => ({ id: provider.id, name: titleCase(provider.id) }));
-}
-
-/**
- * The real model list for a provider family — from pi-ai's model registry, the
- * same data the dashboard's model picker uses. When OAuth credentials are
- * supplied, the provider's modifyModels() is applied (e.g. GitHub Copilot
- * adjusts its model set based on the authenticated account). Never a guess.
- */
-export function modelOptions(family: string, credentials?: OAuthCredentials): ProviderOption[] {
-	let models = getModels(family as Parameters<typeof getModels>[0]) as readonly Model<Api>[];
-	if (credentials) {
-		const provider = builtinProviders().find((candidate) => candidate.id === family);
-		if (provider?.filterModels) {
-			models = provider.filterModels(models, { type: "oauth", ...credentials });
-		}
-	}
-	return models.map((m) => ({ id: m.id, name: m.name || m.id }));
-}
+/** Canonical routing fragments for scripted setup. Provider login belongs to the daemon. */
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 /** All connectable provider ids (OAuth + API-key families). */
 export function connectableProviderIds(): readonly string[] {
@@ -100,15 +34,6 @@ export type ExtractionBackendKind = "cloud" | "local" | "acpx" | "none";
  */
 export function providerKeySecretName(family: string): string {
 	return `SIGNET_KEY_${family.replace(/[^A-Z0-9_]/gi, "_").toUpperCase()}`;
-}
-
-/**
- * Stable secret name for stored OAuth credentials. Mirrors the daemon's
- * `inference-oauth.secretName` (SIGNET_OAUTH_<UPPERHEX>) so the daemon's
- * `loadOAuthCredentials` finds what setup wrote.
- */
-export function oauthSecretName(providerId: string): string {
-	return `SIGNET_OAUTH_${Buffer.from(providerId, "utf8").toString("hex").toUpperCase()}`;
 }
 
 /** Routing account entry for an API-key-connected provider. */

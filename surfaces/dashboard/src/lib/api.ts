@@ -1088,7 +1088,7 @@ export const api = {
 
 	// Config files (settings: agent.yaml read/write)
 	getConfigFiles: async (): Promise<ConfigFile[]> => {
-		const data = await getJSON<{ files?: ConfigFile[] }>("/api/config");
+		const data = await getJSON<{ files?: ConfigFile[] }>("/api/config", { signal: AbortSignal.timeout(10_000) });
 		return data?.files ?? [];
 	},
 	saveConfigFile: async (file: string, content: string): Promise<SaveConfigResult> => {
@@ -1097,6 +1097,7 @@ export const api = {
 				method: "POST",
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify({ file, content }),
+				signal: AbortSignal.timeout(10_000),
 			});
 			if (res.ok) return { ok: true, status: res.status };
 			const body = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -1133,12 +1134,13 @@ export { postJSON };
  * EventSource, since the login is a POST). The session id arrives either in
  * the X-Signet-OAuth-Session-Id response header or the first `session` event.
  */
-export async function startOAuthLogin(providerId: string, onConnected?: () => void): Promise<OAuthLoginHandle> {
+export function startOAuthLogin(providerId: string): OAuthLoginHandle {
 	const handlers: Array<(event: OAuthLoginEvent) => void> = [];
 	const errorHandlers: Array<(message: string) => void> = [];
 	const controller = new AbortController();
 	let closed = false;
 	let capturedSessionId: string | null = null;
+	let terminal = false;
 
 	const emitError = (message: string) => {
 		if (closed) return;
@@ -1148,7 +1150,7 @@ export async function startOAuthLogin(providerId: string, onConnected?: () => vo
 	const pump = fetch(`${API_BASE}/api/inference/oauth/login/${encodeURIComponent(providerId)}`, {
 		method: "POST",
 		headers: { Accept: "text/event-stream", ...authHeaders() },
-		signal: controller.signal,
+		signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10 * 60_000)]),
 	})
 		.then(async (response) => {
 			if (!response.ok || !response.body) {
@@ -1181,10 +1183,12 @@ export async function startOAuthLogin(providerId: string, onConnected?: () => vo
 						continue;
 					}
 					if (event.type === "session") capturedSessionId = event.sessionId;
-					if (event.type === "connected") onConnected?.();
+					if (closed) return;
+					if (event.type === "connected" || event.type === "error") terminal = true;
 					for (const h of handlers) h(event);
 				}
 			}
+			if (!closed && !terminal) throw new Error("Sign-in ended before the connection was saved. Try again.");
 		})
 		.catch((error: unknown) => {
 			if (closed) return;
@@ -1214,6 +1218,7 @@ export async function completeOAuthInteraction(sessionId: string, responseId: st
 		method: "POST",
 		headers: { "Content-Type": "application/json", ...authHeaders() },
 		body: JSON.stringify({ sessionId, responseId, value }),
+		signal: AbortSignal.timeout(10_000),
 	});
 	return res.ok;
 }

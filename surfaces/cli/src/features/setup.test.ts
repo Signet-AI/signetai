@@ -9,11 +9,11 @@ import {
 	readGraphiqState,
 	updateGraphiqActiveProject,
 } from "@signet/core";
-import { runFreshSetup } from "./setup-fresh.js";
+import * as openUrl from "../lib/open-url.js";
 import { detectedHarnessesForExistingSetup, runExistingSetupWizard } from "./setup-migrate.js";
 import { parseSetupPlan } from "./setup-plan.js";
 import type { SetupDeps } from "./setup-types.js";
-import { renderSetupPlanSummary, setupWizard } from "./setup.js";
+import { setupWizard } from "./setup.js";
 
 const NO_HARNESSES = {
 	claudeCode: false,
@@ -422,7 +422,7 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(agentYaml).toContain("embedding:\n  provider: none");
 	});
 
-	it("keeps telemetry enabled in non-interactive setup (issue #1026 Phase 2)", async () => {
+	it("leaves telemetry off until the user opts in", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-telemetry-"));
 		const basePath = join(root, "agents");
 		const templatesPath = join(root, "templates");
@@ -443,12 +443,12 @@ describe("setupWizard non-interactive harness hooks", () => {
 		await setupWizard({ nonInteractive: true, skipGit: true }, deps);
 
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
-		// Telemetry is on by default; non-interactive setups keep the default.
+		// Bootstrap must not silently opt users into telemetry.
 		// The flag must land under memory.pipelineV2 — the path the daemon
 		// reads — or the opt-out would be silently ignored (regression:
 		// setup wrote top-level pipelineV2, which the daemon never sees).
 		expect(agentYaml.indexOf("memory:")).toBeGreaterThanOrEqual(0);
-		expect(agentYaml.indexOf("telemetryEnabled: true")).toBeGreaterThan(agentYaml.indexOf("memory:"));
+		expect(agentYaml.indexOf("telemetryEnabled: false")).toBeGreaterThan(agentYaml.indexOf("memory:"));
 	});
 
 	it("writes custom identity preset with concrete files for every referenced path", async () => {
@@ -878,49 +878,6 @@ describe("setupWizard headless plan path", () => {
 		}
 	});
 
-	it("stores an interactive provider credential on the configured remote daemon", async () => {
-		root = mkdtempSync(join(tmpdir(), "setup-remote-connect-"));
-		const basePath = join(root, "agents");
-		const templatesPath = join(root, "templates");
-		writeIdentityTemplates(templatesPath);
-		const planPath = writePlanFile(root, {
-			extractionProvider: "openrouter",
-			extractionModel: "anthropic/claude-3.5-haiku",
-			extractionConnect: { family: "openrouter", connectMethod: "api" },
-			aggregateRecallProvider: "openrouter",
-			aggregateRecallModel: "anthropic/claude-3.5-sonnet",
-			daemonUrl: "https://signet.remote.example:8443",
-		});
-		const connectExtraction = mock(async () => true);
-		const startDaemon = mock(async () => true);
-		const deps = { ...freshDeps(basePath, templatesPath), startDaemon };
-		const plan = parseSetupPlan(JSON.parse(readFileSync(planPath, "utf-8")));
-
-		await runFreshSetup(
-			plan,
-			{
-				basePath,
-				existingAgentsDir: false,
-				nonInteractive: true,
-				allowUnprotectedWorkspace: true,
-				createLocalBackup: false,
-				availableExtractionProviders: [],
-				openclawConfigCount: 0,
-				openDashboard: false,
-				connectExtraction,
-			},
-			deps,
-		);
-
-		expect(startDaemon).not.toHaveBeenCalled();
-		expect(connectExtraction).toHaveBeenCalledTimes(1);
-		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
-		expect(agentYaml).toContain("aggregateRecall:");
-		expect(agentYaml).toContain("account: openrouter");
-		expect(agentYaml).toContain("credentialRef: OPENROUTER_API_KEY");
-		expect(agentYaml).toContain("credentialRef: SIGNET_KEY_OPENROUTER");
-	});
-
 	it("writes a multi-agent roster from a plan file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-roster-"));
 		const basePath = join(root, "agents");
@@ -976,7 +933,7 @@ describe("setupWizard headless plan path", () => {
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
 			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("cannot use extractionConnect");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("extractionConnect");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1001,7 +958,7 @@ describe("setupWizard headless plan path", () => {
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
 			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("cannot use extractionConnect");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("extractionConnect");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1186,57 +1143,63 @@ describe("setupWizard headless plan path", () => {
 	});
 });
 
-describe("renderSetupPlanSummary", () => {
-	const plan = {
-		agentName: "My Agent",
-		agentDescription: "Personal AI assistant",
-		networkMode: "localhost" as const,
-		harnesses: ["claude-code", "codex"],
-		openclawRuntimePath: "plugin" as const,
-		configureOpenClawWs: false,
-		embeddingProvider: "native",
-		embeddingModel: "nomic-embed-text-v1.5",
-		embeddingDimensions: 768,
-		extractionProvider: "claude-code",
-		extractionModel: "haiku",
-		extractionEndpoint: undefined,
-		searchBalance: 0.7,
-		searchTopK: 20,
-		searchMinScore: 0.3,
-		memorySessionBudget: 2000,
-		memoryDecayRate: 0.95,
-		gitEnabled: true,
-		signetSecretsEnabled: true,
-		graphiqEnabled: false,
-		identityMode: "managed" as const,
-		identityPreset: "minimal" as const,
-		startupIdentityFiles: [{ path: "AGENTS.md" }],
-		specialIdentityFiles: [{ path: "DREAMING.md", kind: "dreaming" as const }],
-	};
-
-	it("groups plan fields into labeled sections", () => {
-		const summary = renderSetupPlanSummary(plan);
-		expect(summary).toContain("Identity");
-		expect(summary).toContain("Harnesses");
-		expect(summary).toContain("Memory & search");
-		expect(summary).toContain("Extraction");
-		expect(summary).toContain("Plugins & network");
+describe("interactive onboarding", () => {
+	it("resumes through the dashboard without rewriting the workspace", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-onboarding-"));
+		const config = "name: Existing agent\noperator_setting: preserve-me\n";
+		writeFileSync(join(root, "agent.yaml"), config);
+		writeFileSync(join(root, "AGENTS.md"), "User-authored instructions");
+		const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ agentsDir: root }) });
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const previousTty = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: root,
+				DEFAULT_PORT: server.port,
+				detectExistingSetup: () => ({ ...fakeDetection(root), agentYaml: true }),
+			});
+			await setupWizard({}, deps);
+			expect(open).toHaveBeenCalledWith(`http://127.0.0.1:${server.port}/#setup`);
+			expect(readFileSync(join(root, "agent.yaml"), "utf8")).toBe(config);
+			expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe("User-authored instructions");
+			expect(deps.configureHarnessHooks).not.toHaveBeenCalled();
+		} finally {
+			open.mockRestore();
+			server.stop(true);
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
-	it("includes the agent name, preset, and harness list", () => {
-		const summary = renderSetupPlanSummary(plan);
-		expect(summary).toContain("My Agent");
-		expect(summary).toContain("managed (minimal)");
-		expect(summary).toContain("claude-code, codex");
-	});
-
-	it("shows disabled state for none providers", () => {
-		const summary = renderSetupPlanSummary({
-			...plan,
-			embeddingProvider: "none",
-			extractionProvider: "none",
+	it("does not open onboarding for an unavailable or different workspace", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-onboarding-failure-"));
+		writeFileSync(join(root, "agent.yaml"), "name: Keep me\n");
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => Response.json({ agentsDir: "/another/workspace" }),
 		});
-		expect(summary).toContain("Embeddings:");
-		expect(summary).toContain("disabled");
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const previousTty = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: root,
+				DEFAULT_PORT: server.port,
+				detectExistingSetup: () => ({ ...fakeDetection(root), agentYaml: true }),
+			});
+			await expect(setupWizard({}, { ...deps, startDaemon: async () => false })).rejects.toThrow(
+				"Could not start Signet",
+			);
+			await expect(setupWizard({}, deps)).rejects.toThrow("Another workspace");
+			expect(open).not.toHaveBeenCalled();
+			expect(readFileSync(join(root, "agent.yaml"), "utf8")).toBe("name: Keep me\n");
+		} finally {
+			open.mockRestore();
+			server.stop(true);
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

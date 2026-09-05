@@ -19,10 +19,10 @@ import {
 /**
  * `SetupPlan` is the single typed, serializable seam for `signet setup`.
  *
- * It captures every decision the fresh-setup wizard makes — no prompts, no
- * side effects, no environment-derived values. Three frontends converge on it:
- * the interactive wizard, a headless `--json`/`--file` payload, and the plain
- * CLI flags. A validated plan is handed to {@link runFreshSetup} together with
+ * It captures every decision a scripted install needs — no prompts, no
+ * side effects, no environment-derived values. Headless `--json`/`--file` payloads and CLI flags converge on it.
+ * Interactive setup uses these defaults to bootstrap, then connects providers
+ * through the daemon-backed dashboard. A validated plan is handed to {@link runFreshSetup} together with
  * a {@link SetupApplyContext} that carries the runtime/detected bits.
  *
  * Design note: the choice enums are derived from the existing readonly choice
@@ -119,15 +119,6 @@ export const setupPlanSchema = z
 		startupIdentityFiles: z.array(identityContextFileSchema),
 		specialIdentityFiles: z.array(identitySpecialFileSchema),
 		dreamingEnabled: z.boolean().optional(),
-		// Dashboard-style provider connect: when set, extraction runs on a connected
-		// cloud provider (API key or OAuth). The modern inference.* route is the
-		// source of truth; pipelineV2 stays enabled so the extraction worker runs.
-		extractionConnect: z
-			.strictObject({
-				family: z.string(),
-				connectMethod: z.enum(["api", "oauth"]),
-			})
-			.optional(),
 		daemonUrl: z
 			.string()
 			// Match normalizeDaemonUrl's rules: a bare origin (no path, query,
@@ -210,22 +201,6 @@ export const setupPlanSchema = z
 				path: ["aggregateRecallProvider"],
 			});
 		}
-		if (plan.extractionConnect) {
-			if (!connectableProviderIds().includes(plan.extractionConnect.family)) {
-				ctx.addIssue({
-					code: "custom",
-					message: `unknown connected provider "${plan.extractionConnect.family}"`,
-					path: ["extractionConnect", "family"],
-				});
-			}
-			if (plan.extractionConnect.family !== plan.extractionProvider) {
-				ctx.addIssue({
-					code: "custom",
-					message: "extractionConnect.family must match extractionProvider",
-					path: ["extractionConnect", "family"],
-				});
-			}
-		}
 		if (plan.agents) {
 			const seen = new Set<string>();
 			plan.agents.forEach((agent, i) => {
@@ -265,10 +240,6 @@ export interface SetupApplyContext {
 	readonly acpxBin?: string;
 	readonly openclawConfigCount: number;
 	readonly openDashboard: boolean;
-	/** Run the provider connect (API-key entry / OAuth) against the now-running
-	 * daemon. Provided by the interactive wizard; undefined for headless plans
-	 * (the provider is connected later via the dashboard). */
-	readonly connectExtraction?: () => Promise<boolean>;
 }
 
 /**

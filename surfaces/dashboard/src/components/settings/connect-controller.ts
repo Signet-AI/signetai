@@ -46,7 +46,7 @@ export interface ConnectControllerOptions {
 	/** Fired when the daemon emits a URL the user must open. */
 	readonly onNavigate?: (url: string) => void;
 	/** Fired once when the login stores the credential daemon-side. */
-	readonly onConnected?: () => void;
+	readonly onConnected?: () => Promise<void>;
 }
 
 export interface ConnectController {
@@ -91,9 +91,7 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 			let deviceCode: { userCode: string; verificationUri: string } | undefined;
 			let progress: string | undefined;
 			let prompt: PendingPrompt | undefined;
-			const handle = await startOAuthLogin(optsRef.current.providerId, () => {
-				optsRef.current.onConnected?.();
-			});
+			const handle = startOAuthLogin(optsRef.current.providerId);
 			loginRef.current = handle;
 			const apply = () =>
 				setPhase(
@@ -102,6 +100,7 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 						: { kind: "oauth-running" },
 				);
 			handle.onEvent((event: OAuthLoginEvent) => {
+				if (loginRef.current !== handle) return;
 				switch (event.type) {
 					case "auth":
 						url = event.url;
@@ -136,7 +135,21 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 						apply();
 						break;
 					case "connected":
-						setPhase({ kind: "connected" });
+						setPhase({ kind: "saving" });
+						void Promise.resolve()
+							.then(() => optsRef.current.onConnected?.())
+							.then(
+								() => {
+									if (loginRef.current === handle) setPhase({ kind: "connected" });
+								},
+								(error: unknown) => {
+									if (loginRef.current !== handle) return;
+									setPhase({
+										kind: "error",
+										message: error instanceof Error ? error.message : "Could not save the connection.",
+									});
+								},
+							);
 						break;
 					case "error":
 						setPhase({ kind: "error", message: event.error });
@@ -147,7 +160,8 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 				}
 			});
 			handle.onError((message) => {
-				if (phaseRef.current.kind === "oauth-running") setPhase({ kind: "error", message });
+				if (loginRef.current === handle && phaseRef.current.kind === "oauth-running")
+					setPhase({ kind: "error", message });
 			});
 		})();
 	}, []);

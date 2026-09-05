@@ -66,21 +66,17 @@ describe("createDaemonClient", () => {
 		}
 	});
 
-	test("a malformed persisted daemon.url falls back gracefully instead of bricking the client", () => {
+	test("rejects a malformed persisted URL instead of contacting another daemon", () => {
 		const dir = join(tmpdir(), `daemon-badurl-${Date.now()}`);
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, "agent.yaml"), "daemon:\n  url: https://host.example/signet\n");
-		const previousUrl = process.env.SIGNET_DAEMON_URL;
+		const previous = process.env.SIGNET_DAEMON_URL;
 		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
-		const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 		try {
-			const client = createDaemonClient(3850, dir);
-			expect(client.url).toBe("http://127.0.0.1:3850");
-			expect(String(warnSpy.mock.calls[0]?.[0] ?? "")).toContain("Ignoring invalid daemon.url");
+			expect(() => createDaemonClient(3850, dir)).toThrow("daemon.url must point at the daemon origin");
 		} finally {
-			warnSpy.mockRestore();
-			if (previousUrl === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
-			else process.env.SIGNET_DAEMON_URL = previousUrl;
+			if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+			else process.env.SIGNET_DAEMON_URL = previous;
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

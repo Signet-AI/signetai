@@ -81,7 +81,7 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 
 	program
 		.command("setup")
-		.description("Setup wizard (interactive by default)")
+		.description("Initialize Signet and open setup in the dashboard")
 		.option("-p, --path <path>", "Base path for agent files")
 		.option("--non-interactive", "Run setup without prompts")
 		.option("--name <name>", "Agent name (non-interactive mode)")
@@ -99,7 +99,7 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		)
 		.option(
 			"--embedding-provider <provider>",
-			"Embedding provider in non-interactive mode (native, llama-cpp, ollama, openai, none)",
+			"Embedding provider in non-interactive mode (native, ollama, openai, none)",
 		)
 		.option("--embedding-model <model>", "Embedding model in non-interactive mode")
 		.option(
@@ -186,7 +186,7 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.action(deps.migrateSchema);
 	withPath(migrate);
 
-	program.command("configure").alias("config").description("Configure agent settings").action(deps.configureAgent);
+	program.command("configure").alias("config").description("Open setup and connection settings").action(deps.configureAgent);
 
 	program
 		.command("sync")

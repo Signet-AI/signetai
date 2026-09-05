@@ -77,6 +77,7 @@ export interface AgentConfigStore {
 	save: () => Promise<boolean>;
 	reload: () => Promise<void>;
 	saving: boolean;
+	error: string | null;
 }
 
 const AGENT_FILE_NAMES = new Set(["agent.yaml", "AGENT.yaml"]);
@@ -87,21 +88,32 @@ export function useAgentConfig(): AgentConfigStore {
 	const [ready, setReady] = useState(false);
 	const [dirty, setDirty] = useState(false);
 	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const saveRef = useRef<Promise<boolean> | null>(null);
+	const revision = useRef(0);
 	// Mutations accumulate in a ref between renders; state mirrors for repaint.
 	const agentRef = useRef<YamlObject>({});
 	agentRef.current = agent;
 
 	const reload = useCallback(async () => {
-		const files = await api.getConfigFiles();
-		const file = files.find((f) => AGENT_FILE_NAMES.has(f.name));
-		if (file) {
-			const parsed = parse(file.content);
-			const obj = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as YamlObject) : {};
+		setError(null);
+		try {
+			const files = await api.getConfigFiles();
+			const file = files.find((f) => AGENT_FILE_NAMES.has(f.name));
+			if (!file) throw new Error("Could not load agent.yaml. Check the daemon connection and retry.");
+			const parsed: unknown = parse(file.content);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+				throw new Error("agent.yaml must contain a configuration object.");
+			const obj = Object.fromEntries(Object.entries(parsed));
+			agentRef.current = obj;
 			setAgent(obj);
 			setFileName(file.name);
+			setDirty(false);
+			setReady(true);
+		} catch (error) {
+			setError(error instanceof Error ? error.message : "Could not load settings.");
+			setReady(false);
 		}
-		setDirty(false);
-		setReady(true);
 	}, []);
 
 	useEffect(() => {
@@ -111,6 +123,7 @@ export function useAgentConfig(): AgentConfigStore {
 	const mutate = useCallback((fn: (draft: YamlObject) => void) => {
 		const draft: YamlObject = structuredClone(agentRef.current);
 		fn(draft);
+		revision.current++;
 		// Write through to the ref synchronously: save() serializes
 		// agentRef.current, and React state (agentRef.current = agent on
 		// render) does not commit before the next paint. Without this, a
@@ -162,14 +175,34 @@ export function useAgentConfig(): AgentConfigStore {
 	const aDel = useCallback((path: readonly string[]) => mutate((draft) => delPath(draft, path)), [mutate]);
 	const aUpdate = useCallback((fn: (draft: YamlObject) => void) => mutate(fn), [mutate]);
 
-	const save = useCallback(async () => {
-		if (!fileName) return false;
+	const save = useCallback((): Promise<boolean> => {
+		if (saveRef.current) return saveRef.current;
+		if (!fileName) return Promise.resolve(false);
 		setSaving(true);
-		const result = await api.saveConfigFile(fileName, stringify(agentRef.current));
-		setSaving(false);
-		if (result.ok) setDirty(false);
-		return result.ok;
+		// One write in flight; edits made during it replace the pending snapshot.
+		saveRef.current = (async () => {
+			const deadline = Date.now() + 30_000;
+			while (Date.now() < deadline) {
+				const savedRevision = revision.current;
+				const result = await api.saveConfigFile(fileName, stringify(agentRef.current));
+				if (!result.ok) {
+					setError(result.error ?? "Could not save settings.");
+					return false;
+				}
+				if (savedRevision === revision.current) {
+					setDirty(false);
+					setError(null);
+					return true;
+				}
+			}
+			setError("Settings are still changing. Finish editing and retry saving.");
+			return false;
+		})().finally(() => {
+			saveRef.current = null;
+			setSaving(false);
+		});
+		return saveRef.current;
 	}, [fileName]);
 
-	return { ready, dirty, agent, aStr, aBool, aSetStr, aSetBool, aSetNum, aDel, aUpdate, save, reload, saving };
+	return { ready, dirty, agent, aStr, aBool, aSetStr, aSetBool, aSetNum, aDel, aUpdate, save, reload, saving, error };
 }

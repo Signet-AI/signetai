@@ -70,7 +70,6 @@ import { registerSourcesCommands } from "./commands/sources.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
 import { registerWorkspaceCommands } from "./commands/workspace.js";
-import { configureAgent } from "./features/configure.js";
 import {
 	doPause,
 	doRestart,
@@ -977,14 +976,42 @@ const daemonDeps = {
 	syncTemplates: runSyncTemplates,
 };
 
+const setupDeps: import("./features/setup-types.js").SetupDeps = {
+	AGENTS_DIR,
+	DEFAULT_PORT,
+	configureHarnessHooks,
+	copyDirRecursive,
+	detectExistingSetup,
+	getSkillsSourceDir,
+	getTemplatesDir,
+	gitAddAndCommit,
+	gitInit,
+	importFromGitHub: (basePath) =>
+		importFromGitHub(basePath, {
+			copyDirRecursive,
+			gitAddAndCommit,
+			isGitRepo,
+		}),
+	isDaemonRunning,
+	isGitRepo,
+	launchDashboard: (options) => launchDashboard(options, daemonDeps),
+	normalizeAgentPath,
+	normalizeChoice,
+	normalizeStringValue,
+	parseIntegerValue,
+	parseSearchBalanceValue,
+	showStatus: (statusOptions) => showStatus(statusOptions, healthDeps),
+	signetLogo,
+	signetBanner: () => signetBanner({ version: VERSION }),
+	startDaemon,
+	syncBuiltinSkills,
+	syncNativeEmbeddingModel,
+	loadConfiguredHarnesses,
+};
+
 registerAppCommands(program, {
 	collectListOption,
-	configureAgent: () =>
-		configureAgent({
-			agentsDir: AGENTS_DIR,
-			configureHarnessHooks,
-			signetLogo,
-		}),
+	configureAgent: () => setupWizard({}, setupDeps),
 	installNative: async (options) => {
 		const result = installNativeBinary(options);
 		printNativeInstallResult(result, options.json);
@@ -997,39 +1024,7 @@ registerAppCommands(program, {
 	},
 	launchDashboard: (options) => launchDashboard(options, daemonDeps),
 	migrateSchema: (options) => migrateSchema(options, daemonDeps),
-	setupWizard: (options) =>
-		setupWizard(options, {
-			AGENTS_DIR,
-			DEFAULT_PORT,
-			configureHarnessHooks,
-			copyDirRecursive,
-			detectExistingSetup,
-			getSkillsSourceDir,
-			getTemplatesDir,
-			gitAddAndCommit,
-			gitInit,
-			importFromGitHub: (basePath) =>
-				importFromGitHub(basePath, {
-					copyDirRecursive,
-					gitAddAndCommit,
-					isGitRepo,
-				}),
-			isDaemonRunning,
-			isGitRepo,
-			launchDashboard: (options) => launchDashboard(options, daemonDeps),
-			normalizeAgentPath,
-			normalizeChoice,
-			normalizeStringValue,
-			parseIntegerValue,
-			parseSearchBalanceValue,
-			showStatus: (statusOptions) => showStatus(statusOptions, healthDeps),
-			signetLogo,
-			signetBanner: () => signetBanner({ version: VERSION }),
-			startDaemon,
-			syncBuiltinSkills,
-			syncNativeEmbeddingModel,
-			loadConfiguredHarnesses,
-		}),
+	setupWizard: (options) => setupWizard(options, setupDeps),
 	showDoctor: (options) => showDoctor(options, healthDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
 	syncTemplates: () => runSyncTemplates(),
