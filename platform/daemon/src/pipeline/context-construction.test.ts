@@ -18,10 +18,11 @@ interface OwnerCall {
 	readonly params: readonly unknown[];
 }
 
-function createOwner(db: Database, calls: OwnerCall[]): DbOwnerClient {
+function createOwner(db: Database, calls: OwnerCall[], shouldFail?: (sql: string) => boolean): DbOwnerClient {
 	return {
 		submit<Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> {
 			if (request.kind !== "query") throw new Error(`unexpected owner request: ${request.kind}`);
+			if (shouldFail?.(request.statement.sql)) throw new Error("injected context query failure");
 			const params = request.statement.params ?? [];
 			if (params.some((param) => typeof param === "object" && param !== null))
 				throw new Error("unexpected byte parameter in context query");
@@ -235,5 +236,19 @@ describe("bounded context snapshots", () => {
 		expect(safeConstraints.map((constraint) => constraint.content)).toContain("preserve the bounded context contract");
 		// The card remains bounded even when the fixture has the full per-entity shape.
 		expect(content.length).toBeLessThanOrEqual(900);
+	});
+
+	it("fails closed when the batched safety decision read is unavailable", async () => {
+		const focalIds = seedWorstCaseGraph(db, 1);
+		seedSafetyRows(db);
+		const owner = createOwner(db, [], (sql) => sql.includes("SELECT source_id, status"));
+		const snapshot = await loadContextSnapshotViaOwner(owner, "default", focalIds, 1);
+		const prepared = await prepareContextRows(snapshot);
+		const safeAttributes = prepared.attributesByAspect.get("entity-0-aspect-0") ?? [];
+
+		expect(snapshot.work).toMatchObject({ partial: true, safetyLedger: "unavailable" });
+		expect(safeAttributes.map((attribute) => attribute.content)).not.toContain("clean persisted context");
+		expect(safeAttributes.map((attribute) => attribute.content)).not.toContain("missing ledger context");
+		expect(safeAttributes.map((attribute) => attribute.content)).toContain("entity-0 value 0-0");
 	});
 });
