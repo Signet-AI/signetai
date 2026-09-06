@@ -1555,6 +1555,48 @@
       "category": "hot-path"
     },
     {
+      "path": "marketplace-installed-state.ts",
+      "line": 316,
+      "api": "existsSync",
+      "source": "if (!existsSync(path)) {",
+      "category": "hot-path"
+    },
+    {
+      "path": "marketplace-installed-state.ts",
+      "line": 322,
+      "api": "readFileSync",
+      "source": "raw = JSON.parse(readFileSync(path, \"utf8\"));",
+      "category": "hot-path"
+    },
+    {
+      "path": "marketplace-installed-state.ts",
+      "line": 373,
+      "api": "mkdirSync",
+      "source": "mkdirSync(dirname(path), { recursive: true });",
+      "category": "hot-path"
+    },
+    {
+      "path": "marketplace-installed-state.ts",
+      "line": 377,
+      "api": "writeFileSync",
+      "source": "writeFileSync(temporaryPath, content, \"utf8\");",
+      "category": "hot-path"
+    },
+    {
+      "path": "marketplace-installed-state.ts",
+      "line": 378,
+      "api": "renameSync",
+      "source": "renameSync(temporaryPath, path);",
+      "category": "hot-path"
+    },
+    {
+      "path": "marketplace-installed-state.ts",
+      "line": 381,
+      "api": "rmSync",
+      "source": "if (!committed) rmSync(temporaryPath, { force: true });",
+      "category": "hot-path"
+    },
+    {
       "path": "mcp-probe.ts",
       "line": 45,
       "api": "existsSync",
@@ -3055,58 +3097,37 @@
     },
     {
       "path": "routes/app-tray.ts",
-      "line": 122,
+      "line": 128,
       "api": "writeFileSync",
       "source": "writeFileSync(join(getMarketplaceDir(), \"app-tray.json\"), JSON.stringify([...fresh, ...toAdd], null, 2));",
       "category": "hot-path"
     },
     {
       "path": "routes/app-tray.ts",
-      "line": 227,
+      "line": 233,
       "api": "writeFileSync",
       "source": "writeFileSync(trayPath, JSON.stringify(tray, null, 2));",
       "category": "hot-path"
     },
     {
       "path": "routes/app-tray.ts",
-      "line": 315,
+      "line": 321,
       "api": "writeFileSync",
       "source": "writeFileSync(trayPath, JSON.stringify(tray, null, 2));",
       "category": "hot-path"
     },
     {
       "path": "routes/app-tray.ts",
-      "line": 347,
+      "line": 349,
       "api": "existsSync",
       "source": "if (!existsSync(dir)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/app-tray.ts",
-      "line": 348,
+      "line": 350,
       "api": "mkdirSync",
       "source": "mkdirSync(dir, { recursive: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/app-tray.ts",
-      "line": 415,
-      "api": "existsSync",
-      "source": "if (!existsSync(path)) return [];",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/app-tray.ts",
-      "line": 417,
-      "api": "readFileSync",
-      "source": "const raw = JSON.parse(readFileSync(path, \"utf-8\")) as unknown;",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/app-tray.ts",
-      "line": 427,
-      "api": "writeFileSync",
-      "source": "writeFileSync(getInstalledMcpPath(), JSON.stringify(servers, null, 2));",
       "category": "hot-path"
     },
     {
@@ -3505,20 +3526,6 @@
       "category": "hot-path"
     },
     {
-      "path": "routes/marketplace-helpers.ts",
-      "line": 35,
-      "api": "existsSync",
-      "source": "if (!existsSync(path)) return [];",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/marketplace-helpers.ts",
-      "line": 38,
-      "api": "readFileSync",
-      "source": "const raw = JSON.parse(readFileSync(path, \"utf-8\")) as unknown;",
-      "category": "hot-path"
-    },
-    {
       "path": "routes/marketplace-reviews.ts",
       "line": 62,
       "api": "existsSync",
@@ -3576,73 +3583,53 @@
     },
     {
       "path": "routes/marketplace.ts",
-      "line": 176,
+      "line": 143,
       "api": "existsSync",
       "source": "if (!existsSync(dir)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace.ts",
-      "line": 177,
+      "line": 144,
       "api": "mkdirSync",
       "source": "mkdirSync(dir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace.ts",
-      "line": 323,
+      "line": 246,
       "api": "existsSync",
       "source": "if (!existsSync(path)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace.ts",
-      "line": 328,
+      "line": 251,
       "api": "statSync",
       "source": "const mtime = statSync(path).mtime.toISOString();",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace.ts",
-      "line": 329,
+      "line": 252,
       "api": "readFileSync",
       "source": "const raw = JSON.parse(readFileSync(path, \"utf-8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace.ts",
-      "line": 338,
+      "line": 261,
       "api": "writeFileSync",
       "source": "writeFileSync(getExposurePolicyPath(), JSON.stringify(policy, null, 2));",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace.ts",
-      "line": 807,
-      "api": "existsSync",
-      "source": "if (!existsSync(path)) return [];",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/marketplace.ts",
-      "line": 810,
-      "api": "readFileSync",
-      "source": "const raw = JSON.parse(readFileSync(path, \"utf-8\")) as unknown;",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/marketplace.ts",
-      "line": 822,
-      "api": "writeFileSync",
-      "source": "writeFileSync(getInstalledMcpPath(), JSON.stringify(servers, null, 2));",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/marketplace.ts",
-      "line": 1128,
+      "line": 933,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:marketplace.mcp-invocation.record"
     },
     {
       "path": "routes/mcp-analytics.ts",
