@@ -1,15 +1,15 @@
 /** App Tray API routes — CRUD for app tray entries and MCP install endpoint. */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AutoCardResource, AutoCardToolAction, SignetAppManifest } from "@signet/core";
+import type { AutoCardResource, AutoCardToolAction } from "@signet/core";
 import type { Hono } from "hono";
 
 import { resolveDefaultBasePath } from "@signet/core";
-import { fetchInternal } from "../internal-fetch.js";
 import { logger } from "../logger.js";
-import { loadAppTray, loadProbeResult, probeServer, reprobeServer, storeProbeResult } from "../mcp-probe.js";
-import { isPrivateHostname } from "../url-validation.js";
+import { installMcpServer, MarketplaceInstallError } from "../mcp-install-service.js";
+import type { MarketplaceMcpInstallDependencies } from "../mcp-install-service.js";
+import { loadAppTray, loadProbeResult, reprobeServer } from "../mcp-probe.js";
 import { readInstalledServersPublic } from "./marketplace-helpers.js";
 
 function isValidState(s: string): s is "tray" | "grid" | "dock" {
@@ -63,7 +63,7 @@ function findFreeGridPosition(
 /**
  * Mount app tray routes on the Hono app.
  */
-export function mountAppTrayRoutes(app: Hono): void {
+export function mountAppTrayRoutes(app: Hono, installDependencies: MarketplaceMcpInstallDependencies = {}): void {
 	/**
 	 * GET /api/os/tray — list all app tray entries.
 	 * Automatically syncs installed MCP servers that are missing
@@ -247,62 +247,51 @@ export function mountAppTrayRoutes(app: Hono): void {
 			return c.json({ ok: false, widgetId: "", manifest: null, error: "url is required" }, 400);
 		}
 
-		// Validate URL scheme and block private/loopback addresses (SSRF prevention)
-		try {
-			const parsed = new URL(url);
-			if (!["https:", "http:"].includes(parsed.protocol)) {
-				return c.json({ ok: false, widgetId: "", manifest: null, error: "Only HTTP/HTTPS URLs are supported" }, 400);
-			}
-
-			if (isPrivateHostname(parsed.hostname)) {
-				return c.json(
-					{ ok: false, widgetId: "", manifest: null, error: "Private/loopback addresses are not allowed" },
-					400,
-				);
-			}
-		} catch {
-			return c.json({ ok: false, widgetId: "", manifest: null, error: "Invalid URL format" }, 400);
-		}
-
 		const nameOverride = body.name?.trim() || undefined;
 		const autoPlace = body.autoPlace === true;
 
 		try {
-			const mcpServersOrgMatch = url.match(/^https?:\/\/(?:www\.)?mcpservers\.org\/servers\/(.+?)(?:\/|\?|#|$)/);
-
+			const mcpServersOrgMatch = url.match(
+				/^https?:\/\/(?:www\.)?mcpservers\.org\/(?:[a-z][a-z-]{1,9}\/)?servers\/(.+?)(?:\/|\?|#|$)/,
+			);
 			const installResult = mcpServersOrgMatch
-				? await installViaCatalog(mcpServersOrgMatch[1], "mcpservers.org", nameOverride)
-				: await installDirectHttp(url, nameOverride);
+				? await installMcpServer(
+						{
+							kind: "catalog",
+							source: "mcpservers.org",
+							catalogId: mcpServersOrgMatch[1],
+							alias: nameOverride,
+						},
+						{
+							signal: c.req.raw.signal,
+							idempotencyKey: c.req.header("Idempotency-Key"),
+						},
+						installDependencies,
+					)
+				: await installMcpServer(
+						{ kind: "direct", url, name: nameOverride },
+						{
+							signal: c.req.raw.signal,
+							idempotencyKey: c.req.header("Idempotency-Key"),
+						},
+						installDependencies,
+					);
 
-			// Probe the server
-			const installed = readInstalledServersPublic();
-			const server = installed.find((s) => s.id === installResult.serverId);
-
-			let manifest: SignetAppManifest | null = null;
-			if (server) {
-				try {
-					const probeResult = await probeServer(server);
-					storeProbeResult(probeResult);
-					manifest = probeResult.declaredManifest ?? null;
-				} catch (err) {
-					logger.warn("probe", `Install probe failed for ${installResult.serverId}: ${err}`);
-					// Install still succeeds — auto-card will be used
-				}
-			}
+			const manifest = installResult.probe?.declaredManifest ?? null;
 
 			// If autoPlace, find free grid position and update tray entry
-			if (autoPlace) {
+			if (autoPlace && installResult.status === "completed") {
 				const tray = loadAppTray();
-				const entry = tray.find((e) => e.id === installResult.serverId);
+				const entry = tray.find((e) => e.id === installResult.server.id);
 				if (entry) {
 					const occupiedPositions = tray.flatMap((e) =>
-						e.state === "grid" && e.gridPosition && e.id !== installResult.serverId ? [e.gridPosition] : [],
+						e.state === "grid" && e.gridPosition && e.id !== installResult.server.id ? [e.gridPosition] : [],
 					);
 
 					const defaultSize = manifest?.defaultSize ?? entry.autoCard?.defaultSize ?? { w: 4, h: 3 };
 					const pos = findFreeGridPosition(occupiedPositions, defaultSize.w, defaultSize.h);
 
-					const idx = tray.findIndex((e) => e.id === installResult.serverId);
+					const idx = tray.findIndex((e) => e.id === installResult.server.id);
 					if (idx >= 0) {
 						tray[idx] = {
 							...tray[idx],
@@ -317,15 +306,30 @@ export function mountAppTrayRoutes(app: Hono): void {
 				}
 			}
 
-			return c.json({
-				ok: true,
-				widgetId: installResult.serverId,
-				manifest,
-			});
+			return c.json(
+				{
+					ok: true,
+					widgetId: installResult.server.id,
+					manifest,
+					created: installResult.created,
+					updated: installResult.updated,
+					status: installResult.status,
+					operationId: installResult.operationId,
+				},
+				installResult.status === "accepted" ? 202 : 200,
+			);
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			logger.error("probe", `Install failed: ${msg}`);
-			return c.json({ ok: false, widgetId: "", manifest: null, error: msg }, 500);
+			const status =
+				error instanceof MarketplaceInstallError
+					? error.code === "timeout"
+						? 504
+						: error.code === "missing_config"
+							? 422
+							: 400
+					: 500;
+			return c.json({ ok: false, widgetId: "", manifest: null, error: msg }, status);
 		}
 	});
 }
@@ -338,191 +342,9 @@ function getMarketplaceDir(): string {
 	return join(getAgentsDir(), "marketplace");
 }
 
-function getInstalledMcpPath(): string {
-	return join(getMarketplaceDir(), "mcp-servers.json");
-}
-
 function ensureMarketplaceDir(): void {
 	const dir = getMarketplaceDir();
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });
 	}
-}
-
-function sanitizeServerId(value: string): string {
-	const normalized = value
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9_-]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return normalized.length > 0 ? normalized : "mcp-server";
-}
-
-function inferNameFromUrl(url: string): string {
-	try {
-		const parsed = new URL(url);
-		// Use hostname without common prefixes
-		let name = parsed.hostname.replace(/^(www|api|mcp)\./, "").replace(/\.(com|org|io|dev|app|net)$/, "");
-		// Add path hint if useful
-		const pathParts = parsed.pathname
-			.split("/")
-			.filter((p) => p.length > 0 && p !== "mcp" && p !== "sse" && p !== "v1");
-		if (pathParts.length > 0) {
-			name = `${name}-${pathParts[0]}`;
-		}
-		return name
-			.replace(/[-_]+/g, " ")
-			.trim()
-			.split(" ")
-			.map((w) => (w.length > 0 ? `${w[0].toUpperCase()}${w.slice(1)}` : w))
-			.join(" ");
-	} catch {
-		return "MCP Server";
-	}
-}
-
-function inferCategory(text: string): string {
-	const source = text.toLowerCase();
-	if (/browser|scrap|crawl|web/.test(source)) return "Web";
-	if (/slack|discord|email|sms|message|chat/.test(source)) return "Communication";
-	if (/database|sql|postgres|mysql|sqlite|redis|vector/.test(source)) return "Database";
-	if (/github|git|ci|deploy|build|code|dev/.test(source)) return "Development";
-	if (/cloud|aws|gcp|azure|vercel|cloudflare/.test(source)) return "Cloud";
-	if (/finance|stock|market|crypto|trading/.test(source)) return "Finance";
-	if (/memory|knowledge|search|docs|rag/.test(source)) return "Knowledge";
-	if (/file|storage|drive|s3|bucket/.test(source)) return "Storage";
-	return "Other";
-}
-
-interface InstalledServer {
-	readonly id: string;
-	readonly source: string;
-	readonly catalogId?: string;
-	readonly name: string;
-	readonly description: string;
-	readonly category: string;
-	readonly homepage?: string;
-	readonly official: boolean;
-	readonly enabled: boolean;
-	readonly scope: { harnesses: string[]; workspaces: string[]; channels: string[] };
-	readonly config: Record<string, unknown>;
-	readonly installedAt: string;
-	readonly updatedAt: string;
-}
-
-function readInstalledServersRaw(): InstalledServer[] {
-	const path = getInstalledMcpPath();
-	if (!existsSync(path)) return [];
-	try {
-		const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-		if (!Array.isArray(raw)) return [];
-		return raw as InstalledServer[];
-	} catch {
-		return [];
-	}
-}
-
-function writeInstalledServersRaw(servers: InstalledServer[]): void {
-	ensureMarketplaceDir();
-	writeFileSync(getInstalledMcpPath(), JSON.stringify(servers, null, 2));
-}
-
-function makeUniqueServerId(baseId: string, installed: readonly InstalledServer[]): string {
-	if (!installed.some((s) => s.id === baseId)) return baseId;
-	let i = 2;
-	while (installed.some((s) => s.id === `${baseId}-${i}`)) {
-		i++;
-	}
-	return `${baseId}-${i}`;
-}
-
-/**
- * Install a direct HTTP MCP server URL as a manual server.
- */
-async function installDirectHttp(url: string, nameOverride?: string): Promise<{ serverId: string; isNew: boolean }> {
-	const installed = readInstalledServersRaw();
-
-	// Check if already installed by matching URL
-	const existing = installed.find(
-		(s) => s.config && typeof s.config === "object" && "url" in s.config && s.config.url === url,
-	);
-	if (existing) {
-		// Update name if override provided
-		if (nameOverride && nameOverride !== existing.name) {
-			const updated = installed.map((s) =>
-				s.id === existing.id ? { ...s, name: nameOverride, updatedAt: new Date().toISOString() } : s,
-			);
-			writeInstalledServersRaw(updated);
-		}
-		return { serverId: existing.id, isNew: false };
-	}
-
-	const name = nameOverride ?? inferNameFromUrl(url);
-	const baseId = sanitizeServerId(name);
-	const id = makeUniqueServerId(baseId, installed);
-	const now = new Date().toISOString();
-
-	const server: InstalledServer = {
-		id,
-		source: "manual",
-		name,
-		description: `${name} MCP server`,
-		category: inferCategory(name),
-		homepage: url,
-		official: false,
-		enabled: true,
-		scope: { harnesses: [], workspaces: [], channels: [] },
-		config: {
-			transport: "http",
-			url,
-			headers: {},
-			timeoutMs: 20000,
-		},
-		installedAt: now,
-		updatedAt: now,
-	};
-
-	writeInstalledServersRaw([...installed, server]);
-	return { serverId: id, isNew: true };
-}
-
-/**
- * Install an MCP server from a catalog source (mcpservers.org).
- * Delegates to the existing /api/marketplace/mcp/install endpoint logic
- * by calling it internally via fetch.
- */
-async function installViaCatalog(
-	catalogId: string,
-	source: "mcpservers.org" | "modelcontextprotocol/servers",
-	nameOverride?: string,
-): Promise<{ serverId: string; isNew: boolean }> {
-	// Use internal HTTP call to the marketplace install endpoint.
-	// This reuses all existing logic (config fetch, dedup, etc.) without
-	// duplicating it.
-	const port = process.env.SIGNET_PORT || "3850";
-	const res = await fetchInternal(`http://127.0.0.1:${port}/api/marketplace/mcp/install`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			id: `${source}:${catalogId}`,
-			source,
-			alias: nameOverride,
-		}),
-	});
-
-	const data = (await res.json()) as {
-		success?: boolean;
-		server?: { id: string };
-		updated?: boolean;
-		error?: string;
-	};
-
-	if (!data.success || !data.server) {
-		throw new Error(data.error ?? "Marketplace install failed");
-	}
-
-	return {
-		serverId: data.server.id,
-		isNew: !data.updated,
-	};
 }

@@ -20,7 +20,7 @@ import { withMarketplaceMcpPermit, withMarketplaceMcpTimeout } from "./marketpla
 // Note: validatePublicHttpUrl from url-validation.ts is used by the install
 // endpoint (server-side fetch = real SSRF risk). Manifest ui/icon fields are
 // client-side (iframe/img) so they only need scheme validation, not address blocking.
-import type { InstalledMarketplaceMcpServer } from "./routes/marketplace.js";
+import type { InstalledMarketplaceMcpServer, MarketplaceMcpProbeOptions } from "./mcp-install-service.js";
 import { getSecret } from "./secrets.js";
 import { deleteCachedWidget, loadCachedWidget } from "./widget-gen.js";
 
@@ -79,56 +79,67 @@ async function resolveSecretReferences(values: Readonly<Record<string, string>>)
 async function withProbeClient<T>(
 	server: InstalledMarketplaceMcpServer,
 	fn: (client: Client) => Promise<T>,
+	options: MarketplaceMcpProbeOptions = {
+		signal: AbortSignal.timeout(Math.min(server.config.timeoutMs, 30_000)),
+		timeoutMs: Math.min(server.config.timeoutMs, 30_000),
+	},
 ): Promise<T> {
-	const timeoutMs = Math.min(server.config.timeoutMs, 30_000);
-	return withMarketplaceMcpPermit(timeoutMs, async (permit, remainingTimeoutMs) => {
-		const client = new Client({
-			name: "signet-os-probe",
-			version: "0.1.0",
-		});
-		let closePromise: Promise<void> | null = null;
-		const close = (): Promise<void> => {
-			if (!closePromise) {
-				closePromise = client.close().catch(() => undefined);
-			}
-			return closePromise;
-		};
-
-		const run = async (): Promise<T> => {
-			if (server.config.transport === "stdio") {
-				const runtimeEnv: Record<string, string> = {};
-				for (const [k, v] of Object.entries(process.env)) {
-					if (typeof v === "string") runtimeEnv[k] = v;
+	const timeoutMs = Math.max(1, Math.min(server.config.timeoutMs, 30_000, options.timeoutMs));
+	if (options.signal.aborted)
+		throw options.signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+	return withMarketplaceMcpPermit(
+		timeoutMs,
+		async (permit, remainingTimeoutMs) => {
+			const client = new Client({
+				name: "signet-os-probe",
+				version: "0.1.0",
+			});
+			let closePromise: Promise<void> | null = null;
+			const close = (): Promise<void> => {
+				if (!closePromise) {
+					closePromise = client.close().catch(() => undefined);
 				}
-				const resolvedEnv = await resolveSecretReferences(server.config.env);
-				const transport = new StdioClientTransport({
-					command: server.config.command,
-					args: [...server.config.args],
-					env: { ...runtimeEnv, ...resolvedEnv },
-					cwd: server.config.cwd,
-				});
+				return closePromise;
+			};
 
-				permit.markProcessStarted();
+			const run = async (): Promise<T> => {
+				if (server.config.transport === "stdio") {
+					const runtimeEnv: Record<string, string> = {};
+					for (const [k, v] of Object.entries(process.env)) {
+						if (typeof v === "string") runtimeEnv[k] = v;
+					}
+					const resolvedEnv = await resolveSecretReferences(server.config.env);
+					const transport = new StdioClientTransport({
+						command: server.config.command,
+						args: [...server.config.args],
+						env: { ...runtimeEnv, ...resolvedEnv },
+						cwd: server.config.cwd,
+					});
+
+					permit.markProcessStarted();
+					await client.connect(transport);
+					return fn(client);
+				}
+
+				const resolvedHeaders = await resolveSecretReferences(server.config.headers);
+				const transport = new StreamableHTTPClientTransport(new URL(server.config.url), {
+					requestInit: {
+						headers: resolvedHeaders,
+						signal: options.signal,
+					},
+				});
 				await client.connect(transport);
 				return fn(client);
+			};
+
+			try {
+				return await withMarketplaceMcpTimeout(run(), remainingTimeoutMs, `Probe ${server.id}`, close, options.signal);
+			} finally {
+				await close();
 			}
-
-			const resolvedHeaders = await resolveSecretReferences(server.config.headers);
-			const transport = new StreamableHTTPClientTransport(new URL(server.config.url), {
-				requestInit: {
-					headers: resolvedHeaders,
-				},
-			});
-			await client.connect(transport);
-			return fn(client);
-		};
-
-		try {
-			return await withMarketplaceMcpTimeout(run(), remainingTimeoutMs, `Probe ${server.id}`, close);
-		} finally {
-			await close();
-		}
-	});
+		},
+		options.signal,
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,83 +295,90 @@ export function generateAutoCard(
  * failed result with an auto-card containing zero tools — the server
  * can be re-probed when it comes online.
  */
-export async function probeServer(server: InstalledMarketplaceMcpServer): Promise<McpProbeResult> {
+export async function probeServer(
+	server: InstalledMarketplaceMcpServer,
+	options?: MarketplaceMcpProbeOptions,
+): Promise<McpProbeResult> {
 	const now = new Date().toISOString();
 
 	try {
-		const probeData = await withProbeClient(server, async (client) => {
-			// 1. List tools
-			const toolsResult = (await client.listTools()) as {
-				tools?: Array<{
-					name: string;
-					description?: string;
-					inputSchema?: unknown;
-					annotations?: { readOnlyHint?: boolean };
-				}>;
-			};
-			const rawTools = toolsResult.tools ?? [];
-
-			// 2. List resources (may not be supported by all servers)
-			let rawResources: Array<{
-				uri: string;
-				name: string;
-				description?: string;
-				mimeType?: string;
-			}> = [];
-			try {
-				const resourcesResult = (await client.listResources()) as {
-					resources?: Array<{
-						uri: string;
+		const probeData = await withProbeClient(
+			server,
+			async (client) => {
+				// 1. List tools
+				const toolsResult = (await client.listTools()) as {
+					tools?: Array<{
 						name: string;
 						description?: string;
-						mimeType?: string;
+						inputSchema?: unknown;
+						annotations?: { readOnlyHint?: boolean };
 					}>;
 				};
-				rawResources = resourcesResult.resources ?? [];
-			} catch {
-				// Resources not supported — that's fine
-				logger.debug("probe", `Server ${server.id} does not support listResources`);
-			}
+				const rawTools = toolsResult.tools ?? [];
 
-			// 3. Try to get server info/metadata for signet block
-			let serverMetadata: unknown = null;
-			try {
-				// The MCP SDK client may expose server info after connection
-				const serverInfo = (client as unknown as { getServerVersion?: () => unknown }).getServerVersion?.();
-				if (isRecord(serverInfo)) {
-					serverMetadata = serverInfo;
-				}
-			} catch {
-				// No server metadata available
-			}
-
-			// Also check if the server exposes metadata via a resource
-			if (!serverMetadata) {
+				// 2. List resources (may not be supported by all servers)
+				let rawResources: Array<{
+					uri: string;
+					name: string;
+					description?: string;
+					mimeType?: string;
+				}> = [];
 				try {
-					// Convention: some servers expose metadata at signet://manifest
-					const metaResource = rawResources.find(
-						(r) => r.uri === "signet://manifest" || r.uri === "signet://app" || r.name === "signet-manifest",
-					);
-					if (metaResource) {
-						const content = await client.readResource({ uri: metaResource.uri });
-						if (isRecord(content) && Array.isArray(content.contents) && content.contents.length > 0) {
-							const firstContent = content.contents[0] as Record<string, unknown>;
-							if (typeof firstContent?.text === "string") {
-								try {
-									serverMetadata = JSON.parse(firstContent.text);
-								} catch {
-									// Not valid JSON
+					const resourcesResult = (await client.listResources()) as {
+						resources?: Array<{
+							uri: string;
+							name: string;
+							description?: string;
+							mimeType?: string;
+						}>;
+					};
+					rawResources = resourcesResult.resources ?? [];
+				} catch {
+					// Resources not supported — that's fine
+					logger.debug("probe", `Server ${server.id} does not support listResources`);
+				}
+
+				// 3. Try to get server info/metadata for signet block
+				let serverMetadata: unknown = null;
+				try {
+					// The MCP SDK client may expose server info after connection
+					const serverInfo = (client as unknown as { getServerVersion?: () => unknown }).getServerVersion?.();
+					if (isRecord(serverInfo)) {
+						serverMetadata = serverInfo;
+					}
+				} catch {
+					// No server metadata available
+				}
+
+				// Also check if the server exposes metadata via a resource
+				if (!serverMetadata) {
+					try {
+						// Convention: some servers expose metadata at signet://manifest
+						const metaResource = rawResources.find(
+							(r) => r.uri === "signet://manifest" || r.uri === "signet://app" || r.name === "signet-manifest",
+						);
+						if (metaResource) {
+							const content = await client.readResource({ uri: metaResource.uri });
+							if (isRecord(content) && Array.isArray(content.contents) && content.contents.length > 0) {
+								const firstContent = content.contents[0] as Record<string, unknown>;
+								if (typeof firstContent?.text === "string") {
+									try {
+										serverMetadata = JSON.parse(firstContent.text);
+									} catch {
+										// Not valid JSON
+									}
 								}
 							}
 						}
+					} catch {
+						// Resource read failed — that's fine
 					}
-				} catch {
-					// Resource read failed — that's fine
 				}
-			}
 
-			return { rawTools, rawResources, serverMetadata };
-		});
+				return { rawTools, rawResources, serverMetadata };
+			},
+			options,
+		);
 
 		// Parse tools into AutoCardToolAction format
 		const tools: AutoCardToolAction[] = probeData.rawTools

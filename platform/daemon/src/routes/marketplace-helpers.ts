@@ -1,50 +1,9 @@
-/**
- * Marketplace helpers — shared utilities extracted to avoid circular imports.
- *
- * The readInstalledServers function from marketplace.ts is not exported,
- * so we provide a public re-implementation here that reads the same file.
- *
- * COUPLING NOTE: This reads ~/.agents/marketplace/mcp-servers.json directly.
- * If marketplace.ts ever changes the file path or format, this must be updated
- * to match. See also: marketplace.ts readInstalledServers().
- */
+/** Shared access to the canonical installed MCP server state owner. */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { resolveDefaultBasePath } from "@signet/core";
-import type { InstalledMarketplaceMcpServer } from "./marketplace.js";
+import { readInstalledServers } from "../mcp-install-service.js";
+import type { InstalledMarketplaceMcpServer } from "../mcp-install-service.js";
 
-function getAgentsDir(): string {
-	return resolveDefaultBasePath();
-}
-
-function getInstalledMcpPath(): string {
-	return join(getAgentsDir(), "marketplace", "mcp-servers.json");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * Read installed MCP servers from the marketplace config file.
- * This is a public accessor for the same data marketplace.ts manages.
- */
+/** Read installed MCP servers for app-tray and other daemon adapters. */
 export function readInstalledServersPublic(): InstalledMarketplaceMcpServer[] {
-	const path = getInstalledMcpPath();
-	if (!existsSync(path)) return [];
-
-	try {
-		const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-		if (!Array.isArray(raw)) return [];
-		return raw.filter(
-			(item): item is InstalledMarketplaceMcpServer =>
-				isRecord(item) &&
-				typeof item.id === "string" &&
-				typeof item.name === "string" &&
-				typeof item.enabled === "boolean",
-		);
-	} catch {
-		return [];
-	}
+	return readInstalledServers();
 }
