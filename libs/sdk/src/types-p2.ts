@@ -393,6 +393,28 @@ export interface RepairActionResponse {
 	readonly message?: string;
 }
 
+export interface VectorRepairOptions {
+	readonly agentId?: string;
+	readonly batchSize?: number;
+	readonly maxVectorBytes?: number;
+	readonly maxBatches?: number;
+	readonly runBudgetMs?: number;
+}
+
+export interface VectorRepairResponse extends RepairActionResponse {
+	readonly operation: "resync" | "clean-orphans";
+	readonly agentId: string;
+	readonly checkpointId: string;
+	readonly phase: "orphan-vectors" | "missing-vectors" | "orphan-embeddings" | "complete";
+	readonly status: "running" | "complete" | "failed";
+	readonly cursor: string | null;
+	readonly processed: number;
+	readonly skipped: number;
+	readonly failed: number;
+	readonly remaining: number;
+	readonly batches: number;
+}
+
 export interface EmbeddingGapsResponse {
 	readonly total: number;
 	readonly embedded: number;

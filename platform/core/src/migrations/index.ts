@@ -160,6 +160,7 @@ import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-fi
 import { up as sourceImportAttemptProvenance } from "./148-source-import-attempt-provenance";
 import { up as transcriptImportStateMachine } from "./149-transcript-import-state-machine";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
+import { up as vectorRepairCheckpoints } from "./153-vector-repair-checkpoints";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1406,6 +1407,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "memory-artifact-sha-index",
 		up: memoryArtifactShaIndex,
 		artifacts: { indexes: ["idx_memory_artifacts_agent_sha"] },
+	},
+	{
+		version: 153,
+		name: "vector-repair-checkpoints",
+		up: vectorRepairCheckpoints,
+		artifacts: { tables: ["vector_repair_checkpoints"] },
 	},
 ];
 

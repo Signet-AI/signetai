@@ -52,6 +52,8 @@ import type {
 	// Analytics
 	UsageCountersResponse,
 	UserPromptSubmitResponse,
+	VectorRepairResponse,
+	VectorRepairOptions,
 } from "./types-p2.js";
 
 // ============================================================================
@@ -601,16 +603,16 @@ export class SignetClientP2 {
 	 * @example
 	 * const result = await client.resyncVectorIndex();
 	 */
-	async resyncVectorIndex(): Promise<RepairActionResponse> {
-		return this.transport.post<RepairActionResponse>("/api/repair/resync-vec", {});
+	async resyncVectorIndex(opts?: VectorRepairOptions): Promise<VectorRepairResponse> {
+		return this.transport.post<VectorRepairResponse>("/api/repair/resync-vec", opts ?? {});
 	}
 
 	/**
 	 * @example
 	 * const result = await client.cleanOrphanedEmbeddings();
 	 */
-	async cleanOrphanedEmbeddings(): Promise<RepairActionResponse> {
-		return this.transport.post<RepairActionResponse>("/api/repair/clean-orphans", {});
+	async cleanOrphanedEmbeddings(opts?: VectorRepairOptions): Promise<VectorRepairResponse> {
+		return this.transport.post<VectorRepairResponse>("/api/repair/clean-orphans", opts ?? {});
 	}
 
 	/**
