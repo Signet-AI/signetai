@@ -99,8 +99,10 @@ Advanced controls:
 JSON recall responses may include `meta.partial: true` when the daemon is
 serving bounded lexical-bridge results while the memory FTS index is incomplete.
 This is a successful `200` response with incomplete lexical coverage, not the
-aggregate-recall `aggregate.partial` flag. Treat the results as partial and
-retry after indexing recovery.
+aggregate-recall `aggregate.partial` flag. Graph-enabled recalls may also
+include `meta.context` with bounded entity/work accounting and an explicit
+partial flag when context was limited. Treat the results as partial and retry
+after indexing recovery.
 
 ---
 
