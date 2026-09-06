@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { runMigrations } from "../../../core/src/migrations";
 import { parseAuthConfig, type TokenClaims } from "../auth";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import { registerRepairRoutes } from "./repair-routes";
 
 interface TestEnvironment {
@@ -73,6 +74,7 @@ function setup(): TestEnvironment {
 	registerRepairRoutes(app, {
 		authConfig: parseAuthConfig(undefined, "/tmp/signet-repair-scope-test"),
 		getDbAccessor: () => accessor,
+		loadMemoryConfig: () => ({ pipelineV2: DEFAULT_PIPELINE_V2 }) as never,
 	});
 	return { db, accessor, app };
 }
@@ -175,5 +177,51 @@ describe("agent authorization for embedding repair routes", () => {
 		});
 		expect(postResponse.status).toBe(403);
 		expect(await postResponse.json()).toEqual({ error: "role 'operator' lacks 'admin' permission" });
+	});
+});
+
+describe("scoped vector repair routes", () => {
+	it("repairs only the resolved agent and rejects implicit global intent", async () => {
+		environment.db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL)");
+		const now = new Date().toISOString();
+		environment.db
+			.prepare(
+				`INSERT INTO memories (id, content, content_hash, agent_id, type, created_at, updated_at, updated_by)
+				 VALUES ('memory-vector-b', 'vector b', 'vector-hash-b', 'agent-b', 'fact', ?, ?, 'test')`,
+			)
+			.run(now, now);
+		environment.db
+			.prepare(
+				`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES ('embedding-vector-b', 'vector-hash-b', ?, 3, 'memory', 'memory-vector-b', 'vector b', ?, 'agent-b')`,
+			)
+			.run(Buffer.from(new Float32Array([1, 2, 3]).buffer), now);
+
+		const response = await environment.app.request("/api/repair/resync-vec", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ agentId: "agent-b", batchSize: 1 }),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			action: "resyncVectorIndex",
+			success: true,
+			agentId: "agent-b",
+			processed: 1,
+			remaining: 0,
+			status: "complete",
+		});
+		expect(environment.db.prepare("SELECT id FROM vec_embeddings").all()).toEqual([{ id: "embedding-vector-b" }]);
+
+		const globalResponse = await environment.app.request("/api/repair/resync-vec", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ allAgents: true }),
+		});
+		expect(globalResponse.status).toBe(403);
+		expect(await globalResponse.json()).toEqual({
+			error: "global vector reconciliation is not exposed; provide one resolved agentId",
+		});
 	});
 });
