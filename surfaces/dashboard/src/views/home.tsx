@@ -3,7 +3,7 @@ import { HomeAgentsPanel } from "@/components/home/agents";
 import { ActivityHeatmap, type DayBucket, type KpiData, KpiFooter, useDateString } from "@/components/home/kpi";
 import { HomeRecentMemories } from "@/components/home/recent-memories";
 import { HomeSecretsPanel } from "@/components/home/secrets";
-import { api } from "@/lib/api";
+import { api, getJSONResult } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { HomeSourcesPanel } from "@/views/sources";
@@ -22,6 +22,16 @@ export function HomeView() {
 	const sources = fetchedSources ?? lastSources;
 	const timeline = useAsync(() => api.getMemoryTimeline(new Date().getTimezoneOffset())).data;
 	const today = useDateString(new Date().toLocaleDateString("en-US"));
+	// The setup link is an onboarding affordance: once a harness integration
+	// exists (its config was written), the dashboard is connected and the link
+	// is noise. Keep it while the check is pending so a fresh workspace still
+	// surfaces it.
+	const harnessesQuery = useAsync(
+		() => getJSONResult<{ harnesses: { exists: boolean }[] }>("/api/harnesses").then((result) => result.data),
+		{ intervalMs: 30000 },
+	);
+	const needsSetup =
+		!harnessesQuery.data?.harnesses || !harnessesQuery.data.harnesses.some((harness) => harness.exists);
 
 	const kpis: KpiData[] = useMemo(() => {
 		const totalMemories = timeline?.totalMemories;
@@ -75,9 +85,11 @@ export function HomeView() {
 							A more memorable you.
 						</span>
 					</div>
-					<a href="#setup" className="self-start text-sm underline underline-offset-4">
-						Set up or repair your memory connection
-					</a>
+					{needsSetup && (
+						<a href="#setup" className="self-start text-sm underline underline-offset-4">
+							Set up or repair your memory connection
+						</a>
+					)}
 					<DailyBrief agentId={status.data?.agentId} agentSettled={!status.loading} />
 					<div className="home-brief-divider" />
 					<HomeRecentMemories />

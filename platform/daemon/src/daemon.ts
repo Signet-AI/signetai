@@ -84,7 +84,7 @@ import {
 	setDatabaseIntegrityWritesBlocked,
 } from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum-worker";
-import { createDbOwnerClient, type DbOwnerClient, type DbOwnerClientOptions } from "./db-owner-client";
+import { createDbOwnerClient, type DbOwnerClient, type DbOwnerClientOptions, DbOwnerError } from "./db-owner-client";
 import {
 	type DbOwnerMaintenance,
 	createDbOwnerMaintenance,
@@ -2264,6 +2264,14 @@ process.on("unhandledRejection", (reason) => {
 	// Sanitized crash report for rejections too (primitives degrade to a
 	// truncated string).
 	telemetryRef?.record("error.occurred", sanitizeCrashError(reason, process.uptime() * 1000));
+	// DB owner errors are bounded-availability degradations by design:
+	// deadline exhaustion cancels the job, queue-full rejects admission, and
+	// the owner protocol keeps serving. Fire-and-forget background callers
+	// (deferred maintenance, recovery, watchers) legitimately race these
+	// rejections at startup, so killing the process here turns recoverable
+	// queue pressure into a crash loop. Crash on unknown rejections; survive
+	// DB owner availability errors.
+	if (reason instanceof DbOwnerError) return;
 	requestShutdown("error:unhandledRejection", 1, reason);
 });
 
