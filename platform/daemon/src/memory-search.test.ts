@@ -158,7 +158,9 @@ describe("hybridRecall", () => {
 
 	it("keeps both recall traversal branches on the owner boundary", () => {
 		const source = readFileSync(join(import.meta.dir, "memory-search.ts"), "utf-8");
-		expect(source).not.toContain("traverseKnowledgeGraph(");
+		// Match the exact generic symbol so a reintroduced import is caught even
+		// when it is aliased or the call is split across multiple lines.
+		expect(source).not.toMatch(/\btraverseKnowledgeGraph\b/);
 		expect(source.match(/traverseKnowledgeGraphViaOwner\(/g) ?? []).toHaveLength(2);
 	});
 
@@ -289,6 +291,72 @@ describe("hybridRecall", () => {
 			expect(injected).toBe(true);
 			expect(result.meta.graphPartial).toBeUndefined();
 			expect(result.meta.graphError).toBeUndefined();
+		} finally {
+			owner.submit = originalSubmit;
+		}
+	});
+
+	it("surfaces traversal owner failures as partial recall metadata", async () => {
+		const now = new Date().toISOString();
+		await getDbAccessor().withWriteTxAsync(async (db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+				 VALUES ('graph-owner-error-memory', 'Signet graph owner error memory', 'fact', 'default', ?, ?, 'test')`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('graph-owner-error-entity', 'Signet', 'signet', 'project', 'default', 10, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('graph-owner-error-aspect', 'graph-owner-error-entity', 'default', 'context', 'context', 0.9, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+					confidence, importance, status, created_at, updated_at
+				) VALUES ('graph-owner-error-attribute', 'graph-owner-error-aspect', 'default',
+					'graph-owner-error-memory', 'attribute', 'Signet graph owner error memory',
+					'signet graph owner error memory', 1, 0.9, 'active', ?, ?)`,
+			).run(now, now);
+		});
+
+		const owner = await getDbOwner();
+		const originalSubmit = owner.submit.bind(owner);
+		let injected = false;
+		owner.submit = (request, options) => {
+			const handle = originalSubmit(request, options);
+			if (options.operation !== "session-start.graph-traversal.table-check") return handle;
+			injected = true;
+			const error = Object.assign(new Error("injected graph owner admission failure"), {
+				code: "DB_OWNER_QUEUE_FULL",
+			});
+			return { ...handle, result: Promise.reject(error) };
+		};
+
+		try {
+			const result = await hybridRecall(
+				{
+					query: "Signet",
+					keywordQuery: "Signet",
+					limit: 5,
+					agentId: "default",
+					readPolicy: "isolated",
+					trackRecallAccess: false,
+				},
+				testCfg({ graph: true, traversal: true }),
+				async () => null,
+			);
+			expect(injected).toBe(true);
+			expect(result.results.map((row) => row.id)).toContain("graph-owner-error-memory");
+			expect(result.meta.partial).toBe(true);
+			expect(result.meta.graphPartial).toBe(true);
+			expect(result.meta.degradation).toBe("graph_traversal_failed");
+			expect(result.meta.graphError).toEqual({
+				channel: "graph_traversal",
+				code: "graph_traversal_failed",
+				message: "Knowledge graph traversal was unavailable.",
+			});
 		} finally {
 			owner.submit = originalSubmit;
 		}

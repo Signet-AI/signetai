@@ -173,7 +173,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/dreaming-worker.ts:179` (withReadDbAsync)
 - `pipeline/dreaming-worker.ts:258` (withReadDbAsync)
 - `pipeline/dreaming-worker.ts:278` (withReadDbAsync)
-- `pipeline/graph-traversal.ts:101` (withReadDbAsync)
+- `pipeline/graph-traversal.ts:103` (withReadDbAsync)
 - `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:346` (withReadDbAsync)
 - `db:maintenance.dead-memory-count.read` (withReadDbAsync)
