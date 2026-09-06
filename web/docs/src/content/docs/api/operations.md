@@ -486,8 +486,27 @@ agent.
 
 ### POST /api/repair/clean-orphans
 
-Remove embedding rows that reference memories which no longer exist.
+Remove embedding rows that reference memories which no longer exist. The
+operation is scoped to the resolved `agentId` and runs through a durable,
+keyset-paginated owner checkpoint. Repeat the request until `status` is
+`complete`; a client disconnect or owner restart resumes from the same
+checkpoint. Global reconciliation is not accepted by this endpoint.
 Rate-limited. Requires `admin` permission.
+
+**Request body** (optional)
+
+```json
+{
+  "agentId": "default",
+  "batchSize": 50,
+  "maxVectorBytes": 262144,
+  "maxBatches": 20
+}
+```
+
+The server hard-caps every owner job at 50 rows, 256 KiB of vector payload,
+2 seconds, and 100 estimated work units. Request values can lower those
+ceilings but cannot raise them.
 
 **Response**
 
@@ -496,9 +515,49 @@ Rate-limited. Requires `admin` permission.
   "action": "cleanOrphanedEmbeddings",
   "success": true,
   "affected": 12,
-  "message": "cleaned 12 orphaned embeddings"
+  "operation": "clean-orphans",
+  "agentId": "default",
+  "checkpointId": "vector-repair-...",
+  "phase": "complete",
+  "status": "complete",
+  "processed": 12,
+  "skipped": 0,
+  "failed": 0,
+  "remaining": 0,
+  "message": "cleaned orphaned embeddings; processed 12, 0 remaining; checkpoint vector-repair-..."
 }
 ```
+
+### POST /api/repair/resync-vec
+
+Reconcile the derived `vec_embeddings` index with canonical `embeddings` for
+one resolved agent. Orphan derived rows are removed before missing canonical
+vectors are inserted. Each owner transaction is a bounded page and advances
+the durable checkpoint atomically with its mutations and semantic repair
+audit. Repeat the request while `status` is `running`.
+
+The same hard server ceilings apply: 50 rows, 256 KiB of vector payload, a
+2-second owner deadline, and 100 estimated work units per job. Malformed or
+oversized canonical vectors are reported as `skipped`; retryable owner write
+failures retain the cursor and are reported as `failed`.
+
+**Request body** (optional)
+
+```json
+{
+  "agentId": "default",
+  "batchSize": 50,
+  "maxVectorBytes": 262144,
+  "maxBatches": 20
+}
+```
+
+**Response**
+
+The response includes `processed`, `skipped`, `failed`, `remaining`,
+`checkpointId`, `phase`, and `status` in addition to the usual repair action
+fields. `agentId` is always the resolved scope; `allAgents` and `scope: "all"`
+are rejected rather than broadening the operation.
 
 ### GET /api/repair/dedup-stats
 

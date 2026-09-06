@@ -36,6 +36,7 @@ import type {
 	DbOwnerNativeMemoryIndex,
 	DbOwnerVectorSearchPayload,
 } from "./db-owner-protocol";
+import { applyVectorRepairBatch, VectorRepairAbortError } from "./vector-repair-owner";
 import type { EmbeddingConfig } from "./memory-config";
 import { awaitEmbeddingProviderAvailable, recordEmbeddingProviderFailure } from "./embedding-circuit-breaker";
 import { vectorToBlob } from "./db-helpers";
@@ -439,6 +440,33 @@ export function runDbOwnerWorker(): void {
 			} catch {
 				// The original error is the actionable failure.
 			}
+			throw error;
+		}
+	}
+
+	function executeVectorRepair(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "vector_repair" }>,
+		context: JobExecutionContext,
+	): unknown {
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const result = applyVectorRepairBatch(db as never, request.input, {
+				shouldAbort: () => {
+					if (cancellationRequested(context.jobId)) throw new VectorRepairAbortError();
+					if (Date.now() >= context.deadlineAt)
+						throw new VectorRepairAbortError("vector repair owner deadline exceeded");
+					return false;
+				},
+			});
+			commit(context);
+			return result;
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {
+				// Preserve the original owner failure.
+			}
+			if (error instanceof VectorRepairAbortError) throw new DbOwnerCancellationRequested();
 			throw error;
 		}
 	}
@@ -1065,6 +1093,7 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "batch")
 			return executeBatch(job.request.statements, job.request.requireChanges === true, context);
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request, context);
+		if (job.request.kind === "vector_repair") return executeVectorRepair(job.request, context);
 		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
 		if (job.request.kind === "dreaming_hygiene_attention") return executeDreamingHygieneAttention(job.request, context);
 		if (job.request.kind === "dreaming_surprisal_attention")

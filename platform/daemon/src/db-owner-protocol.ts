@@ -16,6 +16,11 @@ export const DB_OWNER_MAX_DEADLINE_MS = 60_000;
 export const DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS = 15 * 60_000;
 export const DB_OWNER_MAX_RESULT_BYTES = 1_048_576;
 export const DB_OWNER_MAX_TRANSACTION_STATEMENTS = 128;
+/** Hard ceilings for one vector-repair owner job; request input may only lower these. */
+export const VECTOR_REPAIR_MAX_ROWS_PER_BATCH = 50;
+export const VECTOR_REPAIR_MAX_BYTES_PER_BATCH = 256 * 1024;
+export const VECTOR_REPAIR_MAX_BATCH_DEADLINE_MS = 2_000;
+export const VECTOR_REPAIR_MAX_WORK_UNITS_PER_BATCH = 100;
 export type DbOwnerCancellation = "pending" | "requested" | "started";
 export type DbOwnerOutcome = "completed" | "cancelled" | "timed_out" | "failed" | "owner_died";
 
@@ -250,6 +255,7 @@ export type DbOwnerRequest =
 			/** The owner performs the potentially expensive cosine scan. */
 			readonly payload: DbOwnerVectorSearchPayload;
 	  }
+	| { readonly kind: "vector_repair"; readonly input: DbOwnerVectorRepairInput }
 	| { readonly kind: "source_snapshot_import"; readonly input: DbOwnerSourceSnapshotImport }
 	| { readonly kind: "source_graph_index"; readonly input: DbOwnerSourceGraphIndex }
 	| { readonly kind: "source_graph_file_purge"; readonly input: DbOwnerSourceGraphFilePurge }
@@ -305,6 +311,49 @@ export interface DbOwnerVectorSearchPayload {
 		readonly excludeAggregateRecall?: boolean;
 		readonly maxScanRows?: number;
 	};
+}
+
+export type DbOwnerVectorRepairOperation = "resync" | "clean-orphans";
+
+export interface DbOwnerVectorRepairAudit {
+	readonly action: string;
+	readonly actor: string;
+	readonly reason: string;
+	readonly actorType: "operator" | "agent" | "daemon";
+	readonly requestId?: string;
+}
+
+export interface DbOwnerVectorRepairInput {
+	readonly operation: DbOwnerVectorRepairOperation;
+	readonly agentId: string;
+	readonly checkpointId: string;
+	readonly batchSize?: number;
+	readonly maxVectorBytes?: number;
+	readonly audit: DbOwnerVectorRepairAudit;
+}
+
+export type DbOwnerVectorRepairPhase = "orphan-vectors" | "missing-vectors" | "orphan-embeddings" | "complete";
+
+export interface DbOwnerVectorRepairResult {
+	readonly operation: DbOwnerVectorRepairOperation;
+	readonly agentId: string;
+	readonly checkpointId: string;
+	readonly phase: DbOwnerVectorRepairPhase;
+	readonly status: "running" | "complete" | "failed";
+	readonly cursor: string | null;
+	readonly processed: number;
+	readonly skipped: number;
+	readonly failed: number;
+	readonly affected: number;
+	readonly remaining: number;
+	readonly batchRows: number;
+	readonly batchBytes: number;
+	readonly batchProcessed: number;
+	readonly batchSkipped: number;
+	readonly batchFailed: number;
+	readonly batchAffected: number;
+	readonly operationId: string;
+	readonly error?: string;
 }
 
 export interface DbOwnerDreamingHygieneAttention {

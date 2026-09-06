@@ -3,8 +3,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runMigrations } from "../../core/src/migrations";
 import { createDbOwnerMaintenance, runOwnerMaintenanceWithRetry } from "./db-owner-maintenance";
 import { createDbOwnerClient, DbOwnerDiedError, type DbOwnerClient } from "./db-owner-client";
+import type { DbOwnerVectorRepairInput } from "./db-owner-protocol";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { completeFtsStartupRecovery } from "./fts-startup-recovery";
 
@@ -383,5 +385,112 @@ describe("DB owner FTS maintenance", () => {
 			actor_type: "daemon",
 			request_id: "request-test",
 		});
+	});
+});
+
+function makeVectorRepairDatabase(rowCount: number): { readonly directory: string; readonly path: string } {
+	const directory = mkdtempSync(join(tmpdir(), "signet-vector-repair-owner-"));
+	const path = join(directory, "memory.db");
+	const db = new Database(path);
+	runMigrations(db as never);
+	db.exec("DROP TABLE IF EXISTS vec_embeddings");
+	db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL)");
+	const now = new Date().toISOString();
+	const insertMemory = db.prepare(
+		`INSERT INTO memories (id, content, content_hash, agent_id, type, created_at, updated_at, updated_by)
+		 VALUES (?, ?, ?, 'default', 'fact', ?, ?, 'test')`,
+	);
+	const insertEmbedding = db.prepare(
+		`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+		 VALUES (?, ?, ?, 3, 'memory', ?, ?, ?, 'default')`,
+	);
+	for (let index = 0; index < rowCount; index += 1) {
+		const memoryId = `owner-vector-memory-${index}`;
+		insertMemory.run(memoryId, `owner vector memory ${index}`, `owner-vector-hash-${index}`, now, now);
+		insertEmbedding.run(
+			`owner-vector-embedding-${index}`,
+			`owner-vector-hash-${index}`,
+			Buffer.from(new Float32Array([index, index + 1, index + 2]).buffer),
+			memoryId,
+			`owner vector memory ${index}`,
+			now,
+		);
+	}
+	db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(
+		"owner-vector-orphan",
+		Buffer.from(new Float32Array([9, 9, 9]).buffer),
+	);
+	db.close();
+	return { directory, path };
+}
+
+describe("DB owner vector repair", () => {
+	let maintenance: ReturnType<typeof createDbOwnerMaintenance> | null = null;
+	let directory: string | null = null;
+
+	afterEach(async () => {
+		await maintenance?.close();
+		maintenance = null;
+		if (directory !== null) rmSync(directory, { recursive: true, force: true });
+		directory = null;
+	});
+
+	test("keeps large-corpus owner batches bounded and resumes after owner restart", async () => {
+		const database = makeVectorRepairDatabase(250);
+		directory = database.directory;
+		const request: DbOwnerVectorRepairInput = {
+			operation: "resync",
+			agentId: "default",
+			checkpointId: "compiled-large-corpus-checkpoint",
+			batchSize: 50,
+			maxVectorBytes: 256 * 1024,
+			audit: {
+				action: "resyncVectorIndex",
+				actor: "test-operator",
+				reason: "compiled large-corpus regression",
+				actorType: "operator",
+			},
+		};
+		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
+		const latencies: number[] = [];
+		let measuring = true;
+		const measureLoop = async (): Promise<void> => {
+			while (measuring) {
+				const started = performance.now();
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				latencies.push(performance.now() - started);
+			}
+		};
+		const measuringPromise = measureLoop();
+
+		let result = await maintenance.vectorRepair(request);
+		expect(result.batchRows).toBeLessThanOrEqual(50);
+		expect(result.batchBytes).toBeLessThanOrEqual(256 * 1024);
+		await maintenance.close();
+		maintenance = null;
+		maintenance = createDbOwnerMaintenance({ dbPath: database.path });
+		let batches = 1;
+		while (result.status !== "complete") {
+			result = await maintenance.vectorRepair(request);
+			expect(result.batchRows).toBeLessThanOrEqual(50);
+			expect(result.batchBytes).toBeLessThanOrEqual(256 * 1024);
+			batches += 1;
+			if (batches > 20) throw new Error("owner vector repair did not converge");
+		}
+		measuring = false;
+		await measuringPromise;
+
+		expect(result.remaining).toBe(0);
+		expect(result.affected).toBe(251);
+		expect(batches).toBeGreaterThan(3);
+		expect(Math.max(...latencies)).toBeLessThan(500);
+		const finalDb = new Database(database.path, { readonly: true });
+		expect(finalDb.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get()).toEqual({ n: 250 });
+		const audits = finalDb
+			.prepare("SELECT metadata FROM memory_history WHERE metadata LIKE '%operationId%'")
+			.all() as Array<{ metadata: string }>;
+		finalDb.close();
+		expect(audits.length).toBeGreaterThan(1);
+		expect(audits.some((row) => row.metadata.includes("repair.vector-resync.missing-vectors"))).toBe(true);
 	});
 });
