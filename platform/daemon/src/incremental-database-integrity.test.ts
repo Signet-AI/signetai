@@ -39,7 +39,7 @@ function makeDatabase(): {
 	return { directory, path, owner };
 }
 
-describe("incremental database integrity maintenance (#1683)", () => {
+describe("incremental database integrity maintenance (#1683, #1779)", () => {
 	it("tolerates concurrent legacy checkpoint upgrades", async () => {
 		const database = makeDatabase();
 		const legacy = new Database(database.path);
@@ -73,6 +73,7 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		}>;
 		verification.close();
 		expect(columns.some((column) => column.name === "attempt_count")).toBe(true);
+		expect(columns.some((column) => column.name === "skipped_objects")).toBe(true);
 	});
 
 	it("does not multiply the database-wide page count by the object frontier", async () => {
@@ -96,49 +97,107 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		expect(result.databaseBytesObserved).toBe(pageCount * pageSize);
 	});
 
-	it("parks the stuck-frontier-on-FTS-object class in a named degraded state", async () => {
+	it("skips expected FTS objects, continues the sweep, and reports truthful coverage", async () => {
 		const database = makeDatabase();
 		const db = new Database(database.path);
 		db.exec(`
 			CREATE TABLE session_transcripts (content TEXT NOT NULL);
 			CREATE VIRTUAL TABLE session_transcripts_fts USING fts5(content, content='session_transcripts', content_rowid='rowid');
+			CREATE TABLE zeta_after_fts (value TEXT);
+			CREATE INDEX zeta_after_fts_idx ON zeta_after_fts(value);
+			CREATE VIEW zeta_after_fts_view AS SELECT value FROM zeta_after_fts;
+			CREATE TRIGGER zeta_after_fts_trigger AFTER INSERT ON zeta_after_fts BEGIN SELECT 1; END;
 		`);
 		db.close();
 		await database.owner.start();
 		const scans: string[] = [];
 
-		const first = await runIncrementalDatabaseIntegrityCheck({
+		const result = await runIncrementalDatabaseIntegrityCheck({
 			owner: database.owner,
-			checkpointKey: "test.integrity.stuck-frontier-fts-object",
+			checkpointKey: "test.integrity.fts-continuation",
 			tablesPerRun: 64,
 			maxWorkUnits: 64,
-			runBudgetMs: 5_000,
+			ownerDeadlineMs: 5_000,
+			runBudgetMs: 30_000,
 			onObjectScan: (object) => {
 				scans.push(`${object.type}:${object.name}`);
 			},
 		});
 
-		expect(first.phase).toBe("degraded");
-		expect(first.degradationReason).toBe("degraded:fts-unverifiable");
-		expect(first.remainingObjects).toBe(0);
+		expect(result.phase).toBe("complete");
+		expect(result.degradationReason).toBeNull();
+		expect(result.skippedObjects).toBe(1);
+		expect(result.remainingObjects).toBe(0);
+		expect(result.checkedObjects + result.skippedObjects + result.remainingObjects).toBe(result.inventoryObjects);
+		expect(result.failedObjects).toBe(0);
+		expect(result.ftsVerification).toEqual({
+			status: "unverifiable",
+			totalObjects: 1,
+			skippedObjects: 1,
+			remainingObjects: 0,
+		});
+		expect(scans).toContain("table:zeta_after_fts");
+		expect(scans).toContain("index:zeta_after_fts_idx");
+		expect(scans).toContain("view:zeta_after_fts_view");
+		expect(scans).toContain("trigger:zeta_after_fts_trigger");
 		expect(getDatabaseIntegrityStatus()).toMatchObject({
-			state: "degraded",
-			phase: "degraded",
-			integrity: "degraded:fts-unverifiable",
+			state: "healthy",
+			phase: "complete",
+			integrity: null,
+			ftsVerification: result.ftsVerification,
 		});
+	});
 
-		const second = await runIncrementalDatabaseIntegrityCheck({
+	it("migrates an already parked FTS checkpoint and resumes after it", async () => {
+		const database = makeDatabase();
+		const db = new Database(database.path);
+		db.exec(`
+			CREATE TABLE session_transcripts (content TEXT NOT NULL);
+			CREATE VIRTUAL TABLE session_transcripts_fts USING fts5(content, content='session_transcripts', content_rowid='rowid');
+			CREATE TABLE zeta_after_fts (value TEXT);
+			CREATE TABLE db_integrity_checkpoints (
+				checkpoint_key TEXT PRIMARY KEY,
+				cursor TEXT NOT NULL DEFAULT '',
+				checked_tables INTEGER NOT NULL DEFAULT 0,
+				failed_tables INTEGER NOT NULL DEFAULT 0,
+				pages_checked INTEGER NOT NULL DEFAULT 0,
+				bytes_checked INTEGER NOT NULL DEFAULT 0,
+				status TEXT NOT NULL DEFAULT 'running',
+				updated_at TEXT NOT NULL
+			);
+			INSERT INTO db_integrity_checkpoints
+				(checkpoint_key, cursor, checked_tables, failed_tables, pages_checked, bytes_checked, status, updated_at)
+			VALUES ('test.integrity.parked-upgrade', 'session_transcripts_fts:table', 3, 0, 1, 4096,
+				'degraded:fts-unverifiable', '2026-01-01T00:00:00.000Z');
+		`);
+		db.close();
+		await database.owner.start();
+		const scans: string[] = [];
+
+		const result = await runIncrementalDatabaseIntegrityCheck({
 			owner: database.owner,
-			checkpointKey: "test.integrity.stuck-frontier-fts-object",
+			checkpointKey: "test.integrity.parked-upgrade",
 			tablesPerRun: 64,
 			maxWorkUnits: 64,
 			runBudgetMs: 5_000,
-			onObjectScan: (object) => {
-				scans.push(`${object.type}:${object.name}`);
-			},
+			onObjectScan: (object) => scans.push(`${object.type}:${object.name}`),
 		});
-		expect(second.phase).toBe("degraded");
-		expect(scans.filter((object) => object === "table:session_transcripts_fts")).toHaveLength(1);
+
+		expect(result.phase).toBe("complete");
+		expect(result.skippedObjects).toBe(1);
+		expect(result.degradationReason).toBeNull();
+		expect(scans).not.toContain("table:session_transcripts_fts");
+		expect(scans).toContain("table:zeta_after_fts");
+		expect(getDatabaseIntegrityStatus().state).toBe("healthy");
+
+		const verification = new Database(database.path, { readonly: true });
+		const checkpoint = verification
+			.prepare(
+				"SELECT status, skipped_objects AS skippedObjects FROM db_integrity_checkpoints WHERE checkpoint_key = ?",
+			)
+			.get("test.integrity.parked-upgrade") as { status: string; skippedObjects: number };
+		verification.close();
+		expect(checkpoint).toEqual({ status: "complete", skippedObjects: 1 });
 	});
 
 	it("commits one table frontier per bounded slice and resumes", async () => {
@@ -308,8 +367,10 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		updateDatabaseIntegrityStatus({
 			checkpointKey: "database.quick-check",
 			phase: "complete",
+			inventoryObjects: 3,
 			checkedObjects: 3,
 			failedObjects: 0,
+			skippedObjects: 0,
 			remainingObjects: 0,
 			lastObject: "table:gamma",
 			databasePagesObserved: 3,
@@ -319,6 +380,12 @@ describe("incremental database integrity maintenance (#1683)", () => {
 			ownerExecutionMs: 1,
 			cancellationReason: null,
 			degradationReason: null,
+			ftsVerification: {
+				status: "complete",
+				totalObjects: 0,
+				skippedObjects: 0,
+				remainingObjects: 0,
+			},
 		});
 
 		expect(getDatabaseIntegrityStatus()).toMatchObject({

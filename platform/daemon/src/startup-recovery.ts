@@ -65,6 +65,12 @@ const PENDING_INTEGRITY: DatabaseIntegrityStatus = {
 	ownerState: null,
 	ownerGeneration: null,
 	incrementalProgress: null,
+	ftsVerification: {
+		status: "pending",
+		totalObjects: 0,
+		skippedObjects: 0,
+		remainingObjects: 0,
+	},
 };
 
 let activeRecovery: Promise<StartupRecoveryReport> | null = null;

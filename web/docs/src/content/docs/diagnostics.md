@@ -50,6 +50,23 @@ It transactionally rebuilds disposable telemetry indexes when only
 `/health/ready`, with actionable offline repair guidance. If the audit store
 prevents committing a verified repair, the default remains fail-closed.
 
+The incremental progress in `/health` and `/health/ready` reports
+`inventoryObjects`, `checkedObjects`, `skippedObjects`, and `remainingObjects`.
+For a stable schema inventory, these counts satisfy:
+
+```text
+checkedObjects + skippedObjects + remainingObjects = inventoryObjects
+```
+
+Expected FTS5 virtual tables are intentionally not run through the bounded
+object check because SQLite exposes no killable chunked FTS integrity
+operation. They are counted in `skippedObjects` and described by the separate
+`ftsVerification` object (`status`, `totalObjects`, `skippedObjects`, and
+`remainingObjects`). An `unverifiable` FTS status is coverage information, not
+database corruption: it does not set the database state to `degraded` or add
+repair guidance. Actual check failures and owner or deadline failures continue
+to use the actionable corruption or unavailable states.
+
 Examples:
 
 ```bash

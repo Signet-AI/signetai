@@ -12,11 +12,13 @@
  *       connections (a bound-then-closed port), while a configured source
  *       root keeps the source sync walking (#1671's trigger);
  *   (c) drives a concurrent foreground write load via the normal memory
- *       remember path.
+ *       remember path;
+ *   (d) waits for and validates the incremental integrity coverage contract,
+ *       including expected FTS5 skips and truthful frontier counts.
  *
- * At the end it reads the probe results, evaluates #1543's acceptance
- * criteria (criteria.ts), prints a human summary, and writes a
- * machine-readable JSON artifact.
+ * At the end it reads the probe results, evaluates #1543's stability and
+ * #1779's integrity acceptance criteria (criteria.ts), prints a human summary,
+ * and writes a machine-readable JSON artifact.
  *
  * This harness is a judge, not a fixer: it never patches daemon behavior. If
  * it fails on current main, that is the harness working — the numbers are the
@@ -165,6 +167,158 @@ function childExited(child: ChildProcess | null): {
 	return { exited: false, code: null, signal: null };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function numberField(record: Record<string, unknown> | null, key: string): number | null {
+	const value = record?.[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringField(record: Record<string, unknown> | null, key: string): string | null {
+	const value = record?.[key];
+	return typeof value === "string" ? value : null;
+}
+
+interface IntegrityAcceptance {
+	readonly pass: boolean;
+	readonly checks: readonly {
+		readonly name: string;
+		readonly pass: boolean;
+		readonly observed: string;
+		readonly limit: string;
+	}[];
+	readonly summary: string;
+	readonly snapshot: unknown;
+}
+
+function evaluateIntegritySnapshot(snapshot: unknown): IntegrityAcceptance {
+	const root = asRecord(snapshot);
+	const databaseIntegrity = asRecord(root?.databaseIntegrity);
+	const progress = asRecord(databaseIntegrity?.incrementalProgress);
+	const topLevelFts = asRecord(databaseIntegrity?.ftsVerification);
+	const fts = asRecord(progress?.ftsVerification ?? databaseIntegrity?.ftsVerification);
+	const inventory = numberField(progress, "inventoryObjects");
+	const checked = numberField(progress, "checkedObjects");
+	const skipped = numberField(progress, "skippedObjects");
+	const remaining = numberField(progress, "remainingObjects");
+	const ftsTotal = numberField(fts, "totalObjects");
+	const ftsSkipped = numberField(fts, "skippedObjects");
+	const ftsRemaining = numberField(fts, "remainingObjects");
+	const countInvariant =
+		inventory !== null && checked !== null && skipped !== null && remaining !== null
+			? checked + skipped + remaining === inventory
+			: false;
+	const checks = [
+		{
+			name: "fresh production schema integrity state",
+			pass: stringField(databaseIntegrity, "state") === "healthy" && databaseIntegrity?.repairGuidance === null,
+			observed: `${String(databaseIntegrity?.state ?? "missing")} (repair guidance: ${String(databaseIntegrity?.repairGuidance ?? "none")})`,
+			limit: "healthy with no repair guidance",
+		},
+		{
+			name: "incremental integrity sweep completes",
+			pass: stringField(progress, "phase") === "complete",
+			observed: String(progress?.phase ?? "missing"),
+			limit: "complete",
+		},
+		{
+			name: "integrity coverage counts are consistent",
+			pass: countInvariant,
+			observed:
+				inventory === null || checked === null || skipped === null || remaining === null
+					? "missing numeric coverage fields"
+					: `${checked} checked + ${skipped} skipped + ${remaining} remaining = ${inventory} inventory`,
+			limit: "checked + skipped + remaining = inventory",
+		},
+		{
+			name: "expected FTS5 coverage is explicit",
+			pass:
+				topLevelFts !== null &&
+				stringField(fts, "status") === "unverifiable" &&
+				ftsTotal !== null &&
+				ftsTotal > 0 &&
+				ftsSkipped === ftsTotal &&
+				ftsRemaining === 0 &&
+				stringField(progress, "degradationReason") === null,
+			observed: `${String(fts?.status ?? "missing")} (${ftsSkipped ?? "?"}/${ftsTotal ?? "?"} skipped, ${ftsRemaining ?? "?"} remaining; degradation=${String(progress?.degradationReason ?? "none")})`,
+			limit: "unverifiable FTS coverage, all FTS objects skipped, no degradation reason",
+		},
+		{
+			name: "ordinary objects follow the FTS frontier",
+			pass: stringField(progress, "lastObject") !== null && !/fts/i.test(stringField(progress, "lastObject") ?? ""),
+			observed: String(progress?.lastObject ?? "missing"),
+			limit: "completed object is not an FTS virtual table",
+		},
+	];
+	const failed = checks.filter((check) => !check.pass);
+	return {
+		pass: failed.length === 0,
+		checks,
+		summary:
+			failed.length === 0
+				? "Integrity coverage acceptance PASSED: the production schema completed with explicit, non-degrading FTS coverage."
+				: `Integrity coverage acceptance FAILED: ${failed.map((check) => check.name).join("; ")}`,
+		snapshot,
+	};
+}
+
+async function waitForIntegrityCoverage(
+	origin: string,
+	child: ChildProcess,
+	output: () => string,
+): Promise<IntegrityAcceptance> {
+	const timeoutMs = args.scale === "smoke" ? 300_000 : 420_000;
+	const deadline = Date.now() + timeoutMs;
+	let lastSnapshot: unknown = null;
+	while (Date.now() < deadline) {
+		if (child.exitCode !== null) throw new Error(`daemon exited during integrity acceptance\n${output()}`);
+		const response = await timedFetch(`${origin}/health`, 2_000, undefined, true);
+		if (response.status === 200 && response.json !== undefined) {
+			lastSnapshot = response.json;
+			const databaseIntegrity = asRecord(asRecord(response.json)?.databaseIntegrity);
+			const progress = asRecord(databaseIntegrity?.incrementalProgress);
+			if (progress?.phase === "complete" || progress?.phase === "degraded") {
+				return evaluateIntegritySnapshot(response.json);
+			}
+		}
+		await Bun.sleep(200);
+	}
+	if (lastSnapshot !== null) {
+		const evaluated = evaluateIntegritySnapshot(lastSnapshot);
+		return {
+			...evaluated,
+			pass: false,
+			checks: [
+				...evaluated.checks,
+				{
+					name: "integrity coverage reaches a terminal observation",
+					pass: false,
+					observed: `timed out after ${timeoutMs / 1000}s`,
+					limit: "complete or actionable terminal state",
+				},
+			],
+			summary: `${evaluated.summary} The integrity progress did not reach a terminal observation within ${timeoutMs / 1000}s.`,
+		};
+	}
+	return {
+		pass: false,
+		checks: [
+			{
+				name: "integrity coverage reaches a terminal observation",
+				pass: false,
+				observed: "no /health payload",
+				limit: "complete or actionable terminal state",
+			},
+		],
+		summary: "Integrity coverage acceptance FAILED: /health did not expose a database integrity payload.",
+		snapshot: null,
+	};
+}
+
 // -- synthetic source tree (keeps source sync walking like a real vault) ------
 
 function buildSourceTree(root: string, files: number, dirs: number): void {
@@ -231,6 +385,7 @@ function writeEmergencyArtifact(kind: string, message: string): void {
 				{
 					harness: "phase-d-stability-acceptance",
 					issue: 1543,
+					integrityIssue: 1779,
 					scale: args.scale,
 					evaluation: {
 						pass: false,
@@ -425,6 +580,8 @@ async function main(): Promise<number> {
 		const daemonStartupMark = phaseMarks[phaseMarks.length - 1];
 		const startupMs = daemonStartupMark ? Date.now() - daemonStartupMark.at : -1;
 		console.error(`[phase-d] daemon live after ${startupMs}ms (on ${SCALE.memories} memories)`);
+		const integrityAcceptance = await waitForIntegrityCoverage(origin, daemon, () => stderrChunks.join(""));
+		console.error(integrityAcceptance.summary);
 
 		// 7. Start the measurement phase pollers.
 		markPhase("run");
@@ -629,6 +786,18 @@ async function main(): Promise<number> {
 					: `${evaluation.summary} Pollers also did not settle within ${POLLER_SHUTDOWN_TIMEOUT_MS / 1000}s after the run deadline.`,
 			};
 		}
+		if (!integrityAcceptance.pass) {
+			evaluation = {
+				pass: false,
+				checks: [...evaluation.checks, ...integrityAcceptance.checks],
+				summary: `${evaluation.summary} ${integrityAcceptance.summary}`,
+			};
+		} else {
+			evaluation = {
+				...evaluation,
+				checks: [...evaluation.checks, ...integrityAcceptance.checks],
+			};
+		}
 
 		// 9. Output: human summary + machine-readable artifact.
 		let logs = "";
@@ -641,6 +810,7 @@ async function main(): Promise<number> {
 		const artifact = {
 			harness: "phase-d-stability-acceptance",
 			issue: 1543,
+			integrityIssue: 1779,
 			scale: args.scale,
 			db: { ...dbResult.counts, buildMs: dbResult.buildMs, sizeMb: Number(dbMb) },
 			startupMs,
@@ -662,6 +832,7 @@ async function main(): Promise<number> {
 			},
 			measurements,
 			evaluation,
+			integrityAcceptance,
 			phaseMarks,
 			daemonStdoutTail: stdoutChunks.join("").slice(-4000),
 			daemonStderrTail: stderrChunks.join("").slice(-4000),

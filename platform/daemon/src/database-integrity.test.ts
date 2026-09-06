@@ -105,8 +105,10 @@ function incrementalProgress(overrides: Partial<DatabaseIntegrityProgress> = {})
 	return {
 		checkpointKey: "database.quick-check",
 		phase: "complete",
+		inventoryObjects: 3,
 		checkedObjects: 3,
 		failedObjects: 0,
+		skippedObjects: 0,
 		remainingObjects: 0,
 		lastObject: "table:gamma",
 		databasePagesObserved: 3,
@@ -116,6 +118,12 @@ function incrementalProgress(overrides: Partial<DatabaseIntegrityProgress> = {})
 		ownerExecutionMs: 1,
 		cancellationReason: null,
 		degradationReason: null,
+		ftsVerification: {
+			status: "complete",
+			totalObjects: 0,
+			skippedObjects: 0,
+			remainingObjects: 0,
+		},
 		...overrides,
 	};
 }
@@ -568,6 +576,29 @@ describe("integrity state severity merge", () => {
 	beforeEach(() => {
 		resetGlobalIntegrityLatch();
 		updateDatabaseIntegrityStatus(incrementalProgress());
+	});
+	it("keeps expected FTS skips explicit without degrading database health", () => {
+		const progress = incrementalProgress({
+			inventoryObjects: 4,
+			checkedObjects: 3,
+			skippedObjects: 1,
+			ftsVerification: {
+				status: "unverifiable",
+				totalObjects: 1,
+				skippedObjects: 1,
+				remainingObjects: 0,
+			},
+		});
+
+		updateDatabaseIntegrityStatus(progress);
+
+		expect(getDatabaseIntegrityStatus()).toMatchObject({
+			state: "healthy",
+			phase: "complete",
+			integrity: null,
+			repairGuidance: null,
+			ftsVerification: progress.ftsVerification,
+		});
 	});
 	it("publishes incremental corruption and repair guidance over a degraded latch", () => {
 		publishDatabaseIntegrityStatus("degraded", ["global verification incomplete"]);
