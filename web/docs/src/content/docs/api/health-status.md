@@ -82,6 +82,62 @@ and `GET /health/ready` for readiness.
       "writeActive": false
     }
   },
+  "dbOwner": {
+    "state": "ready",
+    "initialization": "ready",
+    "databaseReady": true,
+    "pid": 23456,
+    "generation": 1,
+    "queuedJobs": 0,
+    "foregroundQueuedJobs": 0,
+    "maintenanceQueuedJobs": 0,
+    "activeJobId": null,
+    "activeWorkloadClass": null,
+    "foregroundOldestAgeMs": null,
+    "maintenanceOldestAgeMs": null,
+    "lanes": {
+      "read": {
+        "state": "ready",
+        "pid": 23456,
+        "generation": 1,
+        "queuedJobs": 0,
+        "activeJobId": null,
+        "activeWorkloadClass": null,
+        "foregroundQueuedJobs": 0,
+        "maintenanceQueuedJobs": 0,
+        "foregroundOldestAgeMs": null,
+        "maintenanceOldestAgeMs": null,
+        "lastError": null
+      },
+      "write": {
+        "state": "ready",
+        "pid": 23457,
+        "generation": 1,
+        "queuedJobs": 0,
+        "activeJobId": null,
+        "activeWorkloadClass": null,
+        "foregroundQueuedJobs": 0,
+        "maintenanceQueuedJobs": 0,
+        "foregroundOldestAgeMs": null,
+        "maintenanceOldestAgeMs": null,
+        "lastError": null
+      },
+      "maintenance": {
+        "state": "ready",
+        "pid": 23458,
+        "generation": 1,
+        "queuedJobs": 0,
+        "activeJobId": null,
+        "activeWorkloadClass": null,
+        "foregroundQueuedJobs": 0,
+        "maintenanceQueuedJobs": 0,
+        "foregroundOldestAgeMs": null,
+        "maintenanceOldestAgeMs": null,
+        "lastError": null
+      }
+    },
+    "lastError": null
+  },
   "eventLoop": {
     "status": "ok",
     "stallMs": 0,
@@ -115,6 +171,12 @@ admission limits, and cancellation/rejection counts. `syncRejected` counts
 legacy synchronous read attempts rejected at the hard connection cap. The
 `dbRuntime.queue` snapshot reports current read/write depth, queue age, and
 active leases; `eventLoopLag` is the bounded independent event-loop sample.
+
+`dbOwner` is the current snapshot of the same registered resource that owns
+owner-routed queries and maintenance. It is `null` only before that resource
+is registered or after shutdown cleanup has removed it. Its `state` and
+`generation` are the owner values also recorded in `databaseIntegrity` when
+that status is published; `lanes` contains the per-lane snapshots.
 
 The process-local `eventLoop` signal separates a responsive daemon from one
 whose event loop is falling behind. Its health semantics are:

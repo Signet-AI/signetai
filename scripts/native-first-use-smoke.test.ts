@@ -55,13 +55,17 @@ async function freePort(): Promise<number> {
 	return port;
 }
 
-async function waitForHealth(origin: string, child: ChildProcess, output: () => string): Promise<void> {
+async function waitForHealth(
+	origin: string,
+	child: ChildProcess,
+	output: () => string,
+): Promise<Record<string, unknown>> {
 	const deadline = Date.now() + 90_000;
 	while (Date.now() < deadline) {
 		if (child.exitCode !== null) throw new Error(`native daemon exited ${child.exitCode}\n${output()}`);
 		try {
 			const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(1_000) });
-			if (response.ok) return;
+			if (response.ok) return (await response.json()) as Record<string, unknown>;
 		} catch {}
 		await Bun.sleep(100);
 	}
@@ -165,7 +169,11 @@ describe("compiled native first use", () => {
 			daemonChild.stderr?.on("data", (chunk: string) => {
 				daemonOutput += chunk;
 			});
-			await waitForHealth(origin, daemonChild, () => daemonOutput);
+			const health = await waitForHealth(origin, daemonChild, () => daemonOutput);
+			expect(health.dbOwner).not.toBeNull();
+			const dbOwner = health.dbOwner as { state?: unknown; generation?: unknown };
+			expect(typeof dbOwner.state).toBe("string");
+			expect(typeof dbOwner.generation).toBe("number");
 			const cliEnv = { ...env, SIGNET_DAEMON_URL: origin };
 
 			run(binary, ["sync"], cliEnv, 30000);

@@ -3,8 +3,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDbOwnerMaintenance, runOwnerMaintenanceWithRetry } from "./db-owner-maintenance";
-import { createDbOwnerClient, DbOwnerDiedError, type DbOwnerClient } from "./db-owner-client";
+import {
+	closeRegisteredDbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	getDbOwnerHealth,
+	registerDbOwnerMaintenance,
+	runOwnerMaintenanceWithRetry,
+} from "./db-owner-maintenance";
+import { createDbOwnerClient, DbOwnerDiedError, type DbOwnerClient, type DbOwnerHealth } from "./db-owner-client";
+import type { DbOwnerMaintenance } from "./db-owner-maintenance";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { completeFtsStartupRecovery } from "./fts-startup-recovery";
 
@@ -115,6 +122,79 @@ describe("DB owner FTS maintenance", () => {
 		expect(deadlines).toHaveLength(2);
 		expect(deadlines[1]).toBeLessThan(deadlines[0]);
 		expect(Date.now() - startedAt).toBeLessThan(125);
+	});
+
+	test("rejects a replacement until the registered owner resource is closed", async () => {
+		const health = {
+			state: "ready",
+			initialization: "ready",
+			databaseReady: true,
+			pid: null,
+			generation: 1,
+			queuedJobs: 0,
+			foregroundQueuedJobs: 0,
+			maintenanceQueuedJobs: 0,
+			activeJobId: null,
+			activeWorkloadClass: null,
+			foregroundOldestAgeMs: null,
+			maintenanceOldestAgeMs: null,
+			lastError: null,
+		} as DbOwnerHealth;
+		const first = { health: () => health, close: async (): Promise<void> => {} } as unknown as DbOwnerMaintenance;
+		const replacement = { health: () => health } as unknown as DbOwnerMaintenance;
+		registerDbOwnerMaintenance(first);
+		try {
+			expect(() => registerDbOwnerMaintenance(replacement)).toThrow(
+				"DB owner maintenance is already registered; close it before registering a replacement",
+			);
+		} finally {
+			await closeRegisteredDbOwnerMaintenance();
+		}
+	});
+
+	test("clears owner health before asynchronous resource cleanup completes", async () => {
+		let release: (() => void) | undefined;
+		let closeStarted: (() => void) | undefined;
+		const closeGate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const started = new Promise<void>((resolve) => {
+			closeStarted = resolve;
+		});
+		const health = {
+			state: "ready",
+			initialization: "ready",
+			databaseReady: true,
+			pid: null,
+			generation: 1,
+			queuedJobs: 0,
+			foregroundQueuedJobs: 0,
+			maintenanceQueuedJobs: 0,
+			activeJobId: null,
+			activeWorkloadClass: null,
+			foregroundOldestAgeMs: null,
+			maintenanceOldestAgeMs: null,
+			lastError: null,
+		} as DbOwnerHealth;
+		const resource = {
+			health: () => health,
+			close: async (): Promise<void> => {
+				closeStarted?.();
+				await closeGate;
+			},
+		} as unknown as DbOwnerMaintenance;
+		const replacement = { health: () => health } as unknown as DbOwnerMaintenance;
+		registerDbOwnerMaintenance(resource);
+		expect(getDbOwnerHealth()).toBe(health);
+
+		const closing = closeRegisteredDbOwnerMaintenance();
+		await started;
+		expect(getDbOwnerHealth()).toBeNull();
+		expect(() => registerDbOwnerMaintenance(replacement)).toThrow(
+			"DB owner maintenance is closing; wait before registering a replacement",
+		);
+		release?.();
+		await closing;
 	});
 
 	test("reports queue admission separately from owner execution time", async () => {
