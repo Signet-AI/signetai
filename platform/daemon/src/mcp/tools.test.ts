@@ -20,6 +20,7 @@ import {
 	updateGraphiqActiveProject,
 } from "@signet/core";
 import { Hono } from "hono";
+import { writeInstalledServers } from "../marketplace-installed-state.js";
 import { resetDefaultPluginHostForTests } from "../plugins/index.js";
 import { mountMarketplaceRoutes } from "../routes/marketplace.js";
 import { createMcpServer, __resetMarketplaceRefreshesForTests, refreshMarketplaceProxyTools } from "./tools.js";
@@ -1764,7 +1765,7 @@ process.stdin.on("data", (chunk) => {
 				installedAt: now,
 				updatedAt: now,
 			}));
-			writeFileSync(join(tempAgentsDir, "marketplace", "mcp-servers.json"), JSON.stringify(servers));
+			writeInstalledServers(servers);
 
 			const app = new Hono();
 			mountMarketplaceRoutes(app);
