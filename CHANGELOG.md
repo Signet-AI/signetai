@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-06
+- Bug fixes: apply existing setup provider; clean retired setup fields; enable dreaming defaults.
+
 ### 2026-09-05
 - Features: replace terminal setup with guided dashboard onboarding; refine workspace and icon system; add durable transcript import clients; expose durable transcript imports; add durable transcript import worker lifecycle; add owner-routed transcript commit seam; add transcript import foundation.
 - Bug fixes: build desktop connector dependencies before daemon; keep installer loading out of daemon boot and repair CI gates; integrate onboarding with updated dashboard; unblock onboarding review and use existing brand assets; fence profile memory before applying context budgets; read entries only from the current head revision; fence generated heads by agent and source revision; gate transcript imports on unsupported platforms; retain transcript import ledgers on unsafe purge; close transcript purge and path escapes; close transcript import escape races; serialize purge with first canonical append; close transcript import lifecycle review gaps; harden transcript import lifecycle; refresh event-loop ledger locations; route transcript DB work through owner; enforce transaction preconditions; use reserved transcript upload slot; enforce lease truth and upload serialization; initialize isolated transcript workspace; retain source audit tombstones; recover stale canonical append locks; retry recovery until db owner is ready; make startup recovery retryable; reconcile filesystem crash recovery; reap recovery children on parent death; recover canonical append lock after crash; close db owner on parent death; make transcript replay file slots unique; converge imported transcript dreaming evidence; stabilize transcript import worker; consolidate current memory eligibility; exclude superseded memories from delivered context; reject invalid runtime config; recover projection token budget.
@@ -31,11 +34,18 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: route wave 7 workers through db owner; route knowledge graph reads through db owner; stabilize DB attribution IDs; isolate server composition root; separate widget generation from probe persistence; isolate Dreaming backlog cache; move owner-local Dreaming execution; make inline owner dispatch exhaustive; isolate DB foundation lifecycle; isolate migration contract.
 - Docs: document fail-closed workspace startup.
 
-### 2026-08-30
-- Bug fixes: preserve low-volume scheduling fallback; realign memory-search site tokens after wave-4 relocation; L1 wave 4 owner-routing + audit realignment; track detached boot descendants; close boot-wedge gate review gaps; route pipeline reads through owner; harden boot wedge measurements; route telemetry identity through owner; route extraction retirement to owner; route startup DB work to owner.
-- Refactoring: route wave 2 reads and telemetry through owner.
-
 ## Release Ledger
+
+## [0.219.2] - 2026-09-06
+
+Release summary: 3 bug fixes.
+Tag range: `v0.219.1..v0.219.2`.
+
+### Bug Fixes
+
+- **config**: apply existing setup provider
+- **config**: clean retired setup fields
+- **config**: enable dreaming defaults
 
 ## [0.219.1] - 2026-09-05
 
