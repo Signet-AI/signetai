@@ -219,14 +219,41 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 	test("passes the traversal deadline budget to every owner query", async () => {
 		const deadlines: number[] = [];
 		const owner = createTestOwner(db, [], deadlines);
+		const deadlineAt = Date.now() + 500;
+		const focal = await resolveFocalEntitiesViaOwner(owner, "default", {
+			checkpointEntityIds: ["e1"],
+			includePinned: false,
+			deadlineAt,
+		});
 		const result = await traverseKnowledgeGraphViaOwner(["e1"], owner, "default", {
 			...CONFIG,
-			timeoutMs: 50,
+			timeoutMs: 500,
+			deadlineAt,
 		});
 
+		expect(focal.entityIds).toEqual(["e1"]);
 		expect(result.memoryIds.has("m1")).toBe(true);
 		expect(deadlines.length).toBeGreaterThan(0);
-		expect(deadlines.every((deadline) => deadline > 0 && deadline <= 50)).toBe(true);
+		expect(deadlines.every((deadline) => deadline > 0 && deadline <= 500)).toBe(true);
+	});
+
+	test("reports an owner deadline as a partial timeout instead of an operational failure", async () => {
+		const owner = createTestOwner(db, []);
+		const originalSubmit = owner.submit.bind(owner);
+		owner.submit = (request, options) => {
+			const handle = originalSubmit(request, options);
+			if (options.operation !== "session-start.graph-traversal.table-check") return handle;
+			const error = Object.assign(new Error("owner traversal deadline exceeded"), {
+				code: "DB_OWNER_DEADLINE",
+			});
+			return { ...handle, result: Promise.reject(error) };
+		};
+
+		const result = await traverseKnowledgeGraphViaOwner(["e1"], owner, "default", CONFIG);
+
+		expect(result.timedOut).toBe(true);
+		expect(result.error).toBeUndefined();
+		expect(result.memoryIds.size).toBe(0);
 	});
 
 	test("falls back to LIKE when the owner FTS index has no matching row", async () => {
