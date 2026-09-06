@@ -19,6 +19,7 @@ import {
 	type AgentRosterReadPolicy,
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	type LlmUsage,
+	type RecallContextMeta,
 	type RecallSurface,
 	type RecallTemporalMeta,
 	SOURCE_CHUNK_SOURCE_TYPE,
@@ -40,7 +41,13 @@ import { buildAgentScopeClause } from "./memory-access-scope";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
 import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
-import { constructContextBlocksViaOwner } from "./pipeline/context-construction";
+import {
+	buildEntityContextFromSnapshot,
+	constructContextBlocksFromSnapshot,
+	prepareContextRows,
+	type ConstructedContext,
+} from "./pipeline/context-construction";
+import { loadContextSnapshotViaOwner } from "./pipeline/context-snapshot";
 import { DEFAULT_DAMPENING, type ScoredRow, applyDampening } from "./pipeline/dampening";
 import { getGraphBoostIdsViaOwner, tokenizeGraphQuery } from "./pipeline/graph-search";
 import {
@@ -162,6 +169,8 @@ export interface RecallResponse {
 			code: string | number | null;
 			message: string;
 		};
+		/** Bounded knowledge-graph context work and any omitted/truncated context. */
+		context?: RecallContextMeta;
 		/** Most specific known degradation reason for partial recall. */
 		degradation?: "fts_incomplete" | "graph_traversal_timeout" | "graph_traversal_failed";
 		/**
@@ -1493,6 +1502,7 @@ export async function hybridRecall(
 	let graphPartial = false;
 	let graphError: RecallResponse["meta"]["graphError"];
 	let graphDegradation: RecallResponse["meta"]["degradation"];
+	let contextMeta: RecallContextMeta | undefined;
 	const selectionSuppressedIds = new Set<string>();
 	const lifecycleSourceResults = new Map<string, { readonly source?: string; readonly source_id?: string }>();
 	const selectionDedupeEnabled = !!params.sessionKey?.trim() && params.includeRecalled !== true;
@@ -1582,6 +1592,7 @@ export async function hybridRecall(
 					? { degradation: "fts_incomplete" as const }
 					: {}),
 			...(dedupeMeta.enabled ? { dedupe: dedupeMeta } : {}),
+			...(contextMeta ? { context: contextMeta } : {}),
 		};
 		try {
 			const trackedIds = response.results.map((row) => row.id).filter((id) => !id.includes(":"));
@@ -3065,8 +3076,14 @@ export async function hybridRecall(
 	}
 
 	// --- Entity context + constructed memories (DP-7) ---
+	// Both views consume one bounded raw snapshot. The constructed budget is
+	// also the entity budget, so a small requested card count cannot trigger
+	// work over the full focal set.
 	let entityContext: RecallResponse["entities"];
 	let focalEids: string[] = [];
+	let constructedBlocks: ReadonlyArray<ConstructedContext> = [];
+	const constructedLimit = Math.min(limit, Math.max(3, Math.ceil(limit * 0.3)));
+	let contextFocalEntityCount = 0;
 
 	if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled) {
 		const entityContextStart = performance.now();
@@ -3076,100 +3093,63 @@ export async function hybridRecall(
 				const agentId = params.agentId ?? "default";
 				const owner = await getGraphOwner();
 				const focal = await getFocalEntities(owner, agentId);
+				contextFocalEntityCount = focal.entityIds.length;
 				if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });
-				const ctx = await (async () => {
-					if (focal.entityIds.length === 0) return null;
-					let eids = focal.entityIds;
-					if (params.scope !== undefined || params.project) {
-						const ph = eids.map(() => "?").join(", ");
-						const scoped = await graphOwnerReadAll<{ entity_id: string }>(
-							`SELECT DISTINCT mem.entity_id
-							 FROM memory_entity_mentions mem
-							 JOIN memories m ON m.id = mem.memory_id
-							 WHERE mem.entity_id IN (${ph})
-							   ${currentMemorySql("m")}
-							   ${filter.sql}`,
-							[...eids, ...filter.args],
-							"memory-search.entity-context.scope",
-							eids.length,
-						);
-						eids = scoped.map((row) => row.entity_id);
-						if (eids.length === 0) return null;
-					}
-
-					const placeholders = eids.map(() => "?").join(", ");
-					const entities = await graphOwnerReadAll<{ id: string; name: string; entity_type: string }>(
-						`SELECT id, name, entity_type FROM entities WHERE id IN (${placeholders})`,
-						eids,
-						"memory-search.entity-context.entities",
+				let eids = focal.entityIds;
+				if (eids.length > 0 && (params.scope !== undefined || params.project)) {
+					const ph = eids.map(() => "?").join(", ");
+					const scoped = await graphOwnerReadAll<{ entity_id: string }>(
+						`SELECT DISTINCT mem.entity_id
+						 FROM memory_entity_mentions mem
+						 JOIN memories m ON m.id = mem.memory_id
+						 WHERE mem.entity_id IN (${ph})
+						   ${currentMemorySql("m")}
+						   ${filter.sql}`,
+						[...eids, ...filter.args],
+						"memory-search.entity-context.scope",
 						eids.length,
 					);
-					const safetyTable = await graphOwnerReadAll<{ name: string }>(
-						"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety'",
-						[],
-						"memory-search.entity-context.safety-table",
-						1,
-					);
-					const safetyJoin =
-						safetyTable.length > 0
-							? "LEFT JOIN memory_content_safety safety ON safety.agent_id = ea.agent_id AND safety.source_kind = 'memory' AND safety.source_id = ea.memory_id"
-							: "";
-					const safetySelect =
-						safetyTable.length > 0
-							? ", safety.status AS safety_status, safety.context_eligible AS safety_context_eligible"
-							: "";
-					const structured = [];
-					for (const entity of entities) {
-						const aspects = await graphOwnerReadAll<{ id: string; name: string }>(
-							`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
-							 WHERE entity_id = ? AND agent_id = ?
-							 ORDER BY weight DESC LIMIT 10`,
-							[entity.id, agentId],
-							"memory-search.entity-context.aspects",
-							10,
-						);
-						const contextAspects = [];
-						for (const aspect of aspects) {
-							const attrs = await graphOwnerReadAll<{
-								content: string;
-								status: string;
-								importance: number;
-								memory_id: string | null;
-								safety_status?: string | null;
-								safety_context_eligible?: number | null;
-							}>(
-								`SELECT ea.content, ea.status, ea.importance, ea.memory_id${safetySelect}
-								 FROM entity_attributes ea ${safetyJoin}
-								 WHERE ea.aspect_id = ? AND ea.agent_id = ? AND ea.status = 'active'
-								 ORDER BY ea.importance DESC LIMIT 5`,
-								[aspect.id, agentId],
-								"memory-search.entity-context.attributes",
-								5,
-							);
-							const attributes = attrs
-								.filter(
-									(attr) =>
-										scanMemoryContent(attr.content).contextEligible &&
-										(!attr.memory_id ||
-											attr.safety_status == null ||
-											(attr.safety_status === "clean" && attr.safety_context_eligible === 1)),
-								)
-								.map((attr) => ({ content: attr.content, status: attr.status, importance: attr.importance }));
-							if (attributes.length > 0) contextAspects.push({ name: aspect.name, attributes });
-						}
-						if (contextAspects.length > 0) {
-							structured.push({ name: entity.name, type: entity.entity_type, aspects: contextAspects });
-						}
-					}
-					return { eids, structured };
-				})();
+					eids = scoped.map((row) => row.entity_id);
+				}
 
-				if (ctx) {
-					entityContext = ctx.structured;
-					focalEids = ctx.eids;
+				if (eids.length > 0) {
+					const snapshot = await loadContextSnapshotViaOwner(owner, agentId, eids, constructedLimit);
+					const prepared = await prepareContextRows(snapshot);
+					entityContext = await buildEntityContextFromSnapshot(snapshot, prepared);
+					constructedBlocks = await constructContextBlocksFromSnapshot(snapshot, constructedLimit, prepared);
+					focalEids = [...snapshot.entityIds];
+					contextMeta = {
+						...snapshot.work,
+						constructedLimit,
+						constructedBlocks: constructedBlocks.length,
+						truncatedBlocks: constructedBlocks.filter((block) => block.truncated).length,
+						...(snapshot.work.partial
+							? {
+									reason:
+										snapshot.work.safetyLedger === "unavailable"
+											? ("safety_ledger_unavailable" as const)
+											: ("entity_budget" as const),
+								}
+							: {}),
+					};
 				}
 			}
 		} catch (e) {
+			contextMeta = {
+				focalEntityCount: contextFocalEntityCount,
+				selectedEntityCount: 0,
+				entityCount: 0,
+				entityLimit: constructedLimit,
+				omittedEntityCount: contextFocalEntityCount,
+				statementCount: 0,
+				estimatedWorkUnits: 0,
+				partial: true,
+				safetyLedger: "unavailable",
+				constructedLimit,
+				constructedBlocks: 0,
+				truncatedBlocks: 0,
+				reason: "owner_failure",
+			};
 			logger.warn("memory", "Entity context fetch failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -3183,18 +3163,15 @@ export async function hybridRecall(
 	// query-independent. To prevent large entity cards from outranking
 	// actual memories that answer the query, cap their scores below the
 	// lowest real result score.
-	if (focalEids.length > 0) {
+	if (focalEids.length > 0 && constructedBlocks.length > 0) {
 		const constructedStart = performance.now();
 		try {
-			const agentId = params.agentId ?? "default";
-			const cap = Math.max(3, Math.ceil(limit * 0.3));
-			const blocks = await constructContextBlocksViaOwner(await getGraphOwner(), agentId, focalEids, cap);
 			const now = new Date().toISOString();
 			const minReal = results.length > 0 ? Math.min(...results.map((r) => r.score)) : 0.5;
 			const maxConstructed = Math.max(0.01, minReal - 0.01);
 			let added = 0;
-			for (const block of blocks) {
-				if (added >= cap || results.length >= limit) break;
+			for (const block of constructedBlocks) {
+				if (added >= constructedLimit || results.length >= limit) break;
 				if (!scanMemoryContent(block.content).contextEligible) continue;
 				const syntheticId = `constructed:${block.provenance.entityName}`;
 				if (existingIds.has(syntheticId)) continue;

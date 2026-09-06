@@ -1254,6 +1254,7 @@ export type {
 	PluginSurfaceBase,
 	PluginSurfaceSummary,
 	PluginToolSummary,
+	RecallContextMeta,
 	RecallResponse,
 	RecallResult,
 	RecoverResult,

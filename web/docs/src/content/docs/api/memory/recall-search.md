@@ -153,6 +153,15 @@ cause is distinct from `provider_unavailable`, which is reserved for provider
 outages and their 503 semantics. This differs from
 `aggregate.partial`, which means aggregate planning or synthesis stopped after
 retrieving only partial evidence.
+
+When graph entity context runs, `meta.context` reports its bounded work. It
+includes the number of focal entities considered, the selected entity budget,
+the set-based owner statement count, the estimated work units, and the safety
+ledger state. `meta.context.partial: true` means the focal-entity budget or
+safety-ledger availability limited context; `omittedEntityCount` identifies the
+budgeted omissions. `truncatedBlocks` reports constructed cards shortened to
+the per-card character limit. These fields make bounded or degraded context
+observable instead of silently dropping it.
 `meta.timings`, when present, reports daemon-side stage timings in
 milliseconds. Aggregate recall fills the same field with aggregate-specific
 stages such as `aggregate_planning`, `aggregate_followup_recalls`, and

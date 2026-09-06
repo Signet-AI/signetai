@@ -34,6 +34,48 @@ describe("recall surface helpers", () => {
 		}
 	});
 
+	it("preserves bounded graph-context work metadata", () => {
+		const parsed = parseRecallPayload({
+			results: [],
+			meta: {
+				totalReturned: 0,
+				hasSupplementary: false,
+				noHits: true,
+				context: {
+					partial: true,
+					focalEntityCount: 200,
+					selectedEntityCount: 3,
+					entityCount: 3,
+					entityLimit: 3,
+					omittedEntityCount: 197,
+					statementCount: 7,
+					estimatedWorkUnits: 418,
+					safetyLedger: "available",
+					constructedLimit: 3,
+					constructedBlocks: 3,
+					truncatedBlocks: 0,
+					reason: "entity_budget",
+				},
+			},
+		});
+
+		expect(parsed.meta.context).toEqual({
+			partial: true,
+			focalEntityCount: 200,
+			selectedEntityCount: 3,
+			entityCount: 3,
+			entityLimit: 3,
+			omittedEntityCount: 197,
+			statementCount: 7,
+			estimatedWorkUnits: 418,
+			safetyLedger: "available",
+			constructedLimit: 3,
+			constructedBlocks: 3,
+			truncatedBlocks: 0,
+			reason: "entity_budget",
+		});
+	});
+
 	it("formats daemon recall payloads with primary and supporting context", () => {
 		const text = formatRecallText({
 			method: "hybrid",

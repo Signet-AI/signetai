@@ -49,10 +49,27 @@ export interface RecallResult {
 	readonly already_recalled?: boolean;
 }
 
+export interface RecallContextMeta {
+	readonly partial: boolean;
+	readonly focalEntityCount: number;
+	readonly selectedEntityCount: number;
+	readonly entityCount: number;
+	readonly entityLimit: number;
+	readonly omittedEntityCount: number;
+	readonly statementCount: number;
+	readonly estimatedWorkUnits: number;
+	readonly safetyLedger: "available" | "missing" | "unavailable";
+	readonly constructedLimit: number;
+	readonly constructedBlocks: number;
+	readonly truncatedBlocks: number;
+	readonly reason?: "entity_budget" | "safety_ledger_unavailable" | "owner_failure";
+}
+
 export interface RecallMeta {
 	readonly totalReturned: number;
 	readonly hasSupplementary: boolean;
 	readonly noHits: boolean;
+	readonly context?: RecallContextMeta;
 	readonly timings?: {
 		readonly totalMs: number;
 		readonly stages: readonly { readonly name: string; readonly durationMs: number }[];
