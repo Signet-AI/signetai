@@ -66,6 +66,8 @@ export interface TraversalConfig {
 	readonly minConfidence: number;
 	/** Timeout in ms (default 500) */
 	readonly timeoutMs: number;
+	/** Optional absolute owner deadline shared with focal resolution. */
+	readonly deadlineAt?: number;
 	/** Filter aspects by canonical_name substring (on-demand expansion) */
 	readonly aspectFilter?: string;
 }
@@ -143,16 +145,23 @@ export interface TraversalStatusSnapshot {
 
 let lastTraversalStatus: TraversalStatusSnapshot | null = null;
 
-function describeTraversalError(error: unknown): TraversalError {
-	const code =
-		typeof error === "object" &&
+function traversalErrorCode(error: unknown): string | number | null {
+	return typeof error === "object" &&
 		error !== null &&
 		"code" in error &&
 		(typeof error.code === "string" || typeof error.code === "number")
-			? error.code
-			: null;
+		? error.code
+		: null;
+}
+
+function isTraversalDeadlineError(error: unknown): boolean {
+	const code = traversalErrorCode(error);
+	return code === "DB_OWNER_DEADLINE" || code === "DB_OWNER_CANCELLED";
+}
+
+function describeTraversalError(error: unknown): TraversalError {
 	return {
-		code,
+		code: traversalErrorCode(error),
 		message: error instanceof Error ? error.message : String(error),
 	};
 }
@@ -412,6 +421,8 @@ export async function resolveFocalEntitiesViaOwner(
 		checkpointEntityIds?: string[];
 		queryTokens?: string[];
 		includePinned?: boolean;
+		/** Optional absolute deadline for owner-backed focal queries. */
+		deadlineAt?: number;
 	},
 ): Promise<FocalEntityResult> {
 	const readAll = readAllFromOwner(owner);
@@ -423,6 +434,7 @@ export async function resolveFocalEntitiesViaOwner(
 			[],
 			"session-start.graph-focal.table-check",
 			4,
+			signals.deadlineAt,
 		);
 		const tableNames = new Set(tableRows.map((row) => row.name));
 		if (
@@ -444,6 +456,7 @@ export async function resolveFocalEntitiesViaOwner(
 							[agentId],
 							"session-start.graph-focal.pinned",
 							200,
+							signals.deadlineAt,
 						)
 					).map((row) => row.id);
 		let resolvedEntityIds: string[] = [];
@@ -471,6 +484,7 @@ export async function resolveFocalEntitiesViaOwner(
 					[agentId, ...args],
 					"session-start.graph-focal.project",
 					Math.max(1, tokens.length * 5),
+					signals.deadlineAt,
 				);
 				resolvedEntityIds = sanitizeEntityIds(projectRows.map((row) => row.id));
 			}
@@ -491,9 +505,11 @@ export async function resolveFocalEntitiesViaOwner(
 						[tokens.join(" OR "), agentId],
 						"session-start.graph-focal.query-fts",
 						20,
+						signals.deadlineAt,
 					);
 					queryIds = sanitizeEntityIds(queryRows.map((row) => row.id));
-				} catch {
+				} catch (error) {
+					if (isTraversalDeadlineError(error)) throw error;
 					// FTS is optional on pre-migration databases.
 				}
 				if (queryIds.length === 0) {
@@ -503,6 +519,7 @@ export async function resolveFocalEntitiesViaOwner(
 						[agentId, ...likeStatement.params],
 						"session-start.graph-focal.query-like",
 						20,
+						signals.deadlineAt,
 					);
 					queryIds = sanitizeEntityIds(likeRows.map((row) => row.id));
 				}
@@ -523,6 +540,7 @@ export async function resolveFocalEntitiesViaOwner(
 						[agentId, ...entityIds],
 						"session-start.graph-focal.names",
 						entityIds.length,
+						signals.deadlineAt,
 					);
 		const nameById = new Map(entityNameRows.map((row) => [row.id, row.name]));
 		const entityNames = entityIds.flatMap((id) => {
@@ -865,7 +883,8 @@ async function traverseKnowledgeGraphWithReadAll(
 		focalEntityIds: [],
 	});
 
-	const deadline = Date.now() + config.timeoutMs;
+	const deadline = config.deadlineAt ?? Date.now() + config.timeoutMs;
+	let phase1: Awaited<ReturnType<typeof batchCollectForEntities>> | undefined;
 	try {
 		const tableRows = await readAll<{ readonly name: string }>(
 			`SELECT name FROM sqlite_master
@@ -891,13 +910,14 @@ async function traverseKnowledgeGraphWithReadAll(
 		const budget = config.maxTraversalPaths;
 
 		// --- Phase 1: Batch-collect for focal entities ---
-		const phase1 = await batchCollectForEntities(readAll, focalIds, agentId, config, budget, deadline);
-		let timedOut = Date.now() > deadline;
+		const collected = await batchCollectForEntities(readAll, focalIds, agentId, config, budget, deadline);
+		phase1 = collected;
+		let timedOut = Date.now() >= deadline;
 
 		await stageYield();
 
 		// --- Phase 2: Dependency expansion + batch collect for hops ---
-		if (!timedOut && phase1.memoryIds.size < budget) {
+		if (!timedOut && collected.memoryIds.size < budget) {
 			const focalPh = focalIds.map(() => "?").join(", ");
 			const dependencyRows = await readAll<{ id: string; source_entity_id: string; target_entity_id: string }>(
 				`SELECT id, source_entity_id, target_entity_id FROM entity_dependencies
@@ -923,28 +943,28 @@ async function traverseKnowledgeGraphWithReadAll(
 			// Filter to hop targets not already visited
 			const hopTargetIds = dependencyRows
 				.map((r) => r.target_entity_id)
-				.filter((id) => !phase1.visitedEntities.has(id));
+				.filter((id) => !collected.visitedEntities.has(id));
 
 			if (hopTargetIds.length > 0) {
-				const remainingBudget = budget - phase1.memoryIds.size;
+				const remainingBudget = budget - collected.memoryIds.size;
 				const phase2 = await batchCollectForEntities(readAll, hopTargetIds, agentId, config, remainingBudget, deadline);
 
 				// Merge phase2 results into phase1
 				for (const mid of phase2.memoryIds) {
-					if (phase1.memoryIds.size >= budget) break;
-					phase1.memoryIds.add(mid);
+					if (collected.memoryIds.size >= budget) break;
+					collected.memoryIds.add(mid);
 				}
 				for (const [mid, score] of phase2.memoryScores) {
-					const current = phase1.memoryScores.get(mid);
+					const current = collected.memoryScores.get(mid);
 					if (current === undefined || score > current) {
-						phase1.memoryScores.set(mid, score);
+						collected.memoryScores.set(mid, score);
 					}
 					await rowYield();
 				}
 				for (const [mid, path] of phase2.memoryPaths) {
-					const prev = phase1.memoryPaths.get(mid);
+					const prev = collected.memoryPaths.get(mid);
 					if (!prev || pathSize(path) > pathSize(prev)) {
-						phase1.memoryPaths.set(mid, path);
+						collected.memoryPaths.set(mid, path);
 					}
 					await rowYield();
 				}
@@ -956,7 +976,7 @@ async function traverseKnowledgeGraphWithReadAll(
 						dependencyId: dep.id,
 					});
 				}
-				for (const [mid, existingPath] of phase1.memoryPaths) {
+				for (const [mid, existingPath] of collected.memoryPaths) {
 					// If this memory came from a hop entity and doesn't already have source info, upgrade it
 					for (const hopId of hopTargetIds) {
 						const source = sourceByTarget.get(hopId);
@@ -970,50 +990,64 @@ async function traverseKnowledgeGraphWithReadAll(
 								source.dependencyId,
 							);
 							if (pathSize(upgraded) > pathSize(existingPath)) {
-								phase1.memoryPaths.set(mid, upgraded);
+								collected.memoryPaths.set(mid, upgraded);
 							}
 						}
 					}
 					await rowYield();
 				}
-				phase1.constraints.push(...phase2.constraints);
+				collected.constraints.push(...phase2.constraints);
 				// Deduplicate across phase1/phase2 boundary (in-place to respect readonly)
 				const seen = new Set<string>();
 				let write = 0;
-				for (let read = 0; read < phase1.constraints.length; read++) {
-					const c = phase1.constraints[read];
+				for (let read = 0; read < collected.constraints.length; read++) {
+					const c = collected.constraints[read];
 					const key = `${c.entityName}::${c.content}`;
 					if (!seen.has(key)) {
 						seen.add(key);
-						phase1.constraints[write++] = c;
+						collected.constraints[write++] = c;
 					}
 				}
-				phase1.constraints.length = write;
+				collected.constraints.length = write;
 				for (const aid of phase2.activeAspectIds) {
-					phase1.activeAspectIds.add(aid);
+					collected.activeAspectIds.add(aid);
 				}
 				for (const eid of phase2.visitedEntities) {
-					phase1.visitedEntities.add(eid);
+					collected.visitedEntities.add(eid);
 				}
 			}
 
-			timedOut = timedOut || Date.now() > deadline;
+			timedOut = timedOut || Date.now() >= deadline;
 		}
 
-		phase1.constraints.sort((a, b) => b.importance - a.importance);
+		collected.constraints.sort((a, b) => b.importance - a.importance);
 
 		return {
-			memoryIds: phase1.memoryIds,
-			memoryScores: phase1.memoryScores,
-			memoryPaths: phase1.memoryPaths,
-			constraints: phase1.constraints,
-			entityCount: phase1.visitedEntities.size,
+			memoryIds: collected.memoryIds,
+			memoryScores: collected.memoryScores,
+			memoryPaths: collected.memoryPaths,
+			constraints: collected.constraints,
+			entityCount: collected.visitedEntities.size,
 			timedOut,
-			activeAspectIds: [...phase1.activeAspectIds],
+			activeAspectIds: [...collected.activeAspectIds],
 			focalEntityIds: focalIds,
 		};
 	} catch (error) {
-		return { ...empty(), error: describeTraversalError(error) };
+		const partial =
+			phase1 === undefined
+				? empty()
+				: {
+						memoryIds: phase1.memoryIds,
+						memoryScores: phase1.memoryScores,
+						memoryPaths: phase1.memoryPaths,
+						constraints: phase1.constraints,
+						entityCount: phase1.visitedEntities.size,
+						timedOut: false,
+						activeAspectIds: [...phase1.activeAspectIds],
+						focalEntityIds: sanitizeEntityIds(focalEntityIds),
+					};
+		if (isTraversalDeadlineError(error)) return { ...partial, timedOut: true };
+		return { ...partial, error: describeTraversalError(error) };
 	}
 }
 
