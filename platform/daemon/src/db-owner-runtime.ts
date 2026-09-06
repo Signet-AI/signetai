@@ -37,6 +37,7 @@ import type {
 	DbOwnerStatement,
 	DbOwnerWorkloadClass,
 } from "./db-owner-protocol";
+import { applyVectorRepairBatch } from "./vector-repair-owner";
 
 let isolatedTestAccessor: DbAccessor | null = null;
 
@@ -163,6 +164,11 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 			}
 			return results;
 		});
+	}
+	if (request.kind === "vector_repair") {
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
+			applyVectorRepairBatch(db as never, request.input),
+		);
 	}
 	if (request.kind === "transcript_bulk_commit") {
 		if (

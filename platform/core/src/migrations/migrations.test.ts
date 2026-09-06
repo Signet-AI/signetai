@@ -416,7 +416,10 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(150);
+			expect(applied.version).toBe(151);
+			expect(
+				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
+			).toEqual({ name: "vector_repair_checkpoints" });
 			expect(
 				(db.query("PRAGMA table_info(memory_jobs)").all() as Array<{ name: string }>).some(
 					(column) => column.name === "lease_token",

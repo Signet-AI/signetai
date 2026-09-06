@@ -41,6 +41,8 @@ POST /api/repair/requeue-dead
 POST /api/repair/release-leases
 POST /api/repair/check-fts
 POST /api/repair/retention-sweep
+POST /api/repair/resync-vec
+POST /api/repair/clean-orphans
 ```
 
 The daemon's full-database integrity scan runs in a single-flight worker after

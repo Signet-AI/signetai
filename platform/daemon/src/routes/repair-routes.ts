@@ -43,13 +43,44 @@ function resolveRepairContext(c: Context): RepairContext {
 function repairHttpStatus(result: RepairResult): 200 | 429 | 500 {
 	if (result.success) return 200;
 	if (
-		/cooldown active|hourly budget exhausted|denied by policy gate|autonomous\.|agents cannot trigger repairs|already in progress/i.test(
+		/cooldown active|hourly budget exhausted|denied by policy gate|autonomous\.|agents cannot trigger repairs|already in progress|owner (?:admission|job).*?(?:deadline|queue)|global vector reconciliation/i.test(
 			result.message,
 		)
 	) {
 		return 429;
 	}
 	return 500;
+}
+
+function vectorRepairOptions(
+	body: Readonly<Record<string, unknown>>,
+	signal: AbortSignal | undefined,
+): {
+	readonly batchSize?: number;
+	readonly maxVectorBytes?: number;
+	readonly maxBatches?: number;
+	readonly runBudgetMs?: number;
+	readonly signal?: AbortSignal;
+} {
+	const positive = (key: string): number | undefined => {
+		const value = body[key];
+		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+	};
+	return {
+		...(positive("batchSize") === undefined ? {} : { batchSize: positive("batchSize") }),
+		...(positive("maxVectorBytes") === undefined ? {} : { maxVectorBytes: positive("maxVectorBytes") }),
+		...(positive("maxBatches") === undefined ? {} : { maxBatches: positive("maxBatches") }),
+		...(positive("runBudgetMs") === undefined ? {} : { runBudgetMs: positive("runBudgetMs") }),
+		...(signal === undefined ? {} : { signal }),
+	};
+}
+
+function rejectGlobalVectorRepair(body: Readonly<Record<string, unknown>>): Response | null {
+	if (body.allAgents !== true && readString(body, "scope") !== "all") return null;
+	return Response.json(
+		{ error: "global vector reconciliation is not exposed; provide one resolved agentId" },
+		{ status: 403 },
+	);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -69,9 +100,11 @@ export function registerRepairRoutes(
 	deps: {
 		readonly authConfig?: AuthConfig;
 		readonly getDbAccessor?: () => DbAccessor;
+		readonly loadMemoryConfig?: typeof loadMemoryConfig;
 	} = {},
 ): void {
 	const effectiveAuthConfig = deps.authConfig ?? authConfig;
+	const resolveMemoryConfig = deps.loadMemoryConfig ?? loadMemoryConfig;
 
 	// Permission guards
 	app.use("/api/repair/*", async (c, next) => {
@@ -217,16 +250,66 @@ export function registerRepairRoutes(
 	});
 
 	app.post("/api/repair/resync-vec", async (c) => {
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = resolveMemoryConfig(AGENTS_DIR);
+		const body = asRecord(await c.req.json().catch(() => ({})));
 		const ctx = resolveRepairContext(c);
-		const result = await resyncVectorIndex(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
+		const globalRejection = rejectGlobalVectorRepair(body);
+		if (globalRejection !== null) return globalRejection;
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			effectiveAuthConfig.mode,
+			readString(body, "agentId") ??
+				readString(body, "agent_id") ??
+				c.req.query("agentId") ??
+				c.req.query("agent_id") ??
+				c.req.header("x-signet-agent-id"),
+			resolveDaemonAgentId(),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const result = await resyncVectorIndex(
+			deps.getDbAccessor?.() ?? getDbAccessor(),
+			cfg.pipelineV2,
+			ctx,
+			repairLimiter,
+			scoped.agentId,
+			vectorRepairOptions(body, c.req.raw.signal),
+		);
 		return c.json(result, repairHttpStatus(result));
 	});
 
 	app.post("/api/repair/clean-orphans", async (c) => {
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = resolveMemoryConfig(AGENTS_DIR);
+		const body = asRecord(await c.req.json().catch(() => ({})));
 		const ctx = resolveRepairContext(c);
-		const result = await cleanOrphanedEmbeddings(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
+		const globalRejection = rejectGlobalVectorRepair(body);
+		if (globalRejection !== null) return globalRejection;
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			effectiveAuthConfig.mode,
+			readString(body, "agentId") ??
+				readString(body, "agent_id") ??
+				c.req.query("agentId") ??
+				c.req.query("agent_id") ??
+				c.req.header("x-signet-agent-id"),
+			resolveDaemonAgentId(),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const options = vectorRepairOptions(body, c.req.raw.signal);
+		const result = await cleanOrphanedEmbeddings(
+			deps.getDbAccessor?.() ?? getDbAccessor(),
+			cfg.pipelineV2,
+			ctx,
+			repairLimiter,
+			options.batchSize ?? Number.MAX_SAFE_INTEGER,
+			scoped.agentId,
+			{
+				maxVectorBytes: options.maxVectorBytes,
+				maxBatches: options.maxBatches,
+				runBudgetMs: options.runBudgetMs,
+				signal: options.signal,
+				throwOnFailure: false,
+			},
+		);
 		return c.json(result, repairHttpStatus(result));
 	});
 

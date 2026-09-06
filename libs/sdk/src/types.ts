@@ -1234,6 +1234,8 @@ export type {
 	ConstellationResponse,
 	// Repair
 	RepairActionResponse,
+	VectorRepairOptions,
+	VectorRepairResponse,
 	EmbeddingGapsResponse,
 	DedupStatsResponse,
 	DeduplicateResponse,

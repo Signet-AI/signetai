@@ -25,8 +25,15 @@ import type {
 	DbOwnerParameter,
 	DbOwnerRequest,
 	DbOwnerStatement,
+	DbOwnerVectorRepairInput,
+	DbOwnerVectorRepairResult,
 } from "./db-owner-protocol";
-import { DB_OWNER_MAX_RESULT_BYTES, DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
+import {
+	DB_OWNER_MAX_RESULT_BYTES,
+	DB_OWNER_MAX_WORK_UNITS,
+	VECTOR_REPAIR_MAX_BATCH_DEADLINE_MS,
+	VECTOR_REPAIR_MAX_WORK_UNITS_PER_BATCH,
+} from "./db-owner-protocol";
 import { setFtsIndexIncomplete } from "./fts-index-state";
 import type { EmbeddingIndexMigrationProgress } from "./embedding-index-state";
 import type { DiagnosticsReport, ProviderTracker, QueueHealth } from "./diagnostics";
@@ -36,6 +43,8 @@ import type { DreamingSurprisalSelection } from "./pipeline/dreaming-surprisal";
 export interface DbOwnerMaintenanceOptions {
 	readonly deadlineMs?: number;
 	readonly estimatedWorkUnits?: number;
+	/** Abort queued or active maintenance before its next owner commit. */
+	readonly signal?: AbortSignal;
 	/** Verification maintenance is admitted while application writes are blocked. */
 	readonly lane?: "maintenance" | "verify";
 	readonly onOwnerMetrics?: (metrics: DbOwnerMaintenanceMetrics) => void | Promise<void>;
@@ -106,15 +115,24 @@ async function runOwnerJob<Result>(
 		// synchronous worker; its metrics promise remains the completion fence.
 		if (!(error instanceof DbOwnerDeadlineError)) notifySettled();
 	});
-	const result = await handle.result;
-	const metrics = await handle.metrics;
-	if (metrics !== undefined) {
-		await options.onOwnerMetrics?.({
-			queueAdmissionMs: Math.max(0, metrics.startedAt - handle.job.enqueuedAt),
-			ownerExecutionMs: Math.max(0, metrics.finishedAt - metrics.startedAt),
-		});
+	const onAbort = (): void => handle.cancel();
+	if (options.signal !== undefined) {
+		if (options.signal.aborted) onAbort();
+		else options.signal.addEventListener("abort", onAbort, { once: true });
 	}
-	return result;
+	try {
+		const result = await handle.result;
+		const metrics = await handle.metrics;
+		if (metrics !== undefined) {
+			await options.onOwnerMetrics?.({
+				queueAdmissionMs: Math.max(0, metrics.startedAt - handle.job.enqueuedAt),
+				ownerExecutionMs: Math.max(0, metrics.finishedAt - metrics.startedAt),
+			});
+		}
+		return result;
+	} finally {
+		options.signal?.removeEventListener("abort", onAbort);
+	}
 }
 
 async function startOwnerWithinDeadline(owner: DbOwnerClient, deadlineAt: number, operation: string): Promise<void> {
@@ -421,6 +439,10 @@ export interface DbOwnerMaintenance {
 		configuredBaseUrl?: string,
 		options?: DbOwnerMaintenanceOptions,
 	) => Promise<EmbeddingIndexMigrationProgress | null>;
+	readonly vectorRepair: (
+		input: DbOwnerVectorRepairInput,
+		options?: DbOwnerMaintenanceOptions,
+	) => Promise<DbOwnerVectorRepairResult>;
 	readonly healthReady: (
 		options?: DbOwnerMaintenanceOptions,
 	) => Promise<{ readonly migrationsOk: boolean; readonly queueHealth: QueueHealth }>;
@@ -906,6 +928,26 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 			"maintenance.embedding.migration-progress",
 			maintenanceOptions,
 		);
+	const vectorRepair = (
+		input: DbOwnerVectorRepairInput,
+		maintenanceOptions: DbOwnerMaintenanceOptions = {},
+	): Promise<DbOwnerVectorRepairResult> => {
+		const requestedDeadline = maintenanceOptions.deadlineMs ?? VECTOR_REPAIR_MAX_BATCH_DEADLINE_MS;
+		if (!Number.isFinite(requestedDeadline) || requestedDeadline <= 0) {
+			throw new RangeError("vector repair owner deadline must be positive");
+		}
+		const deadlineMs = Math.min(VECTOR_REPAIR_MAX_BATCH_DEADLINE_MS, Math.floor(requestedDeadline));
+		const estimatedWorkUnits = Math.min(
+			VECTOR_REPAIR_MAX_WORK_UNITS_PER_BATCH,
+			Math.max(1, Math.floor(maintenanceOptions.estimatedWorkUnits ?? input.batchSize ?? 50)),
+		);
+		return runOwnerMaintenanceWithRetry<DbOwnerVectorRepairResult>(
+			owner,
+			{ kind: "vector_repair", input },
+			`maintenance.vector-repair.${input.operation}`,
+			{ ...maintenanceOptions, lane: "maintenance", deadlineMs, estimatedWorkUnits },
+		);
+	};
 	const healthReady = (
 		maintenanceOptions?: DbOwnerMaintenanceOptions,
 	): Promise<{ readonly migrationsOk: boolean; readonly queueHealth: QueueHealth }> =>
@@ -1007,6 +1049,7 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 		dreamingEpisodicBacklogProbe,
 		dreamingEpisodicBacklogExists,
 		embeddingMigrationProgress,
+		vectorRepair,
 		healthReady,
 		diagnostics,
 		health: () => owner.health(),
