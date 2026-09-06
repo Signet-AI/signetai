@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { writeInstalledServers } from "../marketplace-installed-state.js";
 import { extractStandardMcpConfig, mountMarketplaceRoutes, parseReferenceServersMarkdown } from "./marketplace.js";
 
 describe("parseReferenceServersMarkdown", () => {
@@ -204,7 +205,7 @@ process.stdin.on("data", (chunk) => {
 			installedAt: new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
 		}));
-		writeFileSync(join(tmpAgentsDir, "marketplace", "mcp-servers.json"), JSON.stringify(servers));
+		writeInstalledServers(servers);
 
 		const samples: number[] = [];
 		const sample = (): void => {

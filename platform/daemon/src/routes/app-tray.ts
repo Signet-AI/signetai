@@ -1,6 +1,6 @@
 /** App Tray API routes — CRUD for app tray entries and MCP install endpoint. */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AutoCardResource, AutoCardToolAction, SignetAppManifest } from "@signet/core";
 import type { Hono } from "hono";
@@ -8,9 +8,15 @@ import type { Hono } from "hono";
 import { resolveDefaultBasePath } from "@signet/core";
 import { fetchInternal } from "../internal-fetch.js";
 import { logger } from "../logger.js";
+import {
+	makeUniqueServerId,
+	readInstalledServers,
+	sanitizeServerId,
+	writeInstalledServers,
+} from "../marketplace-installed-state.js";
 import { loadAppTray, loadProbeResult, probeServer, reprobeServer, storeProbeResult } from "../mcp-probe.js";
 import { isPrivateHostname } from "../url-validation.js";
-import { readInstalledServersPublic } from "./marketplace-helpers.js";
+import type { InstalledMarketplaceMcpServer } from "../marketplace-installed-state.js";
 
 function isValidState(s: string): s is "tray" | "grid" | "dock" {
 	return s === "tray" || s === "grid" || s === "dock";
@@ -72,7 +78,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 	 */
 	app.get("/api/os/tray", (c) => {
 		const tray = loadAppTray();
-		const installed = readInstalledServersPublic();
+		const installed = readInstalledServers();
 		const installedById = new Map(installed.map((s) => [s.id, s]));
 		const trayIds = new Set(tray.map((e) => e.id));
 
@@ -167,7 +173,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 	app.post("/api/os/tray/:id/reprobe", async (c) => {
 		const id = c.req.param("id");
 
-		const installed = readInstalledServersPublic();
+		const installed = readInstalledServers();
 		const server = installed.find((s) => s.id === id);
 
 		if (!server) {
@@ -275,7 +281,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 				: await installDirectHttp(url, nameOverride);
 
 			// Probe the server
-			const installed = readInstalledServersPublic();
+			const installed = readInstalledServers();
 			const server = installed.find((s) => s.id === installResult.serverId);
 
 			let manifest: SignetAppManifest | null = null;
@@ -338,24 +344,11 @@ function getMarketplaceDir(): string {
 	return join(getAgentsDir(), "marketplace");
 }
 
-function getInstalledMcpPath(): string {
-	return join(getMarketplaceDir(), "mcp-servers.json");
-}
-
 function ensureMarketplaceDir(): void {
 	const dir = getMarketplaceDir();
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });
 	}
-}
-
-function sanitizeServerId(value: string): string {
-	const normalized = value
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9_-]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return normalized.length > 0 ? normalized : "mcp-server";
 }
 
 function inferNameFromUrl(url: string): string {
@@ -394,65 +387,21 @@ function inferCategory(text: string): string {
 	return "Other";
 }
 
-interface InstalledServer {
-	readonly id: string;
-	readonly source: string;
-	readonly catalogId?: string;
-	readonly name: string;
-	readonly description: string;
-	readonly category: string;
-	readonly homepage?: string;
-	readonly official: boolean;
-	readonly enabled: boolean;
-	readonly scope: { harnesses: string[]; workspaces: string[]; channels: string[] };
-	readonly config: Record<string, unknown>;
-	readonly installedAt: string;
-	readonly updatedAt: string;
-}
-
-function readInstalledServersRaw(): InstalledServer[] {
-	const path = getInstalledMcpPath();
-	if (!existsSync(path)) return [];
-	try {
-		const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-		if (!Array.isArray(raw)) return [];
-		return raw as InstalledServer[];
-	} catch {
-		return [];
-	}
-}
-
-function writeInstalledServersRaw(servers: InstalledServer[]): void {
-	ensureMarketplaceDir();
-	writeFileSync(getInstalledMcpPath(), JSON.stringify(servers, null, 2));
-}
-
-function makeUniqueServerId(baseId: string, installed: readonly InstalledServer[]): string {
-	if (!installed.some((s) => s.id === baseId)) return baseId;
-	let i = 2;
-	while (installed.some((s) => s.id === `${baseId}-${i}`)) {
-		i++;
-	}
-	return `${baseId}-${i}`;
-}
-
 /**
  * Install a direct HTTP MCP server URL as a manual server.
  */
 async function installDirectHttp(url: string, nameOverride?: string): Promise<{ serverId: string; isNew: boolean }> {
-	const installed = readInstalledServersRaw();
+	const installed = readInstalledServers();
 
 	// Check if already installed by matching URL
-	const existing = installed.find(
-		(s) => s.config && typeof s.config === "object" && "url" in s.config && s.config.url === url,
-	);
+	const existing = installed.find((s) => s.config.transport === "http" && s.config.url === url);
 	if (existing) {
 		// Update name if override provided
 		if (nameOverride && nameOverride !== existing.name) {
 			const updated = installed.map((s) =>
 				s.id === existing.id ? { ...s, name: nameOverride, updatedAt: new Date().toISOString() } : s,
 			);
-			writeInstalledServersRaw(updated);
+			writeInstalledServers(updated);
 		}
 		return { serverId: existing.id, isNew: false };
 	}
@@ -462,7 +411,7 @@ async function installDirectHttp(url: string, nameOverride?: string): Promise<{ 
 	const id = makeUniqueServerId(baseId, installed);
 	const now = new Date().toISOString();
 
-	const server: InstalledServer = {
+	const server: InstalledMarketplaceMcpServer = {
 		id,
 		source: "manual",
 		name,
@@ -482,7 +431,7 @@ async function installDirectHttp(url: string, nameOverride?: string): Promise<{ 
 		updatedAt: now,
 	};
 
-	writeInstalledServersRaw([...installed, server]);
+	writeInstalledServers([...installed, server]);
 	return { serverId: id, isNew: true };
 }
 

@@ -20,7 +20,7 @@ import { withMarketplaceMcpPermit, withMarketplaceMcpTimeout } from "./marketpla
 // Note: validatePublicHttpUrl from url-validation.ts is used by the install
 // endpoint (server-side fetch = real SSRF risk). Manifest ui/icon fields are
 // client-side (iframe/img) so they only need scheme validation, not address blocking.
-import type { InstalledMarketplaceMcpServer } from "./routes/marketplace.js";
+import type { InstalledMarketplaceMcpServer } from "./marketplace-installed-state.js";
 import { getSecret } from "./secrets.js";
 import { deleteCachedWidget, loadCachedWidget } from "./widget-gen.js";
 
