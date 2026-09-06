@@ -249,6 +249,7 @@ export {
 } from "./recall";
 export type {
 	AggregateRecallMeta,
+	RecallContextMeta,
 	AggregateRecallUsage,
 	AggregateRecallUsageStage,
 	RecallMeta,

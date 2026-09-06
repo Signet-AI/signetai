@@ -204,6 +204,14 @@ Supplementary results may include:
 - linked rationale memories for decision results,
 - constructed graph context cards.
 
+Graph entity context and constructed cards share one bounded, set-based owner
+snapshot. The snapshot limits focal entities by the constructed-card budget,
+loads aspects, attributes, constraints, dependencies, and persisted safety rows
+in bounded batches, and performs content scanning/text assembly after SQLite
+has released the owner read. Recall exposes `meta.context` with the selected
+entity count, statement/work-unit accounting, safety-ledger state, and an
+explicit partial flag when the focal budget or safety ledger limits context.
+
 The final response is capped to `limit`. Supplementary rows are marked with
 `supplementary: true` so callers can distinguish them from ordinary memory
 rows.

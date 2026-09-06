@@ -31,6 +31,22 @@ export interface RecallRow extends RecallPartitionableRow {
 	readonly subject_id?: string;
 }
 
+export interface RecallContextMeta {
+	readonly partial: boolean;
+	readonly focalEntityCount: number;
+	readonly selectedEntityCount: number;
+	readonly entityCount: number;
+	readonly entityLimit: number;
+	readonly omittedEntityCount: number;
+	readonly statementCount: number;
+	readonly estimatedWorkUnits: number;
+	readonly safetyLedger: "available" | "missing" | "unavailable";
+	readonly constructedLimit: number;
+	readonly constructedBlocks: number;
+	readonly truncatedBlocks: number;
+	readonly reason?: "entity_budget" | "safety_ledger_unavailable" | "owner_failure";
+}
+
 export interface RecallMeta {
 	readonly totalReturned: number;
 	readonly hasSupplementary: boolean;
@@ -42,6 +58,7 @@ export interface RecallMeta {
 		readonly suppressed: number;
 		readonly repeatedReturned: number;
 	};
+	readonly context?: RecallContextMeta;
 }
 
 export type AggregateRecallBudget = "small" | "medium" | "large";
@@ -241,6 +258,58 @@ export function partitionRecallRows<T extends RecallPartitionableRow>(
 	};
 }
 
+function parseRecallContextMeta(raw: unknown): RecallContextMeta | undefined {
+	if (!isRecord(raw) || typeof raw.partial !== "boolean") return undefined;
+	const numberValue = (key: string): number | null => {
+		const value = raw[key];
+		return typeof value === "number" && Number.isFinite(value) ? value : null;
+	};
+	const focalEntityCount = numberValue("focalEntityCount");
+	const selectedEntityCount = numberValue("selectedEntityCount");
+	const entityCount = numberValue("entityCount");
+	const entityLimit = numberValue("entityLimit");
+	const omittedEntityCount = numberValue("omittedEntityCount");
+	const statementCount = numberValue("statementCount");
+	const estimatedWorkUnits = numberValue("estimatedWorkUnits");
+	const constructedLimit = numberValue("constructedLimit");
+	const constructedBlocks = numberValue("constructedBlocks");
+	const truncatedBlocks = numberValue("truncatedBlocks");
+	if (
+		focalEntityCount === null ||
+		selectedEntityCount === null ||
+		entityCount === null ||
+		entityLimit === null ||
+		omittedEntityCount === null ||
+		statementCount === null ||
+		estimatedWorkUnits === null ||
+		constructedLimit === null ||
+		constructedBlocks === null ||
+		truncatedBlocks === null
+	)
+		return undefined;
+	if (raw.safetyLedger !== "available" && raw.safetyLedger !== "missing" && raw.safetyLedger !== "unavailable")
+		return undefined;
+	const reason =
+		raw.reason === "entity_budget" || raw.reason === "safety_ledger_unavailable" || raw.reason === "owner_failure"
+			? raw.reason
+			: undefined;
+	return {
+		partial: raw.partial,
+		focalEntityCount,
+		selectedEntityCount,
+		entityCount,
+		entityLimit,
+		omittedEntityCount,
+		statementCount,
+		estimatedWorkUnits,
+		safetyLedger: raw.safetyLedger,
+		constructedLimit,
+		constructedBlocks,
+		truncatedBlocks,
+		...(reason === undefined ? {} : { reason }),
+	};
+}
+
 export function parseRecallMeta(raw: unknown, fallbackCount: number): RecallMeta {
 	if (!isRecord(raw)) {
 		return {
@@ -262,7 +331,15 @@ export function parseRecallMeta(raw: unknown, fallbackCount: number): RecallMeta
 			}
 		: undefined;
 	const temporal = isRecord(raw.temporal) ? (raw.temporal as unknown as RecallTemporalMeta) : undefined;
-	return { totalReturned, hasSupplementary, noHits, ...(dedupe ? { dedupe } : {}), ...(temporal ? { temporal } : {}) };
+	const context = parseRecallContextMeta(raw.context);
+	return {
+		totalReturned,
+		hasSupplementary,
+		noHits,
+		...(dedupe ? { dedupe } : {}),
+		...(temporal ? { temporal } : {}),
+		...(context ? { context } : {}),
+	};
 }
 
 export function parseRecallPayload(raw: unknown): {

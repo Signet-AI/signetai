@@ -341,6 +341,63 @@ describe("hybridRecall", () => {
 		expect(result.entities).toBeUndefined();
 	});
 
+	it("reports bounded graph-context omissions in recall metadata", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+				 VALUES ('bounded-context-memory', 'Signet bounded context result', 'fact', 'default', ?, ?, 'test')`,
+			).run(now, now);
+			const entity = db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at
+				) VALUES (?, ?, ?, 'project', 'default', 1, ?, ?)`,
+			);
+			const aspect = db.prepare(
+				`INSERT INTO entity_aspects (
+					id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
+				) VALUES (?, ?, 'default', 'context', 'context', 0.9, ?, ?)`,
+			);
+			const attribute = db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+					confidence, importance, status, created_at, updated_at
+				) VALUES (?, ?, 'default', NULL, 'attribute', ?, ?, 1, 0.9, 'active', ?, ?)`,
+			);
+			for (let index = 0; index < 4; index++) {
+				const entityId = `bounded-context-entity-${index}`;
+				const aspectId = `bounded-context-aspect-${index}`;
+				const content = `bounded graph context value ${index}`;
+				entity.run(entityId, `Signet context ${index}`, `signet-context-${index}`, now, now);
+				aspect.run(aspectId, entityId, now, now);
+				attribute.run(`bounded-context-attribute-${index}`, aspectId, content, content, now, now);
+			}
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "Signet",
+				keywordQuery: "Signet",
+				limit: 1,
+				agentId: "default",
+				readPolicy: "isolated",
+				trackRecallAccess: false,
+			},
+			testCfg({ graph: true, traversal: true }),
+			async () => null,
+		);
+
+		expect(result.meta.context).toMatchObject({
+			partial: true,
+			focalEntityCount: 4,
+			selectedEntityCount: 1,
+			entityLimit: 1,
+			constructedLimit: 1,
+			omittedEntityCount: 3,
+			reason: "entity_budget",
+		});
+	});
+
 	function seedUnbackedOntologyClaim(opts: {
 		readonly id: string;
 		readonly agentId?: string;

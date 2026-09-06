@@ -1,23 +1,23 @@
 /**
  * DP-7: Constructed memories with path provenance.
  *
- * Synthesizes purpose-built context blocks from knowledge graph
- * traversal paths. Each block combines entity attributes, constraints,
- * and dependency relationships into a coherent text representation
- * with provenance metadata for future path feedback (DP-9).
- *
- * No LLM calls — pure template synthesis.
+ * This module assembles prompt-facing entity and constructed context from a
+ * bounded raw snapshot. SQLite access and snapshot accounting live in
+ * context-snapshot.ts; no content scanning occurs in an owner callback.
  */
 
 import { scanMemoryContent } from "@signet/core";
+import { yieldEvery } from "../async-yield";
 import type { DbOwnerClient } from "../db-owner-client";
-import { ownerReadAll } from "../db-owner-sql";
-import type { ReadDb } from "../db-accessor";
-import { isMemoryContentContextEligible } from "../memory-content-safety";
-
-// ---------------------------------------------------------------------------
-// Public interfaces
-// ---------------------------------------------------------------------------
+import {
+	loadContextSnapshotViaOwner,
+	CONTEXT_MAX_ATTRIBUTES_PER_ASPECT,
+	type AspectRow,
+	type AttributeRow,
+	type ConstraintRow,
+	type DependencyRow,
+	type ContextSnapshot,
+} from "./context-snapshot";
 
 export interface ConstructedProvenance {
 	readonly entityId: string;
@@ -38,36 +38,12 @@ export interface ConstructedContext {
 	readonly provenance: ConstructedProvenance;
 }
 
-// ---------------------------------------------------------------------------
-// Internal row types
-// ---------------------------------------------------------------------------
-
-interface EntityRow {
-	readonly id: string;
-	readonly name: string;
-	readonly entity_type: string;
-}
-
-interface AspectRow {
-	readonly id: string;
-	readonly name: string;
-}
-
-interface AttributeRow {
-	readonly content: string;
-	readonly importance: number;
-	readonly memory_id: string | null;
-}
-
-interface ConstraintRow {
-	readonly content: string;
-	readonly importance: number;
-	readonly memory_id: string | null;
-}
-
-interface DependencyRow {
-	readonly target_entity_id: string;
-	readonly name: string;
+export interface PreparedContextRows {
+	/** All safe active attributes, used by the entity-context view. */
+	readonly attributesByAspect: ReadonlyMap<string, ReadonlyArray<AttributeRow>>;
+	/** Safe non-constraint attributes, used by constructed cards. */
+	readonly constructibleAttributesByAspect: ReadonlyMap<string, ReadonlyArray<AttributeRow>>;
+	readonly constraintsByEntity: ReadonlyMap<string, ReadonlyArray<ConstraintRow>>;
 }
 
 const MAX_BLOCK_CHARS = 900;
@@ -90,18 +66,12 @@ function isNoise(value: string): boolean {
 }
 
 function trimBlock(text: string): { text: string; truncated: boolean } {
-	if (text.length <= MAX_BLOCK_CHARS) {
-		return { text, truncated: false };
-	}
+	if (text.length <= MAX_BLOCK_CHARS) return { text, truncated: false };
 	return {
 		text: `${text.slice(0, Math.max(1, MAX_BLOCK_CHARS - 3)).trimEnd()}...`,
 		truncated: true,
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Score normalization
-// ---------------------------------------------------------------------------
 
 /** Structural density score: more structure = higher score, clamped to [0, 1]. */
 function densityScore(aspects: number, attrs: number, constraints: number): number {
@@ -111,150 +81,188 @@ function densityScore(aspects: number, attrs: number, constraints: number): numb
 	return Math.min(1, Math.max(0, raw));
 }
 
+function normalizeBlockLimit(limit: number): number {
+	if (!Number.isFinite(limit) || limit <= 0) return 0;
+	return Math.max(1, Math.trunc(limit));
+}
+
 // ---------------------------------------------------------------------------
-// Main construction function
+// Parent-side safety filtering and view assembly
 // ---------------------------------------------------------------------------
 
-export function constructContextBlocks(
-	db: ReadDb,
-	agentId: string,
-	focalEntityIds: ReadonlyArray<string>,
+function contextEligible(snapshot: ContextSnapshot, content: string, memoryId: string | null): boolean {
+	if (!scanMemoryContent(content).contextEligible) return false;
+	if (!memoryId) return true;
+	if (snapshot.safetyLedger === "unavailable") return false;
+	const persisted = snapshot.safety.get(memoryId);
+	return !persisted || (persisted.status === "clean" && persisted.context_eligible === 1);
+}
+
+export async function prepareContextRows(snapshot: ContextSnapshot): Promise<PreparedContextRows> {
+	const attributesByAspect = new Map<string, AttributeRow[]>();
+	const constructibleAttributesByAspect = new Map<string, AttributeRow[]>();
+	const constraintsByEntity = new Map<string, ConstraintRow[]>();
+	const yieldRows = yieldEvery(100);
+	for (const attribute of snapshot.attributes) {
+		if (contextEligible(snapshot, attribute.content, attribute.memory_id)) {
+			if (attribute.all_row_number <= CONTEXT_MAX_ATTRIBUTES_PER_ASPECT) {
+				const rows = attributesByAspect.get(attribute.aspect_id) ?? [];
+				rows.push(attribute);
+				attributesByAspect.set(attribute.aspect_id, rows);
+			}
+			if (attribute.kind !== "constraint" && attribute.kind_row_number <= CONTEXT_MAX_ATTRIBUTES_PER_ASPECT) {
+				const constructibleRows = constructibleAttributesByAspect.get(attribute.aspect_id) ?? [];
+				constructibleRows.push(attribute);
+				constructibleAttributesByAspect.set(attribute.aspect_id, constructibleRows);
+			}
+		}
+		await yieldRows();
+	}
+	for (const constraint of snapshot.constraints) {
+		if (contextEligible(snapshot, constraint.content, constraint.memory_id)) {
+			const rows = constraintsByEntity.get(constraint.entity_id) ?? [];
+			rows.push(constraint);
+			constraintsByEntity.set(constraint.entity_id, rows);
+		}
+		await yieldRows();
+	}
+	return { attributesByAspect, constructibleAttributesByAspect, constraintsByEntity };
+}
+
+function buildEntityContextFromRows(
+	snapshot: ContextSnapshot,
+	prepared: PreparedContextRows,
+): Array<{
+	name: string;
+	type: string;
+	aspects: Array<{ name: string; attributes: Array<{ content: string; status: string; importance: number }> }>;
+}> {
+	const aspectsByEntity = new Map<string, AspectRow[]>();
+	for (const aspect of snapshot.aspects) {
+		const rows = aspectsByEntity.get(aspect.entity_id) ?? [];
+		rows.push(aspect);
+		aspectsByEntity.set(aspect.entity_id, rows);
+	}
+	const result: Array<{
+		name: string;
+		type: string;
+		aspects: Array<{ name: string; attributes: Array<{ content: string; status: string; importance: number }> }>;
+	}> = [];
+	for (const entity of snapshot.entities) {
+		const contextAspects: Array<{
+			name: string;
+			attributes: Array<{ content: string; status: string; importance: number }>;
+		}> = [];
+		for (const aspect of aspectsByEntity.get(entity.id) ?? []) {
+			const attributes = (prepared.attributesByAspect.get(aspect.id) ?? []).map((attribute) => ({
+				content: attribute.content,
+				status: attribute.status,
+				importance: attribute.importance,
+			}));
+			if (attributes.length > 0) contextAspects.push({ name: aspect.name, attributes });
+		}
+		if (contextAspects.length > 0)
+			result.push({ name: entity.name, type: entity.entity_type, aspects: contextAspects });
+	}
+	return result;
+}
+
+/** Build prompt-facing entity context after the owner has released SQLite. */
+export async function buildEntityContextFromSnapshot(
+	snapshot: ContextSnapshot,
+	prepared?: PreparedContextRows,
+): Promise<
+	Array<{
+		name: string;
+		type: string;
+		aspects: Array<{
+			name: string;
+			attributes: Array<{ content: string; status: string; importance: number }>;
+		}>;
+	}>
+> {
+	const rows = prepared ?? (await prepareContextRows(snapshot));
+	return buildEntityContextFromRows(snapshot, rows);
+}
+
+function buildConstructedContextFromRows(
+	snapshot: ContextSnapshot,
+	prepared: PreparedContextRows,
 	limit: number,
 ): ReadonlyArray<ConstructedContext> {
-	if (focalEntityIds.length === 0) return [];
-
-	const ph = focalEntityIds.map(() => "?").join(", ");
-	const entities = db
-		.prepare(
-			`SELECT id, name, entity_type FROM entities
-			 WHERE id IN (${ph})`,
-		)
-		.all(...focalEntityIds) as EntityRow[];
-
-	if (entities.length === 0) return [];
-
+	const aspectsByEntity = new Map<string, AspectRow[]>();
+	for (const aspect of snapshot.aspects) {
+		const rows = aspectsByEntity.get(aspect.entity_id) ?? [];
+		rows.push(aspect);
+		aspectsByEntity.set(aspect.entity_id, rows);
+	}
+	const dependenciesByEntity = new Map<string, DependencyRow[]>();
+	for (const dependency of snapshot.dependencies) {
+		const rows = dependenciesByEntity.get(dependency.source_entity_id) ?? [];
+		rows.push(dependency);
+		dependenciesByEntity.set(dependency.source_entity_id, rows);
+	}
 	const blocks: ConstructedContext[] = [];
-
-	for (const ent of entities) {
-		const aspects = db
-			.prepare(
-				`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
-				 WHERE entity_id = ? AND agent_id = ?
-				 ORDER BY weight DESC LIMIT 10`,
-			)
-			.all(ent.id, agentId) as AspectRow[];
-
+	for (const entity of snapshot.entities) {
 		const lines: string[] = [];
 		const aspectIds: string[] = [];
 		const aspectNames: string[] = [];
 		let totalAttrs = 0;
-
-		for (const asp of aspects) {
-			const attrs = db
-				.prepare(
-					`SELECT content, importance, memory_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
-					 WHERE aspect_id = ? AND agent_id = ?
-					   AND status = 'active' AND kind != 'constraint'
-					 ORDER BY importance DESC LIMIT 5`,
-				)
-				.all(asp.id, agentId) as AttributeRow[];
-
-			const values = attrs
-				.filter((a) =>
-					a.memory_id
-						? isMemoryContentContextEligible(db, {
-								agentId,
-								sourceKind: "memory",
-								sourceId: a.memory_id,
-								content: a.content,
-							})
-						: scanMemoryContent(a.content).contextEligible,
-				)
-				.map((a) => cleanValue(a.content))
+		for (const aspect of aspectsByEntity.get(entity.id) ?? []) {
+			const values = (prepared.constructibleAttributesByAspect.get(aspect.id) ?? [])
+				.map((attribute) => cleanValue(attribute.content))
 				.filter((value) => !isNoise(value));
 			if (values.length === 0) continue;
-
-			aspectIds.push(asp.id);
-			aspectNames.push(asp.name);
+			aspectIds.push(aspect.id);
+			aspectNames.push(aspect.name);
 			totalAttrs += values.length;
-
-			const vals = values.join("; ");
-			lines.push(`- ${asp.name}: ${vals}`);
+			lines.push(`- ${aspect.name}: ${values.join("; ")}`);
 		}
 
-		// Constraints: always surface (invariant 5)
-		const constraints = db
-			.prepare(
-				`SELECT DISTINCT ea.content, ea.importance, ea.memory_id
-				 FROM entity_aspects asp INDEXED BY idx_entity_aspects_entity
-				 CROSS JOIN entity_attributes ea INDEXED BY idx_entity_attributes_aspect
-				   ON ea.aspect_id = asp.id
-				 WHERE asp.entity_id = ? AND ea.agent_id = ?
-				   AND ea.kind = 'constraint' AND ea.status = 'active'
-				 ORDER BY ea.importance DESC LIMIT 10`,
-			)
-			.all(ent.id, agentId) as ConstraintRow[];
-
+		const constraints = prepared.constraintsByEntity.get(entity.id) ?? [];
 		const cleanConstraints = constraints
-			.filter((c) =>
-				c.memory_id
-					? isMemoryContentContextEligible(db, {
-							agentId,
-							sourceKind: "memory",
-							sourceId: c.memory_id,
-							content: c.content,
-						})
-					: scanMemoryContent(c.content).contextEligible,
-			)
-			.map((c) => cleanValue(c.content))
+			.map((constraint) => cleanValue(constraint.content))
 			.filter((value) => !isNoise(value));
-		if (cleanConstraints.length > 0) {
-			const vals = cleanConstraints.join("; ");
-			lines.push(`- Constraints: ${vals}`);
-		}
+		if (cleanConstraints.length > 0) lines.push(`- Constraints: ${cleanConstraints.join("; ")}`);
 
-		// Dependencies: cross-reference names
-		const deps = db
-			.prepare(
-				`SELECT ed.target_entity_id, e.name
-				 FROM entity_dependencies ed INDEXED BY idx_entity_dependencies_source
-				 JOIN entities e ON e.id = ed.target_entity_id
-				 WHERE ed.source_entity_id = ? AND ed.agent_id = ?
-				   AND ed.strength >= 0.3
-				 ORDER BY ed.strength DESC LIMIT 8`,
-			)
-			.all(ent.id, agentId) as DependencyRow[];
-
-		if (deps.length > 0) {
-			lines.push(`- Related: ${deps.map((d) => d.name).join(", ")}`);
-		}
-
+		const dependencies = dependenciesByEntity.get(entity.id) ?? [];
+		if (dependencies.length > 0)
+			lines.push(`- Related: ${dependencies.map((dependency) => dependency.name).join(", ")}`);
 		if (lines.length === 0) continue;
 
-		const built = trimBlock(`[${ent.name} (${ent.entity_type})]\n${lines.join("\n")}`);
-		const score = densityScore(aspectIds.length, totalAttrs, cleanConstraints.length);
-
+		const built = trimBlock(`[${entity.name} (${entity.entity_type})]\n${lines.join("\n")}`);
 		blocks.push({
 			content: built.text,
 			truncated: built.truncated,
-			score,
+			score: densityScore(aspectIds.length, totalAttrs, cleanConstraints.length),
 			source: "constructed",
 			provenance: {
-				entityId: ent.id,
-				entityName: ent.name,
-				entityType: ent.entity_type,
+				entityId: entity.id,
+				entityName: entity.name,
+				entityType: entity.entity_type,
 				aspectIds,
 				aspectNames,
 				attributeCount: totalAttrs,
 				constraintCount: constraints.length,
-				dependencyEntityIds: deps.map((d) => d.target_entity_id),
+				dependencyEntityIds: dependencies.map((dependency) => dependency.target_entity_id),
 			},
 		});
 	}
-
-	// Sort by density score descending, then truncate to limit
 	blocks.sort((a, b) => b.score - a.score);
-	return blocks.slice(0, limit);
+	return blocks.slice(0, normalizeBlockLimit(limit));
+}
+
+/**
+ * Construct context from a previously loaded snapshot. This keeps all text
+ * assembly and content handling outside the owner callback.
+ */
+export async function constructContextBlocksFromSnapshot(
+	snapshot: ContextSnapshot,
+	limit: number,
+	prepared?: PreparedContextRows,
+): Promise<ReadonlyArray<ConstructedContext>> {
+	const rows = prepared ?? (await prepareContextRows(snapshot));
+	return buildConstructedContextFromRows(snapshot, rows, limit);
 }
 
 /** Owner-bound constructed context for recall paths that cannot read parent SQLite. */
@@ -264,140 +272,6 @@ export async function constructContextBlocksViaOwner(
 	focalEntityIds: ReadonlyArray<string>,
 	limit: number,
 ): Promise<ReadonlyArray<ConstructedContext>> {
-	if (focalEntityIds.length === 0) return [];
-	const query = <Row extends object>(sql: string, params: readonly unknown[], operation: string) =>
-		ownerReadAll<Row>(owner, sql, params, {
-			operation,
-			lane: "read",
-			workloadClass: "foreground",
-			deadlineMs: 30_000,
-			estimatedWorkUnits: 200,
-		});
-	const ph = focalEntityIds.map(() => "?").join(", ");
-	const entities = await query<EntityRow>(
-		`SELECT id, name, entity_type FROM entities WHERE id IN (${ph})`,
-		focalEntityIds,
-		"memory-search.constructed.entities",
-	);
-	if (entities.length === 0) return [];
-
-	let safetyTableExists: boolean | null = null;
-	const eligible = async (content: string, memoryId: string | null): Promise<boolean> => {
-		if (!scanMemoryContent(content).contextEligible) return false;
-		if (!memoryId) return true;
-		if (safetyTableExists === null) {
-			try {
-				const rows = await query<{ name: string }>(
-					"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety'",
-					[],
-					"memory-search.constructed.safety-table",
-				);
-				safetyTableExists = rows.length > 0;
-			} catch {
-				safetyTableExists = false;
-			}
-		}
-		if (!safetyTableExists) return true;
-		try {
-			const rows = await query<{ status: string; context_eligible: number }>(
-				`SELECT status, context_eligible FROM memory_content_safety
-			 WHERE agent_id = ? AND source_kind = 'memory' AND source_id = ?`,
-				[agentId, memoryId],
-				"memory-search.constructed.safety-row",
-			);
-			const row = rows[0];
-			return !row || (row.status === "clean" && row.context_eligible === 1);
-		} catch {
-			return false;
-		}
-	};
-
-	const blocks: ConstructedContext[] = [];
-	for (const ent of entities) {
-		const aspects = await query<AspectRow>(
-			`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
-			 WHERE entity_id = ? AND agent_id = ?
-			 ORDER BY weight DESC LIMIT 10`,
-			[ent.id, agentId],
-			"memory-search.constructed.aspects",
-		);
-		const lines: string[] = [];
-		const aspectIds: string[] = [];
-		const aspectNames: string[] = [];
-		let totalAttrs = 0;
-
-		for (const asp of aspects) {
-			const attrs = await query<AttributeRow>(
-				`SELECT content, importance, memory_id FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
-				 WHERE aspect_id = ? AND agent_id = ?
-				   AND status = 'active' AND kind != 'constraint'
-				 ORDER BY importance DESC LIMIT 5`,
-				[asp.id, agentId],
-				"memory-search.constructed.attributes",
-			);
-			const values: string[] = [];
-			for (const attr of attrs) {
-				if (!(await eligible(attr.content, attr.memory_id))) continue;
-				const value = cleanValue(attr.content);
-				if (!isNoise(value)) values.push(value);
-			}
-			if (values.length === 0) continue;
-			aspectIds.push(asp.id);
-			aspectNames.push(asp.name);
-			totalAttrs += values.length;
-			lines.push(`- ${asp.name}: ${values.join("; ")}`);
-		}
-
-		const constraints = await query<ConstraintRow>(
-			`SELECT DISTINCT ea.content, ea.importance, ea.memory_id
-			 FROM entity_aspects asp INDEXED BY idx_entity_aspects_entity
-			 CROSS JOIN entity_attributes ea INDEXED BY idx_entity_attributes_aspect
-			   ON ea.aspect_id = asp.id
-			 WHERE asp.entity_id = ? AND ea.agent_id = ?
-			   AND ea.kind = 'constraint' AND ea.status = 'active'
-			 ORDER BY ea.importance DESC LIMIT 10`,
-			[ent.id, agentId],
-			"memory-search.constructed.constraints",
-		);
-		const cleanConstraints: string[] = [];
-		for (const constraint of constraints) {
-			if (!(await eligible(constraint.content, constraint.memory_id))) continue;
-			const value = cleanValue(constraint.content);
-			if (!isNoise(value)) cleanConstraints.push(value);
-		}
-		if (cleanConstraints.length > 0) lines.push(`- Constraints: ${cleanConstraints.join("; ")}`);
-
-		const deps = await query<DependencyRow>(
-			`SELECT ed.target_entity_id, e.name
-			 FROM entity_dependencies ed INDEXED BY idx_entity_dependencies_source
-			 JOIN entities e ON e.id = ed.target_entity_id
-			 WHERE ed.source_entity_id = ? AND ed.agent_id = ?
-			   AND ed.strength >= 0.3
-			 ORDER BY ed.strength DESC LIMIT 8`,
-			[ent.id, agentId],
-			"memory-search.constructed.dependencies",
-		);
-		if (deps.length > 0) lines.push(`- Related: ${deps.map((dep) => dep.name).join(", ")}`);
-		if (lines.length === 0) continue;
-
-		const built = trimBlock(`[${ent.name} (${ent.entity_type})]\n${lines.join("\n")}`);
-		blocks.push({
-			content: built.text,
-			truncated: built.truncated,
-			score: densityScore(aspectIds.length, totalAttrs, cleanConstraints.length),
-			source: "constructed",
-			provenance: {
-				entityId: ent.id,
-				entityName: ent.name,
-				entityType: ent.entity_type,
-				aspectIds,
-				aspectNames,
-				attributeCount: totalAttrs,
-				constraintCount: constraints.length,
-				dependencyEntityIds: deps.map((dep) => dep.target_entity_id),
-			},
-		});
-	}
-	blocks.sort((a, b) => b.score - a.score);
-	return blocks.slice(0, limit);
+	const snapshot = await loadContextSnapshotViaOwner(owner, agentId, focalEntityIds, limit);
+	return await constructContextBlocksFromSnapshot(snapshot, limit);
 }
