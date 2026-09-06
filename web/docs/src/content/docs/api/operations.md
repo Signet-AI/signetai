@@ -326,6 +326,54 @@ Administrative repair operations. All require `admin` permission. Operations
 are rate-limited internally by the repair limiter and return `429` when the
 limit is exceeded.
 
+### GET /api/repair/integrity-check
+
+Run the operator's global SQLite integrity verification through the database
+owner's isolated verification lane. The daemon awaits both `quick_check` and
+`integrity_check`; neither operation runs in the HTTP/event-loop process.
+Requires `admin` permission.
+
+A completed request returns `200`, including when SQLite reports corruption.
+The response's `outcome` is `passed` or `failed`. An unavailable or cancelled
+owner returns `503`; an owner deadline returns `504`. Deadline and cancellation
+of an uninterruptible native scan retire the verification owner and are
+reported explicitly rather than continuing as detached work.
+
+**Response**
+
+```json
+{
+  "ok": true,
+  "messages": [],
+  "quickCheck": { "ok": true, "messages": [] },
+  "fullCheck": { "ok": true, "messages": [] },
+  "phase": "complete",
+  "outcome": "passed",
+  "executionHome": "db-owner.verify",
+  "checkpointKey": "database.operator-integrity",
+  "deadlineMs": 60000,
+  "durationMs": 42
+}
+```
+
+### POST /api/repair/rebuild-indexes
+
+Rebuild derived FTS and embedding indexes after integrity verification. The
+operation is fail-closed: a failed, unavailable, timed-out, or cancelled
+integrity precondition performs no FTS or embedding writes. Requires `admin`
+permission.
+
+**Response**
+
+```json
+{
+  "integrity": { "ok": true, "outcome": "passed" },
+  "fts": { "repaired": false, "message": "..." },
+  "embeddings": { "reembedded": 0, "totalMissing": 0, "crossAgentHashConflicts": 0 },
+  "summary": "..."
+}
+```
+
 ### POST /api/repair/requeue-dead
 
 Requeue extraction jobs stuck in a terminal-failed state. Typically used

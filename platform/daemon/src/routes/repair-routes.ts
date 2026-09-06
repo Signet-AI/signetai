@@ -30,6 +30,7 @@ import {
 	resyncVectorIndex,
 } from "../repair-actions.js";
 import { which } from "../which.js";
+import type { IntegrityCheckResult, OperatorIntegrityCheckOptions } from "../database-integrity-check.js";
 import { AGENTS_DIR, authConfig, repairLimiter } from "./state.js";
 
 function resolveRepairContext(c: Context): RepairContext {
@@ -69,6 +70,10 @@ export function registerRepairRoutes(
 	deps: {
 		readonly authConfig?: AuthConfig;
 		readonly getDbAccessor?: () => DbAccessor;
+		readonly runIntegrityCheck?: (
+			accessor: DbAccessor,
+			options?: OperatorIntegrityCheckOptions,
+		) => Promise<IntegrityCheckResult>;
 	} = {},
 ): void {
 	const effectiveAuthConfig = deps.authConfig ?? authConfig;
@@ -684,9 +689,13 @@ export function registerRepairRoutes(
 		update: ["signet", ["update", "install"]],
 	};
 
-	app.get("/api/repair/integrity-check", (c) => {
-		const result = integrityCheck(getDbAccessor());
-		return c.json(result);
+	app.get("/api/repair/integrity-check", async (c) => {
+		const accessor = deps.getDbAccessor?.() ?? getDbAccessor();
+		const runCheck = deps.runIntegrityCheck ?? integrityCheck;
+		const result = await runCheck(accessor, { signal: c.req.raw.signal });
+		const status =
+			result.phase === "timed_out" ? 504 : result.phase === "cancelled" || result.phase === "unavailable" ? 503 : 200;
+		return c.json(result, status);
 	});
 
 	app.post("/api/repair/rebuild-indexes", async (c) => {

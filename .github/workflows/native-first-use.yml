@@ -8,6 +8,7 @@ on:
       - "surfaces/cli/**"
       - "scripts/build-native-bun.ts"
       - "scripts/native-first-use-smoke.test.ts"
+      - "scripts/native-integrity-acceptance.test.ts"
       - "package.json"
       - "bun.lock"
       - ".github/workflows/native-first-use.yml"
@@ -19,6 +20,7 @@ on:
       - "surfaces/cli/**"
       - "scripts/build-native-bun.ts"
       - "scripts/native-first-use-smoke.test.ts"
+      - "scripts/native-integrity-acceptance.test.ts"
       - "package.json"
       - "bun.lock"
       - ".github/workflows/native-first-use.yml"
@@ -28,7 +30,7 @@ permissions:
 
 jobs:
   first-use:
-    name: Compiled ${{ matrix.os }} setup, doctor, remember, and recall
+    name: Compiled ${{ matrix.os }} first-use and integrity acceptance
     strategy:
       fail-fast: false
       matrix:
@@ -53,3 +55,8 @@ jobs:
           SIGNET_NATIVE_FIRST_USE_SMOKE: "1"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/signet
         run: bun test scripts/native-first-use-smoke.test.ts
+      - name: Run compiled integrity/health acceptance
+        env:
+          SIGNET_NATIVE_INTEGRITY_SMOKE: "1"
+          SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/signet
+        run: bun test scripts/native-integrity-acceptance.test.ts

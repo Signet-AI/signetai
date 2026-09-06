@@ -13,7 +13,11 @@ import {
 	recreateMemoriesFts,
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
-import type { IntegrityCheckStatus } from "./database-integrity";
+import {
+	runOperatorIntegrityCheck,
+	type IntegrityCheckResult,
+	type OperatorIntegrityCheckOptions,
+} from "./database-integrity-check";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { toFtsSchemaQueryDb } from "./db-accessor";
 import { getDbOwnerMaintenance, type DbOwnerMaintenance } from "./db-owner-maintenance";
@@ -434,7 +438,7 @@ export async function checkFtsConsistency(
 				tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
 			};
 		},
-		{ siteToken: "repair-actions.ts:415" },
+		{ siteToken: "repair-actions.ts:419" },
 	);
 
 	// If FTS table is missing entirely, report it (startup self-heal
@@ -729,7 +733,7 @@ export async function getEmbeddingGapStats(accessor: DbAccessor, agentId: string
 				repair,
 			};
 		},
-		{ siteToken: "repair-actions.ts:700" },
+		{ siteToken: "repair-actions.ts:704" },
 	);
 }
 
@@ -741,10 +745,10 @@ export async function getEmbeddingRepairStats(
 	const gap = await getEmbeddingGapStats(accessor, agentId);
 	const migration = await accessor.withReadDbAsync(
 		async (db) => countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
-		{ siteToken: "repair-actions.ts:742" },
+		{ siteToken: "repair-actions.ts:746" },
 	);
 	const orphaned = await accessor.withReadDbAsync(async (db) => countOrphanedEmbeddings(db, agentId), {
-		siteToken: "repair-actions.ts:746",
+		siteToken: "repair-actions.ts:750",
 	});
 	return { gap, migration, orphaned };
 }
@@ -2431,34 +2435,14 @@ export async function forgetDeadMemories(accessor: DbAccessor, ids: readonly str
 // SQLite integrity check
 // ---------------------------------------------------------------------------
 
-export interface IntegrityCheckResult {
-	readonly ok: boolean;
-	readonly messages: readonly string[];
-	readonly quickCheck: IntegrityCheckStatus;
-	readonly fullCheck: IntegrityCheckStatus;
-}
+export type { IntegrityCheckResult } from "./database-integrity-check";
 
-function readIntegrityCheck(db: ReadDb, pragma: "quick_check" | "integrity_check"): IntegrityCheckStatus {
-	const key = pragma === "quick_check" ? "quick_check" : "integrity_check";
-	const rows = db.prepare(`PRAGMA ${pragma}`).all() as ReadonlyArray<Record<string, unknown>>;
-	const messages = rows.map((row) => String(row[key] ?? ""));
-	if (messages.length === 1 && messages[0] === "ok") return { ok: true, messages: [] };
-	return { ok: false, messages };
-}
-
-/**
- * Run both SQLite integrity modes. quick_check is cheap and useful for
- * broad damage; integrity_check is the authoritative result for indexes.
- */
-export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityCheckResult> {
-	return await accessor.withReadDbAsync(
-		async (db) => {
-			const quickCheck = readIntegrityCheck(db, "quick_check");
-			const fullCheck = readIntegrityCheck(db, "integrity_check");
-			return { ok: fullCheck.ok, messages: fullCheck.messages, quickCheck, fullCheck };
-		},
-		{ siteToken: "db:repair.integrity-check.read" },
-	);
+/** Run the operator integrity service through the process database owner. */
+export async function integrityCheck(
+	accessor: DbAccessor,
+	options: OperatorIntegrityCheckOptions = {},
+): Promise<IntegrityCheckResult> {
+	return await runOperatorIntegrityCheck(accessor, options);
 }
 
 // ---------------------------------------------------------------------------
@@ -2466,7 +2450,7 @@ export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityChe
 // ---------------------------------------------------------------------------
 
 export interface RebuildIndexesResult {
-	readonly integrity: { ok: boolean; messages: readonly string[] };
+	readonly integrity: IntegrityCheckResult;
 	readonly fts: { repaired: boolean; message: string };
 	readonly embeddings: {
 		readonly reembedded: number;
@@ -2478,7 +2462,7 @@ export interface RebuildIndexesResult {
 
 /**
  * Run a coordinated repair of all derived search indexes in sequence:
- * 1. PRAGMA integrity_check — fail fast if DB is corrupt
+ * 1. owner-routed quick_check + integrity_check — fail closed unless both pass
  * 2. FTS consistency check + rebuild if needed
  * 3. Re-embed memories missing vector embeddings
  *
@@ -2493,6 +2477,20 @@ export async function rebuildDerivedIndexes(
 	embeddingCfg: EmbeddingConfig,
 ): Promise<RebuildIndexesResult> {
 	const integrity = await integrityCheck(accessor);
+
+	// Integrity is a hard precondition for every derived-state mutation. A
+	// failed, unavailable, timed-out, or cancelled check must leave both FTS and
+	// embeddings untouched so an operator can preserve the original evidence.
+	if (!integrity.ok) {
+		const reason =
+			integrity.outcome === "failed" ? "integrity verification failed" : `integrity verification ${integrity.outcome}`;
+		return {
+			integrity,
+			fts: { repaired: false, message: `skipped: ${reason}` },
+			embeddings: { reembedded: 0, totalMissing: 0, crossAgentHashConflicts: 0 },
+			summary: `${reason}; FTS and embeddings skipped`,
+		};
+	}
 
 	// Step 1: FTS rebuild
 	const ftsResult = await checkFtsConsistency(accessor, cfg, ctx, limiter, true);

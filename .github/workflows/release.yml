@@ -324,8 +324,9 @@ jobs:
         shell: bash
         env:
           SIGNET_NATIVE_FIRST_USE_SMOKE: "1"
+          SIGNET_NATIVE_INTEGRITY_SMOKE: "1"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/${{ matrix.asset }}
-        run: bun test scripts/native-first-use-smoke.test.ts
+        run: bun test scripts/native-first-use-smoke.test.ts scripts/native-integrity-acceptance.test.ts
 
       - name: Upload to release
         shell: bash

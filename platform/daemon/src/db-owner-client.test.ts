@@ -820,6 +820,63 @@ describe("DB owner client", () => {
 		expect(client.health().generation).toBe(1);
 	});
 
+	test("kills and replaces the verification owner when a native scan times out", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		const slow = client.submit(
+			{ kind: "sleep", durationMs: 250 },
+			{
+				operation: "integrity.operator.deadline-test",
+				lane: "verify",
+				deadlineMs: 40,
+				killOnDeadline: true,
+				killOnCancel: true,
+			},
+		);
+		try {
+			await slow.result;
+			throw new Error("verification deadline unexpectedly resolved");
+		} catch (error) {
+			expect(error).toBeInstanceOf(DbOwnerDeadlineError);
+		}
+		expect(client.health().lanes?.maintenance).toMatchObject({ state: "dead", pid: null, generation: 1 });
+
+		const replacement = client.submit<unknown[]>(
+			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+			{ operation: "integrity.operator.replacement", lane: "verify", deadlineMs: 5_000 },
+		);
+		expect(await replacement.result).toEqual([{ value: 1 }]);
+		expect(client.health().lanes?.maintenance).toMatchObject({ state: "ready", generation: 2 });
+	});
+
+	test("kills the verification owner when an active native scan is cancelled", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		const slow = client.submit(
+			{ kind: "sleep", durationMs: 250 },
+			{
+				operation: "integrity.operator.cancel-test",
+				lane: "verify",
+				deadlineMs: 1_000,
+				killOnCancel: true,
+			},
+		);
+		await waitFor(() => client?.health().lanes?.maintenance.activeJobId === slow.job.id);
+		slow.cancel();
+		try {
+			await slow.result;
+			throw new Error("verification cancellation unexpectedly resolved");
+		} catch (error) {
+			expect(error).toBeInstanceOf(DbOwnerCancelledError);
+		}
+		await slow.metrics;
+		expect(client.health().lanes?.maintenance).toMatchObject({ state: "dead", pid: null, generation: 1 });
+	});
+
 	test("recovers on the immediate submission after an external SIGABRT", async () => {
 		const database = makeDb();
 		directory = database.directory;
