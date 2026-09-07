@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-07
-- Bug fixes: allow undeclared tool capability.
+- Bug fixes: preserve external embedding selection; allow undeclared tool capability.
 
 ### 2026-09-06
 - Bug fixes: apply existing setup provider; clean retired setup fields; enable dreaming defaults.
@@ -33,6 +33,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add Defuddle web imports (rebased); add third-party license colophon.
 
 ## Release Ledger
+
+## [0.219.4] - 2026-09-07
+
+Release summary: 1 bug fix.
+Tag range: `v0.219.3..v0.219.4`.
+
+### Bug Fixes
+
+- **cli**: preserve external embedding selection
 
 ## [0.219.3] - 2026-09-07
 
