@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-07
+- Bug fixes: allow undeclared tool capability.
+
 ### 2026-09-06
 - Bug fixes: apply existing setup provider; clean retired setup fields; enable dreaming defaults.
 
@@ -29,12 +32,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-09-01
 - Features: add Defuddle web imports (rebased); add third-party license colophon.
 
-### 2026-08-31
-- Bug fixes: bundle Dreaming finalizer; refresh event-loop contract baseline; harden native memory provider gating; repair event-loop audit site tokens; bound native source embedding outages; abort OAuth prompts on callback completion; pass abort signal to pi-ai OAuth; update pi-ai model registry; preserve fresh workspace startup; fail closed on malformed workspace pointers; create startup state after workspace preflight; preflight workspace before daemon probes; fail closed when configured workspace disappears; preserve graph context safety; keep graph recall reads on db owner; bound owner traversal deadlines; route memory recall traversal through db owner; pause setup spinner while prompting; cover compiled CLI OAuth setup; preserve non-task type exports; make owner lease retries idempotent; record backlog mirror on the owner-maintenance branch (#1759 re-verdict finding); isolate Dreaming token worker requests; bound exact Dreaming token accounting; enforce provider SDK contracts; bound sync DB site token matching; repair boundary test structure after rebase (balanced describes); restore wave-5 source-evidence helper + classify it in inline dispatch; repair boundary test structure; resolve wave-5 + foundation merge — realign contract inventory to 899/219/217/383; make lifecycle close recovery robust; reopen accessor lifecycle between closes; close DB lifecycle registrations atomically; require DB owner for vacuum work; realign contract test assertions to wave-5 inventory (902/220/384); L1 wave 5 — routes clusters owner-routed (memory/sources/misc + imported-source-outcome); repair compiled first-use path.
-- Refactoring: route wave 7 workers through db owner; route knowledge graph reads through db owner; stabilize DB attribution IDs; isolate server composition root; separate widget generation from probe persistence; isolate Dreaming backlog cache; move owner-local Dreaming execution; make inline owner dispatch exhaustive; isolate DB foundation lifecycle; isolate migration contract.
-- Docs: document fail-closed workspace startup.
-
 ## Release Ledger
+
+## [0.219.3] - 2026-09-07
+
+Release summary: 1 bug fix.
+Tag range: `v0.219.2..v0.219.3`.
+
+### Bug Fixes
+
+- **core**: allow undeclared tool capability
 
 ## [0.219.2] - 2026-09-06
 
