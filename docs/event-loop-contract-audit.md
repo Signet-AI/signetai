@@ -4,18 +4,18 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 831 sites
+- Exact ledger inventory: 835 sites
 - Synchronous `withWriteTx()` sites: 62
 - Synchronous `withReadDb()` sites: 97
 - Async-named DB sites: 168
 - Async-named ON-PARENT DB sites: 166
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 504
+- Synchronous filesystem/process sites: 508
 - Compile-visible legacy DB sites remaining: 159
   - `withWriteTx`: 62
   - `withReadDb`: 97
 
-The 831-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 62 synchronous writes, 97 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 159 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 835-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 62 synchronous writes, 97 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 159 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
@@ -84,8 +84,8 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `embedding-repair-state.ts:139` (withReadDb)
 - `embedding-repair-state.ts:160` (withReadDb)
 - `embedding-repair-state.ts:191` (withWriteTx)
-- `embedding-tracker.ts:200` (withReadDb)
-- `embedding-tracker.ts:271` (withWriteTx)
+- `embedding-tracker.ts:188` (withReadDb)
+- `embedding-tracker.ts:273` (withWriteTx)
 - `embedding-usage.ts:90` (withWriteTxAsync)
 - `embedding-usage.ts:133` (withReadDbAsync)
 - `github-source-provider.ts:460` (withReadDbAsync)

@@ -501,14 +501,14 @@
     },
     {
       "path": "database-integrity.ts",
-      "line": 471,
+      "line": 581,
       "api": "existsSync",
       "source": "if (existsSync(bundled)) return bundled;",
       "category": "hot-path"
     },
     {
       "path": "database-integrity.ts",
-      "line": 551,
+      "line": 632,
       "api": "withWriteTxAsync",
       "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"db:database.integrity.write\" });",
       "category": "hot-path",
@@ -516,7 +516,7 @@
     },
     {
       "path": "database-integrity.ts",
-      "line": 712,
+      "line": 792,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -524,7 +524,7 @@
     },
     {
       "path": "database-integrity.ts",
-      "line": 830,
+      "line": 910,
       "api": "withReadDbAsync",
       "source": "? await accessor.withReadDbAsync(async (db) => check(db, \"integrity_check\", \"telemetry_events\"), {",
       "category": "hot-path",
@@ -1129,14 +1129,14 @@
     },
     {
       "path": "embedding-tracker.ts",
-      "line": 200,
+      "line": 188,
       "api": "withReadDb",
       "source": "const staleRows: StaleRow[] = accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "embedding-tracker.ts",
-      "line": 271,
+      "line": 273,
       "api": "withWriteTx",
       "source": "applied = accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"
@@ -1157,7 +1157,7 @@
     },
     {
       "path": "embedding-worker-handle.ts",
-      "line": 180,
+      "line": 182,
       "api": "existsSync",
       "source": ": existsSync(bundled)",
       "category": "hot-path"
@@ -1248,7 +1248,7 @@
     },
     {
       "path": "harness-install-worker.ts",
-      "line": 38,
+      "line": 48,
       "api": "existsSync",
       "source": "if (!pluginPath || !existsSync(join(pluginPath, \"dist\", \"index.js\")))",
       "category": "hot-path"
@@ -1671,14 +1671,14 @@
     },
     {
       "path": "memory-config.ts",
-      "line": 368,
+      "line": 377,
       "api": "existsSync",
       "source": ".find((path) => existsSync(path));",
       "category": "hot-path"
     },
     {
       "path": "memory-config.ts",
-      "line": 370,
+      "line": 379,
       "api": "readFileSync",
       "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
       "category": "hot-path"
@@ -2015,154 +2015,182 @@
     },
     {
       "path": "native-memory-source-worker.ts",
-      "line": 306,
+      "line": 258,
       "api": "existsSync",
-      "source": "return [existsSync(bundled) ? bundled : join(directory, \"native-memory-source-worker.ts\")];",
+      "source": "return existsSync(bundled) ? bundled : join(directory, \"native-memory-source-worker.ts\");",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 99,
-      "api": "mkdirSync",
-      "source": "mkdirSync(dir, { recursive: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "native-runtime-assets.ts",
-      "line": 100,
+      "line": 95,
       "api": "existsSync",
-      "source": "if (!existsSync(path)) {",
+      "source": "return existsSync(path) && readFileSync(path).equals(content);",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 101,
-      "api": "writeFileSync",
-      "source": "writeFileSync(path, Buffer.from(worker.contentBase64, \"base64\"));",
-      "category": "hot-path"
-    },
-    {
-      "path": "native-runtime-assets.ts",
-      "line": 117,
-      "api": "mkdirSync",
-      "source": "mkdirSync(dir, { recursive: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "native-runtime-assets.ts",
-      "line": 121,
-      "api": "readdirSync",
-      "source": "for (const entry of readdirSync(dir)) {",
-      "category": "hot-path"
-    },
-    {
-      "path": "native-runtime-assets.ts",
-      "line": 127,
+      "line": 95,
       "api": "readFileSync",
-      "source": "const entryHash = createHash(\"sha256\").update(readFileSync(entryPath)).digest(\"hex\").slice(0, 16);",
+      "source": "return existsSync(path) && readFileSync(path).equals(content);",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 135,
-      "api": "unlinkSync",
-      "source": "unlinkSync(entryPath);",
-      "category": "hot-path"
-    },
-    {
-      "path": "native-runtime-assets.ts",
-      "line": 141,
-      "api": "existsSync",
-      "source": "existsSync(path) && createHash(\"sha256\").update(readFileSync(path)).digest(\"hex\").slice(0, 16) === hash;",
-      "category": "hot-path"
-    },
-    {
-      "path": "native-runtime-assets.ts",
-      "line": 141,
-      "api": "readFileSync",
-      "source": "existsSync(path) && createHash(\"sha256\").update(readFileSync(path)).digest(\"hex\").slice(0, 16) === hash;",
-      "category": "hot-path"
-    },
-    {
-      "path": "native-runtime-assets.ts",
-      "line": 146,
+      "line": 105,
       "api": "writeFileSync",
-      "source": "writeFileSync(tempPath, content, { flag: \"wx\" });",
+      "source": "writeFileSync(tempPath, content, { flag: \"wx\", mode: 0o600 });",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 153,
+      "line": 109,
       "api": "renameSync",
       "source": "renameSync(tempPath, path);",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 163,
+      "line": 118,
       "api": "unlinkSync",
       "source": "unlinkSync(path);",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 172,
+      "line": 127,
       "api": "rmSync",
       "source": "rmSync(tempDir, { recursive: true, force: true });",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 187,
+      "line": 138,
       "api": "mkdirSync",
       "source": "mkdirSync(dir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
+      "line": 154,
+      "api": "mkdirSync",
+      "source": "mkdirSync(dir, { recursive: true });",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 158,
+      "api": "readdirSync",
+      "source": "for (const entry of readdirSync(dir)) {",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 164,
+      "api": "readFileSync",
+      "source": "const entryHash = createHash(\"sha256\").update(readFileSync(entryPath)).digest(\"hex\").slice(0, 16);",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 172,
+      "api": "unlinkSync",
+      "source": "unlinkSync(entryPath);",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 178,
+      "api": "existsSync",
+      "source": "existsSync(path) && createHash(\"sha256\").update(readFileSync(path)).digest(\"hex\").slice(0, 16) === hash;",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 178,
+      "api": "readFileSync",
+      "source": "existsSync(path) && createHash(\"sha256\").update(readFileSync(path)).digest(\"hex\").slice(0, 16) === hash;",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 183,
+      "api": "writeFileSync",
+      "source": "writeFileSync(tempPath, content, { flag: \"wx\" });",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
       "line": 190,
+      "api": "renameSync",
+      "source": "renameSync(tempPath, path);",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 200,
+      "api": "unlinkSync",
+      "source": "unlinkSync(path);",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 209,
+      "api": "rmSync",
+      "source": "rmSync(tempDir, { recursive: true, force: true });",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 224,
+      "api": "mkdirSync",
+      "source": "mkdirSync(dir, { recursive: true });",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 227,
       "api": "existsSync",
       "source": "if (!existsSync(path)) {",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 191,
+      "line": 228,
       "api": "writeFileSync",
       "source": "writeFileSync(path, Buffer.from(asset.contentBase64, \"base64\"));",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 205,
+      "line": 242,
       "api": "mkdirSync",
       "source": "mkdirSync(root, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 210,
+      "line": 247,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 211,
+      "line": 248,
       "api": "existsSync",
       "source": "if (!existsSync(path)) {",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 212,
+      "line": 249,
       "api": "writeFileSync",
       "source": "writeFileSync(path, Buffer.from(asset.contentBase64, \"base64\"));",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 217,
+      "line": 254,
       "api": "writeFileSync",
       "source": "writeFileSync(join(root, \".signet-assets.json\"), `${JSON.stringify({ kind, sourceHash }, null, 2)}\\n`);",
       "category": "hot-path"
@@ -3397,9 +3425,9 @@
     },
     {
       "path": "routes/harness-install.ts",
-      "line": 37,
+      "line": 22,
       "api": "existsSync",
-      "source": ": [existsSync(built) ? built : join(directory, \"../harness-install-worker.ts\")];",
+      "source": "return existsSync(built) ? built : join(directory, \"../harness-install-worker.ts\");",
       "category": "hot-path"
     },
     {
