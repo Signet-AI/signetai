@@ -6,9 +6,11 @@ import {
 	cpSync,
 	existsSync,
 	mkdirSync,
+	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
+	renameSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
@@ -20,8 +22,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "../..");
 const resources = resolve(desktopRoot, "resources");
-const daemonOut = resolve(resources, "daemon");
-const runtimeOut = resolve(resources, "runtime");
 const daemonPkgPath = resolve(repoRoot, "platform/daemon/package.json");
 const corePkgPath = resolve(repoRoot, "platform/core/package.json");
 
@@ -129,6 +129,28 @@ function pkgVersion(pkg, name) {
 	return pkg.dependencies?.[name] ?? pkg.optionalDependencies?.[name] ?? pkg.devDependencies?.[name] ?? null;
 }
 
+export function replaceResources(target, staged, rename = renameSync) {
+	const hadTarget = existsSync(target);
+	const backupParent = mkdtempSync(join(dirname(target), ".resources-backup-"));
+	const backup = join(backupParent, basename(target));
+	let moved = false;
+	try {
+		if (hadTarget) {
+			rename(target, backup);
+			moved = true;
+		}
+		rename(staged, target);
+	} catch (error) {
+		if (moved) {
+			if (existsSync(target)) rmSync(target, { recursive: true, force: true });
+			rename(backup, target);
+		}
+		throw error;
+	} finally {
+		rmSync(backupParent, { recursive: true, force: true });
+	}
+}
+
 export function stageRuntime() {
 	const bunArch = targetArch();
 	const target = targetPlatform();
@@ -143,75 +165,83 @@ export function stageRuntime() {
 	const bunSrc = bunRuntime();
 	assertBunRuntime(bunSrc, bunArch, target);
 
-	rmSync(resources, { recursive: true, force: true });
-	mkdirSync(daemonOut, { recursive: true });
-	mkdirSync(runtimeOut, { recursive: true });
+	const stagedResources = mkdtempSync(join(desktopRoot, ".resources-stage-"));
+	try {
+		const daemonOut = resolve(stagedResources, "daemon");
+		const runtimeOut = resolve(stagedResources, "runtime");
+		mkdirSync(daemonOut, { recursive: true });
+		mkdirSync(runtimeOut, { recursive: true });
 
-	const bunDest = resolve(runtimeOut, target === "win32" ? "bun.exe" : "bun");
-	cpSync(bunSrc, bunDest);
-	if (target !== "win32") chmodSync(bunDest, 0o755);
+		const bunDest = resolve(runtimeOut, target === "win32" ? "bun.exe" : "bun");
+		cpSync(bunSrc, bunDest);
+		if (target !== "win32") chmodSync(bunDest, 0o755);
 
-	// Stage every built daemon entrypoint and native asset rather than a
-	// hardcoded subset. The daemon resolves its workers (db-owner, harness
-	// install, dreaming tokens, transcript recovery, ...) as siblings of
-	// daemon.js at runtime; missing files here break the packaged app at boot.
-	mkdirSync(resolve(daemonOut, "dist"), { recursive: true });
-	const daemonDist = resolve(repoRoot, "platform/daemon/dist");
-	for (const entry of readdirSync(daemonDist)) {
-		if (/\.(js|node|wasm)$/.test(entry)) {
-			cpSync(join(daemonDist, entry), resolve(daemonOut, "dist", entry));
+		// Stage every built daemon entrypoint and native asset rather than a
+		// hardcoded subset. The daemon resolves its workers (db-owner, harness
+		// install, dreaming tokens, transcript recovery, ...) as siblings of
+		// daemon.js at runtime; missing files here break the packaged app at boot.
+		mkdirSync(resolve(daemonOut, "dist"), { recursive: true });
+		const daemonDist = resolve(repoRoot, "platform/daemon/dist");
+		for (const entry of readdirSync(daemonDist)) {
+			if (/\.(js|node|wasm)$/.test(entry)) {
+				cpSync(join(daemonDist, entry), resolve(daemonOut, "dist", entry));
+			}
 		}
-	}
-	cpSync(resolve(repoRoot, "platform/daemon/dashboard"), resolve(daemonOut, "dashboard"), { recursive: true });
-	cpSync(resolve(repoRoot, "platform/daemon/skills"), resolve(daemonOut, "skills"), { recursive: true });
+		cpSync(resolve(repoRoot, "platform/daemon/dashboard"), resolve(daemonOut, "dashboard"), { recursive: true });
+		cpSync(resolve(repoRoot, "platform/daemon/skills"), resolve(daemonOut, "skills"), { recursive: true });
 
-	// Connector assets that live on disk in the connector package (not bundled
-	// into dist JS). The hermes-agent connector copies its Python plugin from
-	// here during harness install; the desktop daemon points
-	// SIGNET_CONNECTOR_ASSETS_DIR at this tree.
-	const connectorsOut = resolve(daemonOut, "connectors");
-	const hermesPluginSrc = resolve(repoRoot, "integrations/hermes-agent/connector/hermes-plugin");
-	if (existsSync(hermesPluginSrc)) {
-		cpSync(hermesPluginSrc, resolve(connectorsOut, "hermes-agent", "hermes-plugin"), { recursive: true });
-	} else {
-		throw new Error(`Hermes connector plugin source not found: ${hermesPluginSrc}`);
-	}
+		// Connector assets that live on disk in the connector package (not bundled
+		// into dist JS). The hermes-agent connector copies its Python plugin from
+		// here during harness install; the desktop daemon points
+		// SIGNET_CONNECTOR_ASSETS_DIR at this tree.
+		const connectorsOut = resolve(daemonOut, "connectors");
+		const hermesPluginSrc = resolve(repoRoot, "integrations/hermes-agent/connector/hermes-plugin");
+		if (existsSync(hermesPluginSrc)) {
+			cpSync(hermesPluginSrc, resolve(connectorsOut, "hermes-agent", "hermes-plugin"), { recursive: true });
+		} else {
+			throw new Error(`Hermes connector plugin source not found: ${hermesPluginSrc}`);
+		}
 
-	const daemonPkg = readJson(daemonPkgPath);
-	const corePkg = readJson(corePkgPath);
-	const vecPkg = platformVecPackage(target, bunArch);
-	const vecVersion = pkgVersion(corePkg, vecPkg);
-	if (vecVersion === null) {
-		throw new Error(`No sqlite-vec binary package is available for ${target}/${bunArch}`);
-	}
-	const dependencies = {};
-	for (const name of [
-		"@1password/sdk",
-		"@firecrawl/anydoc",
-		"@huggingface/transformers",
-		"onnxruntime-node",
-		"tiktoken",
-	]) {
-		const version = pkgVersion(daemonPkg, name);
-		if (version) dependencies[name] = version;
-	}
-	for (const name of ["sqlite-vec", vecPkg]) {
-		const version = pkgVersion(corePkg, name);
-		if (version) dependencies[name] = version;
-	}
+		const daemonPkg = readJson(daemonPkgPath);
+		const corePkg = readJson(corePkgPath);
+		const vecPkg = platformVecPackage(target, bunArch);
+		const vecVersion = pkgVersion(corePkg, vecPkg);
+		if (vecVersion === null) {
+			throw new Error(`No sqlite-vec binary package is available for ${target}/${bunArch}`);
+		}
+		const dependencies = {};
+		for (const name of [
+			"@1password/sdk",
+			"@firecrawl/anydoc",
+			"@huggingface/transformers",
+			"onnxruntime-node",
+			"tiktoken",
+		]) {
+			const version = pkgVersion(daemonPkg, name);
+			if (version) dependencies[name] = version;
+		}
+		for (const name of ["sqlite-vec", vecPkg]) {
+			const version = pkgVersion(corePkg, name);
+			if (version) dependencies[name] = version;
+		}
 
-	writeFileSync(
-		resolve(daemonOut, "package.json"),
-		`${JSON.stringify({ private: true, type: "module", dependencies }, null, "	")}\n`,
-	);
+		writeFileSync(
+			resolve(daemonOut, "package.json"),
+			`${JSON.stringify({ private: true, type: "module", dependencies }, null, "	")}\n`,
+		);
 
-	execFileSync(bunSrc, ["install", "--production"], {
-		cwd: daemonOut,
-		stdio: "inherit",
-		env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
-	});
+		execFileSync(bunSrc, ["install", "--production"], {
+			cwd: daemonOut,
+			stdio: "inherit",
+			env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
+		});
 
-	console.log(`Staged Electron desktop resources in ${resources}`);
+		replaceResources(resources, stagedResources);
+		console.log(`Staged Electron desktop resources in ${resources}`);
+	} catch (error) {
+		rmSync(stagedResources, { recursive: true, force: true });
+		throw error;
+	}
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) stageRuntime();

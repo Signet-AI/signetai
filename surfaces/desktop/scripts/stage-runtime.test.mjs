@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertBunRuntime, stageRuntime } from "./stage-runtime.mjs";
+import { assertBunRuntime, replaceResources, stageRuntime } from "./stage-runtime.mjs";
 
 describe("stage-runtime Bun validation", () => {
 	it("rejects an architecture-mismatched staged runtime", () => {
@@ -49,6 +49,30 @@ describe("stage-runtime Bun validation", () => {
 			else process.env.ELECTRON_BUILDER_PLATFORM = previousPlatform;
 			if (previousArch === undefined) delete process.env.ELECTRON_BUILDER_ARCH;
 			else process.env.ELECTRON_BUILDER_ARCH = previousArch;
+		}
+	});
+
+	it("restores the existing resources when the final swap fails", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const target = join(directory, "resources");
+		const staged = join(directory, "staged");
+		mkdirSync(target);
+		mkdirSync(staged);
+		writeFileSync(join(target, "marker"), "old\n");
+		writeFileSync(join(staged, "marker"), "new\n");
+		let renameCalls = 0;
+		const failFinalSwap = (source, destination) => {
+			renameCalls += 1;
+			if (renameCalls === 2) throw new Error("injected final swap failure");
+			renameSync(source, destination);
+		};
+
+		try {
+			expect(() => replaceResources(target, staged, failFinalSwap)).toThrow("injected final swap failure");
+			expect(readFileSync(join(target, "marker"), "utf8")).toBe("old\n");
+			expect(readFileSync(join(staged, "marker"), "utf8")).toBe("new\n");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
 		}
 	});
 });
