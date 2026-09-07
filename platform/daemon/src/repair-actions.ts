@@ -45,6 +45,7 @@ import { type EmbeddingRepairState, readEmbeddingRepairState } from "./embedding
 import {
 	acquireRepairAdmissionInTx,
 	finishRepairAdmissionInTx,
+	GLOBAL_REPAIR_SCOPE,
 	repairScopeKey,
 	type RepairAdmissionCompletion,
 	type RepairAdmissionLease,
@@ -232,20 +233,30 @@ async function beginRepairAdmission(
 	action: string,
 	cooldownMs: number,
 	hourlyBudget: number,
-	scope = "global",
+	scope: string | undefined = undefined,
 	skipDurable = false,
 ): Promise<RepairActionAdmission> {
-	const normalizedScope = repairScopeKey({ agentId: scope === "global" ? undefined : scope });
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cooldownMs, hourlyBudget, scope);
+	const admissionScope = scope ?? GLOBAL_REPAIR_SCOPE;
+	const normalizedScope = scope === undefined ? GLOBAL_REPAIR_SCOPE : repairScopeKey({ agentId: scope });
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cooldownMs, hourlyBudget, normalizedScope);
 	if (!gate.allowed) {
-		return { allowed: false, action, scope, lease: null, reason: gate.reason, retryAfterMs: gate.retryAfterMs };
+		return {
+			allowed: false,
+			action,
+			scope: admissionScope,
+			lease: null,
+			reason: gate.reason,
+			retryAfterMs: gate.retryAfterMs,
+		};
 	}
-	if (limiter.durable !== true || skipDurable) return { allowed: true, action, scope, lease: null };
+	if (limiter.durable !== true || skipDurable) {
+		return { allowed: true, action, scope: admissionScope, lease: null };
+	}
 	if (isSystemPressureHigh()) {
 		return {
 			allowed: false,
 			action,
-			scope,
+			scope: admissionScope,
 			lease: null,
 			reason: "repair admission denied while system pressure is high",
 		};
@@ -290,7 +301,7 @@ export async function runRepairWithAdmission<T extends RepairResult>(
 	action: string,
 	cooldownMs: number,
 	hourlyBudget: number,
-	scope = "global",
+	scope: string | undefined,
 	skipDurable = false,
 	denied: (message: string, retryAfterMs?: number) => T,
 	run: () => Promise<T>,
@@ -465,7 +476,7 @@ export async function requeueDeadJobs(
 		action,
 		cfg.repair.requeueCooldownMs,
 		cfg.repair.requeueHourlyBudget,
-		"global",
+		undefined,
 		dryRun,
 	);
 	if (!admission.allowed) {
@@ -599,7 +610,7 @@ export async function checkFtsConsistency(
 		action,
 		cfg.repair.reembedCooldownMs,
 		FTS_HOURLY_BUDGET,
-		"global",
+		undefined,
 		!repair,
 	);
 	if (!admission.allowed) {
@@ -1368,7 +1379,7 @@ export async function reembedMissingMemories(
 				writeRepairAudit(db, action, ctx, written, resultMessage);
 			});
 
-			limiter.record(action, admissionAgentId);
+			limiter.record(action, repairScopeKey({ agentId: admissionAgentId }));
 			logger.info("pipeline", "repair: re-embedded missing memories", {
 				affected: written,
 				attempted,
@@ -1641,7 +1652,7 @@ export async function reembedModelMigration(
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
-			limiter.record(action, agentId);
+			limiter.record(action, repairScopeKey({ agentId }));
 		}
 		return {
 			action,
@@ -1710,7 +1721,7 @@ export async function cleanOrphanedEmbeddings(
 			return count;
 		});
 
-		limiter.record(action, agentId);
+		limiter.record(action, repairScopeKey({ agentId }));
 		logger.info("pipeline", "repair: cleaned orphaned embeddings", {
 			affected,
 			actor: ctx.actor,
@@ -2073,7 +2084,7 @@ export async function deduplicateMemories(
 		action,
 		cfg.repair.dedupCooldownMs,
 		cfg.repair.dedupHourlyBudget,
-		"global",
+		undefined,
 		dryRun,
 	);
 	if (!admission.allowed) {
@@ -2303,7 +2314,7 @@ export async function pruneChunkGroupEntities(
 ): Promise<RepairResult> {
 	const action = "pruneChunkGroupEntities";
 	const dryRun = options?.dryRun === true;
-	const admission = await beginRepairAdmission(accessor, cfg, ctx, limiter, action, 60_000, 5, "global", dryRun);
+	const admission = await beginRepairAdmission(accessor, cfg, ctx, limiter, action, 60_000, 5, undefined, dryRun);
 	if (!admission.allowed) {
 		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
@@ -2362,7 +2373,7 @@ export async function pruneSingletonExtractedEntities(
 ): Promise<RepairResult> {
 	const action = "pruneSingletonExtractedEntities";
 	const dryRun = options?.dryRun === true;
-	const admission = await beginRepairAdmission(accessor, cfg, ctx, limiter, action, 60_000, 10, "global", dryRun);
+	const admission = await beginRepairAdmission(accessor, cfg, ctx, limiter, action, 60_000, 10, undefined, dryRun);
 	if (!admission.allowed) {
 		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
@@ -2565,7 +2576,7 @@ export async function pruneGenericEntities(
 			return ids.length;
 		});
 
-		limiter.record(action, agentId);
+		limiter.record(action, repairScopeKey({ agentId }));
 		logger.info("pipeline", "repair: pruned generic/non-concrete entities", {
 			affected,
 			agentId,
@@ -2986,7 +2997,7 @@ export async function cancelObsoleteJobs(
 		action,
 		cfg.repair.requeueCooldownMs,
 		cfg.repair.requeueHourlyBudget,
-		"global",
+		undefined,
 		dryRun,
 	);
 	if (!admission.allowed) {
@@ -3127,7 +3138,7 @@ export async function pruneTerminalJobs(
 		action,
 		cfg.repair.requeueCooldownMs,
 		cfg.repair.requeueHourlyBudget,
-		"global",
+		undefined,
 		dryRun,
 	);
 	if (!admission.allowed) {

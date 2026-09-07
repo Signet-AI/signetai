@@ -79,7 +79,7 @@ async function runRouteRepair<T extends RouteRepairOutcome>(
 		action,
 		cooldownMs,
 		hourlyBudget,
-		scope ?? "global",
+		scope,
 		dryRun,
 		denied,
 		work,
