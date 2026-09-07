@@ -54,7 +54,8 @@ export function detectFilesystemType(
 
 	try {
 		const output =
-			opts?.statCommand?.(path) ?? (execFileSyncHidden("/usr/bin/stat", ["-f", "%T", path], { encoding: "utf8" }) as string);
+			opts?.statCommand?.(path) ??
+			(execFileSyncHidden("/usr/bin/stat", ["-f", "%T", path], { encoding: "utf8" }) as string);
 		const filesystemType = output.trim();
 		return filesystemType.length > 0 ? filesystemType : null;
 	} catch {
