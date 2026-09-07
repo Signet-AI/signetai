@@ -86,7 +86,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 		}
 	}
 
-	const home = process.env.HOME?.trim() || homedir();
+	const home = process.env.HOME?.trim() || process.env.USERPROFILE?.trim() || homedir();
 	return {
 		basePath,
 		agentsDir: existsSync(basePath),

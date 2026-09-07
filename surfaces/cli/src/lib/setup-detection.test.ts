@@ -7,6 +7,7 @@ import { detectExistingSetup } from "./setup-detection.js";
 const TMP = join(tmpdir(), `signet-setup-detection-test-${Date.now()}`);
 const ENVIRONMENT_KEYS = [
 	"HOME",
+	"USERPROFILE",
 	"HERMES_HOME",
 	"HERMES_REPO",
 	"KIMI_CODE_HOME",
@@ -138,6 +139,19 @@ describe("detectExistingSetup", () => {
 
 		const detection = detectExistingSetup(TMP);
 
+		expect(detection.harnesses.pi).toBe(true);
+	});
+
+	test("uses USERPROFILE when HOME is unavailable", () => {
+		const userProfile = join(TMP, "user-profile");
+		Reflect.deleteProperty(process.env, "HOME");
+		process.env.USERPROFILE = userProfile;
+		mkdirSync(join(userProfile, ".omp", "agent"), { recursive: true });
+		mkdirSync(join(userProfile, ".pi", "agent"), { recursive: true });
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.ohMyPi).toBe(true);
 		expect(detection.harnesses.pi).toBe(true);
 	});
 

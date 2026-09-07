@@ -19,7 +19,7 @@ function readTrimmed(env: NodeJS.ProcessEnv, name: string): string | null {
 }
 
 function userHome(env: NodeJS.ProcessEnv): string {
-	return env.HOME?.trim() || homedir();
+	return env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
 }
 
 function expandUserPath(pathValue: string, env: NodeJS.ProcessEnv): string {
