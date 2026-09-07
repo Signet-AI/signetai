@@ -63,7 +63,12 @@ curl -fsS -X POST http://127.0.0.1:3850/api/repair/requeue-dead
 curl -fsS -X POST http://127.0.0.1:3850/api/repair/release-leases
 ```
 
-Rate limits and maintenance policy protect repairs from repeated automated retries. A rejected repair is a signal to inspect the root cause, not a reason to loop the request.
+Durable repair admission protects repairs from repeated automated retries. A
+mutating request is keyed by action and resolved scope, and an active lease,
+cooldown, hourly budget, or high-pressure gate returns `429` with
+`code: "repair_admission_denied"`; the response may include `Retry-After`.
+A rejected repair is a signal to inspect the root cause, not a reason to loop
+the request. Dry-run requests do not consume a mutating admission slot.
 
 The retired transcript backfill route is not a recovery path. Current transcript delivery goes directly to Dreaming; do not build automation around an older backfill endpoint.
 
@@ -81,7 +86,7 @@ memory:
       maintenanceMode: observe
 ```
 
-Use `observe` when introducing a deployment or investigating an incident. Set `frozen: true` to stop autonomous writes while preserving the configuration. The `repair` subobject sets cooldowns and hourly budgets for re-embed, requeue, and deduplication work.
+Use `observe` when introducing a deployment or investigating an incident. Set `frozen: true` to stop autonomous writes while preserving the configuration. The `repair` subobject sets cooldowns and hourly budgets for re-embed, requeue, and deduplication work. These ceilings apply to operator, agent, and daemon callers and persist in SQLite across daemon restarts. Operator permission bypasses only the `autonomous.enabled` feature toggle; no implicit force override exists.
 
 Restart after changing these values because pipeline workers are long-running.
 

@@ -137,6 +137,7 @@ function resolveRepairContext(c: { req: { header(name: string): string | undefin
 
 function repairHttpStatus(result: RepairResult): 200 | 410 | 429 | 500 {
 	if (result.success) return 200;
+	if (result.code === "repair_admission_denied") return 429;
 	if (/summary worker retired/i.test(result.message)) return 410;
 	if (
 		/cooldown active|hourly budget exhausted|denied by policy gate|autonomous\.|agents cannot trigger repairs/i.test(
@@ -168,7 +169,7 @@ export function registerQueueDiagnosticsRoutes(
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const response = resolveAccessor().withReadDb(
 				(db: import("../db-accessor").ReadDb) => buildQueueDiagnosticsResponse(db),
-				"routes/queue-diagnostics.ts:169",
+				"db:queue-diagnostics.queue.read",
 			);
 			return c.json(response);
 		} catch (err) {
@@ -206,7 +207,11 @@ export function registerQueueDiagnosticsRoutes(
 		}
 		if (result.success && !parsed.dryRun) invalidateQueueDiagnosticsCache();
 		const code = repairHttpStatus(result);
-		return c.json(result, code as 200 | 410 | 429 | 500);
+		const headers: Record<string, string> = {};
+		if (result.retryAfterMs !== undefined) {
+			headers["Retry-After"] = String(Math.max(1, Math.ceil(result.retryAfterMs / 1000)));
+		}
+		return c.json(result, code as 200 | 410 | 429 | 500, headers);
 	});
 }
 

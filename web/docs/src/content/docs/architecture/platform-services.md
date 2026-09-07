@@ -125,34 +125,39 @@ healthy, `>= 0.5` degraded, `< 0.5` unhealthy.
 count decremented so the running totals stay accurate without a full
 scan.
 
-**Repair actions** (`repair-actions.ts`): four actions are defined.
+**Repair actions** (`repair-actions.ts`): queue recovery, FTS repair,
+retention, embedding, vector reconciliation, deduplication, and bounded
+ontology cleanup actions share one policy boundary. Each mutating action
+passes through `checkRepairGate` and then the durable admission owner in
+`repair-admission.ts`.
 
-- `requeueDeadJobs`: resets dead jobs to `pending` with `attempts = 0`
-  (batch limit 50 per call).
-- `releaseStaleLeases`: resets `leased` jobs whose `leased_at` predates
-  the lease timeout back to `pending`.
-- `checkFtsConsistency`: compares the physical FTS index document count to
-  the canonical memory row count, including retained tombstones. A mismatch
-  is reported without repair; with `repair = true`, rebuild admission is
-  rate-limited, confirmed for autonomous callers, and sent through the async
-  write queue before `INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`.
-- `triggerRetentionSweep`: calls the retention worker's `sweep()` method
-  immediately outside the normal schedule.
+Admission is keyed by action plus the resolved agent/project scope. The
+`repair_admission` SQLite table atomically reserves an hourly slot and a
+lease before work starts, retains the lease owner and request identity, and
+records the latest completion and error. Active leases survive a daemon
+restart until expiry; completed repairs remain subject to their configured
+cooldown. The canonical database write path makes a concurrent request for
+the same key fail before provider or repair work begins. Dry runs do not
+acquire a mutating lease.
 
-All repair actions pass through a policy gate (`checkRepairGate`). The
-gate checks `autonomous.frozen` first (hard stop), then
-`autonomous.enabled` for agent-role callers (operators and daemon bypass
-this), then a rate limiter with per-action cooldown and hourly budget.
-Each successful repair writes an audit event to `memory_history` with
-`memory_id = 'system'`.
+The gate checks `autonomous.frozen` first (hard stop), then
+`autonomous.enabled` for autonomous daemon and agent callers. Operator
+permission bypasses
+only that feature toggle; operators and daemons do not bypass cooldown,
+hourly budget, lease, work-unit, or system-pressure admission. Denials are
+structured and map to HTTP `429`. There is no implicit force override.
+Each completed repair writes an audit event to `memory_history` with
+`memory_id = 'system'` when the action has an audit boundary.
 
 **Embedding refresh tracker** (`embedding-tracker.ts`): the existing
 incremental tracker owns stale and missing-memory vector writes. It does not
-create a second repair queue. Before a provider batch, it acquires a durable
-SQLite lease and consumes one `repair.reembedHourlyBudget` slot. Per-memory
-provider failures retain exponential retry deadlines across daemon restarts;
-the lease, completed batch count, and last error are returned with
-`GET /api/repair/embedding-gaps`.
+create a second repair queue. Before a provider batch, it acquires its
+embedding-specific durable SQLite lease and consumes one
+`repair.reembedHourlyBudget` slot. Per-memory provider failures retain
+exponential retry deadlines across daemon restarts; the lease, completed
+batch count, and last error are returned with `GET /api/repair/embedding-gaps`.
+HTTP and maintenance repair actions additionally use the generic action/scope
+admission boundary so those callers cannot bypass configured limits.
 
 **Maintenance worker** (`pipeline/maintenance-worker.ts`): runs on a
 configurable interval. Each cycle calls `getDiagnostics`, builds repair

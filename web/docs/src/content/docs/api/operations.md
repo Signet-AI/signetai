@@ -322,9 +322,15 @@ Query parameters:
 
 ## Repair
 
-Administrative repair operations. All require `admin` permission. Operations
-are rate-limited internally by the repair limiter and return `429` when the
-limit is exceeded.
+Administrative repair operations. All require `admin` permission. Every
+mutating operation uses durable admission keyed by action and its resolved
+agent/project scope where applicable. Admission records an active lease,
+cooldown, and hourly budget in the workspace database, so operator and
+autonomous daemon callers share the same limits across restarts. Operator
+permission bypasses only the `autonomous.enabled` feature toggle; it is not a
+runtime safety override. Denied admission returns `429` with
+`code: "repair_admission_denied"` and, when known, a `Retry-After` header.
+Dry runs inspect candidates without acquiring a mutating lease.
 
 ### POST /api/repair/requeue-dead
 
@@ -414,8 +420,10 @@ Requires `admin` permission.
 ### POST /api/repair/re-embed
 
 Batch re-embeds memories that are missing vector embeddings. Processes
-up to `batchSize` memories per call. Requires `admin` permission.
-Rate-limited — returns `429` when the limit is exceeded.
+up to `batchSize` memories per provider batch and caps a full sweep at the
+configured hourly batch budget. Requires `admin` permission. Admission is
+scoped to the resolved agent and returns `429` when the durable lease,
+cooldown, hourly budget, or pressure gate denies the request.
 
 **Request body**
 
@@ -433,7 +441,7 @@ embedded without calling the embedding provider.
 
 ```json
 {
-  "action": "reEmbedMissingVectors",
+  "action": "reembedMissingMemories",
   "success": true,
   "affected": 42,
   "message": "re-embedded 42 memories"
@@ -444,7 +452,8 @@ embedded without calling the embedding provider.
 
 Re-embeds a bounded batch of active memories whose stored model or vector
 dimensions differ from the configured embedding target. Set `all: true` to
-force a bounded batch even when metadata already matches. Requires `admin`
+select a bounded batch even when metadata already matches; it does not bypass
+repair admission. Requires `admin`
 permission. Existing vectors remain in place until a replacement vector has
 been fetched and validated.
 
@@ -487,7 +496,9 @@ agent.
 ### POST /api/repair/clean-orphans
 
 Remove embedding rows that reference memories which no longer exist.
-Rate-limited. Requires `admin` permission.
+Admission is scoped to the resolved agent when one is supplied. Requires
+`admin` permission and returns `429` when the durable lease, cooldown, hourly
+budget, or pressure gate denies the request.
 
 **Response**
 
@@ -510,7 +521,9 @@ Requires `admin` permission.
 ### POST /api/repair/deduplicate
 
 Deduplicate memories by content hash and optionally by semantic similarity.
-Rate-limited. Requires `admin` permission.
+Requires `admin` permission and uses durable global admission; it returns
+`429` when the lease, cooldown, hourly budget, or pressure gate denies the
+request.
 
 **Request body**
 

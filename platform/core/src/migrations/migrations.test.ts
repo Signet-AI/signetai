@@ -416,7 +416,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(150);
+			expect(applied.version).toBe(151);
 			expect(
 				(db.query("PRAGMA table_info(memory_jobs)").all() as Array<{ name: string }>).some(
 					(column) => column.name === "lease_token",
@@ -647,6 +647,9 @@ describe("migration framework", () => {
 
 		// v131 records successful source-fragment delivery independently of the time watermark.
 		expect(tableNames).toContain("dreaming_evidence_consumption");
+
+		// v151 makes repair leases and cooldowns durable across daemon restarts.
+		expect(tableNames).toContain("repair_admission");
 
 		// v145 records terminal reviewed dispositions for immutable evidence revisions.
 		expect(tableNames).toContain("dreaming_evidence_reviews");

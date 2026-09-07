@@ -43,7 +43,7 @@ Omit settings you do not need. The daemon supplies bounded defaults and clamps a
 
 `autonomous.enabled` controls autonomous maintenance. `autonomous.frozen` pauses autonomous writes without deleting configuration. `autonomous.maintenanceMode` is `observe` or `execute`. Use `observe` while evaluating a new deployment; use the repair endpoints only with an authenticated operator or admin principal where applicable.
 
-The `repair` object bounds maintenance work with cooldowns and hourly budgets. Its current keys include re-embed, requeue, and deduplication cooldown and budget settings. Keep those limits conservative when a remote provider is involved.
+The `repair` object bounds maintenance work with cooldowns and hourly budgets. Its current keys include re-embed, requeue, and deduplication cooldown and budget settings. These limits apply equally to operator, agent, and autonomous daemon callers; operator permission does not bypass runtime admission. The daemon stores action-and-scope leases and recent completions in SQLite, so a restart cannot immediately replay an in-flight or recently completed repair. Keep the limits conservative when a remote provider is involved. There is no implicit force override; an explicit denied admission returns `429`.
 
 ## Documents and continuity
 

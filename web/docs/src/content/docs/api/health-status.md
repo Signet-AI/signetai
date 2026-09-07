@@ -565,8 +565,11 @@ shape covers `requeue` (extending `requeueDeadJobs`), `cancel`
 ```
 
 Both queue endpoints require the `admin` permission in authenticated modes.
-When the policy gate denies an action, the response carries `success: false`
-and HTTP `429` (cooldown active / hourly budget exhausted / agents without
+Mutating queue repairs use the durable action-and-scope admission table shared
+with HTTP and autonomous daemon callers. When admission or policy denies an
+action, the response carries `success: false`,
+`code: "repair_admission_denied"`, and HTTP `429` (active lease, cooldown,
+hourly budget, pressure, frozen maintenance, or an autonomous caller without
 `autonomous.enabled`). Wrong `action` values or malformed JSON return `400`.
 Cancel and prune apply requests require migrations 089 and 090; neither daemon
 creates audit tables from the request path, and a missing table is reported as

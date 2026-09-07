@@ -190,7 +190,7 @@ async function executeRecommendation(
 			return await checkFtsConsistency(deps.accessor, deps.cfg, ctx, deps.limiter, true, deps.ownerMaintenance);
 		case "triggerRetentionSweep":
 			if (deps.retentionHandle) {
-				return await triggerRetentionSweep(deps.cfg, ctx, deps.limiter, deps.retentionHandle);
+				return await triggerRetentionSweep(deps.cfg, ctx, deps.limiter, deps.retentionHandle, deps.accessor);
 			}
 			return null;
 		case "deduplicateMemories":
@@ -246,7 +246,6 @@ async function executeRecommendation(
 									batchSize,
 									false,
 									false,
-									undefined,
 								)
 							: await reembedModelMigration(
 									deps.accessor,
@@ -322,7 +321,9 @@ export function startMaintenanceWorker(
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
 	let inFlight: Promise<MaintenanceCycleResult> | null = null;
-	const limiter = createRateLimiter();
+	// Use the same durable admission store as HTTP repair callers. The
+	// actor type controls authorization policy only; it never bypasses safety.
+	const limiter = createRateLimiter({ durable: true });
 	const haltTracker = createHaltTracker();
 
 	// cfg is captured by value — changes require a pipeline restart.

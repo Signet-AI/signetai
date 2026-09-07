@@ -162,9 +162,11 @@ actions:
 
 Third, if `maintenanceMode` is `observe`, the recommendations are logged and
 the cycle returns. If `maintenanceMode` is `execute`, each recommendation
-is executed through the corresponding repair action, subject to rate
-limiting (cooldown and hourly budget per action type). After all repairs
-run, diagnostics are re-evaluated and the health score delta is recorded.
+is executed through the corresponding repair action. Mutating actions use
+durable action-and-scope admission: a SQLite lease serializes duplicate work,
+cooldowns and hourly budgets apply to operators and daemons alike, and high
+system pressure denies new work. After all repairs run, diagnostics are
+re-evaluated and the health score delta is recorded.
 
 The halt tracker prevents the maintenance worker from spinning on ineffective
 repairs. Each repair action tracks consecutive non-improving runs. After 3
@@ -206,7 +208,9 @@ Three repair commands cover the issue's "Suggested fix":
 | `signet repair queue prune  [--tables …] [--older-than 90d] [--apply]` | `prune`  | Copy matching terminal rows to `job_archive`, then hard delete. Archive-preserving. 1000-row hard cap per call. |
 
 All three default to **dry-run** and require `--apply` to mutate. The
-preview includes the first 100 matching ids and the total match count.
+preview includes the first 100 matching ids and the total match count. A
+mutating request denied by its durable lease, cooldown, hourly budget, or
+pressure gate returns `429`; there is no implicit force override.
 Requeue excludes retired `extract` jobs because Dreaming already consumed
 their sources; cancel and prune retain those terminal rows for audit cleanup.
 Provenance migrations: `089-job-cancellations`, `090-job-archive`.

@@ -158,6 +158,7 @@ import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-fi
 import { up as sourceImportAttemptProvenance } from "./148-source-import-attempt-provenance";
 import { up as transcriptImportStateMachine } from "./149-transcript-import-state-machine";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
+import { up as repairAdmissionState } from "./151-repair-admission-state";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1371,6 +1372,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "dreaming_passes", column: "head_base_revision" },
 			],
 		},
+	},
+	{
+		version: 151,
+		name: "repair-admission-state",
+		up: repairAdmissionState,
+		artifacts: { tables: ["repair_admission"] },
 	},
 ];
 
