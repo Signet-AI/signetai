@@ -3,8 +3,6 @@ import { createAgentDir } from "@signet/connector-base/agent-dir";
 const ohMyPiAgentDir = createAgentDir({
 	configFileName: "oh-my-pi.json",
 	defaultAgentDir: ".omp/agent",
-	managedFileNames: ["signet-oh-my-pi.js", "signet-oh-my-pi.mjs"],
-	managedMarker: "SIGNET_MANAGED_OH_MY_PI_EXTENSION",
 });
 
 export const clearConfiguredOhMyPiAgentDir = ohMyPiAgentDir.clearConfiguredAgentDir;

@@ -6,8 +6,6 @@ import { expandHome } from "@signet/core";
 export interface AgentDirConfig {
 	readonly configFileName: string;
 	readonly defaultAgentDir: string;
-	readonly managedFileNames: readonly string[];
-	readonly managedMarker: string;
 }
 
 export interface AgentDir {
@@ -76,19 +74,8 @@ export function createAgentDir(config: AgentDirConfig): AgentDir {
 		return Array.from(candidates);
 	};
 
-	const hasSetup = (env: NodeJS.ProcessEnv = process.env): boolean => {
-		for (const agentDir of listAgentDirCandidates(env)) {
-			if (existsSync(agentDir)) return true;
-			for (const filename of config.managedFileNames) {
-				try {
-					if (readFileSync(join(agentDir, "extensions", filename), "utf8").includes(config.managedMarker)) return true;
-				} catch {
-					// Ignore unreadable candidates and continue checking others.
-				}
-			}
-		}
-		return false;
-	};
+	const hasSetup = (env: NodeJS.ProcessEnv = process.env): boolean =>
+		listAgentDirCandidates(env).some((agentDir) => existsSync(agentDir));
 
 	const writeConfiguredAgentDir = (pathValue: string, env: NodeJS.ProcessEnv = process.env): string => {
 		const agentDir = normalizePath(pathValue, env);
