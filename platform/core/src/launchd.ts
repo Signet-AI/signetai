@@ -64,6 +64,14 @@ export function resolveLaunchdExecutable(
 	return FALLBACK_EXECUTABLE_PATHS[name].find(isExecutableFile) ?? FALLBACK_EXECUTABLE_PATHS[name][0];
 }
 
+export function findLaunchdExecutable(
+	name: (typeof CRITICAL_EXECUTABLES)[number],
+	input: Pick<LaunchdEnvironmentInput, "environment" | "pathValue" | "home"> = {},
+): string | null {
+	const executable = resolveLaunchdExecutable(name, input);
+	return isExecutableFile(executable) ? executable : null;
+}
+
 export function buildLaunchdEnvironment(input: LaunchdEnvironmentInput = {}): Record<string, string> {
 	const environment = input.environment ?? process.env;
 	const home = input.home ?? environment.HOME ?? homedir();

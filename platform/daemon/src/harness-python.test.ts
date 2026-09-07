@@ -38,6 +38,10 @@ describe("resolveHarnessPythonCommand", () => {
 		});
 	});
 
+	test("reports when no Python executable is available on macOS", () => {
+		expect(resolveHarnessPythonCommand("darwin", resolver())).toBeNull();
+	});
+
 	test("reports when no Python executable is available", () => {
 		expect(resolveHarnessPythonCommand("win32", resolver())).toBeNull();
 	});

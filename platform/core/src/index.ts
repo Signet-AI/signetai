@@ -201,6 +201,7 @@ export type { SignetDaemonUrlOptions } from "./daemon-url";
 export {
 	buildLaunchdEnvironment,
 	buildLaunchdPlist,
+	findLaunchdExecutable,
 	resolveLaunchdExecutable,
 } from "./launchd";
 export type { LaunchdEnvironmentInput, LaunchdPlistInput } from "./launchd";
