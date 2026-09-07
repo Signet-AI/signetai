@@ -7,7 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-07
-- Bug fixes: preserve legacy tilde paths; support Windows home fallback; skip install without git; preserve external embedding selection; allow undeclared tool capability.
+- Features: ship cross-platform desktop support.
+- Bug fixes: keep bundled Pi dependency local; remove bundled pi runtime dep; protect managed AppImage updates; tighten packaged runtime and tests; expand Windows support and unify native shell; address PR #1858 review findings; survive all DB owner availability rejections, not just deadlines; hide the setup link once a harness connection exists; survive DB owner deadline exhaustion and build the embedding worker; stage connector assets so harness install works in the app; widen mac header inset clear of the traffic lights; edge-to-edge shell and mac traffic-light clearance; restore macOS traffic lights and correct the dock icon size; make the packaged daemon bootable and install on macOS; unblock dreaming startup; drop delegation memory writes; fence integrity deadline workers; preserve legacy tilde paths; support Windows home fallback; skip install without git; preserve external embedding selection; allow undeclared tool capability.
 - Refactoring: remove dead setup scan; share agent dir logic; isolate harness integration paths; centralize process launching.
 - Docs: trim contributor guide; document harness API boundary.
 
@@ -35,6 +36,35 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add Defuddle web imports (rebased); add third-party license colophon.
 
 ## Release Ledger
+
+## [0.220.0] - 2026-09-07
+
+Release summary: 1 feature and 17 bug fixes.
+Tag range: `v0.219.7..v0.220.0`.
+
+### Features
+
+- **desktop**: ship cross-platform desktop support
+
+### Bug Fixes
+
+- **release**: keep bundled Pi dependency local
+- **release**: remove bundled pi runtime dep
+- **desktop**: protect managed AppImage updates
+- **desktop**: tighten packaged runtime and tests
+- **desktop**: expand Windows support and unify native shell
+- **desktop**: address PR #1858 review findings
+- **daemon**: survive all DB owner availability rejections, not just deadlines
+- **dashboard**: hide the setup link once a harness connection exists
+- **daemon**: survive DB owner deadline exhaustion and build the embedding worker
+- **desktop**: stage connector assets so harness install works in the app
+- **dashboard**: widen mac header inset clear of the traffic lights
+- **dashboard**: edge-to-edge shell and mac traffic-light clearance
+- **desktop**: restore macOS traffic lights and correct the dock icon size
+- **desktop**: make the packaged daemon bootable and install on macOS
+- unblock dreaming startup (#1861)
+- **hermes**: drop delegation memory writes
+- **daemon**: fence integrity deadline workers
 
 ## [0.219.7] - 2026-09-07
 
