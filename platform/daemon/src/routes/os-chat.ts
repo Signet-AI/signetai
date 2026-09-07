@@ -12,6 +12,7 @@ import { getInferenceRouterOrNull } from "../inference-router.js";
 import { fetchInternal } from "../internal-fetch.js";
 import { getInteractiveLlmProviderOrNull } from "../llm.js";
 import { logger } from "../logger.js";
+import { readInstalledServers } from "../marketplace-installed-state.js";
 import { loadProbeResult } from "../mcp-probe.js";
 
 const DEFAULT_OS_CHAT_TIMEOUT_MS = 30_000;
@@ -172,8 +173,7 @@ interface ToolSpec {
  * Gather all available tools from all installed MCP servers using probe results.
  */
 function gatherAvailableTools(): ToolSpec[] {
-	const { readInstalledServersPublic } = require("./marketplace-helpers.js");
-	const servers = readInstalledServersPublic();
+	const servers = readInstalledServers();
 	const tools: ToolSpec[] = [];
 
 	for (const server of servers) {

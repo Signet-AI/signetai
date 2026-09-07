@@ -13,6 +13,20 @@ import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
+import type {
+	InstalledMarketplaceMcpServer,
+	MarketplaceMcpCatalogSource,
+	MarketplaceMcpConfig,
+	MarketplaceMcpScope,
+} from "../marketplace-installed-state.js";
+import {
+	makeUniqueServerId,
+	normalizeMcpConfig,
+	normalizeScope,
+	readInstalledServers,
+	sanitizeServerId,
+	writeInstalledServers,
+} from "../marketplace-installed-state.js";
 import {
 	getMarketplaceMcpRuntimeStatus,
 	withMarketplaceMcpPermit,
@@ -30,15 +44,7 @@ const TOOLS_TTL_MS = 30 * 1000;
 /** mcpservers.org locale prefix — shared across catalog listing, detail fetch, and homepage URLs. */
 const MCPSERVERS_LOCALE = "en";
 
-export type MarketplaceMcpTransport = "stdio" | "http";
-export type MarketplaceMcpCatalogSource = "mcpservers.org" | "modelcontextprotocol/servers" | "github";
 export type MarketplaceMcpExposureMode = "compact" | "hybrid" | "expanded";
-
-export interface MarketplaceMcpScope {
-	readonly harnesses: readonly string[];
-	readonly workspaces: readonly string[];
-	readonly channels: readonly string[];
-}
 
 export interface MarketplaceMcpExposurePolicy {
 	readonly mode: MarketplaceMcpExposureMode;
@@ -51,40 +57,6 @@ export interface MarketplaceMcpScopeContext {
 	readonly harness?: string;
 	readonly workspace?: string;
 	readonly channel?: string;
-}
-
-export interface MarketplaceMcpConfigStdio {
-	readonly transport: "stdio";
-	readonly command: string;
-	readonly args: readonly string[];
-	readonly env: Readonly<Record<string, string>>;
-	readonly cwd?: string;
-	readonly timeoutMs: number;
-}
-
-export interface MarketplaceMcpConfigHttp {
-	readonly transport: "http";
-	readonly url: string;
-	readonly headers: Readonly<Record<string, string>>;
-	readonly timeoutMs: number;
-}
-
-export type MarketplaceMcpConfig = MarketplaceMcpConfigStdio | MarketplaceMcpConfigHttp;
-
-export interface InstalledMarketplaceMcpServer {
-	readonly id: string;
-	readonly source: MarketplaceMcpCatalogSource | "manual";
-	readonly catalogId?: string;
-	readonly name: string;
-	readonly description: string;
-	readonly category: string;
-	readonly homepage?: string;
-	readonly official: boolean;
-	readonly enabled: boolean;
-	readonly scope: MarketplaceMcpScope;
-	readonly config: MarketplaceMcpConfig;
-	readonly installedAt: string;
-	readonly updatedAt: string;
 }
 
 export interface MarketplaceMcpCatalogEntry {
@@ -136,7 +108,6 @@ interface DetailConfig {
 	readonly description: string;
 }
 
-const DEFAULT_TIMEOUT_MS = 20_000;
 const SECRET_REF_PREFIX = "secret://";
 // Sentinel: "never explicitly set" — not process start time, which would
 // be misleading since this default is returned whenever no policy file exists.
@@ -163,10 +134,6 @@ function getMarketplaceDir(): string {
 	return join(getAgentsDir(), "marketplace");
 }
 
-function getInstalledMcpPath(): string {
-	return join(getMarketplaceDir(), "mcp-servers.json");
-}
-
 function getExposurePolicyPath(): string {
 	return join(getMarketplaceDir(), "mcp-policy.json");
 }
@@ -180,50 +147,6 @@ function ensureMarketplaceDir(): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function toStringRecord(value: unknown): Record<string, string> {
-	if (!isRecord(value)) return {};
-	const out: Record<string, string> = {};
-	for (const [k, v] of Object.entries(value)) {
-		if (typeof v === "string") out[k] = v;
-	}
-	return out;
-}
-
-function toStringArray(value: unknown): string[] {
-	if (!Array.isArray(value)) return [];
-	return value.filter((v): v is string => typeof v === "string");
-}
-
-function normalizeScopeValues(values: unknown): string[] {
-	const seen = new Set<string>();
-	const normalized: string[] = [];
-	for (const value of toStringArray(values)) {
-		const item = value.trim();
-		if (item.length === 0) continue;
-		const key = item.toLowerCase();
-		if (seen.has(key)) continue;
-		seen.add(key);
-		normalized.push(item);
-	}
-	return normalized;
-}
-
-function normalizeScope(value: unknown): MarketplaceMcpScope {
-	if (!isRecord(value)) {
-		return {
-			harnesses: [],
-			workspaces: [],
-			channels: [],
-		};
-	}
-
-	return {
-		harnesses: normalizeScopeValues(value.harnesses),
-		workspaces: normalizeScopeValues(value.workspaces),
-		channels: normalizeScopeValues(value.channels),
-	};
 }
 
 function normalizeScopeContextValue(value: string | undefined): string | undefined {
@@ -386,15 +309,6 @@ async function resolveSecretReferences(values: Readonly<Record<string, string>>)
 	return resolved;
 }
 
-function sanitizeServerId(value: string): string {
-	const normalized = value
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9_-]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return normalized.length > 0 ? normalized : "mcp-server";
-}
-
 function makeCatalogEntryId(source: MarketplaceMcpCatalogSource, catalogId: string): string {
 	return `${source}:${catalogId}`;
 }
@@ -437,15 +351,6 @@ function parseCatalogSelection(
 	}
 
 	return { source: "mcpservers.org", catalogId: rawId };
-}
-
-function makeUniqueServerId(baseId: string, installed: readonly InstalledMarketplaceMcpServer[]): string {
-	if (!installed.some((s) => s.id === baseId)) return baseId;
-	let i = 2;
-	while (installed.some((s) => s.id === `${baseId}-${i}`)) {
-		i++;
-	}
-	return `${baseId}-${i}`;
 }
 
 function inferNameFromCatalogId(catalogId: string): string {
@@ -665,48 +570,8 @@ async function fetchCatalogPage(page: number): Promise<ParsedCatalogPage> {
 	return parsed;
 }
 
-function normalizeMcpConfig(value: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): MarketplaceMcpConfig | null {
-	if (!isRecord(value)) return null;
-
-	if (typeof value.url === "string") {
-		return {
-			transport: "http",
-			url: value.url,
-			headers: toStringRecord(value.headers),
-			timeoutMs,
-		};
-	}
-
-	if (typeof value.command === "string") {
-		return {
-			transport: "stdio",
-			command: value.command,
-			args: toStringArray(value.args),
-			env: toStringRecord(value.env),
-			cwd: typeof value.cwd === "string" ? value.cwd : undefined,
-			timeoutMs,
-		};
-	}
-
-	if (Array.isArray(value.command)) {
-		const commandParts = toStringArray(value.command);
-		if (commandParts.length === 0) return null;
-		return {
-			transport: "stdio",
-			command: commandParts[0],
-			args: [...commandParts.slice(1), ...toStringArray(value.args)],
-			env: toStringRecord(value.env),
-			cwd: typeof value.cwd === "string" ? value.cwd : undefined,
-			timeoutMs,
-		};
-	}
-
-	return null;
-}
-
 export function extractStandardMcpConfig(markdown: string): DetailConfig {
 	const titleMatch = markdown.match(/^([^\n]+)\n[-=]{3,}\n/m);
-	const title = titleMatch ? titleMatch[1].trim() : undefined;
 
 	let description = "";
 	if (titleMatch) {
@@ -760,66 +625,6 @@ export function extractStandardMcpConfig(markdown: string): DetailConfig {
 		githubUrl,
 		description,
 	};
-}
-
-function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | null {
-	if (!isRecord(value)) return null;
-	if (typeof value.id !== "string") return null;
-	if (
-		value.source !== "mcpservers.org" &&
-		value.source !== "modelcontextprotocol/servers" &&
-		value.source !== "manual" &&
-		value.source !== "github"
-	)
-		return null;
-	if (typeof value.name !== "string") return null;
-	if (typeof value.description !== "string") return null;
-	if (typeof value.category !== "string") return null;
-	if (typeof value.official !== "boolean") return null;
-	if (typeof value.enabled !== "boolean") return null;
-	if (typeof value.installedAt !== "string") return null;
-	if (typeof value.updatedAt !== "string") return null;
-
-	const config = normalizeMcpConfig(value.config);
-	if (!config) return null;
-
-	return {
-		id: value.id,
-		source: value.source,
-		catalogId: typeof value.catalogId === "string" ? value.catalogId : undefined,
-		name: value.name,
-		description: value.description,
-		category: value.category,
-		homepage: typeof value.homepage === "string" ? value.homepage : undefined,
-		official: value.official,
-		enabled: value.enabled,
-		scope: normalizeScope(value.scope),
-		config,
-		installedAt: value.installedAt,
-		updatedAt: value.updatedAt,
-	};
-}
-
-/** NOTE: marketplace-helpers.ts has a public copy of this function to avoid circular imports.
- *  If you change the path or format here, update marketplace-helpers.ts to match. */
-function readInstalledServers(): InstalledMarketplaceMcpServer[] {
-	const path = getInstalledMcpPath();
-	if (!existsSync(path)) return [];
-
-	try {
-		const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-		if (!Array.isArray(raw)) return [];
-		return raw
-			.map((item) => parseInstalledServer(item))
-			.filter((item): item is InstalledMarketplaceMcpServer => item !== null);
-	} catch {
-		return [];
-	}
-}
-
-function writeInstalledServers(servers: readonly InstalledMarketplaceMcpServer[]): void {
-	ensureMarketplaceDir();
-	writeFileSync(getInstalledMcpPath(), JSON.stringify(servers, null, 2));
 }
 
 async function fetchMcpServersOrgDetail(catalogId: string): Promise<DetailConfig> {
@@ -1139,7 +944,7 @@ function recordMcpInvocation(record: McpInvocationRecord): void {
 				record.success ? 1 : 0,
 				record.errorText ?? null,
 			);
-		}, "routes/marketplace.ts:1128");
+		}, "db:marketplace.mcp-invocation.record");
 	} catch (err) {
 		logger.warn("skills", "Failed to record MCP invocation", err instanceof Error ? err : undefined);
 	}
@@ -1359,6 +1164,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		let normalized = normalizeMcpConfig(body.config);
 		let detail: DetailConfig | undefined;
 		const scope = normalizeScope(body.scope);
+		if (!scope) {
+			return c.json({ error: "Invalid scope" }, 400);
+		}
 
 		if (!normalized) {
 			try {
@@ -1455,6 +1263,10 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		if (!normalized) {
 			return c.json({ error: "config must include command/url" }, 400);
 		}
+		const scope = normalizeScope(body.scope);
+		if (!scope) {
+			return c.json({ error: "Invalid scope" }, 400);
+		}
 
 		const installed = readInstalledServers();
 		const id = makeUniqueServerId(sanitizeServerId(body.name), installed);
@@ -1468,7 +1280,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			category: body.category?.trim() || inferCategory(body.name),
 			official: false,
 			enabled: true,
-			scope: normalizeScope(body.scope),
+			scope,
 			config: normalized,
 			installedAt: now,
 			updatedAt: now,
@@ -1679,11 +1491,15 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		if (body.config && !normalized) {
 			return c.json({ error: "Invalid config" }, 400);
 		}
+		const scope = body.scope === undefined ? existing.scope : normalizeScope(body.scope);
+		if (!scope) {
+			return c.json({ error: "Invalid scope" }, 400);
+		}
 
 		const updated: InstalledMarketplaceMcpServer = {
 			...existing,
 			enabled: typeof body.enabled === "boolean" ? body.enabled : existing.enabled,
-			scope: body.scope === undefined ? existing.scope : normalizeScope(body.scope),
+			scope,
 			config: normalized ?? existing.config,
 			name: typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : existing.name,
 			description:
