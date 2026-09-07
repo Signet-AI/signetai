@@ -10,6 +10,7 @@ import {
 	collectWorkspacePackages,
 	isPublishableWorkspacePackage,
 	listPublishableManifestTargets,
+	listWorkspacePackageFiles,
 	parseNativePlatformPackages,
 	parseSupportedNativePlatforms,
 } from "./check-publish-manifests";
@@ -23,7 +24,7 @@ describe("check-publish-manifests", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf-8");
 
-		expect(workflow).toContain("  workflow_dispatch:\n  push:");
+		expect(workflow).toContain("  workflow_dispatch:\n    inputs:");
 	});
 
 	test("does not ship the retired threaded extraction worker", () => {
@@ -524,6 +525,14 @@ describe("check-publish-manifests", () => {
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	test("keeps checked-in publishable manifests free of unpublished runtime workspace dependencies", () => {
+		const files = listWorkspacePackageFiles();
+		const workspacePackages = collectWorkspacePackages(files);
+		const issues = collectManifestIssues(listPublishableManifestTargets(files), workspacePackages);
+
+		expect(issues).toEqual([]);
 	});
 
 	test("flags runtime dependencies on unpublished workspace packages", () => {
