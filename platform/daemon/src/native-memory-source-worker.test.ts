@@ -1,14 +1,8 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { Writable } from "node:stream";
 import { join } from "node:path";
-import { EventEmitter } from "node:events";
 import { describe, expect, it } from "bun:test";
-import {
-	createNativeSourceWorker,
-	NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES,
-	waitForNativeSourceWorkerDrain,
-} from "./native-memory-source-worker";
+import { createNativeSourceWorker, NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES } from "./native-memory-source-worker";
 
 async function fixture(): Promise<{
 	readonly root: string;
@@ -25,98 +19,26 @@ async function fixture(): Promise<{
 }
 
 describe("native source worker", () => {
-	it("does not complete a scan before a real backpressured command drains", async () => {
-		const { root } = await fixture();
-		const source = {
-			root,
-			files: [
-				{ glob: "**/*.md", kind: "markdown" },
-				...Array.from({ length: 4096 }, (_, index) => ({
-					glob: `never-match-${index}-${"x".repeat(64)}`,
-					kind: "markdown",
-				})),
-			],
-		};
-		type TestStdin = NodeJS.WritableStream & {
-			readonly writableHighWaterMark: number;
-			write: (...args: unknown[]) => boolean;
-		};
-		let stdin!: TestStdin;
-		let commandWritten!: () => void;
-		const command = new Promise<void>((resolve) => {
-			commandWritten = resolve;
-		});
-		let commandBytes = 0;
-		let commandWriteReturnedFalse = false;
-		let releaseWrite!: () => void;
-		let scanStarted!: () => void;
-		const started = new Promise<void>((resolve) => {
-			scanStarted = resolve;
-		});
-		let resultDelivered!: () => void;
-		const result = new Promise<void>((resolve) => {
-			resultDelivered = resolve;
-		});
+	it("uses one in-process worker thread for a scan", async () => {
+		const { source } = await fixture();
+		let started = 0;
+		let delivered = 0;
 		const worker = createNativeSourceWorker({
-			wrapStdin: (rawStdin) => {
-				const backpressuredStdin = new Writable({
-					highWaterMark: 1024,
-					write(chunk, _encoding, callback) {
-						rawStdin.write(chunk as string);
-						releaseWrite = callback;
-					},
-				}) as TestStdin;
-				stdin = backpressuredStdin;
-				const write = stdin.write.bind(stdin);
-				stdin.write = ((...args: unknown[]) => {
-					const result = write(...args);
-					const chunk = args[0];
-					if (typeof chunk === "string" && chunk.includes('"type":"scan"')) {
-						commandBytes = Buffer.byteLength(chunk, "utf8");
-						commandWriteReturnedFalse = result === false;
-						commandWritten();
-					}
-					return result;
-				}) as TestStdin["write"];
-				return stdin;
+			onScanStarted: () => {
+				started++;
 			},
-			onScanStarted: scanStarted,
-			onScanResult: resultDelivered,
+			onScanResult: () => {
+				delivered++;
+			},
 		});
-		let settled = false;
 		try {
-			const scan = worker.scan({ source, cursor: null, pageSize: 1 }).then((page) => {
-				settled = true;
-				return page;
-			});
-			await command;
-			expect(commandBytes).toBeGreaterThan(stdin.writableHighWaterMark);
-			expect(commandWriteReturnedFalse).toBe(true);
-			await started;
-			await result;
-			await new Promise<void>((resolve) => setImmediate(resolve));
-			expect(settled).toBe(false);
-			releaseWrite();
-			await scan;
-			expect(settled).toBe(true);
+			const page = await worker.scan({ source, cursor: null, pageSize: 1 });
+			expect(page.files.map((file) => file.content)).toEqual(["B"]);
+			expect(started).toBe(1);
+			expect(delivered).toBe(1);
 		} finally {
 			await worker.close();
 		}
-	});
-
-	it("propagates a worker stream error while waiting for drain", async () => {
-		const stdin = new EventEmitter() as unknown as NodeJS.WritableStream;
-		const streamError = new Error("worker stdin failed");
-		const drain = waitForNativeSourceWorkerDrain(stdin);
-		stdin.emit("error", streamError);
-		await expect(drain).rejects.toBe(streamError);
-	});
-
-	it("propagates a worker stream close while waiting for drain", async () => {
-		const stdin = new EventEmitter() as unknown as NodeJS.WritableStream;
-		const drain = waitForNativeSourceWorkerDrain(stdin);
-		stdin.emit("close");
-		await expect(drain).rejects.toThrow("closed before drain");
 	});
 
 	it("pages source content and resumes from a durable cursor after worker restart", async () => {

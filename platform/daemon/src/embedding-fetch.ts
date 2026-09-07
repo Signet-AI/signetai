@@ -560,8 +560,9 @@ async function serveEmbedding(
 		}
 		if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, formattedText, effectiveCfg, opts);
 		try {
+			const mod = await import("./native-embedding");
+			mod.configureNativeEmbeddingLifecycle({ idleTtlMs: effectiveCfg.idleTtlMs });
 			if (!cachedNativeEmbed) {
-				const mod = await import("./native-embedding");
 				cachedNativeEmbed = mod.nativeEmbed;
 			}
 			const embedding = await cachedNativeEmbed(formattedText);

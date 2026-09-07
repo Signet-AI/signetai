@@ -13,6 +13,14 @@ Dreaming is the only automatic semantic writer. It selects agent-scoped episodic
 
 Inference routing is configured through the canonical router workloads. The `memory_extraction` workload name remains because Dreaming uses it for inference; it does not enable a retired extraction worker.
 
+## Runtime and concurrency
+
+Pipeline work is asynchronous inside the daemon. Promise-based I/O yields the event loop, while a `Worker` moves blocking or CPU-heavy helper code to another thread in the same daemon process. Neither mechanism launches another compiled `signet.exe` for each job.
+
+Admission is bounded. Document ingestion allows two in-flight jobs across the daemon, and LLM calls use a shared semaphore with a default concurrency of two and a configured ceiling of sixteen. Other workers use single-flight or bounded lifecycle handles. Queued work is observed, cancellable, and subject to its operation deadline; it is not an unbounded subprocess pool.
+
+The database owner remains a separate killable process because it is the sole synchronous SQLite owner. Native embedding remains a separate model-owning worker with idle-TTL eviction. Integrity checks and transcript recovery retain separate killable processes when their crash or deadline containment requires it. These are deliberate state or failure-isolation boundaries, not a general recipe for spawning internal helpers.
+
 ## In this section
 
 - [Evidence, Dreaming, and ontology changes](/pipeline/extraction-decisions/)

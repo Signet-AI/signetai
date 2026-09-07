@@ -89,6 +89,45 @@ export function resolveEmbeddedDashboardAsset(requestPath: string): EmbeddedDash
 	return assets.find((asset) => asset.path === normalized) ?? null;
 }
 
+function materializeEmbeddedWorker(path: string, content: Buffer): void {
+	const valid = (): boolean => {
+		try {
+			return existsSync(path) && readFileSync(path).equals(content);
+		} catch {
+			return false;
+		}
+	};
+	if (valid()) return;
+
+	const tempDir = mkdtempSync(join(dirname(path), ".tmp-worker-"));
+	const tempPath = join(tempDir, "worker.mjs");
+	try {
+		writeFileSync(tempPath, content, { flag: "wx", mode: 0o600 });
+		let published = false;
+		for (let attempt = 0; attempt < 2 && !published; attempt += 1) {
+			try {
+				renameSync(tempPath, path);
+				published = true;
+			} catch (error) {
+				const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+				if (code !== "EEXIST" && code !== "EPERM" && code !== "EBUSY") throw error;
+				if (valid()) {
+					published = true;
+				} else if (attempt === 0) {
+					try {
+						unlinkSync(path);
+					} catch {
+						// Another publisher may be repairing the same hash-keyed path.
+					}
+				}
+			}
+		}
+		if (!published) throw new Error(`Unable to publish embedded worker: ${path}`);
+	} finally {
+		rmSync(tempDir, { recursive: true, force: true });
+	}
+}
+
 export function resolveEmbeddedWorkerPath(name: string): string | null {
 	const worker = (nativeRuntimeAssets().workers ?? []).find((asset) => asset.name === name);
 	if (!worker) return null;
@@ -97,9 +136,7 @@ export function resolveEmbeddedWorkerPath(name: string): string | null {
 	const dir = join(tmpdir(), "signet-native-workers");
 	const path = join(dir, `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}-${hash}.mjs`);
 	mkdirSync(dir, { recursive: true });
-	if (!existsSync(path)) {
-		writeFileSync(path, Buffer.from(worker.contentBase64, "base64"));
-	}
+	materializeEmbeddedWorker(path, Buffer.from(worker.contentBase64, "base64"));
 	return path;
 }
 

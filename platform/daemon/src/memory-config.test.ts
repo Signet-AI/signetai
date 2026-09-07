@@ -4,10 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
+	DEFAULT_NATIVE_EMBEDDING_IDLE_TTL_MS,
 	DEFAULT_PIPELINE_V2,
 	MAX_LLAMACPP_MAX_INPUT_TOKENS,
 	MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
+	MAX_NATIVE_EMBEDDING_IDLE_TTL_MS,
 	MIN_LLAMACPP_MAX_INPUT_TOKENS,
+	MIN_NATIVE_EMBEDDING_IDLE_TTL_MS,
 	MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 	detectLocalTimeZone,
 	loadDreamingConfig,
@@ -310,6 +313,22 @@ network:
 		expect(cfg.embedding.dimensions).toBe(768);
 		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
 		expect(cfg.embedding.llamaCppMaxInputTokens).toBe(DEFAULT_LLAMACPP_MAX_INPUT_TOKENS);
+		expect(cfg.embedding.idleTtlMs).toBe(DEFAULT_NATIVE_EMBEDDING_IDLE_TTL_MS);
+		expect(cfg.embedding.preloadNative).toBe(false);
+	});
+
+	it("loads and bounds the native embedding idle TTL", () => {
+		const configuredDir = makeTempAgentsDir();
+		writeFileSync(join(configuredDir, "agent.yaml"), "embedding:\n  idleTtlMs: 120000\n");
+		expect(loadMemoryConfig(configuredDir).embedding.idleTtlMs).toBe(120000);
+
+		const lowDir = makeTempAgentsDir();
+		writeFileSync(join(lowDir, "agent.yaml"), "embedding:\n  idleTtlMs: 1\n");
+		expect(loadMemoryConfig(lowDir).embedding.idleTtlMs).toBe(MIN_NATIVE_EMBEDDING_IDLE_TTL_MS);
+
+		const highDir = makeTempAgentsDir();
+		writeFileSync(join(highDir, "agent.yaml"), "embedding:\n  idleTtlMs: 999999999\n");
+		expect(loadMemoryConfig(highDir).embedding.idleTtlMs).toBe(MAX_NATIVE_EMBEDDING_IDLE_TTL_MS);
 	});
 
 	it("deliberately enables the bounded freshness prior by default and allows opt-out", () => {
@@ -333,6 +352,12 @@ network:
 
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(10000);
+	});
+
+	it("allows native model preloading to be opted into explicitly", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  preloadNative: true\n");
+		expect(loadMemoryConfig(agentsDir).embedding.preloadNative).toBe(true);
 	});
 
 	it("clamps embedding prompt-submit timeout bounds", () => {
