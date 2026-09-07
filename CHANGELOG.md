@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-09-07
 - Features: make Windows a first-class install target; ship cross-platform desktop support.
-- Bug fixes: isolate source worker runtime; align DB audit call sites; preserve concurrent resources; reject missing macOS Python; harden cross-platform installs; keep bundled Pi dependency local; remove bundled pi runtime dep; protect managed AppImage updates; tighten packaged runtime and tests; expand Windows support and unify native shell; address PR #1858 review findings; survive all DB owner availability rejections, not just deadlines; hide the setup link once a harness connection exists; survive DB owner deadline exhaustion and build the embedding worker; stage connector assets so harness install works in the app; widen mac header inset clear of the traffic lights; edge-to-edge shell and mac traffic-light clearance; restore macOS traffic lights and correct the dock icon size; make the packaged daemon bootable and install on macOS; unblock dreaming startup; drop delegation memory writes; fence integrity deadline workers; preserve legacy tilde paths; support Windows home fallback; skip install without git; preserve external embedding selection; allow undeclared tool capability.
+- Bug fixes: remove private Pi dependency; await token worker teardown; isolate source worker runtime; align DB audit call sites; preserve concurrent resources; reject missing macOS Python; harden cross-platform installs; keep bundled Pi dependency local; remove bundled pi runtime dep; protect managed AppImage updates; tighten packaged runtime and tests; expand Windows support and unify native shell; address PR #1858 review findings; survive all DB owner availability rejections, not just deadlines; hide the setup link once a harness connection exists; survive DB owner deadline exhaustion and build the embedding worker; stage connector assets so harness install works in the app; widen mac header inset clear of the traffic lights; edge-to-edge shell and mac traffic-light clearance; restore macOS traffic lights and correct the dock icon size; make the packaged daemon bootable and install on macOS; unblock dreaming startup; drop delegation memory writes; fence integrity deadline workers; preserve legacy tilde paths; support Windows home fallback; skip install without git; preserve external embedding selection; allow undeclared tool capability.
 - Refactoring: remove dead source worker commands; share integrity child lifecycle; remove dead setup scan; share agent dir logic; isolate harness integration paths; centralize process launching.
 - Docs: trim contributor guide; document harness API boundary.
 
@@ -36,6 +36,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add Defuddle web imports (rebased); add third-party license colophon.
 
 ## Release Ledger
+
+## [0.221.5] - 2026-09-07
+
+Release summary: 2 bug fixes.
+Tag range: `v0.221.4..v0.221.5`.
+
+### Bug Fixes
+
+- **release**: remove private Pi dependency
+- **dreaming**: await token worker teardown
 
 ## [0.221.4] - 2026-09-07
 
