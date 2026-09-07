@@ -46,13 +46,13 @@ function initOsInstallSelectors(): void {
 
 		activateInstallOs(selector, detectedOs);
 		for (const tab of selector.querySelectorAll<HTMLElement>("[data-install-os]")) {
-				tab.addEventListener("click", () => {
-					const os = tab.dataset.installOs;
-					if (os !== "windows" && os !== "unix") return;
-					for (const otherSelector of document.querySelectorAll("[data-install-os-selector]")) {
-						activateInstallOs(otherSelector, os);
-					}
-				});
+			tab.addEventListener("click", () => {
+				const os = tab.dataset.installOs;
+				if (os !== "windows" && os !== "unix") return;
+				for (const otherSelector of document.querySelectorAll("[data-install-os-selector]")) {
+					activateInstallOs(otherSelector, os);
+				}
+			});
 		}
 	}
 }
@@ -76,7 +76,7 @@ function initCopyButtons() {
 					new CustomEvent("signet:command-copied", {
 						detail: {
 							commandKind: el.dataset.analyticsCommand ?? commandKind(installCmd),
-							placement: button.closest(".hero-install") ? "hero" : "quickstart",
+							placement: el.dataset.analyticsPlacement ?? (button.closest(".hero-install") ? "hero" : "quickstart"),
 						},
 					}),
 				);

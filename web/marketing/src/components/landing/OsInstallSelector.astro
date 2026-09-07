@@ -71,7 +71,8 @@ const placement = Astro.props.placement ?? "install_selector";
             type="button"
             class="copy-btn push-right"
             data-copy={option.command}
-            data-analytics-command="native_install"
+            data-analytics-command={option.id === "windows" ? "native_install_windows" : "native_install"}
+            data-analytics-placement={placement}
             aria-label={`Copy ${option.label} install command`}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

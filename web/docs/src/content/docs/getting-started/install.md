@@ -32,10 +32,6 @@ bun add -g signetai
 
 Use one method per machine. The npm and Bun routes require their corresponding runtime; the direct installers do not install Bun or rebuild Signet.
 
-```bash
-npm install -g signetai
-```
-
 Confirm that the launcher is available, then start onboarding:
 
 ```bash

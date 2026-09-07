@@ -113,9 +113,15 @@ function main(): void {
 			},
 		]),
 	);
-	failures.push(...runRules(heroPath, hero, [{ kind: "require", pattern: /OsInstallSelector/, description: "OS install selector" }]));
 	failures.push(
-		...runRules(installCtaPath, installCta, [{ kind: "require", pattern: /OsInstallSelector/, description: "OS install selector" }]),
+		...runRules(heroPath, hero, [
+			{ kind: "require", pattern: /OsInstallSelector/, description: "OS install selector" },
+		]),
+	);
+	failures.push(
+		...runRules(installCtaPath, installCta, [
+			{ kind: "require", pattern: /OsInstallSelector/, description: "OS install selector" },
+		]),
 	);
 
 	if (failures.length > 0) {

@@ -37,7 +37,7 @@ iwr -useb https://signetai.sh/install.ps1 | iex
 The published binary supports Windows, but durable transcript imports use
 descriptor-relative filesystem safeguards available only on Linux and macOS.
 Transcript import mutations and deletion of imported Sources return a structured
-`501` platform error on Windows; other Windows package features remain supported.
+`501` platform error on Windows; other Windows features remain supported.
 
 The Windows PowerShell installer verifies the release manifest, installs the
 native binary and connector assets, and adds Signet to the user PATH.

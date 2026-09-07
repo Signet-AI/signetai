@@ -216,11 +216,14 @@
 			if ($connectorName -notmatch "^[A-Za-z0-9._-]+$") {
 				throw "The Signet connector asset name is invalid."
 			}
+			$connectorPropertyNames = @($connector.PSObject.Properties | ForEach-Object { $_.Name })
+			if ($connectorPropertyNames -notcontains "size" -or [int64]$connector.size -le 0) {
+				throw "The Signet connector asset entry is missing a valid size."
+			}
 			$connectorPath = Join-Path $workDir $connectorName
 			Download-File $connectorDownloadUrl $connectorPath
 			$connectorInfo = Get-Item -LiteralPath $connectorPath
-			$connectorPropertyNames = @($connector.PSObject.Properties | ForEach-Object { $_.Name })
-			if ($connectorPropertyNames -notcontains "size" -or [int64]$connectorInfo.Length -ne [int64]$connector.size) {
+			if ([int64]$connectorInfo.Length -ne [int64]$connector.size) {
 				throw "Signet connector asset size verification failed."
 			}
 			if ((Get-Sha256 $connectorPath) -ne $connectorSha256) {

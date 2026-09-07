@@ -25,10 +25,18 @@ describe("install copy", () => {
 		}
 
 		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain(windowsInstallCommand);
-		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain('data-install-os={option.id}');
+		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain(
+			"data-install-os={option.id}",
+		);
 		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain('id: "unix"');
 		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain("install-os-icon-pair");
 		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain("macOS and Linux");
+		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain(
+			'data-analytics-command={option.id === "windows" ? "native_install_windows" : "native_install"}',
+		);
+		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain(
+			"data-analytics-placement={placement}",
+		);
 		expect(read("web/marketing/src/components/landing/Hero.astro")).toContain("OsInstallSelector");
 		expect(read("web/marketing/src/components/landing/InstallCta.astro")).toContain("OsInstallSelector");
 		const interactions = read("web/marketing/src/scripts/interactions.ts");
@@ -57,7 +65,7 @@ describe("install copy", () => {
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("SIGNET_RELEASES_API_BASE");
 		expect(installer).toContain("SIGNET_RELEASE_TAG");
-		expect(installer).toContain("${VERSION:-}");
+		expect(installer).toContain(`\${VERSION:-}`);
 		expect(installer).toContain("SIGNET_CHANNEL");
 		expect(installer).toContain('"$binary_path" install --force "$@"');
 		expect(installer).toContain(
@@ -79,7 +87,7 @@ describe("install copy", () => {
 		expect(installer).toContain("signet-win32-x64.exe");
 		expect(installer).toContain("Get-FileHash -Algorithm SHA256");
 		expect(installer).toContain("--connector-assets");
-		expect(installer).toContain("SetEnvironmentVariable(\"Path\", $updatedUserPath, \"User\")");
+		expect(installer).toContain('SetEnvironmentVariable("Path", $updatedUserPath, "User")');
 		expect(installer).toContain("SIGNET_CHANNEL");
 		expect(installer).not.toContain("npm install -g signetai");
 	});
@@ -129,7 +137,7 @@ describe("install copy", () => {
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("CONNECTOR_COMPONENT");
 		expect(installer).toContain("verifySha256");
-		expect(installer).toContain("signet-connectors-${manifest.version}.tar.gz");
+		expect(installer).toContain(`signet-connectors-\${manifest.version}.tar.gz`);
 		expect(installer).not.toContain("bun.sh/install");
 		expect(installer).not.toContain("better-sqlite3");
 	});
@@ -178,7 +186,7 @@ describe("install copy", () => {
 
 	test("build-connector-assets stages runtime plugin assets into a tarball", () => {
 		const buildScript = read("scripts/build-connector-assets.ts");
-		expect(buildScript).toContain("signet-connectors-${version}.tar.gz");
+		expect(buildScript).toContain(`signet-connectors-\${version}.tar.gz`);
 		expect(buildScript).toContain("runtime/connectors");
 		// The build script walks every `integrations/*/connector/` and
 		// ships any non-source/asset dir under the runtime tree.
