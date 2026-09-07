@@ -77,6 +77,10 @@ The desktop build stages:
 3. a platform Bun runtime
 4. Electron packaging artifacts
 
+Runtime staging requires a runner whose OS and architecture match the target
+artifact. Release jobs build each platform on its matching native runner rather
+than cross-compiling the bundled Bun runtime.
+
 Generated desktop resources live under `surfaces/desktop/resources/` and are
 not committed.
 

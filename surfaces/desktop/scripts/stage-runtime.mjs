@@ -15,7 +15,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const win = process.platform === "win32";
+const hostWin = process.platform === "win32";
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "../..");
@@ -31,7 +31,10 @@ function readJson(path) {
 
 function pathLookup(cmd) {
 	try {
-		const out = execFileSync(win ? "where" : "which", [cmd], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+		const out = execFileSync(hostWin ? "where" : "which", [cmd], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		});
 		return out.trim().split(/\r?\n/)[0] || null;
 	} catch {
 		return null;
@@ -92,10 +95,12 @@ export function assertBunRuntime(
 	expectedPlatform = process.platform,
 	probe = probeBunRuntime,
 ) {
+	const arch = normalizeArch(expectedArch);
+	const platform = normalizePlatform(expectedPlatform);
 	if (!existsSync(runtimePath) || !statSync(runtimePath).isFile()) {
 		throw new Error(`Bun runtime is not a regular file: ${runtimePath}`);
 	}
-	if (process.platform !== "win32" && (statSync(runtimePath).mode & 0o111) === 0) {
+	if (platform !== "win32" && (statSync(runtimePath).mode & 0o111) === 0) {
 		throw new Error(`Bun runtime is not executable: ${runtimePath}`);
 	}
 
@@ -107,8 +112,6 @@ export function assertBunRuntime(
 		throw new Error(`Unable to execute Bun runtime at ${runtimePath}: ${detail}`);
 	}
 
-	const arch = normalizeArch(expectedArch);
-	const platform = normalizePlatform(expectedPlatform);
 	if (runtime.platform !== platform) {
 		throw new Error(`Bun runtime platform mismatch: expected ${platform}, got ${runtime.platform} (${runtimePath})`);
 	}
@@ -127,18 +130,26 @@ function pkgVersion(pkg, name) {
 }
 
 export function stageRuntime() {
-	const bunSrc = bunRuntime();
 	const bunArch = targetArch();
 	const target = targetPlatform();
+	const hostPlatform = normalizePlatform(process.platform);
+	const hostArch = normalizeArch(process.arch);
+	if (target !== hostPlatform || bunArch !== hostArch) {
+		throw new Error(
+			`Desktop runtime staging requires a native ${target}/${bunArch} build runner; host is ${hostPlatform}/${hostArch}.`,
+		);
+	}
+
+	const bunSrc = bunRuntime();
 	assertBunRuntime(bunSrc, bunArch, target);
 
 	rmSync(resources, { recursive: true, force: true });
 	mkdirSync(daemonOut, { recursive: true });
 	mkdirSync(runtimeOut, { recursive: true });
 
-	const bunDest = resolve(runtimeOut, win ? "bun.exe" : "bun");
+	const bunDest = resolve(runtimeOut, target === "win32" ? "bun.exe" : "bun");
 	cpSync(bunSrc, bunDest);
-	if (!win) chmodSync(bunDest, 0o755);
+	if (target !== "win32") chmodSync(bunDest, 0o755);
 
 	// Stage every built daemon entrypoint and native asset rather than a
 	// hardcoded subset. The daemon resolves its workers (db-owner, harness
