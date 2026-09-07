@@ -7,6 +7,7 @@ let hasBoundScroll = false;
 let lastScrollY = -1;
 
 function commandKind(command: string): string {
+	if (command.startsWith("iwr ")) return "native_install_windows";
 	if (command.startsWith("curl ")) return "native_install";
 	if (command.startsWith("npm install")) return "npm_install";
 	if (command.startsWith("bun add")) return "bun_install";
@@ -16,6 +17,44 @@ function commandKind(command: string): string {
 	if (command.startsWith("signet remember")) return "remember";
 	if (command.startsWith("signet recall")) return "recall";
 	return "other";
+}
+
+function detectInstallOs(userAgent: string): "windows" | "unix" {
+	if (/windows nt|win32|win64/i.test(userAgent)) return "windows";
+	return "unix";
+}
+
+function activateInstallOs(selector: Element, os: "windows" | "unix"): void {
+	for (const tab of selector.querySelectorAll<HTMLElement>("[data-install-os]")) {
+		const active = tab.dataset.installOs === os;
+		tab.classList.toggle("active", active);
+		tab.setAttribute("aria-selected", active ? "true" : "false");
+	}
+	for (const panel of selector.querySelectorAll<HTMLElement>("[data-install-os-panel]")) {
+		const active = panel.dataset.installOsPanel === os;
+		panel.classList.toggle("active", active);
+		panel.hidden = !active;
+	}
+}
+
+function initOsInstallSelectors(): void {
+	const detectedOs = detectInstallOs(navigator.userAgent);
+	for (const selector of document.querySelectorAll("[data-install-os-selector]")) {
+		const selectorEl = selector as HTMLElement;
+		if (selectorEl.dataset.bound === "true") continue;
+		selectorEl.dataset.bound = "true";
+
+		activateInstallOs(selector, detectedOs);
+		for (const tab of selector.querySelectorAll<HTMLElement>("[data-install-os]")) {
+			tab.addEventListener("click", () => {
+				const os = tab.dataset.installOs;
+				if (os !== "windows" && os !== "unix") return;
+				for (const otherSelector of document.querySelectorAll("[data-install-os-selector]")) {
+					activateInstallOs(otherSelector, os);
+				}
+			});
+		}
+	}
 }
 
 function initCopyButtons() {
@@ -37,7 +76,7 @@ function initCopyButtons() {
 					new CustomEvent("signet:command-copied", {
 						detail: {
 							commandKind: el.dataset.analyticsCommand ?? commandKind(installCmd),
-							placement: button.closest(".hero-install") ? "hero" : "quickstart",
+							placement: el.dataset.analyticsPlacement ?? (button.closest(".hero-install") ? "hero" : "quickstart"),
 						},
 					}),
 				);
@@ -163,6 +202,7 @@ function bindScrollParallax() {
 
 function initInteractions() {
 	initCopyButtons();
+	initOsInstallSelectors();
 	initInstallTabs();
 	initCodeTabs();
 	initQuickstartTabs();

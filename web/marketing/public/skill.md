@@ -219,7 +219,7 @@ in user space by default.
 
 ### What Signet writes to disk
 
-Signet only writes to these locations inside the home directory:
+Signet's application data is written only to these locations inside the home directory:
 
 | Path | When | What |
 |------|------|------|
@@ -228,11 +228,14 @@ Signet only writes to these locations inside the home directory:
 | `~/.config/opencode/` | OpenCode users | Plugin bundle (signet.mjs), generated AGENTS.md, skills symlink |
 | `~/.openclaw/` or `~/.clawdbot/` or `~/.moltbot/` | OpenClaw users | Config patch only |
 
+The Windows direct installer also adds its user-level install directory to the
+current user's PATH; it does not require administrator permissions.
+
 ### What Signet NEVER does
 
 - Requires or uses sudo
-- Modifies system settings, OS preferences, or system files
-- Writes anything outside the home directory
+- Modifies system-wide settings, OS preferences, or system files
+- Writes application data to system directories without an explicit configured path
 - Installs system services (launchd/systemd) automatically
 - Sends data to external servers (everything is local)
 - Deletes or overwrites existing files without the setup wizard
@@ -245,18 +248,25 @@ Signet only writes to these locations inside the home directory:
 > GATE: Before proceeding, tell your user:
 > "I'm going to install Signet, which will give me persistent memory
 > and a secrets vault. The installer uses the compiled
-> Signet binary and runs a small background daemon on port 3850. It only
-> writes to directories inside your home folder — never system files,
-> never with sudo. Ready to proceed?"
+> Signet binary and runs a small background daemon on port 3850. It writes
+> application data in your home folder; the Windows installer also uses a
+> temporary working directory and may update your user PATH. It never writes
+> system files or uses sudo. Ready to proceed?"
 >
 > WAIT for the user to confirm before continuing.
 
 ### Step 1: Check prerequisites
 
-Check whether the native installer prerequisites are available:
+Check whether the native installer prerequisites are available on macOS or Linux:
 
 ```bash
 curl --version
+```
+
+On Windows x64, use PowerShell 5.1 or newer for the native installer:
+
+```powershell
+$PSVersionTable.PSVersion
 ```
 
 If you choose the Bun package-manager path instead, verify Bun first:
@@ -277,13 +287,18 @@ https://nodejs.org
 Check the operating system:
 - **macOS**: Fully supported
 - **Linux**: Fully supported
-- **Windows**: Supported via WSL (Windows Subsystem for Linux) only
+- **Windows**: Native Windows x64 is supported through the PowerShell installer
 
 ### Step 2: Install Signet
 
 Using the direct native binary installer:
 ```bash
 curl -fsSL https://signetai.sh/install.sh | bash
+```
+
+On Windows x64, use the native PowerShell installer:
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
 ```
 
 Using Bun's package-manager wrapper for the same compiled Signet binary:
@@ -713,14 +728,22 @@ signet setup
 ## Quick Reference
 
 ```bash
-# Prereqs
+# Prereqs on macOS/Linux
 curl --version                 # Required for direct native binary install
 bun --version                  # Only needed for Bun package install
 node --version                 # Only needed for npm package install
 
-# Install
+# Install on macOS/Linux
 curl -fsSL https://signetai.sh/install.sh | bash
+```
 
+```powershell
+# Prereqs and install on Windows x64
+$PSVersionTable.PSVersion
+iwr -useb https://signetai.sh/install.ps1 | iex
+```
+
+```bash
 # Setup
 signet                       # Show command help
 signet setup                 # Explicit setup command

@@ -1,7 +1,7 @@
 # Signet
 
 This npm package is a thin wrapper for the same compiled Signet binary used by
-the curl installer and Bun global installs.
+the native installers and Bun global installs.
 
 ```bash
 npm install -g signetai
@@ -22,6 +22,12 @@ Direct curl installs use the same compiled Signet binary:
 curl -fsSL https://signetai.sh/install.sh | bash
 ```
 
+On Windows x64, use the native PowerShell installer:
+
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
+```
+
 ## Requirements
 
 - Node.js for the npm wrapper, or Bun for the Bun wrapper
@@ -31,11 +37,10 @@ curl -fsSL https://signetai.sh/install.sh | bash
 The published binary supports Windows, but durable transcript imports use
 descriptor-relative filesystem safeguards available only on Linux and macOS.
 Transcript import mutations and deletion of imported Sources return a structured
-`501` platform error on Windows; other Windows package features remain supported.
+`501` platform error on Windows; other Windows features remain supported.
 
-Windows direct installs should use the npm wrapper. The old PowerShell
-`install.ps1` path has been removed until a native Windows direct installer
-ships.
+The Windows PowerShell installer verifies the release manifest, installs the
+native binary and connector assets, and adds Signet to the user PATH.
 
 ## Documentation
 

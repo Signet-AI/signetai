@@ -28,6 +28,12 @@ npm install -g signetai@next
 curl -fsSL https://signetai.sh/install.sh | SIGNET_CHANNEL=nightly bash
 ```
 
+On Windows x64:
+
+```powershell
+$env:SIGNET_CHANNEL = "nightly"; iwr -useb https://signetai.sh/install.ps1 | iex
+```
+
 The npm package is a wrapper around the same compiled Signet binary published
 to the GitHub release for that version.
 
@@ -51,6 +57,12 @@ npm install -g signetai
 
 # Direct native installer (stable is the default)
 curl -fsSL https://signetai.sh/install.sh | bash
+```
+
+On Windows x64, the stable channel is the default:
+
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
 ```
 
 Or switch back from nightly:
