@@ -144,7 +144,11 @@ gate checks `autonomous.frozen` first (hard stop), then
 `autonomous.enabled` for agent-role callers (operators and daemon bypass
 this), then a rate limiter with per-action cooldown and hourly budget.
 Each successful repair writes an audit event to `memory_history` with
-`memory_id = 'system'`.
+`memory_id = 'system'`. Operator-wide integrity verification is a separate
+read-only precondition owned by the database owner's `verify` lane; its
+awaited result updates the shared integrity progress/status model. The
+`rebuild-indexes` coordinator performs no FTS or embedding writes unless both
+checks return a positive result.
 
 **Embedding refresh tracker** (`embedding-tracker.ts`): the existing
 incremental tracker owns stale and missing-memory vector writes. It does not

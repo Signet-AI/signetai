@@ -43,12 +43,17 @@ POST /api/repair/check-fts
 POST /api/repair/retention-sweep
 ```
 
-The daemon's full-database integrity scan runs in a single-flight worker after
-HTTP readiness, with a 30-second wall-clock budget and periodic progress logs.
-It transactionally rebuilds disposable telemetry indexes when only
-`telemetry_events` is corrupt. A confirmed failure is reported by `/health` and
-`/health/ready`, with actionable offline repair guidance. If the audit store
-prevents committing a verified repair, the default remains fail-closed.
+The daemon's full-database integrity scan runs on the process database
+owner's verification lane, outside the HTTP/event-loop process. The route
+awaits both `quick_check` and `integrity_check` and returns an explicit
+`passed`, `failed`, `timed_out`, `cancelled`, or `unavailable` outcome. A
+completed verification (including a confirmed failed check) returns `200`;
+transport/deadline failures return `503`/`504`. The owner boundary has a bounded deadline; an uninterruptible native scan retires
+that owner child when the deadline or cancellation is reached rather than
+continuing as detached work. The same integrity progress/status model used by
+incremental maintenance is updated while the operator scan runs. A confirmed
+failure is reported by `/health` and `/health/ready`, with actionable offline
+repair guidance.
 
 Examples:
 

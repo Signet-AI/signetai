@@ -38,6 +38,11 @@ export interface DbOwnerMaintenanceOptions {
 	readonly estimatedWorkUnits?: number;
 	/** Verification maintenance is admitted while application writes are blocked. */
 	readonly lane?: "maintenance" | "verify";
+	/** Cancel a queued or active owner job when the caller is aborted. */
+	readonly signal?: AbortSignal;
+	/** Retire the owner when this synchronous operation cannot be cancelled in place. */
+	readonly killOnDeadline?: boolean;
+	readonly killOnCancel?: boolean;
 	readonly onOwnerMetrics?: (metrics: DbOwnerMaintenanceMetrics) => void | Promise<void>;
 	/** Called when the owner worker has emitted its terminal result. */
 	readonly onOwnerJobSettled?: () => void | Promise<void>;
@@ -63,12 +68,16 @@ function submitOptions(
 	readonly lane: "read" | "write" | "maintenance" | "verify";
 	readonly deadlineMs: number;
 	readonly estimatedWorkUnits?: number;
+	readonly killOnDeadline?: boolean;
+	readonly killOnCancel?: boolean;
 } {
 	return {
 		operation,
 		lane,
 		deadlineMs: options.deadlineMs ?? DEFAULT_OWNER_DEADLINE_MS,
 		estimatedWorkUnits: options.estimatedWorkUnits,
+		killOnDeadline: options.killOnDeadline ?? operation.startsWith("integrity."),
+		killOnCancel: options.killOnCancel ?? operation.startsWith("integrity."),
 	};
 }
 
@@ -102,19 +111,27 @@ async function runOwnerJob<Result>(
 		notifySettled();
 	});
 	void handle.result.catch((error: unknown) => {
-		// Deadline rejection abandons the client promise but not a dispatched
-		// synchronous worker; its metrics promise remains the completion fence.
+		// A normal deadline may abandon a synchronous job while its metrics
+		// promise remains the completion fence. Integrity jobs opt into owner
+		// retirement, so their deadline/cancellation outcome is process-bounded.
 		if (!(error instanceof DbOwnerDeadlineError)) notifySettled();
 	});
-	const result = await handle.result;
-	const metrics = await handle.metrics;
-	if (metrics !== undefined) {
-		await options.onOwnerMetrics?.({
-			queueAdmissionMs: Math.max(0, metrics.startedAt - handle.job.enqueuedAt),
-			ownerExecutionMs: Math.max(0, metrics.finishedAt - metrics.startedAt),
-		});
+	const onAbort = (): void => handle.cancel();
+	if (options.signal?.aborted === true) handle.cancel();
+	else options.signal?.addEventListener("abort", onAbort, { once: true });
+	try {
+		const result = await handle.result;
+		const metrics = await handle.metrics;
+		if (metrics !== undefined) {
+			await options.onOwnerMetrics?.({
+				queueAdmissionMs: Math.max(0, metrics.startedAt - handle.job.enqueuedAt),
+				ownerExecutionMs: Math.max(0, metrics.finishedAt - metrics.startedAt),
+			});
+		}
+		return result;
+	} finally {
+		options.signal?.removeEventListener("abort", onAbort);
 	}
-	return result;
 }
 
 async function startOwnerWithinDeadline(owner: DbOwnerClient, deadlineAt: number, operation: string): Promise<void> {

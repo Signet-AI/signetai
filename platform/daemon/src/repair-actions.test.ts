@@ -22,6 +22,7 @@ import {
 	deduplicateMemories,
 	getDedupStats,
 	getEmbeddingGapStats,
+	rebuildDerivedIndexes,
 	pruneGenericEntities,
 	pruneTerminalJobs,
 	reembedMissingMemories,
@@ -2546,6 +2547,66 @@ describe("triggerRetentionSweep", () => {
 
 		expect(result.success).toBe(true);
 		expect(swept).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// rebuildDerivedIndexes
+// ---------------------------------------------------------------------------
+
+describe("rebuildDerivedIndexes", () => {
+	let db: Database;
+	let writes = 0;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		writes = 0;
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("does not mutate derived state when integrity verification fails", async () => {
+		const base = asAccessor(db, () => {
+			writes += 1;
+		});
+		const failingAccessor = {
+			...base,
+			withReadDbAsync<T>(fn: (readDb: ReadDb) => T | Promise<T>): Promise<T> {
+				const readDb: ReadDb = {
+					prepare(sql: string) {
+						const statement = db.prepare(sql);
+						if (sql !== "PRAGMA quick_check") return statement as never;
+						return {
+							...statement,
+							all<Row = unknown>(...params: unknown[]): Row[] {
+								void params;
+								return [{ quick_check: "database disk image is malformed" }] as Row[];
+							},
+						};
+					},
+				};
+				return Promise.resolve(fn(readDb));
+			},
+		} as unknown as DbAccessor;
+
+		const result = await rebuildDerivedIndexes(
+			failingAccessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+		);
+
+		expect(result.integrity.ok).toBe(false);
+		expect(result.integrity.outcome).toBe("failed");
+		expect(result.fts).toMatchObject({ repaired: false });
+		expect(result.embeddings).toEqual({ reembedded: 0, totalMissing: 0, crossAgentHashConflicts: 0 });
+		expect(result.summary).toContain("FTS and embeddings skipped");
+		expect(writes).toBe(0);
 	});
 });
 

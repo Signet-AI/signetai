@@ -83,6 +83,10 @@ export interface DbOwnerSubmitOptions {
 	readonly workloadClass?: DbOwnerWorkloadClass;
 	readonly deadlineMs: number;
 	readonly estimatedWorkUnits?: number;
+	/** Kill the owner child when a dispatched synchronous job reaches its deadline. */
+	readonly killOnDeadline?: boolean;
+	/** Kill the owner child when an active synchronous job is cancelled. */
+	readonly killOnCancel?: boolean;
 }
 
 export interface DbOwnerJobHandle<Result> {
@@ -173,6 +177,8 @@ interface PendingJob<Result> {
 	readonly reject: (reason?: unknown) => void;
 	readonly timer: ReturnType<typeof setTimeout>;
 	readonly resolveMetrics: (value: DbOwnerJobMetrics | undefined) => void;
+	readonly killOnDeadline: boolean;
+	readonly killOnCancel: boolean;
 	settled: boolean;
 	dispatched: boolean;
 }
@@ -731,18 +737,31 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 						settledJob.reject(new DbOwnerDeadlineError(job.id));
 					}
 				});
-				// A job deadline abandons the work; it is not authority to kill the
-				// owner. The owner may still be finishing a synchronous operation,
-				// but interactive work is admitted through a separate owner below.
-				// This preserves the owner process and lets the worker consume the
-				// cancellation when the job is still queued.
+				// Most jobs abandon their result at the deadline so the owner can keep
+				// serving independent work. A synchronous integrity scan is different:
+				// it has no native cancellation point, so its caller must be able to
+				// retire this owner child and obtain a real process-level stop.
 				if (dispatched && owner !== null && state === "ready") {
-					void write(owner, { type: "cancel", jobId: job.id }).catch(() => {
-						// A transport failure is handled by the owner exit path.
-					});
+					if (entry.killOnDeadline) {
+						retireOwner(new DbOwnerDiedError(`DB owner killed after deadline for ${job.id}`), owner, "dead", true);
+					} else {
+						void write(owner, { type: "cancel", jobId: job.id }).catch(() => {
+							// A transport failure is handled by the owner exit path.
+						});
+					}
 				}
 			}, submitOptions.deadlineMs);
-			pendingJob = { job, resolve, reject, timer, resolveMetrics, settled: false, dispatched: false };
+			pendingJob = {
+				job,
+				resolve,
+				reject,
+				timer,
+				resolveMetrics,
+				killOnDeadline: submitOptions.killOnDeadline === true,
+				killOnCancel: submitOptions.killOnCancel === true,
+				settled: false,
+				dispatched: false,
+			};
 			pending.set(job.id, pendingJob as PendingJob<unknown>);
 			if (request.kind === "initialize") initialization = "running";
 			dispatch(job.id);
@@ -756,10 +775,23 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 		const active = activeJobId === jobId;
 		recordCancellation(jobId);
 		if (active) {
-			// Active jobs must finish in the owner so a cancellation that arrives
-			// during SQLite COMMIT can report the durable outcome accurately. The
-			// worker fences the transaction before COMMIT and reads this registry
-			// after COMMIT; queued jobs still use the protocol cancel command.
+			// Ordinary writes must finish in the owner so a cancellation that
+			// arrives during SQLite COMMIT can report the durable outcome
+			// accurately. A synchronous integrity scan has no such fence, so the
+			// caller may explicitly retire its owner child instead.
+			if (entry.killOnCancel) {
+				if (entry.dispatched) abandonedMetrics.set(jobId, entry.resolveMetrics);
+				settle(jobId, (job) => {
+					if (!job.settled) {
+						job.settled = true;
+						job.reject(new DbOwnerCancelledError(jobId));
+					}
+				});
+				const owner = child;
+				if (owner !== null && state === "ready") {
+					retireOwner(new DbOwnerDiedError(`DB owner killed after cancellation for ${jobId}`), owner, "dead", true);
+				}
+			}
 			return;
 		}
 		settle(jobId, (job) => {
