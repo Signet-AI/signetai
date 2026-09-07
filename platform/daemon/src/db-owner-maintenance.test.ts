@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDbOwnerMaintenance, runOwnerMaintenanceWithRetry } from "./db-owner-maintenance";
-import { createDbOwnerClient, DbOwnerDiedError, type DbOwnerClient } from "./db-owner-client";
+import { createDbOwnerClient, DbOwnerDeadlineError, DbOwnerDiedError, type DbOwnerClient } from "./db-owner-client";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { completeFtsStartupRecovery } from "./fts-startup-recovery";
 
@@ -115,6 +115,40 @@ describe("DB owner FTS maintenance", () => {
 		expect(deadlines).toHaveLength(2);
 		expect(deadlines[1]).toBeLessThan(deadlines[0]);
 		expect(Date.now() - startedAt).toBeLessThan(125);
+	});
+
+	test("waits for a deadline-abandoned owner worker when requested", async () => {
+		let releaseMetrics: (() => void) | undefined;
+		let settledNotifications = 0;
+		const owner = {
+			start: async (): Promise<void> => {},
+			submit: () => ({
+				job: { enqueuedAt: 0 } as never,
+				result: Promise.reject(new DbOwnerDeadlineError("test.owner-settlement-fence")),
+				metrics: new Promise<undefined>((resolve) => {
+					releaseMetrics = () => resolve(undefined);
+				}),
+				cancel: (): void => {},
+			}),
+		} as unknown as DbOwnerClient;
+
+		let returned = false;
+		const run = runOwnerMaintenanceWithRetry(owner, { kind: "sleep", durationMs: 0 }, "test.owner-settlement-fence", {
+			deadlineMs: 100,
+			waitForOwnerCompletionOnDeadline: true,
+			onOwnerJobSettled: () => {
+				settledNotifications += 1;
+			},
+		}).catch((error: unknown) => {
+			returned = true;
+			throw error;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(returned).toBe(false);
+
+		releaseMetrics?.();
+		await expect(run).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		expect(settledNotifications).toBe(1);
 	});
 
 	test("reports queue admission separately from owner execution time", async () => {

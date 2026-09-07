@@ -18,6 +18,7 @@ import {
 	ownerTransaction,
 	ownerRunStatement,
 	type DbOwnerMaintenanceMetrics,
+	type DbOwnerMaintenanceOptions,
 } from "./db-owner-maintenance";
 import { updateDatabaseIntegrityStatus, type DatabaseIntegrityProgress } from "./database-integrity";
 
@@ -102,6 +103,21 @@ interface QuickCheckRow {
 
 type OwnerMetricsCallback = (metrics: DbOwnerMaintenanceMetrics) => void | Promise<void>;
 
+function integrityOwnerOptions(
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+	estimatedWorkUnits?: number,
+): DbOwnerMaintenanceOptions {
+	// A deadline abandons the client result, but a synchronous SQLite worker can
+	// still be running; the integrity scheduler must not admit its next slice.
+	return {
+		deadlineMs,
+		waitForOwnerCompletionOnDeadline: true,
+		...(estimatedWorkUnits === undefined ? {} : { estimatedWorkUnits }),
+		...(onOwnerMetrics === undefined ? {} : { onOwnerMetrics }),
+	};
+}
+
 const TELEMETRY_INTEGRITY_CURSOR = "\uffff:telemetry_integrity";
 
 function checkpointCursorToLastObject(cursor: string): string | null {
@@ -179,7 +195,7 @@ async function ensureCheckpoint(
 					updated_at TEXT NOT NULL
 				)`),
 		],
-		{ deadlineMs, estimatedWorkUnits: 1, onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
 	);
 	// Upgrade the column before any statement references it: on a legacy table
 	// (created before attempt_count existed) the INSERT below would otherwise
@@ -190,7 +206,7 @@ async function ensureCheckpoint(
 		"integrity.checkpoint.columns",
 		`PRAGMA table_info(${CHECKPOINT_TABLE})`,
 		[],
-		{ deadlineMs, onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics),
 	);
 	if (!columns.some((column) => column.name === "attempt_count")) {
 		try {
@@ -198,7 +214,7 @@ async function ensureCheckpoint(
 				owner,
 				"integrity.checkpoint.attempt-count-column",
 				[ownerRunStatement(`ALTER TABLE ${CHECKPOINT_TABLE} ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`)],
-				{ deadlineMs, estimatedWorkUnits: 1, onOwnerMetrics },
+				integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
 			);
 		} catch (error) {
 			if (!isDuplicateColumnError(error)) throw error;
@@ -207,7 +223,7 @@ async function ensureCheckpoint(
 				"integrity.checkpoint.columns.after-race",
 				`PRAGMA table_info(${CHECKPOINT_TABLE})`,
 				[],
-				{ deadlineMs, onOwnerMetrics },
+				integrityOwnerOptions(deadlineMs, onOwnerMetrics),
 			);
 			if (!columnsAfterRace.some((column) => column.name === "attempt_count")) throw error;
 		}
@@ -223,7 +239,7 @@ async function ensureCheckpoint(
 				[key, new Date().toISOString()],
 			),
 		],
-		{ deadlineMs, estimatedWorkUnits: 1, onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
 	);
 }
 
@@ -241,7 +257,7 @@ async function readCheckpoint(
 			attempt_count AS attemptCount, status
 		 FROM ${CHECKPOINT_TABLE} WHERE checkpoint_key = ?`,
 		[key],
-		{ deadlineMs, onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics),
 	);
 	if (
 		row === undefined ||
@@ -277,7 +293,7 @@ async function resetCompleteCheckpoint(
 				[new Date().toISOString(), key],
 			),
 		],
-		{ deadlineMs, estimatedWorkUnits: 1, onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
 	);
 }
 
@@ -286,14 +302,20 @@ async function readPageMetrics(
 	deadlineMs: () => number,
 	onOwnerMetrics?: OwnerMetricsCallback,
 ): Promise<{ readonly pages: number; readonly bytes: number }> {
-	const pageCount = await ownerQueryOne<PageCountRow>(owner, "integrity.page-count", "PRAGMA page_count", [], {
-		deadlineMs: deadlineMs(),
-		onOwnerMetrics,
-	});
-	const pageSize = await ownerQueryOne<PageCountRow>(owner, "integrity.page-size", "PRAGMA page_size", [], {
-		deadlineMs: deadlineMs(),
-		onOwnerMetrics,
-	});
+	const pageCount = await ownerQueryOne<PageCountRow>(
+		owner,
+		"integrity.page-count",
+		"PRAGMA page_count",
+		[],
+		integrityOwnerOptions(deadlineMs(), onOwnerMetrics),
+	);
+	const pageSize = await ownerQueryOne<PageCountRow>(
+		owner,
+		"integrity.page-size",
+		"PRAGMA page_size",
+		[],
+		integrityOwnerOptions(deadlineMs(), onOwnerMetrics),
+	);
 	const pages = scalar(pageCount?.page_count);
 	return { pages, bytes: pages * scalar(pageSize?.page_size) };
 }
@@ -313,7 +335,7 @@ async function nextObject(
 		   AND type IN ('table', 'index', 'view', 'trigger')
 		 ORDER BY name, type LIMIT 1`,
 		[CHECKPOINT_TABLE, cursor],
-		{ deadlineMs: deadlineMs(), onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs(), onOwnerMetrics),
 	);
 	if (object !== undefined) return object;
 	if (cursor >= TELEMETRY_INTEGRITY_CURSOR) return undefined;
@@ -322,7 +344,7 @@ async function nextObject(
 		"integrity.telemetry.exists",
 		"SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'telemetry_events'",
 		[],
-		{ deadlineMs: deadlineMs(), onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs(), onOwnerMetrics),
 	);
 	return telemetry === undefined
 		? undefined
@@ -343,7 +365,7 @@ async function remainingObjects(
 		   AND name <> ? AND (name || ':' || type) > ?
 		   AND type IN ('table', 'index', 'view', 'trigger')`,
 		[cursor, TELEMETRY_INTEGRITY_CURSOR, CHECKPOINT_TABLE, cursor],
-		{ deadlineMs, onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics),
 	);
 	return scalar(row?.value);
 }
@@ -392,7 +414,7 @@ async function persistTable(
 				],
 			),
 		],
-		{ deadlineMs, estimatedWorkUnits: 1, onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
 	);
 	return next;
 }
@@ -412,7 +434,7 @@ async function markComplete(
 				key,
 			]),
 		],
-		{ deadlineMs, estimatedWorkUnits: 1, onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
 	);
 }
 
@@ -436,7 +458,7 @@ async function markDegraded(
 				[next.cursor, next.status, new Date().toISOString(), key, checkpoint.cursor],
 			),
 		],
-		{ deadlineMs, estimatedWorkUnits: 1, onOwnerMetrics },
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
 	);
 	return next;
 }
@@ -520,13 +542,18 @@ export async function runIncrementalDatabaseIntegrityCheck(
 		if (remaining < 1) throw new IntegrityRunBudgetError();
 		return Math.min(ownerDeadlineMs, Math.floor(remaining));
 	};
-	const emit = async (phase: IncrementalIntegrityPhase, reason: string | null): Promise<void> => {
+	const emit = async (
+		phase: IncrementalIntegrityPhase,
+		reason: string | null,
+		remainingOverride?: number,
+	): Promise<void> => {
 		const remaining =
-			phase === "degraded"
+			remainingOverride ??
+			(phase === "degraded"
 				? 0
 				: await remainingObjects(options.owner, checkpoint.cursor, remainingBudget(), recordOwnerMetrics).catch(
 						() => 0,
-					);
+					));
 		const progress = progressFrom(
 			key,
 			phase,
@@ -542,13 +569,14 @@ export async function runIncrementalDatabaseIntegrityCheck(
 		updateDatabaseIntegrityStatus(progress, errors, options.owner);
 		await options.onProgress?.(progress);
 	};
-	const progressSnapshot = async (): Promise<IncrementalIntegrityProgress> => {
+	const progressSnapshot = async (remainingOverride?: number): Promise<IncrementalIntegrityProgress> => {
 		const remaining =
-			phase === "degraded"
+			remainingOverride ??
+			(phase === "degraded"
 				? 0
 				: await remainingObjects(options.owner, checkpoint.cursor, remainingBudget(), recordOwnerMetrics).catch(
 						() => 0,
-					);
+					));
 		return progressFrom(
 			key,
 			phase,
@@ -631,14 +659,14 @@ export async function runIncrementalDatabaseIntegrityCheck(
 								? `PRAGMA integrity_check(${escapeIdentifier(table.name)})`
 								: `PRAGMA quick_check(${escapeIdentifier(table.name)})`,
 							[],
-							{ deadlineMs: remainingBudget(), estimatedWorkUnits: 1, onOwnerMetrics: recordOwnerMetrics },
+							integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
 						)
 					: await ownerQueryOne<{ sql?: unknown }>(
 							options.owner,
 							`integrity.${table.type}.check`,
 							"SELECT sql FROM sqlite_schema WHERE type = ? AND name = ?",
 							[table.type, table.name],
-							{ deadlineMs: remainingBudget(), estimatedWorkUnits: 1, onOwnerMetrics: recordOwnerMetrics },
+							integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
 						);
 			let message =
 				table.type === "table"
@@ -653,25 +681,21 @@ export async function runIncrementalDatabaseIntegrityCheck(
 					"integrity.telemetry.indexes",
 					"SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'telemetry_events' AND sql IS NOT NULL ORDER BY name",
 					[],
-					{ deadlineMs: remainingBudget(), estimatedWorkUnits: 1, onOwnerMetrics: recordOwnerMetrics },
+					integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
 				);
 				if (failed && indexes.length > 0) {
 					await ownerTransaction(
 						options.owner,
 						"integrity.telemetry.reindex",
 						indexes.map((index) => ownerRunStatement(`REINDEX ${escapeIdentifier(index.name)}`)),
-						{
-							deadlineMs: remainingBudget(),
-							estimatedWorkUnits: Math.min(MAX_WORK_UNITS, indexes.length + 2),
-							onOwnerMetrics: recordOwnerMetrics,
-						},
+						integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, Math.min(MAX_WORK_UNITS, indexes.length + 2)),
 					);
 					const verification = await ownerQueryOne<QuickCheckRow>(
 						options.owner,
 						"integrity.telemetry.verify",
 						`PRAGMA integrity_check(${escapeIdentifier(table.name)})`,
 						[],
-						{ deadlineMs: remainingBudget(), estimatedWorkUnits: 1, onOwnerMetrics: recordOwnerMetrics },
+						integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
 					);
 					message = text(verification?.integrity_check);
 					failed = message !== "ok";
@@ -708,8 +732,9 @@ export async function runIncrementalDatabaseIntegrityCheck(
 		const reason = error instanceof Error ? error.message : String(error);
 		phase = isDeadline(error) || error instanceof IntegrityRunBudgetError ? "timed_out" : "unavailable";
 		cancellationReason = reason;
+		const remainingOverride = isDeadline(error) ? 0 : undefined;
 		try {
-			await emit(phase, reason);
+			await emit(phase, reason, remainingOverride);
 		} catch {
 			const progress = progressFrom(
 				key,
@@ -726,7 +751,7 @@ export async function runIncrementalDatabaseIntegrityCheck(
 			updateDatabaseIntegrityStatus(progress, [...errors, reason], options.owner);
 			return { ...progress, errors: [...errors, reason] };
 		}
-		return { ...(await progressSnapshot()), errors: [...errors, reason] };
+		return { ...(await progressSnapshot(remainingOverride)), errors: [...errors, reason] };
 	}
 }
 

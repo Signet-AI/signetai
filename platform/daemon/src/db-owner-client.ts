@@ -726,6 +726,10 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 				const dispatched = entry.dispatched;
 				settle(job.id, (settledJob) => {
 					if (dispatched) abandonedMetrics.set(job.id, settledJob.resolveMetrics);
+					else {
+						// No owner worker exists for a queued job; close its completion fence.
+						settledJob.resolveMetrics(undefined);
+					}
 					if (!settledJob.settled) {
 						settledJob.settled = true;
 						settledJob.reject(new DbOwnerDeadlineError(job.id));
