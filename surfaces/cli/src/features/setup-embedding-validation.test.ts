@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SetupDetection } from "@signet/core";
@@ -71,12 +71,11 @@ function stubDeps(overrides: Partial<SetupDeps> = {}): SetupDeps {
 	};
 }
 
-describe("fresh setup native embedding model validation", () => {
+describe("fresh setup embedding model validation", () => {
 	let root: string;
 
 	afterEach(() => {
 		if (ORIGINAL_HOME === undefined) {
-			// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 			delete process.env.HOME;
 		} else {
 			process.env.HOME = ORIGINAL_HOME;
@@ -160,8 +159,8 @@ describe("fresh setup native embedding model validation", () => {
 		expect(syncNativeEmbeddingModel.mock.calls.length).toBe(0);
 	});
 
-	it("downgrades to native when ollama is unreachable in non-interactive mode", async () => {
-		root = mkdtempSync(join(tmpdir(), "setup-ollama-downgrade-"));
+	it("keeps ollama selected when it is unreachable in non-interactive mode", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ollama-unavailable-"));
 		const basePath = join(root, "agents");
 
 		const syncNativeEmbeddingModel = mock(async () => ({
@@ -188,11 +187,18 @@ describe("fresh setup native embedding model validation", () => {
 				syncNativeEmbeddingModel,
 			});
 
-			await setupWizard({ nonInteractive: true, embeddingProvider: "ollama" }, deps);
+			await setupWizard(
+				{ nonInteractive: true, embeddingProvider: "ollama", embeddingModel: "qwen3-embedding-4b" },
+				deps,
+			);
 
 			const output = logCalls.join("\n");
-			expect(output).toContain("Downgrading");
-			expect(syncNativeEmbeddingModel.mock.calls.length).toBeGreaterThanOrEqual(1);
+			expect(output).toContain("Keeping embedding provider 'ollama'");
+			expect(output).toContain("embeddings stay unavailable");
+			expect(syncNativeEmbeddingModel.mock.calls.length).toBe(0);
+			const config = readFileSync(join(basePath, "agent.yaml"), "utf8");
+			expect(config).toContain("provider: ollama");
+			expect(config).toContain("qwen3-embedding-4b");
 		} finally {
 			console.log = originalLog;
 			globalThis.fetch = originalFetch;

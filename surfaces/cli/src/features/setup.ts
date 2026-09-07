@@ -700,15 +700,13 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	// One question covers both how a local daemon binds AND whether to skip a
 	// local daemon entirely in favor of a remote one. (networkMode is irrelevant
 	// when remote — no local daemon is started.)
-	let networkMode: NetworkMode;
-	let daemonUrl: string | undefined;
 	const requestedRemoteUrl = normalizeDaemonOrigin(deps.normalizeStringValue(options.remoteUrl));
 	if (options.remoteUrl && !requestedRemoteUrl) {
 		failSetupValidation("--remote-url must be a bare http:// or https:// origin (no path, query, or credentials).");
 	}
 
-	networkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
-	daemonUrl = requestedRemoteUrl ?? undefined;
+	const networkMode: NetworkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
+	const daemonUrl = requestedRemoteUrl ?? undefined;
 
 	// Deployment type only tailors non-interactive/reconfigure defaults (e.g.
 	// VPS prefers non-local extraction providers). It has no effect in the
@@ -716,10 +714,8 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	// works for non-interactive use.
 	const deploymentType: DeploymentTypeChoice = requestedDeploymentType ?? "local";
 
-	let embeddingProvider: EmbeddingProviderChoice;
-
 	const providerFromConfig = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
-	embeddingProvider =
+	const embeddingProvider: EmbeddingProviderChoice =
 		requestedEmbeddingProvider ?? providerFromConfig ?? defaultEmbeddingProviderForDeployment(deploymentType);
 
 	let embeddingModel = "nomic-embed-text";
@@ -739,10 +735,12 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		const ollamaCheck = await validateOllamaModelNonInteractive(configuredModel);
 		if (!ollamaCheck.available || !ollamaCheck.modelInstalled) {
 			console.log(chalk.yellow(`  ⚠ ${ollamaCheck.error ?? "Ollama embedding model not available"}`));
-			console.log(chalk.yellow("  Downgrading embedding provider to 'native' (built-in ONNX)."));
-			embeddingProvider = "native";
-			embeddingModel = "nomic-embed-text-v1.5";
-			embeddingDimensions = 768;
+			console.log(
+				chalk.yellow(
+					"  Keeping embedding provider 'ollama'; setup will continue, but embeddings stay unavailable until Ollama is reachable and the model is installed.",
+				),
+			);
+			console.log(chalk.dim("  Run 'signet doctor' after fixing Ollama, or rerun 'signet setup'."));
 		}
 	} else if (embeddingProvider === "openai") {
 		const configuredModel =
@@ -760,10 +758,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	const existingSetupExtractionProvider =
 		deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
 		deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
-	let extractionProvider: ExtractionProviderChoice;
-	let extractionModel = "haiku";
-
-	extractionProvider = resolveSetupExtractionProvider({
+	const extractionProvider: ExtractionProviderChoice = resolveSetupExtractionProvider({
 		deploymentType,
 		requestedProvider: requestedExtractionProvider,
 		providerFromConfig: existingSetupExtractionProvider,
@@ -772,6 +767,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		availableProviders: availableToolExtractionProviders,
 		preferredHarnesses: harnesses,
 	});
+	let extractionModel = "haiku";
 
 	if (extractionProvider === "acpx") {
 		extractionModel =
@@ -827,14 +823,10 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	// Optional distinct provider for aggregate recall (query-time evidence
 	// synthesis). pi-ai-only (no harness subprocess). When unset, aggregate
 	// recall falls through to the default policy (the extraction provider).
-	let aggregateRecallProvider: string | undefined;
-	let aggregateRecallModel: string | undefined;
-	let aggregateRecallEndpoint: string | undefined;
-
-	aggregateRecallProvider =
+	const aggregateRecallProvider =
 		deps.normalizeChoice(options.aggregateRecallProvider, aggregateRecallProviderIds()) ?? undefined ?? undefined;
-	aggregateRecallModel = deps.normalizeStringValue(options.aggregateRecallModel) ?? undefined;
-	aggregateRecallEndpoint =
+	const aggregateRecallModel = deps.normalizeStringValue(options.aggregateRecallModel) ?? undefined;
+	const aggregateRecallEndpoint =
 		normalizeHttpEndpoint(deps.normalizeStringValue(options.aggregateRecallEndpoint)) ??
 		(aggregateRecallProvider === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT : undefined);
 

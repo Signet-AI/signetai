@@ -3,6 +3,7 @@
  * Runtime-detecting: uses bun:sqlite under Bun, better-sqlite3 under Node.js
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -12,7 +13,7 @@ import { MEMORY_CONTENT_SAFETY_POLICY_VERSION, scanMemoryContent } from "./memor
 import { isDaemonDerivedMemorySourceType } from "./memory-provenance";
 import { runMigrations } from "./migrations/index";
 import { resolveSqliteJournalConfig } from "./sqlite-journal";
-import type { Conversation, Embedding, Memory } from "./types";
+import type { Memory } from "./types";
 import type { MemoryHistory, MemoryJob } from "./types";
 
 // Compute __dirname at runtime so bun's bundler doesn't bake in a static path
@@ -35,6 +36,32 @@ function getPlatformPackageName(): string {
 // Find the sqlite-vec extension path
 // Handles bun's hoisted node_modules structure where platform packages
 // are in separate .bun directories
+let cachedNpmGlobalRoot: string | null | undefined;
+
+function findNpmGlobalRoot(): string | null {
+	if (cachedNpmGlobalRoot !== undefined) return cachedNpmGlobalRoot;
+
+	try {
+		// npm is a .cmd launcher on Windows. Calling it directly avoids routing
+		// through PowerShell, and windowsHide prevents a console window for every
+		// database/owner initialization.
+		const command = platform === "win32" ? "npm.cmd" : "npm";
+		const root = (
+			execFileSync(command, ["root", "-g"], {
+				encoding: "utf8",
+				timeout: 3000,
+				windowsHide: true,
+			}) as string
+		).trim();
+		cachedNpmGlobalRoot = root || null;
+	} catch {
+		// npm not available or timed out — continue with static paths
+		cachedNpmGlobalRoot = null;
+	}
+
+	return cachedNpmGlobalRoot;
+}
+
 function findSqliteVecExtension(): string | null {
 	// Explicit override — always wins
 	const envPath = process.env.SIGNET_VEC_PATH;
@@ -43,18 +70,13 @@ function findSqliteVecExtension(): string | null {
 	const platformPkg = getPlatformPackageName();
 	const extFile = `vec0.${getExtensionSuffix()}`;
 
-	// Try `npm root -g` to find the actual global prefix (works regardless of runtime)
-	try {
-		const { execFileSync } = require("node:child_process");
-		const npmRoot = (execFileSync("npm", ["root", "-g"], { encoding: "utf8", timeout: 3000 }) as string).trim();
-		if (npmRoot) {
-			const direct = join(npmRoot, platformPkg, extFile);
-			if (existsSync(direct)) return direct;
-			const nested = join(npmRoot, "signetai", "node_modules", platformPkg, extFile);
-			if (existsSync(nested)) return nested;
-		}
-	} catch {
-		// npm not available or timed out — continue with static paths
+	// Try npm's resolved global prefix before the static fallbacks.
+	const npmRoot = findNpmGlobalRoot();
+	if (npmRoot) {
+		const direct = join(npmRoot, platformPkg, extFile);
+		if (existsSync(direct)) return direct;
+		const nested = join(npmRoot, "signetai", "node_modules", platformPkg, extFile);
+		if (existsSync(nested)) return nested;
 	}
 
 	// Try common locations in order
@@ -205,7 +227,6 @@ export class Database {
 	private dbPath: string;
 	private db: SQLiteDatabase | null = null;
 	private options?: { readonly?: boolean };
-	private vecEnabled = false;
 
 	constructor(dbPath: string, options?: { readonly?: boolean }) {
 		this.dbPath = dbPath;
@@ -242,7 +263,7 @@ export class Database {
 		}
 
 		// Load sqlite-vec extension for vector search capabilities
-		this.vecEnabled = loadSqliteVec(this.db);
+		loadSqliteVec(this.db);
 
 		// Enable WAL only when the filesystem supports SQLite's shared-memory
 		// and locking requirements. Darwin network filesystems such as SMB/NFS

@@ -99,6 +99,8 @@ Current setup accepts `claude-code`, `codex`, `kimi`, `opencode`, `forge`, `open
 | `--search-balance <alpha>` | Semantic/keyword balance from `0` through `1`. |
 | `--enable-dreaming` | Enable background memory consolidation. |
 
+When an explicitly selected Ollama service or model is unavailable during non-interactive setup, Signet keeps Ollama selected and reports the problem; it does not silently switch to native embeddings. Setup continues with embeddings unavailable until Ollama is ready; use `signet doctor` to check readiness.
+
 Validated extraction providers are `acpx`, `claude-code`, `codex`, `llama-cpp`, `ollama`, `opencode`, `openrouter`, `openai-compatible`, and `none`. Explicit provider flags override defaults inferred from `--deployment-type`.
 
 Current `signet setup --help` lists `llama-cpp` as an embedding provider, but setup validation rejects it. Use the validated embedding values above until that discrepancy is fixed.
