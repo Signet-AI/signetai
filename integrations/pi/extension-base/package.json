@@ -10,6 +10,7 @@
 		"./agent-dir": "./src/agent-dir.ts"
 	},
 	"dependencies": {
+		"@signet/connector-base": "workspace:*",
 		"@signet/core": "workspace:*",
 		"@signet/lifecycle-proof": "workspace:*"
 	},
