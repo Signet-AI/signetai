@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
 	chmodSync,
 	cpSync,
@@ -158,7 +159,14 @@ function acquireResourceLock(target) {
 			if (!Number.isInteger(owner) || processIsAlive(owner)) {
 				throw new Error(`Desktop resources are already being replaced: ${target}`);
 			}
-			rmSync(lockPath, { recursive: true, force: true });
+			const stalePath = `${lockPath}.stale-${randomUUID()}`;
+			try {
+				renameSync(lockPath, stalePath);
+			} catch (staleError) {
+				if (staleError?.code === "ENOENT") continue;
+				throw staleError;
+			}
+			rmSync(stalePath, { recursive: true, force: true });
 			continue;
 		}
 		try {
