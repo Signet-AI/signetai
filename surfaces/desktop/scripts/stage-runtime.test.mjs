@@ -8,6 +8,7 @@ import {
 	readdirSync,
 	renameSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -137,6 +138,21 @@ describe("stage-runtime Bun validation", () => {
 		const lock = join(directory, ".resources.lock");
 		mkdirSync(lock);
 		writeFileSync(join(lock, "owner"), `${Number.MAX_SAFE_INTEGER}\n`);
+
+		try {
+			expect(() => replaceResources(join(directory, "resources"), join(directory, "staged"))).toThrow("ENOENT");
+			expect(existsSync(lock)).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("reclaims an abandoned ownerless lock after its grace period", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const lock = join(directory, ".resources.lock");
+		mkdirSync(lock);
+		const stale = new Date(Date.now() - 61_000);
+		utimesSync(lock, stale, stale);
 
 		try {
 			expect(() => replaceResources(join(directory, "resources"), join(directory, "staged"))).toThrow("ENOENT");

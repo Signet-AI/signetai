@@ -25,6 +25,7 @@ const repoRoot = resolve(desktopRoot, "../..");
 const resources = resolve(desktopRoot, "resources");
 const daemonPkgPath = resolve(repoRoot, "platform/daemon/package.json");
 const corePkgPath = resolve(repoRoot, "platform/core/package.json");
+const resourceLockOwnerGracePeriodMs = 60_000;
 
 function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
@@ -143,6 +144,14 @@ function processIsAlive(pid) {
 	}
 }
 
+function resourceLockIsExpired(lockPath) {
+	try {
+		return Date.now() - statSync(lockPath).mtimeMs >= resourceLockOwnerGracePeriodMs;
+	} catch (error) {
+		return error?.code === "ENOENT";
+	}
+}
+
 function acquireResourceLock(target) {
 	const lockPath = resourceLockPath(target);
 	while (true) {
@@ -151,12 +160,19 @@ function acquireResourceLock(target) {
 		} catch (error) {
 			if (error?.code !== "EEXIST") throw error;
 			let owner;
+			let ownerError;
 			try {
 				owner = Number(readFileSync(join(lockPath, "owner"), "utf8"));
-			} catch (ownerError) {
+			} catch (error) {
+				ownerError = error;
+			}
+			if (ownerError && !resourceLockIsExpired(lockPath)) {
 				throw new Error(`Desktop resources are already being replaced: ${target}`, { cause: ownerError });
 			}
-			if (!Number.isInteger(owner) || processIsAlive(owner)) {
+			if (!ownerError && Number.isInteger(owner) && processIsAlive(owner)) {
+				throw new Error(`Desktop resources are already being replaced: ${target}`);
+			}
+			if (!ownerError && !Number.isInteger(owner) && !resourceLockIsExpired(lockPath)) {
 				throw new Error(`Desktop resources are already being replaced: ${target}`);
 			}
 			const stalePath = `${lockPath}.stale-${randomUUID()}`;
