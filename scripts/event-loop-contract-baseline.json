@@ -480,21 +480,21 @@
     },
     {
       "path": "daemon.ts",
-      "line": 3332,
+      "line": 3333,
       "api": "existsSync",
       "source": "if (existsSync(healthStampPath)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3333,
+      "line": 3334,
       "api": "readFileSync",
       "source": "const prev = JSON.parse(readFileSync(healthStampPath, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3336,
+      "line": 3337,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"

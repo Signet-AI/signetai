@@ -3104,11 +3104,12 @@ async function main() {
 					}
 					return;
 				}
+				if (shuttingDown) return;
 				integritySlicePending = true;
 				if (globalVerifyInFlight || integritySliceTimer !== null) return;
 				integritySliceTimer = setTimeout(() => {
 					integritySliceTimer = null;
-					if (globalVerifyInFlight) return;
+					if (shuttingDown || globalVerifyInFlight) return;
 					integritySlicePending = false;
 					void runIntegritySlice().catch((error) => {
 						logger.error("startup-recovery", "Incremental database integrity continuation rejected", error);
