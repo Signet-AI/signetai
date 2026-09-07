@@ -325,14 +325,26 @@ function isSignetAppBundle(path: string): boolean {
 }
 
 function findMacAppBundle(releaseDir: string, arch: string): string | null {
-	if (!existsSync(releaseDir)) return null;
-	let best: { path: string; mtime: number } | null = null;
 	// Electron-builder's unpacked output lives in layout directories such as
 	// release/mac/Signet.app or release/mac_arm64/Signet.app. Recurse only a
 	// bounded depth and verify the executable's Mach-O architecture so a
 	// foreign-arch artifact is never installed.
-	for (const candidate of macAppBundleCandidates(releaseDir, 3)) {
-		if (!isSignetAppBundle(candidate) || !macAppBundleMatchesArch(candidate, arch)) continue;
+	return findNewestCandidate(
+		releaseDir,
+		macAppBundleCandidates(releaseDir, 3),
+		(candidate) => isSignetAppBundle(candidate) && macAppBundleMatchesArch(candidate, arch),
+	);
+}
+
+function findNewestCandidate(
+	releaseDir: string,
+	candidates: Iterable<string>,
+	matches: (path: string) => boolean,
+): string | null {
+	if (!existsSync(releaseDir)) return null;
+	let best: { path: string; mtime: number } | null = null;
+	for (const candidate of candidates) {
+		if (!matches(candidate)) continue;
 		try {
 			const mtime = statSync(candidate).mtimeMs;
 			if (!best || mtime > best.mtime) best = { path: candidate, mtime };
@@ -432,18 +444,11 @@ function windowsAppExecutable(path: string): string | null {
 }
 
 function findWindowsAppDirectory(releaseDir: string, arch: string): string | null {
-	if (!existsSync(releaseDir)) return null;
-	let best: { path: string; mtime: number } | null = null;
-	for (const candidate of windowsAppDirectoryCandidates(releaseDir, 3)) {
-		if (!isSignetWindowsAppDirectory(candidate) || !windowsAppDirectoryMatchesArch(candidate, arch)) continue;
-		try {
-			const mtime = statSync(candidate).mtimeMs;
-			if (!best || mtime > best.mtime) best = { path: candidate, mtime };
-		} catch {
-			// Ignore an artifact removed between discovery and stat.
-		}
-	}
-	return best?.path ?? null;
+	return findNewestCandidate(
+		releaseDir,
+		windowsAppDirectoryCandidates(releaseDir, 3),
+		(candidate) => isSignetWindowsAppDirectory(candidate) && windowsAppDirectoryMatchesArch(candidate, arch),
+	);
 }
 
 function* windowsAppDirectoryCandidates(root: string, depth: number): Generator<string> {
@@ -517,12 +522,12 @@ export function installLinuxDesktopApp(
 	mkdirSync(iconsDir, { recursive: true });
 
 	const appImage = join(appDir, "Signet.AppImage");
-	installManagedAppImage(source, appImage);
+	const binary = join(binDir, "signet-desktop");
+	installManagedAppImage(source, appImage, binary);
 
 	const icon = join(iconsDir, "signet.png");
 	copyFileSync(join(repo, "surfaces", "desktop", "icons", "icon.png"), icon);
 
-	const binary = join(binDir, "signet-desktop");
 	writeManagedLauncher(binary, appImage, workspace);
 
 	const desktopEntry = join(applicationsDir, "signet.desktop");
@@ -531,11 +536,11 @@ export function installLinuxDesktopApp(
 	return { repo, releaseDir, appImage, binary, desktopEntry, icon, workspace };
 }
 
-function installManagedAppImage(source: string, target: string): void {
+function installManagedAppImage(source: string, target: string, launcher: string): void {
 	replaceManagedPath(
 		source,
 		target,
-		() => true,
+		() => isManagedAppImage(target, launcher),
 		(sourcePath, temporaryPath) => {
 			copyFileSync(sourcePath, temporaryPath);
 			chmodSync(temporaryPath, 0o755);
@@ -654,6 +659,18 @@ function linuxArtifactArchNames(arch: string): ReadonlySet<string> {
 }
 
 const MANAGED_LAUNCHER_MARKER = "# signet-desktop managed launcher";
+
+function isManagedAppImage(target: string, launcher: string): boolean {
+	try {
+		const stat = lstatSync(launcher);
+		if (stat.isSymbolicLink()) {
+			return resolve(dirname(launcher), readlinkSync(launcher)) === resolve(target);
+		}
+		return readFileSync(launcher, "utf8").includes(MANAGED_LAUNCHER_MARKER);
+	} catch {
+		return false;
+	}
+}
 
 function writeManagedLauncher(path: string, target: string, workspace: string): void {
 	const appDir = dirname(target);

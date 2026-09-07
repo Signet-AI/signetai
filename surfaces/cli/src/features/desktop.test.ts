@@ -274,6 +274,28 @@ describe("linux desktop install", () => {
 		}
 	});
 
+	test("refuses to replace an existing foreign AppImage", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			writeFileSync(join(release, "Signet-0.1.0-linux-x86_64.AppImage"), "new app");
+			const appDir = join(home, ".local", "share", "signet", "desktop");
+			mkdirSync(appDir, { recursive: true });
+			const existing = join(appDir, "Signet.AppImage");
+			writeFileSync(existing, "foreign app");
+
+			expect(() => installLinuxDesktopApp(root, home, join(home, "workspace"))).toThrow(
+				"Refusing to replace existing AppImage",
+			);
+			expect(readFileSync(existing, "utf8")).toBe("foreign app");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test("replaces an existing read-only AppImage through a staged swap", () => {
 		const root = makeCheckout();
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
@@ -286,6 +308,9 @@ describe("linux desktop install", () => {
 			const existing = join(appDir, "Signet.AppImage");
 			writeFileSync(existing, "old app");
 			chmodSync(existing, 0o555);
+			const binDir = join(home, ".local", "bin");
+			mkdirSync(binDir, { recursive: true });
+			writeFileSync(join(binDir, "signet-desktop"), "# signet-desktop managed launcher\n");
 
 			const result = installLinuxDesktopApp(root, home, join(home, "workspace"));
 
