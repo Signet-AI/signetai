@@ -85,7 +85,13 @@ import {
 	setDatabaseIntegrityWritesBlocked,
 } from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum-worker";
-import { createDbOwnerClient, type DbOwnerClient, type DbOwnerClientOptions } from "./db-owner-client";
+import {
+	createDbOwnerClient,
+	DB_OWNER_SURVIVABLE_CODES,
+	type DbOwnerClient,
+	type DbOwnerClientOptions,
+	DbOwnerError,
+} from "./db-owner-client";
 import {
 	type DbOwnerMaintenance,
 	createDbOwnerMaintenance,
@@ -2279,6 +2285,17 @@ process.on("unhandledRejection", (reason) => {
 	// Sanitized crash report for rejections too (primitives degrade to a
 	// truncated string).
 	telemetryRef?.record("error.occurred", sanitizeCrashError(reason, process.uptime() * 1000));
+	// Survive only the bounded-availability rejections the owner protocol is
+	// designed to absorb: deadline exhaustion cancels the job, queue-full and
+	// work-budget reject admission, and the owner keeps serving. Fire-and-forget
+	// background callers (deferred maintenance, recovery, watchers) legitimately
+	// race these rejections at startup, so killing the process here turns
+	// recoverable queue pressure into a crash loop. Every other DB owner
+	// failure — a dead owner, a startup timeout, a failed job, writes blocked
+	// on integrity, a closed client — means the database is degraded or gone,
+	// and the daemon must shut down instead of running without it. Crash on
+	// unknown rejections.
+	if (reason instanceof DbOwnerError && DB_OWNER_SURVIVABLE_CODES.has(String(reason.code))) return;
 	requestShutdown("error:unhandledRejection", 1, reason);
 });
 

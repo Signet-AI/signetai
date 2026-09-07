@@ -8,15 +8,11 @@ contextBridge.exposeInMainWorld("signetDesktop", {
 	daemonPort,
 	daemonBaseUrl,
 	workspacePath: process.env.SIGNET_PATH ?? process.env.SIGNET_WORKSPACE ?? null,
-	nativeFrame: process.env.SIGNET_DESKTOP_NATIVE_FRAME === "1",
-	minimize: () => ipcRenderer.invoke("desktop:minimize"),
-	toggleMaximize: () => ipcRenderer.invoke("desktop:toggleMaximize"),
-	close: () => ipcRenderer.invoke("desktop:close"),
-	isMaximized: () => ipcRenderer.invoke("desktop:isMaximized"),
 	startDaemon: () => ipcRenderer.invoke("desktop:startDaemon"),
 	stopDaemon: () => ipcRenderer.invoke("desktop:stopDaemon"),
 	restartDaemon: () => ipcRenderer.invoke("desktop:restartDaemon"),
 	getDaemonStatus: () => ipcRenderer.invoke("desktop:getDaemonStatus"),
+	setTitleBarTheme: (theme: "light" | "dark") => ipcRenderer.invoke("desktop:setTitleBarTheme", theme),
 	openDashboard: () => ipcRenderer.invoke("desktop:openDashboard"),
 	quickCapture: (content: string) => ipcRenderer.invoke("desktop:quickCapture", content),
 	searchMemories: (query: string, limit?: number) => ipcRenderer.invoke("desktop:searchMemories", query, limit),
@@ -24,9 +20,4 @@ contextBridge.exposeInMainWorld("signetDesktop", {
 	checkForUpdate: () => ipcRenderer.invoke("desktop:checkForUpdate"),
 	openExternal: (url: string) => ipcRenderer.invoke("desktop:openExternal", url),
 	quit: () => ipcRenderer.invoke("desktop:quit"),
-	onWindowStateChange: (callback: (state: { readonly maximized: boolean }) => void) => {
-		const listener = (_event: Electron.IpcRendererEvent, state: { readonly maximized: boolean }) => callback(state);
-		ipcRenderer.on("desktop:windowState", listener);
-		return () => ipcRenderer.off("desktop:windowState", listener);
-	},
 });

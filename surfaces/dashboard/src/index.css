@@ -252,9 +252,18 @@
 		--home-type-issue: #d0807a;
 		--home-type-learning: #80a8b8;
 	}
-	.sig-app-frame { border-color: var(--home-edge); }
 	.sig-app-frame > header { background: var(--home-chrome); }
 	.sig-app-frame > header { height: 56px; padding-inline-start: 40px; }
+	/* macOS traffic lights are present only in the Electron desktop shell. */
+	html[data-surface="desktop"][data-platform="mac"] .sig-app-frame > header { padding-inline-start: 96px; }
+	/* Electron's native Windows/Linux controls overlay the titlebar; keep header actions in the safe area. */
+	html[data-surface="desktop"]:not([data-platform="mac"]) .sig-app-frame > header {
+		padding-inline-start: max(24px, env(titlebar-area-x, 0px));
+		padding-inline-end: max(
+			24px,
+			calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100% - 138px)))
+		);
+	}
 	.sig-app-frame > header > .ml-12 { margin-inline-start: 3rem; margin-left: 3rem; }
 	.sig-app-frame > header > .ml-auto { margin-inline-start: auto; margin-left: auto; }
 	.sig-app-frame[data-view="home"] > header { border-bottom: 0; }
@@ -446,8 +455,15 @@
 		.home-daily-brief .insight-text { font-size: 16px; }
 	}
 	@media (max-width: 850px) {
-		.home-workspace { grid-template-columns: 1fr; grid-template-rows: auto auto; overflow-y: auto; scrollbar-width: none; }
+		.home-workspace {
+			grid-template-columns: 1fr;
+			grid-template-rows: max-content max-content;
+			align-content: start;
+			overflow-y: auto;
+			scrollbar-width: none;
+		}
 		.home-workspace::-webkit-scrollbar { display: none; }
+		.home-today { min-height: max-content; overflow: visible; }
 		.home-today > .home-recent { flex: none; height: 260px; }
 		.home-system { border-inline-start: 0; border-block-start: 1px solid var(--border); }
 		.home-activity { margin-block-start: 12px; }

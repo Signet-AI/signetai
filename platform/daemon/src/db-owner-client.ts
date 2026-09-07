@@ -167,6 +167,21 @@ export class DbOwnerWritesBlockedError extends DbOwnerError {
 	}
 }
 
+/**
+ * DB owner error codes that are bounded availability degradations: the job is
+ * cancelled or admission is rejected, the owner keeps serving, and retrying
+ * later succeeds. Process-level handlers (unhandledRejection) may survive
+ * these; every other code — dead owner, startup timeout, failed job, writes
+ * blocked on integrity, closed client — means the database is unusable and
+ * the process must fail instead of limping on.
+ */
+export const DB_OWNER_SURVIVABLE_CODES: ReadonlySet<string> = new Set([
+	"DB_OWNER_DEADLINE",
+	"DB_OWNER_CANCELLED",
+	"DB_OWNER_QUEUE_FULL",
+	"DB_OWNER_WORK_BUDGET",
+] as const);
+
 interface PendingJob<Result> {
 	readonly job: DbOwnerJob;
 	readonly resolve: (value: Result | PromiseLike<Result>) => void;

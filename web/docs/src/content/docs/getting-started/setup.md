@@ -63,3 +63,8 @@ and pass `--repo` to the desktop command. Existing checkouts, local edits, and
 branches are preserved; this change does not delete or relocate them. If a managed
 desktop checkout was removed, rerun `signet desktop install` to restore its source
 build path before the next automatic desktop update.
+
+The source-built desktop app installs to `~/Applications/Signet.app` on macOS and
+`%LOCALAPPDATA%\Programs\Signet Desktop` on Windows. These locations remain
+separate from the native CLI installation; Linux continues to use its user AppImage
+launcher.

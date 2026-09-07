@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
 import { Monitor, Moon, Sun } from "@/components/mingcute-icons";
 import { Button } from "@/components/ui/button";
+import { syncDesktopTitleBarTheme } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 
 const ORDER = ["system", "light", "dark"] as const;
@@ -13,7 +14,7 @@ type Theme = (typeof ORDER)[number];
  * system default the issue mandates).
  */
 export function ModeToggle() {
-	const { theme, setTheme } = useTheme();
+	const { theme, resolvedTheme, setTheme } = useTheme();
 	const [mounted, setMounted] = useState(false);
 	const [transitionReady, setTransitionReady] = useState(false);
 
@@ -28,6 +29,10 @@ export function ModeToggle() {
 			cancelAnimationFrame(secondFrame);
 		};
 	}, []);
+
+	useEffect(() => {
+		syncDesktopTitleBarTheme(resolvedTheme);
+	}, [resolvedTheme]);
 
 	const current = (ORDER.includes(theme as Theme) ? theme : "system") as Theme;
 	const next = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];

@@ -19,6 +19,8 @@ import {
 	buildDesktopFromSource,
 	installDesktopFromSource,
 	installLinuxDesktopApp,
+	installMacDesktopApp,
+	installWindowsDesktopApp,
 	resolveDesktopSourceCheckout,
 } from "./desktop.js";
 
@@ -272,6 +274,28 @@ describe("linux desktop install", () => {
 		}
 	});
 
+	test("refuses to replace an existing foreign AppImage", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			writeFileSync(join(release, "Signet-0.1.0-linux-x86_64.AppImage"), "new app");
+			const appDir = join(home, ".local", "share", "signet", "desktop");
+			mkdirSync(appDir, { recursive: true });
+			const existing = join(appDir, "Signet.AppImage");
+			writeFileSync(existing, "foreign app");
+
+			expect(() => installLinuxDesktopApp(root, home, join(home, "workspace"))).toThrow(
+				"Refusing to replace existing AppImage",
+			);
+			expect(readFileSync(existing, "utf8")).toBe("foreign app");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test("replaces an existing read-only AppImage through a staged swap", () => {
 		const root = makeCheckout();
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
@@ -284,6 +308,9 @@ describe("linux desktop install", () => {
 			const existing = join(appDir, "Signet.AppImage");
 			writeFileSync(existing, "old app");
 			chmodSync(existing, 0o555);
+			const binDir = join(home, ".local", "bin");
+			mkdirSync(binDir, { recursive: true });
+			writeFileSync(join(binDir, "signet-desktop"), "# signet-desktop managed launcher\n");
 
 			const result = installLinuxDesktopApp(root, home, join(home, "workspace"));
 
@@ -386,6 +413,294 @@ describe("linux desktop install", () => {
 			);
 
 			expect(existsSync(result.appImage)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+});
+
+function makeMacAppBundle(dir: string, arch: "x64" | "arm64", executable = "signet"): string {
+	const app = join(dir, "Signet.app");
+	mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+	writeFileSync(
+		join(app, "Contents", "Info.plist"),
+		`<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleExecutable</key><string>${executable}</string><key>CFBundleIdentifier</key><string>ai.signet.app</string></dict></plist>\n`,
+	);
+	// Mach-O 64-bit magic (MH_MAGIC_64, little-endian) followed by cputype.
+	const header = Buffer.alloc(8);
+	header.writeUInt32LE(0xfeedfacf, 0);
+	header.writeUInt32LE(arch === "arm64" ? 0x0100000c : 0x01000007, 4);
+	writeFileSync(join(app, "Contents", "MacOS", executable), header);
+	return app;
+}
+
+function hostDesktopArch(): "x64" | "arm64" {
+	return process.arch === "arm64" ? "arm64" : "x64";
+}
+
+function makeWindowsAppDirectory(dir: string, arch: "x64" | "arm64", packageName = "@signet/desktop"): string {
+	const app = join(dir, `win-${arch}-unpacked`);
+	return makeWindowsAppContents(app, arch, packageName);
+}
+
+function makeWindowsAppContents(app: string, arch: "x64" | "arm64", packageName = "@signet/desktop"): string {
+	mkdirSync(join(app, "resources"), { recursive: true });
+	writeFileSync(join(app, "resources", "app.asar"), JSON.stringify({ name: packageName }));
+	const header = Buffer.alloc(512);
+	header.write("MZ", 0, 2, "ascii");
+	header.writeUInt32LE(0x80, 0x3c);
+	header.write("PE\u0000\u0000", 0x80, 4, "ascii");
+	header.writeUInt16LE(arch === "arm64" ? 0xaa64 : 0x8664, 0x84);
+	writeFileSync(join(app, "signet.exe"), header);
+	return app;
+}
+
+describe("mac desktop install", () => {
+	test("installs the newest matching .app bundle into ~/Applications", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release", "mac");
+			mkdirSync(release, { recursive: true });
+			const app = makeMacAppBundle(release, process.arch === "arm64" ? "arm64" : "x64");
+			utimesSync(app, new Date(2_000), new Date(2_000));
+
+			const workspace = join(home, "workspace");
+			const result = installMacDesktopApp(root, home, workspace);
+
+			expect(result.appBundle).toBe(join(home, "Applications", "Signet.app"));
+			expect(existsSync(join(result.appBundle, "Contents", "Info.plist"))).toBe(true);
+			expect(result.workspace).toBe(workspace);
+			expect(
+				existsSync(join(home, "Applications", ".Signet.app.")) ||
+					readdirSync(join(home, "Applications")).some((name) => name.startsWith(".Signet.app.")),
+			).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses to replace a non-Signet app bundle", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release", "mac");
+			mkdirSync(release, { recursive: true });
+			makeMacAppBundle(release, process.arch === "arm64" ? "arm64" : "x64");
+
+			const applications = join(home, "Applications");
+			mkdirSync(applications, { recursive: true });
+			const foreign = makeMacAppBundle(applications, process.arch === "arm64" ? "arm64" : "x64");
+			renameSync(foreign, join(applications, "Signet.app"));
+			// Rewrite its plist so it is no longer Signet-owned.
+			writeFileSync(
+				join(applications, "Signet.app", "Contents", "Info.plist"),
+				`<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.other</string></dict></plist>\n`,
+			);
+
+			expect(() => installMacDesktopApp(root, home, join(home, "workspace"))).toThrow(
+				"Refusing to replace existing app",
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("replaces an existing Signet-owned bundle", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release", "mac");
+			mkdirSync(release, { recursive: true });
+			makeMacAppBundle(release, process.arch === "arm64" ? "arm64" : "x64");
+
+			const applications = join(home, "Applications");
+			mkdirSync(applications, { recursive: true });
+			makeMacAppBundle(applications, process.arch === "arm64" ? "arm64" : "x64");
+
+			const result = installMacDesktopApp(root, home, join(home, "workspace"));
+
+			expect(existsSync(result.appBundle)).toBe(true);
+			expect(readdirSync(applications).filter((name) => name.endsWith(".app"))).toEqual(["Signet.app"]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("keeps the installed app when the replacement copy fails", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const sourceExecutable = join(
+			root,
+			"surfaces",
+			"desktop",
+			"release",
+			"mac",
+			"Signet.app",
+			"Contents",
+			"MacOS",
+			"signet",
+		);
+		try {
+			const release = join(root, "surfaces", "desktop", "release", "mac");
+			mkdirSync(release, { recursive: true });
+			// An unreadable non-executable resource makes cpSync fail mid-copy
+			// while the bundle still passes the pre-selection arch check (which
+			// only reads the Mach-O executable). The pre-fix code deleted the
+			// installed app BEFORE the copy, so this failure left the user with
+			// no installed app at all.
+			const source = makeMacAppBundle(release, process.arch === "arm64" ? "arm64" : "x64");
+			const doomed = join(source, "Contents", "Resources", "doomed.bin");
+			mkdirSync(join(source, "Contents", "Resources"), { recursive: true });
+			writeFileSync(doomed, "payload");
+			chmodSync(doomed, 0o000);
+
+			const applications = join(home, "Applications");
+			mkdirSync(applications, { recursive: true });
+			makeMacAppBundle(applications, process.arch === "arm64" ? "arm64" : "x64");
+
+			expect(() => installMacDesktopApp(root, home, join(home, "workspace"))).toThrow();
+			// The previously installed bundle survived the failed install...
+			expect(existsSync(join(applications, "Signet.app", "Contents", "Info.plist"))).toBe(true);
+			// ...and no swap debris was left behind.
+			expect(readdirSync(applications).some((name) => name.includes(".previous-"))).toBe(false);
+			expect(readdirSync(applications).some((name) => name.startsWith(".Signet.app."))).toBe(false);
+		} finally {
+			if (existsSync(sourceExecutable)) {
+				// Not strictly required (only Resources/doomed.bin was locked), but
+				// keep the tree removable regardless of platform semantics.
+				chmodSync(sourceExecutable, 0o755);
+			}
+			chmodSync(
+				join(root, "surfaces", "desktop", "release", "mac", "Signet.app", "Contents", "Resources", "doomed.bin"),
+				0o644,
+			);
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("skips foreign-arch bundles and installs the matching one", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			// Two candidate layouts: an arm64 build and the host-arch build.
+			const armDir = join(release, "mac_arm64");
+			const hostDir = join(release, "mac");
+			mkdirSync(armDir, { recursive: true });
+			mkdirSync(hostDir, { recursive: true });
+			const armApp = makeMacAppBundle(armDir, "arm64");
+			const hostApp = makeMacAppBundle(hostDir, process.arch === "arm64" ? "arm64" : "x64");
+			// Make the foreign-arch artifact the newest; arch check must win.
+			utimesSync(armApp, new Date(9_000), new Date(9_000));
+			utimesSync(hostApp, new Date(2_000), new Date(2_000));
+
+			const result = installMacDesktopApp(root, home, join(home, "workspace"));
+
+			expect(result.appBundle).toBe(join(home, "Applications", "Signet.app"));
+			expect(existsSync(result.appBundle)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("Windows desktop install", () => {
+	test("installs the matching unpacked build without touching the native CLI directory", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			const source = makeWindowsAppDirectory(release, hostDesktopArch());
+			const workspace = join(home, "workspace");
+
+			const result = installWindowsDesktopApp(root, home, workspace);
+
+			expect(result.appDir).toBe(join(home, "AppData", "Local", "Programs", "Signet Desktop"));
+			expect(result.programsDir).toBe(join(home, "AppData", "Local", "Programs"));
+			expect(result.executable).toBe(join(result.appDir, "signet.exe"));
+			expect(existsSync(result.executable)).toBe(true);
+			expect(existsSync(join(home, "AppData", "Local", "Programs", "Signet", "signet.exe"))).toBe(false);
+			expect(source).not.toBe(result.appDir);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses to replace a foreign application in the managed directory", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+
+			const appDir = join(home, "AppData", "Local", "Programs", "Signet Desktop");
+			makeWindowsAppContents(appDir, hostDesktopArch(), "com.example.other");
+
+			expect(() => installWindowsDesktopApp(root, home, join(home, "workspace"))).toThrow(
+				"Refusing to replace existing Windows app directory",
+			);
+			expect(readFileSync(join(appDir, "resources", "app.asar"), "utf8")).toContain("com.example.other");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("dispatches Windows through the shared desktop install entrypoint", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			const workspace = join(home, "workspace");
+			const localAppData = join(home, "local-app-data");
+
+			const result = installDesktopFromSource(
+				{ repo: root, skipBuild: true },
+				{
+					env: { SIGNET_PATH: workspace, LOCALAPPDATA: localAppData },
+					home,
+					platform: "win32",
+					runner: () => {
+						throw new Error("runner should not be called");
+					},
+				},
+			);
+
+			if (!("appDir" in result)) throw new Error("expected Windows install result");
+			expect(result.workspace).toBe(workspace);
+			expect(result.appDir).toBe(join(localAppData, "Programs", "Signet Desktop"));
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("does not select a newest foreign-architecture build", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			const host = makeWindowsAppDirectory(release, hostDesktopArch());
+			const foreign = makeWindowsAppDirectory(release, hostDesktopArch() === "arm64" ? "x64" : "arm64");
+			utimesSync(host, new Date(2_000), new Date(2_000));
+			utimesSync(foreign, new Date(9_000), new Date(9_000));
+
+			const result = installWindowsDesktopApp(root, home, join(home, "workspace"));
+
+			expect(existsSync(result.executable)).toBe(true);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 			rmSync(home, { recursive: true, force: true });

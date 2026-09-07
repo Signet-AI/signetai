@@ -2,23 +2,22 @@ import { useState } from "react";
 import { SignetMark } from "@/components/icons";
 import { ModeToggle } from "@/components/mode-toggle";
 import { HeaderNav } from "@/components/shell/navigation";
-import { CaptionButtons } from "@/components/shell/window-chrome";
 import { Button } from "@/components/ui/button";
-import { detectPlatform } from "@/lib/platform";
+import { getDesktopBridge } from "@/lib/desktop";
 import { useSettings } from "@/lib/settings-context";
 import { cn } from "@/lib/utils";
 import { Menu, Settings, X } from "@/components/mingcute-icons";
 
 export function Topbar() {
-	const platform = typeof navigator !== "undefined" ? detectPlatform() : "mac";
 	const [mobileOpen, setMobileOpen] = useState(false);
 	const { setOpen } = useSettings();
+	const desktop = getDesktopBridge();
 
 	return (
 		<header
 			className={cn(
-				"sig-drag relative flex h-[56px] shrink-0 items-center border-b border-border/70 bg-background px-4 sm:px-6",
-				platform !== "mac" && "pr-0",
+				"relative flex h-[56px] shrink-0 items-center border-b border-border/70 bg-background px-4 sm:px-6",
+				desktop !== null && "sig-drag",
 			)}
 		>
 			<button
@@ -52,7 +51,6 @@ export function Topbar() {
 				>
 					<Settings className="size-3.5" />
 				</Button>
-				{platform !== "mac" && <CaptionButtons />}
 			</div>
 
 			{mobileOpen && (
