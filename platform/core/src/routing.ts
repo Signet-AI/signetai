@@ -94,6 +94,7 @@ export interface RoutingModelConfig {
 	readonly label?: string;
 	readonly reasoning?: RoutingReasoningDepth;
 	readonly contextWindow?: number;
+	/** Omitted means the provider has not declared its tool capability. */
 	readonly toolUse?: boolean;
 	readonly streaming?: boolean;
 	readonly multimodal?: boolean;
@@ -1314,7 +1315,10 @@ function buildCandidateTrace(
 	if (requiredPrivacy === "local_only" && target.kind !== "local") {
 		blockedBy.push("local_only request requires local executor");
 	}
-	if ((request.requireTools ?? config.taskClasses[classification.taskClass]?.toolsRequired) && model.toolUse !== true) {
+	if (
+		(request.requireTools ?? config.taskClasses[classification.taskClass]?.toolsRequired) &&
+		model.toolUse === false
+	) {
 		blockedBy.push("tool-use required");
 	}
 	if (

@@ -382,6 +382,92 @@ describe("inference config + decision engine", () => {
 		expect(decision.value.targetRef).toBe(makeRoutingTargetRef("gpt", "gpt54"));
 	});
 
+	it("allows memory extraction when tool support is not declared", () => {
+		const targetRef = makeRoutingTargetRef("compatible", "default");
+		const parsed = parseRoutingConfig({
+			inference: {
+				defaultPolicy: "background",
+				targets: {
+					compatible: {
+						executor: "openai-compatible",
+						endpoint: "https://gateway.example.test/v1",
+						models: {
+							default: { model: "glm-5.3-flash" },
+						},
+					},
+				},
+				policies: {
+					background: {
+						mode: "strict",
+						defaultTargets: [targetRef],
+					},
+				},
+				taskClasses: {
+					memory_extraction: { toolsRequired: true },
+				},
+				workloads: {
+					memoryExtraction: { target: targetRef, taskClass: "memory_extraction" },
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+
+		const decision = resolveRoutingDecision(
+			parsed.value,
+			{ operation: "memory_extraction" },
+			{ targets: { [targetRef]: ready } },
+		);
+		expect(decision.ok).toBe(true);
+		if (!decision.ok) return;
+		expect(decision.value.targetRef).toBe(targetRef);
+		expect(decision.value.trace.candidates[0]?.blockedBy).not.toContain("tool-use required");
+	});
+
+	it("blocks memory extraction when tool support is explicitly disabled", () => {
+		const targetRef = makeRoutingTargetRef("compatible", "default");
+		const parsed = parseRoutingConfig({
+			inference: {
+				defaultPolicy: "background",
+				targets: {
+					compatible: {
+						executor: "openai-compatible",
+						endpoint: "https://gateway.example.test/v1",
+						models: {
+							default: { model: "known-no-tools", toolUse: false },
+						},
+					},
+				},
+				policies: {
+					background: {
+						mode: "strict",
+						defaultTargets: [targetRef],
+					},
+				},
+				taskClasses: {
+					memory_extraction: { toolsRequired: true },
+				},
+				workloads: {
+					memoryExtraction: { target: targetRef, taskClass: "memory_extraction" },
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+
+		const decision = resolveRoutingDecision(
+			parsed.value,
+			{ operation: "memory_extraction" },
+			{ targets: { [targetRef]: ready } },
+		);
+		expect(decision.ok).toBe(false);
+		if (!("error" in decision)) return;
+		const trace = decision.error.details?.trace as
+			| { readonly candidates: readonly { readonly blockedBy: readonly string[] }[] }
+			| undefined;
+		expect(trace?.candidates[0]?.blockedBy).toContain("tool-use required");
+	});
+
 	it("parses ACPX as a first-class restricted harness-backed target", () => {
 		const parsed = parseRoutingConfig({
 			inference: {
