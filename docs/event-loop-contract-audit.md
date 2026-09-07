@@ -4,23 +4,23 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 831 sites
+- Exact ledger inventory: 830 sites
 - Synchronous `withWriteTx()` sites: 62
 - Synchronous `withReadDb()` sites: 97
-- Async-named DB sites: 168
-- Async-named ON-PARENT DB sites: 166
+- Async-named DB sites: 167
+- Async-named ON-PARENT DB sites: 165
 - Async-named OFF-PARENT DB sites: 2
 - Synchronous filesystem/process sites: 504
 - Compile-visible legacy DB sites remaining: 159
   - `withWriteTx`: 62
   - `withReadDb`: 97
 
-The 831-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 62 synchronous writes, 97 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 159 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 830-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 62 synchronous writes, 97 synchronous reads, and 167 async-named DB sites are the complete database-call inventory; 159 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 165 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 327
-- ON-PARENT callback execution: 325
+- Database accessor sites classified: 326
+- ON-PARENT callback execution: 324
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -195,10 +195,10 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `prompt-entity-context.ts:671` (withReadDb)
 - `prompt-entity-context.ts:698` (withReadDb)
 - `db:repair.write.tx` (withWriteTxAsync)
-- `repair-actions.ts:415` (withReadDbAsync)
-- `repair-actions.ts:700` (withReadDbAsync)
-- `repair-actions.ts:742` (withReadDbAsync)
+- `repair-actions.ts:419` (withReadDbAsync)
+- `repair-actions.ts:704` (withReadDbAsync)
 - `repair-actions.ts:746` (withReadDbAsync)
+- `repair-actions.ts:750` (withReadDbAsync)
 - `db:repair.missing-memory-selection.read` (withReadDbAsync)
 - `db:repair.active-embedding-config.read` (withReadDbAsync)
 - `db:repair.embedding-migration-selection.read` (withReadDbAsync)
@@ -209,7 +209,6 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:repair.chunk-group-count.read` (withReadDbAsync)
 - `db:repair.singleton-entity-candidates.read` (withReadDbAsync)
 - `db:repair.generic-entity-candidates.read` (withReadDbAsync)
-- `db:repair.integrity-check.read` (withReadDbAsync)
 - `db:connectors.cascade.documents` (withReadDb)
 - `db:connectors.cascade.tombstone` (withWriteTx)
 - `db:connectors.health.documents` (withReadDb)
