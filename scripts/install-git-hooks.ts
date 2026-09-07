@@ -30,6 +30,11 @@ function describeFailure(result: GitResult): string {
 }
 
 function main(): void {
+	if (Bun.which("git") === null) {
+		console.log("Git executable not found; skipping hook installation.");
+		return;
+	}
+
 	const repository = runGit(["rev-parse", "--show-toplevel"]);
 	if (repository.exitCode !== 0) {
 		console.log("Git repository not found; skipping hook installation.");
