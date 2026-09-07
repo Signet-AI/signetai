@@ -3128,7 +3128,7 @@
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 284,
+      "line": 286,
       "api": "withReadDb",
       "source": "const docs = accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -3136,7 +3136,7 @@
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 295,
+      "line": 297,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -3144,7 +3144,7 @@
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 326,
+      "line": 328,
       "api": "withReadDb",
       "source": "const docCount = accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -3152,77 +3152,77 @@
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 362,
+      "line": 364,
       "api": "existsSync",
       "source": "exists: existsSync(join(homedir(), \".codex\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 368,
+      "line": 370,
       "api": "existsSync",
       "source": "exists: existsSync(resolveHermesHomePath()),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 374,
+      "line": 376,
       "api": "existsSync",
       "source": "exists: existsSync(join(homedir(), \".claude\", \"settings.json\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 380,
+      "line": 382,
       "api": "existsSync",
       "source": "exists: existsSync(join(homedir(), \".config\", \"opencode\", \"AGENTS.md\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 386,
+      "line": 388,
       "api": "existsSync",
       "source": "exists: existsSync(join(AGENTS_DIR, \"AGENTS.md\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 392,
+      "line": 394,
       "api": "existsSync",
       "source": "exists: existsSync(join(homedir(), \".gemini\", \"settings.json\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 398,
+      "line": 400,
       "api": "existsSync",
       "source": "exists: existsSync(join(homedir(), \".pi\", \"agent\", \"settings.json\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 404,
+      "line": 406,
       "api": "existsSync",
       "source": "exists: existsSync(join(homedir(), \".omp\", \"agent\", \"settings.json\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 410,
+      "line": 412,
       "api": "existsSync",
       "source": "exists: existsSync(join(homedir(), \".kimi\", \"config.toml\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 416,
+      "line": 418,
       "api": "existsSync",
       "source": "exists: existsSync(join(homedir(), \".forge\", \"config.yaml\")),",
       "category": "hot-path"
     },
     {
       "path": "routes/connectors-routes.ts",
-      "line": 441,
+      "line": 443,
       "api": "existsSync",
       "source": "if (!existsSync(script)) {",
       "category": "hot-path"
