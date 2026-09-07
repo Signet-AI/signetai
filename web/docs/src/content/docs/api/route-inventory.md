@@ -157,6 +157,20 @@ silently disappear from the API reference.
 `limit`. The counts cover marketplace discovery, probes, and user operations;
 the limit is the daemon-wide client/process budget.
 
+## MCP install lifecycle
+
+`POST /api/os/install` and `POST /api/marketplace/mcp/install` share one
+canonical install service. The service validates and persists the server once,
+then runs at most one probe. Callers may send an `Idempotency-Key`; when they
+do not, the normalized install target supplies a stable retry key.
+
+A successful `200` response includes `created`, `updated`, `status: "completed"`,
+and `operationId`. If the installed state was accepted but the probe could not
+finish before the request deadline or cancellation, the daemon returns `202`
+with `status: "accepted"`, the installed server/widget id, and `operationId`.
+A deadline or cancellation before the mutation returns an error and does not
+later mutate installed state.
+
 
 ## Dashboard
 

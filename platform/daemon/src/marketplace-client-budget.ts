@@ -36,8 +36,8 @@ export class MarketplaceMcpClientBudget {
 		this.max = normalizeLimit(max);
 	}
 
-	async acquire(timeoutMs: number): Promise<MarketplaceMcpClientPermit> {
-		await this.acquireSlot(timeoutMs);
+	async acquire(timeoutMs: number, signal?: AbortSignal): Promise<MarketplaceMcpClientPermit> {
+		await this.acquireSlot(timeoutMs, signal);
 
 		let processStarted = false;
 		let released = false;
@@ -66,10 +66,11 @@ export class MarketplaceMcpClientBudget {
 		};
 	}
 
-	private async acquireSlot(timeoutMs: number): Promise<void> {
+	private async acquireSlot(timeoutMs: number, signal?: AbortSignal): Promise<void> {
 		if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
 			throw new Error("marketplace MCP timeout must be positive");
 		}
+		if (signal?.aborted) throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
 
 		if (this.active < this.max) {
 			this.active++;
@@ -83,18 +84,34 @@ export class MarketplaceMcpClientBudget {
 				settled = true;
 				const index = this.queue.indexOf(entry);
 				if (index >= 0) this.queue.splice(index, 1);
+				cleanup();
 				reject(new Error(`marketplace MCP client budget timed out after ${timeoutMs}ms`));
 			}, timeoutMs);
+			const cleanup = (): void => {
+				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
+			};
+			const rejectAborted = (): void => {
+				if (settled) return;
+				settled = true;
+				const index = this.queue.indexOf(entry);
+				if (index >= 0) this.queue.splice(index, 1);
+				cleanup();
+				reject(signal?.reason ?? new DOMException("The operation was aborted", "AbortError"));
+			};
+			const onAbort = (): void => rejectAborted();
 			const entry: QueueEntry = {
 				start: (): void => {
 					if (settled) return;
 					settled = true;
-					clearTimeout(timer);
+					cleanup();
 					this.active++;
 					resolve();
 				},
 			};
+			signal?.addEventListener("abort", onAbort, { once: true });
 			this.queue.push(entry);
+			if (signal?.aborted) rejectAborted();
 		});
 	}
 
@@ -133,9 +150,10 @@ export function getMarketplaceMcpRuntimeStatus(): MarketplaceMcpRuntimeStatus {
 export async function withMarketplaceMcpPermit<T>(
 	timeoutMs: number,
 	fn: (permit: MarketplaceMcpClientPermit, remainingTimeoutMs: number) => Promise<T>,
+	signal?: AbortSignal,
 ): Promise<T> {
 	const startedAt = Date.now();
-	const permit = await marketplaceMcpClientBudget.acquire(timeoutMs);
+	const permit = await marketplaceMcpClientBudget.acquire(timeoutMs, signal);
 	try {
 		const remainingTimeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
 		return await fn(permit, remainingTimeoutMs);
@@ -154,8 +172,10 @@ export async function withMarketplaceMcpTimeout<T>(
 	timeoutMs: number,
 	label: string,
 	onTimeout: () => Promise<void>,
+	signal?: AbortSignal,
 ): Promise<T> {
 	let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+	let onAbort: (() => void) | null = null;
 	try {
 		return await Promise.race([
 			promise,
@@ -165,8 +185,24 @@ export async function withMarketplaceMcpTimeout<T>(
 					reject(new Error(`${label} timed out after ${timeoutMs}ms`));
 				}, timeoutMs);
 			}),
+			...(signal
+				? [
+						new Promise<T>((_resolve, reject) => {
+							onAbort = (): void => {
+								void onTimeout().catch(() => undefined);
+								reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+							};
+							if (signal.aborted) {
+								onAbort();
+								return;
+							}
+							signal.addEventListener("abort", onAbort, { once: true });
+						}),
+					]
+				: []),
 		]);
 	} finally {
 		if (timeoutHandle) clearTimeout(timeoutHandle);
+		if (signal && onAbort) signal.removeEventListener("abort", onAbort);
 	}
 }

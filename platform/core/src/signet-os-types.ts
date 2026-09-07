@@ -75,6 +75,8 @@ export interface AutoCardManifest {
 
 export interface McpProbeResult {
 	readonly serverId: string;
+	/** Present when the probe belongs to an install operation. */
+	readonly installOperationId?: string;
 	readonly ok: boolean;
 	readonly error?: string;
 	readonly declaredManifest?: SignetAppManifest;
