@@ -5,7 +5,11 @@ import { join } from "node:path";
 import type { SignetSourceEntry } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { createDbOwnerClient } from "./db-owner-client";
-import { closeRegisteredDbOwnerMaintenance, createDbOwnerMaintenance, registerDbOwnerMaintenance } from "./db-owner-maintenance";
+import {
+	closeRegisteredDbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+} from "./db-owner-maintenance";
 import { setActiveTelemetry, type TelemetryCollector } from "./telemetry";
 import {
 	flushPendingSourceLifecycleTelemetry,
