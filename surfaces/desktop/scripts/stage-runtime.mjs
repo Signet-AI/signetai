@@ -162,17 +162,18 @@ function acquireResourceLock(target) {
 			let owner;
 			let ownerError;
 			try {
-				owner = Number(readFileSync(join(lockPath, "owner"), "utf8"));
+				const rawOwner = readFileSync(join(lockPath, "owner"), "utf8").trim();
+				owner = /^\d+$/.test(rawOwner) ? Number(rawOwner) : Number.NaN;
 			} catch (error) {
 				ownerError = error;
 			}
 			if (ownerError && !resourceLockIsExpired(lockPath)) {
 				throw new Error(`Desktop resources are already being replaced: ${target}`, { cause: ownerError });
 			}
-			if (!ownerError && Number.isInteger(owner) && processIsAlive(owner)) {
+			if (!ownerError && Number.isInteger(owner) && owner > 0 && processIsAlive(owner)) {
 				throw new Error(`Desktop resources are already being replaced: ${target}`);
 			}
-			if (!ownerError && !Number.isInteger(owner) && !resourceLockIsExpired(lockPath)) {
+			if (!ownerError && (!Number.isInteger(owner) || owner <= 0) && !resourceLockIsExpired(lockPath)) {
 				throw new Error(`Desktop resources are already being replaced: ${target}`);
 			}
 			const stalePath = `${lockPath}.stale-${randomUUID()}`;

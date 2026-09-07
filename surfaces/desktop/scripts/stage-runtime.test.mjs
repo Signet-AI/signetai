@@ -151,6 +151,7 @@ describe("stage-runtime Bun validation", () => {
 		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
 		const lock = join(directory, ".resources.lock");
 		mkdirSync(lock);
+		writeFileSync(join(lock, "owner"), "");
 		const stale = new Date(Date.now() - 61_000);
 		utimesSync(lock, stale, stale);
 
