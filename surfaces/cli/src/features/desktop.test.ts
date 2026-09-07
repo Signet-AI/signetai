@@ -435,6 +435,35 @@ function makeMacAppBundle(dir: string, arch: "x64" | "arm64", executable = "sign
 	return app;
 }
 
+function makeUniversalMacAppBundle(
+	dir: string,
+	architectures: readonly ("x64" | "arm64")[],
+	executable = "signet",
+): string {
+	const app = join(dir, "Signet.app");
+	mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+	writeFileSync(
+		join(app, "Contents", "Info.plist"),
+		`<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleExecutable</key><string>${executable}</string><key>CFBundleIdentifier</key><string>ai.signet.app</string></dict></plist>\n`,
+	);
+	const entrySize = 20;
+	const tableSize = 8 + architectures.length * entrySize;
+	const header = Buffer.alloc(tableSize + architectures.length * 8);
+	header.writeUInt32BE(0xcafebabe, 0);
+	header.writeUInt32BE(architectures.length, 4);
+	for (const [index, architecture] of architectures.entries()) {
+		const entry = 8 + index * entrySize;
+		const sliceOffset = tableSize + index * 8;
+		header.writeUInt32BE(architecture === "arm64" ? 0x0100000c : 0x01000007, entry);
+		header.writeUInt32BE(0, entry + 4);
+		header.writeUInt32BE(sliceOffset, entry + 8);
+		header.writeUInt32BE(8, entry + 12);
+		header.writeUInt32BE(2, entry + 16);
+	}
+	writeFileSync(join(app, "Contents", "MacOS", executable), header);
+	return app;
+}
+
 function hostDesktopArch(): "x64" | "arm64" {
 	return process.arch === "arm64" ? "arm64" : "x64";
 }
@@ -476,6 +505,23 @@ describe("mac desktop install", () => {
 				existsSync(join(home, "Applications", ".Signet.app.")) ||
 					readdirSync(join(home, "Applications")).some((name) => name.startsWith(".Signet.app.")),
 			).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("accepts a universal bundle containing the host architecture", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release", "mac");
+			mkdirSync(release, { recursive: true });
+			makeUniversalMacAppBundle(release, ["x64", "arm64"]);
+
+			const result = installMacDesktopApp(root, home, join(home, "workspace"));
+
+			expect(existsSync(result.appBundle)).toBe(true);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 			rmSync(home, { recursive: true, force: true });

@@ -387,14 +387,35 @@ function macAppBundleMatchesArch(path: string, arch: string): boolean {
 	}
 	try {
 		const header = Buffer.alloc(8);
-		if (readSync(handle, header, 0, 8, 0) !== 8) return false;
+		if (readSync(handle, header, 0, header.length, 0) !== header.length) return false;
 		const magicLE = header.readUInt32LE(0);
 		const magicBE = header.readUInt32BE(0);
 		const CPU_TYPE_X64 = 0x01000007;
 		const CPU_TYPE_ARM64 = 0x0100000c;
+		const FAT_MAGIC = 0xcafebabe;
+		const FAT_MAGIC_64 = 0xcafebabf;
 		const expected = arch === "arm64" ? CPU_TYPE_ARM64 : CPU_TYPE_X64;
 		if (magicLE === 0xfeedfacf) return header.readUInt32LE(4) === expected;
 		if (magicBE === 0xfeedfacf) return header.readUInt32BE(4) === expected;
+
+		const fatEndian: "be" | "le" | null =
+			magicBE === FAT_MAGIC || magicBE === FAT_MAGIC_64
+				? "be"
+				: magicLE === FAT_MAGIC || magicLE === FAT_MAGIC_64
+					? "le"
+					: null;
+		if (fatEndian === null) return false;
+		const fatMagic = fatEndian === "be" ? magicBE : magicLE;
+		const architectureCount = fatEndian === "be" ? header.readUInt32BE(4) : header.readUInt32LE(4);
+		if (architectureCount === 0 || architectureCount > 128) return false;
+		const entrySize = fatMagic === FAT_MAGIC_64 ? 32 : 20;
+		const table = Buffer.alloc(8 + architectureCount * entrySize);
+		if (readSync(handle, table, 0, table.length, 0) !== table.length) return false;
+		for (let index = 0; index < architectureCount; index += 1) {
+			const entry = 8 + index * entrySize;
+			const cputype = fatEndian === "be" ? table.readUInt32BE(entry) : table.readUInt32LE(entry);
+			if (cputype === expected) return true;
+		}
 		return false;
 	} finally {
 		closeSync(handle);

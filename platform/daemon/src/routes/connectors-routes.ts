@@ -22,7 +22,9 @@ import {
 	updateCursor,
 } from "../connectors/registry.js";
 import { getDbAccessor } from "../db-accessor.js";
+import { resolveHarnessPythonCommand } from "../harness-python.js";
 import { logger } from "../logger.js";
+import { which } from "../which.js";
 import { AGENTS_DIR, SCRIPTS_DIR, authConfig, harnessLastSeen } from "./state.js";
 
 type ConnectorSyncStartOutcome =
@@ -443,8 +445,16 @@ export function registerConnectorRoutes(app: Hono): void {
 				return;
 			}
 
-			const python = process.platform === "darwin" ? resolveLaunchdExecutable("python3") : "python3";
-			const proc = spawn(python, [script], {
+			const python = resolveHarnessPythonCommand(
+				process.platform,
+				which,
+				process.platform === "darwin" ? resolveLaunchdExecutable("python3") : undefined,
+			);
+			if (python === null) {
+				resolve(c.json({ success: false, error: "Python 3 executable not found" }, 500));
+				return;
+			}
+			const proc = spawn(python.executable, [...python.args, script], {
 				timeout: 10000,
 				cwd: AGENTS_DIR,
 			});
