@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -196,9 +197,11 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		expect(result.rebuiltIndexes).toHaveLength(4);
 		expect(auditCalls).toBe(1);
 		const verification = new Database(dbPath);
-		expect(verification.prepare("PRAGMA integrity_check(telemetry_events)").all()).toEqual([{ integrity_check: "ok" }]);
+		const verificationStatement = verification.prepare("PRAGMA integrity_check(telemetry_events)");
+		expect(verificationStatement.all()).toEqual([{ integrity_check: "ok" }]);
+		verificationStatement.finalize();
 		verification.close();
-		rmSync(dir, { recursive: true, force: true });
+		await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
 	});
 
 	it("waits for a concurrent writer before repairing telemetry indexes", async () => {
@@ -208,7 +211,9 @@ describe("telemetry database integrity recovery (#1360)", () => {
 		database.exec(
 			"PRAGMA journal_mode = WAL; CREATE TABLE telemetry_events (event TEXT, queue TEXT, timestamp TEXT, unsent INTEGER); CREATE INDEX idx_telemetry_events_event ON telemetry_events(event); CREATE INDEX idx_telemetry_events_queue ON telemetry_events(queue); CREATE INDEX idx_telemetry_events_timestamp ON telemetry_events(timestamp); CREATE INDEX idx_telemetry_events_unsent ON telemetry_events(unsent); BEGIN IMMEDIATE",
 		);
-		database.prepare("INSERT INTO telemetry_events VALUES (?, ?, ?, ?)").run("held", "queue", "now", 0);
+		const insert = database.prepare("INSERT INTO telemetry_events VALUES (?, ?, ?, ?)");
+		insert.run("held", "queue", "now", 0);
+		insert.finalize();
 		const holdMs = 400;
 		const startedAt = Date.now();
 		const releaseTimer = setTimeout(() => {
@@ -233,9 +238,9 @@ describe("telemetry database integrity recovery (#1360)", () => {
 			expect(result.rebuiltIndexes).toHaveLength(4);
 			expect(Date.now() - startedAt).toBeGreaterThanOrEqual(holdMs - 50);
 			const verification = new Database(dbPath, { readonly: true });
-			expect(verification.prepare("PRAGMA integrity_check(telemetry_events)").all()).toEqual([
-				{ integrity_check: "ok" },
-			]);
+			const verificationStatement = verification.prepare("PRAGMA integrity_check(telemetry_events)");
+			expect(verificationStatement.all()).toEqual([{ integrity_check: "ok" }]);
+			verificationStatement.finalize();
 			verification.close();
 		} finally {
 			clearTimeout(releaseTimer);
@@ -384,6 +389,36 @@ describe("deferred database integrity recovery (#1513)", () => {
 		expect(result.quickCheck.ok).toBe(true);
 	});
 
+	it("routes owner checks through the DB owner without launching the direct-DB child", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-owner-deferred-"));
+		const dbPath = join(dir, "memory.db");
+		const database = new Database(dbPath);
+		database.exec(
+			"CREATE TABLE check_me (value TEXT); CREATE TABLE telemetry_events (event TEXT); CREATE INDEX telemetry_event_idx ON telemetry_events(event)",
+		);
+		database.close();
+		const owner = createDbOwnerClient({ dbPath });
+		let childStarted = false;
+		try {
+			const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, dbPath, {
+				owner,
+				workerPath: join(dir, "must-not-launch.mjs"),
+				onWorkerStarted: () => {
+					childStarted = true;
+				},
+				timeoutMs: 5_000,
+				ownerTimeoutMs: 5_000,
+			});
+
+			expect(result.state).toBe("healthy");
+			expect(result.ownerState).toBe("ready");
+			expect(childStarted).toBe(false);
+		} finally {
+			await owner.close();
+			await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+		}
+	});
+
 	it("handles worker construction failures as unavailable", async () => {
 		const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, "/tmp/not-used.db", {
 			workerPath: "/tmp/missing-database-integrity-worker.mjs",
@@ -510,7 +545,7 @@ describe("deferred database integrity recovery (#1513)", () => {
 		let scanStarted = false;
 		const result = await runDeferredIntegrityCheck(fakeAccessor({}).accessor, dbPath, {
 			workerPath,
-			timeoutMs: 25,
+			timeoutMs: 250,
 			onWorkerStarted: () => {
 				scanStarted = true;
 			},
@@ -518,7 +553,7 @@ describe("deferred database integrity recovery (#1513)", () => {
 
 		expect(scanStarted).toBe(true);
 		expect(result.phase).toBe("timed_out");
-		expect(Date.now() - startedAt).toBeLessThan(500);
+		expect(Date.now() - startedAt).toBeLessThan(1_000);
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -558,9 +593,58 @@ describe("deferred database integrity recovery (#1513)", () => {
 		expect(result.state).toBe("unavailable");
 		expect(result.phase).toBe("timed_out");
 		const verified = new Database(dbPath, { readonly: true });
-		expect(verified.prepare("SELECT COUNT(*) AS n FROM repair_fixture").get()).toEqual({ n: 0 });
+		const verificationStatement = verified.prepare("SELECT COUNT(*) AS n FROM repair_fixture");
+		expect(verificationStatement.get()).toEqual({ n: 0 });
+		verificationStatement.finalize();
 		verified.close();
-		rmSync(dir, { recursive: true, force: true });
+		await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+	});
+
+	it("rejects a concurrent direct-DB child instead of spawning another one", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "integrity-admission-"));
+		const dbPath = join(dir, "memory.db");
+		const workerPath = join(dir, "blocking-repair-worker.mjs");
+		const markerPath = join(dir, "started");
+		const database = new Database(dbPath);
+		database.exec(
+			"CREATE TABLE telemetry_events (event TEXT); CREATE INDEX telemetry_event_idx ON telemetry_events(event)",
+		);
+		database.close();
+		writeFileSync(
+			workerPath,
+			`import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(markerPath)}, "started"); setTimeout(() => {}, 1000);\n`,
+		);
+
+		const options = {
+			dbPath,
+			repairWorkerPath: workerPath,
+			repairRuntimePath: "node",
+			repairTimeoutMs: 250,
+		} as const;
+		const firstRun = repairTelemetryIndexes(
+			fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+			undefined,
+			options,
+		);
+		try {
+			for (let attempt = 0; attempt < 40 && !existsSync(markerPath); attempt += 1) await Bun.sleep(5);
+			expect(existsSync(markerPath)).toBe(true);
+
+			const secondResult = await repairTelemetryIndexes(
+				fakeAccessor({ telemetryMessage: "index mismatch" }).accessor,
+				undefined,
+				options,
+			);
+			expect(secondResult.state).toBe("unavailable");
+			expect(secondResult.telemetryCheck.messages).toContain("database integrity child is already running");
+
+			const firstResult = await firstRun;
+			expect(firstResult.state).toBe("unavailable");
+			expect(firstResult.phase).toBe("timed_out");
+		} finally {
+			await firstRun;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

@@ -11,6 +11,7 @@ import {
 	__setEmbeddingWorkerFactoryForTests,
 	checkNativeProvider,
 	configureNativeEmbeddingAssets,
+	configureNativeEmbeddingLifecycle,
 	getNativeProviderStatus,
 	nativeEmbed,
 	shutdownNativeProvider,
@@ -28,6 +29,7 @@ class FakeWorker implements EmbeddingWorkerLike {
 		Array<(arg: never) => void>
 	>;
 	ready = false;
+	terminated = false;
 
 	on(event: "message" | "error" | "exit", listener: (...a: never[]) => void): this {
 		this.listeners[event].push(listener as never);
@@ -39,6 +41,7 @@ class FakeWorker implements EmbeddingWorkerLike {
 	}
 
 	terminate(): number {
+		this.terminated = true;
 		return 0;
 	}
 
@@ -141,6 +144,45 @@ describe("native-embedding facade (worker-backed)", () => {
 		await shutdownNativeProvider();
 		expect(worker.posted.filter((m) => m.type === "shutdown").length).toBeGreaterThan(shutdownsBefore);
 		expect(getNativeProviderStatus().initialized).toBe(false);
+	});
+
+	it("evicts the idle worker and recreates it on the next embedding", async () => {
+		configureNativeEmbeddingLifecycle({ idleTtlMs: 1000 });
+		const workers: FakeWorker[] = [];
+		__setEmbeddingWorkerFactoryForTests((_path, _init, _options) => {
+			const next = new FakeWorker();
+			workers.push(next);
+			return next;
+		});
+
+		const first = nativeEmbed("before eviction");
+		await flush();
+		workers[0]?.emit({ type: "ready" });
+		await flush();
+		const firstReq = workers[0]?.posted.find((m) => m.type === "embed");
+		workers[0]?.emit({
+			type: "embed_result",
+			id: firstReq?.type === "embed" ? firstReq.id : -1,
+			vector: vec(),
+		});
+		await first;
+
+		await Bun.sleep(1200);
+		expect(workers[0]?.terminated).toBe(true);
+		expect(getNativeProviderStatus().initialized).toBe(false);
+
+		const second = nativeEmbed("after eviction");
+		await flush();
+		expect(workers).toHaveLength(2);
+		workers[1]?.emit({ type: "ready" });
+		await flush();
+		const secondReq = workers[1]?.posted.find((m) => m.type === "embed");
+		workers[1]?.emit({
+			type: "embed_result",
+			id: secondReq?.type === "embed" ? secondReq.id : -1,
+			vector: vec(0.02),
+		});
+		await expect(second).resolves.toHaveLength(DIM);
 	});
 
 	it("★ nativeEmbed awaits in-flight init before embedding (warm-up race #920)", async () => {
@@ -261,14 +303,6 @@ describe("asset path override wiring (#1018 regression)", () => {
 			transformersRuntimeAssetPath: null,
 		});
 	});
-
-	function capturingFactory(): EmbeddingWorkerFactory {
-		const w = new FakeWorker();
-		return (_path, init) => {
-			capturedInits.push(init);
-			return w;
-		};
-	}
 
 	async function settle(worker: FakeWorker): Promise<void> {
 		await flush();

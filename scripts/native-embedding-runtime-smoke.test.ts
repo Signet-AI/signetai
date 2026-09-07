@@ -11,6 +11,7 @@ const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_NATIVE_EMBEDDING_SMOKE === "1";
 const dbOwnerSmokeEnabled = process.env.SIGNET_DB_OWNER_SMOKE === "1";
 const dreamingTokenSmokeEnabled = process.env.SIGNET_DREAMING_TOKEN_SMOKE === "1";
+const workerThreadSmokeEnabled = process.env.SIGNET_NATIVE_WORKER_THREAD_SMOKE === "1";
 const tempDirs: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 const CHILD_KILL_REAP_MS = 2_000;
@@ -252,6 +253,38 @@ describe("compiled native embedding runtime", () => {
 	const smoke = enabled ? test : test.skip;
 	const dreamingTokenSmoke = dreamingTokenSmokeEnabled ? test : test.skip;
 	const dbOwnerSmoke = dbOwnerSmokeEnabled ? test : test.skip;
+	const workerThreadSmoke = workerThreadSmokeEnabled ? test : test.skip;
+
+	workerThreadSmoke(
+		"runs an embedded Worker entrypoint in-process without spawning another signet executable",
+		() => {
+			const binary = nativeSmokeBinary();
+			if (!existsSync(binary)) {
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+			}
+			const result = spawnSync(binary, [], {
+				env: {
+					...process.env,
+					SIGNET_NATIVE_WORKER_THREAD_SMOKE: "1",
+					SIGNET_TELEMETRY_OPTOUT: "1",
+				},
+				encoding: "utf8",
+				timeout: 30_000,
+			});
+			if (result.error) throw result.error;
+			expect(result.status).toBe(0);
+			const event = JSON.parse(result.stdout.trim()) as {
+				type: string;
+				parentPid: number;
+				workerPid: number;
+				workerThreadId: number;
+			};
+			expect(event).toMatchObject({ type: "worker-thread-smoke" });
+			expect(event.parentPid).toBe(event.workerPid);
+			expect(event.workerThreadId).toBeGreaterThan(0);
+		},
+		30_000,
+	);
 
 	dreamingTokenSmoke(
 		"loads the embedded tokenizer WASM across sequential Dreaming cache workers",

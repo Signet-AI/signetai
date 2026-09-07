@@ -1,8 +1,8 @@
 import { HARNESS_INSTALLERS } from "../harness-install-worker";
-import { spawnHidden as spawn } from "@signet/core";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
@@ -12,6 +12,15 @@ const SUPPORTED = new Set(Object.keys(HARNESS_INSTALLERS));
 let installing = false;
 let cancelInstall: (() => void) | undefined;
 let installationClosed: Promise<void> = Promise.resolve();
+const INSTALLATION_TIMEOUT_MS = 30_000;
+
+function harnessInstallWorkerPath(): string {
+	const embedded = resolveEmbeddedWorkerPath("harness-install-worker");
+	if (embedded !== null) return embedded;
+	const directory = dirname(fileURLToPath(import.meta.url));
+	const built = join(directory, "harness-install-worker.js");
+	return existsSync(built) ? built : join(directory, "../harness-install-worker.ts");
+}
 
 export async function stopHarnessInstall(): Promise<void> {
 	cancelInstall?.();
@@ -29,64 +38,63 @@ export async function installHarness(id: string, signal: AbortSignal): Promise<v
 		closed = resolve;
 	});
 	try {
-		const directory = dirname(fileURLToPath(import.meta.url));
-		const built = join(directory, "harness-install-worker.js");
-		const args =
-			resolveEmbeddedWorkerPath("harness-install-worker") !== null
-				? []
-				: [existsSync(built) ? built : join(directory, "../harness-install-worker.ts")];
 		await new Promise<void>((resolve, reject) => {
 			if (signal.aborted) {
 				reject(new Error("Installation cancelled"));
 				return;
 			}
-			const child = spawn(process.execPath, args, {
-				env: { ...process.env, SIGNET_PATH: AGENTS_DIR, SIGNET_INSTALL_HARNESS: id },
-				stdio: ["ignore", "pipe", "pipe"],
-				detached: process.platform !== "win32",
-			});
-			let output = "",
-				error = "",
-				stopped = "";
-			let killTimer: ReturnType<typeof setTimeout> | undefined;
-			const kill = (signal: NodeJS.Signals) => {
-				try {
-					if (process.platform !== "win32" && child.pid) process.kill(-child.pid, signal);
-					else child.kill(signal);
-				} catch (error) {
-					if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
-				}
+			const workerOptions = {
+				env: { ...process.env, SIGNET_PATH: AGENTS_DIR },
+				type: "module",
+				workerData: { id, workspace: AGENTS_DIR },
+			} as const;
+			const worker = new Worker(harnessInstallWorkerPath(), workerOptions);
+			let stopped = "";
+			let settled = false;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const finish = (error?: Error) => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearTimeout(timer);
+				signal.removeEventListener("abort", abort);
+				void worker
+					.terminate()
+					.catch(() => 0)
+					.finally(() => (error ? reject(error) : resolve()));
 			};
 			const stop = (reason: string) => {
 				if (stopped) return;
 				stopped = reason;
-				kill("SIGTERM");
-				killTimer = setTimeout(() => kill("SIGKILL"), 2_000);
+				finish(new Error(reason));
 			};
 			const abort = () =>
 				stop("Installation cancelled. Some integration files may have been written; retry to reconcile them.");
-			const timer = setTimeout(
+			timer = setTimeout(
 				() => stop("Installation timed out. Retry to reconcile partially written integration files."),
-				30_000,
+				INSTALLATION_TIMEOUT_MS,
 			);
 			cancelInstall = abort;
 			signal.addEventListener("abort", abort, { once: true });
-			child.stdout.on("data", (chunk) => {
-				output = (output + String(chunk)).slice(-32_768);
+			worker.on("message", (event: { readonly type?: string; readonly message?: string }) => {
+				if (event.type === "complete") finish();
+				else if (event.type === "error")
+					finish(new Error(event.message || "Agent installation failed. Run signet doctor for details."));
 			});
-			child.stderr.on("data", (chunk) => {
-				error = (error + String(chunk)).slice(-4_096);
+			worker.once("error", (error: Error) => {
+				finish(new Error(stopped || error.message || "Agent installation failed. Run signet doctor for details."));
 			});
-			child.on("error", (e) => {
-				error = e.message;
+			worker.once("exit", (code: number) => {
+				if (settled) return;
+				finish(
+					new Error(
+						stopped ||
+							(code === 0
+								? "Agent installation failed. Run signet doctor for details."
+								: `Agent installation worker exited with code ${code}.`),
+					),
+				);
 			});
-			child.on("close", (code) => {
-				clearTimeout(timer);
-				clearTimeout(killTimer);
-				signal.removeEventListener("abort", abort);
-				if (!stopped && code === 0 && output.includes("SIGNET_INSTALL_RESULT ")) resolve();
-				else reject(new Error(stopped || error || "Agent installation failed. Run signet doctor for details."));
-			});
+			if (signal.aborted) abort();
 		});
 	} finally {
 		installing = false;
