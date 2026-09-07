@@ -39,6 +39,151 @@ export interface TranscriptCommitResult {
 	readonly sessionKey: string;
 }
 
+/** Evidence and its ledger outcome share the caller's owner transaction. */
+export function commitTranscriptImportBatchInTx(
+	db: WriteDb,
+	input: import("./db-owner-protocol").DbOwnerTranscriptBulkCommit,
+): TranscriptCommitResult[] {
+	if (
+		input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch ||
+		(input.commits.length === 0 && !input.inventory) ||
+		(input.inventory?.records.length ?? 0) > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch
+	)
+		throw new RangeError("invalid transcript commit batch");
+	if (transcriptCommitBatchBytes(input.commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
+		throw new RangeError("canonical_batch_too_large");
+	if (
+		!input.agentId ||
+		!input.sourceId ||
+		input.commits.some((item) => item.agentId !== input.agentId || item.sourceId !== input.sourceId)
+	)
+		throw new Error("transcript commit provenance does not match owner request");
+	const lease = db
+		.prepare(
+			"SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying') AND control_request IS NULL",
+		)
+		.get(input.jobId, input.agentId, input.generation, input.leaseToken);
+	if (lease == null) throw new Error("stale import lease");
+	const inventory = input.inventory;
+	if (inventory) {
+		const file = db
+			.prepare(
+				"SELECT 1 FROM source_import_files WHERE id = ? AND job_id = ? AND agent_id = ? AND source_id = ? AND storage_state = 'sealed' AND checkpoint_byte_offset = ?",
+			)
+			.get(inventory.fileId, input.jobId, input.agentId, input.sourceId, inventory.previousByteOffset);
+		if (!file || inventory.checkpoint.byteOffset < inventory.previousByteOffset)
+			throw new Error("stale inventory checkpoint");
+		for (const row of inventory.records) {
+			if (
+				row.byteOffset < inventory.previousByteOffset ||
+				row.byteOffset + row.byteLength > inventory.checkpoint.byteOffset
+			)
+				throw new Error("invalid inventory record range");
+			db.prepare(
+				"INSERT INTO source_import_records (id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_offset,byte_length,raw_hash,status,rejection_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+			).run(
+				`${input.jobId}:${inventory.fileId}:${row.ordinal}`,
+				input.jobId,
+				inventory.fileId,
+				input.sourceId,
+				input.agentId,
+				row.ordinal,
+				row.lineNumber,
+				row.byteOffset,
+				row.byteLength,
+				row.rawHash,
+				row.status,
+				row.rejectionCode ?? null,
+			);
+			if (row.status === "rejected")
+				db.prepare(
+					"INSERT INTO source_import_record_attempts (agent_id,job_id,file_id,record_id,generation,outcome,error_code,source_id) VALUES (?,?,?,?,?,'rejected',?,?)",
+				).run(
+					input.agentId,
+					input.jobId,
+					inventory.fileId,
+					`${input.jobId}:${inventory.fileId}:${row.ordinal}`,
+					input.generation,
+					row.rejectionCode ?? null,
+					input.sourceId,
+				);
+		}
+		const pending = inventory.records.filter((row) => row.status === "pending").length;
+		db.prepare(
+			"UPDATE source_import_jobs SET total = total + ?, pending = pending + ?, rejected = rejected + ? WHERE id = ? AND agent_id = ?",
+		).run(inventory.records.length, pending, inventory.records.length - pending, input.jobId, input.agentId);
+	}
+	const results: TranscriptCommitResult[] = [];
+	for (const item of input.commits) {
+		const row = db
+			.prepare(
+				"SELECT status, canonical_id, canonical_key FROM source_import_records WHERE id = ? AND job_id = ? AND agent_id = ? AND source_id = ?",
+			)
+			.get(item.sourceRecordId, input.jobId, input.agentId, input.sourceId) as
+			| { status: string; canonical_id: string; canonical_key: string }
+			| undefined;
+		if (!row) throw new Error("import record scope denied");
+		if (row.status === "imported" || row.status === "duplicate") {
+			results.push({ outcome: row.status, canonicalId: row.canonical_id, sessionKey: row.canonical_key });
+			continue;
+		}
+		if (row.status !== "pending") throw new Error("import record is not pending");
+		const result = commitCompletedTranscriptBatchInTx(db, [item])[0];
+		if (!result) throw new Error("missing transcript commit outcome");
+		const rejected = result.outcome === "conversation_identity_conflict";
+		db.prepare(
+			"UPDATE source_import_records SET status = ?, canonical_id = ?, canonical_key = ?, external_identity = ?, conversation_fingerprint = ?, rejection_code = ?, attempt_count = attempt_count + 1, updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ?",
+		).run(
+			rejected ? "rejected" : result.outcome,
+			result.canonicalId,
+			result.sessionKey,
+			item.externalIdentity,
+			item.contentHash,
+			rejected ? result.outcome : null,
+			item.sourceRecordId,
+			input.jobId,
+			input.agentId,
+		);
+		db.prepare(
+			"INSERT INTO source_import_record_attempts (agent_id,job_id,file_id,record_id,generation,outcome,error_code,source_id) SELECT agent_id,job_id,file_id,id,?,?,?,source_id FROM source_import_records WHERE id = ? AND job_id = ? AND agent_id = ?",
+		).run(
+			input.generation,
+			result.outcome,
+			rejected ? result.outcome : null,
+			item.sourceRecordId,
+			input.jobId,
+			input.agentId,
+		);
+		db.prepare(
+			"UPDATE source_import_jobs SET pending = MAX(0,pending - 1), imported = imported + ?, duplicate = duplicate + ?, rejected = rejected + ? WHERE id = ? AND agent_id = ?",
+		).run(
+			result.outcome === "imported" ? 1 : 0,
+			result.outcome === "duplicate" ? 1 : 0,
+			rejected ? 1 : 0,
+			input.jobId,
+			input.agentId,
+		);
+		results.push(result);
+	}
+	if (inventory) {
+		db.prepare(
+			"UPDATE source_import_files SET checkpoint_byte_offset = ?, checkpoint_ordinal = ?, checkpoint_line_number = ?, record_count = record_count + ?, malformed_count = malformed_count + ?, state = ?, reserved_bytes = CASE WHEN ? THEN 0 ELSE reserved_bytes END, updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ?",
+		).run(
+			inventory.checkpoint.byteOffset,
+			inventory.checkpoint.ordinal,
+			inventory.checkpoint.lineNumber,
+			inventory.records.length,
+			inventory.records.filter((row) => row.status === "rejected").length,
+			inventory.complete ? "completed" : "inventorying",
+			inventory.complete ? 1 : 0,
+			inventory.fileId,
+			input.jobId,
+			input.agentId,
+		);
+	}
+	return results;
+}
+
 const fixed = (fields: readonly string[]) => fields.map((field) => `${field.length}:${field}`).join("|");
 
 export function buildCompletedTranscriptCommit(
@@ -99,37 +244,9 @@ export function canonicalTranscriptLine(commit: CompletedTranscriptCommit): stri
 	})}\n`;
 }
 
-/** Return the complete payload size that crosses both filesystem and owner boundaries. */
+/** Bound the payload crossing the owner protocol. */
 export function transcriptCommitBatchBytes(commits: readonly CompletedTranscriptCommit[]): number {
-	const canonicalBytes = Buffer.byteLength(commits.map(canonicalTranscriptLine).join(""), "utf8");
-	const ownerPayloadBytes = Buffer.byteLength(JSON.stringify(commits), "utf8");
-	return canonicalBytes + ownerPayloadBytes;
-}
-
-/** Split commits without exceeding either the record-count or byte budget. */
-export function splitTranscriptCommitBatches(
-	commits: readonly CompletedTranscriptCommit[],
-	maxBytes = TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes,
-): CompletedTranscriptCommit[][] {
-	if (maxBytes < 1) throw new RangeError("invalid transcript batch byte limit");
-	const batches: CompletedTranscriptCommit[][] = [];
-	let current: CompletedTranscriptCommit[] = [];
-	for (const commit of commits) {
-		const single = transcriptCommitBatchBytes([commit]);
-		if (single > maxBytes) throw new RangeError("canonical_batch_too_large");
-		const candidate = [...current, commit];
-		if (
-			current.length >= TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch ||
-			(current.length > 0 && transcriptCommitBatchBytes(candidate) > maxBytes)
-		) {
-			batches.push(current);
-			current = [commit];
-		} else {
-			current = candidate;
-		}
-	}
-	if (current.length) batches.push(current);
-	return batches;
+	return Buffer.byteLength(JSON.stringify(commits), "utf8");
 }
 /** Insert the durable transcript exactly once when recovering a committing claim. */
 function insertSessionTranscriptIfMissing(db: WriteDb, commit: CompletedTranscriptCommit): void {
@@ -286,29 +403,29 @@ export function commitCompletedTranscriptBatchInTx(
 }
 
 export function purgeTranscriptImportSourceInTx(db: WriteDb, agentId: string | undefined, sourceId: string): number {
-	const invalidatedJobs =
-		agentId !== undefined
-			? db
-					.prepare(
-						"UPDATE source_import_jobs SET state = 'cancelled', generation = generation + 1, control_request = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = datetime('now') WHERE agent_id = ? AND state NOT IN ('completed','completed_with_rejections','cancelled') AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.job_id = source_import_jobs.id AND source_import_files.agent_id = ? AND source_import_files.source_id = ?)",
-					)
-					.run(agentId, agentId, sourceId).changes
-			: db
-					.prepare(
-						"UPDATE source_import_jobs SET state = 'cancelled', generation = generation + 1, control_request = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = datetime('now') WHERE state NOT IN ('completed','completed_with_rejections','cancelled') AND EXISTS (SELECT 1 FROM source_import_files WHERE source_import_files.job_id = source_import_jobs.id AND source_import_files.source_id = ?)",
-					)
-					.run(sourceId).changes;
-	let changed = invalidatedJobs;
+	const active = db
+		.prepare(
+			`SELECT 1 FROM source_import_jobs j WHERE state NOT IN ('completed','completed_with_rejections','cancelled') ${agentId === undefined ? "" : "AND agent_id = ?"} AND EXISTS (SELECT 1 FROM source_import_files f WHERE f.job_id = j.id AND f.agent_id = j.agent_id AND f.source_id = ?) LIMIT 1`,
+		)
+		.get(...(agentId === undefined ? [] : [agentId]), sourceId);
+	if (active) throw new Error("source purge requires cancelled import leases");
+	const raw = db
+		.prepare(
+			`SELECT 1 FROM source_import_chunks c JOIN source_import_files f ON f.id = c.file_id AND f.agent_id = c.agent_id WHERE f.source_id = ? ${agentId === undefined ? "" : "AND f.agent_id = ?"} LIMIT 1`,
+		)
+		.get(sourceId, ...(agentId === undefined ? [] : [agentId]));
+	if (raw) throw new Error("source purge requires completed raw-byte cleanup");
+	let changed = 0;
 	const conversations =
 		agentId !== undefined
 			? (db
 					.prepare(
-						"SELECT agent_id, external_identity, canonical_key FROM transcript_import_conversations WHERE agent_id = ? AND owner_source_id = ?",
+						"SELECT agent_id, external_identity, canonical_key FROM transcript_import_conversations WHERE agent_id = ? AND owner_source_id = ? AND state != 'removed' LIMIT 25",
 					)
 					.all(agentId, sourceId) as Array<{ agent_id: string; external_identity: string; canonical_key: string }>)
 			: (db
 					.prepare(
-						"SELECT agent_id, external_identity, canonical_key FROM transcript_import_conversations WHERE owner_source_id = ?",
+						"SELECT agent_id, external_identity, canonical_key FROM transcript_import_conversations WHERE owner_source_id = ? AND state != 'removed' LIMIT 25",
 					)
 					.all(sourceId) as Array<{ agent_id: string; external_identity: string; canonical_key: string }>);
 	for (const conversation of conversations) {
@@ -350,16 +467,26 @@ export function purgeTranscriptImportSourceInTx(db: WriteDb, agentId: string | u
 			);
 		}
 	}
-	changed +=
-		agentId !== undefined
-			? db.prepare("DELETE FROM source_import_records WHERE agent_id = ? AND source_id = ?").run(agentId, sourceId)
-					.changes
-			: db.prepare("DELETE FROM source_import_records WHERE source_id = ?").run(sourceId).changes;
-	changed +=
-		agentId !== undefined
-			? db.prepare("DELETE FROM source_import_files WHERE agent_id = ? AND source_id = ?").run(agentId, sourceId)
-					.changes
-			: db.prepare("DELETE FROM source_import_files WHERE source_id = ?").run(sourceId).changes;
+	const scoped = agentId === undefined ? [sourceId] : [agentId, sourceId];
+	const predicate = agentId === undefined ? "source_id = ?" : "agent_id = ? AND source_id = ?";
+	const remaining = db
+		.prepare(
+			`SELECT 1 FROM transcript_import_conversations WHERE ${agentId === undefined ? "" : "agent_id = ? AND "}owner_source_id = ? AND state != 'removed' LIMIT 1`,
+		)
+		.get(...scoped);
+	if (remaining) return changed;
+	changed += db
+		.prepare(
+			`DELETE FROM source_import_records WHERE id IN (SELECT id FROM source_import_records WHERE ${predicate} LIMIT 25)`,
+		)
+		.run(...scoped).changes;
+	const records = db.prepare(`SELECT 1 FROM source_import_records WHERE ${predicate} LIMIT 1`).get(...scoped);
+	if (!records)
+		changed += db
+			.prepare(
+				`DELETE FROM source_import_files WHERE id IN (SELECT id FROM source_import_files WHERE ${predicate} LIMIT 25)`,
+			)
+			.run(...scoped).changes;
 	return changed;
 }
 

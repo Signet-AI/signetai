@@ -59,10 +59,11 @@ function comparable(response: RecallResponse): unknown {
 	};
 }
 
-afterEach(() => {
+afterEach(async () => {
 	stopInferenceServer?.();
 	stopInferenceServer = null;
-	closeDbAccessor();
+	await closeDbAccessor();
+	Bun.gc(true);
 	if (directory !== null) rmSync(directory, { recursive: true, force: true });
 	directory = null;
 	if (previousSignetPath === undefined) process.env.SIGNET_PATH = undefined;
@@ -91,7 +92,7 @@ describe("DB owner recall lane", () => {
 			claimRecallResults: false,
 		};
 		const direct = await hybridRecall(params, cfg, async () => null);
-		closeDbAccessor();
+		await closeDbAccessor();
 
 		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
 		try {
@@ -120,7 +121,7 @@ describe("DB owner recall lane", () => {
 				"INSERT INTO embeddings (content_hash, source_id, source_type, vector, dimensions, chunk_text, created_at) VALUES (?, ?, 'memory', ?, ?, '', datetime('now'))",
 			).run("owner-vector-hash", "owner-vector-fact", new Float32Array([1, 0, 0]), 3);
 		});
-		closeDbAccessor();
+		await closeDbAccessor();
 
 		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
 		try {

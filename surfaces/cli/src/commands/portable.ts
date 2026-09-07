@@ -13,11 +13,9 @@ import chalk from "chalk";
 import { Command } from "commander";
 import ora from "ora";
 import Database from "../sqlite.js";
-import { registerExportTranscriptsCommand } from "./export-transcripts.js";
+import { registerExportTranscriptsCommand, type ExportTranscriptsDeps } from "./export-transcripts.js";
 
-interface PortableDeps {
-	readonly AGENTS_DIR: string;
-}
+interface PortableDeps extends ExportTranscriptsDeps {}
 
 export function registerPortableCommands(program: Command, deps: PortableDeps): void {
 	const exportCmd = program.command("export").description("Export agent data (portable bundle or session transcripts)");

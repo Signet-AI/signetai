@@ -228,6 +228,13 @@ export interface DbOwnerTranscriptBulkCommit {
 	readonly sourceId: string;
 	readonly harness: string;
 	readonly commits: readonly CompletedTranscriptCommit[];
+	readonly inventory?: {
+		readonly fileId: string;
+		readonly records: readonly import("./transcript-import-scan").InventoryRecord[];
+		readonly previousByteOffset: number;
+		readonly checkpoint: import("./transcript-import-scan").TranscriptCheckpoint;
+		readonly complete: boolean;
+	};
 }
 export type DbOwnerRequest =
 	| { readonly kind: "memory_head"; readonly request: import("./memory-head").MemoryHeadRequest }

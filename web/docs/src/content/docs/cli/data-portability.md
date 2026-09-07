@@ -35,7 +35,7 @@ signet export transcripts --messages-only
 signet export transcripts --json
 ```
 
-Transcript export writes JSONL to standard output by default, or to `--output`. Use repeated `--harness` and `--agent` filters, `--limit` and `--offset` for resumable exports, and `--messages-only` to omit system and tool messages. `--json` emits a JSON array instead of JSONL.
+Transcript export writes JSONL to standard output by default, or to `--output`. Export requires the daemon and remains scoped to its resolved agent. Use repeated `--harness` filters and `--agent` to assert that scope, `--limit` and `--offset` for resumable exports, and `--messages-only` to omit system and tool messages. `--json` streams a JSON array instead of JSONL. An output file must not already exist.
 
 Transcripts can contain credentials, personal data, and private project context. Review access controls before using an export for training or analysis.
 
@@ -45,30 +45,38 @@ Transcripts can contain credentials, personal data, and private project context.
 streams the current `signet export transcripts` JSONL shape into a durable daemon
 job. `signet sources imports list|status|pause|resume|retry|cancel` reads or
 controls that job. The daemon records per-line hashes, byte checkpoints,
-statuses, rejection codes, and reconciliation counters; it does not store raw
-transcript bodies in the ledgers.
+statuses, rejection codes, and reconciliation counters. Raw transcript bodies
+are retained separately as bounded database chunks.
 
 The adapter is `signet-export` version `1`. It preserves exact whitespace,
 multiline messages, `user`/`assistant`/`system`/`tool`/`unknown` roles, projects,
 historical timestamps, and source provenance. `--agent` is the target scope;
 an embedded `agent_id` is not an authorization or routing override. Same
 identity plus same content is `duplicate`; same identity plus changed content is
-`conversation_identity_conflict`. Blank lines are counted separately from
-rejected lines.
+`conversation_identity_conflict`. Blank lines are ignored.
 
-The managed transcript filesystem currently supports Linux and macOS only. On
-Windows, the durable transcript import endpoints return HTTP `501` with
-`code: "transcript_import_unsupported_platform"` before creating or mutating
-an import job. Run the transcript import commands against a Linux or macOS
-Signet daemon; other Windows source and native features remain supported.
+Transcript imports and imported-source deletion support Windows, Linux, and macOS.
+The single database owner retains the raw bytes and resumes checksummed uploads.
+See the [import API](/api/documents-sources/#durable-transcript-imports) for upload
+limits, disk-space admission, and migration of older filesystem imports.
+
+Resume an interrupted upload with the job and file IDs from status:
+
+```bash
+signet sources imports upload <job-id> <file-id> ./conversations.jsonl --agent <id>
+```
+
+The client verifies the local prefix against the durable checksum chain before
+continuing. Finalization makes one streaming pass over the stored file for its
+standard SHA-256 identity. Parsing starts only after evidence is sealed.
 
 Limits are one active job/file, 25 records per DB batch, 8 MiB per canonical
 batch, 16 MiB per record, 4 MiB per message, and 50,000 messages. States are
 `staging`, `inventorying`, `queued`, `running`, `paused`, `completed`,
 `completed_with_rejections`, and `cancelled`. Restart recovers leases and byte
-offsets. The terminal reconciliation invariant is `total = imported + duplicate
+offsets. The completed-job reconciliation invariant is `total = imported + duplicate
 + rejected + pending` with `pending = 0`. Exact corpus replay produces
-duplicates, not new evidence. Source removal purges staged/canonical/source
+duplicates, not new evidence. Source removal purges retained bytes and source
 rows, while bounded audit fingerprints/tombstones remain; derived knowledge is
 handled as unsupported/stale by the normal Dreaming review path.
 

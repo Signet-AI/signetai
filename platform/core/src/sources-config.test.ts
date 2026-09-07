@@ -686,6 +686,22 @@ describe("sources-config", () => {
 		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(2);
 	});
 
+	it("replays a finalized upload without creating a second reimport source", () => {
+		const agentsDir = tmp();
+		const input = {
+			fileName: "export.jsonl",
+			contentHash: "a".repeat(64),
+			format: "jsonl",
+			agentId: "a",
+			duplicateMode: "reimport",
+			importKey: "job:file:0",
+		} as const;
+		const first = addImportedSource(input, agentsDir);
+		const replay = addImportedSource(input, agentsDir);
+		expect(first.ok && replay.ok && replay.source.id === first.source.id).toBe(true);
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+		expect(addImportedSource({ ...input, contentHash: "b".repeat(64) }, agentsDir).ok).toBe(false);
+	});
 	it("rejects malformed imported source metadata", () => {
 		const agentsDir = tmp();
 		expect(addImportedSource({ fileName: "", contentHash: "a".repeat(64), format: "json" }, agentsDir)).toEqual({

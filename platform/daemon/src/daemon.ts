@@ -512,16 +512,14 @@ app.use("*", async (c, next) => {
 	);
 });
 
-// Resolve the custom SQLite runtime once so both owner lanes use the same
-// runtime selected for this daemon instance.
+// Resolve the SQLite runtime once for the workspace owner.
 const sqliteRuntime = resolveSqliteRuntimeConfig({ agentsDir: AGENTS_DIR });
 
 export function createRecallDbOwnerOptions(sqlitePath: string | undefined): DbOwnerClientOptions {
-	return { dbPath: MEMORY_DB, sqlitePath, workerRole: "recall" };
+	return { dbPath: MEMORY_DB, sqlitePath };
 }
 
-// Recall uses its own child-process lane so request reads never wait behind
-// maintenance or write work in the generic owner.
+// Recall, writes, and bounded maintenance share one database owner.
 const recallOwner = createDbOwnerClient(createRecallDbOwnerOptions(sqliteRuntime.choice?.path));
 recallDbOwner = recallOwner;
 
@@ -2382,7 +2380,7 @@ async function main() {
 
 	// Expensive schema/FTS initialization must execute in the killable owner
 	// process, not merely behind an async function on this isolate.
-	dbOwnerClient = createDbOwnerClient({ dbPath: MEMORY_DB, sqlitePath: sqliteRuntime.choice?.path });
+	dbOwnerClient = recallOwner;
 	await dbOwnerClient.start();
 	const owner = dbOwnerClient;
 

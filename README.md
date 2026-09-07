@@ -57,9 +57,7 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 
 Covers Linux x64/arm64, macOS x64/arm64, Windows x64, and Docker.
 
-Durable transcript imports require Linux or macOS filesystem safeguards. The
-Windows install remains supported for other Signet features; transcript import
-mutations and imported-source deletion return a structured `501` platform error.
+Durable transcript imports and imported-source deletion support Windows, Linux, and macOS. Uploads resume from durable database checkpoints.
 
 ### Setup
 

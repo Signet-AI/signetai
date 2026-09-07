@@ -65,6 +65,7 @@ export async function importTranscriptFiles(
 	}
 	const started = await deps.fetchDaemonImport<SourceImportCreateResponse>(
 		`/api/sources/imports/${encodeURIComponent(jobId)}/start`,
+		{ method: "POST" },
 	);
 	if (!started.ok) return failImport(started.error ?? "could not start import job");
 	printImportOutput({ ...started.data, id: jobId, jobId }, options.json);

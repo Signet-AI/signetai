@@ -1,34 +1,7 @@
 import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { lstat, open, opendir, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
-
-export const TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS = ["linux", "darwin"] as const;
-export const TRANSCRIPT_IMPORT_UNSUPPORTED_PLATFORM_CODE = "transcript_import_unsupported_platform";
-
-export class UnsupportedTranscriptImportPlatformError extends Error {
-	readonly code = TRANSCRIPT_IMPORT_UNSUPPORTED_PLATFORM_CODE;
-	readonly platform: string;
-	readonly supportedPlatforms = TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS;
-
-	constructor(platform: string) {
-		super(`durable transcript imports are unavailable on ${platform}; supported platforms: linux, darwin`);
-		this.name = "UNSUPPORTED_TRANSCRIPT_IMPORT_PLATFORM";
-		this.platform = platform;
-	}
-}
-
-export function getTranscriptImportPlatformError(
-	platform: string = process.platform,
-): UnsupportedTranscriptImportPlatformError | undefined {
-	if ((TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS as readonly string[]).includes(platform)) return undefined;
-	return new UnsupportedTranscriptImportPlatformError(platform);
-}
-
-export function assertTranscriptImportPlatformSupported(platform: string = process.platform): void {
-	const error = getTranscriptImportPlatformError(platform);
-	if (error !== undefined) throw error;
-}
+import { join, relative, resolve, sep } from "node:path";
 
 const DESCRIPTOR_ROOT =
 	process.platform === "linux" ? "/proc/self/fd" : process.platform === "darwin" ? "/dev/fd" : undefined;
@@ -45,13 +18,12 @@ export class UnsafeManagedTranscriptPathError extends Error {
 }
 
 function descriptorPath(fd: number, child?: string): string {
-	if (DESCRIPTOR_ROOT === undefined) throw new UnsupportedTranscriptImportPlatformError(process.platform);
+	if (DESCRIPTOR_ROOT === undefined) throw new Error("Legacy transcript migration requires Linux or macOS");
 	return child === undefined ? `${DESCRIPTOR_ROOT}/${fd}` : `${DESCRIPTOR_ROOT}/${fd}/${child}`;
 }
 
 function requireDescriptorFilesystem(): void {
-	assertTranscriptImportPlatformSupported();
-	if (DESCRIPTOR_ROOT === undefined) throw new UnsupportedTranscriptImportPlatformError(process.platform);
+	if (DESCRIPTOR_ROOT === undefined) throw new Error("Legacy transcript migration requires Linux or macOS");
 }
 
 function normalizePathError(error: unknown): unknown {
@@ -97,7 +69,7 @@ async function assertFinalComponentIsNotSymlink(path: string): Promise<void> {
  * Open every parent directory from a held descriptor. POSIX descriptor paths
  * keep the checked parent stable while the caller performs its operation.
  */
-async function openContainedDirectory(root: string, parts: readonly string[], create = false): Promise<FileHandle> {
+async function openContainedDirectory(root: string, parts: readonly string[]): Promise<FileHandle> {
 	requireDescriptorFilesystem();
 	let current: FileHandle;
 	try {
@@ -108,18 +80,7 @@ async function openContainedDirectory(root: string, parts: readonly string[], cr
 	try {
 		for (const component of parts) {
 			const child = descriptorPath(current.fd, component);
-			let next: FileHandle;
-			try {
-				next = await open(child, DIRECTORY_FLAGS);
-			} catch (error) {
-				if (!create || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-				try {
-					await mkdir(child, { mode: 0o700 });
-				} catch (mkdirError) {
-					if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
-				}
-				next = await open(child, DIRECTORY_FLAGS);
-			}
+			const next = await open(child, DIRECTORY_FLAGS);
 			await closeQuietly(current);
 			current = next;
 		}
@@ -152,32 +113,6 @@ export async function openContainedTranscriptFile(
 	}
 }
 
-/** Create a directory tree without traversing a symlinked component. */
-export async function mkdirContainedTranscriptDirectory(root: string, candidate: string): Promise<void> {
-	const parts = containedParts(root, candidate, true);
-	const directory = await openContainedDirectory(root, parts, true);
-	await closeQuietly(directory);
-}
-
-/** Create one final directory atomically under its held parent. */
-export async function createContainedTranscriptDirectory(root: string, candidate: string): Promise<boolean> {
-	const parts = containedParts(root, candidate);
-	const name = parts.pop();
-	if (name === undefined) throw new UnsafeManagedTranscriptPathError("managed directory path is empty");
-	const parent = await openContainedDirectory(root, parts, true);
-	try {
-		try {
-			await mkdir(descriptorPath(parent.fd, name), { mode: 0o700 });
-			return true;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-			throw normalizePathError(error);
-		}
-	} finally {
-		await closeQuietly(parent);
-	}
-}
-
 /** Remove a final entry while holding its checked parent directory. */
 export async function removeContainedTranscriptPath(
 	root: string,
@@ -199,51 +134,30 @@ export async function removeContainedTranscriptPath(
 	}
 }
 
-/** Atomically rename entries whose parent directories are held by descriptor. */
-export async function renameContainedTranscriptPath(root: string, from: string, to: string): Promise<void> {
-	const fromParts = containedParts(root, from);
-	const fromName = fromParts.pop();
-	const toParts = containedParts(root, to);
-	const toName = toParts.pop();
-	if (fromName === undefined || toName === undefined)
-		throw new UnsafeManagedTranscriptPathError("managed rename path is empty");
-	const fromParent = await openContainedDirectory(root, fromParts);
+/** Migration inventory holds the directory while iterating a bounded native buffer. */
+export async function* iterateContainedTranscriptDirectory(root: string, candidate: string): AsyncGenerator<string> {
+	const directory = await openContainedDirectory(root, containedParts(root, candidate, true));
 	try {
-		const toParent = await openContainedDirectory(root, toParts);
-		try {
-			await assertFinalComponentIsNotSymlink(descriptorPath(fromParent.fd, fromName));
-			await assertFinalComponentIsNotSymlink(descriptorPath(toParent.fd, toName));
-			await rename(descriptorPath(fromParent.fd, fromName), descriptorPath(toParent.fd, toName));
-		} catch (error) {
-			throw normalizePathError(error);
-		} finally {
-			await closeQuietly(toParent);
-		}
-	} finally {
-		await closeQuietly(fromParent);
-	}
-}
-
-/** Read directory entries through a held directory descriptor. */
-export async function readdirContainedTranscriptDirectory(root: string, candidate: string): Promise<string[]> {
-	const parts = containedParts(root, candidate, true);
-	const directory = await openContainedDirectory(root, parts);
-	try {
-		return await readdir(descriptorPath(directory.fd));
-	} catch (error) {
-		throw normalizePathError(error);
+		const entries = await opendir(descriptorPath(directory.fd));
+		for await (const entry of entries) yield entry.name;
 	} finally {
 		await closeQuietly(directory);
 	}
 }
 
-/** Flush a contained directory after an atomic rename. */
-export async function syncContainedTranscriptDirectory(root: string, candidate: string): Promise<void> {
-	const parts = containedParts(root, candidate, true);
-	const directory = await openContainedDirectory(root, parts);
-	try {
-		await directory.sync();
-	} finally {
-		await closeQuietly(directory);
-	}
+/** Resolve a ledger path only inside imports/transcripts under the workspace. */
+export function resolveManagedTranscriptPath(root: string, managedPath: string): string {
+	const rootResolved = resolve(root);
+	const candidate = resolve(rootResolved, managedPath);
+	const relativePath = relative(rootResolved, candidate);
+	const managedPrefix = `${join("imports", "transcripts")}${sep}`;
+	if (
+		!relativePath ||
+		relativePath.startsWith("..") ||
+		relativePath.includes(`..${sep}`) ||
+		relativePath.includes(`${sep}..`) ||
+		!relativePath.startsWith(managedPrefix)
+	)
+		throw new UnsafeManagedTranscriptPathError("managed staged path escapes workspace");
+	return candidate;
 }

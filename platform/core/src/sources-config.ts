@@ -129,6 +129,8 @@ export interface AddGitHubSourceInput {
 export type ImportedSourceDuplicateMode = "skip" | "replace" | "reimport";
 
 export interface AddImportedSourceInput {
+	/** Stable daemon upload identity, so retrying finalization cannot create another Source. */
+	readonly importKey?: string;
 	readonly fileName: string;
 	readonly contentHash: string;
 	readonly format: string;
@@ -281,6 +283,20 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 		const now = input.now ?? new Date().toISOString();
 		const config = loadSourcesConfigForWrite(agentsDir);
 		const mode = input.duplicateMode ?? "skip";
+		const replay =
+			input.importKey === undefined
+				? undefined
+				: config.sources.find(
+						(source) =>
+							source.kind === "import" &&
+							source.providerSettings?.agentId === agentId &&
+							source.providerSettings?.importKey === input.importKey,
+					);
+		if (replay) {
+			if (replay.providerSettings?.contentHash !== contentHash)
+				return { ok: false, error: "Import identity content mismatch" };
+			return { ok: true, source: replay, created: false, duplicate: true };
+		}
 		const duplicate = config.sources.find(
 			(source) =>
 				source.kind === "import" &&
@@ -310,6 +326,7 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 				fileName: basename(fileName),
 				contentHash,
 				format,
+				...(input.importKey === undefined ? {} : { importKey: input.importKey }),
 				...(agentId === undefined ? {} : { agentId }),
 			},
 		};

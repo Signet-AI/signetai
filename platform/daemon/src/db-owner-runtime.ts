@@ -13,12 +13,7 @@ import {
 	type DbOwnerSubmitOptions,
 } from "./db-owner-client";
 import { getDbOwnerMaintenance } from "./db-owner-maintenance";
-import { TRANSCRIPT_IMPORT_LIMITS } from "./transcript-import-adapter";
-import {
-	commitCompletedTranscriptBatchInTx,
-	purgeTranscriptImportSourceInTx,
-	transcriptCommitBatchBytes,
-} from "./transcript-import-commit";
+import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import type {
 	DbOwnerJob,
@@ -165,30 +160,8 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		});
 	}
 	if (request.kind === "transcript_bulk_commit") {
-		if (
-			request.input.commits.length === 0 ||
-			request.input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch
-		)
-			throw new RangeError("invalid transcript commit batch");
-		if (transcriptCommitBatchBytes(request.input.commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
-			throw new RangeError("canonical_batch_too_large");
-		if (
-			request.input.commits.some(
-				(commit) =>
-					commit.agentId !== request.input.agentId ||
-					commit.sourceId !== request.input.sourceId ||
-					commit.harness !== request.input.harness,
-			)
-		)
-			throw new Error("transcript commit provenance does not match owner request");
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
-			const lease = db
-				.prepare(
-					"SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying')",
-				)
-				.get(request.input.jobId, request.input.agentId, request.input.generation, request.input.leaseToken);
-			if (lease == null) throw new Error("stale import lease");
-			return commitCompletedTranscriptBatchInTx(db as never, request.input.commits);
+			return commitTranscriptImportBatchInTx(db as never, request.input);
 		});
 	}
 	if (request.kind === "source_purge")
@@ -310,7 +283,7 @@ export async function startDbOwnerWithRole(
 	options: Pick<DbOwnerClientOptions, "workerPath"> = {},
 ): Promise<DbOwnerClient> {
 	const identity = await dbIdentity(dbPath);
-	const key = `${workerRole}:${dbPath}`;
+	const key = dbPath;
 	const retiredClosure = retiredClientClosures.get(key);
 	if (retiredClosure !== undefined) await retiredClosure;
 	const current = clients.get(key);
@@ -347,14 +320,14 @@ export async function startDbOwnerWithRole(
 	}
 }
 
-/** Start the generic process DB owner for one database path. */
+/** Start the shared process DB owner for one database path. */
 export async function startDbOwner(
 	dbPath = join(resolveSqliteAgentsDir(), "memory", "memories.db"),
 ): Promise<DbOwnerClient> {
 	return await startDbOwnerWithRole(dbPath, "generic");
 }
 
-/** Start the recall process DB owner for one database path. */
+/** Compatibility entry point; recall shares the canonical owner. */
 export async function startDbRecallOwner(
 	dbPath = join(resolveSqliteAgentsDir(), "memory", "memories.db"),
 ): Promise<DbOwnerClient> {
@@ -377,12 +350,9 @@ export async function getDbOwner(dbPath?: string): Promise<DbOwnerClient> {
 	return await startDbOwner(dbPath);
 }
 
-/** Resolve the recall owner without allowing a generic owner to reject vector jobs. */
+/** Recall requests use the same owner as writes and maintenance. */
 export async function getDbRecallOwner(dbPath?: string): Promise<DbOwnerClient> {
-	if (process.env.SIGNET_DB_OWNER_WORKER === "1") return await getCurrentProcessOwner();
-	if (hasDbAccessor()) return await startDbRecallOwner(getDbAccessorPath());
-	if (isolatedTestAccessor !== null) return inlineOwner(isolatedTestAccessor);
-	return await startDbRecallOwner(dbPath);
+	return getDbOwner(dbPath);
 }
 
 /**
@@ -676,14 +646,9 @@ export function ownerStatement(
 
 export async function closeDbOwner(dbPath?: string): Promise<void> {
 	if (dbPath !== undefined) {
-		const entries = ["generic", "recall"].flatMap((workerRole) => {
-			const key = `${workerRole}:${dbPath}`;
-			const entry = clients.get(key);
-			if (entry === undefined) return [];
-			clients.delete(key);
-			return [entry];
-		});
-		await Promise.all(entries.map((entry) => entry.owner.close()));
+		const entry = clients.get(dbPath);
+		clients.delete(dbPath);
+		if (entry) await entry.owner.close();
 		return;
 	}
 	const entries = [...clients.values()];

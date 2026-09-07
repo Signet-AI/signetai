@@ -266,13 +266,7 @@ function messageFromError(error: DbOwnerSerializedError): DbOwnerError {
 	return new DbOwnerError(error.code ?? error.name, error.message, error.causeFamily, error.sqliteCode);
 }
 
-function oldestAge(first: number | null, second: number | null): number | null {
-	if (first === null) return second;
-	if (second === null) return first;
-	return Math.max(first, second);
-}
-
-function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient {
+export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient {
 	let child: ChildProcess | null = null;
 	let activeChildClose: Promise<void> | null = null;
 	let retiredChildClose: Promise<void> | null = null;
@@ -579,7 +573,6 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 				SIGNET_DB_OWNER_DB_PATH: options.dbPath,
 				SIGNET_DB_OWNER_WORKER: "1",
 				...(options.sqlitePath === undefined ? {} : { SIGNET_DB_OWNER_SQLITE_PATH: options.sqlitePath }),
-				...(options.workerRole === "recall" ? { SIGNET_DB_OWNER_RECALL_WORKER: "1" } : {}),
 				SIGNET_DB_OWNER_CANCEL_REGISTRY: cancellationRegistryPath,
 			};
 			// A compiled daemon sets this marker so the native entrypoint dispatches
@@ -870,121 +863,4 @@ function createSingleDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient
 	}
 
 	return { start, initialize, submit, setWriteBlocked, awaitResult, cancel, health: currentHealth, close };
-}
-
-/**
- * Keep recall independent from serial writes and maintenance. Each lane owns
- * its own SQLite connection and FIFO queue. Read jobs therefore cannot wait
- * behind a synchronous maintenance job, while writes and maintenance remain
- * serialized on one owner connection.
- */
-export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClient {
-	const readLane = createSingleDbOwnerClient(options);
-	// Interactive writes must never share the maintenance owner. Queue priority
-	// inside one saturated child is not capacity reservation: a synchronous
-	// maintenance job can still hold that child and its SQLite connection.
-	const writeLane = options.workerRole === "recall" ? readLane : createSingleDbOwnerClient(options);
-	const maintenanceLane = options.workerRole === "recall" ? readLane : createSingleDbOwnerClient(options);
-	let closed = false;
-
-	function laneFor(requestLane: DbOwnerLane, workloadClass?: DbOwnerWorkloadClass): DbOwnerClient {
-		if (workloadClass === "maintenance" || requestLane === "maintenance" || requestLane === "verify")
-			return maintenanceLane;
-		return requestLane === "read" ? readLane : writeLane;
-	}
-
-	function toLaneHealth(lane: DbOwnerHealth): DbOwnerLaneHealth {
-		return {
-			state: lane.state,
-			pid: lane.pid,
-			generation: lane.generation,
-			queuedJobs: lane.queuedJobs,
-			activeJobId: lane.activeJobId,
-			activeWorkloadClass: lane.activeWorkloadClass,
-			foregroundQueuedJobs: lane.foregroundQueuedJobs,
-			maintenanceQueuedJobs: lane.maintenanceQueuedJobs,
-			foregroundOldestAgeMs: lane.foregroundOldestAgeMs,
-			maintenanceOldestAgeMs: lane.maintenanceOldestAgeMs,
-			lastError: lane.lastError,
-		};
-	}
-
-	function health(): DbOwnerHealth {
-		const read = readLane.health();
-		const write = writeLane.health();
-		const maintenance = maintenanceLane.health();
-		const state: DbOwnerHealthState =
-			read.state === "closed" && write.state === "closed" && maintenance.state === "closed"
-				? "closed"
-				: read.state === "failed" || write.state === "failed" || maintenance.state === "failed"
-					? "failed"
-					: (read.state === "dead" && read.generation > 0) ||
-							(write.state === "dead" && write.generation > 0) ||
-							(maintenance.state === "dead" && maintenance.generation > 0)
-						? "dead"
-						: read.state === "starting" || write.state === "starting" || maintenance.state === "starting"
-							? "starting"
-							: read.state === "ready" || write.state === "ready" || maintenance.state === "ready"
-								? "ready"
-								: "dead";
-		return {
-			state,
-			initialization: maintenance.initialization,
-			databaseReady: maintenance.databaseReady,
-			pid: read.pid ?? write.pid ?? maintenance.pid,
-			generation: Math.max(read.generation, write.generation, maintenance.generation),
-			queuedJobs: read.queuedJobs + write.queuedJobs + maintenance.queuedJobs,
-			foregroundQueuedJobs: read.foregroundQueuedJobs + write.foregroundQueuedJobs + maintenance.foregroundQueuedJobs,
-			maintenanceQueuedJobs:
-				read.maintenanceQueuedJobs + write.maintenanceQueuedJobs + maintenance.maintenanceQueuedJobs,
-			activeJobId: read.activeJobId ?? write.activeJobId ?? maintenance.activeJobId,
-			activeWorkloadClass: read.activeWorkloadClass ?? write.activeWorkloadClass ?? maintenance.activeWorkloadClass,
-			foregroundOldestAgeMs: oldestAge(
-				oldestAge(read.foregroundOldestAgeMs, write.foregroundOldestAgeMs),
-				maintenance.foregroundOldestAgeMs,
-			),
-			maintenanceOldestAgeMs: oldestAge(read.maintenanceOldestAgeMs, maintenance.maintenanceOldestAgeMs),
-			lanes: {
-				read: toLaneHealth(read),
-				write: toLaneHealth(write),
-				maintenance: toLaneHealth(maintenance),
-			},
-			lastError: read.lastError ?? write.lastError ?? maintenance.lastError,
-		};
-	}
-
-	return {
-		async start(): Promise<void> {
-			if (closed) throw new DbOwnerError("DB_OWNER_CLOSED", "DB owner client is closed");
-			await Promise.all([readLane.start(), writeLane.start(), maintenanceLane.start()]);
-		},
-		async initialize(agentsDir?: string): Promise<DbOwnerInitializationResult> {
-			return await maintenanceLane.initialize(agentsDir);
-		},
-		submit<Result>(request: DbOwnerRequest, submitOptions: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> {
-			return laneFor(submitOptions.lane, submitOptions.workloadClass).submit<Result>(request, submitOptions);
-		},
-		setWriteBlocked(blocked: boolean): void {
-			readLane.setWriteBlocked(blocked);
-			if (writeLane !== readLane) writeLane.setWriteBlocked(blocked);
-			if (maintenanceLane !== readLane && maintenanceLane !== writeLane) maintenanceLane.setWriteBlocked(blocked);
-		},
-		awaitResult<Result>(handle: DbOwnerJobHandle<Result>, timeoutMs?: number): Promise<Result> {
-			return laneFor(handle.job.lane, handle.job.workloadClass).awaitResult(handle, timeoutMs);
-		},
-		cancel(jobId) {
-			readLane.cancel(jobId);
-			writeLane.cancel(jobId);
-			maintenanceLane.cancel(jobId);
-		},
-		health,
-		async close(): Promise<void> {
-			if (closed) return;
-			closed = true;
-			const lanes = [readLane];
-			if (writeLane !== readLane) lanes.push(writeLane);
-			if (maintenanceLane !== readLane && maintenanceLane !== writeLane) lanes.push(maintenanceLane);
-			await Promise.all(lanes.map((lane) => lane.close()));
-		},
-	};
 }

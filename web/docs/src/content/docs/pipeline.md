@@ -37,23 +37,23 @@ roles, exact whitespace, multiline content, projects, historical timestamps, and
 source provenance. Embedded agent ids never override the selected target scope.
 
 Each nonblank line has one durable outcome: `pending`, `imported`, `duplicate`,
-or `rejected`; blank lines are counted separately. The worker uses one active
+or `rejected`; blank lines are ignored. The worker uses one active
 job/file, 25 records per database batch, an 8 MiB canonical batch, 16 MiB record
 and 4 MiB message caps, and a 50,000-message cap. Job counters reconcile as
-`total = imported + duplicate + rejected + pending`, and terminal jobs have no
+`total = imported + duplicate + rejected + pending`, and completed jobs have no
 pending records. Restart recovery reclaims leases and resumes byte checkpoints;
-filesystem-first canonical writes are idempotent. Replaying the same export is
+evidence, outcomes, audit entries, and checkpoints commit atomically. Replaying the same export is
 reported as duplicates, not as new evidence.
 
 Dreaming remains separate: a committed batch emits one attention nudge, then the
 existing delivery, consumption, and review path determines pending Dreaming
-work. Removing the source purges imported evidence, canonical lines, indexes,
+work. Removing the source purges imported evidence, indexes,
 and consumption rows while preserving bounded audit tombstones and routing
 derived knowledge through unsupported/stale review.
 
-The managed transcript filesystem currently supports Linux and macOS only. On
-Windows, durable transcript import endpoints and imported-source deletion return
-`501` with `code: "transcript_import_unsupported_platform"` before changing
-import state.
+Transcript imports and imported-source deletion support Windows, Linux, and macOS.
+The single database owner retains the raw bytes and resumes checksummed uploads.
+See the [import API](/api/documents-sources/#durable-transcript-imports) for upload
+limits, disk-space admission, and migration of older filesystem imports.
 
 For supported runtime configuration, use [Inference and routing](/configuration/inference-routing/) and [Pipeline configuration](/configuration/pipeline/). This section intentionally does not duplicate operator configuration.

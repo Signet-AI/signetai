@@ -1137,6 +1137,7 @@ registerContextCommands(program, {
 
 registerPortableCommands(program, {
 	AGENTS_DIR,
+	fetchDaemonStream,
 });
 
 registerWorkspaceCommands(program, {

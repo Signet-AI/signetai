@@ -1,3 +1,4 @@
+import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
 /**
  * Migration runner for Signet's SQLite database
  *
@@ -1369,6 +1370,35 @@ export const MIGRATIONS: readonly Migration[] = [
 			columns: [
 				{ table: "memory_md_heads", column: "is_current" },
 				{ table: "dreaming_passes", column: "head_base_revision" },
+			],
+		},
+	},
+	{
+		version: 151,
+		name: "transcript-import-bytes",
+		up: transcriptImportBytes,
+		artifacts: {
+			tables: [
+				"source_import_chunks",
+				"source_import_capacity",
+				"source_import_migrations",
+				"source_import_migration_streams",
+				"source_import_migration_counts",
+			],
+			columns: [
+				{ table: "source_import_files", column: "storage_state" },
+				{ table: "source_import_files", column: "upload_generation" },
+				{ table: "source_import_files", column: "upload_offset" },
+				{ table: "source_import_files", column: "upload_size" },
+				{ table: "source_import_files", column: "upload_digest" },
+				...["checkpoint_line_number", "reserved_bytes", "original_path"].map((column) => ({
+					table: "source_import_files",
+					column,
+				})),
+				...["retry_count", "cleanup_state", "retry_cursor", "retry_requested"].map((column) => ({
+					table: "source_import_jobs",
+					column,
+				})),
 			],
 		},
 	},
