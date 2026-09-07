@@ -206,10 +206,14 @@ export class DreamingBacklogTokenCache {
 				});
 			});
 		} finally {
-			this.workers.delete(worker);
-			void worker.terminate().catch(() => {
+			// Complete teardown before the next queued request can start another
+			// worker; overlapping compiled worker shutdown can hang Windows.
+			try {
+				await worker.terminate();
+			} catch {
 				// The worker already exited; the request result carries the causal error.
-			});
+			}
+			this.workers.delete(worker);
 		}
 	}
 
