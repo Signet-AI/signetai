@@ -59,7 +59,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `database-integrity.ts:551` (withWriteTxAsync)
 - `database-integrity.ts:712` (withReadDbAsync)
 - `database-integrity.ts:830` (withReadDbAsync)
-- `db-accessor.ts:3031` (withWriteTxAsync)
+- `db-accessor.ts:3022` (withWriteTxAsync)
 - `db-vacuum.ts:331` (withReadDb)
 - `db-vacuum.ts:339` (withReadDbAsync)
 - `db-vacuum.ts:347` (withWriteTxAsync)

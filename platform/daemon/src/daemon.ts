@@ -80,13 +80,13 @@ import {
 	isVectorRuntimeUsable,
 	pruneMigrationBackupsAfterIntegrity,
 	resolveSqliteRuntimeConfig,
-	registerDbOwnerHealthProvider,
 	setDatabaseIntegrityWritesBlocked,
 } from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum-worker";
 import { createDbOwnerClient, type DbOwnerClient, type DbOwnerClientOptions } from "./db-owner-client";
 import {
 	type DbOwnerMaintenance,
+	closeRegisteredDbOwnerMaintenance,
 	createDbOwnerMaintenance,
 	ownerQueryAll,
 	ownerQueryOne,
@@ -1878,7 +1878,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (dbOwnerMaintenanceHandle === null) {
 		dbOwnerMaintenanceHandle = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient ?? undefined });
 		registerDbOwnerMaintenance(dbOwnerMaintenanceHandle);
-		registerDbOwnerHealthProvider(dbOwnerMaintenanceHandle.health);
 	}
 
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
@@ -2087,12 +2086,8 @@ async function cleanup() {
 	}
 	await stopPipelineRuntime();
 
-	if (dbOwnerMaintenanceHandle !== null) {
-		await dbOwnerMaintenanceHandle.close().catch(() => {});
-		dbOwnerMaintenanceHandle = null;
-		registerDbOwnerMaintenance(null);
-		registerDbOwnerHealthProvider(null);
-	}
+	await closeRegisteredDbOwnerMaintenance().catch(() => {});
+	dbOwnerMaintenanceHandle = null;
 
 	try {
 		const { shutdownNativeProvider } = await import("./native-embedding");

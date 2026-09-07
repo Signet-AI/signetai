@@ -4,7 +4,7 @@ import type { Hono } from "hono";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { type ReadDb, type ReadPressure, type WritePressure, getDbAccessor } from "../db-accessor";
 import type { DbOwnerHealth } from "../db-owner-client";
-import { getDbOwnerMaintenance, ownerQueryOne } from "../db-owner-maintenance";
+import { getDbOwnerHealth, getDbOwnerMaintenance, ownerQueryOne } from "../db-owner-maintenance";
 import { getDbRuntimeMetrics, getEventLoopLiveness } from "../db-observability";
 import {
 	QUEUE_MAX_DEAD_RATE,
@@ -210,7 +210,7 @@ export function mountHealthRoutes(app: Hono): void {
 		let dbWriter: WritePressure | null = null;
 		let dbReader: ReadPressure | null = null;
 		let dbRuntime = getDbRuntimeMetrics();
-		let dbOwner: DbOwnerHealth | null = null;
+		const dbOwner: DbOwnerHealth | null = getDbOwnerHealth();
 		try {
 			const accessor = getDbAccessor();
 			try {
@@ -236,7 +236,7 @@ export function mountHealthRoutes(app: Hono): void {
 			dbWriter = accessor.getWritePressure?.() ?? null;
 			dbReader = accessor.getReadPressure?.() ?? null;
 			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
-			dbOwner = accessor.getDbOwnerHealth?.() ?? null;
+			// Owner health is read from the authoritative maintenance resource above.
 		} catch {}
 
 		const databaseIntegrity = getDatabaseIntegrityStatus();

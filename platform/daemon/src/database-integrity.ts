@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { DbOwnerDeadlineError, type DbOwnerClient } from "./db-owner-client";
-import { ownerQueryAll, ownerRunStatement, ownerTransaction } from "./db-owner-maintenance";
+import { getDbOwnerHealthFields, ownerQueryAll, ownerRunStatement, ownerTransaction } from "./db-owner-maintenance";
 import type { DbOwnerStatement } from "./db-owner-protocol";
 import { logger } from "./logger";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
@@ -273,9 +273,9 @@ export function publishDatabaseIntegrityStatus(
 	};
 }
 
-/** Return the last startup integrity result without touching SQLite. */
+/** Keep owner identity live from the registered resource used by /health. */
 export function getDatabaseIntegrityStatus(): DatabaseIntegrityStatus {
-	return latestStatus;
+	return { ...latestStatus, ...getDbOwnerHealthFields() };
 }
 
 export type TelemetryIndexRepairAudit = (

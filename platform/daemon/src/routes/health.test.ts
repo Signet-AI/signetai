@@ -3,14 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { MAX_READ_CONNECTIONS, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import type { DbOwnerHealth, DbOwnerClient } from "../db-owner-client";
 import {
-	MAX_READ_CONNECTIONS,
-	closeDbAccessor,
-	getDbAccessor,
-	initDbAccessor,
-	registerDbOwnerHealthProvider,
-} from "../db-accessor";
-import type { DbOwnerHealth } from "../db-owner-client";
+	closeRegisteredDbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+} from "../db-owner-maintenance";
 import { resetDbObservability } from "../db-observability";
 import { startEventLoopMonitor, stopResourceMonitors } from "../resource-monitor";
 import { mountHealthRoutes } from "./health";
@@ -38,10 +37,11 @@ function makeApp(): Hono {
 	return app;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
 	stopResourceMonitors();
 	resetDbObservability();
-	closeDbAccessor();
+	await closeRegisteredDbOwnerMaintenance();
+	await closeDbAccessor();
 	dir = mkdtempSync(join(tmpdir(), "signet-health-routes-"));
 	// Point the daemon's base path at the bare temp workspace and disable the
 	// embedding provider: readiness must pass here without depending on
@@ -52,10 +52,11 @@ beforeEach(() => {
 	initDbAccessor(join(dir, "memory", "memories.db"));
 });
 
-afterEach(() => {
+afterEach(async () => {
 	stopResourceMonitors();
 	resetDbObservability();
-	closeDbAccessor();
+	await closeRegisteredDbOwnerMaintenance();
+	await closeDbAccessor();
 	if (savedSignetPath === undefined) {
 		delete process.env.SIGNET_PATH;
 	} else {
@@ -106,7 +107,9 @@ describe("GET /health owner diagnostics", () => {
 			...lane,
 			lanes: { read: lane, maintenance: lane },
 		} as DbOwnerHealth;
-		registerDbOwnerHealthProvider(() => ownerHealth);
+		const owner = { health: () => ownerHealth } as unknown as DbOwnerClient;
+		const maintenance = createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner });
+		registerDbOwnerMaintenance(maintenance);
 
 		try {
 			const res = await makeApp().request("http://localhost/health");
@@ -119,7 +122,7 @@ describe("GET /health owner diagnostics", () => {
 			expect(body.dbOwner.lanes.read.maintenanceQueuedJobs).toBe(1);
 			expect(body.dbOwner.lanes.maintenance.foregroundQueuedJobs).toBe(1);
 		} finally {
-			registerDbOwnerHealthProvider(null);
+			await closeRegisteredDbOwnerMaintenance();
 		}
 	});
 });

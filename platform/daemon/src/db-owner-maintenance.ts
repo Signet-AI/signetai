@@ -826,13 +826,56 @@ export interface CreateDbOwnerMaintenanceOptions {
 }
 
 let registeredMaintenance: DbOwnerMaintenance | null = null;
+let registeredMaintenanceClosing = false;
 
-export function registerDbOwnerMaintenance(maintenance: DbOwnerMaintenance | null): void {
+/**
+ * Register the single daemon DB-owner resource used by queries, maintenance,
+ * and diagnostics. A replacement must close the current resource first so a
+ * restart cannot leave two ambient owner lifecycles active at once.
+ */
+export function registerDbOwnerMaintenance(maintenance: DbOwnerMaintenance): void {
+	if (registeredMaintenanceClosing || (registeredMaintenance !== null && registeredMaintenance !== maintenance)) {
+		throw new Error(
+			registeredMaintenanceClosing
+				? "DB owner maintenance is closing; wait before registering a replacement"
+				: "DB owner maintenance is already registered; close it before registering a replacement",
+		);
+	}
 	registeredMaintenance = maintenance;
 }
 
 export function getDbOwnerMaintenance(): DbOwnerMaintenance | null {
 	return registeredMaintenance;
+}
+
+/** Return health from the same registered resource that owns DB operations. */
+export function getDbOwnerHealth(): DbOwnerHealth | null {
+	return registeredMaintenance?.health() ?? null;
+}
+
+/** Keep integrity owner identity tied to the registered resource when present. */
+export function getDbOwnerHealthFields(): {
+	readonly ownerState?: DbOwnerHealth["state"];
+	readonly ownerGeneration?: number;
+} {
+	const health = getDbOwnerHealth();
+	return health === null ? {} : { ownerState: health.state, ownerGeneration: health.generation };
+}
+
+/**
+ * Clear the registry before awaiting close so no request can observe a stale
+ * owner while cleanup or a subsequent daemon start is in progress.
+ */
+export async function closeRegisteredDbOwnerMaintenance(): Promise<void> {
+	const maintenance = registeredMaintenance;
+	registeredMaintenance = null;
+	if (maintenance === null) return;
+	registeredMaintenanceClosing = true;
+	try {
+		await maintenance.close();
+	} finally {
+		registeredMaintenanceClosing = false;
+	}
 }
 
 export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOptions): DbOwnerMaintenance {

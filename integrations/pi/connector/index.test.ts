@@ -35,7 +35,6 @@ beforeEach(() => {
 	process.env.SIGNET_AGENT_ID = "agent-from-env";
 	process.env.SIGNET_DAEMON_URL = "http://127.0.0.1:4123";
 	process.env.SIGNET_API_KEY = "sig_sk_test_connector";
-	// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 	delete process.env.SIGNET_PATH;
 });
 
