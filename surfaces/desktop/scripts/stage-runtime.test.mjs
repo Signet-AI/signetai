@@ -86,6 +86,38 @@ describe("stage-runtime Bun validation", () => {
 		}
 	});
 
+	it("preserves resources created during a failed swap", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const target = join(directory, "resources");
+		const staged = join(directory, "staged");
+		mkdirSync(target);
+		mkdirSync(staged);
+		writeFileSync(join(target, "marker"), "old\n");
+		writeFileSync(join(staged, "marker"), "new\n");
+		let renameCalls = 0;
+		const concurrentFinalSwap = (source, destination) => {
+			renameCalls += 1;
+			if (renameCalls === 2) {
+				mkdirSync(destination);
+				writeFileSync(join(destination, "marker"), "concurrent\n");
+				throw new Error("injected final swap failure");
+			}
+			renameSync(source, destination);
+		};
+
+		try {
+			expect(() => replaceResources(target, staged, concurrentFinalSwap)).toThrow(
+				"Unable to restore previous desktop resources",
+			);
+			expect(readFileSync(join(target, "marker"), "utf8")).toBe("concurrent\n");
+			const backups = readdirSync(directory).filter((entry) => entry.startsWith(".resources-backup-"));
+			expect(backups).toHaveLength(1);
+			expect(readFileSync(join(directory, backups[0], "resources", "marker"), "utf8")).toBe("old\n");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps the backup when rollback also fails", () => {
 		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
 		const target = join(directory, "resources");

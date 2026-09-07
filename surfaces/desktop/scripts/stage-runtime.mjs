@@ -161,7 +161,9 @@ export function replaceResources(target, staged, rename = renameSync, remove = r
 	} catch (error) {
 		if (moved) {
 			try {
-				if (existsSync(target)) rmSync(target, { recursive: true, force: true });
+				if (existsSync(target)) {
+					throw new Error(`Desktop resources changed during replacement: ${target}`);
+				}
 				rename(backup, target);
 			} catch (restoreError) {
 				const detail = restoreError instanceof Error ? restoreError.message : String(restoreError);
