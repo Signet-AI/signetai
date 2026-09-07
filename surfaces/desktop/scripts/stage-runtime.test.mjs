@@ -35,4 +35,20 @@ describe("stage-runtime Bun validation", () => {
 			else process.env.ELECTRON_BUILDER_ARCH = previousArch;
 		}
 	});
+
+	it("rejects a foreign target architecture before resolving a host runtime", () => {
+		const previousPlatform = process.env.ELECTRON_BUILDER_PLATFORM;
+		const previousArch = process.env.ELECTRON_BUILDER_ARCH;
+		const foreignArch = process.arch === "x64" ? "arm64" : "x64";
+		process.env.ELECTRON_BUILDER_PLATFORM = process.platform;
+		process.env.ELECTRON_BUILDER_ARCH = foreignArch;
+		try {
+			expect(() => stageRuntime()).toThrow("Desktop runtime staging requires a native");
+		} finally {
+			if (previousPlatform === undefined) delete process.env.ELECTRON_BUILDER_PLATFORM;
+			else process.env.ELECTRON_BUILDER_PLATFORM = previousPlatform;
+			if (previousArch === undefined) delete process.env.ELECTRON_BUILDER_ARCH;
+			else process.env.ELECTRON_BUILDER_ARCH = previousArch;
+		}
+	});
 });
