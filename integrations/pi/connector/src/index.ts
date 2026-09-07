@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
-	MANAGED_AGENT_ID_DEFAULT,
 	MANAGED_DAEMON_URL_DEFAULT,
 	type UninstallResult,
 	buildManagedExtensionContent,
@@ -22,8 +21,19 @@ import {
 	resolvePiAgentDir,
 	resolvePiExtensionsDir,
 	writeConfiguredPiAgentDir,
-} from "@signet/core";
+} from "@signet/pi-extension-base/agent-dir";
 import { EXTENSION_BUNDLE } from "./extension-bundle.js";
+
+export {
+	clearConfiguredPiAgentDir,
+	getPiConfigPath,
+	hasPiSetup,
+	listPiAgentDirCandidates,
+	readConfiguredPiAgentDir,
+	resolvePiAgentDir,
+	resolvePiExtensionsDir,
+	writeConfiguredPiAgentDir,
+} from "@signet/pi-extension-base/agent-dir";
 
 const PI_EXTENSION_PACKAGE = "@signet/pi-extension";
 const PI_EXTENSION_ENTRY = "dist/signet-pi.mjs";

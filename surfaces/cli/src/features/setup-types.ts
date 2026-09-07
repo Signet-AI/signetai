@@ -1,4 +1,4 @@
-import type { SetupDetection } from "@signet/core";
+import type { SetupDetection } from "../lib/setup-detection.js";
 import type { OpenClawRuntimeChoice } from "./setup-shared.js";
 
 export interface SetupWizardOptions {

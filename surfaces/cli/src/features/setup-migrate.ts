@@ -6,7 +6,6 @@ import {
 	Database as CoreDatabase,
 	type IdentityMode,
 	type ImportResult,
-	type SetupDetection,
 	type SkillsResult,
 	disableGraphiqState,
 	ensureUnifiedSchema,
@@ -20,6 +19,7 @@ import { readNetworkMode } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
+import type { SetupDetection } from "../lib/setup-detection.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";

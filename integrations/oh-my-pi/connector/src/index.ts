@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
-	MANAGED_AGENT_ID_DEFAULT,
 	MANAGED_DAEMON_URL_DEFAULT,
 	type UninstallResult,
 	buildManagedExtensionContent,
@@ -17,14 +16,25 @@ import {
 } from "@signet/connector-base";
 import {
 	clearConfiguredOhMyPiAgentDir,
-	expandHome,
 	getOhMyPiConfigPath,
 	listOhMyPiAgentDirCandidates,
 	resolveOhMyPiAgentDir,
 	resolveOhMyPiExtensionsDir,
 	writeConfiguredOhMyPiAgentDir,
-} from "@signet/core";
+} from "./agent-dir.js";
+import { expandHome } from "@signet/core";
 import { EXTENSION_BUNDLE } from "./extension-bundle.js";
+
+export {
+	clearConfiguredOhMyPiAgentDir,
+	getOhMyPiConfigPath,
+	hasOhMyPiSetup,
+	listOhMyPiAgentDirCandidates,
+	readConfiguredOhMyPiAgentDir,
+	resolveOhMyPiAgentDir,
+	resolveOhMyPiExtensionsDir,
+	writeConfiguredOhMyPiAgentDir,
+} from "./agent-dir.js";
 
 const OH_MY_PI_EXTENSION_PACKAGE = "@signet/oh-my-pi-extension";
 const OH_MY_PI_EXTENSION_ENTRY = "dist/signet-oh-my-pi.mjs";
@@ -53,10 +63,6 @@ export class OhMyPiConnector extends BaseConnector {
 
 	private getManagedExtensionPath(): string {
 		return join(resolveOhMyPiExtensionsDir(), OH_MY_PI_MANAGED_FILENAME);
-	}
-
-	private getLegacyManagedExtensionPath(): string {
-		return join(resolveOhMyPiExtensionsDir(), OH_MY_PI_LEGACY_MANAGED_FILENAME);
 	}
 
 	private getManagedCandidatePaths(filename: string): readonly string[] {

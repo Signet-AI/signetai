@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readdirSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { detectExistingSetup, preflightWorkspace } from "@signet/core";
+import { preflightWorkspace } from "@signet/core";
+import { detectExistingSetup } from "../lib/setup-detection.js";
 import { normalizeWorkspacePath, resolveAgentsDir, writeConfiguredWorkspacePath } from "../lib/workspace.js";
 
 export interface WorkspaceCandidate {
