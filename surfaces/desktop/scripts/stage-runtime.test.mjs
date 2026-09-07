@@ -1,5 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertBunRuntime, replaceResources, stageRuntime } from "./stage-runtime.mjs";
@@ -71,6 +80,33 @@ describe("stage-runtime Bun validation", () => {
 			expect(() => replaceResources(target, staged, failFinalSwap)).toThrow("injected final swap failure");
 			expect(readFileSync(join(target, "marker"), "utf8")).toBe("old\n");
 			expect(readFileSync(join(staged, "marker"), "utf8")).toBe("new\n");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the backup when rollback also fails", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const target = join(directory, "resources");
+		const staged = join(directory, "staged");
+		mkdirSync(target);
+		mkdirSync(staged);
+		writeFileSync(join(target, "marker"), "old\n");
+		writeFileSync(join(staged, "marker"), "new\n");
+		let renameCalls = 0;
+		const failRollback = (source, destination) => {
+			renameCalls += 1;
+			if (renameCalls >= 2) throw new Error("injected rename failure");
+			renameSync(source, destination);
+		};
+
+		try {
+			expect(() => replaceResources(target, staged, failRollback)).toThrow(
+				"Unable to restore previous desktop resources",
+			);
+			const backups = readdirSync(directory).filter((entry) => entry.startsWith(".resources-backup-"));
+			expect(backups).toHaveLength(1);
+			expect(readFileSync(join(directory, backups[0], "resources", "marker"), "utf8")).toBe("old\n");
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

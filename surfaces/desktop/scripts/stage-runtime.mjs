@@ -134,6 +134,7 @@ export function replaceResources(target, staged, rename = renameSync) {
 	const backupParent = mkdtempSync(join(dirname(target), ".resources-backup-"));
 	const backup = join(backupParent, basename(target));
 	let moved = false;
+	let preserveBackup = false;
 	try {
 		if (hadTarget) {
 			rename(target, backup);
@@ -142,12 +143,18 @@ export function replaceResources(target, staged, rename = renameSync) {
 		rename(staged, target);
 	} catch (error) {
 		if (moved) {
-			if (existsSync(target)) rmSync(target, { recursive: true, force: true });
-			rename(backup, target);
+			try {
+				if (existsSync(target)) rmSync(target, { recursive: true, force: true });
+				rename(backup, target);
+			} catch (restoreError) {
+				preserveBackup = true;
+				const detail = restoreError instanceof Error ? restoreError.message : String(restoreError);
+				throw new Error(`Unable to restore previous desktop resources from ${backup}: ${detail}`, { cause: error });
+			}
 		}
 		throw error;
 	} finally {
-		rmSync(backupParent, { recursive: true, force: true });
+		if (!preserveBackup) rmSync(backupParent, { recursive: true, force: true });
 	}
 }
 
