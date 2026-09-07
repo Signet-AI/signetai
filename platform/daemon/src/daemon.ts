@@ -1931,25 +1931,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		setEmbeddingTrackerHandle(embeddingTrackerHandle);
 	}
 
-	if (!pipelinePaused) {
-		embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
-			accessor: getDbAccessor(),
-			configured: memoryCfg.embedding,
-			// Re-read agent.yaml each tick so a mid-build config edit restarts
-			// the build against the new profile instead of spinning on the
-			// stale persisted one (#1160).
-			readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
-			fetchEmbedding,
-			checkProvider: checkEmbeddingProvider,
-			owner: dbOwnerClient ?? undefined,
-			pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
-			batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
-			onPromoted: () => {
-				restartAfterEmbeddingPromotion(telemetry);
-			},
-		});
-	}
-
 	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 		try {
 			dreamingWorkerHandle = startDreamingWorker(
@@ -3242,12 +3223,10 @@ async function main() {
 							},
 						});
 						if (result.phase === "pass") {
-							/* if (result.phase === "pass") {
-							startVacuumConversion(); */
-							if (deferredMigrationVerification) {
+							if (deferredMigrationVerification || migrationWritesDeferred) {
 								logger.info(
 									"startup-recovery",
-									"Prior-generation verification passed; scheduling graceful restart before admitting migration",
+									"Migration verification passed; scheduling graceful restart before admitting migration",
 								);
 								setTimeout(() => {
 									requestShutdown("migration-verify-complete-restart", 0, undefined, false);
@@ -3330,8 +3309,7 @@ async function main() {
 							activeJobId: ownerHealth.activeJobId,
 							activeWorkloadClass: ownerHealth.activeWorkloadClass,
 							maintenanceQueuedJobs: ownerHealth.lanes?.maintenance.queuedJobs ?? ownerHealth.maintenanceQueuedJobs,
-							foregroundQueuedJobs:
-								ownerHealth.lanes?.maintenance.foregroundQueuedJobs ?? ownerHealth.foregroundQueuedJobs,
+							foregroundQueuedJobs: ownerHealth.foregroundQueuedJobs,
 						});
 					}
 					scheduleIntegritySlice(integrityRetryDelayMs);
