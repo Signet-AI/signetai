@@ -277,13 +277,18 @@ https://nodejs.org
 Check the operating system:
 - **macOS**: Fully supported
 - **Linux**: Fully supported
-- **Windows**: Supported via WSL (Windows Subsystem for Linux) only
+- **Windows**: Native Windows x64 is supported through the PowerShell installer
 
 ### Step 2: Install Signet
 
 Using the direct native binary installer:
 ```bash
 curl -fsSL https://signetai.sh/install.sh | bash
+```
+
+On Windows x64, use the native PowerShell installer:
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
 ```
 
 Using Bun's package-manager wrapper for the same compiled Signet binary:
@@ -718,8 +723,11 @@ curl --version                 # Required for direct native binary install
 bun --version                  # Only needed for Bun package install
 node --version                 # Only needed for npm package install
 
-# Install
+# Install on macOS/Linux
 curl -fsSL https://signetai.sh/install.sh | bash
+
+# Install on Windows x64
+iwr -useb https://signetai.sh/install.ps1 | iex
 
 # Setup
 signet                       # Show command help

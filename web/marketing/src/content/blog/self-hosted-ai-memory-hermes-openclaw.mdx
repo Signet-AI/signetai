@@ -150,6 +150,15 @@ signet start
 signet status
 ```
 
+On Windows x64, use the native PowerShell installer instead:
+
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
+signet setup
+signet start
+signet status
+```
+
 Select Hermes Agent and OpenClaw during setup. Then read
 [AI Memory for Hermes Agent and OpenClaw](https://docs.signetai.sh/ai-memory-hermes-openclaw/)
 for the focused guide, [Harnesses](https://docs.signetai.sh/harnesses/) for integration details,

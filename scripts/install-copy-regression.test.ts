@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const nativeInstallCommand = "curl -fsSL https://signetai.sh/install.sh | bash";
+const windowsInstallCommand = "iwr -useb https://signetai.sh/install.ps1 | iex";
 
 function read(path: string): string {
 	return readFileSync(join(root, path), "utf-8");
@@ -15,8 +16,6 @@ describe("install copy", () => {
 			"README.md",
 			"web/docs/src/content/docs/getting-started/install.md",
 			"web/docs/src/content/docs/cli/getting-started.md",
-			"web/marketing/src/components/landing/Hero.astro",
-			"web/marketing/src/components/landing/InstallCta.astro",
 			"web/marketing/src/components/landing/Quickstart.astro",
 			"web/marketing/public/skill.md",
 		];
@@ -24,6 +23,19 @@ describe("install copy", () => {
 		for (const path of primarySurfaces) {
 			expect(read(path)).toContain(nativeInstallCommand);
 		}
+
+		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain(windowsInstallCommand);
+		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain('data-install-os={option.id}');
+		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain('id: "unix"');
+		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain("install-os-icon-pair");
+		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain("macOS and Linux");
+		expect(read("web/marketing/src/components/landing/Hero.astro")).toContain("OsInstallSelector");
+		expect(read("web/marketing/src/components/landing/InstallCta.astro")).toContain("OsInstallSelector");
+		const interactions = read("web/marketing/src/scripts/interactions.ts");
+		expect(interactions).toContain("navigator.userAgent");
+		expect(interactions).toContain("windows nt|win32|win64");
+		expect(interactions).toContain('return "unix"');
+		expect(interactions).toContain("panel.hidden = !active");
 
 		for (const path of [
 			"README.md",
@@ -57,6 +69,19 @@ describe("install copy", () => {
 		expect(installer).not.toContain("bun add -g signetai");
 		expect(installer).not.toContain("npm install -g signetai");
 		expect(installer).not.toContain("better-sqlite3");
+	});
+
+	test("serves a checksum-verifying native Windows installer", () => {
+		const installer = read("web/marketing/public/install.ps1");
+
+		expect(installer).toContain("native-manifest.json");
+		expect(installer).toContain("win32-x64");
+		expect(installer).toContain("signet-win32-x64.exe");
+		expect(installer).toContain("Get-FileHash -Algorithm SHA256");
+		expect(installer).toContain("--connector-assets");
+		expect(installer).toContain("SetEnvironmentVariable(\"Path\", $updatedUserPath, \"User\")");
+		expect(installer).toContain("SIGNET_CHANNEL");
+		expect(installer).not.toContain("npm install -g signetai");
 	});
 
 	test("keeps the npm package as a native binary wrapper", () => {

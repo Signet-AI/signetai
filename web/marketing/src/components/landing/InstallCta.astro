@@ -1,4 +1,6 @@
 ---
+import OsInstallSelector from "./OsInstallSelector.astro";
+
 const tabs = [
 	{
 		id: "install",
@@ -43,6 +45,8 @@ const tabs = [
   <div class="install-final reveal">
     <h2 class="install-final-title">Persistent memory in five minutes.</h2>
     <p class="install-final-sub">Install the binary, run the wizard, start working. No cloud account, no migration.</p>
+
+    <OsInstallSelector placement="install_cta" />
 
     <div class="install-terminal">
       <div class="install-terminal-tabs" role="tablist" aria-label="Getting started steps">

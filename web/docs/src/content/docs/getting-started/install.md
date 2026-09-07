@@ -11,6 +11,17 @@ For macOS and Linux, the native installer is the recommended route:
 curl -fsSL https://signetai.sh/install.sh | bash
 ```
 
+For Windows x64, run the PowerShell installer:
+
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
+```
+
+The Windows installer verifies the release checksum, installs the native
+binary and connector assets, and adds Signet to the user PATH. Open a new
+PowerShell window after installation. The direct Windows installer currently
+supports x64; Windows ARM64 is not currently covered by the direct installer.
+
 Package-manager wrappers install the same compiled Signet binary as the direct installer through the matching native package:
 
 ```bash
@@ -19,7 +30,7 @@ npm install -g signetai
 bun add -g signetai
 ```
 
-Use one method per machine. The npm and Bun routes require their corresponding runtime; the direct installer does not install Bun or rebuild Signet. Windows currently uses the npm route:
+Use one method per machine. The npm and Bun routes require their corresponding runtime; the direct installers do not install Bun or rebuild Signet.
 
 ```bash
 npm install -g signetai
