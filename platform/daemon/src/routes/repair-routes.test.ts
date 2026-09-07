@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import { parseAuthConfig } from "../auth";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { createRateLimiter } from "../repair-actions";
+import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import { registerRepairRoutes } from "./repair-routes";
 
 let db: Database;
@@ -33,6 +35,8 @@ function makeApp(): Hono {
 	registerRepairRoutes(app, {
 		authConfig: parseAuthConfig(undefined, "/tmp/signet-repair-routes-test"),
 		getDbAccessor: () => accessor,
+		limiter: createRateLimiter(),
+		pipelineConfig: DEFAULT_PIPELINE_V2,
 	});
 	return app;
 }

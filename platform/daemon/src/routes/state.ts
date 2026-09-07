@@ -346,7 +346,9 @@ export const authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
 // Provider tracker and analytics singletons
 export const providerTracker = createProviderTracker();
 export const analyticsCollector = createAnalyticsCollector();
-export const repairLimiter = createRateLimiter();
+// Repair admission is durable so HTTP requests and autonomous workers share
+// leases, cooldowns, and hourly budgets across daemon restarts.
+export const repairLimiter = createRateLimiter({ durable: true });
 
 // Version
 function getDaemonVersion(): string {

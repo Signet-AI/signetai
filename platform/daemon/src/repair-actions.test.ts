@@ -359,6 +359,21 @@ describe("checkRepairGate", () => {
 		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(true);
 	});
+
+	it("denies daemon repairs when autonomous maintenance is disabled", async () => {
+		const limiter = createRateLimiter();
+		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
+		const result = checkRepairGate(cfg, CTX_DAEMON, limiter, "a", 0, 100);
+		expect(result.allowed).toBe(false);
+		expect(result.reason).toMatch(/daemon repairs are disabled/);
+	});
+
+	it("does not let operator or daemon callers bypass runtime admission", async () => {
+		const limiter = createRateLimiter();
+		limiter.record("a");
+		expect(checkRepairGate(TEST_CFG, CTX_OPERATOR, limiter, "a", 60_000, 10).allowed).toBe(false);
+		expect(checkRepairGate(TEST_CFG, CTX_DAEMON, limiter, "a", 60_000, 10).allowed).toBe(false);
+	});
 });
 
 describe("pruneGenericEntities", () => {
@@ -1143,7 +1158,6 @@ describe("reembedMissingMemories", () => {
 			10,
 			false,
 			false,
-			undefined,
 		);
 
 		expect(selected).toEqual(["content for mem-b-unique"]);
@@ -1198,7 +1212,6 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 			true,
-			0,
 		);
 
 		expect(providerInputs).toEqual(["content for mem-repairable"]);

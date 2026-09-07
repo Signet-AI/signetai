@@ -1,8 +1,9 @@
 /**
  * Policy-gated repair actions for the memory pipeline.
  *
- * Each action checks the policy gate and rate limiter before running.
- * Operators bypass the autonomousEnabled check; agents do not.
+ * Each action checks the policy gate and runtime admission before running.
+ * Operators bypass only the autonomousEnabled feature toggle; no actor bypasses
+ * cooldown, budget, lease, work-unit, or pressure safety limits.
  * All actions respect autonomousFrozen regardless of actor type.
  */
 
@@ -14,8 +15,7 @@ import {
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { IntegrityCheckStatus } from "./database-integrity";
-import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import { toFtsSchemaQueryDb } from "./db-accessor";
+import { getDbAccessor, toFtsSchemaQueryDb, type DbAccessor, type ReadDb, type WriteDb } from "./db-accessor";
 import { getDbOwnerMaintenance, type DbOwnerMaintenance } from "./db-owner-maintenance";
 import {
 	countChanges,
@@ -42,10 +42,19 @@ import {
 	resolveActiveEmbeddingConfig,
 } from "./embedding-index-state";
 import { type EmbeddingRepairState, readEmbeddingRepairState } from "./embedding-repair-state";
+import {
+	acquireRepairAdmissionInTx,
+	finishRepairAdmissionInTx,
+	repairScopeKey,
+	type RepairAdmissionCompletion,
+	type RepairAdmissionLease,
+	type RepairAdmissionRequest,
+} from "./repair-admission";
 import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import { recoverStaleLeases } from "./pipeline/stale-leases";
+import { isSystemPressureHigh } from "./system-pressure";
 import { insertHistoryEvent } from "./transactions";
 
 // ---------------------------------------------------------------------------
@@ -64,6 +73,10 @@ export interface RepairResult {
 	readonly success: boolean;
 	readonly affected: number;
 	readonly message: string;
+	/** Stable status classification for admission and policy denials. */
+	readonly code?: "repair_admission_denied";
+	/** Milliseconds until a denied admission may be retried, when known. */
+	readonly retryAfterMs?: number;
 	/** Present on dry-run previews; ids the action *would* touch (capped). */
 	readonly preview?: readonly string[];
 	/** Count of rows that matched the filter (capped for log size). */
@@ -85,6 +98,7 @@ export interface JobFilterOptions {
 export interface RepairGateCheck {
 	readonly allowed: boolean;
 	readonly reason?: string;
+	readonly retryAfterMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,17 +112,23 @@ interface RateLimiterEntry {
 }
 
 export interface RateLimiter {
-	check(action: string, cooldownMs: number, hourlyBudget: number): RepairGateCheck;
-	record(action: string): void;
+	/** Durable limiters use the SQLite admission owner instead of this map. */
+	readonly durable?: boolean;
+	check(action: string, cooldownMs: number, hourlyBudget: number, scope?: string): RepairGateCheck;
+	record(action: string, scope?: string): void;
 }
 
-export function createRateLimiter(): RateLimiter {
+export function createRateLimiter(options: { readonly durable?: boolean } = {}): RateLimiter {
 	const state = new Map<string, RateLimiterEntry>();
+	const durable = options.durable === true;
+	const keyFor = (action: string, scope?: string): string => `${action}\u0000${scope?.trim() || "global"}`;
 
 	return {
-		check(action: string, cooldownMs: number, hourlyBudget: number): RepairGateCheck {
+		durable,
+		check(action: string, cooldownMs: number, hourlyBudget: number, scope?: string): RepairGateCheck {
+			if (durable) return { allowed: true };
 			const now = Date.now();
-			const entry = state.get(action);
+			const entry = state.get(keyFor(action, scope));
 
 			if (!entry) return { allowed: true };
 
@@ -132,12 +152,14 @@ export function createRateLimiter(): RateLimiter {
 			return { allowed: true };
 		},
 
-		record(action: string): void {
+		record(action: string, scope?: string): void {
+			if (durable) return;
 			const now = Date.now();
-			const entry = state.get(action);
+			const key = keyFor(action, scope);
+			const entry = state.get(key);
 
 			if (!entry) {
-				state.set(action, {
+				state.set(key, {
 					lastRunAt: now,
 					hourlyCount: 1,
 					hourResetAt: now + 60 * 60 * 1000,
@@ -168,25 +190,160 @@ export function checkRepairGate(
 	action: string,
 	cooldownMs: number,
 	hourlyBudget: number,
+	scope = "global",
 ): RepairGateCheck {
 	if (cfg.autonomous.frozen) {
 		return { allowed: false, reason: "autonomous.frozen is set" };
 	}
 
-	// Agents require autonomous.enabled; operators and daemon bypass this check
-	if (ctx.actorType === "agent" && !cfg.autonomous.enabled) {
+	// Operator permission bypasses only this feature toggle. Autonomous daemon
+	// and agent callers still require it, and every actor reaches runtime
+	// admission so privilege cannot bypass safety ceilings.
+	if (ctx.actorType !== "operator" && !cfg.autonomous.enabled) {
 		return {
 			allowed: false,
-			reason: "autonomous.enabled is false; agents cannot trigger repairs",
+			reason:
+				ctx.actorType === "daemon"
+					? "autonomous.enabled is false; daemon repairs are disabled"
+					: "autonomous.enabled is false; agents cannot trigger repairs",
 		};
 	}
 
-	// Operators and daemon bypass rate limiting — only agents are throttled
-	if (ctx.actorType === "operator" || ctx.actorType === "daemon") {
-		return { allowed: true };
-	}
+	// Durable limiters perform the atomic SQLite check below. The process-local
+	// limiter remains available for isolated callers and unit tests.
+	if (limiter.durable === true) return { allowed: true };
+	return limiter.check(action, cooldownMs, hourlyBudget, scope);
+}
 
-	return limiter.check(action, cooldownMs, hourlyBudget);
+export interface RepairActionAdmission {
+	readonly allowed: boolean;
+	readonly action: string;
+	readonly scope: string;
+	readonly lease: RepairAdmissionLease | null;
+	readonly reason?: string;
+	readonly retryAfterMs?: number;
+}
+
+async function beginRepairAdmission(
+	accessor: DbAccessor | null,
+	cfg: PipelineV2Config,
+	ctx: RepairContext,
+	limiter: RateLimiter,
+	action: string,
+	cooldownMs: number,
+	hourlyBudget: number,
+	scope = "global",
+	skipDurable = false,
+): Promise<RepairActionAdmission> {
+	const normalizedScope = repairScopeKey({ agentId: scope === "global" ? undefined : scope });
+	const gate = checkRepairGate(cfg, ctx, limiter, action, cooldownMs, hourlyBudget, scope);
+	if (!gate.allowed) {
+		return { allowed: false, action, scope, lease: null, reason: gate.reason, retryAfterMs: gate.retryAfterMs };
+	}
+	if (limiter.durable !== true || skipDurable) return { allowed: true, action, scope, lease: null };
+	if (isSystemPressureHigh()) {
+		return {
+			allowed: false,
+			action,
+			scope,
+			lease: null,
+			reason: "repair admission denied while system pressure is high",
+		};
+	}
+	if (accessor === null) throw new Error("durable repair admission requires a database accessor");
+	const admission = await acquireDurableRepairAdmission(accessor, {
+		action,
+		scope: normalizedScope,
+		cooldownMs,
+		hourlyBudget,
+		actor: ctx.actor,
+		actorType: ctx.actorType,
+		requestId: ctx.requestId,
+	});
+	return {
+		allowed: admission.allowed,
+		action,
+		scope: normalizedScope,
+		lease: admission.lease ?? null,
+		reason: admission.reason,
+		retryAfterMs: admission.retryAfterMs,
+	};
+}
+
+function deniedRepairResult<T extends RepairResult>(action: string, admission: RepairActionAdmission, extra: T): T {
+	return {
+		...extra,
+		action,
+		success: false,
+		affected: 0,
+		message: admission.reason ?? "denied by policy gate",
+		code: "repair_admission_denied",
+		...(admission.retryAfterMs === undefined ? {} : { retryAfterMs: admission.retryAfterMs }),
+	};
+}
+
+export async function runRepairWithAdmission<T extends RepairResult>(
+	accessor: DbAccessor,
+	cfg: PipelineV2Config,
+	ctx: RepairContext,
+	limiter: RateLimiter,
+	action: string,
+	cooldownMs: number,
+	hourlyBudget: number,
+	scope = "global",
+	skipDurable = false,
+	denied: (message: string, retryAfterMs?: number) => T,
+	run: () => Promise<T>,
+): Promise<T> {
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cooldownMs,
+		hourlyBudget,
+		scope,
+		skipDurable,
+	);
+	if (!admission.allowed) return denied(admission.reason ?? "denied by policy gate", admission.retryAfterMs);
+	return await runWithRepairAdmission(accessor, admission, ctx, run);
+}
+
+async function runWithRepairAdmission<T extends RepairResult>(
+	accessor: DbAccessor | null,
+	admission: RepairActionAdmission,
+	ctx: RepairContext,
+	run: () => Promise<T>,
+): Promise<T> {
+	if (admission.lease === null) return await run();
+	if (accessor === null) throw new Error("durable repair completion requires a database accessor");
+	try {
+		const result = await run();
+		const settled = await finishDurableRepairAdmission(accessor, admission.lease, {
+			success: result.success,
+			affected: result.affected,
+			actor: ctx.actor,
+			requestId: ctx.requestId,
+			error: result.success ? undefined : result.message,
+		});
+		if (!settled) throw new Error(`repair admission lease lost before ${admission.action} completed`);
+		return result;
+	} catch (error) {
+		try {
+			await finishDurableRepairAdmission(accessor, admission.lease, {
+				success: false,
+				affected: 0,
+				actor: ctx.actor,
+				requestId: ctx.requestId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		} catch {
+			// Preserve the original operation error; the active durable lease
+			// remains until expiry if its failure state cannot be persisted.
+		}
+		throw error;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +378,21 @@ async function withRepairWriteTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T
 		return accessor.withWriteTxAsync(fn, { siteToken: "db:repair.write.tx" });
 	}
 	throw new Error("async write API is unavailable");
+}
+
+async function acquireDurableRepairAdmission(
+	accessor: DbAccessor,
+	request: RepairAdmissionRequest,
+): Promise<ReturnType<typeof acquireRepairAdmissionInTx>> {
+	return await withRepairWriteTx(accessor, (db) => acquireRepairAdmissionInTx(db, request));
+}
+
+async function finishDurableRepairAdmission(
+	accessor: DbAccessor,
+	lease: RepairAdmissionLease,
+	completion: RepairAdmissionCompletion,
+): Promise<boolean> {
+	return await withRepairWriteTx(accessor, (db) => finishRepairAdmissionInTx(db, lease, completion));
 }
 
 // Hold an autonomous rebuild until the same mismatch is observed on a second
@@ -285,55 +457,69 @@ export async function requeueDeadJobs(
 	const retired = rejectRetiredSummaryRepair(action, options);
 	if (retired) return retired;
 
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
-	if (!gate.allowed) {
-		return { action, success: false, affected: 0, message: gate.reason ?? "denied by policy gate" };
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
+		"global",
+		dryRun,
+	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	const result = await withRepairWriteTx(accessor, (db) => {
-		const wantsMemory = !options.tables || options.tables.includes("memory");
-		const selected = wantsMemory
-			? buildDeadRequeueSql(db, "memory_jobs", maxBatch, options)
-			: { sql: "", params: [], ids: [], totalMatching: 0 };
-		const ids = selected.ids;
-		if (dryRun) {
-			return {
-				affected: 0,
-				preview: ids.map((row) => row.id).slice(0, PREVIEW_CAP),
-				totalMatching: selected.totalMatching,
-			};
-		}
-		if (ids.length === 0)
-			return { affected: 0, preview: [] as readonly string[], totalMatching: selected.totalMatching };
-		const placeholders = ids.map(() => "?").join(", ");
-		const now = new Date().toISOString();
-		const changed = db
-			.prepare(`UPDATE memory_jobs SET status = 'pending', attempts = 0, updated_at = ? WHERE id IN (${placeholders})`)
-			.run(now, ...ids.map((row) => row.id));
-		const affected = countChanges(changed);
-		writeRepairAudit(db, action, ctx, affected, `requeued ${affected} dead memory job(s) to pending`);
-		return { affected, preview: [] as readonly string[], totalMatching: selected.totalMatching };
-	});
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const result = await withRepairWriteTx(accessor, (db) => {
+			const wantsMemory = !options.tables || options.tables.includes("memory");
+			const selected = wantsMemory
+				? buildDeadRequeueSql(db, "memory_jobs", maxBatch, options)
+				: { sql: "", params: [], ids: [], totalMatching: 0 };
+			const ids = selected.ids;
+			if (dryRun) {
+				return {
+					affected: 0,
+					preview: ids.map((row) => row.id).slice(0, PREVIEW_CAP),
+					totalMatching: selected.totalMatching,
+				};
+			}
+			if (ids.length === 0)
+				return { affected: 0, preview: [] as readonly string[], totalMatching: selected.totalMatching };
+			const placeholders = ids.map(() => "?").join(", ");
+			const now = new Date().toISOString();
+			const changed = db
+				.prepare(
+					`UPDATE memory_jobs SET status = 'pending', attempts = 0, updated_at = ? WHERE id IN (${placeholders})`,
+				)
+				.run(now, ...ids.map((row) => row.id));
+			const affected = countChanges(changed);
+			writeRepairAudit(db, action, ctx, affected, `requeued ${affected} dead memory job(s) to pending`);
+			return { affected, preview: [] as readonly string[], totalMatching: selected.totalMatching };
+		});
 
-	if (!dryRun) limiter.record(action);
-	logger.info("pipeline", "repair: requeued dead memory jobs", {
-		affected: result.affected,
-		dryRun,
-		previewCount: result.preview.length,
-		totalMatching: result.totalMatching,
-		actor: ctx.actor,
-		reason: ctx.reason,
+		if (!dryRun) limiter.record(action);
+		logger.info("pipeline", "repair: requeued dead memory jobs", {
+			affected: result.affected,
+			dryRun,
+			previewCount: result.preview.length,
+			totalMatching: result.totalMatching,
+			actor: ctx.actor,
+			reason: ctx.reason,
+		});
+		return {
+			action,
+			success: true,
+			affected: dryRun ? 0 : result.affected,
+			message: dryRun
+				? `dry-run: ${result.totalMatching} memory job(s) match requeue filter; preview shows ${result.preview.length}`
+				: `requeued ${result.affected} dead memory job(s) to pending`,
+			preview: dryRun ? result.preview : undefined,
+			totalMatching: dryRun ? result.totalMatching : undefined,
+		};
 	});
-	return {
-		action,
-		success: true,
-		affected: dryRun ? 0 : result.affected,
-		message: dryRun
-			? `dry-run: ${result.totalMatching} memory job(s) match requeue filter; preview shows ${result.preview.length}`
-			: `requeued ${result.affected} dead memory job(s) to pending`,
-		preview: dryRun ? result.preview : undefined,
-		totalMatching: dryRun ? result.totalMatching : undefined,
-	};
 }
 
 export async function releaseStaleLeases(
@@ -343,49 +529,53 @@ export async function releaseStaleLeases(
 	limiter: RateLimiter,
 ): Promise<RepairResult> {
 	const action = "releaseStaleLeases";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
-
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
+	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	const cutoff = new Date(Date.now() - cfg.worker.leaseTimeoutMs).toISOString();
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const cutoff = new Date(Date.now() - cfg.worker.leaseTimeoutMs).toISOString();
 
-	const result = await withRepairWriteTx(accessor, (db) => {
-		const now = new Date().toISOString();
-		const recovered = recoverStaleLeases(db, { cutoff, now });
-		const msg =
-			recovered.dead > 0
-				? `released ${recovered.pending} stale lease(s) back to pending and dead-lettered ${recovered.dead} exhausted job(s)`
-				: `released ${recovered.pending} stale lease(s) back to pending`;
-		writeRepairAudit(db, action, ctx, recovered.total, msg);
+		const result = await withRepairWriteTx(accessor, (db) => {
+			const now = new Date().toISOString();
+			const recovered = recoverStaleLeases(db, { cutoff, now });
+			const msg =
+				recovered.dead > 0
+					? `released ${recovered.pending} stale lease(s) back to pending and dead-lettered ${recovered.dead} exhausted job(s)`
+					: `released ${recovered.pending} stale lease(s) back to pending`;
+			writeRepairAudit(db, action, ctx, recovered.total, msg);
+			return {
+				msg,
+				recovered,
+			};
+		});
+
+		limiter.record(action);
+		logger.info("pipeline", "repair: released stale leases", {
+			affected: result.recovered.total,
+			pending: result.recovered.pending,
+			dead: result.recovered.dead,
+			cutoff,
+			actor: ctx.actor,
+			reason: ctx.reason,
+		});
+
 		return {
-			msg,
-			recovered,
+			action,
+			success: true,
+			affected: result.recovered.total,
+			message: result.msg,
 		};
 	});
-
-	limiter.record(action);
-	logger.info("pipeline", "repair: released stale leases", {
-		affected: result.recovered.total,
-		pending: result.recovered.pending,
-		dead: result.recovered.dead,
-		cutoff,
-		actor: ctx.actor,
-		reason: ctx.reason,
-	});
-
-	return {
-		action,
-		success: true,
-		affected: result.recovered.total,
-		message: result.msg,
-	};
 }
 
 /**
@@ -401,197 +591,203 @@ export async function checkFtsConsistency(
 	ownerMaintenance: DbOwnerMaintenance | null = getDbOwnerMaintenance(),
 ): Promise<RepairResult> {
 	const action = "checkFtsConsistency";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.reembedCooldownMs, FTS_HOURLY_BUDGET);
-
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
-	}
-
-	const { memCount, ftsCount, ftsMissing, tokenizerDrift } = await accessor.withReadDbAsync(
-		async (db) => {
-			const memRow = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
-
-			// Guard against missing FTS index state (can happen on upgrades before
-			// self-heal). Count the physical docsize rows, not the external-content
-			// table, whose COUNT(*) resolves through memories and includes tombstones.
-			let ftsN: number | null = null;
-			try {
-				ftsN = readMemoriesFtsIndexRowCount(toFtsSchemaQueryDb(db));
-			} catch {
-				// Missing FTS shadow state.
-			}
-			const missing = ftsN === null;
-			const ftsSql = missing ? null : readMemoriesFtsSql(toFtsSchemaQueryDb(db));
-			return {
-				memCount: memRow.n,
-				ftsCount: ftsN ?? 0,
-				ftsMissing: missing,
-				tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
-			};
-		},
-		{ siteToken: "repair-actions.ts:415" },
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.reembedCooldownMs,
+		FTS_HOURLY_BUDGET,
+		"global",
+		!repair,
 	);
-
-	// If FTS table is missing entirely, report it (startup self-heal
-	// via ensureFtsTable should have caught this, but handle gracefully)
-	if (ftsMissing) {
-		limiter.record(action);
-		const msg = repair
-			? "FTS index state missing — restart daemon to trigger self-healing rebuild"
-			: "FTS index state missing — run with repair=true or restart daemon";
-		logger.warn("pipeline", "repair: FTS index state missing", {
-			memCount,
-			actor: ctx.actor,
-		});
-		return {
-			action,
-			success: true,
-			affected: 0,
-			message: msg,
-		};
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	if (tokenizerDrift) {
-		if (repair) {
-			if (ftsRebuildInFlight) {
-				limiter.record(action);
-				return {
-					action,
-					success: true,
-					affected: 0,
-					message: "FTS rebuild already in progress",
-				};
-			}
-			ftsRebuildInFlight = true;
-			try {
-				if (ownerMaintenance) {
-					await ownerMaintenance.rebuildFts({
-						checkpointKey: "fts.memories.repair",
-						audit: {
-							action,
-							actor: ctx.actor,
-							reason: ctx.reason,
-							actorType: ctx.actorType,
-							requestId: ctx.requestId,
-							message: "FTS recreated with unicode61 tokenizer",
-						},
-					});
-				} else {
-					await withRepairWriteTx(accessor, (db) => {
-						recreateMemoriesFts(db);
-						writeRepairAudit(db, action, ctx, 1, "FTS recreated with unicode61 tokenizer");
-					});
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const { memCount, ftsCount, ftsMissing, tokenizerDrift } = await accessor.withReadDbAsync(
+			async (db) => {
+				const memRow = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
+
+				// Guard against missing FTS index state (can happen on upgrades before
+				// self-heal). Count the physical docsize rows, not the external-content
+				// table, whose COUNT(*) resolves through memories and includes tombstones.
+				let ftsN: number | null = null;
+				try {
+					ftsN = readMemoriesFtsIndexRowCount(toFtsSchemaQueryDb(db));
+				} catch {
+					// Missing FTS shadow state.
 				}
-			} finally {
-				ftsRebuildInFlight = false;
-			}
-			// The recreate is itself a full rebuild; any prior mismatch is moot.
-			ftsMismatchPendingRebuild = false;
-		}
-
-		limiter.record(action);
-		const message = repair
-			? "FTS tokenizer drift detected — recreated with unicode61 tokenizer"
-			: "FTS tokenizer drift detected — run with repair=true to recreate";
-		logger.warn("pipeline", "repair: FTS tokenizer drift", {
-			memCount,
-			ftsCount,
-			repaired: repair,
-			actor: ctx.actor,
-		});
-		return {
-			action,
-			success: true,
-			affected: 1,
-			message,
-		};
-	}
-
-	// The physical FTS index must contain one document for every canonical
-	// memory row, including tombstones. Async writer admission keeps a repair
-	// out of the request call stack while preserving the existing transaction.
-	const mismatch = memCount !== ftsCount;
-
-	let rebuilt = false;
-	if (mismatch && repair) {
-		// Operator-triggered repairs are explicit intent and rebuild at once;
-		// autonomous repair waits for a second observation so a transient
-		// mismatch cannot trigger a synchronous rebuild every cycle (#1142).
-		const confirmed = ctx.actorType === "operator" || ftsMismatchPendingRebuild;
-		if (confirmed) {
-			if (ftsRebuildInFlight) {
-				limiter.record(action);
+				const missing = ftsN === null;
+				const ftsSql = missing ? null : readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 				return {
-					action,
-					success: true,
-					affected: 0,
-					message: "FTS rebuild already in progress",
+					memCount: memRow.n,
+					ftsCount: ftsN ?? 0,
+					ftsMissing: missing,
+					tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
 				};
-			}
-			ftsRebuildInFlight = true;
-			try {
-				if (ownerMaintenance) {
-					await ownerMaintenance.rebuildFts({
-						checkpointKey: "fts.memories.repair",
-						audit: {
-							action,
-							actor: ctx.actor,
-							reason: ctx.reason,
-							actorType: ctx.actorType,
-							requestId: ctx.requestId,
-							message: `FTS rebuilt: ${memCount} canonical vs ${ftsCount} indexed rows`,
-						},
-					});
-				} else {
-					await withRepairWriteTx(accessor, (db) => {
-						db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run();
-						writeRepairAudit(db, action, ctx, 1, `FTS rebuilt: ${memCount} canonical vs ${ftsCount} indexed rows`);
-					});
-				}
-			} finally {
-				ftsRebuildInFlight = false;
-			}
-			ftsMismatchPendingRebuild = false;
-			rebuilt = true;
-		} else {
-			ftsMismatchPendingRebuild = true;
-			logger.warn("pipeline", "repair: FTS mismatch observed, deferring rebuild until it persists", {
+			},
+			{ siteToken: "db:repair.fts-consistency.read" },
+		);
+
+		// If FTS table is missing entirely, report it (startup self-heal
+		// via ensureFtsTable should have caught this, but handle gracefully)
+		if (ftsMissing) {
+			limiter.record(action);
+			const msg = repair
+				? "FTS index state missing — restart daemon to trigger self-healing rebuild"
+				: "FTS index state missing — run with repair=true or restart daemon";
+			logger.warn("pipeline", "repair: FTS index state missing", {
 				memCount,
-				ftsCount,
 				actor: ctx.actor,
 			});
+			return {
+				action,
+				success: true,
+				affected: 0,
+				message: msg,
+			};
 		}
-	} else if (!mismatch) {
-		ftsMismatchPendingRebuild = false;
-	}
 
-	limiter.record(action);
+		if (tokenizerDrift) {
+			if (repair) {
+				if (ftsRebuildInFlight) {
+					limiter.record(action);
+					return {
+						action,
+						success: true,
+						affected: 0,
+						message: "FTS rebuild already in progress",
+					};
+				}
+				ftsRebuildInFlight = true;
+				try {
+					if (ownerMaintenance) {
+						await ownerMaintenance.rebuildFts({
+							checkpointKey: "fts.memories.repair",
+							audit: {
+								action,
+								actor: ctx.actor,
+								reason: ctx.reason,
+								actorType: ctx.actorType,
+								requestId: ctx.requestId,
+								message: "FTS recreated with unicode61 tokenizer",
+							},
+						});
+					} else {
+						await withRepairWriteTx(accessor, (db) => {
+							recreateMemoriesFts(db);
+							writeRepairAudit(db, action, ctx, 1, "FTS recreated with unicode61 tokenizer");
+						});
+					}
+				} finally {
+					ftsRebuildInFlight = false;
+				}
+				// The recreate is itself a full rebuild; any prior mismatch is moot.
+				ftsMismatchPendingRebuild = false;
+			}
 
-	const message = mismatch
-		? rebuilt
-			? `FTS mismatch: ${memCount} canonical vs ${ftsCount} indexed rows — rebuilt`
-			: `FTS mismatch: ${memCount} canonical vs ${ftsCount} indexed rows (rebuild deferred until mismatch persists)`
-		: `FTS consistent: ${memCount} canonical, ${ftsCount} indexed rows`;
+			limiter.record(action);
+			const message = repair
+				? "FTS tokenizer drift detected — recreated with unicode61 tokenizer"
+				: "FTS tokenizer drift detected — run with repair=true to recreate";
+			logger.warn("pipeline", "repair: FTS tokenizer drift", {
+				memCount,
+				ftsCount,
+				repaired: repair,
+				actor: ctx.actor,
+			});
+			return {
+				action,
+				success: true,
+				affected: 1,
+				message,
+			};
+		}
 
-	logger.info("pipeline", "repair: FTS consistency check", {
-		memCount,
-		ftsCount,
-		mismatch,
-		repaired: rebuilt,
-		actor: ctx.actor,
+		// The physical FTS index must contain one document for every canonical
+		// memory row, including tombstones. Async writer admission keeps a repair
+		// out of the request call stack while preserving the existing transaction.
+		const mismatch = memCount !== ftsCount;
+
+		let rebuilt = false;
+		if (mismatch && repair) {
+			// Operator-triggered repairs are explicit intent and rebuild at once;
+			// autonomous repair waits for a second observation so a transient
+			// mismatch cannot trigger a synchronous rebuild every cycle (#1142).
+			const confirmed = ctx.actorType === "operator" || ftsMismatchPendingRebuild;
+			if (confirmed) {
+				if (ftsRebuildInFlight) {
+					limiter.record(action);
+					return {
+						action,
+						success: true,
+						affected: 0,
+						message: "FTS rebuild already in progress",
+					};
+				}
+				ftsRebuildInFlight = true;
+				try {
+					if (ownerMaintenance) {
+						await ownerMaintenance.rebuildFts({
+							checkpointKey: "fts.memories.repair",
+							audit: {
+								action,
+								actor: ctx.actor,
+								reason: ctx.reason,
+								actorType: ctx.actorType,
+								requestId: ctx.requestId,
+								message: `FTS rebuilt: ${memCount} canonical vs ${ftsCount} indexed rows`,
+							},
+						});
+					} else {
+						await withRepairWriteTx(accessor, (db) => {
+							db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run();
+							writeRepairAudit(db, action, ctx, 1, `FTS rebuilt: ${memCount} canonical vs ${ftsCount} indexed rows`);
+						});
+					}
+				} finally {
+					ftsRebuildInFlight = false;
+				}
+				ftsMismatchPendingRebuild = false;
+				rebuilt = true;
+			} else {
+				ftsMismatchPendingRebuild = true;
+				logger.warn("pipeline", "repair: FTS mismatch observed, deferring rebuild until it persists", {
+					memCount,
+					ftsCount,
+					actor: ctx.actor,
+				});
+			}
+		} else if (!mismatch) {
+			ftsMismatchPendingRebuild = false;
+		}
+
+		limiter.record(action);
+
+		const message = mismatch
+			? rebuilt
+				? `FTS mismatch: ${memCount} canonical vs ${ftsCount} indexed rows — rebuilt`
+				: `FTS mismatch: ${memCount} canonical vs ${ftsCount} indexed rows (rebuild deferred until mismatch persists)`
+			: `FTS consistent: ${memCount} canonical, ${ftsCount} indexed rows`;
+
+		logger.info("pipeline", "repair: FTS consistency check", {
+			memCount,
+			ftsCount,
+			mismatch,
+			repaired: rebuilt,
+			actor: ctx.actor,
+		});
+
+		return {
+			action,
+			success: true,
+			affected: rebuilt ? 1 : 0,
+			message,
+		};
 	});
-
-	return {
-		action,
-		success: true,
-		affected: rebuilt ? 1 : 0,
-		message,
-	};
 }
 
 /**
@@ -602,33 +798,39 @@ export async function triggerRetentionSweep(
 	ctx: RepairContext,
 	limiter: RateLimiter,
 	retentionHandle: { sweep(): Promise<unknown> },
+	accessor?: DbAccessor,
 ): Promise<RepairResult> {
 	const action = "triggerRetentionSweep";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
-
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
+	const admissionAccessor = limiter.durable ? (accessor ?? getDbAccessor()) : null;
+	const admission = await beginRepairAdmission(
+		admissionAccessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
+	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	await retentionHandle.sweep();
-	limiter.record(action);
+	return await runWithRepairAdmission(admissionAccessor, admission, ctx, async () => {
+		await retentionHandle.sweep();
+		limiter.record(action);
 
-	logger.info("pipeline", "repair: retention sweep triggered", {
-		actor: ctx.actor,
-		reason: ctx.reason,
+		logger.info("pipeline", "repair: retention sweep triggered", {
+			actor: ctx.actor,
+			reason: ctx.reason,
+		});
+
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: "retention sweep triggered",
+		};
 	});
-
-	return {
-		action,
-		success: true,
-		affected: 0,
-		message: "retention sweep triggered",
-	};
 }
 
 // ---------------------------------------------------------------------------
@@ -729,7 +931,7 @@ export async function getEmbeddingGapStats(accessor: DbAccessor, agentId: string
 				repair,
 			};
 		},
-		{ siteToken: "repair-actions.ts:700" },
+		{ siteToken: "db:repair.embedding-gap-stats.read" },
 	);
 }
 
@@ -741,10 +943,10 @@ export async function getEmbeddingRepairStats(
 	const gap = await getEmbeddingGapStats(accessor, agentId);
 	const migration = await accessor.withReadDbAsync(
 		async (db) => countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
-		{ siteToken: "repair-actions.ts:742" },
+		{ siteToken: "db:repair.embedding-migration-stats.read" },
 	);
 	const orphaned = await accessor.withReadDbAsync(async (db) => countOrphanedEmbeddings(db, agentId), {
-		siteToken: "repair-actions.ts:746",
+		siteToken: "db:repair.orphaned-embedding-stats.read",
 	});
 	return { gap, migration, orphaned };
 }
@@ -1007,106 +1209,45 @@ export async function reembedMissingMemories(
 	batchSize: number = DEFAULT_REEMBED_BATCH,
 	dryRun = false,
 	runToCompletion = false,
-	cooldownMsOverride?: number,
 ): Promise<RepairResult> {
 	const action = "reembedMissingMemories";
-	const effectiveCooldownMs =
-		typeof cooldownMsOverride === "number" && Number.isFinite(cooldownMsOverride)
-			? Math.max(0, Math.floor(cooldownMsOverride))
-			: cfg.repair.reembedCooldownMs;
-	const gate = checkRepairGate(cfg, ctx, limiter, action, effectiveCooldownMs, cfg.repair.reembedHourlyBudget);
-
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
-	}
-
-	const normalizedBatchSize =
-		Number.isFinite(batchSize) && batchSize > 0 ? Math.max(1, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
-
-	// `embeddingCfg` is the raw configured value (e.g. from agent.yaml), which
-	// carries no `profile`. The durable active generation may have been
-	// promoted with a named profile (e.g. by a prior --model-mismatch
-	// migration), so its persisted fingerprint includes that profile id.
-	// Comparing the raw config's identity fingerprint against that persisted
-	// fingerprint in isActiveEmbeddingConfig always mismatches — not a race,
-	// a permanent false positive that fails every batch with "embedding
-	// profile changed during provider work" (issue: reembed never resolves
-	// the active profile before writing). Resolve once, matching the same
-	// profile the durable index actually owns, before doing any work.
-	const resolvedEmbeddingCfg = await accessor.withReadDbAsync(
-		async (db) => resolveActiveEmbeddingConfig(db, embeddingCfg),
-		{ siteToken: "db:repair.active-embedding-config.read" },
+	const effectiveCooldownMs = cfg.repair.reembedCooldownMs;
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		effectiveCooldownMs,
+		cfg.repair.reembedHourlyBudget,
+		agentId,
+		dryRun,
 	);
-
-	const initialStats = await getEmbeddingGapStats(accessor, agentId);
-	if (initialStats.unembedded === 0) {
-		return {
-			action,
-			success: true,
-			affected: 0,
-			message: "no unembedded memories found",
-		};
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	if (dryRun) {
-		return {
-			action,
-			success: true,
-			affected: 0,
-			message: `dry run: ${Math.min(normalizedBatchSize, initialStats.unembedded)} memories in this batch, ${initialStats.unembedded} total unembedded`,
-		};
-	}
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const normalizedBatchSize =
+			Number.isFinite(batchSize) && batchSize > 0 ? Math.max(1, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
 
-	if (reembedInProgress) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: "re-embed already in progress",
-		};
-	}
+		// `embeddingCfg` is the raw configured value (e.g. from agent.yaml), which
+		// carries no `profile`. The durable active generation may have been
+		// promoted with a named profile (e.g. by a prior --model-mismatch
+		// migration), so its persisted fingerprint includes that profile id.
+		// Comparing the raw config's identity fingerprint against that persisted
+		// fingerprint in isActiveEmbeddingConfig always mismatches — not a race,
+		// a permanent false positive that fails every batch with "embedding
+		// profile changed during provider work" (issue: reembed never resolves
+		// the active profile before writing). Resolve once, matching the same
+		// profile the durable index actually owns, before doing any work.
+		const resolvedEmbeddingCfg = await accessor.withReadDbAsync(
+			async (db) => resolveActiveEmbeddingConfig(db, embeddingCfg),
+			{ siteToken: "db:repair.active-embedding-config.read" },
+		);
 
-	reembedInProgress = true;
-	try {
-		let attempted = 0;
-		let written = 0;
-		let failed = 0;
-		let stale = 0;
-		let crossAgentHashConflicts = 0;
-		let batches = 0;
-		let profileChanged = false;
-
-		while (true) {
-			const outcome = await reembedMissingMemoriesBatch(
-				accessor,
-				embeddingFn,
-				resolvedEmbeddingCfg,
-				normalizedBatchSize,
-				agentId,
-			);
-
-			if (outcome.selected === 0) break;
-
-			attempted += outcome.selected;
-			written += outcome.written;
-			failed += outcome.failed;
-			stale += outcome.stale;
-			crossAgentHashConflicts += outcome.crossAgentHashConflicts;
-			batches++;
-			profileChanged ||= outcome.profileChanged;
-			if (outcome.profileChanged) break;
-
-			if (!runToCompletion) break;
-			if (outcome.selected < normalizedBatchSize) break;
-			if (outcome.written === 0) break;
-		}
-
-		if (attempted === 0) {
+		const initialStats = await getEmbeddingGapStats(accessor, agentId);
+		if (initialStats.unembedded === 0) {
 			return {
 				action,
 				success: true,
@@ -1115,76 +1256,142 @@ export async function reembedMissingMemories(
 			};
 		}
 
-		if (profileChanged) {
+		if (dryRun) {
 			return {
 				action,
-				success: false,
-				affected: written,
-				message: "embedding profile changed during provider work; skipped stale vectors",
+				success: true,
+				affected: 0,
+				message: `dry run: ${Math.min(normalizedBatchSize, initialStats.unembedded)} memories in this batch, ${initialStats.unembedded} total unembedded`,
 			};
 		}
 
-		if (written === 0) {
-			if (crossAgentHashConflicts > 0) {
-				return {
-					action,
-					success: false,
-					affected: 0,
-					message: `${crossAgentHashConflicts} selected memory(s) could not be persisted under the current global uniqueness constraint because their content hash is owned by another agent`,
-					details: { selected: attempted, failed, stale, crossAgentHashConflicts },
-				};
-			}
+		if (reembedInProgress) {
 			return {
 				action,
 				success: false,
 				affected: 0,
-				message:
-					stale > 0
-						? `re-embedded 0 of ${attempted} memories because ${stale} changed during provider work`
-						: `embedding provider returned no vectors for ${attempted} memories`,
+				message: "re-embed already in progress",
 			};
 		}
 
-		const remaining = (await getEmbeddingGapStats(accessor, agentId)).unembedded;
-		const scope = runToCompletion ? `across ${batches} batch(es)` : "in one batch";
-		const msg =
-			failed > 0
-				? `re-embedded ${written} of ${attempted} memories ${scope} (${failed} failed, ${remaining} still missing)`
-				: `re-embedded ${written} of ${attempted} memories ${scope} (${remaining} still missing)`;
-		const conflictMessage =
-			crossAgentHashConflicts > 0
-				? `${crossAgentHashConflicts} selected memory(s) could not be persisted because their content hash is owned by another agent under the current global uniqueness constraint`
-				: "";
-		const resultMessage = conflictMessage.length > 0 ? `${msg}; ${conflictMessage}` : msg;
+		reembedInProgress = true;
+		try {
+			let attempted = 0;
+			let written = 0;
+			let failed = 0;
+			let stale = 0;
+			let crossAgentHashConflicts = 0;
+			let batches = 0;
+			let profileChanged = false;
+			// A full sweep is still bounded: the configured hourly budget also
+			// caps the number of provider batches one invocation may execute.
+			const maxBatches = runToCompletion ? Math.max(1, cfg.repair.reembedHourlyBudget) : 1;
 
-		await withRepairWriteTx(accessor, (db) => {
-			writeRepairAudit(db, action, ctx, written, resultMessage);
-		});
+			while (true) {
+				const outcome = await reembedMissingMemoriesBatch(
+					accessor,
+					embeddingFn,
+					resolvedEmbeddingCfg,
+					normalizedBatchSize,
+					agentId,
+				);
 
-		limiter.record(action);
-		logger.info("pipeline", "repair: re-embedded missing memories", {
-			affected: written,
-			attempted,
-			failed,
-			remaining,
-			batches,
-			runToCompletion,
-			actor: ctx.actor,
-			reason: ctx.reason,
-		});
+				if (outcome.selected === 0) break;
 
-		return {
-			action,
-			success: crossAgentHashConflicts === 0,
-			affected: written,
-			message: resultMessage,
-			...(crossAgentHashConflicts > 0
-				? { details: { selected: attempted, failed, stale, crossAgentHashConflicts } }
-				: {}),
-		};
-	} finally {
-		reembedInProgress = false;
-	}
+				attempted += outcome.selected;
+				written += outcome.written;
+				failed += outcome.failed;
+				stale += outcome.stale;
+				crossAgentHashConflicts += outcome.crossAgentHashConflicts;
+				batches++;
+				profileChanged ||= outcome.profileChanged;
+				if (outcome.profileChanged) break;
+
+				if (!runToCompletion || batches >= maxBatches) break;
+				if (outcome.selected < normalizedBatchSize) break;
+				if (outcome.written === 0) break;
+			}
+
+			if (attempted === 0) {
+				return {
+					action,
+					success: true,
+					affected: 0,
+					message: "no unembedded memories found",
+				};
+			}
+
+			if (profileChanged) {
+				return {
+					action,
+					success: false,
+					affected: written,
+					message: "embedding profile changed during provider work; skipped stale vectors",
+				};
+			}
+
+			if (written === 0) {
+				if (crossAgentHashConflicts > 0) {
+					return {
+						action,
+						success: false,
+						affected: 0,
+						message: `${crossAgentHashConflicts} selected memory(s) could not be persisted under the current global uniqueness constraint because their content hash is owned by another agent`,
+						details: { selected: attempted, failed, stale, crossAgentHashConflicts },
+					};
+				}
+				return {
+					action,
+					success: false,
+					affected: 0,
+					message:
+						stale > 0
+							? `re-embedded 0 of ${attempted} memories because ${stale} changed during provider work`
+							: `embedding provider returned no vectors for ${attempted} memories`,
+				};
+			}
+
+			const remaining = (await getEmbeddingGapStats(accessor, agentId)).unembedded;
+			const scope = runToCompletion ? `across ${batches} batch(es)` : "in one batch";
+			const msg =
+				failed > 0
+					? `re-embedded ${written} of ${attempted} memories ${scope} (${failed} failed, ${remaining} still missing)`
+					: `re-embedded ${written} of ${attempted} memories ${scope} (${remaining} still missing)`;
+			const conflictMessage =
+				crossAgentHashConflicts > 0
+					? `${crossAgentHashConflicts} selected memory(s) could not be persisted because their content hash is owned by another agent under the current global uniqueness constraint`
+					: "";
+			const resultMessage = conflictMessage.length > 0 ? `${msg}; ${conflictMessage}` : msg;
+
+			await withRepairWriteTx(accessor, (db) => {
+				writeRepairAudit(db, action, ctx, written, resultMessage);
+			});
+
+			limiter.record(action, agentId);
+			logger.info("pipeline", "repair: re-embedded missing memories", {
+				affected: written,
+				attempted,
+				failed,
+				remaining,
+				batches,
+				runToCompletion,
+				actor: ctx.actor,
+				reason: ctx.reason,
+			});
+
+			return {
+				action,
+				success: crossAgentHashConflicts === 0,
+				affected: written,
+				message: resultMessage,
+				...(crossAgentHashConflicts > 0
+					? { details: { selected: attempted, failed, stale, crossAgentHashConflicts } }
+					: {}),
+			};
+		} finally {
+			reembedInProgress = false;
+		}
+	});
 }
 
 export async function reembedModelMigration(
@@ -1201,234 +1408,249 @@ export async function reembedModelMigration(
 	readVecDimensions: (db: ReadDb) => number | null = readLiveVecDimensions,
 ): Promise<RepairResult> {
 	const action = "reembedModelMigration";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, 0, cfg.repair.reembedHourlyBudget);
-	if (!gate.allowed) return { action, success: false, affected: 0, message: gate.reason ?? "denied by policy gate" };
-	const size =
-		Number.isFinite(batchSize) && batchSize > 0 ? Math.min(500, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
-	const { rows, totalMatching, sources, liveVecDimensions } = await accessor.withReadDbAsync(
-		async (db) => ({
-			rows: listEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, size, agentId),
-			totalMatching: countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
-			sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
-			liveVecDimensions: readVecDimensions(db),
-		}),
-		{ siteToken: "db:repair.embedding-migration-selection.read" },
-	);
-	const vecDimensionMismatch = liveVecDimensions !== null && liveVecDimensions !== embeddingCfg.dimensions;
-	const details = {
-		selected: totalMatching,
-		selectedThisBatch: rows.length,
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.reembedCooldownMs,
+		cfg.repair.reembedHourlyBudget,
 		agentId,
-		// Provider identity was not persisted by historical schemas. Report that
-		// explicitly rather than implying a provider mismatch can be inferred.
-		sources: sources.map((source) => ({ ...source, provider: "not-recorded" })),
-		target: { provider: embeddingCfg.provider, model: embeddingCfg.model, dimensions: embeddingCfg.dimensions },
-		estimatedBatches: Math.ceil(totalMatching / size),
-		vecDimensions: liveVecDimensions,
-		vectorIndexRebuildRequired: sources.some(
-			(source) => source.dimensions !== null && source.dimensions !== embeddingCfg.dimensions,
-		),
-	};
-	if (dryRun)
-		return {
-			action,
-			success: true,
-			affected: 0,
-			message: `dry run: ${totalMatching} memories selected; ${rows.length} in the next batch`,
-			totalMatching,
-			details,
-		};
-	// Refuse a live run when the vec_embeddings virtual table is pinned to a
-	// different dimension than the configured target. syncVecInsert would
-	// otherwise throw a dimension mismatch that db-helpers silently swallows,
-	// leaving embeddings updated but vec_embeddings serving stale vectors until
-	// a daemon restart. The operator must restart the daemon (which rebuilds
-	// the vec table at the new dimension) and then re-run the migration.
-	if (vecDimensionMismatch) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: `vector index is FLOAT[${liveVecDimensions}] but the configured target is FLOAT[${embeddingCfg.dimensions}]; restart the daemon to resize the vector index, then re-run the migration`,
-			totalMatching,
-			details,
-		};
+		dryRun,
+	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
-	let written = 0;
-	let failed = 0;
-	let contentChanged = 0;
-	let ownershipChanged = 0;
-	let crossAgentConflict = 0;
-	let profileChanged = false;
-	for (const row of rows) {
-		let vector: number[] | null;
-		try {
-			vector = await embeddingFn(row.content, embeddingCfg);
-		} catch (error) {
-			failed++;
-			logger.warn("pipeline", "re-embed migration: embedding failed", {
-				memoryId: row.id,
-				error: error instanceof Error ? error.message : String(error),
-			});
-			continue;
+
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const size =
+			Number.isFinite(batchSize) && batchSize > 0 ? Math.min(500, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
+		const { rows, totalMatching, sources, liveVecDimensions } = await accessor.withReadDbAsync(
+			async (db) => ({
+				rows: listEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, size, agentId),
+				totalMatching: countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
+				sources: listEmbeddingMigrationSources(db, embeddingCfg.model, embeddingCfg.dimensions, all, agentId),
+				liveVecDimensions: readVecDimensions(db),
+			}),
+			{ siteToken: "db:repair.embedding-migration-selection.read" },
+		);
+		const vecDimensionMismatch = liveVecDimensions !== null && liveVecDimensions !== embeddingCfg.dimensions;
+		const details = {
+			selected: totalMatching,
+			selectedThisBatch: rows.length,
+			agentId,
+			// Provider identity was not persisted by historical schemas. Report that
+			// explicitly rather than implying a provider mismatch can be inferred.
+			sources: sources.map((source) => ({ ...source, provider: "not-recorded" })),
+			target: { provider: embeddingCfg.provider, model: embeddingCfg.model, dimensions: embeddingCfg.dimensions },
+			estimatedBatches: Math.ceil(totalMatching / size),
+			vecDimensions: liveVecDimensions,
+			vectorIndexRebuildRequired: sources.some(
+				(source) => source.dimensions !== null && source.dimensions !== embeddingCfg.dimensions,
+			),
+		};
+		if (dryRun)
+			return {
+				action,
+				success: true,
+				affected: 0,
+				message: `dry run: ${totalMatching} memories selected; ${rows.length} in the next batch`,
+				totalMatching,
+				details,
+			};
+		// Refuse a live run when the vec_embeddings virtual table is pinned to a
+		// different dimension than the configured target. syncVecInsert would
+		// otherwise throw a dimension mismatch that db-helpers silently swallows,
+		// leaving embeddings updated but vec_embeddings serving stale vectors until
+		// a daemon restart. The operator must restart the daemon (which rebuilds
+		// the vec table at the new dimension) and then re-run the migration.
+		if (vecDimensionMismatch) {
+			return {
+				action,
+				success: false,
+				affected: 0,
+				message: `vector index is FLOAT[${liveVecDimensions}] but the configured target is FLOAT[${embeddingCfg.dimensions}]; restart the daemon to resize the vector index, then re-run the migration`,
+				totalMatching,
+				details,
+			};
 		}
-		if (!vector || vector.length !== embeddingCfg.dimensions) {
-			failed++;
-			continue;
-		}
-		try {
-			const writeOutcome = await withRepairWriteTx(
-				accessor,
-				(
-					db,
-				): {
-					wrote: boolean;
-					profileChanged: boolean;
-					contentChanged: boolean;
-					ownershipChanged: boolean;
-					crossAgentConflict: boolean;
-				} => {
-					// Provider work happens outside the transaction. Promotion can therefore
-					// change the active vector space while this row is being encoded.
-					// Never commit a vector or model marker from the superseded profile.
-					if (!isActiveEmbeddingConfig(db, embeddingCfg))
-						return {
-							wrote: false,
-							profileChanged: true,
-							contentChanged: false,
-							ownershipChanged: false,
-							crossAgentConflict: false,
-						};
-					const current = db
-						.prepare("SELECT content, content_hash, agent_id FROM memories WHERE id = ? AND is_deleted = 0")
-						.get(row.id) as { content: string; content_hash: string | null; agent_id: string | null } | null;
-					if (!current)
-						return {
-							wrote: false,
-							profileChanged: false,
-							contentChanged: false,
-							ownershipChanged: false,
-							crossAgentConflict: false,
-						};
-					// The provider encoded row.content before this transaction. If the
-					// memory changed while it awaited the provider, its vector belongs to
-					// the old row version and must not be committed under the new one.
-					if (current.content_hash !== row.contentHash || current.content !== row.content) {
-						return {
-							wrote: false,
-							profileChanged: false,
-							contentChanged: true,
-							ownershipChanged: false,
-							crossAgentConflict: false,
-						};
-					}
-					if (normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(row.agentId)) {
-						return {
-							wrote: false,
-							profileChanged: false,
-							contentChanged: false,
-							ownershipChanged: true,
-							crossAgentConflict: false,
-						};
-					}
-					const memoryAgentId = normalizeRepairAgentId(current.agent_id ?? agentId);
-					const id = crypto.randomUUID();
-					const existing = db
-						.prepare("SELECT agent_id FROM embeddings WHERE content_hash = ? LIMIT 1")
-						.get(current.content_hash) as { agent_id: string | null } | null;
-					if (existing != null && normalizeRepairAgentId(existing.agent_id) !== memoryAgentId)
-						return {
-							wrote: false,
-							profileChanged: false,
-							contentChanged: false,
-							ownershipChanged: false,
-							crossAgentConflict: true,
-						};
-					db.prepare(
-						`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now'), ?) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
-					).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content, memoryAgentId);
-					const embedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(current.content_hash) as
-						| { id: string }
-						| undefined;
-					if (!embedding)
-						return {
-							wrote: false,
-							profileChanged: false,
-							contentChanged: false,
-							ownershipChanged: false,
-							crossAgentConflict: false,
-						};
-					syncVecInsert(db, embedding.id, vector);
-					db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
-					return {
-						wrote: true,
-						profileChanged: false,
-						contentChanged: false,
-						ownershipChanged: false,
-						crossAgentConflict: false,
-					};
-				},
-			);
-			if (writeOutcome.profileChanged) {
-				profileChanged = true;
-				break;
-			}
-			if (writeOutcome.contentChanged) {
-				contentChanged++;
+		let written = 0;
+		let failed = 0;
+		let contentChanged = 0;
+		let ownershipChanged = 0;
+		let crossAgentConflict = 0;
+		let profileChanged = false;
+		for (const row of rows) {
+			let vector: number[] | null;
+			try {
+				vector = await embeddingFn(row.content, embeddingCfg);
+			} catch (error) {
+				failed++;
+				logger.warn("pipeline", "re-embed migration: embedding failed", {
+					memoryId: row.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
 				continue;
 			}
-			if (writeOutcome.ownershipChanged) {
-				ownershipChanged++;
+			if (!vector || vector.length !== embeddingCfg.dimensions) {
+				failed++;
 				continue;
 			}
-			if (writeOutcome.crossAgentConflict) {
-				crossAgentConflict++;
-				continue;
+			try {
+				const writeOutcome = await withRepairWriteTx(
+					accessor,
+					(
+						db,
+					): {
+						wrote: boolean;
+						profileChanged: boolean;
+						contentChanged: boolean;
+						ownershipChanged: boolean;
+						crossAgentConflict: boolean;
+					} => {
+						// Provider work happens outside the transaction. Promotion can therefore
+						// change the active vector space while this row is being encoded.
+						// Never commit a vector or model marker from the superseded profile.
+						if (!isActiveEmbeddingConfig(db, embeddingCfg))
+							return {
+								wrote: false,
+								profileChanged: true,
+								contentChanged: false,
+								ownershipChanged: false,
+								crossAgentConflict: false,
+							};
+						const current = db
+							.prepare("SELECT content, content_hash, agent_id FROM memories WHERE id = ? AND is_deleted = 0")
+							.get(row.id) as { content: string; content_hash: string | null; agent_id: string | null } | null;
+						if (!current)
+							return {
+								wrote: false,
+								profileChanged: false,
+								contentChanged: false,
+								ownershipChanged: false,
+								crossAgentConflict: false,
+							};
+						// The provider encoded row.content before this transaction. If the
+						// memory changed while it awaited the provider, its vector belongs to
+						// the old row version and must not be committed under the new one.
+						if (current.content_hash !== row.contentHash || current.content !== row.content) {
+							return {
+								wrote: false,
+								profileChanged: false,
+								contentChanged: true,
+								ownershipChanged: false,
+								crossAgentConflict: false,
+							};
+						}
+						if (normalizeRepairAgentId(current.agent_id) !== normalizeRepairAgentId(row.agentId)) {
+							return {
+								wrote: false,
+								profileChanged: false,
+								contentChanged: false,
+								ownershipChanged: true,
+								crossAgentConflict: false,
+							};
+						}
+						const memoryAgentId = normalizeRepairAgentId(current.agent_id ?? agentId);
+						const id = crypto.randomUUID();
+						const existing = db
+							.prepare("SELECT agent_id FROM embeddings WHERE content_hash = ? LIMIT 1")
+							.get(current.content_hash) as { agent_id: string | null } | null;
+						if (existing != null && normalizeRepairAgentId(existing.agent_id) !== memoryAgentId)
+							return {
+								wrote: false,
+								profileChanged: false,
+								contentChanged: false,
+								ownershipChanged: false,
+								crossAgentConflict: true,
+							};
+						db.prepare(
+							`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id) VALUES (?, ?, ?, ?, 'memory', ?, ?, datetime('now'), ?) ON CONFLICT(content_hash) DO UPDATE SET vector=excluded.vector, dimensions=excluded.dimensions, source_id=excluded.source_id, chunk_text=excluded.chunk_text, created_at=excluded.created_at`,
+						).run(id, current.content_hash, vectorToBlob(vector), vector.length, row.id, row.content, memoryAgentId);
+						const embedding = db
+							.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
+							.get(current.content_hash) as { id: string } | undefined;
+						if (!embedding)
+							return {
+								wrote: false,
+								profileChanged: false,
+								contentChanged: false,
+								ownershipChanged: false,
+								crossAgentConflict: false,
+							};
+						syncVecInsert(db, embedding.id, vector);
+						db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
+						return {
+							wrote: true,
+							profileChanged: false,
+							contentChanged: false,
+							ownershipChanged: false,
+							crossAgentConflict: false,
+						};
+					},
+				);
+				if (writeOutcome.profileChanged) {
+					profileChanged = true;
+					break;
+				}
+				if (writeOutcome.contentChanged) {
+					contentChanged++;
+					continue;
+				}
+				if (writeOutcome.ownershipChanged) {
+					ownershipChanged++;
+					continue;
+				}
+				if (writeOutcome.crossAgentConflict) {
+					crossAgentConflict++;
+					continue;
+				}
+				if (writeOutcome.wrote) written++;
+			} catch (error) {
+				failed++;
+				logger.warn("pipeline", "re-embed migration: write failed", {
+					memoryId: row.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
 			}
-			if (writeOutcome.wrote) written++;
-		} catch (error) {
-			failed++;
-			logger.warn("pipeline", "re-embed migration: write failed", {
-				memoryId: row.id,
-				error: error instanceof Error ? error.message : String(error),
-			});
 		}
-	}
-	const message = `re-embedded ${written} of ${rows.length} selected memories${
-		failed > 0 ? ` (${failed} failed)` : ""
-	}${contentChanged > 0 ? ` (${contentChanged} changed during provider work)` : ""}${
-		ownershipChanged > 0 ? ` (${ownershipChanged} ownership change(s) during provider work)` : ""
-	}${crossAgentConflict > 0 ? ` (${crossAgentConflict} cross-agent hash conflict(s) skipped)` : ""}`;
-	if (profileChanged) {
+		const message = `re-embedded ${written} of ${rows.length} selected memories${
+			failed > 0 ? ` (${failed} failed)` : ""
+		}${contentChanged > 0 ? ` (${contentChanged} changed during provider work)` : ""}${
+			ownershipChanged > 0 ? ` (${ownershipChanged} ownership change(s) during provider work)` : ""
+		}${crossAgentConflict > 0 ? ` (${crossAgentConflict} cross-agent hash conflict(s) skipped)` : ""}`;
+		if (profileChanged) {
+			return {
+				action,
+				success: false,
+				affected: written,
+				message: "embedding profile changed during provider work; skipped stale migration vectors",
+				totalMatching,
+				details: { ...details, failed, contentChanged, ownershipChanged, crossAgentConflict },
+			};
+		}
+		if (written > 0) {
+			try {
+				await withRepairWriteTx(accessor, (db) => writeRepairAudit(db, action, ctx, written, message));
+			} catch (error) {
+				// The repair work is already committed per-row; a failed audit write
+				// must not discard the partial-progress result the caller needs.
+				logger.warn("pipeline", "re-embed migration: audit write failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+			limiter.record(action, agentId);
+		}
 		return {
 			action,
-			success: false,
+			success: failed === 0 && contentChanged === 0 && ownershipChanged === 0 && crossAgentConflict === 0,
 			affected: written,
-			message: "embedding profile changed during provider work; skipped stale migration vectors",
+			message,
 			totalMatching,
 			details: { ...details, failed, contentChanged, ownershipChanged, crossAgentConflict },
 		};
-	}
-	if (written > 0) {
-		try {
-			await withRepairWriteTx(accessor, (db) => writeRepairAudit(db, action, ctx, written, message));
-		} catch (error) {
-			// The repair work is already committed per-row; a failed audit write
-			// must not discard the partial-progress result the caller needs.
-			logger.warn("pipeline", "re-embed migration: audit write failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-		limiter.record(action);
-	}
-	return {
-		action,
-		success: failed === 0 && contentChanged === 0 && ownershipChanged === 0 && crossAgentConflict === 0,
-		affected: written,
-		message,
-		totalMatching,
-		details: { ...details, failed, contentChanged, ownershipChanged, crossAgentConflict },
-	};
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -1449,50 +1671,58 @@ export async function cleanOrphanedEmbeddings(
 	agentId?: string,
 ): Promise<RepairResult> {
 	const action = "cleanOrphanedEmbeddings";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
-
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
+		agentId,
+	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	const limit = Number.isFinite(maxBatch) && maxBatch > 0 ? Math.floor(maxBatch) : Number.MAX_SAFE_INTEGER;
-	const affected = await withRepairWriteTx(accessor, (db) => {
-		const orphans = listOrphanedEmbeddingIds(db, limit, agentId);
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const limit =
+			Number.isFinite(maxBatch) && maxBatch > 0
+				? Math.min(MAX_BATCH_HARD_CAP, Math.floor(maxBatch))
+				: MAX_BATCH_HARD_CAP;
+		const affected = await withRepairWriteTx(accessor, (db) => {
+			const orphans = listOrphanedEmbeddingIds(db, limit, agentId);
 
-		if (orphans.length === 0) return 0;
+			if (orphans.length === 0) return 0;
 
-		const ids = orphans.map((r) => r.id);
-		if (!syncVecDeleteByEmbeddingIds(db, ids)) {
-			throw new Error("failed to reconcile vec_embeddings before orphan cleanup");
-		}
+			const ids = orphans.map((r) => r.id);
+			if (!syncVecDeleteByEmbeddingIds(db, ids)) {
+				throw new Error("failed to reconcile vec_embeddings before orphan cleanup");
+			}
 
-		const placeholders = ids.map(() => "?").join(", ");
-		const result = db.prepare(`DELETE FROM embeddings WHERE id IN (${placeholders})`).run(...ids);
+			const placeholders = ids.map(() => "?").join(", ");
+			const result = db.prepare(`DELETE FROM embeddings WHERE id IN (${placeholders})`).run(...ids);
 
-		const count = countChanges(result);
-		const msg = `cleaned ${count} orphaned embedding(s)`;
-		writeRepairAudit(db, action, ctx, count, msg);
-		return count;
+			const count = countChanges(result);
+			const msg = `cleaned ${count} orphaned embedding(s)`;
+			writeRepairAudit(db, action, ctx, count, msg);
+			return count;
+		});
+
+		limiter.record(action, agentId);
+		logger.info("pipeline", "repair: cleaned orphaned embeddings", {
+			affected,
+			actor: ctx.actor,
+			reason: ctx.reason,
+		});
+
+		return {
+			action,
+			success: true,
+			affected,
+			message: `cleaned ${affected} orphaned embedding(s)`,
+		};
 	});
-
-	limiter.record(action);
-	logger.info("pipeline", "repair: cleaned orphaned embeddings", {
-		affected,
-		actor: ctx.actor,
-		reason: ctx.reason,
-	});
-
-	return {
-		action,
-		success: true,
-		affected,
-		message: `cleaned ${affected} orphaned embedding(s)`,
-	};
 }
 
 // ---------------------------------------------------------------------------
@@ -1531,116 +1761,122 @@ export async function resyncVectorIndex(
 	limiter: RateLimiter,
 ): Promise<RepairResult> {
 	const action = "resyncVectorIndex";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.reembedCooldownMs, cfg.repair.reembedHourlyBudget);
-
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.reembedCooldownMs,
+		cfg.repair.reembedHourlyBudget,
+	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	const stats: VecResyncStats = await withRepairWriteTx(accessor, (db): VecResyncStats => {
-		try {
-			db.prepare("SELECT 1 FROM vec_embeddings LIMIT 1").get();
-		} catch {
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const stats: VecResyncStats = await withRepairWriteTx(accessor, (db): VecResyncStats => {
+			try {
+				db.prepare("SELECT 1 FROM vec_embeddings LIMIT 1").get();
+			} catch {
+				return {
+					vecAvailable: false,
+					inserted: 0,
+					deleted: 0,
+					skipped: 0,
+				};
+			}
+
+			const orphanRows = db
+				.prepare(
+					`SELECT v.id
+				 FROM vec_embeddings v
+				 LEFT JOIN embeddings e ON e.id = v.id
+				 WHERE e.id IS NULL
+				 LIMIT ?`,
+				)
+				.all(MAX_BATCH_HARD_CAP) as Array<{ id: string }>;
+
+			let deleted = 0;
+			if (orphanRows.length > 0) {
+				const remove = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
+				for (const row of orphanRows) {
+					const result = remove.run(row.id);
+					if (countChanges(result) > 0) deleted++;
+				}
+			}
+
+			const missingRows = db
+				.prepare(
+					`SELECT e.id, e.vector
+				 FROM embeddings e
+				 LEFT JOIN vec_embeddings v ON v.id = e.id
+				 WHERE v.id IS NULL
+				 LIMIT ?`,
+				)
+				.all(MAX_BATCH_HARD_CAP) as Array<{ id: string; vector: unknown }>;
+
+			let inserted = 0;
+			let skipped = 0;
+			const insert = db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)");
+
+			for (const row of missingRows) {
+				const vector = blobToFloat32Vector(row.vector);
+				if (!vector) {
+					skipped++;
+					continue;
+				}
+				const result = insert.run(row.id, vector);
+				if (countChanges(result) > 0) inserted++;
+			}
+
+			const affected = inserted + deleted;
+			const msg =
+				skipped > 0
+					? `resynced vec index (+${inserted}/-${deleted}, skipped ${skipped} malformed vector(s))`
+					: `resynced vec index (+${inserted}/-${deleted})`;
+			writeRepairAudit(db, action, ctx, affected, msg);
+
 			return {
-				vecAvailable: false,
-				inserted: 0,
-				deleted: 0,
-				skipped: 0,
+				vecAvailable: true,
+				inserted,
+				deleted,
+				skipped,
+			};
+		});
+
+		if (!stats.vecAvailable) {
+			return {
+				action,
+				success: false,
+				affected: 0,
+				message: "vec_embeddings table not found; restart daemon to initialize vector index",
 			};
 		}
 
-		const orphanRows = db
-			.prepare(
-				`SELECT v.id
-				 FROM vec_embeddings v
-				 LEFT JOIN embeddings e ON e.id = v.id
-				 WHERE e.id IS NULL`,
-			)
-			.all() as Array<{ id: string }>;
+		limiter.record(action);
+		const affected = stats.inserted + stats.deleted;
+		const message =
+			stats.skipped > 0
+				? `resynced vec index (+${stats.inserted}/-${stats.deleted}, skipped ${stats.skipped} malformed vector(s))`
+				: `resynced vec index (+${stats.inserted}/-${stats.deleted})`;
 
-		let deleted = 0;
-		if (orphanRows.length > 0) {
-			const remove = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
-			for (const row of orphanRows) {
-				const result = remove.run(row.id);
-				if (countChanges(result) > 0) deleted++;
-			}
-		}
+		logger.info("pipeline", "repair: resynced vec index", {
+			affected,
+			inserted: stats.inserted,
+			deleted: stats.deleted,
+			skipped: stats.skipped,
+			actor: ctx.actor,
+			reason: ctx.reason,
+		});
 
-		const missingRows = db
-			.prepare(
-				`SELECT e.id, e.vector
-				 FROM embeddings e
-				 LEFT JOIN vec_embeddings v ON v.id = e.id
-				 WHERE v.id IS NULL`,
-			)
-			.all() as Array<{ id: string; vector: unknown }>;
-
-		let inserted = 0;
-		let skipped = 0;
-		const insert = db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)");
-
-		for (const row of missingRows) {
-			const vector = blobToFloat32Vector(row.vector);
-			if (!vector) {
-				skipped++;
-				continue;
-			}
-			const result = insert.run(row.id, vector);
-			if (countChanges(result) > 0) inserted++;
-		}
-
-		const affected = inserted + deleted;
-		const msg =
-			skipped > 0
-				? `resynced vec index (+${inserted}/-${deleted}, skipped ${skipped} malformed vector(s))`
-				: `resynced vec index (+${inserted}/-${deleted})`;
-		writeRepairAudit(db, action, ctx, affected, msg);
-
-		return {
-			vecAvailable: true,
-			inserted,
-			deleted,
-			skipped,
-		};
-	});
-
-	if (!stats.vecAvailable) {
 		return {
 			action,
-			success: false,
-			affected: 0,
-			message: "vec_embeddings table not found; restart daemon to initialize vector index",
+			success: true,
+			affected,
+			message,
 		};
-	}
-
-	limiter.record(action);
-	const affected = stats.inserted + stats.deleted;
-	const message =
-		stats.skipped > 0
-			? `resynced vec index (+${stats.inserted}/-${stats.deleted}, skipped ${stats.skipped} malformed vector(s))`
-			: `resynced vec index (+${stats.inserted}/-${stats.deleted})`;
-
-	logger.info("pipeline", "repair: resynced vec index", {
-		affected,
-		inserted: stats.inserted,
-		deleted: stats.deleted,
-		skipped: stats.skipped,
-		actor: ctx.actor,
-		reason: ctx.reason,
 	});
-
-	return {
-		action,
-		success: true,
-		affected,
-		message,
-	};
 }
 
 // ---------------------------------------------------------------------------
@@ -1824,29 +2060,32 @@ export async function deduplicateMemories(
 	},
 ): Promise<DedupResult> {
 	const action = "deduplicateMemories";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.dedupCooldownMs, cfg.repair.dedupHourlyBudget);
-
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			clusters: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
-	}
-
 	const batchSize = options?.batchSize ?? cfg.repair.dedupBatchSize;
 	const semanticThreshold = options?.semanticThreshold ?? cfg.repair.dedupSemanticThreshold;
 	const dryRun = options?.dryRun ?? false;
 	const semanticEnabled = options?.semanticEnabled ?? false;
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.dedupCooldownMs,
+		cfg.repair.dedupHourlyBudget,
+		"global",
+		dryRun,
+	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, clusters: 0, message: "" });
+	}
 
-	// Phase 1: Exact hash clusters
-	const hashClusters = await accessor.withReadDbAsync(
-		async (db) => {
-			return db
-				.prepare(
-					`SELECT content_hash, COALESCE(scope, '__NULL__') AS scope_key, COUNT(*) AS cnt
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		// Phase 1: Exact hash clusters
+		const hashClusters = await accessor.withReadDbAsync(
+			async (db) => {
+				return db
+					.prepare(
+						`SELECT content_hash, COALESCE(scope, '__NULL__') AS scope_key, COUNT(*) AS cnt
 				 FROM memories
 				 WHERE is_deleted = 0 AND pinned = 0 AND manual_override = 0
 				   AND content_hash IS NOT NULL
@@ -1854,79 +2093,52 @@ export async function deduplicateMemories(
 				 HAVING COUNT(*) > 1
 				 ORDER BY cnt DESC
 				 LIMIT ?`,
-				)
-				.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
-		},
-		{ siteToken: "db:repair.exact-duplicate-candidates.read" },
-	);
+					)
+					.all(batchSize) as Array<{ content_hash: string; scope_key: string; cnt: number }>;
+			},
+			{ siteToken: "db:repair.exact-duplicate-candidates.read" },
+		);
 
-	if (dryRun) {
-		const totalExcess = hashClusters.reduce((sum, c) => sum + c.cnt - 1, 0);
-		let semanticClusterCount = 0;
-		if (semanticEnabled) {
-			const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize);
-			semanticClusterCount = semanticClusters.length;
+		if (dryRun) {
+			const totalExcess = hashClusters.reduce((sum, c) => sum + c.cnt - 1, 0);
+			let semanticClusterCount = 0;
+			if (semanticEnabled) {
+				const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize);
+				semanticClusterCount = semanticClusters.length;
+			}
+			limiter.record(action);
+			const parts = [`${hashClusters.length} exact cluster(s), ${totalExcess} excess duplicate(s)`];
+			if (semanticEnabled) {
+				parts.push(`${semanticClusterCount} semantic cluster(s)`);
+			}
+			return {
+				action,
+				success: true,
+				affected: 0,
+				clusters: hashClusters.length + semanticClusterCount,
+				message: `dry run: ${parts.join(", ")}`,
+			};
 		}
-		limiter.record(action);
-		const parts = [`${hashClusters.length} exact cluster(s), ${totalExcess} excess duplicate(s)`];
-		if (semanticEnabled) {
-			parts.push(`${semanticClusterCount} semantic cluster(s)`);
-		}
-		return {
-			action,
-			success: true,
-			affected: 0,
-			clusters: hashClusters.length + semanticClusterCount,
-			message: `dry run: ${parts.join(", ")}`,
-		};
-	}
 
-	let totalRemoved = 0;
-	let totalClusters = 0;
+		let totalRemoved = 0;
+		let totalClusters = 0;
 
-	// Process exact hash clusters (scope-aware: only dedup within same scope)
-	for (const cluster of hashClusters) {
-		const removed = await withRepairWriteTx(accessor, (db) => {
-			const scopeFilter = cluster.scope_key === "__NULL__" ? "AND scope IS NULL" : "AND scope = ?";
-			const scopeArgs = cluster.scope_key === "__NULL__" ? [] : [cluster.scope_key];
-			const candidates = db
-				.prepare(
-					`SELECT id, content, content_hash, tags, importance,
+		// Process exact hash clusters (scope-aware: only dedup within same scope)
+		for (const cluster of hashClusters) {
+			const removed = await withRepairWriteTx(accessor, (db) => {
+				const scopeFilter = cluster.scope_key === "__NULL__" ? "AND scope IS NULL" : "AND scope = ?";
+				const scopeArgs = cluster.scope_key === "__NULL__" ? [] : [cluster.scope_key];
+				const candidates = db
+					.prepare(
+						`SELECT id, content, content_hash, tags, importance,
 							access_count, update_count, updated_at, pinned, manual_override
 					 FROM memories
 					 WHERE content_hash = ? AND is_deleted = 0
 					   AND pinned = 0 AND manual_override = 0
 					   ${scopeFilter}
 					 ORDER BY importance DESC`,
-				)
-				.all(cluster.content_hash, ...scopeArgs) as DedupCandidate[];
-
-			const result = processCluster(db, candidates, ctx);
-			return result?.removed ?? 0;
-		});
-
-		if (removed > 0) {
-			totalRemoved += removed;
-			totalClusters++;
-		}
-	}
-
-	// Phase 2: Semantic clusters (only if exact phase didn't fill batch)
-	if (semanticEnabled && totalClusters < batchSize) {
-		const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize - totalClusters);
-
-		for (const cluster of semanticClusters) {
-			const removed = await withRepairWriteTx(accessor, (db) => {
-				const ids = cluster.map((c) => c.id);
-				const placeholders = ids.map(() => "?").join(", ");
-				const candidates = db
-					.prepare(
-						`SELECT id, content, content_hash, tags, importance,
-								access_count, update_count, updated_at, pinned, manual_override
-						 FROM memories
-						 WHERE id IN (${placeholders}) AND is_deleted = 0`,
 					)
-					.all(...ids) as DedupCandidate[];
+					.all(cluster.content_hash, ...scopeArgs) as DedupCandidate[];
 
 				const result = processCluster(db, candidates, ctx);
 				return result?.removed ?? 0;
@@ -1937,26 +2149,54 @@ export async function deduplicateMemories(
 				totalClusters++;
 			}
 		}
-	}
 
-	limiter.record(action);
-	const msg = `deduplicated ${totalRemoved} memory/memories across ${totalClusters} cluster(s)`;
+		// Phase 2: Semantic clusters (only if exact phase didn't fill batch)
+		if (semanticEnabled && totalClusters < batchSize) {
+			const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize - totalClusters);
 
-	logger.info("pipeline", "repair: deduplication complete", {
-		affected: totalRemoved,
-		clusters: totalClusters,
-		semanticEnabled,
-		actor: ctx.actor,
-		reason: ctx.reason,
+			for (const cluster of semanticClusters) {
+				const removed = await withRepairWriteTx(accessor, (db) => {
+					const ids = cluster.map((c) => c.id);
+					const placeholders = ids.map(() => "?").join(", ");
+					const candidates = db
+						.prepare(
+							`SELECT id, content, content_hash, tags, importance,
+								access_count, update_count, updated_at, pinned, manual_override
+						 FROM memories
+						 WHERE id IN (${placeholders}) AND is_deleted = 0`,
+						)
+						.all(...ids) as DedupCandidate[];
+
+					const result = processCluster(db, candidates, ctx);
+					return result?.removed ?? 0;
+				});
+
+				if (removed > 0) {
+					totalRemoved += removed;
+					totalClusters++;
+				}
+			}
+		}
+
+		limiter.record(action);
+		const msg = `deduplicated ${totalRemoved} memory/memories across ${totalClusters} cluster(s)`;
+
+		logger.info("pipeline", "repair: deduplication complete", {
+			affected: totalRemoved,
+			clusters: totalClusters,
+			semanticEnabled,
+			actor: ctx.actor,
+			reason: ctx.reason,
+		});
+
+		return {
+			action,
+			success: true,
+			affected: totalRemoved,
+			clusters: totalClusters,
+			message: msg,
+		};
 	});
-
-	return {
-		action,
-		success: true,
-		affected: totalRemoved,
-		clusters: totalClusters,
-		message: msg,
-	};
 }
 
 // ---------------------------------------------------------------------------
@@ -2061,42 +2301,45 @@ export async function pruneChunkGroupEntities(
 	options?: { batchSize?: number; dryRun?: boolean },
 ): Promise<RepairResult> {
 	const action = "pruneChunkGroupEntities";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 5);
-	if (!gate.allowed) {
-		return { action, success: false, affected: 0, message: gate.reason ?? "denied" };
+	const dryRun = options?.dryRun === true;
+	const admission = await beginRepairAdmission(accessor, cfg, ctx, limiter, action, 60_000, 5, "global", dryRun);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	const batchSize = options?.batchSize ?? 500;
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const batchSize = options?.batchSize ?? 500;
 
-	const total = await accessor.withReadDbAsync(
-		async (db) =>
-			(db.prepare("SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group'").get() as { n: number }).n,
-		{ siteToken: "db:repair.chunk-group-count.read" },
-	);
+		const total = await accessor.withReadDbAsync(
+			async (db) =>
+				(db.prepare("SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group'").get() as { n: number }).n,
+			{ siteToken: "db:repair.chunk-group-count.read" },
+		);
 
-	if (options?.dryRun) {
-		return {
-			action,
-			success: true,
-			affected: total,
-			message: `dry-run: would delete ${total} chunk_group entities`,
-		};
-	}
+		if (dryRun) {
+			return {
+				action,
+				success: true,
+				affected: total,
+				message: `dry-run: would delete ${total} chunk_group entities`,
+			};
+		}
 
-	const affected = await withRepairWriteTx(accessor, (db) => {
-		const ids = db.prepare("SELECT id FROM entities WHERE entity_type = 'chunk_group' LIMIT ?").all(batchSize) as {
-			id: string;
-		}[];
-		if (ids.length === 0) return 0;
-		const placeholders = ids.map(() => "?").join(",");
-		db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids.map((r) => r.id));
-		writeRepairAudit(db, action, ctx, ids.length, `deleted ${ids.length} chunk_group entities`);
-		return ids.length;
+		const affected = await withRepairWriteTx(accessor, (db) => {
+			const ids = db.prepare("SELECT id FROM entities WHERE entity_type = 'chunk_group' LIMIT ?").all(batchSize) as {
+				id: string;
+			}[];
+			if (ids.length === 0) return 0;
+			const placeholders = ids.map(() => "?").join(",");
+			db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids.map((r) => r.id));
+			writeRepairAudit(db, action, ctx, ids.length, `deleted ${ids.length} chunk_group entities`);
+			return ids.length;
+		});
+
+		limiter.record(action);
+		logger.info("pipeline", "repair: pruned chunk_group entities", { affected, actor: ctx.actor });
+		return { action, success: true, affected, message: `deleted ${affected} chunk_group entities` };
 	});
-
-	limiter.record(action);
-	logger.info("pipeline", "repair: pruned chunk_group entities", { affected, actor: ctx.actor });
-	return { action, success: true, affected, message: `deleted ${affected} chunk_group entities` };
 }
 
 // ---------------------------------------------------------------------------
@@ -2117,19 +2360,21 @@ export async function pruneSingletonExtractedEntities(
 	options?: { batchSize?: number; dryRun?: boolean; maxMentions?: number },
 ): Promise<RepairResult> {
 	const action = "pruneSingletonExtractedEntities";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 10);
-	if (!gate.allowed) {
-		return { action, success: false, affected: 0, message: gate.reason ?? "denied" };
+	const dryRun = options?.dryRun === true;
+	const admission = await beginRepairAdmission(accessor, cfg, ctx, limiter, action, 60_000, 10, "global", dryRun);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	const batchSize = options?.batchSize ?? 200;
-	const maxMentions = options?.maxMentions ?? 1;
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const batchSize = options?.batchSize ?? 200;
+		const maxMentions = options?.maxMentions ?? 1;
 
-	const candidates = await accessor.withReadDbAsync(
-		async (db) =>
-			db
-				.prepare(
-					`SELECT e.id FROM entities e
+		const candidates = await accessor.withReadDbAsync(
+			async (db) =>
+				db
+					.prepare(
+						`SELECT e.id FROM entities e
 				 WHERE e.entity_type = 'extracted'
 				   AND e.mentions <= ?
 				   AND NOT EXISTS (SELECT 1 FROM entity_aspects WHERE entity_id = e.id LIMIT 1)
@@ -2149,50 +2394,51 @@ export async function pruneSingletonExtractedEntities(
 				     LIMIT 1
 				   )
 				 LIMIT ?`,
-				)
-				.all(maxMentions, batchSize) as { id: string }[],
-		{ siteToken: "db:repair.singleton-entity-candidates.read" },
-	);
+					)
+					.all(maxMentions, batchSize) as { id: string }[],
+			{ siteToken: "db:repair.singleton-entity-candidates.read" },
+		);
 
-	if (options?.dryRun) {
+		if (dryRun) {
+			return {
+				action,
+				success: true,
+				affected: candidates.length,
+				message: `dry-run: would delete ${candidates.length} singleton extracted entities`,
+			};
+		}
+
+		if (candidates.length === 0) {
+			return { action, success: true, affected: 0, message: "no singleton extracted entities found" };
+		}
+
+		const affected = await withRepairWriteTx(accessor, (db) => {
+			const ids = candidates.map((r) => r.id);
+			const placeholders = ids.map(() => "?").join(",");
+			// Clean mention links (no FK cascade)
+			db.prepare(`DELETE FROM memory_entity_mentions WHERE entity_id IN (${placeholders})`).run(...ids);
+			// Clean relations (no FK cascade)
+			db.prepare(
+				`DELETE FROM relations WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
+			).run(...ids, ...ids);
+			// Delete entities — cascades entity_aspects and entity_dependencies
+			db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids);
+			writeRepairAudit(db, action, ctx, ids.length, `deleted ${ids.length} singleton extracted entities`);
+			return ids.length;
+		});
+
+		limiter.record(action);
+		logger.info("pipeline", "repair: pruned singleton extracted entities", {
+			affected,
+			actor: ctx.actor,
+		});
 		return {
 			action,
 			success: true,
-			affected: candidates.length,
-			message: `dry-run: would delete ${candidates.length} singleton extracted entities`,
+			affected,
+			message: `deleted ${affected} singleton extracted entities`,
 		};
-	}
-
-	if (candidates.length === 0) {
-		return { action, success: true, affected: 0, message: "no singleton extracted entities found" };
-	}
-
-	const affected = await withRepairWriteTx(accessor, (db) => {
-		const ids = candidates.map((r) => r.id);
-		const placeholders = ids.map(() => "?").join(",");
-		// Clean mention links (no FK cascade)
-		db.prepare(`DELETE FROM memory_entity_mentions WHERE entity_id IN (${placeholders})`).run(...ids);
-		// Clean relations (no FK cascade)
-		db.prepare(
-			`DELETE FROM relations WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
-		).run(...ids, ...ids);
-		// Delete entities — cascades entity_aspects and entity_dependencies
-		db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids);
-		writeRepairAudit(db, action, ctx, ids.length, `deleted ${ids.length} singleton extracted entities`);
-		return ids.length;
 	});
-
-	limiter.record(action);
-	logger.info("pipeline", "repair: pruned singleton extracted entities", {
-		affected,
-		actor: ctx.actor,
-	});
-	return {
-		action,
-		success: true,
-		affected,
-		message: `deleted ${affected} singleton extracted entities`,
-	};
 }
 
 // ---------------------------------------------------------------------------
@@ -2246,20 +2492,22 @@ export async function pruneGenericEntities(
 	options?: { batchSize?: number; dryRun?: boolean; agentId?: string },
 ): Promise<RepairResult> {
 	const action = "pruneGenericEntities";
-	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 10);
-	if (!gate.allowed) {
-		return { action, success: false, affected: 0, message: gate.reason ?? "denied" };
-	}
-
 	const batchSize = Math.max(1, Math.min(Math.floor(options?.batchSize ?? 100), 500));
 	const agentId = options?.agentId ?? "default";
-	const candidates = await accessor.withReadDbAsync(
-		async (db) => {
-			const candidates: GenericEntityCandidate[] = [];
-			const pageSize = Math.max(batchSize * 10, 500);
-			let offset = 0;
-			const selectPage = db.prepare(
-				`SELECT e.id, e.name, e.entity_type
+	const dryRun = options?.dryRun ?? true;
+	const admission = await beginRepairAdmission(accessor, cfg, ctx, limiter, action, 60_000, 10, agentId, dryRun);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
+	}
+
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const candidates = await accessor.withReadDbAsync(
+			async (db) => {
+				const candidates: GenericEntityCandidate[] = [];
+				const pageSize = Math.max(batchSize * 10, 500);
+				let offset = 0;
+				const selectPage = db.prepare(
+					`SELECT e.id, e.name, e.entity_type
 			 FROM entities e
 			 WHERE e.agent_id = ?
 			   AND COALESCE(e.pinned, 0) = 0
@@ -2267,62 +2515,63 @@ export async function pruneGenericEntities(
 			   AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
 			 ORDER BY e.updated_at DESC
 			 LIMIT ? OFFSET ?`,
-			);
+				);
 
-			for (;;) {
-				const rows = selectPage.all(agentId, pageSize, offset) as GenericEntityCandidate[];
-				if (rows.length === 0) break;
-				for (const row of rows) {
-					const quality = classifyEntityQuality(row.name, row.entity_type);
-					if (!quality.ok) {
-						candidates.push({ ...row, reason: quality.reason });
-						if (candidates.length >= batchSize) return candidates;
+				for (;;) {
+					const rows = selectPage.all(agentId, pageSize, offset) as GenericEntityCandidate[];
+					if (rows.length === 0) break;
+					for (const row of rows) {
+						const quality = classifyEntityQuality(row.name, row.entity_type);
+						if (!quality.ok) {
+							candidates.push({ ...row, reason: quality.reason });
+							if (candidates.length >= batchSize) return candidates;
+						}
 					}
+					offset += rows.length;
 				}
-				offset += rows.length;
-			}
-			return candidates;
-		},
-		{ siteToken: "db:repair.generic-entity-candidates.read" },
-	);
-
-	if (options?.dryRun ?? true) {
-		const preview = candidates
-			.slice(0, 10)
-			.map((row) => `${row.name} (${row.reason ?? "invalid"})`)
-			.join(", ");
-		return {
-			action,
-			success: true,
-			affected: candidates.length,
-			message: `dry-run: would delete ${candidates.length} generic/non-concrete entities${preview ? `: ${preview}` : ""}`,
-		};
-	}
-
-	if (candidates.length === 0) {
-		return { action, success: true, affected: 0, message: "no generic/non-concrete entities found" };
-	}
-
-	const affected = await withRepairWriteTx(accessor, (db) => {
-		const ids = candidates.map((row) => row.id);
-		deleteEntityGraphRows(db, ids);
-		writeRepairAudit(
-			db,
-			action,
-			ctx,
-			ids.length,
-			`deleted ${ids.length} generic/non-concrete entities for agent ${agentId}`,
+				return candidates;
+			},
+			{ siteToken: "db:repair.generic-entity-candidates.read" },
 		);
-		return ids.length;
-	});
 
-	limiter.record(action);
-	logger.info("pipeline", "repair: pruned generic/non-concrete entities", {
-		affected,
-		agentId,
-		actor: ctx.actor,
+		if (dryRun) {
+			const preview = candidates
+				.slice(0, 10)
+				.map((row) => `${row.name} (${row.reason ?? "invalid"})`)
+				.join(", ");
+			return {
+				action,
+				success: true,
+				affected: candidates.length,
+				message: `dry-run: would delete ${candidates.length} generic/non-concrete entities${preview ? `: ${preview}` : ""}`,
+			};
+		}
+
+		if (candidates.length === 0) {
+			return { action, success: true, affected: 0, message: "no generic/non-concrete entities found" };
+		}
+
+		const affected = await withRepairWriteTx(accessor, (db) => {
+			const ids = candidates.map((row) => row.id);
+			deleteEntityGraphRows(db, ids);
+			writeRepairAudit(
+				db,
+				action,
+				ctx,
+				ids.length,
+				`deleted ${ids.length} generic/non-concrete entities for agent ${agentId}`,
+			);
+			return ids.length;
+		});
+
+		limiter.record(action, agentId);
+		logger.info("pipeline", "repair: pruned generic/non-concrete entities", {
+			affected,
+			agentId,
+			actor: ctx.actor,
+		});
+		return { action, success: true, affected, message: `deleted ${affected} generic/non-concrete entities` };
 	});
-	return { action, success: true, affected, message: `deleted ${affected} generic/non-concrete entities` };
 }
 
 // ---------------------------------------------------------------------------
@@ -2402,7 +2651,11 @@ export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMem
  * Soft-delete a batch of memories by ID in a single transaction.
  * Returns the number actually deleted (skips already-deleted).
  */
-export async function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[]): Promise<number> {
+export async function forgetDeadMemories(
+	accessor: DbAccessor,
+	ids: readonly string[],
+	ctx: RepairContext = { actor: "api", reason: "dead-memory hygiene", actorType: "daemon" },
+): Promise<number> {
 	if (ids.length === 0) return 0;
 	const now = new Date().toISOString();
 	return await withRepairWriteTx(accessor, (db) => {
@@ -2411,18 +2664,7 @@ export async function forgetDeadMemories(accessor: DbAccessor, ids: readonly str
 		for (const id of ids) {
 			total += countChanges(stmt.run(now, id));
 		}
-		writeRepairAudit(
-			db,
-			"forget-dead-memories",
-			{
-				actor: "api",
-				reason: "dead-memory hygiene",
-				actorType: "daemon",
-				requestId: undefined,
-			},
-			total,
-			`soft-deleted ${total} dead memories`,
-		);
+		writeRepairAudit(db, "forget-dead-memories", ctx, total, `soft-deleted ${total} dead memories`);
 		return total;
 	});
 }
@@ -2465,7 +2707,7 @@ export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityChe
 // Rebuild derived search indexes
 // ---------------------------------------------------------------------------
 
-export interface RebuildIndexesResult {
+export interface RebuildIndexesResult extends RepairResult {
 	readonly integrity: { ok: boolean; messages: readonly string[] };
 	readonly fts: { repaired: boolean; message: string };
 	readonly embeddings: {
@@ -2492,41 +2734,78 @@ export async function rebuildDerivedIndexes(
 	embeddingFn: (content: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	embeddingCfg: EmbeddingConfig,
 ): Promise<RebuildIndexesResult> {
-	const integrity = await integrityCheck(accessor);
-
-	// Step 1: FTS rebuild
-	const ftsResult = await checkFtsConsistency(accessor, cfg, ctx, limiter, true);
-
-	// Step 2: Re-embed missing memories (batch of 200, not full sweep)
-	const reembedResult = await reembedAllMissingMemoriesBatch(accessor, embeddingFn, embeddingCfg, 200);
-
-	const parts: string[] = [];
-	if (!integrity.ok) {
-		parts.push(`integrity: ${integrity.messages.length} issue(s)`);
-	} else {
-		parts.push("integrity: ok");
-	}
-	if (ftsResult.affected > 0) {
-		parts.push("FTS: repaired");
-	} else {
-		parts.push("FTS: consistent");
-	}
-	parts.push(
-		reembedResult.crossAgentHashConflicts > 0
-			? `embeddings: re-embedded ${reembedResult.written} of ${reembedResult.selected} missing; ${reembedResult.crossAgentHashConflicts} selected memory(s) could not be persisted under the current global uniqueness constraint because their content hash is owned by another agent`
-			: `embeddings: re-embedded ${reembedResult.written} of ${reembedResult.selected} missing`,
+	const action = "rebuildDerivedIndexes";
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.reembedCooldownMs,
+		cfg.repair.reembedHourlyBudget,
 	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, {
+			action,
+			success: false,
+			affected: 0,
+			message: "",
+			integrity: { ok: false, messages: [] },
+			fts: { repaired: false, message: "repair admission denied" },
+			embeddings: { reembedded: 0, totalMissing: 0, crossAgentHashConflicts: 0 },
+			summary: "repair admission denied",
+		});
+	}
 
-	return {
-		integrity,
-		fts: { repaired: ftsResult.affected > 0, message: ftsResult.message },
-		embeddings: {
-			reembedded: reembedResult.written,
-			totalMissing: reembedResult.selected - reembedResult.written,
-			crossAgentHashConflicts: reembedResult.crossAgentHashConflicts,
-		},
-		summary: parts.join(" · "),
-	};
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const integrity = await integrityCheck(accessor);
+
+		// Step 1: FTS rebuild
+		// The outer rebuild lease is the canonical admission for this composite
+		// operation; use a local subtask limiter to avoid charging a second
+		// independent FTS lease for the same request.
+		const ftsResult = await checkFtsConsistency(accessor, cfg, ctx, createRateLimiter(), true);
+
+		// Step 2: Re-embed missing memories (batch of 200, not full sweep)
+		const reembedResult = await reembedAllMissingMemoriesBatch(accessor, embeddingFn, embeddingCfg, 200);
+
+		const parts: string[] = [];
+		if (!integrity.ok) {
+			parts.push(`integrity: ${integrity.messages.length} issue(s)`);
+		} else {
+			parts.push("integrity: ok");
+		}
+		if (ftsResult.affected > 0) {
+			parts.push("FTS: repaired");
+		} else {
+			parts.push("FTS: consistent");
+		}
+		parts.push(
+			reembedResult.crossAgentHashConflicts > 0
+				? `embeddings: re-embedded ${reembedResult.written} of ${reembedResult.selected} missing; ${reembedResult.crossAgentHashConflicts} selected memory(s) could not be persisted under the current global uniqueness constraint because their content hash is owned by another agent`
+				: `embeddings: re-embedded ${reembedResult.written} of ${reembedResult.selected} missing`,
+		);
+
+		return {
+			action,
+			success:
+				integrity.ok &&
+				ftsResult.success &&
+				reembedResult.failed === 0 &&
+				!reembedResult.profileChanged &&
+				reembedResult.crossAgentHashConflicts === 0,
+			affected: (ftsResult.affected > 0 ? 1 : 0) + reembedResult.written,
+			message: parts.join(" · "),
+			integrity,
+			fts: { repaired: ftsResult.affected > 0, message: ftsResult.message },
+			embeddings: {
+				reembedded: reembedResult.written,
+				totalMissing: reembedResult.selected - reembedResult.written,
+				crossAgentHashConflicts: reembedResult.crossAgentHashConflicts,
+			},
+			summary: parts.join(" · "),
+		};
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -2698,116 +2977,122 @@ export async function cancelObsoleteJobs(
 	if (retired) return retired;
 
 	const dryRun = options.dryRun === true;
-
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
+		"global",
+		dryRun,
+	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	const olderThanMs = options.olderThanMs ?? 30 * 24 * 60 * 60 * 1000;
-	const wantsMemory = !options.tables || options.tables.includes("memory");
-	const result = await withRepairWriteTx<CancelResultMeta>(accessor, (db) => {
-		if (!tableExists(db, "job_cancellations")) {
-			throw new Error("job_cancellations table missing; run migrations");
-		}
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const olderThanMs = options.olderThanMs ?? 30 * 24 * 60 * 60 * 1000;
+		const wantsMemory = !options.tables || options.tables.includes("memory");
+		const result = await withRepairWriteTx<CancelResultMeta>(accessor, (db) => {
+			if (!tableExists(db, "job_cancellations")) {
+				throw new Error("job_cancellations table missing; run migrations");
+			}
 
-		const selection = {
-			...options,
-			olderThanMs,
-			maxBatch: options.maxBatch ?? MAX_BATCH_HARD_CAP,
-		};
-		const targets: Array<{
-			readonly table: "memory_jobs";
-			readonly rows: readonly CancelPruneMatchRow[];
-			readonly totalMatching: number;
-		}> = [];
-		// `--max-batch` is an aggregate cap across ALL selected tables, not a
-		// per-table cap. Select memory first, then hand only the remaining
-		// budget to summary so a both-queue operation can never exceed the
-		// requested blast radius (issue #1053).
-		let remaining = Math.min(selection.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
-		if (wantsMemory) {
-			const r = buildCancelPruneSql(db, "memory_jobs", ["dead", "completed"], {
-				...selection,
-				maxBatch: remaining,
-			});
-			targets.push({ table: "memory_jobs", rows: r.rows, totalMatching: r.totalMatching });
-			remaining = Math.max(0, remaining - r.rows.length);
-		}
+			const selection = {
+				...options,
+				olderThanMs,
+				maxBatch: options.maxBatch ?? MAX_BATCH_HARD_CAP,
+			};
+			const targets: Array<{
+				readonly table: "memory_jobs";
+				readonly rows: readonly CancelPruneMatchRow[];
+				readonly totalMatching: number;
+			}> = [];
+			// `--max-batch` is an aggregate cap across ALL selected tables, not a
+			// per-table cap. Select memory first, then hand only the remaining
+			// budget to summary so a both-queue operation can never exceed the
+			// requested blast radius (issue #1053).
+			let remaining = Math.min(selection.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
+			if (wantsMemory) {
+				const r = buildCancelPruneSql(db, "memory_jobs", ["dead", "completed"], {
+					...selection,
+					maxBatch: remaining,
+				});
+				targets.push({ table: "memory_jobs", rows: r.rows, totalMatching: r.totalMatching });
+				remaining = Math.max(0, remaining - r.rows.length);
+			}
 
-		const totalMatching = targets.reduce((acc, t) => acc + t.totalMatching, 0);
+			const totalMatching = targets.reduce((acc, t) => acc + t.totalMatching, 0);
 
-		if (dryRun) {
+			if (dryRun) {
+				const previewIds: string[] = [];
+				for (const t of targets) {
+					for (const r of t.rows) previewIds.push(`${t.table}:${r.id}`);
+					if (previewIds.length >= PREVIEW_CAP) break;
+				}
+				return {
+					affected: 0,
+					preview: previewIds.slice(0, PREVIEW_CAP),
+					totalMatching,
+				};
+			}
+
+			let affected = 0;
 			const previewIds: string[] = [];
 			for (const t of targets) {
-				for (const r of t.rows) previewIds.push(`${t.table}:${r.id}`);
-				if (previewIds.length >= PREVIEW_CAP) break;
-			}
-			return {
-				affected: 0,
-				preview: previewIds.slice(0, PREVIEW_CAP),
-				totalMatching,
-			};
-		}
-
-		let affected = 0;
-		const previewIds: string[] = [];
-		for (const t of targets) {
-			for (const row of t.rows) {
-				const cancellationId = `cancel-${t.table}-${row.id}-${Date.now()}`;
-				const now = new Date().toISOString();
-				db.prepare(
-					`INSERT INTO job_cancellations
+				for (const row of t.rows) {
+					const cancellationId = `cancel-${t.table}-${row.id}-${Date.now()}`;
+					const now = new Date().toISOString();
+					db.prepare(
+						`INSERT INTO job_cancellations
 					 (id, source_table, source_id, status_before, payload_json,
 					  reason, actor, actor_type, request_id, created_at)
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				).run(
-					cancellationId,
-					t.table,
-					row.id,
-					String(row.payload.status ?? ""),
-					JSON.stringify(row.payload),
-					ctx.reason,
-					ctx.actor,
-					ctx.actorType,
-					ctx.requestId ?? null,
-					now,
-				);
+					).run(
+						cancellationId,
+						t.table,
+						row.id,
+						String(row.payload.status ?? ""),
+						JSON.stringify(row.payload),
+						ctx.reason,
+						ctx.actor,
+						ctx.actorType,
+						ctx.requestId ?? null,
+						now,
+					);
 
-				db.prepare(`UPDATE ${t.table} SET status = 'cancelled' WHERE id = ?`).run(row.id);
-				affected += 1;
-				if (previewIds.length < PREVIEW_CAP) previewIds.push(`${t.table}:${row.id}`);
+					db.prepare(`UPDATE ${t.table} SET status = 'cancelled' WHERE id = ?`).run(row.id);
+					affected += 1;
+					if (previewIds.length < PREVIEW_CAP) previewIds.push(`${t.table}:${row.id}`);
+				}
 			}
-		}
-		writeRepairAudit(db, action, ctx, affected, `cancelled ${affected} obsolete job(s)`);
-		return { affected, preview: previewIds, totalMatching };
-	});
+			writeRepairAudit(db, action, ctx, affected, `cancelled ${affected} obsolete job(s)`);
+			return { affected, preview: previewIds, totalMatching };
+		});
 
-	if (!dryRun) limiter.record(action);
-	logger.info("pipeline", "repair: cancelled obsolete jobs", {
-		affected: result.affected,
-		dryRun,
-		previewCount: result.preview.length,
-		totalMatching: result.totalMatching,
-		actor: ctx.actor,
-		reason: ctx.reason,
-	});
+		if (!dryRun) limiter.record(action);
+		logger.info("pipeline", "repair: cancelled obsolete jobs", {
+			affected: result.affected,
+			dryRun,
+			previewCount: result.preview.length,
+			totalMatching: result.totalMatching,
+			actor: ctx.actor,
+			reason: ctx.reason,
+		});
 
-	return {
-		action,
-		success: true,
-		affected: dryRun ? 0 : result.affected,
-		message: dryRun
-			? `dry-run: ${result.totalMatching} job(s) match cancel filter; preview shows ${result.preview.length}`
-			: `cancelled ${result.affected} obsolete job(s)`,
-		preview: dryRun ? result.preview : undefined,
-		totalMatching: dryRun ? result.totalMatching : undefined,
-	};
+		return {
+			action,
+			success: true,
+			affected: dryRun ? 0 : result.affected,
+			message: dryRun
+				? `dry-run: ${result.totalMatching} job(s) match cancel filter; preview shows ${result.preview.length}`
+				: `cancelled ${result.affected} obsolete job(s)`,
+			preview: dryRun ? result.preview : undefined,
+			totalMatching: dryRun ? result.totalMatching : undefined,
+		};
+	});
 }
 
 interface PruneResultMeta {
@@ -2833,127 +3118,133 @@ export async function pruneTerminalJobs(
 	if (retired) return retired;
 
 	const dryRun = options.dryRun === true;
-
-	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.requeueCooldownMs, cfg.repair.requeueHourlyBudget);
-	if (!gate.allowed) {
-		return {
-			action,
-			success: false,
-			affected: 0,
-			message: gate.reason ?? "denied by policy gate",
-		};
+	const admission = await beginRepairAdmission(
+		accessor,
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
+		"global",
+		dryRun,
+	);
+	if (!admission.allowed) {
+		return deniedRepairResult(action, admission, { action, success: false, affected: 0, message: "" });
 	}
 
-	const wantsMemory = !options.tables || options.tables.includes("memory");
-	const result = await withRepairWriteTx<PruneResultMeta>(accessor, (db) => {
-		if (!tableExists(db, "job_archive")) {
-			throw new Error("job_archive table missing; run migrations");
-		}
+	return await runWithRepairAdmission(accessor, admission, ctx, async () => {
+		const wantsMemory = !options.tables || options.tables.includes("memory");
+		const result = await withRepairWriteTx<PruneResultMeta>(accessor, (db) => {
+			if (!tableExists(db, "job_archive")) {
+				throw new Error("job_archive table missing; run migrations");
+			}
 
-		const targets: Array<{
-			readonly table: "memory_jobs";
-			readonly statusList: readonly string[];
-			readonly cutoff: number;
-		}> = [];
-		if (wantsMemory) {
-			targets.push({
-				table: "memory_jobs",
-				statusList: ["dead", "cancelled", "completed"],
-				cutoff: options.retentionMs ?? 90 * 24 * 60 * 60 * 1000,
-			});
-		}
+			const targets: Array<{
+				readonly table: "memory_jobs";
+				readonly statusList: readonly string[];
+				readonly cutoff: number;
+			}> = [];
+			if (wantsMemory) {
+				targets.push({
+					table: "memory_jobs",
+					statusList: ["dead", "cancelled", "completed"],
+					cutoff: options.retentionMs ?? 90 * 24 * 60 * 60 * 1000,
+				});
+			}
 
-		const perTable: Array<{
-			readonly rows: readonly CancelPruneMatchRow[];
-			readonly totalMatching: number;
-		}> = [];
-		let totalMatching = 0;
-		// `--max-batch` is an aggregate cap across ALL selected tables; the
-		// remaining budget carries across tables so a both-queue prune can
-		// never exceed the requested blast radius (issue #1053).
-		let remaining = Math.min(options.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
-		for (const t of targets) {
-			const selection: JobFilterOptions = {
-				...options,
-				olderThanMs: t.cutoff,
-				maxBatch: remaining,
-			};
-			const r = buildCancelPruneSql(db, t.table, t.statusList, selection);
-			perTable.push({ rows: r.rows, totalMatching: r.totalMatching });
-			totalMatching += r.totalMatching;
-			remaining = Math.max(0, remaining - r.rows.length);
-		}
+			const perTable: Array<{
+				readonly rows: readonly CancelPruneMatchRow[];
+				readonly totalMatching: number;
+			}> = [];
+			let totalMatching = 0;
+			// `--max-batch` is an aggregate cap across ALL selected tables; the
+			// remaining budget carries across tables so a both-queue prune can
+			// never exceed the requested blast radius (issue #1053).
+			let remaining = Math.min(options.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
+			for (const t of targets) {
+				const selection: JobFilterOptions = {
+					...options,
+					olderThanMs: t.cutoff,
+					maxBatch: remaining,
+				};
+				const r = buildCancelPruneSql(db, t.table, t.statusList, selection);
+				perTable.push({ rows: r.rows, totalMatching: r.totalMatching });
+				totalMatching += r.totalMatching;
+				remaining = Math.max(0, remaining - r.rows.length);
+			}
 
-		if (dryRun) {
+			if (dryRun) {
+				const previewIds: string[] = [];
+				for (let i = 0; i < perTable.length; i += 1) {
+					const t = targets[i];
+					if (!t) continue;
+					const pt = perTable[i];
+					if (!pt) continue;
+					for (const row of pt.rows) previewIds.push(`${t.table}:${row.id}`);
+					if (previewIds.length >= PREVIEW_CAP) break;
+				}
+				return {
+					affected: 0,
+					preview: previewIds.slice(0, PREVIEW_CAP),
+					totalMatching,
+				};
+			}
+
+			let affected = 0;
 			const previewIds: string[] = [];
 			for (let i = 0; i < perTable.length; i += 1) {
 				const t = targets[i];
 				if (!t) continue;
 				const pt = perTable[i];
 				if (!pt) continue;
-				for (const row of pt.rows) previewIds.push(`${t.table}:${row.id}`);
-				if (previewIds.length >= PREVIEW_CAP) break;
-			}
-			return {
-				affected: 0,
-				preview: previewIds.slice(0, PREVIEW_CAP),
-				totalMatching,
-			};
-		}
-
-		let affected = 0;
-		const previewIds: string[] = [];
-		for (let i = 0; i < perTable.length; i += 1) {
-			const t = targets[i];
-			if (!t) continue;
-			const pt = perTable[i];
-			if (!pt) continue;
-			for (const row of pt.rows) {
-				const archiveId = `archive-${t.table}-${row.id}-${Date.now()}`;
-				const now = new Date().toISOString();
-				db.prepare(
-					`INSERT INTO job_archive
+				for (const row of pt.rows) {
+					const archiveId = `archive-${t.table}-${row.id}-${Date.now()}`;
+					const now = new Date().toISOString();
+					db.prepare(
+						`INSERT INTO job_archive
 					 (id, source_table, source_id, status, payload_json,
 					  archived_at, archived_by, reason, created_at)
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				).run(
-					archiveId,
-					t.table,
-					row.id,
-					String(row.payload.status ?? ""),
-					JSON.stringify(row.payload),
-					now,
-					ctx.actor,
-					ctx.reason,
-					now,
-				);
-				db.prepare(`DELETE FROM ${t.table} WHERE id = ?`).run(row.id);
-				affected += 1;
-				if (previewIds.length < PREVIEW_CAP) previewIds.push(`${t.table}:${row.id}`);
+					).run(
+						archiveId,
+						t.table,
+						row.id,
+						String(row.payload.status ?? ""),
+						JSON.stringify(row.payload),
+						now,
+						ctx.actor,
+						ctx.reason,
+						now,
+					);
+					db.prepare(`DELETE FROM ${t.table} WHERE id = ?`).run(row.id);
+					affected += 1;
+					if (previewIds.length < PREVIEW_CAP) previewIds.push(`${t.table}:${row.id}`);
+				}
 			}
-		}
-		writeRepairAudit(db, action, ctx, affected, `pruned ${affected} terminal job(s)`);
-		return { affected, preview: previewIds, totalMatching };
-	});
+			writeRepairAudit(db, action, ctx, affected, `pruned ${affected} terminal job(s)`);
+			return { affected, preview: previewIds, totalMatching };
+		});
 
-	if (!dryRun) limiter.record(action);
-	logger.info("pipeline", "repair: pruned terminal jobs", {
-		affected: result.affected,
-		dryRun,
-		previewCount: result.preview.length,
-		totalMatching: result.totalMatching,
-		actor: ctx.actor,
-		reason: ctx.reason,
-	});
+		if (!dryRun) limiter.record(action);
+		logger.info("pipeline", "repair: pruned terminal jobs", {
+			affected: result.affected,
+			dryRun,
+			previewCount: result.preview.length,
+			totalMatching: result.totalMatching,
+			actor: ctx.actor,
+			reason: ctx.reason,
+		});
 
-	return {
-		action,
-		success: true,
-		affected: dryRun ? 0 : result.affected,
-		message: dryRun
-			? `dry-run: ${result.totalMatching} job(s) match prune filter; preview shows ${result.preview.length}`
-			: `pruned ${result.affected} terminal job(s) (archived)`,
-		preview: dryRun ? result.preview : undefined,
-		totalMatching: dryRun ? result.totalMatching : undefined,
-	};
+		return {
+			action,
+			success: true,
+			affected: dryRun ? 0 : result.affected,
+			message: dryRun
+				? `dry-run: ${result.totalMatching} job(s) match prune filter; preview shows ${result.preview.length}`
+				: `pruned ${result.affected} terminal job(s) (archived)`,
+			preview: dryRun ? result.preview : undefined,
+			totalMatching: dryRun ? result.totalMatching : undefined,
+		};
+	});
 }
