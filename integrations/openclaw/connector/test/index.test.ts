@@ -66,7 +66,8 @@ describe("OpenClawConnector config patching", () => {
 		expect(handlerJs).not.toContain("JSON.stringify(data, null, 2)");
 		expect(handlerJs).toContain("event.messages.push(await recallMessage(data));");
 		expect(handlerJs).not.toContain("Supporting context:");
-		expect(handlerJs).not.toContain('data.results.map(r => `- ${r.content}`).join("\\\\n")');
+		const legacyInterpolation = "$" + "{r.content}";
+		expect(handlerJs).not.toContain(`data.results.map(r => \`- ${legacyInterpolation}\`).join("\\\\n")`);
 	});
 
 	it("does not patch workspace when configureWorkspace is false", async () => {

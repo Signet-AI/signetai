@@ -27,7 +27,11 @@ import {
 import { shouldRecordDbOwnerCancellation } from "./db-owner-worker";
 import { findSqliteVecExtension } from "@signet/core";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
-import { closeRegisteredDbOwnerMaintenance, createDbOwnerMaintenance, registerDbOwnerMaintenance } from "./db-owner-maintenance";
+import {
+	closeRegisteredDbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+} from "./db-owner-maintenance";
 import { recallThroughDbOwner } from "./db-owner-recall";
 import { dbOwnerQuery, startDbOwnerWithRole } from "./db-owner-runtime";
 
