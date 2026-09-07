@@ -143,6 +143,15 @@ signet start
 signet status
 ```
 
+On Windows x64, use the native PowerShell installer instead:
+
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
+signet setup
+signet start
+signet status
+```
+
 During setup, select Hermes Agent and OpenClaw when prompted. For
 non-interactive installs, see the harness-specific options in
 [Harnesses](/harnesses/).

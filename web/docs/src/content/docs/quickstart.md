@@ -14,10 +14,10 @@ curl -fsSL https://signetai.sh/install.sh | bash
 signet --help
 ```
 
-Windows users should install the package wrapper instead:
+On Windows x64, use the PowerShell installer:
 
-```bash
-npm install -g signetai
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
 ```
 
 See [Install](/getting-started/install/) for package-manager alternatives and non-interactive setup.

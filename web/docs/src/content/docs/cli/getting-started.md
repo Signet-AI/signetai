@@ -17,7 +17,13 @@ bun add -g signetai
 signet --help
 ```
 
-Use one installation route per machine. See [Install](/getting-started/install/) for platform notes. All three installation paths provide the same compiled Signet binary through the matching native package.
+On Windows x64, use the native PowerShell installer:
+
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
+```
+
+Use one installation route per machine. See [Install](/getting-started/install/) for platform notes. All installation paths provide the same compiled Signet binary through the matching native package.
 
 ## Common commands
 

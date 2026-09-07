@@ -39,6 +39,12 @@ Read more: [Why Signet](https://docs.signetai.sh/quickstart/#why-signet) · [Arc
 curl -fsSL https://signetai.sh/install.sh | bash                 # recommended
 ```
 
+On Windows x64, run the PowerShell installer:
+
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
+```
+
 Or: `npm install -g signetai` / `bun add -g signetai`
 
 Don't want to handle setup yourself? Paste this to your AI agent:
@@ -47,7 +53,7 @@ Don't want to handle setup yourself? Paste this to your AI agent:
 Install and fully configure Signet AI by following this guide exactly: https://signetai.sh/skill.md
 ```
 
-Covers Linux x64/arm64, macOS x64/arm64, Docker, and Windows x64 (Windows: use `npm install -g signetai` or Docker).
+Covers Linux x64/arm64, macOS x64/arm64, Windows x64, and Docker.
 
 Durable transcript imports require Linux or macOS filesystem safeguards. The
 Windows package remains supported for other Signet features; transcript import
