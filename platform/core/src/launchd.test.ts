@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "bun:test";
-import { buildLaunchdEnvironment, buildLaunchdPlist, resolveLaunchdExecutable } from "./launchd";
+import { buildLaunchdEnvironment, buildLaunchdPlist, findLaunchdExecutable, resolveLaunchdExecutable } from "./launchd";
 
 const temporaryDirectories: string[] = [];
 
@@ -61,6 +61,21 @@ describe("launchd environment", () => {
 		expect(environment.PATH.split(":")).toContain(bin);
 		expect(environment.HOME).toBe("/Users/user");
 		expect(environment.SIGNET_PATH).toBe("/Users/user/.agents");
+	});
+
+	it("finds an existing launchd executable without changing fallback resolution", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-launchd-existing-"));
+		temporaryDirectories.push(directory);
+		const bin = join(directory, "bin");
+		mkdirSync(bin);
+		const executable = join(bin, "python3");
+		writeFileSync(executable, "#!/bin/sh\n");
+		chmodSync(executable, 0o755);
+
+		expect(findLaunchdExecutable("python3", { environment: { HOME: "/Users/user" }, pathValue: bin })).toBe(executable);
+		expect(resolveLaunchdExecutable("python3", { environment: { HOME: "/Users/user" }, pathValue: bin })).toBe(
+			executable,
+		);
 	});
 
 	it("passes the resolved launchd environment to a spawned child", () => {

@@ -4,9 +4,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	CONNECTOR_PROVIDERS,
+	findLaunchdExecutable,
 	loadConfiguredHarnesses,
 	resolveHermesHomePath,
-	resolveLaunchdExecutable,
 	type ConnectorConfig,
 	type SyncCursor,
 } from "@signet/core";
@@ -448,7 +448,7 @@ export function registerConnectorRoutes(app: Hono): void {
 			const python = resolveHarnessPythonCommand(
 				process.platform,
 				which,
-				process.platform === "darwin" ? resolveLaunchdExecutable("python3") : undefined,
+				process.platform === "darwin" ? (findLaunchdExecutable("python3") ?? undefined) : undefined,
 			);
 			if (python === null) {
 				resolve(c.json({ success: false, error: "Python 3 executable not found" }, 500));
