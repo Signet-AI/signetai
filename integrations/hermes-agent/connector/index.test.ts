@@ -1266,7 +1266,7 @@ assert calls == [{
 		expect(result.stdout).toContain("remove");
 	});
 
-	it("stores Hermes delegation memories with project scope", () => {
+	it("does not save a memory for Hermes delegation", () => {
 		const fixture = join(tmpRoot, "python-delegation-fixture");
 		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
 		mkdirSync(join(fixture, "agent"), { recursive: true });
@@ -1283,25 +1283,31 @@ assert calls == [{
 					"import json, time",
 					"from plugins.memory.signet import SignetMemoryProvider",
 					"class FakeClient:",
-					"    def __init__(self): self.calls = []",
-					"    def remember(self, content, **kwargs): self.calls.append({'content': content, **kwargs})",
+					"    def __init__(self): self.remember_calls = []; self.notification_calls = []",
+					"    def remember(self, content, **kwargs): self.remember_calls.append({'content': content, **kwargs})",
+					"    def notifications(self, session_key, hook, **kwargs): self.notification_calls.append({'session_key': session_key, 'hook': hook, **kwargs}); return {}",
 					"provider = SignetMemoryProvider()",
 					"provider._client = FakeClient()",
 					"provider._project = '/tmp/delegated-project'",
-					"provider.on_delegation('inspect branch', 'found the issue')",
+					"provider._session_key = 'parent-session'",
+					"provider.on_delegation('inspect branch', 'found the issue', child_session_id='child-session')",
 					"for _ in range(50):",
-					"    if provider._client.calls: break",
+					"    if provider._client.notification_calls: break",
 					"    time.sleep(0.02)",
-					"provider._client.calls and print(json.dumps(provider._client.calls[0], sort_keys=True))",
+					"print(json.dumps({'remember_calls': provider._client.remember_calls, 'notification_calls': provider._client.notification_calls}, sort_keys=True))",
 				].join("\n"),
 			],
 			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
 		);
 
-		expect(result.status).toBe(0);
-		expect(result.stdout).toContain('"project": "/tmp/delegated-project"');
-		expect(result.stdout).toContain('"delegation"');
-		expect(result.stdout).toContain('"subagent"');
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		const output = JSON.parse(result.stdout) as {
+			remember_calls: unknown[];
+			notification_calls: Array<{ hook: string }>;
+		};
+		expect(output.remember_calls).toEqual([]);
+		expect(output.notification_calls).toHaveLength(1);
+		expect(output.notification_calls[0]?.hook).toBe("on_delegation");
 	});
 
 	it("registers Signet tools with a Hermes-style memory manager before daemon initialization", () => {
