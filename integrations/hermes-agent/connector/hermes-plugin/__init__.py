@@ -1263,27 +1263,9 @@ class SignetMemoryProvider(MemoryProvider):
 
     def on_delegation(self, task: str, result: str, *,
                       child_session_id: str = "", **kwargs) -> None:
-        """Observe subagent delegation results — store as a memory."""
-        client = self._client
-        if not client or not result:
+        """Refresh pending peer notifications."""
+        if not self._client:
             return
-        project = self._project
-
-        content = f"Delegated task: {task[:200]}\nResult: {result[:500]}"
-
-        def _run():
-            try:
-                client.remember(
-                    content,
-                    importance=0.6,
-                    tags=["delegation", "subagent"],
-                    project=project,
-                )
-            except Exception as e:
-                logger.debug("Signet delegation memory failed: %s", e)
-
-        t = threading.Thread(target=_run, daemon=True, name="signet-delegation")
-        t.start()
         self._queue_notification_refresh("on_delegation")
 
     def _fire_checkpoint(self) -> None:
