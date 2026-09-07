@@ -803,6 +803,27 @@ describe("DB owner client", () => {
 		await waitFor(() => client?.health().lanes?.maintenance.activeJobId === null);
 	});
 
+	test("closes the metrics fence when a queued job expires", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		const slow = client.submit(
+			{ kind: "sleep", durationMs: 250 },
+			{ operation: "maintenance.queued-fence-blocker", lane: "maintenance", deadlineMs: 1_000 },
+		);
+		await waitFor(() => client?.health().lanes?.maintenance.activeJobId === slow.job.id);
+		const queued = client.submit(
+			{ kind: "sleep", durationMs: 0 },
+			{ operation: "maintenance.queued-fence-expiry", lane: "maintenance", deadlineMs: 40 },
+		);
+		await expect(queued.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		const queuedMetrics = queued.metrics;
+		if (queuedMetrics === undefined) throw new Error("queued job did not expose a metrics fence");
+		await expect(queuedMetrics).resolves.toBeUndefined();
+		await expect(slow.result).resolves.toEqual({ sleptMs: 250 });
+	});
+
 	test("recovers immediately after a maintenance deadline is abandoned", async () => {
 		const database = makeDb();
 		directory = database.directory;

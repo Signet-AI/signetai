@@ -96,6 +96,7 @@ import {
 } from "./db-owner-maintenance";
 import { createDeferredRuntimeGate, createDeferredRuntimeScheduler } from "./deferred-runtime-gate";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
+import { ownerReadOne } from "./db-owner-sql";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingIndexMigrationHandle, startEmbeddingIndexMigration } from "./embedding-index-migration";
@@ -956,12 +957,12 @@ async function resolveActiveEmbeddingConfigThroughOwner(
 	operation: string,
 ): Promise<ResolvedMemoryConfig["embedding"]> {
 	if (configured.profile) return configured;
-	const row = await ownerQueryOne<EmbeddingIndexStateRow>(
+	// Startup must not wait behind FTS/integrity maintenance work.
+	const row = await ownerReadOne<EmbeddingIndexStateRow>(
 		owner,
-		operation,
 		"SELECT active_profile_json, staging_profile_json, state, last_error FROM embedding_index_state WHERE id = 1",
 		[],
-		{ deadlineMs: 5_000 },
+		{ operation, deadlineMs: 5_000 },
 	);
 	return resolveActiveEmbeddingConfigFromState(configured, parseEmbeddingIndexStateRow(row ?? null));
 }

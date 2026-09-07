@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDbOwnerClient } from "./db-owner-client";
+import { createDbOwnerClient, DbOwnerDeadlineError, type DbOwnerClient } from "./db-owner-client";
 import {
 	runIncrementalDatabaseIntegrityCheck,
 	readMigrationVerifyCheckpoint,
@@ -203,6 +203,44 @@ describe("incremental database integrity maintenance (#1683)", () => {
 
 		expect(result.checkedObjects).toBe(1);
 		expect(database.owner.health().activeJobId).toBeNull();
+	});
+
+	it("publishes the committed checkpoint without probing after an owner deadline", async () => {
+		const operations: string[] = [];
+		let releaseMetrics: (() => void) | undefined;
+		let metricsSettled = false;
+		const owner = {
+			health: () => ({ state: "ready" }),
+			submit: (_request: unknown, options: { readonly operation: string }) => {
+				operations.push(options.operation);
+				return {
+					job: { enqueuedAt: Date.now() } as never,
+					result: Promise.reject(new DbOwnerDeadlineError("test.integrity.deadline")),
+					metrics: new Promise<undefined>((resolve) => {
+						releaseMetrics = () => {
+							metricsSettled = true;
+							resolve(undefined);
+						};
+					}),
+					cancel: (): void => {},
+				};
+			},
+		} as unknown as DbOwnerClient;
+
+		const resultPromise = runIncrementalDatabaseIntegrityCheck({
+			owner,
+			checkpointKey: "test.integrity.deadline",
+			runBudgetMs: 5_000,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(metricsSettled).toBe(false);
+		releaseMetrics?.();
+
+		const result = await resultPromise;
+		expect(result.phase).toBe("timed_out");
+		expect(result.remainingObjects).toBe(0);
+		expect(metricsSettled).toBe(true);
+		expect(operations).toEqual(["integrity.checkpoint.ensure"]);
 	});
 
 	it("preserves the checkpoint across a hard 100ms run budget and resumes", async () => {

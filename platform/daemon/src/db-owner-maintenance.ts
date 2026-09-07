@@ -41,6 +41,12 @@ export interface DbOwnerMaintenanceOptions {
 	readonly onOwnerMetrics?: (metrics: DbOwnerMaintenanceMetrics) => void | Promise<void>;
 	/** Called when the owner worker has emitted its terminal result. */
 	readonly onOwnerJobSettled?: () => void | Promise<void>;
+	/**
+	 * Keep a deadline-abandoned synchronous job as the caller's completion fence.
+	 * Queued jobs resolve their metrics without running; dispatched jobs resolve
+	 * after the owner emits its terminal result.
+	 */
+	readonly waitForOwnerCompletionOnDeadline?: boolean;
 	/** Called when admission rejects before an owner job is created. */
 	readonly onOwnerJobAdmissionFailure?: (error: unknown) => void;
 }
@@ -106,7 +112,17 @@ async function runOwnerJob<Result>(
 		// synchronous worker; its metrics promise remains the completion fence.
 		if (!(error instanceof DbOwnerDeadlineError)) notifySettled();
 	});
-	const result = await handle.result;
+	let result: Result;
+	try {
+		result = await handle.result;
+	} catch (error) {
+		if (error instanceof DbOwnerDeadlineError && options.waitForOwnerCompletionOnDeadline === true) {
+			await handle.metrics?.catch(() => {
+				// Preserve the original deadline error if owner metrics fail too.
+			});
+		}
+		throw error;
+	}
 	const metrics = await handle.metrics;
 	if (metrics !== undefined) {
 		await options.onOwnerMetrics?.({
