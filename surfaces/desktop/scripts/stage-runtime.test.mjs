@@ -8,6 +8,7 @@ import {
 	readdirSync,
 	renameSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,6 +82,82 @@ describe("stage-runtime Bun validation", () => {
 			expect(() => replaceResources(target, staged, failFinalSwap)).toThrow("injected final swap failure");
 			expect(readFileSync(join(target, "marker"), "utf8")).toBe("old\n");
 			expect(readFileSync(join(staged, "marker"), "utf8")).toBe("new\n");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves resources created during a failed swap", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const target = join(directory, "resources");
+		const staged = join(directory, "staged");
+		mkdirSync(target);
+		mkdirSync(staged);
+		writeFileSync(join(target, "marker"), "old\n");
+		writeFileSync(join(staged, "marker"), "new\n");
+		let renameCalls = 0;
+		const concurrentFinalSwap = (source, destination) => {
+			renameCalls += 1;
+			if (renameCalls === 2) {
+				mkdirSync(destination);
+				writeFileSync(join(destination, "marker"), "concurrent\n");
+				throw new Error("injected final swap failure");
+			}
+			renameSync(source, destination);
+		};
+
+		try {
+			expect(() => replaceResources(target, staged, concurrentFinalSwap)).toThrow(
+				"Unable to restore previous desktop resources",
+			);
+			expect(readFileSync(join(target, "marker"), "utf8")).toBe("concurrent\n");
+			const backups = readdirSync(directory).filter((entry) => entry.startsWith(".resources-backup-"));
+			expect(backups).toHaveLength(1);
+			expect(readFileSync(join(directory, backups[0], "resources", "marker"), "utf8")).toBe("old\n");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a concurrent resource replacement", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const lock = join(directory, ".resources.lock");
+		mkdirSync(lock);
+
+		try {
+			expect(() => replaceResources(join(directory, "resources"), join(directory, "staged"))).toThrow(
+				"Desktop resources are already being replaced",
+			);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("reclaims a resource lock from a dead owner", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const lock = join(directory, ".resources.lock");
+		mkdirSync(lock);
+		writeFileSync(join(lock, "owner"), `${Number.MAX_SAFE_INTEGER}\n`);
+
+		try {
+			expect(() => replaceResources(join(directory, "resources"), join(directory, "staged"))).toThrow("ENOENT");
+			expect(existsSync(lock)).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("reclaims an abandoned ownerless lock after its grace period", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const lock = join(directory, ".resources.lock");
+		mkdirSync(lock);
+		writeFileSync(join(lock, "owner"), "");
+		const stale = new Date(Date.now() - 61_000);
+		utimesSync(lock, stale, stale);
+
+		try {
+			expect(() => replaceResources(join(directory, "resources"), join(directory, "staged"))).toThrow("ENOENT");
+			expect(existsSync(lock)).toBe(false);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
