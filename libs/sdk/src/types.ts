@@ -801,6 +801,12 @@ export interface Harness {
 
 export interface HarnessListResponse {
 	readonly harnesses: readonly Harness[];
+	/**
+	 * Harness ids recorded as connected in the workspace's agent.yaml — the
+	 * Signet-owned connection record. Absent on older daemons; `exists` on each
+	 * harness merely reports harness home-directory presence, not a connection.
+	 */
+	readonly configuredHarnesses?: readonly string[];
 }
 
 export interface HarnessRegenerateResponse {

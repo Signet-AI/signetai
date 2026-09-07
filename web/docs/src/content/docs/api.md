@@ -134,3 +134,12 @@ or failure may leave partial integration files; retry the same operation to
 reconcile them. OpenClaw preserves its configured runtime path and requires the
 existing CLI-managed plugin package for plugin mode; missing packages fail
 explicitly before configuration is written.
+
+`GET /api/harnesses` reports each harness's home-directory `exists` state plus
+`configuredHarnesses`: the harness ids recorded as connected in the workspace's
+agent.yaml, written when a connect (or `signet setup`) succeeds. `configuredHarnesses`
+is the Signet-owned connection record; `exists` alone proves only that a harness
+is installed on the machine, never that Signet was connected to it. Clients
+deciding whether onboarding is still needed must gate on `configuredHarnesses`
+(the field is absent on older daemons; treat absence as unknown and fall back
+without hiding setup affordances).

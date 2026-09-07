@@ -22,16 +22,22 @@ export function HomeView() {
 	const sources = fetchedSources ?? lastSources;
 	const timeline = useAsync(() => api.getMemoryTimeline(new Date().getTimezoneOffset())).data;
 	const today = useDateString(new Date().toLocaleDateString("en-US"));
-	// The setup link is an onboarding affordance: once a harness integration
-	// exists (its config was written), the dashboard is connected and the link
-	// is noise. Keep it while the check is pending so a fresh workspace still
-	// surfaces it.
+	// The setup link is an onboarding affordance: once a harness integration is
+	// connected, the dashboard is connected and the link is noise. Keep it while
+	// the check is pending so a fresh workspace still surfaces it. Gate on
+	// `configuredHarnesses` (the Signet-owned agent.yaml record written when a
+	// connection succeeds), not on `exists` — a harness home directory can be
+	// present long before Signet was ever connected, which would hide the only
+	// setup/repair link. Older daemons omit configuredHarnesses; treat that as
+	// unknown and keep the setup link visible rather than guessing from exists.
 	const harnessesQuery = useAsync(
-		() => getJSONResult<{ harnesses: { exists: boolean }[] }>("/api/harnesses").then((result) => result.data),
+		() => getJSONResult<{ configuredHarnesses?: string[] }>("/api/harnesses").then((result) => result.data),
 		{ intervalMs: 30000 },
 	);
-	const needsSetup =
-		!harnessesQuery.data?.harnesses || !harnessesQuery.data.harnesses.some((harness) => harness.exists);
+	const connected =
+		harnessesQuery.data?.configuredHarnesses?.length !== undefined &&
+		harnessesQuery.data.configuredHarnesses.length > 0;
+	const needsSetup = !connected;
 
 	const kpis: KpiData[] = useMemo(() => {
 		const totalMemories = timeline?.totalMemories;

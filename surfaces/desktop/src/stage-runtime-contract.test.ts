@@ -11,9 +11,12 @@ import { expect, test } from "bun:test";
  */
 test("desktop runtime staging ships the full daemon dist and tiktoken", () => {
 	const source = readFileSync(join(import.meta.dir, "..", "scripts", "stage-runtime.mjs"), "utf8");
-	expect(source).toContain('for (const entry of readdirSync(daemonDist))');
+	expect(source).toContain("for (const entry of readdirSync(daemonDist))");
 	expect(source).not.toContain('for (const name of ["daemon.js"');
-	const daemonManifest = readFileSync(join(import.meta.dir, "..", "..", "..", "platform", "daemon", "package.json"), "utf8");
+	const daemonManifest = readFileSync(
+		join(import.meta.dir, "..", "..", "..", "platform", "daemon", "package.json"),
+		"utf8",
+	);
 	const daemonPkg = JSON.parse(daemonManifest) as { dependencies?: Record<string, string> };
 	expect(source).toContain('"tiktoken"');
 	expect(typeof daemonPkg.dependencies?.tiktoken).toBe("string");

@@ -194,27 +194,67 @@ export function installMacDesktopApp(
 
 /**
  * Replaces an installed Signet.app through a staged swap. A pre-existing bundle
- * is only removed when it is Signet-owned (matching bundle id in its
- * Info.plist); foreign applications are never touched.
+ * is only replaced when it is Signet-owned (matching bundle id in its
+ * Info.plist); foreign applications are never touched. The old bundle stays in
+ * place until the replacement copy succeeds, so a failed copy or rename can
+ * never leave the machine without an installed app.
  */
 function replaceManagedAppBundle(source: string, target: string): void {
-	if (existsSync(target)) {
-		if (!isSignetAppBundle(target)) {
-			throw new Error(
-				`Refusing to replace existing app at ${target} because it is not a Signet app bundle. Remove it first if it is not needed.`,
-			);
-		}
-		rmSync(target, { recursive: true, force: true });
+	if (existsSync(target) && !isSignetAppBundle(target)) {
+		throw new Error(
+			`Refusing to replace existing app at ${target} because it is not a Signet app bundle. Remove it first if it is not needed.`,
+		);
 	}
 	const parent = dirname(target);
 	const tmp = join(parent, `.Signet.app.${process.pid}.${Date.now()}.tmp`);
+	const backup = `${target}.previous-${process.pid}-${Date.now()}`;
+	let backupOf = false;
+	let replaced = false;
+	let restoreFailure: Error | undefined;
 	try {
 		cpSync(source, tmp, { recursive: true });
-		renameSync(tmp, target);
+		if (existsSync(target)) {
+			renameSync(target, backup);
+			backupOf = true;
+		}
+		try {
+			renameSync(tmp, target);
+			replaced = true;
+		} catch (swapErr) {
+			// A failed swap restores the previous bundle before reporting
+			// failure; the swap error itself is what the caller needs unless
+			// the restore also fails, in which case the restore failure is the
+			// more urgent diagnosis.
+			try {
+				if (backupOf) renameSync(backup, target);
+			} catch (restoreErr) {
+				throw restoreErr instanceof Error
+					? new Error(`Failed to restore the previous app bundle after a failed install: ${restoreErr.message}`, {
+							cause: swapErr,
+						})
+					: restoreErr;
+			}
+			throw swapErr;
+		}
 	} catch (err) {
 		rmSync(tmp, { recursive: true, force: true });
 		throw err;
+	} finally {
+		// A successful swap drops the old bundle in place; a failed one already
+		// restored it above. A backup that could not be dropped after a
+		// successful swap is harmless debris, but it must not be silent.
+		if (replaced && backupOf && existsSync(backup)) {
+			try {
+				rmSync(backup, { recursive: true, force: true });
+			} catch (cleanupErr) {
+				restoreFailure =
+					cleanupErr instanceof Error
+						? new Error(`Install succeeded, but removing the backup bundle failed: ${cleanupErr.message}`)
+						: new Error("Install succeeded, but removing the backup bundle failed.");
+			}
+		}
 	}
+	if (restoreFailure) throw restoreFailure;
 }
 
 function isSignetAppBundle(path: string): boolean {

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	CONNECTOR_PROVIDERS,
+	loadConfiguredHarnesses,
 	resolveHermesHomePath,
 	resolveLaunchdExecutable,
 	type ConnectorConfig,
@@ -424,7 +425,13 @@ export function registerConnectorRoutes(app: Hono): void {
 			lastSeen: harnessLastSeen.get(config.id) ?? null,
 		}));
 
-		return c.json({ harnesses });
+		// Signet-owned connection record: the harnesses the operator (or the
+		// onboarding flow) actually connected, from agent.yaml. Unlike `exists`,
+		// which merely reports that a harness's home directory is present, a
+		// non-empty list proves a Signet connection was established.
+		const configuredHarnesses = loadConfiguredHarnesses(AGENTS_DIR);
+
+		return c.json({ harnesses, configuredHarnesses });
 	});
 
 	app.post("/api/harnesses/regenerate", async (c) => {

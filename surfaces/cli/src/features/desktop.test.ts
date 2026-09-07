@@ -484,6 +484,59 @@ describe("mac desktop install", () => {
 		}
 	});
 
+	test("keeps the installed app when the replacement copy fails", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const sourceExecutable = join(
+			root,
+			"surfaces",
+			"desktop",
+			"release",
+			"mac",
+			"Signet.app",
+			"Contents",
+			"MacOS",
+			"signet",
+		);
+		try {
+			const release = join(root, "surfaces", "desktop", "release", "mac");
+			mkdirSync(release, { recursive: true });
+			// An unreadable non-executable resource makes cpSync fail mid-copy
+			// while the bundle still passes the pre-selection arch check (which
+			// only reads the Mach-O executable). The pre-fix code deleted the
+			// installed app BEFORE the copy, so this failure left the user with
+			// no installed app at all.
+			const source = makeMacAppBundle(release, process.arch === "arm64" ? "arm64" : "x64");
+			const doomed = join(source, "Contents", "Resources", "doomed.bin");
+			mkdirSync(join(source, "Contents", "Resources"), { recursive: true });
+			writeFileSync(doomed, "payload");
+			chmodSync(doomed, 0o000);
+
+			const applications = join(home, "Applications");
+			mkdirSync(applications, { recursive: true });
+			makeMacAppBundle(applications, process.arch === "arm64" ? "arm64" : "x64");
+
+			expect(() => installMacDesktopApp(root, home, join(home, "workspace"))).toThrow();
+			// The previously installed bundle survived the failed install...
+			expect(existsSync(join(applications, "Signet.app", "Contents", "Info.plist"))).toBe(true);
+			// ...and no swap debris was left behind.
+			expect(readdirSync(applications).some((name) => name.includes(".previous-"))).toBe(false);
+			expect(readdirSync(applications).some((name) => name.startsWith(".Signet.app."))).toBe(false);
+		} finally {
+			if (existsSync(sourceExecutable)) {
+				// Not strictly required (only Resources/doomed.bin was locked), but
+				// keep the tree removable regardless of platform semantics.
+				chmodSync(sourceExecutable, 0o755);
+			}
+			chmodSync(
+				join(root, "surfaces", "desktop", "release", "mac", "Signet.app", "Contents", "Resources", "doomed.bin"),
+				0o644,
+			);
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test("skips foreign-arch bundles and installs the matching one", () => {
 		const root = makeCheckout();
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
