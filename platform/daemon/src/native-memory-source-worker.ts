@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker, isMainThread, parentPort, threadId } from "node:worker_threads";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
-import { buildObsidianSourceChunks, type ObsidianSourceChunk } from "./obsidian-source-embeddings";
+import { buildObsidianSourceChunks, type ObsidianSourceChunk } from "./obsidian-source-chunks";
 
 export interface NativeSourceWorkerPattern {
 	readonly glob: string;
@@ -279,6 +279,7 @@ export function createNativeSourceWorker(
 	let worker: Worker | null = null;
 	let startPromise: Promise<void> | null = null;
 	let rejectStart: ((error: Error) => void) | null = null;
+	let terminationPromise: Promise<void> | null = null;
 	let sequence = 0;
 	const pending = new Map<string, PendingScan>();
 	const rejectPending = (error: Error): void => {
@@ -295,9 +296,22 @@ export function createNativeSourceWorker(
 			rejectStart = null;
 		}
 		rejectPending(error);
-		await target.terminate().catch(() => {});
+		const termination = Promise.resolve()
+			.then(() => target.terminate())
+			.then(
+				() => undefined,
+				() => undefined,
+			);
+		terminationPromise = termination;
+		void termination.then(() => {
+			if (terminationPromise === termination) terminationPromise = null;
+		});
+		await termination;
 	};
 	const start = async (): Promise<void> => {
+		if (worker !== null) return;
+		const pendingTermination = terminationPromise;
+		if (pendingTermination !== null) await pendingTermination;
 		if (worker !== null) return;
 		if (startPromise !== null) return await startPromise;
 		startPromise = new Promise<void>((resolve, reject) => {
@@ -403,7 +417,11 @@ export function createNativeSourceWorker(
 		},
 		async close(): Promise<void> {
 			const current = worker;
-			if (current === null) return;
+			if (current === null) {
+				const pendingTermination = terminationPromise;
+				if (pendingTermination !== null) await pendingTermination;
+				return;
+			}
 			await terminateWorker(current, new Error("native source worker closed"));
 		},
 	};
