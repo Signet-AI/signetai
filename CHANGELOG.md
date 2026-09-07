@@ -8,6 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-09-07
 - Bug fixes: skip install without git; preserve external embedding selection; allow undeclared tool capability.
+- Refactoring: centralize process launching.
 
 ### 2026-09-06
 - Bug fixes: apply existing setup provider; clean retired setup fields; enable dreaming defaults.
@@ -33,6 +34,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add Defuddle web imports (rebased); add third-party license colophon.
 
 ## Release Ledger
+
+## [0.219.6] - 2026-09-07
+
+Release summary: 1 refactor.
+Tag range: `v0.219.5..v0.219.6`.
+
+### Refactoring
+
+- **core**: centralize process launching
 
 ## [0.219.5] - 2026-09-07
 
