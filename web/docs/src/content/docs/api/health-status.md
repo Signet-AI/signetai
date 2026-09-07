@@ -135,6 +135,22 @@ Memory resource values are MiB. On macOS, `physicalFootprint` and
 and driver-backed memory that RSS can miss. They are `null` on platforms
 where this metric is unavailable.
 
+When incremental database maintenance is active, `databaseIntegrity.incrementalProgress`
+contains `inventoryObjects`, `checkedObjects`, `skippedObjects`, and
+`remainingObjects`. For a stable schema, the coverage invariant is:
+
+```text
+checkedObjects + skippedObjects + remainingObjects = inventoryObjects
+```
+
+Expected FTS5 virtual tables are represented by the separate
+`databaseIntegrity.ftsVerification` object. Its `status` is `unverifiable`
+when FTS objects were intentionally skipped because SQLite does not provide a
+killable chunked FTS integrity operation; this status is coverage information,
+not database corruption, and does not make `/health` degraded. Check failures
+and owner or deadline failures continue to report their actionable health
+states and guidance.
+
 ### GET /health/live
 
 No authentication required. Cheap liveness probe: reports that the daemon

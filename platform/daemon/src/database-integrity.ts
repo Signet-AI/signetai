@@ -22,11 +22,25 @@ import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 
 export type DatabaseIntegrityState = "unknown" | "healthy" | "repaired" | "corrupt" | "unavailable" | "degraded";
 
+export type FtsIntegrityCoverageState = "pending" | "unverifiable" | "complete";
+
+/** Coverage of FTS5 virtual tables, which are not checked by the object sweep. */
+export interface FtsIntegrityCoverage {
+	readonly status: FtsIntegrityCoverageState;
+	readonly totalObjects: number;
+	readonly skippedObjects: number;
+	readonly remainingObjects: number;
+}
+
 export interface DatabaseIntegrityProgress {
 	readonly checkpointKey: string;
 	readonly phase: "running" | "complete" | "cancelled" | "timed_out" | "unavailable" | "degraded";
+	readonly inventoryObjects: number;
+	/** Objects whose selected verification operation ran; failures are a subset. */
 	readonly checkedObjects: number;
 	readonly failedObjects: number;
+	/** Expected virtual-table objects intentionally outside the chunked sweep. */
+	readonly skippedObjects: number;
 	readonly remainingObjects: number;
 	readonly lastObject: string | null;
 	readonly databasePagesObserved: number;
@@ -36,6 +50,7 @@ export interface DatabaseIntegrityProgress {
 	readonly ownerExecutionMs: number;
 	readonly cancellationReason: string | null;
 	readonly degradationReason: string | null;
+	readonly ftsVerification: FtsIntegrityCoverage;
 }
 
 export interface IntegrityCheckStatus {
@@ -56,9 +71,16 @@ export interface DatabaseIntegrityStatus {
 	readonly ownerState: string | null;
 	readonly ownerGeneration: number | null;
 	readonly incrementalProgress: DatabaseIntegrityProgress | null;
+	readonly ftsVerification: FtsIntegrityCoverage;
 }
 
 const UNKNOWN_CHECK: IntegrityCheckStatus = { ok: false, messages: ["not checked"] };
+const PENDING_FTS_VERIFICATION: FtsIntegrityCoverage = {
+	status: "pending",
+	totalObjects: 0,
+	skippedObjects: 0,
+	remainingObjects: 0,
+};
 const REPAIR_GUIDANCE =
 	"Stop the daemon, back up the database, and run the operator integrity repair flow before restarting.";
 const INTEGRITY_CHILD_ENV_KEYS = [
@@ -90,6 +112,7 @@ let latestStatus: DatabaseIntegrityStatus = {
 	ownerState: null,
 	ownerGeneration: null,
 	incrementalProgress: null,
+	ftsVerification: PENDING_FTS_VERIFICATION,
 };
 
 type GlobalIntegrityState = "healthy" | "corrupt" | "unavailable" | "degraded";
@@ -169,6 +192,7 @@ function statusWith(
 		ownerState: health?.state ?? null,
 		ownerGeneration: health?.generation ?? null,
 		incrementalProgress: null,
+		ftsVerification: latestStatus.ftsVerification,
 	};
 }
 
@@ -235,6 +259,7 @@ export function updateDatabaseIntegrityStatus(
 		ownerState: health?.state ?? latestStatus.ownerState,
 		ownerGeneration: health?.generation ?? latestStatus.ownerGeneration,
 		incrementalProgress: progress,
+		ftsVerification: progress.ftsVerification,
 	};
 }
 
@@ -548,7 +573,7 @@ async function runKillableTelemetryRepair(
 }
 
 async function writeAsync<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
-	return accessor.withWriteTxAsync(processBatch, { siteToken: "database-integrity.ts:551" });
+	return accessor.withWriteTxAsync(processBatch, { siteToken: "database-integrity.ts:576" });
 }
 
 /**
@@ -715,7 +740,7 @@ async function readIntegrityChecks(
 				telemetry: check(db, "integrity_check", "telemetry_events"),
 				indexes: listTelemetryIndexes(db),
 			}),
-			{ siteToken: "database-integrity.ts:712" },
+			{ siteToken: "database-integrity.ts:737" },
 		);
 	}
 	const deadlineMs = options.repairTimeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS;
@@ -828,7 +853,7 @@ export async function repairTelemetryIndexes(
 			const verifiedTelemetry =
 				options?.owner === undefined
 					? await accessor.withReadDbAsync(async (db) => check(db, "integrity_check", "telemetry_events"), {
-							siteToken: "database-integrity.ts:830",
+							siteToken: "database-integrity.ts:855",
 						})
 					: ownerCheck(
 							await ownerQueryAll<Record<string, unknown>>(

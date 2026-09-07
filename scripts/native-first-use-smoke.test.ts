@@ -68,6 +68,76 @@ async function waitForHealth(origin: string, child: ChildProcess, output: () => 
 	throw new Error(`native daemon did not become healthy\n${output()}`);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function numberField(record: Record<string, unknown> | null, key: string): number | null {
+	const value = record?.[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+async function waitForIntegrityCoverage(origin: string, child: ChildProcess, output: () => string): Promise<unknown> {
+	const deadline = Date.now() + 90_000;
+	while (Date.now() < deadline) {
+		if (child.exitCode !== null) throw new Error(`native daemon exited during integrity acceptance\n${output()}`);
+		try {
+			const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(1_000) });
+			if (response.ok) {
+				const payload: unknown = await response.json();
+				const databaseIntegrity = asRecord(asRecord(payload)?.databaseIntegrity);
+				const progress = asRecord(databaseIntegrity?.incrementalProgress);
+				const hasCoverage =
+					numberField(progress, "inventoryObjects") !== null &&
+					numberField(progress, "checkedObjects") !== null &&
+					numberField(progress, "skippedObjects") !== null &&
+					numberField(progress, "remainingObjects") !== null;
+				if (progress?.phase === "complete" || progress?.phase === "degraded" || hasCoverage) return payload;
+			}
+		} catch {}
+		await Bun.sleep(100);
+	}
+	throw new Error(`native daemon did not expose FTS integrity coverage within 90s\n${output()}`);
+}
+
+function assertIntegrityCoverage(payload: unknown): void {
+	const databaseIntegrity = asRecord(asRecord(payload)?.databaseIntegrity);
+	const progress = asRecord(databaseIntegrity?.incrementalProgress);
+	const topLevelFts = asRecord(databaseIntegrity?.ftsVerification);
+	const fts = asRecord(progress?.ftsVerification ?? databaseIntegrity?.ftsVerification);
+	const inventory = numberField(progress, "inventoryObjects");
+	const checked = numberField(progress, "checkedObjects");
+	const skipped = numberField(progress, "skippedObjects");
+	const remaining = numberField(progress, "remainingObjects");
+	const ftsTotal = numberField(fts, "totalObjects");
+	const ftsSkipped = numberField(fts, "skippedObjects");
+	const ftsRemaining = numberField(fts, "remainingObjects");
+
+	expect(asRecord(payload)?.status).toBe("healthy");
+	expect(["unknown", "healthy"].includes(String(databaseIntegrity?.state))).toBe(true);
+	expect(databaseIntegrity?.repairGuidance).toBeNull();
+	expect(["running", "complete"].includes(String(progress?.phase))).toBe(true);
+	expect(progress?.degradationReason).toBeNull();
+	expect(topLevelFts).not.toBeNull();
+	expect(topLevelFts).toEqual(fts);
+	if (inventory === null || checked === null || skipped === null || remaining === null) {
+		throw new Error("compiled first-use health omitted numeric integrity coverage");
+	}
+	expect(checked + skipped + remaining).toBe(inventory);
+	expect(["pending", "unverifiable", "complete"].includes(String(fts?.status))).toBe(true);
+	if (ftsTotal === null || ftsSkipped === null || ftsRemaining === null) {
+		throw new Error("compiled first-use health omitted FTS coverage");
+	}
+	expect(ftsTotal).toBeGreaterThan(0);
+	expect(ftsSkipped).toBeGreaterThanOrEqual(0);
+	expect(ftsSkipped).toBeLessThanOrEqual(ftsTotal);
+	expect(ftsRemaining).toBeGreaterThanOrEqual(0);
+	expect(ftsRemaining).toBeLessThanOrEqual(ftsTotal);
+	if (fts?.status === "unverifiable") expect(ftsSkipped).toBeGreaterThan(0);
+}
+
 async function stopDaemonChild(): Promise<void> {
 	const child = daemonChild;
 	daemonChild = null;
@@ -190,6 +260,9 @@ describe("compiled native first use", () => {
 			expect(
 				results.some((row) => typeof row === "object" && row !== null && Reflect.get(row, "content") === sentence),
 			).toBe(true);
+
+			const health = await waitForIntegrityCoverage(origin, daemonChild, () => daemonOutput);
+			assertIntegrityCoverage(health);
 		},
 		3 * 60_000,
 	);
