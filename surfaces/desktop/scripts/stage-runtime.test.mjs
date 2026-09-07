@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	chmodSync,
+	existsSync,
 	mkdtempSync,
 	mkdirSync,
 	readFileSync,
@@ -11,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertBunRuntime, replaceResources, stageRuntime } from "./stage-runtime.mjs";
+import { assertBunRuntime, removeStaging, replaceResources, stageRuntime } from "./stage-runtime.mjs";
 
 describe("stage-runtime Bun validation", () => {
 	it("rejects an architecture-mismatched staged runtime", () => {
@@ -132,6 +133,20 @@ describe("stage-runtime Bun validation", () => {
 			const backups = readdirSync(directory).filter((entry) => entry.startsWith(".resources-backup-"));
 			expect(backups).toHaveLength(1);
 			expect(readFileSync(join(directory, backups[0], "resources", "marker"), "utf8")).toBe("old\n");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("reports temporary cleanup failures without hiding the staged tree", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const failCleanup = () => {
+			throw new Error("injected staging cleanup failure");
+		};
+
+		try {
+			expect(() => removeStaging(directory, failCleanup)).toThrow("Unable to remove temporary desktop resources");
+			expect(existsSync(directory)).toBe(true);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

@@ -138,6 +138,15 @@ function removeBackup(backupParent, backup, remove = rmSync) {
 	}
 }
 
+export function removeStaging(stagedResources, remove = rmSync) {
+	try {
+		remove(stagedResources, { recursive: true, force: true });
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`Unable to remove temporary desktop resources ${stagedResources}: ${detail}`, { cause: error });
+	}
+}
+
 export function replaceResources(target, staged, rename = renameSync, remove = rmSync) {
 	const hadTarget = existsSync(target);
 	const backupParent = mkdtempSync(join(dirname(target), ".resources-backup-"));
@@ -259,7 +268,13 @@ export function stageRuntime() {
 		replaceResources(resources, stagedResources);
 		console.log(`Staged Electron desktop resources in ${resources}`);
 	} catch (error) {
-		rmSync(stagedResources, { recursive: true, force: true });
+		try {
+			removeStaging(stagedResources);
+		} catch (cleanupError) {
+			const original = error instanceof Error ? error.message : String(error);
+			const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+			throw new Error(`${original}; ${detail}`, { cause: error });
+		}
 		throw error;
 	}
 }
