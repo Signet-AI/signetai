@@ -255,8 +255,6 @@ that today are invisible or unsafe:
 
 ## Phase 7 — Regression tests
 
-> Per PR template: "Regression tests added for each bug fix."
-
 - [ ] `platform/daemon/src/diagnostics.test.ts` (existing) — extend
       to cover the three-table `QueueCounts` (memory / summary /
       extraction) and threshold boundaries.
