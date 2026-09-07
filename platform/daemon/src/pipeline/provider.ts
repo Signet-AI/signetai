@@ -15,9 +15,9 @@
  * The LlmProvider interface itself lives in @signet/core so that the
  * ingestion pipeline and other consumers can accept any provider.
  */
-// On Windows, use node:child_process spawn with windowsHide to prevent
-// console window flashing. Bun.spawn doesn't support windowsHide.
-import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
+// Use the shared launcher so every daemon subprocess inherits the Windows
+// hidden-console default. Bun.spawn does not support windowsHide.
+import { spawnHidden as nodeSpawn, type ChildProcess } from "@signet/core";
 import { mkdirSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
@@ -1562,7 +1562,6 @@ function runAcpxAttempt(
 			env: acpxEnv(config, runId),
 			stdio: ["pipe", "pipe", "pipe"],
 			detached: process.platform !== "win32",
-			windowsHide: true,
 		});
 		const finish = async (fn: () => void, cleanupWait: "all" | "termination" | "none" = "all"): Promise<void> => {
 			if (settled) return;

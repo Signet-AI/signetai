@@ -6,10 +6,10 @@
  * that form the cross-harness identity standard.
  */
 
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { execFileSyncHidden } from "./child-process";
 import { listOhMyPiAgentDirCandidates, resolveOhMyPiAgentDir } from "./oh-my-pi";
 import { listPiAgentDirCandidates, resolvePiAgentDir } from "./pi";
 import { parseSimpleYaml } from "./yaml";
@@ -390,7 +390,7 @@ export function resolveHermesRepoPath(): string | null {
 	}
 
 	try {
-		const hermesPath = execFileSync("which", ["hermes"], {
+		const hermesPath = execFileSyncHidden("which", ["hermes"], {
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "ignore"],
 			timeout: 3000,

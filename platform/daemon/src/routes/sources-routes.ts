@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFileHidden as execFile } from "@signet/core";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";

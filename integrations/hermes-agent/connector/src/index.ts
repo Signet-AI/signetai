@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSyncHidden as spawnSync } from "@signet/core";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";

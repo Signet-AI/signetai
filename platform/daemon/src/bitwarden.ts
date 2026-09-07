@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 
 export const BITWARDEN_SESSION_SECRET = "BITWARDEN_SESSION";
 export const BITWARDEN_ACTIVE_PROVIDER_SECRET = "SIGNET_SECRETS_ACTIVE_PROVIDER";
@@ -440,7 +440,6 @@ function runBw(
 	return new Promise((resolve, reject) => {
 		const proc = spawn("bw", [...args], {
 			stdio: "pipe",
-			windowsHide: true,
 			env: { ...process.env, BW_SESSION: options.session },
 		});
 		let stdout = "";

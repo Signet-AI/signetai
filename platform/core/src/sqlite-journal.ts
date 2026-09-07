@@ -3,8 +3,8 @@
  * shared-memory and locking semantics.
  */
 
-import { execFileSync } from "node:child_process";
 import { statfsSync } from "node:fs";
+import { execFileSyncHidden } from "./child-process";
 
 const NETWORK_FILESYSTEM_TYPES = new Set(["afpfs", "nfs", "smbfs", "webdav"]);
 
@@ -54,7 +54,7 @@ export function detectFilesystemType(
 
 	try {
 		const output =
-			opts?.statCommand?.(path) ?? (execFileSync("/usr/bin/stat", ["-f", "%T", path], { encoding: "utf8" }) as string);
+			opts?.statCommand?.(path) ?? (execFileSyncHidden("/usr/bin/stat", ["-f", "%T", path], { encoding: "utf8" }) as string);
 		const filesystemType = output.trim();
 		return filesystemType.length > 0 ? filesystemType : null;
 	} catch {

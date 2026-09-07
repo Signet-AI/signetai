@@ -1,6 +1,6 @@
-import { type SpawnSyncReturns, spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { spawnHidden, spawnSyncHidden, type SpawnSyncReturns } from "./child-process";
 
 export const SIGNET_SOURCE_CHECKOUT_DIRNAME = "signetai";
 export const SIGNET_SOURCE_REMOTE_URL = "https://github.com/Signet-AI/signetai.git";
@@ -312,11 +312,10 @@ async function isGitAvailableAsync(timeoutMs: number): Promise<boolean> {
 }
 
 function runGit(args: readonly string[], cwd: string | undefined, timeoutMs: number): GitCommandResult {
-	const result: SpawnSyncReturns<string> = spawnSync("git", args, {
+	const result: SpawnSyncReturns<string> = spawnSyncHidden("git", args, {
 		cwd,
 		encoding: "utf-8",
 		timeout: timeoutMs,
-		windowsHide: true,
 	});
 
 	return {
@@ -334,10 +333,9 @@ async function runGitAsync(
 	timeoutMs: number,
 ): Promise<GitCommandResult> {
 	return await new Promise((resolve) => {
-		const proc = spawn("git", args, {
+		const proc = spawnHidden("git", args, {
 			cwd,
 			stdio: ["ignore", "pipe", "pipe"],
-			windowsHide: true,
 			detached: process.platform !== "win32",
 		});
 		let stdout = "";
@@ -393,7 +391,7 @@ async function runGitAsync(
 	});
 }
 
-function killGitProcessTree(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+function killGitProcessTree(proc: ReturnType<typeof spawnHidden>, signal: NodeJS.Signals): void {
 	try {
 		if (process.platform !== "win32" && proc.pid) {
 			process.kill(-proc.pid, signal);

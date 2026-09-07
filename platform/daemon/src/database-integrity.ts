@@ -7,7 +7,7 @@
  * when SQLite reports an index mismatch.
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -548,7 +548,7 @@ async function runKillableTelemetryRepair(
 }
 
 async function writeAsync<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
-	return accessor.withWriteTxAsync(processBatch, { siteToken: "database-integrity.ts:551" });
+	return accessor.withWriteTxAsync(processBatch, { siteToken: "db:database.integrity.write" });
 }
 
 /**
@@ -715,7 +715,7 @@ async function readIntegrityChecks(
 				telemetry: check(db, "integrity_check", "telemetry_events"),
 				indexes: listTelemetryIndexes(db),
 			}),
-			{ siteToken: "database-integrity.ts:712" },
+			{ siteToken: "db:database.integrity.read-checks" },
 		);
 	}
 	const deadlineMs = options.repairTimeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS;
@@ -828,7 +828,7 @@ export async function repairTelemetryIndexes(
 			const verifiedTelemetry =
 				options?.owner === undefined
 					? await accessor.withReadDbAsync(async (db) => check(db, "integrity_check", "telemetry_events"), {
-							siteToken: "database-integrity.ts:830",
+							siteToken: "db:database.integrity.verify",
 						})
 					: ownerCheck(
 							await ownerQueryAll<Record<string, unknown>>(

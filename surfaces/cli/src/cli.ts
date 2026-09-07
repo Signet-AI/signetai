@@ -4,7 +4,7 @@
  * Own your agent. Bring it anywhere.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawnSyncHidden as spawnSync } from "@signet/core";
 import {
 	existsSync,
 	lstatSync,
@@ -731,7 +731,6 @@ async function ensureOpenClawPluginPackage(
 		timeout: 120_000,
 		cwd: tmpdir(),
 		env: process.env,
-		windowsHide: true,
 	});
 
 	if (result.status !== 0) {

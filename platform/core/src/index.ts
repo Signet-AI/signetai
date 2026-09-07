@@ -4,6 +4,14 @@
  */
 
 export { Signet } from "./signet";
+export {
+	execFileHidden,
+	execFileSyncHidden,
+	execSyncHidden,
+	spawnHidden,
+	spawnSyncHidden,
+} from "./child-process";
+export type { ChildProcess, ChildProcessWithoutNullStreams, SpawnSyncReturns } from "./child-process";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
 export {
 	__setSecretStoreLockHookForTests,

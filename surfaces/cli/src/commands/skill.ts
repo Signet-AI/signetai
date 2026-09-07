@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
@@ -140,7 +140,6 @@ export function registerSkillCommands(program: Command, deps: SkillDeps): void {
 				const proc = spawn(cmd.command, cmd.args, {
 					stdio: ["ignore", "pipe", "pipe"],
 					env: { ...process.env },
-					windowsHide: true,
 				});
 				let stderr = "";
 				proc.stderr.on("data", (buf: Buffer) => {

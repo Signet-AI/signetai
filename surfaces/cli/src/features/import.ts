@@ -2,7 +2,7 @@ import { confirm, input } from "@inquirer/prompts";
 import chalk from "chalk";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSyncHidden as spawnSync } from "@signet/core";
 import ora from "ora";
 
 interface Deps {
@@ -46,7 +46,6 @@ export async function importFromGitHub(basePath: string, deps: Deps): Promise<vo
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
 			timeout: 60_000,
-			windowsHide: true,
 			env: {
 				...process.env,
 				GCM_INTERACTIVE: "never",
@@ -126,7 +125,6 @@ function hasUncommittedChanges(basePath: string): boolean {
 	const result = spawnSync("git", ["status", "--porcelain"], {
 		cwd: basePath,
 		encoding: "utf-8",
-		windowsHide: true,
 	});
 	return typeof result.stdout === "string" && result.stdout.trim().length > 0;
 }
@@ -200,7 +198,6 @@ function ensureOriginRemote(basePath: string, gitUrl: string, deps: Deps): void 
 	const remote = spawnSync("git", ["remote", "get-url", "origin"], {
 		cwd: basePath,
 		encoding: "utf-8",
-		windowsHide: true,
 	});
 	if (remote.status === 0) {
 		return;
@@ -208,7 +205,6 @@ function ensureOriginRemote(basePath: string, gitUrl: string, deps: Deps): void 
 
 	spawnSync("git", ["remote", "add", "origin", gitUrl], {
 		cwd: basePath,
-		windowsHide: true,
 	});
 	console.log(chalk.dim(`  Set origin remote to ${gitUrl}`));
 }

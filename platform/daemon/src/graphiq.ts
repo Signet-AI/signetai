@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { constants, accessSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -72,7 +72,7 @@ export function runCommand(
 ): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
 	return new Promise((resolveResult) => {
 		const env = extraEnv ? { ...process.env, ...extraEnv } : process.env;
-		const proc = spawn(command, [...args], { stdio: "pipe", windowsHide: true, env });
+		const proc = spawn(command, [...args], { stdio: "pipe", env });
 		const hardKillGraceMs = Math.min(1_000, Math.max(100, Math.floor(timeoutMs / 4)));
 		let settled = false;
 		let stdout = "";

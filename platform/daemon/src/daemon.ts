@@ -6,7 +6,7 @@ import { requestMemoryHead } from "./memory-head";
  */
 
 import "./bun-socket-polyfill";
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
@@ -2945,7 +2945,6 @@ async function main() {
 				const replacement = spawn(preferredExecutablePath ?? process.execPath, [daemonScript], {
 					detached: true,
 					stdio: "ignore",
-					windowsHide: true,
 					env: {
 						...process.env,
 						SIGNET_PORT: String(PORT),

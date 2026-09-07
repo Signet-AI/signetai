@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import type { AsyncEntry } from "@napi-rs/keyring";
+import { execFileSyncHidden } from "./child-process";
 
 export type SecretKeyringState =
 	| "found"
@@ -120,7 +120,7 @@ function linuxKeyringAvailable(): SecretKeyringResult | null {
 		};
 	}
 	try {
-		execFileSync("busctl", ["--user", "status", "org.freedesktop.secrets"], {
+		execFileSyncHidden("busctl", ["--user", "status", "org.freedesktop.secrets"], {
 			stdio: "ignore",
 			timeout: 1_000,
 		});

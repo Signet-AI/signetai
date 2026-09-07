@@ -7,7 +7,7 @@ import {
 } from "@signet/core";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnHidden as spawn, type ChildProcessWithoutNullStreams } from "@signet/core";
 
 const GIT_COMMAND_TIMEOUT_MS = 30_000;
 
@@ -118,7 +118,6 @@ async function runGit(dir: string, args: string[], timeoutMs = GIT_COMMAND_TIMEO
 		const proc = spawn(git, args, {
 			cwd: dir,
 			stdio: "pipe",
-			windowsHide: true,
 			detached: process.platform !== "win32",
 		});
 		let stdout = "";

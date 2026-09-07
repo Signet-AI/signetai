@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import type { ServerWebSocket } from "bun";
 
 export interface InspectorEndpoint {
@@ -104,7 +104,6 @@ export function handoffInspectorParent(env: NodeJS.ProcessEnv = process.env): vo
 	const child = spawn(process.execPath, resolveInspectorHandoffArgs(), {
 		detached: true,
 		stdio: "ignore",
-		windowsHide: true,
 		env: handoff.environment,
 	});
 	child.unref();

@@ -5,7 +5,6 @@
  * encrypted store when no daemon is running.
  */
 
-import { execSync, spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
 	chmodSync,
@@ -24,6 +23,7 @@ import {
 } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { execSyncHidden, spawnHidden } from "./child-process";
 import { resolveDefaultBasePath } from "./constants.js";
 import {
 	getSecretKeyring,
@@ -172,7 +172,7 @@ function resolveMachineId(): string | undefined {
 
 		// macOS fallback
 		try {
-			const out = execSync("ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID | awk '{print $3}'", {
+			const out = execSyncHidden("ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID | awk '{print $3}'", {
 				timeout: 2000,
 			})
 				.toString()
@@ -185,10 +185,9 @@ function resolveMachineId(): string | undefined {
 	} else {
 		// Windows: use MachineGuid from registry
 		try {
-			const out = execSync('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid', {
+			const out = execSyncHidden('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid', {
 				encoding: "utf-8",
 				timeout: 2000,
-				windowsHide: true,
 			});
 			const match = out.match(/MachineGuid\s+REG_SZ\s+(\S+)/);
 			if (match?.[1]) return match[1];
@@ -1049,11 +1048,10 @@ export async function execWithSecrets(
 
 	return new Promise((resolve, reject) => {
 		const useProcessGroup = process.platform !== "win32";
-		const proc = spawn(cmd[0], cmd.slice(1), {
+		const proc = spawnHidden(cmd[0], cmd.slice(1), {
 			detached: useProcessGroup,
 			env: { ...process.env, ...resolved },
 			stdio: "pipe",
-			windowsHide: true,
 		});
 
 		const stdoutRedactor = createStreamingRedactor();

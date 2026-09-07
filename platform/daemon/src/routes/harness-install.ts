@@ -1,5 +1,5 @@
 import { HARNESS_INSTALLERS } from "../harness-install-worker";
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,7 +43,6 @@ export async function installHarness(id: string, signal: AbortSignal): Promise<v
 			const child = spawn(process.execPath, args, {
 				env: { ...process.env, SIGNET_PATH: AGENTS_DIR, SIGNET_INSTALL_HARNESS: id },
 				stdio: ["ignore", "pipe", "pipe"],
-				windowsHide: true,
 				detached: process.platform !== "win32",
 			});
 			let output = "",

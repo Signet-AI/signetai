@@ -1,4 +1,4 @@
-import { type SpawnSyncReturns, spawn, spawnSync } from "node:child_process";
+import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type SpawnSyncReturns } from "@signet/core";
 import { createHash } from "node:crypto";
 import {
 	appendFileSync,
@@ -733,7 +733,6 @@ function readCmd(pid: number): string | null {
 			try {
 				const proc = spawnSync(command, ["-NoProfile", "-NonInteractive", "-Command", script], {
 					encoding: "utf-8",
-					windowsHide: true,
 					timeout: 3000,
 				});
 				if (proc.status === 0 && proc.stdout.trim()) return proc.stdout.trim();
@@ -746,7 +745,6 @@ function readCmd(pid: number): string | null {
 	try {
 		const proc = spawnSync("ps", ["-o", "command=", "-p", String(pid)], {
 			encoding: "utf-8",
-			windowsHide: true,
 		});
 		if (proc.status !== 0) return null;
 		const value = proc.stdout.trim();
@@ -795,7 +793,6 @@ function readProcessGroupId(pid: number): number | null {
 		const result = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], {
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "ignore"],
-			windowsHide: true,
 		});
 		if (result.status !== 0) return null;
 		const groupId = Number.parseInt(result.stdout.trim(), 10);
@@ -818,7 +815,6 @@ function isProcessGroupAlive(groupId: number): boolean {
 		const result = spawnSync("ps", ["-o", "stat=", "-g", String(groupId)], {
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "ignore"],
-			windowsHide: true,
 		});
 		if (result.status !== 0) return false;
 		const states = result.stdout
@@ -1121,7 +1117,6 @@ interface DaemonStartDiagnosticsDeps {
 		options: {
 			readonly encoding: "utf8";
 			readonly stdio: "pipe";
-			readonly windowsHide: true;
 			readonly timeout: number;
 		},
 	) => { readonly stdout?: string };
@@ -1174,7 +1169,7 @@ export function readDaemonStartFailureDiagnostics(
 				"-n",
 				"40",
 			],
-			{ encoding: "utf8", stdio: "pipe", windowsHide: true, timeout: 3000 },
+			{ encoding: "utf8", stdio: "pipe", timeout: 3000 },
 		);
 		const journal = result.stdout ?? "";
 		const journalLines = tailNonEmptyLines(journal, 20);
@@ -1285,7 +1280,6 @@ export function getLaunchdDaemonLoadState(label: string, deps: LaunchdDaemonLoad
 	try {
 		const result = spawn("launchctl", ["print", `${currentLaunchdDomain()}/${label}`], {
 			stdio: "ignore",
-			windowsHide: true,
 			timeout: 3000,
 		});
 		if (result.status === 0) return "loaded";
@@ -1417,7 +1411,7 @@ export function buildLaunchdDaemonStopArgs(label: string = LAUNCHD_DAEMON_LABEL)
 type LaunchctlProbeSpawnSync = (
 	command: string,
 	args: readonly string[],
-	options: { readonly stdio: "ignore"; readonly windowsHide: boolean; readonly timeout: number },
+	options: { readonly stdio: "ignore"; readonly timeout: number },
 ) => {
 	readonly status: number | null;
 };
@@ -1452,7 +1446,6 @@ function spawnInspectorProxy(proxy: NonNullable<DaemonInspectorForwarding["proxy
 	const processHandle = spawn(command, args, {
 		detached: true,
 		stdio: "ignore",
-		windowsHide: true,
 		env: {
 			...process.env,
 			BUN_INSPECT: "",
@@ -1560,7 +1553,6 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 		});
 		const result = spawnSync("systemd-run", systemdArgs, {
 			stdio: ["ignore", "ignore", stderrTarget],
-			windowsHide: true,
 			env: daemonEnv,
 			timeout: 5000,
 		});
@@ -1592,7 +1584,6 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 			if (legacyState === "loaded") {
 				const legacyBootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(LAUNCHD_DAEMON_LABEL), {
 					stdio: ["ignore", "ignore", stderrTarget],
-					windowsHide: true,
 					env: daemonEnv,
 					timeout: 5000,
 				});
@@ -1630,14 +1621,12 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 		if (isLaunchdDaemonLoaded(agentsDir)) {
 			bootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(launchdDaemonLabel(agentsDir)), {
 				stdio: ["ignore", "ignore", stderrTarget],
-				windowsHide: true,
 				env: daemonEnv,
 				timeout: 5000,
 			});
 		}
 		const bootstrap = spawnSync("launchctl", buildLaunchdDaemonStartArgs(plistPath), {
 			stdio: ["ignore", "ignore", stderrTarget],
-			windowsHide: true,
 			env: daemonEnv,
 			timeout: 5000,
 		});
@@ -1646,7 +1635,6 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 			const target = buildLaunchdDaemonStopArgs(launchdDaemonLabel(agentsDir))[1];
 			const kickstart = spawnSync("launchctl", ["kickstart", "-k", target], {
 				stdio: ["ignore", "ignore", stderrTarget],
-				windowsHide: true,
 				env: daemonEnv,
 				timeout: 5000,
 			});
@@ -1670,7 +1658,6 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR, preferredDaemo
 		const proc = spawn(command, args, {
 			detached: true,
 			stdio: ["ignore", "ignore", stderrTarget],
-			windowsHide: true,
 			env: daemonEnv,
 		});
 
@@ -1738,14 +1725,12 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: 
 		if (migration.action === "migrate") {
 			const legacyBootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(LAUNCHD_DAEMON_LABEL), {
 				stdio: "ignore",
-				windowsHide: true,
 				timeout: 5000,
 			});
 			if (didLaunchdDaemonStart(legacyBootout)) rmSync(migration.legacyPlistPath, { force: true });
 		}
 		spawnSync("launchctl", buildLaunchdDaemonStopArgs(launchdDaemonLabel(agentsDir)), {
 			stdio: "ignore",
-			windowsHide: true,
 			timeout: 5000,
 		});
 	}

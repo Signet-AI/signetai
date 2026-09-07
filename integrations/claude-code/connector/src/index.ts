@@ -12,7 +12,7 @@
  * ```
  */
 
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";

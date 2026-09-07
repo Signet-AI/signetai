@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { LOOPBACK_HOST } from "@signet/core";

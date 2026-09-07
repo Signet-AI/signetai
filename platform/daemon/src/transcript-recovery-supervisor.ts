@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 
 const TRANSCRIPT_RECOVERY_CHILD_GRACE_MS = 4_000;
 
