@@ -426,6 +426,15 @@ Keep harness-specific installation, managed-file, and configuration policy under
 `integrations/<tool>/`; `platform/core` should expose reusable identity and
 workspace primitives rather than integration-owned setup modules.
 
+The harness boundary is also a published API boundary. `@signet/core` no longer
+exports `detectExistingSetup`, `SetupDetection`, or the Oh My Pi/Pi path and
+configuration helpers. Update integration callers to import Oh My Pi helpers from
+`@signet/connector-oh-my-pi`, Pi connector helpers from `@signet/connector-pi`,
+and Pi extension helpers from `@signet/pi-extension-base/agent-dir`. The CLI's
+`surfaces/cli/src/lib/setup-detection.ts` module is an internal CLI composition
+point, not a core API. Compatibility re-exports are intentionally not retained,
+because they would put harness-specific ownership back in `@signet/core`.
+
 Reference Repos
 ---
 
