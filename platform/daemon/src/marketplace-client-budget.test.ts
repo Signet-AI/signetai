@@ -34,6 +34,21 @@ describe("MarketplaceMcpClientBudget", () => {
 		expect(budget.status()).toEqual({ activeClients: 0, activeProcesses: 0, pending: 0, limit: 1 });
 	});
 
+	it("removes an aborted waiter without consuming a later permit", async () => {
+		const budget = new MarketplaceMcpClientBudget(1);
+		const active = await budget.acquire(1_000);
+		const controller = new AbortController();
+		const queued = budget.acquire(1_000, controller.signal);
+
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		controller.abort();
+		await expect(queued).rejects.toMatchObject({ name: "AbortError" });
+		expect(budget.status().pending).toBe(0);
+
+		active.release();
+		expect(budget.status()).toMatchObject({ activeClients: 0, pending: 0 });
+	});
+
 	it("invokes cleanup when an operation reaches its deadline", async () => {
 		let closed = false;
 
