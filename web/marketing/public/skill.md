@@ -235,7 +235,7 @@ current user's PATH; it does not require administrator permissions.
 
 - Requires or uses sudo
 - Modifies system-wide settings, OS preferences, or system files
-- Writes application data outside the home directory
+- Writes application data to system directories without an explicit configured path
 - Installs system services (launchd/systemd) automatically
 - Sends data to external servers (everything is local)
 - Deletes or overwrites existing files without the setup wizard
@@ -248,9 +248,10 @@ current user's PATH; it does not require administrator permissions.
 > GATE: Before proceeding, tell your user:
 > "I'm going to install Signet, which will give me persistent memory
 > and a secrets vault. The installer uses the compiled
-> Signet binary and runs a small background daemon on port 3850. It only
-> writes to directories inside your home folder — never system files,
-> never with sudo. Ready to proceed?"
+> Signet binary and runs a small background daemon on port 3850. It writes
+> application data in your home folder; the Windows installer also uses a
+> temporary working directory and may update your user PATH. It never writes
+> system files or uses sudo. Ready to proceed?"
 >
 > WAIT for the user to confirm before continuing.
 
