@@ -118,6 +118,34 @@ describe("stage-runtime Bun validation", () => {
 		}
 	});
 
+	it("rejects a concurrent resource replacement", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const lock = join(directory, ".resources.lock");
+		mkdirSync(lock);
+
+		try {
+			expect(() => replaceResources(join(directory, "resources"), join(directory, "staged"))).toThrow(
+				"Desktop resources are already being replaced",
+			);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("reclaims a resource lock from a dead owner", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const lock = join(directory, ".resources.lock");
+		mkdirSync(lock);
+		writeFileSync(join(lock, "owner"), `${Number.MAX_SAFE_INTEGER}\n`);
+
+		try {
+			expect(() => replaceResources(join(directory, "resources"), join(directory, "staged"))).toThrow("ENOENT");
+			expect(existsSync(lock)).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps the backup when rollback also fails", () => {
 		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
 		const target = join(directory, "resources");

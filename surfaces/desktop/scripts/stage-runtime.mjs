@@ -129,6 +129,52 @@ function pkgVersion(pkg, name) {
 	return pkg.dependencies?.[name] ?? pkg.optionalDependencies?.[name] ?? pkg.devDependencies?.[name] ?? null;
 }
 
+function resourceLockPath(target) {
+	return join(dirname(target), `.${basename(target)}.lock`);
+}
+
+function processIsAlive(pid) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error?.code === "EPERM";
+	}
+}
+
+function acquireResourceLock(target) {
+	const lockPath = resourceLockPath(target);
+	while (true) {
+		try {
+			mkdirSync(lockPath);
+		} catch (error) {
+			if (error?.code !== "EEXIST") throw error;
+			let owner;
+			try {
+				owner = Number(readFileSync(join(lockPath, "owner"), "utf8"));
+			} catch (ownerError) {
+				throw new Error(`Desktop resources are already being replaced: ${target}`, { cause: ownerError });
+			}
+			if (!Number.isInteger(owner) || processIsAlive(owner)) {
+				throw new Error(`Desktop resources are already being replaced: ${target}`);
+			}
+			rmSync(lockPath, { recursive: true, force: true });
+			continue;
+		}
+		try {
+			writeFileSync(join(lockPath, "owner"), `${process.pid}\n`);
+		} catch (error) {
+			rmSync(lockPath, { recursive: true, force: true });
+			throw error;
+		}
+		return lockPath;
+	}
+}
+
+function releaseResourceLock(lockPath) {
+	rmSync(lockPath, { recursive: true, force: true });
+}
+
 function removeBackup(backupParent, backup, remove = rmSync) {
 	try {
 		remove(backupParent, { recursive: true, force: true });
@@ -148,38 +194,57 @@ export function removeStaging(stagedResources, remove = rmSync) {
 }
 
 export function replaceResources(target, staged, rename = renameSync, remove = rmSync) {
-	const hadTarget = existsSync(target);
-	const backupParent = mkdtempSync(join(dirname(target), ".resources-backup-"));
-	const backup = join(backupParent, basename(target));
-	let moved = false;
+	const lockPath = acquireResourceLock(target);
+	let failure;
 	try {
-		if (hadTarget) {
-			rename(target, backup);
-			moved = true;
-		}
-		rename(staged, target);
-	} catch (error) {
-		if (moved) {
-			try {
-				if (existsSync(target)) {
-					throw new Error(`Desktop resources changed during replacement: ${target}`);
-				}
-				rename(backup, target);
-			} catch (restoreError) {
-				const detail = restoreError instanceof Error ? restoreError.message : String(restoreError);
-				throw new Error(`Unable to restore previous desktop resources from ${backup}: ${detail}`, { cause: error });
-			}
-		}
+		const hadTarget = existsSync(target);
+		const backupParent = mkdtempSync(join(dirname(target), ".resources-backup-"));
+		const backup = join(backupParent, basename(target));
+		let moved = false;
 		try {
-			removeBackup(backupParent, backup, remove);
-		} catch (cleanupError) {
-			const original = error instanceof Error ? error.message : String(error);
-			const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-			throw new Error(`${original}; ${detail}`, { cause: error });
+			if (hadTarget) {
+				rename(target, backup);
+				moved = true;
+			}
+			rename(staged, target);
+		} catch (error) {
+			if (moved) {
+				try {
+					if (existsSync(target)) {
+						throw new Error(`Desktop resources changed during replacement: ${target}`);
+					}
+					rename(backup, target);
+				} catch (restoreError) {
+					const detail = restoreError instanceof Error ? restoreError.message : String(restoreError);
+					throw new Error(`Unable to restore previous desktop resources from ${backup}: ${detail}`, { cause: error });
+				}
+			}
+			try {
+				removeBackup(backupParent, backup, remove);
+			} catch (cleanupError) {
+				const original = error instanceof Error ? error.message : String(error);
+				const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+				throw new Error(`${original}; ${detail}`, { cause: error });
+			}
+			throw error;
 		}
-		throw error;
+		removeBackup(backupParent, backup, remove);
+	} catch (error) {
+		failure = error;
 	}
-	removeBackup(backupParent, backup, remove);
+	let releaseError;
+	try {
+		releaseResourceLock(lockPath);
+	} catch (error) {
+		releaseError = error;
+	}
+	if (failure && releaseError) {
+		const original = failure instanceof Error ? failure.message : String(failure);
+		const detail = releaseError instanceof Error ? releaseError.message : String(releaseError);
+		throw new Error(`${original}; Unable to release desktop resource lock ${lockPath}: ${detail}`, { cause: failure });
+	}
+	if (failure) throw failure;
+	if (releaseError) throw releaseError;
 }
 
 export function stageRuntime() {
