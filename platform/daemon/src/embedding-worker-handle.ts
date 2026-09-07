@@ -120,6 +120,8 @@ export interface EmbeddingWorkerHandle {
 	checkAvailable(): Promise<EmbeddingProviderStatus>;
 	getStatus(): EmbeddingProviderSnapshot;
 	getLastError(): string | null;
+	/** True when the provider must remain disabled until daemon restart. */
+	isPermanentlyDisabled(): boolean;
 	stop(): Promise<void>;
 }
 
@@ -220,7 +222,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		pending.clear();
 	}
 
-	function sendRpc(kind: "embed" | "checkAvailable", timeoutMs: number, extra?: { text: string }): number {
+	function sendRpc(kind: "embed" | "checkAvailable", extra?: { text: string }): number {
 		const id = nextId++;
 		const msg: MainToWorkerMessage =
 			kind === "embed" ? { type: "embed", id, text: extra?.text ?? "" } : { type: "checkAvailable", id };
@@ -232,7 +234,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		return ready.then(
 			() =>
 				new Promise<T>((resolve, reject) => {
-					const id = sendRpc(kind, timeoutMs, extra);
+					const id = sendRpc(kind, extra);
 					const timer = setTimeout(() => {
 						if (pending.has(id)) {
 							clearPending(id);
@@ -415,6 +417,10 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 
 		getLastError(): string | null {
 			return lastError;
+		},
+
+		isPermanentlyDisabled(): boolean {
+			return disabled;
 		},
 
 		async stop(): Promise<void> {

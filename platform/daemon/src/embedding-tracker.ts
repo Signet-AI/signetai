@@ -180,19 +180,7 @@ export function startEmbeddingTracker(
 		}
 
 		try {
-			// 1. Check provider health (uses existing 30s cache)
-			const gate = await awaitEmbeddingProviderAvailable(
-				`${embeddingCfg.provider}:${embeddingCfg.model}:${embeddingCfg.base_url ?? ""}`,
-				async () => (await checkProviderFn(embeddingCfg)).available,
-				trackerCfg.pollMs,
-				() => logger.warn("embedding", "Embedding provider unavailable; retrying tracker cycle"),
-			);
-			if (!gate.available) {
-				skippedCycles++;
-				return;
-			}
-
-			// 2. Query stale/missing embeddings (read-only), then merge durable
+			// 1. Query stale/missing embeddings (read-only), then merge durable
 			// failure backoff so restarting the daemon cannot immediately replay a
 			// poison row against the provider.
 			const now = Date.now();
@@ -220,6 +208,20 @@ export function startEmbeddingTracker(
 			lastQueueDepth = readyRows.length;
 			lastCycleAt = new Date(now).toISOString();
 			if (readyRows.length === 0) return;
+
+			// 2. Check provider health only when there is actual repair work. This
+			// keeps an idle tracker from loading the native model just because its
+			// timer fired.
+			const gate = await awaitEmbeddingProviderAvailable(
+				`${embeddingCfg.provider}:${embeddingCfg.model}:${embeddingCfg.base_url ?? ""}`,
+				async () => (await checkProviderFn(embeddingCfg)).available,
+				trackerCfg.pollMs,
+				() => logger.warn("embedding", "Embedding provider unavailable; retrying tracker cycle"),
+			);
+			if (!gate.available) {
+				skippedCycles++;
+				return;
+			}
 
 			// The durable lease serializes provider calls before they begin. The
 			// hourly budget is charged only after at least one active-profile

@@ -667,6 +667,11 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 	const now = Date.now();
 	const cacheKey = embeddingStatusCacheKey(cfg);
 	const cached = embeddingStatusCache.get(cacheKey);
+	let nativeEmbedding: typeof import("../native-embedding") | null = null;
+	if (cfg.provider === "native" && cfg.warmNative !== false) {
+		nativeEmbedding = await import("../native-embedding");
+		nativeEmbedding.configureNativeEmbeddingLifecycle({ idleTtlMs: cfg.idleTtlMs });
+	}
 
 	if (cached && now - cached.checkedAt < STATUS_CACHE_TTL) {
 		cachedEmbeddingStatus = cached.status;
@@ -707,7 +712,7 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 				cacheEmbeddingStatus(cacheKey, status, now);
 				return status;
 			}
-			const mod = await import("../native-embedding");
+			const mod = nativeEmbedding ?? (await import("../native-embedding"));
 			const nativeStatus = await mod.checkNativeProvider();
 			status.modelCached = nativeStatus.modelCached;
 			if (nativeStatus.available) {

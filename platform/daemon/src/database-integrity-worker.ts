@@ -1,3 +1,11 @@
+/**
+ * This entrypoint intentionally remains a child process, not a Worker-thread
+ * module. It opens SQLite directly and the caller must be able to SIGKILL the
+ * whole operation when synchronous quick_check exceeds its deadline. The
+ * owner-routed daemon path performs quick_check through the DB owner and does
+ * not launch this process; this boundary serves only the direct-DB compatibility
+ * path, which admits one child at a time and reaps it before admitting another.
+ */
 import { createRequire } from "node:module";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";

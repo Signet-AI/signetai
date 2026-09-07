@@ -3500,7 +3500,9 @@ async function main() {
 			}, 30_000);
 
 			const startupCfg = loadMemoryConfig(AGENTS_DIR);
-			if (startupCfg.embedding.provider !== "none") {
+			const shouldPreloadNative =
+				startupCfg.embedding.provider !== "native" || startupCfg.embedding.preloadNative === true;
+			if (startupCfg.embedding.provider !== "none" && shouldPreloadNative) {
 				checkEmbeddingProvider(startupCfg.embedding)
 					.then((embeddingStatus) => {
 						if (!embeddingStatus.available) {

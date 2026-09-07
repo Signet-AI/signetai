@@ -33,7 +33,7 @@ rmSync(buildDir, { recursive: true, force: true });
 mkdirSync(workerDir, { recursive: true });
 
 function runBunBuild(args: readonly string[]): void {
-	const result = spawnSync("bun", ["build", ...args], {
+	const result = spawnSync(process.execPath, ["build", ...args], {
 		cwd: root,
 		stdio: "inherit",
 		windowsHide: true,
@@ -118,6 +118,14 @@ const templatesDir = join(root, "surfaces", "cli", "templates");
 const skillsDir = join(root, "skills");
 const hermesPluginDir = join(root, "integrations", "hermes-agent", "connector", "hermes-plugin");
 const graphiqScriptPath = join(root, "scripts", "install-graphiq.sh");
+const workerThreadSmokeEntry = join(buildDir, "worker-thread-smoke.ts");
+writeFileSync(
+	workerThreadSmokeEntry,
+	`import { parentPort, threadId } from "node:worker_threads";
+if (parentPort === null) throw new Error("worker-thread smoke entrypoint requires a parent port");
+parentPort.postMessage({ type: "worker-thread-smoke", pid: process.pid, threadId });
+`,
+);
 
 const workerEntries = [
 	["synthesis-render-worker", "platform/daemon/src/synthesis-render-worker.ts"],
@@ -132,6 +140,9 @@ const workerEntries = [
 	// materialized wasmDir to the worker via workerData.
 	["embedding-worker", "platform/daemon/src/embedding-worker.ts"],
 	["dreaming-token-worker", "platform/daemon/src/pipeline/dreaming-token-worker.ts"],
+	// Kept in the compiled asset set so the native smoke can prove that a
+	// materialized Worker entrypoint executes in the parent process.
+	["worker-thread-smoke", workerThreadSmokeEntry],
 ] as const;
 const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
 
@@ -434,15 +445,55 @@ if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PR
 	} finally {
 		cache.stop();
 	}
+} else if (process.env.SIGNET_NATIVE_WORKER_THREAD_SMOKE) {
+	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/native-runtime-assets");
+	const workerPath = resolveEmbeddedWorkerPath("worker-thread-smoke");
+	if (workerPath === null) throw new Error("worker-thread smoke requires an embedded worker asset");
+	const { Worker } = await import("node:worker_threads");
+	const worker = new Worker(workerPath, { type: "module" });
+	try {
+		const message = await new Promise<{ readonly pid: number; readonly threadId: number }>((resolve, reject) => {
+			let settled = false;
+			const finish = (operation: () => void): void => {
+				if (settled) return;
+				settled = true;
+				operation();
+			};
+			worker.once("message", (value: unknown) => {
+				if (
+					typeof value !== "object" ||
+					value === null ||
+					typeof (value as { pid?: unknown }).pid !== "number" ||
+					typeof (value as { threadId?: unknown }).threadId !== "number"
+				) {
+					finish(() => reject(new Error("worker-thread smoke returned an invalid message")));
+					return;
+				}
+				const message = value as { readonly pid: number; readonly threadId: number };
+				finish(() => resolve(message));
+			});
+			worker.once("error", (error: unknown) => finish(() => reject(error)));
+			worker.once("exit", (code: number) => {
+				if (code !== 0) finish(() => reject(new Error(\`worker-thread smoke exited with code \${code}\`)));
+			});
+		});
+		process.stdout.write(
+			JSON.stringify({
+				type: "worker-thread-smoke",
+				parentPid: process.pid,
+				workerPid: message.pid,
+				workerThreadId: message.threadId,
+			}) + "\\n",
+		);
+	} finally {
+		await worker.terminate();
+	}
 } else if (process.env.SIGNET_DB_OWNER_WORKER) {
 	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
 	runDbOwnerWorker();
 } else if (process.env.SIGNET_INSTALL_HARNESS) {
 	const { runHarnessInstallWorker } = await import("../platform/daemon/src/harness-install-worker");
 	await runHarnessInstallWorker();
-} else if (process.env.SIGNET_NATIVE_SOURCE_WORKER) {
-	const { runNativeSourceWorker } = await import("../platform/daemon/src/native-memory-source-worker");
-	runNativeSourceWorker();
 } else if (process.env.SIGNET_DB_OWNER_CLIENT_SMOKE) {
 	const dbPath = process.env.SIGNET_DB_OWNER_DB_PATH;
 	if (!dbPath) throw new Error("DB owner client smoke requires SIGNET_DB_OWNER_DB_PATH");

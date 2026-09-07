@@ -37,6 +37,10 @@ export interface EmbeddingConfig {
 	api_key?: string;
 	promptSubmitTimeoutMs?: number;
 	llamaCppMaxInputTokens?: number;
+	/** Idle lifetime of the native embedding worker before it is evicted. */
+	idleTtlMs?: number;
+	/** Opt in to loading the native model during daemon startup. */
+	preloadNative?: boolean;
 	/**
 	 * Kill-switch for the native ONNX path (#1073). When false, the daemon
 	 * never warms or routes to native even if the active embedding profile is
@@ -284,6 +288,9 @@ export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS = 1000;
 export const MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS = 1000;
 export const MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS = 300000;
+export const DEFAULT_NATIVE_EMBEDDING_IDLE_TTL_MS = 10 * 60 * 1000;
+export const MIN_NATIVE_EMBEDDING_IDLE_TTL_MS = 1000;
+export const MAX_NATIVE_EMBEDDING_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface ResolvedMemoryConfig {
 	embedding: EmbeddingConfig;
@@ -331,8 +338,10 @@ const runtimeSchema = z.object({
 			endpoint: z.string().optional(),
 			api_key: z.string().optional(),
 			warmNative: z.boolean().default(true),
+			preloadNative: z.boolean().default(false),
 			promptSubmitTimeoutMs: z.number().default(DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS),
 			llamaCppMaxInputTokens: z.number().default(DEFAULT_LLAMACPP_MAX_INPUT_TOKENS),
+			idleTtlMs: z.number().int().default(DEFAULT_NATIVE_EMBEDDING_IDLE_TTL_MS),
 			costRates: costs.optional(),
 			cost_rates: costs.optional(),
 		})
@@ -395,6 +404,7 @@ export function readRuntimeConfig(agentsDir: string): {
 				base_url: active ? (endpoint?.trim() ? endpoint : endpoints[provider]) : "",
 				api_key: active ? embedding.api_key : undefined,
 				warmNative: embedding.warmNative,
+				preloadNative: embedding.preloadNative,
 				promptSubmitTimeoutMs: Math.max(
 					MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 					Math.min(MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS, embedding.promptSubmitTimeoutMs),
@@ -402,6 +412,10 @@ export function readRuntimeConfig(agentsDir: string): {
 				llamaCppMaxInputTokens: Math.max(
 					MIN_LLAMACPP_MAX_INPUT_TOKENS,
 					Math.min(MAX_LLAMACPP_MAX_INPUT_TOKENS, embedding.llamaCppMaxInputTokens),
+				),
+				idleTtlMs: Math.max(
+					MIN_NATIVE_EMBEDDING_IDLE_TTL_MS,
+					Math.min(MAX_NATIVE_EMBEDDING_IDLE_TTL_MS, embedding.idleTtlMs),
 				),
 				...(rates && Object.keys(rates).length ? { costRates: rates } : {}),
 			},

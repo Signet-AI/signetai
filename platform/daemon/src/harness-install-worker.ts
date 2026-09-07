@@ -3,6 +3,7 @@
 import { resolveGlobalPackagePath, resolvePrimaryPackageManager } from "@signet/core";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { isMainThread, parentPort, workerData } from "node:worker_threads";
 
 export const HARNESS_INSTALLERS = {
 	"claude-code": () => import("@signet/connector-claude-code").then((module) => module.ClaudeCodeConnector),
@@ -17,15 +18,24 @@ export const HARNESS_INSTALLERS = {
 	forge: () => import("@signet/connector-forge").then((module) => module.ForgeConnector),
 };
 
-export async function runHarnessInstallWorker(): Promise<void> {
-	const id = process.env.SIGNET_INSTALL_HARNESS;
+export interface HarnessInstallWorkerRequest {
+	readonly id: string;
+	readonly workspace: string;
+}
+
+export type HarnessInstallWorkerEvent =
+	| { readonly type: "complete" }
+	| { readonly type: "error"; readonly message: string };
+
+async function installHarness(request: HarnessInstallWorkerRequest) {
+	const id = request.id;
 	const loadInstaller =
 		id && Object.hasOwn(HARNESS_INSTALLERS, id) ? HARNESS_INSTALLERS[id as keyof typeof HARNESS_INSTALLERS] : null;
 	const Installer = loadInstaller ? await loadInstaller() : null;
 	const connector = Installer ? new Installer() : null;
 	const { OpenClawConnector } = await import("@signet/connector-openclaw");
 	if (!connector) throw new Error("Unsupported harness installation");
-	const workspace = process.env.SIGNET_PATH;
+	const workspace = request.workspace;
 	if (!workspace) throw new Error("Missing resolved workspace");
 	// OpenClaw's package is installed by the existing CLI package owner. Never
 	// report a working plugin when only its config exists.
@@ -48,9 +58,39 @@ export async function runHarnessInstallWorker(): Promise<void> {
 	if (!result.success) throw new Error(result.message);
 	if (!connector.isInstalled())
 		throw new Error("Integration files were written, but verification failed. Retry installation.");
-	process.stdout.write(`SIGNET_INSTALL_RESULT ${JSON.stringify(result)}\n`);
+	return result;
 }
 
-if (process.env.SIGNET_INSTALL_HARNESS && /harness-install-worker\.(ts|js|mjs)$/.test(process.argv[1] ?? "")) {
+export async function runHarnessInstallWorker(request?: HarnessInstallWorkerRequest): Promise<void> {
+	const resolvedRequest =
+		request ?? ({ id: process.env.SIGNET_INSTALL_HARNESS ?? "", workspace: process.env.SIGNET_PATH ?? "" } as const);
+	const result = await installHarness(resolvedRequest);
+	if (request === undefined) process.stdout.write(`SIGNET_INSTALL_RESULT ${JSON.stringify(result)}\n`);
+}
+
+async function runThreadWorker(): Promise<void> {
+	if (parentPort === null) throw new Error("harness install worker requires a parent port");
+	try {
+		await runHarnessInstallWorker(workerData as HarnessInstallWorkerRequest);
+		parentPort.postMessage({ type: "complete" } satisfies HarnessInstallWorkerEvent);
+	} catch (error) {
+		parentPort.postMessage({
+			type: "error",
+			message: error instanceof Error ? error.message : String(error),
+		} satisfies HarnessInstallWorkerEvent);
+	} finally {
+		parentPort.close();
+	}
+}
+
+if (!isMainThread && parentPort !== null) {
+	void runThreadWorker();
+}
+
+if (
+	isMainThread &&
+	process.env.SIGNET_INSTALL_HARNESS &&
+	/harness-install-worker\.(ts|js|mjs)$/.test(process.argv[1] ?? "")
+) {
 	await runHarnessInstallWorker();
 }
