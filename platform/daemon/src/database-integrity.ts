@@ -386,6 +386,103 @@ class IntegrityCheckTimeoutError extends Error {
 	}
 }
 
+interface KillableChildOutput {
+	readonly stdout: string;
+	readonly stderr: string;
+}
+
+interface KillableChildOptions {
+	readonly executable: string;
+	readonly args: readonly string[];
+	readonly env: NodeJS.ProcessEnv;
+	readonly timeoutMs: number;
+	readonly timeoutError: () => Error;
+	readonly onLine?: (line: string) => boolean;
+	readonly errorMessage?: (code: number | null, stderr: string) => string;
+}
+
+/** Run a synchronous child with one timeout/reap path for all integrity phases. */
+async function runKillableChild(options: KillableChildOptions): Promise<KillableChildOutput> {
+	const child = spawn(options.executable, [...options.args], {
+		env: options.env,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	const reaped = waitForChildExit(child);
+	let stopPromise: Promise<void> | undefined;
+	const stop = (): Promise<void> => {
+		if (stopPromise !== undefined) return stopPromise;
+		stopPromise = terminateAndReapChild(child, reaped);
+		return stopPromise;
+	};
+	try {
+		return await new Promise<KillableChildOutput>((resolve, reject) => {
+			let settled = false;
+			let stdout = "";
+			let stdoutBuffer = "";
+			let stderr = "";
+			const timer = setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				void stop().then(
+					() => reject(options.timeoutError()),
+					(error) => reject(error),
+				);
+			}, options.timeoutMs);
+			const fail = (error: Error): void => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				reject(error);
+			};
+			const complete = (): void => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolve({ stdout, stderr });
+			};
+			child.stdout?.setEncoding("utf8");
+			child.stdout?.on("data", (chunk: string) => {
+				stdout += chunk;
+				stdoutBuffer += chunk;
+				const lines = stdoutBuffer.split("\n");
+				stdoutBuffer = lines.pop() ?? "";
+				for (const line of lines) {
+					if (line.length === 0) continue;
+					try {
+						if (options.onLine?.(line) === true) complete();
+					} catch (error: unknown) {
+						fail(error instanceof Error ? error : new Error(String(error)));
+					}
+					if (settled) return;
+				}
+			});
+			child.stderr?.setEncoding("utf8");
+			child.stderr?.on("data", (chunk: string) => {
+				stderr += chunk;
+			});
+			child.once("error", fail);
+			child.once("close", (code) => {
+				if (settled) return;
+				clearTimeout(timer);
+				if (code !== 0) {
+					fail(
+						new Error(options.errorMessage?.(code, stderr) ?? `integrity child exited with code ${code ?? "unknown"}`),
+					);
+					return;
+				}
+				if (options.onLine !== undefined) {
+					fail(new Error("integrity child exited without a result"));
+					return;
+				}
+				complete();
+			});
+			child.stderr?.resume();
+		});
+	} finally {
+		await stop();
+	}
+}
+
 async function runIntegrityWorkerCheck(
 	dbPath: string,
 	timeoutMs: number,
@@ -396,86 +493,31 @@ async function runIntegrityWorkerCheck(
 		const embeddedWorkerPath = resolveEmbeddedWorkerPath("database-integrity-worker");
 		const workerPath = options.workerPath ?? embeddedWorkerPath ?? workerPathFromModule();
 		const workerArgs = options.workerPath === undefined && embeddedWorkerPath !== null ? [] : [workerPath];
-		let child: ChildProcess | undefined;
-		let reaped: Promise<void> | undefined;
-		let progressTimer: ReturnType<typeof setInterval> | undefined;
-		try {
-			// The integrity child must not inherit the daemon's inspector or
-			// profiler settings. In the profiling runbook BUN_INSPECT points at the
-			// daemon's private inspector port. The child then tries to bind the same
-			// port and exits before it can report its quick_check result.
-			const workerEnv = integrityChildEnv({
-				SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
-			});
-			const spawnedChild = spawn(process.execPath, workerArgs, {
-				env: workerEnv,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			child = spawnedChild;
-			reaped = waitForChildExit(spawnedChild);
-			return await new Promise<DatabaseIntegrityWorkerResult>((resolve, reject) => {
-				let settled = false;
-				const timer = setTimeout(() => {
-					if (settled) return;
-					settled = true;
-					void terminateAndReapChild(spawnedChild, reaped as Promise<void>).then(
-						() => reject(new IntegrityCheckTimeoutError(timeoutMs)),
-						(error) => reject(error),
-					);
-				}, timeoutMs);
-				let output = "";
-				spawnedChild.stdout?.setEncoding("utf8");
-				spawnedChild.stdout?.on("data", (chunk: string) => {
-					for (const line of `${output}${chunk}`.split("\n").slice(0, -1)) {
-						if (line === "started") {
-							options.onWorkerStarted?.();
-							continue;
-						}
-						if (line.length > 0) {
-							try {
-								const message = JSON.parse(line) as DatabaseIntegrityWorkerMessage;
-								if (message.type === "result" && !settled) {
-									settled = true;
-									clearTimeout(timer);
-									resolve(message.result);
-								}
-							} catch {
-								// The close handler reports a malformed or incomplete response.
-							}
-						}
-					}
-					output = `${output}${chunk}`.split("\n").at(-1) ?? "";
-				});
-				progressTimer = setInterval(() => {
-					logger.info("startup-recovery", "Database integrity check in progress", {
-						elapsedMs: Date.now() - startedAt,
-						budgetMs: timeoutMs,
-					});
-				}, 1000);
-				spawnedChild.once("error", (error) => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					reject(error);
-				});
-				spawnedChild.once("close", (code) => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					if (code !== 0) {
-						reject(new Error(`database integrity worker exited with code ${code ?? "unknown"}`));
-					} else {
-						reject(new Error("database integrity worker exited without a result"));
-					}
-				});
-				spawnedChild.stderr?.resume();
-			});
-		} finally {
-			if (progressTimer !== undefined) clearInterval(progressTimer);
-			// A result is not the lifecycle boundary. Keep the admission slot until
-			// the child has actually emitted close, especially on Windows.
-			if (child !== undefined && reaped !== undefined) await terminateAndReapChild(child, reaped);
-		}
+		let result: DatabaseIntegrityWorkerResult | undefined;
+		await runKillableChild({
+			executable: process.execPath,
+			args: workerArgs,
+			env: integrityChildEnv({ SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath }),
+			timeoutMs,
+			timeoutError: () => new IntegrityCheckTimeoutError(timeoutMs),
+			onLine: (line) => {
+				if (line === "started") {
+					options.onWorkerStarted?.();
+					return false;
+				}
+				try {
+					const message = JSON.parse(line) as DatabaseIntegrityWorkerMessage;
+					if (message.type !== "result") return false;
+					result = message.result;
+					return true;
+				} catch {
+					return false;
+				}
+			},
+		});
+		if (result === undefined) throw new Error("database integrity worker exited without a result");
+		logger.info("startup-recovery", "Database integrity check complete", { elapsedMs: Date.now() - startedAt });
+		return result;
 	});
 }
 
@@ -561,72 +603,26 @@ async function runKillableTelemetryRepair(
 	return await withIntegrityChildSlot(async () => {
 		const dir = workerPath === undefined ? await mkdtemp(join(tmpdir(), "signet-integrity-repair-")) : null;
 		const scriptPath = workerPath ?? join(dir ?? tmpdir(), "repair.mjs");
-		if (workerPath === undefined) await writeFile(scriptPath, REPAIR_WORKER_SOURCE, "utf8");
-
-		let child: ChildProcess | undefined;
-		let reaped: Promise<void> | undefined;
 		try {
-			const spawnedChild = spawn(runtimePath ?? process.execPath, [scriptPath], {
+			if (workerPath === undefined) await writeFile(scriptPath, REPAIR_WORKER_SOURCE, "utf8");
+			const output = await runKillableChild({
+				executable: runtimePath ?? process.execPath,
+				args: [scriptPath],
 				env: integrityChildEnv({
 					SIGNET_DATABASE_INTEGRITY_DB_PATH: dbPath,
 					SIGNET_DATABASE_INTEGRITY_INDEXES: JSON.stringify(indexes),
 					SIGNET_DATABASE_INTEGRITY_REQUIRE_BASE: requireBase ?? fileURLToPath(import.meta.url),
 				}),
-				stdio: ["ignore", "pipe", "pipe"],
+				timeoutMs,
+				timeoutError: () => new IntegrityRepairTimeoutError(timeoutMs),
+				errorMessage: (code, stderr) => {
+					const detail = stderr.trim();
+					return `telemetry index repair worker exited with code ${code ?? "unknown"}${detail.length > 0 ? `: ${detail}` : ""}`;
+				},
 			});
-			child = spawnedChild;
-			reaped = waitForChildExit(spawnedChild);
-			await new Promise<void>((resolve, reject) => {
-				let settled = false;
-				const timer = setTimeout(() => {
-					if (settled) return;
-					settled = true;
-					void terminateAndReapChild(spawnedChild, reaped as Promise<void>).then(
-						() => reject(new IntegrityRepairTimeoutError(timeoutMs)),
-						(error) => reject(error),
-					);
-				}, timeoutMs);
-				let output = "";
-				let errorOutput = "";
-				spawnedChild.stdout?.setEncoding("utf8");
-				spawnedChild.stdout?.on("data", (chunk: string) => {
-					output += chunk;
-				});
-				spawnedChild.stderr?.setEncoding("utf8");
-				spawnedChild.stderr?.on("data", (chunk: string) => {
-					errorOutput += chunk;
-				});
-				spawnedChild.once("error", (error) => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					reject(error);
-				});
-				spawnedChild.once("close", (code) => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					if (code !== 0) {
-						const detail = errorOutput.trim();
-						reject(
-							new Error(
-								`telemetry index repair worker exited with code ${code ?? "unknown"}${detail.length > 0 ? `: ${detail}` : ""}`,
-							),
-						);
-						return;
-					}
-					try {
-						const result = JSON.parse(output.trim()) as { ok?: unknown };
-						if (result.ok !== true) throw new Error("telemetry index repair worker returned an invalid result");
-						resolve();
-					} catch (error) {
-						reject(error);
-					}
-				});
-				spawnedChild.stderr?.resume();
-			});
+			const result = JSON.parse(output.stdout.trim()) as { ok?: unknown };
+			if (result.ok !== true) throw new Error("telemetry index repair worker returned an invalid result");
 		} finally {
-			if (child !== undefined && reaped !== undefined) await terminateAndReapChild(child, reaped);
 			if (dir !== null) await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
 		}
 	});

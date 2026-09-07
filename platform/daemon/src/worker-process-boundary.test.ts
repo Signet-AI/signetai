@@ -16,11 +16,11 @@ type IntentionalProcessOwner = {
 
 const sourceRoot = fileURLToPath(new URL(".", import.meta.url));
 const compiledRuntimeLaunch =
-	/\b(?:nodeSpawn|spawn(?:Hidden)?)\s*\(\s*(?:(?:runtimePath|preferredExecutablePath)\s*\?\?\s*)?process\.execPath\b|\bBun\.spawn\s*\(\s*\[\s*process\.execPath\b/g;
+	/\b(?:nodeSpawn|spawn(?:Hidden)?)\s*\(\s*(?:(?:runtimePath|preferredExecutablePath)\s*\?\?\s*)?(?:process\.execPath|options\.executable)\b|\bBun\.spawn\s*\(\s*\[\s*process\.execPath\b/g;
 
 const intentionalProcessOwners: Readonly<Record<string, IntentionalProcessOwner>> = {
 	"daemon.ts": { count: 1, reason: "daemon replacement after an update" },
-	"database-integrity.ts": { count: 2, reason: "killable integrity check and repair" },
+	"database-integrity.ts": { count: 1, reason: "killable integrity worker runner" },
 	"db-owner-client.ts": { count: 1, reason: "exclusive synchronous SQLite owner" },
 	"transcript-recovery-supervisor.ts": { count: 1, reason: "killable transcript recovery supervisor" },
 	"transcript-recovery-worker.ts": { count: 1, reason: "bounded transcript recovery child" },
