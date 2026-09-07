@@ -10,6 +10,10 @@
 			"import": "./dist/index.js",
 			"types": "./dist/index.d.ts"
 		},
+		"./agent-dir": {
+			"import": "./dist/agent-dir.js",
+			"types": "./dist/agent-dir.d.ts"
+		},
 		"./lenient-json": {
 			"import": "./dist/lenient-json.js",
 			"types": "./dist/lenient-json.d.ts"
@@ -21,7 +25,7 @@
 		"!dist/**/__tests__/**"
 	],
 	"scripts": {
-		"build": "bun build ./src/index.ts ./src/lenient-json.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
+		"build": "bun build ./src/index.ts ./src/agent-dir.ts ./src/lenient-json.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
 		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
 		"typecheck": "tsc --noEmit"
 	},

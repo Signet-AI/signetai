@@ -272,6 +272,7 @@
       "name": "@signet/pi-extension-base",
       "version": "0.219.6",
       "dependencies": {
+        "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
         "@signet/lifecycle-proof": "workspace:*",
       },
