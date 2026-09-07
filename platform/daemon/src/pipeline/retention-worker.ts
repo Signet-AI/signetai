@@ -292,50 +292,30 @@ function purgeTombstones(db: WriteDb, cutoff: string, limit: number): number {
 	return expiredIds.length;
 }
 
-function purgeHistory(db: WriteDb, cutoff: string, limit: number): number {
-	const result = db
-		.prepare(
-			`DELETE FROM memory_history
-			 WHERE created_at < ?
-			 LIMIT ?`,
-		)
-		.run(cutoff, limit);
-	return countChanges(result);
-}
-
-function purgeCompletedJobs(db: WriteDb, cutoff: string, limit: number): number {
-	const result = db
-		.prepare(
-			`DELETE FROM memory_jobs
-			 WHERE status = 'completed' AND completed_at IS NOT NULL AND completed_at < ?
-			 LIMIT ?`,
-		)
-		.run(cutoff, limit);
-	return countChanges(result);
-}
-
-function purgeDeadJobs(db: WriteDb, cutoff: string, limit: number): number {
-	const result = db
-		.prepare(
-			`DELETE FROM memory_jobs
-			 WHERE status = 'dead' AND failed_at IS NOT NULL AND failed_at < ?
-			 LIMIT ?`,
-		)
-		.run(cutoff, limit);
-	return countChanges(result);
+// Select-then-delete, like the purge steps above. Not `DELETE ... LIMIT`: that
+// needs SQLITE_ENABLE_UPDATE_DELETE_LIMIT, which Homebrew's libsqlite3 (loaded
+// on macOS for sqlite-vec) lacks. See #1888.
+function purgeExpiredRows(db: WriteDb, table: string, where: string, params: unknown[], limit: number): number {
+	const expired = db.prepare(`SELECT id FROM ${table} WHERE ${where} LIMIT ?`).all(...params, limit) as Array<{
+		id: string;
+	}>;
+	if (expired.length === 0) return 0;
+	const placeholders = expired.map(() => "?").join(", ");
+	// Count selected IDs rather than .changes; status triggers inflate it.
+	db.prepare(`DELETE FROM ${table} WHERE id IN (${placeholders})`).run(...expired.map((r) => r.id));
+	return expired.length;
 }
 
 function purgeTranscriptCaptureJobs(db: WriteDb, status: "completed" | "dead", cutoff: string, limit: number): number {
 	const timestampColumn = status === "completed" ? "completed_at" : "updated_at";
 	try {
-		const result = db
-			.prepare(
-				`DELETE FROM transcript_capture_jobs
-				 WHERE status = ? AND ${timestampColumn} IS NOT NULL AND ${timestampColumn} < ?
-				 LIMIT ?`,
-			)
-			.run(status, cutoff, limit);
-		return countChanges(result);
+		return purgeExpiredRows(
+			db,
+			"transcript_capture_jobs",
+			`status = ? AND ${timestampColumn} IS NOT NULL AND ${timestampColumn} < ?`,
+			[status, cutoff],
+			limit,
+		);
 	} catch (error) {
 		if (error instanceof Error && error.message.includes("no such table")) return 0;
 		throw error;
@@ -423,11 +403,23 @@ export async function runRetentionSweepOnce(
 		(db, step) => {
 			switch (step.kind) {
 				case "history":
-					return purgeHistory(db, step.cutoff, normalizedCfg.batchLimit);
+					return purgeExpiredRows(db, "memory_history", "created_at < ?", [step.cutoff], normalizedCfg.batchLimit);
 				case "completed":
-					return purgeCompletedJobs(db, step.cutoff, normalizedCfg.batchLimit);
+					return purgeExpiredRows(
+						db,
+						"memory_jobs",
+						"status = 'completed' AND completed_at IS NOT NULL AND completed_at < ?",
+						[step.cutoff],
+						normalizedCfg.batchLimit,
+					);
 				case "dead":
-					return purgeDeadJobs(db, step.cutoff, normalizedCfg.batchLimit);
+					return purgeExpiredRows(
+						db,
+						"memory_jobs",
+						"status = 'dead' AND failed_at IS NOT NULL AND failed_at < ?",
+						[step.cutoff],
+						normalizedCfg.batchLimit,
+					);
 				case "transcript-completed":
 					return purgeTranscriptCaptureJobs(db, "completed", step.cutoff, normalizedCfg.batchLimit);
 				case "transcript-dead":
@@ -465,7 +457,7 @@ export function startRetentionWorker(
 ): RetentionHandle {
 	const normalizedCfg = normalizeRetentionConfig(cfg);
 	let running = true;
-	let timer: ReturnType<typeof setInterval> | null = null;
+	let timer: ReturnType<typeof setTimeout> | null = null;
 
 	async function doSweep(): Promise<RetentionSweepResult> {
 		const result = await runRetentionSweepOnce(accessor, normalizedCfg, ownerMaintenance);
@@ -486,15 +478,24 @@ export function startRetentionWorker(
 		return result;
 	}
 
-	timer = setInterval(() => {
+	function schedule(delayMs: number): void {
 		if (!running) return;
-		if (isSystemPressureHigh()) return;
-		void doSweep().catch((e) => {
-			logger.warn("retention", "Sweep error", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		});
-	}, normalizedCfg.intervalMs);
+		timer = setTimeout(async () => {
+			if (!running) return;
+			if (!isSystemPressureHigh()) {
+				await doSweep().catch((e) => {
+					logger.warn("retention", "Sweep error", {
+						error: e instanceof Error ? e.message : String(e),
+					});
+				});
+			}
+			schedule(normalizedCfg.intervalMs);
+		}, delayMs);
+	}
+
+	// First sweep shortly after boot; a daemon that restarts more often than
+	// intervalMs would otherwise never purge.
+	schedule(60_000);
 
 	logger.info("retention", "Worker started", {
 		intervalMs: normalizedCfg.intervalMs,
@@ -508,7 +509,10 @@ export function startRetentionWorker(
 		},
 		stop() {
 			running = false;
-			if (timer) clearInterval(timer);
+			if (timer !== null) {
+				clearTimeout(timer);
+				timer = null;
+			}
 			logger.info("retention", "Worker stopped");
 		},
 		sweep: doSweep,
