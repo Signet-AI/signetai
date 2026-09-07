@@ -106,6 +106,7 @@ export interface MarketplaceMcpInstallResult {
 export interface MarketplaceMcpProbeOptions {
 	readonly signal: AbortSignal;
 	readonly timeoutMs: number;
+	readonly operationId?: string;
 }
 
 export interface MarketplaceMcpInstallDependencies {
@@ -532,7 +533,11 @@ function idempotentResult(
 	const priorOperationId = plan.server.installOperationId ?? operationId;
 	// An update keeps the server id, so an older probe file must not make a
 	// timed-out update look completed.
-	if (probe && probe.probedAt >= plan.server.updatedAt) {
+	if (
+		probe &&
+		((plan.server.installOperationId !== undefined && probe.installOperationId === plan.server.installOperationId) ||
+			(probe.installOperationId === undefined && probe.probedAt > plan.server.updatedAt))
+	) {
 		return completedResult(priorOperationId, plan, probe);
 	}
 	return acceptedResult(priorOperationId, plan);
@@ -740,6 +745,7 @@ async function runInstallWithinContext(
 			dependencies.probeServer(plan.server, {
 				signal: context.signal,
 				timeoutMs: Math.max(1, remainingMs(context)),
+				operationId,
 			}),
 			context,
 			"probe",

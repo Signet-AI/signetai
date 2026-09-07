@@ -300,6 +300,7 @@ export async function probeServer(
 	options?: MarketplaceMcpProbeOptions,
 ): Promise<McpProbeResult> {
 	const now = new Date().toISOString();
+	const installOperationId = options?.operationId;
 
 	try {
 		const probeData = await withProbeClient(
@@ -415,6 +416,7 @@ export async function probeServer(
 
 		return {
 			serverId: server.id,
+			...(installOperationId ? { installOperationId } : {}),
 			ok: true,
 			declaredManifest: declaredManifest ?? undefined,
 			autoCard,
@@ -432,6 +434,7 @@ export async function probeServer(
 		// show "reconnecting" state, auto-upgrade when server appears
 		return {
 			serverId: server.id,
+			...(installOperationId ? { installOperationId } : {}),
 			ok: false,
 			error: msg,
 			autoCard: generateAutoCard([], [], server.name),
