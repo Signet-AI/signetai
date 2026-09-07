@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -440,7 +440,6 @@ export function registerConnectorRoutes(app: Hono): void {
 			const proc = spawn(python, [script], {
 				timeout: 10000,
 				cwd: AGENTS_DIR,
-				windowsHide: true,
 			});
 
 			let stdout = "";

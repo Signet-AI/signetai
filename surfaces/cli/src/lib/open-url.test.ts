@@ -1,8 +1,19 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { spawn } from "node:child_process";
-import { openUrlWithFallback } from "./open-url.js";
+import { buildWindowsOpenInvocation, openUrlWithFallback } from "./open-url.js";
 
 describe("openUrlWithFallback", () => {
+	it("passes Windows browser URLs as data to a static PowerShell command", () => {
+		const url = 'https://example.com/search?q=one&next=`"quoted"';
+		const invocation = buildWindowsOpenInvocation(url);
+		const command = invocation.args.at(-1);
+
+		expect(command).toBe("$url = $env:SIGNET_OPEN_URL; Start-Process -FilePath $url;");
+		expect(command).not.toContain(url);
+		expect(invocation.options.env.SIGNET_OPEN_URL).toBe(url);
+		expect(invocation.options.stdio).toBe("ignore");
+	});
+
 	it("prints a usable manual URL when opening the browser fails (#1477)", async () => {
 		const lines: string[] = [];
 		const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {

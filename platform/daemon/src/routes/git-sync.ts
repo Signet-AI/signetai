@@ -1,5 +1,4 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn, type ChildProcessWithoutNullStreams } from "@signet/core";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
@@ -101,7 +100,6 @@ async function runBoundedCommand(cmd: string, args: string[], options?: CommandO
 		const proc = spawn(cmd, args, {
 			cwd: options?.cwd,
 			stdio: "pipe",
-			windowsHide: true,
 			detached: process.platform !== "win32",
 		});
 		let stdout = "";

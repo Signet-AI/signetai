@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSyncHidden as execFileSync } from "@signet/core";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseSimpleYaml, resolveDefaultBasePath } from "@signet/core";
@@ -33,7 +33,6 @@ function detectGitBranch(remote: string, dir = resolveAgentsDirForModuleInit()):
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
 			timeout: 3000,
-			windowsHide: true,
 		}).trim();
 		const prefix = `refs/remotes/${remote}/`;
 		if (ref.startsWith(prefix)) {
@@ -49,7 +48,6 @@ function detectGitBranch(remote: string, dir = resolveAgentsDirForModuleInit()):
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
 			timeout: 3000,
-			windowsHide: true,
 		}).trim();
 		if (branch && branch !== "HEAD") {
 			return branch;

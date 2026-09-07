@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { lstat, opendir, readFile } from "node:fs/promises";

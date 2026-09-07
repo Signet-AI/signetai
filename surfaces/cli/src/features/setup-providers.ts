@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnHidden as spawn, spawnSyncHidden as spawnSync } from "@signet/core";
 import { platform } from "node:os";
 import { confirm, select } from "@inquirer/prompts";
 import { LOOPBACK_HOST } from "@signet/core";
@@ -153,7 +153,6 @@ export function resolveCommandPath(
 						encoding: "utf8",
 						stdio: ["ignore", "pipe", "ignore"],
 						timeout: COMMAND_DETECTION_TIMEOUT_MS,
-						windowsHide: true,
 					});
 					if (result.status !== 0) return undefined;
 					return result.stdout
@@ -189,7 +188,6 @@ function probeCommand(command: string): boolean {
 		const result = spawnSync(command, ["--version"], {
 			stdio: "ignore",
 			timeout: COMMAND_DETECTION_TIMEOUT_MS,
-			windowsHide: true,
 		});
 		return result.status === 0;
 	} catch {
@@ -207,7 +205,6 @@ async function runCommandWithOutput(
 			cwd: options?.cwd,
 			env: options?.env,
 			timeout: options?.timeout,
-			windowsHide: true,
 		});
 
 		let stdout = "";

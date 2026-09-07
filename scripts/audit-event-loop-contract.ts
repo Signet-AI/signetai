@@ -205,8 +205,12 @@ const MARKER_LINE = /LEGACY_SYNC_DB_ACCESS/;
 const MARKER_WINDOW_LINES = 1;
 
 function isExcludedSource(path: string): boolean {
+	const normalized = path.replaceAll("\\", "/");
 	return (
-		path.endsWith(".test.ts") || path.endsWith(".bench.ts") || path.includes("/__tests__/") || path.includes("/dist/")
+		normalized.endsWith(".test.ts") ||
+		normalized.endsWith(".bench.ts") ||
+		normalized.includes("/__tests__/") ||
+		normalized.includes("/dist/")
 	);
 }
 

@@ -1,4 +1,4 @@
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess } from "@signet/core";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";

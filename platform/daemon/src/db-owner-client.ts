@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
 import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

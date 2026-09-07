@@ -3,12 +3,12 @@
  * Runtime-detecting: uses bun:sqlite under Bun, better-sqlite3 under Node.js
  */
 
-import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { arch, platform } from "node:process";
 import { fileURLToPath } from "node:url";
+import { execFileSyncHidden } from "./child-process";
 import { MEMORY_CONTENT_SAFETY_POLICY_VERSION, scanMemoryContent } from "./memory-content-safety";
 import { isDaemonDerivedMemorySourceType } from "./memory-provenance";
 import { runMigrations } from "./migrations/index";
@@ -47,10 +47,9 @@ function findNpmGlobalRoot(): string | null {
 		// database/owner initialization.
 		const command = platform === "win32" ? "npm.cmd" : "npm";
 		const root = (
-			execFileSync(command, ["root", "-g"], {
+			execFileSyncHidden(command, ["root", "-g"], {
 				encoding: "utf8",
 				timeout: 3000,
-				windowsHide: true,
 			}) as string
 		).trim();
 		cachedNpmGlobalRoot = root || null;

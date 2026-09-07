@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSyncHidden as spawnSync } from "@signet/core";
 import {
 	chmodSync,
 	copyFileSync,

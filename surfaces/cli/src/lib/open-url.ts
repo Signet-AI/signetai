@@ -1,8 +1,7 @@
-import type { ChildProcess } from "node:child_process";
-import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import chalk from "chalk";
 import open from "open";
+import { execFileHidden as execFile, spawnHidden, type ChildProcess } from "@signet/core";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_OPEN_TIMEOUT_MS = 5_000;
@@ -12,6 +11,19 @@ type OpenInvocationOptions = {
 };
 
 type OpenUrl = (url: string, options?: OpenInvocationOptions) => Promise<ChildProcess | undefined>;
+
+const WINDOWS_OPEN_ENV = "SIGNET_OPEN_URL";
+const WINDOWS_OPEN_SCRIPT = `$url = $env:${WINDOWS_OPEN_ENV}; Start-Process -FilePath $url;`;
+
+export interface WindowsOpenInvocation {
+	readonly command: "powershell.exe";
+	readonly args: readonly string[];
+	readonly options: {
+		readonly detached: true;
+		readonly stdio: "ignore";
+		readonly env: NodeJS.ProcessEnv;
+	};
+}
 
 export interface OpenUrlOptions {
 	readonly open?: OpenUrl;
@@ -27,6 +39,25 @@ async function hasDarwinGuiSession(): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+export function buildWindowsOpenInvocation(url: string): WindowsOpenInvocation {
+	return {
+		command: "powershell.exe",
+		args: ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_OPEN_SCRIPT],
+		options: {
+			detached: true,
+			stdio: "ignore",
+			env: { ...process.env, [WINDOWS_OPEN_ENV]: url },
+		},
+	};
+}
+
+function openWindowsUrl(url: string): ChildProcess {
+	const invocation = buildWindowsOpenInvocation(url);
+	const child = spawnHidden(invocation.command, invocation.args, invocation.options);
+	child.unref();
+	return child;
 }
 
 function printManualBrowserInstructions(url: string): void {
@@ -75,6 +106,7 @@ export async function openUrlWithFallback(url: string, options: OpenUrlOptions =
 		const opener =
 			options.open ??
 			((target: string) => {
+				if (platform === "win32") return openWindowsUrl(target);
 				// open(wait: true) waits for the browser application to exit on macOS.
 				// Spawn without that app-lifetime wait and observe the opener process here instead.
 				return open(target, { wait: false });

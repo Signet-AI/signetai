@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { createHash } from "node:crypto";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -121,7 +121,6 @@ export async function runUpdateProcess(
 			cwd: options.cwd,
 			env: options.env,
 			stdio: ["ignore", "pipe", "pipe"],
-			windowsHide: true,
 		});
 		let stdout = "";
 		let stderr = "";

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSyncHidden as spawnSync } from "@signet/core";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -106,7 +106,6 @@ export function getGitRemoteState(dir: string): GitRemoteState {
 	const probe = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
 		cwd: path,
 		encoding: "utf-8",
-		windowsHide: true,
 	});
 	const isRepo = probe.status === 0;
 	if (!isRepo) {
@@ -116,7 +115,6 @@ export function getGitRemoteState(dir: string): GitRemoteState {
 	const remote = spawnSync("git", ["remote", "get-url", "origin"], {
 		cwd: path,
 		encoding: "utf-8",
-		windowsHide: true,
 	});
 	if (remote.status !== 0) {
 		return { isRepo: true, origin: null };
@@ -268,7 +266,6 @@ export function setOriginRemote(dir: string, url: string): void {
 		const init = spawnSync("git", ["init"], {
 			cwd: path,
 			encoding: "utf-8",
-			windowsHide: true,
 		});
 		if (init.status !== 0) {
 			throw new Error(readOutput(init.stderr) || `Failed to initialize git repository: ${path}`);
@@ -279,7 +276,6 @@ export function setOriginRemote(dir: string, url: string): void {
 		const set = spawnSync("git", ["remote", "set-url", "origin", url], {
 			cwd: path,
 			encoding: "utf-8",
-			windowsHide: true,
 		});
 		if (set.status === 0) {
 			return;
@@ -290,7 +286,6 @@ export function setOriginRemote(dir: string, url: string): void {
 	const add = spawnSync("git", ["remote", "add", "origin", url], {
 		cwd: path,
 		encoding: "utf-8",
-		windowsHide: true,
 	});
 	if (add.status === 0) {
 		return;

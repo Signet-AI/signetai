@@ -1,4 +1,5 @@
 import type { Context, Hono } from "hono";
+import { spawnHidden } from "@signet/core";
 import { resolveDaemonAgentId } from "../agent-id";
 import { type AuthConfig, requirePermission } from "../auth";
 import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
@@ -752,9 +753,8 @@ export function registerRepairRoutes(
 
 					setTimeout(async () => {
 						if (key === "daemon-restart") {
-							const { spawn: nodeSpawn } = await import("node:child_process");
 							setTimeout(() => {
-								const child = nodeSpawn(resolved, ["daemon", "start"], {
+								const child = spawnHidden(resolved, ["daemon", "start"], {
 									detached: true,
 									stdio: "ignore",
 									env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
@@ -786,10 +786,8 @@ export function registerRepairRoutes(
 
 				write({ type: "started", key, command: `${bin} ${args.join(" ")}` });
 
-				const { spawn: nodeSpawn } = await import("node:child_process");
-				const child = nodeSpawn(resolved, args as string[], {
+				const child = spawnHidden(resolved, args as string[], {
 					stdio: "pipe",
-					windowsHide: true,
 					env: { ...baseEnv, SIGNET_NO_HOOKS: "1", FORCE_COLOR: "0" } as NodeJS.ProcessEnv,
 				});
 

@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { spawnSyncHidden } from "./child-process";
 import { inferPackageManagerFromExecutable } from "./package-manager-path";
 import { parseSimpleYaml } from "./yaml";
 
@@ -63,7 +63,7 @@ export function parsePackageManagerUserAgent(userAgent: string | undefined): Pac
 
 function defaultCommandExists(command: string): boolean {
 	try {
-		const result = spawnSync(command, ["--version"], { stdio: "ignore", windowsHide: true });
+		const result = spawnSyncHidden(command, ["--version"], { stdio: "ignore" });
 		return result.status === 0;
 	} catch {
 		return false;
@@ -138,7 +138,7 @@ export function resolvePrimaryPackageManager(options: ResolvePackageManagerOptio
 	if (!options.execPath && !inferFromPath(execPathForDetection)) {
 		try {
 			const locator = (options.platform ?? process.platform) === "win32" ? "where" : "which";
-			const result = spawnSync(locator, ["signet"], { encoding: "utf-8", windowsHide: true });
+			const result = spawnSyncHidden(locator, ["signet"], { encoding: "utf-8" });
 			if (result.status === 0 && result.stdout.trim()) {
 				execPathForDetection = result.stdout.trim();
 			}
@@ -251,10 +251,9 @@ export function resolveGlobalPackagePath(family: PackageManagerFamily, packageNa
 				return undefined;
 			}
 			case "npm": {
-				const result = spawnSync("npm", ["root", "-g"], {
+				const result = spawnSyncHidden("npm", ["root", "-g"], {
 					encoding: "utf-8",
 					timeout: 10_000,
-					windowsHide: true,
 				});
 				if (result.status === 0 && result.stdout.trim()) {
 					const candidate = join(result.stdout.trim(), packageName);
@@ -263,10 +262,9 @@ export function resolveGlobalPackagePath(family: PackageManagerFamily, packageNa
 				return undefined;
 			}
 			case "pnpm": {
-				const result = spawnSync("pnpm", ["root", "-g"], {
+				const result = spawnSyncHidden("pnpm", ["root", "-g"], {
 					encoding: "utf-8",
 					timeout: 10_000,
-					windowsHide: true,
 				});
 				if (result.status === 0 && result.stdout.trim()) {
 					const candidate = join(result.stdout.trim(), packageName);
@@ -277,18 +275,16 @@ export function resolveGlobalPackagePath(family: PackageManagerFamily, packageNa
 			case "yarn": {
 				// `yarn global dir` is Yarn Classic (v1) only. Yarn Berry (v2+)
 				// removed all `yarn global` subcommands. Detect version first.
-				const versionResult = spawnSync("yarn", ["--version"], {
+				const versionResult = spawnSyncHidden("yarn", ["--version"], {
 					encoding: "utf-8",
 					timeout: 5_000,
-					windowsHide: true,
 				});
 				const isClassic = versionResult.status === 0 && /^1\./.test(versionResult.stdout.trim());
 
 				if (isClassic) {
-					const result = spawnSync("yarn", ["global", "dir"], {
+					const result = spawnSyncHidden("yarn", ["global", "dir"], {
 						encoding: "utf-8",
 						timeout: 10_000,
-						windowsHide: true,
 					});
 					if (result.status === 0 && result.stdout.trim()) {
 						const candidate = join(result.stdout.trim(), "node_modules", packageName);

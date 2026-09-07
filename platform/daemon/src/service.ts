@@ -3,7 +3,7 @@
  * Handles systemd (Linux), launchd (macOS), and Windows service management
  */
 
-import { execSync, spawn } from "node:child_process";
+import { execSyncHidden as execSync, spawnHidden as spawn } from "@signet/core";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
@@ -112,7 +112,7 @@ function getDaemonPath(): string {
 function getRuntime(): string {
 	try {
 		const locator = platform() === "win32" ? "where" : "which";
-		execSync(`${locator} bun`, { encoding: "utf-8", windowsHide: true });
+		execSync(`${locator} bun`, { encoding: "utf-8" });
 		return "bun";
 	} catch {
 		console.error("Error: Bun is required to run Signet daemon (uses bun:sqlite)");
@@ -205,10 +205,10 @@ function resolveRuntimePath(): string {
 	}
 	const locator = platform() === "win32" ? "where" : "which";
 	try {
-		return execSync(`${locator} bun`, { encoding: "utf-8", windowsHide: true }).trim().split(/\r?\n/)[0];
+		return execSync(`${locator} bun`, { encoding: "utf-8" }).trim().split(/\r?\n/)[0];
 	} catch {
 		try {
-			return execSync(`${locator} node`, { encoding: "utf-8", windowsHide: true }).trim().split(/\r?\n/)[0];
+			return execSync(`${locator} node`, { encoding: "utf-8" }).trim().split(/\r?\n/)[0];
 		} catch {
 			return platform() === "win32" ? "bun" : "/usr/bin/bun";
 		}
@@ -313,7 +313,6 @@ async function startDirect(port: number = 3850): Promise<number> {
 	const proc = spawn(runtime, [daemonPath], {
 		detached: true,
 		stdio: "ignore",
-		windowsHide: true,
 		env: {
 			...process.env,
 			SIGNET_PORT: port.toString(),

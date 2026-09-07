@@ -5,7 +5,7 @@
  * Integrates with the procedural memory graph for skill discovery.
  */
 
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import {
 	cpSync,
 	createWriteStream,
@@ -1141,7 +1141,6 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 			const proc = spawn(skillsCommand.command, skillsCommand.args, {
 				env: { ...process.env },
 				timeout: 60000,
-				windowsHide: true,
 			});
 
 			let stdout = "";

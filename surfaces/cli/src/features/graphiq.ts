@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { constants, accessSync, existsSync, rmSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -311,7 +311,7 @@ function runCommand(
 ): Promise<CommandResult> {
 	return new Promise((resolveResult) => {
 		const env = options?.env ? { ...process.env, ...options.env } : process.env;
-		const proc = spawn(command, [...args], { stdio: "pipe", windowsHide: true, env });
+		const proc = spawn(command, [...args], { stdio: "pipe", env });
 		let stdout = "";
 		let stderr = "";
 		proc.stdout.on("data", (chunk) => {
