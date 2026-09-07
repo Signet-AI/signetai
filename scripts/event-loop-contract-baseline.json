@@ -501,28 +501,28 @@
     },
     {
       "path": "database-integrity.ts",
-      "line": 471,
+      "line": 496,
       "api": "existsSync",
       "source": "if (existsSync(bundled)) return bundled;",
       "category": "hot-path"
     },
     {
       "path": "database-integrity.ts",
-      "line": 551,
+      "line": 576,
       "api": "withWriteTxAsync",
-      "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"database-integrity.ts:551\" });",
+      "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"database-integrity.ts:576\" });",
       "category": "hot-path"
     },
     {
       "path": "database-integrity.ts",
-      "line": 712,
+      "line": 737,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "database-integrity.ts",
-      "line": 830,
+      "line": 855,
       "api": "withReadDbAsync",
       "source": "? await accessor.withReadDbAsync(async (db) => check(db, \"integrity_check\", \"telemetry_events\"), {",
       "category": "hot-path"
@@ -5246,21 +5246,21 @@
     },
     {
       "path": "startup-recovery.ts",
-      "line": 78,
+      "line": 84,
       "api": "withWriteTxAsync",
-      "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"startup-recovery.ts:78\" });",
+      "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"startup-recovery.ts:84\" });",
       "category": "hot-path"
     },
     {
       "path": "startup-recovery.ts",
-      "line": 100,
+      "line": 106,
       "api": "withReadDbAsync",
       "source": "const batch = await accessor.withReadDbAsync(async (db) => fetchBatch(db, limit), {",
       "category": "hot-path"
     },
     {
       "path": "startup-recovery.ts",
-      "line": 521,
+      "line": 527,
       "api": "withReadDbAsync",
       "source": "const migrationInProgress = await accessor.withReadDbAsync(",
       "category": "hot-path"
