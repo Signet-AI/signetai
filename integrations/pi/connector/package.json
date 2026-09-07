@@ -25,10 +25,10 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@signet/connector-base": "0.219.7",
-		"@signet/pi-extension-base": "0.219.7"
+		"@signet/connector-base": "0.219.7"
 	},
 	"devDependencies": {
+		"@signet/pi-extension-base": "workspace:*",
 		"@types/node": "^22.0.0",
 		"typescript": "^5.7.0"
 	},

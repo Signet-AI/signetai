@@ -246,10 +246,10 @@
         "signet-connector-pi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.219.6",
-        "@signet/pi-extension-base": "workspace:*",
+        "@signet/connector-base": "0.219.7",
       },
       "devDependencies": {
+        "@signet/pi-extension-base": "workspace:*",
         "@types/node": "^22.0.0",
         "typescript": "^5.7.0",
       },
@@ -285,7 +285,7 @@
       "name": "@signet/connector-base",
       "version": "0.219.7",
       "dependencies": {
-        "@signet/core": "0.217.3",
+        "@signet/core": "0.219.7",
         "json5": "^2.2.3",
         "jsonc-parser": "3.3.1",
       },
@@ -362,6 +362,12 @@
         "sqlite-vec-linux-x64": "^0.1.7-alpha.2",
         "sqlite-vec-windows-x64": "^0.1.7-alpha.2",
       },
+      "peerDependencies": {
+        "better-sqlite3": "*",
+      },
+      "optionalPeers": [
+        "better-sqlite3",
+      ],
     },
     "platform/daemon": {
       "name": "@signet/daemon",

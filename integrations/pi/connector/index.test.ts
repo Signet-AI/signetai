@@ -162,6 +162,18 @@ describe("root build pipeline", () => {
 		expect(build.indexOf(connector)).toBeLessThan(build.indexOf(deps));
 	});
 
+	it("keeps the bundled Pi extension base out of runtime dependencies", () => {
+		const dir = dirname(fileURLToPath(import.meta.url));
+		const path = resolve(dir, "package.json");
+		const manifest: {
+			dependencies?: Record<string, string>;
+			devDependencies?: Record<string, string>;
+		} = JSON.parse(readFileSync(path, "utf8"));
+
+		expect(manifest.dependencies?.["@signet/pi-extension-base"]).toBeUndefined();
+		expect(manifest.devDependencies?.["@signet/pi-extension-base"]).toBe("workspace:*");
+	});
+
 	it("keeps cli out of the parallel dependency batch", () => {
 		const dir = dirname(fileURLToPath(import.meta.url));
 		const path = resolve(dir, "..", "..", "..", "package.json");
