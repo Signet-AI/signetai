@@ -83,7 +83,10 @@
 		"bench": "bun scripts/bench-memory.ts",
 		"bench:ingest": "bun scripts/bench-memory.ts ingest",
 		"bench:evaluate": "bun scripts/bench-memory.ts --resume run --from-phase search",
-		"eval:transcript-import": "bun scripts/evals/transcript-import-real-daemon.ts"
+		"eval:transcript-import": "bun scripts/evals/transcript-import-real-daemon.ts",
+		"hooks:install": "bun scripts/install-git-hooks.ts",
+		"hooks:pre-commit": "bun scripts/pre-commit.ts",
+		"prepare": "bun run hooks:install"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.5",

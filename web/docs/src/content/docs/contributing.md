@@ -27,9 +27,14 @@ Contributor workflow, from source:
 git clone https://github.com/Signet-AI/signetai.git
 cd signetai
 bun install
+bun run hooks:install
 bun run build
 bun test
 ```
+
+`bun install` also installs the tracked Git hooks for the current worktree through
+the `prepare` script. Run `bun run hooks:install` explicitly when re-enabling
+them after changing worktrees or Git configuration.
 
 Before submitting changes, run the full check suite:
 
@@ -38,6 +43,24 @@ bun run typecheck   # Workspace typecheck (includes the daemon backlog tracked i
 bun run lint        # Biome static analysis
 bun run format      # Biome auto-format
 bun test            # All maintained repository tests (excludes vendored references/)
+```
+
+Git hooks
+---
+
+The pre-commit hook runs staged Biome validation and the workspace typecheck.
+The typecheck observes the current working tree rather than reconstructing the
+staged index, so unrelated unstaged changes can affect its result. It also prints
+a documentation reminder when a commit may change user-visible behavior, APIs,
+schemas, configuration, or lifecycle. The documentation step is intentionally
+advisory; it does not run a separate documentation checker.
+
+```bash
+# Reinstall the hooks for this worktree
+bun run hooks:install
+
+# Run the pre-commit checks without creating a commit
+bun run hooks:pre-commit
 ```
 
 Common local loops:
