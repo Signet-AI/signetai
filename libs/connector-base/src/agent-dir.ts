@@ -6,6 +6,7 @@ import { expandHome } from "@signet/core";
 export interface AgentDirConfig {
 	readonly configFileName: string;
 	readonly defaultAgentDir: string;
+	readonly legacyTildeExpansion?: boolean;
 }
 
 export interface AgentDir {
@@ -30,18 +31,22 @@ function userHome(env: NodeJS.ProcessEnv): string {
 	return env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
 }
 
-function normalizePath(pathValue: string, env: NodeJS.ProcessEnv): string {
-	return resolve(expandHome(pathValue.trim(), userHome(env)));
+function normalizePath(pathValue: string, env: NodeJS.ProcessEnv, legacyTildeExpansion = false): string {
+	const trimmed = pathValue.trim();
+	const home = userHome(env);
+	const expanded =
+		legacyTildeExpansion && trimmed.startsWith("~") ? join(home, trimmed.slice(1)) : expandHome(trimmed, home);
+	return resolve(expanded);
 }
 
-function readConfigHome(env: NodeJS.ProcessEnv): string {
+function readConfigHome(env: NodeJS.ProcessEnv, legacyTildeExpansion = false): string {
 	const configured = readTrimmed(env, "XDG_CONFIG_HOME");
-	return configured === null ? join(userHome(env), ".config") : normalizePath(configured, env);
+	return configured === null ? join(userHome(env), ".config") : normalizePath(configured, env, legacyTildeExpansion);
 }
 
 export function createAgentDir(config: AgentDirConfig): AgentDir {
 	const getConfigPath = (env: NodeJS.ProcessEnv = process.env): string =>
-		join(readConfigHome(env), "signet", config.configFileName);
+		join(readConfigHome(env, config.legacyTildeExpansion), "signet", config.configFileName);
 
 	const readConfiguredAgentDir = (env: NodeJS.ProcessEnv = process.env): string | null => {
 		try {
@@ -49,7 +54,7 @@ export function createAgentDir(config: AgentDirConfig): AgentDir {
 			if (typeof raw !== "object" || raw === null) return null;
 			const agentDir = Reflect.get(raw, "agentDir");
 			if (typeof agentDir !== "string" || agentDir.trim().length === 0) return null;
-			return normalizePath(agentDir, env);
+			return normalizePath(agentDir, env, config.legacyTildeExpansion);
 		} catch {
 			return null;
 		}
@@ -57,7 +62,7 @@ export function createAgentDir(config: AgentDirConfig): AgentDir {
 
 	const resolveAgentDir = (env: NodeJS.ProcessEnv = process.env): string => {
 		const configured = readTrimmed(env, "PI_CODING_AGENT_DIR");
-		if (configured !== null) return normalizePath(configured, env);
+		if (configured !== null) return normalizePath(configured, env, config.legacyTildeExpansion);
 		return readConfiguredAgentDir(env) ?? join(userHome(env), config.defaultAgentDir);
 	};
 
@@ -67,7 +72,7 @@ export function createAgentDir(config: AgentDirConfig): AgentDir {
 	const listAgentDirCandidates = (env: NodeJS.ProcessEnv = process.env): readonly string[] => {
 		const candidates = new Set<string>();
 		const configured = readTrimmed(env, "PI_CODING_AGENT_DIR");
-		if (configured !== null) candidates.add(normalizePath(configured, env));
+		if (configured !== null) candidates.add(normalizePath(configured, env, config.legacyTildeExpansion));
 		const persisted = readConfiguredAgentDir(env);
 		if (persisted !== null) candidates.add(persisted);
 		candidates.add(join(userHome(env), config.defaultAgentDir));
@@ -78,7 +83,7 @@ export function createAgentDir(config: AgentDirConfig): AgentDir {
 		listAgentDirCandidates(env).some((agentDir) => existsSync(agentDir));
 
 	const writeConfiguredAgentDir = (pathValue: string, env: NodeJS.ProcessEnv = process.env): string => {
-		const agentDir = normalizePath(pathValue, env);
+		const agentDir = normalizePath(pathValue, env, config.legacyTildeExpansion);
 		const configPath = getConfigPath(env);
 		if (readConfiguredAgentDir(env) === agentDir) return configPath;
 		mkdirSync(dirname(configPath), { recursive: true });

@@ -3,6 +3,7 @@ import { createAgentDir } from "@signet/connector-base/agent-dir";
 const piAgentDir = createAgentDir({
 	configFileName: "pi.json",
 	defaultAgentDir: ".pi/agent",
+	legacyTildeExpansion: true,
 });
 
 export const clearConfiguredPiAgentDir = piAgentDir.clearConfiguredAgentDir;
