@@ -451,7 +451,6 @@ export {
 	IDENTITY_MODES,
 	REQUIRED_IDENTITY_KEYS,
 	OPTIONAL_IDENTITY_KEYS,
-	detectExistingSetup,
 	loadIdentityFiles,
 	loadIdentityFilesSync,
 	hasValidIdentity,
@@ -488,29 +487,8 @@ export type {
 	IdentityPresetSpec,
 	IdentityFile,
 	IdentityMap,
-	SetupDetection,
 	HermesTarget,
 } from "./identity";
-
-export {
-	clearConfiguredOhMyPiAgentDir,
-	getOhMyPiConfigPath,
-	listOhMyPiAgentDirCandidates,
-	readConfiguredOhMyPiAgentDir,
-	resolveOhMyPiAgentDir,
-	resolveOhMyPiExtensionsDir,
-	writeConfiguredOhMyPiAgentDir,
-} from "./oh-my-pi";
-
-export {
-	clearConfiguredPiAgentDir,
-	getPiConfigPath,
-	listPiAgentDirCandidates,
-	readConfiguredPiAgentDir,
-	resolvePiAgentDir,
-	resolvePiExtensionsDir,
-	writeConfiguredPiAgentDir,
-} from "./pi";
 
 // Multi-agent support
 export {

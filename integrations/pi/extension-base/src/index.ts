@@ -5,6 +5,17 @@ export {
 	readTrimmedRuntimeEnv,
 } from "./helpers.js";
 
+export {
+	clearConfiguredPiAgentDir,
+	getPiConfigPath,
+	hasPiSetup,
+	listPiAgentDirCandidates,
+	readConfiguredPiAgentDir,
+	resolvePiAgentDir,
+	resolvePiExtensionsDir,
+	writeConfiguredPiAgentDir,
+} from "./agent-dir.js";
+
 export type {
 	BaseAgentMessage,
 	BaseExtensionContext,

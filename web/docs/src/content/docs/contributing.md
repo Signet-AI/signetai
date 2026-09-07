@@ -427,8 +427,11 @@ Signet recognizes these standard identity files at `$SIGNET_WORKSPACE/`:
 | TOOLS.md | no | Tool preferences and notes |
 | BOOTSTRAP.md | no | Setup ritual (typically deleted after first run) |
 
-The `detectExistingSetup()` function in `platform/core/src/identity.ts`
-detects existing setups from OpenClaw, Claude Code, and OpenCode.
+The `detectExistingSetup()` function in `surfaces/cli/src/lib/setup-detection.ts`
+combines shared identity-file checks with harness detection for the setup surface.
+Keep harness-specific installation, managed-file, and configuration policy under
+`integrations/<tool>/`; `platform/core` should expose reusable identity and
+workspace primitives rather than integration-owned setup modules.
 
 Reference Repos
 ---

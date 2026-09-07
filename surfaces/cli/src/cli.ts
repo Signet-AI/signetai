@@ -29,8 +29,6 @@ import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
 import { PiConnector } from "@signet/connector-pi";
 import {
-	type SetupDetection,
-	detectExistingSetup as detectExistingSetupCore,
 	expandHome,
 	getGlobalInstallCommand,
 	loadConfiguredHarnesses,
@@ -41,6 +39,7 @@ import {
 	syncWorkspaceSourceRepo,
 	syncWorkspaceSourceRepoAsync,
 } from "@signet/core";
+import { detectExistingSetup } from "./lib/setup-detection.js";
 import chalk from "chalk";
 import { Command } from "commander";
 
@@ -364,11 +363,6 @@ function signetLogo() {
   ${chalk.hex("#C9A227")("◈")} ${chalk.bold("signet")} ${chalk.dim(`v${VERSION}`)}
   ${chalk.dim("own your agent. bring it anywhere.")}
 `;
-}
-
-function detectExistingSetup(basePath: string): SetupDetection {
-	// Use the enhanced detection from @signet/core
-	return detectExistingSetupCore(basePath);
 }
 
 function collectListOption(value: string, previous: string[]): string[] {

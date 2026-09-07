@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { buildAgentMemoryConfig, getAgentIdentityFiles, normalizeAgentRosterEntry, scaffoldAgent } from "../agents";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
-	detectExistingSetup,
 	getMissingIdentityFiles,
 	hasValidIdentity,
 	loadIdentityMode,
@@ -23,44 +22,32 @@ const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
 const ORIGINAL_HERMES_HOME = process.env.HERMES_HOME;
-const ORIGINAL_FORGE_CONFIG = process.env.FORGE_CONFIG;
 const ORIGINAL_KIMI_SHARE_DIR = process.env.KIMI_SHARE_DIR;
 const ORIGINAL_KIMI_CODE_HOME = process.env.KIMI_CODE_HOME;
 
 beforeEach(() => mkdirSync(TMP, { recursive: true }));
 afterEach(() => {
 	if (ORIGINAL_HOME === undefined) {
-		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 		delete process.env.HOME;
 	} else {
 		process.env.HOME = ORIGINAL_HOME;
 	}
 	if (ORIGINAL_HERMES_REPO === undefined) {
-		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 		delete process.env.HERMES_REPO;
 	} else {
 		process.env.HERMES_REPO = ORIGINAL_HERMES_REPO;
 	}
 	if (ORIGINAL_HERMES_HOME === undefined) {
-		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 		delete process.env.HERMES_HOME;
 	} else {
 		process.env.HERMES_HOME = ORIGINAL_HERMES_HOME;
 	}
-	if (ORIGINAL_FORGE_CONFIG === undefined) {
-		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
-		delete process.env.FORGE_CONFIG;
-	} else {
-		process.env.FORGE_CONFIG = ORIGINAL_FORGE_CONFIG;
-	}
 	if (ORIGINAL_KIMI_SHARE_DIR === undefined) {
-		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 		delete process.env.KIMI_SHARE_DIR;
 	} else {
 		process.env.KIMI_SHARE_DIR = ORIGINAL_KIMI_SHARE_DIR;
 	}
 	if (ORIGINAL_KIMI_CODE_HOME === undefined) {
-		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 		delete process.env.KIMI_CODE_HOME;
 	} else {
 		process.env.KIMI_CODE_HOME = ORIGINAL_KIMI_CODE_HOME;
@@ -280,87 +267,6 @@ describe("parseRuntimeYaml", () => {
 		expect(result.status).toBe(0);
 		expect(result.stderr).toBe("");
 		expect(result.stderr).not.toContain(secret);
-	});
-});
-
-describe("detectExistingSetup", () => {
-	test("detects Hermes Agent in the default ~/.hermes install path", () => {
-		process.env.HOME = TMP;
-		mkdirSync(join(TMP, ".hermes", "plugins", "memory"), { recursive: true });
-
-		const detection = detectExistingSetup(TMP);
-
-		expect(detection.harnesses.hermesAgent).toBe(true);
-	});
-
-	test("detects Hermes Agent from HERMES_HOME without HERMES_REPO", () => {
-		const hermesHome = join(TMP, "custom-hermes-home");
-		process.env.HERMES_HOME = hermesHome;
-		mkdirSync(join(hermesHome, "plugins", "memory"), { recursive: true });
-
-		const detection = detectExistingSetup(TMP);
-
-		expect(detection.harnesses.hermesAgent).toBe(true);
-	});
-
-	test("detects Hermes Agent in the managed ~/.hermes/hermes-agent checkout", () => {
-		process.env.HOME = TMP;
-		mkdirSync(join(TMP, ".hermes", "hermes-agent", "plugins", "memory"), { recursive: true });
-
-		const detection = detectExistingSetup(TMP);
-
-		expect(detection.harnesses.hermesAgent).toBe(true);
-	});
-
-	test("detects Hermes Agent before the Signet memory plugin is installed", () => {
-		const hermesRepo = join(TMP, "hermes-agent");
-		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
-		process.env.HERMES_REPO = hermesRepo;
-
-		const detection = detectExistingSetup(TMP);
-
-		expect(detection.harnesses.hermesAgent).toBe(true);
-	});
-
-	test("detects ForgeCode from the default ~/.forge config path", () => {
-		process.env.HOME = TMP;
-		mkdirSync(join(TMP, ".forge"), { recursive: true });
-		writeFileSync(join(TMP, ".forge", ".mcp.json"), "{}\n");
-
-		const detection = detectExistingSetup(TMP);
-
-		expect(detection.harnesses.forge).toBe(true);
-	});
-
-	test("detects ForgeCode from the legacy ~/forge config path", () => {
-		process.env.HOME = TMP;
-		mkdirSync(join(TMP, "forge"), { recursive: true });
-		writeFileSync(join(TMP, "forge", ".forge.toml"), "# config\n");
-
-		const detection = detectExistingSetup(TMP);
-
-		expect(detection.harnesses.forge).toBe(true);
-	});
-
-	test("detects Kimi from the current ~/.kimi config home", () => {
-		process.env.HOME = TMP;
-		mkdirSync(join(TMP, ".kimi"), { recursive: true });
-		writeFileSync(join(TMP, ".kimi", "config.toml"), "[loop_control]\nmax_steps = 10\n");
-
-		const detection = detectExistingSetup(TMP);
-
-		expect(detection.harnesses.kimi).toBe(true);
-	});
-
-	test("detects Kimi from the legacy KIMI_CODE_HOME override", () => {
-		const legacyHome = join(TMP, "legacy-kimi");
-		process.env.KIMI_CODE_HOME = legacyHome;
-		mkdirSync(legacyHome, { recursive: true });
-		writeFileSync(join(legacyHome, "config.toml"), "[loop_control]\nmax_steps = 10\n");
-
-		const detection = detectExistingSetup(TMP);
-
-		expect(detection.harnesses.kimi).toBe(true);
 	});
 });
 

@@ -2,10 +2,10 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSy
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
+import { getOhMyPiConfigPath } from "@signet/connector-oh-my-pi";
+import { getPiConfigPath } from "@signet/connector-pi";
 import {
 	type WorkspaceSourceRepoSyncResult,
-	getOhMyPiConfigPath,
-	getPiConfigPath,
 	loadConfiguredHarnesses,
 	resolveHermesRepoPath,
 	resolveKimiHomePath,

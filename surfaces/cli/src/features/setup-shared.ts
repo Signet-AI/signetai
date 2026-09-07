@@ -1,5 +1,5 @@
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import type { SetupDetection } from "@signet/core";
+import type { SetupDetection } from "../lib/setup-detection.js";
 import chalk from "chalk";
 
 export type HarnessChoice =

@@ -2,16 +2,10 @@ import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	SIGNET_SECRETS_PLUGIN_ID,
-	type SetupDetection,
-	detectExistingSetup,
-	readGraphiqState,
-	updateGraphiqActiveProject,
-} from "@signet/core";
+import { SIGNET_SECRETS_PLUGIN_ID, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
+import { detectExistingSetup, type SetupDetection } from "../lib/setup-detection.js";
 import * as openUrl from "../lib/open-url.js";
 import { detectedHarnessesForExistingSetup, runExistingSetupWizard } from "./setup-migrate.js";
-import { parseSetupPlan } from "./setup-plan.js";
 import type { SetupDeps } from "./setup-types.js";
 import { setupWizard } from "./setup.js";
 
@@ -21,6 +15,7 @@ const NO_HARNESSES = {
 	opencode: false,
 	forge: false,
 	codex: false,
+	kimi: false,
 	ohMyPi: false,
 	pi: false,
 	hermesAgent: false,
@@ -102,19 +97,16 @@ describe("setupWizard non-interactive harness hooks", () => {
 
 	afterEach(() => {
 		if (ORIGINAL_HOME === undefined) {
-			// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 			delete process.env.HOME;
 		} else {
 			process.env.HOME = ORIGINAL_HOME;
 		}
 		if (ORIGINAL_HERMES_REPO === undefined) {
-			// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 			delete process.env.HERMES_REPO;
 		} else {
 			process.env.HERMES_REPO = ORIGINAL_HERMES_REPO;
 		}
 		if (ORIGINAL_HERMES_HOME === undefined) {
-			// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 			delete process.env.HERMES_HOME;
 		} else {
 			process.env.HERMES_HOME = ORIGINAL_HERMES_HOME;
@@ -508,9 +500,7 @@ describe("setupWizard non-interactive harness hooks", () => {
 		mkdirSync(basePath, { recursive: true });
 		mkdirSync(join(root, ".hermes", "plugins", "memory"), { recursive: true });
 		process.env.HOME = root;
-		// biome-ignore lint/performance/noDelete: default ~/.hermes must be enough
 		delete process.env.HERMES_REPO;
-		// biome-ignore lint/performance/noDelete: default ~/.hermes must be enough
 		delete process.env.HERMES_HOME;
 
 		const detection = detectExistingSetup(basePath);

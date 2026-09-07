@@ -1,13 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-	buildRecallRequestBody,
-	buildRememberRequestBody,
-	formatRecallText,
-	parseRecallPayload,
-	resolvePiAgentDir,
-} from "@signet/core";
+import { buildRecallRequestBody, buildRememberRequestBody, formatRecallText, parseRecallPayload } from "@signet/core";
 import type { RecallPayload } from "@signet/core";
+import { resolvePiAgentDir } from "@signet/pi-extension-base/agent-dir";
 import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
 import { Type } from "@sinclair/typebox";
 import { createDaemonClient } from "./daemon-client.js";

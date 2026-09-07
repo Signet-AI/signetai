@@ -6,20 +6,11 @@
  * that form the cross-harness identity standard.
  */
 
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSyncHidden } from "./child-process";
-import { listOhMyPiAgentDirCandidates, resolveOhMyPiAgentDir } from "./oh-my-pi";
-import { listPiAgentDirCandidates, resolvePiAgentDir } from "./pi";
 import { parseSimpleYaml } from "./yaml";
-
-const OH_MY_PI_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.js";
-const OH_MY_PI_LEGACY_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.mjs";
-const OH_MY_PI_MANAGED_MARKER = "SIGNET_MANAGED_OH_MY_PI_EXTENSION";
-const PI_MANAGED_EXTENSION_FILENAME = "signet-pi.js";
-const PI_LEGACY_MANAGED_EXTENSION_FILENAME = "signet-pi.mjs";
-const PI_MANAGED_MARKER = "SIGNET_MANAGED_PI_EXTENSION";
 
 /**
  * Returns the base path for agent-specific files.
@@ -219,81 +210,6 @@ export const OPTIONAL_IDENTITY_KEYS = Object.entries(IDENTITY_FILES)
 	.filter(([, spec]) => spec.optional)
 	.map(([key]) => key);
 
-/**
- * Detection result for existing setup
- */
-export interface SetupDetection {
-	/** Base path checked */
-	basePath: string;
-	/** Whether the base directory exists */
-	agentsDir: boolean;
-	/** Whether agent.yaml exists */
-	agentYaml: boolean;
-	/** Whether AGENTS.md exists */
-	agentsMd: boolean;
-	/** Whether config.yaml exists */
-	configYaml: boolean;
-	/** Whether memories.db exists */
-	memoryDb: boolean;
-	/** Found identity files */
-	identityFiles: string[];
-	/** Whether memory directory exists with logs */
-	hasMemoryDir: boolean;
-	/** Number of memory log files */
-	memoryLogCount: number;
-	/** Whether .clawdhub/lock.json exists (OpenClaw skills registry) */
-	hasClawdhub: boolean;
-	/** Whether ~/.claude/skills/ exists */
-	hasClaudeSkills: boolean;
-	/** Detected installed harnesses */
-	harnesses: {
-		claudeCode: boolean;
-		openclaw: boolean;
-		opencode: boolean;
-		forge: boolean;
-		codex: boolean;
-		kimi: boolean;
-		ohMyPi: boolean;
-		pi: boolean;
-		hermesAgent: boolean;
-		gemini: boolean;
-	};
-}
-
-function isSignetManagedOhMyPiInstall(): boolean {
-	for (const agentDir of listOhMyPiAgentDirCandidates()) {
-		const extensionsDir = join(agentDir, "extensions");
-		for (const filename of [OH_MY_PI_MANAGED_EXTENSION_FILENAME, OH_MY_PI_LEGACY_MANAGED_EXTENSION_FILENAME]) {
-			const extensionPath = join(extensionsDir, filename);
-			if (!existsSync(extensionPath)) continue;
-			try {
-				const content = readFileSync(extensionPath, "utf8");
-				if (content.includes(OH_MY_PI_MANAGED_MARKER)) return true;
-			} catch {
-				// ignore unreadable candidate and continue checking others
-			}
-		}
-	}
-	return false;
-}
-
-function isSignetManagedPiInstall(): boolean {
-	for (const agentDir of listPiAgentDirCandidates()) {
-		const extensionsDir = join(agentDir, "extensions");
-		for (const filename of [PI_MANAGED_EXTENSION_FILENAME, PI_LEGACY_MANAGED_EXTENSION_FILENAME]) {
-			const extensionPath = join(extensionsDir, filename);
-			if (!existsSync(extensionPath)) continue;
-			try {
-				const content = readFileSync(extensionPath, "utf8");
-				if (content.includes(PI_MANAGED_MARKER)) return true;
-			} catch {
-				// ignore unreadable candidate and continue checking others
-			}
-		}
-	}
-	return false;
-}
-
 function userHome(): string {
 	return process.env.HOME?.trim() || homedir();
 }
@@ -309,13 +225,6 @@ export function resolveKimiHomePath(): string {
 	if (existsSync(currentHome)) return currentHome;
 	if (existsSync(legacyHome)) return legacyHome;
 	return currentHome;
-}
-
-function isBinaryOnPath(bin: string): boolean {
-	const separator = process.platform === "win32" ? ";" : ":";
-	return (process.env.PATH ?? "")
-		.split(separator)
-		.some((directory) => directory.length > 0 && existsSync(join(directory, bin)));
 }
 
 export interface HermesTarget {
@@ -428,71 +337,6 @@ export function resolveHermesRepoPluginPath(): string | null {
 	}
 
 	return null;
-}
-
-/**
- * Detect existing identity setup at a given path
- */
-export function detectExistingSetup(basePath: string): SetupDetection {
-	const identityFileNames = Object.values(IDENTITY_FILES).map((spec) => spec.path);
-
-	// Check for identity files
-	const foundFiles: string[] = [];
-	for (const fileName of identityFileNames) {
-		if (existsSync(join(basePath, fileName))) {
-			foundFiles.push(fileName);
-		}
-	}
-
-	// Check memory directory
-	const memoryDir = join(basePath, "memory");
-	let memoryLogCount = 0;
-	if (existsSync(memoryDir)) {
-		try {
-			const files = readdirSync(memoryDir);
-			memoryLogCount = files.filter((f: string) => f.endsWith(".md") && !f.startsWith("TEMPLATE")).length;
-		} catch {
-			// Ignore errors
-		}
-	}
-
-	// Detect harnesses
-	const home = homedir();
-
-	return {
-		basePath,
-		agentsDir: existsSync(basePath),
-		agentYaml: existsSync(join(basePath, "agent.yaml")),
-		agentsMd: existsSync(join(basePath, "AGENTS.md")),
-		configYaml: existsSync(join(basePath, "config.yaml")),
-		memoryDb: existsSync(join(basePath, "memory", "memories.db")),
-		identityFiles: foundFiles,
-		hasMemoryDir: existsSync(memoryDir),
-		memoryLogCount,
-		hasClawdhub: existsSync(join(basePath, ".clawdhub", "lock.json")),
-		hasClaudeSkills: existsSync(join(home, ".claude", "skills")),
-		harnesses: {
-			claudeCode: existsSync(join(home, ".claude", "settings.json")),
-			openclaw:
-				existsSync(join(home, ".openclaw", "openclaw.json")) || existsSync(join(home, ".clawdbot", "clawdbot.json")),
-			opencode: existsSync(join(home, ".config", "opencode", "config.json")),
-			forge:
-				existsSync(join(home, ".forge", ".mcp.json")) ||
-				existsSync(join(home, "forge", ".mcp.json")) ||
-				existsSync(join(home, ".forge", ".forge.toml")) ||
-				existsSync(join(home, "forge", ".forge.toml")),
-			codex:
-				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
-			kimi:
-				existsSync(join(resolveKimiHomePath(), "config.toml")) ||
-				existsSync(join(home, ".kimi-code", "config.toml")) ||
-				isBinaryOnPath("kimi"),
-			ohMyPi: isSignetManagedOhMyPiInstall() || existsSync(resolveOhMyPiAgentDir()),
-			pi: isSignetManagedPiInstall() || existsSync(resolvePiAgentDir()),
-			hermesAgent: resolveHermesRepoPath() !== null,
-			gemini: existsSync(join(home, ".gemini", "settings.json")),
-		},
-	};
 }
 
 /**

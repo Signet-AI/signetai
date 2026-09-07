@@ -246,8 +246,8 @@
         "signet-connector-pi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.217.3",
-        "@signet/core": "0.217.3",
+        "@signet/connector-base": "0.219.6",
+        "@signet/pi-extension-base": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
