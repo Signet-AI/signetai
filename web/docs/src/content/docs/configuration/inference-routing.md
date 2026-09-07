@@ -228,7 +228,7 @@ Model fields:
 | `label` | string | Optional display label |
 | `reasoning` | string | `low`, `medium`, or `high` |
 | `contextWindow` | number | Maximum prompt tokens the model can accept |
-| `toolUse` | boolean | Whether tool use is supported |
+| `toolUse` | boolean (optional) | Whether tool use is supported. For tool-required tasks, explicit `false` blocks routing; omission means the capability is undeclared and does not block routing. |
 | `streaming` | boolean | Whether streaming is supported |
 | `multimodal` | boolean | Whether multimodal input is supported |
 | `costTier` | string | `low`, `medium`, or `high` |
