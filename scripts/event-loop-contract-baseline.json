@@ -1556,35 +1556,35 @@
     },
     {
       "path": "mcp-install-service.ts",
-      "line": 169,
+      "line": 170,
       "api": "existsSync",
       "source": "if (!existsSync(dir)) mkdirSync(dir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "mcp-install-service.ts",
-      "line": 169,
+      "line": 170,
       "api": "mkdirSync",
       "source": "if (!existsSync(dir)) mkdirSync(dir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "mcp-install-service.ts",
-      "line": 353,
+      "line": 354,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "mcp-install-service.ts",
-      "line": 355,
+      "line": 356,
       "api": "readFileSync",
       "source": "const raw = JSON.parse(readFileSync(path, \"utf-8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "mcp-install-service.ts",
-      "line": 365,
+      "line": 366,
       "api": "writeFileSync",
       "source": "writeFileSync(getInstalledMcpPath(), JSON.stringify(servers, null, 2));",
       "category": "hot-path"
@@ -1605,63 +1605,63 @@
     },
     {
       "path": "mcp-probe.ts",
-      "line": 458,
+      "line": 461,
       "api": "writeFileSync",
       "source": "writeFileSync(manifestPath, JSON.stringify(result, null, 2));",
       "category": "hot-path"
     },
     {
       "path": "mcp-probe.ts",
-      "line": 492,
+      "line": 495,
       "api": "writeFileSync",
       "source": "writeFileSync(getAppTrayPath(), JSON.stringify(tray, null, 2));",
       "category": "hot-path"
     },
     {
       "path": "mcp-probe.ts",
-      "line": 518,
+      "line": 521,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "mcp-probe.ts",
-      "line": 521,
+      "line": 524,
       "api": "readFileSync",
       "source": "const raw = JSON.parse(readFileSync(path, \"utf-8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "mcp-probe.ts",
-      "line": 540,
+      "line": 543,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return null;",
       "category": "hot-path"
     },
     {
       "path": "mcp-probe.ts",
-      "line": 543,
+      "line": 546,
       "api": "readFileSync",
       "source": "const raw = JSON.parse(readFileSync(path, \"utf-8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "mcp-probe.ts",
-      "line": 559,
+      "line": 562,
       "api": "existsSync",
       "source": "if (existsSync(manifestPath)) {",
       "category": "hot-path"
     },
     {
       "path": "mcp-probe.ts",
-      "line": 560,
+      "line": 563,
       "api": "unlinkSync",
       "source": "unlinkSync(manifestPath);",
       "category": "hot-path"
     },
     {
       "path": "mcp-probe.ts",
-      "line": 570,
+      "line": 573,
       "api": "writeFileSync",
       "source": "writeFileSync(getAppTrayPath(), JSON.stringify(filtered, null, 2));",
       "category": "hot-path"
