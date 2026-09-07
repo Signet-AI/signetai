@@ -1,5 +1,10 @@
-import { createHash } from "node:crypto";
-import { relative } from "node:path";
+import {
+	buildObsidianSourceChunks,
+	hash,
+	normalizePath,
+	relPath,
+	type ObsidianSourceChunk,
+} from "./obsidian-source-chunks";
 import {
 	scanMemoryContent,
 	MEMORY_CONTENT_SAFETY_POLICY_VERSION,
@@ -25,6 +30,9 @@ import {
 } from "./embedding-circuit-breaker";
 import { logger } from "./logger";
 
+export { buildObsidianSourceChunks };
+export type { ObsidianSourceChunk };
+
 export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
 const OBSIDIAN_SOURCE_CHUNK_DELAY_MS = 100;
 const EMBEDDING_PROVIDER_PROBE_TEXT = "Signet embedding provider health check.";
@@ -36,16 +44,6 @@ export type SourceEmbeddingFetch = (
 	role?: EmbeddingRole,
 	opts?: EmbeddingFetchOptions,
 ) => Promise<number[] | null>;
-
-export interface ObsidianSourceChunk {
-	readonly id: string;
-	readonly text: string;
-	readonly chunkText: string;
-	readonly heading: string;
-	readonly headingPath: string;
-	readonly startLine: number;
-	readonly endLine: number;
-}
 
 export interface IndexObsidianSourceEmbeddingsInput {
 	readonly agentId: string;
@@ -110,180 +108,6 @@ export interface PurgeObsidianSourceFileEmbeddingsInput {
 	readonly root: string;
 	readonly filePath: string;
 	readonly signal?: AbortSignal;
-}
-
-interface MarkdownSection {
-	readonly heading: string;
-	readonly headingPath: string;
-	readonly startLine: number;
-	readonly endLine: number;
-	readonly body: string;
-}
-
-const TARGET_CHARS = 1_600;
-const MAX_CHARS = 2_200;
-const MIN_CHARS = 40;
-
-function normalizePath(path: string): string {
-	return path.replace(/\\/g, "/");
-}
-
-function relPath(root: string, filePath: string): string {
-	return normalizePath(relative(root, filePath));
-}
-
-function stripFrontmatterLines(lines: string[]): { lines: string[]; lineOffset: number } {
-	if (lines[0] !== "---") return { lines, lineOffset: 0 };
-	const end = lines.findIndex((line, index) => index > 0 && line === "---");
-	if (end === -1) return { lines, lineOffset: 0 };
-	return { lines: lines.slice(end + 1), lineOffset: end + 1 };
-}
-
-function slug(input: string): string {
-	return input
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.slice(0, 80);
-}
-
-function hash(input: string): string {
-	return createHash("sha256").update(input).digest("hex");
-}
-
-function parseMarkdownSections(content: string): MarkdownSection[] {
-	const rawLines = content.replace(/\r\n?/g, "\n").split("\n");
-	const stripped = stripFrontmatterLines(rawLines);
-	const lines = stripped.lines;
-	const sections: Array<{ heading: string; headingPath: string; startLine: number; lines: string[] }> = [];
-	const headingStack: Array<{ level: number; title: string }> = [];
-	let current: { heading: string; headingPath: string; startLine: number; lines: string[] } = {
-		heading: "Overview",
-		headingPath: "Overview",
-		startLine: stripped.lineOffset + 1,
-		lines: [],
-	};
-
-	function pushCurrent(endLine: number): void {
-		const body = current.lines.join("\n").trim();
-		if (!body && current.heading === "Overview") return;
-		sections.push({ ...current, lines: current.lines.slice(0, Math.max(0, endLine - current.startLine + 1)) });
-	}
-
-	for (let idx = 0; idx < lines.length; idx++) {
-		const line = lines[idx] ?? "";
-		const absoluteLine = stripped.lineOffset + idx + 1;
-		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
-		if (match) {
-			pushCurrent(absoluteLine - 1);
-			const level = match[1]?.length ?? 1;
-			const title = match[2]?.trim() || "Untitled";
-			while (headingStack.length > 0 && (headingStack[headingStack.length - 1]?.level ?? 0) >= level)
-				headingStack.pop();
-			headingStack.push({ level, title });
-			const headingPath = headingStack.map((item) => item.title).join(" / ");
-			current = { heading: title, headingPath, startLine: absoluteLine, lines: [] };
-			continue;
-		}
-		current.lines.push(line);
-	}
-	pushCurrent(stripped.lineOffset + lines.length);
-
-	return sections
-		.map((section) => ({
-			heading: section.heading,
-			headingPath: section.headingPath,
-			startLine: section.startLine,
-			endLine: section.startLine + section.lines.length,
-			body: section.lines.join("\n").trim(),
-		}))
-		.filter((section) => section.body.length >= MIN_CHARS);
-}
-
-function splitParagraphs(body: string): string[] {
-	return body
-		.split(/\n{2,}|\n(?=-\s+)|\n(?=\d+\.\s+)/)
-		.map((part) => part.trim())
-		.filter((part) => part.length > 0);
-}
-
-function splitLongText(text: string): string[] {
-	if (text.length <= MAX_CHARS) return [text];
-	const chunks: string[] = [];
-	for (let start = 0; start < text.length; start += TARGET_CHARS) {
-		chunks.push(text.slice(start, start + MAX_CHARS).trim());
-	}
-	return chunks.filter((chunk) => chunk.length >= MIN_CHARS);
-}
-
-export function buildObsidianSourceChunks(input: {
-	readonly sourceId: string;
-	readonly root: string;
-	readonly filePath: string;
-	readonly content: string;
-}): ObsidianSourceChunk[] {
-	const root = normalizePath(input.root).replace(/\/$/, "");
-	const filePath = normalizePath(input.filePath);
-	const relativePath = relPath(root, filePath);
-	const chunks: ObsidianSourceChunk[] = [];
-	for (const section of parseMarkdownSections(input.content)) {
-		const paragraphs = splitParagraphs(section.body);
-		let bucket = "";
-		let chunkIndex = 0;
-		const flush = (): void => {
-			const trimmed = bucket.trim();
-			if (trimmed.length < MIN_CHARS) {
-				bucket = "";
-				return;
-			}
-			for (const piece of splitLongText(trimmed)) {
-				const headingKey = slug(section.headingPath) || "overview";
-				const lineKey = `${section.startLine}-${section.endLine}`;
-				const chunkId = `${input.sourceId}:${relativePath}#${headingKey}:${lineKey}:${chunkIndex}`;
-				const chunkText = [
-					`source_id: ${input.sourceId}`,
-					"source_provider: obsidian",
-					`source_root: ${root}`,
-					`source_path: ${filePath}`,
-					`vault_relative_path: ${relativePath}`,
-					`heading: ${section.headingPath}`,
-					`lines: ${section.startLine}-${section.endLine}`,
-					"",
-					piece,
-				].join("\n");
-				chunks.push({
-					id: chunkId,
-					text: piece,
-					chunkText,
-					heading: section.heading,
-					headingPath: section.headingPath,
-					startLine: section.startLine,
-					endLine: section.endLine,
-				});
-				chunkIndex++;
-			}
-			bucket = "";
-		};
-		for (const paragraph of paragraphs) {
-			if (paragraph.length > MAX_CHARS) {
-				flush();
-				for (const piece of splitLongText(paragraph)) {
-					bucket = piece;
-					flush();
-				}
-				continue;
-			}
-			const candidate = bucket ? `${bucket}\n\n${paragraph}` : paragraph;
-			if (candidate.length > TARGET_CHARS) {
-				flush();
-				bucket = paragraph;
-			} else {
-				bucket = candidate;
-			}
-		}
-		flush();
-	}
-	return chunks;
 }
 
 export async function indexObsidianSourceEmbeddingsViaOwner(
@@ -629,7 +453,7 @@ export async function indexObsidianSourceEmbeddings(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const embeddingConfig = getDbAccessor().withReadDb(
 		(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-		"obsidian-source-embeddings.ts:630",
+		"obsidian-source-embeddings.ts:454",
 	);
 	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
@@ -671,7 +495,7 @@ export async function indexObsidianSourceEmbeddings(
 						sourceId: existingChunk.id,
 						content: chunk.chunkText,
 					}),
-				"obsidian-source-embeddings.ts:666",
+				"obsidian-source-embeddings.ts:490",
 			);
 			skipped++;
 			await yielder();
@@ -681,7 +505,7 @@ export async function indexObsidianSourceEmbeddings(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const writeConfig = getDbAccessor().withReadDb(
 			(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-			"obsidian-source-embeddings.ts:682",
+			"obsidian-source-embeddings.ts:506",
 		);
 		let failureCause: PipelineCauseFamily = "provider_unavailable";
 		const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
@@ -760,7 +584,7 @@ export async function indexObsidianSourceEmbeddings(
 				| undefined;
 			syncVecInsert(db, stored?.id ?? embId, vector);
 			return true;
-		}, "obsidian-source-embeddings.ts:716");
+		}, "obsidian-source-embeddings.ts:540");
 		if (!stored) {
 			skipped++;
 			await yielder();
@@ -798,7 +622,7 @@ export async function indexObsidianSourceEmbeddings(
 				const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
 				for (const id of staleIds) stmt.run(id);
 			}
-		}, "obsidian-source-embeddings.ts:777");
+		}, "obsidian-source-embeddings.ts:601");
 
 	return {
 		chunks: chunks.length,
@@ -827,7 +651,7 @@ function existingChunkEmbedding(agentId: string, chunkId: string): { id: string;
 					"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
 				)
 				.get(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
-		"obsidian-source-embeddings.ts:823",
+		"obsidian-source-embeddings.ts:647",
 	) as { id: string; content_hash: string } | undefined;
 	return row ?? null;
 }
@@ -868,7 +692,7 @@ function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): numb
 			changes += result.changes;
 		}
 		return changes;
-	}, "obsidian-source-embeddings.ts:846");
+	}, "obsidian-source-embeddings.ts:670");
 }
 
 function prefixUpperBound(prefix: string): string {

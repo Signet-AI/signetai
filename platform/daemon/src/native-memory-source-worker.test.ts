@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,6 +77,30 @@ describe("native source worker", () => {
 		worker.cancel();
 		await expect(scan).rejects.toThrow(/native source worker/);
 		await worker.close();
+	});
+
+	it("waits for cancelled worker termination before restarting", async () => {
+		const { root } = await fixture();
+		const script = [
+			`const { createNativeSourceWorker } = await import(${JSON.stringify(join(import.meta.dir, "native-memory-source-worker.ts"))});`,
+			"const worker = createNativeSourceWorker();",
+			'const source = { root: process.env.NATIVE_SOURCE_WORKER_TEST_ROOT, files: [{ glob: "**/*.md", kind: "markdown" }] };',
+			"await worker.scan({ source, cursor: null, pageSize: 1 });",
+			"worker.cancel();",
+			"await worker.scan({ source, cursor: null, pageSize: 1 });",
+			"await worker.close();",
+		].join("\n");
+		const result = spawnSync(process.execPath, ["-e", script], {
+			env: { ...process.env, NATIVE_SOURCE_WORKER_TEST_ROOT: root },
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+			timeout: 5_000,
+		});
+		expect(result.error).toBeUndefined();
+		if (result.status !== 0)
+			throw new Error(
+				`worker lifecycle child exited with ${String(result.status)}: ${result.stderr || result.stdout || "no output"}`,
+			);
 	});
 
 	it("prepares Obsidian chunks inside the isolated worker", async () => {
