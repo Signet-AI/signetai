@@ -43,7 +43,7 @@ import type {
 // (next-themes reads localStorage.theme at init). Runs at module-eval time,
 // before createRoot().render(), and only in VITE_DEMO=1 builds — this module
 // is tree-shaken from every non-demo build.
-if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+if (import.meta.env.VITE_DEMO === "1" && typeof window !== "undefined" && typeof localStorage !== "undefined") {
 	localStorage.setItem("theme", "dark");
 	document.documentElement.classList.add("dark");
 	// The embed is a fixed 1920x1080 stage scaled to the marketing frame; the
