@@ -150,9 +150,17 @@ is an honest partial-coverage signal, not an HTTP failure: the response remains
 incomplete and retry after indexing recovery. Hook callers also receive the
 `x-signet-operation-cause: fts_index_incomplete` header for this condition. This
 cause is distinct from `provider_unavailable`, which is reserved for provider
-outages and their 503 semantics. This differs from
-`aggregate.partial`, which means aggregate planning or synthesis stopped after
-retrieving only partial evidence.
+outages and their 503 semantics.
+
+When graph traversal is enabled, `meta.graphPartial` and `meta.partial` are
+`true` if the owner deadline or cancellation stops traversal before all stages
+complete. `meta.degradation` is `graph_traversal_timeout` for that bounded
+partial result. An owner, SQL, or admission failure instead sets
+`meta.degradation` to `graph_traversal_failed` and includes the safe,
+non-sensitive `meta.graphError` marker. A graph with no matching entities keeps
+both fields absent, so a legitimate empty traversal is not reported as a
+failure. This differs from `aggregate.partial`, which means aggregate planning
+or synthesis stopped after retrieving only partial evidence.
 `meta.timings`, when present, reports daemon-side stage timings in
 milliseconds. Aggregate recall fills the same field with aggregate-specific
 stages such as `aggregate_planning`, `aggregate_followup_recalls`, and

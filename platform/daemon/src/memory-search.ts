@@ -1437,6 +1437,10 @@ function describeRecallGraphError(error: unknown): {
 	return { code, message: error instanceof Error ? error.message : String(error) };
 }
 
+function isRecallGraphDeadlineError(error: { readonly code: string | number | null }): boolean {
+	return error.code === "DB_OWNER_DEADLINE" || error.code === "DB_OWNER_CANCELLED";
+}
+
 // ---------------------------------------------------------------------------
 // Main search orchestration
 // ---------------------------------------------------------------------------
@@ -1524,6 +1528,10 @@ export async function hybridRecall(
 		}
 		if (result.error) {
 			graphPartial = true;
+			if (isRecallGraphDeadlineError(result.error)) {
+				graphDegradation ??= "graph_traversal_timeout";
+				return;
+			}
 			graphDegradation = "graph_traversal_failed";
 			graphError = {
 				channel: "graph_traversal",
@@ -1695,11 +1703,13 @@ export async function hybridRecall(
 	const getFocalEntities = async (
 		owner: DbOwnerClient,
 		agentId: string,
+		deadlineAt?: number,
 	): Promise<ReturnType<typeof resolveFocalEntities>> => {
 		if (focalCache?.agentId === agentId) return focalCache.value;
 		const value = await resolveFocalEntitiesViaOwner(owner, agentId, {
 			queryTokens: getGraphQueryTokens(),
 			includePinned: false,
+			deadlineAt,
 		});
 		focalCache = { agentId, value };
 		return value;
@@ -1999,8 +2009,9 @@ export async function hybridRecall(
 					const queryTokens = getGraphQueryTokens();
 					if (queryTokens.length > 0) {
 						const agentId = params.agentId ?? "default";
+						const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
 						const owner = await getGraphOwner();
-						const focal = await getFocalEntities(owner, agentId);
+						const focal = await getFocalEntities(owner, agentId, traversalDeadlineAt);
 						if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });
 
 						if (focal.entityIds.length > 0) {
@@ -2013,6 +2024,7 @@ export async function hybridRecall(
 								maxTraversalPaths: traversalCfg.maxTraversalPaths,
 								minConfidence: traversalCfg.minConfidence,
 								timeoutMs: traversalCfg.timeoutMs,
+								deadlineAt: traversalDeadlineAt,
 								scope: params.scope,
 							});
 							recordGraphResult(traversal);
@@ -2144,8 +2156,9 @@ export async function hybridRecall(
 					const queryTokens = getGraphQueryTokens();
 					if (traversalCfg && queryTokens.length > 0) {
 						const agentId = params.agentId ?? "default";
+						const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
 						const owner = await getGraphOwner();
-						const focal = await getFocalEntities(owner, agentId);
+						const focal = await getFocalEntities(owner, agentId, traversalDeadlineAt);
 						if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });
 
 						if (focal.entityIds.length > 0) {
@@ -2158,6 +2171,7 @@ export async function hybridRecall(
 								maxTraversalPaths: traversalCfg.maxTraversalPaths,
 								minConfidence: traversalCfg.minConfidence,
 								timeoutMs: traversalCfg.timeoutMs,
+								deadlineAt: traversalDeadlineAt,
 							});
 							recordGraphResult(traversal);
 
