@@ -7,8 +7,9 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-07
-- Bug fixes: skip install without git; preserve external embedding selection; allow undeclared tool capability.
-- Refactoring: centralize process launching.
+- Bug fixes: preserve legacy tilde paths; support Windows home fallback; skip install without git; preserve external embedding selection; allow undeclared tool capability.
+- Refactoring: remove dead setup scan; share agent dir logic; isolate harness integration paths; centralize process launching.
+- Docs: trim contributor guide; document harness API boundary.
 
 ### 2026-09-06
 - Bug fixes: apply existing setup provider; clean retired setup fields; enable dreaming defaults.
@@ -34,6 +35,27 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add Defuddle web imports (rebased); add third-party license colophon.
 
 ## Release Ledger
+
+## [0.219.7] - 2026-09-07
+
+Release summary: 2 bug fixes, 3 refactors, and 2 docs updates.
+Tag range: `v0.219.6..v0.219.7`.
+
+### Bug Fixes
+
+- **pi**: preserve legacy tilde paths
+- **cli**: support Windows home fallback
+
+### Refactoring
+
+- **connectors**: remove dead setup scan
+- **integrations**: share agent dir logic
+- **core**: isolate harness integration paths
+
+### Docs
+
+- trim contributor guide
+- **core**: document harness API boundary
 
 ## [0.219.6] - 2026-09-07
 
