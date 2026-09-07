@@ -54,7 +54,7 @@ interface ScanCommand {
 	readonly pageSize: number;
 }
 
-type WorkerCommand = ScanCommand | { readonly type: "cancel"; readonly id: string } | { readonly type: "shutdown" };
+type WorkerCommand = ScanCommand;
 
 type WorkerEvent =
 	| { readonly type: "ready"; readonly threadId: number }
@@ -227,7 +227,6 @@ async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
 export function runNativeSourceWorker(): void {
 	const port = parentPort;
 	if (port === null) throw new Error("native source worker requires a parent port");
-	const canceled = new Set<string>();
 	const send = (event: WorkerEvent): void => {
 		const serialized = JSON.stringify(event);
 		if (Buffer.byteLength(serialized, "utf8") > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES)
@@ -238,19 +237,9 @@ export function runNativeSourceWorker(): void {
 	};
 	send({ type: "ready", threadId });
 	port.on("message", (command: WorkerCommand) => {
-		if (command.type === "shutdown") {
-			process.exit(0);
-		}
-		if (command.type === "cancel") {
-			canceled.add(command.id);
-			return;
-		}
 		send({ type: "scan_started", id: command.id });
 		void scan(command).then(
-			(result) => {
-				if (canceled.delete(command.id)) return;
-				send({ type: "result", id: command.id, result });
-			},
+			(result) => send({ type: "result", id: command.id, result }),
 			(error: unknown) =>
 				send({
 					type: "error",
