@@ -129,12 +129,20 @@ function pkgVersion(pkg, name) {
 	return pkg.dependencies?.[name] ?? pkg.optionalDependencies?.[name] ?? pkg.devDependencies?.[name] ?? null;
 }
 
-export function replaceResources(target, staged, rename = renameSync) {
+function removeBackup(backupParent, backup, remove = rmSync) {
+	try {
+		remove(backupParent, { recursive: true, force: true });
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`Unable to remove desktop resource backup ${backup}: ${detail}`, { cause: error });
+	}
+}
+
+export function replaceResources(target, staged, rename = renameSync, remove = rmSync) {
 	const hadTarget = existsSync(target);
 	const backupParent = mkdtempSync(join(dirname(target), ".resources-backup-"));
 	const backup = join(backupParent, basename(target));
 	let moved = false;
-	let preserveBackup = false;
 	try {
 		if (hadTarget) {
 			rename(target, backup);
@@ -147,15 +155,20 @@ export function replaceResources(target, staged, rename = renameSync) {
 				if (existsSync(target)) rmSync(target, { recursive: true, force: true });
 				rename(backup, target);
 			} catch (restoreError) {
-				preserveBackup = true;
 				const detail = restoreError instanceof Error ? restoreError.message : String(restoreError);
 				throw new Error(`Unable to restore previous desktop resources from ${backup}: ${detail}`, { cause: error });
 			}
 		}
+		try {
+			removeBackup(backupParent, backup, remove);
+		} catch (cleanupError) {
+			const original = error instanceof Error ? error.message : String(error);
+			const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+			throw new Error(`${original}; ${detail}`, { cause: error });
+		}
 		throw error;
-	} finally {
-		if (!preserveBackup) rmSync(backupParent, { recursive: true, force: true });
 	}
+	removeBackup(backupParent, backup, remove);
 }
 
 export function stageRuntime() {

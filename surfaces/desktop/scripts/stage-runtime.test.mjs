@@ -111,4 +111,29 @@ describe("stage-runtime Bun validation", () => {
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
+
+	it("reports backup cleanup failures without hiding the installed resources", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const target = join(directory, "resources");
+		const staged = join(directory, "staged");
+		mkdirSync(target);
+		mkdirSync(staged);
+		writeFileSync(join(target, "marker"), "old\n");
+		writeFileSync(join(staged, "marker"), "new\n");
+		const failCleanup = () => {
+			throw new Error("injected backup cleanup failure");
+		};
+
+		try {
+			expect(() => replaceResources(target, staged, renameSync, failCleanup)).toThrow(
+				"Unable to remove desktop resource backup",
+			);
+			expect(readFileSync(join(target, "marker"), "utf8")).toBe("new\n");
+			const backups = readdirSync(directory).filter((entry) => entry.startsWith(".resources-backup-"));
+			expect(backups).toHaveLength(1);
+			expect(readFileSync(join(directory, backups[0], "resources", "marker"), "utf8")).toBe("old\n");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 });
