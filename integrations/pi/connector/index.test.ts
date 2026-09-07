@@ -3,9 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolvePiAgentDir } from "@signet/pi-extension-base/agent-dir";
 import { EXTENSION_BUNDLE } from "./src/extension-bundle.js";
-import { PiConnector } from "./src/index.js";
+import { PiConnector, resolvePiAgentDir } from "./src/index.js";
 
 const originalEnv = {
 	HOME: process.env.HOME,

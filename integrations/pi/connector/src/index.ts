@@ -14,26 +14,23 @@ import {
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
-import {
-	clearConfiguredPiAgentDir,
-	getPiConfigPath,
-	listPiAgentDirCandidates,
-	resolvePiAgentDir,
-	resolvePiExtensionsDir,
-	writeConfiguredPiAgentDir,
-} from "@signet/pi-extension-base/agent-dir";
+import { createAgentDir } from "@signet/connector-base/agent-dir";
 import { EXTENSION_BUNDLE } from "./extension-bundle.js";
 
-export {
-	clearConfiguredPiAgentDir,
-	getPiConfigPath,
-	hasPiSetup,
-	listPiAgentDirCandidates,
-	readConfiguredPiAgentDir,
-	resolvePiAgentDir,
-	resolvePiExtensionsDir,
-	writeConfiguredPiAgentDir,
-} from "@signet/pi-extension-base/agent-dir";
+const piAgentDir = createAgentDir({
+	configFileName: "pi.json",
+	defaultAgentDir: ".pi/agent",
+	legacyTildeExpansion: true,
+});
+
+export const clearConfiguredPiAgentDir = piAgentDir.clearConfiguredAgentDir;
+export const getPiConfigPath = piAgentDir.getConfigPath;
+export const hasPiSetup = piAgentDir.hasSetup;
+export const listPiAgentDirCandidates = piAgentDir.listAgentDirCandidates;
+export const readConfiguredPiAgentDir = piAgentDir.readConfiguredAgentDir;
+export const resolvePiAgentDir = piAgentDir.resolveAgentDir;
+export const resolvePiExtensionsDir = piAgentDir.resolveExtensionsDir;
+export const writeConfiguredPiAgentDir = piAgentDir.writeConfiguredAgentDir;
 
 const PI_EXTENSION_PACKAGE = "@signet/pi-extension";
 const PI_EXTENSION_ENTRY = "dist/signet-pi.mjs";
