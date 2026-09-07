@@ -20,6 +20,7 @@ import {
 	installDesktopFromSource,
 	installLinuxDesktopApp,
 	installMacDesktopApp,
+	installWindowsDesktopApp,
 	resolveDesktopSourceCheckout,
 } from "./desktop.js";
 
@@ -409,6 +410,27 @@ function makeMacAppBundle(dir: string, arch: "x64" | "arm64", executable = "sign
 	return app;
 }
 
+function hostDesktopArch(): "x64" | "arm64" {
+	return process.arch === "arm64" ? "arm64" : "x64";
+}
+
+function makeWindowsAppDirectory(dir: string, arch: "x64" | "arm64", packageName = "@signet/desktop"): string {
+	const app = join(dir, `win-${arch}-unpacked`);
+	return makeWindowsAppContents(app, arch, packageName);
+}
+
+function makeWindowsAppContents(app: string, arch: "x64" | "arm64", packageName = "@signet/desktop"): string {
+	mkdirSync(join(app, "resources"), { recursive: true });
+	writeFileSync(join(app, "resources", "app.asar"), JSON.stringify({ name: packageName }));
+	const header = Buffer.alloc(512);
+	header.write("MZ", 0, 2, "ascii");
+	header.writeUInt32LE(0x80, 0x3c);
+	header.write("PE\u0000\u0000", 0x80, 4, "ascii");
+	header.writeUInt16LE(arch === "arm64" ? 0xaa64 : 0x8664, 0x84);
+	writeFileSync(join(app, "signet.exe"), header);
+	return app;
+}
+
 describe("mac desktop install", () => {
 	test("installs the newest matching .app bundle into ~/Applications", () => {
 		const root = makeCheckout();
@@ -558,6 +580,102 @@ describe("mac desktop install", () => {
 
 			expect(result.appBundle).toBe(join(home, "Applications", "Signet.app"));
 			expect(existsSync(result.appBundle)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("Windows desktop install", () => {
+	test("installs the matching unpacked build without touching the native CLI directory", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			const source = makeWindowsAppDirectory(release, hostDesktopArch());
+			const workspace = join(home, "workspace");
+
+			const result = installWindowsDesktopApp(root, home, workspace);
+
+			expect(result.appDir).toBe(join(home, "AppData", "Local", "Programs", "Signet Desktop"));
+			expect(result.programsDir).toBe(join(home, "AppData", "Local", "Programs"));
+			expect(result.executable).toBe(join(result.appDir, "signet.exe"));
+			expect(existsSync(result.executable)).toBe(true);
+			expect(existsSync(join(home, "AppData", "Local", "Programs", "Signet", "signet.exe"))).toBe(false);
+			expect(source).not.toBe(result.appDir);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses to replace a foreign application in the managed directory", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+
+			const appDir = join(home, "AppData", "Local", "Programs", "Signet Desktop");
+			makeWindowsAppContents(appDir, hostDesktopArch(), "com.example.other");
+
+			expect(() => installWindowsDesktopApp(root, home, join(home, "workspace"))).toThrow(
+				"Refusing to replace existing Windows app directory",
+			);
+			expect(readFileSync(join(appDir, "resources", "app.asar"), "utf8")).toContain("com.example.other");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("dispatches Windows through the shared desktop install entrypoint", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			const workspace = join(home, "workspace");
+			const localAppData = join(home, "local-app-data");
+
+			const result = installDesktopFromSource(
+				{ repo: root, skipBuild: true },
+				{
+					env: { SIGNET_PATH: workspace, LOCALAPPDATA: localAppData },
+					home,
+					platform: "win32",
+					runner: () => {
+						throw new Error("runner should not be called");
+					},
+				},
+			);
+
+			if (!("appDir" in result)) throw new Error("expected Windows install result");
+			expect(result.workspace).toBe(workspace);
+			expect(result.appDir).toBe(join(localAppData, "Programs", "Signet Desktop"));
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("does not select a newest foreign-architecture build", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			const host = makeWindowsAppDirectory(release, hostDesktopArch());
+			const foreign = makeWindowsAppDirectory(release, hostDesktopArch() === "arm64" ? "x64" : "arm64");
+			utimesSync(host, new Date(2_000), new Date(2_000));
+			utimesSync(foreign, new Date(9_000), new Date(9_000));
+
+			const result = installWindowsDesktopApp(root, home, join(home, "workspace"));
+
+			expect(existsSync(result.executable)).toBe(true);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 			rmSync(home, { recursive: true, force: true });

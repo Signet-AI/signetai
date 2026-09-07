@@ -58,10 +58,15 @@ export function registerDesktopCommands(program: Command, deps: DesktopDeps): vo
 					console.log(chalk.dim(`  Desktop:  ${result.desktopEntry}`));
 					console.log(chalk.dim(`  Workspace: ${result.workspace}`));
 					console.log(chalk.cyan("\n  Run: signet-desktop"));
-				} else {
+				} else if ("appBundle" in result) {
 					console.log(chalk.dim(`  App:      ${result.appBundle}`));
 					console.log(chalk.dim(`  Workspace: ${result.workspace}`));
 					console.log(chalk.cyan("\n  Run: open Signet.app (or launch from ~/Applications)"));
+				} else {
+					console.log(chalk.dim(`  App:      ${result.appDir}`));
+					console.log(chalk.dim(`  Executable: ${result.executable}`));
+					console.log(chalk.dim(`  Workspace: ${result.workspace}`));
+					console.log(chalk.cyan("\n  Run: launch the Signet Desktop executable above"));
 				}
 			} catch (err) {
 				console.error(chalk.red("Signet desktop install failed"));

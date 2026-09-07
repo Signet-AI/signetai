@@ -1,8 +1,7 @@
 /**
- * Platform detection for platform-aware window chrome.
- * The mockup keys chrome off a `data-platform` attribute (mac | win | linux);
- * mac shows traffic lights, win/linux show caption buttons. In Electron the OS
- * draws the traffic lights; in a browser we render a stand-in for fidelity.
+ * Platform detection for platform-aware dashboard spacing.
+ * Native window controls are owned by Electron desktop shells; browser
+ * surfaces render the dashboard without window controls.
  */
 export type Platform = "mac" | "win" | "linux";
 

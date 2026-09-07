@@ -1,7 +1,18 @@
 import { stat } from "node:fs/promises";
 import { extname, normalize, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { net, BrowserWindow, Menu, type OpenDialogOptions, app, dialog, ipcMain, protocol, shell } from "electron";
+import {
+	net,
+	BrowserWindow,
+	Menu,
+	type OpenDialogOptions,
+	app,
+	dialog,
+	ipcMain,
+	nativeTheme,
+	protocol,
+	shell,
+} from "electron";
 import { DaemonManager } from "./daemon-manager.js";
 import { checkForDesktopUpdate, configureDesktopUpdates } from "./desktop-updates.js";
 import { validateExternalUrl } from "./external-url.js";
@@ -48,14 +59,30 @@ function usesNativeWindowFrame(): boolean {
 	return process.env.SIGNET_DESKTOP_NATIVE_FRAME === "1";
 }
 
-/**
- * macOS keeps native traffic lights over the dashboard's custom topbar via
- * titleBarStyle: "hiddenInset". A fully frameless window (frame: false) hides
- * the traffic lights entirely, which is why the dashboard shipped without
- * native window controls on macOS.
- */
-function macosTitleBarStyle(): "hiddenInset" | undefined {
-	return process.platform === "darwin" ? "hiddenInset" : undefined;
+function windowTitleBarStyle(): "hidden" | "hiddenInset" | undefined {
+	if (usesNativeWindowFrame()) return undefined;
+	if (process.platform === "darwin") return "hiddenInset";
+	if (process.platform === "win32" || process.platform === "linux") return "hidden";
+	return undefined;
+}
+
+type WindowTheme = "light" | "dark";
+
+const TITLE_BAR_OVERLAY_PALETTE: Record<WindowTheme, Electron.TitleBarOverlay> = {
+	light: { color: "#f2f5f7", symbolColor: "#27313a", height: 56 },
+	dark: { color: "#0f1215", symbolColor: "#d6dbe1", height: 56 },
+};
+
+function titleBarOverlayForTheme(theme: WindowTheme): Electron.TitleBarOverlay {
+	return TITLE_BAR_OVERLAY_PALETTE[theme];
+}
+
+function windowTitleBarOverlay(): Electron.TitleBarOverlay | undefined {
+	if (usesNativeWindowFrame()) return undefined;
+	if (process.platform === "win32" || process.platform === "linux") {
+		return titleBarOverlayForTheme(nativeTheme.shouldUseDarkColors ? "dark" : "light");
+	}
+	return undefined;
 }
 
 const MIME: Record<string, string> = {
@@ -127,10 +154,6 @@ function focusedWindow(): BrowserWindow | null {
 	return BrowserWindow.getFocusedWindow() ?? mainWindow;
 }
 
-function emitWindowState(win: BrowserWindow): void {
-	win.webContents.send("desktop:windowState", { maximized: win.isMaximized() });
-}
-
 function lockNativeZoom(win: BrowserWindow): void {
 	win.webContents.setZoomFactor(1);
 	win.webContents.on("zoom-changed", (event) => {
@@ -138,6 +161,13 @@ function lockNativeZoom(win: BrowserWindow): void {
 		win.webContents.setZoomFactor(1);
 	});
 	win.webContents.on("did-finish-load", () => win.webContents.setZoomFactor(1));
+}
+
+function setWindowTheme(theme: WindowTheme): void {
+	if (!mainWindow || mainWindow.isDestroyed()) return;
+	if (usesNativeWindowFrame()) return;
+	if (process.platform !== "win32" && process.platform !== "linux") return;
+	mainWindow.setTitleBarOverlay(titleBarOverlayForTheme(theme));
 }
 
 function createMainWindow(): BrowserWindow {
@@ -149,8 +179,9 @@ function createMainWindow(): BrowserWindow {
 		minWidth: 800,
 		minHeight: 600,
 		show: true,
-		frame: usesNativeWindowFrame(),
-		titleBarStyle: macosTitleBarStyle(),
+		frame: true,
+		titleBarStyle: windowTitleBarStyle(),
+		titleBarOverlay: windowTitleBarOverlay(),
 		title: "Signet",
 		backgroundColor: "#0f0f0f",
 		webPreferences: {
@@ -169,8 +200,6 @@ function createMainWindow(): BrowserWindow {
 		return { action: "deny" };
 	});
 
-	mainWindow.on("maximize", () => mainWindow && emitWindowState(mainWindow));
-	mainWindow.on("unmaximize", () => mainWindow && emitWindowState(mainWindow));
 	mainWindow.on("close", (event) => {
 		if (quitting) return;
 		event.preventDefault();
@@ -346,16 +375,6 @@ async function pickDirectory(options?: { title?: string }): Promise<string | nul
 }
 
 function registerIpc(): void {
-	ipcMain.handle("desktop:minimize", () => focusedWindow()?.minimize());
-	ipcMain.handle("desktop:toggleMaximize", () => {
-		const win = focusedWindow();
-		if (!win) return;
-		if (win.isMaximized()) win.unmaximize();
-		else win.maximize();
-		emitWindowState(win);
-	});
-	ipcMain.handle("desktop:close", () => focusedWindow()?.close());
-	ipcMain.handle("desktop:isMaximized", () => focusedWindow()?.isMaximized() ?? false);
 	ipcMain.handle("desktop:startDaemon", async () => {
 		const status = await daemon.start();
 		daemonStartupError = null;
@@ -368,6 +387,10 @@ function registerIpc(): void {
 		return status;
 	});
 	ipcMain.handle("desktop:getDaemonStatus", () => daemon.status());
+	ipcMain.handle("desktop:setTitleBarTheme", (_event, theme: unknown) => {
+		if (theme !== "light" && theme !== "dark") throw new Error("theme must be light or dark");
+		setWindowTheme(theme);
+	});
 	ipcMain.handle("desktop:openDashboard", () => showDashboard());
 	ipcMain.handle("desktop:quickCapture", (_event, content: string) => quickCapture(content));
 	ipcMain.handle("desktop:searchMemories", (_event, query: string, limit?: number) => searchMemories(query, limit));

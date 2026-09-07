@@ -18,7 +18,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveWorkspaceSourceRepoPath, syncWorkspaceSourceRepo } from "@signet/core";
 import { resolveAgentsDir } from "../lib/workspace.js";
@@ -51,7 +51,14 @@ export interface DesktopMacInstallResult extends DesktopBuildResult {
 	readonly workspace: string;
 }
 
-export type DesktopInstallResult = DesktopLinuxInstallResult | DesktopMacInstallResult;
+export interface DesktopWindowsInstallResult extends DesktopBuildResult {
+	readonly appDir: string;
+	readonly executable: string;
+	readonly programsDir: string;
+	readonly workspace: string;
+}
+
+export type DesktopInstallResult = DesktopLinuxInstallResult | DesktopMacInstallResult | DesktopWindowsInstallResult;
 
 interface DesktopCommandContext {
 	readonly cwd?: string;
@@ -157,16 +164,21 @@ export function installDesktopFromSource(
 	}
 
 	const platform = ctx.platform ?? process.platform;
+	const home = ctx.home ?? homedir();
 	if (platform === "darwin") {
-		return installMacDesktopApp(repo, ctx.home ?? homedir(), workspace);
+		return installMacDesktopApp(repo, home, workspace);
+	}
+	if (platform === "win32") {
+		const localAppData = ctx.env?.LOCALAPPDATA?.trim() || join(home, "AppData", "Local");
+		return installWindowsDesktopApp(repo, home, workspace, localAppData);
 	}
 	if (platform !== "linux") {
 		throw new Error(
-			`signet desktop install supports macOS and Linux installs. Build artifacts are in ${desktopReleaseDir(repo)}.`,
+			`signet desktop install supports macOS, Windows, and Linux installs. Build artifacts are in ${desktopReleaseDir(repo)}.`,
 		);
 	}
 
-	return installLinuxDesktopApp(repo, ctx.home ?? homedir(), workspace);
+	return installLinuxDesktopApp(repo, home, workspace);
 }
 
 const MAC_APP_MARKER = "ai.signet.app";
@@ -187,74 +199,120 @@ export function installMacDesktopApp(
 	const applicationsDir = join(home, "Applications");
 	mkdirSync(applicationsDir, { recursive: true });
 	const appBundle = join(applicationsDir, "Signet.app");
-	replaceManagedAppBundle(source, appBundle);
+	replaceManagedPath(
+		source,
+		appBundle,
+		isSignetAppBundle,
+		(sourcePath, temporaryPath) => cpSync(sourcePath, temporaryPath, { recursive: true }),
+		"app",
+	);
 
 	return { repo, releaseDir, appBundle, applicationsDir, workspace };
 }
 
 /**
- * Replaces an installed Signet.app through a staged swap. A pre-existing bundle
- * is only replaced when it is Signet-owned (matching bundle id in its
- * Info.plist); foreign applications are never touched. The old bundle stays in
- * place until the replacement copy succeeds, so a failed copy or rename can
- * never leave the machine without an installed app.
+ * Install the unpacked Windows build into a user-owned program directory.
+ * The directory is intentionally distinct from the native CLI's
+ * %LOCALAPPDATA%\\Programs\\Signet\\signet.exe path.
  */
-function replaceManagedAppBundle(source: string, target: string): void {
-	if (existsSync(target) && !isSignetAppBundle(target)) {
+export function installWindowsDesktopApp(
+	repo: string,
+	home: string,
+	workspace = resolveAgentsDir().path,
+	localAppData = join(home, "AppData", "Local"),
+): DesktopWindowsInstallResult {
+	const releaseDir = desktopReleaseDir(repo);
+	const source = findWindowsAppDirectory(releaseDir, process.arch);
+	if (!source) {
 		throw new Error(
-			`Refusing to replace existing app at ${target} because it is not a Signet app bundle. Remove it first if it is not needed.`,
+			`No matching Windows ${process.arch} app directory found in ${releaseDir}. Run signet desktop build first.`,
 		);
 	}
+
+	const programsDir = join(localAppData, "Programs");
+	const appDir = join(programsDir, "Signet Desktop");
+	mkdirSync(programsDir, { recursive: true });
+	replaceManagedPath(
+		source,
+		appDir,
+		isSignetWindowsAppDirectory,
+		(sourcePath, temporaryPath) => cpSync(sourcePath, temporaryPath, { recursive: true }),
+		"Windows app directory",
+	);
+
+	const executable = windowsAppExecutable(appDir);
+	if (!executable) {
+		throw new Error(`Installed Windows Signet app is missing its executable at ${appDir}.`);
+	}
+	return { repo, releaseDir, appDir, executable, programsDir, workspace };
+}
+
+/**
+ * Replace a managed file or directory without deleting the previous install
+ * until the replacement has been copied successfully. The temporary and
+ * backup paths stay beside the target so directory renames remain atomic on
+ * the same filesystem on both macOS and Windows.
+ */
+function replaceManagedPath(
+	source: string,
+	target: string,
+	isManaged: (path: string) => boolean,
+	copy: (source: string, target: string) => void,
+	kind: string,
+): void {
+	if (existsSync(target) && !isManaged(target)) {
+		throw new Error(
+			`Refusing to replace existing ${kind} at ${target} because it is not a Signet app. Remove it first if it is not needed.`,
+		);
+	}
+
 	const parent = dirname(target);
-	const tmp = join(parent, `.Signet.app.${process.pid}.${Date.now()}.tmp`);
-	const backup = `${target}.previous-${process.pid}-${Date.now()}`;
-	let backupOf = false;
-	let replaced = false;
-	let restoreFailure: Error | undefined;
+	const token = `${process.pid}.${Date.now()}`;
+	const temporary = join(parent, `.Signet.${kind}.${token}.tmp`);
+	const backup = `${target}.previous-${token}`;
+	let backupCreated = false;
 	try {
-		cpSync(source, tmp, { recursive: true });
+		rmSync(temporary, { recursive: true, force: true });
+		copy(source, temporary);
 		if (existsSync(target)) {
 			renameSync(target, backup);
-			backupOf = true;
+			backupCreated = true;
 		}
 		try {
-			renameSync(tmp, target);
-			replaced = true;
-		} catch (swapErr) {
-			// A failed swap restores the previous bundle before reporting
-			// failure; the swap error itself is what the caller needs unless
-			// the restore also fails, in which case the restore failure is the
-			// more urgent diagnosis.
-			try {
-				if (backupOf) renameSync(backup, target);
-			} catch (restoreErr) {
-				throw restoreErr instanceof Error
-					? new Error(`Failed to restore the previous app bundle after a failed install: ${restoreErr.message}`, {
-							cause: swapErr,
-						})
-					: restoreErr;
+			renameSync(temporary, target);
+		} catch (swapError) {
+			if (backupCreated) {
+				try {
+					renameSync(backup, target);
+					backupCreated = false;
+				} catch (restoreError) {
+					throw restoreError instanceof Error
+						? new Error(
+								`Failed to restore the previous Signet ${kind} after a failed install: ${restoreError.message}`,
+								{
+									cause: swapError,
+								},
+							)
+						: restoreError;
+				}
 			}
-			throw swapErr;
+			throw swapError;
 		}
-	} catch (err) {
-		rmSync(tmp, { recursive: true, force: true });
-		throw err;
-	} finally {
-		// A successful swap drops the old bundle in place; a failed one already
-		// restored it above. A backup that could not be dropped after a
-		// successful swap is harmless debris, but it must not be silent.
-		if (replaced && backupOf && existsSync(backup)) {
-			try {
-				rmSync(backup, { recursive: true, force: true });
-			} catch (cleanupErr) {
-				restoreFailure =
-					cleanupErr instanceof Error
-						? new Error(`Install succeeded, but removing the backup bundle failed: ${cleanupErr.message}`)
-						: new Error("Install succeeded, but removing the backup bundle failed.");
-			}
+	} catch (error) {
+		rmSync(temporary, { recursive: true, force: true });
+		throw error;
+	}
+
+	if (backupCreated) {
+		try {
+			rmSync(backup, { recursive: true, force: true });
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			throw new Error(`Signet ${kind} installed, but removing the previous install failed: ${detail}`, {
+				cause: error,
+			});
 		}
 	}
-	if (restoreFailure) throw restoreFailure;
 }
 
 function isSignetAppBundle(path: string): boolean {
@@ -269,16 +327,17 @@ function isSignetAppBundle(path: string): boolean {
 function findMacAppBundle(releaseDir: string, arch: string): string | null {
 	if (!existsSync(releaseDir)) return null;
 	let best: { path: string; mtime: number } | null = null;
-	// electron-builder's unpacked output lives in layout directories such as
-	// release/mac/Signet.app or release/mac_arm64/Signet.app; recurse to a
+	// Electron-builder's unpacked output lives in layout directories such as
+	// release/mac/Signet.app or release/mac_arm64/Signet.app. Recurse only a
 	// bounded depth and verify the executable's Mach-O architecture so a
 	// foreign-arch artifact is never installed.
 	for (const candidate of macAppBundleCandidates(releaseDir, 3)) {
-		if (!isSignetAppBundle(candidate)) continue;
-		if (!macAppBundleMatchesArch(candidate, arch)) continue;
-		const mtime = statSync(candidate).mtimeMs;
-		if (!best || mtime > best.mtime) {
-			best = { path: candidate, mtime: mtime };
+		if (!isSignetAppBundle(candidate) || !macAppBundleMatchesArch(candidate, arch)) continue;
+		try {
+			const mtime = statSync(candidate).mtimeMs;
+			if (!best || mtime > best.mtime) best = { path: candidate, mtime };
+		} catch {
+			// The release directory can change while a build is being cleaned up.
 		}
 	}
 	return best?.path ?? null;
@@ -317,9 +376,6 @@ function macAppBundleMatchesArch(path: string, arch: string): boolean {
 	try {
 		const header = Buffer.alloc(8);
 		if (readSync(handle, header, 0, 8, 0) !== 8) return false;
-		// The first 4 bytes are the magic; cputype follows. Byte-swapped
-		// (CIGAM) forms mean the file was written in the opposite endianness
-		// from the reader, so swap when reading the cputype field.
 		const magicLE = header.readUInt32LE(0);
 		const magicBE = header.readUInt32BE(0);
 		const CPU_TYPE_X64 = 0x01000007;
@@ -340,6 +396,101 @@ function macBundleExecutable(path: string): string | null {
 		return match ? join(path, "Contents", "MacOS", match[1]) : null;
 	} catch {
 		return null;
+	}
+}
+
+const WINDOWS_PACKAGE_MARKERS = [Buffer.from('"name": "@signet/desktop"'), Buffer.from('"name":"@signet/desktop"')];
+
+function isSignetWindowsAppDirectory(path: string): boolean {
+	const executable = windowsAppExecutable(path);
+	if (!executable) return false;
+	const asar = join(path, "resources", "app.asar");
+	try {
+		const contents = readFileSync(asar);
+		if (WINDOWS_PACKAGE_MARKERS.some((marker) => contents.includes(marker))) return true;
+	} catch {
+		// An unpacked Electron directory can expose app/package.json instead of
+		// app.asar during local builds.
+	}
+	try {
+		const packageJson = readJson(join(path, "resources", "app", "package.json"));
+		return jsonString(packageJson, "name") === "@signet/desktop";
+	} catch {
+		return false;
+	}
+}
+
+function windowsAppExecutable(path: string): string | null {
+	try {
+		const entry = readdirSync(path, { withFileTypes: true }).find(
+			(candidate) => candidate.isFile() && candidate.name.toLowerCase() === "signet.exe",
+		);
+		return entry ? join(path, entry.name) : null;
+	} catch {
+		return null;
+	}
+}
+
+function findWindowsAppDirectory(releaseDir: string, arch: string): string | null {
+	if (!existsSync(releaseDir)) return null;
+	let best: { path: string; mtime: number } | null = null;
+	for (const candidate of windowsAppDirectoryCandidates(releaseDir, 3)) {
+		if (!isSignetWindowsAppDirectory(candidate) || !windowsAppDirectoryMatchesArch(candidate, arch)) continue;
+		try {
+			const mtime = statSync(candidate).mtimeMs;
+			if (!best || mtime > best.mtime) best = { path: candidate, mtime };
+		} catch {
+			// Ignore an artifact removed between discovery and stat.
+		}
+	}
+	return best?.path ?? null;
+}
+
+function* windowsAppDirectoryCandidates(root: string, depth: number): Generator<string> {
+	if (depth < 0) return;
+	let entries: readonly import("node:fs").Dirent[];
+	try {
+		entries = readdirSync(root, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		if (!entry.isDirectory()) continue;
+		const path = join(root, entry.name);
+		if (entry.name.toLowerCase().endsWith("-unpacked")) {
+			yield path;
+			continue;
+		}
+		if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+		yield* windowsAppDirectoryCandidates(path, depth - 1);
+	}
+}
+
+function windowsAppDirectoryMatchesArch(path: string, arch: string): boolean {
+	const executable = windowsAppExecutable(path);
+	if (!executable) return false;
+	let handle: number;
+	try {
+		handle = openSync(executable, "r");
+	} catch {
+		return false;
+	}
+	try {
+		const header = Buffer.alloc(4096);
+		const bytesRead = readSync(handle, header, 0, header.length, 0);
+		if (bytesRead < 0x40 || header.toString("ascii", 0, 2) !== "MZ") return false;
+		const peOffset = header.readUInt32LE(0x3c);
+		if (peOffset + 6 > bytesRead || header.toString("ascii", peOffset, peOffset + 4) !== "PE\u0000\u0000") {
+			return false;
+		}
+		const machine = header.readUInt16LE(peOffset + 4);
+		if (arch === "x64") return machine === 0x8664;
+		if (arch === "arm64") return machine === 0xaa64 || machine === 0xa641;
+		if (arch === "ia32") return machine === 0x014c;
+		if (arch === "arm") return machine === 0x01c4;
+		return false;
+	} finally {
+		closeSync(handle);
 	}
 }
 
@@ -381,18 +532,17 @@ export function installLinuxDesktopApp(
 }
 
 function installManagedAppImage(source: string, target: string): void {
-	const dir = dirname(target);
-	const tmp = join(dir, `.Signet.AppImage.${process.pid}.${Date.now()}.tmp`);
-	try {
-		rmSync(tmp, { force: true });
-		copyFileSync(source, tmp);
-		chmodSync(tmp, 0o755);
-		renameSync(tmp, target);
-		chmodSync(target, 0o755);
-	} catch (err) {
-		rmSync(tmp, { force: true });
-		throw err;
-	}
+	replaceManagedPath(
+		source,
+		target,
+		() => true,
+		(sourcePath, temporaryPath) => {
+			copyFileSync(sourcePath, temporaryPath);
+			chmodSync(temporaryPath, 0o755);
+		},
+		"AppImage",
+	);
+	chmodSync(target, 0o755);
 }
 
 function ancestorCandidates(path: string): string[] {
@@ -511,7 +661,7 @@ function writeManagedLauncher(path: string, target: string, workspace: string): 
 		const stat = lstatSync(path);
 		if (stat.isSymbolicLink()) {
 			const current = resolve(dirname(path), readlinkSync(path));
-			if (current !== target && !current.startsWith(`${appDir}/`)) {
+			if (current !== resolve(target) && !isPathWithin(appDir, current)) {
 				throw new Error(
 					`Refusing to replace launcher symlink at ${path} because it does not point at Signet's desktop install directory.`,
 				);
@@ -562,4 +712,11 @@ function quoteDesktopPath(path: string): string {
 
 function quoteShellPath(path: string): string {
 	return `'${path.replaceAll("'", "'\\''")}'`;
+}
+
+function isPathWithin(parent: string, child: string): boolean {
+	const relativePath = relative(resolve(parent), resolve(child));
+	return (
+		relativePath === "" || (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath))
+	);
 }
