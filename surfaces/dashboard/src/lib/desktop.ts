@@ -3,8 +3,6 @@ export interface DesktopBridge {
 	readonly setTitleBarTheme?: (theme: "light" | "dark") => Promise<unknown>;
 }
 
-export type DesktopTheme = "light" | "dark";
-
 declare global {
 	interface Window {
 		readonly signetDesktop?: DesktopBridge;

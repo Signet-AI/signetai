@@ -117,8 +117,8 @@ export function assertBunRuntime(
 	}
 }
 
-function platformVecPackage(arch) {
-	const os = process.platform === "win32" ? "windows" : process.platform;
+export function platformVecPackage(platform, arch) {
+	const os = platform === "win32" ? "windows" : platform;
 	return `sqlite-vec-${os}-${arch}`;
 }
 
@@ -129,7 +129,8 @@ function pkgVersion(pkg, name) {
 export function stageRuntime() {
 	const bunSrc = bunRuntime();
 	const bunArch = targetArch();
-	assertBunRuntime(bunSrc, bunArch, targetPlatform());
+	const target = targetPlatform();
+	assertBunRuntime(bunSrc, bunArch, target);
 
 	rmSync(resources, { recursive: true, force: true });
 	mkdirSync(daemonOut, { recursive: true });
@@ -167,7 +168,11 @@ export function stageRuntime() {
 
 	const daemonPkg = readJson(daemonPkgPath);
 	const corePkg = readJson(corePkgPath);
-	const vecPkg = platformVecPackage(bunArch);
+	const vecPkg = platformVecPackage(target, bunArch);
+	const vecVersion = pkgVersion(corePkg, vecPkg);
+	if (vecVersion === null) {
+		throw new Error(`No sqlite-vec binary package is available for ${target}/${bunArch}`);
+	}
 	const dependencies = {};
 	for (const name of [
 		"@1password/sdk",

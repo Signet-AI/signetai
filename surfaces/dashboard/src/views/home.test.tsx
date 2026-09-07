@@ -67,15 +67,14 @@ afterAll(() => {
 	globalThis.fetch = originalFetch;
 });
 
-async function renderHome(): Promise<HTMLElement> {
+async function renderHome(): Promise<readonly [HTMLElement, Root]> {
 	const { HomeView } = await import("./home");
 	const { ViewProvider } = await import("@/lib/view-context");
 	const { SettingsProvider } = await import("@/lib/settings-context");
 	const container = document.createElement("div");
 	document.body.appendChild(container);
-	let root: Root | null = null;
+	const root = createRoot(container);
 	await act(async () => {
-		root = createRoot(container);
 		root.render(
 			<SettingsProvider>
 				<ViewProvider>{<HomeView />}</ViewProvider>
@@ -83,14 +82,13 @@ async function renderHome(): Promise<HTMLElement> {
 		);
 		await flush();
 	});
-	return container;
+	return [container, root];
 }
 
-async function unmountHome(root: Root | null): Promise<void> {
+async function unmountHome(root: Root): Promise<void> {
 	await act(async () => {
-		root?.unmount();
+		root.unmount();
 	});
-	root = null;
 }
 
 test("shows the setup link on a fresh workspace even when harness directories exist", async () => {
@@ -101,12 +99,12 @@ test("shows the setup link on a fresh workspace even when harness directories ex
 		],
 		configuredHarnesses: [],
 	};
-	const container = await renderHome();
+	const [container, root] = await renderHome();
 	try {
 		expect(container.querySelector('a[href="#setup"]')).not.toBeNull();
 		expect(container.textContent).toContain("Set up or repair your memory connection");
 	} finally {
-		await unmountHome(null);
+		await unmountHome(root);
 		container.remove();
 	}
 });
@@ -116,22 +114,22 @@ test("hides the setup link once a harness connection is configured", async () =>
 		harnesses: [{ id: "codex", name: "Codex", path: "/home/.codex", exists: false, lastSeen: null }],
 		configuredHarnesses: ["codex"],
 	};
-	const container = await renderHome();
+	const [container, root] = await renderHome();
 	try {
 		expect(container.querySelector('a[href="#setup"]')).toBeNull();
 	} finally {
-		await unmountHome(null);
+		await unmountHome(root);
 		container.remove();
 	}
 });
 
 test("keeps the setup link when an older daemon omits the connection record", async () => {
 	harnessPayload = { harnesses: [{ id: "codex", name: "Codex", path: "/x", exists: true, lastSeen: null }] };
-	const container = await renderHome();
+	const [container, root] = await renderHome();
 	try {
 		expect(container.querySelector('a[href="#setup"]')).not.toBeNull();
 	} finally {
-		await unmountHome(null);
+		await unmountHome(root);
 		container.remove();
 	}
 });
@@ -146,12 +144,12 @@ test("keeps the setup link while the harness check is pending", async () => {
 		});
 		return original("/api/harnesses");
 	}) as typeof fetch;
-	const container = await renderHome();
+	const [container, root] = await renderHome();
 	try {
 		expect(container.querySelector('a[href="#setup"]')).not.toBeNull();
 	} finally {
 		resolveFetch?.(Response.json(harnessPayload));
-		await unmountHome(null);
+		await unmountHome(root);
 		container.remove();
 		globalThis.fetch = original;
 	}

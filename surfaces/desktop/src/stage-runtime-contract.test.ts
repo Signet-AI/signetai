@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
+import { platformVecPackage } from "../scripts/stage-runtime.mjs";
 
 /**
  * The packaged daemon resolves every worker (db-owner, harness install,
@@ -35,4 +36,9 @@ test("desktop runtime staging ships connector assets for harness install", () =>
 
 	const daemonManager = readFileSync(join(import.meta.dir, "daemon-manager.ts"), "utf8");
 	expect(daemonManager).toContain("SIGNET_CONNECTOR_ASSETS_DIR");
+});
+
+test("selects the native sqlite-vec package for the target platform", () => {
+	expect(platformVecPackage("darwin", "arm64")).toBe("sqlite-vec-darwin-arm64");
+	expect(platformVecPackage("win32", "x64")).toBe("sqlite-vec-windows-x64");
 });

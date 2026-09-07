@@ -40,9 +40,6 @@ export function ModeToggle() {
 	const switchTheme = () => {
 		document.documentElement.classList.add("sig-theme-switching");
 		setTheme(next);
-		const nextDesktopTheme =
-			next === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : next;
-		syncDesktopTitleBarTheme(nextDesktopTheme);
 		requestAnimationFrame(() => {
 			requestAnimationFrame(() => document.documentElement.classList.remove("sig-theme-switching"));
 		});

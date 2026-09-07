@@ -34,10 +34,7 @@ export function HomeView() {
 		() => getJSONResult<{ configuredHarnesses?: string[] }>("/api/harnesses").then((result) => result.data),
 		{ intervalMs: 30000 },
 	);
-	const connected =
-		harnessesQuery.data?.configuredHarnesses?.length !== undefined &&
-		harnessesQuery.data.configuredHarnesses.length > 0;
-	const needsSetup = !connected;
+	const connected = (harnessesQuery.data?.configuredHarnesses?.length ?? 0) > 0;
 
 	const kpis: KpiData[] = useMemo(() => {
 		const totalMemories = timeline?.totalMemories;
@@ -91,7 +88,7 @@ export function HomeView() {
 							A more memorable you.
 						</span>
 					</div>
-					{needsSetup && (
+					{!connected && (
 						<a href="#setup" className="self-start text-sm underline underline-offset-4">
 							Set up or repair your memory connection
 						</a>
