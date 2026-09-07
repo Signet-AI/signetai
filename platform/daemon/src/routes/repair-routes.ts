@@ -730,7 +730,7 @@ export function registerRepairRoutes(
 			}),
 			async () => {
 				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				const clustered = getDbAccessor().withWriteTx(
+				const clustered = accessor.withWriteTx(
 					(db: import("../db-accessor").WriteDb) => clusterEntities(db, scoped.agentId),
 					"db:repair.cluster-entities.write",
 				);

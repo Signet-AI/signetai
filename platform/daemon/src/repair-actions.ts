@@ -971,7 +971,7 @@ interface ReembedBatchOutcome {
 	readonly profileChanged: boolean;
 }
 
-let reembedInProgress = false;
+const reembedInProgress = new Set<string>();
 
 type MissingMemorySelector = (db: ReadDb, limit: number) => ReadonlyArray<UnembeddedRow>;
 
@@ -1211,6 +1211,7 @@ export async function reembedMissingMemories(
 	runToCompletion = false,
 ): Promise<RepairResult> {
 	const action = "reembedMissingMemories";
+	const admissionAgentId = normalizeRepairAgentId(agentId);
 	const effectiveCooldownMs = cfg.repair.reembedCooldownMs;
 	const admission = await beginRepairAdmission(
 		accessor,
@@ -1220,7 +1221,7 @@ export async function reembedMissingMemories(
 		action,
 		effectiveCooldownMs,
 		cfg.repair.reembedHourlyBudget,
-		agentId,
+		admissionAgentId,
 		dryRun,
 	);
 	if (!admission.allowed) {
@@ -1265,7 +1266,7 @@ export async function reembedMissingMemories(
 			};
 		}
 
-		if (reembedInProgress) {
+		if (reembedInProgress.has(admissionAgentId)) {
 			return {
 				action,
 				success: false,
@@ -1274,7 +1275,7 @@ export async function reembedMissingMemories(
 			};
 		}
 
-		reembedInProgress = true;
+		reembedInProgress.add(admissionAgentId);
 		try {
 			let attempted = 0;
 			let written = 0;
@@ -1367,7 +1368,7 @@ export async function reembedMissingMemories(
 				writeRepairAudit(db, action, ctx, written, resultMessage);
 			});
 
-			limiter.record(action, agentId);
+			limiter.record(action, admissionAgentId);
 			logger.info("pipeline", "repair: re-embedded missing memories", {
 				affected: written,
 				attempted,
@@ -1389,7 +1390,7 @@ export async function reembedMissingMemories(
 					: {}),
 			};
 		} finally {
-			reembedInProgress = false;
+			reembedInProgress.delete(admissionAgentId);
 		}
 	});
 }
