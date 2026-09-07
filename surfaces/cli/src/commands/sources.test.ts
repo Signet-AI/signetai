@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSourcesConfig } from "@signet/core";
@@ -34,6 +35,54 @@ describe("sources CLI commands", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("resumes uploads after verifying the retained prefix and sends bounded chunks", async () => {
+		const bytes = Buffer.alloc(2 * 1024 ** 2 + 3, 97),
+			file = join(dir, "resume.jsonl");
+		writeFileSync(file, bytes);
+		const hash = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
+		let digest = "";
+		for (let offset = 0; offset < 1024 ** 2; offset += 64 * 1024) {
+			const part = bytes.subarray(offset, offset + 64 * 1024);
+			digest = hash(`${digest}:${hash(part)}:${part.length}`);
+		}
+		const calls: Array<{ path: string; opts?: RequestInit }> = [];
+		const deps = {
+			agentsDir: dir,
+			fetchDaemonResult: async <T>() => ({
+				ok: true as const,
+				data: {
+					files: [
+						{
+							id: "file",
+							state: "staging",
+							upload_offset: 1024 ** 2,
+							upload_generation: 2,
+							upload_size: bytes.length,
+							upload_digest: digest,
+						},
+					],
+				} as T,
+			}),
+			fetchDaemonRaw: async (path: string, opts?: RequestInit) => {
+				calls.push({ path, opts });
+				return { ok: true as const, response: Response.json({ offset: bytes.length }) };
+			},
+		};
+		const program = new Command();
+		registerSourcesCommands(program, deps);
+		await program.parseAsync(["node", "test", "sources", "imports", "upload", "job", "file", file, "--agent", "a"]);
+		expect(calls.map((call) => call.opts?.method)).toEqual(["PATCH", "PATCH", "POST"]);
+		expect(new Headers(calls[0]?.opts?.headers).get("upload-offset")).toBe(String(1024 ** 2));
+		expect(new Headers(calls[0]?.opts?.headers).get("upload-generation")).toBe("2");
+		expect((calls[0]?.opts?.body as Uint8Array | undefined)?.length).toBe(1024 ** 2);
+		expect((calls[1]?.opts?.body as Uint8Array | undefined)?.length).toBe(3);
+		writeFileSync(file, Buffer.alloc(bytes.length, 98));
+		calls.length = 0;
+		const retry = new Command();
+		registerSourcesCommands(retry, deps);
+		await retry.parseAsync(["node", "test", "sources", "imports", "upload", "job", "file", file, "--agent", "a"]);
+		expect(calls).toHaveLength(0);
+	});
 	it("wires desktop-cache mode through the Discord add command", async () => {
 		const cachePath = join(dir, "discord");
 		const program = new Command();

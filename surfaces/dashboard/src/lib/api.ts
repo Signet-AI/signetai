@@ -470,6 +470,10 @@ export interface SourceImportJob {
 	readonly files?: readonly SourceImportFile[];
 }
 export interface SourceImportFile {
+	readonly upload_offset?: number;
+	readonly upload_generation?: number;
+	readonly upload_digest?: string;
+	readonly upload_size?: number | null;
 	readonly id: string;
 	readonly name?: string;
 	readonly state?: string;
@@ -865,21 +869,72 @@ export const api = {
 		file: File,
 	): Promise<ApiReadResult<unknown>> => {
 		try {
-			const res = await fetch(
-				`${API_BASE}/api/sources/imports/${encodeURIComponent(jobId)}/files/${encodeURIComponent(fileId)}?agentId=${encodeURIComponent(agentId)}`,
-				{
-					method: "PUT",
-					signal: AbortSignal.timeout(5 * 60_000),
-					headers: { "Content-Type": "application/jsonl", "x-file-name": file.name, ...authHeaders() },
-					body: file,
+			const base = `${API_BASE}/api/sources/imports/${encodeURIComponent(jobId)}`;
+			const query = `?agentId=${encodeURIComponent(agentId)}`;
+			const status = await getJSONResult<{ files: SourceImportFile[] }>(`${base}${query}`);
+			if (status.error) return { data: null, error: status.error };
+			const slot = status.data?.files.find((entry) => entry.id === fileId);
+			if (
+				!slot ||
+				typeof slot.upload_offset !== "number" ||
+				typeof slot.upload_generation !== "number" ||
+				typeof slot.upload_digest !== "string"
+			)
+				return { data: null, error: "Upload state is unavailable" };
+			if (slot.state === "ready" || slot.state === "completed") return { data: slot, error: null };
+			if (slot.upload_size != null && slot.upload_size !== file.size)
+				return { data: null, error: "File size differs from the retained upload" };
+			const path = `${base}/files/${encodeURIComponent(fileId)}`;
+			const hash = async (bytes: ArrayBuffer): Promise<string> =>
+				Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) =>
+					byte.toString(16).padStart(2, "0"),
+				).join("");
+			let chain = "";
+			for (let offset = 0; offset < file.size; ) {
+				const end = Math.min(
+					offset + 1024 * 1024,
+					file.size,
+					offset < slot.upload_offset ? slot.upload_offset : Infinity,
+				);
+				const bytes = await file.slice(offset, end).arrayBuffer();
+				if (offset < slot.upload_offset) {
+					for (let cursor = 0; cursor < bytes.byteLength; cursor += 64 * 1024) {
+						const part = bytes.slice(cursor, cursor + 64 * 1024);
+						chain = await hash(new TextEncoder().encode(`${chain}:${await hash(part)}:${part.byteLength}`).buffer);
+					}
+					if (end === slot.upload_offset && chain !== slot.upload_digest)
+						return { data: null, error: "File prefix differs from the retained upload" };
+				} else {
+					const response = await fetch(`${path}${query}`, {
+						method: "PATCH",
+						signal: AbortSignal.timeout(60_000),
+						headers: {
+							...authHeaders(),
+							"upload-length": String(file.size),
+							"upload-offset": String(offset),
+							"upload-generation": String(slot.upload_generation),
+							"upload-checksum": await hash(bytes),
+						},
+						body: bytes,
+					});
+					const result = await response.json();
+					if (!response.ok) return { data: null, error: result.error ?? "Upload failed" };
+				}
+				offset = end;
+			}
+			const response = await fetch(`${path}${file.size === 0 ? "" : "/finalize"}${query}`, {
+				method: file.size === 0 ? "PUT" : "POST",
+				signal: AbortSignal.timeout(15 * 60_000),
+				headers: {
+					...authHeaders(),
+					"upload-generation": String(slot.upload_generation),
+					"upload-length": String(file.size),
 				},
-			);
-			const body = await res.json().catch(() => null);
-			return res.ok
-				? { data: body, error: null }
-				: { data: null, error: body?.error ?? `request failed (${res.status})` };
-		} catch {
-			return { data: null, error: "request failed" };
+			});
+			const result = await response.json();
+			return response.ok ? { data: result, error: null } : { data: null, error: result.error ?? "Finalization failed" };
+		} catch (error) {
+			return { data: null, error: error instanceof Error ? error.message : "Upload failed" };
 		}
 	},
 	controlSourceImport: (jobId: string, action: "start" | "pause" | "resume" | "retry" | "cancel") =>

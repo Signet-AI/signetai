@@ -683,3 +683,5 @@ export type {
 	EventBusSubscription,
 	ContextSnapshot,
 } from "./signet-os-types";
+
+export { parseTranscriptMessages, buildExportTranscriptRecord } from "./transcript-export";

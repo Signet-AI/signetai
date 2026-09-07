@@ -57,12 +57,13 @@ auth:
 process.env.SIGNET_PATH = tmpDir;
 let closeAccessor: (() => void) | null = null;
 
-afterAll(() => {
-	closeAccessor?.();
+afterAll(async () => {
+	await closeAccessor?.();
 	if (prevSignetPath === undefined) {
 		Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	}
 	if (prevSignetPath !== undefined) process.env.SIGNET_PATH = prevSignetPath;
+	Bun.gc(true);
 	rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -89,12 +90,11 @@ describe("auth guard co-location", () => {
 		return new Hono();
 	}
 
-	it("passes the resolved SQLite runtime to the recall owner", async () => {
+	it("passes the resolved SQLite runtime to the shared owner", async () => {
 		const { createRecallDbOwnerOptions } = await import("./daemon");
 		expect(createRecallDbOwnerOptions("/tmp/custom-libsqlite3.dylib")).toEqual({
 			dbPath: join(tmpDir, "memory", "memories.db"),
 			sqlitePath: "/tmp/custom-libsqlite3.dylib",
-			workerRole: "recall",
 		});
 	});
 

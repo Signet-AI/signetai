@@ -15,12 +15,7 @@ import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./mem
 import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
-import { TRANSCRIPT_IMPORT_LIMITS } from "./transcript-import-adapter";
-import {
-	commitCompletedTranscriptBatchInTx,
-	purgeTranscriptImportSourceInTx,
-	transcriptCommitBatchBytes,
-} from "./transcript-import-commit";
+import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
 import { getDreamingHygieneCandidatesInDb } from "./knowledge-graph-hygiene";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 import { DREAMING_SURPRISAL_SELECTOR_VERSION, selectDreamingSurprisalInDb } from "./pipeline/dreaming-surprisal";
@@ -174,6 +169,7 @@ export function runDbOwnerWorker(): void {
 		}
 		db = new Database(dbPath);
 		db.exec("PRAGMA busy_timeout = 5000");
+		db.exec("PRAGMA synchronous = FULL");
 		const vecExtension = findSqliteVecExtension();
 		if (vecExtension !== null) loadSqliteVecIfAvailable(db, vecExtension);
 	} catch (error) {
@@ -387,31 +383,9 @@ export function runDbOwnerWorker(): void {
 		request: Extract<DbOwnerJob["request"], { readonly kind: "transcript_bulk_commit" }>,
 		context: JobExecutionContext,
 	): unknown {
-		if (
-			request.input.commits.length === 0 ||
-			request.input.commits.length > TRANSCRIPT_IMPORT_LIMITS.maxRecordsPerBatch
-		)
-			throw new RangeError("invalid transcript commit batch");
-		if (transcriptCommitBatchBytes(request.input.commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
-			throw new RangeError("canonical_batch_too_large");
-		if (
-			request.input.commits.some(
-				(commit) =>
-					commit.agentId !== request.input.agentId ||
-					commit.sourceId !== request.input.sourceId ||
-					commit.harness !== request.input.harness,
-			)
-		)
-			throw new Error("transcript commit provenance does not match owner request");
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			const lease = db
-				.prepare(
-					"SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND state IN ('running','inventorying')",
-				)
-				.get(request.input.jobId, request.input.agentId, request.input.generation, request.input.leaseToken);
-			if (lease == null) throw new Error("stale import lease");
-			const result = commitCompletedTranscriptBatchInTx(db as never, request.input.commits);
+			const result = commitTranscriptImportBatchInTx(db as never, request.input);
 			commit(context);
 			return result;
 		} catch (error) {
@@ -955,9 +929,6 @@ export function runDbOwnerWorker(): void {
 			error.name = "DB_OWNER_WRITES_BLOCKED";
 			throw error;
 		}
-		if (process.env.SIGNET_DB_OWNER_RECALL_WORKER !== "1") {
-			throw new Error("DB owner recall jobs require a recall worker");
-		}
 		if (!recallAccessorReady) {
 			const { initDbAccessorAsync } = await import("./db-accessor");
 			await initDbAccessorAsync(ownerDbPath);
@@ -1016,9 +987,6 @@ export function runDbOwnerWorker(): void {
 	}
 
 	async function executeVectorSearch(payload: DbOwnerVectorSearchPayload): Promise<unknown> {
-		if (process.env.SIGNET_DB_OWNER_RECALL_WORKER !== "1") {
-			throw new Error("DB owner vector-search jobs require a recall worker");
-		}
 		if (!recallAccessorReady) {
 			const { initDbAccessorAsync } = await import("./db-accessor");
 			await initDbAccessorAsync(ownerDbPath);

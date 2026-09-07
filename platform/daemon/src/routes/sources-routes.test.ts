@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -44,7 +44,7 @@ describe("Sources routes", () => {
 	let previousSignetPath: string | undefined;
 	let previousSignetAgentId: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		clearSourceIndexProgressForTests();
 		dir = mkdtempSync(join(tmpdir(), "signet-sources-routes-"));
 		vault = join(dir, "vault");
@@ -55,21 +55,22 @@ describe("Sources routes", () => {
 		process.env.SIGNET_PATH = dir;
 		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		mkdirSync(join(dir, "memory"), { recursive: true });
-		closeDbAccessor();
+		await closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		globalThis.fetch = originalFetch;
 		setWebDnsLookupForTest(null);
 		setWebRequestForTest(null);
 		setActiveTelemetry(undefined);
 		clearSourceIndexProgressForTests();
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		if (previousSignetAgentId === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		else process.env.SIGNET_AGENT_ID = previousSignetAgentId;
+		Bun.gc(true);
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -737,7 +738,7 @@ describe("Sources routes", () => {
 			).count,
 		).toBe(0);
 	});
-	it("rejects imported-source deletion on unsupported platforms before changing state", async () => {
+	it("deletes imported sources on Windows", async () => {
 		process.env.SIGNET_AGENT_ID = "source-owner-a";
 		const added = addImportedSource(
 			{
@@ -756,15 +757,8 @@ describe("Sources routes", () => {
 			{ method: "DELETE" },
 		);
 
-		expect(response.status).toBe(501);
-		expect(await response.json()).toEqual({
-			error: "durable transcript imports are unavailable on win32; supported platforms: linux, darwin",
-			code: "transcript_import_unsupported_platform",
-			platform: "win32",
-			supportedPlatforms: ["linux", "darwin"],
-		});
-		expect(loadSourcesConfig(dir).sources).toEqual([added.source]);
-		expect(existsSync(join(dir, ".daemon", "source-deletion-tombstones.json"))).toBe(false);
+		expect(response.status).toBe(200);
+		expect(loadSourcesConfig(dir).sources).toEqual([]);
 	});
 
 	it("does not expose another agent's imported source through list or read routes", async () => {
@@ -1040,13 +1034,14 @@ describe("Sources routes", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memory_artifacts
-				 (agent_id, source_path, source_sha256, source_kind, session_id, session_token, harness, captured_at, content, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 (agent_id, source_path, source_sha256, source_kind, source_id, session_id, session_token, harness, captured_at, content, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				"default",
 				join(vault, "permanent", "Note.md"),
 				"sha",
 				"source_obsidian_markdown",
+				added.source.id,
 				"session",
 				"token",
 				"obsidian",
@@ -1676,7 +1671,7 @@ describe("Sources routes", () => {
 			files: [{ extraction: first }],
 		});
 
-		closeDbAccessor();
+		await closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		expect((await readHealth())?.importExtraction).toEqual(first);
 	});

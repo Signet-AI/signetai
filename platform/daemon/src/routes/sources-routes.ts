@@ -66,7 +66,6 @@ import {
 import { getSourceProvider } from "../source-providers";
 import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
 import { purgeSourceOwnedRows } from "../source-purge";
-import { getTranscriptImportPlatformError, TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS } from "../transcript-import-safe-fs";
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;
@@ -191,7 +190,6 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const recordIndexOperation = deps.recordIndexOperation ?? recordSourceIndexOperation;
 	const pickerExecFile = deps.pickerExecFile ?? execFileAsync;
 	const pickerPlatform = deps.pickerPlatform ?? process.platform;
-	const transcriptImportPlatform = deps.platform ?? process.platform;
 	app.get("/api/sources", async (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();
@@ -514,19 +512,6 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const sourceAgentId = resolveDaemonAgentId();
 		if (source.kind === "import" && source.providerSettings?.agentId !== sourceAgentId)
 			return c.json({ error: "Source not found" }, 404);
-		if (source.kind === "import") {
-			const unsupported = getTranscriptImportPlatformError(transcriptImportPlatform);
-			if (unsupported !== undefined)
-				return c.json(
-					{
-						error: unsupported.message,
-						code: unsupported.code,
-						platform: unsupported.platform,
-						supportedPlatforms: [...TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS],
-					},
-					501,
-				);
-		}
 		// Keep the configured source until lifecycle state and provider artifacts
 		// are gone. The config is the durable retry handle when an owner or purge
 		// operation fails partway through deletion.
@@ -808,7 +793,7 @@ export async function cleanupSourceDeletionTombstones(
 	const remaining: SourceDeletionTombstone[] = [];
 	for (const tombstone of tombstones) {
 		const configured = configuredSources.find((source: SignetSourceEntry) => source.id === tombstone.source.id);
-		if (configured !== undefined) {
+		if (configured !== undefined && configured.generation !== tombstone.source.generation) {
 			// Artifact purge is keyed by source id rather than generation. Retain
 			// every tombstone while that id is configured: this avoids deleting a
 			// deliberately re-added source, while generation-specific route
@@ -819,7 +804,10 @@ export async function cleanupSourceDeletionTombstones(
 		const provider = getSourceProvider(tombstone.source.kind);
 		try {
 			await removeSourceLifecycleState(tombstone.source, tombstone.agentId);
+			await purgeSourceOwnedRows({ sourceId: tombstone.source.id, agentId: tombstone.agentId });
 			if (provider) await purgeSource(provider, tombstone.source, tombstone.agentId, purgeNativeSource);
+			const removed = removeSourceIfGeneration(tombstone.source.id, tombstone.source.generation, agentsDir);
+			if (!removed.ok) throw new Error(removed.error);
 		} catch (err) {
 			remaining.push(tombstone);
 			logger.warn(

@@ -1,104 +1,32 @@
 import { controlImport, createJob, createOwnerTranscriptImportStore } from "../transcript-import-store";
+import { DbOwnerError } from "../db-owner-client";
 import { randomUUID } from "node:crypto";
-import { addImportedSource, removeSourceIfGeneration, resolveDefaultBasePath } from "@signet/core";
-import type { Context, Hono, Next } from "hono";
+import { addImportedSource, resolveDefaultBasePath, buildExportTranscriptRecord } from "@signet/core";
+import { Hono, type Context } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { authConfig } from "./state";
 import { requirePermission } from "../auth";
 import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
-import {
-	removeStagedTranscriptFile,
-	stageTranscriptStream,
-	type StagedTranscriptFile,
-} from "../transcript-import-staging";
 import { withTranscriptImportOperationLock } from "../transcript-import-operation-lock";
-import { getTranscriptImportPlatformError, TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS } from "../transcript-import-safe-fs";
+import {
+	cleanupCancelledTranscriptImport,
+	bindTranscriptSource,
+	appendTranscriptChunk,
+	beginTranscriptUpload,
+	purgeTranscriptBytes,
+	readTranscriptBytes,
+	sealTranscriptUpload,
+	transcriptUpload,
+	uploadTranscriptStream,
+	TRANSCRIPT_UPLOAD_BYTES,
+	TRANSCRIPT_FILE_BYTES,
+	type TranscriptUploadScope,
+} from "../transcript-import-bytes";
 
-const MAX_FILE_BYTES = 512 * 1024 * 1024;
 const MAX_FILES_PER_IMPORT = 25;
 const IMPORT_DUPLICATE_MODES = ["skip", "replace", "reimport"] as const;
 type ImportDuplicateMode = (typeof IMPORT_DUPLICATE_MODES)[number];
-const now = (): string => new Date().toISOString();
-const uploadInFlight = new Map<string, Promise<void>>();
 const TRANSCRIPT_IMPORT_OPERATION_KEY = "transcript-import";
-const uploadedSources = new Map<
-	string,
-	{ readonly sourceId: string; readonly generation?: string; readonly created: boolean }
->();
-
-function uploadSourceKey(agentId: string, jobId: string, fileId: string): string {
-	return `${agentId}:${jobId}:${fileId}`;
-}
-
-function stagedSourceId(jobId: string, fileId: string): string {
-	const reservedSourceId = `import:${jobId}:${fileId}`;
-	return `${reservedSourceId.replaceAll(":", "-")}-${jobId}-${fileId}`;
-}
-
-function stagedManagedPath(jobId: string, fileId: string): string {
-	return `imports/transcripts/${stagedSourceId(jobId, fileId)}/source.jsonl`;
-}
-
-async function rollbackCreatedSource(
-	source: { readonly sourceId: string; readonly generation?: string; readonly created: boolean },
-	root: string,
-	jobId: string,
-	agentId: string,
-): Promise<void> {
-	if (!source.created) return;
-	const references = await dbOwnerQuery<{ count: number }>(
-		{
-			sql: "SELECT COUNT(*) AS count FROM source_import_files WHERE agent_id = ? AND source_id = ? AND job_id != ? AND state != 'failed'",
-			params: [agentId, source.sourceId, jobId],
-			result: "get",
-			readonly: true,
-		},
-		{ operation: "sources.import.rollback.references", lane: "read" },
-	);
-	if ((references?.count ?? 0) > 0) return;
-	const removed = removeSourceIfGeneration(source.sourceId, source.generation, root);
-	if (!removed.ok) throw new Error(removed.error);
-}
-
-async function cleanupCancelledImport(jobId: string, agentId: string): Promise<void> {
-	const job = await dbOwnerQuery<{ state: string }>(
-		{
-			sql: "SELECT state FROM source_import_jobs WHERE id = ? AND agent_id = ?",
-			params: [jobId, agentId],
-			result: "get",
-			readonly: true,
-		},
-		{ operation: "sources.import.cancelled.status", lane: "read" },
-	);
-	if (job?.state !== "cancelled") return;
-	const files = await dbOwnerQuery<Array<{ id: string; source_id: string; managed_path: string }>>(
-		{
-			sql: "SELECT id, source_id, managed_path FROM source_import_files WHERE job_id = ? AND agent_id = ?",
-			params: [jobId, agentId],
-			result: "all",
-			readonly: true,
-		},
-		{ operation: "sources.import.cancelled.files", lane: "read" },
-	);
-	const root = resolveDefaultBasePath();
-	const managedPaths = new Set<string>();
-	const sourceKeys = new Set<string>();
-	for (const file of files) {
-		managedPaths.add(file.managed_path);
-		if (!uploadInFlight.has(uploadSourceKey(agentId, jobId, file.id)))
-			managedPaths.add(stagedManagedPath(jobId, file.id));
-		sourceKeys.add(file.source_id);
-	}
-	for (const managedPath of managedPaths) await removeStagedTranscriptFile(root, managedPath);
-	for (const file of files) {
-		const key = uploadSourceKey(agentId, jobId, file.id);
-		const source = uploadedSources.get(key);
-		if (source !== undefined && sourceKeys.has(file.source_id)) {
-			await rollbackCreatedSource(source, root, jobId, agentId);
-		}
-		uploadedSources.delete(key);
-	}
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -117,7 +45,7 @@ function bodyStream(request: Request): AsyncIterable<Uint8Array> {
 	// the clone's reader reaches EOF even though the original body is non-empty.
 	// Consume the one-shot server stream directly; staging remains byte-streamed.
 	const body = request.body;
-	if (body === null) throw new Error("request body is required");
+	if (body === null) return (async function* (): AsyncGenerator<Uint8Array> {})();
 	return (async function* (): AsyncGenerator<Uint8Array> {
 		const reader = body.getReader();
 		if (reader === undefined) throw new Error("request body is required");
@@ -127,7 +55,7 @@ function bodyStream(request: Request): AsyncIterable<Uint8Array> {
 				const item = await reader.read();
 				if (item.done) return;
 				total += item.value.byteLength;
-				if (total > MAX_FILE_BYTES) throw new Error("file exceeds limit");
+				if (total > TRANSCRIPT_FILE_BYTES) throw new Error("file exceeds limit");
 				yield item.value;
 			}
 		} finally {
@@ -135,61 +63,59 @@ function bodyStream(request: Request): AsyncIterable<Uint8Array> {
 		}
 	})();
 }
+async function boundedBody(request: Request, limit: number): Promise<Buffer> {
+	const parts: Uint8Array[] = [];
+	let length = 0;
+	for await (const part of bodyStream(request)) {
+		length += part.length;
+		if (length > limit) throw new RangeError("import request exceeds its byte limit");
+		parts.push(part);
+	}
+	return Buffer.concat(parts);
+}
+
 function permission(name: "modify" | "recall" | "admin") {
 	return requirePermission(name, authConfig);
 }
 
-async function markUploadFailed(jobId: string, fileId: string, agentId: string, message: string): Promise<void> {
-	try {
-		await dbOwnerTransaction(
-			[
-				{
-					sql: "UPDATE source_import_files SET state = 'staging', error = ?, updated_at = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging'",
-					params: [message, now(), fileId, jobId, agentId],
-					result: "run" as const,
-				},
-				{
-					sql: "UPDATE source_import_jobs SET state = 'staging', error = ?, updated_at = ? WHERE id = ? AND agent_id = ? AND state = 'staging'",
-					params: [message, now(), jobId, agentId],
-					result: "run" as const,
-				},
-			],
-			{ operation: "sources.import.upload.failed", lane: "write" },
-		);
-	} catch {
-		// Preserve the original upload failure when the owner is unavailable.
-	}
-}
-
-function transcriptImportPlatformGate(platform: string) {
-	return async (c: Context, next: Next) => {
-		const unsupported = getTranscriptImportPlatformError(platform);
-		if (unsupported === undefined) return await next();
-		return c.json(
-			{
-				error: unsupported.message,
-				code: unsupported.code,
-				platform: unsupported.platform,
-				supportedPlatforms: [...TRANSCRIPT_IMPORT_SUPPORTED_PLATFORMS],
-			},
-			501,
-		);
-	};
-}
-
-export function registerTranscriptImportRoutes(app: Hono, platform: string = process.platform): void {
+export function registerTranscriptImportRoutes(parent: Hono): void {
+	const app = new Hono();
+	app.onError((error, c) => {
+		const code = error instanceof DbOwnerError ? String(error.code) : "transcript_import_conflict";
+		const status =
+			code === "SQLITE_FULL"
+				? 507
+				: error instanceof DbOwnerError && code.startsWith("DB_OWNER_")
+					? 503
+					: error instanceof RangeError
+						? 413
+						: 409;
+		return c.json({ error: error.message, code }, status);
+	});
+	let transfers = 0;
+	app.use("/api/sources/imports/:jobId/files/*", async (c, next) => {
+		if (transfers >= 4)
+			return c.json({ error: "transcript transfer capacity reached", code: "transcript_import_busy" }, 429);
+		transfers++;
+		try {
+			await next();
+		} finally {
+			transfers--;
+		}
+	});
 	const store = createOwnerTranscriptImportStore();
+	app.use("/api/sources/imports/*", async (c, next) => {
+		if (agent(c) === null) return c.json({ error: "agent scope denied" }, 403);
+		await next();
+	});
 	app.use("/api/sources/imports", permission("modify"));
 	app.use("/api/sources/imports/*", permission("modify"));
-	const platformGate = transcriptImportPlatformGate(platform);
-	app.use("/api/sources/imports", platformGate);
-	app.use("/api/sources/imports/*", platformGate);
 	app.post("/api/sources/imports", async (c) => {
 		const agentId = agent(c);
 		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
 		let body: unknown;
 		try {
-			body = await c.req.json();
+			body = JSON.parse((await boundedBody(c.req.raw, 64 * 1024)).toString("utf8"));
 		} catch {
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
@@ -202,7 +128,7 @@ export function registerTranscriptImportRoutes(app: Hono, platform: string = pro
 		if (!isDuplicateMode(duplicateMode)) return c.json({ error: "invalid duplicateMode" }, 400);
 		const requestedFiles: Array<{ readonly id: string; readonly name: string }> = [];
 		for (const file of body.files) {
-			if (!isRecord(file) || typeof file.name !== "string" || file.name.trim().length === 0)
+			if (!isRecord(file) || typeof file.name !== "string" || file.name.trim().length === 0 || file.name.length > 1024)
 				return c.json({ error: "each file must have a nonempty name" }, 400);
 			requestedFiles.push({ id: randomUUID(), name: file.name.trim() });
 		}
@@ -223,6 +149,109 @@ export function registerTranscriptImportRoutes(app: Hono, platform: string = pro
 			{ operation: "sources.import.list", lane: "read" },
 		);
 		return c.json({ imports: rows });
+	});
+
+	app.get("/api/sources/imports/export/transcripts", async (c) => {
+		const agentId = agent(c);
+		if (!agentId || c.req.queries("agentId")?.some((id) => id !== agentId))
+			return c.json({ error: "agent scope denied" }, 403);
+		const limit = Number(c.req.query("limit") ?? Number.MAX_SAFE_INTEGER),
+			skip = Number(c.req.query("offset") ?? 0);
+		const harnesses = c.req.queries("harness") ?? [];
+		if (!Number.isSafeInteger(limit) || limit < 0 || !Number.isSafeInteger(skip) || skip < 0 || harnesses.length > 25)
+			return c.json({ error: "invalid export bounds" }, 400);
+		const since = c.req.query("since"),
+			until = c.req.query("until");
+		const where = ["agent_id = ?"];
+		const params: Array<string | number> = [agentId];
+		if (harnesses.length) {
+			where.push(`harness IN (${harnesses.map(() => "?").join(",")})`);
+			params.push(...harnesses);
+		}
+		if (since) {
+			where.push("created_at >= ?");
+			params.push(since);
+		}
+		if (until) {
+			where.push("created_at <= ?");
+			params.push(/^\d{4}-\d{2}-\d{2}$/.test(until) ? `${until}T23:59:59.999Z` : until);
+		}
+		const json = c.req.query("json") === "true",
+			messagesOnly = c.req.query("messagesOnly") === "true";
+		let cursor: [string, string] | undefined,
+			visited = 0,
+			emitted = 0,
+			opened = false;
+		const encoder = new TextEncoder();
+		return new Response(
+			new ReadableStream<Uint8Array>({
+				async pull(controller) {
+					try {
+						c.req.raw.signal.throwIfAborted();
+						if (json && !opened) {
+							opened = true;
+							controller.enqueue(encoder.encode("["));
+							return;
+						}
+						if (emitted >= limit) {
+							if (json) controller.enqueue(encoder.encode("]\n"));
+							controller.close();
+							return;
+						}
+						const row = await dbOwnerQuery<
+							Omit<Parameters<typeof buildExportTranscriptRecord>[0], "content"> & { bytes: number }
+						>(
+							{
+								sql: `SELECT session_key,length(CAST(content AS BLOB)) AS bytes,harness,project,agent_id,created_at FROM session_transcripts WHERE ${where.join(" AND ")} ${cursor ? "AND (created_at,session_key) > (?,?)" : ""} ORDER BY created_at,session_key LIMIT 1`,
+								params: [...params, ...(cursor ?? [])],
+								result: "get",
+								readonly: true,
+							},
+							{ operation: "sources.import.export", lane: "read" },
+						);
+						if (!row) {
+							if (json) controller.enqueue(encoder.encode("]\n"));
+							controller.close();
+							return;
+						}
+						cursor = [row.created_at, row.session_key];
+						if (visited++ < skip) {
+							controller.enqueue(new Uint8Array());
+							return;
+						}
+						if (row.bytes > 16 * 1024 ** 2) throw new Error("Transcript exceeds the 16 MiB export record limit");
+						const parts: Buffer[] = [];
+						for (let offset = 0; offset < row.bytes; offset += 64 * 1024) {
+							c.req.raw.signal.throwIfAborted();
+							const part = await dbOwnerQuery<{ content: string }>(
+								{
+									sql: "SELECT hex(substr(CAST(content AS BLOB),?,65536)) AS content FROM session_transcripts WHERE agent_id = ? AND session_key = ? AND created_at = ? AND length(CAST(content AS BLOB)) = ?",
+									params: [offset + 1, agentId, row.session_key, row.created_at, row.bytes],
+									result: "get",
+									readonly: true,
+								},
+								{ operation: "sources.import.export.content", lane: "read" },
+							);
+							if (!part) throw new Error("Transcript changed during export; retry the export");
+							parts.push(Buffer.from(part.content, "hex"));
+						}
+						const record = buildExportTranscriptRecord({ ...row, content: Buffer.concat(parts).toString("utf8") });
+						const messages = messagesOnly
+							? record.messages.filter((message) => message.role === "user" || message.role === "assistant")
+							: record.messages;
+						controller.enqueue(
+							encoder.encode(
+								`${json && emitted ? "," : ""}${JSON.stringify({ ...record, messages, message_count: messages.length })}${json ? "" : "\n"}`,
+							),
+						);
+						emitted++;
+					} catch (error) {
+						controller.error(error);
+					}
+				},
+			}),
+			{ headers: { "content-type": json ? "application/json" : "application/x-ndjson" } },
+		);
 	});
 	app.get("/api/sources/imports/:jobId", async (c) => {
 		const agentId = agent(c);
@@ -249,157 +278,131 @@ export function registerTranscriptImportRoutes(app: Hono, platform: string = pro
 		);
 		return c.json({ job, files });
 	});
-	app.put("/api/sources/imports/:jobId/files/:fileId", async (c) => {
+	const scope = (c: Context): TranscriptUploadScope => {
 		const agentId = agent(c);
-		if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
+		if (agentId === null) throw new Error("agent scope denied");
+		const generation = Number(c.req.header("upload-generation") ?? "0");
+		if (!Number.isSafeInteger(generation) || generation < 0) throw new Error("invalid upload generation");
 		const jobId = c.req.param("jobId"),
 			fileId = c.req.param("fileId");
-		const uploadKey = `${agentId}:${jobId}:${fileId}`;
-		const previous = uploadInFlight.get(uploadKey) ?? Promise.resolve();
-		let release!: () => void;
-		const gate = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		uploadInFlight.set(uploadKey, gate);
-		await previous;
-		try {
-			const job = await dbOwnerQuery<{ id: string; generation: number; duplicate_mode?: ImportDuplicateMode }>(
+		if (!jobId || !fileId) throw new Error("upload scope required");
+		return { agentId, jobId, fileId, generation, signal: c.req.raw.signal };
+	};
+	const finalize = async (c: Context): Promise<Response> => {
+		const upload = scope(c);
+		await sealTranscriptUpload(upload);
+		return withTranscriptImportOperationLock(TRANSCRIPT_IMPORT_OPERATION_KEY, async () => {
+			const file = await dbOwnerQuery<{
+				name: string;
+				content_hash: string;
+				size_bytes: number;
+				state: string;
+				source_id: string;
+				duplicate_mode: ImportDuplicateMode;
+			}>(
 				{
-					sql: "SELECT id,generation,duplicate_mode FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'staging'",
-					params: [jobId, agentId],
+					sql: "SELECT f.name,f.content_hash,f.size_bytes,f.state,f.source_id,j.duplicate_mode FROM source_import_files f JOIN source_import_jobs j ON j.id = f.job_id AND j.agent_id = f.agent_id WHERE f.id = ? AND f.job_id = ? AND f.agent_id = ? AND f.upload_generation = ? AND f.storage_state = 'sealed' AND j.state = 'staging'",
+					params: [upload.fileId, upload.jobId, upload.agentId, upload.generation],
 					result: "get",
 					readonly: true,
 				},
-				{ operation: "sources.import.upload.scope", lane: "read" },
+				{ operation: "sources.import.finalize.file", lane: "read" },
 			);
-			if (job == null) return c.json({ error: "import not found or not staging" }, 404);
-			const file = await dbOwnerQuery<{ id: string; name: string; ordinal: number; state: string }>(
+			if (!file) return c.json({ error: "import is no longer staging" }, 409);
+			const added = addImportedSource(
 				{
-					sql: "SELECT id,name,ordinal,state FROM source_import_files WHERE id = ? AND job_id = ? AND agent_id = ?",
-					params: [fileId, jobId, agentId],
-					result: "get",
-					readonly: true,
+					fileName: file.name,
+					contentHash: file.content_hash,
+					format: "jsonl",
+					agentId: upload.agentId,
+					duplicateMode: file.duplicate_mode,
+					importKey: `${upload.jobId}:${upload.fileId}:${upload.generation}`,
 				},
-				{ operation: "sources.import.upload.file", lane: "read" },
+				resolveDefaultBasePath(),
 			);
-			if (file == null) return c.json({ error: "file not found" }, 404);
-			if (file.state !== "staging") return c.json({ error: "file not found or already uploaded" }, 409);
-			const root = resolveDefaultBasePath();
-			let staged: StagedTranscriptFile;
-			try {
-				staged = await stageTranscriptStream(root, stagedSourceId(jobId, fileId), bodyStream(c.req.raw));
-			} catch (error) {
-				const message = error instanceof Error ? error.message : "upload failed";
-				await markUploadFailed(jobId, fileId, agentId, message);
-				return c.json({ error: message }, message === "file exceeds limit" ? 413 : 500);
-			}
-			return await withTranscriptImportOperationLock(TRANSCRIPT_IMPORT_OPERATION_KEY, async () => {
-				const currentJob = await dbOwnerQuery<{ state: string; generation: number }>(
-					{
-						sql: "SELECT state,generation FROM source_import_jobs WHERE id = ? AND agent_id = ?",
-						params: [jobId, agentId],
-						result: "get",
-						readonly: true,
-					},
-					{ operation: "sources.import.upload.final-scope", lane: "read" },
-				);
-				const currentFile = await dbOwnerQuery<{ state: string }>(
-					{
-						sql: "SELECT state FROM source_import_files WHERE id = ? AND job_id = ? AND agent_id = ?",
-						params: [fileId, jobId, agentId],
-						result: "get",
-						readonly: true,
-					},
-					{ operation: "sources.import.upload.final-file", lane: "read" },
-				);
-				if (
-					currentJob == null ||
-					currentJob.state !== "staging" ||
-					currentJob.generation !== job.generation ||
-					currentFile?.state !== "staging"
-				) {
-					await removeStagedTranscriptFile(root, staged.managedPath);
-					return c.json({ error: "import was invalidated during upload" }, 409);
-				}
-
-				const added = addImportedSource(
-					{
-						fileName: file.name,
-						contentHash: staged.contentHash,
-						format: "jsonl",
-						agentId,
-						duplicateMode: job.duplicate_mode ?? "skip",
-					},
-					root,
-				);
-				if (!added.ok) {
-					await removeStagedTranscriptFile(root, staged.managedPath);
-					await markUploadFailed(jobId, fileId, agentId, added.error);
-					return c.json({ error: added.error }, 400);
-				}
-				try {
-					await dbOwnerTransaction(
-						[
-							{
-								sql: "UPDATE source_import_files SET source_id = ?, name = ?, managed_path = ?, size_bytes = ?, content_hash = ?, state = 'ready', error = NULL, updated_at = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND state = 'staging' AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'staging' AND generation = ?)",
-								params: [
-									added.source.id,
-									c.req.header("x-file-name") ?? file.name,
-									staged.managedPath,
-									staged.sizeBytes,
-									staged.contentHash,
-									now(),
-									fileId,
-									jobId,
-									agentId,
-									jobId,
-									agentId,
-									job.generation,
-								],
-								result: "run" as const,
-								requireChanges: true,
-							},
-							{
-								sql: "UPDATE source_import_jobs SET error = NULL, updated_at = ? WHERE id = ? AND agent_id = ? AND state = 'staging' AND generation = ?",
-								params: [now(), jobId, agentId, job.generation],
-								result: "run" as const,
-								requireChanges: true,
-							},
-						],
-						{ operation: "sources.import.upload", lane: "write" },
-					);
-				} catch (error) {
-					await removeStagedTranscriptFile(root, staged.managedPath);
-					await rollbackCreatedSource(
-						{ sourceId: added.source.id, generation: added.source.generation, created: added.created },
-						root,
-						jobId,
-						agentId,
-					);
-					if (error instanceof Error && error.message.includes("precondition changed zero rows"))
-						return c.json({ error: "import was invalidated during upload" }, 409);
-					throw error;
-				}
-				uploadedSources.set(uploadSourceKey(agentId, jobId, fileId), {
+			if (!added.ok) return c.json({ error: added.error }, 400);
+			await bindTranscriptSource(upload, added.source.id);
+			return c.json(
+				{
+					fileId: upload.fileId,
 					sourceId: added.source.id,
-					generation: added.source.generation,
-					created: added.created,
-				});
-				return c.json(
+					sizeBytes: file.size_bytes,
+					contentHash: file.content_hash,
+				},
+				201,
+			);
+		});
+	};
+
+	app.put("/api/sources/imports/:jobId/files/:fileId", async (c) => {
+		const declared = c.req.header("upload-length") ?? c.req.header("content-length");
+		if (declared === undefined) return c.json({ error: "upload-length is required" }, 411);
+		await uploadTranscriptStream(scope(c), Number(declared), bodyStream(c.req.raw));
+		return finalize(c);
+	});
+	app.patch("/api/sources/imports/:jobId/files/:fileId", async (c) => {
+		const upload = scope(c);
+		const length = c.req.header("upload-length"),
+			offset = c.req.header("upload-offset"),
+			checksum = c.req.header("upload-checksum");
+		if (length === undefined || offset === undefined || !checksum)
+			return c.json({ error: "upload-length, upload-offset and upload-checksum are required" }, 400);
+		await beginTranscriptUpload(upload, Number(length));
+		const bytes = await boundedBody(c.req.raw, TRANSCRIPT_UPLOAD_BYTES);
+		const nextOffset = await appendTranscriptChunk(upload, Number(offset), bytes, checksum);
+		return c.json({ offset: nextOffset, generation: upload.generation });
+	});
+	app.post("/api/sources/imports/:jobId/files/:fileId/finalize", finalize);
+	app.post("/api/sources/imports/:jobId/files/:fileId/reset", async (c) =>
+		withTranscriptImportOperationLock(TRANSCRIPT_IMPORT_OPERATION_KEY, async () => {
+			const upload = scope(c);
+			const file = await transcriptUpload(upload);
+			if (
+				!(
+					(file.storage_state === "uploading" && file.upload_generation === upload.generation) ||
+					(["purging", "purged"].includes(file.storage_state) && file.upload_generation === upload.generation + 1)
+				)
+			)
+				return c.json({ error: "only an incomplete upload can be reset" }, 409);
+			await purgeTranscriptBytes(upload);
+			await dbOwnerTransaction(
+				[
 					{
-						fileId,
-						sourceId: added.source.id,
-						managedPath: staged.managedPath,
-						sizeBytes: staged.sizeBytes,
-						contentHash: staged.contentHash,
+						sql: "UPDATE source_import_files SET storage_state = 'uploading', upload_offset = 0, upload_size = NULL, upload_digest = '', content_hash = NULL, size_bytes = 0 WHERE id = ? AND job_id = ? AND agent_id = ? AND storage_state = 'purged' AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'staging')",
+						params: [upload.fileId, upload.jobId, upload.agentId, upload.jobId, upload.agentId],
+						result: "run",
+						requireChanges: true,
 					},
-					201,
-				);
-			});
-		} finally {
-			release();
-			if (uploadInFlight.get(uploadKey) === gate) uploadInFlight.delete(uploadKey);
-		}
+				],
+				{ operation: "sources.import.upload.reset", lane: "write" },
+			);
+			return c.json(await transcriptUpload(upload));
+		}),
+	);
+	app.get("/api/sources/imports/:jobId/files/:fileId/content", async (c) => {
+		const upload = scope(c);
+		const file = await transcriptUpload(upload);
+		if (file.storage_state !== "sealed") return c.json({ error: "source is not sealed" }, 409);
+		const readScope = { ...upload, generation: file.upload_generation };
+		let offset = 0;
+		const stream = new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				try {
+					if (offset === file.upload_size) {
+						controller.close();
+						return;
+					}
+					const bytes = await readTranscriptBytes(readScope, offset);
+					offset += bytes.length;
+					controller.enqueue(bytes);
+				} catch (error) {
+					controller.error(error);
+				}
+			},
+		});
+		return new Response(stream, {
+			headers: { "content-type": "application/x-ndjson", "content-length": String(file.upload_size) },
+		});
 	});
 	for (const control of ["start", "pause", "resume", "retry", "cancel"] as const) {
 		app.post(`/api/sources/imports/:jobId/${control}`, async (c) => {
@@ -408,7 +411,8 @@ export function registerTranscriptImportRoutes(app: Hono, platform: string = pro
 			const jobId = c.req.param("jobId");
 			const run = async (): Promise<Response> => {
 				const changed = await controlImport(store, { jobId, agentId, control });
-				if (control === "cancel") await cleanupCancelledImport(jobId, agentId);
+				if (control === "cancel")
+					await cleanupCancelledTranscriptImport(agentId, jobId, () => !c.req.raw.signal.aborted);
 				return c.json({ jobId, control, changed });
 			};
 			return control === "cancel"
@@ -421,19 +425,29 @@ export function registerTranscriptImportRoutes(app: Hono, platform: string = pro
 			const agentId = agent(c);
 			if (agentId === null) return c.json({ error: "agent scope denied" }, 403);
 			const jobId = c.req.param("jobId");
-			const rows = await dbOwnerQuery(
+			const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
 				{
 					sql:
 						suffix === "rejections"
-							? "SELECT * FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected' ORDER BY ordinal"
-							: "SELECT status, COUNT(*) AS count FROM source_import_records WHERE job_id = ? AND agent_id = ? GROUP BY status",
-					params: [jobId, agentId],
+							? "SELECT * FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'rejected' AND id > ? ORDER BY id LIMIT 100"
+							: "SELECT total,imported,duplicate,rejected,pending FROM source_import_jobs WHERE id = ? AND agent_id = ?",
+					params: [jobId, agentId, ...(suffix === "rejections" ? [c.req.query("cursor") ?? ""] : [])],
 					result: "all",
 					readonly: true,
 				},
 				{ operation: `sources.import.${suffix}`, lane: "read" },
 			);
-			return c.json({ jobId, [suffix]: rows });
+			return c.json({
+				jobId,
+				[suffix]:
+					suffix === "reconciliation"
+						? Object.entries(rows[0] ?? {})
+								.filter(([status]) => status !== "total")
+								.map(([status, count]) => ({ status, count }))
+						: rows,
+				nextCursor: suffix === "rejections" && rows.length === 100 ? rows[99]?.id : null,
+			});
 		});
 	}
+	parent.route("/", app);
 }

@@ -6,8 +6,6 @@ import {
 	commitCompletedTranscriptBatchInTx,
 	purgeTranscriptImportSourceInTx,
 	serializeCompletedTranscriptMessages,
-	splitTranscriptCommitBatches,
-	transcriptCommitBatchBytes,
 } from "./transcript-import-commit";
 import { signetExportV1Adapter } from "./transcript-import-adapter";
 
@@ -59,7 +57,7 @@ describe("transcript import invariants", () => {
 			buildCompletedTranscriptCommit(record("agent-a"), input),
 		);
 	});
-	test("source purge invalidates active import generations before deleting source rows", () => {
+	test("source purge refuses active leases before deleting source rows", () => {
 		const db = new Database(":memory:");
 		try {
 			db.exec(`
@@ -68,7 +66,8 @@ describe("transcript import invariants", () => {
 					generation INTEGER NOT NULL, control_request TEXT,
 					lease_token TEXT, lease_expires_at TEXT, updated_at TEXT
 				);
-				CREATE TABLE source_import_files (
+				CREATE TABLE source_import_chunks (file_id TEXT NOT NULL,agent_id TEXT NOT NULL);
+                CREATE TABLE source_import_files (
 					id TEXT PRIMARY KEY, job_id TEXT NOT NULL, source_id TEXT NOT NULL,
 					agent_id TEXT NOT NULL
 				);
@@ -78,7 +77,7 @@ describe("transcript import invariants", () => {
 				);
 				CREATE TABLE transcript_import_conversations (
 					agent_id TEXT NOT NULL, external_identity TEXT NOT NULL,
-					canonical_key TEXT NOT NULL, owner_source_id TEXT NOT NULL
+					canonical_key TEXT NOT NULL, owner_source_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'committed'
 				);
 			`);
 			db.prepare(
@@ -91,6 +90,10 @@ describe("transcript import invariants", () => {
 				"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id) VALUES ('purge-record', 'purge-job', 'purge-file', 'source-a', 'agent-a')",
 			).run();
 
+			expect(() => purgeTranscriptImportSourceInTx(db as never, "agent-a", "source-a")).toThrow(
+				"cancelled import leases",
+			);
+			db.exec("UPDATE source_import_jobs SET state = 'cancelled',generation = generation + 1,lease_token = NULL");
 			purgeTranscriptImportSourceInTx(db as never, "agent-a", "source-a");
 
 			expect(
@@ -115,7 +118,8 @@ describe("transcript import invariants", () => {
 					generation INTEGER NOT NULL, control_request TEXT,
 					lease_token TEXT, lease_expires_at TEXT, updated_at TEXT
 				);
-				CREATE TABLE source_import_files (
+				CREATE TABLE source_import_chunks (file_id TEXT NOT NULL,agent_id TEXT NOT NULL);
+                CREATE TABLE source_import_files (
 					id TEXT PRIMARY KEY, job_id TEXT NOT NULL, source_id TEXT NOT NULL,
 					agent_id TEXT NOT NULL
 				);
@@ -154,6 +158,10 @@ describe("transcript import invariants", () => {
 				).run(agentId, `identity-${suffix}`, `session-${suffix}`);
 			}
 
+			expect(() => purgeTranscriptImportSourceInTx(db as never, undefined, "shared-source")).toThrow(
+				"cancelled import leases",
+			);
+			db.exec("UPDATE source_import_jobs SET state = 'cancelled',generation = generation + 1,lease_token = NULL");
 			expect(purgeTranscriptImportSourceInTx(db as never, undefined, "shared-source")).toBeGreaterThan(0);
 			expect(
 				db.prepare("SELECT agent_id, state, generation, lease_token FROM source_import_jobs ORDER BY agent_id").all(),
@@ -172,16 +180,6 @@ describe("transcript import invariants", () => {
 			db.close();
 		}
 	});
-	test("splits canonical batches by the complete payload byte budget", () => {
-		const commit = buildCompletedTranscriptCommit(record("agent-a"), {
-			agentId: "agent-a",
-			sourceId: "source-a",
-			sourceRecordId: "record-a",
-		});
-		const oneCommitBytes = transcriptCommitBatchBytes([commit]);
-		expect(splitTranscriptCommitBatches([commit, commit], oneCommitBytes)).toEqual([[commit], [commit]]);
-		expect(() => splitTranscriptCommitBatches([commit], oneCommitBytes - 1)).toThrow("canonical_batch_too_large");
-	});
 	test("purge transfers duplicate ownership and permits lossless reimport", () => {
 		const db = new Database(":memory:");
 		try {
@@ -191,7 +189,8 @@ describe("transcript import invariants", () => {
 					generation INTEGER NOT NULL, control_request TEXT,
 					lease_token TEXT, lease_expires_at TEXT, updated_at TEXT
 				);
-				CREATE TABLE source_import_files (
+				CREATE TABLE source_import_chunks (file_id TEXT NOT NULL,agent_id TEXT NOT NULL);
+                CREATE TABLE source_import_files (
 					id TEXT PRIMARY KEY, job_id TEXT NOT NULL, source_id TEXT NOT NULL,
 					agent_id TEXT NOT NULL
 				);

@@ -243,11 +243,17 @@ Transcript imports are a separate durable API; they do not use the synchronous
 and `cancel` are durable controls. All routes require `modify` permission and
 fail closed when `agentId` is not the daemon's resolved target agent.
 
-The managed transcript filesystem is supported on Linux and macOS. On Windows,
-transcript import endpoints and deletion of an imported Source return `501`
-with `code: "transcript_import_unsupported_platform"`; they do not create,
-mutate, or purge import state. Install or run the daemon on Linux or macOS to
-use durable transcript imports.
+Transcript imports and imported-source deletion support Windows, Linux, and macOS.
+Raw JSONL bytes are retained in the workspace database by its single owner process.
+Uploads use checksummed, resumable 1 MiB requests and 64 KiB storage chunks. Files
+may be up to 64 GiB; admission reserves three times the declared size plus 64 MiB
+and leaves 1 GiB free. Other writers can still consume disk space, so a disk-full
+failure remains explicit and the acknowledged upload prefix remains resumable.
+
+Existing filesystem imports migrate on Linux or macOS: Signet verifies retained
+bytes before removing old files. Finish that migration before moving an older
+workspace to Windows. Migration failures remain visible and preserve evidence;
+new Windows imports do not require POSIX filesystem operations.
 
 ### POST /api/sources/imports
 
@@ -259,11 +265,41 @@ Lists transcript import jobs for the resolved agent.
 
 ### GET /api/sources/imports/:jobId
 
-Returns one job and its staged files.
+Returns one job and its files, including `upload_offset`, `upload_generation`,
+`upload_size`, and the checksum chain `upload_digest`.
 
 ### PUT /api/sources/imports/:jobId/files/:fileId
 
-Streams one JSONL file into the staged slot.
+Compatibility transport for one streamed JSONL file. Requires `upload-length`
+(or `content-length`); it uses the same bounded chunk writer.
+
+### PATCH /api/sources/imports/:jobId/files/:fileId
+
+Upload at most 1 MiB with `upload-length`, `upload-offset`, `upload-generation`
+(default `0`), and `upload-checksum` (hex SHA-256 of this request). Offsets and
+nonfinal chunks must align to 64 KiB. Identical replay is safe; conflicting
+bytes and stale generations fail. The reply acknowledges the durable offset.
+
+### POST /api/sources/imports/:jobId/files/:fileId/finalize
+
+Requires the complete declared upload. Verifies the retained bytes with a
+streaming SHA-256 pass, seals them, and registers the Source idempotently.
+Interrupted verification can be retried; no upload prefix is discarded.
+
+### POST /api/sources/imports/:jobId/files/:fileId/reset
+
+Discards an incomplete upload and increments its generation. The old generation
+cannot append to the replacement. An interrupted reset can be retried.
+
+### GET /api/sources/imports/:jobId/files/:fileId/content
+
+Streams exact retained bytes of a sealed file, including rejected and blank lines.
+
+### GET /api/sources/imports/export/transcripts
+
+Streams conversation JSONL (or `json=true`) through the database owner, one
+bounded record at a time. Supports `harness`, `since`, `until`, `limit`,
+`offset`, and `messagesOnly`; `agentId` must match the resolved agent.
 
 ### POST /api/sources/imports/:jobId/start
 
@@ -271,9 +307,8 @@ Queues the staged job for inventory and commit.
 
 ### POST /api/sources/imports/:jobId/pause
 
-Requests a pause at the next bounded worker checkpoint. A pending cancellation
-takes precedence: pausing that job returns `changed: false` and preserves the
-cancellation request.
+Invalidates the worker lease atomically. Work stops at its next bounded read or
+commit. Pausing a cancelled job returns `changed: false`.
 
 ### POST /api/sources/imports/:jobId/resume
 
@@ -285,11 +320,13 @@ Retries interrupted or retryable records in a job.
 
 ### POST /api/sources/imports/:jobId/cancel
 
-Cancels a job and terminalizes remaining pending records.
+Cancels further processing and reclaims incomplete uploads in bounded transactions.
+Sealed Sources retain their evidence until Source deletion. `cleanup_state`
+reports pending or complete cleanup; record counters retain partial progress.
 
 ### GET /api/sources/imports/:jobId/rejections
 
-Lists rejected records and bounded rejection codes.
+Lists at most 100 rejected records. Pass `cursor=nextCursor` for the next page.
 
 ### GET /api/sources/imports/:jobId/reconciliation
 
@@ -297,25 +334,23 @@ Returns the durable status-count reconciliation.
 
 The only accepted adapter is `signet-export` version `1` (`source: "signet"`).
 Each line is classified exactly once as `imported`, `duplicate`, or `rejected`;
-blank lines are counted separately. Validation rejects malformed JSON, unknown
+blank lines are ignored. Validation rejects malformed JSON, unknown
 roles, count mismatches, missing/nonempty-invalid messages, invalid timestamps,
 and records over 16 MiB or messages over 4 MiB. The hard limits are 25 records
 per database batch, 8 MiB canonical batch, 50,000 messages, and one active
 job/file. The response counters satisfy `total = imported + duplicate +
-rejected + pending` while a job is active and `pending = 0` when terminal.
+rejected + pending` while a job is active and `pending = 0` when completed. Cancelled and failed jobs retain partial progress.
 
 Imported transcripts preserve message roles (`user`, `assistant`, `system`,
 `tool`, `unknown`), exact content whitespace and newlines, project, and the
 historical timestamp. The selected target agent owns the rows; embedded
 `agent_id` is provenance only. Source identity and content fingerprints make
 same-identity replay a duplicate and same-identity/different-content a
-`conversation_identity_conflict` rejection. Staging is an fsynced managed JSONL
-file under `imports/transcripts/<source-id>/`; canonical harness files and
-`session_transcripts` are written with deterministic IDs. Recovery resumes byte
-checkpoints and replays filesystem writes idempotently before finalizing DB
-ownership.
+`conversation_identity_conflict` rejection. Raw bytes, canonical conversation rows, and ledgers live under one database
+owner. Recovery resumes durable offsets; each interpretation batch atomically
+commits conversation evidence, record outcomes, audit entries, and its checkpoint.
 
-Removing an import Source purges its staged file, canonical lines,
+Removing an import Source purges its retained raw chunks,
 `session_transcripts`, artifacts, indexes, aggregates, and consumption/review
 rows. Bounded record fingerprints and audit tombstones remain. Derived
 knowledge is marked unsupported/stale and reviewed by the normal Dreaming path;

@@ -175,6 +175,7 @@ export function ConnectSourceDialog({
 
 	const choose = (selected: FileList | null) => {
 		if (!selected) return;
+		setTranscriptJobId(null);
 		setFiles(Array.from(selected));
 		setDesktopPaths([]);
 		setResult(null);
@@ -201,7 +202,14 @@ export function ConnectSourceDialog({
 			}
 			setBusy(true);
 			setError(null);
-			const created = await api.createSourceImport(selectedAgent, targetFiles, duplicateMode);
+			const created = transcriptJobId
+				? await api.getSourceImport(transcriptJobId).then((response) => ({
+						...response,
+						data: response.data
+							? { jobId: response.data.job.id, id: response.data.job.id, files: response.data.files }
+							: undefined,
+					}))
+				: await api.createSourceImport(selectedAgent, targetFiles, duplicateMode);
 			if (!created.data) {
 				setBusy(false);
 				setError(created.error ?? "Could not create import job");

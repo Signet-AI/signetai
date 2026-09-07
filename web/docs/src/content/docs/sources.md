@@ -57,10 +57,10 @@ Whitespace, multiline content, roles, projects, timestamps, and provenance are
 retained exactly. The chosen `--agent` owns the import; an embedded `agent_id`
 does not change scope.
 
-Durable transcript imports and removal of transcript-import Sources require
-Linux or macOS filesystem safeguards. On Windows, the import and removal
-mutations return HTTP `501` with
-`code: "transcript_import_unsupported_platform"` before changing state.
+Transcript imports and imported-source deletion support Windows, Linux, and macOS.
+The single database owner retains the raw bytes and resumes checksummed uploads.
+See the [import API](/api/documents-sources/#durable-transcript-imports) for upload
+limits, disk-space admission, and migration of older filesystem imports.
 
 ```bash
 signet sources import ./claude.jsonl ./codex.jsonl --kind transcripts --schema signet --agent my-agent --json

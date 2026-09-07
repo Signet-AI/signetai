@@ -1,4 +1,5 @@
-import { createReadStream } from "node:fs";
+import { open } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import type { SignetSourceEntry } from "@signet/core";
 import type { Command } from "commander";
 import {
@@ -23,6 +24,90 @@ export interface RegisterSourcesCommandsDeps extends SourcesDeps {
 		opts?: RequestInit & { timeout?: number },
 	) => Promise<DaemonFetchResult<T>>;
 	readonly fetchDaemonRaw?: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
+}
+
+async function uploadTranscriptFile(
+	deps: RegisterSourcesCommandsDeps,
+	agentId: string,
+	jobId: string,
+	fileId: string,
+	fileName: string,
+): Promise<DaemonStreamResult> {
+	if (!deps.fetchDaemonRaw || !deps.fetchDaemonResult)
+		return { ok: false, reason: "offline", error: "transcript uploads require the daemon" };
+	const base = `/api/sources/imports/${encodeURIComponent(jobId)}`;
+	const query = `?agentId=${encodeURIComponent(agentId)}`;
+	const status = await deps.fetchDaemonResult<{
+		files: Array<{
+			id: string;
+			state: string;
+			upload_offset: number;
+			upload_generation: number;
+			upload_digest: string;
+			upload_size: number | null;
+		}>;
+	}>(`${base}${query}`);
+	if (!status.ok) return status;
+	const slot = status.data.files.find((file) => file.id === fileId);
+	if (!slot) return { ok: false, reason: "http", error: "upload slot not found" };
+	if (slot.state === "ready" || slot.state === "completed") return { ok: true, response: Response.json(slot) };
+	const path = `${base}/files/${encodeURIComponent(fileId)}`;
+	const handle = await open(fileName, "r");
+	try {
+		const info = await handle.stat();
+		if (!info.isFile() || (slot.upload_size !== null && slot.upload_size !== info.size))
+			throw new Error("file size differs from the upload declaration");
+		let chain = "";
+		const hash = (bytes: Uint8Array | string): string => createHash("sha256").update(bytes).digest("hex");
+		for (let offset = 0; offset < info.size; ) {
+			const size = Math.min(
+				1024 * 1024,
+				info.size - offset,
+				offset < slot.upload_offset ? slot.upload_offset - offset : Infinity,
+			);
+			const bytes = Buffer.alloc(size);
+			let filled = 0;
+			while (filled < size) {
+				const read = await handle.read(bytes, filled, size - filled, offset + filled);
+				if (!read.bytesRead) throw new Error("file changed during upload");
+				filled += read.bytesRead;
+			}
+			if (offset < slot.upload_offset) {
+				for (let cursor = 0; cursor < bytes.length; cursor += 64 * 1024) {
+					const part = bytes.subarray(cursor, cursor + 64 * 1024);
+					chain = hash(`${chain}:${hash(part)}:${part.length}`);
+				}
+				if (offset + size === slot.upload_offset && chain !== slot.upload_digest)
+					throw new Error("file prefix differs from the retained upload; reset the slot before replacing it");
+			} else {
+				const result = await deps.fetchDaemonRaw(`${path}${query}`, {
+					method: "PATCH",
+					timeout: 60_000,
+					headers: {
+						"upload-length": String(info.size),
+						"upload-offset": String(offset),
+						"upload-generation": String(slot.upload_generation),
+						"upload-checksum": hash(bytes),
+					},
+					body: bytes,
+				});
+				if (!result.ok) return result;
+				await result.response.arrayBuffer();
+			}
+			offset += size;
+		}
+		const after = await handle.stat();
+		if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw new Error("file changed during upload");
+		return deps.fetchDaemonRaw(`${path}${info.size === 0 ? "" : "/finalize"}${query}`, {
+			method: info.size === 0 ? "PUT" : "POST",
+			timeout: 15 * 60_000,
+			headers: { "upload-generation": String(slot.upload_generation), "upload-length": String(info.size) },
+		});
+	} catch (error) {
+		return { ok: false, reason: "http", error: error instanceof Error ? error.message : "upload failed" };
+	} finally {
+		await handle.close();
+	}
 }
 
 function collect(value: string, previous: string[]): string[] {
@@ -50,20 +135,8 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 						return result as DaemonFetchResult<import("../features/sources.js").SourceImportCreateResponse>;
 					}
 				: undefined,
-			uploadDaemonImportFile: deps.fetchDaemonRaw
-				? async (jobId, fileId, fileName) => {
-						const result = await deps.fetchDaemonRaw?.(
-							`/api/sources/imports/${encodeURIComponent(jobId)}/files/${encodeURIComponent(fileId)}?agentId=${encodeURIComponent(options.agent)}`,
-							{
-								method: "PUT",
-								headers: { "Content-Type": "application/jsonl", "x-file-name": fileName },
-								body: createReadStream(fileName) as unknown as BodyInit,
-								...({ duplex: "half" } as unknown as RequestInit),
-							},
-						);
-						return result as DaemonStreamResult;
-					}
-				: undefined,
+			uploadDaemonImportFile: (jobId, fileId, fileName) =>
+				uploadTranscriptFile(deps, options.agent, jobId, fileId, fileName),
 			fetchDaemonImport: deps.fetchDaemonResult
 				? async <T>(path: string, opts?: RequestInit) => {
 						const result = await deps.fetchDaemonResult?.(
@@ -77,6 +150,19 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 	);
 
 	const imports = sources.command("imports");
+	imports
+		.command("upload <jobId> <fileId> <file>")
+		.description("Resume an incomplete transcript upload, then finalize its Source")
+		.requiredOption("--agent <id>", "Target agent id")
+		.action(async (jobId: string, fileId: string, file: string, options: { agent: string }) => {
+			const result = await uploadTranscriptFile(deps, options.agent, jobId, fileId, file);
+			if (!result.ok) {
+				console.error(result.error ?? result.reason);
+				process.exitCode = 1;
+				return;
+			}
+			console.log(await result.response.text());
+		});
 
 	for (const action of ["list", "status", "pause", "resume", "retry", "cancel"] as const) {
 		const command = imports

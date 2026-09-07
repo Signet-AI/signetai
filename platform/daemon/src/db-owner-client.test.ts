@@ -37,19 +37,19 @@ function makeDb(): { readonly directory: string; readonly path: string } {
 	const db = new Database(path);
 	db.exec("CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT NOT NULL)");
 	db.prepare("INSERT INTO memories (id, content) VALUES (?, ?)").run("m1", "owner-routed recall");
-	db.close();
+	db.close(true);
 	return { directory, path };
 }
 
-function makeMigratedDb(): { readonly directory: string; readonly path: string } {
+async function makeMigratedDb(): Promise<{ readonly directory: string; readonly path: string }> {
 	const directory = mkdtempSync(join(tmpdir(), "signet-db-owner-migrated-"));
 	const path = join(directory, "memory.db");
 	const previousPath = process.env.SIGNET_PATH;
 	process.env.SIGNET_PATH = directory;
 	mkdirSync(join(directory, "memory"), { recursive: true });
-	closeDbAccessor();
+	await closeDbAccessor();
 	initDbAccessor(path);
-	closeDbAccessor();
+	await closeDbAccessor();
 	if (previousPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	else process.env.SIGNET_PATH = previousPath;
 	return { directory, path };
@@ -63,6 +63,21 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 	}
 }
 
+async function rejected(promise: Promise<unknown>): Promise<unknown> {
+	try {
+		await promise;
+	} catch (error) {
+		return error;
+	}
+	throw new Error("expected rejection");
+}
+async function rejectedThrow(promise: Promise<unknown>): Promise<() => never> {
+	const error = await rejected(promise);
+	return () => {
+		throw error;
+	};
+}
+
 describe("DB owner client", () => {
 	let client: ReturnType<typeof createDbOwnerClient> | null = null;
 	let directory: string | null = null;
@@ -71,11 +86,28 @@ describe("DB owner client", () => {
 		registerDbOwnerMaintenance(null);
 		await client?.close();
 		client = null;
-		if (directory !== null) rmSync(directory, { recursive: true, force: true });
+		if (directory !== null)
+			for (let attempt = 0; ; attempt++) {
+				try {
+					rmSync(directory, { recursive: true, force: true });
+					break;
+				} catch (error) {
+					if (attempt === 5 || !(error instanceof Error) || !("code" in error) || error.code !== "EBUSY") throw error;
+					await new Promise((resolve) => setTimeout(resolve, 50));
+				}
+			}
 		directory = null;
 	});
 
 	function processExists(pid: number): boolean {
+		if (process.platform === "win32") {
+			try {
+				process.kill(pid, 0);
+				return true;
+			} catch {
+				return false;
+			}
+		}
 		try {
 			const status = readFileSync(`/proc/${pid}/status`, "utf8");
 			if (/^State:\s+Z/m.test(status)) return false;
@@ -102,25 +134,27 @@ describe("DB owner client", () => {
 		);
 		const vector = Buffer.from(new Float32Array([1, 2]).buffer);
 		const insert = fixture.prepare("INSERT INTO embeddings (id, dimensions, vector) VALUES (?, 2, ?)");
+		fixture.exec("BEGIN");
 		for (let index = 0; index < 1_201; index += 1) {
 			insert.run(`embedding-${String(index).padStart(4, "0")}`, index === 600 ? Buffer.from([1]) : vector);
 		}
-		fixture.close();
+		fixture.exec("COMMIT");
+		fixture.close(true);
 
 		client = createDbOwnerClient({ dbPath: database.path });
 		await client.start();
-		const maintenanceBefore = client.health().lanes?.maintenance;
+		const maintenanceBefore = client.health();
 		if (maintenanceBefore === undefined || maintenanceBefore.pid === null) {
 			throw new Error("maintenance owner did not publish a pid");
 		}
 		for (let iteration = 0; iteration < 4; iteration += 1) {
-			await expect(
-				client.submit<{ readonly completed: boolean }>(
+			expect(
+				await client.submit<{ readonly completed: boolean }>(
 					{ kind: "vector_backfill", expectedDimensions: 2, maxBatches: 1, batchSize: 500 },
 					{ operation: "maintenance.vector-backfill-regression", lane: "maintenance", deadlineMs: 10_000 },
 				).result,
-			).resolves.toEqual({ completed: true });
-			const maintenance = client.health().lanes?.maintenance;
+			).toEqual({ completed: true });
+			const maintenance = client.health();
 			expect(maintenance).toMatchObject({
 				state: "ready",
 				generation: 1,
@@ -153,12 +187,12 @@ describe("DB owner client", () => {
 		try {
 			client = createDbOwnerClient({ dbPath: database.path, workerPath: join(import.meta.dir, "db-owner-worker.ts") });
 			await client.start();
-			await expect(
-				client.submit<readonly { readonly value: number }[]>(
+			expect(
+				await client.submit<readonly { readonly value: number }[]>(
 					{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
 					{ operation: "vec-degraded-plain-query", lane: "read", deadlineMs: 1_000 },
 				).result,
-			).resolves.toEqual([{ value: 1 }]);
+			).toEqual([{ value: 1 }]);
 			expect(client.health().state).toBe("ready");
 			expect(client.health().pid).not.toBeNull();
 		} finally {
@@ -180,14 +214,14 @@ describe("DB owner client", () => {
 			client = createDbOwnerClient({ dbPath: database.path });
 			const start = client.start();
 			await waitFor(() => existsSync(startupStarted));
-			await expect(start).resolves.toBeUndefined();
+			expect(await start).toBeUndefined();
 			writeFileSync(startupRelease, "release\n");
-			await expect(
-				client.submit<readonly { readonly value: number }[]>(
+			expect(
+				await client.submit<readonly { readonly value: number }[]>(
 					{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
 					{ operation: "startup-ready-query", lane: "read", deadlineMs: 1_000 },
 				).result,
-			).resolves.toEqual([{ value: 1 }]);
+			).toEqual([{ value: 1 }]);
 		} finally {
 			writeFileSync(startupRelease, "release\n");
 			if (previousStarted === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_STARTUP_STARTED");
@@ -224,12 +258,12 @@ describe("DB owner client", () => {
 			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
 			{ operation: "malformed-owner-regression", lane: "read", deadlineMs: 5_000 },
 		);
-		await expect(handle.result).rejects.toMatchObject({ code: "DB_OWNER_DIED" });
+		expect(await rejected(handle.result)).toMatchObject({ code: "DB_OWNER_DIED" });
 		await waitFor(() => !processExists(firstPid));
-		expect(client.health().lanes?.read).toMatchObject({ state: "failed", pid: null });
+		expect(client.health()).toMatchObject({ state: "failed", pid: null });
 
 		await client.start();
-		const replacementPid = client.health().lanes?.read?.pid;
+		const replacementPid = client.health().pid;
 		expect(replacementPid).not.toBeNull();
 		expect(replacementPid).not.toBe(firstPid);
 	});
@@ -258,12 +292,14 @@ describe("DB owner client", () => {
 		client = first;
 		const firstPid = first.health().pid;
 		if (firstPid === null) throw new Error("replacement test owner did not publish a pid");
-		await expect(
-			first.submit(
-				{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
-				{ operation: "replacement-owner-regression", lane: "read", deadlineMs: 5_000 },
-			).result,
-		).rejects.toMatchObject({ message: "owner fatal" });
+		expect(
+			await rejected(
+				first.submit(
+					{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+					{ operation: "replacement-owner-regression", lane: "read", deadlineMs: 5_000 },
+				).result,
+			),
+		).toMatchObject({ message: "owner fatal" });
 		await waitFor(() => first.health().state === "failed");
 
 		const [replacementA, replacementB] = await Promise.all([
@@ -288,7 +324,7 @@ describe("DB owner client", () => {
 		process.env.SIGNET_DB_OWNER_START_TIMEOUT_MS = "50";
 		try {
 			client = createDbOwnerClient({ dbPath: database.path, workerPath });
-			await expect(client.start()).rejects.toMatchObject({ code: "DB_OWNER_START_TIMEOUT" });
+			expect(await rejected(client.start())).toMatchObject({ code: "DB_OWNER_START_TIMEOUT" });
 		} finally {
 			if (previousTimeout === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_START_TIMEOUT_MS");
 			else process.env.SIGNET_DB_OWNER_START_TIMEOUT_MS = previousTimeout;
@@ -302,7 +338,7 @@ describe("DB owner client", () => {
 		process.env.SIGNET_DB_OWNER_START_TIMEOUT_MS = "abc";
 		try {
 			client = createDbOwnerClient({ dbPath: database.path });
-			await expect(client.start()).rejects.toMatchObject({ code: "DB_OWNER_START_TIMEOUT_INVALID" });
+			expect(await rejected(client.start())).toMatchObject({ code: "DB_OWNER_START_TIMEOUT_INVALID" });
 		} finally {
 			if (previousTimeout === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_START_TIMEOUT_MS");
 			else process.env.SIGNET_DB_OWNER_START_TIMEOUT_MS = previousTimeout;
@@ -335,16 +371,18 @@ describe("DB owner client", () => {
 		client = createDbOwnerClient({ dbPath: database.path, workerPath });
 		await client.start();
 
-		await expect(
-			client.submit(
-				{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
-				{ operation: "serialized-application-error", lane: "read", deadlineMs: 1_000 },
-			).result,
-		).rejects.toMatchObject({ code: "DB_MIGRATION_BACKUP_ADMISSION_FAILED", sqliteCode: undefined });
+		expect(
+			await rejected(
+				client.submit(
+					{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+					{ operation: "serialized-application-error", lane: "read", deadlineMs: 1_000 },
+				).result,
+			),
+		).toMatchObject({ code: "DB_MIGRATION_BACKUP_ADMISSION_FAILED", sqliteCode: undefined });
 	});
 
 	test("keeps transport readiness distinct from database initialization", async () => {
-		const database = makeMigratedDb();
+		const database = await makeMigratedDb();
 		directory = database.directory;
 		client = createDbOwnerClient({ dbPath: database.path });
 		await client.start();
@@ -354,7 +392,7 @@ describe("DB owner client", () => {
 	});
 
 	test("executes exact, bounded, and existence Dreaming backlog requests in the owner", async () => {
-		const database = makeMigratedDb();
+		const database = await makeMigratedDb();
 		directory = database.directory;
 		const fixture = new Database(database.path);
 		const timestamp = "2026-08-01T00:00:00.000Z";
@@ -365,7 +403,7 @@ describe("DB owner client", () => {
 				 VALUES (?, ?, ?, ?, ?, ?)`,
 			)
 			.run("owner-dreaming-source", "owner-routed episodic evidence", "default", timestamp, timestamp, timestamp);
-		fixture.close();
+		fixture.close(true);
 		client = createDbOwnerClient({ dbPath: database.path });
 		await client.start();
 
@@ -417,7 +455,7 @@ describe("DB owner client", () => {
 	test("loads sqlite-vec for legacy snapshot import and preserves KNN rows", async () => {
 		const extension = findSqliteVecExtension();
 		if (extension === null) throw new Error("sqlite-vec extension is required for this regression");
-		const database = makeMigratedDb();
+		const database = await makeMigratedDb();
 		directory = database.directory;
 		client = createDbOwnerClient({ dbPath: database.path });
 		const vectorValues = new Float32Array(768);
@@ -506,104 +544,24 @@ describe("DB owner client", () => {
 		expect(client.health().pid).not.toBe(process.pid);
 	});
 
-	test("recall lane completes while maintenance lane is saturated", async () => {
+	test("read, write and maintenance work share one owner and yield between bounded slices", async () => {
 		const database = makeDb();
 		directory = database.directory;
 		client = createDbOwnerClient({ dbPath: database.path });
 		await client.start();
-		const maintenance = client.submit(
-			{ kind: "sleep", durationMs: 250 },
-			{ operation: "maintenance.saturation", lane: "maintenance", deadlineMs: 1_000 },
-		);
-		const startedAt = performance.now();
-		const recall = client.submit<unknown[]>(
-			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
-			{ operation: "recall.concurrent", lane: "read", deadlineMs: 1_000 },
-		);
-		await expect(recall.result).resolves.toEqual([{ value: 1 }]);
-		const recallDurationMs = performance.now() - startedAt;
-		await maintenance.result;
-		expect(recallDurationMs).toBeLessThan(200);
-	});
-
-	test("reserves interactive write capacity while maintenance is saturated", async () => {
-		const database = makeDb();
-		directory = database.directory;
-		client = createDbOwnerClient({ dbPath: database.path });
-		const maintenance = client.submit(
-			{ kind: "sleep", durationMs: 300 },
-			{ operation: "maintenance.saturation", lane: "maintenance", deadlineMs: 2_000 },
-		);
-		await waitFor(() => client?.health().lanes?.maintenance.activeJobId === maintenance.job.id);
-		const startedAt = Date.now();
-		const foreground = client.submit<unknown[]>(
-			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
-			{ operation: "memory.interactive-write", lane: "write", deadlineMs: 1_000 },
-		);
-		expect(await foreground.result).toEqual([{ value: 1 }]);
-		expect(Date.now() - startedAt).toBeLessThan(250);
-		expect(client.health().lanes?.maintenance.activeJobId).toBe(maintenance.job.id);
-		expect(client.health().lanes?.write.activeJobId).toBeNull();
-		await maintenance.result;
-	});
-
-	test("serves health, dashboard, recall, and writes during maintenance saturation", async () => {
-		const database = makeDb();
-		directory = database.directory;
-		client = createDbOwnerClient({ dbPath: database.path });
-		await client.start();
-		const maintenance = client.submit(
-			{ kind: "sleep", durationMs: 350 },
-			{ operation: "sources.native-sync", lane: "maintenance", deadlineMs: 2_000 },
-		);
-		await waitFor(() => client?.health().lanes?.maintenance.activeJobId === maintenance.job.id);
-		const startedAt = Date.now();
-		const health = client.submit<unknown[]>(
-			{ kind: "query", statement: { sql: "SELECT 1 AS health", result: "all" } },
-			{ operation: "health", lane: "read", deadlineMs: 1_000 },
-		);
-		const dashboard = client.submit<unknown[]>(
-			{ kind: "query", statement: { sql: "SELECT 1 AS dashboard", result: "all" } },
-			{ operation: "dashboard", lane: "read", deadlineMs: 1_000 },
-		);
-		const recall = client.submit<unknown[]>(
-			{ kind: "query", statement: { sql: "SELECT 1 AS recall", result: "all" } },
-			{ operation: "recall", lane: "read", deadlineMs: 1_000 },
-		);
-		const write = client.submit<unknown[]>(
-			{ kind: "query", statement: { sql: "SELECT 1 AS write", result: "all" } },
-			{ operation: "memory.interactive-write", lane: "write", deadlineMs: 1_000 },
-		);
-		expect(await Promise.all([health.result, dashboard.result, recall.result, write.result])).toEqual([
-			[{ health: 1 }],
-			[{ dashboard: 1 }],
-			[{ recall: 1 }],
-			[{ write: 1 }],
-		]);
-		expect(Date.now() - startedAt).toBeLessThan(500);
-		await maintenance.result;
-	});
-
-	test("keeps recall reads independent from maintenance work", async () => {
-		const database = makeDb();
-		directory = database.directory;
-		const maintenanceClient = createDbOwnerClient({ dbPath: database.path });
-		client = createDbOwnerClient({ dbPath: database.path, workerRole: "recall" });
-		try {
-			await Promise.all([maintenanceClient.start(), client.start()]);
-			const slow = maintenanceClient.submit(
-				{ kind: "sleep", durationMs: 300 },
-				{ operation: "maintenance.blocking-test", lane: "maintenance", deadlineMs: 1_000 },
+		const pid = client.health().pid;
+		for (let i = 0; i < 5; i++) {
+			const maintenance = client.submit(
+				{ kind: "sleep", durationMs: 20 },
+				{ operation: "maintenance.slice", lane: "maintenance", deadlineMs: 1000 },
 			);
-			const startedAt = Date.now();
-			const rows = await recallThroughDbOwner<{ id: string }>(client, "SELECT id FROM memories", [], {
-				deadlineMs: 1_000,
-			});
-			expect(rows).toEqual([{ id: "m1" }]);
-			expect(Date.now() - startedAt).toBeLessThan(250);
-			await slow.result;
-		} finally {
-			await maintenanceClient.close();
+			const foreground = client.submit(
+				{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+				{ operation: "recall", lane: i % 2 ? "read" : "write", deadlineMs: 1000 },
+			);
+			expect(await foreground.result).toEqual([{ value: 1 }]);
+			await maintenance.result;
+			expect(client.health().pid).toBe(pid);
 		}
 	});
 
@@ -615,7 +573,7 @@ describe("DB owner client", () => {
 			{ kind: "sleep", durationMs: 250 },
 			{ operation: "recall.slow-read-deadline", lane: "read", deadlineMs: 40 },
 		);
-		await expect(slow.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		expect(await rejected(slow.result)).toBeInstanceOf(DbOwnerDeadlineError);
 		const fast = recallThroughDbOwner<{ id: string }>(client, "SELECT id FROM memories", [], {
 			deadlineMs: 1_000,
 		});
@@ -686,7 +644,7 @@ describe("DB owner client", () => {
 		);
 		await new Promise((resolve) => setTimeout(resolve, 150));
 		blocker.exec("ROLLBACK");
-		blocker.close();
+		blocker.close(true);
 		expect((await write.result).changes).toBe(1);
 	});
 
@@ -713,7 +671,7 @@ describe("DB owner client", () => {
 			},
 			{ operation: "memory.batch-precondition", lane: "write", deadlineMs: 1_000 },
 		);
-		await expect(batch.result).rejects.toThrow("DB owner batch precondition changed zero rows");
+		expect(await rejectedThrow(batch.result)).toThrow("DB owner batch precondition changed zero rows");
 		const rows = await recallThroughDbOwner<{ id: string }>(client, "SELECT id FROM memories ORDER BY id");
 		expect(rows).toEqual([{ id: "m1" }]);
 	});
@@ -743,7 +701,7 @@ describe("DB owner client", () => {
 			},
 			{ operation: "memory.transaction-precondition", lane: "write", deadlineMs: 1_000 },
 		);
-		await expect(transaction.result).rejects.toThrow("DB owner transaction precondition changed zero rows");
+		expect(await rejectedThrow(transaction.result)).toThrow("DB owner transaction precondition changed zero rows");
 		const rows = await recallThroughDbOwner<{ id: string }>(client, "SELECT id FROM memories ORDER BY id");
 		expect(rows).toEqual([{ id: "m1" }]);
 	});
@@ -762,7 +720,7 @@ describe("DB owner client", () => {
 			{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
 			{ operation: "transport.retry-guard", lane: "read", deadlineMs: 1_000 },
 		);
-		await expect(handle.result).rejects.toBeInstanceOf(DbOwnerDiedError);
+		expect(await rejected(handle.result)).toBeInstanceOf(DbOwnerDiedError);
 		expect(client.health().state).toBe("dead");
 	});
 
@@ -792,15 +750,15 @@ describe("DB owner client", () => {
 			{ kind: "sleep", durationMs: 250 },
 			{ operation: "maintenance.deadline-test", lane: "maintenance", deadlineMs: 40 },
 		);
-		await expect(slow.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
-		expect(client.health().lanes?.maintenance.pid).not.toBeNull();
+		expect(await rejected(slow.result)).toBeInstanceOf(DbOwnerDeadlineError);
+		expect(client.health().pid).not.toBeNull();
 		const fast = client.submit<unknown[]>(
 			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
 			{ operation: "memory.interactive-after-maintenance-timeout", lane: "write", deadlineMs: 1_000 },
 		);
 		expect(await fast.result).toEqual([{ value: 1 }]);
 		expect(client.health().state).toBe("ready");
-		await waitFor(() => client?.health().lanes?.maintenance.activeJobId === null);
+		await waitFor(() => client?.health().activeJobId === null);
 	});
 
 	test("closes the metrics fence when a queued job expires", async () => {
@@ -812,16 +770,16 @@ describe("DB owner client", () => {
 			{ kind: "sleep", durationMs: 250 },
 			{ operation: "maintenance.queued-fence-blocker", lane: "maintenance", deadlineMs: 1_000 },
 		);
-		await waitFor(() => client?.health().lanes?.maintenance.activeJobId === slow.job.id);
+		await waitFor(() => client?.health().activeJobId === slow.job.id);
 		const queued = client.submit(
 			{ kind: "sleep", durationMs: 0 },
 			{ operation: "maintenance.queued-fence-expiry", lane: "maintenance", deadlineMs: 40 },
 		);
-		await expect(queued.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		expect(await rejected(queued.result)).toBeInstanceOf(DbOwnerDeadlineError);
 		const queuedMetrics = queued.metrics;
 		if (queuedMetrics === undefined) throw new Error("queued job did not expose a metrics fence");
-		await expect(queuedMetrics).resolves.toBeUndefined();
-		await expect(slow.result).resolves.toEqual({ sleptMs: 250 });
+		expect(await queuedMetrics).toBeUndefined();
+		expect(await slow.result).toEqual({ sleptMs: 250 });
 	});
 
 	test("recovers immediately after a maintenance deadline is abandoned", async () => {
@@ -832,7 +790,7 @@ describe("DB owner client", () => {
 			{ kind: "sleep", durationMs: 250 },
 			{ operation: "maintenance.immediate-deadline-test", lane: "maintenance", deadlineMs: 40 },
 		);
-		await expect(slow.result).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		expect(await rejected(slow.result)).toBeInstanceOf(DbOwnerDeadlineError);
 		const fast = client.submit<unknown[]>(
 			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
 			{ operation: "recall.immediate-recovery", lane: "read", deadlineMs: 1_000 },
@@ -848,7 +806,7 @@ describe("DB owner client", () => {
 		await client.start();
 		const pid = client.health().pid;
 		if (pid === null) throw new Error("owner did not publish a pid");
-		process.kill(pid, "SIGABRT");
+		process.kill(pid, process.platform === "win32" ? "SIGKILL" : "SIGABRT");
 		const fast = client.submit<unknown[]>(
 			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
 			{ operation: "recall.immediate-sigabrt-recovery", lane: "read", deadlineMs: 1_000 },
@@ -865,7 +823,7 @@ describe("DB owner client", () => {
 			{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
 			{ operation: "recall.read", lane: "read", deadlineMs: 1_000 },
 		);
-		await expect(handle.result).rejects.toBeInstanceOf(DbOwnerDiedError);
+		expect(await rejected(handle.result)).toBeInstanceOf(DbOwnerDiedError);
 		expect(client.health().state).toBe("failed");
 	});
 
@@ -883,7 +841,7 @@ describe("DB owner client", () => {
 		);
 		await waitFor(() => client?.health().activeJobId === first.job.id);
 		second.cancel();
-		await expect(second.result).rejects.toBeInstanceOf(DbOwnerCancelledError);
+		expect(await rejected(second.result)).toBeInstanceOf(DbOwnerCancelledError);
 		expect(client.health().queuedJobs).toBe(0);
 		expect(client.health().activeJobId).toBe(first.job.id);
 		await first.result;
@@ -910,11 +868,11 @@ describe("DB owner client", () => {
 				},
 				{ operation: "memory.stale-commit-after-abort", lane: "write", deadlineMs: 5_000 },
 			);
-			await waitFor(() => client?.health().lanes?.write.activeJobId === write.job.id);
+			await waitFor(() => client?.health().activeJobId === write.job.id);
 			client.cancel(write.job.id);
 			blocker.exec("ROLLBACK");
 			blockerReleased = true;
-			await expect(write.result).rejects.toBeInstanceOf(DbOwnerCancelledError);
+			expect(await rejected(write.result)).toBeInstanceOf(DbOwnerCancelledError);
 			const rows = await client.submit<readonly { readonly id: string }[]>(
 				{ kind: "query", statement: { sql: "SELECT id FROM memories ORDER BY id", result: "all" } },
 				{ operation: "memory.verify-no-stale-commit", lane: "read", deadlineMs: 1_000 },
@@ -922,7 +880,7 @@ describe("DB owner client", () => {
 			expect(rows).toEqual([{ id: "m1" }]);
 		} finally {
 			if (!blockerReleased) blocker.exec("ROLLBACK");
-			blocker.close();
+			blocker.close(true);
 		}
 	});
 
@@ -950,12 +908,12 @@ describe("DB owner client", () => {
 				},
 				{ operation: "memory.commit-window-cancel", lane: "write", deadlineMs: 5_000 },
 			);
-			await waitFor(() => client?.health().lanes?.write.activeJobId === write.job.id);
+			await waitFor(() => client?.health().activeJobId === write.job.id);
 			await waitFor(() => existsSync(commitStarted));
 			client.cancel(write.job.id);
 			blocker.exec("ROLLBACK");
 			blockerReleased = true;
-			await expect(write.result).resolves.toMatchObject({ changes: 1 });
+			expect(await write.result).toMatchObject({ changes: 1 });
 			const rows = await client.submit<readonly { readonly id: string }[]>(
 				{ kind: "query", statement: { sql: "SELECT id FROM memories ORDER BY id", result: "all" } },
 				{ operation: "memory.verify-commit-window-write", lane: "read", deadlineMs: 1_000 },
@@ -963,7 +921,7 @@ describe("DB owner client", () => {
 			expect(rows).toContainEqual({ id: "commit-window-write" });
 		} finally {
 			if (!blockerReleased) blocker.exec("ROLLBACK");
-			blocker.close();
+			blocker.close(true);
 			if (previousCommitMarker === undefined)
 				Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_STARTED");
 			else process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = previousCommitMarker;
@@ -999,15 +957,15 @@ describe("DB owner client", () => {
 		);
 		const firstResult = first.result.catch(() => undefined);
 		const queuedResult = queued.result.catch(() => undefined);
-		await waitFor(() => client?.health().lanes?.maintenance.activeJobId === first.job.id);
+		await waitFor(() => client?.health().activeJobId === first.job.id);
 		queued.cancel();
 		await queuedResult;
-		const ownerPid = client.health().lanes?.maintenance.pid;
+		const ownerPid = client.health().pid;
 		if (ownerPid === null || ownerPid === undefined) throw new Error("maintenance owner did not publish a pid");
 		expect(readdirSync(database.directory).filter((entry) => entry.startsWith(".db-owner-cancel-")).length).toBe(1);
 		process.kill(ownerPid, "SIGKILL");
 		await waitFor(() => !processExists(ownerPid));
-		await waitFor(() => client?.health().lanes?.maintenance.state === "dead");
+		await waitFor(() => client?.health().state === "dead");
 		await firstResult;
 		const nextClient = createDbOwnerClient({ dbPath: database.path });
 		client = nextClient;
@@ -1034,7 +992,7 @@ describe("DB owner client", () => {
 				{ kind: "vacuum_conversion" },
 				{ operation: "maintenance.vacuum-conversion-cancel", lane: "maintenance", deadlineMs: 15 * 60_000 },
 			);
-			await waitFor(() => client?.health().lanes?.maintenance.activeJobId === conversion.job.id);
+			await waitFor(() => client?.health().activeJobId === conversion.job.id);
 			await waitFor(() => existsSync(activeFile));
 			client.cancel(conversion.job.id);
 			expect(await conversion.result).toEqual({ converted: true });
@@ -1046,7 +1004,7 @@ describe("DB owner client", () => {
 					.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_signet_vacuum_converted'")
 					.get(),
 			).toBeDefined();
-			verification.close();
+			verification.close(true);
 		} finally {
 			if (previousPause === undefined) Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS");
 			else process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = previousPause;
@@ -1076,7 +1034,7 @@ describe("DB owner client", () => {
 			{ kind: "sleep", durationMs: 250 },
 			{ operation: "maintenance.classifier-saturation", lane: "maintenance", deadlineMs: 1_000 },
 		);
-		await waitFor(() => client?.health().lanes?.maintenance.activeJobId === slow.job.id);
+		await waitFor(() => client?.health().activeJobId === slow.job.id);
 
 		const query = dbOwnerQuery<readonly { readonly value: number }[]>(
 			{ sql: "SELECT 1 AS value", result: "all" },
@@ -1087,9 +1045,9 @@ describe("DB owner client", () => {
 				deadlineMs: 1_000,
 			},
 		);
-		await waitFor(() => client?.health().lanes?.maintenance.queuedJobs === 1);
-		expect(client.health().lanes?.write.queuedJobs).toBe(0);
-		await expect(query).resolves.toEqual([{ value: 1 }]);
+		await waitFor(() => client?.health().queuedJobs === 1);
+		expect(client.health().queuedJobs).toBe(1);
+		expect(await query).toEqual([{ value: 1 }]);
 		await slow.result;
 	});
 
@@ -1148,7 +1106,7 @@ describe("DB owner client", () => {
 			);
 		}
 
-		await expect(owner.initialize(database.directory)).rejects.toBeInstanceOf(DbOwnerAdmissionError);
+		expect(await rejected(owner.initialize(database.directory))).toBeInstanceOf(DbOwnerAdmissionError);
 		for (const handle of handles) handle.cancel();
 		await Promise.allSettled(handles.map((handle) => handle.result));
 	});
@@ -1166,21 +1124,21 @@ describe("DB owner client", () => {
 				{ operation: "application.write-block-test", lane: "maintenance", deadlineMs: 1_000 },
 			),
 		).toThrow(DbOwnerWritesBlockedError);
-		await expect(
-			client.submit<{ readonly value: number } | undefined>(
+		expect(
+			await client.submit<{ readonly value: number } | undefined>(
 				{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "get", readonly: true } },
 				{ operation: "integrity.verify-block-test", lane: "verify", deadlineMs: 1_000 },
 			).result,
-		).resolves.toEqual({ value: 1 });
+		).toEqual({ value: 1 });
 	});
 
 	test("carries pending vector backfill state through the initialize protocol", async () => {
-		const database = makeMigratedDb();
+		const database = await makeMigratedDb();
 		directory = database.directory;
 		client = createDbOwnerClient({ dbPath: database.path });
 		await client.start();
 
-		await expect(client.initialize(database.directory)).resolves.toEqual({
+		expect(await client.initialize(database.directory)).toEqual({
 			initialized: true,
 			pendingVecBackfill: true,
 			extensionPath: findSqliteVecExtension(),
@@ -1202,6 +1160,6 @@ describe("DB owner client", () => {
 			},
 			{ operation: "recall.result-limit-test", lane: "read", deadlineMs: 2_000 },
 		);
-		await expect(handle.result).rejects.toMatchObject({ code: "DB_OWNER_RESULT_TOO_LARGE" });
+		expect(await rejected(handle.result)).toMatchObject({ code: "DB_OWNER_RESULT_TOO_LARGE" });
 	});
 });
