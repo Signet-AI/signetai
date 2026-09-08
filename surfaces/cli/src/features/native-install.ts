@@ -1,4 +1,4 @@
-import { spawnSyncHidden as spawnSync } from "@signet/core";
+import { spawnHidden as spawn, spawnSyncHidden as spawnSync } from "@signet/core";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
@@ -11,8 +11,60 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, posix, win32 } from "node:path";
 import chalk from "chalk";
+
+export const NATIVE_UPDATE_BACKUP_ENV = "SIGNET_NATIVE_UPDATE_BACKUP";
+
+const NATIVE_UPDATE_BACKUP_NAME = /^\.signet\.exe\.\d+\.backup$/i;
+const NATIVE_UPDATE_BACKUP_ATTEMPTS = 120;
+const NATIVE_UPDATE_BACKUP_RETRY_MS = 250;
+
+export function isNativeUpdateBackupCleanupRequest(
+	backupPath: string | undefined,
+	executablePath = process.execPath,
+	platform = process.platform,
+): backupPath is string {
+	if (platform !== "win32" || backupPath === undefined) return false;
+	const pathApi = platform === "win32" ? win32 : posix;
+	return (
+		pathApi.basename(executablePath).toLowerCase() === "signet.exe" &&
+		NATIVE_UPDATE_BACKUP_NAME.test(pathApi.basename(backupPath)) &&
+		pathApi.resolve(pathApi.dirname(backupPath)).toLowerCase() ===
+			pathApi.resolve(pathApi.dirname(executablePath)).toLowerCase()
+	);
+}
+
+function isWindowsFileLockError(error: unknown): boolean {
+	if (!(error instanceof Error) || !("code" in error)) return false;
+	return error.code === "EACCES" || error.code === "EPERM" || error.code === "EBUSY";
+}
+
+export async function cleanupNativeUpdateBackup(backupPath: string): Promise<void> {
+	for (let attempt = 0; attempt < NATIVE_UPDATE_BACKUP_ATTEMPTS; attempt += 1) {
+		try {
+			rmSync(backupPath, { force: true });
+			return;
+		} catch (error) {
+			if (!isWindowsFileLockError(error)) return;
+			await new Promise<void>((resolve) => setTimeout(resolve, NATIVE_UPDATE_BACKUP_RETRY_MS));
+		}
+	}
+}
+
+function deferWindowsNativeBackupCleanup(targetPath: string, backupPath: string): void {
+	try {
+		const child = spawn(targetPath, [], {
+			detached: true,
+			stdio: "ignore",
+			env: { ...process.env, [NATIVE_UPDATE_BACKUP_ENV]: backupPath },
+		});
+		child.on("error", () => {});
+		child.unref();
+	} catch {
+		// The replacement is complete; leave auxiliary cleanup for a later install.
+	}
+}
 
 export interface NativeInstallOptions {
 	readonly binDir?: string;
@@ -252,12 +304,17 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 			renameSync(target, backup);
 			try {
 				renameSync(tmp, target);
-				rmSync(backup, { force: true });
 			} catch (error) {
 				if (!existsSync(target) && existsSync(backup)) {
 					renameSync(backup, target);
 				}
 				throw error;
+			}
+			try {
+				rmSync(backup, { force: true });
+			} catch (error) {
+				if (!isWindowsFileLockError(error)) throw error;
+				deferWindowsNativeBackupCleanup(target, backup);
 			}
 		} else {
 			// POSIX rename replaces the existing path atomically, so a failed

@@ -82,7 +82,13 @@ import {
 import { buildDesktopFromSource, installDesktopFromSource } from "./features/desktop.js";
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
 import { importFromGitHub } from "./features/import.js";
-import { installNativeBinary, printNativeInstallResult } from "./features/native-install.js";
+import {
+	cleanupNativeUpdateBackup,
+	installNativeBinary,
+	isNativeUpdateBackupCleanupRequest,
+	NATIVE_UPDATE_BACKUP_ENV,
+	printNativeInstallResult,
+} from "./features/native-install.js";
 import { setupWizard } from "./features/setup.js";
 import { copyDirRecursive, syncBuiltinSkills, syncTemplates } from "./features/sync.js";
 import { flushCliTelemetry, recordCommandInvoked } from "./features/telemetry.js";
@@ -120,6 +126,11 @@ import {
 import "./sqlite.js";
 
 const isDaemonEntrypoint = process.env.SIGNET_DAEMON_ENTRYPOINT === "1";
+const nativeUpdateBackup = process.env[NATIVE_UPDATE_BACKUP_ENV];
+if (isNativeUpdateBackupCleanupRequest(nativeUpdateBackup)) {
+	await cleanupNativeUpdateBackup(nativeUpdateBackup);
+	process.exit(0);
+}
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
