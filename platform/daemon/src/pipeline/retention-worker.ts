@@ -292,32 +292,26 @@ function purgeTombstones(db: WriteDb, cutoff: string, limit: number): number {
 	return expiredIds.length;
 }
 
-// Select-then-delete, like the purge steps above. Not `DELETE ... LIMIT`: that
-// needs SQLITE_ENABLE_UPDATE_DELETE_LIMIT, which Homebrew's libsqlite3 (loaded
-// on macOS for sqlite-vec) lacks. See #1888.
-function purgeExpiredRows(db: WriteDb, table: string, where: string, params: unknown[], limit: number): number {
-	const expired = db.prepare(`SELECT id FROM ${table} WHERE ${where} LIMIT ?`).all(...params, limit) as Array<{
-		id: string;
-	}>;
-	if (expired.length === 0) return 0;
-	const placeholders = expired.map(() => "?").join(", ");
-	// Count selected IDs rather than .changes; status triggers inflate it.
-	db.prepare(`DELETE FROM ${table} WHERE id IN (${placeholders})`).run(...expired.map((r) => r.id));
-	return expired.length;
-}
-
-function purgeTranscriptCaptureJobs(db: WriteDb, status: "completed" | "dead", cutoff: string, limit: number): number {
-	const timestampColumn = status === "completed" ? "completed_at" : "updated_at";
+// LIMIT stays inside a SELECT because DELETE ... LIMIT is optional in SQLite.
+function purgeExpiredRows(
+	db: WriteDb,
+	table: string,
+	where: string,
+	cutoff: string,
+	limit: number,
+	allowMissingTable = false,
+): number {
 	try {
-		return purgeExpiredRows(
-			db,
-			"transcript_capture_jobs",
-			`status = ? AND ${timestampColumn} IS NOT NULL AND ${timestampColumn} < ?`,
-			[status, cutoff],
-			limit,
-		);
+		const deleted = db
+			.prepare(
+				`DELETE FROM ${table}
+				 WHERE id IN (SELECT id FROM ${table} WHERE ${where} LIMIT ?)
+				 RETURNING id`,
+			)
+			.all(cutoff, limit) as Array<{ id: string }>;
+		return deleted.length;
 	} catch (error) {
-		if (error instanceof Error && error.message.includes("no such table")) return 0;
+		if (allowMissingTable && error instanceof Error && error.message.includes("no such table")) return 0;
 		throw error;
 	}
 }
@@ -391,41 +385,37 @@ export async function runRetentionSweepOnce(
 	// through the shared yielding writer so a sweep gives the event loop a turn
 	// between each maintenance batch.
 	const steps = [
-		{ kind: "history", cutoff: historyCutoff },
-		{ kind: "completed", cutoff: completedJobCutoff },
-		{ kind: "dead", cutoff: deadJobCutoff },
-		{ kind: "transcript-completed", cutoff: completedJobCutoff },
-		{ kind: "transcript-dead", cutoff: deadJobCutoff },
+		{ table: "memory_history", where: "created_at < ?", cutoff: historyCutoff, allowMissingTable: false },
+		{
+			table: "memory_jobs",
+			where: "status = 'completed' AND completed_at IS NOT NULL AND completed_at < ?",
+			cutoff: completedJobCutoff,
+			allowMissingTable: false,
+		},
+		{
+			table: "memory_jobs",
+			where: "status = 'dead' AND failed_at IS NOT NULL AND failed_at < ?",
+			cutoff: deadJobCutoff,
+			allowMissingTable: false,
+		},
+		{
+			table: "transcript_capture_jobs",
+			where: "status = 'completed' AND completed_at IS NOT NULL AND completed_at < ?",
+			cutoff: completedJobCutoff,
+			allowMissingTable: true,
+		},
+		{
+			table: "transcript_capture_jobs",
+			where: "status = 'dead' AND updated_at IS NOT NULL AND updated_at < ?",
+			cutoff: deadJobCutoff,
+			allowMissingTable: true,
+		},
 	] as const;
 	const postRetention = await runWriteBatches(
 		accessor,
 		steps,
-		(db, step) => {
-			switch (step.kind) {
-				case "history":
-					return purgeExpiredRows(db, "memory_history", "created_at < ?", [step.cutoff], normalizedCfg.batchLimit);
-				case "completed":
-					return purgeExpiredRows(
-						db,
-						"memory_jobs",
-						"status = 'completed' AND completed_at IS NOT NULL AND completed_at < ?",
-						[step.cutoff],
-						normalizedCfg.batchLimit,
-					);
-				case "dead":
-					return purgeExpiredRows(
-						db,
-						"memory_jobs",
-						"status = 'dead' AND failed_at IS NOT NULL AND failed_at < ?",
-						[step.cutoff],
-						normalizedCfg.batchLimit,
-					);
-				case "transcript-completed":
-					return purgeTranscriptCaptureJobs(db, "completed", step.cutoff, normalizedCfg.batchLimit);
-				case "transcript-dead":
-					return purgeTranscriptCaptureJobs(db, "dead", step.cutoff, normalizedCfg.batchLimit);
-			}
-		},
+		(db, step) =>
+			purgeExpiredRows(db, step.table, step.where, step.cutoff, normalizedCfg.batchLimit, step.allowMissingTable),
 		{ label: "retention sweep", maxPerTx: 1 },
 	);
 	if (postRetention.error) throw new Error(postRetention.error);
@@ -478,24 +468,20 @@ export function startRetentionWorker(
 		return result;
 	}
 
-	function schedule(delayMs: number): void {
-		if (!running) return;
-		timer = setTimeout(async () => {
-			if (!running) return;
-			if (!isSystemPressureHigh()) {
-				await doSweep().catch((e) => {
-					logger.warn("retention", "Sweep error", {
-						error: e instanceof Error ? e.message : String(e),
-					});
+	async function runScheduledSweep(): Promise<void> {
+		if (running && !isSystemPressureHigh()) {
+			await doSweep().catch((e) => {
+				logger.warn("retention", "Sweep error", {
+					error: e instanceof Error ? e.message : String(e),
 				});
-			}
-			schedule(normalizedCfg.intervalMs);
-		}, delayMs);
+			});
+		}
+		if (running) timer = setTimeout(runScheduledSweep, normalizedCfg.intervalMs);
 	}
 
 	// First sweep shortly after boot; a daemon that restarts more often than
 	// intervalMs would otherwise never purge.
-	schedule(60_000);
+	timer = setTimeout(runScheduledSweep, 60_000);
 
 	logger.info("retention", "Worker started", {
 		intervalMs: normalizedCfg.intervalMs,

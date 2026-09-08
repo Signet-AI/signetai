@@ -399,8 +399,16 @@ describe("retention worker", () => {
 		expect(cold).toMatchObject({ memory_id: "mem-expired", agent_id: "agent-a", archived_reason: "retention_decay" });
 	});
 
-	it("returns zero counts when nothing to purge", async () => {
-		const handle = startRetentionWorker(accessor, testRetentionConfig());
+	it("returns zero counts and rejects unsupported delete syntax", async () => {
+		const spy = {
+			prepare(sql: string) {
+				if (/DELETE\s+FROM\s+\w+\s+WHERE(?:(?!\bIN\s*\()[\s\S])*\bLIMIT\b/i.test(sql)) {
+					throw new Error("DELETE ... LIMIT is unavailable");
+				}
+				return db.prepare(sql) as unknown as SqliteStatement;
+			},
+		} as unknown as WriteDb;
+		const handle = startRetentionWorker(makeAccessor(db, spy), testRetentionConfig());
 		const result = await handle.sweep();
 		handle.stop();
 
@@ -409,29 +417,5 @@ describe("retention worker", () => {
 		expect(result.completedJobsPurged).toBe(0);
 		expect(result.deadJobsPurged).toBe(0);
 		expect(result.graphLinksPurged).toBe(0);
-	});
-
-	it("issues only bounded deletes that every SQLite build accepts", async () => {
-		// Homebrew's libsqlite3 lacks SQLITE_ENABLE_UPDATE_DELETE_LIMIT, so a bare
-		// `DELETE ... LIMIT` fails there but passes on the build tests run on. #1888
-		const statements: string[] = [];
-		const spy = new Proxy(db, {
-			get(target, prop, receiver) {
-				if (prop === "prepare") {
-					return (sql: string) => {
-						statements.push(sql);
-						return target.prepare(sql);
-					};
-				}
-				return Reflect.get(target, prop, receiver);
-			},
-		}) as unknown as WriteDb;
-		const handle = startRetentionWorker(makeAccessor(db, spy), testRetentionConfig());
-		await handle.sweep();
-		handle.stop();
-
-		const bareDeleteLimit = /DELETE\s+FROM\s+\w+\s+WHERE(?:(?!\bIN\s*\()[\s\S])*\bLIMIT\b/i;
-		const offenders = statements.filter((sql) => bareDeleteLimit.test(sql));
-		expect(offenders).toEqual([]);
 	});
 });
