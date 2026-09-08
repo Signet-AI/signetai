@@ -56,9 +56,13 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_source_import_attempts_record ON source_import_record_attempts(agent_id, record_id, created_at);
 	`);
 	for (const column of ["source_id", "source_record_id", "source_meta_json"] as const) {
-		const exists = db
-			.prepare("SELECT 1 AS found FROM pragma_table_info('session_transcripts') WHERE name = ?")
-			.get(column);
+		const statement = db.prepare("SELECT 1 AS found FROM pragma_table_info('session_transcripts') WHERE name = ?");
+		let exists: Record<string, unknown> | undefined;
+		try {
+			exists = statement.get(column);
+		} finally {
+			statement.finalize?.();
+		}
 		if (exists == null) db.exec(`ALTER TABLE session_transcripts ADD COLUMN ${column} TEXT`);
 	}
 	db.exec(

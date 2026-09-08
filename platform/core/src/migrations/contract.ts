@@ -5,6 +5,7 @@ export interface MigrationDb {
 		run(...args: unknown[]): void;
 		get(...args: unknown[]): Record<string, unknown> | undefined;
 		all(...args: unknown[]): Record<string, unknown>[];
+		finalize?: () => void;
 	};
 }
 
