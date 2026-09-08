@@ -81,6 +81,137 @@ describe("pi provider catalog models", () => {
 		expect(resolved.piModel.baseUrl).toBe("https://opencode.ai/zen/go/v1");
 	});
 
+	test("routes supplied OpenCode session affinity through non-interactive Pi calls (#1887)", async () => {
+		const originalFetch = globalThis.fetch;
+		const requestHeaders: Headers[] = [];
+		globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit) => {
+			const headers = new Headers(init?.headers);
+			requestHeaders.push(headers);
+			if (init?.method !== "GET" && !headers.get("x-opencode-session")) {
+				return Promise.resolve(new Response("missing x-opencode-session", { status: 400 }));
+			}
+			return Promise.resolve(
+				new Response(
+					[
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\n`,
+						`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+						"data: [DONE]\n\n",
+					].join(""),
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				),
+			);
+		}) as unknown as typeof fetch;
+		try {
+			const model = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4-flash");
+			expect(model).toBeDefined();
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				providerFamily: "opencode-go",
+				model: "deepseek-v4-flash",
+				piModel: model as Model<Api>,
+				apiKey: "test-key",
+			});
+
+			await expect(provider.available()).resolves.toBe(true);
+			await expect(provider.generate("non-interactive call", { sessionId: "request-session" })).resolves.toBe("done");
+			const streamWithUsage = provider.streamWithUsage;
+			if (!streamWithUsage) throw new Error("expected Pi stream support");
+			const result = await streamWithUsage("non-interactive stream", { sessionId: "request-session" });
+			const reader = result.stream.getReader();
+			while (!(await reader.read()).done) {
+				// Drain the stream so the upstream request settles.
+			}
+
+			expect(requestHeaders).toHaveLength(3);
+			expect(requestHeaders[0]?.get("x-opencode-session")).toBeNull();
+			expect(requestHeaders[0]?.get("x-opencode-client")).toBeNull();
+			expect(requestHeaders.slice(1).map((headers) => headers.get("x-opencode-session"))).toEqual([
+				"request-session",
+				"request-session",
+			]);
+			expect(requestHeaders.slice(1).every((headers) => headers.get("x-opencode-client") === "pi")).toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("preserves configured OpenCode headers and isolates unrelated providers", async () => {
+		const originalFetch = globalThis.fetch;
+		const requestHeaders: Headers[] = [];
+		globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit) => {
+			requestHeaders.push(new Headers(init?.headers));
+			return Promise.resolve(
+				new Response(
+					[
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\n`,
+						`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+						"data: [DONE]\n\n",
+					].join(""),
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				),
+			);
+		}) as unknown as typeof fetch;
+		try {
+			const openCodeModel = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4-flash");
+			if (!openCodeModel) throw new Error("expected OpenCode Go catalog model");
+			const configuredOpenCodeModel = {
+				...openCodeModel,
+				headers: {
+					"X-OpenCode-Session": "configured-session",
+					"X-OpenCode-Client": "configured-client",
+				},
+			};
+			const openCodeProvider = createPiModelProvider({
+				executor: "openai-compatible",
+				providerFamily: "opencode-go",
+				model: "deepseek-v4-flash",
+				piModel: configuredOpenCodeModel,
+				apiKey: "test-key",
+			});
+			await expect(openCodeProvider.generate("configured headers", { sessionId: "generated-session" })).resolves.toBe(
+				"done",
+			);
+
+			const unrelatedModel = getModels("openrouter")[0];
+			if (!unrelatedModel) throw new Error("expected OpenRouter catalog model");
+			const unrelatedProvider = createPiModelProvider({
+				executor: "openrouter",
+				providerFamily: "openrouter",
+				model: unrelatedModel.id,
+				piModel: unrelatedModel,
+				apiKey: "test-key",
+			});
+			await expect(unrelatedProvider.generate("unrelated provider", { sessionId: "unrelated-session" })).resolves.toBe(
+				"done",
+			);
+
+			const endpointModel = {
+				...openCodeModel,
+				provider: "custom-opencode",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+			};
+			const endpointProvider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "deepseek-v4-flash",
+				piModel: endpointModel,
+				apiKey: "test-key",
+			});
+			await expect(endpointProvider.generate("endpoint detection", { sessionId: "endpoint-session" })).resolves.toBe(
+				"done",
+			);
+
+			expect(requestHeaders).toHaveLength(3);
+			expect(requestHeaders[0]?.get("x-opencode-session")).toBe("configured-session");
+			expect(requestHeaders[0]?.get("x-opencode-client")).toBe("configured-client");
+			expect(requestHeaders[1]?.get("x-opencode-session")).toBeNull();
+			expect(requestHeaders[1]?.get("x-opencode-client")).toBeNull();
+			expect(requestHeaders[2]?.get("x-opencode-session")).toBe("endpoint-session");
+			expect(requestHeaders[2]?.get("x-opencode-client")).toBe("pi");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	test("does not label a remote zero-rate model as provider-reported cost", () => {
 		const provider = createPiModelProvider({
 			executor: "openai-compatible",

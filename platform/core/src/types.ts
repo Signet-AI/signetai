@@ -76,6 +76,8 @@ export interface LlmGenerateOptions {
 	readonly maxTokens?: number;
 	readonly temperature?: number;
 	readonly signal?: AbortSignal;
+	/** Optional upstream session identity for providers that support session affinity. */
+	readonly sessionId?: string;
 	readonly responseFormat?: "json";
 	readonly think?: boolean;
 }

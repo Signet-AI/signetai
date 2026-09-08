@@ -217,6 +217,11 @@ All LLM calls go through an `LlmProvider` interface with two methods:
 `generate(prompt, opts?)` returning a `Promise<string>`, and `available()`
 returning a `Promise<boolean>`.
 
+`opts.sessionId` is optional upstream session-affinity metadata. The router keeps a
+caller-provided ID or creates one per routed inference execution. Providers that
+do not support session affinity ignore it; Pi agent sessions keep Pi's native
+session ID.
+
 Two implementations are shipped:
 
 **LlamaCppProvider** calls the llama.cpp server via its OpenAI-compatible

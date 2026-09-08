@@ -15,6 +15,7 @@ import {
 	InMemoryCredentialStore,
 	type Model,
 	type OpenAICompletionsCompat,
+	type ProviderHeaders,
 	type ThinkingLevel,
 	type Usage,
 } from "@earendil-works/pi-ai";
@@ -213,6 +214,36 @@ interface ResolvedModel {
 
 function isLocalBaseUrl(url: string): boolean {
 	return /^https?:\/\/(127\.0\.0\.1|localhost|\[?::1\]?)/i.test(url);
+}
+
+function isOpenCodeModel(config: PiModelProviderConfig, model: Model<Api>): boolean {
+	if (config.providerFamily === "opencode" || config.providerFamily === "opencode-go") return true;
+	if (model.provider === "opencode" || model.provider === "opencode-go") return true;
+	try {
+		return new URL(model.baseUrl).hostname === "opencode.ai";
+	} catch {
+		return false;
+	}
+}
+
+function hasHeader(model: Model<Api>, name: string): boolean {
+	return Object.keys(model.headers ?? {}).some((key) => key.toLowerCase() === name);
+}
+
+function openCodeHeaders(
+	config: PiModelProviderConfig,
+	model: Model<Api>,
+	sessionId: string | undefined,
+): ProviderHeaders | undefined {
+	// ModelRuntime's direct API does not run pi-coding-agent's SDK provider
+	// attribution transform. Keep only the OpenCode defaults here; session
+	// lifetime is owned by the router and configured model headers win.
+	if (!sessionId || !isOpenCodeModel(config, model)) return undefined;
+	const headers: Record<string, string> = {
+		...(hasHeader(model, "x-opencode-session") ? {} : { "x-opencode-session": sessionId }),
+		...(hasHeader(model, "x-opencode-client") ? {} : { "x-opencode-client": "pi" }),
+	};
+	return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 function localAccountingForConfig(config: PiModelProviderConfig): AccountingProvenance | undefined {
@@ -553,6 +584,8 @@ export function createPiModelProvider(
 	): {
 		apiKey: string | undefined;
 		signal: AbortSignal;
+		sessionId?: string;
+		transformHeaders?: (headers: ProviderHeaders) => ProviderHeaders;
 		maxTokens?: number;
 		temperature?: number;
 		reasoning?: ThinkingLevel;
@@ -563,9 +596,15 @@ export function createPiModelProvider(
 		//   opts.reasoning undefined   -> use the provider's configured level
 		const effectiveReasoning: ThinkingLevel | undefined =
 			opts?.reasoning === false ? undefined : (opts?.reasoning ?? reasoning);
+		const headers = openCodeHeaders(config, piModel, opts?.sessionId);
+		const transformHeaders = headers
+			? (requestHeaders: ProviderHeaders): ProviderHeaders => ({ ...headers, ...requestHeaders })
+			: undefined;
 		return {
 			apiKey,
 			signal: abort.signal,
+			...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+			...(transformHeaders ? { transformHeaders } : {}),
 			...(opts?.maxTokens ? { maxTokens: opts.maxTokens } : {}),
 			...(typeof opts?.temperature === "number" ? { temperature: opts.temperature } : {}),
 			...(effectiveReasoning !== undefined ? { reasoning: effectiveReasoning } : {}),

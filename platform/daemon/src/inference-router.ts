@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFile as readFileAsync, stat as statAsync } from "node:fs/promises";
 import { isAbsolute, join, normalize, resolve } from "node:path";
 import type { AgentSessionEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -1008,6 +1009,7 @@ export class InferenceRouter {
 			readonly acpxHooks?: AcpxHooksMode;
 			readonly signal?: AbortSignal;
 			readonly abortSignal?: AbortSignal;
+			readonly sessionId?: string;
 		},
 	): Promise<RouterResult<InferenceExecutionResult>> {
 		const background = this.beginBackgroundExecution(request.operation, request.agentId, "inference");
@@ -1269,6 +1271,7 @@ export class InferenceRouter {
 			readonly refresh?: boolean;
 			readonly acpxHooks?: AcpxHooksMode;
 			readonly signal?: AbortSignal;
+			readonly sessionId?: string;
 		},
 	): Promise<RouterResult<InferenceExecutionResult>> {
 		const loaded = await this.loadConfig(opts?.refresh ?? false);
@@ -1276,6 +1279,7 @@ export class InferenceRouter {
 		const decision = await this.explain(request, false);
 		if (!decision.ok) return decision;
 		const attempts: InferenceExecutionAttempt[] = [];
+		const sessionId = opts?.sessionId ?? randomUUID();
 		for (const targetRef of [decision.value.targetRef, ...decision.value.fallbackTargetRefs]) {
 			if (opts?.signal?.aborted) break;
 			const parsed = parseRoutingTargetRef(targetRef);
@@ -1312,6 +1316,7 @@ export class InferenceRouter {
 					timeoutMs: opts?.timeoutMs,
 					maxTokens: opts?.maxTokens,
 					signal: opts?.signal,
+					sessionId,
 					// aggregate_recall is latency-sensitive (the routing engine already
 					// excludes ACPX subprocesses for it). Suppress thinking for the same
 					// reason: thinking tokens would dominate the synthesis budget.
@@ -1374,6 +1379,7 @@ export class InferenceRouter {
 			readonly maxTokens?: number;
 			readonly refresh?: boolean;
 			readonly abortSignal?: AbortSignal;
+			readonly sessionId?: string;
 		},
 	): Promise<RouterResult<InferenceStreamResult>> {
 		const loaded = await this.loadConfig(opts?.refresh ?? false);
@@ -1388,6 +1394,7 @@ export class InferenceRouter {
 		if (!decision.ok) return decision;
 
 		const attempts: InferenceExecutionAttempt[] = [];
+		const sessionId = opts?.sessionId ?? randomUUID();
 		for (const targetRef of [decision.value.targetRef, ...decision.value.fallbackTargetRefs]) {
 			const parsed = parseRoutingTargetRef(targetRef);
 			if (!parsed.ok) {
@@ -1427,6 +1434,7 @@ export class InferenceRouter {
 					timeoutMs: opts?.timeoutMs,
 					maxTokens: opts?.maxTokens,
 					abortSignal: opts?.abortSignal,
+					sessionId,
 					// aggregate_recall is latency-sensitive: suppress thinking tokens
 					// (mirrors the execute path and the routing engine's ACPX exclusion).
 					reasoning: request.operation === "aggregate_recall" ? false : undefined,

@@ -25,6 +25,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	type AcpxModelSelection,
 	DEFAULT_PROVIDER_RATE_LIMIT,
+	type LlmGenerateOptions,
 	type LlmGenerateResult,
 	type LlmProvider,
 	type LlmUsage,
@@ -454,11 +455,10 @@ export async function acquireLlmConcurrencyPermit(
 
 export type { LlmProvider, LlmGenerateResult } from "@signet/core";
 
-export type LlmProviderCallOptions = {
-	readonly timeoutMs?: number;
-	readonly maxTokens?: number;
-	readonly temperature?: number;
-	readonly signal?: AbortSignal;
+export type LlmProviderCallOptions = Pick<
+	LlmGenerateOptions,
+	"timeoutMs" | "maxTokens" | "temperature" | "signal" | "sessionId"
+> & {
 	readonly abortSignal?: AbortSignal;
 	/**
 	 * Per-call thinking-level override for pi-ai-backed providers.

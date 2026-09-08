@@ -80,6 +80,7 @@ export type {
 	AgentManifest,
 	AgentConfig,
 	LlmProvider,
+	LlmGenerateOptions,
 	LlmUsage,
 	LlmCacheRequestAccounting,
 	LlmGenerateResult,

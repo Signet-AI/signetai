@@ -160,6 +160,37 @@ function writeMatrixConfig(dir: string): void {
 	);
 }
 
+function writeOpenCodeMatrixConfig(dir: string): void {
+	mkdirSync(join(dir, "memory"), { recursive: true });
+	writeFileSync(
+		join(dir, "agent.yaml"),
+		`inference:
+  defaultPolicy: opencode
+  accounts:
+    opencode-account:
+      kind: api
+      providerFamily: opencode-go
+      credentialRef: SIGNET_MATRIX_PRIMARY_API_KEY
+  targets:
+    opencode:
+      executor: openai-compatible
+      account: opencode-account
+      endpoint: https://opencode.ai/zen/go/v1
+      models:
+        default:
+          model: deepseek-v4-flash
+          streaming: true
+  policies:
+    opencode:
+      mode: strict
+      allow:
+        - opencode/default
+      defaultTargets:
+        - opencode/default
+`,
+	);
+}
+
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 	restoreCredential("SIGNET_MATRIX_STRUCTURED_API_KEY", originalStructuredApiKey);
@@ -170,6 +201,68 @@ afterEach(() => {
 });
 
 describe("InferenceRouter hermetic provider matrix (#1324)", () => {
+	test("propagates caller session affinity and isolates generated sessions (#1887)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-provider-matrix-opencode-"));
+		try {
+			writeOpenCodeMatrixConfig(dir);
+			setMatrixCredentials();
+			const probeHeaders: Headers[] = [];
+			const sessionIds: Array<string | null> = [];
+			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+				const headers = new Headers(init?.headers);
+				if (String(input).endsWith("/models")) {
+					probeHeaders.push(headers);
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				sessionIds.push(headers.get("x-opencode-session"));
+				return Promise.resolve(openAiSseResponse("routed response"));
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const callerOwned = await router.execute(
+				{ operation: "memory_extraction", promptPreview: "caller-owned session" },
+				"Use the caller-owned session.",
+				{ maxTokens: 32, timeoutMs: 1_000, sessionId: "caller-session" },
+			);
+			const generatedOne = await router.execute(
+				{ operation: "memory_extraction", promptPreview: "generated session one" },
+				"Use a generated session.",
+				{ maxTokens: 32, timeoutMs: 1_000 },
+			);
+			const generatedTwo = await router.execute(
+				{ operation: "memory_extraction", promptPreview: "generated session two" },
+				"Use another generated session.",
+				{ maxTokens: 32, timeoutMs: 1_000 },
+			);
+			const streamed = await router.stream(
+				{ operation: "memory_extraction", promptPreview: "stream session" },
+				"Use the stream session.",
+				{ maxTokens: 32, timeoutMs: 1_000, sessionId: "stream-session" },
+			);
+			if (streamed.ok) {
+				const reader = streamed.value.stream.getReader();
+				while (!(await reader.read()).done) {
+					// Drain the stream so the upstream request settles.
+				}
+			}
+
+			expect(callerOwned.ok).toBe(true);
+			expect(generatedOne.ok).toBe(true);
+			expect(generatedTwo.ok).toBe(true);
+			expect(streamed.ok).toBe(true);
+			expect(sessionIds).toHaveLength(4);
+			expect(sessionIds[0]).toBe("caller-session");
+			expect(sessionIds[1]).toMatch(/^[0-9a-f-]{36}$/);
+			expect(sessionIds[2]).toMatch(/^[0-9a-f-]{36}$/);
+			expect(sessionIds[3]).toBe("stream-session");
+			expect(sessionIds[1]).not.toBe(sessionIds[2]);
+			expect(probeHeaders.length).toBeGreaterThan(0);
+			expect(probeHeaders.every((headers) => headers.get("x-opencode-session") === null)).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("uses workload-selected targets, forwards output bounds, and parses structured output", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-provider-matrix-structured-"));
 		try {
