@@ -29,8 +29,23 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run --filter @signet/core build
-      - name: Verify durable imports and legacy migration
+      - name: Verify durable Windows imports
         run: |
           bun test --max-concurrency=1 platform/daemon/src/transcript-import-bytes.test.ts
           bun test --max-concurrency=1 platform/daemon/src/transcript-import-scan.test.ts
           bun test --max-concurrency=1 platform/daemon/src/transcript-import-commit.test.ts
+
+  posix-migration-coverage:
+    name: Transcript import legacy migration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter @signet/core build
+      - name: Verify POSIX legacy migration
+        run: bun test --max-concurrency=1 --test-name-pattern "legacy migration verifies bytes" platform/daemon/src/transcript-import-bytes.test.ts
