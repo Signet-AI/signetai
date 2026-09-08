@@ -137,6 +137,85 @@ describe("sources CLI commands", () => {
 			expect(reads).toBe(scenario === "exhausted" ? 4 : scenario === "denied" ? 1 : 2);
 		});
 	}
+	it("retries finalization after a transient owner failure", async () => {
+		const bytes = Buffer.alloc(64 * 1024, 97),
+			file = join(dir, "finalize-retry.jsonl");
+		writeFileSync(file, bytes);
+		let reads = 0,
+			finalizations = 0;
+		const program = new Command();
+		registerSourcesCommands(program, {
+			agentsDir: dir,
+			fetchDaemonResult: async <T>() => {
+				reads++;
+				return {
+					ok: true as const,
+					data: {
+						files: [
+							{
+								id: "file",
+								state: "staging",
+								upload_size: bytes.length,
+								upload_generation: 0,
+								upload_offset: reads > 1 ? bytes.length : 0,
+								upload_digest: "",
+							},
+						],
+					} as T,
+				};
+			},
+			fetchDaemonRaw: async (_path, opts) => {
+				if (opts?.method === "PATCH") return { ok: true, response: Response.json({ offset: bytes.length }) };
+				finalizations++;
+				return finalizations === 1
+					? { ok: false, reason: "timeout" as const }
+					: { ok: true, response: Response.json({ state: "ready" }) };
+			},
+		});
+		await program.parseAsync(["node", "test", "sources", "imports", "upload", "job", "file", file, "--agent", "a"]);
+		expect(reads).toBe(2);
+		expect(finalizations).toBe(2);
+	});
+	it("retries transient reconciliation status reads", async () => {
+		const bytes = Buffer.alloc(64 * 1024, 97),
+			file = join(dir, "status-retry.jsonl");
+		writeFileSync(file, bytes);
+		let reads = 0,
+			patches = 0;
+		const program = new Command();
+		registerSourcesCommands(program, {
+			agentsDir: dir,
+			fetchDaemonResult: async <T>() => {
+				reads++;
+				if (reads === 2) return { ok: false as const, reason: "http" as const, status: 503, error: "busy" };
+				return {
+					ok: true as const,
+					data: {
+						files: [
+							{
+								id: "file",
+								state: "staging",
+								upload_size: bytes.length,
+								upload_generation: 0,
+								upload_offset: 0,
+								upload_digest: "",
+							},
+						],
+					} as T,
+				};
+			},
+			fetchDaemonRaw: async (_path, opts) => {
+				if (opts?.method === "POST") return { ok: true, response: Response.json({ state: "ready" }) };
+				patches++;
+				return patches === 1
+					? { ok: false, reason: "http" as const, status: 503, error: "busy" }
+					: { ok: true, response: Response.json({ offset: bytes.length }) };
+			},
+		});
+		await program.parseAsync(["node", "test", "sources", "imports", "upload", "job", "file", file, "--agent", "a"]);
+		expect(reads).toBe(3);
+		expect(patches).toBe(2);
+	});
 	it("wires desktop-cache mode through the Discord add command", async () => {
 		const cachePath = join(dir, "discord");
 		const program = new Command();

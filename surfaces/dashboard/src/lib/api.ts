@@ -29,6 +29,7 @@ export interface ApiReadResult<T> {
 	readonly data: T | null;
 	readonly error: string | null;
 	readonly details?: unknown;
+	readonly status?: number;
 }
 
 export async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiReadResult<T>> {
@@ -45,11 +46,11 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 					? body.error
 					: `request failed (${res.status})`;
 			const details = typeof body === "object" && body !== null && "details" in body ? body.details : undefined;
-			return { data: null, error, details };
+			return { data: null, error, details, status: res.status };
 		}
 		return { data: body as T, error: null };
 	} catch {
-		return { data: null, error: "request failed" };
+		return { data: null, error: "request failed", status: 0 };
 	}
 }
 
@@ -871,7 +872,15 @@ export const api = {
 		try {
 			const base = `${API_BASE}/api/sources/imports/${encodeURIComponent(jobId)}`;
 			const query = `?agentId=${encodeURIComponent(agentId)}`;
-			const status = await getJSONResult<{ files: SourceImportFile[] }>(`${base}${query}`);
+			const getStatus = () => getJSONResult<{ files: SourceImportFile[] }>(`${base}${query}`);
+			const getStatusWithRetry = async () => {
+				for (let attempt = 0; ; attempt++) {
+					const result = await getStatus();
+					if (!result.error || attempt === 3 || ![0, 408, 429, 503].includes(result.status ?? 0)) return result;
+					await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+				}
+			};
+			const status = await getStatusWithRetry();
 			if (status.error) return { data: null, error: status.error };
 			const slot = status.data?.files.find((entry) => entry.id === fileId);
 			if (
@@ -924,7 +933,7 @@ export const api = {
 						if (attempt === 3 || (response && ![408, 429, 503].includes(response.status)))
 							return { data: null, error: result?.error ?? "Upload failed" };
 						await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
-						const status = await getJSONResult<{ files: SourceImportFile[] }>(`${base}${query}`);
+						const status = await getStatusWithRetry();
 						if (status.error) return { data: null, error: status.error };
 						const current = status.data?.files.find((entry) => entry.id === fileId);
 						if (
@@ -941,17 +950,37 @@ export const api = {
 				}
 				offset = end;
 			}
-			const response = await fetch(`${path}${file.size === 0 ? "" : "/finalize"}${query}`, {
+			const finalizePath = `${path}${file.size === 0 ? "" : "/finalize"}${query}`;
+			const finalizeOptions: Omit<RequestInit, "signal"> = {
 				method: file.size === 0 ? "PUT" : "POST",
-				signal: AbortSignal.timeout(15 * 60_000),
 				headers: {
 					...authHeaders(),
 					"upload-generation": String(slot.upload_generation),
 					"upload-length": String(file.size),
 				},
-			});
-			const result = await response.json();
-			return response.ok ? { data: result, error: null } : { data: null, error: result.error ?? "Finalization failed" };
+			};
+			for (let attempt = 0; ; attempt++) {
+				const response = await fetch(finalizePath, {
+					...finalizeOptions,
+					signal: AbortSignal.timeout(15 * 60_000),
+				}).catch(() => null);
+				const result = await response?.json().catch(() => null);
+				if (response?.ok) return { data: result, error: null };
+				const retryable = !response || [408, 429, 503].includes(response.status);
+				if (attempt === 3 || !retryable) return { data: null, error: result?.error ?? "Finalization failed" };
+				await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+				const currentStatus = await getStatusWithRetry();
+				if (currentStatus.error) return { data: null, error: currentStatus.error };
+				const current = currentStatus.data?.files.find((entry) => entry.id === fileId);
+				if (!current) return { data: null, error: "Upload state is unavailable" };
+				if (current.state === "ready" || current.state === "completed") return { data: current, error: null };
+				if (
+					current.upload_generation !== slot.upload_generation ||
+					current.upload_size !== file.size ||
+					current.upload_offset !== file.size
+				)
+					return { data: null, error: "Upload changed while finalizing; resume after verifying the retained prefix" };
+			}
 		} catch (error) {
 			return { data: null, error: error instanceof Error ? error.message : "Upload failed" };
 		}

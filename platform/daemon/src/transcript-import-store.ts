@@ -164,7 +164,7 @@ export function createOwnerTranscriptImportStore(): ImportStore {
 				return (await dbOwnerTransaction(
 					[
 						{
-							sql: "UPDATE source_import_jobs SET state = CASE WHEN rejected > 0 THEN 'completed_with_rejections' ELSE 'completed' END, lease_token = NULL, lease_expires_at = NULL, completed_at = datetime('now'), reconciled_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND control_request IS NULL AND state IN ('running','inventorying') AND NOT EXISTS (SELECT 1 FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'pending') AND NOT EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ? AND state != 'completed')",
+							sql: "UPDATE source_import_jobs SET state = CASE WHEN rejected > 0 THEN 'completed_with_rejections' ELSE 'completed' END, error = NULL, lease_token = NULL, lease_expires_at = NULL, completed_at = datetime('now'), reconciled_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND agent_id = ? AND generation = ? AND lease_token = ? AND control_request IS NULL AND state IN ('running','inventorying') AND NOT EXISTS (SELECT 1 FROM source_import_records WHERE job_id = ? AND agent_id = ? AND status = 'pending') AND NOT EXISTS (SELECT 1 FROM source_import_files WHERE job_id = ? AND agent_id = ? AND state != 'completed')",
 							params: [
 								operation.jobId,
 								operation.agentId,

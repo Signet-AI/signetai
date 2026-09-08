@@ -26,6 +26,16 @@ export interface RegisterSourcesCommandsDeps extends SourcesDeps {
 	readonly fetchDaemonRaw?: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 }
 
+const UPLOAD_RETRY_LIMIT = 3;
+
+function isRetryableUploadFailure(result: { readonly reason?: string; readonly status?: number }): boolean {
+	return result.reason === "timeout" || result.reason === "offline" || [408, 429, 503].includes(result.status ?? 0);
+}
+
+function retryDelay(attempt: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+}
+
 async function uploadTranscriptFile(
 	deps: RegisterSourcesCommandsDeps,
 	agentId: string,
@@ -49,7 +59,14 @@ async function uploadTranscriptFile(
 				upload_size: number | null;
 			}>;
 		}>(`${base}${query}`);
-	const status = await getStatus();
+	const getStatusWithRetry = async () => {
+		for (let attempt = 0; ; attempt++) {
+			const result = await getStatus();
+			if (result.ok || attempt === UPLOAD_RETRY_LIMIT || !isRetryableUploadFailure(result)) return result;
+			await retryDelay(attempt);
+		}
+	};
+	const status = await getStatusWithRetry();
 	if (!status.ok) return status;
 	const slot = status.data.files.find((file) => file.id === fileId);
 	if (!slot) return { ok: false, reason: "http", error: "upload slot not found" };
@@ -100,17 +117,9 @@ async function uploadTranscriptFile(
 						await result.response.arrayBuffer();
 						break;
 					}
-					if (
-						attempt === 3 ||
-						!(
-							result.reason === "timeout" ||
-							result.reason === "offline" ||
-							[408, 429, 503].includes(result.status ?? 0)
-						)
-					)
-						return result;
-					await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
-					const status = await getStatus();
+					if (attempt === UPLOAD_RETRY_LIMIT || !isRetryableUploadFailure(result)) return result;
+					await retryDelay(attempt);
+					const status = await getStatusWithRetry();
 					if (!status.ok) return status;
 					const current = status.data.files.find((file) => file.id === fileId);
 					if (
@@ -130,11 +139,30 @@ async function uploadTranscriptFile(
 		}
 		const after = await handle.stat();
 		if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw new Error("file changed during upload");
-		return deps.fetchDaemonRaw(`${path}${info.size === 0 ? "" : "/finalize"}${query}`, {
-			method: info.size === 0 ? "PUT" : "POST",
+		const finalizePath = `${path}${info.size === 0 ? "" : "/finalize"}${query}`;
+		const finalizeOptions = {
+			method: info.size === 0 ? ("PUT" as const) : ("POST" as const),
 			timeout: 15 * 60_000,
 			headers: { "upload-generation": String(slot.upload_generation), "upload-length": String(info.size) },
-		});
+		};
+		for (let attempt = 0; ; attempt++) {
+			const result = await deps.fetchDaemonRaw(finalizePath, finalizeOptions);
+			if (result.ok) return result;
+			if (attempt === UPLOAD_RETRY_LIMIT || !isRetryableUploadFailure(result)) return result;
+			await retryDelay(attempt);
+			const currentStatus = await getStatusWithRetry();
+			if (!currentStatus.ok) return currentStatus;
+			const current = currentStatus.data.files.find((file) => file.id === fileId);
+			if (!current) return { ok: false, reason: "http", error: "upload slot not found" };
+			if (current.state === "ready" || current.state === "completed")
+				return { ok: true, response: Response.json(current) };
+			if (
+				current.upload_generation !== slot.upload_generation ||
+				current.upload_size !== info.size ||
+				current.upload_offset !== info.size
+			)
+				throw new Error("upload changed while finalizing; resume after verifying the retained prefix");
+		}
 	} catch (error) {
 		return { ok: false, reason: "http", error: error instanceof Error ? error.message : "upload failed" };
 	} finally {

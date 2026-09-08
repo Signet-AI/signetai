@@ -284,7 +284,10 @@ test("worker imports mixed harnesses and malformed evidence without filesystem c
 	await dbOwnerTransaction(
 		[
 			{ sql: "UPDATE source_import_files SET state = 'ready', source_id = 's' WHERE id = 'file'", result: "run" },
-			{ sql: "UPDATE source_import_jobs SET state = 'queued' WHERE id = 'job'", result: "run" },
+			{
+				sql: "UPDATE source_import_jobs SET state = 'queued', error = 'import worker stopped' WHERE id = 'job'",
+				result: "run",
+			},
 		],
 		options,
 	);
@@ -293,9 +296,9 @@ test("worker imports mixed harnesses and malformed evidence without filesystem c
 		const deadline = Date.now() + 10_000;
 		let state: unknown;
 		while (Date.now() < deadline) {
-			state = await dbOwnerQuery<{ state: string }>(
+			state = await dbOwnerQuery<{ state: string; error: string | null }>(
 				{
-					sql: "SELECT state,total,imported,rejected,pending FROM source_import_jobs WHERE id = 'job'",
+					sql: "SELECT state,total,imported,rejected,pending,error FROM source_import_jobs WHERE id = 'job'",
 					result: "get",
 					readonly: true,
 				},
@@ -310,7 +313,14 @@ test("worker imports mixed harnesses and malformed evidence without filesystem c
 				break;
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
-		expect(state).toEqual({ state: "completed_with_rejections", total: 61, imported: 60, rejected: 1, pending: 0 });
+		expect(state).toEqual({
+			state: "completed_with_rejections",
+			total: 61,
+			imported: 60,
+			rejected: 1,
+			pending: 0,
+			error: null,
+		});
 		expect(
 			await dbOwnerQuery(
 				{
