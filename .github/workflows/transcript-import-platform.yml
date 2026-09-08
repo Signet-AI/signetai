@@ -30,4 +30,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run --filter @signet/core build
       - name: Verify durable imports and legacy migration
-        run: bun test --max-concurrency=1 platform/daemon/src/transcript-import-bytes.test.ts platform/daemon/src/transcript-import-scan.test.ts platform/daemon/src/transcript-import-commit.test.ts
+        run: |
+          bun test --max-concurrency=1 platform/daemon/src/transcript-import-bytes.test.ts
+          bun test --max-concurrency=1 platform/daemon/src/transcript-import-scan.test.ts
+          bun test --max-concurrency=1 platform/daemon/src/transcript-import-commit.test.ts

@@ -48,3 +48,70 @@ for (const scenario of ["deadline", "lost-ack", "network", "exhausted", "denied"
 		expect(reads).toBe(scenario === "exhausted" ? 4 : scenario === "denied" ? 1 : 2);
 	});
 }
+
+test("dashboard retries finalization after a transient owner failure", async () => {
+	const bytes = Buffer.alloc(64 * 1024, 97);
+	let reads = 0,
+		finalizations = 0;
+	const mocked = spyOn(globalThis, "fetch").mockImplementation((async (_path, opts) => {
+		if (opts?.method === "PATCH") return Response.json({ offset: bytes.length });
+		if (opts?.method === "POST") {
+			finalizations++;
+			return finalizations === 1
+				? Response.json({ error: "DB_OWNER_DEADLINE" }, { status: 503 })
+				: Response.json({ state: "ready" });
+		}
+		reads++;
+		return Response.json({
+			files: [
+				{
+					id: "file",
+					state: "staging",
+					upload_size: bytes.length,
+					upload_generation: 0,
+					upload_offset: reads > 1 ? bytes.length : 0,
+					upload_digest: "",
+				},
+			],
+		});
+	}) as typeof fetch);
+	restore = () => mocked.mockRestore();
+	const result = await api.uploadSourceImportFile("a", "job", "file", new File([bytes], "upload.jsonl"));
+	expect(result.error).toBeNull();
+	expect(reads).toBe(2);
+	expect(finalizations).toBe(2);
+});
+
+test("dashboard retries transient reconciliation status reads", async () => {
+	const bytes = Buffer.alloc(64 * 1024, 97);
+	let reads = 0,
+		patches = 0;
+	const mocked = spyOn(globalThis, "fetch").mockImplementation((async (_path, opts) => {
+		if (opts?.method === "PATCH") {
+			patches++;
+			return patches === 1
+				? Response.json({ error: "DB_OWNER_DEADLINE" }, { status: 503 })
+				: Response.json({ offset: bytes.length });
+		}
+		if (opts?.method === "POST") return Response.json({ state: "ready" });
+		reads++;
+		if (reads === 2) return Response.json({ error: "busy" }, { status: 503 });
+		return Response.json({
+			files: [
+				{
+					id: "file",
+					state: "staging",
+					upload_size: bytes.length,
+					upload_generation: 0,
+					upload_offset: 0,
+					upload_digest: "",
+				},
+			],
+		});
+	}) as typeof fetch);
+	restore = () => mocked.mockRestore();
+	const result = await api.uploadSourceImportFile("a", "job", "file", new File([bytes], "upload.jsonl"));
+	expect(result.error).toBeNull();
+	expect(reads).toBe(3);
+	expect(patches).toBe(2);
+});
