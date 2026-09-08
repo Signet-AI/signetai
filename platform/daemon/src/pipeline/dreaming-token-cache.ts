@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
@@ -139,10 +138,6 @@ export class DreamingBacklogTokenCache {
 			count: ensureTokenCount(count, "Dreaming exact token total"),
 			measuredAtMs: Date.now(),
 		});
-	}
-
-	hasValue(agentId: string): boolean {
-		return this.getFresh(agentId) !== null;
 	}
 
 	invalidate(agentId: string): void {
@@ -301,10 +296,6 @@ export function countDreamingBacklogTokenEntries(
 	stopAtTokens?: number,
 ): Promise<DreamingBacklogTokenBatchResult> {
 	return dreamingBacklogTokenCache.countEntries(agentId, entries, stopAtTokens);
-}
-
-export function hasDreamingEpisodicTokenBacklogCached(agentId: string): boolean {
-	return dreamingBacklogTokenCache.hasValue(agentId);
 }
 
 export function getDreamingEpisodicTokenBacklogCached(agentId: string): number {

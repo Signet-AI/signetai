@@ -54,7 +54,7 @@ import { requestDreamingReviewedEvidenceRequeue } from "./dreaming-evidence-revi
 import {
 	beginDreamingEpisodicTokenBacklogMeasurement,
 	getDreamingEpisodicTokenBacklogCached,
-	hasDreamingEpisodicTokenBacklogCached,
+	getDreamingEpisodicTokenBacklogCachedOrNull,
 	invalidateDreamingEpisodicTokenBacklog,
 	recordDreamingEpisodicTokenBacklog,
 } from "./dreaming-token-cache";
@@ -1322,13 +1322,13 @@ describe("Dreaming", () => {
 			agentId,
 		);
 		await getDreamingEpisodicTokenBacklogInDb(db as unknown as ReadDb, agentId);
-		expect(hasDreamingEpisodicTokenBacklogCached(agentId)).toBe(true);
+		expect(getDreamingEpisodicTokenBacklogCachedOrNull(agentId)).not.toBeNull();
 
 		const staleGeneration = beginDreamingEpisodicTokenBacklogMeasurement(agentId);
 		invalidateDreamingEpisodicTokenBacklog(agentId);
 		recordDreamingEpisodicTokenBacklog(agentId, 123, staleGeneration);
 
-		expect(hasDreamingEpisodicTokenBacklogCached(agentId)).toBe(false);
+		expect(getDreamingEpisodicTokenBacklogCachedOrNull(agentId)).toBeNull();
 	});
 
 	it("keeps owner-routed and inline probe semantics equivalent", async () => {
