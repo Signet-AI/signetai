@@ -40,25 +40,50 @@ function isWindowsFileLockError(error: unknown): boolean {
 	return error.code === "EACCES" || error.code === "EPERM" || error.code === "EBUSY";
 }
 
-export async function cleanupNativeUpdateBackup(backupPath: string): Promise<void> {
+export async function cleanupNativeUpdateBackup(backupPath: string): Promise<boolean> {
 	for (let attempt = 0; attempt < NATIVE_UPDATE_BACKUP_ATTEMPTS; attempt += 1) {
 		try {
 			rmSync(backupPath, { force: true });
-			return;
+			return true;
 		} catch (error) {
-			if (!isWindowsFileLockError(error)) return;
+			if (!isWindowsFileLockError(error)) return false;
 			await new Promise<void>((resolve) => setTimeout(resolve, NATIVE_UPDATE_BACKUP_RETRY_MS));
 		}
 	}
+	return false;
+}
+
+export interface NativeUpdateBackupCleanupInvocation {
+	readonly command: string;
+	readonly args: readonly string[];
+	readonly options: {
+		readonly cwd: string;
+		readonly detached: true;
+		readonly stdio: "ignore";
+		readonly env: NodeJS.ProcessEnv;
+	};
+}
+
+export function buildNativeUpdateBackupCleanupInvocation(
+	targetPath: string,
+	backupPath: string,
+): NativeUpdateBackupCleanupInvocation {
+	return {
+		command: targetPath,
+		args: [],
+		options: {
+			cwd: win32.dirname(targetPath),
+			detached: true,
+			stdio: "ignore",
+			env: { ...process.env, [NATIVE_UPDATE_BACKUP_ENV]: backupPath },
+		},
+	};
 }
 
 function deferWindowsNativeBackupCleanup(targetPath: string, backupPath: string): void {
 	try {
-		const child = spawn(targetPath, [], {
-			detached: true,
-			stdio: "ignore",
-			env: { ...process.env, [NATIVE_UPDATE_BACKUP_ENV]: backupPath },
-		});
+		const invocation = buildNativeUpdateBackupCleanupInvocation(targetPath, backupPath);
+		const child = spawn(invocation.command, invocation.args, invocation.options);
 		child.on("error", () => {});
 		child.unref();
 	} catch {
