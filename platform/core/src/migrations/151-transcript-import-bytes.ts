@@ -2,6 +2,14 @@ import type { MigrationDb } from "./contract";
 
 /** Raw evidence is immutable once sealed; legacy paths require explicit migration. */
 export function up(db: MigrationDb): void {
+	const hasColumn = (table: string, column: string): boolean => {
+		const statement = db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`);
+		try {
+			return statement.get(column) != null;
+		} finally {
+			statement.finalize?.();
+		}
+	};
 	for (const [column, definition] of [
 		["upload_generation", "INTEGER NOT NULL DEFAULT 0"],
 		["upload_offset", "INTEGER NOT NULL DEFAULT 0"],
@@ -15,16 +23,16 @@ export function up(db: MigrationDb): void {
 			"TEXT NOT NULL DEFAULT 'legacy' CHECK (storage_state IN ('legacy','uploading','sealed','purging','purged'))",
 		],
 	]) {
-		if (!db.prepare("SELECT 1 FROM pragma_table_info('source_import_files') WHERE name = ?").get(column))
+		if (!hasColumn("source_import_files", column))
 			db.exec(`ALTER TABLE source_import_files ADD COLUMN ${column} ${definition}`);
 	}
-	if (!db.prepare("SELECT 1 FROM pragma_table_info('source_import_jobs') WHERE name = 'retry_count'").get())
+	if (!hasColumn("source_import_jobs", "retry_count"))
 		db.exec("ALTER TABLE source_import_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
-	if (!db.prepare("SELECT 1 FROM pragma_table_info('source_import_jobs') WHERE name = 'cleanup_state'").get())
+	if (!hasColumn("source_import_jobs", "cleanup_state"))
 		db.exec("ALTER TABLE source_import_jobs ADD COLUMN cleanup_state TEXT NOT NULL DEFAULT 'idle'");
-	if (!db.prepare("SELECT 1 FROM pragma_table_info('source_import_jobs') WHERE name = 'retry_cursor'").get())
+	if (!hasColumn("source_import_jobs", "retry_cursor"))
 		db.exec("ALTER TABLE source_import_jobs ADD COLUMN retry_cursor TEXT NOT NULL DEFAULT ''");
-	if (!db.prepare("SELECT 1 FROM pragma_table_info('source_import_jobs') WHERE name = 'retry_requested'").get())
+	if (!hasColumn("source_import_jobs", "retry_requested"))
 		db.exec("ALTER TABLE source_import_jobs ADD COLUMN retry_requested INTEGER NOT NULL DEFAULT 0");
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS source_import_migrations (agent_id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'pending', cursor TEXT NOT NULL DEFAULT '', error TEXT);
