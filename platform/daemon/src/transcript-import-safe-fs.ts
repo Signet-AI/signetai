@@ -3,17 +3,25 @@ import { lstat, open, opendir, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
-import { dlopen, ptr, read } from "bun:ffi";
+import { dlopen, ptr, read, toArrayBuffer } from "bun:ffi";
 
 const DESCRIPTOR_ROOT =
 	process.platform === "linux" ? "/proc/self/fd" : process.platform === "darwin" ? "/dev/fd" : undefined;
 const DIRECTORY_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0) | (fsConstants.O_NOFOLLOW ?? 0);
 const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const DARWIN_DIRECTORY_BUFFER_BYTES = 64 * 1024;
+const DARWIN_DIRENT_HEADER_BYTES = 8;
 
 type DarwinFileSystem = {
 	readonly symbols: {
 		readonly __error: () => ReturnType<typeof ptr>;
 		readonly close: (fd: number) => number;
+		readonly getdirentries: (
+			fd: number,
+			buffer: ReturnType<typeof ptr>,
+			length: number,
+			base: ReturnType<typeof ptr>,
+		) => number;
 		readonly openat: (dirfd: number, path: ReturnType<typeof ptr>, flags: number, mode: number) => number;
 		readonly unlinkat: (dirfd: number, path: ReturnType<typeof ptr>, flags: number) => number;
 	};
@@ -28,6 +36,7 @@ function loadDarwinFileSystem(): DarwinFileSystem | null {
 		darwinFileSystem = dlopen("/usr/lib/libSystem.B.dylib", {
 			__error: { args: [], returns: "ptr" },
 			close: { args: ["i32"], returns: "i32" },
+			getdirentries: { args: ["i32", "ptr", "i32", "ptr"], returns: "i32" },
 			openat: { args: ["i32", "cstring", "i32", "i32"], returns: "i32" },
 			unlinkat: { args: ["i32", "cstring", "i32"], returns: "i32" },
 		}) as unknown as DarwinFileSystem;
@@ -64,6 +73,37 @@ async function duplicateDarwinDescriptor(fd: number, flags: number): Promise<Fil
 async function openContainedChild(parent: FileHandle, name: string, flags: number, mode?: number): Promise<FileHandle> {
 	if (process.platform !== "darwin") return open(descriptorPath(parent.fd, name), flags, mode);
 	return duplicateDarwinDescriptor(openAt(parent.fd, name, flags, mode), flags);
+}
+
+function* readDarwinDirectory(fd: number, api: DarwinFileSystem): Generator<string> {
+	const buffer = new Uint8Array(DARWIN_DIRECTORY_BUFFER_BYTES);
+	const base = new BigInt64Array(1);
+	const bufferPointer = ptr(buffer);
+	const basePointer = ptr(base);
+	const decoder = new TextDecoder();
+	for (;;) {
+		const bytes = api.symbols.getdirentries(fd, bufferPointer, buffer.byteLength, basePointer);
+		if (bytes < 0) throw darwinError("getdirentries", api);
+		if (bytes === 0) return;
+		for (let offset = 0; offset < bytes; ) {
+			if (offset + DARWIN_DIRENT_HEADER_BYTES > bytes) throw new Error("invalid macOS directory entry");
+			const recordLength = read.u16(bufferPointer, offset + 4);
+			const nameLength = read.u8(bufferPointer, offset + 7);
+			if (
+				recordLength < DARWIN_DIRENT_HEADER_BYTES ||
+				offset + recordLength > bytes ||
+				nameLength > recordLength - DARWIN_DIRENT_HEADER_BYTES
+			)
+				throw new Error("invalid macOS directory entry");
+			if (nameLength > 0) {
+				const name = decoder.decode(
+					new Uint8Array(toArrayBuffer(bufferPointer, offset + DARWIN_DIRENT_HEADER_BYTES, nameLength)),
+				);
+				if (name !== "." && name !== "..") yield name;
+			}
+			offset += recordLength;
+		}
+	}
 }
 
 export class UnsafeManagedTranscriptPathError extends Error {
@@ -202,8 +242,14 @@ export async function removeContainedTranscriptPath(
 export async function* iterateContainedTranscriptDirectory(root: string, candidate: string): AsyncGenerator<string> {
 	const directory = await openContainedDirectory(root, containedParts(root, candidate, true));
 	try {
-		const entries = await opendir(descriptorPath(directory.fd));
-		for await (const entry of entries) yield entry.name;
+		if (process.platform === "darwin") {
+			const api = loadDarwinFileSystem();
+			if (!api) throw new Error("Darwin descriptor filesystem unavailable");
+			yield* readDarwinDirectory(directory.fd, api);
+		} else {
+			const entries = await opendir(descriptorPath(directory.fd));
+			for await (const entry of entries) yield entry.name;
+		}
 	} finally {
 		await closeQuietly(directory);
 	}
