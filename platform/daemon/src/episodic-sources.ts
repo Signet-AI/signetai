@@ -860,12 +860,10 @@ export function searchEpisodicSources(
 	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 51));
 	// Scheduled backlog probes request one lookahead row to distinguish a
 	// complete full page from a truncated one.
-	// An empty query still lists recent sources (runbook cutoff pattern). A
-	// match-all LIKE would still page every row's content overflow chain off
-	// disk (gigabytes for artifacts and transcripts), so the empty case uses
-	// IS NOT NULL, which the record header answers without reading the value.
-	const contentMatch = (column: string): string => (query.length === 0 ? `${column} IS NOT NULL` : `${column} LIKE ?`);
-	const likeArgs: unknown[] = query.length === 0 ? [] : [`%${query}%`];
+	// The empty arm avoids LIKE overflow; artifact placeholders remain excluded
+	// by the length predicate below.
+	const contentPredicate = (column: string): string => `((? = '' AND ${column} IS NOT NULL) OR ${column} LIKE ?)`;
+	const contentArgs: unknown[] = [query, `%${query}%`];
 	// Both the `since` and `before` bounds compare via julianday(): the
 	// watermark can now be ISO (`...T11:00:00.000Z` from an artifact) while
 	// rows use SQLite space format (`... 11:00:00`), and a raw string
@@ -926,6 +924,7 @@ export function searchEpisodicSources(
 			? "COALESCE(session_transcripts.updated_at, session_transcripts.created_at)"
 			: "session_transcripts.created_at";
 	const transcriptCompleted = transcriptHasCompletedAt ? "session_transcripts.completed_at IS NOT NULL" : "0";
+	const commonArgs = [params.agentId, ...contentArgs, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs];
 
 	const branches: Array<{ sql: string; args: unknown[] }> = [];
 	if (params.kind === undefined || params.kind === "memory") {
@@ -934,12 +933,12 @@ export function searchEpisodicSources(
 			      FROM memories
 			      WHERE agent_id = ? AND memory_kind = 'episodic'
 			        AND COALESCE(is_deleted, 0) = 0 AND visibility != 'archived' AND scope IS NULL
-			        AND COALESCE(type, '') != 'session_summary' AND ${contentMatch("content")}
+			        AND COALESCE(type, '') != 'session_summary' AND ${contentPredicate("content")}
 			        ${params.since ? "AND (julianday(created_at) >= julianday(?) OR julianday(created_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(created_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("memory", "id", "created_at", "''", "created_at")}
 			        ${reviewedPredicate("memory", "id", "created_at", "''", "created_at")}`,
-			args: [params.agentId, ...likeArgs, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs],
+			args: commonArgs,
 		});
 	}
 	if (params.kind === undefined || params.kind === "artifact") {
@@ -951,33 +950,33 @@ export function searchEpisodicSources(
 			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at
 			      FROM memory_artifacts ma
 			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
-			        AND length(ma.content) > 0 AND ${contentMatch("ma.content")}
+			        AND length(ma.content) > 0 AND ${contentPredicate("ma.content")}
 			        ${params.since ? "AND (julianday(ma.captured_at) >= julianday(?) OR julianday(ma.captured_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(ma.captured_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("artifact", "ma.source_path", "ma.captured_at", "COALESCE(ma.source_id, '')", "CASE WHEN ma.source_sha256 IS NULL OR ma.source_sha256 = '' THEN ma.captured_at ELSE ma.source_sha256 END")}
 			        ${reviewedPredicate("artifact", "ma.source_path", "ma.captured_at", "COALESCE(ma.source_id, '')", "CASE WHEN ma.source_sha256 IS NULL OR ma.source_sha256 = '' THEN ma.captured_at ELSE ma.source_sha256 END")}
 			        AND (ma.source_sha256 IS NULL OR ma.source_sha256 = ''
-			             OR (ma.agent_id, ma.source_path) = (
-			               SELECT ma2.agent_id, ma2.source_path FROM memory_artifacts ma2
+			             OR ma.source_path = (
+			               SELECT ma2.source_path FROM memory_artifacts ma2
 			               WHERE ma2.agent_id = ma.agent_id AND COALESCE(ma2.is_deleted, 0) = 0
 			                 AND ma2.source_sha256 = ma.source_sha256
 			                 AND COALESCE(ma2.source_id, '') = COALESCE(ma.source_id, '')
 			               ORDER BY ma2.captured_at DESC, ma2.source_path ASC
 			               LIMIT 1
 			             ))`,
-			args: [params.agentId, ...likeArgs, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs],
+			args: commonArgs,
 		});
 	}
 	if (params.kind === undefined || params.kind === "transcript") {
 		branches.push({
 			sql: `SELECT 'transcript' AS kind, session_key AS id, ${transcriptSearchTime} AS captured_at
 			      FROM session_transcripts
-			      WHERE agent_id = ? AND ${transcriptCompleted} AND ${contentMatch("session_transcripts.content")}
+			      WHERE agent_id = ? AND ${transcriptCompleted} AND ${contentPredicate("session_transcripts.content")}
 			        ${params.since ? `AND (julianday(${transcriptSearchTime}) >= julianday(?) OR julianday(${transcriptSearchTime}) < julianday(?))` : ""}
 			        ${params.before ? `AND julianday(${transcriptSearchTime}) <= julianday(?)` : ""}
 			        ${deliveredPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}
 			        ${reviewedPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}`,
-			args: [params.agentId, ...likeArgs, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs],
+			args: commonArgs,
 		});
 	}
 	if (params.kind === "summary") {
@@ -986,12 +985,12 @@ export function searchEpisodicSources(
 			      FROM session_summaries
 			      WHERE agent_id = ? AND depth = 0
 			        AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
-			        AND ${contentMatch("content")}
+			        AND ${contentPredicate("content")}
 			        ${params.since ? "AND (julianday(latest_at) >= julianday(?) OR julianday(latest_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(latest_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("summary", "id", "latest_at", "''", "latest_at")}
 			        ${reviewedPredicate("summary", "id", "latest_at", "''", "latest_at")}`,
-			args: [params.agentId, ...likeArgs, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs],
+			args: commonArgs,
 		});
 	}
 

@@ -1748,9 +1748,16 @@ function verifyMigrationArtifacts(writeConn: SqliteDatabase, auditHighWaterMark:
 	const appliedVersions = appliedMigrationVersions(writeConn, auditHighWaterMark);
 	for (const migration of MIGRATIONS) {
 		if (!appliedVersions.has(migration.version)) continue;
-		for (const table of migration.artifacts?.tables ?? []) {
-			const row = writeConn.prepare("SELECT 1 AS present FROM sqlite_schema WHERE name = ? LIMIT 1").get(table);
-			if (row === undefined) missing.push(`table ${table} (migration ${migration.version})`);
+		for (const [type, names] of [
+			["table", migration.artifacts?.tables],
+			["index", migration.artifacts?.indexes],
+		] as const) {
+			for (const name of names ?? []) {
+				const row = writeConn
+					.prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = ? AND name = ? LIMIT 1")
+					.get(type, name);
+				if (row === undefined) missing.push(`${type} ${name} (migration ${migration.version})`);
+			}
 		}
 		for (const column of migration.artifacts?.columns ?? []) {
 			const rows = writeConn.prepare(`PRAGMA table_info(${JSON.stringify(column.table)})`).all() as ReadonlyArray<{

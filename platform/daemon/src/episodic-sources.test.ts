@@ -340,27 +340,32 @@ describe("episodic source selection", () => {
 		]);
 	});
 
-	it("keeps content-identical artifacts distinct across configured sources", () => {
+	it("dedupes content-identical artifacts by source and agent", () => {
 		getDbAccessor().withWriteTx((db) => {
-			for (const [sourceId, sourcePath] of [
-				["import-a", "imports/a.md"],
-				["import-b", "imports/b.md"],
+			const insert = db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, source_id, session_id, session_token,
+				  captured_at, content, updated_at, is_deleted)
+				 VALUES (?, ?, 'same-content', 'source_markdown', ?, 'session-a', 'token-a', ?, ?, ?, ?)`,
+			);
+			for (const [agentId, sourceId, sourcePath, capturedAt, content, isDeleted] of [
+				["ant", null, "imports/old.md", "2026-08-01T10:00:00.000Z", "old", 0],
+				["ant", "", "imports/tie-z.md", "2026-08-01T11:00:00.000Z", "z", 0],
+				["ant", null, "imports/tie-a.md", "2026-08-01T11:00:00.000Z", "a", 0],
+				["ant", "import-a", "imports/deleted.md", "2026-08-01T12:00:00.000Z", "deleted", 1],
+				["ant", "import-b", "imports/b.md", "2026-08-01T09:00:00.000Z", "b", 0],
+				["other", "import-a", "imports/other.md", "2026-08-01T13:00:00.000Z", "other", 0],
+				["ant", "import-a", "imports/empty.md", "2026-08-01T08:00:00.000Z", "", 0],
 			] as const) {
-				db.prepare(
-					`INSERT INTO memory_artifacts
-					 (agent_id, source_path, source_sha256, source_kind, source_id, session_id, session_token,
-					  captured_at, content, updated_at, is_deleted)
-					 VALUES ('ant', ?, 'same-content', 'source_markdown', ?, 'session-a', 'token-a',
-					  '2026-08-01T11:00:00.000Z', 'Shared source evidence', '2026-08-01T11:00:00.000Z', 0)`,
-				).run(sourcePath, sourceId);
+				insert.run(agentId, sourcePath, sourceId, capturedAt, content, capturedAt, isDeleted);
 			}
 		});
 
 		const matches = getDbAccessor().withReadDb((db) =>
-			searchEpisodicSources(db, { agentId: "ant", query: "Shared source evidence" }),
+			searchEpisodicSources(db, { agentId: "ant", query: "", kind: "artifact", limit: null }),
 		);
 		expect(matches.map((match) => ({ id: match.id, sourceEntryId: match.sourceEntryId }))).toEqual([
-			{ id: "imports/a.md", sourceEntryId: "import-a" },
+			{ id: "imports/tie-a.md", sourceEntryId: null },
 			{ id: "imports/b.md", sourceEntryId: "import-b" },
 		]);
 	});
