@@ -1,4 +1,4 @@
-import { spawnHidden as spawn, spawnSyncHidden as spawnSync } from "@signet/core";
+import { spawnSyncHidden as spawnSync } from "@signet/core";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
@@ -11,85 +11,8 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, posix, win32 } from "node:path";
+import { basename, dirname, join } from "node:path";
 import chalk from "chalk";
-
-export const NATIVE_UPDATE_BACKUP_ENV = "SIGNET_NATIVE_UPDATE_BACKUP";
-
-const NATIVE_UPDATE_BACKUP_NAME = /^\.signet\.exe\.\d+\.backup$/i;
-const NATIVE_UPDATE_BACKUP_ATTEMPTS = 120;
-const NATIVE_UPDATE_BACKUP_RETRY_MS = 250;
-
-export function isNativeUpdateBackupCleanupRequest(
-	backupPath: string | undefined,
-	executablePath = process.execPath,
-	platform = process.platform,
-): backupPath is string {
-	if (platform !== "win32" || backupPath === undefined) return false;
-	const pathApi = platform === "win32" ? win32 : posix;
-	return (
-		pathApi.basename(executablePath).toLowerCase() === "signet.exe" &&
-		NATIVE_UPDATE_BACKUP_NAME.test(pathApi.basename(backupPath)) &&
-		pathApi.resolve(pathApi.dirname(backupPath)).toLowerCase() ===
-			pathApi.resolve(pathApi.dirname(executablePath)).toLowerCase()
-	);
-}
-
-function isWindowsFileLockError(error: unknown): boolean {
-	if (!(error instanceof Error) || !("code" in error)) return false;
-	return error.code === "EACCES" || error.code === "EPERM" || error.code === "EBUSY";
-}
-
-export async function cleanupNativeUpdateBackup(backupPath: string): Promise<boolean> {
-	for (let attempt = 0; attempt < NATIVE_UPDATE_BACKUP_ATTEMPTS; attempt += 1) {
-		try {
-			rmSync(backupPath, { force: true });
-			return true;
-		} catch (error) {
-			if (!isWindowsFileLockError(error)) return false;
-			await new Promise<void>((resolve) => setTimeout(resolve, NATIVE_UPDATE_BACKUP_RETRY_MS));
-		}
-	}
-	return false;
-}
-
-export interface NativeUpdateBackupCleanupInvocation {
-	readonly command: string;
-	readonly args: readonly string[];
-	readonly options: {
-		readonly cwd: string;
-		readonly detached: true;
-		readonly stdio: "ignore";
-		readonly env: NodeJS.ProcessEnv;
-	};
-}
-
-export function buildNativeUpdateBackupCleanupInvocation(
-	targetPath: string,
-	backupPath: string,
-): NativeUpdateBackupCleanupInvocation {
-	return {
-		command: targetPath,
-		args: [],
-		options: {
-			cwd: win32.dirname(targetPath),
-			detached: true,
-			stdio: "ignore",
-			env: { ...process.env, [NATIVE_UPDATE_BACKUP_ENV]: backupPath },
-		},
-	};
-}
-
-function deferWindowsNativeBackupCleanup(targetPath: string, backupPath: string): void {
-	try {
-		const invocation = buildNativeUpdateBackupCleanupInvocation(targetPath, backupPath);
-		const child = spawn(invocation.command, invocation.args, invocation.options);
-		child.on("error", () => {});
-		child.unref();
-	} catch {
-		// The replacement is complete; leave auxiliary cleanup for a later install.
-	}
-}
 
 export interface NativeInstallOptions {
 	readonly binDir?: string;
@@ -324,7 +247,7 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 	try {
 		if (process.platform !== "win32") chmodSync(tmp, 0o755);
 		if (process.platform === "win32" && existsSync(target)) {
-			const backup = join(dirname(target), `.${basename(target)}.${process.pid}.backup`);
+			const backup = join(dirname(target), `.${basename(target)}.backup`); // Parent may still execute this renamed image.
 			rmSync(backup, { force: true });
 			renameSync(target, backup);
 			try {
@@ -334,12 +257,6 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 					renameSync(backup, target);
 				}
 				throw error;
-			}
-			try {
-				rmSync(backup, { force: true });
-			} catch (error) {
-				if (!isWindowsFileLockError(error)) throw error;
-				deferWindowsNativeBackupCleanup(target, backup);
 			}
 		} else {
 			// POSIX rename replaces the existing path atomically, so a failed
