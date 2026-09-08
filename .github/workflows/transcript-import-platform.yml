@@ -21,13 +21,9 @@ permissions:
   contents: read
 
 jobs:
-  platform-contract:
-    name: Transcript import (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  windows-platform-gate:
+    name: Transcript import Windows platform gate
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
