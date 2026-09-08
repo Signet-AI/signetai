@@ -118,27 +118,37 @@ function removeRetiredPipelineSettings(pipeline: Record<string, unknown>): Recor
 	return cleaned;
 }
 
+function mergeDreamingMemory(
+	existingMemory: Record<string, unknown>,
+	basePipeline: unknown,
+	overridePipeline: unknown,
+): Record<string, unknown> {
+	const base = readRecord(basePipeline);
+	const override = readRecord(overridePipeline);
+	return {
+		...existingMemory,
+		dreaming: { ...readRecord(existingMemory.dreaming), enabled: true },
+		pipelineV2: {
+			...base,
+			...override,
+			enabled: true,
+			graph: { ...readRecord(base.graph), ...readRecord(override.graph) },
+			reranker: { ...readRecord(base.reranker), ...readRecord(override.reranker) },
+			autonomous: {
+				...readRecord(base.autonomous),
+				...readRecord(override.autonomous),
+			},
+		},
+	};
+}
+
 export function enableDreamingInConfig(existingConfig: Record<string, unknown>): Record<string, unknown> {
 	const existingMemory = readRecord(existingConfig.memory);
 	const existingPipeline = removeRetiredPipelineSettings(readRecord(existingMemory.pipelineV2));
 	const pipelineDefaults = buildSetupPipeline("none", true);
 	return {
 		...existingConfig,
-		memory: {
-			...existingMemory,
-			dreaming: { ...readRecord(existingMemory.dreaming), enabled: true },
-			pipelineV2: {
-				...pipelineDefaults,
-				...existingPipeline,
-				enabled: true,
-				graph: { ...readRecord(pipelineDefaults.graph), ...readRecord(existingPipeline.graph) },
-				reranker: { ...readRecord(pipelineDefaults.reranker), ...readRecord(existingPipeline.reranker) },
-				autonomous: {
-					...readRecord(pipelineDefaults.autonomous),
-					...readRecord(existingPipeline.autonomous),
-				},
-			},
-		},
+		memory: mergeDreamingMemory(existingMemory, pipelineDefaults, existingPipeline),
 	};
 }
 
@@ -374,20 +384,7 @@ export async function runExistingSetupWizard(
 				Reflect.deleteProperty(existingMemory, "synthesis");
 				const existingPipeline = removeRetiredPipelineSettings(readRecord(existingMemory.pipelineV2));
 				const pipelineDefaults = buildSetupPipeline(options?.extractionProvider ?? "none", true);
-				updatedConfig.memory = {
-					...existingMemory,
-					dreaming: { ...readRecord(existingMemory.dreaming), enabled: true },
-					pipelineV2: {
-						...existingPipeline,
-						...pipelineDefaults,
-						graph: { ...readRecord(existingPipeline.graph), ...readRecord(pipelineDefaults.graph) },
-						reranker: { ...readRecord(existingPipeline.reranker), ...readRecord(pipelineDefaults.reranker) },
-						autonomous: {
-							...readRecord(existingPipeline.autonomous),
-							...readRecord(pipelineDefaults.autonomous),
-						},
-					},
-				};
+				updatedConfig.memory = mergeDreamingMemory(existingMemory, existingPipeline, pipelineDefaults);
 			} else {
 				const existingMemory = { ...readRecord(existingConfig.memory) };
 				Reflect.deleteProperty(existingMemory, "synthesis");

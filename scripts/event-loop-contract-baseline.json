@@ -2610,7 +2610,7 @@
     },
     {
       "path": "pipeline/dreaming-token-cache.ts",
-      "line": 35,
+      "line": 34,
       "api": "existsSync",
       "source": "return existsSync(bundled)",
       "category": "hot-path"
