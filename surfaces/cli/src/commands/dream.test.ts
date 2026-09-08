@@ -72,7 +72,7 @@ interface StatusPayload {
 		lastPassId: string | null;
 		lastPassMode: string | null;
 	};
-	episodicTokensPending: number;
+	episodicTokensPending: number | null;
 	config: { tokenThreshold: number; backfillOnFirstRun: boolean };
 	passes: Array<{
 		id: string;
@@ -222,6 +222,21 @@ describe("Dreaming capability CLI binding", () => {
 });
 
 describe("dream status failure labeling", () => {
+	it("labels an unmeasured episodic backlog instead of printing null", async () => {
+		const fetchDaemonResult = mockFetch(async () => okResult({ ...makeStatus([]), episodicTokensPending: null }));
+		const program = new Command();
+		registerDreamCommands(program, { ...makeDeps(), fetchDaemonResult });
+		const capture = captureOutput();
+		try {
+			await program.parseAsync(["node", "test", "dream", "status"]);
+			const output = capture.lines.join("\n");
+			expect(output).toContain("unmeasured / 10000 episodic tokens");
+			expect(output).not.toContain("null / 10000");
+		} finally {
+			capture.restore();
+		}
+	});
+
 	it("names an unresponsive daemon instead of asking whether it is running", async () => {
 		const fetchDaemonResult = mockFetch(async () => ({ ok: false, reason: "timeout" }));
 		const program = new Command();

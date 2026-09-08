@@ -19,7 +19,6 @@ import { graphWriteCaps, loadMemoryConfig } from "../memory-config.js";
 import { listMemoryContentSafety, parseMemorySafetyReasons } from "../memory-content-safety.js";
 import {
 	getDreamingAttention,
-	getDreamingEpisodicTokenBacklog,
 	getDreamingEvidenceExclusions,
 	getDreamingReviewedEvidence,
 	getDreamingPasses,
@@ -40,6 +39,7 @@ import {
 	type DreamingLiveEvent,
 } from "../pipeline/dreaming-live-events";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
+import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreaming-token-cache";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
 import { AlreadyRunningError } from "../pipeline/dreaming-worker.js";
@@ -755,7 +755,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const agentId = scopedAgent.agentId;
 
 		const state = await getDreamingState(accessor, agentId);
-		const episodicTokensPending = await getDreamingEpisodicTokenBacklog(accessor, agentId);
+		const episodicTokensPending = getDreamingEpisodicTokenBacklogCachedOrNull(agentId);
 		const passes = await getDreamingPasses(accessor, agentId, 10);
 		const exclusions = await getDreamingEvidenceExclusions(accessor, agentId);
 		const reviewedEvidence = await getDreamingReviewedEvidence(accessor, agentId);

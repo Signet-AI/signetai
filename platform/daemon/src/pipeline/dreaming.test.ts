@@ -51,7 +51,13 @@ import {
 } from "./dreaming-evidence-retry";
 import { readDreamingRunbook } from "./dreaming-runbook";
 import { requestDreamingReviewedEvidenceRequeue } from "./dreaming-evidence-reviews";
-import { getDreamingEpisodicTokenBacklogCached } from "./dreaming-token-cache";
+import {
+	beginDreamingEpisodicTokenBacklogMeasurement,
+	getDreamingEpisodicTokenBacklogCached,
+	hasDreamingEpisodicTokenBacklogCached,
+	invalidateDreamingEpisodicTokenBacklog,
+	recordDreamingEpisodicTokenBacklog,
+} from "./dreaming-token-cache";
 
 const AGENT = "default";
 
@@ -1303,6 +1309,26 @@ describe("Dreaming", () => {
 
 		expect(probe.kind).toBe("indeterminate");
 		expect(getDreamingEpisodicTokenBacklogCached(agentId)).toBe(exact);
+	});
+
+	it("hides an exact aggregate after its source window is invalidated", async () => {
+		const agentId = "invalidated-cache";
+		seedArtifact(
+			db,
+			`imports/${agentId}.md`,
+			"the invalidated cached source",
+			`${agentId}-source`,
+			"2026-08-01T00:00:00.000Z",
+			agentId,
+		);
+		await getDreamingEpisodicTokenBacklogInDb(db as unknown as ReadDb, agentId);
+		expect(hasDreamingEpisodicTokenBacklogCached(agentId)).toBe(true);
+
+		const staleGeneration = beginDreamingEpisodicTokenBacklogMeasurement(agentId);
+		invalidateDreamingEpisodicTokenBacklog(agentId);
+		recordDreamingEpisodicTokenBacklog(agentId, 123, staleGeneration);
+
+		expect(hasDreamingEpisodicTokenBacklogCached(agentId)).toBe(false);
 	});
 
 	it("keeps owner-routed and inline probe semantics equivalent", async () => {

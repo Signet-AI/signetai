@@ -103,7 +103,7 @@ Current setup accepts `claude-code`, `codex`, `kimi`, `opencode`, `forge`, `open
 | `--extraction-endpoint <url>` | Endpoint for `openai-compatible` extraction. |
 | `--aggregate-recall-provider`, `--aggregate-recall-model`, `--aggregate-recall-endpoint` | Configure a distinct provider for aggregate recall. |
 | `--search-balance <alpha>` | Semantic/keyword balance from `0` through `1`. |
-| `--enable-dreaming` | Enable background memory consolidation. |
+| `--enable-dreaming` | Enable background memory consolidation. On an existing workspace, this updates the Dreaming and pipeline settings in `agent.yaml` while preserving unrelated configuration. |
 
 When an explicitly selected Ollama service or model is unavailable during non-interactive setup, Signet keeps Ollama selected and reports the problem; it does not silently switch to native embeddings. Setup continues with embeddings unavailable until Ollama is ready; use `signet doctor` to check readiness.
 

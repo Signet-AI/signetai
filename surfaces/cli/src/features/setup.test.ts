@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SIGNET_SECRETS_PLUGIN_ID, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
+import { SIGNET_SECRETS_PLUGIN_ID, parseSimpleYaml, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
 import { detectExistingSetup, type SetupDetection } from "../lib/setup-detection.js";
 import * as openUrl from "../lib/open-url.js";
 import { detectedHarnessesForExistingSetup, runExistingSetupWizard } from "./setup-migrate.js";
@@ -218,6 +218,61 @@ describe("setupWizard non-interactive harness hooks", () => {
 		await setupWizard({ nonInteractive: true }, deps);
 
 		expect(configureHarnessHooks).not.toHaveBeenCalled();
+	});
+
+	it("enables Dreaming on an existing installation when requested", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-existing-dreaming-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		writeFileSync(
+			join(basePath, "agent.yaml"),
+			`version: 1
+memory:
+  pipelineV2:
+    enabled: false
+    semanticContradictionEnabled: false
+    custom: keep
+    graph:
+      enabled: false
+    reranker:
+      enabled: false
+    autonomous:
+      enabled: false
+      allowUpdateDelete: false
+  dreaming:
+    backfillOnFirstRun: true
+`,
+		);
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({ ...fakeDetection(basePath), agentYaml: true })),
+		});
+
+		await setupWizard(
+			{
+				nonInteractive: true,
+				enableDreaming: true,
+				skipGit: true,
+				allowUnprotectedWorkspace: true,
+			},
+			deps,
+		);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		const config = parseSimpleYaml(agentYaml);
+		const memory = config.memory as Record<string, unknown>;
+		const dreaming = memory.dreaming as Record<string, unknown>;
+		const pipeline = memory.pipelineV2 as Record<string, unknown>;
+		expect(dreaming.enabled).toBe(true);
+		expect(dreaming.backfillOnFirstRun).toBe(true);
+		expect(pipeline.enabled).toBe(true);
+		expect(pipeline.semanticContradictionEnabled).toBe(false);
+		expect(pipeline.custom).toBe("keep");
+		expect((pipeline.graph as Record<string, unknown>).enabled).toBe(false);
+		expect((pipeline.reranker as Record<string, unknown>).enabled).toBe(false);
+		expect((pipeline.autonomous as Record<string, unknown>).enabled).toBe(false);
+		expect((pipeline.autonomous as Record<string, unknown>).allowUpdateDelete).toBe(false);
 	});
 
 	it("writes OpenAI-compatible endpoint during non-interactive setup", async () => {

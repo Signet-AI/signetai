@@ -513,6 +513,12 @@ episodic evidence. Requires `admin` permission.
 }
 ```
 
+The `episodicTokensPending` field is a number only when a recent exact
+backlog measurement is available for the resolved agent. It is `null` when the
+backlog has not been measured, the cached measurement was invalidated, or the
+measurement expired. The status endpoint does not perform an unbounded token
+scan to populate this field.
+
 The status response also includes `reviewedEvidence`, containing immutable
 source revisions that a completed pass fully inspected and intentionally found
 to contain no durable fact. These rows are excluded from scan-first backlog

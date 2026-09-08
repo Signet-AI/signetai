@@ -52,7 +52,7 @@ interface DreamPass {
 interface DreamStatus {
 	readonly worker: { readonly running: boolean; readonly active: boolean };
 	readonly state: DreamState;
-	readonly episodicTokensPending: number;
+	readonly episodicTokensPending: number | null;
 	readonly config: {
 		readonly tokenThreshold: number;
 		readonly backfillOnFirstRun: boolean;
@@ -225,9 +225,11 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 				: chalk.dim("stopped");
 
 			console.log(`  ${chalk.dim("Worker:")}     ${worker}`);
-			console.log(
-				`  ${chalk.dim("Threshold:")}  ${data.episodicTokensPending} / ${data.config.tokenThreshold} episodic tokens`,
-			);
+			const threshold =
+				data.episodicTokensPending === null
+					? `${chalk.dim("unmeasured")} / ${data.config.tokenThreshold}`
+					: `${data.episodicTokensPending} / ${data.config.tokenThreshold}`;
+			console.log(`  ${chalk.dim("Threshold:")}  ${threshold} episodic tokens`);
 
 			if (data.state.lastPassAt) {
 				console.log(`  ${chalk.dim("Last pass:")}  ${data.state.lastPassAt} (${data.state.lastPassMode})`);
