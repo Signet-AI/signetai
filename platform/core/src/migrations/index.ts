@@ -1,4 +1,5 @@
 import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
+import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
 /**
  * Migration runner for Signet's SQLite database
  *
@@ -1401,6 +1402,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				})),
 			],
 		},
+	},
+	{
+		version: 152,
+		name: "memory-artifact-sha-index",
+		up: memoryArtifactShaIndex,
+		// Index only: MigrationArtifacts has no `indexes` field (see v3).
 	},
 ];
 
