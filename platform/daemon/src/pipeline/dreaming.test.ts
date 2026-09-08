@@ -53,6 +53,7 @@ import { readDreamingRunbook } from "./dreaming-runbook";
 import { requestDreamingReviewedEvidenceRequeue } from "./dreaming-evidence-reviews";
 import {
 	beginDreamingEpisodicTokenBacklogMeasurement,
+	DreamingBacklogTokenCache,
 	getDreamingEpisodicTokenBacklogCached,
 	getDreamingEpisodicTokenBacklogCachedOrNull,
 	invalidateDreamingEpisodicTokenBacklog,
@@ -1329,6 +1330,41 @@ describe("Dreaming", () => {
 		recordDreamingEpisodicTokenBacklog(agentId, 123, staleGeneration);
 
 		expect(getDreamingEpisodicTokenBacklogCachedOrNull(agentId)).toBeNull();
+	});
+
+	it("does not repopulate after cache stop", async () => {
+		const cache = new DreamingBacklogTokenCache();
+		const refresh = cache.replaceExactSnapshot("stopped-cache", []);
+		cache.stop();
+
+		await expect(refresh).rejects.toThrow("stopped");
+		expect(cache.getFresh("stopped-cache")).toBeNull();
+	});
+
+	it("does not record a measurement captured before cache stop", () => {
+		const cache = new DreamingBacklogTokenCache();
+		const measurement = cache.beginMeasurement("stopped-measurement-cache");
+		cache.stop();
+		cache.recordExactTotal("stopped-measurement-cache", 1, measurement);
+
+		expect(cache.getFresh("stopped-measurement-cache")).toBeNull();
+	});
+
+	it("does not publish an in-flight snapshot after cache stop", async () => {
+		const cache = new DreamingBacklogTokenCache();
+		Object.defineProperty(cache, "count", {
+			value: async () => {
+				await new Promise<void>((resolve) => setTimeout(resolve, 0));
+				return [{ key: "source", count: 1 }];
+			},
+		});
+		const refresh = cache.replaceExactSnapshot("stopped-inflight-cache", [
+			{ key: "source", revision: "v1", text: "pending" },
+		]);
+		queueMicrotask(() => cache.stop());
+
+		await expect(refresh).rejects.toThrow("stopped during measurement");
+		expect(cache.getFresh("stopped-inflight-cache")).toBeNull();
 	});
 
 	it("keeps owner-routed and inline probe semantics equivalent", async () => {
