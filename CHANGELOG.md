@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-08
-- Bug fixes: retain Windows rollback backup until next install; isolate deferred Windows cleanup process; finish Windows native update replacement; simplify portable purge; bounded deletes portable to SQLite without DELETE LIMIT.
+- Bug fixes: reuse shared recall accessor; enumerate macOS transcript directories by fd; use descriptor-relative macOS transcript paths; close migration schema probes; retry transcript upload finalization; make transcript uploads resilient at scale; support resumable transcript imports on Windows; retain Windows rollback backup until next install; isolate deferred Windows cleanup process; finish Windows native update replacement; simplify portable purge; bounded deletes portable to SQLite without DELETE LIMIT.
 
 ### 2026-09-07
 - Features: make Windows a first-class install target; ship cross-platform desktop support.
@@ -36,6 +36,21 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: keep owner protocol pure.
 
 ## Release Ledger
+
+## [0.221.9] - 2026-09-08
+
+Release summary: 7 bug fixes.
+Tag range: `v0.221.8..v0.221.9`.
+
+### Bug Fixes
+
+- **daemon**: reuse shared recall accessor
+- enumerate macOS transcript directories by fd
+- use descriptor-relative macOS transcript paths
+- close migration schema probes
+- retry transcript upload finalization
+- make transcript uploads resilient at scale
+- support resumable transcript imports on Windows
 
 ## [0.221.8] - 2026-09-08
 

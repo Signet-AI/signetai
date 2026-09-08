@@ -1,6 +1,6 @@
 {
 	"name": "@signet/connector-pi",
-	"version": "0.221.8",
+	"version": "0.221.9",
 	"description": "Signet connector for pi",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -25,7 +25,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@signet/connector-base": "0.221.8"
+		"@signet/connector-base": "0.221.9"
 	},
 	"devDependencies": {
 		"@signet/pi-extension-base": "workspace:*",
