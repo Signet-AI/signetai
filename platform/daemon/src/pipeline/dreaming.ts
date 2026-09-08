@@ -84,6 +84,8 @@ import {
 import {
 	type DreamingBacklogTokenEntry,
 	countDreamingBacklogTokenEntries,
+	beginDreamingEpisodicTokenBacklogMeasurement,
+	invalidateDreamingEpisodicTokenBacklog,
 	recordDreamingEpisodicTokenBacklog,
 	refreshDreamingBacklogTokenCache,
 } from "./dreaming-token-cache";
@@ -1638,6 +1640,9 @@ export async function runDreamingAgentPass(
 	liveOptions?: DreamingPassLiveOptions,
 	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
+	// Any pass may consume or create episodic evidence. Do not present the
+	// previous exact aggregate while the pass is mutating its source window.
+	for (const scope of scopes) invalidateDreamingEpisodicTokenBacklog(scope);
 	const passId =
 		existingPassId ??
 		(await (ownerMaintenance
@@ -2421,6 +2426,7 @@ export async function getDreamingEpisodicTokenBacklog(
 	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<number> {
 	const input: DbOwnerDreamingEpisodicBacklog = { agentId };
+	const measurementGeneration = beginDreamingEpisodicTokenBacklogMeasurement(agentId);
 	const options = { deadlineMs: 60_000, estimatedWorkUnits: DB_OWNER_MAX_WORK_UNITS };
 	const count = ownerMaintenance
 		? await ownerMaintenance.dreamingEpisodicBacklog(input, options)
@@ -2428,7 +2434,7 @@ export async function getDreamingEpisodicTokenBacklog(
 				runWithOwner: async (owner) => await ownerDreamingEpisodicBacklog(owner, input, options),
 				runInline: ({ read }) => read((db) => getDreamingEpisodicTokenBacklogInDb(db, input.agentId)),
 			});
-	recordDreamingEpisodicTokenBacklog(agentId, count);
+	recordDreamingEpisodicTokenBacklog(agentId, count, measurementGeneration);
 	return count;
 }
 
@@ -2438,6 +2444,7 @@ export async function probeDreamingEpisodicBacklog(
 	tokenThreshold: number,
 	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<DreamingEpisodicBacklogProbe> {
+	const measurementGeneration = beginDreamingEpisodicTokenBacklogMeasurement(agentId);
 	const input: DbOwnerDreamingEpisodicBacklogProbe = {
 		agentId,
 		tokenThreshold: ensureDreamingTokenThreshold(tokenThreshold),
@@ -2451,7 +2458,8 @@ export async function probeDreamingEpisodicBacklog(
 				runInline: ({ read }) =>
 					read((db) => probeDreamingEpisodicBacklogInDb(db, input.agentId, input.tokenThreshold, input.maxSources)),
 			});
-	if (result.kind === "exact") recordDreamingEpisodicTokenBacklog(agentId, result.tokens);
+	if (result.kind === "exact") recordDreamingEpisodicTokenBacklog(agentId, result.tokens, measurementGeneration);
+	else invalidateDreamingEpisodicTokenBacklog(agentId);
 	return result;
 }
 

@@ -1779,6 +1779,69 @@ function buildTelemetryConfigSnapshot(agentsDir: string, memoryCfg: ResolvedMemo
 
 async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
 	const pipelinePaused = memoryCfg.pipelineV2.paused;
+	const router = getOrCreateInferenceRouter(AGENTS_DIR);
+	const defaultAgentId = resolveDaemonAgentId();
+	initInferenceProviderResolver((workload) => {
+		switch (workload) {
+			case "memoryExtraction":
+				return router.createWorkloadProvider("memory_extraction", defaultAgentId);
+			case "sessionSynthesis":
+				return router.createWorkloadProvider("session_synthesis", defaultAgentId);
+			case "aggregateRecall":
+				return router.createWorkloadProvider("aggregate_recall", defaultAgentId);
+			case "widgetGeneration":
+				return router.createWorkloadProvider("widget_generation", defaultAgentId);
+			case "repair":
+				return router.createWorkloadProvider("repair", defaultAgentId);
+			case "interactive":
+				return router.createWorkloadProvider("interactive", defaultAgentId);
+			case "default":
+				return router.createWorkloadProvider("default", defaultAgentId);
+		}
+	});
+	// Surface broken routing references (defaultPolicy, workload targets, etc.) at
+	// boot before any route is attempted (#1005). Never blocks daemon startup.
+	void router.validateConfigReferences();
+
+	// Admit Dreaming before optional startup work. Legacy-job retirement and
+	// embedding resolution both use the DB-owner queue and can reject the
+	// deferred runtime before the worker would otherwise be created.
+	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
+		try {
+			dreamingWorkerHandle = startDreamingWorker(
+				getDbAccessor(),
+				memoryCfg.dreaming,
+				AGENTS_DIR,
+				defaultAgentId,
+				{
+					acpxMcp: {
+						daemonUrl: `http://${INTERNAL_SELF_HOST}:${PORT}`,
+						authorizationTokenForAgent: (agentId) =>
+							authSecret
+								? createToken(
+										authSecret,
+										{ sub: `dreaming:${agentId}`, role: "agent", scope: { agent: agentId } },
+										Math.max(900, Math.ceil(memoryCfg.dreaming.timeout / 1000) + 60),
+									)
+								: undefined,
+					},
+					evidenceRetry: {
+						cooldownMs: memoryCfg.pipelineV2.repair.requeueCooldownMs,
+						hourlyBudget: memoryCfg.pipelineV2.repair.requeueHourlyBudget,
+						maxAttempts: 3,
+					},
+					ownerMaintenance: dbOwnerMaintenanceHandle ?? undefined,
+				},
+				graphWriteCaps(memoryCfg),
+			);
+			setDreamingWorker(dreamingWorkerHandle);
+		} catch (err) {
+			logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
 	logger.info("dreaming", "Dreaming owns all semantic writes; legacy extraction is retired");
 	// Terminalize every pre-existing legacy `extract` job. The source keeps its
 	// provenance and memory kind, so only already-episodic evidence remains
@@ -1811,30 +1874,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	if (!transcriptCaptureWorkerHandle) {
 		transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
 	}
-
-	const router = getOrCreateInferenceRouter(AGENTS_DIR);
-	// Surface broken routing references (defaultPolicy, workload targets, etc.) at
-	// boot before any route is attempted (#1005). Never blocks daemon startup.
-	void router.validateConfigReferences();
-	const defaultAgentId = resolveDaemonAgentId();
-	initInferenceProviderResolver((workload) => {
-		switch (workload) {
-			case "memoryExtraction":
-				return router.createWorkloadProvider("memory_extraction", defaultAgentId);
-			case "sessionSynthesis":
-				return router.createWorkloadProvider("session_synthesis", defaultAgentId);
-			case "aggregateRecall":
-				return router.createWorkloadProvider("aggregate_recall", defaultAgentId);
-			case "widgetGeneration":
-				return router.createWorkloadProvider("widget_generation", defaultAgentId);
-			case "repair":
-				return router.createWorkloadProvider("repair", defaultAgentId);
-			case "interactive":
-				return router.createWorkloadProvider("interactive", defaultAgentId);
-			case "default":
-				return router.createWorkloadProvider("default", defaultAgentId);
-		}
-	});
 
 	const routerStatus = await router.status(false);
 	const statusValue = routerStatus.ok ? routerStatus.value : null;
@@ -1935,45 +1974,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		setEmbeddingTrackerHandle(embeddingTrackerHandle);
 	}
 
-	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
-		try {
-			dreamingWorkerHandle = startDreamingWorker(
-				getDbAccessor(),
-				memoryCfg.dreaming,
-				AGENTS_DIR,
-				defaultAgentId,
-				{
-					acpxMcp: {
-						daemonUrl: `http://${INTERNAL_SELF_HOST}:${PORT}`,
-						authorizationTokenForAgent: (agentId) =>
-							authSecret
-								? createToken(
-										authSecret,
-										{ sub: `dreaming:${agentId}`, role: "agent", scope: { agent: agentId } },
-										Math.max(900, Math.ceil(memoryCfg.dreaming.timeout / 1000) + 60),
-									)
-								: undefined,
-					},
-					evidenceRetry: {
-						cooldownMs: memoryCfg.pipelineV2.repair.requeueCooldownMs,
-						hourlyBudget: memoryCfg.pipelineV2.repair.requeueHourlyBudget,
-						maxAttempts: 3,
-					},
-					ownerMaintenance: dbOwnerMaintenanceHandle ?? undefined,
-				},
-				graphWriteCaps(memoryCfg),
-			);
-			setDreamingWorker(dreamingWorkerHandle);
-		} catch (err) {
-			logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}
-
-	// Embedding migration is bounded background work. Start Dreaming before its
-	// owner maintenance so a slow provider or staging rebuild cannot prevent the
-	// worker from existing at all during startup.
+	// Embedding migration is bounded background work and must not gate the
+	// already-admitted Dreaming worker.
 	if (!pipelinePaused) {
 		try {
 			embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({

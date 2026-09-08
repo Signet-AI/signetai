@@ -644,7 +644,7 @@ export interface DreamStatus {
 		lastPassId: string | null;
 		lastPassMode: string | null;
 	};
-	episodicTokensPending: number;
+	episodicTokensPending: number | null;
 	config: {
 		tokenThreshold: number;
 		backfillOnFirstRun: boolean;

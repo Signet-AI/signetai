@@ -18,6 +18,11 @@ interface CachedTokenEntry {
 	readonly count: number;
 }
 
+interface CachedTotal {
+	readonly count: number;
+	readonly measuredAtMs: number;
+}
+
 interface CountResponse {
 	readonly type: "counted";
 	readonly requestId: number;
@@ -58,6 +63,12 @@ function requestKey(
 }
 
 /**
+ * Status is intentionally non-blocking, so a completed exact measurement is
+ * usable for a short window but must not become an unbounded stale claim.
+ */
+const DREAMING_BACKLOG_CACHE_MAX_AGE_MS = 60_000;
+
+/**
  * Memoized exact backlog counts. The cache key includes the source and its
  * delivered offset, while the source revision catches in-place updates without
  * retaining the complete evidence text. Entries are nested by agent ID, so an
@@ -66,8 +77,9 @@ function requestKey(
  * the aggregate value and remove entries absent from their complete snapshot.
  */
 export class DreamingBacklogTokenCache {
-	private readonly values = new Map<string, number>();
+	private readonly values = new Map<string, CachedTotal>();
 	private readonly entries = new Map<string, Map<string, CachedTokenEntry>>();
+	private readonly generations = new Map<string, number>();
 	private readonly exactInflight = new Map<string, Promise<number>>();
 	private readonly batchInflight = new Map<string, Promise<DreamingBacklogTokenBatchResult>>();
 	private readonly tails = new Map<string, Promise<void>>();
@@ -75,11 +87,12 @@ export class DreamingBacklogTokenCache {
 
 	async replaceExactSnapshot(agentId: string, entries: readonly DreamingBacklogTokenEntry[]): Promise<number> {
 		const key = requestKey("exact", agentId, entries);
+		const generation = this.generationFor(agentId);
 		return await this.enqueue(
 			agentId,
 			key,
 			this.exactInflight,
-			async () => await this.replaceExactSnapshotNow(agentId, entries),
+			async () => await this.replaceExactSnapshotNow(agentId, entries, generation),
 		);
 	}
 
@@ -98,16 +111,43 @@ export class DreamingBacklogTokenCache {
 		);
 	}
 
-	get(agentId: string): number {
-		return this.values.get(agentId) ?? 0;
+	beginMeasurement(agentId: string): number {
+		return this.generationFor(agentId);
 	}
 
-	recordExactTotal(agentId: string, count: number): void {
-		this.values.set(agentId, ensureTokenCount(count, "Dreaming exact token total"));
+	private generationFor(agentId: string): number {
+		return this.generations.get(agentId) ?? 0;
+	}
+
+	get(agentId: string): number {
+		return this.getFresh(agentId) ?? 0;
+	}
+
+	getFresh(agentId: string): number | null {
+		const cached = this.values.get(agentId);
+		if (cached === undefined) return null;
+		if (Date.now() - cached.measuredAtMs > DREAMING_BACKLOG_CACHE_MAX_AGE_MS) {
+			this.values.delete(agentId);
+			return null;
+		}
+		return cached.count;
+	}
+
+	recordExactTotal(agentId: string, count: number, generation = this.generationFor(agentId)): void {
+		if (generation !== this.generationFor(agentId)) return;
+		this.values.set(agentId, {
+			count: ensureTokenCount(count, "Dreaming exact token total"),
+			measuredAtMs: Date.now(),
+		});
 	}
 
 	hasValue(agentId: string): boolean {
-		return this.values.has(agentId);
+		return this.getFresh(agentId) !== null;
+	}
+
+	invalidate(agentId: string): void {
+		this.values.delete(agentId);
+		this.generations.set(agentId, this.generationFor(agentId) + 1);
 	}
 
 	stop(): void {
@@ -116,11 +156,15 @@ export class DreamingBacklogTokenCache {
 		this.exactInflight.clear();
 		this.batchInflight.clear();
 		this.tails.clear();
+		this.values.clear();
+		this.entries.clear();
+		this.generations.clear();
 	}
 
 	private async replaceExactSnapshotNow(
 		agentId: string,
 		entries: readonly DreamingBacklogTokenEntry[],
+		generation: number,
 	): Promise<number> {
 		const result = await this.countEntriesNow(agentId, entries);
 		const nextKeys = new Set(entries.map((entry) => entry.key));
@@ -131,7 +175,7 @@ export class DreamingBacklogTokenCache {
 		for (const key of agentEntries.keys()) {
 			if (!nextKeys.has(key)) agentEntries.delete(key);
 		}
-		this.values.set(agentId, result.tokens);
+		this.recordExactTotal(agentId, result.tokens, generation);
 		return result.tokens;
 	}
 
@@ -259,11 +303,26 @@ export function countDreamingBacklogTokenEntries(
 	return dreamingBacklogTokenCache.countEntries(agentId, entries, stopAtTokens);
 }
 
+export function hasDreamingEpisodicTokenBacklogCached(agentId: string): boolean {
+	return dreamingBacklogTokenCache.hasValue(agentId);
+}
+
 export function getDreamingEpisodicTokenBacklogCached(agentId: string): number {
 	return dreamingBacklogTokenCache.get(agentId);
 }
 
+export function getDreamingEpisodicTokenBacklogCachedOrNull(agentId: string): number | null {
+	return dreamingBacklogTokenCache.getFresh(agentId);
+}
+
+export function beginDreamingEpisodicTokenBacklogMeasurement(agentId: string): number {
+	return dreamingBacklogTokenCache.beginMeasurement(agentId);
+}
+
+export function invalidateDreamingEpisodicTokenBacklog(agentId: string): void {
+	dreamingBacklogTokenCache.invalidate(agentId);
+}
 /** Record only a complete, measured backlog total in the aggregate cache. */
-export function recordDreamingEpisodicTokenBacklog(agentId: string, count: number): void {
-	dreamingBacklogTokenCache.recordExactTotal(agentId, count);
+export function recordDreamingEpisodicTokenBacklog(agentId: string, count: number, generation?: number): void {
+	dreamingBacklogTokenCache.recordExactTotal(agentId, count, generation);
 }

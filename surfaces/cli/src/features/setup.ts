@@ -24,7 +24,7 @@ import { openUrlWithFallback } from "../lib/open-url.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { aggregateRecallProviderIds } from "./setup-inference-connect.js";
-import { runExistingSetupWizard } from "./setup-migrate.js";
+import { enableDreamingInConfig, runExistingSetupWizard } from "./setup-migrate.js";
 import { defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
 import { isBareDaemonOrigin, parseSetupPlan, setupPlanJsonSchema } from "./setup-plan.js";
 import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
@@ -510,9 +510,10 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, options);
 		const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, options);
 		if (existing.agentYaml) {
+			const configToWrite = options.enableDreaming === true ? enableDreamingInConfig(existingConfig) : existingConfig;
 			writeCapabilitySelection(
 				basePath,
-				existingConfig,
+				configToWrite,
 				configuredIdentityMode ?? existingSetupIdentityMode,
 				signetSecretsEnabled,
 			);

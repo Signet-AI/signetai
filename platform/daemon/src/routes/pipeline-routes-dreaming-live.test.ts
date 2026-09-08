@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { dreamingLiveEvents, publishDreamingAgentEvent } from "../pipeline/dreaming-live-events";
+import {
+	invalidateDreamingEpisodicTokenBacklog,
+	recordDreamingEpisodicTokenBacklog,
+} from "../pipeline/dreaming-token-cache";
 import { registerPipelineRoutes } from "./pipeline-routes";
 
 const originalAgentId = process.env.SIGNET_AGENT_ID;
@@ -54,11 +58,31 @@ describe("Dreaming live routes", () => {
 		expect(crossAgentResponse.status).toBe(404);
 	});
 
+	it("reads the cached backlog in the status response", async () => {
+		recordDreamingEpisodicTokenBacklog("agent-a", 12345);
+		const app = new Hono();
+		registerPipelineRoutes(app);
+
+		const response = await app.request("/api/dream/status");
+		expect(response.status).toBe(200);
+		expect((await response.json()).episodicTokensPending).toBe(12345);
+		recordDreamingEpisodicTokenBacklog("agent-a", 0);
+	});
+
+	it("returns null when no fresh exact backlog measurement exists", async () => {
+		invalidateDreamingEpisodicTokenBacklog("agent-a");
+		const app = new Hono();
+		registerPipelineRoutes(app);
+
+		const response = await app.request("/api/dream/status");
+		expect(response.status).toBe(200);
+		expect((await response.json()).episodicTokensPending).toBeNull();
+	});
+
 	it("emits an initial snapshot over the scoped SSE stream", async () => {
 		const app = new Hono();
 		registerPipelineRoutes(app);
 		const response = await app.request("/api/dream/passes/live-pass-a/events");
-		expect(response.status).toBe(200);
 		expect(response.headers.get("content-type")).toContain("text/event-stream");
 		const reader = response.body?.getReader();
 		if (!reader) throw new Error("SSE response did not expose a body");

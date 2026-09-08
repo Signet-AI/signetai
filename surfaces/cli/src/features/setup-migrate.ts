@@ -118,6 +118,30 @@ function removeRetiredPipelineSettings(pipeline: Record<string, unknown>): Recor
 	return cleaned;
 }
 
+export function enableDreamingInConfig(existingConfig: Record<string, unknown>): Record<string, unknown> {
+	const existingMemory = readRecord(existingConfig.memory);
+	const existingPipeline = removeRetiredPipelineSettings(readRecord(existingMemory.pipelineV2));
+	const pipelineDefaults = buildSetupPipeline("none", true);
+	return {
+		...existingConfig,
+		memory: {
+			...existingMemory,
+			dreaming: { ...readRecord(existingMemory.dreaming), enabled: true },
+			pipelineV2: {
+				...pipelineDefaults,
+				...existingPipeline,
+				enabled: true,
+				graph: { ...readRecord(pipelineDefaults.graph), ...readRecord(existingPipeline.graph) },
+				reranker: { ...readRecord(pipelineDefaults.reranker), ...readRecord(existingPipeline.reranker) },
+				autonomous: {
+					...readRecord(pipelineDefaults.autonomous),
+					...readRecord(existingPipeline.autonomous),
+				},
+			},
+		},
+	};
+}
+
 export function detectedHarnessesForExistingSetup(
 	detection: SetupDetection,
 	configuredHarnessList: readonly string[],
