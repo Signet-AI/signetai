@@ -37,6 +37,7 @@ let root: string;
 let owner: DbOwnerClient;
 const scope = { agentId: "a", jobId: "job", fileId: "file", generation: 0 };
 const checksum = (value: Uint8Array): string => createHash("sha256").update(value).digest("hex");
+const testTempRoot = process.env.RUNNER_TEMP ?? tmpdir();
 async function failure(promise: Promise<unknown>): Promise<string> {
 	try {
 		await promise;
@@ -47,7 +48,7 @@ async function failure(promise: Promise<unknown>): Promise<string> {
 }
 const options = { operation: "test.import", lane: "write" } as const;
 beforeEach(async () => {
-	root = mkdtempSync(join(tmpdir(), "signet-import-bytes-"));
+	root = mkdtempSync(join(testTempRoot, "signet-import-bytes-"));
 	oldPath = process.env.SIGNET_PATH;
 	oldAgent = process.env.SIGNET_AGENT_ID;
 	process.env.SIGNET_PATH = root;
