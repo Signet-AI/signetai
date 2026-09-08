@@ -1,10 +1,10 @@
-import { constants } from "node:fs";
+import { constants, mkdtempSync } from "node:fs";
 import { openContainedTranscriptFile, resolveManagedTranscriptPath } from "./transcript-import-safe-fs";
 import { loadSourcesConfig } from "@signet/core";
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, mkdir, writeFile, access, symlink } from "node:fs/promises";
+import { rm, mkdir, writeFile, access, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { up as ledger } from "../../core/src/migrations/146-source-transcript-import";
@@ -47,7 +47,7 @@ async function failure(promise: Promise<unknown>): Promise<string> {
 }
 const options = { operation: "test.import", lane: "write" } as const;
 beforeEach(async () => {
-	root = await mkdtemp(join(tmpdir(), "signet-import-bytes-"));
+	root = mkdtempSync(join(tmpdir(), "signet-import-bytes-"));
 	oldPath = process.env.SIGNET_PATH;
 	oldAgent = process.env.SIGNET_AGENT_ID;
 	process.env.SIGNET_PATH = root;
