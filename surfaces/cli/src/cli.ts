@@ -128,8 +128,7 @@ import "./sqlite.js";
 const isDaemonEntrypoint = process.env.SIGNET_DAEMON_ENTRYPOINT === "1";
 const nativeUpdateBackup = process.env[NATIVE_UPDATE_BACKUP_ENV];
 if (isNativeUpdateBackupCleanupRequest(nativeUpdateBackup)) {
-	await cleanupNativeUpdateBackup(nativeUpdateBackup);
-	process.exit(0);
+	process.exit((await cleanupNativeUpdateBackup(nativeUpdateBackup)) ? 0 : 1);
 }
 
 // Template directory location (relative to built CLI)
