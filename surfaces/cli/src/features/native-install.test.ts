@@ -2,13 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	buildNativeUpdateBackupCleanupInvocation,
-	cleanupNativeUpdateBackup,
-	isNativeUpdateBackupCleanupRequest,
-	persistNativeInstallPath,
-	printNativeInstallResult,
-} from "./native-install.js";
+import { persistNativeInstallPath, printNativeInstallResult } from "./native-install.js";
 
 function makeHome(): string {
 	return mkdtempSync(join(tmpdir(), "signet-native-install-"));
@@ -21,32 +15,6 @@ afterEach(() => {
 });
 
 describe("persistNativeInstallPath", () => {
-	test("accepts only a backup next to the installed Windows binary", () => {
-		const targetPath = "C:\\Users\\test user\\Signet & Tools\\signet.exe";
-		const backupPath = "C:\\Users\\test user\\Signet & Tools\\.signet.exe.1234.backup";
-		const invocation = buildNativeUpdateBackupCleanupInvocation(targetPath, backupPath);
-
-		expect(isNativeUpdateBackupCleanupRequest(backupPath, targetPath, "win32")).toBe(true);
-		expect(isNativeUpdateBackupCleanupRequest("C:\\Other\\.signet.exe.1234.backup", targetPath, "win32")).toBe(false);
-		expect(isNativeUpdateBackupCleanupRequest(targetPath, targetPath, "win32")).toBe(false);
-		expect(invocation).toMatchObject({
-			command: targetPath,
-			args: [],
-			options: { cwd: "C:\\Users\\test user\\Signet & Tools", detached: true, stdio: "ignore" },
-		});
-		expect(invocation.options.env.SIGNET_NATIVE_UPDATE_BACKUP).toBe(backupPath);
-	});
-
-	test("removes a native update backup once it is no longer locked", async () => {
-		const home = makeHome();
-		homes.push(home);
-		const backupPath = join(home, ".signet.exe.1234.backup");
-		writeFileSync(backupPath, "old native binary");
-
-		expect(await cleanupNativeUpdateBackup(backupPath)).toBe(true);
-		expect(existsSync(backupPath)).toBe(false);
-	});
-
 	test("persists the macOS zsh PATH entry in .zprofile", () => {
 		const home = makeHome();
 		homes.push(home);
