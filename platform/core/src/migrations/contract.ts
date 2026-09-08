@@ -12,6 +12,8 @@ export interface MigrationDb {
 /** Schema artifacts used to detect migrations recorded without their effects. */
 export interface MigrationArtifacts {
 	readonly tables?: readonly string[];
+	/** Index names whose absence should cause the migration to be repaired. */
+	readonly indexes?: readonly string[];
 	readonly columns?: readonly {
 		readonly table: string;
 		readonly column: string;

@@ -117,6 +117,12 @@ describe("migration framework", () => {
 		expect(migrations[18].version).toBe(19);
 		expect(migrations[21].version).toBe(22);
 		expect(migrations[23].version).toBe(24);
+		db.exec("DROP INDEX idx_memory_artifacts_agent_sha");
+		expect(hasPendingMigrations(db)).toBe(true);
+		runMigrations(db);
+		expect(
+			db.query("SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'idx_memory_artifacts_agent_sha'").get(),
+		).toBeTruthy();
 	});
 
 	test("migration 147 preserves existing replay records when upgrading from migration 146", () => {
@@ -2823,8 +2829,8 @@ describe("migration 152: memory artifact sha index", () => {
 				 SELECT ma.source_path FROM memory_artifacts ma
 				 WHERE ma.agent_id = 'ant'
 				   AND (ma.source_sha256 IS NULL OR ma.source_sha256 = ''
-				        OR (ma.agent_id, ma.source_path) = (
-				          SELECT ma2.agent_id, ma2.source_path FROM memory_artifacts ma2
+				        OR ma.source_path = (
+				          SELECT ma2.source_path FROM memory_artifacts ma2
 				          WHERE ma2.agent_id = ma.agent_id AND COALESCE(ma2.is_deleted, 0) = 0
 				            AND ma2.source_sha256 = ma.source_sha256
 				            AND COALESCE(ma2.source_id, '') = COALESCE(ma.source_id, '')
@@ -2833,7 +2839,8 @@ describe("migration 152: memory artifact sha index", () => {
 			)
 			.all() as Array<{ detail: string }>;
 		const inner = plan.map((row) => row.detail).filter((detail) => detail.includes("ma2"));
-		expect(inner).toEqual([expect.stringContaining("USING COVERING INDEX idx_memory_artifacts_agent_sha")]);
+		expect(inner.some((detail) => detail.includes("USING COVERING INDEX idx_memory_artifacts_agent_sha"))).toBe(true);
+		expect(plan.every((row) => !row.detail.includes("USE TEMP B-TREE FOR ORDER BY"))).toBe(true);
 		db.close();
 	});
 });

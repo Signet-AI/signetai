@@ -8,7 +8,7 @@ import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
  * records execution in `schema_migrations_audit`.
  */
 
-import type { Migration, MigrationDb } from "./contract";
+import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
 import { up as baseline } from "./001-baseline";
 import { up as pipelineV2 } from "./002-pipeline-v2";
@@ -183,9 +183,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 3,
 		name: "unique-content-hash",
 		up: uniqueContentHash,
-		// No artifact declarations: v3 creates idx_memories_content_hash_unique
-		// (an index), but MigrationArtifacts has no `indexes` field. The columns
-		// it touches (why, project) are part of the v1 baseline, not v3.
+		// No artifact declaration: rerunning v3 can null duplicate content hashes.
 	},
 	{
 		version: 4,
@@ -1407,7 +1405,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 152,
 		name: "memory-artifact-sha-index",
 		up: memoryArtifactShaIndex,
-		// Index only: MigrationArtifacts has no `indexes` field (see v3).
+		artifacts: { indexes: ["idx_memory_artifacts_agent_sha"] },
 	},
 ];
 
@@ -1488,6 +1486,12 @@ function existingTables(db: MigrationDb): Set<string> {
 	return new Set(rows.filter(hasStringName).map((r) => r.name));
 }
 
+/** Get the set of index names in the database (single query). */
+function existingIndexes(db: MigrationDb): Set<string> {
+	const rows = db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all();
+	return new Set(rows.filter(hasStringName).map((r) => r.name));
+}
+
 /** Get column names for a table, with per-call caching. */
 function tableColumns(db: MigrationDb, table: string, cache: Map<string, Set<string>>): Set<string> {
 	let cols = cache.get(table);
@@ -1498,9 +1502,35 @@ function tableColumns(db: MigrationDb, table: string, cache: Map<string, Set<str
 	return cols;
 }
 
+function missingArtifact(
+	db: MigrationDb,
+	artifacts: MigrationArtifacts,
+	tables: Set<string>,
+	indexes: Set<string>,
+	colCache: Map<string, Set<string>>,
+): string | undefined {
+	for (const table of artifacts.tables ?? []) {
+		if (!tables.has(table)) return `table "${table}"`;
+	}
+	for (const column of artifacts.columns ?? []) {
+		if (!tables.has(column.table)) {
+			if (column.optional) continue;
+			return `column "${column.table}.${column.column}" (table missing)`;
+		}
+		if (!tableColumns(db, column.table, colCache).has(column.column)) {
+			if (column.optional) continue;
+			return `column "${column.table}.${column.column}"`;
+		}
+	}
+	for (const index of artifacts.indexes ?? []) {
+		if (!indexes.has(index)) return `index "${index}"`;
+	}
+	return undefined;
+}
+
 /**
  * Detect phantom migrations — versions recorded in schema_migrations whose
- * expected artifacts (tables/columns) no longer exist. Read-only; does not
+ * expected artifacts (tables/columns/indexes) no longer exist. Read-only; does not
  * modify the database.
  *
  * Used by both hasPendingMigrations (detection only) and
@@ -1513,47 +1543,20 @@ function findPhantomVersions(
 	precomputedApplied?: Set<number>,
 ): Set<number> {
 	const tables = existingTables(db);
+	const indexes = existingIndexes(db);
 	const colCache = new Map<string, Set<string>>();
 	const phantoms = new Set<number>();
 	const applied = precomputedApplied ?? appliedVersions(db);
 
 	for (const migration of MIGRATIONS) {
-		if (!migration.artifacts) continue;
-
-		// Skip v1 — legacy CLI partial schemas handled by repairBogusVersion
-		if (migration.version === 1) continue;
-
-		// Not recorded as applied — not a phantom
-		if (!applied.has(migration.version)) continue;
-
-		let missing = false;
-
-		if (migration.artifacts.tables) {
-			for (const t of migration.artifacts.tables) {
-				if (!tables.has(t)) {
-					missing = true;
-					break;
-				}
-			}
-		}
-
-		if (!missing && migration.artifacts.columns) {
-			for (const col of migration.artifacts.columns) {
-				if (!tables.has(col.table)) {
-					if (col.optional) continue;
-					missing = true;
-					break;
-				}
-				const cols = tableColumns(db, col.table, colCache);
-				if (!cols.has(col.column)) {
-					if (col.optional) continue;
-					missing = true;
-					break;
-				}
-			}
-		}
-
-		if (missing) phantoms.add(migration.version);
+		const artifacts = migration.artifacts;
+		if (
+			artifacts &&
+			migration.version !== 1 &&
+			applied.has(migration.version) &&
+			missingArtifact(db, artifacts, tables, indexes, colCache)
+		)
+			phantoms.add(migration.version);
 	}
 
 	return phantoms;
@@ -1600,42 +1603,13 @@ function appliedVersions(db: MigrationDb): Set<number> {
  * Throws if any artifact is missing (SAVEPOINT catches it).
  */
 function verifyArtifacts(db: MigrationDb, migration: Migration): void {
-	if (!migration.artifacts) return;
-
-	const tables = existingTables(db);
-
-	if (migration.artifacts.tables) {
-		for (const t of migration.artifacts.tables) {
-			if (!tables.has(t)) {
-				throw new Error(
-					`Post-DDL verification failed: migration ${migration.version} (${migration.name}) ` +
-						`declares table "${t}" but it was not created`,
-				);
-			}
-		}
-	}
-
-	if (migration.artifacts.columns) {
-		const colCache = new Map<string, Set<string>>();
-		for (const col of migration.artifacts.columns) {
-			if (!tables.has(col.table)) {
-				// Optional columns skip verification when the table doesn't exist
-				// (conditional/repair migrations that are no-ops on fresh schemas).
-				if (col.optional) continue;
-				throw new Error(
-					`Post-DDL verification failed: migration ${migration.version} (${migration.name}) ` +
-						`declares column "${col.table}.${col.column}" but table does not exist`,
-				);
-			}
-			const colNames = tableColumns(db, col.table, colCache);
-			if (!colNames.has(col.column)) {
-				throw new Error(
-					`Post-DDL verification failed: migration ${migration.version} (${migration.name}) ` +
-						`declares column "${col.table}.${col.column}" but it was not created`,
-				);
-			}
-		}
-	}
+	const artifacts = migration.artifacts;
+	if (!artifacts) return;
+	const missing = missingArtifact(db, artifacts, existingTables(db), existingIndexes(db), new Map());
+	if (missing)
+		throw new Error(
+			`Post-DDL verification failed: migration ${migration.version} (${migration.name}) declares ${missing} but it was not created`,
+		);
 }
 
 /**
