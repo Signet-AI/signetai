@@ -416,7 +416,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(151);
+			expect(applied.version).toBe(152);
 			expect(
 				(db.query("PRAGMA table_info(memory_jobs)").all() as Array<{ name: string }>).some(
 					(column) => column.name === "lease_token",
@@ -2808,6 +2808,32 @@ describe("migration 122: Dreaming evidence retry", () => {
 			expect.arrayContaining(["failure_class", "source_fingerprint", "retry_count", "last_requeued_at"]),
 		);
 		expect(db.prepare("SELECT retry_count, failure_class FROM dreaming_evidence_exclusions").all()).toEqual([]);
+		db.close();
+	});
+});
+
+describe("migration 152: memory artifact sha index", () => {
+	test("the artifact dedup subquery seeks the covering index instead of rescanning the table", () => {
+		// The correlated dedup subquery on source_sha256 must seek the covering index (#1894).
+		const db = createFreshDb();
+		runMigrations(db);
+		const plan = db
+			.query(
+				`EXPLAIN QUERY PLAN
+				 SELECT ma.source_path FROM memory_artifacts ma
+				 WHERE ma.agent_id = 'ant'
+				   AND (ma.source_sha256 IS NULL OR ma.source_sha256 = ''
+				        OR (ma.agent_id, ma.source_path) = (
+				          SELECT ma2.agent_id, ma2.source_path FROM memory_artifacts ma2
+				          WHERE ma2.agent_id = ma.agent_id AND COALESCE(ma2.is_deleted, 0) = 0
+				            AND ma2.source_sha256 = ma.source_sha256
+				            AND COALESCE(ma2.source_id, '') = COALESCE(ma.source_id, '')
+				          ORDER BY ma2.captured_at DESC, ma2.source_path ASC
+				          LIMIT 1))`,
+			)
+			.all() as Array<{ detail: string }>;
+		const inner = plan.map((row) => row.detail).filter((detail) => detail.includes("ma2"));
+		expect(inner).toEqual([expect.stringContaining("USING COVERING INDEX idx_memory_artifacts_agent_sha")]);
 		db.close();
 	});
 });
