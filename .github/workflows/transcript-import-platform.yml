@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "platform/daemon/src/transcript-import-*.ts"
+      - "platform/core/src/migrations/151-transcript-import-bytes.ts"
       - "platform/daemon/src/routes/transcript-import-routes.ts"
       - "platform/daemon/src/routes/sources-routes.ts"
       - ".github/workflows/transcript-import-platform.yml"
@@ -11,6 +12,7 @@ on:
     branches: [main]
     paths:
       - "platform/daemon/src/transcript-import-*.ts"
+      - "platform/core/src/migrations/151-transcript-import-bytes.ts"
       - "platform/daemon/src/routes/transcript-import-routes.ts"
       - "platform/daemon/src/routes/sources-routes.ts"
       - ".github/workflows/transcript-import-platform.yml"
@@ -19,11 +21,17 @@ permissions:
   contents: read
 
 jobs:
-  windows-platform-gate:
-    name: Transcript import Windows platform gate
-    runs-on: windows-latest
+  platform-contract:
+    name: Transcript import (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - name: Verify the unsupported-platform contract
-        run: bun test platform/daemon/src/transcript-import-platform.test.ts
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter @signet/core build
+      - name: Verify durable imports and legacy migration
+        run: bun test platform/daemon/src/transcript-import-bytes.test.ts platform/daemon/src/transcript-import-scan.test.ts platform/daemon/src/transcript-import-commit.test.ts

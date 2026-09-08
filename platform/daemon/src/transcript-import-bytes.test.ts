@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { openContainedTranscriptFile, resolveManagedTranscriptPath } from "./transcript-import-safe-fs";
 import { loadSourcesConfig } from "@signet/core";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, mkdir, writeFile, access, symlink } from "node:fs/promises";
@@ -22,6 +22,7 @@ import {
 	sealTranscriptUpload,
 	transcriptUpload,
 	TRANSCRIPT_CHUNK_BYTES,
+	TRANSCRIPT_READ_BYTES,
 	uploadTranscriptStream,
 	purgeTranscriptBytes,
 	cleanupCancelledTranscriptImport,
@@ -114,6 +115,67 @@ test("owner persists chunks across restart, rejects cross-agent access and seals
 	expect(await failure(appendTranscriptChunk(scope, 0, first, checksum(first)))).toContain("not writable");
 	expect(await failure(readTranscriptBytes({ ...scope, agentId: "b" }, 0))).toContain("unavailable");
 }, 20_000);
+
+test("concurrent identical first PATCHes declare once and replay without conflicts", async () => {
+	const app = new Hono();
+	registerTranscriptImportRoutes(app);
+	const bytes = Buffer.alloc(1024 * 1024, 73);
+	const send = (body: Buffer) =>
+		app.request("/api/sources/imports/job/files/file?agentId=a", {
+			method: "PATCH",
+			headers: {
+				"upload-length": String(bytes.length),
+				"upload-offset": "0",
+				"upload-generation": "0",
+				"upload-checksum": checksum(body),
+			},
+			body,
+		});
+	const responses = await Promise.all(Array.from({ length: 4 }, () => send(bytes)));
+	expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200]);
+	for (const response of responses) expect(await response.json()).toEqual({ offset: bytes.length, generation: 0 });
+	expect((await send(Buffer.alloc(bytes.length, 74))).status).toBe(409);
+	expect(
+		await dbOwnerQuery(
+			{ sql: "SELECT count(*) AS n FROM source_import_chunks", result: "get", readonly: true },
+			options,
+		),
+	).toEqual({ n: 16 });
+}, 20_000);
+
+test("sealing batches chunk reads across the owner boundary while preserving exact hashes", async () => {
+	const bytes = Buffer.alloc(1024 * 1024, 71);
+	const count = 64;
+	await beginTranscriptUpload(scope, bytes.length * count);
+	const expected = createHash("sha256");
+	for (let part = 0; part < count; part++) {
+		expected.update(bytes);
+		await appendTranscriptChunk(scope, part * bytes.length, bytes, checksum(bytes));
+	}
+	const calls = spyOn(owner, "submit");
+	try {
+		const sealed = await sealTranscriptUpload(scope);
+		expect(sealed.content_hash).toBe(expected.digest("hex"));
+		// Bounded batch reads, two metadata reads, one sealing transaction.
+		expect(calls.mock.calls.length).toBe(Math.ceil((bytes.length * count) / TRANSCRIPT_READ_BYTES) + 3);
+	} finally {
+		calls.mockRestore();
+	}
+	expect(await readTranscriptBytes(scope, 17, TRANSCRIPT_READ_BYTES)).toEqual(
+		bytes.subarray(17, 17 + TRANSCRIPT_READ_BYTES),
+	);
+	await dbOwnerTransaction(
+		[
+			{
+				sql: "UPDATE source_import_chunks SET checksum = 'corrupt' WHERE byte_offset = ?",
+				params: [TRANSCRIPT_CHUNK_BYTES],
+				result: "run",
+			},
+		],
+		options,
+	);
+	expect(await failure(readTranscriptBytes(scope, 0, TRANSCRIPT_READ_BYTES))).toContain("checksum mismatch");
+}, 60_000);
 
 test("owner rolls back evidence when ledger write fails and preserves imported outcome on replay", async () => {
 	await dbOwnerTransaction(

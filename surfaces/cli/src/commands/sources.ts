@@ -35,18 +35,21 @@ async function uploadTranscriptFile(
 ): Promise<DaemonStreamResult> {
 	if (!deps.fetchDaemonRaw || !deps.fetchDaemonResult)
 		return { ok: false, reason: "offline", error: "transcript uploads require the daemon" };
+	const fetchStatus = deps.fetchDaemonResult;
 	const base = `/api/sources/imports/${encodeURIComponent(jobId)}`;
 	const query = `?agentId=${encodeURIComponent(agentId)}`;
-	const status = await deps.fetchDaemonResult<{
-		files: Array<{
-			id: string;
-			state: string;
-			upload_offset: number;
-			upload_generation: number;
-			upload_digest: string;
-			upload_size: number | null;
-		}>;
-	}>(`${base}${query}`);
+	const getStatus = () =>
+		fetchStatus<{
+			files: Array<{
+				id: string;
+				state: string;
+				upload_offset: number;
+				upload_generation: number;
+				upload_digest: string;
+				upload_size: number | null;
+			}>;
+		}>(`${base}${query}`);
+	const status = await getStatus();
 	if (!status.ok) return status;
 	const slot = status.data.files.find((file) => file.id === fileId);
 	if (!slot) return { ok: false, reason: "http", error: "upload slot not found" };
@@ -72,27 +75,56 @@ async function uploadTranscriptFile(
 				if (!read.bytesRead) throw new Error("file changed during upload");
 				filled += read.bytesRead;
 			}
+			const previousChain = chain;
+			for (let cursor = 0; cursor < bytes.length; cursor += 64 * 1024) {
+				const part = bytes.subarray(cursor, cursor + 64 * 1024);
+				chain = hash(`${chain}:${hash(part)}:${part.length}`);
+			}
 			if (offset < slot.upload_offset) {
-				for (let cursor = 0; cursor < bytes.length; cursor += 64 * 1024) {
-					const part = bytes.subarray(cursor, cursor + 64 * 1024);
-					chain = hash(`${chain}:${hash(part)}:${part.length}`);
-				}
 				if (offset + size === slot.upload_offset && chain !== slot.upload_digest)
 					throw new Error("file prefix differs from the retained upload; reset the slot before replacing it");
 			} else {
-				const result = await deps.fetchDaemonRaw(`${path}${query}`, {
-					method: "PATCH",
-					timeout: 60_000,
-					headers: {
-						"upload-length": String(info.size),
-						"upload-offset": String(offset),
-						"upload-generation": String(slot.upload_generation),
-						"upload-checksum": hash(bytes),
-					},
-					body: bytes,
-				});
-				if (!result.ok) return result;
-				await result.response.arrayBuffer();
+				for (let attempt = 0; ; attempt++) {
+					const result = await deps.fetchDaemonRaw(`${path}${query}`, {
+						method: "PATCH",
+						timeout: 60_000,
+						headers: {
+							"upload-length": String(info.size),
+							"upload-offset": String(offset),
+							"upload-generation": String(slot.upload_generation),
+							"upload-checksum": hash(bytes),
+						},
+						body: bytes,
+					});
+					if (result.ok) {
+						await result.response.arrayBuffer();
+						break;
+					}
+					if (
+						attempt === 3 ||
+						!(
+							result.reason === "timeout" ||
+							result.reason === "offline" ||
+							[408, 429, 503].includes(result.status ?? 0)
+						)
+					)
+						return result;
+					await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+					const status = await getStatus();
+					if (!status.ok) return status;
+					const current = status.data.files.find((file) => file.id === fileId);
+					if (
+						!current ||
+						current.upload_generation !== slot.upload_generation ||
+						current.upload_size !== info.size ||
+						!(
+							(current.upload_offset === offset && current.upload_digest === previousChain) ||
+							(current.upload_offset === offset + size && current.upload_digest === chain)
+						)
+					)
+						throw new Error("upload changed while retrying; resume after verifying the retained prefix");
+					// Replay even after a lost acknowledgement; the daemon verifies identical bytes.
+				}
 			}
 			offset += size;
 		}

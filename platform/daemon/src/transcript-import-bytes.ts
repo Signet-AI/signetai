@@ -6,6 +6,9 @@ import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
 
 export const TRANSCRIPT_CHUNK_BYTES = 64 * 1024;
 export const TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
+// Seven chunks fit below the 1 MiB owner result cap after hex encoding and
+// protocol framing, while reducing finalization round trips substantially.
+export const TRANSCRIPT_READ_BYTES = 6 * TRANSCRIPT_CHUNK_BYTES;
 export const TRANSCRIPT_FILE_BYTES = 64 * 1024 ** 3;
 export interface TranscriptUploadScope {
 	readonly agentId: string;
@@ -63,29 +66,39 @@ export async function beginTranscriptUpload(scope: TranscriptUploadScope, size: 
 	const available = disk.bavail * disk.bsize;
 	if (!Number.isSafeInteger(available) || available <= 0) throw new Error("available disk space is unknown");
 	const reservation = size * 3 + 64 * 1024 ** 2;
-	await dbOwnerTransaction(
-		[
-			{
-				sql: "UPDATE source_import_capacity SET reserved_bytes = reserved_bytes WHERE id = 1 AND reserved_bytes + ? <= ?",
-				params: [reservation, Math.max(0, available - 1024 ** 3)],
-				result: "run",
-				requireChanges: true,
-			},
-			{
-				sql: "UPDATE source_import_files SET upload_size = ?, storage_state = 'uploading' WHERE id = ? AND job_id = ? AND agent_id = ? AND upload_generation = ? AND storage_state = 'uploading' AND (upload_size IS NULL OR upload_size = ?) AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'staging' AND (control_request IS NULL OR source_import_files.storage_state = 'legacy'))",
-				params: [size, scope.fileId, scope.jobId, scope.agentId, scope.generation, size, scope.jobId, scope.agentId],
-				result: "run",
-				requireChanges: true,
-			},
-			{
-				sql: "UPDATE source_import_files SET reserved_bytes = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND reserved_bytes = 0",
-				params: [reservation, scope.fileId, scope.jobId, scope.agentId],
-				result: "run",
-				requireChanges: true,
-			},
-		],
-		write,
-	);
+	try {
+		await dbOwnerTransaction(
+			[
+				{
+					sql: "UPDATE source_import_capacity SET reserved_bytes = reserved_bytes WHERE id = 1 AND reserved_bytes + ? <= ?",
+					params: [reservation, Math.max(0, available - 1024 ** 3)],
+					result: "run",
+					requireChanges: true,
+				},
+				{
+					sql: "UPDATE source_import_files SET upload_size = ?, storage_state = 'uploading' WHERE id = ? AND job_id = ? AND agent_id = ? AND upload_generation = ? AND storage_state = 'uploading' AND (upload_size IS NULL OR upload_size = ?) AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND state = 'staging' AND (control_request IS NULL OR source_import_files.storage_state = 'legacy'))",
+					params: [size, scope.fileId, scope.jobId, scope.agentId, scope.generation, size, scope.jobId, scope.agentId],
+					result: "run",
+					requireChanges: true,
+				},
+				{
+					sql: "UPDATE source_import_files SET reserved_bytes = ? WHERE id = ? AND job_id = ? AND agent_id = ? AND reserved_bytes = 0",
+					params: [reservation, scope.fileId, scope.jobId, scope.agentId],
+					result: "run",
+					requireChanges: true,
+				},
+			],
+			write,
+		);
+	} catch (error) {
+		const declared = await transcriptUpload(scope);
+		if (
+			declared.upload_generation !== scope.generation ||
+			declared.upload_size !== size ||
+			declared.storage_state !== "uploading"
+		)
+			throw error;
+	}
 }
 
 /** The offset CAS and chunk insertion commit together. Replays must match bytes. */
@@ -119,12 +132,8 @@ export async function appendTranscriptChunk(
 		throw new RangeError("upload chunk size mismatch");
 	if (offset < file.upload_offset) {
 		if (offset + bytes.length > file.upload_offset) throw new Error("upload replay overlaps durable offset");
-		const hash = createHash("sha256");
-		for (let position = offset; position < offset + bytes.length; position += TRANSCRIPT_CHUNK_BYTES)
-			hash.update(
-				await readTranscriptBytes(scope, position, Math.min(TRANSCRIPT_CHUNK_BYTES, offset + bytes.length - position)),
-			);
-		if (hash.digest("hex") !== expectedChecksum) throw new Error("upload replay checksum mismatch");
+		if ((await transcriptBytesChecksum(scope, offset, bytes.length)) !== expectedChecksum)
+			throw new Error("upload replay checksum mismatch");
 		return file.upload_offset;
 	}
 	let digest = file.upload_digest;
@@ -146,28 +155,38 @@ export async function appendTranscriptChunk(
 			result: "run" as const,
 		});
 	}
-	await dbOwnerTransaction(
-		[
-			{
-				sql: "UPDATE source_import_files SET upload_offset = ?, upload_digest = ?, updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ? AND upload_generation = ? AND upload_offset = ? AND storage_state IN ('uploading','legacy') AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND (state = 'staging' OR source_import_files.storage_state = 'legacy') AND (control_request IS NULL OR source_import_files.storage_state = 'legacy'))",
-				params: [
-					offset + bytes.length,
-					digest,
-					scope.fileId,
-					scope.jobId,
-					scope.agentId,
-					scope.generation,
-					offset,
-					scope.jobId,
-					scope.agentId,
-				],
-				result: "run",
-				requireChanges: true,
-			},
-			...chunks,
-		],
-		write,
-	);
+	try {
+		await dbOwnerTransaction(
+			[
+				{
+					sql: "UPDATE source_import_files SET upload_offset = ?, upload_digest = ?, updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ? AND upload_generation = ? AND upload_offset = ? AND storage_state IN ('uploading','legacy') AND EXISTS (SELECT 1 FROM source_import_jobs WHERE id = ? AND agent_id = ? AND (state = 'staging' OR source_import_files.storage_state = 'legacy') AND (control_request IS NULL OR source_import_files.storage_state = 'legacy'))",
+					params: [
+						offset + bytes.length,
+						digest,
+						scope.fileId,
+						scope.jobId,
+						scope.agentId,
+						scope.generation,
+						offset,
+						scope.jobId,
+						scope.agentId,
+					],
+					result: "run",
+					requireChanges: true,
+				},
+				...chunks,
+			],
+			write,
+		);
+	} catch (error) {
+		const committed = await transcriptUpload(scope);
+		if (committed.upload_generation !== scope.generation || committed.upload_offset < offset + bytes.length)
+			throw error;
+		// A concurrent CAS winner may have committed this exact request.
+		if ((await transcriptBytesChecksum(scope, offset, bytes.length)) !== expectedChecksum)
+			throw new Error("upload replay checksum mismatch");
+		return committed.upload_offset;
+	}
 	return offset + bytes.length;
 }
 
@@ -183,23 +202,41 @@ export async function readTranscriptBytes(
 		offset < 0 ||
 		!Number.isInteger(length) ||
 		length < 1 ||
-		length > TRANSCRIPT_CHUNK_BYTES
+		length > TRANSCRIPT_READ_BYTES
 	)
 		throw new RangeError("invalid evidence read");
 	const chunkOffset = Math.floor(offset / TRANSCRIPT_CHUNK_BYTES) * TRANSCRIPT_CHUNK_BYTES;
-	const row = await dbOwnerQuery<{ content: string; checksum: string }>(
+	const rows = await dbOwnerQuery<Array<{ byte_offset: number; content: string; checksum: string }>>(
 		{
-			sql: "SELECT hex(c.content) AS content,c.checksum FROM source_import_chunks c JOIN source_import_files f ON f.id = c.file_id AND f.agent_id = c.agent_id WHERE c.agent_id = ? AND c.file_id = ? AND c.generation = ? AND c.byte_offset = ? AND f.job_id = ? AND f.upload_generation = c.generation AND f.storage_state IN ('uploading','sealed','legacy')",
-			params: [scope.agentId, scope.fileId, scope.generation, chunkOffset, scope.jobId],
-			result: "get",
+			sql: "SELECT c.byte_offset,hex(c.content) AS content,c.checksum FROM source_import_chunks c JOIN source_import_files f ON f.id = c.file_id AND f.agent_id = c.agent_id WHERE c.agent_id = ? AND c.file_id = ? AND c.generation = ? AND c.byte_offset >= ? AND c.byte_offset < ? AND f.job_id = ? AND f.upload_generation = c.generation AND f.storage_state IN ('uploading','sealed','legacy') ORDER BY c.byte_offset LIMIT 7",
+			params: [scope.agentId, scope.fileId, scope.generation, chunkOffset, offset + length, scope.jobId],
+			result: "all",
 			readonly: true,
 		},
 		read,
 	);
-	if (!row) throw new Error("source evidence unavailable");
-	const bytes = Buffer.from(row.content, "hex");
-	if (checksum(bytes) !== row.checksum) throw new Error("source evidence checksum mismatch");
-	return bytes.subarray(offset - chunkOffset, offset - chunkOffset + length);
+	if (!rows?.length) throw new Error("source evidence unavailable");
+	let position = chunkOffset;
+	const chunks = rows.map((row) => {
+		if (row.byte_offset !== position) throw new Error("source evidence truncated");
+		const bytes = Buffer.from(row.content, "hex");
+		if (checksum(bytes) !== row.checksum) throw new Error("source evidence checksum mismatch");
+		position += bytes.length;
+		return bytes;
+	});
+	return Buffer.concat(chunks).subarray(offset - chunkOffset, offset - chunkOffset + length);
+}
+
+async function transcriptBytesChecksum(scope: TranscriptUploadScope, offset: number, length: number): Promise<string> {
+	const hash = createHash("sha256");
+	for (let cursor = offset, remaining = length; remaining > 0; ) {
+		const bytes = await readTranscriptBytes(scope, cursor, Math.min(TRANSCRIPT_READ_BYTES, remaining));
+		if (!bytes.length) throw new Error("source evidence truncated");
+		hash.update(bytes);
+		cursor += bytes.length;
+		remaining -= bytes.length;
+	}
+	return hash.digest("hex");
 }
 
 /** Seal before interpretation. Standard SHA-256 remains the file duplicate identity. */
@@ -219,7 +256,7 @@ export async function sealTranscriptUpload(
 	const hash = createHash("sha256");
 	for (let offset = 0; offset < file.upload_size; ) {
 		if (!active()) throw new Error("import interrupted");
-		const bytes = await readTranscriptBytes(scope, offset);
+		const bytes = await readTranscriptBytes(scope, offset, Math.min(TRANSCRIPT_READ_BYTES, file.upload_size - offset));
 		if (!bytes.length) throw new Error("source evidence truncated");
 		hash.update(bytes);
 		offset += bytes.length;

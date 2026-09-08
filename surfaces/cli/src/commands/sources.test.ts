@@ -83,6 +83,60 @@ describe("sources CLI commands", () => {
 		await retry.parseAsync(["node", "test", "sources", "imports", "upload", "job", "file", file, "--agent", "a"]);
 		expect(calls).toHaveLength(0);
 	});
+	for (const scenario of ["deadline", "lost-ack", "exhausted", "denied", "generation", "different-bytes"] as const) {
+		it(`reconciles bounded upload retries: ${scenario}`, async () => {
+			const bytes = Buffer.alloc(64 * 1024, 97),
+				file = join(dir, "retry.jsonl");
+			writeFileSync(file, bytes);
+			const hash = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
+			let requests = 0,
+				reads = 0,
+				finalized = false;
+			const program = new Command();
+			registerSourcesCommands(program, {
+				agentsDir: dir,
+				fetchDaemonResult: async <T>() => {
+					reads++;
+					return {
+						ok: true as const,
+						data: {
+							files: [
+								{
+									id: "file",
+									state: "staging",
+									upload_generation: scenario === "generation" && reads > 1 ? 1 : 0,
+									upload_size: bytes.length,
+									upload_offset: scenario === "lost-ack" && reads > 1 ? bytes.length : 0,
+									upload_digest:
+										scenario === "different-bytes" && reads > 1
+											? "different"
+											: scenario === "lost-ack" && reads > 1
+												? hash(`:${hash(bytes)}:${bytes.length}`)
+												: "",
+								},
+							],
+						} as T,
+					};
+				},
+				fetchDaemonRaw: async (_path, opts) => {
+					if (opts?.method === "POST") {
+						finalized = true;
+						return { ok: true, response: Response.json({}) };
+					}
+					requests++;
+					expect(new Headers(opts?.headers).get("upload-offset")).toBe("0");
+					expect(opts?.body).toEqual(bytes);
+					return requests === 1 || scenario === "exhausted"
+						? { ok: false, reason: "http", status: scenario === "denied" ? 403 : 503, error: "DB_OWNER_DEADLINE" }
+						: { ok: true, response: Response.json({ offset: bytes.length }) };
+				},
+			});
+			await program.parseAsync(["node", "test", "sources", "imports", "upload", "job", "file", file, "--agent", "a"]);
+			expect(finalized).toBe(scenario === "deadline" || scenario === "lost-ack");
+			expect(requests).toBe(scenario === "exhausted" ? 4 : finalized ? 2 : 1);
+			expect(reads).toBe(scenario === "exhausted" ? 4 : scenario === "denied" ? 1 : 2);
+		});
+	}
 	it("wires desktop-cache mode through the Discord add command", async () => {
 		const cachePath = join(dir, "discord");
 		const program = new Command();
