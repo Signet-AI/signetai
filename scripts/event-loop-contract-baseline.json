@@ -431,70 +431,70 @@
     },
     {
       "path": "daemon.ts",
-      "line": 2156,
+      "line": 2158,
       "api": "existsSync",
       "source": "if (existsSync(PID_FILE)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2158,
+      "line": 2160,
       "api": "unlinkSync",
       "source": "unlinkSync(PID_FILE);",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2327,
+      "line": 2329,
       "api": "mkdirSync",
       "source": "mkdirSync(DAEMON_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2328,
+      "line": 2330,
       "api": "mkdirSync",
       "source": "mkdirSync(LOG_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2329,
+      "line": 2331,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(MEMORY_DB), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2500,
+      "line": 2502,
       "api": "existsSync",
       "source": "const workerPath = existsSync(bundled)",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2575,
+      "line": 2577,
       "api": "writeFileSync",
       "source": "writeFileSync(PID_FILE, process.pid.toString());",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3348,
+      "line": 3350,
       "api": "existsSync",
       "source": "if (existsSync(healthStampPath)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3349,
+      "line": 3351,
       "api": "readFileSync",
       "source": "const prev = JSON.parse(readFileSync(healthStampPath, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3352,
+      "line": 3354,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"
@@ -2610,7 +2610,7 @@
     },
     {
       "path": "pipeline/dreaming-token-cache.ts",
-      "line": 30,
+      "line": 35,
       "api": "existsSync",
       "source": "return existsSync(bundled)",
       "category": "hot-path"
@@ -2645,14 +2645,14 @@
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 921,
+      "line": 923,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return { content: \"\", unreadable: false };",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 923,
+      "line": 925,
       "api": "readFileSync",
       "source": "const raw = readFileSync(path, \"utf-8\").trim();",
       "category": "hot-path"
