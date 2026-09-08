@@ -897,28 +897,47 @@ export const api = {
 					offset < slot.upload_offset ? slot.upload_offset : Infinity,
 				);
 				const bytes = await file.slice(offset, end).arrayBuffer();
+				const previousChain = chain;
+				for (let cursor = 0; cursor < bytes.byteLength; cursor += 64 * 1024) {
+					const part = bytes.slice(cursor, cursor + 64 * 1024);
+					chain = await hash(new TextEncoder().encode(`${chain}:${await hash(part)}:${part.byteLength}`).buffer);
+				}
 				if (offset < slot.upload_offset) {
-					for (let cursor = 0; cursor < bytes.byteLength; cursor += 64 * 1024) {
-						const part = bytes.slice(cursor, cursor + 64 * 1024);
-						chain = await hash(new TextEncoder().encode(`${chain}:${await hash(part)}:${part.byteLength}`).buffer);
-					}
 					if (end === slot.upload_offset && chain !== slot.upload_digest)
 						return { data: null, error: "File prefix differs from the retained upload" };
 				} else {
-					const response = await fetch(`${path}${query}`, {
-						method: "PATCH",
-						signal: AbortSignal.timeout(60_000),
-						headers: {
-							...authHeaders(),
-							"upload-length": String(file.size),
-							"upload-offset": String(offset),
-							"upload-generation": String(slot.upload_generation),
-							"upload-checksum": await hash(bytes),
-						},
-						body: bytes,
-					});
-					const result = await response.json();
-					if (!response.ok) return { data: null, error: result.error ?? "Upload failed" };
+					for (let attempt = 0; ; attempt++) {
+						const response = await fetch(`${path}${query}`, {
+							method: "PATCH",
+							signal: AbortSignal.timeout(60_000),
+							headers: {
+								...authHeaders(),
+								"upload-length": String(file.size),
+								"upload-offset": String(offset),
+								"upload-generation": String(slot.upload_generation),
+								"upload-checksum": await hash(bytes),
+							},
+							body: bytes,
+						}).catch(() => null);
+						const result = await response?.json();
+						if (response?.ok) break;
+						if (attempt === 3 || (response && ![408, 429, 503].includes(response.status)))
+							return { data: null, error: result?.error ?? "Upload failed" };
+						await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+						const status = await getJSONResult<{ files: SourceImportFile[] }>(`${base}${query}`);
+						if (status.error) return { data: null, error: status.error };
+						const current = status.data?.files.find((entry) => entry.id === fileId);
+						if (
+							!current ||
+							current.upload_generation !== slot.upload_generation ||
+							current.upload_size !== file.size ||
+							!(
+								(current.upload_offset === offset && current.upload_digest === previousChain) ||
+								(current.upload_offset === end && current.upload_digest === chain)
+							)
+						)
+							return { data: null, error: "Upload changed while retrying; resume after verifying the retained prefix" };
+					}
 				}
 				offset = end;
 			}
