@@ -912,7 +912,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1131,
+      "line": 1132,
       "api": "writeFileSync",
       "source": "if (activeFile) writeFileSync(activeFile, `${Date.now()}\\n`);",
       "category": "hot-path"
