@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-08
-- Bug fixes: simplify portable purge; bounded deletes portable to SQLite without DELETE LIMIT.
+- Bug fixes: retain Windows rollback backup until next install; isolate deferred Windows cleanup process; finish Windows native update replacement; simplify portable purge; bounded deletes portable to SQLite without DELETE LIMIT.
 
 ### 2026-09-07
 - Features: make Windows a first-class install target; ship cross-platform desktop support.
@@ -36,6 +36,17 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: keep owner protocol pure.
 
 ## Release Ledger
+
+## [0.221.8] - 2026-09-08
+
+Release summary: 3 bug fixes.
+Tag range: `v0.221.7..v0.221.8`.
+
+### Bug Fixes
+
+- **cli**: retain Windows rollback backup until next install
+- **cli**: isolate deferred Windows cleanup process
+- **cli**: finish Windows native update replacement
 
 ## [0.221.7] - 2026-09-08
 
