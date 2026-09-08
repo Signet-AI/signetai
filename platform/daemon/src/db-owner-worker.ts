@@ -1008,6 +1008,7 @@ export function runDbOwnerWorker(): void {
 		}
 		const { initDbAccessorAsync } = await import("./db-accessor");
 		const initialization = await initDbAccessorAsync(ownerDbPath, { agentsDir, deadlineAt: context?.deadlineAt });
+		recallAccessorReady = true;
 		if (context !== undefined) context.committed = true;
 		return {
 			initialized: true,

@@ -4,7 +4,8 @@ on:
   pull_request:
     paths:
       - "platform/daemon/src/transcript-import-*.ts"
-      - "platform/core/src/migrations/151-transcript-import-bytes.ts"
+      - "platform/core/src/migrations/*transcript-import*.ts"
+      - "platform/core/src/migrations/contract.ts"
       - "platform/daemon/src/routes/transcript-import-routes.ts"
       - "platform/daemon/src/routes/sources-routes.ts"
       - ".github/workflows/transcript-import-platform.yml"
@@ -12,7 +13,8 @@ on:
     branches: [main]
     paths:
       - "platform/daemon/src/transcript-import-*.ts"
-      - "platform/core/src/migrations/151-transcript-import-bytes.ts"
+      - "platform/core/src/migrations/*transcript-import*.ts"
+      - "platform/core/src/migrations/contract.ts"
       - "platform/daemon/src/routes/transcript-import-routes.ts"
       - "platform/daemon/src/routes/sources-routes.ts"
       - ".github/workflows/transcript-import-platform.yml"

@@ -104,6 +104,41 @@ describe("DB owner recall lane", () => {
 		}
 	});
 
+	test("reuses a shared owner accessor after initialization before recall", async () => {
+		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-shared-init-recall-"));
+		previousSignetPath = process.env.SIGNET_PATH;
+		mkdirSync(join(directory, "memory"), { recursive: true });
+		writeFileSync(join(directory, "agent.yaml"), "name: DbOwnerSharedInitRecallTest\n");
+		process.env.SIGNET_PATH = directory;
+		const databasePath = join(directory, "memory", "memories.db");
+		initDbAccessor(databasePath);
+		seedFacts();
+		await closeDbAccessor();
+
+		const client = createDbOwnerClient({ dbPath: databasePath });
+		try {
+			await client.initialize(directory);
+			const cfg = testConfig(directory);
+			const result = await hybridRecallThroughDbOwner(
+				client,
+				{
+					query: "owner recall fixture",
+					keywordQuery: "owner recall fixture",
+					limit: 5,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					trackRecallAccess: false,
+					claimRecallResults: false,
+				},
+				cfg,
+				{ queryEmbedding: null },
+			);
+			expect(result.results.map((row) => row.id)).toContain("owner-fact-a");
+		} finally {
+			await client.close();
+		}
+	});
+
 	test("executes vector scoring in the recall owner lane", async () => {
 		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-vector-search-"));
 		previousSignetPath = process.env.SIGNET_PATH;
