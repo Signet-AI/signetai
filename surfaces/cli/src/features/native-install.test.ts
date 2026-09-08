@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { persistNativeInstallPath, printNativeInstallResult } from "./native-install.js";
+import {
+	cleanupNativeUpdateBackup,
+	isNativeUpdateBackupCleanupRequest,
+	persistNativeInstallPath,
+	printNativeInstallResult,
+} from "./native-install.js";
 
 function makeHome(): string {
 	return mkdtempSync(join(tmpdir(), "signet-native-install-"));
@@ -15,6 +20,25 @@ afterEach(() => {
 });
 
 describe("persistNativeInstallPath", () => {
+	test("accepts only a backup next to the installed Windows binary", () => {
+		const targetPath = "C:\\Users\\test user\\Signet & Tools\\signet.exe";
+		const backupPath = "C:\\Users\\test user\\Signet & Tools\\.signet.exe.1234.backup";
+
+		expect(isNativeUpdateBackupCleanupRequest(backupPath, targetPath, "win32")).toBe(true);
+		expect(isNativeUpdateBackupCleanupRequest("C:\\Other\\.signet.exe.1234.backup", targetPath, "win32")).toBe(false);
+		expect(isNativeUpdateBackupCleanupRequest(targetPath, targetPath, "win32")).toBe(false);
+	});
+
+	test("removes a native update backup once it is no longer locked", async () => {
+		const home = makeHome();
+		homes.push(home);
+		const backupPath = join(home, ".signet.exe.1234.backup");
+		writeFileSync(backupPath, "old native binary");
+
+		await cleanupNativeUpdateBackup(backupPath);
+		expect(existsSync(backupPath)).toBe(false);
+	});
+
 	test("persists the macOS zsh PATH entry in .zprofile", () => {
 		const home = makeHome();
 		homes.push(home);
@@ -128,7 +152,7 @@ describe("persistNativeInstallPath", () => {
 	test("skips persistence when PATH already contains the directory", () => {
 		const home = makeHome();
 		homes.push(home);
-		const binDir = join(home, ".local", "bin");
+		const binDir = "/home/test/.local/bin";
 		const result = persistNativeInstallPath(binDir, {
 			home,
 			platform: "darwin",
@@ -160,7 +184,7 @@ describe("persistNativeInstallPath", () => {
 	test("does not modify the profile when the exact directory is already on PATH", () => {
 		const home = makeHome();
 		homes.push(home);
-		const binDir = join(home, ".local", "bin");
+		const binDir = "/home/test/.local/bin";
 		const profilePath = join(home, ".zprofile");
 		const existing = '# Signet\nexport PATH="$HOME/.local/bin:$PATH"\n';
 		writeFileSync(profilePath, existing, "utf8");
