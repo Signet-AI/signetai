@@ -41,6 +41,11 @@ export interface DreamingBacklogTokenBatchResult {
 	readonly entriesCounted: number;
 }
 
+export interface DreamingBacklogTokenMeasurement {
+	readonly generation: number;
+	readonly lifecycleGeneration: number;
+}
+
 function ensureTokenCount(value: number, label: string): number {
 	if (!Number.isSafeInteger(value) || value < 0) {
 		throw new RangeError(`${label} must be a finite non-negative safe integer`);
@@ -79,6 +84,7 @@ export class DreamingBacklogTokenCache {
 	private readonly values = new Map<string, CachedTotal>();
 	private readonly entries = new Map<string, Map<string, CachedTokenEntry>>();
 	private readonly generations = new Map<string, number>();
+	private lifecycleGeneration = 0;
 	private readonly exactInflight = new Map<string, Promise<number>>();
 	private readonly batchInflight = new Map<string, Promise<DreamingBacklogTokenBatchResult>>();
 	private readonly tails = new Map<string, Promise<void>>();
@@ -86,12 +92,12 @@ export class DreamingBacklogTokenCache {
 
 	async replaceExactSnapshot(agentId: string, entries: readonly DreamingBacklogTokenEntry[]): Promise<number> {
 		const key = requestKey("exact", agentId, entries);
-		const generation = this.generationFor(agentId);
+		const measurement = this.beginMeasurement(agentId);
 		return await this.enqueue(
 			agentId,
 			key,
 			this.exactInflight,
-			async () => await this.replaceExactSnapshotNow(agentId, entries, generation),
+			async () => await this.replaceExactSnapshotNow(agentId, entries, measurement),
 		);
 	}
 
@@ -102,20 +108,31 @@ export class DreamingBacklogTokenCache {
 	): Promise<DreamingBacklogTokenBatchResult> {
 		const stopAt = stopAtTokens === undefined ? undefined : ensureTokenCount(stopAtTokens, "Dreaming token stop limit");
 		const key = requestKey("batch", agentId, entries, stopAt);
+		const lifecycleGeneration = this.lifecycleGeneration;
 		return await this.enqueue(
 			agentId,
 			key,
 			this.batchInflight,
-			async () => await this.countEntriesNow(agentId, entries, stopAt),
+			async () => await this.countEntriesNow(agentId, entries, stopAt, lifecycleGeneration),
 		);
 	}
 
-	beginMeasurement(agentId: string): number {
-		return this.generationFor(agentId);
+	beginMeasurement(agentId: string): DreamingBacklogTokenMeasurement {
+		return {
+			generation: this.generationFor(agentId),
+			lifecycleGeneration: this.lifecycleGeneration,
+		};
 	}
 
 	private generationFor(agentId: string): number {
 		return this.generations.get(agentId) ?? 0;
+	}
+
+	private isCurrent(agentId: string, measurement: DreamingBacklogTokenMeasurement): boolean {
+		return (
+			measurement.lifecycleGeneration === this.lifecycleGeneration &&
+			measurement.generation === this.generationFor(agentId)
+		);
 	}
 
 	get(agentId: string): number {
@@ -132,8 +149,8 @@ export class DreamingBacklogTokenCache {
 		return cached.count;
 	}
 
-	recordExactTotal(agentId: string, count: number, generation = this.generationFor(agentId)): void {
-		if (generation !== this.generationFor(agentId)) return;
+	recordExactTotal(agentId: string, count: number, measurement = this.beginMeasurement(agentId)): void {
+		if (!this.isCurrent(agentId, measurement)) return;
 		this.values.set(agentId, {
 			count: ensureTokenCount(count, "Dreaming exact token total"),
 			measuredAtMs: Date.now(),
@@ -146,6 +163,7 @@ export class DreamingBacklogTokenCache {
 	}
 
 	stop(): void {
+		this.lifecycleGeneration += 1;
 		for (const worker of this.workers) void worker.terminate();
 		this.workers.clear();
 		this.exactInflight.clear();
@@ -159,9 +177,10 @@ export class DreamingBacklogTokenCache {
 	private async replaceExactSnapshotNow(
 		agentId: string,
 		entries: readonly DreamingBacklogTokenEntry[],
-		generation: number,
+		measurement: DreamingBacklogTokenMeasurement,
 	): Promise<number> {
-		const result = await this.countEntriesNow(agentId, entries);
+		const result = await this.countEntriesNow(agentId, entries, undefined, measurement.lifecycleGeneration);
+		if (!this.isCurrent(agentId, measurement)) return result.tokens;
 		const nextKeys = new Set(entries.map((entry) => entry.key));
 		const agentEntries = this.entries.get(agentId);
 		if (agentEntries === undefined) {
@@ -170,14 +189,15 @@ export class DreamingBacklogTokenCache {
 		for (const key of agentEntries.keys()) {
 			if (!nextKeys.has(key)) agentEntries.delete(key);
 		}
-		this.recordExactTotal(agentId, result.tokens, generation);
+		this.recordExactTotal(agentId, result.tokens, measurement);
 		return result.tokens;
 	}
 
 	private async countEntriesNow(
 		agentId: string,
 		entries: readonly DreamingBacklogTokenEntry[],
-		stopAtTokens?: number,
+		stopAtTokens: number | undefined,
+		lifecycleGeneration: number,
 	): Promise<DreamingBacklogTokenBatchResult> {
 		const agentEntries = this.entries.get(agentId) ?? new Map<string, CachedTokenEntry>();
 		this.entries.set(agentId, agentEntries);
@@ -208,6 +228,9 @@ export class DreamingBacklogTokenCache {
 			}
 			const segment = entries.slice(index, end);
 			const counts = await this.count(segment, stopAtTokens === undefined ? undefined : stopAtTokens - tokens);
+			if (lifecycleGeneration !== this.lifecycleGeneration) {
+				throw new Error("Dreaming token cache stopped during measurement");
+			}
 			if (counts.length === 0) throw new Error(`Dreaming token worker omitted ${entry.key}`);
 			for (let resultIndex = 0; resultIndex < counts.length; resultIndex += 1) {
 				const candidate = segment[resultIndex];
@@ -265,7 +288,14 @@ export class DreamingBacklogTokenCache {
 		const active = inflight.get(key);
 		if (active !== undefined) return active;
 		const prior = this.tails.get(agentId) ?? Promise.resolve();
-		const promise = prior.then(operation, operation);
+		const lifecycleGeneration = this.lifecycleGeneration;
+		const run = (): Promise<Result> => {
+			if (lifecycleGeneration !== this.lifecycleGeneration) {
+				return Promise.reject(new Error("Dreaming token cache stopped during operation"));
+			}
+			return operation();
+		};
+		const promise = prior.then(run, run);
 		inflight.set(key, promise);
 		const tail = promise.then(
 			() => undefined,
@@ -306,7 +336,7 @@ export function getDreamingEpisodicTokenBacklogCachedOrNull(agentId: string): nu
 	return dreamingBacklogTokenCache.getFresh(agentId);
 }
 
-export function beginDreamingEpisodicTokenBacklogMeasurement(agentId: string): number {
+export function beginDreamingEpisodicTokenBacklogMeasurement(agentId: string): DreamingBacklogTokenMeasurement {
 	return dreamingBacklogTokenCache.beginMeasurement(agentId);
 }
 
@@ -314,6 +344,10 @@ export function invalidateDreamingEpisodicTokenBacklog(agentId: string): void {
 	dreamingBacklogTokenCache.invalidate(agentId);
 }
 /** Record only a complete, measured backlog total in the aggregate cache. */
-export function recordDreamingEpisodicTokenBacklog(agentId: string, count: number, generation?: number): void {
-	dreamingBacklogTokenCache.recordExactTotal(agentId, count, generation);
+export function recordDreamingEpisodicTokenBacklog(
+	agentId: string,
+	count: number,
+	measurement?: DreamingBacklogTokenMeasurement,
+): void {
+	dreamingBacklogTokenCache.recordExactTotal(agentId, count, measurement);
 }
