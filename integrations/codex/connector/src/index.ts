@@ -203,28 +203,35 @@ function readBoundedDirectoryEntries(root: string, limit: number): Dirent[] {
 
 let cachedWindowsAppxInstallRoots: string[] | undefined;
 
-function resolveWindowsAppxInstallRoots(): string[] {
-	if (process.platform !== "win32") return [];
-	if (cachedWindowsAppxInstallRoots !== undefined) return cachedWindowsAppxInstallRoots;
+interface WindowsAppxQueryResult {
+	readonly status: number | null;
+	readonly stdout: string;
+}
+
+type WindowsAppxQuery = (command: string) => WindowsAppxQueryResult;
+
+const WINDOWS_APPX_DISCOVERY_COMMAND =
+	"Get-AppxPackage | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.Name -eq 'OpenAI.ChatGPT' -or $_.Name -eq 'OpenAI.ChatGPT-Desktop' } | ForEach-Object { $_.InstallLocation }";
+
+export function resolveWindowsAppxInstallRoots(
+	platform: NodeJS.Platform = process.platform,
+	query?: WindowsAppxQuery,
+): string[] {
+	if (platform !== "win32") return [];
+	if (!query && cachedWindowsAppxInstallRoots !== undefined) return cachedWindowsAppxInstallRoots;
 	try {
-		const result = spawnSync(
-			"powershell.exe",
-			[
-				"-NoLogo",
-				"-NoProfile",
-				"-NonInteractive",
-				"-Command",
-				"Get-AppxPackage | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.Name -eq 'OpenAI.ChatGPT' } | ForEach-Object { $_.InstallLocation }",
-			],
-			{ encoding: "utf-8", timeout: 5_000 },
-		);
-		if (result.status !== 0) return (cachedWindowsAppxInstallRoots = []);
-		return (cachedWindowsAppxInstallRoots = uniquePaths(result.stdout.split(/\r?\n/).map((path) => path.trim())).slice(
-			0,
-			CODEX_APP_PATH_LIMIT,
-		));
+		const result = query
+			? query(WINDOWS_APPX_DISCOVERY_COMMAND)
+			: spawnSync(
+					"powershell.exe",
+					["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_APPX_DISCOVERY_COMMAND],
+					{ encoding: "utf-8", timeout: 5_000 },
+				);
+		if (result.status !== 0) return query ? [] : (cachedWindowsAppxInstallRoots = []);
+		const roots = uniquePaths(result.stdout.split(/\r?\n/).map((path) => path.trim())).slice(0, CODEX_APP_PATH_LIMIT);
+		return query ? roots : (cachedWindowsAppxInstallRoots = roots);
 	} catch {
-		return (cachedWindowsAppxInstallRoots = []);
+		return query ? [] : (cachedWindowsAppxInstallRoots = []);
 	}
 }
 
@@ -236,7 +243,7 @@ function defaultCodexDesktopAppPaths(platform: NodeJS.Platform = process.platfor
 		const programFilesX86 = readTrimmedEnv("PROGRAMFILES(X86)");
 		return uniquePaths([
 			...overrides,
-			...resolveWindowsAppxInstallRoots(),
+			...resolveWindowsAppxInstallRoots(platform),
 			join(localAppData, "Programs", "OpenAI", "Codex"),
 			join(localAppData, "Programs", "OpenAI", "ChatGPT"),
 			join(localAppData, "OpenAI", "Codex"),
@@ -272,7 +279,7 @@ function defaultCodexDesktopAppPaths(platform: NodeJS.Platform = process.platfor
 }
 
 function codexDesktopResourceRoots(appPath: string, platform: NodeJS.Platform): string[] {
-	const isWindowsPackageParent = platform === "win32" && /[\\/]((?:windowsapps)|(?:packages))$/i.test(appPath);
+	const isWindowsPackageParent = platform === "win32" && /[\\/]((?:windowsapps)|(?:packages))[\\/]*$/i.test(appPath);
 	const roots =
 		platform === "darwin"
 			? [join(appPath, "Contents", "Resources")]

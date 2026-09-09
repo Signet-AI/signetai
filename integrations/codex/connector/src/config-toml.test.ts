@@ -9,7 +9,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CodexConnector, buildHooksFile, buildMcpBlock, resolveCodexCli, resolveCodexDesktopNode } from "./index.js";
+import {
+	CodexConnector,
+	buildHooksFile,
+	buildMcpBlock,
+	resolveCodexCli,
+	resolveCodexDesktopNode,
+	resolveWindowsAppxInstallRoots,
+} from "./index.js";
 
 class TempConnector extends CodexConnector {
 	constructor(private home: string) {
@@ -1225,7 +1232,20 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		writeFileSync(unrelated, "unrelated fixture\n", "utf-8");
 
 		expect(resolveCodexCli([packagesRoot], (path) => path === unrelated, "win32")).toBeNull();
+		expect(resolveCodexCli([`${packagesRoot}\\`], (path) => path === unrelated, "win32")).toBeNull();
 		expect(resolveCodexCli([packagesRoot], (path) => path === codex, "win32")).toBe(codex);
+	});
+
+	test("discovers the current ChatGPT Desktop AppX package from PowerShell output", () => {
+		const packageRoot = join(tempHome, "WindowsApps", "OpenAI.ChatGPT-Desktop_26.901.6511.0_x64__2p2nqsd0c76g0");
+		let query = "";
+		const roots = resolveWindowsAppxInstallRoots("win32", (command) => {
+			query = command;
+			return { status: 0, stdout: `${packageRoot}\r\n` };
+		});
+
+		expect(query).toContain("'OpenAI.ChatGPT-Desktop'");
+		expect(roots).toEqual([packageRoot]);
 	});
 
 	test("honors CODEX_HOME for the desktop connector", async () => {
