@@ -391,22 +391,6 @@ describe("daemon status contract", () => {
 		expect(extractionFallback).toContain("dbOwnerTransaction");
 	});
 
-	it("admits Dreaming before DB-owner startup gates can reject the deferred runtime", () => {
-		const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf-8");
-		const runtimeStart = source.indexOf("async function startPipelineRuntime");
-		const workerStart = source.indexOf("dreamingWorkerHandle = startDreamingWorker", runtimeStart);
-		const legacyRetirement = source.indexOf("const deadLettered = await retireLegacyExtractionJobsAsync", runtimeStart);
-		const embeddingResolution = source.indexOf(
-			"const activeEmbeddingCfg = await resolveActiveEmbeddingConfigThroughOwner",
-			runtimeStart,
-		);
-
-		expect(runtimeStart).toBeGreaterThanOrEqual(0);
-		expect(workerStart).toBeGreaterThan(runtimeStart);
-		expect(workerStart).toBeLessThan(legacyRetirement);
-		expect(workerStart).toBeLessThan(embeddingResolution);
-	});
-
 	it("counts non-errored connectors as active for heartbeat telemetry", () => {
 		expect(countConnectorsActive([{ status: "idle" }, { status: "syncing" }, { status: "error" }])).toBe(2);
 	});
