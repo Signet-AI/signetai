@@ -76,7 +76,7 @@ Signet runs underneath the tools you already use. Run `signet setup` to configur
 |[Claude Code](https://docs.anthropic.com/en/docs/claude-code)|Hooks + MCP|
 |[OpenCode](https://github.com/sst/opencode)|Plugin|
 |[OpenClaw](https://github.com/openclaw/openclaw)|Plugin|
-|[Codex](https://github.com/openai/codex)|Hooks + MCP|
+|[Codex](https://github.com/openai/codex)|Native plugin + hooks/MCP fallback|
 |[Kimi Code](https://github.com/MoonshotAI/kimi-cli)|Hooks + MCP / ACPX|
 |[Hermes Agent](https://github.com/NousResearch/hermes-agent)|Memory provider plugin|
 |[Pi](https://github.com/mariozechner/pi-coding-agent)|Extension|

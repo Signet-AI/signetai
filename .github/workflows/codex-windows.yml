@@ -1,0 +1,41 @@
+name: Codex Windows Contract
+
+on:
+  pull_request:
+    paths:
+      - "integrations/codex/**"
+      - "libs/connector-base/**"
+      - "platform/core/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/codex-windows.yml"
+  push:
+    branches: [main]
+    paths:
+      - "integrations/codex/**"
+      - "libs/connector-base/**"
+      - "platform/core/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/codex-windows.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  connector:
+    name: Codex connector Windows tests
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+        run: bun install --frozen-lockfile
+      - name: Build connector dependencies
+        run: bun run --filter "@signet/core" --filter "@signet/connector-base" build
+      - name: Run Codex connector tests
+        run: bun test --max-concurrency=1 integrations/codex

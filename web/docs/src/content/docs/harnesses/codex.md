@@ -5,21 +5,27 @@ description: "Connect Signet to Codex."
 
 ## Codex
 
-Codex is OpenAI's terminal coding agent (`codex-rs`). Signet integrates
-with Codex through a generated Codex plugin bundle when the installed Codex
-CLI supports plugin marketplaces. The plugin declares Signet metadata, skills,
-and MCP configuration. Until Codex exposes plugin lifecycle hooks, Signet also
-installs compatibility `hooks.json` entries for session start, prompt submit,
-and session end. Older Codex versions fall back to direct hook and MCP config
-patching.
+Codex is OpenAI's coding agent (`codex-rs`), available as a standalone CLI and
+as the runtime bundled by the ChatGPT desktop app for Work/Codex mode. Signet
+integrates with both through a generated Codex plugin bundle when the installed
+Codex executable supports plugin marketplaces. The bundle uses the
+`.codex-plugin`/`.mcp.json` compatibility layout that current Codex CLI and
+ChatGPT desktop Work/Codex runtimes load for local stdio servers. A separate
+portable root manifest is intentionally deferred until the local-stdio contract
+is stable across desktop versions. Older Codex versions fall back to direct
+`hooks.json` and MCP config patching.
+
+The connector talks to the local Codex executable directly, including the copy
+bundled by ChatGPT desktop; Codex app-server integration is not required for
+plugin installation.
 
 ### Files managed by Signet
 
 | File | Description |
 |------|-------------|
 | `~/.codex/.tmp/signet-plugin-marketplace` | Generated local marketplace containing the Signet plugin bundle |
-| `~/.codex/config.toml` | Plugin marketplace/config registration, or compatibility `[mcp_servers.signet]` on older Codex installs |
-| `~/.codex/hooks.json` | Compatibility lifecycle hooks — SessionStart, UserPromptSubmit, Stop |
+| `~/.codex/config.toml` | Native plugin marketplace/config registration, or compatibility `[mcp_servers.signet]` on older Codex installs |
+| `~/.codex/hooks.json` | Compatibility lifecycle hooks — SessionStart, UserPromptSubmit, PreToolUse, Stop |
 | `~/.codex/skills` | Compatibility symlink to `$SIGNET_WORKSPACE/skills` when plugin support is unavailable |
 
 Generated Codex hook manifests contain only fields from Codex's hook schema.
@@ -47,13 +53,14 @@ still uses daemon-side dedupe keyed by `session_key`, `agent_id`, and
 
 ### How it works
 
-1. `signet setup --harness codex` feature-detects `codex plugin` support.
-2. On supported Codex installs, Signet writes a local plugin marketplace bundle and registers `signet@signet-local` in `~/.codex/config.toml`.
-3. While plugin lifecycle hooks are not available, Codex also reads compatibility hooks from `~/.codex/hooks.json`.
+1. `signet setup --harness codex` resolves a usable Codex executable. It checks the platform's known Codex/ChatGPT desktop resource roots and then `PATH`; `CODEX_CLI_PATH` can override discovery.
+2. If that executable supports `codex plugin`, Signet writes a local plugin marketplace bundle and registers `signet@signet-local` in `~/.codex/config.toml`.
+3. Native plugin hooks are loaded by Codex after its one-time hook trust review. If native plugin hooks are unavailable, Codex also reads compatibility hooks from `~/.codex/hooks.json`.
 4. On session start, Codex fires `SessionStart` → calls `signet hook session-start -H codex --codex-json` → Signet returns identity + memories as `hookSpecificOutput.additionalContext` with `suppressOutput: true`, injected into the model's context window without printing the hook payload to the user transcript.
 5. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex --codex-json` → Signet returns bounded entity current-view context only when the prompt mentions a known entity or active alias. Empty matches return no additional context. This is blocking — Codex waits for the hook before sending to the model.
-6. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
-7. The MCP server exposes `signet_recall`, `signet_source_search`, `signet_session_search`, `signet_save_note`, and compatibility `memory_*` tools that Codex can invoke directly during sessions.
+6. Before a tool call, Codex may fire `PreToolUse` → calls `signet hook notifications -H codex --hook PreToolUse --codex-json` so Signet can deliver pending cross-agent notifications.
+7. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
+8. The MCP server exposes `signet_recall`, `signet_source_search`, `signet_session_search`, `signet_save_note`, and compatibility `memory_*` tools that Codex can invoke directly during sessions.
 
 Codex `SessionStart` hook timeout defaults to 20 seconds: the Signet CLI
 waits up to `SIGNET_SESSION_START_TIMEOUT` (`15000` ms by default) for
@@ -94,7 +101,22 @@ path, query string, fragment, or embedded credentials.
 
 Codex matches the session-start, prompt-submit, and session-end path, but
 it does **not** currently expose the same compaction lifecycle fidelity as
-Claude Code or OpenCode.
+Claude Code or OpenCode. In ChatGPT desktop, approve the generated Signet
+hooks in the one-time trust prompt; continuing without trust leaves the plugin
+installed but prevents lifecycle hooks from running.
+
+`CODEX_HOME` selects the Codex state directory for the connector. Native
+ChatGPT and Codex on Windows normally use `%USERPROFILE%\\.codex`, and
+standalone Codex clients on one OS may share that OS's state directory. Keep
+WSL/Linux and macOS installs on their native state directories instead of
+pointing them at a Windows `CODEX_HOME`: generated hook and MCP commands
+contain platform-specific absolute paths and Windows `.cmd` wrappers. Install
+the integration separately per OS. The Linux ChatGPT desktop app is currently
+preview software; when its bundled executable is not on `PATH`, Signet checks
+the usual `/usr/lib/chatgpt`, `/opt/chatgpt`, and per-user resource roots. On
+Windows, Signet writes a hashed `.cmd` wrapper for generated hooks so paths
+containing spaces and remote-daemon environment variables do not depend on
+Codex's wrapped `cmd.exe /C` quoting.
 
 ### Supported hooks
 
@@ -102,6 +124,7 @@ Claude Code or OpenCode.
 |------|-----------|
 | session-start | yes — identity + memories via `hookSpecificOutput.additionalContext` |
 | user-prompt-submit | yes — entity current-view context via `hookSpecificOutput.additionalContext` when matched |
+| pre-tool-use | yes — pending notifications via the Codex hook payload |
 | session-end | yes — transcript extraction via `Stop` hook |
 
 ### MCP tools
@@ -128,7 +151,7 @@ than a local Ollama instance.
 
 ### Prerequisites
 
-- Codex (`codex-rs`) installed and in `PATH`
+- Codex CLI installed, or ChatGPT desktop installed with Work/Codex mode
 - Signet daemon running (`signet daemon start`)
 
 ---
