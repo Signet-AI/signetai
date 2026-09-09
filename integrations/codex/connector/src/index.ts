@@ -225,7 +225,7 @@ export function resolveWindowsAppxInstallRoots(
 			: spawnSync(
 					"powershell.exe",
 					["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_APPX_DISCOVERY_COMMAND],
-					{ encoding: "utf-8", timeout: 5_000 },
+					{ encoding: "utf-8", timeout: 1_000 },
 				);
 		if (result.status !== 0) return query ? [] : (cachedWindowsAppxInstallRoots = []);
 		const roots = uniquePaths(result.stdout.split(/\r?\n/).map((path) => path.trim())).slice(0, CODEX_APP_PATH_LIMIT);

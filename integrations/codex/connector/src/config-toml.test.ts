@@ -1107,7 +1107,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 			if (process.platform === "win32") {
 				const wrapper = result.filesWritten.find((path) => path.toLowerCase().endsWith(".cmd"));
 				expect(wrapper).toBeDefined();
-				expect(readFileSync(wrapper as string, "utf-8")).toContain(`${runtime} ${signetEntry}`);
+				expect(readFileSync(wrapper as string, "utf-8").replaceAll('"', "")).toContain(`${runtime} ${signetEntry}`);
 			} else {
 				expect(handler?.command).toContain(`${runtime} ${signetEntry}`);
 			}
@@ -1147,7 +1147,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 			if (process.platform === "win32") {
 				const wrapper = result.filesWritten.find((path) => path.toLowerCase().endsWith(".cmd"));
 				expect(wrapper).toBeDefined();
-				expect(readFileSync(wrapper as string, "utf-8")).toContain(`${runtime} ${signetEntry}`);
+				expect(readFileSync(wrapper as string, "utf-8").replaceAll('"', "")).toContain(`${runtime} ${signetEntry}`);
 			} else {
 				expect(handler?.command).toContain(`${runtime} ${signetEntry}`);
 			}
