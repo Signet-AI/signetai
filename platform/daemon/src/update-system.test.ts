@@ -113,8 +113,8 @@ describe("Issue 322: verify installed version after update install", () => {
 				activeExecutablePath: "/home/test/.local/bin/signet",
 			},
 			{
-				syncWorkspaceSourceRepoAsync: async (dir) => {
-					calls.push(dir);
+				syncWorkspaceSourceRepoAsync: async (dir, options) => {
+					calls.push(`${dir}:${options?.localChanges ?? "skip"}`);
 					return {
 						status: "current",
 						path: join(dir, "signetai"),
@@ -130,7 +130,7 @@ describe("Issue 322: verify installed version after update install", () => {
 			},
 		);
 
-		expect(calls).toEqual([workspaceDir]);
+		expect(calls).toEqual([`${workspaceDir}:stash`]);
 		expect(result).toEqual({
 			success: true,
 			message: "Update installed. Restart daemon to apply.",
@@ -147,6 +147,39 @@ describe("Issue 322: verify installed version after update install", () => {
 			},
 		});
 		expect(getUpdateState().pendingRestartVersion).toBe("0.78.1");
+	});
+
+	it("reports the source stash restore command after a successful update", async () => {
+		const workspaceDir = join(tmpdir(), `signet-update-stash-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const repoPath = join(workspaceDir, "signetai");
+		const stashRef = "0123456789abcdef0123456789abcdef01234567";
+		initUpdateSystem("0.78.0", workspaceDir);
+
+		const result = await finalizeSuccessfulUpdateInstall(
+			"0.78.1",
+			"installed ok",
+			{
+				installMethod: "native",
+				activeExecutablePath: "/home/test/.local/bin/signet",
+			},
+			{
+				syncWorkspaceSourceRepoAsync: async () => ({
+					status: "pulled",
+					path: repoPath,
+					message: `pulled latest Signet source checkout; local changes were preserved in stash ${stashRef}`,
+					branch: "main",
+					defaultBranch: "main",
+					localChanges: "stashed",
+					stashRef,
+				}),
+				updateDesktopInstallAfterUpdate: async () => ({
+					status: "skipped",
+					message: "Signet desktop app is not installed",
+				}),
+			},
+		);
+
+		expect(result.message).toContain(`Restore with: git -C "${repoPath}" stash apply ${stashRef}`);
 	});
 
 	it("fires the onUpgraded lifecycle hook with (from, to) on success (issue #1026 Phase 2)", async () => {

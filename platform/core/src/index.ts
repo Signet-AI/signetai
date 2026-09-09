@@ -354,6 +354,7 @@ export {
 	syncWorkspaceSourceRepo,
 } from "./workspace-source-repo";
 export type {
+	WorkspaceSourceRepoLocalChanges,
 	WorkspaceSourceRepoStatus,
 	WorkspaceSourceRepoSyncOptions,
 	WorkspaceSourceRepoSyncResult,

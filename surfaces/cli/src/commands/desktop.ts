@@ -27,6 +27,7 @@ export function registerDesktopCommands(program: Command, deps: DesktopDeps): vo
 				console.log(chalk.green("✓ Signet desktop build complete"));
 				console.log(chalk.dim(`  Source:   ${result.repo}`));
 				console.log(chalk.dim(`  Artifacts: ${result.releaseDir}`));
+				printLocalChangeStatus(result);
 			} catch (err) {
 				console.error(chalk.red("Signet desktop build failed"));
 				console.error(chalk.red(err instanceof Error ? err.message : String(err)));
@@ -68,10 +69,26 @@ export function registerDesktopCommands(program: Command, deps: DesktopDeps): vo
 					console.log(chalk.dim(`  Workspace: ${result.workspace}`));
 					console.log(chalk.cyan("\n  Run: launch the Signet Desktop executable above"));
 				}
+				printLocalChangeStatus(result);
 			} catch (err) {
 				console.error(chalk.red("Signet desktop install failed"));
 				console.error(chalk.red(err instanceof Error ? err.message : String(err)));
 				process.exit(1);
 			}
 		});
+}
+
+function printLocalChangeStatus(result: DesktopBuildResult): void {
+	if (result.localChanges === "generated-only") {
+		console.log(chalk.dim("  Generated build artifacts were left in place during source sync."));
+		return;
+	}
+	if (result.localChanges === "left-in-place") {
+		console.log(chalk.yellow("  Local source changes were left in place during source sync."));
+		return;
+	}
+	if (result.localChanges !== "stashed" || !result.stashRef) return;
+
+	console.log(chalk.yellow(`  Local source changes were preserved in stash ${result.stashRef}.`));
+	console.log(chalk.dim(`  Restore: git -C "${result.repo}" stash apply ${result.stashRef}`));
 }

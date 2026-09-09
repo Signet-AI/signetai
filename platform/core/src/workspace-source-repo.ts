@@ -9,13 +9,17 @@ const DEFAULT_GIT_TIMEOUT_MS = 60_000;
 const SOURCE_REPO_SYNC_LOCK_FILENAME = "source-repo-sync.lock";
 const SOURCE_REPO_SYNC_LOCK_STALE_MS = 5 * 60_000;
 const SOURCE_REPO_SYNC_LOCK_WAIT_MS = 15_000;
+const SOURCE_REPO_AUTOSTASH_PREFIX = "signet-source-autostash";
 
 export type WorkspaceSourceRepoStatus = "cloned" | "pulled" | "fetched" | "current" | "skipped" | "error";
+export type WorkspaceSourceRepoLocalChanges = "none" | "generated-only" | "left-in-place" | "stashed";
 
 export interface WorkspaceSourceRepoSyncOptions {
 	/** Only explicit source builds may create a checkout; routine sync updates existing repositories. */
 	readonly cloneIfMissing?: boolean;
 	readonly gitTimeoutMs?: number;
+	/** Preserve user-owned local changes in a verified Git stash before updating. */
+	readonly localChanges?: "skip" | "stash";
 	readonly remoteUrl?: string;
 	readonly repoDirName?: string;
 }
@@ -26,6 +30,8 @@ export interface WorkspaceSourceRepoSyncResult {
 	readonly message: string;
 	readonly branch: string | null;
 	readonly defaultBranch: string | null;
+	readonly localChanges?: WorkspaceSourceRepoLocalChanges;
+	readonly stashRef?: string;
 }
 
 interface GitCommandResult {
@@ -57,6 +63,27 @@ type SyncLockAttempt =
 	| { readonly status: "error"; readonly message: string };
 
 type WorkspaceDirEnsureResult = { readonly ok: true } | { readonly ok: false; readonly message: string };
+
+interface WorkingTreeStatus {
+	readonly statusReadable: boolean;
+	readonly hasUserChanges: boolean;
+	readonly hasGeneratedChanges: boolean;
+	readonly hasUnmergedChanges: boolean;
+	readonly userPaths: readonly string[];
+}
+
+interface LocalChangesMetadata {
+	readonly localChanges: WorkspaceSourceRepoLocalChanges;
+	readonly stashRef?: string;
+}
+
+type AutoStashResult =
+	| { readonly ok: true; readonly stashRef: string }
+	| { readonly ok: false; readonly message: string; readonly stashRef?: string };
+
+type LocalChangesPreparation =
+	| { readonly ok: true; readonly metadata: LocalChangesMetadata }
+	| { readonly ok: false; readonly message: string; readonly metadata?: LocalChangesMetadata };
 
 type MaybePromise<T> = T | Promise<T>;
 type GitRunner = (
@@ -97,7 +124,15 @@ export function syncWorkspaceSourceRepo(
 	}
 
 	try {
-		return syncWorkspaceSourceRepoLocked(runGit, workspaceDir, repoPath, remoteUrl, timeoutMs, clone);
+		return syncWorkspaceSourceRepoLocked(
+			runGit,
+			workspaceDir,
+			repoPath,
+			remoteUrl,
+			timeoutMs,
+			clone,
+			options.localChanges ?? "skip",
+		);
 	} finally {
 		releaseSourceRepoSyncLock(lock.lock);
 	}
@@ -128,7 +163,15 @@ export async function syncWorkspaceSourceRepoAsync(
 	}
 
 	try {
-		return await syncWorkspaceSourceRepoLocked(runGitAsync, workspaceDir, repoPath, remoteUrl, timeoutMs, clone);
+		return await syncWorkspaceSourceRepoLocked(
+			runGitAsync,
+			workspaceDir,
+			repoPath,
+			remoteUrl,
+			timeoutMs,
+			clone,
+			options.localChanges ?? "skip",
+		);
 	} finally {
 		releaseSourceRepoSyncLock(lock.lock);
 	}
@@ -141,6 +184,7 @@ function syncWorkspaceSourceRepoLocked(
 	remoteUrl: string,
 	timeoutMs: number,
 	cloneIfMissing: boolean,
+	localChanges: "skip" | "stash",
 ): WorkspaceSourceRepoSyncResult;
 function syncWorkspaceSourceRepoLocked(
 	run: typeof runGitAsync,
@@ -149,6 +193,7 @@ function syncWorkspaceSourceRepoLocked(
 	remoteUrl: string,
 	timeoutMs: number,
 	cloneIfMissing: boolean,
+	localChanges: "skip" | "stash",
 ): Promise<WorkspaceSourceRepoSyncResult>;
 function syncWorkspaceSourceRepoLocked(
 	run: GitRunner,
@@ -157,6 +202,7 @@ function syncWorkspaceSourceRepoLocked(
 	remoteUrl: string,
 	timeoutMs: number,
 	cloneIfMissing: boolean,
+	localChanges: "skip" | "stash",
 ): MaybePromise<WorkspaceSourceRepoSyncResult> {
 	if (!existsSync(repoPath) || isEmptyDirectory(repoPath)) {
 		if (!cloneIfMissing) return missingCheckoutResult(repoPath);
@@ -204,7 +250,7 @@ function syncWorkspaceSourceRepoLocked(
 					);
 				}
 
-				return finalizeFetchedRepoWith(run, repoPath, state, timeoutMs);
+				return finalizeFetchedRepoWith(run, repoPath, state, timeoutMs, localChanges);
 			});
 		}),
 	);
@@ -215,6 +261,7 @@ function finalizeFetchedRepoWith(
 	repoPath: string,
 	state: RepoState,
 	timeoutMs: number,
+	localChangesMode: "skip" | "stash",
 ): MaybePromise<WorkspaceSourceRepoSyncResult> {
 	if (state.branch === null) {
 		return fetchedResult(
@@ -237,68 +284,168 @@ function finalizeFetchedRepoWith(
 			state,
 		);
 	}
-	return mapToSyncResult(isWorkingTreeDirtyWith(run, repoPath, timeoutMs), (dirty) => {
-		if (dirty) {
+	return flatMapMaybePromise(readWorkingTreeStatusWith(run, repoPath, timeoutMs), (workingTree) => {
+		const generatedOnlyMetadata: LocalChangesMetadata = {
+			localChanges: workingTree.hasGeneratedChanges ? "generated-only" : "none",
+		};
+		const localChangesMetadata: LocalChangesMetadata = {
+			localChanges: workingTree.hasUserChanges ? "left-in-place" : generatedOnlyMetadata.localChanges,
+		};
+
+		if (!workingTree.hasUserChanges) {
+			return continueFetchedRepoWith(run, repoPath, state, timeoutMs, generatedOnlyMetadata);
+		}
+
+		if (localChangesMode !== "stash") {
 			return fetchedResult(
 				repoPath,
 				"fetched latest Signet source checkout, skipped pull because the working tree has local changes",
 				state,
+				{ localChanges: "left-in-place" },
 			);
 		}
 
-		return mapToSyncResult(readUpstreamBranchWith(run, repoPath, timeoutMs), (upstream) => {
-			if (upstream !== `origin/${state.defaultBranch}`) {
+		if (workingTree.hasUnmergedChanges) {
+			return fetchedResult(
+				repoPath,
+				"fetched latest Signet source checkout, skipped pull because the working tree has unresolved merge conflicts",
+				state,
+				{ localChanges: "left-in-place" },
+			);
+		}
+
+		if (!workingTree.statusReadable) {
+			return errorResult(
+				repoPath,
+				"could not safely inspect the working tree before creating an automatic stash",
+				state,
+				localChangesMetadata,
+			);
+		}
+
+		return continueFetchedRepoWith(run, repoPath, state, timeoutMs, localChangesMetadata, () =>
+			prepareLocalChangesForUpdateWith(run, repoPath, timeoutMs, workingTree.userPaths),
+		);
+	});
+}
+
+function continueFetchedRepoWith(
+	run: GitRunner,
+	repoPath: string,
+	state: RepoState,
+	timeoutMs: number,
+	metadata: LocalChangesMetadata,
+	prepareForUpdate?: () => MaybePromise<LocalChangesPreparation>,
+): MaybePromise<WorkspaceSourceRepoSyncResult> {
+	const defaultBranch = state.defaultBranch;
+	if (defaultBranch === null) {
+		return fetchedResult(
+			repoPath,
+			"fetched latest Signet source checkout, skipped pull because origin HEAD is unavailable",
+			state,
+			metadata,
+		);
+	}
+
+	return flatMapMaybePromise(readUpstreamBranchWith(run, repoPath, timeoutMs), (upstream) => {
+		if (upstream !== `origin/${defaultBranch}`) {
+			return fetchedResult(
+				repoPath,
+				"fetched latest Signet source checkout, skipped pull because the current branch is not tracking origin",
+				state,
+				metadata,
+			);
+		}
+
+		return flatMapMaybePromise(readAheadBehindWith(run, repoPath, upstream, timeoutMs), (divergence) => {
+			if (divergence === null) {
 				return fetchedResult(
 					repoPath,
-					"fetched latest Signet source checkout, skipped pull because the current branch is not tracking origin",
+					"fetched latest Signet source checkout, skipped pull because branch divergence could not be determined",
 					state,
+					metadata,
 				);
 			}
+			if (divergence.ahead > 0) {
+				return fetchedResult(
+					repoPath,
+					"fetched latest Signet source checkout, skipped pull because the checkout has local commits",
+					state,
+					metadata,
+				);
+			}
+			if (divergence.behind === 0) {
+				return currentResult(repoPath, state, metadata);
+			}
 
-			return mapToSyncResult(readAheadBehindWith(run, repoPath, upstream, timeoutMs), (divergence) => {
-				if (divergence === null) {
+			return flatMapMaybePromise(isSafeBranchNameWith(run, defaultBranch, timeoutMs), (safeBranchName) => {
+				if (!safeBranchName) {
 					return fetchedResult(
 						repoPath,
-						"fetched latest Signet source checkout, skipped pull because branch divergence could not be determined",
+						"fetched latest Signet source checkout, skipped pull because origin HEAD resolved to an unsafe branch name",
 						state,
+						metadata,
 					);
 				}
-				if (divergence.ahead > 0) {
-					return fetchedResult(
-						repoPath,
-						"fetched latest Signet source checkout, skipped pull because the checkout has local commits",
-						state,
-					);
-				}
-				if (divergence.behind === 0) {
-					return currentResult(repoPath, state);
-				}
 
-				return mapToSyncResult(isSafeBranchNameWith(run, state.defaultBranch, timeoutMs), (safeBranchName) => {
-					if (!safeBranchName) {
-						return fetchedResult(
-							repoPath,
-							"fetched latest Signet source checkout, skipped pull because origin HEAD resolved to an unsafe branch name",
-							state,
-						);
-					}
-
-					return mapToSyncResult(
-						run(["merge", "--ff-only", "--no-edit", `refs/remotes/origin/${state.defaultBranch}`], repoPath, timeoutMs),
+				const fastForward = (preparedMetadata: LocalChangesMetadata): MaybePromise<WorkspaceSourceRepoSyncResult> =>
+					flatMapMaybePromise(
+						run(["merge", "--ff-only", "--no-edit", `refs/remotes/origin/${defaultBranch}`], repoPath, timeoutMs),
 						(pull) => {
 							if (!pull.ok) {
 								return errorResult(
 									repoPath,
 									`failed to fast-forward Signet source checkout: ${readGitError(pull, timeoutMs)}`,
 									state,
+									preparedMetadata,
 								);
 							}
 
-							return pulledResult(repoPath, state);
+							return pulledResult(repoPath, state, preparedMetadata);
 						},
 					);
+
+				if (!prepareForUpdate) return fastForward(metadata);
+				return flatMapMaybePromise(prepareForUpdate(), (preparation) => {
+					if (preparation.ok === false) {
+						return errorResult(repoPath, preparation.message, state, preparation.metadata ?? metadata);
+					}
+					return fastForward(preparation.metadata);
 				});
 			});
+		});
+	});
+}
+
+function prepareLocalChangesForUpdateWith(
+	run: GitRunner,
+	repoPath: string,
+	timeoutMs: number,
+	userPaths: readonly string[],
+): MaybePromise<LocalChangesPreparation> {
+	return flatMapMaybePromise(createAutoStashWith(run, repoPath, timeoutMs, userPaths), (stash) => {
+		if (stash.ok === false) {
+			return {
+				ok: false,
+				message: `failed to preserve local changes before updating Signet source checkout: ${stash.message}`,
+				...(stash.stashRef ? { metadata: { localChanges: "stashed", stashRef: stash.stashRef } } : {}),
+			};
+		}
+
+		const stashedMetadata: LocalChangesMetadata = {
+			localChanges: "stashed",
+			stashRef: stash.stashRef,
+		};
+		return flatMapMaybePromise(readWorkingTreeStatusWith(run, repoPath, timeoutMs), (afterStash) => {
+			if (!afterStash.statusReadable || afterStash.hasUserChanges) {
+				return {
+					ok: false,
+					message: `verified local-change stash ${stash.stashRef} did not leave the source checkout clean; the stash was kept`,
+					metadata: stashedMetadata,
+				};
+			}
+
+			return { ok: true, metadata: stashedMetadata };
 		});
 	});
 }
@@ -667,6 +814,8 @@ function readFsError(prefix: string, err: unknown): string {
 	return `${prefix}: ${err instanceof Error ? err.message : String(err)}`;
 }
 
+const NO_LOCAL_CHANGES: LocalChangesMetadata = { localChanges: "none" };
+
 function skippedResult(repoPath: string, message: string, state?: RepoState): WorkspaceSourceRepoSyncResult {
 	return {
 		status: "skipped",
@@ -677,23 +826,35 @@ function skippedResult(repoPath: string, message: string, state?: RepoState): Wo
 	};
 }
 
-function fetchedResult(repoPath: string, message: string, state: RepoState): WorkspaceSourceRepoSyncResult {
+function fetchedResult(
+	repoPath: string,
+	message: string,
+	state: RepoState,
+	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
+): WorkspaceSourceRepoSyncResult {
 	return {
 		status: "fetched",
 		path: repoPath,
-		message,
+		message: addLocalChangesMessage(message, metadata),
 		branch: state.branch,
 		defaultBranch: state.defaultBranch,
+		...localChangesFields(metadata),
 	};
 }
 
-function errorResult(repoPath: string, message: string, state?: RepoState): WorkspaceSourceRepoSyncResult {
+function errorResult(
+	repoPath: string,
+	message: string,
+	state?: RepoState,
+	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
+): WorkspaceSourceRepoSyncResult {
 	return {
 		status: "error",
 		path: repoPath,
-		message,
+		message: addLocalChangesMessage(message, metadata),
 		branch: state?.branch ?? null,
 		defaultBranch: state?.defaultBranch ?? null,
+		...localChangesFields(metadata),
 	};
 }
 
@@ -707,24 +868,58 @@ function clonedResult(repoPath: string, state: RepoState): WorkspaceSourceRepoSy
 	};
 }
 
-function pulledResult(repoPath: string, state: RepoState): WorkspaceSourceRepoSyncResult {
+function pulledResult(
+	repoPath: string,
+	state: RepoState,
+	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
+): WorkspaceSourceRepoSyncResult {
 	return {
 		status: "pulled",
 		path: repoPath,
-		message: "pulled latest Signet source checkout",
+		message: addLocalChangesMessage("pulled latest Signet source checkout", metadata),
 		branch: state.branch,
 		defaultBranch: state.defaultBranch,
+		...localChangesFields(metadata),
 	};
 }
 
-function currentResult(repoPath: string, state: RepoState): WorkspaceSourceRepoSyncResult {
+function currentResult(
+	repoPath: string,
+	state: RepoState,
+	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
+): WorkspaceSourceRepoSyncResult {
 	return {
 		status: "current",
 		path: repoPath,
-		message: "Signet source checkout is already current",
+		message: addLocalChangesMessage("Signet source checkout is already current", metadata),
 		branch: state.branch,
 		defaultBranch: state.defaultBranch,
+		...localChangesFields(metadata),
 	};
+}
+
+function localChangesFields(metadata: LocalChangesMetadata): {
+	readonly localChanges?: WorkspaceSourceRepoLocalChanges;
+	readonly stashRef?: string;
+} {
+	if (metadata.localChanges === "none") return {};
+	return {
+		localChanges: metadata.localChanges,
+		...(metadata.stashRef ? { stashRef: metadata.stashRef } : {}),
+	};
+}
+
+function addLocalChangesMessage(message: string, metadata: LocalChangesMetadata): string {
+	if (metadata.localChanges === "stashed" && metadata.stashRef) {
+		return `${message}; local changes were preserved in stash ${metadata.stashRef}`;
+	}
+	if (metadata.localChanges === "generated-only") {
+		return `${message}; generated build artifacts were left in place`;
+	}
+	if (metadata.localChanges === "left-in-place") {
+		return `${message}; local changes were left in place`;
+	}
+	return message;
 }
 
 function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
@@ -732,6 +927,10 @@ function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
 }
 
 function mapMaybePromise<T, U>(value: MaybePromise<T>, map: (value: T) => U): MaybePromise<U> {
+	return isPromiseLike(value) ? value.then(map) : map(value);
+}
+
+function flatMapMaybePromise<T, U>(value: MaybePromise<T>, map: (value: T) => MaybePromise<U>): MaybePromise<U> {
 	return isPromiseLike(value) ? value.then(map) : map(value);
 }
 
@@ -800,22 +999,63 @@ function readDefaultBranchWith(run: GitRunner, repoPath: string, timeoutMs: numb
 	);
 }
 
-function isWorkingTreeDirtyWith(run: typeof runGit, repoPath: string, timeoutMs: number): boolean;
-function isWorkingTreeDirtyWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<boolean>;
-function isWorkingTreeDirtyWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<boolean>;
-function isWorkingTreeDirtyWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<boolean> {
+function readWorkingTreeStatusWith(run: typeof runGit, repoPath: string, timeoutMs: number): WorkingTreeStatus;
+function readWorkingTreeStatusWith(
+	run: typeof runGitAsync,
+	repoPath: string,
+	timeoutMs: number,
+): Promise<WorkingTreeStatus>;
+function readWorkingTreeStatusWith(
+	run: GitRunner,
+	repoPath: string,
+	timeoutMs: number,
+): MaybePromise<WorkingTreeStatus>;
+function readWorkingTreeStatusWith(
+	run: GitRunner,
+	repoPath: string,
+	timeoutMs: number,
+): MaybePromise<WorkingTreeStatus> {
 	return mapMaybePromise(
 		run(["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=all"], repoPath, timeoutMs),
 		(result) => {
 			if (!result.ok) {
-				return true;
+				return {
+					statusReadable: false,
+					hasUserChanges: true,
+					hasGeneratedChanges: false,
+					hasUnmergedChanges: false,
+					userPaths: [],
+				};
 			}
 
-			return result.stdout
+			let statusReadable = true;
+			let hasUserChanges = false;
+			let hasGeneratedChanges = false;
+			let hasUnmergedChanges = false;
+			const userPaths: string[] = [];
+			for (const line of result.stdout
 				.split("\n")
 				.map((line) => line.trimEnd())
-				.filter((line) => line.length > 0)
-				.some((line) => !isGeneratedSourceRepoStatusLine(line));
+				.filter((line) => line.length > 0)) {
+				if (isUnmergedStatusLine(line)) {
+					hasUnmergedChanges = true;
+					hasUserChanges = true;
+					continue;
+				}
+				if (isGeneratedSourceRepoStatusLine(line)) {
+					hasGeneratedChanges = true;
+					continue;
+				}
+				hasUserChanges = true;
+				const path = parsePorcelainStatusPath(line);
+				if (path) {
+					userPaths.push(path);
+				} else {
+					statusReadable = false;
+				}
+			}
+
+			return { statusReadable, hasUserChanges, hasGeneratedChanges, hasUnmergedChanges, userPaths };
 		},
 	);
 }
@@ -831,10 +1071,122 @@ const GENERATED_SOURCE_REPO_PATH_PREFIXES = [
 	"surfaces/desktop/resources/",
 ];
 
+const GENERATED_SOURCE_REPO_PATH_PATTERNS = [/^platform\/daemon\/anydoc\.[^/]+\.node$/];
+
 function isGeneratedSourceRepoStatusLine(line: string): boolean {
 	const path = parsePorcelainStatusPath(line);
 	if (!path) return false;
-	return GENERATED_SOURCE_REPO_PATH_PREFIXES.some((prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix));
+	return (
+		GENERATED_SOURCE_REPO_PATH_PREFIXES.some((prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix)) ||
+		GENERATED_SOURCE_REPO_PATH_PATTERNS.some((pattern) => pattern.test(path))
+	);
+}
+
+function isUnmergedStatusLine(line: string): boolean {
+	if (line.length < 2) return false;
+	const indexStatus = line[0];
+	const worktreeStatus = line[1];
+	return (
+		indexStatus === "U" ||
+		worktreeStatus === "U" ||
+		(indexStatus === "A" && worktreeStatus === "A") ||
+		(indexStatus === "D" && worktreeStatus === "D")
+	);
+}
+
+function createAutoStashWith(
+	run: typeof runGit,
+	repoPath: string,
+	timeoutMs: number,
+	userPaths: readonly string[],
+): AutoStashResult;
+function createAutoStashWith(
+	run: typeof runGitAsync,
+	repoPath: string,
+	timeoutMs: number,
+	userPaths: readonly string[],
+): Promise<AutoStashResult>;
+function createAutoStashWith(
+	run: GitRunner,
+	repoPath: string,
+	timeoutMs: number,
+	userPaths: readonly string[],
+): MaybePromise<AutoStashResult>;
+function createAutoStashWith(
+	run: GitRunner,
+	repoPath: string,
+	timeoutMs: number,
+	userPaths: readonly string[],
+): MaybePromise<AutoStashResult> {
+	const stashMessage = `${SOURCE_REPO_AUTOSTASH_PREFIX}-${new Date().toISOString().replace(/\D/g, "")}`;
+	const pathspecs = userPaths.map((path) => `:(literal)${path}`);
+	return flatMapMaybePromise(readStashHeadWith(run, repoPath, timeoutMs), (before) =>
+		flatMapMaybePromise(
+			run(["stash", "push", "--include-untracked", "--message", stashMessage, "--", ...pathspecs], repoPath, timeoutMs),
+			(stash) =>
+				flatMapMaybePromise(readStashHeadWith(run, repoPath, timeoutMs), (after) => {
+					const stashRef = after && after !== before ? after : undefined;
+					if (!stash.ok) {
+						return {
+							ok: false,
+							message: `git stash failed: ${readGitError(stash, timeoutMs)}`,
+							...(stashRef ? { stashRef } : {}),
+						};
+					}
+					if (!stashRef) {
+						return {
+							ok: false,
+							message: `git stash completed without creating a verifiable ${SOURCE_REPO_AUTOSTASH_PREFIX} entry`,
+						};
+					}
+
+					return flatMapMaybePromise(readStashSubjectWith(run, repoPath, stashRef, timeoutMs), (subject) => {
+						if (!subject?.includes(stashMessage)) {
+							return {
+								ok: false,
+								message: `new refs/stash entry ${stashRef} could not be verified as Signet's automatic stash`,
+								stashRef,
+							};
+						}
+
+						return { ok: true, stashRef };
+					});
+				}),
+		),
+	);
+}
+
+function readStashHeadWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
+function readStashHeadWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
+function readStashHeadWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
+function readStashHeadWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
+	return mapMaybePromise(run(["rev-parse", "--verify", "--quiet", "refs/stash"], repoPath, timeoutMs), (result) =>
+		readTrimmedValue(result),
+	);
+}
+
+function readStashSubjectWith(run: typeof runGit, repoPath: string, stashRef: string, timeoutMs: number): string | null;
+function readStashSubjectWith(
+	run: typeof runGitAsync,
+	repoPath: string,
+	stashRef: string,
+	timeoutMs: number,
+): Promise<string | null>;
+function readStashSubjectWith(
+	run: GitRunner,
+	repoPath: string,
+	stashRef: string,
+	timeoutMs: number,
+): MaybePromise<string | null>;
+function readStashSubjectWith(
+	run: GitRunner,
+	repoPath: string,
+	stashRef: string,
+	timeoutMs: number,
+): MaybePromise<string | null> {
+	return mapMaybePromise(run(["show", "-s", "--format=%s", stashRef], repoPath, timeoutMs), (result) =>
+		readTrimmedValue(result),
+	);
 }
 
 function parsePorcelainStatusPath(line: string): string | null {
