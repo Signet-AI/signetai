@@ -174,6 +174,30 @@ function uniquePaths(paths: readonly (string | undefined)[]): string[] {
 	return [...new Set(paths.filter((path): path is string => Boolean(path)))];
 }
 
+let cachedWindowsAppxInstallRoots: string[] | undefined;
+
+function resolveWindowsAppxInstallRoots(): string[] {
+	if (process.platform !== "win32") return [];
+	if (cachedWindowsAppxInstallRoots !== undefined) return cachedWindowsAppxInstallRoots;
+	try {
+		const result = spawnSync(
+			"powershell.exe",
+			[
+				"-NoLogo",
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				"Get-AppxPackage | Where-Object { $_.Name -eq 'OpenAI.Codex' -or $_.Name -eq 'OpenAI.ChatGPT' } | ForEach-Object { $_.InstallLocation }",
+			],
+			{ encoding: "utf-8", timeout: 5_000 },
+		);
+		if (result.status !== 0) return (cachedWindowsAppxInstallRoots = []);
+		return (cachedWindowsAppxInstallRoots = uniquePaths(result.stdout.split(/\r?\n/).map((path) => path.trim())));
+	} catch {
+		return (cachedWindowsAppxInstallRoots = []);
+	}
+}
+
 function defaultCodexDesktopAppPaths(platform: NodeJS.Platform = process.platform): readonly string[] {
 	const overrides = [readTrimmedEnv("CODEX_APP_PATH"), readTrimmedEnv("CHATGPT_APP_PATH")];
 	if (platform === "win32") {
@@ -182,6 +206,7 @@ function defaultCodexDesktopAppPaths(platform: NodeJS.Platform = process.platfor
 		const programFilesX86 = readTrimmedEnv("PROGRAMFILES(X86)");
 		return uniquePaths([
 			...overrides,
+			...resolveWindowsAppxInstallRoots(),
 			join(localAppData, "Programs", "OpenAI", "Codex"),
 			join(localAppData, "Programs", "OpenAI", "ChatGPT"),
 			join(localAppData, "OpenAI", "Codex"),
@@ -222,6 +247,7 @@ function codexDesktopResourceRoots(appPath: string, platform: NodeJS.Platform): 
 			? [join(appPath, "Contents", "Resources")]
 			: [
 					join(appPath, "resources"),
+					join(appPath, "app"),
 					join(appPath, "app", "resources"),
 					join(appPath, "Contents", "Resources"),
 					appPath,
@@ -246,7 +272,7 @@ function codexDesktopResourceRoots(appPath: string, platform: NodeJS.Platform): 
 	return uniquePaths(roots);
 }
 
-function codexDesktopNodeCandidates(root: string, depth = 0, platform: NodeJS.Platform = process.platform): string[] {
+function codexDesktopExecutableCandidates(root: string, executableNames: ReadonlySet<string>, depth = 0): string[] {
 	if (depth > CODEX_RUNTIME_SCAN_DEPTH || !existsSync(root)) return [];
 	const candidates: string[] = [];
 	let entries: Dirent[] = [];
@@ -255,18 +281,23 @@ function codexDesktopNodeCandidates(root: string, depth = 0, platform: NodeJS.Pl
 	} catch {
 		return [];
 	}
-	const nodeNames = platform === "win32" ? new Set(["node", "node.exe"]) : new Set(["node"]);
 	for (const entry of entries) {
 		const path = join(root, entry.name);
-		if ((entry.isFile() || entry.isSymbolicLink()) && nodeNames.has(entry.name.toLowerCase())) candidates.push(path);
+		if ((entry.isFile() || entry.isSymbolicLink()) && executableNames.has(entry.name.toLowerCase()))
+			candidates.push(path);
 		try {
 			if (!statSync(path).isDirectory()) continue;
-			candidates.push(...codexDesktopNodeCandidates(path, depth + 1, platform));
+			candidates.push(...codexDesktopExecutableCandidates(path, executableNames, depth + 1));
 		} catch {
 			// Ignore broken symlinks and files that disappear while scanning.
 		}
 	}
 	return candidates;
+}
+
+function codexDesktopNodeCandidates(root: string, depth = 0, platform: NodeJS.Platform = process.platform): string[] {
+	const nodeNames = platform === "win32" ? new Set(["node", "node.exe"]) : new Set(["node"]);
+	return codexDesktopExecutableCandidates(root, nodeNames, depth);
 }
 
 function isUsableNodeRuntime(path: string): boolean {
@@ -300,10 +331,12 @@ export function resolveCodexDesktopNode(
 
 function codexDesktopCliCandidates(appPath: string, platform: NodeJS.Platform = process.platform): string[] {
 	const executableNames = platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"];
+	const names = new Set(executableNames);
 	return uniquePaths(
-		codexDesktopResourceRoots(appPath, platform).flatMap((root) =>
-			executableNames.flatMap((name) => [join(root, name), join(root, "bin", name)]),
-		),
+		codexDesktopResourceRoots(appPath, platform).flatMap((root) => [
+			...executableNames.flatMap((name) => [join(root, name), join(root, "bin", name)]),
+			...codexDesktopExecutableCandidates(root, names),
+		]),
 	);
 }
 
@@ -600,7 +633,7 @@ function shellCommandArg(value: string, platform: NodeJS.Platform = process.plat
 		const escaped = value.replace(/[%^&|<>!"]/g, (character) => {
 			if (character === "%") return "%%";
 			if (character === "!") return "^!";
-			if (character === '"') return '\\"';
+			if (character === '"') return '^"';
 			return `^${character}`;
 		});
 		return `"${escaped}"`;
@@ -659,7 +692,7 @@ function writeWindowsHookWrapper(
 
 	const apiKey = readAuthTokenEnv();
 	const wrapperRoot = join(codexHome, ".tmp", "signet-plugin-marketplace", "runtime");
-	const identity = JSON.stringify({ signetArgs, remoteDaemonUrl, apiKey });
+	const identity = JSON.stringify({ signetArgs, remoteDaemonUrl });
 	const digest = createHash("sha256").update(identity).digest("hex").slice(0, 16);
 	const wrapperPath = join(wrapperRoot, `signet-codex-hook-${digest}.cmd`);
 	mkdirSync(wrapperRoot, { recursive: true });
