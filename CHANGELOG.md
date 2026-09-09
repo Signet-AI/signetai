@@ -7,6 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-09
+- Features: add ChatGPT desktop plugin path.
 - Bug fixes: make episodic artifact indexing self-healing; index memory_artifacts by source_sha256 for the backlog probe; require maintenance before admission; restore maintenance before admission; cancel stale cache work on stop; keep worker available at startup.
 - Refactoring: dedupe setup/cache code.
 
@@ -37,6 +38,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: repair native health fixture; avoid embedding conflict starvation; enforce scoped embedding repair; scope legacy embedding repairs.
 
 ## Release Ledger
+
+## [0.222.0] - 2026-09-09
+
+Release summary: 1 feature.
+Tag range: `v0.221.11..v0.222.0`.
+
+### Features
+
+- **codex**: add ChatGPT desktop plugin path (#1896)
 
 ## [0.221.11] - 2026-09-09
 
