@@ -1009,7 +1009,7 @@ registerAppCommands(program, {
 		const result = installNativeBinary(options);
 		printNativeInstallResult(result, options.json);
 		if (await isDaemonRunning()) {
-			const rebound = await startDaemon(AGENTS_DIR, result.target);
+			const rebound = await startDaemon(AGENTS_DIR, "compiled", result.target);
 			if (!rebound) {
 				console.error("Signet binary installed, but the running daemon could not be switched to it.");
 			}

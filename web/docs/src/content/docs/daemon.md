@@ -51,7 +51,22 @@ SIGNET_BIND=0.0.0.0 SIGNET_PORT=3850 signet daemon start
 
 An exposed interface is not an authentication setting. Use `auth.mode: team` for an untrusted or Internet-facing deployment. `hybrid` is convenient for a trusted workstation, but is not a public reverse-proxy security boundary. See [Authentication](/auth/) and [Self-Hosting](/self-hosting/).
 
-## Runtime configuration
+## Daemon runtime selection
+
+The compiled daemon is the default. Select the production Bun JavaScript bundle
+for profiling with the CLI or environment:
+
+```bash
+signet daemon restart --runtime bun-js
+SIGNET_DAEMON_RUNTIME=compiled signet daemon restart
+```
+
+The only supported runtime values are `compiled` and `bun-js`. An invalid value
+fails before the daemon acquires its workspace lock. `bun-js` requires the
+staged production bundle, all worker bundles, dashboard and skills assets, and
+its external runtime dependencies; it never falls back to TypeScript source or
+the compiled executable. The selected runtime is returned by `/health`,
+`/api/status`, and `/api/pipeline/status`, and is recorded in lifecycle state.
 
 The daemon loads `agent.yaml` from the selected workspace. Some files and service settings can be observed after startup, but long-running pipeline workers begin from a configuration snapshot. Restart after changing pipeline, embedding, inference, auth, or network configuration.
 

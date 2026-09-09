@@ -29,6 +29,7 @@ interface DaemonStatus {
 	readonly pid: number | null;
 	readonly uptime: number | null;
 	readonly version: string | null;
+	readonly runtime?: string | null;
 	readonly host: string | null;
 	readonly bindHost: string | null;
 	readonly networkMode: string | null;
@@ -263,6 +264,7 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 			`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(ver)}${readinessDegraded ? chalk.dim(" (live)") : ""}`,
 		);
 		console.log(chalk.dim(`    PID: ${report.daemon.pid ?? "unknown"}`));
+		console.log(chalk.dim(`    Runtime: ${report.daemon.runtime ?? "unknown"}`));
 		console.log(
 			chalk.dim(`    Uptime: ${report.daemon.uptime === null ? "unknown" : deps.formatUptime(report.daemon.uptime)}`),
 		);

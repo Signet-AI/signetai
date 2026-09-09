@@ -19,6 +19,7 @@ export interface NativeInstallOptions {
 	readonly force?: boolean;
 	readonly json?: boolean;
 	readonly connectorAssets?: string;
+	readonly daemonJsAssets?: string;
 }
 
 export interface NativeInstallResult {
@@ -29,6 +30,7 @@ export interface NativeInstallResult {
 	readonly pathProfile: string | null;
 	readonly pathPersisted: boolean;
 	readonly connectorAssetsDir: string | null;
+	readonly daemonJsAssetsDir: string | null;
 }
 
 function isRuntimeExecutable(path: string): boolean {
@@ -162,14 +164,20 @@ function extractConnectorAssets(archivePath: string, extractRoot: string): void 
  * to `<binDir>/../runtime/connectors/`, mirroring the layout the npm
  * wrapper uses after `install-native.js` runs.
  */
-function installConnectorAssetsFromManifest(tarballPath: string, binDir: string): string {
-	// Look up the expected SHA-256 from the manifest. The manifest is
-	// resolved relative to the wrapper's `native-manifest.json` if it
-	// exists, otherwise we fall back to trusting the tarball as-is
-	// (curl installs without the manifest will skip verification but
-	// still extract, matching the npm-wrapper happy path).
+type RuntimeComponent = "connectors" | "daemonJs";
+
+function installRuntimeAssetsFromManifest(
+	tarballPath: string,
+	binDir: string,
+	component: RuntimeComponent,
+	componentLabel: string,
+): string {
+	// Look up the expected SHA-256 from the manifest. Curl installs keep the
+	// manifest next to the native binary; workspace and older installs may not
+	// have one, so extraction remains compatible with the connector path.
 	const manifestCandidates = [
 		join(process.cwd(), "native-manifest.json"),
+		join(dirname(process.execPath), "native-manifest.json"),
 		join(dirname(process.execPath), "..", "native-manifest.json"),
 		join(dirname(process.execPath), "..", "..", "native-manifest.json"),
 	];
@@ -177,30 +185,36 @@ function installConnectorAssetsFromManifest(tarballPath: string, binDir: string)
 		if (!existsSync(manifestPath)) continue;
 		try {
 			const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
-				components?: { connectors?: { sha256?: string; size?: number } };
+				components?: Record<string, { sha256?: string; size?: number }>;
 			};
-			const expected = manifest.components?.connectors?.sha256;
-			const expectedSize = manifest.components?.connectors?.size;
-			if (expected) verifySha256(tarballPath, expected);
-			if (typeof expectedSize === "number") {
+			const entry = manifest.components?.[component];
+			if (entry?.sha256) verifySha256(tarballPath, entry.sha256);
+			if (typeof entry?.size === "number") {
 				const actual = readFileSync(tarballPath).length;
-				if (actual !== expectedSize) {
-					throw new Error(`Tarball size mismatch: expected ${expectedSize}, got ${actual}`);
+				if (actual !== entry.size) {
+					throw new Error(`Tarball size mismatch for ${componentLabel}: expected ${entry.size}, got ${actual}`);
 				}
 			}
 			break;
-		} catch (err) {
-			if (err instanceof Error && err.message.startsWith("SHA-256")) throw err;
-			// Ignore JSON parse errors and keep looking at the next candidate.
+		} catch (error) {
+			if (error instanceof Error && (error.message.startsWith("SHA-256") || error.message.startsWith("Tarball size"))) {
+				throw error;
+			}
+			// Ignore malformed manifests and try the next candidate.
 		}
 	}
 
-	// Tarballs use a `runtime/connectors/<harness>/...` layout, so we
-	// extract at `<binDir>/..` (one level above `bin/`) and let the
-	// tarball's own `runtime/` prefix land at the right place.
 	const extractRoot = join(binDir, "..");
 	extractConnectorAssets(tarballPath, extractRoot);
-	return join(extractRoot, "runtime", "connectors");
+	return join(extractRoot, "runtime", component === "daemonJs" ? "daemon-js" : "connectors");
+}
+
+function installConnectorAssetsFromManifest(tarballPath: string, binDir: string): string {
+	return installRuntimeAssetsFromManifest(tarballPath, binDir, "connectors", "connector assets");
+}
+
+function installDaemonJsAssetsFromManifest(tarballPath: string, binDir: string): string {
+	return installRuntimeAssetsFromManifest(tarballPath, binDir, "daemonJs", "Bun JavaScript daemon assets");
 }
 
 export function installNativeBinary(options: NativeInstallOptions = {}): NativeInstallResult {
@@ -218,6 +232,9 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		const connectorAssetsDir = options.connectorAssets
 			? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
 			: null;
+		const daemonJsAssetsDir = options.daemonJsAssets
+			? installDaemonJsAssetsFromManifest(options.daemonJsAssets, binDir)
+			: null;
 		const pathPersistence = persistNativeInstallPath(binDir, {
 			interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
 		});
@@ -230,6 +247,7 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 			pathProfile: pathPersistence.profilePath,
 			pathPersisted: pathPersistence.persisted,
 			connectorAssetsDir,
+			daemonJsAssetsDir,
 		};
 	}
 
@@ -238,6 +256,9 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 	// previously working Signet binary in place.
 	const connectorAssetsDir = options.connectorAssets
 		? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
+		: null;
+	const daemonJsAssetsDir = options.daemonJsAssets
+		? installDaemonJsAssetsFromManifest(options.daemonJsAssets, binDir)
 		: null;
 
 	mkdirSync(binDir, { recursive: true });
@@ -279,6 +300,7 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		pathProfile: pathPersistence.profilePath,
 		pathPersisted: pathPersistence.persisted,
 		connectorAssetsDir,
+		daemonJsAssetsDir,
 	};
 }
 
@@ -297,6 +319,10 @@ export function printNativeInstallResult(result: NativeInstallResult, json = fal
 
 	if (result.connectorAssetsDir) {
 		console.log(chalk.green(`Installed connector assets to ${result.connectorAssetsDir}`));
+	}
+
+	if (result.daemonJsAssetsDir) {
+		console.log(chalk.green(`Installed Bun JavaScript daemon assets to ${result.daemonJsAssetsDir}`));
 	}
 
 	if (result.pathPersisted && result.pathProfile) {

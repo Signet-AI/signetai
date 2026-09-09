@@ -21,6 +21,7 @@ import { readEmbeddingIndexMigrationProgress } from "../embedding-index-state";
 import {
 	AGENTS_DIR,
 	CURRENT_VERSION,
+	DAEMON_RUNTIME,
 	PORT,
 	authConfig,
 	getCurrentAgentsDir,
@@ -254,6 +255,7 @@ export function mountHealthRoutes(app: Hono): void {
 			uptime: process.uptime(),
 			pid: process.pid,
 			version: CURRENT_VERSION,
+			runtime: DAEMON_RUNTIME,
 			port: PORT,
 			agentsDir: AGENTS_DIR,
 			workspace: {
@@ -283,6 +285,7 @@ export function mountHealthRoutes(app: Hono): void {
 			uptime: process.uptime(),
 			pid: process.pid,
 			version: CURRENT_VERSION,
+			runtime: DAEMON_RUNTIME,
 			port: PORT,
 			shuttingDown,
 			eventLoop: getEventLoopLiveness(),
@@ -369,6 +372,7 @@ export function mountHealthRoutes(app: Hono): void {
 			{
 				status: ready ? "ready" : "not_ready",
 				version: CURRENT_VERSION,
+				runtime: DAEMON_RUNTIME,
 				shuttingDown,
 				checks: {
 					workspace: {

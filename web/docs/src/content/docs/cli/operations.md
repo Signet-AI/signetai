@@ -29,6 +29,7 @@ Output:
   ● Daemon running
     PID: 12345
     Uptime: 2h 15m
+    Runtime: compiled
     Dashboard: http://localhost:3850
 
   ✓ AGENTS.md
@@ -117,6 +118,8 @@ grouped form is the preferred surface.
 
 ```bash
 signet daemon start
+signet daemon start --runtime bun-js
+signet daemon start --runtime compiled
 signet daemon stop
 signet daemon restart
 signet daemon status
@@ -131,7 +134,11 @@ signet logs
 
 ### `signet daemon start`
 
-Start the Signet daemon if not already running.
+Start the Signet daemon if not already running. The compiled runtime is the
+default. Use `--runtime bun-js` to launch the production Bun JavaScript bundle
+for profiling; changing the requested runtime stops a running daemon before
+starting the selected mode. `SIGNET_DAEMON_RUNTIME` provides the same selection
+for service-manager launches.
 
 ```
   ◈ signet v0.1.0
@@ -151,7 +158,8 @@ Top-level alias: `signet stop`
 
 ### `signet daemon restart`
 
-Stop and start the daemon. Useful after installing an update.
+Stop and start the daemon. Useful after installing an update or changing
+`--runtime` between `compiled` and `bun-js`.
 
 Top-level alias: `signet restart`
 

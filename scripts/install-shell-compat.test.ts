@@ -76,6 +76,12 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 `;
 			const binaryName = "signet-linux-x64";
 			writeFileSync(join(fixtureDir, binaryName), binary);
+			const connectorName = "signet-connectors-v-test.tar.gz";
+			const connectorArchive = Buffer.from("connector archive");
+			writeFileSync(join(fixtureDir, connectorName), connectorArchive);
+			const daemonJsName = "signet-daemon-js-v-test.tar.gz";
+			const daemonJsArchive = Buffer.from("bun-js archive");
+			writeFileSync(join(fixtureDir, daemonJsName), daemonJsArchive);
 			writeFileSync(
 				join(fixtureDir, "native-manifest.json"),
 				JSON.stringify({
@@ -85,6 +91,16 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 							sha256: createHash("sha256").update(binary).digest("hex"),
 						},
 					],
+					components: {
+						connectors: {
+							url: connectorName,
+							sha256: createHash("sha256").update(connectorArchive).digest("hex"),
+						},
+						daemonJs: {
+							url: daemonJsName,
+							sha256: createHash("sha256").update(daemonJsArchive).digest("hex"),
+						},
+					},
 				}),
 			);
 
@@ -109,7 +125,16 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 					});
 
 					expect(result.status, `${shell} ${invocation} stderr:\n${result.stderr}`).toBe(0);
-					expect(readFileSync(argsPath, "utf8").split("\n")).toEqual(["install", "--force", "--json", ""]);
+					expect(readFileSync(argsPath, "utf8").split("\n")).toEqual([
+						"install",
+						"--force",
+						"--connector-assets",
+						join(downloadDir, connectorName),
+						"--daemon-js-assets",
+						join(downloadDir, daemonJsName),
+						"--json",
+						"",
+					]);
 				}
 			}
 		} finally {

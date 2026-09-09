@@ -203,6 +203,7 @@ describe("persistNativeInstallPath", () => {
 				pathProfile: "/home/test/.zprofile",
 				pathPersisted: true,
 				connectorAssetsDir: null,
+				daemonJsAssetsDir: null,
 			});
 		} finally {
 			console.log = originalLog;

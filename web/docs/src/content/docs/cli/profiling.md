@@ -1,6 +1,6 @@
 ---
 title: Profile the daemon
-description: Capture a Bun CPU profile from a running Signet daemon.
+description: Compare the compiled and Bun JavaScript daemon runtimes with CPU and heap profiles.
 ---
 
 Use the daemon's Bun inspector when a daemon is alive but its event loop is
@@ -11,7 +11,7 @@ stopped daemon and run this single profile-enabled headless launch:
 profile_dir=$(mktemp -d)
 BUN_OPTIONS="--cpu-prof --cpu-prof-dir=$profile_dir" \
   SIGNET_INSPECTOR_PUBLIC=127.0.0.1:9229/json \
-  signet daemon restart --no-sync
+  signet daemon restart --no-sync --runtime=bun-js
 ```
 
 `SIGNET_INSPECTOR_PUBLIC` keeps `127.0.0.1:9229` as the public inspector
@@ -21,6 +21,38 @@ systemd-run boundary and across the daemon's detached launch. It also supplies
 the discovery routes that are missing from the Bun inspector in the current
 runtime. `restart --no-sync` makes the profile-enabled invocation replace any
 stale daemon without running an unrelated workspace sync.
+
+`--runtime=bun-js` selects the production JavaScript bundle. It does not use
+`src/daemon.ts` or watch mode, and it fails before launch if the bundle, worker
+bundles, dashboard, skills, or external runtime dependencies are missing. Omit
+`--runtime` (or pass `--runtime=compiled`) to profile the compiled daemon.
+
+To produce source maps for the JavaScript comparison, build the daemon bundle
+explicitly:
+
+```bash
+cd platform/daemon
+bun run build:profile
+cd ../..
+bun run build:daemon-js-assets
+```
+
+The profile build emits `.map` files beside the daemon and worker bundles. Keep the
+compiled and `bun-js` runs comparable: use the same commit, workspace,
+configuration, model, workload, Bun version, and warm-up period.
+
+| Metric | Measure | Keep comparable |
+| --- | --- | --- |
+| Startup time | Time from launch to the first successful `/health/live` response. | Use a cold process and the same workspace/configuration for each runtime. |
+| RSS | Record the daemon process resident set size after the same warm-up period. | Sample at the same interval and exclude the CLI parent and inspector proxy. |
+| Event-loop latency | Run the same health or dedicated latency probe while the workload is active. | Use the same request rate, timeout, and workload phase. |
+| Route latency | Measure p50, p95, and p99 latency for the same API route and payload. | Reuse the same client, concurrency, database, and warm-up period. |
+| CPU profile | Stop cleanly after the workload and compare the emitted `.cpuprofile` files. | Use the same profile duration and workload; compare hot stacks by symbol. |
+| Heap profile | Enable Bun heap profiling and compare the emitted heap snapshots after the same workload. | Use the same allocation phase and capture point; compare retained objects, not file size alone. |
+
+Record the raw measurements and profile filenames alongside the runtime name. A
+source/watch run is a development diagnostic, not a third runtime to compare
+against the production modes.
 
 Keep the `/json` suffix. It is the endpoint form expected by Bun's inspector
 protocol and by the discovery proxy.

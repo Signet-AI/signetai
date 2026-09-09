@@ -5,6 +5,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DAEMON_JS_WORKER_FILES,
 	buildLaunchdDaemonPlist,
 	buildLaunchdDaemonStartArgs,
 	buildLaunchdDaemonStopArgs,
@@ -13,6 +14,8 @@ import {
 	didSystemdDaemonStart,
 	getDaemonStatus,
 	getLaunchdDaemonLoadState,
+	inspectDaemonJsBundle,
+	resolveBunJsDaemonBundle,
 	isDaemonEntrypointEnvironment,
 	isDaemonRunning,
 	isLaunchdDaemonLoaded,
@@ -28,6 +31,7 @@ import {
 	resolveDaemonInspectorForwarding,
 	resolveDaemonLaunchCommand,
 	resolveDaemonPaths,
+	resolveDaemonPathForRuntime,
 	resolveDaemonRuntimeCommand,
 	stopManagedDaemonProcess,
 	waitForDaemonLiveness,
@@ -43,6 +47,77 @@ describe("resolveDaemonPaths", () => {
 	it("keeps the JavaScript daemon bundle as the default when SIGNET_DIR is set", () => {
 		const paths = resolveDaemonPaths({ SIGNET_DIR: "/opt/signet" });
 		expect(paths[0]).toBe("/opt/signet/runtime/daemon-js/daemon.js");
+	});
+});
+
+describe("bun-js daemon bundle selection", () => {
+	it("requires the production entrypoint, workers, assets, and external dependencies", () => {
+		const bundleDir = mkdtempSync(join(tmpdir(), "signet-daemon-js-bundle-"));
+		try {
+			writeFileSync(join(bundleDir, "daemon.js"), "export {};");
+			for (const worker of DAEMON_JS_WORKER_FILES) writeFileSync(join(bundleDir, worker), "export {};");
+			mkdirSync(join(bundleDir, "dashboard"));
+			writeFileSync(join(bundleDir, "dashboard", "index.html"), "<!doctype html>");
+			mkdirSync(join(bundleDir, "skills"));
+			writeFileSync(join(bundleDir, "skills", "README.md"), "skills");
+			mkdirSync(join(bundleDir, "vendor"), { recursive: true });
+			writeFileSync(join(bundleDir, "vendor", "tiktoken_bg.wasm"), "wasm");
+			mkdirSync(join(bundleDir, "vendor", "node_modules", "@firecrawl", "anydoc"), { recursive: true });
+
+			expect(inspectDaemonJsBundle(join(bundleDir, "daemon.js"))).toEqual({
+				daemonPath: join(bundleDir, "daemon.js"),
+				valid: true,
+				missing: [],
+			});
+			rmSync(join(bundleDir, "embedding-worker.js"));
+			expect(inspectDaemonJsBundle(join(bundleDir, "daemon.js")).missing).toContain("embedding-worker.js");
+		} finally {
+			rmSync(bundleDir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not use a JavaScript path for the compiled runtime", () => {
+		const daemonPath = join(mkdtempSync(join(tmpdir(), "signet-daemon-runtime-")), "daemon.js");
+		try {
+			writeFileSync(daemonPath, "export {};");
+			expect(resolveDaemonPathForRuntime("compiled", {}, daemonPath)).toBeNull();
+		} finally {
+			rmSync(join(daemonPath, ".."), { recursive: true, force: true });
+		}
+	});
+
+	it("does not fall back when an explicit bundle path is incomplete", () => {
+		const bundleDir = mkdtempSync(join(tmpdir(), "signet-daemon-js-invalid-"));
+		try {
+			writeFileSync(join(bundleDir, "daemon.js"), "export {};");
+			expect(resolveBunJsDaemonBundle({ SIGNET_DAEMON_JS_PATH: join(bundleDir, "daemon.js") })).toEqual({
+				daemonPath: join(bundleDir, "daemon.js"),
+				valid: false,
+				missing: expect.arrayContaining(["embedding-worker.js"]),
+			});
+		} finally {
+			rmSync(bundleDir, { recursive: true, force: true });
+		}
+	});
+
+	it("selects a complete bundle from the explicit environment path", () => {
+		const bundleDir = mkdtempSync(join(tmpdir(), "signet-daemon-js-path-"));
+		try {
+			writeFileSync(join(bundleDir, "daemon.js"), "export {};");
+			for (const worker of DAEMON_JS_WORKER_FILES) writeFileSync(join(bundleDir, worker), "export {};");
+			mkdirSync(join(bundleDir, "dashboard"));
+			writeFileSync(join(bundleDir, "dashboard", "index.html"), "<!doctype html>");
+			mkdirSync(join(bundleDir, "skills"));
+			writeFileSync(join(bundleDir, "skills", "README.md"), "skills");
+			mkdirSync(join(bundleDir, "vendor"), { recursive: true });
+			writeFileSync(join(bundleDir, "vendor", "tiktoken_bg.wasm"), "wasm");
+			mkdirSync(join(bundleDir, "vendor", "node_modules", "@firecrawl", "anydoc"), { recursive: true });
+			expect(resolveBunJsDaemonBundle({ SIGNET_DAEMON_JS_PATH: join(bundleDir, "daemon.js") })?.daemonPath).toBe(
+				join(bundleDir, "daemon.js"),
+			);
+		} finally {
+			rmSync(bundleDir, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -184,6 +259,56 @@ describe("buildSystemdDaemonStartArgs", () => {
 		expect(args).toContain("--setenv=BUN_INSPECT=");
 		expect(args).toContain("--property=StandardError=append:/home/user/.agents/.daemon/logs/startup.log");
 		expect(args.slice(-2)).toEqual([process.execPath, "/opt/signet/dist/daemon.js"]);
+	});
+
+	it("propagates the selected runtime through systemd and launchd", () => {
+		const input = {
+			daemonPath: "/opt/signet/runtime/daemon-js/daemon.js",
+			runtime: "bun-js" as const,
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+		};
+
+		const args = buildSystemdDaemonStartArgs(input);
+		const plist = buildLaunchdDaemonPlist(input);
+
+		expect(args).toContain("--setenv=SIGNET_DAEMON_RUNTIME=bun-js");
+		expect(args.slice(-2)).toEqual([process.execPath, input.daemonPath]);
+		expect(plist).toMatch(/<key>SIGNET_DAEMON_RUNTIME<\/key>\s*<string>bun-js<\/string>/);
+		expect(plist).toContain(`<string>${input.daemonPath}</string>`);
+	});
+
+	it("propagates Bun-JS vendor assets through service managers", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-daemon-service-assets-"));
+		const bundleDir = join(root, "daemon", "dist");
+		const daemonPath = join(bundleDir, "daemon.js");
+		const nodePath = join(bundleDir, "vendor", "node_modules");
+		const wasmPath = join(bundleDir, "vendor", "tiktoken_bg.wasm");
+		try {
+			mkdirSync(join(nodePath, "@firecrawl", "anydoc"), { recursive: true });
+			writeFileSync(daemonPath, "export {};");
+			writeFileSync(wasmPath, "wasm");
+			const input = {
+				daemonPath,
+				runtime: "bun-js" as const,
+				agentsDir: "/home/user/.agents",
+				port: 3850,
+				host: "127.0.0.1",
+				bind: "0.0.0.0",
+				startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+			};
+			const args = buildSystemdDaemonStartArgs(input);
+			const plist = buildLaunchdDaemonPlist(input);
+			expect(args).toContain(`--setenv=NODE_PATH=${nodePath}`);
+			expect(args).toContain(`--setenv=SIGNET_TIKTOKEN_WASM_PATH=${wasmPath}`);
+			expect(plist).toContain(`<string>${nodePath}</string>`);
+			expect(plist).toContain(`<string>${wasmPath}</string>`);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("forwards the Bun inspector setting through the transient service boundary", () => {

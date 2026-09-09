@@ -1,11 +1,11 @@
-import type { ChildProcess } from "@signet/core";
+import type { ChildProcess, DaemonRuntime } from "@signet/core";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
-import { detectSchema, ensureUnifiedSchema, runMigrations } from "@signet/core";
+import { detectSchema, ensureUnifiedSchema, resolveDaemonRuntime, runMigrations } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
-import type { LogOptions, PathOptions, RestartOptions } from "../commands/shared.js";
+import type { LogOptions, PathOptions, RestartOptions, StartOptions } from "../commands/shared.js";
 import { daemonAccessLines } from "../lib/network.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
 import Database from "../sqlite.js";
@@ -16,6 +16,7 @@ interface DaemonStatus {
 	readonly pid: number | null;
 	readonly uptime: number | null;
 	readonly version: string | null;
+	readonly runtime?: string | null;
 	readonly host: string | null;
 	readonly bindHost: string | null;
 	readonly networkMode: string | null;
@@ -52,7 +53,7 @@ interface Deps {
 	readonly normalizeAgentPath: (pathValue: string) => string;
 	readonly signetLogo: () => string;
 	readonly sleep: (ms: number) => Promise<void>;
-	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
+	readonly startDaemon: (agentsDir?: string, runtime?: DaemonRuntime) => Promise<boolean>;
 	readonly stopDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly isLaunchdDaemonLoaded?: (agentsDir?: string) => Promise<boolean>;
 	readonly confirmRestartSync?: () => Promise<boolean>;
@@ -205,13 +206,26 @@ export async function showLogs(options: LogOptions, deps: Deps): Promise<void> {
 	readFileLogs(basePath, limit, options);
 }
 
-export async function doStart(options: PathOptions, deps: Deps): Promise<void> {
+export async function doStart(options: StartOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
-	const running = await deps.isDaemonRunning();
+	const runtime = readRuntime(options.runtime);
+	let running = await deps.isDaemonRunning();
+	if (runtime !== undefined && running) {
+		const status = await deps.getDaemonStatus();
+		if (status.runtime !== runtime) {
+			const stopped = await deps.stopDaemon(basePath);
+			if (!stopped) {
+				console.error(chalk.red("Failed to stop the daemon before changing runtimes"));
+				process.exit(1);
+			}
+			await deps.sleep(500);
+			running = false;
+		}
+	}
 
 	const spinner = ora("Starting daemon...").start();
-	const started = await deps.startDaemon(basePath);
+	const started = await deps.startDaemon(basePath, runtime);
 	if (started) {
 		spinner.succeed(running ? "Daemon ready" : "Daemon started");
 		const status = await deps.getDaemonStatus();
@@ -260,6 +274,7 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 export async function doRestart(options: RestartOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
+	const runtime = readRuntime(options.runtime);
 	const spinner = ora("Restarting daemon...").start();
 	const running = await deps.isDaemonRunning();
 	const stale = running ? false : await deps.hasDaemonProcess(basePath);
@@ -273,7 +288,7 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 		await deps.sleep(500);
 	}
 
-	const started = await deps.startDaemon(basePath);
+	const started = await deps.startDaemon(basePath, runtime);
 
 	if (started) {
 		spinner.succeed(running || stale ? "Daemon restarted" : "Daemon started");
@@ -311,6 +326,10 @@ export async function doPause(options: PathOptions, deps: Deps): Promise<void> {
 
 export async function doResume(options: PathOptions, deps: Deps): Promise<void> {
 	await togglePipelinePause(options, deps, false);
+}
+
+function readRuntime(value: string | undefined): DaemonRuntime | undefined {
+	return value === undefined ? undefined : resolveDaemonRuntime(value);
 }
 
 function readPath(options: PathOptions, deps: Deps): string {

@@ -95,6 +95,50 @@ function makeDeps(overrides?: Partial<Parameters<typeof doRestart>[1]>): Paramet
 }
 
 describe("daemon lifecycle recovery", () => {
+	it("passes an explicit runtime to startDaemon", async () => {
+		let selected: string | undefined;
+		const deps = makeDeps({
+			startDaemon: async (_agentsDir, runtime) => {
+				selected = runtime;
+				return true;
+			},
+		});
+
+		await doStart({ runtime: "bun-js" }, deps);
+
+		expect(selected).toBe("bun-js");
+	});
+
+	it("stops a running daemon before changing its runtime", async () => {
+		const calls: string[] = [];
+		const deps = makeDeps({
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 42,
+				uptime: 1,
+				version: "0.77.1",
+				runtime: "compiled",
+				host: "127.0.0.1",
+				bindHost: "0.0.0.0",
+				networkMode: "local",
+				extraction: null,
+			}),
+			isDaemonRunning: async () => true,
+			stopDaemon: async () => {
+				calls.push("stop");
+				return true;
+			},
+			startDaemon: async (_agentsDir, runtime) => {
+				calls.push(runtime ?? "default");
+				return true;
+			},
+		});
+
+		await doStart({ runtime: "bun-js" }, deps);
+
+		expect(calls).toEqual(["stop", "bun-js"]);
+	});
+
 	it("lets an already-running daemon reconcile its installation owner", async () => {
 		let started = false;
 		const deps = makeDeps({

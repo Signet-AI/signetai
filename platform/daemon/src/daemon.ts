@@ -16,6 +16,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
+	DAEMON_RUNTIME_ENV,
 	type AgentDefinition,
 	buildArchitectureDoc,
 	configuredRoutingTargetRefs,
@@ -178,6 +179,7 @@ import {
 	BIND_HOST,
 	CURRENT_VERSION,
 	DAEMON_DIR,
+	DAEMON_RUNTIME,
 	HOST,
 	INTERNAL_SELF_HOST,
 	LOG_DIR,
@@ -2185,6 +2187,7 @@ function buildLifecycleRecord(state: DaemonLifecycle["state"], extra: Partial<Da
 		pid: process.pid,
 		version: CURRENT_VERSION,
 		startedAt: lifecycleStartedAt,
+		...(DAEMON_RUNTIME === null ? {} : { runtime: DAEMON_RUNTIME }),
 		systemdUnit: process.env.SIGNET_DAEMON_UNIT || undefined,
 		...extra,
 	};
@@ -2327,6 +2330,15 @@ async function main() {
 		return;
 	}
 
+	if (DAEMON_RUNTIME === null) {
+		console.error(
+			`Signet cannot start: unsupported ${DAEMON_RUNTIME_ENV} value ${JSON.stringify(process.env.SIGNET_DAEMON_RUNTIME)}. Choose compiled or bun-js.`,
+		);
+		logger.shutdown(false);
+		process.exitCode = 1;
+		return;
+	}
+
 	// Validate the selected runtime configuration before acquiring the daemon
 	// lock, running migrations, opening the database, or writing lifecycle/PID
 	// state. The loader intentionally reports only file and field diagnostics;
@@ -2345,7 +2357,7 @@ async function main() {
 	mkdirSync(LOG_DIR, { recursive: true });
 	mkdirSync(dirname(MEMORY_DB), { recursive: true });
 
-	logger.info("daemon", "Signet Daemon starting");
+	logger.info("daemon", "Signet Daemon starting", { runtime: DAEMON_RUNTIME });
 	logger.info("daemon", `File logging to ${logger.logFilePath}`);
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
 	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });

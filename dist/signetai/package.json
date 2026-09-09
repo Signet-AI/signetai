@@ -12,6 +12,7 @@
     "bin/native-platforms.js",
     "bin/signet.js",
     "dist/mcp-stdio.js",
+    "runtime",
     "native-manifest.json",
     "scripts",
     "README.md",
@@ -20,7 +21,7 @@
   "scripts": {
     "// prebuild": "Release-only: rebuilds dist/mcp-stdio.js from the daemon's MCP stdio source. Runs on `bun run build:signetai` during the release pipeline, NOT on `npm install` — consumers receive whatever the publisher shipped. The npm tarball is built from a tree where this prebuild has already run.",
     "copy:scripts": "mkdir -p scripts && cp ../../scripts/install-graphiq.sh scripts/install-graphiq.sh",
-    "prebuild": "bun run copy:scripts && bun ../../scripts/build-signet-mcp.ts",
+    "prebuild": "bun run copy:scripts && bun ../../scripts/build-signet-mcp.ts && bun ../../scripts/stage-daemon-js-runtime.ts",
     "build": "node scripts/verify-wrapper.js",
     "postinstall": "node scripts/install-native.js"
   },

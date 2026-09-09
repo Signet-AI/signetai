@@ -57,6 +57,7 @@
 		"build:signetai": "cd dist/signetai && bun run build",
 		"build:native-bun": "bun scripts/build-native-bun.ts",
 		"native:manifest": "bun scripts/generate-native-manifest.ts",
+		"build:daemon-js-assets": "bun scripts/build-daemon-js-assets.ts",
 		"build:publish": "bun run build:dashboard",
 		"build:dashboard": "cd surfaces/dashboard && bun install && bun run build",
 		"build:desktop": "cd surfaces/desktop && bun run build:desktop",

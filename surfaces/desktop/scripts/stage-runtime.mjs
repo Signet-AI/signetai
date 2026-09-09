@@ -331,13 +331,7 @@ export function stageRuntime() {
 			throw new Error(`No sqlite-vec binary package is available for ${target}/${bunArch}`);
 		}
 		const dependencies = {};
-		for (const name of [
-			"@1password/sdk",
-			"@firecrawl/anydoc",
-			"@huggingface/transformers",
-			"onnxruntime-node",
-			"tiktoken",
-		]) {
+		for (const name of ["@firecrawl/anydoc", "tiktoken"]) {
 			const version = pkgVersion(daemonPkg, name);
 			if (version) dependencies[name] = version;
 		}
