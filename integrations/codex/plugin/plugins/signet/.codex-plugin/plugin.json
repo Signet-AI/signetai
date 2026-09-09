@@ -1,6 +1,6 @@
 {
 	"name": "signet",
-	"version": "0.1.0",
+	"version": "0.1.0+codex.20260908213746",
 	"description": "Connect Codex to the local Signet substrate for source-backed recall, sessions, ontology, skills, and scoped note capture.",
 	"author": {
 		"name": "Signet"
@@ -11,7 +11,6 @@
 	"keywords": ["signet", "recall", "sources", "sessions", "ontology", "codex"],
 	"skills": "./skills/",
 	"mcpServers": "./.mcp.json",
-	"hooks": "./hooks/hooks.json",
 	"interface": {
 		"displayName": "Signet",
 		"shortDescription": "Source-backed recall and continuity for Codex",

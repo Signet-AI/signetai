@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CodexConnector, buildMcpBlock, resolveCodexDesktopNode } from "./index.js";
+import { CodexConnector, buildHooksFile, buildMcpBlock, resolveCodexCli, resolveCodexDesktopNode } from "./index.js";
 
 class TempConnector extends CodexConnector {
 	constructor(private home: string) {
@@ -42,11 +42,21 @@ class NativePluginTempConnector extends TempConnector {
 	protected override installNativePlugin(codexHome: string): { success: boolean; filesWritten: readonly string[] } {
 		const installedRoot = join(codexHome, "plugins", "cache", "signet-local", "signet", "0.1.0");
 		mkdirSync(installedRoot, { recursive: true });
+		if (!readFileIfExists(this.getConfigPath()).includes('[plugins."signet@signet-local"]')) {
+			writeFileSync(
+				this.getConfigPath(),
+				`${readFileIfExists(this.getConfigPath())}\n[marketplaces.signet-local]\nsource_type = 'local'\nsource = '/tmp/signet-plugin-marketplace'\n\n[plugins."signet@signet-local"]\nenabled = true\n`,
+			);
+		}
 		return { success: true, filesWritten: [installedRoot] };
 	}
 	protected override removeNativePlugin(codexHome: string): void {
 		rmSync(join(codexHome, "plugins", "cache", "signet-local", "signet"), { recursive: true, force: true });
 	}
+}
+
+function readFileIfExists(path: string): string {
+	return existsSync(path) ? readFileSync(path, "utf-8").trimEnd() : "";
 }
 
 class NativePluginFailingTempConnector extends TempConnector {
@@ -55,6 +65,21 @@ class NativePluginFailingTempConnector extends TempConnector {
 	}
 	protected override installNativePlugin(): { success: boolean; filesWritten: readonly string[]; warning: string } {
 		return { success: false, filesWritten: [], warning: "native plugin add failed in test" };
+	}
+}
+
+class NativePluginCommandTempConnector extends TempConnector {
+	constructor(
+		home: string,
+		private codexCommand: string,
+	) {
+		super(home);
+	}
+	protected override resolveCodexCli(): string {
+		return this.codexCommand;
+	}
+	protected override supportsNativePluginInstall(): boolean {
+		return true;
 	}
 }
 
@@ -72,6 +97,12 @@ class NativePluginConfigParsingTempConnector extends TempConnector {
 		}
 		const installedRoot = join(codexHome, "plugins", "cache", "signet-local", "signet", "0.1.0");
 		mkdirSync(installedRoot, { recursive: true });
+		if (!readFileIfExists(this.getConfigPath()).includes('[plugins."signet@signet-local"]')) {
+			writeFileSync(
+				this.getConfigPath(),
+				`${readFileIfExists(this.getConfigPath())}\n[marketplaces.signet-local]\nsource_type = 'local'\nsource = '/tmp/signet-plugin-marketplace'\n\n[plugins."signet@signet-local"]\nenabled = true\n`,
+			);
+		}
 		return { success: true, filesWritten: [installedRoot] };
 	}
 }
@@ -88,6 +119,7 @@ let previousApiKey: string | undefined;
 let previousToken: string | undefined;
 let previousForceCompatHooks: string | undefined;
 let previousWrapperDir: string | undefined;
+let previousCodexHome: string | undefined;
 let previousArgvEntry: string | undefined;
 let previousExecPath: string;
 
@@ -108,6 +140,7 @@ beforeEach(() => {
 	previousToken = process.env.SIGNET_TOKEN;
 	previousForceCompatHooks = process.env.SIGNET_CODEX_FORCE_COMPAT_HOOKS;
 	previousWrapperDir = process.env.SIGNET_WRAPPER_DIR;
+	previousCodexHome = process.env.CODEX_HOME;
 	previousArgvEntry = process.argv[1];
 	previousExecPath = process.execPath;
 	Reflect.deleteProperty(process.env, "SIGNET_SESSION_START_TIMEOUT");
@@ -118,6 +151,7 @@ beforeEach(() => {
 	Reflect.deleteProperty(process.env, "SIGNET_TOKEN");
 	Reflect.deleteProperty(process.env, "SIGNET_CODEX_FORCE_COMPAT_HOOKS");
 	Reflect.deleteProperty(process.env, "SIGNET_WRAPPER_DIR");
+	Reflect.deleteProperty(process.env, "CODEX_HOME");
 	tempHome = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	codexDir = join(tempHome, ".codex");
 	configPath = join(codexDir, "config.toml");
@@ -134,6 +168,7 @@ afterEach(() => {
 	restoreEnv("SIGNET_TOKEN", previousToken);
 	restoreEnv("SIGNET_CODEX_FORCE_COMPAT_HOOKS", previousForceCompatHooks);
 	restoreEnv("SIGNET_WRAPPER_DIR", previousWrapperDir);
+	restoreEnv("CODEX_HOME", previousCodexHome);
 	if (previousArgvEntry === undefined) process.argv.splice(1, 1);
 	else process.argv[1] = previousArgvEntry;
 	process.execPath = previousExecPath;
@@ -154,6 +189,10 @@ function nativePluginConnector(): TempConnector {
 
 function failingNativePluginConnector(): TempConnector {
 	return new NativePluginFailingTempConnector(tempHome);
+}
+
+function nativePluginCommandConnector(codexCommand: string): TempConnector {
+	return new NativePluginCommandTempConnector(tempHome, codexCommand);
 }
 
 function configParsingNativePluginConnector(): TempConnector {
@@ -297,7 +336,11 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain(
 			"trusted_hash = 'sha256:8a71d58ff6a7d2c9c6b5587da1e3aba4e4ff020a198318e428ff71f7b4fab6af'",
 		);
-		expect(content.match(/enabled = true/g)?.length).toBe(3);
+		expect(content).toContain(`${prefix}pre_tool_use:0:0"]`);
+		expect(content).toContain(
+			"trusted_hash = 'sha256:0ecfffe8a9fbb8efa06ba68f59ee00d653427a37009573a9da24ff698b371c3c'",
+		);
+		expect(content.match(/enabled = true/g)?.length).toBe(4);
 	});
 
 	test("repairs disabled Signet hook state on reinstall", async () => {
@@ -439,8 +482,7 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		expect(config).toContain("[marketplaces.signet-local]");
 		expect(config).toContain('[plugins."signet@signet-local"]');
 		expect(config).toContain("enabled = true");
-		expect(config).toContain("[mcp_servers.signet]");
-		expect(config).toContain("command = 'signet-mcp'");
+		expect(config).not.toContain("[mcp_servers.signet]");
 		expect(config).not.toContain(`[hooks.state."${hooksPath}:`);
 		expect(existsSync(hooksPath)).toBe(false);
 
@@ -451,7 +493,7 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		};
 		expect(plugin.mcpServers).toBe("./.mcp.json");
 		expect(plugin.skills).toBe("./skills/");
-		expect(plugin.hooks).toBe("./hooks/hooks.json");
+		expect(plugin.hooks).toBeUndefined();
 	});
 
 	test("native plugin install remains idempotent", async () => {
@@ -464,6 +506,31 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		expect(firstConfig.match(/\[marketplaces\.signet-local\]/g)).toHaveLength(1);
 	});
 
+	test("registers the generated marketplace before installing the native plugin", async () => {
+		if (process.platform === "win32") return;
+		const logPath = join(tempHome, "codex-commands.log");
+		const fakeCodex = join(tempHome, "fake-codex");
+		writeFileSync(
+			fakeCodex,
+			[
+				"#!/bin/sh",
+				`printf '%s\\n' "$*" >> '${logPath}'`,
+				'case "$1 $2" in',
+				'  "plugin marketplace") exit 0 ;;',
+				'  "plugin add") echo "Installed plugin root: /fake/signet" ;;',
+				"esac",
+			].join("\n"),
+			"utf-8",
+		);
+		chmodSync(fakeCodex, 0o755);
+
+		await nativePluginCommandConnector(fakeCodex).install(tempHome);
+
+		const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+		expect(calls[0]).toStartWith("plugin marketplace add ");
+		expect(calls[1]).toBe("plugin add signet@signet-local");
+	});
+
 	test("native plugin install removes stale compatibility Signet hooks", async () => {
 		await connector().install(tempHome);
 		expect(existsSync(hooksPath)).toBe(true);
@@ -473,7 +540,7 @@ describe("CodexConnector.install — native plugin bundle", () => {
 
 		const config = readFileSync(configPath, "utf-8");
 		expect(config).toContain('[plugins."signet@signet-local"]');
-		expect(config).toContain("[mcp_servers.signet]");
+		expect(config).not.toContain("[mcp_servers.signet]");
 		expect(config).not.toContain(`[hooks.state."${hooksPath}:`);
 		expect(existsSync(hooksPath)).toBe(false);
 	});
@@ -489,6 +556,7 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		);
 		expect(config).toContain(`[hooks.state."${hooksPath}:user_prompt_submit:0:0"]`);
 		expect(existsSync(hooksPath)).toBe(true);
+		expect(config).not.toContain("[mcp_servers.signet]");
 	});
 
 	test("removes stale compatibility MCP before native plugin add reads Codex config", async () => {
@@ -508,11 +576,10 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		const result = await configParsingNativePluginConnector().install(tempHome);
 
 		const config = readFileSync(configPath, "utf-8");
-		expect(result.message).toBe("Codex integration installed — native plugin bundle + compatibility MCP server");
+		expect(result.message).toBe("Codex integration installed — native plugin bundle");
 		expect(result.warnings).not.toContain("codex refused stale mcp_servers.signet");
 		expect(config).toContain('[plugins."signet@signet-local"]');
-		expect(config).toContain("[mcp_servers.signet]");
-		expect(config).toContain("command = 'signet-mcp'");
+		expect(config).not.toContain("[mcp_servers.signet]");
 		expect(config).not.toContain("transport = 'sse'");
 	});
 
@@ -561,6 +628,38 @@ describe("CodexConnector.uninstall — config.toml cleanup", () => {
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).not.toContain("[mcp_servers.signet]");
 		expect(content).not.toContain("[hooks.state.");
+	});
+
+	test("removes native plugin descendant tables without touching other config", async () => {
+		writeFileSync(
+			configPath,
+			[
+				"[model]",
+				'name = "gpt-4o"',
+				"",
+				"[marketplaces.signet-local]",
+				"source_type = 'local'",
+				"",
+				'[plugins."signet@signet-local"]',
+				"enabled = true",
+				"",
+				'[plugins."signet@signet-local".metadata]',
+				"managed = true",
+				"",
+				"[history]",
+				"enabled = true",
+				"",
+			].join("\n"),
+		);
+
+		await connector().uninstall();
+
+		const content = readFileSync(configPath, "utf-8");
+		expect(content).toContain("[model]");
+		expect(content).toContain("[history]");
+		expect(content).not.toContain("[marketplaces.signet-local]");
+		expect(content).not.toContain('[plugins."signet@signet-local"]');
+		expect(content).not.toContain("managed = true");
 	});
 
 	test("preserves other sections when removing signet entry", async () => {
@@ -661,6 +760,17 @@ describe("buildMcpBlock — TOML quoting", () => {
 	test("includes args line when args are present", () => {
 		const block = buildMcpBlock({ command: "node", args: ["mcp.js", "--port", "3000"] });
 		expect(block).toContain("args = ['mcp.js', '--port', '3000']");
+	});
+
+	test("includes environment for an absolute native MCP worker", () => {
+		const block = buildMcpBlock({
+			command: "/Users/example/.local/bin/signet",
+			args: [],
+			env: { SIGNET_MCP_STDIO_WORKER: "1" },
+		});
+
+		expect(block).toContain("[mcp_servers.signet.env]");
+		expect(block).toContain("SIGNET_MCP_STDIO_WORKER = '1'");
 	});
 });
 
@@ -990,6 +1100,87 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		);
 	});
 
+	test("discovers the Codex executable bundled by ChatGPT.app", () => {
+		const appPath = join(tempHome, "Applications", "ChatGPT.app");
+		const codex = join(appPath, "Contents", "Resources", "codex");
+		mkdirSync(join(codex, ".."), { recursive: true });
+		writeFileSync(
+			codex,
+			'#!/bin/sh\nif [ "$1" = "plugin" ]; then echo plugin-help; else echo codex-cli 0.153.4; fi\n',
+			"utf-8",
+		);
+		chmodSync(codex, 0o755);
+
+		expect(resolveCodexCli([appPath])).toBe(codex);
+	});
+
+	test("discovers Linux ChatGPT resource layouts", () => {
+		const appPath = join(tempHome, "chatgpt");
+		const codex = join(appPath, "resources", "codex");
+		mkdirSync(join(codex, ".."), { recursive: true });
+		writeFileSync(codex, "codex fixture\n", "utf-8");
+
+		expect(resolveCodexCli([appPath], (path) => path === codex, "linux")).toBe(codex);
+	});
+
+	test("discovers Windows ChatGPT resource layouts and node.exe", () => {
+		const appPath = join(tempHome, "ChatGPT");
+		const codex = join(appPath, "app", "resources", "codex.exe");
+		const node = join(appPath, "resources", "runtime", "node.exe");
+		mkdirSync(join(codex, ".."), { recursive: true });
+		mkdirSync(join(node, ".."), { recursive: true });
+		writeFileSync(codex, "codex fixture\n", "utf-8");
+		writeFileSync(node, "node fixture\n", "utf-8");
+
+		expect(resolveCodexCli([appPath], (path) => path === codex, "win32")).toBe(codex);
+		expect(resolveCodexDesktopNode([appPath], (path) => path === node, "win32")).toBe(node);
+	});
+
+	test("discovers Windows Store package roots", () => {
+		const packagesRoot = join(tempHome, "Packages");
+		const codex = join(packagesRoot, "OpenAI.ChatGPT-Desktop_1.0.0", "resources", "codex.exe");
+		mkdirSync(join(codex, ".."), { recursive: true });
+		writeFileSync(codex, "codex fixture\n", "utf-8");
+
+		expect(resolveCodexCli([packagesRoot], (path) => path === codex, "win32")).toBe(codex);
+	});
+
+	test("honors CODEX_HOME for the desktop connector", async () => {
+		const configuredHome = join(tempHome, "configured-codex-home");
+		process.env.CODEX_HOME = configuredHome;
+		const c = new (class extends CodexConnector {
+			protected override supportsNativePluginInstall(): boolean {
+				return false;
+			}
+		})();
+
+		await c.install(tempHome);
+
+		expect(existsSync(join(configuredHome, "config.toml"))).toBe(true);
+		expect(existsSync(join(configuredHome, "hooks.json"))).toBe(true);
+		expect(existsSync(join(codexDir, "config.toml"))).toBe(false);
+	});
+
+	test("uses an absolute native Signet binary for hooks and MCP when no wrapper entry exists", async () => {
+		const nativeBinary = join(tempHome, "bin", "signet");
+		mkdirSync(join(nativeBinary, ".."), { recursive: true });
+		writeFileSync(nativeBinary, "native fixture\n", "utf-8");
+		chmodSync(nativeBinary, 0o755);
+		process.execPath = nativeBinary;
+		process.argv[1] = "/$bunfs/root/signet";
+
+		await connector().install(tempHome);
+
+		const hooks = readHooksJson().hooks as Record<string, Record<string, unknown>[]>;
+		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
+		expect(startHandler.command).toBe(`${nativeBinary} hook session-start -H codex --codex-json`);
+
+		const config = readFileSync(configPath, "utf-8");
+		expect(config).toContain(`command = '${nativeBinary}'`);
+		expect(config).toContain("[mcp_servers.signet.env]");
+		expect(config).toContain("SIGNET_MCP_STDIO_WORKER = '1'");
+	});
+
 	test("installs with malformed but valid hooks.json", async () => {
 		for (const hooks of [
 			{ SessionStart: "x" },
@@ -1034,6 +1225,38 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(commands.some((command) => command === "signet hook session-start -H codex --codex-json")).toBe(true);
 	});
 
+	test("preserves third-party handlers in a mixed matcher group", async () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify({
+				hooks: {
+					SessionStart: [
+						{
+							matcher: "*",
+							hooks: [
+								{ type: "command", command: "third-party-reviewer --session", timeout: 4 },
+								{ type: "command", command: "signet hook session-start -H codex", timeout: 4 },
+							],
+						},
+					],
+				},
+			}),
+		);
+
+		await connector().install(tempHome);
+		const installed = readHooksJson().hooks as Record<string, Record<string, unknown>[]>;
+		const handlers = installed.SessionStart.flatMap((group) => group.hooks as Record<string, unknown>[]);
+		expect(handlers.some((handler) => handler.command === "third-party-reviewer --session")).toBe(true);
+		expect(handlers.filter((handler) => String(handler.command).includes("signet hook session-start")).length).toBe(1);
+
+		await connector().uninstall();
+		const remaining = readHooksJson().hooks as Record<string, Record<string, unknown>[]>;
+		expect(remaining.SessionStart).toHaveLength(1);
+		expect((remaining.SessionStart[0].hooks as Record<string, unknown>[])[0].command).toBe(
+			"third-party-reviewer --session",
+		);
+	});
+
 	test("does not use array-form command (regression: issue #481)", async () => {
 		await connector().install(tempHome);
 		const json = readHooksJson();
@@ -1069,6 +1292,20 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		const bundled = JSON.parse(readFileSync(bundledPath, "utf-8"));
 
 		expect(codexHookContractErrors(bundled)).toEqual([]);
+	});
+
+	test("uses a quote-safe Windows wrapper command when one is available", () => {
+		const hooks = buildHooksFile(
+			["C:\\Program Files\\Signet\\signet.exe"],
+			"https://signet.example.test",
+			"C:\\Users\\Example User\\.codex\\.tmp\\signet-codex-hook-0123456789abcdef.cmd",
+			"win32",
+		) as unknown as { hooks: Record<string, Array<{ hooks: Array<Record<string, unknown>> }>> };
+		const command = hooks.hooks.SessionStart[0]?.hooks[0]?.commandWindows;
+		expect(command).toBe(
+			'"C:\\Users\\Example User\\.codex\\.tmp\\signet-codex-hook-0123456789abcdef.cmd" hook session-start -H codex --codex-json',
+		);
+		expect(command).not.toContain('set "');
 	});
 
 	test("idempotent: re-running install produces identical hooks.json", async () => {

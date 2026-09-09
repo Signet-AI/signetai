@@ -6,6 +6,7 @@
 					{
 						"type": "command",
 						"command": "signet hook session-start -H codex --codex-json",
+						"commandWindows": "signet.exe hook session-start -H codex --codex-json",
 						"timeout": 20
 					}
 				]
@@ -17,7 +18,20 @@
 					{
 						"type": "command",
 						"command": "signet hook user-prompt-submit -H codex --codex-json",
+						"commandWindows": "signet.exe hook user-prompt-submit -H codex --codex-json",
 						"timeout": 7
+					}
+				]
+			}
+		],
+		"PreToolUse": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "signet hook notifications -H codex --hook PreToolUse --codex-json",
+						"commandWindows": "signet.exe hook notifications -H codex --hook PreToolUse --codex-json",
+						"timeout": 5
 					}
 				]
 			}
@@ -28,6 +42,7 @@
 					{
 						"type": "command",
 						"command": "signet hook session-end -H codex",
+						"commandWindows": "signet.exe hook session-end -H codex",
 						"timeout": 30
 					}
 				]
