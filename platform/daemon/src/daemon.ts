@@ -157,6 +157,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
 import { dbOwnerTransaction } from "./db-owner-runtime";
+import { startDeferredRuntimeAfterDreaming } from "./dreaming-startup";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobsAsync } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
@@ -1803,66 +1804,71 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	// boot before any route is attempted (#1005). Never blocks daemon startup.
 	void router.validateConfigReferences();
 
-	// Admit Dreaming before optional startup work. Legacy-job retirement and
-	// embedding resolution both use the DB-owner queue and can reject the
-	// deferred runtime before the worker would otherwise be created.
-	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
-		try {
-			dreamingWorkerHandle = startDreamingWorker(
-				getDbAccessor(),
-				memoryCfg.dreaming,
-				AGENTS_DIR,
-				defaultAgentId,
-				{
-					acpxMcp: {
-						daemonUrl: `http://${INTERNAL_SELF_HOST}:${PORT}`,
-						authorizationTokenForAgent: (agentId) =>
-							authSecret
-								? createToken(
-										authSecret,
-										{ sub: `dreaming:${agentId}`, role: "agent", scope: { agent: agentId } },
-										Math.max(900, Math.ceil(memoryCfg.dreaming.timeout / 1000) + 60),
-									)
-								: undefined,
-					},
-					evidenceRetry: {
-						cooldownMs: memoryCfg.pipelineV2.repair.requeueCooldownMs,
-						hourlyBudget: memoryCfg.pipelineV2.repair.requeueHourlyBudget,
-						maxAttempts: 3,
-					},
-					ownerMaintenance: dbOwnerMaintenanceHandle ?? undefined,
-				},
-				graphWriteCaps(memoryCfg),
+	const activeEmbeddingCfg = await startDeferredRuntimeAfterDreaming(
+		// Admit Dreaming before optional startup work. Legacy-job retirement and
+		// embedding resolution both use the DB-owner queue and can reject the
+		// deferred runtime before the worker would otherwise be created.
+		() => {
+			if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
+				try {
+					dreamingWorkerHandle = startDreamingWorker(
+						getDbAccessor(),
+						memoryCfg.dreaming,
+						AGENTS_DIR,
+						defaultAgentId,
+						{
+							acpxMcp: {
+								daemonUrl: `http://${INTERNAL_SELF_HOST}:${PORT}`,
+								authorizationTokenForAgent: (agentId) =>
+									authSecret
+										? createToken(
+												authSecret,
+												{ sub: `dreaming:${agentId}`, role: "agent", scope: { agent: agentId } },
+												Math.max(900, Math.ceil(memoryCfg.dreaming.timeout / 1000) + 60),
+											)
+										: undefined,
+							},
+							evidenceRetry: {
+								cooldownMs: memoryCfg.pipelineV2.repair.requeueCooldownMs,
+								hourlyBudget: memoryCfg.pipelineV2.repair.requeueHourlyBudget,
+								maxAttempts: 3,
+							},
+							ownerMaintenance: dbOwnerMaintenanceHandle ?? undefined,
+						},
+						graphWriteCaps(memoryCfg),
+					);
+					setDreamingWorker(dreamingWorkerHandle);
+				} catch (err) {
+					logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+		},
+		async () => {
+			logger.info("dreaming", "Dreaming owns all semantic writes; legacy extraction is retired");
+			// Terminalize every pre-existing legacy `extract` job. The source keeps its
+			// provenance and memory kind, so only already-episodic evidence remains
+			// reachable by the Dreaming cursor; derived rows are never reclassified.
+			// Leased rows are terminalized too because no legacy worker remains. Runs on
+			// cold boot and live-reload config transitions (#913).
+			if (!pipelinePaused) {
+				const deadLettered = await retireLegacyExtractionJobsAsync({
+					reason: "Dreaming cutover: legacy extraction worker not started",
+				});
+				if (deadLettered > 0) {
+					logger.info("dreaming", "Retired legacy extraction jobs", {
+						count: deadLettered,
+					});
+				}
+			}
+
+			return resolveActiveEmbeddingConfigThroughOwner(
+				daemonDbOwner(),
+				memoryCfg.embedding,
+				"startup.resolve-active-embedding",
 			);
-			setDreamingWorker(dreamingWorkerHandle);
-		} catch (err) {
-			logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}
-
-	logger.info("dreaming", "Dreaming owns all semantic writes; legacy extraction is retired");
-	// Terminalize every pre-existing legacy `extract` job. The source keeps its
-	// provenance and memory kind, so only already-episodic evidence remains
-	// reachable by the Dreaming cursor; derived rows are never reclassified.
-	// Leased rows are terminalized too because no legacy worker remains. Runs on
-	// cold boot and live-reload config transitions (#913).
-	if (!pipelinePaused) {
-		const deadLettered = await retireLegacyExtractionJobsAsync({
-			reason: "Dreaming cutover: legacy extraction worker not started",
-		});
-		if (deadLettered > 0) {
-			logger.info("dreaming", "Retired legacy extraction jobs", {
-				count: deadLettered,
-			});
-		}
-	}
-
-	const activeEmbeddingCfg = await resolveActiveEmbeddingConfigThroughOwner(
-		daemonDbOwner(),
-		memoryCfg.embedding,
-		"startup.resolve-active-embedding",
+		},
 	);
 	configureLlmConcurrency(memoryCfg.pipelineV2.worker.maxLlmConcurrency);
 	logger.info("config", "Resolved embedding config", {
