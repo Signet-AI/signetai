@@ -20,7 +20,11 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveWorkspaceSourceRepoPath, syncWorkspaceSourceRepo } from "@signet/core";
+import {
+	resolveWorkspaceSourceRepoPath,
+	syncWorkspaceSourceRepo,
+	type WorkspaceSourceRepoSyncResult,
+} from "@signet/core";
 import { resolveAgentsDir } from "../lib/workspace.js";
 
 export interface DesktopCommandOptions {
@@ -35,6 +39,8 @@ export interface DesktopInstallOptions extends DesktopCommandOptions {
 export interface DesktopBuildResult {
 	readonly repo: string;
 	readonly releaseDir: string;
+	readonly localChanges?: "none" | "generated-only" | "left-in-place" | "stashed";
+	readonly stashRef?: string;
 }
 
 export interface DesktopLinuxInstallResult extends DesktopBuildResult {
@@ -81,6 +87,11 @@ type CommandRunner = (
 	opts: { readonly cwd: string; readonly env: NodeJS.ProcessEnv },
 ) => CommandResult;
 
+interface PreparedDesktopSourceCheckout {
+	readonly repo: string;
+	readonly sourceSync?: WorkspaceSourceRepoSyncResult;
+}
+
 const defaultRunner: CommandRunner = (cmd, args, opts) =>
 	spawnSync(cmd, [...args], {
 		cwd: opts.cwd,
@@ -124,61 +135,115 @@ function desktopSourceCheckoutCandidates(ctx: Pick<DesktopCommandContext, "cwd" 
 	});
 }
 
-function prepareDesktopSourceCheckout(options: DesktopCommandOptions, ctx: DesktopCommandContext): string {
+function prepareDesktopSourceCheckout(
+	options: DesktopCommandOptions,
+	ctx: DesktopCommandContext,
+): PreparedDesktopSourceCheckout {
 	const env = ctx.env ?? process.env;
 	const explicit = options.repo?.trim() || env.SIGNET_SOURCE_DIR?.trim();
-	if (explicit || options.skipSourceSync) return resolveDesktopSourceCheckout(options.repo, ctx);
+	if (explicit || options.skipSourceSync) {
+		return { repo: resolveDesktopSourceCheckout(options.repo, ctx) };
+	}
 
 	const workspace = resolveAgentsDir(env).path;
-	const sync = (ctx.syncWorkspaceSourceRepo ?? syncWorkspaceSourceRepo)(workspace, { cloneIfMissing: true });
+	const sync = (ctx.syncWorkspaceSourceRepo ?? syncWorkspaceSourceRepo)(workspace, {
+		cloneIfMissing: true,
+		localChanges: "stash",
+	});
 	if (!["cloned", "pulled", "current"].includes(sync.status)) {
-		throw new Error(`Could not update Signet source checkout before desktop build: ${sync.message}`);
+		throw new Error(sourceSyncFailureMessage(sync));
 	}
-	return sync.path;
+	return { repo: sync.path, sourceSync: sync };
 }
 
 export function buildDesktopFromSource(
 	options: DesktopCommandOptions = {},
 	ctx: DesktopCommandContext = {},
 ): DesktopBuildResult {
-	const repo = prepareDesktopSourceCheckout(options, ctx);
+	const prepared = prepareDesktopSourceCheckout(options, ctx);
+	try {
+		buildDesktopAtRepo(prepared.repo, ctx);
+	} catch (error) {
+		throw sourceSyncFailure(error, prepared);
+	}
+
+	return withSourceSyncMetadata(
+		{ repo: prepared.repo, releaseDir: desktopReleaseDir(prepared.repo) },
+		prepared.sourceSync,
+	);
+}
+
+function buildDesktopAtRepo(repo: string, ctx: DesktopCommandContext): void {
 	const runner = ctx.runner ?? defaultRunner;
 	const env = ctx.env ?? process.env;
 
 	runChecked(runner, "bun", ["install"], repo, env);
 	runChecked(runner, "bun", ["run", "build:desktop"], repo, env);
-
-	return { repo, releaseDir: desktopReleaseDir(repo) };
 }
 
 export function installDesktopFromSource(
 	options: DesktopInstallOptions = {},
 	ctx: DesktopCommandContext = {},
 ): DesktopInstallResult {
-	const repo = options.skipBuild
-		? resolveDesktopSourceCheckout(options.repo, ctx)
+	const prepared = options.skipBuild
+		? { repo: resolveDesktopSourceCheckout(options.repo, ctx) }
 		: prepareDesktopSourceCheckout(options, ctx);
 	const workspace = resolveAgentsDir(ctx.env ?? process.env).path;
-	if (!options.skipBuild) {
-		buildDesktopFromSource({ repo, skipSourceSync: true }, ctx);
-	}
+	try {
+		if (!options.skipBuild) {
+			buildDesktopAtRepo(prepared.repo, ctx);
+		}
 
-	const platform = ctx.platform ?? process.platform;
-	const home = ctx.home ?? homedir();
-	if (platform === "darwin") {
-		return installMacDesktopApp(repo, home, workspace);
-	}
-	if (platform === "win32") {
-		const localAppData = ctx.env?.LOCALAPPDATA?.trim() || join(home, "AppData", "Local");
-		return installWindowsDesktopApp(repo, home, workspace, localAppData);
-	}
-	if (platform !== "linux") {
-		throw new Error(
-			`signet desktop install supports macOS, Windows, and Linux installs. Build artifacts are in ${desktopReleaseDir(repo)}.`,
-		);
-	}
+		const platform = ctx.platform ?? process.platform;
+		const home = ctx.home ?? homedir();
+		if (platform === "darwin") {
+			return withSourceSyncMetadata(installMacDesktopApp(prepared.repo, home, workspace), prepared.sourceSync);
+		}
+		if (platform === "win32") {
+			const localAppData = ctx.env?.LOCALAPPDATA?.trim() || join(home, "AppData", "Local");
+			return withSourceSyncMetadata(
+				installWindowsDesktopApp(prepared.repo, home, workspace, localAppData),
+				prepared.sourceSync,
+			);
+		}
+		if (platform !== "linux") {
+			throw new Error(
+				`signet desktop install supports macOS, Windows, and Linux installs. Build artifacts are in ${desktopReleaseDir(prepared.repo)}.`,
+			);
+		}
 
-	return installLinuxDesktopApp(repo, home, workspace);
+		return withSourceSyncMetadata(installLinuxDesktopApp(prepared.repo, home, workspace), prepared.sourceSync);
+	} catch (error) {
+		throw sourceSyncFailure(error, prepared);
+	}
+}
+
+function withSourceSyncMetadata<T extends DesktopBuildResult>(
+	result: T,
+	sourceSync: WorkspaceSourceRepoSyncResult | undefined,
+): T {
+	if (!sourceSync?.localChanges || sourceSync.localChanges === "none") return result;
+	return {
+		...result,
+		localChanges: sourceSync.localChanges,
+		...(sourceSync.stashRef ? { stashRef: sourceSync.stashRef } : {}),
+	};
+}
+
+function sourceSyncFailureMessage(sync: WorkspaceSourceRepoSyncResult): string {
+	const recovery = sync.stashRef ? `\n${sourceChangesRecoveryMessage(sync.path, sync.stashRef)}` : "";
+	return `Could not update Signet source checkout before desktop build: ${sync.message}${recovery}`;
+}
+
+function sourceSyncFailure(error: unknown, prepared: PreparedDesktopSourceCheckout): Error {
+	const original = error instanceof Error ? error : new Error(String(error));
+	const stashRef = prepared.sourceSync?.stashRef;
+	if (!stashRef) return original;
+	return new Error(`${original.message}\n${sourceChangesRecoveryMessage(prepared.repo, stashRef)}`);
+}
+
+function sourceChangesRecoveryMessage(repo: string, stashRef: string): string {
+	return `Local source changes were preserved in stash ${stashRef}. Restore with: git -C "${repo}" stash apply ${stashRef}`;
 }
 
 const MAC_APP_MARKER = "ai.signet.app";

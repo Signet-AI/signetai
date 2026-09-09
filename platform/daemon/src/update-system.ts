@@ -6,6 +6,7 @@ import {
 	type SignetInstallMethod,
 	type SignetInstallationReport,
 	type SignetUpdateTarget,
+	type WorkspaceSourceRepoSyncOptions,
 	type WorkspaceSourceRepoSyncResult,
 	detectSignetInstallations,
 	parseSimpleYaml,
@@ -494,7 +495,10 @@ export function normalizeTargetVersion(targetVersion: string | undefined): strin
 }
 
 interface FinalizeSuccessfulUpdateDeps {
-	syncWorkspaceSourceRepoAsync?: (workspaceDir: string) => Promise<WorkspaceSourceRepoSyncResult>;
+	syncWorkspaceSourceRepoAsync?: (
+		workspaceDir: string,
+		options?: WorkspaceSourceRepoSyncOptions,
+	) => Promise<WorkspaceSourceRepoSyncResult>;
 	updateDesktopInstallAfterUpdate?: (
 		repoSync: WorkspaceSourceRepoSyncResult,
 		installedVersion: string,
@@ -718,7 +722,7 @@ export async function finalizeSuccessfulUpdateInstall(
 	stdout: string,
 	metadata: SuccessfulUpdateMetadata,
 	deps: FinalizeSuccessfulUpdateDeps = {
-		syncWorkspaceSourceRepoAsync: (workspaceDir) => syncWorkspaceSourceRepoAsync(workspaceDir),
+		syncWorkspaceSourceRepoAsync: (workspaceDir, options) => syncWorkspaceSourceRepoAsync(workspaceDir, options),
 		updateDesktopInstallAfterUpdate: (repoSync, version, activeExecutablePath) =>
 			updateDesktopInstallAfterUpdate(repoSync, version, {
 				signetCliPath: activeExecutablePath,
@@ -732,8 +736,9 @@ export async function finalizeSuccessfulUpdateInstall(
 	let repoSync: WorkspaceSourceRepoSyncResult;
 	try {
 		repoSync = await (
-			deps.syncWorkspaceSourceRepoAsync ?? ((workspaceDir) => syncWorkspaceSourceRepoAsync(workspaceDir))
-		)(agentsDir);
+			deps.syncWorkspaceSourceRepoAsync ??
+			((workspaceDir, options) => syncWorkspaceSourceRepoAsync(workspaceDir, options))
+		)(agentsDir, { localChanges: "stash" });
 	} catch (error) {
 		repoSync = {
 			status: "error",
@@ -781,9 +786,10 @@ export async function finalizeSuccessfulUpdateInstall(
 
 	updateLogger.info("system", "Update installed successfully");
 	deps.onUpgraded?.(currentVersion, installedVersion);
+	const sourceChangesRecovery = repoSync.stashRef ? sourceChangesRecoveryMessage(repoSync) : "";
 	return {
 		success: true,
-		message: "Update installed. Restart daemon to apply.",
+		message: `Update installed. Restart daemon to apply.${sourceChangesRecovery}`,
 		output: stdout,
 		installedVersion,
 		restartRequired: true,
@@ -793,6 +799,11 @@ export async function finalizeSuccessfulUpdateInstall(
 		observedVersion: installedVersion,
 		desktopUpdate,
 	};
+}
+
+function sourceChangesRecoveryMessage(repoSync: WorkspaceSourceRepoSyncResult): string {
+	if (!repoSync.stashRef) return "";
+	return `\nLocal source changes were preserved in stash ${repoSync.stashRef}. Restore with: git -C "${repoSync.path}" stash apply ${repoSync.stashRef}`;
 }
 
 export async function runUpdate(targetVersion?: string, deps: RunUpdateDeps = {}): Promise<UpdateRunResult> {
