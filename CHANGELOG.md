@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-09
+- Bug fixes: make episodic artifact indexing self-healing; index memory_artifacts by source_sha256 for the backlog probe; require maintenance before admission; restore maintenance before admission; cancel stale cache work on stop; keep worker available at startup.
+- Refactoring: dedupe setup/cache code.
+
 ### 2026-09-08
 - Bug fixes: route OpenCode Pi calls; reuse shared recall accessor; enumerate macOS transcript directories by fd; use descriptor-relative macOS transcript paths; close migration schema probes; retry transcript upload finalization; make transcript uploads resilient at scale; support resumable transcript imports on Windows; retain Windows rollback backup until next install; isolate deferred Windows cleanup process; finish Windows native update replacement; simplify portable purge; bounded deletes portable to SQLite without DELETE LIMIT.
 
@@ -32,10 +36,25 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-09-03
 - Bug fixes: repair native health fixture; avoid embedding conflict starvation; enforce scoped embedding repair; scope legacy embedding repairs.
 
-### 2026-09-02
-- Bug fixes: keep owner protocol pure.
-
 ## Release Ledger
+
+## [0.221.11] - 2026-09-09
+
+Release summary: 6 bug fixes and 1 refactor.
+Tag range: `v0.221.10..v0.221.11`.
+
+### Bug Fixes
+
+- **dreaming**: make episodic artifact indexing self-healing
+- **dreaming**: index memory_artifacts by source_sha256 for the backlog probe
+- **dreaming**: require maintenance before admission
+- **dreaming**: restore maintenance before admission
+- **dreaming**: cancel stale cache work on stop
+- **dreaming**: keep worker available at startup
+
+### Refactoring
+
+- **dreaming**: dedupe setup/cache code
 
 ## [0.221.10] - 2026-09-08
 
