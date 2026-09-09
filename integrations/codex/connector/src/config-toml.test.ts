@@ -552,6 +552,41 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		expect(calls[1]).toBe("plugin add signet@signet-local");
 	});
 
+	test("invokes Windows Codex command shims through cmd.exe", async () => {
+		if (process.platform !== "win32") return;
+		for (const extension of [".cmd", ".bat"]) {
+			const logPath = join(tempHome, `codex commands${extension}.log`);
+			const fakeCodex = join(tempHome, `fake Codex${extension}`);
+			writeFileSync(
+				fakeCodex,
+				[
+					"@echo off",
+					`set "LOG=${logPath}"`,
+					'>> "%LOG%" echo %*',
+					'if /I "%1 %2 %3"=="plugin marketplace add" exit /b 0',
+					'if /I "%1 %2"=="plugin add" echo Installed plugin root: C:\\fake\\signet',
+					"exit /b 0",
+					"",
+				].join("\r\n"),
+				"utf-8",
+			);
+
+			const connector = nativePluginCommandConnector(fakeCodex);
+			const result = await connector.install(tempHome);
+			await connector.uninstall();
+
+			expect(result.message).toBe("Codex integration installed — native plugin bundle");
+			const calls = readFileSync(logPath, "utf-8")
+				.trim()
+				.split(/\r?\n/)
+				.map((call) => call.replaceAll('"', ""));
+			expect(calls.some((call) => call.startsWith("plugin marketplace add "))).toBe(true);
+			expect(calls).toContain("plugin add signet@signet-local");
+			expect(calls).toContain("plugin remove signet@signet-local");
+			expect(calls).toContain("plugin marketplace remove signet-local");
+		}
+	});
+
 	test("native plugin install removes stale compatibility Signet hooks", async () => {
 		await connector().install(tempHome);
 		expect(existsSync(hooksPath)).toBe(true);
@@ -1183,9 +1218,13 @@ describe("CodexConnector.install — hooks.json schema", () => {
 	test("discovers Windows Store package roots", () => {
 		const packagesRoot = join(tempHome, "Packages");
 		const codex = join(packagesRoot, "OpenAI.ChatGPT-Desktop_1.0.0", "resources", "codex.exe");
+		const unrelated = join(packagesRoot, "Acme.Codex_1.0.0", "resources", "codex.exe");
 		mkdirSync(join(codex, ".."), { recursive: true });
+		mkdirSync(join(unrelated, ".."), { recursive: true });
 		writeFileSync(codex, "codex fixture\n", "utf-8");
+		writeFileSync(unrelated, "unrelated fixture\n", "utf-8");
 
+		expect(resolveCodexCli([packagesRoot], (path) => path === unrelated, "win32")).toBeNull();
 		expect(resolveCodexCli([packagesRoot], (path) => path === codex, "win32")).toBe(codex);
 	});
 

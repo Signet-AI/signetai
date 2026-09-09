@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
+	opendirSync,
 	readFileSync,
 	readdirSync,
 	rmSync,
@@ -169,9 +170,35 @@ function resolveSignetMcp(runtime: string | null = null): SignetMcpConfig {
 }
 
 const CODEX_RUNTIME_SCAN_DEPTH = 8;
+const CODEX_RUNTIME_SCAN_ENTRY_LIMIT = 4_096;
+const CODEX_PACKAGE_ROOT_SCAN_LIMIT = 4_096;
+const CODEX_APP_PATH_LIMIT = 32;
 
 function uniquePaths(paths: readonly (string | undefined)[]): string[] {
 	return [...new Set(paths.filter((path): path is string => Boolean(path)))];
+}
+
+function readBoundedDirectoryEntries(root: string, limit: number): Dirent[] {
+	if (limit <= 0) return [];
+	let directory: ReturnType<typeof opendirSync> | undefined;
+	const entries: Dirent[] = [];
+	try {
+		directory = opendirSync(root);
+		while (entries.length < limit) {
+			const entry = directory.readSync();
+			if (!entry) break;
+			entries.push(entry);
+		}
+	} catch {
+		return [];
+	} finally {
+		try {
+			directory?.closeSync();
+		} catch {
+			// Ignore directories that disappear or become inaccessible during the scan.
+		}
+	}
+	return entries;
 }
 
 let cachedWindowsAppxInstallRoots: string[] | undefined;
@@ -192,7 +219,10 @@ function resolveWindowsAppxInstallRoots(): string[] {
 			{ encoding: "utf-8", timeout: 5_000 },
 		);
 		if (result.status !== 0) return (cachedWindowsAppxInstallRoots = []);
-		return (cachedWindowsAppxInstallRoots = uniquePaths(result.stdout.split(/\r?\n/).map((path) => path.trim())));
+		return (cachedWindowsAppxInstallRoots = uniquePaths(result.stdout.split(/\r?\n/).map((path) => path.trim())).slice(
+			0,
+			CODEX_APP_PATH_LIMIT,
+		));
 	} catch {
 		return (cachedWindowsAppxInstallRoots = []);
 	}
@@ -242,52 +272,58 @@ function defaultCodexDesktopAppPaths(platform: NodeJS.Platform = process.platfor
 }
 
 function codexDesktopResourceRoots(appPath: string, platform: NodeJS.Platform): string[] {
+	const isWindowsPackageParent = platform === "win32" && /[\\/]((?:windowsapps)|(?:packages))$/i.test(appPath);
 	const roots =
 		platform === "darwin"
 			? [join(appPath, "Contents", "Resources")]
-			: [
-					join(appPath, "resources"),
-					join(appPath, "app"),
-					join(appPath, "app", "resources"),
-					join(appPath, "Contents", "Resources"),
-					appPath,
-				];
-	if (platform === "win32" && /[\\/]((?:windowsapps)|(?:packages))$/i.test(appPath)) {
-		try {
-			for (const entry of readdirSync(appPath, { withFileTypes: true })) {
-				if (entry.isDirectory() && /^OpenAI\.(?:Codex|ChatGPT)(?:[-_.]|$)/i.test(entry.name)) {
-					const packageRoot = join(appPath, entry.name);
-					roots.push(
-						packageRoot,
-						join(packageRoot, "resources"),
-						join(packageRoot, "app", "resources"),
-						join(packageRoot, "Contents", "Resources"),
-					);
-				}
+			: isWindowsPackageParent
+				? []
+				: [
+						join(appPath, "resources"),
+						join(appPath, "app"),
+						join(appPath, "app", "resources"),
+						join(appPath, "Contents", "Resources"),
+						appPath,
+					];
+	if (isWindowsPackageParent) {
+		for (const entry of readBoundedDirectoryEntries(appPath, CODEX_PACKAGE_ROOT_SCAN_LIMIT)) {
+			if (entry.isDirectory() && /^OpenAI\.(?:Codex|ChatGPT)(?:[-_.]|$)/i.test(entry.name)) {
+				const packageRoot = join(appPath, entry.name);
+				roots.push(
+					packageRoot,
+					join(packageRoot, "resources"),
+					join(packageRoot, "app"),
+					join(packageRoot, "app", "resources"),
+					join(packageRoot, "Contents", "Resources"),
+				);
 			}
-		} catch {
-			// WindowsApps is commonly access-restricted; PATH and explicit overrides remain available.
 		}
 	}
 	return uniquePaths(roots);
 }
 
-function codexDesktopExecutableCandidates(root: string, executableNames: ReadonlySet<string>, depth = 0): string[] {
-	if (depth > CODEX_RUNTIME_SCAN_DEPTH || !existsSync(root)) return [];
+interface RuntimeScanBudget {
+	remaining: number;
+}
+
+function codexDesktopExecutableCandidates(
+	root: string,
+	executableNames: ReadonlySet<string>,
+	depth = 0,
+	budget: RuntimeScanBudget = { remaining: CODEX_RUNTIME_SCAN_ENTRY_LIMIT },
+): string[] {
+	if (depth > CODEX_RUNTIME_SCAN_DEPTH || budget.remaining <= 0 || !existsSync(root)) return [];
 	const candidates: string[] = [];
-	let entries: Dirent[] = [];
-	try {
-		entries = readdirSync(root, { withFileTypes: true });
-	} catch {
-		return [];
-	}
+	const entries = readBoundedDirectoryEntries(root, budget.remaining);
 	for (const entry of entries) {
+		if (budget.remaining <= 0) break;
+		budget.remaining -= 1;
 		const path = join(root, entry.name);
 		if ((entry.isFile() || entry.isSymbolicLink()) && executableNames.has(entry.name.toLowerCase()))
 			candidates.push(path);
 		try {
 			if (!statSync(path).isDirectory()) continue;
-			candidates.push(...codexDesktopExecutableCandidates(path, executableNames, depth + 1));
+			candidates.push(...codexDesktopExecutableCandidates(path, executableNames, depth + 1, budget));
 		} catch {
 			// Ignore broken symlinks and files that disappear while scanning.
 		}
@@ -295,9 +331,14 @@ function codexDesktopExecutableCandidates(root: string, executableNames: Readonl
 	return candidates;
 }
 
-function codexDesktopNodeCandidates(root: string, depth = 0, platform: NodeJS.Platform = process.platform): string[] {
+function codexDesktopNodeCandidates(
+	root: string,
+	depth = 0,
+	platform: NodeJS.Platform = process.platform,
+	budget: RuntimeScanBudget = { remaining: CODEX_RUNTIME_SCAN_ENTRY_LIMIT },
+): string[] {
 	const nodeNames = platform === "win32" ? new Set(["node", "node.exe"]) : new Set(["node"]);
-	return codexDesktopExecutableCandidates(root, nodeNames, depth);
+	return codexDesktopExecutableCandidates(root, nodeNames, depth, budget);
 }
 
 function isUsableNodeRuntime(path: string): boolean {
@@ -317,8 +358,9 @@ export function resolveCodexDesktopNode(
 ): string | null {
 	const seen = new Set<string>();
 	for (const appPath of appPaths) {
+		const budget: RuntimeScanBudget = { remaining: CODEX_RUNTIME_SCAN_ENTRY_LIMIT };
 		const candidates = codexDesktopResourceRoots(appPath, platform).flatMap((root) =>
-			codexDesktopNodeCandidates(root, 0, platform),
+			codexDesktopNodeCandidates(root, 0, platform, budget),
 		);
 		for (const candidate of candidates) {
 			if (seen.has(candidate)) continue;
@@ -332,10 +374,11 @@ export function resolveCodexDesktopNode(
 function codexDesktopCliCandidates(appPath: string, platform: NodeJS.Platform = process.platform): string[] {
 	const executableNames = platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"];
 	const names = new Set(executableNames);
+	const budget: RuntimeScanBudget = { remaining: CODEX_RUNTIME_SCAN_ENTRY_LIMIT };
 	return uniquePaths(
 		codexDesktopResourceRoots(appPath, platform).flatMap((root) => [
 			...executableNames.flatMap((name) => [join(root, name), join(root, "bin", name)]),
-			...codexDesktopExecutableCandidates(root, names),
+			...codexDesktopExecutableCandidates(root, names, 0, budget),
 		]),
 	);
 }
@@ -353,10 +396,11 @@ function pathExecutableCandidates(command: string, platform: NodeJS.Platform = p
 function isUsableCodexCli(path: string, platform: NodeJS.Platform = process.platform): boolean {
 	if (!isExistingFile(path)) return false;
 	try {
-		const result = spawnSync(path, ["plugin", "--help"], {
+		const invocation = codexCommandInvocation(path, ["plugin", "--help"], platform);
+		const result = spawnSync(invocation.command, invocation.args, {
 			encoding: "utf-8",
 			timeout: 5_000,
-			shell: platform === "win32" && /\.(?:cmd|bat)$/i.test(path),
+			env: invocation.env,
 		});
 		return result.status === 0 && `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().length > 0;
 	} catch {
@@ -656,6 +700,47 @@ function windowsBatchArg(value: string): string {
 
 function windowsBatchEntrypoint(value: string): string {
 	return /\.(?:cmd|bat)$/i.test(value) ? "call " : "";
+}
+
+function windowsCmdEnvironmentValue(value: string): string {
+	if (value.includes('"')) throw new Error("Windows command arguments cannot contain double quotes");
+	return `"${value}"`;
+}
+
+interface CodexCommandInvocation {
+	readonly command: string;
+	readonly args: string[];
+	readonly env: NodeJS.ProcessEnv;
+}
+
+function codexCommandInvocation(
+	command: string,
+	args: readonly string[],
+	platform: NodeJS.Platform = process.platform,
+	environment: NodeJS.ProcessEnv = process.env,
+): CodexCommandInvocation {
+	if (platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+		// Keep user-controlled paths and arguments out of cmd.exe's command string.
+		// The quoted environment values survive cmd.exe expansion without Node's
+		// Windows argument quoting turning embedded quotes into backslashes.
+		const commandVariable = "SIGNET_CODEX_SHIM_COMMAND";
+		const env: NodeJS.ProcessEnv = {
+			...environment,
+			[commandVariable]: windowsCmdEnvironmentValue(command),
+		};
+		const invocationArgs = ["/d", "/v:off", "/s", "/c", `%SIGNET_CODEX_SHIM_COMMAND%`];
+		for (const [index, arg] of args.entries()) {
+			const argumentVariable = `SIGNET_CODEX_SHIM_ARG_${index}`;
+			env[argumentVariable] = windowsCmdEnvironmentValue(arg);
+			invocationArgs.push(`%${argumentVariable}%`);
+		}
+		return {
+			command: "cmd.exe",
+			args: invocationArgs,
+			env,
+		};
+	}
+	return { command, args: [...args], env: environment };
 }
 
 function readAuthTokenEnv(): string | undefined {
@@ -1259,11 +1344,12 @@ export class CodexConnector extends BaseConnector {
 		const codex = this.resolveCodexCli();
 		if (!codex) return false;
 		try {
-			const result = spawnSync(codex, ["plugin", "--help"], {
+			const env = { ...process.env, CODEX_HOME: this.getCodexHome() };
+			const invocation = codexCommandInvocation(codex, ["plugin", "--help"], process.platform, env);
+			const result = spawnSync(invocation.command, invocation.args, {
 				stdio: "ignore",
 				timeout: 15_000,
-				shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(codex),
-				env: { ...process.env, CODEX_HOME: this.getCodexHome() },
+				env: invocation.env,
 			});
 			return result.status === 0 && !result.error;
 		} catch {
@@ -1287,11 +1373,17 @@ export class CodexConnector extends BaseConnector {
 		let marketplaceResult: ReturnType<typeof spawnSync> | null = null;
 		let marketplaceError: unknown = null;
 		try {
-			marketplaceResult = spawnSync(codex, ["plugin", "marketplace", "add", marketplaceRoot], {
+			const env = { ...process.env, CODEX_HOME: codexHome };
+			const invocation = codexCommandInvocation(
+				codex,
+				["plugin", "marketplace", "add", marketplaceRoot],
+				process.platform,
+				env,
+			);
+			marketplaceResult = spawnSync(invocation.command, invocation.args, {
 				encoding: "utf-8",
 				timeout: 15_000,
-				shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(codex),
-				env: { ...process.env, CODEX_HOME: codexHome },
+				env: invocation.env,
 			});
 		} catch (error) {
 			marketplaceError = error;
@@ -1316,11 +1408,17 @@ export class CodexConnector extends BaseConnector {
 		let result: ReturnType<typeof spawnSync> | null = null;
 		let installError: unknown = null;
 		try {
-			result = spawnSync(codex, ["plugin", "add", CODEX_PLUGIN_CONFIG_NAME], {
+			const env = { ...process.env, CODEX_HOME: codexHome };
+			const invocation = codexCommandInvocation(
+				codex,
+				["plugin", "add", CODEX_PLUGIN_CONFIG_NAME],
+				process.platform,
+				env,
+			);
+			result = spawnSync(invocation.command, invocation.args, {
 				encoding: "utf-8",
 				timeout: 15_000,
-				shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(codex),
-				env: { ...process.env, CODEX_HOME: codexHome },
+				env: invocation.env,
 			});
 		} catch (error) {
 			installError = error;
@@ -1352,15 +1450,23 @@ export class CodexConnector extends BaseConnector {
 	protected removeNativePlugin(codexHome: string): void {
 		const codex = this.resolveCodexCli();
 		if (!codex) return;
-		const options = {
-			stdio: "ignore" as const,
-			timeout: 15_000,
-			shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(codex),
-			env: { ...process.env, CODEX_HOME: codexHome },
-		};
+		const env = { ...process.env, CODEX_HOME: codexHome };
+		const options = { stdio: "ignore" as const, timeout: 15_000 };
 		try {
-			spawnSync(codex, ["plugin", "remove", CODEX_PLUGIN_CONFIG_NAME], options);
-			spawnSync(codex, ["plugin", "marketplace", "remove", CODEX_PLUGIN_MARKETPLACE_NAME], options);
+			const removePlugin = codexCommandInvocation(
+				codex,
+				["plugin", "remove", CODEX_PLUGIN_CONFIG_NAME],
+				process.platform,
+				env,
+			);
+			spawnSync(removePlugin.command, removePlugin.args, { ...options, env: removePlugin.env });
+			const removeMarketplace = codexCommandInvocation(
+				codex,
+				["plugin", "marketplace", "remove", CODEX_PLUGIN_MARKETPLACE_NAME],
+				process.platform,
+				env,
+			);
+			spawnSync(removeMarketplace.command, removeMarketplace.args, { ...options, env: removeMarketplace.env });
 		} catch {
 			// Uninstall still removes Signet-owned compatibility state below.
 		}

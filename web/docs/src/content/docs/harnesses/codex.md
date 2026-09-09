@@ -105,15 +105,18 @@ Claude Code or OpenCode. In ChatGPT desktop, approve the generated Signet
 hooks in the one-time trust prompt; continuing without trust leaves the plugin
 installed but prevents lifecycle hooks from running.
 
-`CODEX_HOME` selects the Codex state directory for the connector. On Windows,
-native ChatGPT and native Codex normally use `%USERPROFILE%\\.codex`; a Codex
-CLI running in WSL uses Linux `~/.codex` unless `CODEX_HOME` points to the
-Windows directory. The Linux ChatGPT desktop app is currently preview software;
-when its bundled executable is not on `PATH`, Signet checks the usual
-`/usr/lib/chatgpt`, `/opt/chatgpt`, and per-user resource roots. On Windows,
-Signet writes a hashed `.cmd` wrapper for generated hooks so paths containing
-spaces and remote-daemon environment variables do not depend on Codex's wrapped
-`cmd.exe /C` quoting.
+`CODEX_HOME` selects the Codex state directory for the connector. Native
+ChatGPT and Codex on Windows normally use `%USERPROFILE%\\.codex`, and
+standalone Codex clients on one OS may share that OS's state directory. Keep
+WSL/Linux and macOS installs on their native state directories instead of
+pointing them at a Windows `CODEX_HOME`: generated hook and MCP commands
+contain platform-specific absolute paths and Windows `.cmd` wrappers. Install
+the integration separately per OS. The Linux ChatGPT desktop app is currently
+preview software; when its bundled executable is not on `PATH`, Signet checks
+the usual `/usr/lib/chatgpt`, `/opt/chatgpt`, and per-user resource roots. On
+Windows, Signet writes a hashed `.cmd` wrapper for generated hooks so paths
+containing spaces and remote-daemon environment variables do not depend on
+Codex's wrapped `cmd.exe /C` quoting.
 
 ### Supported hooks
 

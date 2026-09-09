@@ -15,9 +15,8 @@ older Codex installs.
   used by Linux desktop packages, and known per-user/system Windows roots,
   including bundled Codex executables and Node runtimes, so native plugin
   installation does not depend on the desktop app's shell `PATH`
-- Honors `CODEX_HOME` (including `~` expansion) so native Windows, WSL, Linux,
-  macOS, and Codex CLI installations can deliberately share or separate their
-  plugin/config state
+- Honors `CODEX_HOME` (including `~` expansion) so multiple Codex clients on
+  the same OS can deliberately share or separate their plugin/config state
 - Uses absolute Signet launch commands when running from the packaged native
   binary; the MCP worker is started with `SIGNET_MCP_STDIO_WORKER=1`
 - On Windows, writes a hashed `.cmd` hook wrapper so Codex can launch paths
@@ -99,12 +98,13 @@ CLI owns marketplace and plugin state; Signet only patches the legacy global
 MCP/hooks path when it must fall back.
 
 On Windows, the native ChatGPT app and native Codex CLI normally share
-`%USERPROFILE%\\.codex`. A Codex CLI running inside WSL uses Linux `~/.codex`
-unless `CODEX_HOME` points it at the Windows directory, so configure that
-explicitly if both surfaces should see the same plugin. The Linux ChatGPT
-desktop app is currently preview software; the connector checks its standard
-`/usr/lib/chatgpt`, `/opt/chatgpt`, and per-user resource roots, then falls back
-to `PATH`.
+`%USERPROFILE%\\.codex`. Keep WSL/Linux and macOS installs on their native state
+directories instead of pointing them at a Windows `CODEX_HOME`: generated hook
+and MCP commands contain platform-specific absolute paths and Windows `.cmd`
+wrappers. Install the integration separately per OS when those environments
+need Signet. The Linux ChatGPT desktop app is currently preview software; the
+connector checks its standard `/usr/lib/chatgpt`, `/opt/chatgpt`, and per-user
+resource roots, then falls back to `PATH`.
 
 In ChatGPT desktop Work/Codex mode, Codex presents the generated plugin hooks
 for one-time manual review. Approve the Signet hooks in the desktop prompt so
