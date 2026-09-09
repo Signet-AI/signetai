@@ -1812,13 +1812,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	void router.validateConfigReferences();
 
 	if (dbOwnerMaintenanceHandle === null) {
-		try {
-			dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
-		} catch (error) {
-			logger.warn("daemon", "Could not prepare maintenance before Dreaming admission; deferred startup will retry", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+		dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
 	}
 
 	const activeEmbeddingCfg = await startDeferredRuntimeAfterDreaming(
