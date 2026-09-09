@@ -36,6 +36,22 @@ describe("daemon lifecycle record (#1148)", () => {
 		}
 	});
 
+	it("persists and reads the selected runtime", () => {
+		const root = tempRoot();
+		try {
+			writeDaemonLifecycle(root, {
+				state: "running",
+				pid: 4242,
+				version: "0.222.0",
+				startedAt: "2026-09-09T00:00:00.000Z",
+				runtime: "bun-js",
+			});
+			expect(readDaemonLifecycle(root)?.runtime).toBe("bun-js");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("leaves the record at running when the process dies without an exit path, which is how SIGKILL/OOM deaths surface", () => {
 		const root = tempRoot();
 		try {

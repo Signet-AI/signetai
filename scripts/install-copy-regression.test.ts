@@ -113,6 +113,7 @@ describe("install copy", () => {
 		expect(manifest.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
 		expect(manifest.files).toContain("dist/mcp-stdio.js");
 		expect(manifest.files).toContain("native-manifest.json");
+		expect(manifest.files).toContain("runtime");
 		expect(manifest.files).not.toContain("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
@@ -136,6 +137,9 @@ describe("install copy", () => {
 		// expects to find at `$SIGNET_DIR/runtime/connectors/...`.
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("CONNECTOR_COMPONENT");
+		expect(installer).toContain("DAEMON_JS_COMPONENT");
+		expect(installer).toContain("installDaemonJsAssets");
+		expect(installer).toContain('join(packageDir, "runtime", "daemon-js")');
 		expect(installer).toContain("verifySha256");
 		expect(installer).toContain(`signet-connectors-\${manifest.version}.tar.gz`);
 		expect(installer).not.toContain("bun.sh/install");
@@ -174,13 +178,14 @@ describe("install copy", () => {
 	test("curl installer downloads and verifies the connector-asset tarball", () => {
 		const installer = read("web/marketing/public/install.sh");
 
-		// The curl installer reads `components.connectors` from the
-		// manifest, downloads the tarball, verifies its SHA-256, and
-		// passes it to `signet install --connector-assets <path>` so the
-		// native command can extract the assets next to the installed
-		// binary.
-		expect(installer).toContain("components.connectors");
+		// The curl installer reads both companion components from the
+		// manifest, downloads each tarball, verifies its SHA-256, and
+		// passes the verified paths to the native installer.
+		expect(installer).toContain("manifest_component_value()");
+		expect(installer).toContain("manifest_component_value connectors url");
+		expect(installer).toContain("manifest_component_value daemonJs url");
 		expect(installer).toContain("--connector-assets");
+		expect(installer).toContain("--daemon-js-assets");
 		expect(installer).toContain("install --force --connector-assets");
 	});
 

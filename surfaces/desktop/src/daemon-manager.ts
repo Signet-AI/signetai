@@ -12,6 +12,7 @@ export interface HealthStatus {
 	readonly version: string;
 	readonly pid: number;
 	readonly uptime: number;
+	readonly runtime?: string | null;
 	readonly agentsDir: string | null;
 }
 
@@ -21,6 +22,7 @@ export interface DesktopDaemonStatus {
 	readonly mode: DaemonMode;
 	readonly pid: number | null;
 	readonly version: string | null;
+	readonly runtime: string | null;
 	readonly uptime: number | null;
 	readonly port: number;
 	readonly baseUrl: string;
@@ -118,6 +120,7 @@ export class DaemonManager {
 			mode: this.#mode,
 			pid: health?.pid ?? null,
 			version: health?.version ?? null,
+			runtime: health?.runtime ?? null,
 			uptime: health?.uptime ?? null,
 			port: this.port,
 			baseUrl: this.baseUrl,
@@ -301,6 +304,9 @@ export class DaemonManager {
 				SIGNET_PATH: this.#workspacePath,
 				SIGNET_WORKSPACE: this.#workspacePath,
 				SIGNET_DESKTOP: "1",
+				SIGNET_DAEMON_RUNTIME: "bun-js",
+				SIGNET_DAEMON_JS_PATH: daemonEntry(),
+				SIGNET_TIKTOKEN_WASM_PATH: join(daemonRoot(), "node_modules", "tiktoken", "tiktoken_bg.wasm"),
 				// On-disk connector assets (hermes-agent Python plugin) staged by
 				// stage-runtime; connectors resolve them through this variable.
 				SIGNET_CONNECTOR_ASSETS_DIR: process.env.SIGNET_CONNECTOR_ASSETS_DIR ?? join(daemonRoot(), "connectors"),

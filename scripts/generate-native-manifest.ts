@@ -19,6 +19,7 @@ interface ComponentEntry {
 
 type ComponentsMap = {
 	readonly connectors?: ComponentEntry;
+	readonly daemonJs?: ComponentEntry;
 };
 
 const root = join(import.meta.dir, "..");
@@ -36,7 +37,9 @@ function platformFromName(name: string): string | null {
 		// Connector-asset tarball is a component, not a binary. Skip it
 		// from the `assets` listing so the install-time platform lookup
 		// doesn't accidentally match `connectors-<version>.tar.gz`.
-		name.startsWith("signet-connectors-")
+		name.startsWith("signet-connectors-") ||
+		name.startsWith("signet-daemon-js-") ||
+		name === "daemon-js-manifest.json"
 	) {
 		return null;
 	}
@@ -80,12 +83,29 @@ function loadConnectorComponent(): ComponentEntry | null {
 	};
 }
 
-if (assets.length === 0 && !loadConnectorComponent()) {
-	throw new Error(`No native Signet binaries or connector components found in ${nativeDir}`);
+function loadDaemonJsComponent(): ComponentEntry | null {
+	const tarballName = `signet-daemon-js-${version}.tar.gz`;
+	const tarballPath = join(nativeDir, tarballName);
+	if (!existsSync(tarballPath)) return null;
+	const stat = statSync(tarballPath);
+	if (!stat.isFile() || stat.size === 0) return null;
+	return {
+		url: tarballName,
+		sha256: createHash("sha256").update(readFileSync(tarballPath)).digest("hex"),
+		size: stat.size,
+	};
 }
 
 const connectors = loadConnectorComponent();
-const components: ComponentsMap = connectors ? { connectors: connectors } : {};
+const daemonJs = loadDaemonJsComponent();
+if (assets.length === 0 && !connectors && !daemonJs) {
+	throw new Error(`No native Signet binaries or runtime components found in ${nativeDir}`);
+}
+
+const components: ComponentsMap = {
+	...(connectors ? { connectors } : {}),
+	...(daemonJs ? { daemonJs } : {}),
+};
 
 const manifest = {
 	schemaVersion: 1 as const,

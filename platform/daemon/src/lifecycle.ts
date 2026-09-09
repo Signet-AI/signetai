@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { DaemonRuntime } from "@signet/core";
 
 /**
  * Daemon lifecycle record.
@@ -24,6 +25,8 @@ export interface DaemonLifecycle {
 	readonly pid: number;
 	readonly version: string;
 	readonly startedAt: string;
+	/** Runtime selected for this process: the release binary or the Bun JS bundle. */
+	readonly runtime?: DaemonRuntime;
 	/** systemd transient unit name (Linux service-manager launch), when known. */
 	readonly systemdUnit?: string;
 	readonly exitedAt?: string;

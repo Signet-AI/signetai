@@ -4,11 +4,17 @@ export interface PathOptions {
 	path?: string;
 }
 
+export interface RuntimeOptions {
+	runtime?: string;
+}
+
+export interface StartOptions extends PathOptions, RuntimeOptions {}
+
 export interface StatusOptions extends PathOptions {
 	json?: boolean;
 }
 
-export interface RestartOptions extends PathOptions {
+export interface RestartOptions extends PathOptions, RuntimeOptions {
 	openclaw?: boolean;
 	sync?: boolean;
 }
@@ -22,6 +28,10 @@ export interface LogOptions extends PathOptions {
 
 export function withPath(cmd: Command): Command {
 	return cmd.option("-p, --path <path>", "Base path for agent files");
+}
+
+export function withRuntime(cmd: Command): Command {
+	return cmd.option("--runtime <runtime>", "Daemon runtime: compiled or bun-js");
 }
 
 export function withJson(cmd: Command): Command {

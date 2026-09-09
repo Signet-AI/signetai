@@ -1,15 +1,11 @@
+import { rmSync } from "node:fs";
+
 /**
  * Daemon build script — dual-runtime: Bun.build under Bun, esbuild under Node.
  * Aliases native packages that break when bundled (baked paths to .node/.wasm binaries).
  */
 
-const EXTERNAL_BUN = [
-	"better-sqlite3",
-	"@1password/sdk",
-	"@firecrawl/anydoc",
-	"onnxruntime-node",
-	"@huggingface/transformers",
-];
+const EXTERNAL_BUN = ["@firecrawl/anydoc"];
 
 const EXTERNAL_NODE = [
 	"better-sqlite3",
@@ -45,6 +41,10 @@ const targets: Array<{
 ];
 
 const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";
+const profileBuild = process.env.SIGNET_DAEMON_PROFILE === "1" || process.argv.includes("--profile");
+if (!profileBuild) {
+	for (const target of targets) rmSync(`${target.outfile}.map`, { force: true });
+}
 const isBun = typeof Bun !== "undefined" && !forceNodeBuild;
 let ok = true;
 
@@ -58,6 +58,7 @@ if (isBun) {
 			format: "esm",
 			external: EXTERNAL_BUN,
 			alias: ALIAS,
+			sourcemap: profileBuild ? "external" : "none",
 		});
 
 		if (!result.success) {
@@ -86,6 +87,7 @@ if (isBun) {
 				external: EXTERNAL_NODE,
 				alias: ALIAS,
 				format: "esm",
+				sourcemap: profileBuild ? "external" : false,
 				banner: {
 					js: 'import { createRequire as __createRequire } from "module"; const require = __createRequire(import.meta.url);',
 				},

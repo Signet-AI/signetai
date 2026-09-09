@@ -58,6 +58,7 @@ import {
 	AGENTS_DIR,
 	BIND_HOST,
 	CURRENT_VERSION,
+	DAEMON_RUNTIME,
 	HOST,
 	LOG_DIR,
 	MEMORY_DB,
@@ -388,6 +389,7 @@ export function registerPipelineRoutes(app: Hono): void {
 
 		return c.json({
 			status: "running",
+			runtime: DAEMON_RUNTIME,
 			version: CURRENT_VERSION,
 			pid: process.pid,
 			uptime: process.uptime(),

@@ -200,6 +200,14 @@ export { loadConfiguredHarnesses, parseHarnessList } from "./harness-config";
 export { resolveSignetDaemonUrl } from "./daemon-url";
 export type { SignetDaemonUrlOptions } from "./daemon-url";
 export {
+	DAEMON_RUNTIME_ENV,
+	DAEMON_RUNTIME_VALUES,
+	DEFAULT_DAEMON_RUNTIME,
+	parseDaemonRuntime,
+	resolveDaemonRuntime,
+} from "./daemon-runtime";
+export type { DaemonRuntime } from "./daemon-runtime";
+export {
 	buildLaunchdEnvironment,
 	buildLaunchdPlist,
 	findLaunchdExecutable,

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
 	networkModeFromBindHost,
 	normalizeLoopbackHost,
+	resolveDaemonRuntime,
 	resolveDefaultBasePath,
 	resolveNetworkBinding,
 } from "@signet/core";
@@ -17,6 +18,7 @@ import { type ResolvedMemoryConfig, loadMemoryConfig, readRuntimeConfig } from "
 import { createRateLimiter } from "../repair-actions";
 import type { TelemetryCollector } from "../telemetry";
 import { getUpdateState } from "../update-system";
+import type { DaemonRuntime } from "@signet/core";
 
 export let restartPipelineRuntimeRef:
 	| ((memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<void>)
@@ -29,6 +31,15 @@ export const PID_FILE = join(DAEMON_DIR, "pid");
 export const LOG_DIR = join(DAEMON_DIR, "logs");
 export const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 export const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
+
+/** The runtime selected by the process environment; null means invalid input. */
+export const DAEMON_RUNTIME: DaemonRuntime | null = (() => {
+	try {
+		return resolveDaemonRuntime(undefined, process.env);
+	} catch {
+		return null;
+	}
+})();
 
 export function getCurrentAgentsDir(): string {
 	return resolveDefaultBasePath();
