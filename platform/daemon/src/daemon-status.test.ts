@@ -391,6 +391,17 @@ describe("daemon status contract", () => {
 		expect(extractionFallback).toContain("dbOwnerTransaction");
 	});
 
+	it("keeps DB-owner maintenance available when admitting Dreaming", () => {
+		const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf-8");
+		const runtimeStart = source.indexOf("async function startPipelineRuntime");
+		const maintenanceStart = source.indexOf("dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance()", runtimeStart);
+		const workerStart = source.indexOf("dreamingWorkerHandle = startDreamingWorker", runtimeStart);
+
+		expect(runtimeStart).toBeGreaterThanOrEqual(0);
+		expect(maintenanceStart).toBeGreaterThan(runtimeStart);
+		expect(maintenanceStart).toBeLessThan(workerStart);
+	});
+
 	it("counts non-errored connectors as active for heartbeat telemetry", () => {
 		expect(countConnectorsActive([{ status: "idle" }, { status: "syncing" }, { status: "error" }])).toBe(2);
 	});

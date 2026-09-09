@@ -1778,6 +1778,13 @@ function buildTelemetryConfigSnapshot(agentsDir: string, memoryCfg: ResolvedMemo
 	};
 }
 
+function initializeDbOwnerMaintenance(): DbOwnerMaintenance {
+	const maintenance = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient ?? undefined });
+	registerDbOwnerMaintenance(maintenance);
+	registerDbOwnerHealthProvider(maintenance.health);
+	return maintenance;
+}
+
 async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
 	const pipelinePaused = memoryCfg.pipelineV2.paused;
 	const router = getOrCreateInferenceRouter(AGENTS_DIR);
@@ -1803,6 +1810,16 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	// Surface broken routing references (defaultPolicy, workload targets, etc.) at
 	// boot before any route is attempted (#1005). Never blocks daemon startup.
 	void router.validateConfigReferences();
+
+	if (dbOwnerMaintenanceHandle === null) {
+		try {
+			dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
+		} catch (error) {
+			logger.warn("daemon", "Could not prepare maintenance before Dreaming admission; deferred startup will retry", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
 
 	const activeEmbeddingCfg = await startDeferredRuntimeAfterDreaming(
 		// Admit Dreaming before optional startup work. Legacy-job retirement and
@@ -1931,9 +1948,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	});
 
 	if (dbOwnerMaintenanceHandle === null) {
-		dbOwnerMaintenanceHandle = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient ?? undefined });
-		registerDbOwnerMaintenance(dbOwnerMaintenanceHandle);
-		registerDbOwnerHealthProvider(dbOwnerMaintenanceHandle.health);
+		dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
 	}
 
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
@@ -2493,8 +2508,7 @@ async function main() {
 	startEventLoopMonitor();
 	startFdPollMonitor();
 
-	dbOwnerMaintenanceHandle = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient });
-	registerDbOwnerMaintenance(dbOwnerMaintenanceHandle);
+	dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
 	// Clean accumulated crash-loop damage through the owner. This remains a
 	// deferred call, so owner startup and the bounded drain never delay readiness.
 	if (!migrationIntegrityWritesBlocked) runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
