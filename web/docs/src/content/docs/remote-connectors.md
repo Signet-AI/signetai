@@ -249,6 +249,15 @@ so merely supporting a harness does not add an unused row to the home page.
 The legacy `harnesses` and `configuredHarnesses` fields remain available to
 setup flows.
 
+Installation markers alone do not prove runtime health: the default inspection
+reports Degraded with an explicit unverified-health diagnostic. Healthy requires
+a connector-specific probe that validates its runtime. Inspection runs outside
+the HTTP process in a worker, with a five-second deadline per connector. A timed
+out or failed inspection stays visible without suppressing other connectors.
+Requests cancel their workers on disconnect; daemon shutdown waits for cleanup.
+Only one inspection per connector can run at a time; overlapping checks report
+that the connector is busy and can be retried.
+
 Refresh one connector without reloading the dashboard:
 
 ```text

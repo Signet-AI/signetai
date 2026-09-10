@@ -20,7 +20,7 @@ import {
 	updateCursor,
 } from "../connectors/registry.js";
 import { getDbAccessor } from "../db-accessor.js";
-import { enumerateHarnessConnectors, inspectHarnessConnector } from "../harness-registry.js";
+import { enumerateHarnessConnectors, inspectHarnessConnector } from "../harness-health.js";
 import { resolveHarnessPythonCommand } from "../harness-python.js";
 import { logger } from "../logger.js";
 import { which } from "../which.js";
@@ -360,7 +360,7 @@ export function registerConnectorRoutes(app: Hono): void {
 		// which reports a discovered harness configuration, a non-empty list
 		// proves a Signet connection was established.
 		const configuredHarnesses = loadConfiguredHarnesses(AGENTS_DIR);
-		const connectors = await enumerateHarnessConnectors(configuredHarnesses, harnessLastSeen);
+		const connectors = await enumerateHarnessConnectors(configuredHarnesses, harnessLastSeen, c.req.raw.signal);
 		const harnesses = connectors.map((connector) => ({
 			name: connector.displayName,
 			id: connector.id,
@@ -376,7 +376,7 @@ export function registerConnectorRoutes(app: Hono): void {
 	app.get("/api/harnesses/:id/health", async (c) => {
 		const id = c.req.param("id");
 		const configuredHarnesses = loadConfiguredHarnesses(AGENTS_DIR);
-		const connector = await inspectHarnessConnector(id, configuredHarnesses, harnessLastSeen);
+		const connector = await inspectHarnessConnector(id, configuredHarnesses, harnessLastSeen, c.req.raw.signal);
 		if (!connector) return c.json({ error: "Unsupported harness connector." }, 404);
 		return c.json(connector);
 	});

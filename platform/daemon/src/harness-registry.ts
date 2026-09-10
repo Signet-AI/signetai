@@ -78,7 +78,8 @@ function unavailableCapabilities(): ConnectorRecoveryCapabilities {
 }
 
 function defaultHealth(installed: boolean, detected: boolean, checkedAt: string): HarnessConnectorHealth {
-	if (installed) return { status: "healthy", message: "Integration is ready.", checkedAt };
+	if (installed)
+		return { status: "degraded", message: "Integration detected; runtime health has not been verified.", checkedAt };
 	if (detected) {
 		return {
 			status: "degraded",
@@ -144,7 +145,7 @@ function unavailableStatus(
 		configured,
 		detected: false,
 		installed: false,
-		relevant: configured,
+		relevant: configured || lastSeen !== null,
 		configPath: null,
 		lastSeen,
 		capabilities: unavailableCapabilities(),
@@ -156,7 +157,7 @@ function unavailableStatus(
 	};
 }
 
-async function inspectRegisteredConnector(
+export async function inspectRegisteredConnector(
 	id: string,
 	loader: HarnessConnectorLoader,
 	configured: boolean,
@@ -220,7 +221,7 @@ async function inspectRegisteredConnector(
 		configured,
 		detected,
 		installed,
-		relevant: configured || detected || installed,
+		relevant: configured || detected || installed || lastSeen !== null,
 		configPath,
 		lastSeen,
 		capabilities: readCapabilities(connector),
@@ -235,24 +236,6 @@ export function getHarnessLoader(
 	return Object.entries(registry).find(([registeredId]) => registeredId === id)?.[1] ?? null;
 }
 
-export async function inspectHarnessConnector(
-	id: string,
-	configuredHarnesses: readonly string[],
-	lastSeen: ReadonlyMap<string, string> = new Map(),
-	registry: HarnessRegistry = HARNESS_INSTALLERS,
-	now: () => Date = () => new Date(),
-): Promise<HarnessConnectorStatus | null> {
-	const loader = getHarnessLoader(id, registry);
-	if (!loader) return null;
-	return inspectRegisteredConnector(
-		id,
-		loader,
-		configuredHarnesses.includes(id),
-		lastSeen.get(id) ?? null,
-		now().toISOString(),
-	);
-}
-
 export async function createHarnessConnector(
 	id: string,
 	registry: HarnessRegistry = HARNESS_INSTALLERS,
@@ -261,18 +244,4 @@ export async function createHarnessConnector(
 	if (!loader) return null;
 	const Connector = await loader();
 	return new Connector();
-}
-
-export async function enumerateHarnessConnectors(
-	configuredHarnesses: readonly string[],
-	lastSeen: ReadonlyMap<string, string> = new Map(),
-	registry: HarnessRegistry = HARNESS_INSTALLERS,
-	now: () => Date = () => new Date(),
-): Promise<readonly HarnessConnectorStatus[]> {
-	const configured = new Set(configuredHarnesses);
-	return Promise.all(
-		Object.entries(registry).map(([id, loader]) =>
-			inspectRegisteredConnector(id, loader, configured.has(id), lastSeen.get(id) ?? null, now().toISOString()),
-		),
-	);
 }

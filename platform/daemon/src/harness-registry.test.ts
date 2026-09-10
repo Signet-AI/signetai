@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { BaseConnector, type ConnectorHealth, type InstallResult, type UninstallResult } from "@signet/connector-base";
-import { enumerateHarnessConnectors, type HarnessRegistry } from "./harness-registry";
+import { inspectRegisteredConnector, type HarnessRegistry } from "./harness-registry";
 
 class HealthyConnector extends BaseConnector {
 	readonly name = "Alpha Harness";
@@ -77,11 +77,16 @@ test("enumeration follows the supplied registry and isolates connector failures"
 		},
 	};
 
-	const statuses = await enumerateHarnessConnectors(
-		["bravo", "missing"],
-		new Map([["bravo", "2026-09-09T12:00:00.000Z"]]),
-		registry,
-		() => new Date("2026-09-09T12:01:00.000Z"),
+	const statuses = await Promise.all(
+		Object.entries(registry).map(([id, loader]) =>
+			inspectRegisteredConnector(
+				id,
+				loader,
+				["bravo", "missing"].includes(id),
+				id === "bravo" ? "2026-09-09T12:00:00.000Z" : null,
+				"2026-09-09T12:01:00.000Z",
+			),
+		),
 	);
 
 	expect(statuses.map((status) => status.id)).toEqual(["alpha", "bravo", "charlie", "missing"]);
@@ -90,7 +95,7 @@ test("enumeration follows the supplied registry and isolates connector failures"
 		icon: "alpha.svg",
 		installed: true,
 		relevant: true,
-		health: { status: "healthy", checkedAt: "2026-09-09T12:01:00.000Z" },
+		health: { status: "degraded", checkedAt: "2026-09-09T12:01:00.000Z" },
 	});
 	expect(statuses.find((status) => status.id === "bravo")).toMatchObject({
 		configured: true,
@@ -130,4 +135,33 @@ test("base recovery actions reuse the connector's canonical install path", async
 		reinitialize: true,
 		reinitializeRequiresConfirmation: true,
 	});
+});
+
+test("installation markers do not report disabled or missing Codex runtime as healthy", async () => {
+	const { CodexConnector } = await import("@signet/connector-codex");
+	const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+	const { join } = await import("node:path");
+	const dir = mkdtempSync("/tmp/signet-codex-health-");
+	class FixtureCodex extends CodexConnector {
+		protected getCodexHome(): string {
+			return dir;
+		}
+	}
+	try {
+		for (const enabled of [false, true]) {
+			writeFileSync(join(dir, "config.toml"), `[plugins."signet@signet-local"]\nenabled = ${enabled}\n`);
+			const result = await inspectRegisteredConnector(
+				"codex",
+				async () => FixtureCodex,
+				true,
+				null,
+				new Date().toISOString(),
+			);
+			expect(result.installed).toBe(true);
+			expect(result.health.status).toBe("degraded");
+			expect(result.health.message).toContain("not been verified");
+		}
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

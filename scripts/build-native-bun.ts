@@ -133,6 +133,7 @@ const workerEntries = [
 	["db-owner-worker", "platform/daemon/src/db-owner-worker.ts"],
 	["native-memory-source-worker", "platform/daemon/src/native-memory-source-worker.ts"],
 	["harness-install-worker", "platform/daemon/src/harness-install-worker.ts"],
+	["harness-health-worker", "platform/daemon/src/harness-health-worker.ts"],
 	// Native ONNX embedding runs in a worker so model download / WASM compile /
 	// inference can never block the daemon's main event loop (see
 	// embedding-worker.ts). Transformers is bundled into this asset; the ONNX

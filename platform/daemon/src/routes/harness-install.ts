@@ -1,13 +1,14 @@
-import type { BaseConnector, ConnectorRecoveryCapabilities, InstallResult } from "@signet/connector-base";
+import type { ConnectorRecoveryCapabilities, InstallResult } from "@signet/connector-base";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { createHarnessConnector, getHarnessLoader, type HarnessAction } from "../harness-registry";
+import { getHarnessLoader, type HarnessAction } from "../harness-registry";
 import type { HarnessInstallWorkerEvent, HarnessInstallWorkerRequest } from "../harness-install-worker";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
+import { inspectHarnessConnector } from "../harness-health";
 import { AGENTS_DIR, authConfig } from "./state";
 
 let installing = false;
@@ -150,28 +151,10 @@ export function registerHarnessInstallRoutes(app: Hono): void {
 				return c.json({ error: "Unsupported agent; use the CLI to configure this integration." }, 400);
 			}
 
-			let connector: BaseConnector | null;
-			try {
-				connector = await createHarnessConnector(id);
-			} catch (error) {
-				return c.json(
-					{ error: `Connector plugin failed to load: ${error instanceof Error ? error.message : String(error)}` },
-					503,
-				);
-			}
-			if (!connector) return c.json({ error: "Connector is unavailable." }, 503);
-
-			let capabilities: ConnectorRecoveryCapabilities;
-			try {
-				capabilities = connector.getRecoveryCapabilities();
-			} catch (error) {
-				return c.json(
-					{
-						error: `Could not inspect connector capabilities: ${error instanceof Error ? error.message : String(error)}`,
-					},
-					503,
-				);
-			}
+			const connector = await inspectHarnessConnector(id, [], new Map(), c.req.raw.signal);
+			if (!connector?.available)
+				return c.json({ error: connector?.health.message ?? "Connector is unavailable." }, 503);
+			const capabilities: ConnectorRecoveryCapabilities = connector.capabilities;
 			if (!capabilities[action]) {
 				return c.json({ error: `${actionLabel(action)} is not supported by this connector.` }, 400);
 			}
