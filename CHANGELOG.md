@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-10
-- Features: add selectable Bun JS runtime.
+- Features: add daemon JS bundle path flag; add selectable Bun JS runtime.
 - Bug fixes: harden Bun daemon runtime and installer.
 
 ### 2026-09-09
@@ -39,6 +39,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: add missing contributors.
 
 ## Release Ledger
+
+## [0.224.0] - 2026-09-10
+
+Release summary: 1 feature.
+Tag range: `v0.223.0..v0.224.0`.
+
+### Features
+
+- **cli**: add daemon JS bundle path flag
 
 ## [0.223.0] - 2026-09-10
 
