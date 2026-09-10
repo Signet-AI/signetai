@@ -87,6 +87,8 @@ describe("install copy", () => {
 		expect(installer).toContain("signet-win32-x64.exe");
 		expect(installer).toContain("Get-FileHash -Algorithm SHA256");
 		expect(installer).toContain("--connector-assets");
+		expect(installer).toContain("daemonJs");
+		expect(installer).toContain("--daemon-js-assets");
 		expect(installer).toContain('SetEnvironmentVariable("Path", $updatedUserPath, "User")');
 		expect(installer).toContain("SIGNET_CHANNEL");
 		expect(installer).not.toContain("npm install -g signetai");

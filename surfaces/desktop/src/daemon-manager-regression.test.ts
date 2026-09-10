@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import EventEmitter from "node:events";
+import { join, resolve } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Module mocks — declared before any dynamic import of the module under test.
@@ -63,6 +64,7 @@ const HEALTHY_PAYLOAD = {
 	version: "1.0.0-test",
 	pid: 42,
 	uptime: 100,
+	runtime: "bun-js",
 	agentsDir: "/tmp/signet-workspace",
 };
 
@@ -154,8 +156,8 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 		// openSync must have been used (proves the sync path, not the lazy createWriteStream path).
 		expect(openSyncSpy).toHaveBeenCalledTimes(2);
 		expect(openedPaths).toEqual([
-			"/tmp/signet-workspace/.daemon/logs/daemon.out.log",
-			"/tmp/signet-workspace/.daemon/logs/daemon.err.log",
+			join(resolve("/tmp/signet-workspace"), ".daemon", "logs", "daemon.out.log"),
+			join(resolve("/tmp/signet-workspace"), ".daemon", "logs", "daemon.err.log"),
 		]);
 
 		openSyncSpy.mockRestore();
@@ -182,6 +184,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 		// The manager must report attached mode, confirming the attach path was taken.
 		expect(status.mode).toBe("attached");
 		expect(manager.daemonMode).toBe("attached");
+		expect(status.runtime).toBe("bun-js");
 	});
 
 	// -----------------------------------------------------------------------

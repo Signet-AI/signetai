@@ -46,7 +46,7 @@ afterEach(() => {
 describe("resolveDaemonPaths", () => {
 	it("keeps the JavaScript daemon bundle as the default when SIGNET_DIR is set", () => {
 		const paths = resolveDaemonPaths({ SIGNET_DIR: "/opt/signet" });
-		expect(paths[0]).toBe("/opt/signet/runtime/daemon-js/daemon.js");
+		expect(paths[0]).toBe(join("/opt/signet", "runtime", "daemon-js", "daemon.js"));
 	});
 });
 
@@ -146,13 +146,34 @@ describe("daemon entrypoint ownership", () => {
 describe("resolveDaemonRuntimeCommand", () => {
 	it("uses the bundled Node runtime when SIGNET_DIR points at a native bundle install", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-runtime-node-"));
-		const nodePath = join(root, "runtime", "node", "bin", "node");
+		const nodeName = process.platform === "win32" ? "node.exe" : "node";
+		const nodePath = join(root, "runtime", "node", "bin", nodeName);
 		mkdirSync(join(root, "runtime", "node", "bin"), { recursive: true });
 		writeFileSync(nodePath, "");
 
-		expect(resolveDaemonRuntimeCommand({ SIGNET_DIR: root }, "/usr/bin/node", "")).toBe(nodePath);
+		expect(resolveDaemonRuntimeCommand({ SIGNET_DIR: root }, join("/usr/bin", nodeName), "")).toBe(nodePath);
 
 		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("resolves bun.exe from PATH when a compiled Windows binary selects bun-js", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-bun-path-"));
+		const bunName = process.platform === "win32" ? "bun.exe" : "bun";
+		const bunPath = join(root, "bin", bunName);
+		try {
+			mkdirSync(join(root, "bin"), { recursive: true });
+			writeFileSync(bunPath, "");
+			expect(
+				resolveDaemonRuntimeCommand(
+					{},
+					join("/opt/signet", process.platform === "win32" ? "signet.exe" : "signet"),
+					join(root, "bin"),
+					"bun-js",
+				),
+			).toBe(bunPath);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -395,6 +416,7 @@ describe("buildSystemdDaemonStartArgs", () => {
 
 describe("buildLaunchdDaemonPlist", () => {
 	it("starts daemon as a macOS LaunchAgent with explicit env and log routing", () => {
+		if (process.platform !== "darwin") return;
 		const plist = buildLaunchdDaemonPlist({
 			daemonPath: "/opt/signet/dist/daemon.js",
 			agentsDir: "/Users/user/.agents",
@@ -434,6 +456,7 @@ describe("buildLaunchdDaemonPlist", () => {
 	});
 
 	it("forwards the Bun inspector setting into the persistent launch agent", () => {
+		if (process.platform !== "darwin") return;
 		const plist = buildLaunchdDaemonPlist({
 			daemonPath: "/opt/signet/dist/daemon.js",
 			agentsDir: "/Users/user/.agents",
@@ -449,6 +472,7 @@ describe("buildLaunchdDaemonPlist", () => {
 	});
 
 	it("invokes runtime directly without bash wrapper", () => {
+		if (process.platform !== "darwin") return;
 		const plist = buildLaunchdDaemonPlist({
 			daemonPath: "/opt/signet/dist/daemon.js",
 			agentsDir: "/Users/user/.agents",
@@ -471,6 +495,7 @@ describe("buildLaunchdDaemonPlist", () => {
 	});
 
 	it("uses a persistent user LaunchAgent path", () => {
+		if (process.platform !== "darwin") return;
 		const agentsDir = "/Users/user/.agents";
 		expect(launchdDaemonPlistPath(agentsDir, "/Users/user")).toBe(
 			`/Users/user/Library/LaunchAgents/${launchdDaemonLabel(agentsDir)}.plist`,
@@ -481,10 +506,12 @@ describe("buildLaunchdDaemonPlist", () => {
 	});
 
 	it("keeps the legacy plist path available for migration", () => {
+		if (process.platform !== "darwin") return;
 		expect(launchdDaemonLegacyPlistPath("/Users/user")).toBe("/Users/user/Library/LaunchAgents/ai.signet.daemon.plist");
 	});
 
 	it("uses launchctl bootstrap against the current user launchd domain", () => {
+		if (process.platform !== "darwin") return;
 		const args = buildLaunchdDaemonStartArgs("/Users/user/Library/LaunchAgents/ai.signet.daemon.plist");
 		expect(args[0]).toBe("bootstrap");
 		expect(args[1]).toStartWith("gui/");
@@ -492,6 +519,7 @@ describe("buildLaunchdDaemonPlist", () => {
 	});
 
 	it("uses launchctl bootout against the current user launchd service", () => {
+		if (process.platform !== "darwin") return;
 		const label = launchdDaemonLabel("/Users/user/.agents");
 		const args = buildLaunchdDaemonStopArgs(label);
 		expect(args[0]).toBe("bootout");
