@@ -53,7 +53,7 @@ export interface HarnessConnectorStatus {
 
 export type HarnessRegistry = Readonly<Record<string, HarnessConnectorLoader>>;
 
-const HEALTH_STATUSES: readonly ConnectorHealthStatus[] = ["healthy", "degraded", "unhealthy", "needs-auth"];
+const HEALTH_STATUSES: readonly ConnectorHealthStatus[] = ["healthy", "degraded", "unhealthy", "needs-auth", "unknown"];
 
 function isHealthStatus(value: unknown): value is ConnectorHealthStatus {
 	return typeof value === "string" && HEALTH_STATUSES.some((status) => status === value);
@@ -79,7 +79,7 @@ function unavailableCapabilities(): ConnectorRecoveryCapabilities {
 
 function defaultHealth(installed: boolean, detected: boolean, checkedAt: string): HarnessConnectorHealth {
 	if (installed)
-		return { status: "degraded", message: "Integration detected; runtime health has not been verified.", checkedAt };
+		return { status: "unknown", message: "Integration detected; runtime health has not been verified.", checkedAt };
 	if (detected) {
 		return {
 			status: "degraded",
