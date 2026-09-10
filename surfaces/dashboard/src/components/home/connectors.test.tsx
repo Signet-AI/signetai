@@ -114,6 +114,15 @@ describe("HomeConnectorsPanel", () => {
 						health: { status: "needs-auth", message: "Credentials expired.", checkedAt: new Date().toISOString() },
 					}),
 					connector({
+						id: "echo",
+						displayName: "Echo Harness",
+						health: {
+							status: "unknown",
+							message: "Integration detected; runtime health has not been verified.",
+							checkedAt: new Date().toISOString(),
+						},
+					}),
+					connector({
 						id: "ignored",
 						displayName: "Ignored Harness",
 						relevant: false,
@@ -127,13 +136,28 @@ describe("HomeConnectorsPanel", () => {
 			/>,
 		);
 
-		expect(mounted.container.querySelector('[data-testid="connector-count"]')?.textContent).toBe("4");
+		expect(mounted.container.querySelector('[data-testid="connector-count"]')?.textContent).toBe("5");
 		expect(mounted.container.textContent).toContain("Alpha Harness");
 		expect(mounted.container.textContent).toContain("Bravo Harness");
 		expect(mounted.container.textContent).toContain("Needs auth");
+		expect(mounted.container.textContent).toContain("Not verified");
 		expect(mounted.container.textContent).not.toContain("Ignored Harness");
 		expect(mounted.container.querySelector('[aria-label="Reinitialize Alpha Harness"]')).not.toBeNull();
 		expect(mounted.container.querySelector('img[src="/logos/alpha.svg"]')).not.toBeNull();
+
+		await act(async () => mounted.root.unmount());
+	});
+
+	test("bounds the connector rows in an inner scroll region", async () => {
+		const mounted = await mount(
+			<HomeConnectorsPanel result={response([connector()])} loading={false} onRefresh={() => undefined} />,
+		);
+
+		const rows = mounted.container.querySelector('[data-testid="connector-rows"]');
+		expect(rows).not.toBeNull();
+		expect(rows?.classList.contains("overflow-y-auto")).toBe(true);
+		expect(rows?.classList.contains("scrollbar-none")).toBe(true);
+		expect(rows?.getAttribute("aria-label")).toBe("Installed connector health");
 
 		await act(async () => mounted.root.unmount());
 	});

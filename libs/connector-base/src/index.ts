@@ -62,7 +62,7 @@ export interface UninstallResult {
 	configsPatched?: string[];
 }
 
-export type ConnectorHealthStatus = "healthy" | "degraded" | "unhealthy" | "needs-auth";
+export type ConnectorHealthStatus = "healthy" | "degraded" | "unhealthy" | "needs-auth" | "unknown";
 
 export interface ConnectorHealth {
 	status: ConnectorHealthStatus;
@@ -259,12 +259,12 @@ export abstract class BaseConnector {
 	/**
 	 * Inspect the connector's runtime health. Connectors with richer signals
 	 * may override this; the shared default only detects installation markers. It cannot verify
-	 * enabled configuration, runtime artifacts, or connectivity.
+	 * enabled configuration, runtime artifacts, or connectivity, so it reports an unknown state.
 	 */
 	async inspectHealth(): Promise<ConnectorHealth> {
 		try {
 			if (this.isInstalled()) {
-				return { status: "degraded", message: "Integration detected; runtime health has not been verified." };
+				return { status: "unknown", message: "Integration detected; runtime health has not been verified." };
 			}
 			if (this.isDetected()) {
 				return { status: "degraded", message: "Harness detected; Signet integration is not configured." };

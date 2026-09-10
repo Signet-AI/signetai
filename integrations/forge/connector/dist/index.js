@@ -18397,7 +18397,7 @@ ${content}`);
   async inspectHealth() {
     try {
       if (this.isInstalled()) {
-        return { status: "degraded", message: "Integration detected; runtime health has not been verified." };
+        return { status: "unknown", message: "Integration detected; runtime health has not been verified." };
       }
       if (this.isDetected()) {
         return { status: "degraded", message: "Harness detected; Signet integration is not configured." };

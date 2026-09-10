@@ -249,9 +249,11 @@ so merely supporting a harness does not add an unused row to the home page.
 The legacy `harnesses` and `configuredHarnesses` fields remain available to
 setup flows.
 
-Installation markers alone do not prove runtime health: the default inspection
-reports Degraded with an explicit unverified-health diagnostic. Healthy requires
-a connector-specific probe that validates its runtime. Inspection runs outside
+Installation markers alone do not prove runtime health: the shared default
+inspection reports Not verified with an explicit unverified-health diagnostic. A
+connector-specific probe may report Healthy, Degraded, or Needs auth when it can
+validate the corresponding runtime condition; registry-derived states such as a
+detected but unconfigured harness remain Degraded. Inspection runs outside
 the HTTP process in a child process, with a five-second deadline per connector. A timed
 out or failed inspection stays visible without suppressing other connectors.
 Requests cancel their child processes on disconnect; daemon shutdown waits for cleanup.

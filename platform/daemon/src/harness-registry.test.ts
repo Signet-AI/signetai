@@ -95,7 +95,7 @@ test("enumeration follows the supplied registry and isolates connector failures"
 		icon: "alpha.svg",
 		installed: true,
 		relevant: true,
-		health: { status: "degraded", checkedAt: "2026-09-09T12:01:00.000Z" },
+		health: { status: "unknown", checkedAt: "2026-09-09T12:01:00.000Z" },
 	});
 	expect(statuses.find((status) => status.id === "bravo")).toMatchObject({
 		configured: true,
@@ -158,7 +158,7 @@ test("installation markers do not report disabled or missing Codex runtime as he
 				new Date().toISOString(),
 			);
 			expect(result.installed).toBe(true);
-			expect(result.health.status).toBe("degraded");
+			expect(result.health.status).toBe("unknown");
 			expect(result.health.message).toContain("not been verified");
 		}
 	} finally {
