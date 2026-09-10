@@ -489,6 +489,8 @@ if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PR
 	} finally {
 		await worker.terminate();
 	}
+} else if (process.env.SIGNET_HEALTH_INSPECTION) {
+	await import("../platform/daemon/src/harness-health-worker");
 } else if (process.env.SIGNET_DB_OWNER_WORKER) {
 	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
 	runDbOwnerWorker();

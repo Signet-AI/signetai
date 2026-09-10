@@ -252,9 +252,10 @@ setup flows.
 Installation markers alone do not prove runtime health: the default inspection
 reports Degraded with an explicit unverified-health diagnostic. Healthy requires
 a connector-specific probe that validates its runtime. Inspection runs outside
-the HTTP process in a worker, with a five-second deadline per connector. A timed
+the HTTP process in a child process, with a five-second deadline per connector. A timed
 out or failed inspection stays visible without suppressing other connectors.
-Requests cancel their workers on disconnect; daemon shutdown waits for cleanup.
+Requests cancel their child processes on disconnect; daemon shutdown waits for cleanup.
+The child also enforces its own lifetime if the daemon exits abruptly.
 Only one inspection per connector can run at a time; overlapping checks report
 that the connector is busy and can be retried.
 
