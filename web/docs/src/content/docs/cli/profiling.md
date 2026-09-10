@@ -44,12 +44,11 @@ signet daemon restart --no-sync --runtime bun-js \
   --daemon-js-path ./dist/signetai/runtime/daemon-js/daemon.js
 ```
 
-`--daemon-js-path` takes precedence over `SIGNET_DAEMON_JS_PATH`. Relative paths
-resolve from your current directory. The flag requires the `bun-js` runtime,
-selected with `--runtime` or `SIGNET_DAEMON_RUNTIME`; it does not build or update
-the checkout. Missing bundles or required assets fail before the running daemon
-is stopped. Startup prints the selected bundle path. Pass the same flag alongside
-the profiling environment variables above when capturing your local build.
+`--daemon-js-path` overrides `SIGNET_DAEMON_JS_PATH`; relative paths resolve from
+the current directory. It requires `bun-js`, validates before shutdown, and prints
+the selected path at startup. It does not build, sync, or save a preference: repeat
+the flag on later launches, including the profiling command above. On `start`, an
+explicit path restarts an existing daemon even if it already uses `bun-js`.
 
 The profile build emits `.map` files beside the daemon and worker bundles. Keep the
 compiled and `bun-js` runs comparable: use the same commit, workspace,
