@@ -269,6 +269,7 @@ import { mountMcpRoute } from "./mcp";
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { mountChangelogRoutes } from "./routes/changelog.js";
+import { stopHarnessHealth } from "./harness-health";
 import { registerHarnessInstallRoutes, stopHarnessInstall } from "./routes/harness-install";
 import { registerConnectorRoutes } from "./routes/connectors-routes.js";
 import { setupDashboardRoutes } from "./routes/dashboard.js";
@@ -2051,6 +2052,7 @@ async function cleanup() {
 	setShuttingDown(true);
 	bindAbort.abort();
 	await stopHarnessInstall();
+	await stopHarnessHealth();
 	logger.info("daemon", "Shutting down");
 
 	if (httpServer) {
