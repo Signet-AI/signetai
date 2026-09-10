@@ -63,6 +63,15 @@ async function postJSON<T>(path: string, body?: unknown, signal?: AbortSignal): 
 	});
 }
 
+async function postJSONResult<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<ApiReadResult<T>> {
+	return getJSONResult<T>(path, {
+		method: "POST",
+		signal,
+		headers: body ? { "Content-Type": "application/json" } : undefined,
+		body: body ? JSON.stringify(body) : undefined,
+	});
+}
+
 /** POST/DELETE that preserves the daemon's `{error}` body on failure so
  *  forms can surface the real rejection reason. */
 async function mutateJSON<T extends { error?: string }>(
@@ -491,6 +500,60 @@ export interface SourcesResponse {
 	sources: SignetSource[];
 }
 
+export type HarnessConnectorHealthStatus = "healthy" | "degraded" | "unhealthy" | "needs-auth";
+
+export interface HarnessConnectorHealth {
+	status: HarnessConnectorHealthStatus;
+	message: string;
+	checkedAt: string;
+}
+
+export interface HarnessConnectorCapabilities {
+	repair: boolean;
+	reinitialize: boolean;
+	reinitializeRequiresConfirmation: boolean;
+}
+
+export interface HarnessConnector {
+	id: string;
+	displayName: string;
+	kind: "harness";
+	description: string;
+	icon: string | null;
+	available: boolean;
+	configured: boolean;
+	detected: boolean;
+	installed: boolean;
+	relevant: boolean;
+	configPath: string | null;
+	lastSeen: string | null;
+	capabilities: HarnessConnectorCapabilities;
+	health: HarnessConnectorHealth;
+}
+
+export interface HarnessSummary {
+	id: string;
+	name: string;
+	icon: string | null;
+	path: string;
+	exists: boolean;
+	lastSeen: string | null;
+}
+
+export interface HarnessesResponse {
+	readonly harnesses: readonly HarnessSummary[];
+	readonly connectors: readonly HarnessConnector[];
+	readonly configuredHarnesses: readonly string[];
+}
+
+export interface HarnessActionResponse {
+	readonly success: boolean;
+	readonly id: string;
+	readonly action: "repair" | "reinitialize";
+	readonly message?: string;
+	readonly warnings?: readonly string[];
+}
+
 export interface SkillsResponse {
 	count: number;
 }
@@ -662,6 +725,12 @@ export interface DreamStatus {
 export const api = {
 	getStatus: () => getJSON<DaemonStatus>("/api/status"),
 	getIdentity: () => getJSON<DashboardIdentity>("/api/identity"),
+	getHarnesses: () => getJSONResult<HarnessesResponse>("/api/harnesses"),
+	getHarnessHealth: (id: string) => getJSONResult<HarnessConnector>(`/api/harnesses/${encodeURIComponent(id)}/health`),
+	repairHarness: (id: string) =>
+		postJSONResult<HarnessActionResponse>(`/api/harnesses/${encodeURIComponent(id)}/repair`),
+	reinitializeHarness: (id: string) =>
+		postJSONResult<HarnessActionResponse>(`/api/harnesses/${encodeURIComponent(id)}/reinitialize`, { confirm: true }),
 	getAgents: () => getJSONResult<AgentsResponse>("/api/agents"),
 	updateAgentScope: async (
 		name: string,

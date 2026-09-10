@@ -153,6 +153,10 @@ export class ClaudeCodeConnector extends BaseConnector {
 	readonly name = "Claude Code";
 	readonly harnessId = "claude-code";
 
+	getIconAsset(): string {
+		return "claude.svg";
+	}
+
 	private config: ConnectorConfig;
 	private daemonUrl: string;
 

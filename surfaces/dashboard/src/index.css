@@ -293,7 +293,7 @@
 	.home-page-heading h1, .home-page-heading h2 { font-size: 22px; font-weight: 500; line-height: 1.3; letter-spacing: -.02em; text-wrap: balance; }
 	.home-page-heading p { margin-top: 5px; font-size: 12px; font-weight: 400; }
 	.home-daily-brief > div:first-child > span { font-size: 14px; font-weight: 500; }
-	.home-daily-brief .insight-text { width: min(100%, 520px); max-width: 60ch; min-height: 72px; font-size: 16px; font-weight: 400; line-height: 1.5; letter-spacing: 0; text-wrap: pretty; }
+	.home-daily-brief .insight-text { width: min(100%, 700px); max-width: 72ch; min-height: 72px; font-size: 16px; font-weight: 400; line-height: 1.5; letter-spacing: 0; text-wrap: pretty; }
 	.home-daily-brief button[aria-label] svg { width: 11px; height: 11px; }
 	.home-daily-brief button[aria-label] { width: 22px; height: 22px; border-radius: 50%; background: var(--home-interactive, transparent); border-top-color: var(--home-edge, var(--border)); color: var(--muted-foreground); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 4%, transparent), 0 1px 0 color-mix(in srgb, var(--background) 22%, transparent); transition-property: background-color, border-color, color, transform; transition-duration: 150ms; transition-timing-function: ease-out; }
 	.home-daily-brief button[aria-label]:active:not(:disabled) { transform: scale(0.96); }
@@ -343,6 +343,7 @@
 	.home-health-healthy { color: var(--home-health-healthy); }
 	.home-health-degraded { color: var(--home-health-degraded); }
 	.home-health-unhealthy { color: var(--home-health-unhealthy); }
+	.home-health-needs-auth { color: var(--home-health-unhealthy); }
 	.home-health-empty { color: var(--home-secondary); }
 	.home-status-healthy { background: var(--home-health-healthy); box-shadow: 0 0 6px color-mix(in srgb, var(--home-health-healthy) 45%, transparent); }
 	.home-status-warning { background: var(--home-health-degraded); box-shadow: 0 0 6px color-mix(in srgb, var(--home-health-degraded) 35%, transparent); }
@@ -354,6 +355,21 @@
 	.home-system [data-health="unhealthy"] summary > span:nth-child(3) { color: var(--home-health-unhealthy); }
 	.home-system [data-health="degraded"] summary > span:nth-child(3) { color: var(--home-health-degraded); }
 	.home-system [data-health="healthy"] summary > span:nth-child(3) { color: var(--home-health-healthy); }
+	.home-system [data-health="needs-auth"] summary > span:nth-child(3) { color: var(--home-health-unhealthy); }
+	.home-connector-row { min-height: 54px; }
+	.home-connector-icon img { width: 18px; height: 18px; object-fit: contain; }
+	.dark .home-connector-icon img[src$="hermes-agent.svg"],
+	.dark .home-connector-icon img[src$="oh-my-pi.svg"] { filter: invert(1); }
+	html:not(.dark) .home-connector-icon img[src$="openai.svg"],
+	html:not(.dark) .home-connector-icon img[src$="forge.svg"],
+	html:not(.dark) .home-connector-icon img[src$="pi.svg"] { filter: invert(1); }
+	.home-connector-row[data-health="healthy"] .home-connector-icon { color: color-mix(in srgb, var(--home-health-healthy) 58%, var(--home-body)); }
+	.home-connector-row[data-health="unhealthy"] .home-connector-icon,
+	.home-connector-row[data-health="needs-auth"] .home-connector-icon { color: color-mix(in srgb, var(--home-health-unhealthy) 62%, var(--home-body)); }
+	.home-connector-row[data-health="degraded"] .home-connector-icon { color: color-mix(in srgb, var(--home-health-degraded) 68%, var(--home-body)); }
+	.home-connector-action { display: inline-flex; min-height: 28px; align-items: center; gap: 5px; border: 1px solid var(--border); border-top-color: var(--home-edge, var(--border)); border-radius: 6px; padding-inline: 8px; background: var(--home-interactive, transparent); color: var(--home-meta, var(--muted-foreground)); font-size: 10.5px; font-weight: 400; white-space: nowrap; }
+	.home-connector-action:disabled { cursor: not-allowed; opacity: .45; }
+	.home-connector-actions { margin-inline-start: 6px; }
 	.home-system #home-agents-title, .home-system #review-suggestions-title, .home-system #home-secrets-title { font-size: 14px; font-weight: 500; }
 	.home-system .group > div > span:first-child { font-size: 14px; font-weight: 500; }
 	.home-system .group > div > button { height: 30px; padding-inline-start: 8px; padding-inline-end: 11px; font-size: 12px; font-weight: 400; border-radius: 6px; }
@@ -480,6 +496,10 @@
 		.home-activity { padding-block-start: 16px; }
 		.home-secret-description,
 		.home-system [aria-labelledby="review-suggestions-title"] > div:nth-child(2) { margin-top: 16px; }
+	}
+	@media (min-width: 851px) and (min-height: 951px) {
+		.home-today > .home-recent { max-height: none; }
+		.home-activity { margin-block-start: auto; }
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.sig-app-frame [aria-label="Dashboard navigation"] [aria-hidden] { transition: none; }

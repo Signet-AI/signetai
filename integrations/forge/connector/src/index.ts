@@ -86,6 +86,10 @@ export class ForgeConnector extends BaseConnector {
 	readonly name = "ForgeCode";
 	readonly harnessId = "forge";
 
+	getIconAsset(): string {
+		return "forge.svg";
+	}
+
 	protected getForgeHome(): string {
 		const configured = readTrimmedEnv("FORGE_CONFIG");
 		if (configured) return resolve(expandHome(configured));

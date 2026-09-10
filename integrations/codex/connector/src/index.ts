@@ -1329,6 +1329,10 @@ export class CodexConnector extends BaseConnector {
 	readonly name = "Codex";
 	readonly harnessId = "codex";
 
+	getIconAsset(): string {
+		return "openai.svg";
+	}
+
 	protected getCodexHome(): string {
 		const configured = readTrimmedEnv("CODEX_HOME");
 		return configured ? expandHome(configured) : join(homedir(), ".codex");

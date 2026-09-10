@@ -62,6 +62,19 @@ export interface UninstallResult {
 	configsPatched?: string[];
 }
 
+export type ConnectorHealthStatus = "healthy" | "degraded" | "unhealthy" | "needs-auth";
+
+export interface ConnectorHealth {
+	status: ConnectorHealthStatus;
+	message: string;
+}
+
+export interface ConnectorRecoveryCapabilities {
+	repair: boolean;
+	reinitialize: boolean;
+	reinitializeRequiresConfirmation: boolean;
+}
+
 // ============================================================================
 // Base Connector
 // ============================================================================
@@ -92,6 +105,15 @@ export abstract class BaseConnector {
 	 * Machine identifier (e.g., "claude-code")
 	 */
 	abstract readonly harnessId: string;
+
+	/**
+	 * Optional bundled brand asset filename for clients that present the
+	 * connector. The dashboard resolves this against its local `/logos/`
+	 * assets; connectors without a mark use a generic icon.
+	 */
+	getIconAsset(): string | null {
+		return null;
+	}
 
 	// ==========================================================================
 	// Shared implementations (provided by base class)
@@ -225,6 +247,54 @@ export abstract class BaseConnector {
 	 * Check if the connector is already installed.
 	 */
 	abstract isInstalled(): boolean;
+
+	/**
+	 * Check whether the harness has a discoverable configuration, even when
+	 * Signet's integration is not installed yet.
+	 */
+	isDetected(): boolean {
+		return existsSync(this.getConfigPath());
+	}
+
+	/**
+	 * Inspect the connector's runtime health. Connectors with richer signals
+	 * may override this; the shared default verifies the installed integration
+	 * and keeps an unconfigured harness visible as a degraded state.
+	 */
+	async inspectHealth(): Promise<ConnectorHealth> {
+		try {
+			if (this.isInstalled()) return { status: "healthy", message: "Integration is ready." };
+			if (this.isDetected()) {
+				return { status: "degraded", message: "Harness detected; Signet integration is not configured." };
+			}
+			return { status: "unhealthy", message: "Signet integration is not installed." };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { status: "unhealthy", message: `Health inspection failed: ${message}` };
+		}
+	}
+
+	/**
+	 * Return actions that are safe for this connector to expose in clients.
+	 * The default actions reuse the connector's idempotent install path.
+	 */
+	getRecoveryCapabilities(): ConnectorRecoveryCapabilities {
+		return {
+			repair: true,
+			reinitialize: true,
+			reinitializeRequiresConfirmation: true,
+		};
+	}
+
+	/** Reconcile an existing integration through the connector's install path. */
+	async repair(basePath: string): Promise<InstallResult> {
+		return this.install(basePath);
+	}
+
+	/** Re-run connector initialization through the connector's install path. */
+	async reinitialize(basePath: string): Promise<InstallResult> {
+		return this.install(basePath);
+	}
 
 	/**
 	 * Get the path to the harness's main config file.

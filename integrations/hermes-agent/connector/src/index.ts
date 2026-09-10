@@ -825,6 +825,11 @@ async function ensureNamedAgentRegistered(
 export class HermesAgentConnector extends BaseConnector {
 	readonly name = "Hermes Agent";
 	readonly harnessId = "hermes-agent";
+
+	getIconAsset(): string {
+		return "hermes-agent.svg";
+	}
+
 	private readonly target?: HermesConnectorTarget;
 
 	constructor(target?: HermesConnectorTarget) {

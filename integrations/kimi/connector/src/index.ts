@@ -322,6 +322,10 @@ export class KimiConnector extends BaseConnector {
 	readonly name = "Kimi";
 	readonly harnessId = "kimi";
 
+	getIconAsset(): string {
+		return "kimi.png";
+	}
+
 	protected getKimiHome(): string {
 		const currentOverride = readEnv("KIMI_SHARE_DIR");
 		if (currentOverride) return currentOverride;

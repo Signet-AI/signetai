@@ -1,42 +1,32 @@
 /** Isolated adapter installation. Connector classes remain the installation authority. */
 
 import { resolveGlobalPackagePath, resolvePrimaryPackageManager } from "@signet/core";
+import type { InstallResult } from "@signet/connector-base";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
+import { createHarnessConnector, type HarnessAction } from "./harness-registry";
 
-export const HARNESS_INSTALLERS = {
-	"claude-code": () => import("@signet/connector-claude-code").then((module) => module.ClaudeCodeConnector),
-	codex: () => import("@signet/connector-codex").then((module) => module.CodexConnector),
-	"hermes-agent": () => import("@signet/connector-hermes-agent").then((module) => module.HermesAgentConnector),
-	opencode: () => import("@signet/connector-opencode").then((module) => module.OpenCodeConnector),
-	openclaw: () => import("@signet/connector-openclaw").then((module) => module.OpenClawConnector),
-	gemini: () => import("@signet/connector-gemini").then((module) => module.GeminiConnector),
-	pi: () => import("@signet/connector-pi").then((module) => module.PiConnector),
-	"oh-my-pi": () => import("@signet/connector-oh-my-pi").then((module) => module.OhMyPiConnector),
-	kimi: () => import("@signet/connector-kimi").then((module) => module.KimiConnector),
-	forge: () => import("@signet/connector-forge").then((module) => module.ForgeConnector),
-};
+export { HARNESS_INSTALLERS } from "./harness-registry";
 
 export interface HarnessInstallWorkerRequest {
 	readonly id: string;
 	readonly workspace: string;
+	readonly action?: HarnessAction;
 }
 
 export type HarnessInstallWorkerEvent =
-	| { readonly type: "complete" }
+	| { readonly type: "complete"; readonly result: InstallResult }
 	| { readonly type: "error"; readonly message: string };
 
-async function installHarness(request: HarnessInstallWorkerRequest) {
+async function installHarness(request: HarnessInstallWorkerRequest): Promise<InstallResult> {
 	const id = request.id;
-	const loadInstaller =
-		id && Object.hasOwn(HARNESS_INSTALLERS, id) ? HARNESS_INSTALLERS[id as keyof typeof HARNESS_INSTALLERS] : null;
-	const Installer = loadInstaller ? await loadInstaller() : null;
-	const connector = Installer ? new Installer() : null;
+	const connector = await createHarnessConnector(id);
 	const { OpenClawConnector } = await import("@signet/connector-openclaw");
 	if (!connector) throw new Error("Unsupported harness installation");
 	const workspace = request.workspace;
 	if (!workspace) throw new Error("Missing resolved workspace");
+	const action = request.action ?? "connect";
 	// OpenClaw's package is installed by the existing CLI package owner. Never
 	// report a working plugin when only its config exists.
 	let pluginPath: string | null = null;
@@ -51,9 +41,13 @@ async function installHarness(request: HarnessInstallWorkerRequest) {
 			);
 	}
 	const result =
-		connector instanceof OpenClawConnector
-			? await connector.install(workspace, { configureWorkspace: false, runtimePath: runtimePath ?? "plugin" })
-			: await connector.install(workspace);
+		action === "repair"
+			? await connector.repair(workspace)
+			: action === "reinitialize"
+				? await connector.reinitialize(workspace)
+				: connector instanceof OpenClawConnector
+					? await connector.install(workspace, { configureWorkspace: false, runtimePath: runtimePath ?? "plugin" })
+					: await connector.install(workspace);
 	if (connector instanceof OpenClawConnector && pluginPath) connector.patchLoadPaths(dirname(pluginPath));
 	if (!result.success) throw new Error(result.message);
 	if (!connector.isInstalled())
@@ -61,18 +55,19 @@ async function installHarness(request: HarnessInstallWorkerRequest) {
 	return result;
 }
 
-export async function runHarnessInstallWorker(request?: HarnessInstallWorkerRequest): Promise<void> {
+export async function runHarnessInstallWorker(request?: HarnessInstallWorkerRequest): Promise<InstallResult> {
 	const resolvedRequest =
 		request ?? ({ id: process.env.SIGNET_INSTALL_HARNESS ?? "", workspace: process.env.SIGNET_PATH ?? "" } as const);
 	const result = await installHarness(resolvedRequest);
 	if (request === undefined) process.stdout.write(`SIGNET_INSTALL_RESULT ${JSON.stringify(result)}\n`);
+	return result;
 }
 
 async function runThreadWorker(): Promise<void> {
 	if (parentPort === null) throw new Error("harness install worker requires a parent port");
 	try {
-		await runHarnessInstallWorker(workerData as HarnessInstallWorkerRequest);
-		parentPort.postMessage({ type: "complete" } satisfies HarnessInstallWorkerEvent);
+		const result = await runHarnessInstallWorker(workerData as HarnessInstallWorkerRequest);
+		parentPort.postMessage({ type: "complete", result } satisfies HarnessInstallWorkerEvent);
 	} catch (error) {
 		parentPort.postMessage({
 			type: "error",
