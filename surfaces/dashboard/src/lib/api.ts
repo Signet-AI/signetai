@@ -500,7 +500,7 @@ export interface SourcesResponse {
 	sources: SignetSource[];
 }
 
-export type HarnessConnectorHealthStatus = "healthy" | "degraded" | "unhealthy" | "needs-auth";
+export type HarnessConnectorHealthStatus = "healthy" | "degraded" | "unhealthy" | "needs-auth" | "unknown";
 
 export interface HarnessConnectorHealth {
 	status: HarnessConnectorHealthStatus;

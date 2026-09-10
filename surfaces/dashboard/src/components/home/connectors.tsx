@@ -27,6 +27,7 @@ const STATUS_LABELS: Record<HarnessConnectorHealthStatus, string> = {
 	degraded: "Degraded",
 	unhealthy: "Unhealthy",
 	"needs-auth": "Needs auth",
+	unknown: "Not verified",
 };
 
 const STATUS_CLASSES: Record<HarnessConnectorHealthStatus, string> = {
@@ -34,6 +35,7 @@ const STATUS_CLASSES: Record<HarnessConnectorHealthStatus, string> = {
 	degraded: "home-health-degraded",
 	unhealthy: "home-health-unhealthy",
 	"needs-auth": "home-health-needs-auth",
+	unknown: "home-health-unknown",
 };
 
 function actionLabel(action: RecoveryAction): string {
@@ -117,17 +119,41 @@ export function HomeConnectorsPanel({
 					No harness connectors installed.
 				</div>
 			) : (
-				<ul className="home-connectors-rows mt-1.5 list-none divide-y divide-border">
-					{connectors.map((connector) => (
-						<HomeConnectorRow
-							key={connector.id}
-							connector={connector}
-							globallyBusy={activeConnectorId !== null && activeConnectorId !== connector.id}
-							onRunning={(running) => setActiveConnectorId(running ? connector.id : null)}
-						/>
-					))}
-				</ul>
+				<HomeConnectorRows
+					connectors={connectors}
+					activeConnectorId={activeConnectorId}
+					onRunning={(id) => setActiveConnectorId(id)}
+				/>
 			)}
+		</section>
+	);
+}
+
+function HomeConnectorRows({
+	connectors,
+	activeConnectorId,
+	onRunning,
+}: {
+	connectors: readonly HarnessConnector[];
+	activeConnectorId: string | null;
+	onRunning: (id: string | null) => void;
+}) {
+	return (
+		<section
+			data-testid="connector-rows"
+			aria-label="Installed connector health"
+			className="home-connectors-rows mt-1.5 overflow-y-auto scrollbar-none"
+		>
+			<ul className="list-none divide-y divide-border">
+				{connectors.map((connector) => (
+					<HomeConnectorRow
+						key={connector.id}
+						connector={connector}
+						globallyBusy={activeConnectorId !== null && activeConnectorId !== connector.id}
+						onRunning={(running) => onRunning(running ? connector.id : null)}
+					/>
+				))}
+			</ul>
 		</section>
 	);
 }
@@ -208,7 +234,7 @@ function HomeConnectorRow({
 	return (
 		<>
 			<li
-				className="home-connector-row flex min-w-0 items-center gap-2.5 py-2.5"
+				className="home-connector-row flex min-w-0 items-center gap-2.5 px-0.5 py-2.5"
 				data-health={health.status}
 				aria-busy={running !== null}
 			>
