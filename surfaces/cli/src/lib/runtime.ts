@@ -1787,6 +1787,8 @@ export async function startDaemon(
 		return false;
 	}
 
+	if (runtime === "bun-js") console.log(chalk.dim(`  Daemon JavaScript bundle: ${daemonPath}`));
+
 	const net = resolveDaemonNetwork(agentsDir, process.env);
 	const inspectorForwarding = await resolveDaemonInspectorForwarding();
 
