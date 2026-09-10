@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-10
+- Features: add selectable Bun JS runtime.
+- Bug fixes: harden Bun daemon runtime and installer.
+
 ### 2026-09-09
 - Features: add ChatGPT desktop plugin path.
 - Bug fixes: make episodic artifact indexing self-healing; index memory_artifacts by source_sha256 for the backlog probe; require maintenance before admission; restore maintenance before admission; cancel stale cache work on stop; keep worker available at startup.
@@ -34,10 +38,20 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: simplify backlog probes.
 - Docs: add missing contributors.
 
-### 2026-09-03
-- Bug fixes: repair native health fixture; avoid embedding conflict starvation; enforce scoped embedding repair; scope legacy embedding repairs.
-
 ## Release Ledger
+
+## [0.223.0] - 2026-09-10
+
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.222.0..v0.223.0`.
+
+### Features
+
+- **daemon**: add selectable Bun JS runtime
+
+### Bug Fixes
+
+- **windows**: harden Bun daemon runtime and installer
 
 ## [0.222.0] - 2026-09-09
 
