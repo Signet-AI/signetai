@@ -1248,7 +1248,7 @@
     },
     {
       "path": "harness-health.ts",
-      "line": 22,
+      "line": 20,
       "api": "existsSync",
       "source": "return existsSync(built) ? built : join(directory, \"harness-health-worker.ts\");",
       "category": "hot-path"
