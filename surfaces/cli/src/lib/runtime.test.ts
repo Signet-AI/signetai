@@ -69,6 +69,9 @@ describe("bun-js daemon bundle selection", () => {
 				valid: true,
 				missing: [],
 			});
+			expect(
+				resolveDaemonPathForRuntime("bun-js", { SIGNET_DAEMON_JS_PATH: "missing.js" }, join(bundleDir, "daemon.js")),
+			).toBe(join(bundleDir, "daemon.js"));
 			rmSync(join(bundleDir, "embedding-worker.js"));
 			expect(inspectDaemonJsBundle(join(bundleDir, "daemon.js")).missing).toContain("embedding-worker.js");
 		} finally {
