@@ -154,6 +154,7 @@
 	$workDir = Join-Path $downloadRoot ("install-" + [Guid]::NewGuid().ToString("N"))
 	$binaryPath = $null
 	$connectorPath = $null
+	$daemonJsPath = $null
 
 	try {
 		New-Item -ItemType Directory -Force -Path $workDir | Out-Null
@@ -231,11 +232,53 @@
 			}
 		}
 
+		$daemonJs = $null
+		if ($componentPropertyNames -contains "daemonJs") {
+			$daemonJs = $manifest.components.daemonJs
+		}
+		if ($null -ne $daemonJs) {
+			$daemonJsUrl = [string]$daemonJs.url
+			$daemonJsSha256 = ([string]$daemonJs.sha256).ToLowerInvariant()
+			if ([string]::IsNullOrWhiteSpace($daemonJsUrl) -or $daemonJsSha256 -notmatch "^[a-f0-9]{64}$") {
+				throw "The Signet Bun JavaScript daemon asset entry is invalid."
+			}
+
+			if ($daemonJsUrl -match "^https?://") {
+				$daemonJsDownloadUrl = $daemonJsUrl
+				$daemonJsName = [IO.Path]::GetFileName(([Uri]$daemonJsUrl).AbsolutePath)
+			} else {
+				if ($daemonJsUrl -match "\.\.") {
+					throw "The Signet Bun JavaScript daemon asset path is invalid."
+				}
+				$daemonJsDownloadUrl = Join-DownloadUrl $downloadBase $daemonJsUrl
+				$daemonJsName = [IO.Path]::GetFileName(($daemonJsUrl -split "\?")[0])
+			}
+			if ($daemonJsName -notmatch "^[A-Za-z0-9._-]+$") {
+				throw "The Signet Bun JavaScript daemon asset name is invalid."
+			}
+			$daemonJsPropertyNames = @($daemonJs.PSObject.Properties | ForEach-Object { $_.Name })
+			if ($daemonJsPropertyNames -notcontains "size" -or [int64]$daemonJs.size -le 0) {
+				throw "The Signet Bun JavaScript daemon asset entry is missing a valid size."
+			}
+			$daemonJsPath = Join-Path $workDir $daemonJsName
+			Download-File $daemonJsDownloadUrl $daemonJsPath
+			$daemonJsInfo = Get-Item -LiteralPath $daemonJsPath
+			if ([int64]$daemonJsInfo.Length -ne [int64]$daemonJs.size) {
+				throw "Signet Bun JavaScript daemon asset size verification failed."
+			}
+			if ((Get-Sha256 $daemonJsPath) -ne $daemonJsSha256) {
+				throw "Signet Bun JavaScript daemon asset SHA-256 verification failed."
+			}
+		}
+
 		$localAppData = Get-EnvironmentValue "LOCALAPPDATA" (Join-Path (Get-EnvironmentValue "USERPROFILE" $HOME) "AppData\Local")
 		$installDir = Get-EnvironmentValue "SIGNET_BIN_DIR" (Join-Path $localAppData "Programs\Signet")
 		$installArguments = @("install", "--bin-dir", $installDir, "--force")
 		if ($null -ne $connectorPath) {
 			$installArguments += @("--connector-assets", $connectorPath)
+		}
+		if ($null -ne $daemonJsPath) {
+			$installArguments += @("--daemon-js-assets", $daemonJsPath)
 		}
 
 		Write-Host "Installing Signet to $installDir"

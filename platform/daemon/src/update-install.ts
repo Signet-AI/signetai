@@ -71,12 +71,14 @@ export interface NativeReleaseSelection {
 	readonly version: string;
 	readonly asset: NativeManifestAsset;
 	readonly connectors?: NativeManifestComponent;
+	readonly daemonJs?: NativeManifestComponent;
 }
 
 export const UPDATE_INSTALL_TIMEOUT_MS = 15 * 60_000;
 export const NATIVE_MANIFEST_MAX_BYTES = 1024 * 1024;
 export const NATIVE_BINARY_MAX_BYTES = 256 * 1024 * 1024;
 export const NATIVE_CONNECTORS_MAX_BYTES = 64 * 1024 * 1024;
+export const NATIVE_DAEMON_JS_MAX_BYTES = 128 * 1024 * 1024;
 export const VERSION_VERIFY_TIMEOUT_MS = 30_000;
 
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
@@ -330,6 +332,9 @@ export function parseNativeReleaseManifest(
 	const connectors = components?.connectors
 		? readManifestComponent(components.connectors, NATIVE_CONNECTORS_MAX_BYTES, "connectors component")
 		: undefined;
+	const daemonJs = components?.daemonJs
+		? readManifestComponent(components.daemonJs, NATIVE_DAEMON_JS_MAX_BYTES, "daemonJs component")
+		: undefined;
 
 	return {
 		version: expectedVersion,
@@ -340,6 +345,7 @@ export function parseNativeReleaseManifest(
 			size: asset.size,
 		},
 		...(connectors ? { connectors } : {}),
+		...(daemonJs ? { daemonJs } : {}),
 	};
 }
 
@@ -512,6 +518,29 @@ async function installNativeUpdate(
 			const connectorPath = join(tempDir, connectorFileName);
 			await writeFile(connectorPath, connectors);
 			args.push("--connector-assets", connectorPath);
+		}
+		if (selection.daemonJs && (deps.env ?? process.env).SIGNET_DAEMON_RUNTIME === "bun-js") {
+			const daemonJsAssetUrl = releaseAssetUrl(releaseBase, selection.daemonJs.url);
+			const daemonJsFileName = posix.basename(new URL(daemonJsAssetUrl).pathname);
+			if (!daemonJsFileName) {
+				throw new UpdateInstallFailure("manifest_invalid", "Native manifest daemonJs URL has no file name");
+			}
+			const daemonJs = await downloadBounded(
+				daemonJsAssetUrl,
+				selection.daemonJs.size,
+				AbortSignal.timeout(remainingUpdateTimeout(deadline)),
+				fetchImpl,
+			);
+			if (daemonJs.length !== selection.daemonJs.size) {
+				throw new UpdateInstallFailure(
+					"checksum_mismatch",
+					`Bun JavaScript daemon archive size is ${daemonJs.length}, expected ${selection.daemonJs.size}`,
+				);
+			}
+			verifyDownloadedSha256(daemonJs, selection.daemonJs.sha256, "Bun JavaScript daemon archive");
+			const daemonJsPath = join(tempDir, daemonJsFileName);
+			await writeFile(daemonJsPath, daemonJs);
+			args.push("--daemon-js-assets", daemonJsPath);
 		}
 
 		const result = await (deps.runCommand ?? runUpdateProcess)(binaryPath, args, {

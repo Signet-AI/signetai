@@ -1037,6 +1037,35 @@ async function waitForProcessGroupExit(groupId: number): Promise<boolean> {
 }
 
 export async function stopManagedDaemonProcess(pid: number): Promise<void> {
+	if (process.platform === "win32") {
+		// Windows has no POSIX process-group equivalent. taskkill's tree mode is
+		// the bounded, OS-native way to release child-held resources (for example
+		// the DB owner or an integration worker) when the daemon is detached.
+		try {
+			const result = spawnSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+				stdio: ["ignore", "ignore", "ignore"],
+				timeout: 5000,
+			});
+			if (result.status === 0 || !isAlive(pid)) return;
+		} catch {
+			// Fall through to the signal-based fallback below.
+		}
+		try {
+			process.kill(pid, "SIGTERM");
+		} catch {
+			// Process might already be dead.
+		}
+		if (!(await waitForPidExit(pid))) {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {
+				// Process might already be dead.
+			}
+			await waitForPidExit(pid);
+		}
+		return;
+	}
+
 	const groupId = readOwnedProcessGroupId(pid);
 	try {
 		process.kill(groupId === null ? pid : -groupId, "SIGTERM");
@@ -1396,12 +1425,21 @@ export function readDaemonStartFailureDiagnostics(
 
 function findExecutableOnPath(name: string, pathValue: string | undefined = process.env.PATH): string | null {
 	if (!pathValue) return null;
+	const names =
+		process.platform === "win32" && !name.includes(".") ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`] : [name];
 	for (const dir of pathValue.split(delimiter)) {
 		if (!dir) continue;
-		const candidate = join(dir, name);
-		if (existsSync(candidate)) return candidate;
+		for (const candidateName of names) {
+			const candidate = join(dir, candidateName);
+			if (existsSync(candidate)) return candidate;
+		}
 	}
 	return null;
+}
+
+function isBunExecutablePath(path: string): boolean {
+	const name = basename(path).toLowerCase();
+	return name === "bun" || name === "bun.exe";
 }
 
 export function resolveDaemonRuntimeCommand(
@@ -1412,7 +1450,7 @@ export function resolveDaemonRuntimeCommand(
 ): string {
 	const selectedRuntime = runtime ?? resolveDaemonRuntime(undefined, env);
 	if (selectedRuntime === "bun-js") {
-		if (basename(execPath).startsWith("bun")) return execPath;
+		if (isBunExecutablePath(execPath)) return execPath;
 		const found = findExecutableOnPath("bun", pathValue);
 		if (found) return found;
 		if (process.platform === "darwin") return resolveLaunchdExecutable("bun", { environment: env, pathValue });
@@ -1425,7 +1463,7 @@ export function resolveDaemonRuntimeCommand(
 		if (existsSync(bundledNode)) return bundledNode;
 	}
 
-	if (basename(execPath).startsWith("bun")) return execPath;
+	if (isBunExecutablePath(execPath)) return execPath;
 	const found = findExecutableOnPath("bun", pathValue);
 	if (found) return found;
 	if (process.platform === "darwin") return resolveLaunchdExecutable("bun", { environment: env, pathValue });
@@ -1433,7 +1471,8 @@ export function resolveDaemonRuntimeCommand(
 }
 
 function isJavaScriptDaemonPath(path: string): boolean {
-	return path.endsWith(".js") || path.endsWith(".ts");
+	const lower = path.toLowerCase();
+	return lower.endsWith(".js") || lower.endsWith(".ts");
 }
 
 export function resolveDaemonLaunchCommand(
@@ -1448,7 +1487,7 @@ export function resolveDaemonLaunchCommand(
 		}
 		return [daemonPath];
 	}
-	if (selectedRuntime === "bun-js" && !daemonPath.endsWith(".js")) {
+	if (selectedRuntime === "bun-js" && !daemonPath.toLowerCase().endsWith(".js")) {
 		throw new Error("The bun-js daemon runtime does not launch TypeScript source. Build @signet/daemon first.");
 	}
 	return [resolveDaemonRuntimeCommand(env, process.execPath, env.PATH, selectedRuntime), daemonPath];
@@ -1468,9 +1507,9 @@ export function macOSLaunchAgentAttributionNotice(
 	}
 
 	const runtime = resolveDaemonRuntimeCommand(opts.env, opts.execPath, opts.pathValue);
-	const runtimeName = basename(runtime).startsWith("bun")
+	const runtimeName = isBunExecutablePath(runtime)
 		? "Bun"
-		: basename(runtime).startsWith("node")
+		: basename(runtime).toLowerCase().startsWith("node")
 			? "Node.js"
 			: basename(runtime);
 	const signer = runtimeName === "Bun" ? "Bun's signer (for example, Jarred Sumner)" : `${runtimeName}'s signer`;
@@ -1482,7 +1521,7 @@ export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
 
 function currentLaunchdDomain(): string {
 	const uid = typeof process.getuid === "function" ? process.getuid() : null;
-	return uid === null ? "user" : `gui/${uid}`;
+	return uid === null ? "gui/user" : `gui/${uid}`;
 }
 
 export function launchdDaemonLabel(agentsDir: string): string {

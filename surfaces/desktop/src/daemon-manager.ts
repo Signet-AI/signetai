@@ -1,4 +1,4 @@
-import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
+import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type ChildProcess } from "@signet/core";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { LOOPBACK_HOST } from "@signet/core";
@@ -62,6 +62,21 @@ function stringOrNull(value: unknown): string | null {
 	return typeof value === "string" ? value : null;
 }
 
+function terminateChildProcess(child: ChildProcess): void {
+	if (process.platform === "win32" && typeof child.pid === "number") {
+		try {
+			const result = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+				stdio: "ignore",
+				timeout: 5000,
+			});
+			if (result.status === 0) return;
+		} catch {
+			// Fall through to the signal-based fallback below.
+		}
+	}
+	child.kill("SIGTERM");
+}
+
 export class DaemonManager {
 	readonly port = readPort();
 	readonly baseUrl = `http://${LOOPBACK_HOST}:${this.port}`;
@@ -103,6 +118,7 @@ export class DaemonManager {
 				version: stringOrNull(data.version) ?? "unknown",
 				pid: pid ?? 0,
 				uptime: numberOrNull(data.uptime) ?? 0,
+				runtime: stringOrNull(data.runtime),
 				agentsDir: stringOrNull(data.agentsDir),
 			};
 		} catch {
@@ -205,7 +221,7 @@ export class DaemonManager {
 		const child = this.#child;
 		if (!child || !this.#owned) return this.status();
 
-		child.kill("SIGTERM");
+		terminateChildProcess(child);
 		if (!(await this.#waitForExit(child, 5000))) {
 			throw new Error("Owned daemon did not exit within 5 seconds");
 		}
@@ -229,7 +245,7 @@ export class DaemonManager {
 
 	shutdownOwned(): void {
 		if (!this.#child || !this.#owned) return;
-		this.#child.kill("SIGTERM");
+		terminateChildProcess(this.#child);
 		this.#child = null;
 		this.#owned = false;
 		this.#mode = "none";

@@ -23,6 +23,7 @@ function linkCommand(binDir: string, command: string): void {
 
 describe("install.sh shell compatibility", () => {
 	test("runs through bash and zsh without jq or Bash-only matching", () => {
+		if (process.platform === "win32") return;
 		const workspace = mkdtempSync(join(tmpdir(), "signet-install-shell-"));
 		const binDir = join(workspace, "bin");
 		const fixtureDir = join(workspace, "fixtures");

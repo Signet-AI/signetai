@@ -1,10 +1,10 @@
 import { access, cp, mkdir, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const source = join(root, "skills");
-const target = join(root, "platform/daemon/skills");
+const target = resolve(root, process.argv[2] ?? "platform/daemon/skills");
 
 try {
 	await access(source);

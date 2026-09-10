@@ -20,7 +20,7 @@
 		"build:dashboard": "cd ../dashboard && bun install && bun run build",
 		"dev": "bun --watch src/dev-cli.ts",
 		"dev:dashboard": "cd ../dashboard && bun run dev",
-		"copy:skills": "rm -rf skills && cp -r ../../skills skills",
+		"copy:skills": "bun ../../scripts/copy-skills.ts surfaces/cli/skills",
 		"prebuild": "bun run build:workspace-deps && bun run copy:skills",
 		"prepublishOnly": "bun run build",
 		"test": "bun test"
