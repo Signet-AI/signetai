@@ -131,7 +131,7 @@ describe("daemon bundle flag", () => {
 		});
 
 		it(`${action.name} rejects invalid selections before stopping`, async () => {
-			const deps = makeDeps();
+			const deps = makeDeps({ isDaemonRunning: async () => true });
 			const stop = spyOn(deps, "stopDaemon");
 			try {
 				await expect(action({ runtime: "compiled", daemonJsPath: "missing.js" }, deps)).rejects.toThrow(
