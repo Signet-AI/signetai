@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { DbOwnerDeadlineError, type DbOwnerClient } from "./db-owner-client";
-import { getDbOwnerHealthFields, ownerQueryAll, ownerRunStatement, ownerTransaction } from "./db-owner-maintenance";
+import { getDbOwnerMaintenance, ownerQueryAll, ownerRunStatement, ownerTransaction } from "./db-owner-maintenance";
 import type { DbOwnerStatement } from "./db-owner-protocol";
 import { logger } from "./logger";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
@@ -275,7 +275,10 @@ export function publishDatabaseIntegrityStatus(
 
 /** Keep owner identity live from the registered resource used by /health. */
 export function getDatabaseIntegrityStatus(): DatabaseIntegrityStatus {
-	return { ...latestStatus, ...getDbOwnerHealthFields() };
+	const health = getDbOwnerMaintenance()?.health();
+	return health === undefined
+		? latestStatus
+		: { ...latestStatus, ownerState: health.state, ownerGeneration: health.generation };
 }
 
 export type TelemetryIndexRepairAudit = (

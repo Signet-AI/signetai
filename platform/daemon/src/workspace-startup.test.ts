@@ -101,7 +101,7 @@ describe("daemon workspace startup preflight", () => {
 		expect(Bun.file(join(root, "home", ".agents")).exists()).resolves.toBe(false);
 	}, 30_000);
 
-	it("applies team auth before the first listener response and retains it on rejected reload", async () => {
+	it("publishes DB-owner health and retains team auth on rejected reload", async () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-team-auth-startup-"));
 		tempDirs.push(root);
 		const workspace = join(root, "workspace");
@@ -135,6 +135,21 @@ describe("daemon workspace startup preflight", () => {
 					return false;
 				}
 			});
+			const healthResponse = await fetch(`http://127.0.0.1:${port}/health`, {
+				signal: AbortSignal.timeout(5_000),
+			});
+			expect(healthResponse.ok).toBe(true);
+			const health = (await healthResponse.json()) as {
+				readonly dbOwner: { readonly state: string; readonly generation: number } | null;
+				readonly databaseIntegrity: { readonly ownerState: string | null; readonly ownerGeneration: number | null };
+			};
+			expect(health.dbOwner).not.toBeNull();
+			if (health.dbOwner === null) throw new Error("DB-owner health was missing after daemon startup");
+			expect(typeof health.dbOwner.state).toBe("string");
+			expect(typeof health.dbOwner.generation).toBe("number");
+			expect(health.databaseIntegrity.ownerState).toBe(health.dbOwner.state);
+			expect(health.databaseIntegrity.ownerGeneration).toBe(health.dbOwner.generation);
+
 			const firstResponse = await fetch(`http://127.0.0.1:${port}/api/memory/recall`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
