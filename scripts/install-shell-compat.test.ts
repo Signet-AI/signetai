@@ -49,6 +49,16 @@ describe("install.sh shell compatibility", () => {
 				linkCommand(binDir, command);
 			}
 
+			// Keep the fixture aligned with the host that runs the shell test. The
+			// installer intentionally derives its asset key from uname, so a
+			// Linux-only manifest makes this otherwise portable test fail on macOS.
+			const hostOs = spawnSync("uname", ["-s"], { encoding: "utf8" }).stdout.trim().toLowerCase();
+			const hostArch = spawnSync("uname", ["-m"], { encoding: "utf8" }).stdout.trim();
+			const fixtureOs = hostOs === "darwin" ? "darwin" : hostOs === "linux" ? "linux" : hostOs;
+			const fixtureArch =
+				hostArch === "x86_64" || hostArch === "amd64" ? "x64" : hostArch === "aarch64" ? "arm64" : hostArch;
+			const fixturePlatform = `${fixtureOs}-${fixtureArch}`;
+
 			const curl = join(binDir, "curl");
 			writeFileSync(
 				curl,
@@ -74,7 +84,7 @@ fi
 			const binary = `#!/bin/sh
 printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 `;
-			const binaryName = "signet-linux-x64";
+			const binaryName = `signet-${fixturePlatform}`;
 			writeFileSync(join(fixtureDir, binaryName), binary);
 			const connectorName = "signet-connectors-v-test.tar.gz";
 			const connectorArchive = Buffer.from("connector archive");
@@ -87,7 +97,7 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 				JSON.stringify({
 					assets: [
 						{
-							platform: "linux-x64",
+							platform: fixturePlatform,
 							sha256: createHash("sha256").update(binary).digest("hex"),
 						},
 					],
