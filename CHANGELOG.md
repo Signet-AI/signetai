@@ -7,8 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-10
-- Features: add daemon JS bundle path flag; add selectable Bun JS runtime.
-- Bug fixes: harden Bun daemon runtime and installer.
+- Features: add dynamic connector health dashboard; add daemon JS bundle path flag; add selectable Bun JS runtime.
+- Bug fixes: enforce connector deadlines across native I/O; bound connector inspection and avoid unverified healthy status; harden Bun daemon runtime and installer.
 
 ### 2026-09-09
 - Features: add ChatGPT desktop plugin path.
@@ -39,6 +39,20 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: add missing contributors.
 
 ## Release Ledger
+
+## [0.225.0] - 2026-09-10
+
+Release summary: 1 feature and 2 bug fixes.
+Tag range: `v0.224.0..v0.225.0`.
+
+### Features
+
+- add dynamic connector health dashboard
+
+### Bug Fixes
+
+- enforce connector deadlines across native I/O
+- bound connector inspection and avoid unverified healthy status
 
 ## [0.224.0] - 2026-09-10
 
