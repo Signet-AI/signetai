@@ -6,6 +6,7 @@ export interface PathOptions {
 
 export interface RuntimeOptions {
 	runtime?: string;
+	daemonJsPath?: string;
 }
 
 export interface StartOptions extends PathOptions, RuntimeOptions {}
@@ -31,7 +32,9 @@ export function withPath(cmd: Command): Command {
 }
 
 export function withRuntime(cmd: Command): Command {
-	return cmd.option("--runtime <runtime>", "Daemon runtime: compiled or bun-js");
+	return cmd
+		.option("--runtime <runtime>", "Daemon runtime: compiled or bun-js")
+		.option("--daemon-js-path <path>", "Built daemon.js to run with bun-js (overrides SIGNET_DAEMON_JS_PATH)");
 }
 
 export function withJson(cmd: Command): Command {

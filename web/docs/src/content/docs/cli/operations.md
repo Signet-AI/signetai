@@ -163,6 +163,26 @@ Stop and start the daemon. Useful after installing an update or changing
 
 Top-level alias: `signet restart`
 
+### Select a local daemon bundle
+
+After building a checkout, select its JavaScript daemon explicitly:
+
+```bash
+signet daemon restart --runtime bun-js \
+  --daemon-js-path ./platform/daemon/dist/daemon.js
+```
+
+`--daemon-js-path` is available on `daemon start`, `daemon restart`, and their
+`start` / `restart` aliases. It overrides `SIGNET_DAEMON_JS_PATH` and resolves
+relative paths from the current directory. Select `bun-js` using `--runtime` or
+`SIGNET_DAEMON_RUNTIME`. The bundle must include its workers and runtime assets;
+this option does not build or synchronize source. An explicit path on `start`
+restarts an existing daemon even when it already uses `bun-js`, so the selected
+build takes effect. Repeat the flag on subsequent starts or restarts to select
+that build again; it does not save a workspace preference.
+
+See [Profile the daemon](/cli/profiling/) for the build and profiling workflow.
+
 ### `signet daemon logs`
 
 View daemon logs.

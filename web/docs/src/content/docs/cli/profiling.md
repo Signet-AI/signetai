@@ -37,6 +37,20 @@ cd ../..
 bun run build:daemon-js-assets
 ```
 
+Select the bundle you just built when restarting:
+
+```bash
+signet daemon restart --no-sync --runtime bun-js \
+  --daemon-js-path ./dist/signetai/runtime/daemon-js/daemon.js
+```
+
+`--daemon-js-path` takes precedence over `SIGNET_DAEMON_JS_PATH`. Relative paths
+resolve from your current directory. The flag requires the `bun-js` runtime,
+selected with `--runtime` or `SIGNET_DAEMON_RUNTIME`; it does not build or update
+the checkout. Missing bundles or required assets fail before the running daemon
+is stopped. Startup prints the selected bundle path. Pass the same flag alongside
+the profiling environment variables above when capturing your local build.
+
 The profile build emits `.map` files beside the daemon and worker bundles. Keep the
 compiled and `bun-js` runs comparable: use the same commit, workspace,
 configuration, model, workload, Bun version, and warm-up period.
