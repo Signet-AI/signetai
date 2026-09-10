@@ -142,7 +142,9 @@ native `EventSource` with headers, so auth is pumped manually).
 |---|---|---|---|
 | `getPipelineStatus` / `pausePipeline` / `resumePipeline` | GET/POST | `/api/pipeline/{status,pause,resume}` | Pipeline control |
 | `getModelsByProvider` | GET | `/api/pipeline/models/by-provider` | Model registry grouped by provider |
-| `getHarnesses` | GET 🔐 | `/api/harnesses` | Discovered harnesses |
+| `getHarnesses` | GET | `/api/harnesses` | Registry-backed harness discovery, normalized connector status, bundled connector icon metadata, and recovery capabilities |
+| `getHarnessHealth` | GET | `/api/harnesses/{id}/health` | Refresh one harness connector health result |
+| `repairHarness` / `reinitializeHarness` | POST 🔐 | `/api/harnesses/{id}/{repair,reinitialize}` | Run the connector-owned recovery path |
 | `regenerateHarnesses` | POST | `/api/harnesses/regenerate` | Regenerate harness configs |
 | `getInferenceCatalog` | GET 🔐 | `/api/inference/catalog` | Model/provider catalog |
 | `getInferenceStatus` | GET 🔐 | `/api/inference/status` | Active provider/auth status |
@@ -244,7 +246,7 @@ what is *not* being rebuilt yet and where future mockup work would slot in.
 | **Logs viewer** (live SSE tail) | `/api/logs/stream` | none |
 | **Sessions / Black-box traces / hook bypass** | `/api/sessions/*`, `/api/sessions/{key}/bypass` | none |
 | **Reflections** (daily Q&A generate/answer) | `/api/reflections/*` | none (Home "Daily brief" is continuity, ≠ reflection Q&A) |
-| **Harness discovery + regenerate** | `/api/harnesses`, `/api/harnesses/regenerate` | none (Settings "Connected harnesses" is read-only) |
+| **Harness discovery + connector recovery** | `/api/harnesses`, `/api/harnesses/{id}/{health,repair,reinitialize}`, `/api/harnesses/regenerate` | Home Connectors section consumes registry-backed status; setup remains the management flow |
 | **OS / widget sandbox** (install, AppDock, AutoCard, AgentChat) | `/api/os/install`, `os/*` components | none |
 | **Changelog / Roadmap / Readme tabs** | `/api/changelog`, `/api/roadmap`, `/api/readme` | none |
 | **Onboarding flow** (the core #948 ask) | (Svelte had none — LoginScreen only) | not staged |

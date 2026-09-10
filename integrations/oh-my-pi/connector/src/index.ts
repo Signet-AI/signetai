@@ -61,6 +61,10 @@ export class OhMyPiConnector extends BaseConnector {
 	readonly name = "Oh My Pi";
 	readonly harnessId = "oh-my-pi";
 
+	getIconAsset(): string {
+		return "oh-my-pi.svg";
+	}
+
 	private getManagedExtensionPath(): string {
 		return join(resolveOhMyPiExtensionsDir(), OH_MY_PI_MANAGED_FILENAME);
 	}

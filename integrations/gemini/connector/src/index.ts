@@ -39,6 +39,10 @@ export class GeminiConnector extends BaseConnector {
 	readonly name = "Gemini";
 	readonly harnessId = "gemini";
 
+	getIconAsset(): string {
+		return "gemini.svg";
+	}
+
 	private getGeminiHome(): string {
 		return join(homedir(), ".gemini");
 	}

@@ -231,6 +231,43 @@ manages. It uses `SIGNET_DAEMON_URL` and `SIGNET_API_KEY` at runtime.
 `SIGNET_TOKEN` remains a backwards-compatible alias, but new installs should
 use `SIGNET_API_KEY`.
 
+## Dashboard connector status and recovery
+
+The local dashboard reads the normalized `connectors` array from:
+
+```text
+GET /api/harnesses
+```
+
+The daemon derives this array from its registered harness connector loaders.
+Each entry reports its `id`, display name, `detected`, `installed`,
+`configured`, and `relevant` state, plus the last health result and supported
+recovery capabilities. `icon` is the connector-provided filename for a
+bundled local brand asset under the dashboard's `/logos/` directory; clients
+fall back to a generic mark when it is absent or unavailable. The dashboard only shows entries marked `relevant`,
+so merely supporting a harness does not add an unused row to the home page.
+The legacy `harnesses` and `configuredHarnesses` fields remain available to
+setup flows.
+
+Refresh one connector without reloading the dashboard:
+
+```text
+GET /api/harnesses/<id>/health
+```
+
+Recovery actions are worker-isolated and require the `admin` permission:
+
+```text
+POST /api/harnesses/<id>/repair
+POST /api/harnesses/<id>/reinitialize
+```
+
+When the connector advertises that reinitialization can change its owned
+configuration, the request must include `{ "confirm": true }`. Reinitialize
+then runs the connector's canonical initialization path; both actions return
+their result or the actionable failure message, and clients should run the
+health endpoint immediately afterward.
+
 ## 5. Verify the connection before first run
 
 From the remote machine:

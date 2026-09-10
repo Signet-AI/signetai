@@ -20,13 +20,22 @@ test("GET /api/harnesses reports the agent.yaml connection record", () => {
 import { strict as assert } from "node:assert";
 import { Hono } from ${JSON.stringify(require.resolve("hono"))};
 import { registerConnectorRoutes } from ${JSON.stringify(join(import.meta.dir, "connectors-routes.ts"))};
+import { HARNESS_INSTALLERS } from ${JSON.stringify(join(import.meta.dir, "../harness-registry.ts"))};
 const app = new Hono();
 registerConnectorRoutes(app);
 const response = await app.request("/api/harnesses");
 assert.equal(response.status, 200);
 const body = await response.json();
 assert.ok(Array.isArray(body.harnesses));
+assert.ok(Array.isArray(body.connectors));
 assert.ok(Array.isArray(body.configuredHarnesses));
+assert.deepEqual(body.harnesses.map((h) => h.id).sort(), Object.keys(HARNESS_INSTALLERS).sort());
+assert.deepEqual(body.connectors.map((connector) => connector.id).sort(), Object.keys(HARNESS_INSTALLERS).sort());
+const codex = body.connectors.find((connector) => connector.id === "codex");
+assert.equal(codex.configured, true);
+assert.equal(codex.relevant, true);
+assert.equal(codex.detected, false);
+assert.equal(codex.capabilities.repair, true);
 console.log("harness route contract passed");
 const {logger} = await import(${JSON.stringify(join(import.meta.dir, "../logger.ts"))}); logger.shutdown();
 `,

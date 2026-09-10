@@ -1,6 +1,7 @@
 import { Dialog } from "radix-ui";
 import { Monitor, FileText as Files, MessageCircle as MessagesSquare } from "@/components/mingcute-icons";
 import { SignetMark, sourceLogo } from "@/components/icons";
+import { ConnectorLogo } from "@/components/connector-logo";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useEffect, useRef, useState } from "react";
 import { api, getJSONResult, type Memory } from "@/lib/api";
@@ -15,11 +16,6 @@ import { useConnectController } from "@/components/settings/connect-controller";
 import { ConnectSourceDialog, type SourceKind } from "@/components/sources/connect-source-dialog";
 import "./onboarding.css";
 
-interface Harness {
-	id: string;
-	name: string;
-	exists: boolean;
-}
 const STEPS = ["Welcome", "Agents", "Connection", "Sources", "First memory", "Ready"];
 
 export function OnboardingModal() {
@@ -45,7 +41,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 	const store = useAgentConfig();
 	const status = useAsync(() => api.getStatus());
 	const catalog = useAsync(() => api.getInferenceCatalog());
-	const harnesses = useAsync(() => getJSONResult<{ harnesses: Harness[] }>("/api/harnesses"));
+	const harnesses = useAsync(() => api.getHarnesses());
 	const [step, setStep] = useState(0);
 	const [selected, setSelected] = useState<string[]>([]);
 	const [provider, setProvider] = useState("");
@@ -476,12 +472,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 														}
 													>
 														<span className="app-icon">
-															{
-																<img
-																	src={`/logos/${h.id === "claude-code" ? "claude" : h.id === "codex" ? "openai" : h.id}.${h.id === "kimi" ? "png" : "svg"}`}
-																	alt=""
-																/>
-															}
+															<ConnectorLogo icon={h.icon} />
 														</span>
 														<span>
 															<strong>{h.name}</strong>

@@ -56,6 +56,10 @@ export class PiConnector extends BaseConnector {
 	readonly name = "pi";
 	readonly harnessId = "pi";
 
+	getIconAsset(): string {
+		return "pi.svg";
+	}
+
 	private getManagedExtensionPath(): string {
 		return join(resolvePiExtensionsDir(), PI_MANAGED_FILENAME);
 	}

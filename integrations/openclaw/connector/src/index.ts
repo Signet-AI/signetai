@@ -186,6 +186,10 @@ export class OpenClawConnector extends BaseConnector {
 	readonly name = "OpenClaw";
 	readonly harnessId = "openclaw";
 
+	getIconAsset(): string {
+		return "openclaw.svg";
+	}
+
 	/**
 	 * Install the connector.
 	 *
@@ -292,6 +296,21 @@ export class OpenClawConnector extends BaseConnector {
 			configsPatched,
 			...(warnings.length > 0 ? { warnings } : {}),
 		};
+	}
+
+	private installRecovery(basePath: string): Promise<InstallResult> {
+		return this.install(basePath, {
+			configureWorkspace: false,
+			runtimePath: this.getConfiguredRuntimePath() ?? "plugin",
+		});
+	}
+
+	async repair(basePath: string): Promise<InstallResult> {
+		return this.installRecovery(basePath);
+	}
+
+	async reinitialize(basePath: string): Promise<InstallResult> {
+		return this.installRecovery(basePath);
 	}
 
 	/**

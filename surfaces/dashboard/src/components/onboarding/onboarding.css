@@ -42,6 +42,7 @@
  .choice.selected { border-color:var(--success); background:var(--accent-subtle); }
  .app-icon { width:31px; height:31px; display:grid; place-items:center; flex-shrink:0; }
  .app-icon img { width:26px; height:26px; object-fit:contain; }
+ .app-icon svg { width:26px; height:26px; }
  .choice strong { font-size:13px; font-weight:500; }
  .choice small { display:block; color:var(--muted-foreground); font-size:11px; margin-top:3px; }
  .agent-choices { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:18px; }

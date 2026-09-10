@@ -1,9 +1,10 @@
 import { DailyBrief } from "@/components/home/daily-brief";
 import { HomeAgentsPanel } from "@/components/home/agents";
+import { HomeConnectorsPanel } from "@/components/home/connectors";
 import { ActivityHeatmap, type DayBucket, type KpiData, KpiFooter, useDateString } from "@/components/home/kpi";
 import { HomeRecentMemories } from "@/components/home/recent-memories";
 import { HomeSecretsPanel } from "@/components/home/secrets";
-import { api, getJSONResult } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { HomeSourcesPanel } from "@/views/sources";
@@ -30,11 +31,8 @@ export function HomeView() {
 	// present long before Signet was ever connected, which would hide the only
 	// setup/repair link. Older daemons omit configuredHarnesses; treat that as
 	// unknown and keep the setup link visible rather than guessing from exists.
-	const harnessesQuery = useAsync(
-		() => getJSONResult<{ configuredHarnesses?: string[] }>("/api/harnesses").then((result) => result.data),
-		{ intervalMs: 30000 },
-	);
-	const connected = (harnessesQuery.data?.configuredHarnesses?.length ?? 0) > 0;
+	const harnessesQuery = useAsync(() => api.getHarnesses(), { intervalMs: 30000 });
+	const connected = (harnessesQuery.data?.data?.configuredHarnesses?.length ?? 0) > 0;
 
 	const kpis: KpiData[] = useMemo(() => {
 		const totalMemories = timeline?.totalMemories;
@@ -119,6 +117,12 @@ export function HomeView() {
 						sources={sources}
 						loading={sourcesQuery.loading && sources === undefined}
 						onRefresh={sourcesQuery.refresh}
+					/>
+					<HomeWidgetSeparator />
+					<HomeConnectorsPanel
+						result={harnessesQuery.data}
+						loading={harnessesQuery.loading}
+						onRefresh={harnessesQuery.refresh}
 					/>
 					<HomeWidgetSeparator />
 					<HomeAgentsPanel activeAgentId={status.data?.agentId} />

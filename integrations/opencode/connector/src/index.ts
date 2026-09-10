@@ -107,6 +107,10 @@ export class OpenCodeConnector extends BaseConnector {
 	readonly name = "OpenCode";
 	readonly harnessId = "opencode";
 
+	getIconAsset(): string {
+		return "opencode.svg";
+	}
+
 	protected getOpenCodePath(): string {
 		return join(homedir(), ".config", "opencode");
 	}

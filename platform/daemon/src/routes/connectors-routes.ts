@@ -1,12 +1,10 @@
 import { spawnHidden as spawn } from "@signet/core";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	CONNECTOR_PROVIDERS,
 	findLaunchdExecutable,
 	loadConfiguredHarnesses,
-	resolveHermesHomePath,
 	type ConnectorConfig,
 	type SyncCursor,
 } from "@signet/core";
@@ -22,6 +20,7 @@ import {
 	updateCursor,
 } from "../connectors/registry.js";
 import { getDbAccessor } from "../db-accessor.js";
+import { enumerateHarnessConnectors, inspectHarnessConnector } from "../harness-registry.js";
 import { resolveHarnessPythonCommand } from "../harness-python.js";
 import { logger } from "../logger.js";
 import { which } from "../which.js";
@@ -356,84 +355,30 @@ export function registerConnectorRoutes(app: Hono): void {
 	// Harnesses API
 
 	app.get("/api/harnesses", async (c) => {
-		const configs = [
-			{
-				name: "Codex",
-				id: "codex",
-				path: join(join(homedir(), ".codex"), "config.toml"),
-				exists: existsSync(join(homedir(), ".codex")),
-			},
-			{
-				name: "Hermes",
-				id: "hermes-agent",
-				path: join(resolveHermesHomePath(), "config.yaml"),
-				exists: existsSync(resolveHermesHomePath()),
-			},
-			{
-				name: "Claude Code",
-				id: "claude-code",
-				path: join(homedir(), ".claude", "settings.json"),
-				exists: existsSync(join(homedir(), ".claude", "settings.json")),
-			},
-			{
-				name: "OpenCode",
-				id: "opencode",
-				path: join(homedir(), ".config", "opencode", "AGENTS.md"),
-				exists: existsSync(join(homedir(), ".config", "opencode", "AGENTS.md")),
-			},
-			{
-				name: "OpenClaw",
-				id: "openclaw",
-				path: join(AGENTS_DIR, "AGENTS.md"),
-				exists: existsSync(join(AGENTS_DIR, "AGENTS.md")),
-			},
-			{
-				name: "Gemini CLI",
-				id: "gemini",
-				path: join(homedir(), ".gemini", "settings.json"),
-				exists: existsSync(join(homedir(), ".gemini", "settings.json")),
-			},
-			{
-				id: "pi",
-				name: "Pi",
-				path: join(homedir(), ".pi", "agent", "settings.json"),
-				exists: existsSync(join(homedir(), ".pi", "agent", "settings.json")),
-			},
-			{
-				id: "oh-my-pi",
-				name: "Oh My Pi",
-				path: join(homedir(), ".omp", "agent", "settings.json"),
-				exists: existsSync(join(homedir(), ".omp", "agent", "settings.json")),
-			},
-			{
-				id: "kimi",
-				name: "Kimi",
-				path: join(homedir(), ".kimi", "config.toml"),
-				exists: existsSync(join(homedir(), ".kimi", "config.toml")),
-			},
-			{
-				id: "forge",
-				name: "ForgeCode",
-				path: join(homedir(), ".forge", "config.yaml"),
-				exists: existsSync(join(homedir(), ".forge", "config.yaml")),
-			},
-		];
-
-		const harnesses = configs.map((config) => ({
-			name: config.name,
-			id: config.id,
-			path: config.path,
-			exists: config.exists,
-			lastSeen: harnessLastSeen.get(config.id) ?? null,
-		}));
-
 		// Signet-owned connection record: the harnesses the operator (or the
 		// onboarding flow) actually connected, from agent.yaml. Unlike `exists`,
-		// which merely reports that a harness's home directory is present, a
-		// non-empty list proves a Signet connection was established.
+		// which reports a discovered harness configuration, a non-empty list
+		// proves a Signet connection was established.
 		const configuredHarnesses = loadConfiguredHarnesses(AGENTS_DIR);
+		const connectors = await enumerateHarnessConnectors(configuredHarnesses, harnessLastSeen);
+		const harnesses = connectors.map((connector) => ({
+			name: connector.displayName,
+			id: connector.id,
+			icon: connector.icon,
+			path: connector.configPath ?? "",
+			exists: connector.detected,
+			lastSeen: connector.lastSeen,
+		}));
 
-		return c.json({ harnesses, configuredHarnesses });
+		return c.json({ harnesses, connectors, configuredHarnesses });
+	});
+
+	app.get("/api/harnesses/:id/health", async (c) => {
+		const id = c.req.param("id");
+		const configuredHarnesses = loadConfiguredHarnesses(AGENTS_DIR);
+		const connector = await inspectHarnessConnector(id, configuredHarnesses, harnessLastSeen);
+		if (!connector) return c.json({ error: "Unsupported harness connector." }, 404);
+		return c.json(connector);
 	});
 
 	app.post("/api/harnesses/regenerate", async (c) => {

@@ -2,6 +2,7 @@ import { BaseConnector, type InstallResult, type UninstallResult } from "@signet
 export declare class ForgeConnector extends BaseConnector {
     readonly name = "ForgeCode";
     readonly harnessId = "forge";
+    getIconAsset(): string;
     protected getForgeHome(): string;
     getConfigPath(): string;
     install(basePath: string): Promise<InstallResult>;

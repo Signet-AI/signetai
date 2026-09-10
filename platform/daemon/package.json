@@ -45,6 +45,7 @@
 		"@huggingface/transformers": "^4.2.0",
 		"@modelcontextprotocol/sdk": "^1.30.0",
 		"@signet/core": "workspace:*",
+		"@signet/connector-base": "workspace:*",
 		"@signet/lifecycle-proof": "workspace:*",
 		"acpx": "0.13.0",
 		"better-sqlite3": "^11.0.0",
