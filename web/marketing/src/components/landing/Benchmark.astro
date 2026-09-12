@@ -26,22 +26,38 @@ const stats = [
     <span class="section-index">06 / 07</span>
   </div>
 
-  <p class="lp-label reveal" style="margin-bottom: var(--space-md);">
+  <p class="benchmark-intro reveal">
     Signet's latest tracked MemoryBench run averages 97.6% LongMemEval answer accuracy under the rules profile — one of the only local-first memory systems with SOTA recall on a shared, verifiable eval harness.
   </p>
 
-  <div class="benchmark-stats reveal">
-    {stats.map((stat) => (
-      <div class="benchmark-stat">
-        <span class="lp-readout">{stat.value}</span>
-        <span class="lp-eyebrow">{stat.label}</span>
-        <span class="benchmark-context">{stat.context}</span>
+  <div class="benchmark-proof reveal">
+    <div class="benchmark-score">
+      <div class="benchmark-score-top"><span>MEMORYBENCH</span><span>RULES PROFILE</span></div>
+      <span class="benchmark-score-value">{stats[0].value}</span>
+      <span class="benchmark-score-label">{stats[0].label}</span>
+      <p>{stats[0].context}</p>
+    </div>
+    <div class="benchmark-evidence">
+      <div class="benchmark-evidence-chart" aria-hidden="true">
+        <span style="--bar: 36%"></span><span style="--bar: 49%"></span><span style="--bar: 58%"></span><span style="--bar: 70%"></span><span class="is-best" style="--bar: 94%"></span><span style="--bar: 62%"></span><span style="--bar: 45%"></span>
       </div>
-    ))}
+      {stats.slice(1).map((stat, index) => (
+        <div class="benchmark-evidence-row">
+          <span class="benchmark-evidence-index">0{index + 2}</span>
+          <span class="benchmark-evidence-value">{stat.value}</span>
+          <div>
+            <span class="benchmark-evidence-label">{stat.label}</span>
+            <p>{stat.context}</p>
+          </div>
+        </div>
+      ))}
+    </div>
   </div>
 
-  <p class="benchmark-caveat reveal">
-    The rules profile keeps the contract strict: memories are ingested through /api/memory/remember, recalled through /api/memory/recall, and answered from bounded daemon recall results.
-  </p>
-  <a href="https://docs.signetai.sh/benchmarking/" class="benchmark-link reveal" data-analytics-guide="benchmarking">Methodology and full results &rarr;</a>
+  <div class="benchmark-foot reveal">
+    <p class="benchmark-caveat">
+      The rules profile keeps the contract strict: memories are ingested through /api/memory/remember, recalled through /api/memory/recall, and answered from bounded daemon recall results.
+    </p>
+    <a href="https://docs.signetai.sh/benchmarking/" class="benchmark-link" data-analytics-guide="benchmarking">Methodology and full results &rarr;</a>
+  </div>
 </section>

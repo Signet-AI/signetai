@@ -5,7 +5,7 @@
   <div class="footer-left">
     <div class="footer-brand">
       <img src="/Signet-Logo-White.png" alt="" class="footer-logo" width="24" height="24" aria-hidden="true" />
-      <span class="footer-brand-text">SIGNET_AI</span>
+      <span class="footer-brand-text">SIGNET AI</span>
     </div>
     <div class="footer-tagline">Local-first memory and secrets for AI agents.</div>
     <div class="footer-meta">&copy; 2026 SIGNET. ALL RIGHTS RESERVED.</div>
@@ -44,14 +44,21 @@
 
 <style>
   .site-footer {
+    isolation: isolate;
+    overflow: hidden;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
     padding-top: var(--space-3xl);
     padding-bottom: var(--space-xl);
-    border-top: 1px solid var(--color-border);
+    padding-inline: clamp(20px, 4vw, var(--space-xl));
+    border-top: 1px solid rgba(132, 179, 227, 0.32);
     gap: 40px;
     flex-wrap: wrap;
+    background:
+      linear-gradient(180deg, rgba(5, 15, 26, 0.58) 0%, rgba(5, 12, 22, 0.86) 100%),
+      url('/footer-bg.jpg') center 56% / cover no-repeat;
+    box-shadow: inset 0 1px 0 rgba(198, 222, 255, 0.07), inset 0 34px 90px rgba(3, 10, 18, 0.32);
   }
 
   .footer-left {

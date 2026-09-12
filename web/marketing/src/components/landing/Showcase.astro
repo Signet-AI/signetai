@@ -24,7 +24,7 @@
         <iframe
           class="showcase-embed"
           id="showcase-embed"
-          src="/demo/#home"
+          src="/dashboard/index.html#home"
           title="Signet dashboard demo"
           loading="lazy"
           aria-label="Interactive Signet dashboard demo"
@@ -45,7 +45,11 @@
 <style>
   .showcase {
     position: relative;
-    padding: var(--space-3xl) 0 var(--space-2xl);
+    padding: clamp(88px, 8vw, 112px) 0 clamp(64px, 7vw, 96px);
+  }
+
+  .showcase .section-header {
+    margin-bottom: clamp(36px, 4vw, 56px);
   }
 
   .showcase-inner {
@@ -62,7 +66,7 @@
     font-weight: 600;
     letter-spacing: 0;
     text-transform: none;
-    color: #ffffff;
+    color: var(--color-text-bright);
     text-align: center;
     margin-bottom: var(--space-sm);
   }
@@ -70,7 +74,7 @@
   .showcase-desc {
     font-size: 1rem;
     line-height: 1.7;
-    color: #cbd5e1;
+    color: var(--color-text);
     text-align: center;
     max-width: 560px;
     margin: 0 auto var(--space-lg);
@@ -86,7 +90,7 @@
     inset: -40px -60px;
     background: radial-gradient(
       ellipse 60% 55% at 50% 45%,
-      rgba(77, 124, 254, 0.2),
+      rgba(120, 146, 232, 0.13),
       transparent 70%
     );
     pointer-events: none;
@@ -99,7 +103,7 @@
     border-radius: 12px;
     overflow: hidden;
     background: color-mix(in srgb, var(--color-surface) 30%, transparent);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--color-border-strong);
     box-shadow:
       0 25px 50px -12px rgba(0, 0, 0, 0.7),
       inset 0 1px 0 rgba(255, 255, 255, 0.06);
@@ -118,7 +122,7 @@
     height: 100%;
     border: 0;
     display: block;
-    background: #0b0b0f;
+    background: var(--color-surface);
     transform-origin: top left;
   }
 

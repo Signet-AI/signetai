@@ -27,17 +27,17 @@
    SYS_TOKENS & BASE
    ========================================================================== */
 :root {
-	--color-bg: #060608;
-	--color-surface: #0a0a0e;
-	--color-surface-raised: #151519;
-	--color-border: rgba(255, 255, 255, 0.05);
-	--color-border-strong: rgba(255, 255, 255, 0.15);
-	--color-text: #d7d7de;
-	--color-text-bright: #f2f2f5;
-	--color-text-muted: #8b8b96;
-	--color-accent: #4d7cfe;
-	--color-success: #4a7a5e;
-	--color-glow: rgba(240, 240, 242, 0.04);
+	--color-bg: #06131d;
+	--color-surface: #0b1b27;
+	--color-surface-raised: #122536;
+	--color-border: rgba(153, 180, 214, 0.11);
+	--color-border-strong: rgba(153, 180, 214, 0.23);
+	--color-text: #d2d9e2;
+	--color-text-bright: #f1f4f8;
+	--color-text-muted: #8998aa;
+	--color-accent: #7892e8;
+	--color-success: #7198b5;
+	--color-glow: rgba(111, 145, 202, 0.08);
 	--radius-sm: calc(0.5rem - 4px);
 	--radius-md: calc(0.5rem - 2px);
 
@@ -45,15 +45,15 @@
 	--font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 	--font-mono: "Geist Mono", "IBM Plex Mono", monospace;
 
-	--color-highlight: #4d7cfe;
-	--color-highlight-muted: rgba(77, 124, 254, 0.14);
-	--color-highlight-dim: rgba(77, 124, 254, 0.08);
-	--color-highlight-text: #7ba0ff;
-	--color-electric: #3b82f6;
-	--color-electric-muted: rgba(59, 130, 246, 0.12);
-	--color-electric-dim: rgba(59, 130, 246, 0.06);
-	--color-glow-highlight: 0 0 20px rgba(77, 124, 254, 0.12);
-	--color-glow-electric: 0 0 20px rgba(59, 130, 246, 0.15);
+	--color-highlight: #879deb;
+	--color-highlight-muted: rgba(120, 146, 232, 0.14);
+	--color-highlight-dim: rgba(120, 146, 232, 0.08);
+	--color-highlight-text: #a9b8f4;
+	--color-electric: #5f86c6;
+	--color-electric-muted: rgba(95, 134, 198, 0.12);
+	--color-electric-dim: rgba(95, 134, 198, 0.06);
+	--color-glow-highlight: 0 0 20px rgba(120, 146, 232, 0.12);
+	--color-glow-electric: 0 0 20px rgba(95, 134, 198, 0.15);
 	--color-danger: #8a4a48;
 	--color-warning: #d4a017;
 	--sig-grain-opacity: 0.05;
@@ -82,7 +82,9 @@ html {
 }
 
 body {
-	background-color: var(--color-bg);
+	background:
+		radial-gradient(1100px 640px at 48% -12%, rgba(34, 69, 101, 0.22), transparent 72%),
+		var(--color-bg);
 	color: var(--color-text);
 	font-family: var(--font-body);
 	-webkit-font-smoothing: antialiased;
@@ -169,7 +171,7 @@ h4 {
 	background: var(--color-accent);
 	border-color: var(--color-accent);
 	color: var(--color-bg);
-	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 2px 8px rgba(77, 124, 254, 0.25);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 2px 8px rgba(120, 146, 232, 0.25);
 }
 .btn-primary:hover {
 	background: var(--color-highlight-text);
