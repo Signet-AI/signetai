@@ -96,16 +96,21 @@ paths, or user identity.
 | `inference.route` | inference control-plane routing decision | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `candidateCount`, `blockedCount`, `allowedCount`, `privacy`, `durationMs`, `success`, `errorCode` |
 | `inference.execute` / `inference.stream` | per-execution outcome | `surface`, `agentId`, `operation`, `taskClass`, `policyId`, `selectedTarget`, `finalTarget`, `attemptPath`, `failedTargets`, `attemptCount`, `failedCount`, `fallbackCount`, `privacy`, `durationMs`, `inputTokens`, `outputTokens`, `success`, `cancelled`, `errorCode` |
 | `inference.fallback` | emitted alongside execute/stream when a target failed and routing fell back | same fields as execute/stream |
-| `error.occurred` | process-level crash, unhandled rejection, or event-loop wedge | `type`, `message`, `stack`, `uptimeMs`; `EventLoopLag` reports add `lagMs` and the latest bounded runtime-pressure buckets |
+| `error.occurred` | process-level crash, unhandled rejection, or event-loop wedge | `type`, `message`, `stack`, `uptimeMs`, `version`, `deploymentRole`, `installChannel`; `EventLoopLag` reports add `lagMs` and the latest bounded runtime-pressure buckets |
 | `version.upgraded` | daemon auto-update path only | `from`, `to` |
 | `version.observed` | daemon start sees a different persisted version (any update mechanism) | `from`, `to` |
-| `command.invoked` | CLI command (name only, never arguments) | `command`, `deploymentRole`, `installChannel` |
+| `command.invoked` | CLI command (name only, never arguments) | `command`, `version`, `deploymentRole`, `installChannel` |
 
 ### Marketing site events
 
-The marketing site uses the same PostHog project with `surface: "marketing"`
-and `$lib: "signet-web"` on every event. Automatic capture, automatic page
-views, pageleave events, performance capture, heatmaps, console-log recording,
+The marketing site uses the same PostHog project with `surface: "marketing"`,
+`deployment: "production"`, and `$lib: "signet-web"` on every event. The
+browser initializes analytics only on the canonical `signetai.sh` and
+`www.signetai.sh` hosts. The production deploy sets `PUBLIC_POSTHOG_ENV=production`;
+local, preview, and other development builds do not enable analytics. The
+runtime also requires an exact approved hostname, so a production build served
+on a development host does not initialize PostHog. Automatic capture,
+automatic page views, pageleave events, performance capture, heatmaps, console-log recording,
 feature-flag/remote-config requests, session recording, surveys, and form capture
 are disabled. Search telemetry sends only state and bounded result-count/query-length
 buckets; it never sends query text. Guide, harness, and CTA links are classified
@@ -114,7 +119,7 @@ and send destination categories rather than raw URLs.
 
 | Event | When | Key payload fields |
 |---|---|---|
-| `marketing.page_view` | site route loads | `pageCategory`, `pagePath` |
+| `marketing.page_view` | site route loads on an approved production host | `pageCategory`, `pagePath`, `deployment: "production"` |
 | `marketing.cta_clicked` | marked CTA is clicked | `cta`, `placement`, page context |
 | `marketing.harness_selected` | harness link is clicked | `harness`, page context |
 | `marketing.install_surface_opened` | install method/surface tab is selected | `surfaceName`, `option`, page context |
@@ -155,8 +160,10 @@ Notes on individual events:
   id is first created. It covers bun, desktop, and npm uniformly and is the
   **active installs** metric. Count distinct ids with `install.activated`;
   never sum ping and activated counts.
-- **Deployment metadata** — every daemon and CLI event carries bounded
-  `deploymentRole` and `installChannel` values. Both default to `unknown` and
+- **Deployment metadata** — every daemon and CLI event carries a bounded
+  `version`, `deploymentRole`, and `installChannel`. The version defaults to the
+  running daemon/CLI version (with the existing `-dev` marker); caller-supplied
+  version fields are normalized. Role and channel default to `unknown` and
   are set only by explicit configuration or the documented environment
   variables. `SIGNET_TELEMETRY_ENV=dev` remains compatible and maps the role
   to `development` while retaining `deployment: dev` and the `-dev` version

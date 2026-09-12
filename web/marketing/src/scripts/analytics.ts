@@ -1,10 +1,15 @@
 import posthog from "posthog-js";
+import { MARKETING_DEPLOYMENT, shouldEnableMarketingAnalytics } from "./analytics-config";
 
 const POSTHOG_API_KEY = import.meta.env.PUBLIC_POSTHOG_API_KEY ?? "phc_mLsvJmbmp6e9UarrX9Cq5QtTjVNiiphM9mvi5Xnddd8Q";
 const POSTHOG_HOST = import.meta.env.PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com";
+const POSTHOG_ENVIRONMENT = import.meta.env.PUBLIC_POSTHOG_ENV ?? "";
 const SURFACE = "marketing";
 const LIBRARY = "signet-web";
 const LIBRARY_VERSION = "1";
+const MARKETING_ANALYTICS_ENABLED =
+	typeof window !== "undefined" &&
+	shouldEnableMarketingAnalytics(window.location.hostname, POSTHOG_API_KEY, POSTHOG_ENVIRONMENT);
 
 const EVENT_NAMES = {
 	pageView: "marketing.page_view",
@@ -54,10 +59,12 @@ function pageContext(): { pageCategory: string; pagePath: string } {
 }
 
 function capture(eventName: string, properties: Record<string, unknown> = {}): void {
+	if (!MARKETING_ANALYTICS_ENABLED) return;
 	posthog.capture(eventName, {
 		...properties,
 		surface: SURFACE,
 		$lib: LIBRARY,
+		deployment: MARKETING_DEPLOYMENT,
 	});
 }
 
@@ -167,7 +174,7 @@ function onCustomEvent(event: Event): void {
 	}
 }
 
-if (POSTHOG_API_KEY) {
+if (MARKETING_ANALYTICS_ENABLED) {
 	posthog.init(POSTHOG_API_KEY, {
 		api_host: POSTHOG_HOST,
 		autocapture: false,
@@ -183,6 +190,7 @@ if (POSTHOG_API_KEY) {
 				...event.properties,
 				surface: SURFACE,
 				$lib: LIBRARY,
+				deployment: MARKETING_DEPLOYMENT,
 			};
 			return event;
 		},

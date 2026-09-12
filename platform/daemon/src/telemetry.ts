@@ -1031,14 +1031,16 @@ export function createTelemetryCollector(
 	}
 
 	function addContext(event: TelemetryEventType, properties: TelemetryProperties): TelemetryProperties {
+		const version =
+			typeof properties.version === "string" && properties.version.trim().length > 0
+				? telemetryReportedVersion(properties.version, deployment)
+				: reportedVersion;
 		return {
 			...properties,
+			version,
 			deploymentRole,
 			installChannel,
 			...(deployment ? { deployment } : {}),
-			...(typeof properties.version === "string"
-				? { version: telemetryReportedVersion(properties.version, deployment) }
-				: {}),
 			...(typeof properties.from === "string"
 				? {
 						from:

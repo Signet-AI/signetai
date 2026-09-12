@@ -728,6 +728,19 @@ describe("telemetry collector", () => {
 		expect(props.uptimeMs).toBe(42);
 	});
 
+	it("adds collector version and installation metadata to crash events", async () => {
+		const collector = makeCollector();
+		collector.record("error.occurred", { type: "DbOwnerError" });
+		await collector.flush();
+
+		const event = captured.flatMap((request) => request.body.batch).find((entry) => entry.event === "error.occurred");
+		expect(event?.properties).toMatchObject({
+			version: "0.0.0-test",
+			deploymentRole: "unknown",
+			installChannel: "unknown",
+		});
+	});
+
 	it("honors SIGNET_TELEMETRY_OPTOUT as a runtime opt-out", () => {
 		// Regression: CI and test daemons boot with default config and the
 		// shipped key, so every smoke run became a fake PostHog install.

@@ -17,6 +17,8 @@ jobs:
     env:
       # This workflow builds the website, not the Electron desktop app.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      # The runtime hostname gate is a second boundary for preview/local builds.
+      PUBLIC_POSTHOG_ENV: production
     if: "!contains(github.event.head_commit.message, 'chore: release')"
 
     steps:
