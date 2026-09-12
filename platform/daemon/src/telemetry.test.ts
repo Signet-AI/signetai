@@ -741,6 +741,19 @@ describe("telemetry collector", () => {
 		});
 	});
 
+	it("uses the running version for missing or blank caller versions", async () => {
+		const collector = makeCollector();
+		collector.record("error.occurred", { type: "missing-version" });
+		collector.record("error.occurred", { type: "blank-version", version: "   " });
+		collector.record("error.occurred", { type: "explicit-version", version: "0.176.7" });
+		await collector.flush();
+
+		const events = captured
+			.flatMap((request) => request.body.batch)
+			.filter((entry) => entry.event === "error.occurred");
+		expect(events.map((entry) => entry.properties.version)).toEqual(["0.0.0-test", "0.0.0-test", "0.176.7"]);
+	});
+
 	it("honors SIGNET_TELEMETRY_OPTOUT as a runtime opt-out", () => {
 		// Regression: CI and test daemons boot with default config and the
 		// shipped key, so every smoke run became a fake PostHog install.
