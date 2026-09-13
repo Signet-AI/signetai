@@ -190,6 +190,7 @@ interface PendingJob<Result> {
 	readonly resolveMetrics: (value: DbOwnerJobMetrics | undefined) => void;
 	settled: boolean;
 	dispatched: boolean;
+	dispatching: boolean;
 }
 
 export interface DbOwnerClientOptions {
@@ -291,6 +292,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	);
 	const pending = new Map<string, PendingJob<unknown>>();
 	const abandonedMetrics = new Map<string, (value: DbOwnerJobMetrics | undefined) => void>();
+	const abandonedWorkloadClasses = new Map<string, DbOwnerWorkloadClass>();
 
 	function unlinkCancellationRegistry(): void {
 		try {
@@ -414,6 +416,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		if (!closed) rejectAll(error, dispatchedOnly);
 		for (const resolveMetrics of abandonedMetrics.values()) resolveMetrics(undefined);
 		abandonedMetrics.clear();
+		abandonedWorkloadClasses.clear();
 		unlinkCancellationRegistry();
 		if (retired !== null) {
 			try {
@@ -459,6 +462,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			abandonedMetrics.delete(event.jobId);
 			abandonedResolveMetrics(event.metrics);
 		}
+		abandonedWorkloadClasses.delete(event.jobId);
 		if (pendingJob?.job.request.kind === "initialize") {
 			initialization = event.outcome === "completed" ? "ready" : "failed";
 		}
@@ -635,10 +639,12 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 					dispatch(jobId);
 					return;
 				}
+				entry.dispatching = true;
 				void write(owner, { type: "submit", job: entry.job }).then(
 					() => {
 						const current = pending.get(jobId);
 						if (current === undefined || current.settled) return;
+						current.dispatching = false;
 						if (child !== owner) {
 							settle(jobId, (job) => {
 								if (!job.settled) {
@@ -699,12 +705,14 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		const workloadClass =
 			submitOptions.workloadClass ??
 			(submitOptions.lane === "maintenance" || submitOptions.lane === "verify" ? "maintenance" : "foreground");
-		const classJobs = [...pending.values()].filter((entry) => entry.job.workloadClass === workloadClass).length;
+		const classJobs =
+			[...pending.values()].filter((entry) => entry.job.workloadClass === workloadClass).length +
+			[...abandonedWorkloadClasses.values()].filter((entry) => entry === workloadClass).length;
 		const maxClassJobs = workloadClass === "foreground" ? MAX_DB_OWNER_FOREGROUND_JOBS : MAX_DB_OWNER_MAINTENANCE_JOBS;
 		if (classJobs >= maxClassJobs) {
 			throw new DbOwnerAdmissionError(
 				"DB_OWNER_QUEUE_FULL",
-				`DB owner ${workloadClass} admission queue is full at ${maxClassJobs} pending jobs`,
+				`DB owner ${workloadClass} admission queue is full at ${maxClassJobs} admitted jobs`,
 			);
 		}
 		const now = dbOwnerWallClockNow();
@@ -731,10 +739,13 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				if (entry === undefined || entry.settled) return;
 				lastError = `deadline exceeded for ${job.id}`;
 				const owner = child;
-				const dispatched = entry.dispatched;
+				const dispatched = entry.dispatched || entry.dispatching;
+				if (dispatched) recordCancellation(job.id);
 				settle(job.id, (settledJob) => {
-					if (dispatched) abandonedMetrics.set(job.id, settledJob.resolveMetrics);
-					else {
+					if (dispatched) {
+						abandonedMetrics.set(job.id, settledJob.resolveMetrics);
+						abandonedWorkloadClasses.set(job.id, settledJob.job.workloadClass);
+					} else {
 						// No owner worker exists for a queued job; close its completion fence.
 						settledJob.resolveMetrics(undefined);
 					}
@@ -744,17 +755,25 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 					}
 				});
 				// A job deadline abandons the work; it is not authority to kill the
-				// owner. The owner may still be finishing a synchronous operation,
-				// but interactive work is admitted through a separate owner below.
-				// This preserves the owner process and lets the worker consume the
-				// cancellation when the job is still queued.
+				// owner. Persist the cancellation before settling the caller so an
+				// in-flight transaction fences itself before COMMIT. The protocol
+				// cancel remains the fast path for work that is still queued.
 				if (dispatched && owner !== null && state === "ready") {
 					void write(owner, { type: "cancel", jobId: job.id }).catch(() => {
 						// A transport failure is handled by the owner exit path.
 					});
 				}
 			}, submitOptions.deadlineMs);
-			pendingJob = { job, resolve, reject, timer, resolveMetrics, settled: false, dispatched: false };
+			pendingJob = {
+				job,
+				resolve,
+				reject,
+				timer,
+				resolveMetrics,
+				settled: false,
+				dispatched: false,
+				dispatching: false,
+			};
 			pending.set(job.id, pendingJob as PendingJob<unknown>);
 			if (request.kind === "initialize") initialization = "running";
 			dispatch(job.id);
@@ -774,6 +793,8 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			// after COMMIT; queued jobs still use the protocol cancel command.
 			return;
 		}
+		const dispatched = entry.dispatched || entry.dispatching;
+		if (dispatched) abandonedWorkloadClasses.set(jobId, entry.job.workloadClass);
 		settle(jobId, (job) => {
 			if (!job.settled) {
 				job.settled = true;
@@ -847,6 +868,9 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		if (retiredChildClose === retiredClose) retiredChildClose = null;
 		state = "closed";
 		rejectAll(new DbOwnerDiedError("DB owner client closed"));
+		for (const resolveMetrics of abandonedMetrics.values()) resolveMetrics(undefined);
+		abandonedMetrics.clear();
+		abandonedWorkloadClasses.clear();
 		try {
 			unlinkSync(cancellationRegistryPath);
 		} catch {

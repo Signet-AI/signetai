@@ -849,6 +849,95 @@ describe("DB owner client", () => {
 		expect(client.health().activeJobId).toBeNull();
 	});
 
+	test("does not commit an in-flight write after its deadline", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		await client.submit<readonly { readonly value: number }[]>(
+			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+			{ operation: "memory.deadline-write-ready", lane: "read", deadlineMs: 1_000 },
+		).result;
+		const blocker = new Database(database.path);
+		let blockerReleased = false;
+		blocker.exec("BEGIN IMMEDIATE");
+		try {
+			const write = client.submit<{ readonly changes: number }>(
+				{
+					kind: "query",
+					statement: {
+						sql: "INSERT INTO memories (id, content) VALUES (?, ?)",
+						params: ["stale-after-deadline", "must not commit"],
+						result: "run",
+					},
+				},
+				{ operation: "memory.stale-commit-after-deadline", lane: "write", deadlineMs: 40 },
+			);
+			const writeFailure = write.result.then(
+				() => null,
+				(error: unknown) => error,
+			);
+			await waitFor(() => client?.health().activeJobId === write.job.id);
+			expect(await writeFailure).toBeInstanceOf(DbOwnerDeadlineError);
+			blocker.exec("ROLLBACK");
+			blockerReleased = true;
+			blocker.close(true);
+			const rows = await client.submit<readonly { readonly id: string }[]>(
+				{ kind: "query", statement: { sql: "SELECT id FROM memories ORDER BY id", result: "all" } },
+				{ operation: "memory.verify-no-stale-deadline-commit", lane: "read", deadlineMs: 1_000 },
+			).result;
+			expect(rows).toEqual([{ id: "m1" }]);
+		} finally {
+			if (!blockerReleased) blocker.exec("ROLLBACK");
+			blocker.close(true);
+		}
+	});
+
+	test("does not over-admit work after dispatched jobs time out", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		await client.submit<readonly { readonly value: number }[]>(
+			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+			{ operation: "maintenance.queue-admission-ready", lane: "read", deadlineMs: 1_000 },
+		).result;
+
+		const timedOut = [];
+		for (let index = 0; index < MAX_DB_OWNER_PENDING_JOBS; index += 1) {
+			const handle = client.submit(
+				{ kind: "sleep", durationMs: 250 },
+				{ operation: "maintenance.queue-admission-timeout", lane: "maintenance", deadlineMs: 50 },
+			);
+			timedOut.push(
+				handle.result.then(
+					() => null,
+					(error: unknown) => error,
+				),
+			);
+		}
+		await waitFor(() => client?.health().activeJobId !== null);
+		const timeoutErrors = await Promise.all(timedOut);
+		expect(timeoutErrors.every((error) => error instanceof DbOwnerDeadlineError)).toBe(true);
+
+		const admitted = [];
+		let admissionErrors = 0;
+		for (let index = 0; index < 2; index += 1) {
+			try {
+				const handle = client.submit(
+					{ kind: "sleep", durationMs: 1 },
+					{ operation: "maintenance.queue-admission-after-timeout", lane: "maintenance", deadlineMs: 100 },
+				);
+				admitted.push(handle.result.catch(() => undefined));
+			} catch (error) {
+				admissionErrors += 1;
+				expect(error).toBeInstanceOf(DbOwnerAdmissionError);
+			}
+		}
+		await Promise.all(admitted);
+		expect(admissionErrors).toBe(2);
+	});
+
 	test("does not commit a stale write after aborting an in-flight owner operation", async () => {
 		const database = makeDb();
 		directory = database.directory;
