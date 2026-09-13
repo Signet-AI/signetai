@@ -840,7 +840,7 @@
     },
     {
       "path": "db-owner-client.ts",
-      "line": 887,
+      "line": 890,
       "api": "unlinkSync",
       "source": "unlinkSync(cancellationRegistryPath);",
       "category": "hot-path"

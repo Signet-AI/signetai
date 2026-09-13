@@ -663,7 +663,10 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 						const current = pending.get(jobId);
 						if (error instanceof DbOwnerDiedError && current !== undefined) current.dispatching = false;
 						if (child !== owner || closed) return;
-						const transportError = error instanceof Error ? error : new Error(String(error));
+						const transportError =
+							error instanceof DbOwnerDiedError
+								? error
+								: new DbOwnerDiedError(error instanceof Error ? error.message : String(error));
 						retireOwner(transportError, owner, state === "starting" ? "failed" : "dead", true);
 						if (child === owner || pending.get(jobId)?.settled === true) return;
 						dispatch(jobId);

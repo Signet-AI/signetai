@@ -747,7 +747,7 @@ describe("DB owner client", () => {
 				'  process.stdin.on("data", (chunk) => {',
 				'    if (fatalSent || !chunk.includes(\'\\"type\\":\\"submit\\"\')) return;',
 				"    fatalSent = true;",
-				'    send({ type: "fatal", error: { name: "TEST_TRANSPORT_FAILURE", message: "transport failed during dispatch" } });',
+				"    process.stdin.destroy();",
 				"    setTimeout(() => process.exit(0), 0);",
 				"  });",
 				"} else {",
@@ -772,7 +772,7 @@ describe("DB owner client", () => {
 			result,
 			new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), 1_000)),
 		]);
-		expect(resultState).toBeInstanceOf(Error);
+		expect(resultState).toBeInstanceOf(DbOwnerDiedError);
 		const metrics = handle.metrics;
 		if (metrics === undefined) throw new Error("dispatching job did not expose a metrics fence");
 		const metricsState = await Promise.race([
