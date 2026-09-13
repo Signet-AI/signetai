@@ -728,6 +728,62 @@ describe("DB owner client", () => {
 		expect(client.health().state).toBe("dead");
 	});
 
+	test("rejects a job when owner retirement interrupts dispatch", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const workerPath = join(database.directory, "dispatching-owner-worker.mjs");
+		writeFileSync(
+			workerPath,
+			[
+				'import { existsSync, writeFileSync } from "node:fs";',
+				"const newline = String.fromCharCode(10);",
+				'const marker = process.argv[1] + ".first";',
+				"const first = !existsSync(marker);",
+				'if (first) writeFileSync(marker, "first");',
+				"const send = (event) => process.stdout.write(JSON.stringify(event) + newline);",
+				'send({ type: "ready", pid: process.pid });',
+				"if (first) {",
+				"  let fatalSent = false;",
+				'  process.stdin.on("data", (chunk) => {',
+				'    if (fatalSent || !chunk.includes(\'\\"type\\":\\"submit\\"\')) return;',
+				"    fatalSent = true;",
+				'    send({ type: "fatal", error: { name: "TEST_TRANSPORT_FAILURE", message: "transport failed during dispatch" } });',
+				"    setTimeout(() => process.exit(0), 0);",
+				"  });",
+				"} else {",
+				"  setTimeout(() => {}, 5_000);",
+				"}",
+			].join(String.fromCharCode(10)),
+		);
+		client = createDbOwnerClient({ dbPath: database.path, workerPath });
+		await client.start();
+		const handle = client.submit<readonly { readonly value: number }[]>(
+			{
+				kind: "query",
+				statement: { sql: `SELECT 1 -- ${"x".repeat(100_000_000)}`, result: "all" },
+			},
+			{ operation: "transport.dispatching-retirement", lane: "read", deadlineMs: 5_000 },
+		);
+		const result = handle.result.then(
+			() => "completed" as const,
+			(error: unknown) => error,
+		);
+		const resultState = await Promise.race([
+			result,
+			new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), 1_000)),
+		]);
+		expect(resultState).toBeInstanceOf(Error);
+		const metrics = handle.metrics;
+		if (metrics === undefined) throw new Error("dispatching job did not expose a metrics fence");
+		const metricsState = await Promise.race([
+			metrics.then(() => "resolved" as const),
+			new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), 1_000)),
+		]);
+		expect(metricsState).toBe("resolved");
+		expect(await metrics).toBeUndefined();
+		expect(client.health()).toMatchObject({ state: "dead", pid: null, queuedJobs: 0 });
+	});
+
 	test("detects an owner crash and recovers with a fresh owner", async () => {
 		const database = makeDb();
 		directory = database.directory;

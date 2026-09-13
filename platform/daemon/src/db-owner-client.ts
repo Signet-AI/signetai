@@ -380,7 +380,8 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 
 	function rejectAll(error: Error, dispatchedOnly = false): void {
 		for (const jobId of pending.keys()) {
-			if (dispatchedOnly && pending.get(jobId)?.dispatched !== true) continue;
+			const entry = pending.get(jobId);
+			if (entry === undefined || (dispatchedOnly && !entry.dispatched && !entry.dispatching)) continue;
 			settle(jobId, (job) => {
 				job.resolveMetrics(undefined);
 				if (!job.settled) {
@@ -659,6 +660,8 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 						current.dispatched = true;
 					},
 					(error: unknown) => {
+						const current = pending.get(jobId);
+						if (error instanceof DbOwnerDiedError && current !== undefined) current.dispatching = false;
 						if (child !== owner || closed) return;
 						const transportError = error instanceof Error ? error : new Error(String(error));
 						retireOwner(transportError, owner, state === "starting" ? "failed" : "dead", true);
