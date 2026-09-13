@@ -382,6 +382,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		for (const jobId of pending.keys()) {
 			if (dispatchedOnly && pending.get(jobId)?.dispatched !== true) continue;
 			settle(jobId, (job) => {
+				job.resolveMetrics(undefined);
 				if (!job.settled) {
 					job.settled = true;
 					job.reject(error);
@@ -647,6 +648,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 						current.dispatching = false;
 						if (child !== owner) {
 							settle(jobId, (job) => {
+								job.resolveMetrics(undefined);
 								if (!job.settled) {
 									job.settled = true;
 									job.reject(new DbOwnerDiedError());
@@ -667,6 +669,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			},
 			(error: unknown) => {
 				settle(jobId, (entry) => {
+					entry.resolveMetrics(undefined);
 					if (!entry.settled) {
 						entry.settled = true;
 						entry.reject(error);
@@ -794,8 +797,14 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			return;
 		}
 		const dispatched = entry.dispatched || entry.dispatching;
-		if (dispatched) abandonedWorkloadClasses.set(jobId, entry.job.workloadClass);
 		settle(jobId, (job) => {
+			if (dispatched) {
+				abandonedMetrics.set(jobId, job.resolveMetrics);
+				abandonedWorkloadClasses.set(jobId, job.job.workloadClass);
+			} else {
+				// No owner worker exists for a queued job; close its completion fence.
+				job.resolveMetrics(undefined);
+			}
 			if (!job.settled) {
 				job.settled = true;
 				job.reject(new DbOwnerCancelledError(jobId));

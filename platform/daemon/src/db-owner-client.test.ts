@@ -941,6 +941,50 @@ process.stdin.on("data", (chunk) => {
 		expect(client.health().activeJobId).toBeNull();
 	});
 
+	test("closes metrics fence when a dispatched cancellation meets owner retirement", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		client = createDbOwnerClient({ dbPath: database.path });
+		await client.start();
+		const active = client.submit(
+			{ kind: "sleep", durationMs: 250 },
+			{ operation: "maintenance.cancel-metrics-blocker", lane: "maintenance", deadlineMs: 1_000 },
+		);
+		await waitFor(() => client?.health().activeJobId === active.job.id);
+		const activeFailure = rejected(active.result);
+		const activeMetrics = active.metrics;
+		if (activeMetrics === undefined) throw new Error("active job did not expose a metrics fence");
+		const queued = client.submit(
+			{ kind: "sleep", durationMs: 0 },
+			{ operation: "maintenance.cancel-metrics-queued", lane: "maintenance", deadlineMs: 1_000 },
+		);
+		await waitFor(() => client?.health().queuedJobs === 1);
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		const queuedMetrics = queued.metrics;
+		if (queuedMetrics === undefined) throw new Error("cancelled job did not expose a metrics fence");
+		const queuedFailure = rejected(queued.result);
+		queued.cancel();
+		expect(await queuedFailure).toBeInstanceOf(DbOwnerCancelledError);
+		const metricsBeforeRetirement = await Promise.race([
+			queuedMetrics.then(() => "resolved" as const),
+			new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
+		]);
+		expect(metricsBeforeRetirement).toBe("pending");
+		const pid = client.health().pid;
+		if (pid === null) throw new Error("owner did not publish a pid");
+		active.cancel();
+		process.kill(pid, "SIGKILL");
+		expect(await activeFailure).toBeInstanceOf(DbOwnerDiedError);
+		await waitFor(() => client?.health().state === "dead");
+		const metricsState = await Promise.race([
+			queuedMetrics.then(() => "resolved" as const),
+			new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), 500)),
+		]);
+		expect(metricsState).toBe("resolved");
+		expect(await queuedMetrics).toBeUndefined();
+		expect(await activeMetrics).toBeUndefined();
+	});
+
 	test("does not commit an in-flight write after its deadline", async () => {
 		const database = makeDb();
 		directory = database.directory;
