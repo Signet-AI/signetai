@@ -27,7 +27,11 @@ import {
 import { shouldRecordDbOwnerCancellation } from "./db-owner-worker";
 import { findSqliteVecExtension } from "@signet/core";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
-import { createDbOwnerMaintenance, registerDbOwnerMaintenance } from "./db-owner-maintenance";
+import {
+	createDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+	runOwnerMaintenanceWithRetry,
+} from "./db-owner-maintenance";
 import { recallThroughDbOwner } from "./db-owner-recall";
 import { dbOwnerQuery, startDbOwnerWithRole } from "./db-owner-runtime";
 
@@ -815,6 +819,94 @@ describe("DB owner client", () => {
 		expect(client.health().generation).toBe(2);
 	});
 
+	test("recovers capacity after owner retirement despite a late old-owner result", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const workerPath = join(database.directory, "late-owner-worker.mjs");
+		const modeFile = join(database.directory, "owner-mode");
+		const releaseFile = join(database.directory, "owner-release");
+		writeFileSync(
+			workerPath,
+			`import { existsSync, writeFileSync } from "node:fs";
+const newline = String.fromCharCode(10);
+const modeFile = process.env.SIGNET_TEST_DB_OWNER_MODE_FILE;
+const releaseFile = process.env.SIGNET_TEST_DB_OWNER_RELEASE_FILE;
+const first = modeFile === undefined || !existsSync(modeFile);
+if (first && modeFile !== undefined) writeFileSync(modeFile, "first" + newline);
+const send = (event) => process.stdout.write(JSON.stringify(event) + newline);
+send({ type: "ready", pid: process.pid });
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+  const lines = input.split(newline);
+  input = lines.pop() ?? "";
+  for (const line of lines) {
+    if (!line) continue;
+    const command = JSON.parse(line);
+    if (command.type !== "submit") continue;
+    if (first && command.job.operation === "test.retire-late-old") {
+      send({ type: "started", jobId: command.job.id, workloadClass: command.job.workloadClass });
+      const timer = setInterval(() => {
+        if (releaseFile === undefined || !existsSync(releaseFile)) return;
+        clearInterval(timer);
+        send({ type: "fatal", error: { name: "TEST_OWNER_RETIRED", message: "old owner retired" } });
+        send({ type: "result", jobId: command.job.id, outcome: "completed", result: { value: "late-old-owner" }, metrics: { startedAt: Date.now(), finishedAt: Date.now() } });
+      }, 5);
+      continue;
+    }
+    send({ type: "result", jobId: command.job.id, outcome: "completed", result: { value: command.job.operation }, metrics: { startedAt: Date.now(), finishedAt: Date.now() } });
+  }
+});
+`,
+		);
+		const previousModeFile = process.env.SIGNET_TEST_DB_OWNER_MODE_FILE;
+		const previousReleaseFile = process.env.SIGNET_TEST_DB_OWNER_RELEASE_FILE;
+		process.env.SIGNET_TEST_DB_OWNER_MODE_FILE = modeFile;
+		process.env.SIGNET_TEST_DB_OWNER_RELEASE_FILE = releaseFile;
+		try {
+			client = createDbOwnerClient({ dbPath: database.path, workerPath });
+			const owner = client;
+			if (owner === null) throw new Error("owner client not created");
+			await owner.start();
+			const first = owner.submit<{ readonly value: string }>(
+				{ kind: "sleep", durationMs: 0 },
+				{ operation: "test.retire-late-old", lane: "maintenance", deadlineMs: 40 },
+			);
+			await waitFor(() => owner.health().activeJobId === first.job.id);
+			expect(await rejected(first.result)).toBeInstanceOf(DbOwnerDeadlineError);
+			const firstMetrics = first.metrics;
+			if (firstMetrics === undefined) throw new Error("retired owner job did not expose metrics");
+
+			writeFileSync(releaseFile, "release\\n");
+			await waitFor(() => owner.health().state === "failed");
+			expect(await firstMetrics).toBeUndefined();
+
+			const accepted: ReturnType<typeof owner.submit>[] = [];
+			for (let index = 0; index < MAX_DB_OWNER_PENDING_JOBS; index += 1) {
+				accepted.push(
+					owner.submit(
+						{ kind: "sleep", durationMs: 0 },
+						{ operation: `maintenance.after-owner-retirement-${index}`, lane: "maintenance", deadlineMs: 1_000 },
+					),
+				);
+			}
+			expect(() =>
+				owner.submit(
+					{ kind: "sleep", durationMs: 0 },
+					{ operation: "maintenance.after-owner-retirement-over-cap", lane: "maintenance", deadlineMs: 1_000 },
+				),
+			).toThrow(DbOwnerAdmissionError);
+			expect(await Promise.all(accepted.map((handle) => handle.result))).toHaveLength(MAX_DB_OWNER_PENDING_JOBS);
+			expect(owner.health()).toMatchObject({ state: "ready", generation: 2, queuedJobs: 0, maintenanceQueuedJobs: 0 });
+		} finally {
+			if (previousModeFile === undefined) Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_MODE_FILE");
+			else process.env.SIGNET_TEST_DB_OWNER_MODE_FILE = previousModeFile;
+			if (previousReleaseFile === undefined) Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_RELEASE_FILE");
+			else process.env.SIGNET_TEST_DB_OWNER_RELEASE_FILE = previousReleaseFile;
+		}
+	});
+
 	test("fails closed when the owner cannot construct its database", async () => {
 		const database = makeDb();
 		directory = database.directory;
@@ -938,6 +1030,95 @@ describe("DB owner client", () => {
 		expect(admissionErrors).toBe(2);
 	});
 
+	test("admits fresh maintenance work after locked abandoned jobs drain", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const blocker = new Database(database.path);
+		let blockerReleased = false;
+		blocker.exec("BEGIN IMMEDIATE");
+		client = createDbOwnerClient({ dbPath: database.path });
+		try {
+			const owner = client;
+			if (owner === null) throw new Error("owner client not created");
+			await owner.start();
+			const timedOut: ReturnType<typeof owner.submit>[] = [];
+			const timeoutResults: Promise<unknown>[] = [];
+			const first = owner.submit(
+				{
+					kind: "query",
+					statement: {
+						sql: "INSERT INTO memories (id, content) VALUES (?, ?)",
+						params: ["saturated-0", "must not commit"],
+						result: "run",
+					},
+				},
+				{ operation: "maintenance.saturation-lock", lane: "maintenance", deadlineMs: 250 },
+			);
+			timedOut.push(first);
+			timeoutResults.push(
+				first.result.then(
+					() => null,
+					(error: unknown) => error,
+				),
+			);
+			await waitFor(() => owner.health().activeJobId === first.job.id);
+			for (let index = 1; index < MAX_DB_OWNER_PENDING_JOBS; index += 1) {
+				const handle = owner.submit(
+					{
+						kind: "query",
+						statement: {
+							sql: "INSERT INTO memories (id, content) VALUES (?, ?)",
+							params: [`saturated-${index}`, "must not commit"],
+							result: "run",
+						},
+					},
+					{ operation: "maintenance.saturation-lock", lane: "maintenance", deadlineMs: 250 },
+				);
+				timedOut.push(handle);
+				timeoutResults.push(
+					handle.result.then(
+						() => null,
+						(error: unknown) => error,
+					),
+				);
+			}
+			const timeoutErrors = await Promise.all(timeoutResults);
+			expect(timeoutErrors.every((error) => error instanceof DbOwnerDeadlineError)).toBe(true);
+			expect(() =>
+				owner.submit(
+					{ kind: "sleep", durationMs: 0 },
+					{ operation: "maintenance.saturation-before-drain", lane: "maintenance", deadlineMs: 1_000 },
+				),
+			).toThrow(DbOwnerAdmissionError);
+
+			blocker.exec("ROLLBACK");
+			blockerReleased = true;
+			blocker.close(true);
+			await Promise.all(timedOut.map((handle) => handle.metrics));
+			await waitFor(() => owner.health().activeJobId === null, 5_000);
+			const staleRows = await owner.submit<readonly { readonly id: string }[]>(
+				{
+					kind: "query",
+					statement: {
+						sql: "SELECT id FROM memories WHERE id LIKE 'saturated-%' ORDER BY id",
+						result: "all",
+					},
+				},
+				{ operation: "maintenance.saturation-drain-verify", lane: "read", deadlineMs: 1_000 },
+			).result;
+			expect(staleRows).toEqual([]);
+			const fresh = owner.submit<{ readonly sleptMs: number }>(
+				{ kind: "sleep", durationMs: 0 },
+				{ operation: "maintenance.after-saturation-drain", lane: "maintenance", deadlineMs: 1_000 },
+			);
+			expect(await fresh.result).toEqual({ sleptMs: 0 });
+			expect(owner.health()).toMatchObject({ state: "ready", maintenanceQueuedJobs: 0, queuedJobs: 0 });
+		} finally {
+			if (!blockerReleased) blocker.exec("ROLLBACK");
+			blocker.close(true);
+		}
+	});
+
 	test("does not commit a stale write after aborting an in-flight owner operation", async () => {
 		const database = makeDb();
 		directory = database.directory;
@@ -1008,6 +1189,111 @@ describe("DB owner client", () => {
 				{ operation: "memory.verify-commit-window-write", lane: "read", deadlineMs: 1_000 },
 			).result;
 			expect(rows).toContainEqual({ id: "commit-window-write" });
+		} finally {
+			if (!blockerReleased) blocker.exec("ROLLBACK");
+			blocker.close(true);
+			if (previousCommitMarker === undefined)
+				Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_STARTED");
+			else process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = previousCommitMarker;
+		}
+	});
+
+	test("returns a deadline to an awaiter while the handle reports a durable commit", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const blocker = new Database(database.path);
+		blocker.exec("BEGIN");
+		blocker.prepare("SELECT id FROM memories").all();
+		const commitStarted = join(database.directory, "await-commit-started");
+		const previousCommitMarker = process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED;
+		process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = commitStarted;
+		let blockerReleased = false;
+		try {
+			client = createDbOwnerClient({ dbPath: database.path });
+			await client.start();
+			const write = client.submit<{ readonly changes: number }>(
+				{
+					kind: "query",
+					statement: {
+						sql: "INSERT INTO memories (id, content) VALUES (?, ?)",
+						params: ["await-deadline-commit", "must commit exactly once"],
+						result: "run",
+					},
+				},
+				{ operation: "memory.await-deadline-commit", lane: "write", deadlineMs: 5_000 },
+			);
+			await waitFor(() => existsSync(commitStarted));
+			expect(await rejected(client.awaitResult(write, 40))).toBeInstanceOf(DbOwnerDeadlineError);
+			blocker.exec("ROLLBACK");
+			blockerReleased = true;
+			blocker.close(true);
+			expect(await write.result).toMatchObject({ changes: 1 });
+			const rows = await client.submit<readonly { readonly id: string }[]>(
+				{
+					kind: "query",
+					statement: {
+						sql: "SELECT id FROM memories WHERE id = ?",
+						params: ["await-deadline-commit"],
+						result: "all",
+					},
+				},
+				{ operation: "memory.await-deadline-commit-verify", lane: "read", deadlineMs: 1_000 },
+			).result;
+			expect(rows).toEqual([{ id: "await-deadline-commit" }]);
+		} finally {
+			if (!blockerReleased) blocker.exec("ROLLBACK");
+			blocker.close(true);
+			if (previousCommitMarker === undefined)
+				Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_STARTED");
+			else process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = previousCommitMarker;
+		}
+	});
+
+	test("does not retry a late non-idempotent commit after a deadline", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const blocker = new Database(database.path);
+		blocker.exec("CREATE TABLE non_idempotent_writes (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL)");
+		blocker.exec("BEGIN");
+		blocker.prepare("SELECT id FROM memories").all();
+		const commitStarted = join(database.directory, "retry-commit-started");
+		const previousCommitMarker = process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED;
+		process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = commitStarted;
+		let blockerReleased = false;
+		try {
+			client = createDbOwnerClient({ dbPath: database.path });
+			const owner = client;
+			if (owner === null) throw new Error("owner client not created");
+			await owner.start();
+			const run = runOwnerMaintenanceWithRetry<{ readonly changes: number }>(
+				owner,
+				{
+					kind: "query",
+					statement: {
+						sql: "INSERT INTO non_idempotent_writes (content) VALUES (?)",
+						params: ["must be inserted once"],
+						result: "run",
+					},
+				},
+				"maintenance.non-idempotent-deadline",
+				{ deadlineMs: 100 },
+			);
+			await waitFor(() => existsSync(commitStarted));
+			expect(await rejected(run)).toBeInstanceOf(DbOwnerDeadlineError);
+			blocker.exec("ROLLBACK");
+			blockerReleased = true;
+			blocker.close(true);
+			const rows = await owner.submit<readonly { readonly count: number }[]>(
+				{
+					kind: "query",
+					statement: {
+						sql: "SELECT COUNT(*) AS count FROM non_idempotent_writes",
+						result: "all",
+					},
+				},
+				{ operation: "maintenance.non-idempotent-deadline-verify", lane: "read", deadlineMs: 1_000 },
+			).result;
+			expect(rows).toEqual([{ count: 1 }]);
 		} finally {
 			if (!blockerReleased) blocker.exec("ROLLBACK");
 			blocker.close(true);
