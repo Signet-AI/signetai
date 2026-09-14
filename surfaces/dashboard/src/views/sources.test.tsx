@@ -413,6 +413,30 @@ describe("sources grouping", () => {
 		}
 	});
 
+	test("transcript import shows a retry when agent responses are malformed", async () => {
+		const previousGetAgents = api.getAgents;
+		const previousGetStatus = api.getStatus;
+		api.getAgents = async () => ({ data: JSON.parse('{"agents":{}}'), error: null });
+		api.getStatus = async () => null;
+		let mounted: Awaited<ReturnType<typeof mount>> | undefined;
+		try {
+			mounted = await mount(
+				<ConnectSourceDialog open initialKind="transcripts" onClose={() => undefined} onConnected={() => undefined} />,
+			);
+			await act(async () => {
+				await flush();
+				await flush();
+			});
+			expect(mounted.container.textContent).toContain("No agents are available. Try again.");
+			expect(button(mounted.container, "Retry agent list")).not.toBeNull();
+		} finally {
+			api.getAgents = previousGetAgents;
+			api.getStatus = previousGetStatus;
+			await act(async () => mounted?.root.unmount());
+			mounted?.container.remove();
+		}
+	});
+
 	test("desktop file picking preserves filesystem paths and duplicate mode through import", async () => {
 		const mounted = await mount(<ConnectSourceDialog open onClose={() => undefined} onConnected={() => undefined} />);
 		await click(button(mounted.container, "Files"));
