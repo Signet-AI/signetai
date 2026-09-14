@@ -13,6 +13,8 @@ const originalAddSource = api.addSource;
 const originalPickFiles = api.pickFiles;
 const originalGetSourceSnapshot = api.getSourceSnapshot;
 const originalRemoveSource = api.removeSource;
+const originalGetAgents = api.getAgents;
+const originalGetStatus = api.getStatus;
 const originalFetch = globalThis.fetch;
 
 let importCall: { files: readonly File[]; duplicateMode: string; paths: readonly string[] } | null = null;
@@ -96,6 +98,8 @@ afterAll(() => {
 	api.pickFiles = originalPickFiles;
 	api.getSourceSnapshot = originalGetSourceSnapshot;
 	api.removeSource = originalRemoveSource;
+	api.getAgents = originalGetAgents;
+	api.getStatus = originalGetStatus;
 	globalThis.fetch = originalFetch;
 });
 
@@ -323,10 +327,12 @@ describe("sources grouping", () => {
 		mounted.container.remove();
 	});
 
-	test("transcript imports send the selected duplicate mode to the daemon", async () => {
+	test("transcript imports send the selected agent and duplicate mode to the daemon", async () => {
 		const calls: RequestInit[] = [];
+		const paths: string[] = [];
 		const previousFetch = globalThis.fetch;
-		globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+		globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+			paths.push(String(input));
 			calls.push(init ?? {});
 			return new Response(
 				JSON.stringify({ id: "job-1", jobId: "job-1", kind: "import", state: "staging", files: [] }),
@@ -336,12 +342,74 @@ describe("sources grouping", () => {
 		try {
 			const result = await api.createSourceImport("agent-a", [new File(["{}"], "transcript.jsonl")], "reimport");
 			expect(result.error).toBeNull();
+			expect(paths[0]).toContain("/api/sources/imports?agentId=agent-a");
 			expect(JSON.parse(String(calls[0]?.body))).toMatchObject({
 				schemaId: "signet-export",
 				duplicateMode: "reimport",
 			});
+
+			const started = await api.controlSourceImport("job-1", "start", "agent-b");
+			expect(started?.jobId).toBe("job-1");
+			expect(paths[1]).toContain("/api/sources/imports/job-1/start?agentId=agent-b");
 		} finally {
 			globalThis.fetch = previousFetch;
+		}
+	});
+
+	test("transcript import falls back to the active daemon agent when the roster is unavailable", async () => {
+		const previousGetAgents = api.getAgents;
+		const previousGetStatus = api.getStatus;
+		let agentCalls = 0;
+		let statusCalls = 0;
+		api.getAgents = async () => {
+			agentCalls++;
+			return { data: { agents: [] }, error: null };
+		};
+		api.getStatus = async () => {
+			statusCalls++;
+			return {
+				status: "ok",
+				version: "test",
+				uptime: 1,
+				port: 3850,
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "local",
+				agentId: "agent-a",
+				agentsDir: "/tmp/agents",
+			};
+		};
+		let mounted: Awaited<ReturnType<typeof mount>> | undefined;
+		try {
+			mounted = await mount(
+				<ConnectSourceDialog open initialKind="transcripts" onClose={() => undefined} onConnected={() => undefined} />,
+			);
+			await act(async () => {
+				await flush();
+				await flush();
+			});
+			const trigger = mounted.container.querySelector('[aria-label="Target agent"]');
+			if (!(trigger instanceof HTMLElement)) throw new Error("target agent selector not found");
+			if (agentCalls !== 1 || statusCalls !== 1)
+				throw new Error(`agent calls: ${agentCalls}, status calls: ${statusCalls}`);
+			const fileInput = mounted.container.querySelector('input[type="file"]');
+			if (!(fileInput instanceof HTMLInputElement)) throw new Error("transcript file input not found");
+			Object.defineProperty(fileInput, "files", {
+				configurable: true,
+				value: [new File(["{}"], "transcript.jsonl")],
+			});
+			const view = fileInput.ownerDocument.defaultView;
+			if (!view) throw new Error("transcript file input has no window");
+			await act(async () => {
+				fileInput.dispatchEvent(new view.Event("change", { bubbles: true }));
+				await flush();
+			});
+			expect(button(mounted.container, "Import & index").disabled).toBe(false);
+		} finally {
+			api.getAgents = previousGetAgents;
+			api.getStatus = previousGetStatus;
+			await act(async () => mounted?.root.unmount());
+			mounted?.container.remove();
 		}
 	});
 

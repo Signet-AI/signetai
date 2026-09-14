@@ -98,6 +98,10 @@ async function mutateJSON<T extends { error?: string }>(
 	}
 }
 
+function agentQuery(agentId: string | undefined): string {
+	return agentId ? `?agentId=${encodeURIComponent(agentId)}` : "";
+}
+
 async function postSourceImport(
 	agentId: string,
 	files: readonly File[],
@@ -922,10 +926,11 @@ export const api = {
 
 	// Sources
 	getSources: () => getJSON<SourcesResponse>("/api/sources"),
-	getSourceImports: () => getJSONResult<SourceImportsResponse>("/api/sources/imports"),
-	getSourceImport: (jobId: string) =>
+	getSourceImports: (agentId?: string) =>
+		getJSONResult<SourceImportsResponse>(`/api/sources/imports${agentQuery(agentId)}`),
+	getSourceImport: (jobId: string, agentId?: string) =>
 		getJSONResult<{ job: SourceImportJob; files: SourceImportFile[] }>(
-			`/api/sources/imports/${encodeURIComponent(jobId)}`,
+			`/api/sources/imports/${encodeURIComponent(jobId)}${agentQuery(agentId)}`,
 		),
 	createSourceImport: (
 		agentId: string,
@@ -1054,19 +1059,19 @@ export const api = {
 			return { data: null, error: error instanceof Error ? error.message : "Upload failed" };
 		}
 	},
-	controlSourceImport: (jobId: string, action: "start" | "pause" | "resume" | "retry" | "cancel") =>
+	controlSourceImport: (jobId: string, action: "start" | "pause" | "resume" | "retry" | "cancel", agentId?: string) =>
 		postJSON<{ jobId: string; control: string; changed: boolean }>(
-			`/api/sources/imports/${encodeURIComponent(jobId)}/${action}`,
+			`/api/sources/imports/${encodeURIComponent(jobId)}/${action}${agentQuery(agentId)}`,
 			undefined,
 			AbortSignal.timeout(30_000),
 		),
-	getSourceImportRejections: (jobId: string) =>
+	getSourceImportRejections: (jobId: string, agentId?: string) =>
 		getJSON<{ jobId: string; rejections: readonly unknown[] }>(
-			`/api/sources/imports/${encodeURIComponent(jobId)}/rejections`,
+			`/api/sources/imports/${encodeURIComponent(jobId)}/rejections${agentQuery(agentId)}`,
 		),
-	getSourceImportReconciliation: (jobId: string) =>
+	getSourceImportReconciliation: (jobId: string, agentId?: string) =>
 		getJSON<{ jobId: string; reconciliation: readonly unknown[] }>(
-			`/api/sources/imports/${encodeURIComponent(jobId)}/reconciliation`,
+			`/api/sources/imports/${encodeURIComponent(jobId)}/reconciliation${agentQuery(agentId)}`,
 		),
 	importSources: async (
 		files: readonly File[],
