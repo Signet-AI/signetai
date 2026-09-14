@@ -137,24 +137,38 @@ export function ConnectSourceDialog({
 		agentLoadRequest.current = request;
 		setAgents([]);
 		setAgentLoadError(null);
-		const response = await api.getAgents();
-		if (request !== agentLoadRequest.current) return;
-		const available = (response.data?.agents ?? []).map((agent) => ({ id: agent.id, name: agent.name }));
-		if (available.length > 0) {
-			setAgents(available);
-			if (available.length === 1) setTarget((current) => current || available[0].id);
-			return;
-		}
+		let rosterError = "Unable to load agents. Try again.";
+		try {
+			const response = await api.getAgents();
+			if (request !== agentLoadRequest.current) return;
+			rosterError = response.error ?? rosterError;
+			const roster = Array.isArray(response.data?.agents) ? response.data.agents : [];
+			const available = roster
+				.filter((agent) => typeof agent?.id === "string" && agent.id.length > 0)
+				.map((agent) => ({
+					id: agent.id,
+					name: typeof agent.name === "string" && agent.name.length > 0 ? agent.name : agent.id,
+				}));
+			if (available.length > 0) {
+				setAgents(available);
+				if (available.length === 1) setTarget((current) => current || available[0].id);
+				return;
+			}
 
-		const status = await api.getStatus();
-		if (request !== agentLoadRequest.current) return;
-		const activeAgent = status?.agentId?.trim();
-		if (activeAgent) {
-			setAgents([{ id: activeAgent, name: activeAgent }]);
-			setTarget((current) => current || activeAgent);
-			return;
+			const status = await api.getStatus();
+			if (request !== agentLoadRequest.current) return;
+			const activeAgent = status?.agentId?.trim();
+			if (activeAgent) {
+				setAgents([{ id: activeAgent, name: activeAgent }]);
+				setTarget((current) => current || activeAgent);
+				return;
+			}
+			setAgentLoadError(
+				rosterError === "Unable to load agents. Try again." ? "No agents are available. Try again." : rosterError,
+			);
+		} catch {
+			if (request === agentLoadRequest.current) setAgentLoadError(rosterError);
 		}
-		setAgentLoadError(response.error ?? "No agents are available. Try again.");
 	}, []);
 
 	useEffect(() => {
