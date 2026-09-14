@@ -8,7 +8,7 @@ import { sourceLogo } from "@/components/icons";
 import { type ImportSourcesResponse, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { FolderOpen, Globe, Loader2, MessageCircle, RotateCcw, Upload, X } from "@/components/mingcute-icons";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type SourceKind = "files" | "web" | "transcripts" | "obsidian" | "github" | "discord";
 
@@ -129,13 +129,41 @@ export function ConnectSourceDialog({
 	const [result, setResult] = useState<ImportSourcesResponse | null>(null);
 	const [transcriptJobId, setTranscriptJobId] = useState<string | null>(null);
 	const [agents, setAgents] = useState<readonly { id: string; name: string }[]>([]);
+	const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
+	const agentLoadRequest = useRef(0);
+
+	const loadAgents = useCallback(async () => {
+		const request = agentLoadRequest.current + 1;
+		agentLoadRequest.current = request;
+		setAgents([]);
+		setAgentLoadError(null);
+		const response = await api.getAgents();
+		if (request !== agentLoadRequest.current) return;
+		const available = (response.data?.agents ?? []).map((agent) => ({ id: agent.id, name: agent.name }));
+		if (available.length > 0) {
+			setAgents(available);
+			if (available.length === 1) setTarget((current) => current || available[0].id);
+			return;
+		}
+
+		const status = await api.getStatus();
+		if (request !== agentLoadRequest.current) return;
+		const activeAgent = status?.agentId?.trim();
+		if (activeAgent) {
+			setAgents([{ id: activeAgent, name: activeAgent }]);
+			setTarget((current) => current || activeAgent);
+			return;
+		}
+		setAgentLoadError(response.error ?? "No agents are available. Try again.");
+	}, []);
 
 	useEffect(() => {
 		if (!open) return;
-		void api.getAgents().then((response) => {
-			if (response.data) setAgents(response.data.agents.map((agent) => ({ id: agent.id, name: agent.name })));
-		});
-	}, [open]);
+		void loadAgents();
+		return () => {
+			agentLoadRequest.current += 1;
+		};
+	}, [loadAgents, open]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -203,7 +231,7 @@ export function ConnectSourceDialog({
 			setBusy(true);
 			setError(null);
 			const created = transcriptJobId
-				? await api.getSourceImport(transcriptJobId).then((response) => ({
+				? await api.getSourceImport(transcriptJobId, selectedAgent).then((response) => ({
 						...response,
 						data: response.data
 							? { jobId: response.data.job.id, id: response.data.job.id, files: response.data.files }
@@ -236,7 +264,7 @@ export function ConnectSourceDialog({
 					return;
 				}
 			}
-			const started = await api.controlSourceImport(jobId, "start");
+			const started = await api.controlSourceImport(jobId, "start", selectedAgent);
 			setBusy(false);
 			if (!started) {
 				setError(`Job ${jobId}: could not start import`);
@@ -467,6 +495,14 @@ export function ConnectSourceDialog({
 												</SelectContent>
 											</Select>
 											<span className="cs-field__hint">{FIELD.transcripts.hint}</span>
+											{agentLoadError && (
+												<span className="cs-field__hint flex items-center justify-between gap-2" role="alert">
+													{agentLoadError}
+													<button type="button" className="cs-btn-ghost shrink-0" onClick={() => void loadAgents()}>
+														Retry agent list
+													</button>
+												</span>
+											)}
 										</label>
 									)}
 									{embedded && selectedCount > 2 && (

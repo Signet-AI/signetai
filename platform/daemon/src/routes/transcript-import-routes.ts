@@ -5,7 +5,8 @@ import { addImportedSource, resolveDefaultBasePath, buildExportTranscriptRecord 
 import { Hono, type Context } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { authConfig } from "./state";
-import { requirePermission } from "../auth";
+import { requirePermission, type AuthMode, type TokenClaims } from "../auth";
+import { resolveScopedAgent } from "../request-scope";
 import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
 import { withTranscriptImportOperationLock } from "../transcript-import-operation-lock";
 import {
@@ -35,10 +36,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isDuplicateMode(value: unknown): value is ImportDuplicateMode {
 	return typeof value === "string" && (IMPORT_DUPLICATE_MODES as readonly string[]).includes(value);
 }
+export function resolveTranscriptImportAgent(
+	claims: TokenClaims | null,
+	authMode: AuthMode,
+	requestedAgentId: string | undefined,
+	fallbackAgentId: string,
+): string | null {
+	const scoped = resolveScopedAgent(claims, authMode, requestedAgentId, fallbackAgentId);
+	return scoped.error ? null : scoped.agentId;
+}
+
 function agent(c: Context): string | null {
-	const resolved = resolveDaemonAgentId();
-	const requested = c.req.query("agentId") ?? c.req.query("agent_id");
-	return requested === undefined || requested === resolved ? resolved : null;
+	return resolveTranscriptImportAgent(
+		c.get("auth")?.claims ?? null,
+		authConfig.mode,
+		c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+		resolveDaemonAgentId(),
+	);
 }
 function bodyStream(request: Request): AsyncIterable<Uint8Array> {
 	// Bun's server Request clone does not preserve the streamed upload body here:

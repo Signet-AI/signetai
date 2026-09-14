@@ -334,12 +334,12 @@ export function SourcesView() {
 }
 
 function TranscriptImportCard({ job, onMutate }: { job: SourceImportJob; onMutate: () => void }) {
-	const { data: detail } = useAsync(() => api.getSourceImport(job.id), { intervalMs: 3000 });
+	const { data: detail } = useAsync(() => api.getSourceImport(job.id, job.agent_id), { intervalMs: 3000 });
 	const current = detail?.data?.job ?? job;
 	const files = detail?.data?.files ?? job.files ?? [];
 	const terminal = ["completed", "completed_with_rejections", "cancelled", "failed"].includes(current.state);
 	const control = async (action: "pause" | "resume" | "retry" | "cancel") => {
-		await api.controlSourceImport(job.id, action);
+		await api.controlSourceImport(job.id, action, job.agent_id);
 		onMutate();
 	};
 	return (
@@ -392,10 +392,18 @@ function TranscriptImportCard({ job, onMutate }: { job: SourceImportJob; onMutat
 				</div>
 			)}
 			<div className="flex gap-2 font-mono text-[10px]">
-				<button type="button" className="underline" onClick={() => void downloadImportData(current.id, "rejections")}>
+				<button
+					type="button"
+					className="underline"
+					onClick={() => void downloadImportData(current.id, "rejections", current.agent_id)}
+				>
 					Download rejections
 				</button>
-				<button type="button" className="underline" onClick={() => void showReconciliation(current.id)}>
+				<button
+					type="button"
+					className="underline"
+					onClick={() => void showReconciliation(current.id, current.agent_id)}
+				>
 					Reconciliation
 				</button>
 			</div>
@@ -403,8 +411,8 @@ function TranscriptImportCard({ job, onMutate }: { job: SourceImportJob; onMutat
 	);
 }
 
-async function downloadImportData(jobId: string, kind: "rejections"): Promise<void> {
-	const data = await api.getSourceImportRejections(jobId);
+async function downloadImportData(jobId: string, kind: "rejections", agentId?: string): Promise<void> {
+	const data = await api.getSourceImportRejections(jobId, agentId);
 	if (!data) return;
 	const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
 	const link = document.createElement("a");
@@ -414,8 +422,8 @@ async function downloadImportData(jobId: string, kind: "rejections"): Promise<vo
 	URL.revokeObjectURL(url);
 }
 
-async function showReconciliation(jobId: string): Promise<void> {
-	const data = await api.getSourceImportReconciliation(jobId);
+async function showReconciliation(jobId: string, agentId?: string): Promise<void> {
+	const data = await api.getSourceImportReconciliation(jobId, agentId);
 	if (data) window.alert(JSON.stringify(data.reconciliation));
 }
 function ImportedDocumentsCard({ documents, onMutate }: { documents: readonly SignetSource[]; onMutate: () => void }) {
