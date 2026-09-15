@@ -1269,28 +1269,28 @@
     },
     {
       "path": "hooks.ts",
-      "line": 502,
+      "line": 510,
       "api": "existsSync",
       "source": "if (!existsSync(getMemoryDbPath())) return undefined;",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 604,
+      "line": 612,
       "api": "existsSync",
       "source": "if (!existsSync(getMemoryDbPath())) return [];",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 835,
+      "line": 877,
       "api": "existsSync",
       "source": "if (req.sessionKey && existsSync(getMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 838,
+      "line": 880,
       "api": "withReadDbAsync",
       "source": "const block = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1298,42 +1298,42 @@
     },
     {
       "path": "hooks.ts",
-      "line": 1691,
+      "line": 1774,
       "api": "existsSync",
       "source": "if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 1693,
+      "line": 1776,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2101,
+      "line": 2184,
       "api": "existsSync",
       "source": "if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2103,
+      "line": 2186,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2365,
+      "line": 2448,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2367,
+      "line": 2450,
       "api": "readFileSync",
       "source": "const raw = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
@@ -1664,21 +1664,21 @@
     },
     {
       "path": "memory-candidates.ts",
-      "line": 124,
+      "line": 126,
       "api": "existsSync",
       "source": "if (memoryIds.length === 0 || !existsSync(memoryDbPath)) return [];",
       "category": "hot-path"
     },
     {
       "path": "memory-candidates.ts",
-      "line": 230,
+      "line": 234,
       "api": "existsSync",
       "source": "if (!existsSync(memoryDbPath)) return [];",
       "category": "hot-path"
     },
     {
       "path": "memory-candidates.ts",
-      "line": 318,
+      "line": 325,
       "api": "existsSync",
       "source": "if (!existsSync(memoryDbPath)) return [];",
       "category": "hot-path"
