@@ -18,6 +18,7 @@ export default defineConfig({
 			customCss: ["./src/styles/custom.css"],
 			components: {
 				Head: "./src/components/Head.astro",
+				Search: "./src/components/Search.astro",
 			},
 			lastUpdated: true,
 			editLink: {
