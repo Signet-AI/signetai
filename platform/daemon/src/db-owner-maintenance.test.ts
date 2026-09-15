@@ -558,4 +558,27 @@ describe("registered DB owner maintenance", () => {
 		await closeRegisteredDbOwnerMaintenance();
 		expect(() => proxy.health()).toThrow("DB owner maintenance is no longer registered");
 	});
+
+	test("rejects stale owner proxies after replacement", async () => {
+		const firstOwner = {
+			health: () => ({ state: "ready" }),
+		} as unknown as DbOwnerClient;
+		const secondOwner = {
+			health: () => ({ state: "ready" }),
+		} as unknown as DbOwnerClient;
+		registerDbOwnerMaintenance({
+			owner: firstOwner,
+			close: async (): Promise<void> => {},
+		} as unknown as DbOwnerMaintenance);
+		const firstProxy = await getDbOwner();
+
+		await closeRegisteredDbOwnerMaintenance();
+		registerDbOwnerMaintenance({
+			owner: secondOwner,
+			close: async (): Promise<void> => {},
+		} as unknown as DbOwnerMaintenance);
+
+		await expect(firstProxy.start()).rejects.toThrow("DB owner maintenance is no longer registered");
+		await expect(firstProxy.initialize()).rejects.toThrow("DB owner maintenance is no longer registered");
+	});
 });
