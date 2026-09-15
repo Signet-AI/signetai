@@ -264,8 +264,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `158-dreaming-candidate-scan-index.ts`.
-
+`schema_migrations_audit`. The latest migration is `159-retire-obsolete-invocation-ledger.ts`.
 ### Evidence and semantic state
 
 **`memories`** is the central durable memory table. It stores content, type,
