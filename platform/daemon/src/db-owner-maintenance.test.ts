@@ -542,6 +542,51 @@ describe("registered DB owner maintenance", () => {
 		expect(closeCalls).toBe(1);
 	});
 
+	test("keeps active proxy jobs callable while the registry drains", async () => {
+		let resolveResult: ((value: string) => void) | undefined;
+		let resolveMetrics: ((value: undefined) => void) | undefined;
+		let cancelCalls = 0;
+		let closeCalls = 0;
+		const owner = {
+			submit: () => ({
+				job: { id: "active" } as never,
+				result: new Promise<string>((resolve) => {
+					resolveResult = resolve;
+				}),
+				metrics: new Promise<undefined>((resolve) => {
+					resolveMetrics = resolve;
+				}),
+				cancel: (): void => {},
+			}),
+			awaitResult: async <Result>(handle: { result: Promise<Result> }): Promise<Result> => await handle.result,
+			cancel: (): void => {
+				cancelCalls += 1;
+			},
+		} as unknown as DbOwnerClient;
+		registerDbOwnerMaintenance({
+			owner,
+			close: async (): Promise<void> => {
+				closeCalls += 1;
+			},
+		} as unknown as DbOwnerMaintenance);
+
+		const proxy = await getDbOwner();
+		const handle = proxy.submit<string>(
+			{ kind: "query", statement: { sql: "SELECT 1", result: "get" } },
+			{ operation: "test.proxy-submit", lane: "read", deadlineMs: 1_000 },
+		);
+		const closing = closeRegisteredDbOwnerMaintenance();
+		proxy.cancel("active");
+		expect(cancelCalls).toBe(1);
+		resolveResult?.("ok");
+		await expect(proxy.awaitResult(handle)).resolves.toBe("ok");
+		expect(closeCalls).toBe(0);
+
+		resolveMetrics?.(undefined);
+		await closing;
+		expect(closeCalls).toBe(1);
+	});
+
 	test("returns an owner proxy that fails closed after registry retirement", async () => {
 		const owner = {
 			health: () => ({ state: "ready" }),
@@ -581,5 +626,8 @@ describe("registered DB owner maintenance", () => {
 
 		await expect(firstProxy.start()).rejects.toThrow("DB owner maintenance is no longer registered");
 		await expect(firstProxy.initialize()).rejects.toThrow("DB owner maintenance is no longer registered");
+		const staleHandle = { job: { id: "retired" } } as never;
+		await expect(firstProxy.awaitResult(staleHandle)).rejects.toThrow("DB owner maintenance is no longer registered");
+		expect(() => firstProxy.cancel("retired")).toThrow("DB owner maintenance is no longer registered");
 	});
 });
