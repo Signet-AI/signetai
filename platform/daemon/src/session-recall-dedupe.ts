@@ -1,3 +1,4 @@
+import { resolveAgentId } from "./agent-id";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 
@@ -12,6 +13,7 @@ export interface RecallDedupeMeta {
 	readonly contextEpoch?: number;
 	readonly suppressed: number;
 	readonly repeatedReturned: number;
+	readonly failedOpen?: boolean;
 }
 
 export interface ApplyRecallDedupeOptions<T extends RecallDedupeItem> {
@@ -38,9 +40,9 @@ function normalizeSessionKey(sessionKey: string | null | undefined): string | nu
 	return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeAgentId(agentId: string | null | undefined): string {
+function normalizeAgentId(agentId: string | null | undefined, sessionKey: string): string {
 	const trimmed = agentId?.trim();
-	return trimmed && trimmed.length > 0 ? trimmed : "default";
+	return trimmed && trimmed.length > 0 ? trimmed : resolveAgentId({ sessionKey });
 }
 
 function hasRecallDedupeTables(db: WriteDb): boolean {
@@ -63,6 +65,19 @@ function itemKind(id: string): string {
 	if (prefix === "summary") return "summary";
 	if (prefix === "constructed") return "constructed";
 	return "memory";
+}
+
+function itemKey(item: RecallDedupeItem): string {
+	return `${itemKind(item.id)}\0${item.id}`;
+}
+
+function disabledMeta(failedOpen = false): RecallDedupeMeta {
+	return {
+		enabled: false,
+		suppressed: 0,
+		repeatedReturned: 0,
+		...(failedOpen ? { failedOpen: true } : {}),
+	};
 }
 
 function currentEpoch(db: WriteDb, sessionKey: string, agentId: string): number {
@@ -116,7 +131,7 @@ function loadRecalledIds(
 	items: readonly RecallDedupeItem[],
 ): Set<string> {
 	if (items.length === 0) return new Set();
-	const keys = new Set(items.map((item) => `${itemKind(item.id)}\0${item.id}`));
+	const keys = new Set(items.map((item) => itemKey(item)));
 	const placeholders = items.map(() => "(?, ?)").join(", ");
 	const args = items.flatMap((item) => [itemKind(item.id), item.id]);
 	const rows = db
@@ -132,88 +147,98 @@ function loadRecalledIds(
 	return new Set(rows.map((row) => `${row.item_kind}\0${row.item_id}`).filter((key) => keys.has(key)));
 }
 
+function applyRecallDedupeInTx<T extends RecallDedupeItem>(
+	db: WriteDb,
+	opts: ApplyRecallDedupeOptions<T>,
+	sessionKey: string,
+	agentId: string,
+): { readonly items: T[]; readonly meta: RecallDedupeMeta } {
+	if (!hasRecallDedupeTables(db)) {
+		return { items: [...opts.items], meta: disabledMeta(true) };
+	}
+
+	const epoch = currentEpoch(db, sessionKey, agentId);
+	if (opts.includeRecalled === true) {
+		const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
+		const seen = new Set<string>();
+		const items: T[] = [];
+		let repeatedReturned = 0;
+		for (const item of opts.items) {
+			const key = itemKey(item);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			if (recalled.has(key)) {
+				repeatedReturned++;
+				items.push(opts.markRepeated ? opts.markRepeated(item) : item);
+				continue;
+			}
+			insertRecallEvent(db, { sessionKey, agentId, epoch, item, surface: opts.surface, mode: opts.mode });
+			items.push(item);
+		}
+		return {
+			items,
+			meta: { enabled: true, contextEpoch: epoch, suppressed: 0, repeatedReturned },
+		};
+	}
+
+	let suppressed = 0;
+	const items: T[] = [];
+	if (opts.claim) {
+		for (const item of opts.items) {
+			const claimed = insertRecallEvent(db, {
+				sessionKey,
+				agentId,
+				epoch,
+				item,
+				surface: opts.surface,
+				mode: opts.mode,
+			});
+			if (claimed) items.push(item);
+			else suppressed++;
+		}
+	} else {
+		const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
+		const seen = new Set<string>();
+		for (const item of opts.items) {
+			const key = itemKey(item);
+			if (seen.has(key)) {
+				suppressed++;
+				continue;
+			}
+			seen.add(key);
+			if (recalled.has(key)) suppressed++;
+			else items.push(item);
+		}
+	}
+
+	return {
+		items,
+		meta: { enabled: true, contextEpoch: epoch, suppressed, repeatedReturned: 0 },
+	};
+}
+
 export function applyRecallDedupe<T extends RecallDedupeItem>(
 	opts: ApplyRecallDedupeOptions<T>,
 ): { readonly items: T[]; readonly meta: RecallDedupeMeta } {
 	const sessionKey = normalizeSessionKey(opts.sessionKey);
 	if (!sessionKey) {
-		return {
-			items: [...opts.items],
-			meta: { enabled: false, suppressed: 0, repeatedReturned: 0 },
-		};
+		return { items: [...opts.items], meta: disabledMeta() };
 	}
 
-	const agentId = normalizeAgentId(opts.agentId);
+	const agentId = normalizeAgentId(opts.agentId, sessionKey);
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			if (!hasRecallDedupeTables(db)) {
-				return {
-					items: [...opts.items],
-					meta: { enabled: false, suppressed: 0, repeatedReturned: 0 },
-				};
-			}
-
-			const epoch = currentEpoch(db, sessionKey, agentId);
-			if (opts.includeRecalled === true) {
-				const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
-				let repeatedReturned = 0;
-				const items = opts.items.map((item) => {
-					const repeated = recalled.has(`${itemKind(item.id)}\0${item.id}`);
-					if (repeated) repeatedReturned++;
-					if (!repeated) {
-						insertRecallEvent(db, { sessionKey, agentId, epoch, item, surface: opts.surface, mode: opts.mode });
-						return item;
-					}
-					return opts.markRepeated ? opts.markRepeated(item) : item;
-				});
-				return {
-					items,
-					meta: { enabled: true, contextEpoch: epoch, suppressed: 0, repeatedReturned },
-				};
-			}
-
-			let suppressed = 0;
-			const items: T[] = [];
-			if (opts.claim) {
-				for (const item of opts.items) {
-					const claimed = insertRecallEvent(db, {
-						sessionKey,
-						agentId,
-						epoch,
-						item,
-						surface: opts.surface,
-						mode: opts.mode,
-					});
-					if (claimed) items.push(item);
-					else suppressed++;
-				}
-			} else {
-				const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
-				for (const item of opts.items) {
-					if (recalled.has(`${itemKind(item.id)}\0${item.id}`)) {
-						suppressed++;
-					} else {
-						items.push(item);
-					}
-				}
-			}
-
-			return {
-				items,
-				meta: { enabled: true, contextEpoch: epoch, suppressed, repeatedReturned: 0 },
-			};
-		}, "session-recall-dedupe.ts:149");
+		return getDbAccessor().withWriteTx(
+			(db: import("./db-accessor").WriteDb) => applyRecallDedupeInTx(db, opts, sessionKey, agentId),
+			"session-recall-dedupe.ts:232",
+		);
 	} catch (error) {
 		logger.warn("memory", "Recall dedupe failed open", {
 			error: error instanceof Error ? error.message : String(error),
 			sessionKey,
 			agentId,
 		});
-		return {
-			items: [...opts.items],
-			meta: { enabled: false, suppressed: 0, repeatedReturned: 0 },
-		};
+		return { items: [...opts.items], meta: disabledMeta(true) };
 	}
 }
 
@@ -222,82 +247,21 @@ export async function applyRecallDedupeAsync<T extends RecallDedupeItem>(
 ): Promise<{ readonly items: T[]; readonly meta: RecallDedupeMeta }> {
 	const sessionKey = normalizeSessionKey(opts.sessionKey);
 	if (!sessionKey) {
-		return {
-			items: [...opts.items],
-			meta: { enabled: false, suppressed: 0, repeatedReturned: 0 },
-		};
+		return { items: [...opts.items], meta: disabledMeta() };
 	}
 
-	const agentId = normalizeAgentId(opts.agentId);
+	const agentId = normalizeAgentId(opts.agentId, sessionKey);
 	try {
-		return await getDbAccessor().withWriteTxAsync(
-			(db) => {
-				if (!hasRecallDedupeTables(db)) {
-					return {
-						items: [...opts.items],
-						meta: { enabled: false, suppressed: 0, repeatedReturned: 0 },
-					};
-				}
-
-				const epoch = currentEpoch(db, sessionKey, agentId);
-				if (opts.includeRecalled === true) {
-					const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
-					let repeatedReturned = 0;
-					const items = opts.items.map((item) => {
-						const repeated = recalled.has(`${itemKind(item.id)}\0${item.id}`);
-						if (repeated) repeatedReturned++;
-						if (!repeated) {
-							insertRecallEvent(db, { sessionKey, agentId, epoch, item, surface: opts.surface, mode: opts.mode });
-							return item;
-						}
-						return opts.markRepeated ? opts.markRepeated(item) : item;
-					});
-					return {
-						items,
-						meta: { enabled: true, contextEpoch: epoch, suppressed: 0, repeatedReturned },
-					};
-				}
-
-				let suppressed = 0;
-				const items: T[] = [];
-				if (opts.claim) {
-					for (const item of opts.items) {
-						const claimed = insertRecallEvent(db, {
-							sessionKey,
-							agentId,
-							epoch,
-							item,
-							surface: opts.surface,
-							mode: opts.mode,
-						});
-						if (claimed) items.push(item);
-						else suppressed++;
-					}
-				} else {
-					const recalled = loadRecalledIds(db, sessionKey, agentId, epoch, opts.items);
-					for (const item of opts.items) {
-						if (recalled.has(`${itemKind(item.id)}\0${item.id}`)) suppressed++;
-						else items.push(item);
-					}
-				}
-
-				return {
-					items,
-					meta: { enabled: true, contextEpoch: epoch, suppressed, repeatedReturned: 0 },
-				};
-			},
-			{ siteToken: "session-recall-dedupe.ts:233" },
-		);
+		return await getDbAccessor().withWriteTxAsync((db) => applyRecallDedupeInTx(db, opts, sessionKey, agentId), {
+			siteToken: "session-recall-dedupe.ts:255",
+		});
 	} catch (error) {
 		logger.warn("memory", "Recall dedupe failed open", {
 			error: error instanceof Error ? error.message : String(error),
 			sessionKey,
 			agentId,
 		});
-		return {
-			items: [...opts.items],
-			meta: { enabled: false, suppressed: 0, repeatedReturned: 0 },
-		};
+		return { items: [...opts.items], meta: disabledMeta(true) };
 	}
 }
 
@@ -316,14 +280,14 @@ export async function advanceRecallContextEpochAsync(input: {
 	readonly agentId?: string | null;
 	readonly reason: string;
 	readonly sourceRef?: string | null;
-}): Promise<{ readonly advanced: boolean; readonly contextEpoch?: number }> {
+}): Promise<{ readonly advanced: boolean; readonly contextEpoch?: number; readonly failedOpen?: boolean }> {
 	const sessionKey = normalizeSessionKey(input.sessionKey);
 	if (!sessionKey) return { advanced: false };
-	const agentId = normalizeAgentId(input.agentId);
+	const agentId = normalizeAgentId(input.agentId, sessionKey);
 	try {
 		return await getDbAccessor().withWriteTxAsync(
 			(db) => {
-				if (!hasRecallDedupeTables(db)) return { advanced: false };
+				if (!hasRecallDedupeTables(db)) return { advanced: false, failedOpen: true };
 				const next = currentEpoch(db, sessionKey, agentId) + 1;
 				db.prepare(
 					`INSERT OR IGNORE INTO session_context_epochs (
@@ -341,7 +305,7 @@ export async function advanceRecallContextEpochAsync(input: {
 			sessionKey,
 			agentId,
 		});
-		return { advanced: false };
+		return { advanced: false, failedOpen: true };
 	}
 }
 
@@ -363,14 +327,14 @@ export function advanceRecallContextEpoch(input: {
 	readonly agentId?: string | null;
 	readonly reason: string;
 	readonly sourceRef?: string | null;
-}): { readonly advanced: boolean; readonly contextEpoch?: number } {
+}): { readonly advanced: boolean; readonly contextEpoch?: number; readonly failedOpen?: boolean } {
 	const sessionKey = normalizeSessionKey(input.sessionKey);
 	if (!sessionKey) return { advanced: false };
-	const agentId = normalizeAgentId(input.agentId);
+	const agentId = normalizeAgentId(input.agentId, sessionKey);
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			if (!hasRecallDedupeTables(db)) return { advanced: false };
+			if (!hasRecallDedupeTables(db)) return { advanced: false, failedOpen: true };
 			const next = currentEpoch(db, sessionKey, agentId) + 1;
 			db.prepare(
 				`INSERT OR IGNORE INTO session_context_epochs (
@@ -386,6 +350,6 @@ export function advanceRecallContextEpoch(input: {
 			sessionKey,
 			agentId,
 		});
-		return { advanced: false };
+		return { advanced: false, failedOpen: true };
 	}
 }

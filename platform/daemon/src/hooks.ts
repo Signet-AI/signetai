@@ -248,6 +248,7 @@ export type { HooksConfig };
 export interface SessionStartRequest {
 	harness: string;
 	project?: string;
+	cwd?: string;
 	agentId?: string;
 	claimOnly?: boolean;
 	source?: string;
@@ -988,17 +989,22 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	const sessionStartRecallSessionKey = sessionStartRecallKey(req);
-	memories = (
-		await applyRecallDedupeAsync({
+	const sessionStartDedupe = await applyRecallDedupeAsync({
+		sessionKey: sessionStartRecallSessionKey,
+		agentId,
+		surface: "api.hooks.session-start",
+		mode: "automatic",
+		includeRecalled: false,
+		claim: false,
+		items: memories,
+	});
+	if (sessionStartDedupe.meta.failedOpen) {
+		logger.warn("memory", "Session-start recall dedupe failed open", {
 			sessionKey: sessionStartRecallSessionKey,
 			agentId,
-			surface: "api.hooks.session-start",
-			mode: "automatic",
-			includeRecalled: false,
-			claim: false,
-			items: memories,
-		})
-	).items;
+		});
+	}
+	memories = sessionStartDedupe.items;
 	const memoryCandidateCount = memories.length;
 	const sessionContinuityOptions = {
 		maxEntries: Math.max(0, Math.trunc(config.sessionContinuityMaxEntries ?? DEFAULT_SESSION_CONTINUITY_MAX_ENTRIES)),
@@ -1236,6 +1242,12 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		mode: "automatic",
 		items: sessionContinuity.included,
 	});
+	if (claimedMemories.meta.failedOpen) {
+		logger.warn("memory", "Session-start recall claim failed open", {
+			sessionKey: sessionStartRecallSessionKey,
+			agentId,
+		});
+	}
 	const memoryClaimSuppressedCount = Math.max(0, sessionContinuity.included.length - claimedMemories.items.length);
 	if (claimedMemories.items.length !== sessionContinuity.included.length) {
 		sessionContinuity = renderSessionContinuity(claimedMemories.items, sessionContinuityOptions);
