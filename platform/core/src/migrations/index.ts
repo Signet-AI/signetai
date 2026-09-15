@@ -1,5 +1,6 @@
 import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
 import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
+import { up as retireObsoleteInvocationLedger } from "./153-retire-obsolete-invocation-ledger";
 /**
  * Migration runner for Signet's SQLite database
  *
@@ -561,9 +562,6 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 52,
 		name: "mcp-invocations",
 		up: mcpInvocations,
-		artifacts: {
-			tables: ["mcp_invocations"],
-		},
 	},
 	{
 		version: 53,
@@ -1406,6 +1404,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "memory-artifact-sha-index",
 		up: memoryArtifactShaIndex,
 		artifacts: { indexes: ["idx_memory_artifacts_agent_sha"] },
+	},
+	{
+		version: 153,
+		name: "retire-obsolete-invocation-ledger",
+		up: retireObsoleteInvocationLedger,
 	},
 ];
 

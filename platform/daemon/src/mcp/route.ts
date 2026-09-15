@@ -94,17 +94,8 @@ export function mountMcpRoute(app: Hono): void {
 				sessionIdGenerator: undefined, // stateless
 				enableJsonResponse: true,
 			});
-			const harness = c.req.query("harness") ?? c.req.header("x-signet-harness") ?? undefined;
-			const workspace = c.req.query("workspace") ?? c.req.header("x-signet-workspace") ?? undefined;
-			const channel = c.req.query("channel") ?? c.req.header("x-signet-channel") ?? undefined;
-
 			server = await createMcpServer({
 				authorizationHeader: c.req.header("authorization"),
-				context: {
-					harness,
-					workspace,
-					channel,
-				},
 			});
 			await server.connect(transport);
 			const response = await transport.handleRequest(c.req.raw, parsedBody === undefined ? undefined : { parsedBody });

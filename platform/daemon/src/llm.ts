@@ -14,7 +14,6 @@ export type InferenceWorkload =
 	| "sessionSynthesis"
 	| "aggregateRecall"
 	| "interactive"
-	| "widgetGeneration"
 	| "repair";
 
 type InferenceProviderResolver = (workload: InferenceWorkload) => LlmProvider;
@@ -63,16 +62,6 @@ export function getSynthesisProvider(): LlmProvider {
 }
 
 export function closeSynthesisProvider(): void {}
-
-export function initWidgetProvider(_instance: LlmProvider): void {
-	throw new Error("initWidgetProvider is obsolete — configure inference workloads instead");
-}
-
-export function getWidgetProvider(): LlmProvider {
-	return getInferenceProvider("widgetGeneration");
-}
-
-export function closeWidgetProvider(): void {}
 
 export function getInteractiveLlmProvider(): LlmProvider {
 	return getInferenceProvider("interactive");

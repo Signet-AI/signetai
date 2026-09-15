@@ -7013,7 +7013,7 @@ var require_package2 = __commonJS2((exports, module) => {
   };
 });
 var require_keyring = __commonJS2((exports, module) => {
-  var __filename2 = "/home/nicholai/signet/signetai/.worktrees/connectors-dashboard-health/node_modules/.bun/@napi-rs+keyring@1.3.0/node_modules/@napi-rs/keyring/index.js";
+  var __filename2 = "/home/nicholai/signet/signetai/.worktrees/hermes-984097ee/node_modules/.bun/@napi-rs+keyring@1.3.0/node_modules/@napi-rs/keyring/index.js";
   var { createRequire: createRequire22 } = __require("node:module");
   __require = createRequire22(__filename2);
   var { readFileSync: readFileSync3 } = __require("node:fs");
@@ -11377,6 +11377,9 @@ function up2(db) {
 		CREATE INDEX idx_memory_artifacts_agent_sha ON memory_artifacts(agent_id, source_sha256, COALESCE(source_id, ''), COALESCE(is_deleted, 0), captured_at DESC, source_path)
 	`);
 }
+function up3(db) {
+  db.exec("DROP TABLE IF EXISTS mcp_invocations");
+}
 var MEMORIES_FTS_TOKENIZER = "unicode61";
 var FTS_STATE_TABLE = "memories_fts_state";
 function normalizeSql(sql) {
@@ -11492,7 +11495,7 @@ function memoriesFtsNeedsTokenizerRepair(sql) {
     return true;
   return !normalized.includes(`tokenize='${MEMORIES_FTS_TOKENIZER}'`);
 }
-function up3(db) {
+function up4(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
@@ -11590,7 +11593,7 @@ function addColumnIfMissing(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up4(db) {
+function up5(db) {
   addColumnIfMissing(db, "memories", "content_hash", "TEXT");
   addColumnIfMissing(db, "memories", "normalized_content", "TEXT");
   addColumnIfMissing(db, "memories", "is_deleted", "INTEGER DEFAULT 0");
@@ -11708,7 +11711,7 @@ function addColumnIfMissing2(db, table, column, definition) {
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   return true;
 }
-function up5(db) {
+function up6(db) {
   addColumnIfMissing2(db, "memories", "why", "TEXT");
   addColumnIfMissing2(db, "memories", "project", "TEXT");
   db.exec(`DROP INDEX IF EXISTS idx_memories_content_hash`);
@@ -11745,7 +11748,7 @@ function addColumnIfMissing3(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up6(db) {
+function up7(db) {
   addColumnIfMissing3(db, "memory_history", "actor_type", "TEXT");
   addColumnIfMissing3(db, "memory_history", "session_id", "TEXT");
   addColumnIfMissing3(db, "memory_history", "request_id", "TEXT");
@@ -11778,7 +11781,7 @@ function addColumnIfMissing4(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up7(db) {
+function up8(db) {
   addColumnIfMissing4(db, "entities", "canonical_name", "TEXT");
   addColumnIfMissing4(db, "entities", "mentions", "INTEGER DEFAULT 0");
   addColumnIfMissing4(db, "entities", "embedding", "BLOB");
@@ -11795,7 +11798,7 @@ function hasColumn4(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r2) => r2.name === column);
 }
-function up8(db) {
+function up9(db) {
   if (!hasColumn4(db, "memories", "idempotency_key")) {
     db.exec("ALTER TABLE memories ADD COLUMN idempotency_key TEXT");
   }
@@ -11810,7 +11813,7 @@ function hasColumn5(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r2) => r2.name === column);
 }
-function up9(db) {
+function up10(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY,
@@ -11867,7 +11870,7 @@ function up9(db) {
     db.exec("ALTER TABLE memory_jobs ADD COLUMN document_id TEXT");
   }
 }
-function up10(db) {
+function up11(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings'").all();
   if (tables.length === 0)
     return;
@@ -11884,7 +11887,7 @@ function up10(db) {
 			ON embeddings(content_hash)
 	`);
 }
-function up11(db) {
+function up12(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS summary_jobs (
 			id TEXT PRIMARY KEY,
@@ -11904,7 +11907,7 @@ function up11(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_summary_jobs_status
 		 ON summary_jobs(status)`);
 }
-function up12(db) {
+function up13(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS umap_cache (
 			id INTEGER PRIMARY KEY,
@@ -11915,7 +11918,7 @@ function up12(db) {
 		)
 	`);
 }
-function up13(db) {
+function up14(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_scores (
 			id TEXT PRIMARY KEY,
@@ -11935,7 +11938,7 @@ function up13(db) {
 			ON session_scores(session_key);
 	`);
 }
-function up14(db) {
+function up15(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS scheduled_tasks (
 			id TEXT PRIMARY KEY,
@@ -11976,7 +11979,7 @@ function addColumnIfMissing5(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up15(db) {
+function up16(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS ingestion_jobs (
 			id TEXT PRIMARY KEY,
@@ -12002,7 +12005,7 @@ function up15(db) {
   addColumnIfMissing5(db, "memories", "source_path", "TEXT");
   addColumnIfMissing5(db, "memories", "source_section", "TEXT");
 }
-function up16(db) {
+function up17(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS telemetry_events (
 			id TEXT PRIMARY KEY,
@@ -12027,7 +12030,7 @@ function addColumnIfMissing6(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up17(db) {
+function up18(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_memories (
 			id TEXT PRIMARY KEY,
@@ -12054,7 +12057,7 @@ function up17(db) {
   addColumnIfMissing6(db, "session_scores", "confidence", "REAL");
   addColumnIfMissing6(db, "session_scores", "continuity_reasoning", "TEXT");
 }
-function up18(db) {
+function up19(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_checkpoints (
 			id TEXT PRIMARY KEY,
@@ -12076,7 +12079,7 @@ function up18(db) {
 			ON session_checkpoints(project_normalized, created_at DESC);
 	`);
 }
-function up19(db) {
+function up20(db) {
   const cols = db.prepare("PRAGMA table_info(scheduled_tasks)").all();
   const colNames = new Set(cols.flatMap((c2) => typeof c2.name === "string" ? [c2.name] : []));
   if (!colNames.has("skill_name")) {
@@ -12087,7 +12090,7 @@ function up19(db) {
 			 CHECK (skill_mode IN ('inject', 'slash') OR skill_mode IS NULL)`);
   }
 }
-function up20(db) {
+function up21(db) {
   const existing = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='skill_meta'").get();
   if (existing)
     return;
@@ -12119,7 +12122,7 @@ function up20(db) {
 		CREATE INDEX idx_skill_meta_source ON skill_meta(source);
 	`);
 }
-function up21(db) {
+function up22(db) {
   const entityCols = db.prepare("PRAGMA table_info(entities)").all();
   const entityColNames = new Set(entityCols.flatMap((c2) => typeof c2.name === "string" ? [c2.name] : []));
   if (!entityColNames.has("agent_id")) {
@@ -12204,13 +12207,13 @@ function addColumnIfMissing7(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up22(db) {
+function up23(db) {
   addColumnIfMissing7(db, "session_memories", "entity_slot", "INTEGER");
   addColumnIfMissing7(db, "session_memories", "aspect_slot", "INTEGER");
   addColumnIfMissing7(db, "session_memories", "is_constraint", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing7(db, "session_memories", "structural_density", "INTEGER");
 }
-function up23(db) {
+function up24(db) {
   const columns = db.prepare("PRAGMA table_info(session_checkpoints)").all();
   const columnNames = new Set(columns.flatMap((column) => typeof column.name === "string" ? [column.name] : []));
   if (!columnNames.has("focal_entity_ids")) {
@@ -12235,25 +12238,25 @@ function addColumnIfMissing8(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up24(db) {
+function up25(db) {
   addColumnIfMissing8(db, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing8(db, "entities", "pinned_at", "TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_entities_pinned ON entities(agent_id, pinned, pinned_at DESC)");
 }
-function up25(_db) {}
 function up26(_db) {}
+function up27(_db) {}
 function addColumnIfMissing9(db, table, column, definition) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
   if (!cols.some((c2) => c2.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up27(db) {
+function up28(db) {
   addColumnIfMissing9(db, "session_memories", "agent_relevance_score", "REAL");
   addColumnIfMissing9(db, "session_memories", "agent_feedback_count", "INTEGER DEFAULT 0");
 }
-function up28(_db) {}
-function up29(db) {
+function up29(_db) {}
+function up30(db) {
   db.exec(`
 		UPDATE entities
 		SET canonical_name = REPLACE(REPLACE(REPLACE(
@@ -12262,7 +12265,7 @@ function up29(db) {
 		WHERE canonical_name IS NULL
 	`);
 }
-function up30(db) {
+function up31(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memories_cold (
 			archive_id TEXT PRIMARY KEY,
@@ -12299,7 +12302,7 @@ function up30(db) {
 		CREATE INDEX IF NOT EXISTS idx_cold_source ON memories_cold(cold_source_id);
 	`);
 }
-function up31(db) {
+function up32(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_summaries (
 			id TEXT PRIMARY KEY,
@@ -12344,7 +12347,7 @@ function up31(db) {
 			WHERE session_key IS NOT NULL;
 	`);
 }
-function up32(db) {
+function up33(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_jobs_new (
 			id TEXT PRIMARY KEY,
@@ -12389,7 +12392,7 @@ function up32(db) {
 			ON memory_jobs(failed_at);
 	`);
 }
-function up33(db) {
+function up34(db) {
   const depCols = db.prepare("PRAGMA table_info(entity_dependencies)").all();
   if (!depCols.some((c2) => c2.name === "reason")) {
     db.exec("ALTER TABLE entity_dependencies ADD COLUMN reason TEXT");
@@ -12399,7 +12402,7 @@ function up33(db) {
     db.exec("ALTER TABLE entities ADD COLUMN last_synthesized_at TEXT");
   }
 }
-function up34(db) {
+function up35(db) {
   const cols = db.prepare("PRAGMA table_info(embeddings)").all();
   if (cols.length === 0)
     return;
@@ -12407,14 +12410,14 @@ function up34(db) {
     db.exec("ALTER TABLE embeddings ADD COLUMN vector BLOB");
   }
 }
-function up35(db) {
+function up36(db) {
   const cols = db.prepare("PRAGMA table_info(memories)").all();
   if (!cols.some((c2) => c2.name === "scope")) {
     db.exec("ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT NULL");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope) WHERE scope IS NOT NULL");
 }
-function up36(db) {
+function up37(db) {
   db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
   db.exec(`
 		CREATE UNIQUE INDEX idx_memories_content_hash_unique
@@ -12422,7 +12425,7 @@ function up36(db) {
 		WHERE content_hash IS NOT NULL AND is_deleted = 0
 	`);
 }
-function up37(db) {
+function up38(db) {
   db.exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
 			name, canonical_name,
@@ -12454,13 +12457,13 @@ function up37(db) {
 		END
 	`);
 }
-function up38(db) {
+function up39(db) {
   const cols = db.prepare("PRAGMA table_info(entity_dependencies)").all();
   if (!cols.some((c2) => c2.name === "confidence")) {
     db.exec("ALTER TABLE entity_dependencies ADD COLUMN confidence REAL DEFAULT 0.7");
   }
 }
-function up39(db) {
+function up40(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_communities (
 			id TEXT PRIMARY KEY,
@@ -12478,7 +12481,7 @@ function up39(db) {
     db.exec("ALTER TABLE entities ADD COLUMN community_id TEXT REFERENCES entity_communities(id)");
   }
 }
-function up40(db) {
+function up41(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_hints (
 			id TEXT PRIMARY KEY,
@@ -12518,7 +12521,7 @@ function up40(db) {
 		END
 	`);
 }
-function up41(db) {
+function up42(db) {
   db.exec(`
 		DELETE FROM entity_dependencies
 		WHERE id NOT IN (
@@ -12536,7 +12539,7 @@ function up41(db) {
 		)
 	`);
 }
-function up42(db) {
+function up43(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_transcripts (
 			session_key TEXT PRIMARY KEY,
@@ -12559,7 +12562,7 @@ function addColumnIfMissing10(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up43(db) {
+function up44(db) {
   addColumnIfMissing10(db, "session_memories", "path_json", "TEXT");
   db.exec(`
 		CREATE TABLE IF NOT EXISTS path_feedback_events (
@@ -12634,7 +12637,7 @@ function addColumnIfMissing11(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up44(db) {
+function up45(db) {
   addColumnIfMissing11(db, "session_memories", "entity_slot", "INTEGER");
   addColumnIfMissing11(db, "session_memories", "aspect_slot", "INTEGER");
   addColumnIfMissing11(db, "session_memories", "is_constraint", "INTEGER NOT NULL DEFAULT 0");
@@ -12722,7 +12725,7 @@ function addColumnIfMissing12(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up45(db) {
+function up46(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS agents (
 			id           TEXT PRIMARY KEY,
@@ -12751,7 +12754,7 @@ function addColumnIfMissing13(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up46(db) {
+function up47(db) {
   addColumnIfMissing13(db, "session_summaries", "source_type", "TEXT");
   addColumnIfMissing13(db, "session_summaries", "source_ref", "TEXT");
   addColumnIfMissing13(db, "session_summaries", "meta_json", "TEXT");
@@ -12777,7 +12780,7 @@ function addColumnIfMissing14(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up47(db) {
+function up48(db) {
   addColumnIfMissing14(db, "session_transcripts", "updated_at", "TEXT");
   addColumnIfMissing14(db, "summary_jobs", "agent_id", "TEXT NOT NULL DEFAULT 'default'");
   addColumnIfMissing14(db, "session_scores", "agent_id", "TEXT NOT NULL DEFAULT 'default'");
@@ -12848,7 +12851,7 @@ function up47(db) {
 			ON memory_md_heads(lease_expires_at);
 	`);
 }
-function up48(db) {
+function up49(db) {
   db.exec(`
 		DROP INDEX IF EXISTS idx_summaries_session_depth;
 
@@ -12909,7 +12912,7 @@ function up48(db) {
 			  AND COALESCE(source_type, 'summary') = 'summary';
 	`);
 }
-function up49(db) {
+function up50(db) {
   db.exec(`
 		DROP TRIGGER IF EXISTS session_transcripts_fts_ai;
 		DROP TRIGGER IF EXISTS session_transcripts_fts_ad;
@@ -13007,7 +13010,7 @@ function up49(db) {
 			  AND COALESCE(source_type, 'summary') = 'summary';
 	`);
 }
-function up50(db) {
+function up51(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_thread_heads (
 			agent_id TEXT NOT NULL DEFAULT 'default',
@@ -13125,7 +13128,7 @@ function up50(db) {
 		WHERE excluded.latest_at >= memory_thread_heads.latest_at;
 	`);
 }
-function up51(db) {
+function up52(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_extract_cursors (
 			session_key TEXT NOT NULL,
@@ -13142,7 +13145,7 @@ function hasTable(db, name) {
 			 WHERE type = 'table' AND name = ?
 			 LIMIT 1`).get(name) !== undefined;
 }
-function up52(db) {
+function up53(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_dependency_history (
 			id                TEXT PRIMARY KEY,
@@ -13312,7 +13315,7 @@ function addColumnIfMissing15(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up53(db) {
+function up54(db) {
   addColumnIfMissing15(db, "summary_jobs", "session_id", "TEXT");
   addColumnIfMissing15(db, "summary_jobs", "trigger", "TEXT NOT NULL DEFAULT 'session_end'");
   addColumnIfMissing15(db, "summary_jobs", "captured_at", "TEXT");
@@ -13404,7 +13407,7 @@ function up53(db) {
 		VALUES ('rebuild');
 	`);
 }
-function up54(db) {
+function up55(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS mcp_invocations (
 			id          TEXT PRIMARY KEY,
@@ -13421,7 +13424,7 @@ function up54(db) {
 		CREATE INDEX IF NOT EXISTS idx_mcp_inv_agent ON mcp_invocations(agent_id, created_at);
 	`);
 }
-function up55(db) {
+function up56(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS skill_invocations (
 			id          TEXT PRIMARY KEY,
@@ -13437,7 +13440,7 @@ function up55(db) {
 		CREATE INDEX IF NOT EXISTS idx_skill_inv_agent ON skill_invocations(agent_id, created_at);
 	`);
 }
-function up56(db) {
+function up57(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS task_scope_hints (
 			task_id     TEXT PRIMARY KEY REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
@@ -13468,7 +13471,7 @@ function up56(db) {
 			ON task_scope_hints(agent_id, updated_at);
 	`);
 }
-function up57(db) {
+function up58(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_state (
 			agent_id TEXT PRIMARY KEY NOT NULL,
@@ -13511,7 +13514,7 @@ function ensureMemoriesScopeColumns(db) {
   if (!names.has("scope"))
     db.exec("ALTER TABLE memories ADD COLUMN scope TEXT");
 }
-function up58(db) {
+function up59(db) {
   ensureMemoriesScopeColumns(db);
   db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
   db.exec(`
@@ -13524,20 +13527,20 @@ function up58(db) {
 		WHERE content_hash IS NOT NULL AND is_deleted = 0
 	`);
 }
-function up59(db) {
+function up60(db) {
   const sql = readMemoriesFtsSql(db);
   if (sql !== null && !memoriesFtsNeedsTokenizerRepair(sql))
     return;
   recreateMemoriesFts(db);
 }
-function up60(db) {
+function up61(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_order
 			ON entities(agent_id, pinned DESC, pinned_at DESC, mentions DESC, updated_at DESC, name)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_extracted_mentions
 			ON entities(entity_type, mentions)
 			WHERE entity_type = 'extracted'`);
 }
-function up61(db) {
+function up62(db) {
   const cols = db.prepare("PRAGMA table_info(entity_attributes)").all();
   if (!cols.some((col) => col.name === "claim_key")) {
     db.exec("ALTER TABLE entity_attributes ADD COLUMN claim_key TEXT");
@@ -13546,7 +13549,7 @@ function up61(db) {
 			ON entity_attributes(agent_id, aspect_id, claim_key, status)
 			WHERE claim_key IS NOT NULL`);
 }
-function up62(db) {
+function up63(db) {
   const cols = db.prepare("PRAGMA table_info(entity_attributes)").all();
   if (!cols.some((col) => col.name === "group_key")) {
     db.exec("ALTER TABLE entity_attributes ADD COLUMN group_key TEXT");
@@ -13558,13 +13561,13 @@ function up62(db) {
 			ON entity_attributes(agent_id, aspect_id, group_key, claim_key, status)
 			WHERE claim_key IS NOT NULL`);
 }
-function up63(db) {
+function up64(db) {
   const cols = db.prepare("PRAGMA table_info(memory_artifacts)").all();
   if (cols.some((col) => col.name === "source_mtime_ms"))
     return;
   db.exec("ALTER TABLE memory_artifacts ADD COLUMN source_mtime_ms REAL");
 }
-function up64(db) {
+function up65(db) {
   const cols = db.prepare("PRAGMA table_info(memory_artifacts)").all();
   const names = new Set(cols.map((col) => col.name));
   if (!names.has("is_deleted")) {
@@ -13578,7 +13581,7 @@ function up64(db) {
 			ON memory_artifacts(agent_id, is_deleted, deleted_at)
 	`);
 }
-function up65(db) {
+function up66(db) {
   db.exec("DROP TRIGGER IF EXISTS memories_au");
   db.exec(`
 		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF content ON memories BEGIN
@@ -13596,7 +13599,7 @@ function addColumnIfMissing16(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up66(db) {
+function up67(db) {
   for (const table of ["entities", "entity_communities", "entity_attributes", "entity_dependencies"]) {
     addColumnIfMissing16(db, table, "source_id", "TEXT");
     addColumnIfMissing16(db, table, "source_kind", "TEXT");
@@ -13616,7 +13619,7 @@ function hasColumn7(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((row) => row.name === column);
 }
-function up67(db) {
+function up68(db) {
   if (!hasTable2(db, "embeddings"))
     return;
   if (!hasColumn7(db, "embeddings", "agent_id")) {
@@ -13624,7 +13627,7 @@ function up67(db) {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_embeddings_agent_source ON embeddings(agent_id, source_type, source_id)");
 }
-function up68(db) {
+function up69(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_search_telemetry (
 			id TEXT PRIMARY KEY,
@@ -13665,7 +13668,7 @@ function addColumnIfMissing17(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up69(db) {
+function up70(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS ontology_proposals (
 			id          TEXT PRIMARY KEY,
@@ -13708,7 +13711,7 @@ function up69(db) {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_proposal ON ${table}(agent_id, proposal_id)`);
   }
 }
-function up70(db) {
+function up71(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS daily_reflections (
 			id               TEXT PRIMARY KEY,
@@ -13735,7 +13738,7 @@ function up70(db) {
 			WHERE content_key IS NOT NULL;
 	`);
 }
-function up71(db) {
+function up72(db) {
   const cols = db.prepare("PRAGMA table_info(daily_reflections)").all();
   const colNames = new Set(cols.flatMap((c2) => typeof c2.name === "string" ? [c2.name] : []));
   if (!colNames.has("content_key")) {
@@ -13772,7 +13775,7 @@ function backfillVersionRoots(db) {
 		WHERE version_root_id IS NULL
 	`);
 }
-function up72(db) {
+function up73(db) {
   for (const table of ["entities", "entity_aspects", "entity_dependencies"]) {
     addColumnIfMissing18(db, table, "status", "TEXT NOT NULL DEFAULT 'active'");
     addColumnIfMissing18(db, table, "archived_at", "TEXT");
@@ -13807,7 +13810,7 @@ function up72(db) {
 			ON entity_aspects(agent_id, proposal_id);
 	`);
 }
-function up73(db) {
+function up74(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS epistemic_assertions (
 			id TEXT PRIMARY KEY,
@@ -13863,7 +13866,7 @@ function ensureMemoriesScopeColumns2(db) {
   if (!names.has("runtime_path"))
     db.exec("ALTER TABLE memories ADD COLUMN runtime_path TEXT");
 }
-function up74(db) {
+function up75(db) {
   ensureMemoriesScopeColumns2(db);
   db.exec("DROP INDEX IF EXISTS idx_memories_idempotency_key");
   db.exec(`
@@ -13877,7 +13880,7 @@ function up74(db) {
 		WHERE idempotency_key IS NOT NULL AND is_deleted = 0
 	`);
 }
-function up75(db) {
+function up76(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_context_epochs (
 			session_key TEXT NOT NULL,
@@ -13912,7 +13915,7 @@ function up75(db) {
 			ON session_recall_events(item_kind, item_id, created_at DESC);
 	`);
 }
-function up76(db) {
+function up77(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS aggregate_memory_sources (
 			aggregate_memory_id TEXT NOT NULL,
@@ -13931,7 +13934,7 @@ function addColumnIfMissing19(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up77(db) {
+function up78(db) {
   addColumnIfMissing19(db, "memory_artifacts", "source_id", "TEXT");
   addColumnIfMissing19(db, "memory_artifacts", "source_root", "TEXT");
   addColumnIfMissing19(db, "memory_artifacts", "source_external_id", "TEXT");
@@ -13944,7 +13947,7 @@ function up77(db) {
 			ON memory_artifacts(agent_id, source_id, source_root);
 	`);
 }
-function up78(db) {
+function up79(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS temporal_edges (
 			id TEXT PRIMARY KEY,
@@ -13967,7 +13970,7 @@ function up78(db) {
 			ON temporal_edges(agent_id, subject_type, subject_id);
 	`);
 }
-function up79(db) {
+function up80(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_aliases (
 			id TEXT PRIMARY KEY,
@@ -13991,7 +13994,7 @@ function up79(db) {
 			ON entity_aliases(agent_id, canonical_alias, status);
 	`);
 }
-function up80(db) {
+function up81(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS api_keys (
 			id TEXT PRIMARY KEY,
@@ -14019,7 +14022,7 @@ function up80(db) {
 			ON api_keys(connector, harness);
 	`);
 }
-function up81(db) {
+function up82(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS transcript_capture_jobs (
 			id TEXT PRIMARY KEY,
@@ -14054,7 +14057,7 @@ function hasColumn10(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((row) => row.name === column);
 }
-function up82(db) {
+function up83(db) {
   if (!hasColumn10(db, "documents", "agent_id")) {
     db.exec("ALTER TABLE documents ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'");
   }
@@ -14140,7 +14143,7 @@ function up82(db) {
   db.exec("CREATE INDEX IF NOT EXISTS idx_documents_agent_project ON documents(agent_id, project)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_documents_source_scope ON documents(source_url, agent_id, project)");
 }
-function up83(db) {
+function up84(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS aggregate_evidence_sources (
 			aggregate_memory_id TEXT NOT NULL,
@@ -14162,7 +14165,7 @@ function hasColumn11(db, table, column) {
   return rows.some((row) => row.name === column);
 }
 var COLUMNS = ["harness", "session_id", "tool_use_id", "cwd", "origin", "args"];
-function up84(db) {
+function up85(db) {
   for (const column of COLUMNS) {
     if (!hasColumn11(db, "skill_invocations", column)) {
       db.exec(`ALTER TABLE skill_invocations ADD COLUMN ${column} TEXT`);
@@ -14243,7 +14246,7 @@ function documentScopeColumnsPreservingExisting(db) {
 		`);
   }
   try {
-    up82(db);
+    up83(db);
     if (preserveAgentId) {
       db.exec(`
 				UPDATE documents
@@ -14263,12 +14266,12 @@ function documentScopeColumnsPreservingExisting(db) {
     db.exec("DROP TABLE IF EXISTS temp.__signet_doc_project_guard");
   }
 }
-function up85(db) {
-  up81(db);
+function up86(db) {
+  up82(db);
   if (hasTable3(db, "documents")) {
     documentScopeColumnsPreservingExisting(db);
   }
-  up83(db);
+  up84(db);
   addColumnIfMissing20(db, "memories", "superseded_by", "TEXT");
   addColumnIfMissing20(db, "memories", "superseded_at", "TEXT");
   addColumnIfMissing20(db, "memories", "superseded_reason", "TEXT");
@@ -14325,7 +14328,7 @@ function up85(db) {
 		  AND ${sourceAgentId} = ${targetAgentId}
 	`);
 }
-function up86(db) {
+function up87(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS legacy_markdown_imports (
 			path TEXT PRIMARY KEY,
@@ -14355,7 +14358,7 @@ function up86(db) {
 			ON legacy_markdown_chunks(memory_id);
 	`);
 }
-function up87(db) {
+function up88(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('relations', 'entity_dependencies')").all();
   const tableNames = new Set(tables.map((r2) => String(r2.name)));
   if (!tableNames.has("relations") || !tableNames.has("entity_dependencies"))
@@ -14414,7 +14417,7 @@ function addColumnIfMissing21(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up88(db) {
+function up89(db) {
   addColumnIfMissing21(db, "summary_jobs", "content_hash", "TEXT");
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_summary_jobs_agent_session_content_hash
@@ -14427,14 +14430,14 @@ function addColumnIfMissing22(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up89(db) {
+function up90(db) {
   addColumnIfMissing22(db, "summary_jobs", "boundary_reason", "TEXT");
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_summary_jobs_boundary_reason
 		ON summary_jobs(agent_id, session_key, boundary_reason)
 	`);
 }
-function up90(db) {
+function up91(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS transcript_recovery_files (
 			agent_id TEXT NOT NULL,
@@ -14452,7 +14455,7 @@ function up90(db) {
 			ON transcript_capture_jobs(agent_id, session_id, status);
 	`);
 }
-function up91(db) {
+function up92(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS job_cancellations (
 			id TEXT PRIMARY KEY,
@@ -14480,7 +14483,7 @@ function indexExists(db, table, indexName) {
   const rows = db.prepare(`PRAGMA index_list(${table})`).all();
   return rows.some((row) => row.name === indexName);
 }
-function up92(db) {
+function up93(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS job_archive (
 			id TEXT PRIMARY KEY,
@@ -14507,7 +14510,7 @@ function indexExists2(db, table, indexName) {
   const rows = db.prepare(`PRAGMA index_list(${table})`).all();
   return rows.some((row) => row.name === indexName);
 }
-function up93(db) {
+function up94(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_index_state (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -14520,7 +14523,7 @@ function up93(db) {
 		)
 	`);
 }
-function up94(db) {
+function up95(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embeddings_staging (
 			id TEXT PRIMARY KEY,
@@ -14539,7 +14542,7 @@ function up94(db) {
 			ON embeddings_staging(agent_id, source_type, source_id);
 	`);
 }
-function up95(db) {
+function up96(db) {
   const columns = db.prepare("PRAGMA table_info(dreaming_state)").all();
   if (!columns.some((column) => column.name === "evidence_cursor")) {
     db.exec("ALTER TABLE dreaming_state ADD COLUMN evidence_cursor TEXT");
@@ -14550,7 +14553,7 @@ function hasColumn13(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r2) => r2.name === column);
 }
-function up96(db) {
+function up97(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'memories'").all();
   if (tables.length === 0)
     return;
@@ -14575,23 +14578,23 @@ function up96(db) {
 function hasColumn14(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up97(db) {
+function up98(db) {
   const hasMemories = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'").get();
   if (!hasMemories || !hasColumn14(db, "memories", "memory_kind") || !hasColumn14(db, "memories", "type"))
     return;
   db.exec("UPDATE memories SET memory_kind = NULL WHERE type = 'session_summary'");
 }
-function up98(db) {
+function up99(db) {
   db.exec("DROP TABLE IF EXISTS ingestion_jobs");
 }
-function up99(db) {
+function up100(db) {
   const columns = db.prepare("PRAGMA table_info(dreaming_state)").all();
   if (!columns.some((column) => column.name === "last_failure_at")) {
     db.exec("ALTER TABLE dreaming_state ADD COLUMN last_failure_at TEXT");
   }
   db.exec("UPDATE dreaming_state SET last_failure_at = updated_at WHERE consecutive_failures > 0 AND last_failure_at IS NULL");
 }
-function up100(db) {
+function up101(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_evidence_exclusions (
 			agent_id TEXT NOT NULL,
@@ -14608,7 +14611,7 @@ function up100(db) {
 			ON dreaming_evidence_exclusions (agent_id, resolved_at, requeue_requested_at, excluded_at DESC);
 	`);
 }
-function up101(db) {
+function up102(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_tool_calls (
 			id TEXT PRIMARY KEY,
@@ -14628,7 +14631,7 @@ function up101(db) {
 			ON dreaming_tool_calls (agent_id, pass_id, sequence ASC);
 	`);
 }
-function up102(db) {
+function up103(db) {
   const columns = db.prepare("PRAGMA table_info(dreaming_passes)").all();
   if (!columns.some((column) => column.name === "evidence_window_json")) {
     db.exec("ALTER TABLE dreaming_passes ADD COLUMN evidence_window_json TEXT");
@@ -14637,7 +14640,7 @@ function up102(db) {
     db.exec("ALTER TABLE dreaming_passes ADD COLUMN runbook_json TEXT");
   }
 }
-function up103(db) {
+function up104(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_attention (
 			id TEXT PRIMARY KEY,
@@ -14659,7 +14662,7 @@ function up103(db) {
 function hasColumn15(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up104(db) {
+function up105(db) {
   const requiredMemoryColumns = [
     "content_hash",
     "normalized_content",
@@ -14710,7 +14713,7 @@ function up104(db) {
 		WHERE EXISTS (SELECT 1 FROM memory_entity_mentions WHERE entity_id = entities.id)
 	`);
 }
-function up105(db) {
+function up106(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memories', 'entity_attributes')").all();
   if (tables.length !== 2)
     return;
@@ -14733,7 +14736,7 @@ function tableExists(db, table) {
 function hasColumn16(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up106(db) {
+function up107(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS derived_memory_sources (
 			derived_memory_id TEXT NOT NULL,
@@ -14776,7 +14779,7 @@ function up106(db) {
 		`);
   }
 }
-function up107(db) {
+function up108(db) {
   db.exec(`
 		DROP TRIGGER IF EXISTS entities_fts_ai;
 		DROP TRIGGER IF EXISTS entities_fts_ad;
@@ -14865,7 +14868,7 @@ function up107(db) {
 function hasColumn17(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up108(db) {
+function up109(db) {
   if (!hasColumn17(db, "memories", "review_after")) {
     db.exec("ALTER TABLE memories ADD COLUMN review_after TEXT;");
   }
@@ -14881,14 +14884,14 @@ var TOKEN_COLUMNS = [
   ["tokens_cache_write", "INTEGER"],
   ["tokens_cost", "REAL"]
 ];
-function up109(db) {
+function up110(db) {
   for (const [column, type] of TOKEN_COLUMNS) {
     if (!hasColumn18(db, "dreaming_passes", column)) {
       db.exec(`ALTER TABLE dreaming_passes ADD COLUMN ${column} ${type};`);
     }
   }
 }
-function up110(db) {
+function up111(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_usage (
 			day TEXT NOT NULL,
@@ -14901,7 +14904,7 @@ function up110(db) {
 		);
 	`);
 }
-function up111(db) {
+function up112(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS telemetry_install (
 			id TEXT PRIMARY KEY,
@@ -14909,7 +14912,7 @@ function up111(db) {
 		);
 	`);
 }
-function up112(db) {
+function up113(db) {
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_memory_entity_mentions_entity_memory
 			ON memory_entity_mentions(entity_id, memory_id);
@@ -14920,7 +14923,7 @@ function hasColumn19(db, table, column) {
   return rows.some((row) => row.name === column);
 }
 var COLUMNS2 = ["first_remember_at", "first_recall_at"];
-function up113(db) {
+function up114(db) {
   for (const column of COLUMNS2) {
     if (!hasColumn19(db, "telemetry_install", column)) {
       db.exec(`ALTER TABLE telemetry_install ADD COLUMN ${column} TEXT`);
@@ -14936,7 +14939,7 @@ function addColumnIfMissing23(db, column, definition) {
     db.exec(`ALTER TABLE telemetry_events ADD COLUMN ${column} ${definition}`);
   }
 }
-function up114(db) {
+function up115(db) {
   addColumnIfMissing23(db, "source", "TEXT NOT NULL DEFAULT 'daemon'");
   addColumnIfMissing23(db, "claim_token", "TEXT");
   addColumnIfMissing23(db, "claimed_at", "TEXT");
@@ -14945,7 +14948,7 @@ function up114(db) {
 			ON telemetry_events(source, sent_to_posthog, claimed_at, timestamp);
 	`);
 }
-function up115(db) {
+function up116(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_claims (
 			session_key TEXT NOT NULL,
@@ -14966,7 +14969,7 @@ function up115(db) {
 			ON session_claims(agent_id, state, expires_at);
 	`);
 }
-function up116(db) {
+function up117(db) {
   const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'entity_attributes'").get();
   if (table == null)
     return;
@@ -14975,7 +14978,7 @@ function up116(db) {
 			ON entity_attributes(memory_id, agent_id, status, importance);
 	`);
 }
-function up117(db) {
+function up118(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS cross_agent_messages (
 			id TEXT PRIMARY KEY,
@@ -15032,7 +15035,7 @@ function addColumnIfMissing24(db, column, definition) {
     db.exec(`ALTER TABLE cross_agent_messages ADD COLUMN ${column} ${definition}`);
   }
 }
-function up118(db) {
+function up119(db) {
   const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cross_agent_messages'").get();
   if (table == null)
     return;
@@ -15233,7 +15236,7 @@ function backfillTranscriptsFromSummaryJobs(db) {
     insert.run(...values);
   }
 }
-function up119(db) {
+function up120(db) {
   if (!hasTable4(db, "session_transcripts"))
     return;
   addColumnIfMissing25(db, "session_transcripts", "completed_at", "TEXT");
@@ -15286,7 +15289,7 @@ function up119(db) {
 			ON session_transcripts(agent_id, content_hash);
 	`);
 }
-function up120(db) {
+function up121(db) {
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_memory_jobs_pressure_status
 			ON memory_jobs(status)
@@ -15305,12 +15308,12 @@ function up120(db) {
 function hasColumn22(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up121(db) {
+function up122(db) {
   if (!hasColumn22(db, "telemetry_install", "last_seen_version")) {
     db.exec("ALTER TABLE telemetry_install ADD COLUMN last_seen_version TEXT");
   }
 }
-function up122(db) {
+function up123(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS source_lifecycle_state (
 			agent_id TEXT NOT NULL,
@@ -15339,7 +15342,7 @@ function addColumnIfMissing26(db, column, definition) {
     db.exec(`ALTER TABLE telemetry_events ADD COLUMN ${column} ${definition}`);
   }
 }
-function up123(db) {
+function up124(db) {
   addColumnIfMissing26(db, "delivery_attempts", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing26(db, "last_attempt_at", "TEXT");
   addColumnIfMissing26(db, "sent_at", "TEXT");
@@ -15360,7 +15363,7 @@ function up123(db) {
 		VALUES (1, CURRENT_TIMESTAMP);
 	`);
 }
-function up124(db) {
+function up125(db) {
   const columns = db.prepare("PRAGMA table_info(dreaming_evidence_exclusions)").all();
   const names = new Set(columns.map((column) => column.name));
   if (!names.has("failure_class")) {
@@ -15377,7 +15380,7 @@ function up124(db) {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_dreaming_evidence_exclusions_retry ON dreaming_evidence_exclusions (resolved_at, requeue_requested_at, failure_class, retry_count, last_requeued_at)");
 }
-function up125(db) {
+function up126(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_index_failures (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15401,7 +15404,7 @@ function up125(db) {
 			ON embedding_index_failures(source_type, source_id);
 	`);
 }
-function up126(db) {
+function up127(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS imported_source_lifecycle (
 			id TEXT PRIMARY KEY,
@@ -15451,7 +15454,7 @@ function backfillTable(db, params) {
 			 FROM ${params.table}${params.where ? ` WHERE ${params.where}` : ""}`).all();
   backfill(db, rows, params.sourceKind, params.scannedAt);
 }
-function up127(db) {
+function up128(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_content_safety (
 			agent_id TEXT NOT NULL,
@@ -15508,7 +15511,7 @@ function up127(db) {
     scannedAt
   });
 }
-function up128(db) {
+function up129(db) {
   const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_attention'").get();
   if (!table)
     return;
@@ -15542,7 +15545,7 @@ function up128(db) {
 			ON dreaming_attention (agent_id, resolved_at, priority DESC, created_at ASC);
 	`);
 }
-function up129(db) {
+function up130(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS ontology_contradictions (
 			id TEXT PRIMARY KEY,
@@ -15598,7 +15601,7 @@ function up129(db) {
 			ON ontology_contradictions(agent_id, left_source_id, right_source_id);
 	`);
 }
-function up130(db) {
+function up131(db) {
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_memory_jobs_diagnostics_status_created_at
 			ON memory_jobs(status, created_at)
@@ -15613,7 +15616,7 @@ function up130(db) {
 function tableExists3(db, table) {
   return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) != null;
 }
-function up131(db) {
+function up132(db) {
   if (!tableExists3(db, "memory_jobs"))
     return;
   if (!tableExists3(db, "job_cancellations")) {
@@ -15662,7 +15665,7 @@ function up131(db) {
 		  AND status IN ('pending', 'leased');
 	`);
 }
-function up132(db) {
+function up133(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_repair_budget (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -15702,7 +15705,7 @@ function up132(db) {
 		END;
 	`);
 }
-function up133(db) {
+function up134(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_evidence_consumption (
 			agent_id TEXT NOT NULL,
@@ -15725,13 +15728,13 @@ function up133(db) {
 			ON dreaming_evidence_consumption(agent_id, pass_id, delivered_offset, source_length);
 	`);
 }
-function up134(db) {
+function up135(db) {
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_observer_entity
 			ON epistemic_assertions(agent_id, subject_entity_id, status, asserted_at DESC, created_at DESC);
 	`);
 }
-function up135(db) {
+function up136(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_head_revisions (
 			id TEXT PRIMARY KEY,
@@ -15783,7 +15786,7 @@ function up135(db) {
   if (!names.has("format_version"))
     db.exec("ALTER TABLE memory_md_heads ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1");
 }
-function up136(db) {
+function up137(db) {
   db.exec(`
 		CREATE TABLE memory_head_entries_v134 (
 			entry_id TEXT NOT NULL, agent_id TEXT NOT NULL, canonical_text TEXT NOT NULL,
@@ -15801,7 +15804,7 @@ function up136(db) {
 		 ON memory_head_entries(agent_id, entry_id, last_revision DESC);
 	`);
 }
-function up137(db) {
+function up138(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_head_publications (
 			agent_id TEXT NOT NULL,
@@ -15817,7 +15820,7 @@ function up137(db) {
 			ON memory_head_publications(agent_id, status, revision DESC);
 	`);
 }
-function up138(db) {
+function up139(db) {
   const cols = new Set(db.prepare("PRAGMA table_info(memory_head_revisions)").all().map((r2) => r2.name));
   for (const [name, type] of [
     ["entry_id", "TEXT"],
@@ -15831,7 +15834,7 @@ function up138(db) {
   }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_head_revisions_entry ON memory_head_revisions(agent_id, revision, entry_id)");
 }
-function up139(db) {
+function up140(db) {
   const cols = new Set(db.prepare("PRAGMA table_info(dreaming_passes)").all().map((r2) => r2.name));
   for (const [name, type] of [
     ["head_revision", "INTEGER"],
@@ -15853,7 +15856,7 @@ function addColumnIfMissing27(db, table, column, definition) {
   if (!hasColumn25(db, table, column))
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up140(db) {
+function up141(db) {
   addColumnIfMissing27(db, "memories", "manual_override", "INTEGER DEFAULT 0");
   db.exec(`
 		CREATE TABLE IF NOT EXISTS transcript_capture_status (
@@ -16158,7 +16161,7 @@ function up140(db) {
 		GROUP BY j.agent_id;
 	`);
 }
-function up141(db) {
+function up142(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS native_source_sync_state (
 			agent_id TEXT NOT NULL,
@@ -16174,7 +16177,7 @@ function up141(db) {
 			ON native_source_sync_state(agent_id, status);
 	`);
 }
-function up142(db) {
+function up143(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS transcript_recovery_frontiers (
 			agent_id TEXT NOT NULL,
@@ -16186,7 +16189,7 @@ function up142(db) {
 		);
 	`);
 }
-function up143(db) {
+function up144(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS source_sync_checkpoints (
 			agent_id TEXT NOT NULL,
@@ -16200,13 +16203,13 @@ function up143(db) {
 		);
 	`);
 }
-function up144(db) {
+function up145(db) {
   const columns = db.prepare("PRAGMA table_info(source_sync_checkpoints)").all();
   if (!columns.some((column) => column.name === "frontier")) {
     db.exec("ALTER TABLE source_sync_checkpoints ADD COLUMN frontier TEXT");
   }
 }
-function up145(db) {
+function up146(db) {
   const columns = new Set(db.prepare("PRAGMA table_info(embedding_index_state)").all().map((row) => row.name).filter((name) => typeof name === "string"));
   const additions = [
     ["migration_phase", "TEXT"],
@@ -16241,13 +16244,13 @@ function up145(db) {
 		`);
   }
 }
-function up146(db) {
+function up147(db) {
   const columns = new Set(db.prepare("PRAGMA table_info(memory_jobs)").all().map((row) => row.name).filter((name) => typeof name === "string"));
   if (!columns.has("lease_token")) {
     db.exec("ALTER TABLE memory_jobs ADD COLUMN lease_token TEXT");
   }
 }
-function up147(db) {
+function up148(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_evidence_reviews (
 			agent_id TEXT NOT NULL,
@@ -16265,7 +16268,7 @@ function up147(db) {
 			ON dreaming_evidence_reviews (agent_id, reviewed_at DESC);
 	`);
 }
-function up148(db) {
+function up149(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS source_import_jobs (
 			id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind = 'import'), agent_id TEXT NOT NULL,
@@ -16332,16 +16335,16 @@ function up148(db) {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_session_transcripts_agent_source ON session_transcripts(agent_id, source_id)");
 }
-function up149(db) {
+function up150(db) {
   db.exec("CREATE INDEX IF NOT EXISTS idx_source_import_files_job_state ON source_import_files(job_id, state)");
 }
-function up150(db) {
+function up151(db) {
   const columns = db.prepare("PRAGMA table_info(source_import_record_attempts)").all();
   if (!columns.some((column) => column.name === "source_id")) {
     db.exec("ALTER TABLE source_import_record_attempts ADD COLUMN source_id TEXT");
   }
 }
-function up151(db) {
+function up152(db) {
   const addColumn = (table, column, definition) => {
     const statement = db.prepare("SELECT 1 AS found FROM pragma_table_info(?) WHERE name = ?");
     let exists;
@@ -16362,7 +16365,7 @@ function addColumnIfMissing28(db, table, column, definition) {
   if (!columns.some((row) => row.name === column))
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up152(db) {
+function up153(db) {
   addColumnIfMissing28(db, "memory_md_heads", "is_current", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing28(db, "dreaming_passes", "head_base_revision", "INTEGER");
   db.exec("CREATE INDEX IF NOT EXISTS idx_memory_head_revisions_content_hash ON memory_head_revisions(content_hash)");
@@ -16516,13 +16519,13 @@ var MIGRATIONS = [
   {
     version: 1,
     name: "baseline",
-    up: up3,
+    up: up4,
     artifacts: { tables: ["memories", "conversations", "embeddings"] }
   },
   {
     version: 2,
     name: "pipeline-v2",
-    up: up4,
+    up: up5,
     artifacts: {
       tables: ["memory_history", "memory_jobs", "entities", "relations", "memory_entity_mentions"]
     }
@@ -16530,12 +16533,12 @@ var MIGRATIONS = [
   {
     version: 3,
     name: "unique-content-hash",
-    up: up5
+    up: up6
   },
   {
     version: 4,
     name: "history-actor-and-retention",
-    up: up6,
+    up: up7,
     artifacts: {
       columns: [{ table: "memory_history", column: "actor_type" }]
     }
@@ -16543,7 +16546,7 @@ var MIGRATIONS = [
   {
     version: 5,
     name: "graph-extended",
-    up: up7,
+    up: up8,
     artifacts: {
       columns: [{ table: "entities", column: "canonical_name" }]
     }
@@ -16551,7 +16554,7 @@ var MIGRATIONS = [
   {
     version: 6,
     name: "idempotency-key",
-    up: up8,
+    up: up9,
     artifacts: {
       columns: [{ table: "memories", column: "idempotency_key" }]
     }
@@ -16559,42 +16562,42 @@ var MIGRATIONS = [
   {
     version: 7,
     name: "documents-and-connectors",
-    up: up9,
+    up: up10,
     artifacts: { tables: ["documents", "document_memories", "connectors"] }
   },
   {
     version: 8,
     name: "embeddings-unique-hash",
-    up: up10
+    up: up11
   },
   {
     version: 9,
     name: "summary-jobs",
-    up: up11,
+    up: up12,
     artifacts: { tables: ["summary_jobs"] }
   },
   {
     version: 10,
     name: "umap-cache",
-    up: up12,
+    up: up13,
     artifacts: { tables: ["umap_cache"] }
   },
   {
     version: 11,
     name: "session-scores",
-    up: up13,
+    up: up14,
     artifacts: { tables: ["session_scores"] }
   },
   {
     version: 12,
     name: "scheduled-tasks",
-    up: up14,
+    up: up15,
     artifacts: { tables: ["scheduled_tasks", "task_runs"] }
   },
   {
     version: 13,
     name: "ingestion-tracking",
-    up: up15,
+    up: up16,
     artifacts: {
       columns: [
         { table: "memories", column: "source_path" },
@@ -16605,13 +16608,13 @@ var MIGRATIONS = [
   {
     version: 14,
     name: "telemetry",
-    up: up16,
+    up: up17,
     artifacts: { tables: ["telemetry_events"] }
   },
   {
     version: 15,
     name: "session-memories",
-    up: up17,
+    up: up18,
     artifacts: {
       tables: ["session_memories"],
       columns: [
@@ -16623,13 +16626,13 @@ var MIGRATIONS = [
   {
     version: 16,
     name: "session-checkpoints",
-    up: up18,
+    up: up19,
     artifacts: { tables: ["session_checkpoints"] }
   },
   {
     version: 17,
     name: "task-skills",
-    up: up19,
+    up: up20,
     artifacts: {
       columns: [{ table: "scheduled_tasks", column: "skill_name" }]
     }
@@ -16637,13 +16640,13 @@ var MIGRATIONS = [
   {
     version: 18,
     name: "skill-meta",
-    up: up20,
+    up: up21,
     artifacts: { tables: ["skill_meta"] }
   },
   {
     version: 19,
     name: "knowledge-structure",
-    up: up21,
+    up: up22,
     artifacts: {
       tables: ["entity_aspects", "entity_attributes", "entity_dependencies", "task_meta"],
       columns: [{ table: "entities", column: "agent_id" }]
@@ -16652,7 +16655,7 @@ var MIGRATIONS = [
   {
     version: 20,
     name: "session-structural-columns",
-    up: up22,
+    up: up23,
     artifacts: {
       columns: [
         { table: "session_memories", column: "entity_slot" },
@@ -16665,7 +16668,7 @@ var MIGRATIONS = [
   {
     version: 21,
     name: "checkpoint-structural",
-    up: up23,
+    up: up24,
     artifacts: {
       columns: [{ table: "session_checkpoints", column: "focal_entity_ids" }]
     }
@@ -16673,7 +16676,7 @@ var MIGRATIONS = [
   {
     version: 22,
     name: "entity-pinning",
-    up: up24,
+    up: up25,
     artifacts: {
       columns: [
         { table: "entities", column: "pinned" },
@@ -16684,17 +16687,17 @@ var MIGRATIONS = [
   {
     version: 23,
     name: "retired-scorer-gap",
-    up: up25
+    up: up26
   },
   {
     version: 24,
     name: "retired-scorer-gap",
-    up: up26
+    up: up27
   },
   {
     version: 25,
     name: "agent-feedback",
-    up: up27,
+    up: up28,
     artifacts: {
       columns: [{ table: "session_memories", column: "agent_relevance_score" }]
     }
@@ -16702,32 +16705,32 @@ var MIGRATIONS = [
   {
     version: 26,
     name: "retired-scorer-gap",
-    up: up28
+    up: up29
   },
   {
     version: 27,
     name: "backfill-canonical-names",
-    up: up29
+    up: up30
   },
   {
     version: 28,
     name: "lossless-retention",
-    up: up30
+    up: up31
   },
   {
     version: 29,
     name: "session-summary-dag",
-    up: up31
+    up: up32
   },
   {
     version: 30,
     name: "nullable-memory-job-memory-id",
-    up: up32
+    up: up33
   },
   {
     version: 31,
     name: "dependency-reason",
-    up: up33,
+    up: up34,
     artifacts: {
       columns: [
         { table: "entity_dependencies", column: "reason" },
@@ -16738,7 +16741,7 @@ var MIGRATIONS = [
   {
     version: 32,
     name: "embeddings-vector-column",
-    up: up34,
+    up: up35,
     artifacts: {
       columns: [{ table: "embeddings", column: "vector", optional: true }]
     }
@@ -16746,7 +16749,7 @@ var MIGRATIONS = [
   {
     version: 33,
     name: "scope",
-    up: up35,
+    up: up36,
     artifacts: {
       columns: [{ table: "memories", column: "scope" }]
     }
@@ -16754,17 +16757,17 @@ var MIGRATIONS = [
   {
     version: 34,
     name: "scope-aware-dedup",
-    up: up36
+    up: up37
   },
   {
     version: 35,
     name: "entity-fts",
-    up: up37
+    up: up38
   },
   {
     version: 36,
     name: "dependency-confidence",
-    up: up38,
+    up: up39,
     artifacts: {
       columns: [{ table: "entity_dependencies", column: "confidence" }]
     }
@@ -16772,7 +16775,7 @@ var MIGRATIONS = [
   {
     version: 37,
     name: "entity-communities",
-    up: up39,
+    up: up40,
     artifacts: {
       tables: ["entity_communities"],
       columns: [{ table: "entities", column: "community_id" }]
@@ -16781,24 +16784,24 @@ var MIGRATIONS = [
   {
     version: 38,
     name: "memory-hints",
-    up: up40,
+    up: up41,
     artifacts: { tables: ["memory_hints"] }
   },
   {
     version: 39,
     name: "dedup-entity-dependencies",
-    up: up41
+    up: up42
   },
   {
     version: 40,
     name: "session-transcripts",
-    up: up42,
+    up: up43,
     artifacts: { tables: ["session_transcripts"] }
   },
   {
     version: 41,
     name: "path-feedback",
-    up: up43,
+    up: up44,
     artifacts: {
       tables: [
         "path_feedback_events",
@@ -16813,7 +16816,7 @@ var MIGRATIONS = [
   {
     version: 42,
     name: "session-memories-agent-id",
-    up: up44,
+    up: up45,
     artifacts: {
       columns: [{ table: "session_memories", column: "agent_id" }]
     }
@@ -16821,7 +16824,7 @@ var MIGRATIONS = [
   {
     version: 43,
     name: "agents-table",
-    up: up45,
+    up: up46,
     artifacts: {
       tables: ["agents"],
       columns: [
@@ -16833,7 +16836,7 @@ var MIGRATIONS = [
   {
     version: 44,
     name: "memory-md-temporal-head",
-    up: up46,
+    up: up47,
     artifacts: {
       columns: [
         { table: "session_summaries", column: "source_type" },
@@ -16845,7 +16848,7 @@ var MIGRATIONS = [
   {
     version: 45,
     name: "lossless-working-memory-hardening",
-    up: up47,
+    up: up48,
     artifacts: {
       tables: ["session_transcripts_fts", "memory_md_heads"],
       columns: [
@@ -16858,17 +16861,17 @@ var MIGRATIONS = [
   {
     version: 46,
     name: "session-summary-uniqueness",
-    up: up48
+    up: up49
   },
   {
     version: 47,
     name: "agent-scoped-temporal-uniqueness",
-    up: up49
+    up: up50
   },
   {
     version: 48,
     name: "thread-heads",
-    up: up50,
+    up: up51,
     artifacts: {
       tables: ["memory_thread_heads"]
     }
@@ -16876,7 +16879,7 @@ var MIGRATIONS = [
   {
     version: 49,
     name: "session-extract-cursors",
-    up: up51,
+    up: up52,
     artifacts: {
       tables: ["session_extract_cursors"]
     }
@@ -16884,7 +16887,7 @@ var MIGRATIONS = [
   {
     version: 50,
     name: "related-to-audit",
-    up: up52,
+    up: up53,
     artifacts: {
       tables: ["entity_dependency_history"]
     }
@@ -16892,7 +16895,7 @@ var MIGRATIONS = [
   {
     version: 51,
     name: "memory-md-rolling-window-lineage",
-    up: up53,
+    up: up54,
     artifacts: {
       tables: ["memory_artifacts", "memory_artifact_tombstones", "memory_artifacts_fts"],
       columns: [
@@ -16907,15 +16910,12 @@ var MIGRATIONS = [
   {
     version: 52,
     name: "mcp-invocations",
-    up: up54,
-    artifacts: {
-      tables: ["mcp_invocations"]
-    }
+    up: up55
   },
   {
     version: 53,
     name: "skill-invocations",
-    up: up55,
+    up: up56,
     artifacts: {
       tables: ["skill_invocations"]
     }
@@ -16923,7 +16923,7 @@ var MIGRATIONS = [
   {
     version: 54,
     name: "task-agent-scope",
-    up: up56,
+    up: up57,
     artifacts: {
       tables: ["task_scope_hints"]
     }
@@ -16931,7 +16931,7 @@ var MIGRATIONS = [
   {
     version: 55,
     name: "dreaming-state",
-    up: up57,
+    up: up58,
     artifacts: {
       tables: ["dreaming_state", "dreaming_passes"]
     }
@@ -16939,22 +16939,22 @@ var MIGRATIONS = [
   {
     version: 56,
     name: "agent-scoped-content-hash",
-    up: up58
+    up: up59
   },
   {
     version: 57,
     name: "memories-fts-tokenizer-repair",
-    up: up59
+    up: up60
   },
   {
     version: 58,
     name: "knowledge-graph-indices",
-    up: up60
+    up: up61
   },
   {
     version: 59,
     name: "entity-attribute-claim-key",
-    up: up61,
+    up: up62,
     artifacts: {
       columns: [{ table: "entity_attributes", column: "claim_key" }]
     }
@@ -16962,7 +16962,7 @@ var MIGRATIONS = [
   {
     version: 60,
     name: "entity-attribute-group-key",
-    up: up62,
+    up: up63,
     artifacts: {
       columns: [{ table: "entity_attributes", column: "group_key" }]
     }
@@ -16970,7 +16970,7 @@ var MIGRATIONS = [
   {
     version: 61,
     name: "memory-artifact-source-mtime",
-    up: up63,
+    up: up64,
     artifacts: {
       columns: [{ table: "memory_artifacts", column: "source_mtime_ms" }]
     }
@@ -16978,7 +16978,7 @@ var MIGRATIONS = [
   {
     version: 62,
     name: "memory-artifact-soft-delete",
-    up: up64,
+    up: up65,
     artifacts: {
       columns: [
         { table: "memory_artifacts", column: "is_deleted" },
@@ -16989,12 +16989,12 @@ var MIGRATIONS = [
   {
     version: 63,
     name: "content-only-memories-fts-update",
-    up: up65
+    up: up66
   },
   {
     version: 64,
     name: "source-graph-provenance",
-    up: up66,
+    up: up67,
     artifacts: {
       columns: [
         { table: "entities", column: "source_path" },
@@ -17007,7 +17007,7 @@ var MIGRATIONS = [
   {
     version: 65,
     name: "source-embedding-agent-scope",
-    up: up67,
+    up: up68,
     artifacts: {
       columns: [{ table: "embeddings", column: "agent_id", optional: true }]
     }
@@ -17015,7 +17015,7 @@ var MIGRATIONS = [
   {
     version: 66,
     name: "memory-search-telemetry",
-    up: up68,
+    up: up69,
     artifacts: {
       tables: ["memory_search_telemetry"]
     }
@@ -17023,7 +17023,7 @@ var MIGRATIONS = [
   {
     version: 67,
     name: "ontology-proposals",
-    up: up69,
+    up: up70,
     artifacts: {
       tables: ["ontology_proposals"],
       columns: [
@@ -17037,7 +17037,7 @@ var MIGRATIONS = [
   {
     version: 68,
     name: "daily-reflections",
-    up: up70,
+    up: up71,
     artifacts: {
       tables: ["daily_reflections"]
     }
@@ -17045,7 +17045,7 @@ var MIGRATIONS = [
   {
     version: 69,
     name: "daily-reflections-multiple-insights",
-    up: up71,
+    up: up72,
     artifacts: {
       tables: ["daily_reflections"]
     }
@@ -17053,7 +17053,7 @@ var MIGRATIONS = [
   {
     version: 70,
     name: "ontology-control-plane-state",
-    up: up72,
+    up: up73,
     artifacts: {
       columns: [
         { table: "entities", column: "status" },
@@ -17068,7 +17068,7 @@ var MIGRATIONS = [
   {
     version: 71,
     name: "epistemic-assertions",
-    up: up73,
+    up: up74,
     artifacts: {
       tables: ["epistemic_assertions"]
     }
@@ -17076,7 +17076,7 @@ var MIGRATIONS = [
   {
     version: 72,
     name: "agent-scoped-idempotency-key",
-    up: up74,
+    up: up75,
     artifacts: {
       columns: [
         { table: "memories", column: "idempotency_key" },
@@ -17087,7 +17087,7 @@ var MIGRATIONS = [
   {
     version: 73,
     name: "recall-context-dedupe",
-    up: up75,
+    up: up76,
     artifacts: {
       tables: ["session_context_epochs", "session_recall_events"]
     }
@@ -17095,7 +17095,7 @@ var MIGRATIONS = [
   {
     version: 74,
     name: "aggregate-memory-links",
-    up: up76,
+    up: up77,
     artifacts: {
       tables: ["aggregate_memory_sources"]
     }
@@ -17103,7 +17103,7 @@ var MIGRATIONS = [
   {
     version: 75,
     name: "memory-artifact-source-provenance",
-    up: up77,
+    up: up78,
     artifacts: {
       columns: [
         { table: "memory_artifacts", column: "source_id" },
@@ -17117,7 +17117,7 @@ var MIGRATIONS = [
   {
     version: 76,
     name: "temporal-edges",
-    up: up78,
+    up: up79,
     artifacts: {
       tables: ["temporal_edges"]
     }
@@ -17125,7 +17125,7 @@ var MIGRATIONS = [
   {
     version: 77,
     name: "entity-aliases",
-    up: up79,
+    up: up80,
     artifacts: {
       tables: ["entity_aliases"]
     }
@@ -17133,7 +17133,7 @@ var MIGRATIONS = [
   {
     version: 78,
     name: "api-keys",
-    up: up80,
+    up: up81,
     artifacts: {
       tables: ["api_keys"]
     }
@@ -17141,7 +17141,7 @@ var MIGRATIONS = [
   {
     version: 79,
     name: "transcript-capture-jobs",
-    up: up81,
+    up: up82,
     artifacts: {
       tables: ["transcript_capture_jobs"]
     }
@@ -17149,7 +17149,7 @@ var MIGRATIONS = [
   {
     version: 80,
     name: "document-scope-columns",
-    up: up82,
+    up: up83,
     artifacts: {
       columns: [
         { table: "documents", column: "agent_id" },
@@ -17160,7 +17160,7 @@ var MIGRATIONS = [
   {
     version: 81,
     name: "aggregate-evidence-sources",
-    up: up83,
+    up: up84,
     artifacts: {
       tables: ["aggregate_evidence_sources"]
     }
@@ -17168,7 +17168,7 @@ var MIGRATIONS = [
   {
     version: 82,
     name: "skill-invocations-harness",
-    up: up84,
+    up: up85,
     artifacts: {
       columns: [
         { table: "skill_invocations", column: "harness" },
@@ -17179,7 +17179,7 @@ var MIGRATIONS = [
   {
     version: 83,
     name: "memory-lifecycle-repair",
-    up: up85,
+    up: up86,
     artifacts: {
       tables: ["transcript_capture_jobs", "aggregate_evidence_sources", "entity_dependencies"],
       columns: [
@@ -17194,7 +17194,7 @@ var MIGRATIONS = [
   {
     version: 84,
     name: "legacy-markdown-import-state",
-    up: up86,
+    up: up87,
     artifacts: {
       tables: ["legacy_markdown_imports", "legacy_markdown_chunks"]
     }
@@ -17202,7 +17202,7 @@ var MIGRATIONS = [
   {
     version: 85,
     name: "backfill-relations-to-dependencies",
-    up: up87,
+    up: up88,
     artifacts: {
       tables: ["entity_dependencies"]
     }
@@ -17210,7 +17210,7 @@ var MIGRATIONS = [
   {
     version: 86,
     name: "summary-jobs-content-hash",
-    up: up88,
+    up: up89,
     artifacts: {
       columns: [{ table: "summary_jobs", column: "content_hash" }]
     }
@@ -17218,7 +17218,7 @@ var MIGRATIONS = [
   {
     version: 87,
     name: "summary-jobs-boundary-reason",
-    up: up89,
+    up: up90,
     artifacts: {
       columns: [{ table: "summary_jobs", column: "boundary_reason" }]
     }
@@ -17226,7 +17226,7 @@ var MIGRATIONS = [
   {
     version: 88,
     name: "transcript-recovery-files",
-    up: up90,
+    up: up91,
     artifacts: {
       tables: ["transcript_recovery_files"]
     }
@@ -17234,7 +17234,7 @@ var MIGRATIONS = [
   {
     version: 89,
     name: "job-cancellations",
-    up: up91,
+    up: up92,
     artifacts: {
       tables: ["job_cancellations"]
     }
@@ -17242,7 +17242,7 @@ var MIGRATIONS = [
   {
     version: 90,
     name: "job-archive",
-    up: up92,
+    up: up93,
     artifacts: {
       tables: ["job_archive"]
     }
@@ -17250,25 +17250,25 @@ var MIGRATIONS = [
   {
     version: 91,
     name: "embedding-index-generations",
-    up: up93,
+    up: up94,
     artifacts: { tables: ["embedding_index_state"] }
   },
   {
     version: 92,
     name: "embedding-staging-store",
-    up: up94,
+    up: up95,
     artifacts: { tables: ["embeddings_staging"] }
   },
   {
     version: 93,
     name: "dreaming-evidence-cursor",
-    up: up95,
+    up: up96,
     artifacts: { columns: [{ table: "dreaming_state", column: "evidence_cursor" }] }
   },
   {
     version: 94,
     name: "memory-kind",
-    up: up96,
+    up: up97,
     artifacts: {
       columns: [
         { table: "memories", column: "memory_kind" },
@@ -17279,35 +17279,35 @@ var MIGRATIONS = [
   {
     version: 95,
     name: "compaction-recall-projections",
-    up: up97
+    up: up98
   },
   {
     version: 96,
     name: "retire-legacy-ingestion",
-    up: up98
+    up: up99
   },
   {
     version: 97,
     name: "dreaming-failure-backoff",
-    up: up99,
+    up: up100,
     artifacts: { columns: [{ table: "dreaming_state", column: "last_failure_at" }] }
   },
   {
     version: 98,
     name: "dreaming-evidence-exclusions",
-    up: up100,
+    up: up101,
     artifacts: { tables: ["dreaming_evidence_exclusions"] }
   },
   {
     version: 99,
     name: "dreaming-tool-calls",
-    up: up101,
+    up: up102,
     artifacts: { tables: ["dreaming_tool_calls"] }
   },
   {
     version: 100,
     name: "dreaming-runbook",
-    up: up102,
+    up: up103,
     artifacts: {
       columns: [
         { table: "dreaming_passes", column: "evidence_window_json" },
@@ -17318,23 +17318,23 @@ var MIGRATIONS = [
   {
     version: 101,
     name: "dreaming-attention",
-    up: up103,
+    up: up104,
     artifacts: { tables: ["dreaming_attention"] }
   },
   {
     version: 102,
     name: "attribute-semantic-memories",
-    up: up104
+    up: up105
   },
   {
     version: 103,
     name: "semantic-memory-kind",
-    up: up105
+    up: up106
   },
   {
     version: 104,
     name: "derived-memory-provenance",
-    up: up106,
+    up: up107,
     artifacts: {
       tables: ["derived_memory_sources"],
       columns: [{ table: "memories", column: "stale_at" }]
@@ -17343,12 +17343,12 @@ var MIGRATIONS = [
   {
     version: 105,
     name: "agent-scoped-entity-name",
-    up: up107
+    up: up108
   },
   {
     version: 106,
     name: "memory-review-after",
-    up: up108,
+    up: up109,
     artifacts: {
       columns: [{ table: "memories", column: "review_after" }]
     }
@@ -17356,7 +17356,7 @@ var MIGRATIONS = [
   {
     version: 107,
     name: "dreaming-pass-usage",
-    up: up109,
+    up: up110,
     artifacts: {
       columns: [
         { table: "dreaming_passes", column: "tokens_input" },
@@ -17370,7 +17370,7 @@ var MIGRATIONS = [
   {
     version: 108,
     name: "embedding-usage",
-    up: up110,
+    up: up111,
     artifacts: {
       tables: ["embedding_usage"]
     }
@@ -17378,7 +17378,7 @@ var MIGRATIONS = [
   {
     version: 109,
     name: "telemetry-install",
-    up: up111,
+    up: up112,
     artifacts: {
       tables: ["telemetry_install"]
     }
@@ -17386,12 +17386,12 @@ var MIGRATIONS = [
   {
     version: 110,
     name: "memory-mention-join-index",
-    up: up112
+    up: up113
   },
   {
     version: 111,
     name: "telemetry-first-use",
-    up: up113,
+    up: up114,
     artifacts: {
       columns: [
         { table: "telemetry_install", column: "first_remember_at" },
@@ -17402,7 +17402,7 @@ var MIGRATIONS = [
   {
     version: 112,
     name: "telemetry-queue-ownership",
-    up: up114,
+    up: up115,
     artifacts: {
       columns: [
         { table: "telemetry_events", column: "source" },
@@ -17414,7 +17414,7 @@ var MIGRATIONS = [
   {
     version: 113,
     name: "session-claims",
-    up: up115,
+    up: up116,
     artifacts: {
       tables: ["session_claims"],
       columns: [
@@ -17428,12 +17428,12 @@ var MIGRATIONS = [
   {
     version: 114,
     name: "memory-traversal-hydration-index",
-    up: up116
+    up: up117
   },
   {
     version: 115,
     name: "cross-agent-message-notifications",
-    up: up117,
+    up: up118,
     artifacts: {
       tables: ["cross_agent_messages", "cross_agent_message_receipts"]
     }
@@ -17441,7 +17441,7 @@ var MIGRATIONS = [
   {
     version: 116,
     name: "acp-delivery-reconciliation",
-    up: up118,
+    up: up119,
     artifacts: {
       columns: [
         { table: "cross_agent_messages", column: "delivery_state" },
@@ -17455,7 +17455,7 @@ var MIGRATIONS = [
   {
     version: 117,
     name: "retire-summary-worker",
-    up: up119,
+    up: up120,
     artifacts: {
       columns: [
         { table: "session_transcripts", column: "completed_at" },
@@ -17466,24 +17466,24 @@ var MIGRATIONS = [
   {
     version: 118,
     name: "queue-pressure-indices",
-    up: up120
+    up: up121
   },
   {
     version: 119,
     name: "telemetry-version-observation",
-    up: up121,
+    up: up122,
     artifacts: { columns: [{ table: "telemetry_install", column: "last_seen_version" }] }
   },
   {
     version: 120,
     name: "source-lifecycle-telemetry",
-    up: up122,
+    up: up123,
     artifacts: { tables: ["source_lifecycle_state"] }
   },
   {
     version: 121,
     name: "telemetry-delivery-health",
-    up: up123,
+    up: up124,
     artifacts: {
       tables: ["telemetry_delivery_state"],
       columns: [
@@ -17497,7 +17497,7 @@ var MIGRATIONS = [
   {
     version: 122,
     name: "dreaming-evidence-retry",
-    up: up124,
+    up: up125,
     artifacts: {
       columns: [
         { table: "dreaming_evidence_exclusions", column: "failure_class" },
@@ -17510,13 +17510,13 @@ var MIGRATIONS = [
   {
     version: 123,
     name: "embedding-index-failures",
-    up: up125,
+    up: up126,
     artifacts: { tables: ["embedding_index_failures"] }
   },
   {
     version: 124,
     name: "import-derived-lifecycle",
-    up: up126,
+    up: up127,
     artifacts: {
       tables: ["imported_source_lifecycle"]
     }
@@ -17524,77 +17524,77 @@ var MIGRATIONS = [
   {
     version: 125,
     name: "memory-content-safety",
-    up: up127,
+    up: up128,
     artifacts: { tables: ["memory_content_safety"] }
   },
   {
     version: 126,
     name: "dreaming-surprisal-attention",
-    up: up128,
+    up: up129,
     artifacts: { tables: ["dreaming_attention"] }
   },
   {
     version: 127,
     name: "ontology-contradictions",
-    up: up129,
+    up: up130,
     artifacts: { tables: ["ontology_contradictions"] }
   },
   {
     version: 128,
     name: "bounded-queue-diagnostics",
-    up: up130
+    up: up131
   },
   {
     version: 129,
     name: "retire-structural-jobs",
-    up: up131
+    up: up132
   },
   {
     version: 130,
     name: "embedding-repair-state",
-    up: up132,
+    up: up133,
     artifacts: { tables: ["embedding_repair_budget", "embedding_repair_backoff"] }
   },
   {
     version: 131,
     name: "dreaming-evidence-consumption",
-    up: up133,
+    up: up134,
     artifacts: { tables: ["dreaming_evidence_consumption"] }
   },
   {
     version: 132,
     name: "observer-scoped-epistemic-assertions",
-    up: up134,
+    up: up135,
     artifacts: { tables: ["epistemic_assertions"] }
   },
   {
     version: 133,
     name: "dreaming-memory-head",
-    up: up135,
+    up: up136,
     artifacts: { tables: ["memory_head_revisions", "memory_head_entries", "memory_head_revision_entries"] }
   },
   {
     version: 134,
     name: "scope-memory-head-entries",
-    up: up136,
+    up: up137,
     artifacts: { tables: ["memory_head_entries"] }
   },
   {
     version: 135,
     name: "memory-head-publication",
-    up: up137,
+    up: up138,
     artifacts: { tables: ["memory_head_publications"] }
   },
   {
     version: 136,
     name: "memory-head-revisions",
-    up: up138,
+    up: up139,
     artifacts: { tables: ["memory_head_revisions"] }
   },
   {
     version: 137,
     name: "dreaming-head-manifest",
-    up: up139,
+    up: up140,
     artifacts: {
       columns: [
         { table: "dreaming_passes", column: "head_revision" },
@@ -17605,7 +17605,7 @@ var MIGRATIONS = [
   {
     version: 138,
     name: "bounded-status-projections",
-    up: up140,
+    up: up141,
     artifacts: {
       tables: ["transcript_capture_status", "memories_duplicate_hash_counts", "memories_diagnostics_state"]
     }
@@ -17613,31 +17613,31 @@ var MIGRATIONS = [
   {
     version: 139,
     name: "native-source-sync-state",
-    up: up141,
+    up: up142,
     artifacts: { tables: ["native_source_sync_state"] }
   },
   {
     version: 140,
     name: "transcript-recovery-frontier",
-    up: up142,
+    up: up143,
     artifacts: { tables: ["transcript_recovery_frontiers"] }
   },
   {
     version: 141,
     name: "source-sync-checkpoints",
-    up: up143,
+    up: up144,
     artifacts: { tables: ["source_sync_checkpoints"] }
   },
   {
     version: 142,
     name: "source-sync-frontier",
-    up: up144,
+    up: up145,
     artifacts: { columns: [{ table: "source_sync_checkpoints", column: "frontier" }] }
   },
   {
     version: 143,
     name: "embedding-index-progress",
-    up: up145,
+    up: up146,
     artifacts: {
       columns: [
         { table: "embedding_index_state", column: "migration_phase" },
@@ -17653,19 +17653,19 @@ var MIGRATIONS = [
   {
     version: 144,
     name: "memory-job-lease-token",
-    up: up146,
+    up: up147,
     artifacts: { columns: [{ table: "memory_jobs", column: "lease_token" }] }
   },
   {
     version: 145,
     name: "dreaming-evidence-reviews",
-    up: up147,
+    up: up148,
     artifacts: { tables: ["dreaming_evidence_reviews"] }
   },
   {
     version: 146,
     name: "source-transcript-import",
-    up: up148,
+    up: up149,
     artifacts: {
       tables: [
         "source_import_jobs",
@@ -17684,19 +17684,19 @@ var MIGRATIONS = [
   {
     version: 147,
     name: "source-import-replay-file-slots",
-    up: up149,
+    up: up150,
     artifacts: { tables: ["source_import_files"] }
   },
   {
     version: 148,
     name: "source-import-attempt-provenance",
-    up: up150,
+    up: up151,
     artifacts: { columns: [{ table: "source_import_record_attempts", column: "source_id" }] }
   },
   {
     version: 149,
     name: "transcript-import-state-machine",
-    up: up151,
+    up: up152,
     artifacts: {
       columns: [
         { table: "source_import_jobs", column: "duplicate_mode" },
@@ -17708,7 +17708,7 @@ var MIGRATIONS = [
   {
     version: 150,
     name: "memory-head-freshness",
-    up: up152,
+    up: up153,
     artifacts: {
       columns: [
         { table: "memory_md_heads", column: "is_current" },
@@ -17750,6 +17750,11 @@ var MIGRATIONS = [
     name: "memory-artifact-sha-index",
     up: up2,
     artifacts: { indexes: ["idx_memory_artifacts_agent_sha"] }
+  },
+  {
+    version: 153,
+    name: "retire-obsolete-invocation-ledger",
+    up: up3
   }
 ];
 var LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
@@ -25494,7 +25499,7 @@ var require_package22 = __commonJS((exports, module) => {
   };
 });
 var require_keyring2 = __commonJS((exports, module) => {
-  var __filename3 = "/home/nicholai/signet/signetai/.worktrees/connectors-dashboard-health/node_modules/.bun/@napi-rs+keyring@1.3.0/node_modules/@napi-rs/keyring/index.js";
+  var __filename3 = "/home/nicholai/signet/signetai/.worktrees/hermes-984097ee/node_modules/.bun/@napi-rs+keyring@1.3.0/node_modules/@napi-rs/keyring/index.js";
   var { createRequire: createRequire23 } = __require2("node:module");
   __require2 = createRequire23(__filename3);
   var { readFileSync: readFileSync3 } = __require2("node:fs");
@@ -29792,7 +29797,7 @@ var DAEMON_DERIVED_MEMORY_SOURCE_TYPES2 = [
   "checkpoint",
   "dreaming"
 ];
-function up153(db) {
+function up154(db) {
   const hasColumn26 = (table, column) => {
     const statement = db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`);
     try {
@@ -29857,6 +29862,9 @@ function up210(db) {
 		DROP INDEX IF EXISTS idx_memory_artifacts_agent_sha;
 		CREATE INDEX idx_memory_artifacts_agent_sha ON memory_artifacts(agent_id, source_sha256, COALESCE(source_id, ''), COALESCE(is_deleted, 0), captured_at DESC, source_path)
 	`);
+}
+function up310(db) {
+  db.exec("DROP TABLE IF EXISTS mcp_invocations");
 }
 var MEMORIES_FTS_TOKENIZER2 = "unicode61";
 var FTS_STATE_TABLE2 = "memories_fts_state";
@@ -29973,7 +29981,7 @@ function memoriesFtsNeedsTokenizerRepair2(sql) {
     return true;
   return !normalized.includes(`tokenize='${MEMORIES_FTS_TOKENIZER2}'`);
 }
-function up310(db) {
+function up410(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
@@ -30071,7 +30079,7 @@ function addColumnIfMissing29(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up410(db) {
+function up510(db) {
   addColumnIfMissing29(db, "memories", "content_hash", "TEXT");
   addColumnIfMissing29(db, "memories", "normalized_content", "TEXT");
   addColumnIfMissing29(db, "memories", "is_deleted", "INTEGER DEFAULT 0");
@@ -30189,7 +30197,7 @@ function addColumnIfMissing210(db, table, column, definition) {
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   return true;
 }
-function up510(db) {
+function up610(db) {
   addColumnIfMissing210(db, "memories", "why", "TEXT");
   addColumnIfMissing210(db, "memories", "project", "TEXT");
   db.exec(`DROP INDEX IF EXISTS idx_memories_content_hash`);
@@ -30226,7 +30234,7 @@ function addColumnIfMissing32(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up610(db) {
+function up710(db) {
   addColumnIfMissing32(db, "memory_history", "actor_type", "TEXT");
   addColumnIfMissing32(db, "memory_history", "session_id", "TEXT");
   addColumnIfMissing32(db, "memory_history", "request_id", "TEXT");
@@ -30259,7 +30267,7 @@ function addColumnIfMissing42(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up710(db) {
+function up810(db) {
   addColumnIfMissing42(db, "entities", "canonical_name", "TEXT");
   addColumnIfMissing42(db, "entities", "mentions", "INTEGER DEFAULT 0");
   addColumnIfMissing42(db, "entities", "embedding", "BLOB");
@@ -30276,7 +30284,7 @@ function hasColumn42(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r3) => r3.name === column);
 }
-function up810(db) {
+function up910(db) {
   if (!hasColumn42(db, "memories", "idempotency_key")) {
     db.exec("ALTER TABLE memories ADD COLUMN idempotency_key TEXT");
   }
@@ -30291,7 +30299,7 @@ function hasColumn52(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r3) => r3.name === column);
 }
-function up910(db) {
+function up1010(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY,
@@ -30348,7 +30356,7 @@ function up910(db) {
     db.exec("ALTER TABLE memory_jobs ADD COLUMN document_id TEXT");
   }
 }
-function up1010(db) {
+function up1110(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings'").all();
   if (tables.length === 0)
     return;
@@ -30365,7 +30373,7 @@ function up1010(db) {
 			ON embeddings(content_hash)
 	`);
 }
-function up1110(db) {
+function up1210(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS summary_jobs (
 			id TEXT PRIMARY KEY,
@@ -30385,7 +30393,7 @@ function up1110(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_summary_jobs_status
 		 ON summary_jobs(status)`);
 }
-function up1210(db) {
+function up1310(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS umap_cache (
 			id INTEGER PRIMARY KEY,
@@ -30396,7 +30404,7 @@ function up1210(db) {
 		)
 	`);
 }
-function up1310(db) {
+function up1410(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_scores (
 			id TEXT PRIMARY KEY,
@@ -30416,7 +30424,7 @@ function up1310(db) {
 			ON session_scores(session_key);
 	`);
 }
-function up1410(db) {
+function up155(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS scheduled_tasks (
 			id TEXT PRIMARY KEY,
@@ -30457,7 +30465,7 @@ function addColumnIfMissing52(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up154(db) {
+function up162(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS ingestion_jobs (
 			id TEXT PRIMARY KEY,
@@ -30483,7 +30491,7 @@ function up154(db) {
   addColumnIfMissing52(db, "memories", "source_path", "TEXT");
   addColumnIfMissing52(db, "memories", "source_section", "TEXT");
 }
-function up162(db) {
+function up172(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS telemetry_events (
 			id TEXT PRIMARY KEY,
@@ -30508,7 +30516,7 @@ function addColumnIfMissing62(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up172(db) {
+function up182(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_memories (
 			id TEXT PRIMARY KEY,
@@ -30535,7 +30543,7 @@ function up172(db) {
   addColumnIfMissing62(db, "session_scores", "confidence", "REAL");
   addColumnIfMissing62(db, "session_scores", "continuity_reasoning", "TEXT");
 }
-function up182(db) {
+function up192(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_checkpoints (
 			id TEXT PRIMARY KEY,
@@ -30557,7 +30565,7 @@ function up182(db) {
 			ON session_checkpoints(project_normalized, created_at DESC);
 	`);
 }
-function up192(db) {
+function up202(db) {
   const cols = db.prepare("PRAGMA table_info(scheduled_tasks)").all();
   const colNames = new Set(cols.flatMap((c3) => typeof c3.name === "string" ? [c3.name] : []));
   if (!colNames.has("skill_name")) {
@@ -30568,7 +30576,7 @@ function up192(db) {
 			 CHECK (skill_mode IN ('inject', 'slash') OR skill_mode IS NULL)`);
   }
 }
-function up202(db) {
+function up212(db) {
   const existing = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='skill_meta'").get();
   if (existing)
     return;
@@ -30600,7 +30608,7 @@ function up202(db) {
 		CREATE INDEX idx_skill_meta_source ON skill_meta(source);
 	`);
 }
-function up212(db) {
+function up222(db) {
   const entityCols = db.prepare("PRAGMA table_info(entities)").all();
   const entityColNames = new Set(entityCols.flatMap((c3) => typeof c3.name === "string" ? [c3.name] : []));
   if (!entityColNames.has("agent_id")) {
@@ -30685,13 +30693,13 @@ function addColumnIfMissing72(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up222(db) {
+function up232(db) {
   addColumnIfMissing72(db, "session_memories", "entity_slot", "INTEGER");
   addColumnIfMissing72(db, "session_memories", "aspect_slot", "INTEGER");
   addColumnIfMissing72(db, "session_memories", "is_constraint", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing72(db, "session_memories", "structural_density", "INTEGER");
 }
-function up232(db) {
+function up242(db) {
   const columns = db.prepare("PRAGMA table_info(session_checkpoints)").all();
   const columnNames = new Set(columns.flatMap((column) => typeof column.name === "string" ? [column.name] : []));
   if (!columnNames.has("focal_entity_ids")) {
@@ -30716,25 +30724,25 @@ function addColumnIfMissing82(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up242(db) {
+function up252(db) {
   addColumnIfMissing82(db, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing82(db, "entities", "pinned_at", "TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_entities_pinned ON entities(agent_id, pinned, pinned_at DESC)");
 }
-function up252(_db) {}
 function up262(_db) {}
+function up272(_db) {}
 function addColumnIfMissing92(db, table, column, definition) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
   if (!cols.some((c3) => c3.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up272(db) {
+function up282(db) {
   addColumnIfMissing92(db, "session_memories", "agent_relevance_score", "REAL");
   addColumnIfMissing92(db, "session_memories", "agent_feedback_count", "INTEGER DEFAULT 0");
 }
-function up282(_db) {}
-function up292(db) {
+function up292(_db) {}
+function up302(db) {
   db.exec(`
 		UPDATE entities
 		SET canonical_name = REPLACE(REPLACE(REPLACE(
@@ -30743,7 +30751,7 @@ function up292(db) {
 		WHERE canonical_name IS NULL
 	`);
 }
-function up302(db) {
+function up312(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memories_cold (
 			archive_id TEXT PRIMARY KEY,
@@ -30780,7 +30788,7 @@ function up302(db) {
 		CREATE INDEX IF NOT EXISTS idx_cold_source ON memories_cold(cold_source_id);
 	`);
 }
-function up312(db) {
+function up322(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_summaries (
 			id TEXT PRIMARY KEY,
@@ -30825,7 +30833,7 @@ function up312(db) {
 			WHERE session_key IS NOT NULL;
 	`);
 }
-function up322(db) {
+function up332(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_jobs_new (
 			id TEXT PRIMARY KEY,
@@ -30870,7 +30878,7 @@ function up322(db) {
 			ON memory_jobs(failed_at);
 	`);
 }
-function up332(db) {
+function up342(db) {
   const depCols = db.prepare("PRAGMA table_info(entity_dependencies)").all();
   if (!depCols.some((c3) => c3.name === "reason")) {
     db.exec("ALTER TABLE entity_dependencies ADD COLUMN reason TEXT");
@@ -30880,7 +30888,7 @@ function up332(db) {
     db.exec("ALTER TABLE entities ADD COLUMN last_synthesized_at TEXT");
   }
 }
-function up342(db) {
+function up352(db) {
   const cols = db.prepare("PRAGMA table_info(embeddings)").all();
   if (cols.length === 0)
     return;
@@ -30888,14 +30896,14 @@ function up342(db) {
     db.exec("ALTER TABLE embeddings ADD COLUMN vector BLOB");
   }
 }
-function up352(db) {
+function up362(db) {
   const cols = db.prepare("PRAGMA table_info(memories)").all();
   if (!cols.some((c3) => c3.name === "scope")) {
     db.exec("ALTER TABLE memories ADD COLUMN scope TEXT DEFAULT NULL");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope) WHERE scope IS NOT NULL");
 }
-function up362(db) {
+function up372(db) {
   db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
   db.exec(`
 		CREATE UNIQUE INDEX idx_memories_content_hash_unique
@@ -30903,7 +30911,7 @@ function up362(db) {
 		WHERE content_hash IS NOT NULL AND is_deleted = 0
 	`);
 }
-function up372(db) {
+function up382(db) {
   db.exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
 			name, canonical_name,
@@ -30935,13 +30943,13 @@ function up372(db) {
 		END
 	`);
 }
-function up382(db) {
+function up392(db) {
   const cols = db.prepare("PRAGMA table_info(entity_dependencies)").all();
   if (!cols.some((c3) => c3.name === "confidence")) {
     db.exec("ALTER TABLE entity_dependencies ADD COLUMN confidence REAL DEFAULT 0.7");
   }
 }
-function up392(db) {
+function up402(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_communities (
 			id TEXT PRIMARY KEY,
@@ -30959,7 +30967,7 @@ function up392(db) {
     db.exec("ALTER TABLE entities ADD COLUMN community_id TEXT REFERENCES entity_communities(id)");
   }
 }
-function up402(db) {
+function up412(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_hints (
 			id TEXT PRIMARY KEY,
@@ -30999,7 +31007,7 @@ function up402(db) {
 		END
 	`);
 }
-function up412(db) {
+function up422(db) {
   db.exec(`
 		DELETE FROM entity_dependencies
 		WHERE id NOT IN (
@@ -31017,7 +31025,7 @@ function up412(db) {
 		)
 	`);
 }
-function up422(db) {
+function up432(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_transcripts (
 			session_key TEXT PRIMARY KEY,
@@ -31040,7 +31048,7 @@ function addColumnIfMissing102(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up432(db) {
+function up442(db) {
   addColumnIfMissing102(db, "session_memories", "path_json", "TEXT");
   db.exec(`
 		CREATE TABLE IF NOT EXISTS path_feedback_events (
@@ -31115,7 +31123,7 @@ function addColumnIfMissing112(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up442(db) {
+function up452(db) {
   addColumnIfMissing112(db, "session_memories", "entity_slot", "INTEGER");
   addColumnIfMissing112(db, "session_memories", "aspect_slot", "INTEGER");
   addColumnIfMissing112(db, "session_memories", "is_constraint", "INTEGER NOT NULL DEFAULT 0");
@@ -31203,7 +31211,7 @@ function addColumnIfMissing122(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up452(db) {
+function up462(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS agents (
 			id           TEXT PRIMARY KEY,
@@ -31232,7 +31240,7 @@ function addColumnIfMissing132(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up462(db) {
+function up472(db) {
   addColumnIfMissing132(db, "session_summaries", "source_type", "TEXT");
   addColumnIfMissing132(db, "session_summaries", "source_ref", "TEXT");
   addColumnIfMissing132(db, "session_summaries", "meta_json", "TEXT");
@@ -31258,7 +31266,7 @@ function addColumnIfMissing142(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up472(db) {
+function up482(db) {
   addColumnIfMissing142(db, "session_transcripts", "updated_at", "TEXT");
   addColumnIfMissing142(db, "summary_jobs", "agent_id", "TEXT NOT NULL DEFAULT 'default'");
   addColumnIfMissing142(db, "session_scores", "agent_id", "TEXT NOT NULL DEFAULT 'default'");
@@ -31329,7 +31337,7 @@ function up472(db) {
 			ON memory_md_heads(lease_expires_at);
 	`);
 }
-function up482(db) {
+function up492(db) {
   db.exec(`
 		DROP INDEX IF EXISTS idx_summaries_session_depth;
 
@@ -31390,7 +31398,7 @@ function up482(db) {
 			  AND COALESCE(source_type, 'summary') = 'summary';
 	`);
 }
-function up492(db) {
+function up502(db) {
   db.exec(`
 		DROP TRIGGER IF EXISTS session_transcripts_fts_ai;
 		DROP TRIGGER IF EXISTS session_transcripts_fts_ad;
@@ -31488,7 +31496,7 @@ function up492(db) {
 			  AND COALESCE(source_type, 'summary') = 'summary';
 	`);
 }
-function up502(db) {
+function up512(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_thread_heads (
 			agent_id TEXT NOT NULL DEFAULT 'default',
@@ -31606,7 +31614,7 @@ function up502(db) {
 		WHERE excluded.latest_at >= memory_thread_heads.latest_at;
 	`);
 }
-function up512(db) {
+function up522(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_extract_cursors (
 			session_key TEXT NOT NULL,
@@ -31623,7 +31631,7 @@ function hasTable5(db, name) {
 			 WHERE type = 'table' AND name = ?
 			 LIMIT 1`).get(name) !== undefined;
 }
-function up522(db) {
+function up532(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_dependency_history (
 			id                TEXT PRIMARY KEY,
@@ -31793,7 +31801,7 @@ function addColumnIfMissing152(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up532(db) {
+function up542(db) {
   addColumnIfMissing152(db, "summary_jobs", "session_id", "TEXT");
   addColumnIfMissing152(db, "summary_jobs", "trigger", "TEXT NOT NULL DEFAULT 'session_end'");
   addColumnIfMissing152(db, "summary_jobs", "captured_at", "TEXT");
@@ -31885,7 +31893,7 @@ function up532(db) {
 		VALUES ('rebuild');
 	`);
 }
-function up542(db) {
+function up552(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS mcp_invocations (
 			id          TEXT PRIMARY KEY,
@@ -31902,7 +31910,7 @@ function up542(db) {
 		CREATE INDEX IF NOT EXISTS idx_mcp_inv_agent ON mcp_invocations(agent_id, created_at);
 	`);
 }
-function up552(db) {
+function up562(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS skill_invocations (
 			id          TEXT PRIMARY KEY,
@@ -31918,7 +31926,7 @@ function up552(db) {
 		CREATE INDEX IF NOT EXISTS idx_skill_inv_agent ON skill_invocations(agent_id, created_at);
 	`);
 }
-function up562(db) {
+function up572(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS task_scope_hints (
 			task_id     TEXT PRIMARY KEY REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
@@ -31949,7 +31957,7 @@ function up562(db) {
 			ON task_scope_hints(agent_id, updated_at);
 	`);
 }
-function up572(db) {
+function up582(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_state (
 			agent_id TEXT PRIMARY KEY NOT NULL,
@@ -31992,7 +32000,7 @@ function ensureMemoriesScopeColumns3(db) {
   if (!names.has("scope"))
     db.exec("ALTER TABLE memories ADD COLUMN scope TEXT");
 }
-function up582(db) {
+function up592(db) {
   ensureMemoriesScopeColumns3(db);
   db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
   db.exec(`
@@ -32005,20 +32013,20 @@ function up582(db) {
 		WHERE content_hash IS NOT NULL AND is_deleted = 0
 	`);
 }
-function up592(db) {
+function up602(db) {
   const sql = readMemoriesFtsSql2(db);
   if (sql !== null && !memoriesFtsNeedsTokenizerRepair2(sql))
     return;
   recreateMemoriesFts2(db);
 }
-function up602(db) {
+function up612(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_order
 			ON entities(agent_id, pinned DESC, pinned_at DESC, mentions DESC, updated_at DESC, name)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_entities_extracted_mentions
 			ON entities(entity_type, mentions)
 			WHERE entity_type = 'extracted'`);
 }
-function up612(db) {
+function up622(db) {
   const cols = db.prepare("PRAGMA table_info(entity_attributes)").all();
   if (!cols.some((col) => col.name === "claim_key")) {
     db.exec("ALTER TABLE entity_attributes ADD COLUMN claim_key TEXT");
@@ -32027,7 +32035,7 @@ function up612(db) {
 			ON entity_attributes(agent_id, aspect_id, claim_key, status)
 			WHERE claim_key IS NOT NULL`);
 }
-function up622(db) {
+function up632(db) {
   const cols = db.prepare("PRAGMA table_info(entity_attributes)").all();
   if (!cols.some((col) => col.name === "group_key")) {
     db.exec("ALTER TABLE entity_attributes ADD COLUMN group_key TEXT");
@@ -32039,13 +32047,13 @@ function up622(db) {
 			ON entity_attributes(agent_id, aspect_id, group_key, claim_key, status)
 			WHERE claim_key IS NOT NULL`);
 }
-function up632(db) {
+function up642(db) {
   const cols = db.prepare("PRAGMA table_info(memory_artifacts)").all();
   if (cols.some((col) => col.name === "source_mtime_ms"))
     return;
   db.exec("ALTER TABLE memory_artifacts ADD COLUMN source_mtime_ms REAL");
 }
-function up642(db) {
+function up652(db) {
   const cols = db.prepare("PRAGMA table_info(memory_artifacts)").all();
   const names = new Set(cols.map((col) => col.name));
   if (!names.has("is_deleted")) {
@@ -32059,7 +32067,7 @@ function up642(db) {
 			ON memory_artifacts(agent_id, is_deleted, deleted_at)
 	`);
 }
-function up652(db) {
+function up662(db) {
   db.exec("DROP TRIGGER IF EXISTS memories_au");
   db.exec(`
 		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF content ON memories BEGIN
@@ -32077,7 +32085,7 @@ function addColumnIfMissing162(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up662(db) {
+function up672(db) {
   for (const table of ["entities", "entity_communities", "entity_attributes", "entity_dependencies"]) {
     addColumnIfMissing162(db, table, "source_id", "TEXT");
     addColumnIfMissing162(db, table, "source_kind", "TEXT");
@@ -32097,7 +32105,7 @@ function hasColumn72(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((row) => row.name === column);
 }
-function up672(db) {
+function up682(db) {
   if (!hasTable22(db, "embeddings"))
     return;
   if (!hasColumn72(db, "embeddings", "agent_id")) {
@@ -32105,7 +32113,7 @@ function up672(db) {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_embeddings_agent_source ON embeddings(agent_id, source_type, source_id)");
 }
-function up682(db) {
+function up692(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_search_telemetry (
 			id TEXT PRIMARY KEY,
@@ -32146,7 +32154,7 @@ function addColumnIfMissing172(db, table, column, definition) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
-function up692(db) {
+function up702(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS ontology_proposals (
 			id          TEXT PRIMARY KEY,
@@ -32189,7 +32197,7 @@ function up692(db) {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_proposal ON ${table}(agent_id, proposal_id)`);
   }
 }
-function up702(db) {
+function up712(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS daily_reflections (
 			id               TEXT PRIMARY KEY,
@@ -32216,7 +32224,7 @@ function up702(db) {
 			WHERE content_key IS NOT NULL;
 	`);
 }
-function up712(db) {
+function up722(db) {
   const cols = db.prepare("PRAGMA table_info(daily_reflections)").all();
   const colNames = new Set(cols.flatMap((c3) => typeof c3.name === "string" ? [c3.name] : []));
   if (!colNames.has("content_key")) {
@@ -32253,7 +32261,7 @@ function backfillVersionRoots2(db) {
 		WHERE version_root_id IS NULL
 	`);
 }
-function up722(db) {
+function up732(db) {
   for (const table of ["entities", "entity_aspects", "entity_dependencies"]) {
     addColumnIfMissing182(db, table, "status", "TEXT NOT NULL DEFAULT 'active'");
     addColumnIfMissing182(db, table, "archived_at", "TEXT");
@@ -32288,7 +32296,7 @@ function up722(db) {
 			ON entity_aspects(agent_id, proposal_id);
 	`);
 }
-function up732(db) {
+function up742(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS epistemic_assertions (
 			id TEXT PRIMARY KEY,
@@ -32344,7 +32352,7 @@ function ensureMemoriesScopeColumns22(db) {
   if (!names.has("runtime_path"))
     db.exec("ALTER TABLE memories ADD COLUMN runtime_path TEXT");
 }
-function up742(db) {
+function up752(db) {
   ensureMemoriesScopeColumns22(db);
   db.exec("DROP INDEX IF EXISTS idx_memories_idempotency_key");
   db.exec(`
@@ -32358,7 +32366,7 @@ function up742(db) {
 		WHERE idempotency_key IS NOT NULL AND is_deleted = 0
 	`);
 }
-function up752(db) {
+function up762(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_context_epochs (
 			session_key TEXT NOT NULL,
@@ -32393,7 +32401,7 @@ function up752(db) {
 			ON session_recall_events(item_kind, item_id, created_at DESC);
 	`);
 }
-function up762(db) {
+function up772(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS aggregate_memory_sources (
 			aggregate_memory_id TEXT NOT NULL,
@@ -32412,7 +32420,7 @@ function addColumnIfMissing192(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up772(db) {
+function up782(db) {
   addColumnIfMissing192(db, "memory_artifacts", "source_id", "TEXT");
   addColumnIfMissing192(db, "memory_artifacts", "source_root", "TEXT");
   addColumnIfMissing192(db, "memory_artifacts", "source_external_id", "TEXT");
@@ -32425,7 +32433,7 @@ function up772(db) {
 			ON memory_artifacts(agent_id, source_id, source_root);
 	`);
 }
-function up782(db) {
+function up792(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS temporal_edges (
 			id TEXT PRIMARY KEY,
@@ -32448,7 +32456,7 @@ function up782(db) {
 			ON temporal_edges(agent_id, subject_type, subject_id);
 	`);
 }
-function up792(db) {
+function up802(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_aliases (
 			id TEXT PRIMARY KEY,
@@ -32472,7 +32480,7 @@ function up792(db) {
 			ON entity_aliases(agent_id, canonical_alias, status);
 	`);
 }
-function up802(db) {
+function up812(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS api_keys (
 			id TEXT PRIMARY KEY,
@@ -32500,7 +32508,7 @@ function up802(db) {
 			ON api_keys(connector, harness);
 	`);
 }
-function up812(db) {
+function up822(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS transcript_capture_jobs (
 			id TEXT PRIMARY KEY,
@@ -32535,7 +32543,7 @@ function hasColumn102(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((row) => row.name === column);
 }
-function up822(db) {
+function up832(db) {
   if (!hasColumn102(db, "documents", "agent_id")) {
     db.exec("ALTER TABLE documents ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'");
   }
@@ -32621,7 +32629,7 @@ function up822(db) {
   db.exec("CREATE INDEX IF NOT EXISTS idx_documents_agent_project ON documents(agent_id, project)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_documents_source_scope ON documents(source_url, agent_id, project)");
 }
-function up832(db) {
+function up842(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS aggregate_evidence_sources (
 			aggregate_memory_id TEXT NOT NULL,
@@ -32643,7 +32651,7 @@ function hasColumn112(db, table, column) {
   return rows.some((row) => row.name === column);
 }
 var COLUMNS3 = ["harness", "session_id", "tool_use_id", "cwd", "origin", "args"];
-function up842(db) {
+function up852(db) {
   for (const column of COLUMNS3) {
     if (!hasColumn112(db, "skill_invocations", column)) {
       db.exec(`ALTER TABLE skill_invocations ADD COLUMN ${column} TEXT`);
@@ -32724,7 +32732,7 @@ function documentScopeColumnsPreservingExisting2(db) {
 		`);
   }
   try {
-    up822(db);
+    up832(db);
     if (preserveAgentId) {
       db.exec(`
 				UPDATE documents
@@ -32744,12 +32752,12 @@ function documentScopeColumnsPreservingExisting2(db) {
     db.exec("DROP TABLE IF EXISTS temp.__signet_doc_project_guard");
   }
 }
-function up852(db) {
-  up812(db);
+function up862(db) {
+  up822(db);
   if (hasTable32(db, "documents")) {
     documentScopeColumnsPreservingExisting2(db);
   }
-  up832(db);
+  up842(db);
   addColumnIfMissing202(db, "memories", "superseded_by", "TEXT");
   addColumnIfMissing202(db, "memories", "superseded_at", "TEXT");
   addColumnIfMissing202(db, "memories", "superseded_reason", "TEXT");
@@ -32806,7 +32814,7 @@ function up852(db) {
 		  AND ${sourceAgentId} = ${targetAgentId}
 	`);
 }
-function up862(db) {
+function up872(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS legacy_markdown_imports (
 			path TEXT PRIMARY KEY,
@@ -32836,7 +32844,7 @@ function up862(db) {
 			ON legacy_markdown_chunks(memory_id);
 	`);
 }
-function up872(db) {
+function up882(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('relations', 'entity_dependencies')").all();
   const tableNames = new Set(tables.map((r3) => String(r3.name)));
   if (!tableNames.has("relations") || !tableNames.has("entity_dependencies"))
@@ -32895,7 +32903,7 @@ function addColumnIfMissing212(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up882(db) {
+function up892(db) {
   addColumnIfMissing212(db, "summary_jobs", "content_hash", "TEXT");
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_summary_jobs_agent_session_content_hash
@@ -32908,14 +32916,14 @@ function addColumnIfMissing222(db, table, column, definition) {
     return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up892(db) {
+function up902(db) {
   addColumnIfMissing222(db, "summary_jobs", "boundary_reason", "TEXT");
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_summary_jobs_boundary_reason
 		ON summary_jobs(agent_id, session_key, boundary_reason)
 	`);
 }
-function up902(db) {
+function up912(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS transcript_recovery_files (
 			agent_id TEXT NOT NULL,
@@ -32933,7 +32941,7 @@ function up902(db) {
 			ON transcript_capture_jobs(agent_id, session_id, status);
 	`);
 }
-function up912(db) {
+function up922(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS job_cancellations (
 			id TEXT PRIMARY KEY,
@@ -32961,7 +32969,7 @@ function indexExists3(db, table, indexName) {
   const rows = db.prepare(`PRAGMA index_list(${table})`).all();
   return rows.some((row) => row.name === indexName);
 }
-function up922(db) {
+function up932(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS job_archive (
 			id TEXT PRIMARY KEY,
@@ -32988,7 +32996,7 @@ function indexExists22(db, table, indexName) {
   const rows = db.prepare(`PRAGMA index_list(${table})`).all();
   return rows.some((row) => row.name === indexName);
 }
-function up932(db) {
+function up942(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_index_state (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -33001,7 +33009,7 @@ function up932(db) {
 		)
 	`);
 }
-function up942(db) {
+function up952(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embeddings_staging (
 			id TEXT PRIMARY KEY,
@@ -33020,7 +33028,7 @@ function up942(db) {
 			ON embeddings_staging(agent_id, source_type, source_id);
 	`);
 }
-function up952(db) {
+function up962(db) {
   const columns = db.prepare("PRAGMA table_info(dreaming_state)").all();
   if (!columns.some((column) => column.name === "evidence_cursor")) {
     db.exec("ALTER TABLE dreaming_state ADD COLUMN evidence_cursor TEXT");
@@ -33031,7 +33039,7 @@ function hasColumn132(db, table, column) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all();
   return rows.some((r3) => r3.name === column);
 }
-function up962(db) {
+function up972(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'memories'").all();
   if (tables.length === 0)
     return;
@@ -33056,23 +33064,23 @@ function up962(db) {
 function hasColumn142(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up972(db) {
+function up982(db) {
   const hasMemories = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'").get();
   if (!hasMemories || !hasColumn142(db, "memories", "memory_kind") || !hasColumn142(db, "memories", "type"))
     return;
   db.exec("UPDATE memories SET memory_kind = NULL WHERE type = 'session_summary'");
 }
-function up982(db) {
+function up992(db) {
   db.exec("DROP TABLE IF EXISTS ingestion_jobs");
 }
-function up992(db) {
+function up1002(db) {
   const columns = db.prepare("PRAGMA table_info(dreaming_state)").all();
   if (!columns.some((column) => column.name === "last_failure_at")) {
     db.exec("ALTER TABLE dreaming_state ADD COLUMN last_failure_at TEXT");
   }
   db.exec("UPDATE dreaming_state SET last_failure_at = updated_at WHERE consecutive_failures > 0 AND last_failure_at IS NULL");
 }
-function up1002(db) {
+function up1012(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_evidence_exclusions (
 			agent_id TEXT NOT NULL,
@@ -33089,7 +33097,7 @@ function up1002(db) {
 			ON dreaming_evidence_exclusions (agent_id, resolved_at, requeue_requested_at, excluded_at DESC);
 	`);
 }
-function up1012(db) {
+function up1022(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_tool_calls (
 			id TEXT PRIMARY KEY,
@@ -33109,7 +33117,7 @@ function up1012(db) {
 			ON dreaming_tool_calls (agent_id, pass_id, sequence ASC);
 	`);
 }
-function up1022(db) {
+function up1032(db) {
   const columns = db.prepare("PRAGMA table_info(dreaming_passes)").all();
   if (!columns.some((column) => column.name === "evidence_window_json")) {
     db.exec("ALTER TABLE dreaming_passes ADD COLUMN evidence_window_json TEXT");
@@ -33118,7 +33126,7 @@ function up1022(db) {
     db.exec("ALTER TABLE dreaming_passes ADD COLUMN runbook_json TEXT");
   }
 }
-function up1032(db) {
+function up1042(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_attention (
 			id TEXT PRIMARY KEY,
@@ -33140,7 +33148,7 @@ function up1032(db) {
 function hasColumn152(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up1042(db) {
+function up1052(db) {
   const requiredMemoryColumns = [
     "content_hash",
     "normalized_content",
@@ -33191,7 +33199,7 @@ function up1042(db) {
 		WHERE EXISTS (SELECT 1 FROM memory_entity_mentions WHERE entity_id = entities.id)
 	`);
 }
-function up1052(db) {
+function up1062(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memories', 'entity_attributes')").all();
   if (tables.length !== 2)
     return;
@@ -33214,7 +33222,7 @@ function tableExists4(db, table) {
 function hasColumn162(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up1062(db) {
+function up1072(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS derived_memory_sources (
 			derived_memory_id TEXT NOT NULL,
@@ -33257,7 +33265,7 @@ function up1062(db) {
 		`);
   }
 }
-function up1072(db) {
+function up1082(db) {
   db.exec(`
 		DROP TRIGGER IF EXISTS entities_fts_ai;
 		DROP TRIGGER IF EXISTS entities_fts_ad;
@@ -33346,7 +33354,7 @@ function up1072(db) {
 function hasColumn172(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up1082(db) {
+function up1092(db) {
   if (!hasColumn172(db, "memories", "review_after")) {
     db.exec("ALTER TABLE memories ADD COLUMN review_after TEXT;");
   }
@@ -33362,14 +33370,14 @@ var TOKEN_COLUMNS2 = [
   ["tokens_cache_write", "INTEGER"],
   ["tokens_cost", "REAL"]
 ];
-function up1092(db) {
+function up1102(db) {
   for (const [column, type] of TOKEN_COLUMNS2) {
     if (!hasColumn182(db, "dreaming_passes", column)) {
       db.exec(`ALTER TABLE dreaming_passes ADD COLUMN ${column} ${type};`);
     }
   }
 }
-function up1102(db) {
+function up1112(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_usage (
 			day TEXT NOT NULL,
@@ -33382,7 +33390,7 @@ function up1102(db) {
 		);
 	`);
 }
-function up1112(db) {
+function up1122(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS telemetry_install (
 			id TEXT PRIMARY KEY,
@@ -33390,7 +33398,7 @@ function up1112(db) {
 		);
 	`);
 }
-function up1122(db) {
+function up1132(db) {
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_memory_entity_mentions_entity_memory
 			ON memory_entity_mentions(entity_id, memory_id);
@@ -33401,7 +33409,7 @@ function hasColumn192(db, table, column) {
   return rows.some((row) => row.name === column);
 }
 var COLUMNS22 = ["first_remember_at", "first_recall_at"];
-function up1132(db) {
+function up1142(db) {
   for (const column of COLUMNS22) {
     if (!hasColumn192(db, "telemetry_install", column)) {
       db.exec(`ALTER TABLE telemetry_install ADD COLUMN ${column} TEXT`);
@@ -33417,7 +33425,7 @@ function addColumnIfMissing232(db, column, definition) {
     db.exec(`ALTER TABLE telemetry_events ADD COLUMN ${column} ${definition}`);
   }
 }
-function up1142(db) {
+function up1152(db) {
   addColumnIfMissing232(db, "source", "TEXT NOT NULL DEFAULT 'daemon'");
   addColumnIfMissing232(db, "claim_token", "TEXT");
   addColumnIfMissing232(db, "claimed_at", "TEXT");
@@ -33426,7 +33434,7 @@ function up1142(db) {
 			ON telemetry_events(source, sent_to_posthog, claimed_at, timestamp);
 	`);
 }
-function up1152(db) {
+function up1162(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS session_claims (
 			session_key TEXT NOT NULL,
@@ -33447,7 +33455,7 @@ function up1152(db) {
 			ON session_claims(agent_id, state, expires_at);
 	`);
 }
-function up1162(db) {
+function up1172(db) {
   const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'entity_attributes'").get();
   if (table == null)
     return;
@@ -33456,7 +33464,7 @@ function up1162(db) {
 			ON entity_attributes(memory_id, agent_id, status, importance);
 	`);
 }
-function up1172(db) {
+function up1182(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS cross_agent_messages (
 			id TEXT PRIMARY KEY,
@@ -33513,7 +33521,7 @@ function addColumnIfMissing242(db, column, definition) {
     db.exec(`ALTER TABLE cross_agent_messages ADD COLUMN ${column} ${definition}`);
   }
 }
-function up1182(db) {
+function up1192(db) {
   const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cross_agent_messages'").get();
   if (table == null)
     return;
@@ -33714,7 +33722,7 @@ function backfillTranscriptsFromSummaryJobs2(db) {
     insert.run(...values);
   }
 }
-function up1192(db) {
+function up1202(db) {
   if (!hasTable42(db, "session_transcripts"))
     return;
   addColumnIfMissing252(db, "session_transcripts", "completed_at", "TEXT");
@@ -33767,7 +33775,7 @@ function up1192(db) {
 			ON session_transcripts(agent_id, content_hash);
 	`);
 }
-function up1202(db) {
+function up1212(db) {
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_memory_jobs_pressure_status
 			ON memory_jobs(status)
@@ -33786,12 +33794,12 @@ function up1202(db) {
 function hasColumn222(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
 }
-function up1212(db) {
+function up1222(db) {
   if (!hasColumn222(db, "telemetry_install", "last_seen_version")) {
     db.exec("ALTER TABLE telemetry_install ADD COLUMN last_seen_version TEXT");
   }
 }
-function up1222(db) {
+function up1232(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS source_lifecycle_state (
 			agent_id TEXT NOT NULL,
@@ -33820,7 +33828,7 @@ function addColumnIfMissing262(db, column, definition) {
     db.exec(`ALTER TABLE telemetry_events ADD COLUMN ${column} ${definition}`);
   }
 }
-function up1232(db) {
+function up1242(db) {
   addColumnIfMissing262(db, "delivery_attempts", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing262(db, "last_attempt_at", "TEXT");
   addColumnIfMissing262(db, "sent_at", "TEXT");
@@ -33841,7 +33849,7 @@ function up1232(db) {
 		VALUES (1, CURRENT_TIMESTAMP);
 	`);
 }
-function up1242(db) {
+function up1252(db) {
   const columns = db.prepare("PRAGMA table_info(dreaming_evidence_exclusions)").all();
   const names = new Set(columns.map((column) => column.name));
   if (!names.has("failure_class")) {
@@ -33858,7 +33866,7 @@ function up1242(db) {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_dreaming_evidence_exclusions_retry ON dreaming_evidence_exclusions (resolved_at, requeue_requested_at, failure_class, retry_count, last_requeued_at)");
 }
-function up1252(db) {
+function up1262(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_index_failures (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33882,7 +33890,7 @@ function up1252(db) {
 			ON embedding_index_failures(source_type, source_id);
 	`);
 }
-function up1262(db) {
+function up1272(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS imported_source_lifecycle (
 			id TEXT PRIMARY KEY,
@@ -33932,7 +33940,7 @@ function backfillTable2(db, params) {
 			 FROM ${params.table}${params.where ? ` WHERE ${params.where}` : ""}`).all();
   backfill2(db, rows, params.sourceKind, params.scannedAt);
 }
-function up1272(db) {
+function up1282(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_content_safety (
 			agent_id TEXT NOT NULL,
@@ -33989,7 +33997,7 @@ function up1272(db) {
     scannedAt
   });
 }
-function up1282(db) {
+function up1292(db) {
   const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_attention'").get();
   if (!table)
     return;
@@ -34023,7 +34031,7 @@ function up1282(db) {
 			ON dreaming_attention (agent_id, resolved_at, priority DESC, created_at ASC);
 	`);
 }
-function up1292(db) {
+function up1302(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS ontology_contradictions (
 			id TEXT PRIMARY KEY,
@@ -34079,7 +34087,7 @@ function up1292(db) {
 			ON ontology_contradictions(agent_id, left_source_id, right_source_id);
 	`);
 }
-function up1302(db) {
+function up1312(db) {
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_memory_jobs_diagnostics_status_created_at
 			ON memory_jobs(status, created_at)
@@ -34094,7 +34102,7 @@ function up1302(db) {
 function tableExists32(db, table) {
   return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) != null;
 }
-function up1312(db) {
+function up1322(db) {
   if (!tableExists32(db, "memory_jobs"))
     return;
   if (!tableExists32(db, "job_cancellations")) {
@@ -34143,7 +34151,7 @@ function up1312(db) {
 		  AND status IN ('pending', 'leased');
 	`);
 }
-function up1322(db) {
+function up1332(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_repair_budget (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -34183,7 +34191,7 @@ function up1322(db) {
 		END;
 	`);
 }
-function up1332(db) {
+function up1342(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_evidence_consumption (
 			agent_id TEXT NOT NULL,
@@ -34206,13 +34214,13 @@ function up1332(db) {
 			ON dreaming_evidence_consumption(agent_id, pass_id, delivered_offset, source_length);
 	`);
 }
-function up1342(db) {
+function up1352(db) {
   db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_observer_entity
 			ON epistemic_assertions(agent_id, subject_entity_id, status, asserted_at DESC, created_at DESC);
 	`);
 }
-function up1352(db) {
+function up1362(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_head_revisions (
 			id TEXT PRIMARY KEY,
@@ -34264,7 +34272,7 @@ function up1352(db) {
   if (!names.has("format_version"))
     db.exec("ALTER TABLE memory_md_heads ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1");
 }
-function up1362(db) {
+function up1372(db) {
   db.exec(`
 		CREATE TABLE memory_head_entries_v134 (
 			entry_id TEXT NOT NULL, agent_id TEXT NOT NULL, canonical_text TEXT NOT NULL,
@@ -34282,7 +34290,7 @@ function up1362(db) {
 		 ON memory_head_entries(agent_id, entry_id, last_revision DESC);
 	`);
 }
-function up1372(db) {
+function up1382(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_head_publications (
 			agent_id TEXT NOT NULL,
@@ -34298,7 +34306,7 @@ function up1372(db) {
 			ON memory_head_publications(agent_id, status, revision DESC);
 	`);
 }
-function up1382(db) {
+function up1392(db) {
   const cols = new Set(db.prepare("PRAGMA table_info(memory_head_revisions)").all().map((r3) => r3.name));
   for (const [name, type] of [
     ["entry_id", "TEXT"],
@@ -34312,7 +34320,7 @@ function up1382(db) {
   }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_head_revisions_entry ON memory_head_revisions(agent_id, revision, entry_id)");
 }
-function up1392(db) {
+function up1402(db) {
   const cols = new Set(db.prepare("PRAGMA table_info(dreaming_passes)").all().map((r3) => r3.name));
   for (const [name, type] of [
     ["head_revision", "INTEGER"],
@@ -34334,7 +34342,7 @@ function addColumnIfMissing272(db, table, column, definition) {
   if (!hasColumn252(db, table, column))
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up1402(db) {
+function up1412(db) {
   addColumnIfMissing272(db, "memories", "manual_override", "INTEGER DEFAULT 0");
   db.exec(`
 		CREATE TABLE IF NOT EXISTS transcript_capture_status (
@@ -34639,7 +34647,7 @@ function up1402(db) {
 		GROUP BY j.agent_id;
 	`);
 }
-function up1412(db) {
+function up1422(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS native_source_sync_state (
 			agent_id TEXT NOT NULL,
@@ -34655,7 +34663,7 @@ function up1412(db) {
 			ON native_source_sync_state(agent_id, status);
 	`);
 }
-function up1422(db) {
+function up1432(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS transcript_recovery_frontiers (
 			agent_id TEXT NOT NULL,
@@ -34667,7 +34675,7 @@ function up1422(db) {
 		);
 	`);
 }
-function up1432(db) {
+function up1442(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS source_sync_checkpoints (
 			agent_id TEXT NOT NULL,
@@ -34681,13 +34689,13 @@ function up1432(db) {
 		);
 	`);
 }
-function up1442(db) {
+function up1452(db) {
   const columns = db.prepare("PRAGMA table_info(source_sync_checkpoints)").all();
   if (!columns.some((column) => column.name === "frontier")) {
     db.exec("ALTER TABLE source_sync_checkpoints ADD COLUMN frontier TEXT");
   }
 }
-function up1452(db) {
+function up1462(db) {
   const columns = new Set(db.prepare("PRAGMA table_info(embedding_index_state)").all().map((row) => row.name).filter((name) => typeof name === "string"));
   const additions = [
     ["migration_phase", "TEXT"],
@@ -34722,13 +34730,13 @@ function up1452(db) {
 		`);
   }
 }
-function up1462(db) {
+function up1472(db) {
   const columns = new Set(db.prepare("PRAGMA table_info(memory_jobs)").all().map((row) => row.name).filter((name) => typeof name === "string"));
   if (!columns.has("lease_token")) {
     db.exec("ALTER TABLE memory_jobs ADD COLUMN lease_token TEXT");
   }
 }
-function up1472(db) {
+function up1482(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_evidence_reviews (
 			agent_id TEXT NOT NULL,
@@ -34746,7 +34754,7 @@ function up1472(db) {
 			ON dreaming_evidence_reviews (agent_id, reviewed_at DESC);
 	`);
 }
-function up1482(db) {
+function up1492(db) {
   db.exec(`
 		CREATE TABLE IF NOT EXISTS source_import_jobs (
 			id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind = 'import'), agent_id TEXT NOT NULL,
@@ -34813,16 +34821,16 @@ function up1482(db) {
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_session_transcripts_agent_source ON session_transcripts(agent_id, source_id)");
 }
-function up1492(db) {
+function up1502(db) {
   db.exec("CREATE INDEX IF NOT EXISTS idx_source_import_files_job_state ON source_import_files(job_id, state)");
 }
-function up1502(db) {
+function up1512(db) {
   const columns = db.prepare("PRAGMA table_info(source_import_record_attempts)").all();
   if (!columns.some((column) => column.name === "source_id")) {
     db.exec("ALTER TABLE source_import_record_attempts ADD COLUMN source_id TEXT");
   }
 }
-function up1512(db) {
+function up1522(db) {
   const addColumn = (table, column, definition) => {
     const statement = db.prepare("SELECT 1 AS found FROM pragma_table_info(?) WHERE name = ?");
     let exists;
@@ -34843,7 +34851,7 @@ function addColumnIfMissing282(db, table, column, definition) {
   if (!columns.some((row) => row.name === column))
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-function up1522(db) {
+function up1532(db) {
   addColumnIfMissing282(db, "memory_md_heads", "is_current", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing282(db, "dreaming_passes", "head_base_revision", "INTEGER");
   db.exec("CREATE INDEX IF NOT EXISTS idx_memory_head_revisions_content_hash ON memory_head_revisions(content_hash)");
@@ -34997,13 +35005,13 @@ var MIGRATIONS2 = [
   {
     version: 1,
     name: "baseline",
-    up: up310,
+    up: up410,
     artifacts: { tables: ["memories", "conversations", "embeddings"] }
   },
   {
     version: 2,
     name: "pipeline-v2",
-    up: up410,
+    up: up510,
     artifacts: {
       tables: ["memory_history", "memory_jobs", "entities", "relations", "memory_entity_mentions"]
     }
@@ -35011,12 +35019,12 @@ var MIGRATIONS2 = [
   {
     version: 3,
     name: "unique-content-hash",
-    up: up510
+    up: up610
   },
   {
     version: 4,
     name: "history-actor-and-retention",
-    up: up610,
+    up: up710,
     artifacts: {
       columns: [{ table: "memory_history", column: "actor_type" }]
     }
@@ -35024,7 +35032,7 @@ var MIGRATIONS2 = [
   {
     version: 5,
     name: "graph-extended",
-    up: up710,
+    up: up810,
     artifacts: {
       columns: [{ table: "entities", column: "canonical_name" }]
     }
@@ -35032,7 +35040,7 @@ var MIGRATIONS2 = [
   {
     version: 6,
     name: "idempotency-key",
-    up: up810,
+    up: up910,
     artifacts: {
       columns: [{ table: "memories", column: "idempotency_key" }]
     }
@@ -35040,42 +35048,42 @@ var MIGRATIONS2 = [
   {
     version: 7,
     name: "documents-and-connectors",
-    up: up910,
+    up: up1010,
     artifacts: { tables: ["documents", "document_memories", "connectors"] }
   },
   {
     version: 8,
     name: "embeddings-unique-hash",
-    up: up1010
+    up: up1110
   },
   {
     version: 9,
     name: "summary-jobs",
-    up: up1110,
+    up: up1210,
     artifacts: { tables: ["summary_jobs"] }
   },
   {
     version: 10,
     name: "umap-cache",
-    up: up1210,
+    up: up1310,
     artifacts: { tables: ["umap_cache"] }
   },
   {
     version: 11,
     name: "session-scores",
-    up: up1310,
+    up: up1410,
     artifacts: { tables: ["session_scores"] }
   },
   {
     version: 12,
     name: "scheduled-tasks",
-    up: up1410,
+    up: up155,
     artifacts: { tables: ["scheduled_tasks", "task_runs"] }
   },
   {
     version: 13,
     name: "ingestion-tracking",
-    up: up154,
+    up: up162,
     artifacts: {
       columns: [
         { table: "memories", column: "source_path" },
@@ -35086,13 +35094,13 @@ var MIGRATIONS2 = [
   {
     version: 14,
     name: "telemetry",
-    up: up162,
+    up: up172,
     artifacts: { tables: ["telemetry_events"] }
   },
   {
     version: 15,
     name: "session-memories",
-    up: up172,
+    up: up182,
     artifacts: {
       tables: ["session_memories"],
       columns: [
@@ -35104,13 +35112,13 @@ var MIGRATIONS2 = [
   {
     version: 16,
     name: "session-checkpoints",
-    up: up182,
+    up: up192,
     artifacts: { tables: ["session_checkpoints"] }
   },
   {
     version: 17,
     name: "task-skills",
-    up: up192,
+    up: up202,
     artifacts: {
       columns: [{ table: "scheduled_tasks", column: "skill_name" }]
     }
@@ -35118,13 +35126,13 @@ var MIGRATIONS2 = [
   {
     version: 18,
     name: "skill-meta",
-    up: up202,
+    up: up212,
     artifacts: { tables: ["skill_meta"] }
   },
   {
     version: 19,
     name: "knowledge-structure",
-    up: up212,
+    up: up222,
     artifacts: {
       tables: ["entity_aspects", "entity_attributes", "entity_dependencies", "task_meta"],
       columns: [{ table: "entities", column: "agent_id" }]
@@ -35133,7 +35141,7 @@ var MIGRATIONS2 = [
   {
     version: 20,
     name: "session-structural-columns",
-    up: up222,
+    up: up232,
     artifacts: {
       columns: [
         { table: "session_memories", column: "entity_slot" },
@@ -35146,7 +35154,7 @@ var MIGRATIONS2 = [
   {
     version: 21,
     name: "checkpoint-structural",
-    up: up232,
+    up: up242,
     artifacts: {
       columns: [{ table: "session_checkpoints", column: "focal_entity_ids" }]
     }
@@ -35154,7 +35162,7 @@ var MIGRATIONS2 = [
   {
     version: 22,
     name: "entity-pinning",
-    up: up242,
+    up: up252,
     artifacts: {
       columns: [
         { table: "entities", column: "pinned" },
@@ -35165,17 +35173,17 @@ var MIGRATIONS2 = [
   {
     version: 23,
     name: "retired-scorer-gap",
-    up: up252
+    up: up262
   },
   {
     version: 24,
     name: "retired-scorer-gap",
-    up: up262
+    up: up272
   },
   {
     version: 25,
     name: "agent-feedback",
-    up: up272,
+    up: up282,
     artifacts: {
       columns: [{ table: "session_memories", column: "agent_relevance_score" }]
     }
@@ -35183,32 +35191,32 @@ var MIGRATIONS2 = [
   {
     version: 26,
     name: "retired-scorer-gap",
-    up: up282
+    up: up292
   },
   {
     version: 27,
     name: "backfill-canonical-names",
-    up: up292
+    up: up302
   },
   {
     version: 28,
     name: "lossless-retention",
-    up: up302
+    up: up312
   },
   {
     version: 29,
     name: "session-summary-dag",
-    up: up312
+    up: up322
   },
   {
     version: 30,
     name: "nullable-memory-job-memory-id",
-    up: up322
+    up: up332
   },
   {
     version: 31,
     name: "dependency-reason",
-    up: up332,
+    up: up342,
     artifacts: {
       columns: [
         { table: "entity_dependencies", column: "reason" },
@@ -35219,7 +35227,7 @@ var MIGRATIONS2 = [
   {
     version: 32,
     name: "embeddings-vector-column",
-    up: up342,
+    up: up352,
     artifacts: {
       columns: [{ table: "embeddings", column: "vector", optional: true }]
     }
@@ -35227,7 +35235,7 @@ var MIGRATIONS2 = [
   {
     version: 33,
     name: "scope",
-    up: up352,
+    up: up362,
     artifacts: {
       columns: [{ table: "memories", column: "scope" }]
     }
@@ -35235,17 +35243,17 @@ var MIGRATIONS2 = [
   {
     version: 34,
     name: "scope-aware-dedup",
-    up: up362
+    up: up372
   },
   {
     version: 35,
     name: "entity-fts",
-    up: up372
+    up: up382
   },
   {
     version: 36,
     name: "dependency-confidence",
-    up: up382,
+    up: up392,
     artifacts: {
       columns: [{ table: "entity_dependencies", column: "confidence" }]
     }
@@ -35253,7 +35261,7 @@ var MIGRATIONS2 = [
   {
     version: 37,
     name: "entity-communities",
-    up: up392,
+    up: up402,
     artifacts: {
       tables: ["entity_communities"],
       columns: [{ table: "entities", column: "community_id" }]
@@ -35262,24 +35270,24 @@ var MIGRATIONS2 = [
   {
     version: 38,
     name: "memory-hints",
-    up: up402,
+    up: up412,
     artifacts: { tables: ["memory_hints"] }
   },
   {
     version: 39,
     name: "dedup-entity-dependencies",
-    up: up412
+    up: up422
   },
   {
     version: 40,
     name: "session-transcripts",
-    up: up422,
+    up: up432,
     artifacts: { tables: ["session_transcripts"] }
   },
   {
     version: 41,
     name: "path-feedback",
-    up: up432,
+    up: up442,
     artifacts: {
       tables: [
         "path_feedback_events",
@@ -35294,7 +35302,7 @@ var MIGRATIONS2 = [
   {
     version: 42,
     name: "session-memories-agent-id",
-    up: up442,
+    up: up452,
     artifacts: {
       columns: [{ table: "session_memories", column: "agent_id" }]
     }
@@ -35302,7 +35310,7 @@ var MIGRATIONS2 = [
   {
     version: 43,
     name: "agents-table",
-    up: up452,
+    up: up462,
     artifacts: {
       tables: ["agents"],
       columns: [
@@ -35314,7 +35322,7 @@ var MIGRATIONS2 = [
   {
     version: 44,
     name: "memory-md-temporal-head",
-    up: up462,
+    up: up472,
     artifacts: {
       columns: [
         { table: "session_summaries", column: "source_type" },
@@ -35326,7 +35334,7 @@ var MIGRATIONS2 = [
   {
     version: 45,
     name: "lossless-working-memory-hardening",
-    up: up472,
+    up: up482,
     artifacts: {
       tables: ["session_transcripts_fts", "memory_md_heads"],
       columns: [
@@ -35339,17 +35347,17 @@ var MIGRATIONS2 = [
   {
     version: 46,
     name: "session-summary-uniqueness",
-    up: up482
+    up: up492
   },
   {
     version: 47,
     name: "agent-scoped-temporal-uniqueness",
-    up: up492
+    up: up502
   },
   {
     version: 48,
     name: "thread-heads",
-    up: up502,
+    up: up512,
     artifacts: {
       tables: ["memory_thread_heads"]
     }
@@ -35357,7 +35365,7 @@ var MIGRATIONS2 = [
   {
     version: 49,
     name: "session-extract-cursors",
-    up: up512,
+    up: up522,
     artifacts: {
       tables: ["session_extract_cursors"]
     }
@@ -35365,7 +35373,7 @@ var MIGRATIONS2 = [
   {
     version: 50,
     name: "related-to-audit",
-    up: up522,
+    up: up532,
     artifacts: {
       tables: ["entity_dependency_history"]
     }
@@ -35373,7 +35381,7 @@ var MIGRATIONS2 = [
   {
     version: 51,
     name: "memory-md-rolling-window-lineage",
-    up: up532,
+    up: up542,
     artifacts: {
       tables: ["memory_artifacts", "memory_artifact_tombstones", "memory_artifacts_fts"],
       columns: [
@@ -35388,15 +35396,12 @@ var MIGRATIONS2 = [
   {
     version: 52,
     name: "mcp-invocations",
-    up: up542,
-    artifacts: {
-      tables: ["mcp_invocations"]
-    }
+    up: up552
   },
   {
     version: 53,
     name: "skill-invocations",
-    up: up552,
+    up: up562,
     artifacts: {
       tables: ["skill_invocations"]
     }
@@ -35404,7 +35409,7 @@ var MIGRATIONS2 = [
   {
     version: 54,
     name: "task-agent-scope",
-    up: up562,
+    up: up572,
     artifacts: {
       tables: ["task_scope_hints"]
     }
@@ -35412,7 +35417,7 @@ var MIGRATIONS2 = [
   {
     version: 55,
     name: "dreaming-state",
-    up: up572,
+    up: up582,
     artifacts: {
       tables: ["dreaming_state", "dreaming_passes"]
     }
@@ -35420,22 +35425,22 @@ var MIGRATIONS2 = [
   {
     version: 56,
     name: "agent-scoped-content-hash",
-    up: up582
+    up: up592
   },
   {
     version: 57,
     name: "memories-fts-tokenizer-repair",
-    up: up592
+    up: up602
   },
   {
     version: 58,
     name: "knowledge-graph-indices",
-    up: up602
+    up: up612
   },
   {
     version: 59,
     name: "entity-attribute-claim-key",
-    up: up612,
+    up: up622,
     artifacts: {
       columns: [{ table: "entity_attributes", column: "claim_key" }]
     }
@@ -35443,7 +35448,7 @@ var MIGRATIONS2 = [
   {
     version: 60,
     name: "entity-attribute-group-key",
-    up: up622,
+    up: up632,
     artifacts: {
       columns: [{ table: "entity_attributes", column: "group_key" }]
     }
@@ -35451,7 +35456,7 @@ var MIGRATIONS2 = [
   {
     version: 61,
     name: "memory-artifact-source-mtime",
-    up: up632,
+    up: up642,
     artifacts: {
       columns: [{ table: "memory_artifacts", column: "source_mtime_ms" }]
     }
@@ -35459,7 +35464,7 @@ var MIGRATIONS2 = [
   {
     version: 62,
     name: "memory-artifact-soft-delete",
-    up: up642,
+    up: up652,
     artifacts: {
       columns: [
         { table: "memory_artifacts", column: "is_deleted" },
@@ -35470,12 +35475,12 @@ var MIGRATIONS2 = [
   {
     version: 63,
     name: "content-only-memories-fts-update",
-    up: up652
+    up: up662
   },
   {
     version: 64,
     name: "source-graph-provenance",
-    up: up662,
+    up: up672,
     artifacts: {
       columns: [
         { table: "entities", column: "source_path" },
@@ -35488,7 +35493,7 @@ var MIGRATIONS2 = [
   {
     version: 65,
     name: "source-embedding-agent-scope",
-    up: up672,
+    up: up682,
     artifacts: {
       columns: [{ table: "embeddings", column: "agent_id", optional: true }]
     }
@@ -35496,7 +35501,7 @@ var MIGRATIONS2 = [
   {
     version: 66,
     name: "memory-search-telemetry",
-    up: up682,
+    up: up692,
     artifacts: {
       tables: ["memory_search_telemetry"]
     }
@@ -35504,7 +35509,7 @@ var MIGRATIONS2 = [
   {
     version: 67,
     name: "ontology-proposals",
-    up: up692,
+    up: up702,
     artifacts: {
       tables: ["ontology_proposals"],
       columns: [
@@ -35518,7 +35523,7 @@ var MIGRATIONS2 = [
   {
     version: 68,
     name: "daily-reflections",
-    up: up702,
+    up: up712,
     artifacts: {
       tables: ["daily_reflections"]
     }
@@ -35526,7 +35531,7 @@ var MIGRATIONS2 = [
   {
     version: 69,
     name: "daily-reflections-multiple-insights",
-    up: up712,
+    up: up722,
     artifacts: {
       tables: ["daily_reflections"]
     }
@@ -35534,7 +35539,7 @@ var MIGRATIONS2 = [
   {
     version: 70,
     name: "ontology-control-plane-state",
-    up: up722,
+    up: up732,
     artifacts: {
       columns: [
         { table: "entities", column: "status" },
@@ -35549,7 +35554,7 @@ var MIGRATIONS2 = [
   {
     version: 71,
     name: "epistemic-assertions",
-    up: up732,
+    up: up742,
     artifacts: {
       tables: ["epistemic_assertions"]
     }
@@ -35557,7 +35562,7 @@ var MIGRATIONS2 = [
   {
     version: 72,
     name: "agent-scoped-idempotency-key",
-    up: up742,
+    up: up752,
     artifacts: {
       columns: [
         { table: "memories", column: "idempotency_key" },
@@ -35568,7 +35573,7 @@ var MIGRATIONS2 = [
   {
     version: 73,
     name: "recall-context-dedupe",
-    up: up752,
+    up: up762,
     artifacts: {
       tables: ["session_context_epochs", "session_recall_events"]
     }
@@ -35576,7 +35581,7 @@ var MIGRATIONS2 = [
   {
     version: 74,
     name: "aggregate-memory-links",
-    up: up762,
+    up: up772,
     artifacts: {
       tables: ["aggregate_memory_sources"]
     }
@@ -35584,7 +35589,7 @@ var MIGRATIONS2 = [
   {
     version: 75,
     name: "memory-artifact-source-provenance",
-    up: up772,
+    up: up782,
     artifacts: {
       columns: [
         { table: "memory_artifacts", column: "source_id" },
@@ -35598,7 +35603,7 @@ var MIGRATIONS2 = [
   {
     version: 76,
     name: "temporal-edges",
-    up: up782,
+    up: up792,
     artifacts: {
       tables: ["temporal_edges"]
     }
@@ -35606,7 +35611,7 @@ var MIGRATIONS2 = [
   {
     version: 77,
     name: "entity-aliases",
-    up: up792,
+    up: up802,
     artifacts: {
       tables: ["entity_aliases"]
     }
@@ -35614,7 +35619,7 @@ var MIGRATIONS2 = [
   {
     version: 78,
     name: "api-keys",
-    up: up802,
+    up: up812,
     artifacts: {
       tables: ["api_keys"]
     }
@@ -35622,7 +35627,7 @@ var MIGRATIONS2 = [
   {
     version: 79,
     name: "transcript-capture-jobs",
-    up: up812,
+    up: up822,
     artifacts: {
       tables: ["transcript_capture_jobs"]
     }
@@ -35630,7 +35635,7 @@ var MIGRATIONS2 = [
   {
     version: 80,
     name: "document-scope-columns",
-    up: up822,
+    up: up832,
     artifacts: {
       columns: [
         { table: "documents", column: "agent_id" },
@@ -35641,7 +35646,7 @@ var MIGRATIONS2 = [
   {
     version: 81,
     name: "aggregate-evidence-sources",
-    up: up832,
+    up: up842,
     artifacts: {
       tables: ["aggregate_evidence_sources"]
     }
@@ -35649,7 +35654,7 @@ var MIGRATIONS2 = [
   {
     version: 82,
     name: "skill-invocations-harness",
-    up: up842,
+    up: up852,
     artifacts: {
       columns: [
         { table: "skill_invocations", column: "harness" },
@@ -35660,7 +35665,7 @@ var MIGRATIONS2 = [
   {
     version: 83,
     name: "memory-lifecycle-repair",
-    up: up852,
+    up: up862,
     artifacts: {
       tables: ["transcript_capture_jobs", "aggregate_evidence_sources", "entity_dependencies"],
       columns: [
@@ -35675,7 +35680,7 @@ var MIGRATIONS2 = [
   {
     version: 84,
     name: "legacy-markdown-import-state",
-    up: up862,
+    up: up872,
     artifacts: {
       tables: ["legacy_markdown_imports", "legacy_markdown_chunks"]
     }
@@ -35683,7 +35688,7 @@ var MIGRATIONS2 = [
   {
     version: 85,
     name: "backfill-relations-to-dependencies",
-    up: up872,
+    up: up882,
     artifacts: {
       tables: ["entity_dependencies"]
     }
@@ -35691,7 +35696,7 @@ var MIGRATIONS2 = [
   {
     version: 86,
     name: "summary-jobs-content-hash",
-    up: up882,
+    up: up892,
     artifacts: {
       columns: [{ table: "summary_jobs", column: "content_hash" }]
     }
@@ -35699,7 +35704,7 @@ var MIGRATIONS2 = [
   {
     version: 87,
     name: "summary-jobs-boundary-reason",
-    up: up892,
+    up: up902,
     artifacts: {
       columns: [{ table: "summary_jobs", column: "boundary_reason" }]
     }
@@ -35707,7 +35712,7 @@ var MIGRATIONS2 = [
   {
     version: 88,
     name: "transcript-recovery-files",
-    up: up902,
+    up: up912,
     artifacts: {
       tables: ["transcript_recovery_files"]
     }
@@ -35715,7 +35720,7 @@ var MIGRATIONS2 = [
   {
     version: 89,
     name: "job-cancellations",
-    up: up912,
+    up: up922,
     artifacts: {
       tables: ["job_cancellations"]
     }
@@ -35723,7 +35728,7 @@ var MIGRATIONS2 = [
   {
     version: 90,
     name: "job-archive",
-    up: up922,
+    up: up932,
     artifacts: {
       tables: ["job_archive"]
     }
@@ -35731,25 +35736,25 @@ var MIGRATIONS2 = [
   {
     version: 91,
     name: "embedding-index-generations",
-    up: up932,
+    up: up942,
     artifacts: { tables: ["embedding_index_state"] }
   },
   {
     version: 92,
     name: "embedding-staging-store",
-    up: up942,
+    up: up952,
     artifacts: { tables: ["embeddings_staging"] }
   },
   {
     version: 93,
     name: "dreaming-evidence-cursor",
-    up: up952,
+    up: up962,
     artifacts: { columns: [{ table: "dreaming_state", column: "evidence_cursor" }] }
   },
   {
     version: 94,
     name: "memory-kind",
-    up: up962,
+    up: up972,
     artifacts: {
       columns: [
         { table: "memories", column: "memory_kind" },
@@ -35760,35 +35765,35 @@ var MIGRATIONS2 = [
   {
     version: 95,
     name: "compaction-recall-projections",
-    up: up972
+    up: up982
   },
   {
     version: 96,
     name: "retire-legacy-ingestion",
-    up: up982
+    up: up992
   },
   {
     version: 97,
     name: "dreaming-failure-backoff",
-    up: up992,
+    up: up1002,
     artifacts: { columns: [{ table: "dreaming_state", column: "last_failure_at" }] }
   },
   {
     version: 98,
     name: "dreaming-evidence-exclusions",
-    up: up1002,
+    up: up1012,
     artifacts: { tables: ["dreaming_evidence_exclusions"] }
   },
   {
     version: 99,
     name: "dreaming-tool-calls",
-    up: up1012,
+    up: up1022,
     artifacts: { tables: ["dreaming_tool_calls"] }
   },
   {
     version: 100,
     name: "dreaming-runbook",
-    up: up1022,
+    up: up1032,
     artifacts: {
       columns: [
         { table: "dreaming_passes", column: "evidence_window_json" },
@@ -35799,23 +35804,23 @@ var MIGRATIONS2 = [
   {
     version: 101,
     name: "dreaming-attention",
-    up: up1032,
+    up: up1042,
     artifacts: { tables: ["dreaming_attention"] }
   },
   {
     version: 102,
     name: "attribute-semantic-memories",
-    up: up1042
+    up: up1052
   },
   {
     version: 103,
     name: "semantic-memory-kind",
-    up: up1052
+    up: up1062
   },
   {
     version: 104,
     name: "derived-memory-provenance",
-    up: up1062,
+    up: up1072,
     artifacts: {
       tables: ["derived_memory_sources"],
       columns: [{ table: "memories", column: "stale_at" }]
@@ -35824,12 +35829,12 @@ var MIGRATIONS2 = [
   {
     version: 105,
     name: "agent-scoped-entity-name",
-    up: up1072
+    up: up1082
   },
   {
     version: 106,
     name: "memory-review-after",
-    up: up1082,
+    up: up1092,
     artifacts: {
       columns: [{ table: "memories", column: "review_after" }]
     }
@@ -35837,7 +35842,7 @@ var MIGRATIONS2 = [
   {
     version: 107,
     name: "dreaming-pass-usage",
-    up: up1092,
+    up: up1102,
     artifacts: {
       columns: [
         { table: "dreaming_passes", column: "tokens_input" },
@@ -35851,7 +35856,7 @@ var MIGRATIONS2 = [
   {
     version: 108,
     name: "embedding-usage",
-    up: up1102,
+    up: up1112,
     artifacts: {
       tables: ["embedding_usage"]
     }
@@ -35859,7 +35864,7 @@ var MIGRATIONS2 = [
   {
     version: 109,
     name: "telemetry-install",
-    up: up1112,
+    up: up1122,
     artifacts: {
       tables: ["telemetry_install"]
     }
@@ -35867,12 +35872,12 @@ var MIGRATIONS2 = [
   {
     version: 110,
     name: "memory-mention-join-index",
-    up: up1122
+    up: up1132
   },
   {
     version: 111,
     name: "telemetry-first-use",
-    up: up1132,
+    up: up1142,
     artifacts: {
       columns: [
         { table: "telemetry_install", column: "first_remember_at" },
@@ -35883,7 +35888,7 @@ var MIGRATIONS2 = [
   {
     version: 112,
     name: "telemetry-queue-ownership",
-    up: up1142,
+    up: up1152,
     artifacts: {
       columns: [
         { table: "telemetry_events", column: "source" },
@@ -35895,7 +35900,7 @@ var MIGRATIONS2 = [
   {
     version: 113,
     name: "session-claims",
-    up: up1152,
+    up: up1162,
     artifacts: {
       tables: ["session_claims"],
       columns: [
@@ -35909,12 +35914,12 @@ var MIGRATIONS2 = [
   {
     version: 114,
     name: "memory-traversal-hydration-index",
-    up: up1162
+    up: up1172
   },
   {
     version: 115,
     name: "cross-agent-message-notifications",
-    up: up1172,
+    up: up1182,
     artifacts: {
       tables: ["cross_agent_messages", "cross_agent_message_receipts"]
     }
@@ -35922,7 +35927,7 @@ var MIGRATIONS2 = [
   {
     version: 116,
     name: "acp-delivery-reconciliation",
-    up: up1182,
+    up: up1192,
     artifacts: {
       columns: [
         { table: "cross_agent_messages", column: "delivery_state" },
@@ -35936,7 +35941,7 @@ var MIGRATIONS2 = [
   {
     version: 117,
     name: "retire-summary-worker",
-    up: up1192,
+    up: up1202,
     artifacts: {
       columns: [
         { table: "session_transcripts", column: "completed_at" },
@@ -35947,24 +35952,24 @@ var MIGRATIONS2 = [
   {
     version: 118,
     name: "queue-pressure-indices",
-    up: up1202
+    up: up1212
   },
   {
     version: 119,
     name: "telemetry-version-observation",
-    up: up1212,
+    up: up1222,
     artifacts: { columns: [{ table: "telemetry_install", column: "last_seen_version" }] }
   },
   {
     version: 120,
     name: "source-lifecycle-telemetry",
-    up: up1222,
+    up: up1232,
     artifacts: { tables: ["source_lifecycle_state"] }
   },
   {
     version: 121,
     name: "telemetry-delivery-health",
-    up: up1232,
+    up: up1242,
     artifacts: {
       tables: ["telemetry_delivery_state"],
       columns: [
@@ -35978,7 +35983,7 @@ var MIGRATIONS2 = [
   {
     version: 122,
     name: "dreaming-evidence-retry",
-    up: up1242,
+    up: up1252,
     artifacts: {
       columns: [
         { table: "dreaming_evidence_exclusions", column: "failure_class" },
@@ -35991,13 +35996,13 @@ var MIGRATIONS2 = [
   {
     version: 123,
     name: "embedding-index-failures",
-    up: up1252,
+    up: up1262,
     artifacts: { tables: ["embedding_index_failures"] }
   },
   {
     version: 124,
     name: "import-derived-lifecycle",
-    up: up1262,
+    up: up1272,
     artifacts: {
       tables: ["imported_source_lifecycle"]
     }
@@ -36005,77 +36010,77 @@ var MIGRATIONS2 = [
   {
     version: 125,
     name: "memory-content-safety",
-    up: up1272,
+    up: up1282,
     artifacts: { tables: ["memory_content_safety"] }
   },
   {
     version: 126,
     name: "dreaming-surprisal-attention",
-    up: up1282,
+    up: up1292,
     artifacts: { tables: ["dreaming_attention"] }
   },
   {
     version: 127,
     name: "ontology-contradictions",
-    up: up1292,
+    up: up1302,
     artifacts: { tables: ["ontology_contradictions"] }
   },
   {
     version: 128,
     name: "bounded-queue-diagnostics",
-    up: up1302
+    up: up1312
   },
   {
     version: 129,
     name: "retire-structural-jobs",
-    up: up1312
+    up: up1322
   },
   {
     version: 130,
     name: "embedding-repair-state",
-    up: up1322,
+    up: up1332,
     artifacts: { tables: ["embedding_repair_budget", "embedding_repair_backoff"] }
   },
   {
     version: 131,
     name: "dreaming-evidence-consumption",
-    up: up1332,
+    up: up1342,
     artifacts: { tables: ["dreaming_evidence_consumption"] }
   },
   {
     version: 132,
     name: "observer-scoped-epistemic-assertions",
-    up: up1342,
+    up: up1352,
     artifacts: { tables: ["epistemic_assertions"] }
   },
   {
     version: 133,
     name: "dreaming-memory-head",
-    up: up1352,
+    up: up1362,
     artifacts: { tables: ["memory_head_revisions", "memory_head_entries", "memory_head_revision_entries"] }
   },
   {
     version: 134,
     name: "scope-memory-head-entries",
-    up: up1362,
+    up: up1372,
     artifacts: { tables: ["memory_head_entries"] }
   },
   {
     version: 135,
     name: "memory-head-publication",
-    up: up1372,
+    up: up1382,
     artifacts: { tables: ["memory_head_publications"] }
   },
   {
     version: 136,
     name: "memory-head-revisions",
-    up: up1382,
+    up: up1392,
     artifacts: { tables: ["memory_head_revisions"] }
   },
   {
     version: 137,
     name: "dreaming-head-manifest",
-    up: up1392,
+    up: up1402,
     artifacts: {
       columns: [
         { table: "dreaming_passes", column: "head_revision" },
@@ -36086,7 +36091,7 @@ var MIGRATIONS2 = [
   {
     version: 138,
     name: "bounded-status-projections",
-    up: up1402,
+    up: up1412,
     artifacts: {
       tables: ["transcript_capture_status", "memories_duplicate_hash_counts", "memories_diagnostics_state"]
     }
@@ -36094,31 +36099,31 @@ var MIGRATIONS2 = [
   {
     version: 139,
     name: "native-source-sync-state",
-    up: up1412,
+    up: up1422,
     artifacts: { tables: ["native_source_sync_state"] }
   },
   {
     version: 140,
     name: "transcript-recovery-frontier",
-    up: up1422,
+    up: up1432,
     artifacts: { tables: ["transcript_recovery_frontiers"] }
   },
   {
     version: 141,
     name: "source-sync-checkpoints",
-    up: up1432,
+    up: up1442,
     artifacts: { tables: ["source_sync_checkpoints"] }
   },
   {
     version: 142,
     name: "source-sync-frontier",
-    up: up1442,
+    up: up1452,
     artifacts: { columns: [{ table: "source_sync_checkpoints", column: "frontier" }] }
   },
   {
     version: 143,
     name: "embedding-index-progress",
-    up: up1452,
+    up: up1462,
     artifacts: {
       columns: [
         { table: "embedding_index_state", column: "migration_phase" },
@@ -36134,19 +36139,19 @@ var MIGRATIONS2 = [
   {
     version: 144,
     name: "memory-job-lease-token",
-    up: up1462,
+    up: up1472,
     artifacts: { columns: [{ table: "memory_jobs", column: "lease_token" }] }
   },
   {
     version: 145,
     name: "dreaming-evidence-reviews",
-    up: up1472,
+    up: up1482,
     artifacts: { tables: ["dreaming_evidence_reviews"] }
   },
   {
     version: 146,
     name: "source-transcript-import",
-    up: up1482,
+    up: up1492,
     artifacts: {
       tables: [
         "source_import_jobs",
@@ -36165,19 +36170,19 @@ var MIGRATIONS2 = [
   {
     version: 147,
     name: "source-import-replay-file-slots",
-    up: up1492,
+    up: up1502,
     artifacts: { tables: ["source_import_files"] }
   },
   {
     version: 148,
     name: "source-import-attempt-provenance",
-    up: up1502,
+    up: up1512,
     artifacts: { columns: [{ table: "source_import_record_attempts", column: "source_id" }] }
   },
   {
     version: 149,
     name: "transcript-import-state-machine",
-    up: up1512,
+    up: up1522,
     artifacts: {
       columns: [
         { table: "source_import_jobs", column: "duplicate_mode" },
@@ -36189,7 +36194,7 @@ var MIGRATIONS2 = [
   {
     version: 150,
     name: "memory-head-freshness",
-    up: up1522,
+    up: up1532,
     artifacts: {
       columns: [
         { table: "memory_md_heads", column: "is_current" },
@@ -36200,7 +36205,7 @@ var MIGRATIONS2 = [
   {
     version: 151,
     name: "transcript-import-bytes",
-    up: up153,
+    up: up154,
     artifacts: {
       tables: [
         "source_import_chunks",
@@ -36231,6 +36236,11 @@ var MIGRATIONS2 = [
     name: "memory-artifact-sha-index",
     up: up210,
     artifacts: { indexes: ["idx_memory_artifacts_agent_sha"] }
+  },
+  {
+    version: 153,
+    name: "retire-obsolete-invocation-ledger",
+    up: up310
   }
 ];
 var LATEST_SCHEMA_VERSION2 = MIGRATIONS2[MIGRATIONS2.length - 1]?.version ?? 0;
