@@ -18,7 +18,7 @@
 		"!dist/**/__tests__/**"
 	],
 	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
+		"build": "bun build src/index.ts --outdir dist --target node --external better-sqlite3 --external @napi-rs/keyring && bun run build:types",
 		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
 		"dev": "bun --watch src/index.ts",
 		"typecheck": "tsc --noEmit"
