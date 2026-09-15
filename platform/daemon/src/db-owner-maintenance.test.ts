@@ -7,14 +7,17 @@ import {
 	closeRegisteredDbOwnerMaintenance,
 	createDbOwnerMaintenance,
 	getDbOwnerMaintenance,
+	isDbOwnerMaintenanceClosing,
 	registerDbOwnerMaintenance,
 	runOwnerMaintenanceWithRetry,
+	submitRegisteredDbOwnerJob,
 	withRegisteredDbOwnerMaintenance,
 } from "./db-owner-maintenance";
 import type { DbOwnerMaintenance } from "./db-owner-maintenance";
 import { createDbOwnerClient, DbOwnerDeadlineError, DbOwnerDiedError, type DbOwnerClient } from "./db-owner-client";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { completeFtsStartupRecovery } from "./fts-startup-recovery";
+import { getDbOwner } from "./db-owner-runtime";
 
 function makeDatabase(memoryCount = 7): { readonly directory: string; readonly path: string } {
 	const directory = mkdtempSync(join(tmpdir(), "signet-fts-owner-"));
@@ -445,11 +448,13 @@ describe("registered DB owner maintenance", () => {
 
 		const closing = closeRegisteredDbOwnerMaintenance();
 		expect(getDbOwnerMaintenance()).toBeNull();
+		expect(isDbOwnerMaintenanceClosing()).toBe(true);
 		expect(() => registerDbOwnerMaintenance(maintenance)).toThrow("DB owner maintenance is closing");
 
 		release?.();
 		await closing;
 		expect(getDbOwnerMaintenance()).toBeNull();
+		expect(isDbOwnerMaintenanceClosing()).toBe(false);
 	});
 
 	test("requires explicit close before replacing the registered maintenance", async () => {
@@ -492,8 +497,65 @@ describe("registered DB owner maintenance", () => {
 		expect(closeCalls).toBe(0);
 
 		release?.();
-		expect(await operation).toBe(maintenance);
+		await expect(operation).resolves.toBe(maintenance);
 		await closing;
 		expect(closeCalls).toBe(1);
+	});
+
+	test("keeps a submitted owner job leased through worker completion", async () => {
+		let resolveResult: ((value: string) => void) | undefined;
+		let resolveMetrics: ((value: undefined) => void) | undefined;
+		let closeCalls = 0;
+		const owner = {
+			submit: () => ({
+				job: {} as never,
+				result: new Promise<string>((resolve) => {
+					resolveResult = resolve;
+				}),
+				metrics: new Promise<undefined>((resolve) => {
+					resolveMetrics = resolve;
+				}),
+				cancel: (): void => {},
+			}),
+		} as unknown as DbOwnerClient;
+		const maintenance = {
+			owner,
+			close: async (): Promise<void> => {
+				closeCalls += 1;
+			},
+		} as unknown as DbOwnerMaintenance;
+		registerDbOwnerMaintenance(maintenance);
+
+		const handle = submitRegisteredDbOwnerJob<string>(
+			owner,
+			{ kind: "query", statement: { sql: "SELECT 1", result: "get" } },
+			{ operation: "test.registered-submit", lane: "read", deadlineMs: 1_000 },
+		);
+		if (handle === null) throw new Error("registered owner job was not admitted");
+		const closing = closeRegisteredDbOwnerMaintenance();
+		resolveResult?.("ok");
+		await expect(handle.result).resolves.toBe("ok");
+		expect(closeCalls).toBe(0);
+
+		resolveMetrics?.(undefined);
+		await closing;
+		expect(closeCalls).toBe(1);
+	});
+
+	test("returns an owner proxy that fails closed after registry retirement", async () => {
+		const owner = {
+			health: () => ({ state: "ready" }),
+		} as unknown as DbOwnerClient;
+		const maintenance = {
+			owner,
+			close: async (): Promise<void> => {},
+		} as unknown as DbOwnerMaintenance;
+		registerDbOwnerMaintenance(maintenance);
+
+		const proxy = await getDbOwner();
+		expect(proxy).not.toBe(owner);
+		expect(proxy.health().state).toBe("ready");
+		await closeRegisteredDbOwnerMaintenance();
+		expect(() => proxy.health()).toThrow("DB owner maintenance is no longer registered");
 	});
 });

@@ -16,7 +16,11 @@ import { normalizeAndHashContent } from "./content-normalization";
 import type { IntegrityCheckStatus } from "./database-integrity";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { toFtsSchemaQueryDb } from "./db-accessor";
-import { getDbOwnerMaintenance, type DbOwnerMaintenance } from "./db-owner-maintenance";
+import {
+	isDbOwnerMaintenanceClosing,
+	type DbOwnerMaintenance,
+	withRegisteredDbOwnerMaintenance,
+} from "./db-owner-maintenance";
 import {
 	countChanges,
 	readLiveVecDimensions,
@@ -398,9 +402,24 @@ export async function checkFtsConsistency(
 	ctx: RepairContext,
 	limiter: RateLimiter,
 	repair = false,
-	ownerMaintenance: DbOwnerMaintenance | null = getDbOwnerMaintenance(),
+	ownerMaintenance?: DbOwnerMaintenance | null,
 ): Promise<RepairResult> {
 	const action = "checkFtsConsistency";
+	if (ownerMaintenance === undefined) {
+		const registeredResult = await withRegisteredDbOwnerMaintenance((maintenance) =>
+			checkFtsConsistency(accessor, cfg, ctx, limiter, repair, maintenance),
+		);
+		if (registeredResult !== undefined) return registeredResult;
+		if (isDbOwnerMaintenanceClosing()) {
+			return {
+				action,
+				success: false,
+				affected: 0,
+				message: "DB owner maintenance is closing",
+			};
+		}
+		return await checkFtsConsistency(accessor, cfg, ctx, limiter, repair, null);
+	}
 	const gate = checkRepairGate(cfg, ctx, limiter, action, cfg.repair.reembedCooldownMs, FTS_HOURLY_BUDGET);
 
 	if (!gate.allowed) {

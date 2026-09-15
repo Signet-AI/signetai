@@ -14,6 +14,7 @@ import {
 	type DbOwnerClient,
 	type DbOwnerHealth,
 	type DbOwnerJobHandle,
+	type DbOwnerSubmitOptions,
 } from "./db-owner-client";
 import { createDbOwnerClient } from "./db-owner-client";
 import type {
@@ -866,6 +867,10 @@ export function getDbOwnerMaintenance(): DbOwnerMaintenance | null {
 	return registeredMaintenance;
 }
 
+export function isDbOwnerMaintenanceClosing(): boolean {
+	return registeredMaintenanceClose !== null;
+}
+
 function acquireRegisteredDbOwnerMaintenance(): RegisteredDbOwnerMaintenanceLease | null {
 	const maintenance = registeredMaintenance;
 	if (maintenance === null || registeredMaintenanceClose !== null) return null;
@@ -906,6 +911,33 @@ export async function withRegisteredDbOwnerMaintenance<Result>(
 		return await callback(lease.maintenance);
 	} finally {
 		lease.release();
+	}
+}
+
+export function submitRegisteredDbOwnerJob<Result>(
+	expectedOwner: DbOwnerClient,
+	request: DbOwnerRequest,
+	options: DbOwnerSubmitOptions,
+): DbOwnerJobHandle<Result> | null {
+	const lease = acquireRegisteredDbOwnerMaintenance();
+	if (lease === null || lease.maintenance.owner !== expectedOwner) {
+		lease?.release();
+		return null;
+	}
+	try {
+		const handle = lease.maintenance.owner.submit<Result>(request, options);
+		let released = false;
+		const release = (): void => {
+			if (released) return;
+			released = true;
+			lease.release();
+		};
+		const completion = handle.metrics ?? handle.result;
+		void completion.then(release, release);
+		return handle;
+	} catch (error) {
+		lease.release();
+		throw error;
 	}
 }
 
