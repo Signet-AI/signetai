@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
 import type { Hono } from "hono";
 
-type ReviewTargetType = "skill" | "mcp";
+type ReviewTargetType = "skill";
 
 interface MarketplaceReview {
 	readonly id: string;
@@ -69,7 +69,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseTargetType(value: unknown): ReviewTargetType | null {
-	if (value === "skill" || value === "mcp") {
+	if (value === "skill") {
 		return value;
 	}
 	return null;

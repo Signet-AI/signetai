@@ -87,6 +87,7 @@ if (isBun) {
 				target: "node20",
 				external: EXTERNAL_NODE,
 				alias: ALIAS,
+				loader: { ".wasm": "file" },
 				format: "esm",
 				sourcemap: profileBuild ? "external" : false,
 				banner: {

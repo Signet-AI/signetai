@@ -12,7 +12,7 @@
 		}
 	},
 	"scripts": {
-		"build": "bun build src/index.ts --outfile dist/signet.mjs --target node --minify --format esm --external better-sqlite3",
+		"build": "bun build src/index.ts --outfile dist/signet.mjs --target node --minify --format esm --external better-sqlite3 --external @napi-rs/keyring",
 		"typecheck": "tsc --noEmit",
 		"dev": "bun --watch src/index.ts"
 	},

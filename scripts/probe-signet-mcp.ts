@@ -204,16 +204,6 @@ const TOOL_CALLS: readonly ToolCall[] = [
 		},
 	},
 	{
-		name: "mcp_server_list",
-		args: {},
-		validate: (result) => {
-			const r = unwrapToolResult(result) as { tools?: unknown[]; servers?: unknown[]; policy?: { mode?: string } };
-			if (!r || !Array.isArray(r.servers)) return "expected servers array in result";
-			if (r.policy && typeof r.policy !== "object") return "expected policy object in result";
-			return null;
-		},
-	},
-	{
 		name: "signet_code_status",
 		args: {},
 		validate: (result) => {

@@ -27,16 +27,7 @@ import {
 import type { RecallPayload, RecallRow } from "@signet/core";
 import { SignetClient } from "@signet/sdk";
 import { Type } from "@sinclair/typebox";
-import type {
-	OpenClawPluginApi,
-	OpenClawToolResult,
-	PluginHookAfterCompactionEvent,
-	PluginHookAgentContext,
-	PluginHookAgentEndEvent,
-	PluginHookBeforeAgentStartEvent,
-	PluginHookBeforeCompactionEvent,
-	PluginHookBeforePromptBuildEvent,
-} from "./openclaw-types.js";
+import type { OpenClawPluginApi, OpenClawToolResult } from "./openclaw-types.js";
 
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:3850";
 const RUNTIME_PATH = "plugin" as const;
@@ -297,35 +288,6 @@ interface MemoryRecord {
 	who: string | null;
 	created_at: string;
 	updated_at: string;
-}
-
-interface MarketplaceToolEntry {
-	id: string;
-	serverId: string;
-	serverName: string;
-	toolName: string;
-	description: string;
-	readOnly: boolean;
-	inputSchema: unknown;
-}
-
-interface MarketplaceToolCatalog {
-	count: number;
-	tools: MarketplaceToolEntry[];
-	servers: Array<{
-		serverId: string;
-		serverName: string;
-		ok: boolean;
-		toolCount: number;
-		error?: string;
-	}>;
-}
-
-interface MarketplaceContextOptions {
-	readonly daemonUrl?: string;
-	readonly harness?: string;
-	readonly workspace?: string;
-	readonly channel?: string;
 }
 
 // ============================================================================
@@ -805,46 +767,6 @@ export async function memoryForget(
 		},
 	);
 	return result?.success === true;
-}
-
-export async function marketplaceToolList(
-	options: MarketplaceContextOptions & { refresh?: boolean } = {},
-): Promise<MarketplaceToolCatalog | null> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const params = new URLSearchParams();
-	if (options.refresh) params.set("refresh", "1");
-	if (options.harness) params.set("harness", options.harness);
-	if (options.workspace) params.set("workspace", options.workspace);
-	if (options.channel) params.set("channel", options.channel);
-	const query = params.toString();
-	const path = `/api/marketplace/mcp/tools${query.length > 0 ? `?${query}` : ""}`;
-	return daemonFetch<MarketplaceToolCatalog>(daemonUrl, path, {
-		timeout: READ_TIMEOUT,
-	});
-}
-
-export async function marketplaceToolCall(
-	serverId: string,
-	toolName: string,
-	args: Record<string, unknown>,
-	options: MarketplaceContextOptions = {},
-): Promise<{ success: boolean; result?: unknown; error?: string } | null> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const params = new URLSearchParams();
-	if (options.harness) params.set("harness", options.harness);
-	if (options.workspace) params.set("workspace", options.workspace);
-	if (options.channel) params.set("channel", options.channel);
-	const query = params.toString();
-	const path = `/api/marketplace/mcp/call${query.length > 0 ? `?${query}` : ""}`;
-	return daemonFetch<{ success: boolean; result?: unknown; error?: string }>(daemonUrl, path, {
-		method: "POST",
-		body: {
-			serverId,
-			toolName,
-			args,
-		},
-		timeout: WRITE_TIMEOUT,
-	});
 }
 
 // ============================================================================
@@ -1925,98 +1847,9 @@ const signetPlugin = {
 				{ name: "memory_forget" },
 			);
 
-			api.registerTool(
-				{
-					name: "mcp_server_list",
-					label: "Tool Server List",
-					description: "List installed external Tool Servers (MCP) and discover routed tools.",
-					parameters: Type.Object({
-						refresh: Type.Optional(
-							Type.Boolean({
-								description: "Refresh live tool catalogs",
-							}),
-						),
-					}),
-					async execute(_toolCallId, params) {
-						const refresh = (params as { refresh?: boolean }).refresh;
-						try {
-							const result = await marketplaceToolList({
-								...opts,
-								refresh,
-							});
-							if (!result) {
-								return textResult("Failed to load Tool Server catalog.", {
-									error: "daemon unavailable",
-								});
-							}
-
-							const lines = result.tools
-								.slice(0, 30)
-								.map((tool) => `${tool.serverId}:${tool.toolName} - ${tool.description}`);
-
-							return textResult(
-								result.tools.length > 0
-									? `Available routed tools (${result.tools.length}):\n\n${lines.join("\n")}`
-									: "No routed tool server tools are currently available.",
-								{
-									count: result.count,
-									servers: result.servers,
-									tools: result.tools,
-								},
-							);
-						} catch (err) {
-							return textResult(`Tool server list failed: ${String(err)}`, {
-								error: String(err),
-							});
-						}
-					},
-				},
-				{ name: "mcp_server_list" },
-			);
-
-			api.registerTool(
-				{
-					name: "mcp_server_call",
-					label: "Tool Server Call",
-					description: "Invoke a routed tool from an installed external Tool Server (MCP).",
-					parameters: Type.Object({
-						server_id: Type.String({
-							description: "Installed Tool Server id",
-						}),
-						tool: Type.String({
-							description: "Tool name exposed by that server",
-						}),
-						args: Type.Optional(Type.Object({}, { additionalProperties: true })),
-					}),
-					async execute(_toolCallId, params) {
-						const payload = params as {
-							server_id: string;
-							tool: string;
-							args?: Record<string, unknown>;
-						};
-						try {
-							const result = await marketplaceToolCall(payload.server_id, payload.tool, payload.args ?? {}, opts);
-							if (!result?.success) {
-								return textResult(`Tool server call failed: ${result?.error ?? "unknown error"}`, {
-									error: result?.error ?? "unknown",
-								});
-							}
-
-							const text = typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2);
-							return textResult(text, { result: result.result });
-						} catch (err) {
-							return textResult(`Tool server call failed: ${String(err)}`, {
-								error: String(err),
-							});
-						}
-					},
-				},
-				{ name: "mcp_server_call" },
-			);
-
 			// OpenClaw uses this pass to build the tool registry exposed to a
 			// harness such as Codex. Static tools are enough; hooks, services,
-			// timers, marketplace refreshes, and daemon probes belong to full mode.
+			// timers and daemon probes belong to full mode.
 			if (mode === "tool-discovery") return;
 
 			// ==================================================================

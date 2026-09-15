@@ -60,12 +60,6 @@ function getPrependContext(value: unknown): string | undefined {
 	return typeof value.prependContext === "string" ? value.prependContext : undefined;
 }
 
-async function flushIntervals(): Promise<void> {
-	for (const callback of intervalCallbacks) {
-		await callback();
-	}
-}
-
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
 		status,
@@ -265,34 +259,6 @@ beforeEach(() => {
 							},
 						],
 						count: 1,
-					});
-				case "/api/marketplace/mcp/tools":
-					return jsonResponse({
-						count: 2,
-						servers: [{ id: "server-a", name: "Server A" }],
-						tools: [
-							{
-								serverId: "server-a",
-								serverName: "Server A",
-								toolName: "alpha",
-								description: "Alpha tool",
-							},
-							{
-								serverId: "server-a",
-								serverName: "Server A",
-								toolName: "beta",
-								description: "Beta tool",
-							},
-						],
-					});
-				case "/api/marketplace/mcp/policy":
-					return jsonResponse({
-						policy: {
-							mode: "hybrid",
-							maxExpandedTools: 12,
-							maxSearchResults: 20,
-							updatedAt: "2026-03-08T00:00:00Z",
-						},
 					});
 				default:
 					return jsonResponse({ error: "not found" }, 404);
@@ -1823,21 +1789,6 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		// Still 1 hit — no spam from the success path
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
-
-	it("keeps marketplace access behind the manifest-declared static tools", async () => {
-		const { api, tools } = createMockApi();
-		signetPlugin.register(api);
-		await Bun.sleep(0);
-
-		expect(tools.some((tool) => tool.name.startsWith("signet_server_a_"))).toBeFalse();
-		expect(getHits("/api/marketplace/mcp/tools")).toBe(0);
-		expect(getHits("/api/marketplace/mcp/policy")).toBe(0);
-
-		const listTool = tools.find((tool) => tool.name === "mcp_server_list");
-		expect(listTool).toBeDefined();
-		await listTool?.execute("tool-call-1", {});
-		expect(getHits("/api/marketplace/mcp/tools")).toBe(1);
-	});
 });
 
 describe("registration guard (#422)", () => {
@@ -1874,8 +1825,6 @@ describe("registration guard (#422)", () => {
 			"memory_list",
 			"memory_modify",
 			"memory_forget",
-			"mcp_server_list",
-			"mcp_server_call",
 		]);
 		expect(memoryCapabilities).toHaveLength(0);
 		expect(hooks.size).toBe(0);

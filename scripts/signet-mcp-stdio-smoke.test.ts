@@ -22,6 +22,7 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..");
 const wrapperPackageJsonPath = join(root, "dist", "signetai", "package.json");
 const stdioBundlePath = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
+const tokenizerWasmPath = join(root, "dist", "signetai", "dist", "tiktoken_bg.wasm");
 const runningChildren: ChildProcess[] = [];
 
 afterEach(() => {
@@ -105,6 +106,9 @@ describe("signet-mcp stdio server (regression guard for issue #826)", () => {
 		};
 		expect(wrapper.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
 		expect(wrapper.files ?? []).toContain("dist/mcp-stdio.js");
+		// The bundle must ship its tokenizer wasm sibling because the client
+		// runs without resolving workspace dependencies.
+		expect(wrapper.files ?? []).toContain("dist/tiktoken_bg.wasm");
 		// The pre-#816 forwarder shim must not be in the tarball.
 		expect(wrapper.files ?? []).not.toContain("bin/signet-mcp.js");
 	});
@@ -116,6 +120,7 @@ describe("signet-mcp stdio server (regression guard for issue #826)", () => {
 		}
 		const stat = statSync(stdioBundlePath);
 		expect(stat.isFile()).toBe(true);
+		expect(existsSync(tokenizerWasmPath)).toBe(true);
 		// Bundle must have a Node shebang so `signet-mcp` runs directly when
 		// the package manager installs the bin symlink with default perms.
 		const head = readFileSync(stdioBundlePath, { encoding: "utf-8", flag: "r" }).slice(0, 64);
@@ -179,6 +184,8 @@ describe("signet-mcp stdio server (regression guard for issue #826)", () => {
 			const isolatedDir = mkdtempSync(join(tmpdir(), "signet-mcp-node-smoke-"));
 			const isolatedBundlePath = join(isolatedDir, "mcp-stdio.js");
 			copyFileSync(stdioBundlePath, isolatedBundlePath);
+			copyFileSync(tokenizerWasmPath, join(isolatedDir, "tiktoken_bg.wasm"));
+			copyFileSync(wrapperPackageJsonPath, join(isolatedDir, "package.json"));
 			const env = { ...process.env };
 			delete env.NODE_PATH;
 

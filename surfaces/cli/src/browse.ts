@@ -38,7 +38,7 @@ interface CDPMessage {
 type EventListener = (params: Record<string, unknown>) => void;
 
 // ============================================================================
-// SignetOSEvent — matches the event bus envelope from the spec
+// Browser event envelope
 // ============================================================================
 
 interface BrowserNavigatePayload {
@@ -95,7 +95,7 @@ type BrowserEventPayload =
 	| BrowserCheckoutPayload
 	| BrowserLoginPayload;
 
-interface SignetOSEvent {
+interface BrowserEvent {
 	id: string;
 	source: string;
 	type: string;
@@ -108,9 +108,9 @@ function makeEventId(): string {
 }
 
 // ── Event Transport Abstraction ─────────────────────────────────────────────
-// Default: stdout. Phase 3 (event bus) swaps this to EventEmitter/Redis
-// without touching any of the emit callsites.
-type EventTransport = (event: SignetOSEvent) => void;
+// Default: stdout. A future shared transport can replace this without
+// touching any of the emit callsites.
+type EventTransport = (event: BrowserEvent) => void;
 
 let activeTransport: EventTransport = (event) => {
 	process.stdout.write(JSON.stringify(event) + "\n");
@@ -122,7 +122,7 @@ export function setEventTransport(transport: EventTransport): void {
 }
 
 function emitEvent(type: string, payload: BrowserEventPayload) {
-	const event: SignetOSEvent = {
+	const event: BrowserEvent = {
 		id: makeEventId(),
 		source: "browser",
 		type,

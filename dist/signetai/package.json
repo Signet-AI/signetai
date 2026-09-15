@@ -12,6 +12,7 @@
     "bin/native-platforms.js",
     "bin/signet.js",
     "dist/mcp-stdio.js",
+    "dist/tiktoken_bg.wasm",
     "runtime",
     "native-manifest.json",
     "scripts",

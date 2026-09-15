@@ -115,8 +115,8 @@ describe("marketplace reviews routes", () => {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
-				targetType: "mcp",
-				targetId: "mcp/failing",
+				targetType: "skill",
+				targetId: "skills/failing",
 				displayName: "avery",
 				rating: 3,
 				title: "Slow",

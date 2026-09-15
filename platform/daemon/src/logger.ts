@@ -43,13 +43,6 @@ export type LogCategory =
 	| "session-tracker" // Runtime-path session ownership + bypass TTL tracking
 	| "system" // System events
 	| "update" // Auto-update cycle
-	| "probe" // MCP server auto-probe (Signet OS)
-	| "event-bus" // Signet OS event bus
-	| "event-bridge" // Browser-to-event-bus bridge
-	| "widget" // Widget HTML generation (Signet OS)
-	| "os-chat" // OS chat agent (natural language → MCP tools)
-	| "os-agent" // OS page-agent (visual GUI automation)
-	| "mcp-analytics" // MCP invocation analytics
 	| "config" // Configuration loading and resolution
 	| "config-migration" // Legacy config migration on startup
 	| "diagnostics" // Runtime diagnostics and health reporting
@@ -59,7 +52,6 @@ export type LogCategory =
 	| "connectors" // Connector management
 	| "documents" // Document ingestion
 	| "projection" // UMAP projection computation
-	| "os" // Signet OS app tray and system operations
 	| "changelog" // Changelog, roadmap, and README serving
 	| "auth" // Authentication and authorization
 	| "reconciler" // Skill filesystem reconciler
