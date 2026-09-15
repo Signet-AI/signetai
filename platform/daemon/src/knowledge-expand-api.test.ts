@@ -124,6 +124,10 @@ describe("knowledge expand API", () => {
 		expect(expandSource).toContain("resolveFocalEntitiesViaOwner");
 		expect(expandSource).toContain("traverseKnowledgeGraphViaOwner");
 		expect(expandSource).toContain("expandKnowledgeGraphViaOwner");
+		const exactResolutionStart = expandSource.indexOf("resolveNamedEntity");
+		const exactResolution = expandSource.slice(exactResolutionStart, exactResolutionStart + 240);
+		expect(exactResolution).toContain("deadlineAt: traversalDeadlineAt");
+
 		expect(expandSource).not.toMatch(/\bresolveFocalEntities\s*\(/);
 		expect(expandSource).not.toMatch(/\btraverseKnowledgeGraph\s*\(/);
 		expect(expandSource).not.toContain("withReadDbAsync");

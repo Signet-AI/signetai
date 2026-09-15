@@ -384,6 +384,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			const resolved = await resolveNamedEntity(getDbAccessor(), {
 				agentId,
 				name: entityName,
+				deadlineAt: traversalDeadlineAt,
 			});
 			const focal: Awaited<ReturnType<typeof resolveFocalEntitiesViaOwner>> =
 				resolved !== null
