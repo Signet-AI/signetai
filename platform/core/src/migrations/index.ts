@@ -2,6 +2,7 @@ import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
 import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
 import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
 import { up as sourceSyncFailures } from "./155-source-sync-failures";
+import { up as retireObsoleteInvocationLedger } from "./159-retire-obsolete-invocation-ledger";
 
 import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1447,6 +1448,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "dreaming-candidate-scan-index",
 		up: dreamingCandidateScanIndex,
 		artifacts: { indexes: ["idx_memories_agent_kind"] },
+	},
+	{
+		version: 159,
+		name: "retire-obsolete-invocation-ledger",
+		up: retireObsoleteInvocationLedger,
 	},
 ];
 function checksum(m: Migration): string {

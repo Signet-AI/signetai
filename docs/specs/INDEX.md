@@ -49,7 +49,6 @@ flowchart TD
     SNH[Signet Native Harness]
     RRP[Remember/Recall Skill Parity]
     DMS[Deep Memory Search]
-    MCB[MCP CLI Bridge + Usage Analytics]
     GMM[Git Marketplace Monorepo]
     ASL[Adaptive Skill Lifecycle]
     CIR[Cryptographic Identity Roadmap]
@@ -115,7 +114,6 @@ flowchart TD
   PM --> RRP
   DP --> DMS
   SSF --> DMS
-  SR --> MCB
   PAF --> GMM
   PM --> ASL
   PAF --> ASL
@@ -698,11 +696,8 @@ Phase ordering based on hard dependencies and integration contracts.
   - extend prospective indexing with hint embeddings and semantic recall over predicted future cues
 - **Deep Memory Search** (`deep-memory-search`)
   - optional multi-agent LLM memory search path (not primary retrieval)
-- **MCP CLI Bridge and Usage Analytics** (`mcp-cli-bridge-and-usage-analytics`)
-  - expose installed MCP servers as Signet CLI commands and track usage in dashboard
-  - reference inspiration: MC Porter
 - **Overview Usage Analytics** (`overview-usage-analytics`)
-  - make the home overview card reflect real MCP server and skill usage
+  - make the home overview card reflect real skill usage
   - reuse analytics ledgers instead of catalog popularity
 - **Git Marketplace Monorepo** (`git-marketplace-monorepo`)
   - GitHub-authenticated PR workflow for skills/servers and JSON review artifacts
@@ -814,9 +809,8 @@ Legend:
 | `signet-native-harness` | planning | `docs/specs/planning/signet-native-harness.md` | `distributed-harness-orchestration`, `signet-runtime` | - | Stub: first-party harness track (Hermes-agent informed) |
 | `remember-recall-skill-parity` | planning | `docs/specs/planning/remember-recall-skill-parity.md` | `procedural-memory-plan` | - | Stub: /remember and /recall architecture/schema parity |
 | `deep-memory-search` | planning | `docs/specs/planning/deep-memory-search.md` | `desire-paths-epic`, `ssm-foundation-evaluation` | - | Stub: optional supermemory-style deep memory escalation |
-| `mcp-cli-bridge-and-usage-analytics` | approved | `docs/specs/approved/mcp-cli-bridge-and-usage-analytics.md` | `signet-runtime` | - | Phase 1: CLI bridge, invocation tracking, analytics API, dashboard panel |
-| `overview-usage-analytics` | approved | `docs/specs/approved/overview-usage-analytics.md` | `mcp-cli-bridge-and-usage-analytics`, `procedural-memory-plan` | - | Home overview card ranks most-used MCP servers and skills from real analytics instead of catalog popularity |
-| `git-marketplace-monorepo` | planning | `docs/specs/planning/git-marketplace-monorepo.md` | `predictor-agent-feedback` | - | Stub: GitHub-authenticated PR marketplace for skills and MCP servers |
+| `overview-usage-analytics` | approved | `docs/specs/approved/overview-usage-analytics.md` | `procedural-memory-plan` | - | Home overview card ranks most-used skills from real analytics instead of catalog popularity |
+| `git-marketplace-monorepo` | planning | `docs/specs/planning/git-marketplace-monorepo.md` | `predictor-agent-feedback` | - | Stub: GitHub-authenticated PR marketplace for skills and JSON review artifacts |
 | `adaptive-skill-lifecycle` | planning | `docs/specs/planning/adaptive-skill-lifecycle.md` | `procedural-memory-plan`, `predictor-agent-feedback` | - | Stub: passive continuous skill creation/maintenance loop |
 | `marketplace-official-skills` | planning | `docs/specs/planning/marketplace-official-skills.md` | `procedural-memory-plan` | - | Stub: feature Signet official skills prominently in the dashboard marketplace |
 | `cryptographic-identity-roadmap` | planning | `docs/specs/planning/cryptographic-identity-roadmap.md` | `multi-agent-support` | - | Stub: signed identity and artifact trust roadmap |

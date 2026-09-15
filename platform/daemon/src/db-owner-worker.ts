@@ -952,8 +952,6 @@ export function runDbOwnerWorker(): void {
 						return router.createWorkloadProvider("session_synthesis", agentId);
 					case "aggregateRecall":
 						return router.createWorkloadProvider("aggregate_recall", agentId);
-					case "widgetGeneration":
-						return router.createWorkloadProvider("widget_generation", agentId);
 					case "repair":
 						return router.createWorkloadProvider("repair", agentId);
 					case "interactive":

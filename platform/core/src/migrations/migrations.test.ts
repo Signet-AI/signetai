@@ -409,7 +409,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(158);
+			expect(applied.version).toBe(159);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -1831,28 +1831,29 @@ describe("migration framework", () => {
 		expect(oldRow?.content_hash).toBeNull();
 	});
 
-	test("mcp_invocations table exists with expected columns after migration 052", () => {
+	test("retired external-tool invocation ledger is absent after current migrations", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
 		const tables = db
 			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_invocations'")
-			.all() as Array<{
-			name: string;
-		}>;
-		expect(tables.length).toBe(1);
+			.all() as Array<{ name: string }>;
+		expect(tables).toHaveLength(0);
+	});
 
-		const cols = db.query("PRAGMA table_info(mcp_invocations)").all() as Array<{ name: string }>;
-		const colNames = cols.map((c) => c.name);
-		expect(colNames).toContain("id");
-		expect(colNames).toContain("server_id");
-		expect(colNames).toContain("tool_name");
-		expect(colNames).toContain("agent_id");
-		expect(colNames).toContain("source");
-		expect(colNames).toContain("latency_ms");
-		expect(colNames).toContain("success");
-		expect(colNames).toContain("error_text");
-		expect(colNames).toContain("created_at");
+	test("migration 159 removes the invocation ledger from an upgraded workspace", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.prepare("DELETE FROM schema_migrations WHERE version = 159").run();
+		db.prepare("DELETE FROM schema_migrations_audit WHERE version = 159").run();
+		db.exec("CREATE TABLE mcp_invocations (id TEXT PRIMARY KEY)");
+
+		runMigrations(db);
+
+		const tables = db
+			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_invocations'")
+			.all() as Array<{ name: string }>;
+		expect(tables).toHaveLength(0);
 	});
 
 	test("skill_invocations table exists with expected columns after migration 053", () => {

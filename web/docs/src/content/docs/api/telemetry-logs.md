@@ -565,8 +565,6 @@ See the [MCP server reference](/mcp/) for full tool documentation.
 MCP admission is bounded to 8 in-flight requests. An admitted request whose
 JSON body exceeds 512 KiB returns HTTP 413; a request arriving at a saturated
 admission cap returns HTTP 503 with a JSON-RPC error and should be retried.
-Marketplace proxy refreshes are single-flight per authorization and scope
-context for 30 seconds.
 
 **GET /mcp** — Open an SSE stream for server-initiated notifications.
 
