@@ -63,9 +63,11 @@ describe("context budget helpers", () => {
 	});
 
 	it("does not let multibyte text bypass the hard token budget", () => {
-		const result = applyTokenBudget("界".repeat(20), 5);
+		for (const text of ["界".repeat(20), "😀".repeat(20)]) {
+			const result = applyTokenBudget(text, 5);
 
-		expect(countTokens(result)).toBeLessThanOrEqual(5);
+			expect(countTokens(result)).toBeLessThanOrEqual(5);
+		}
 	});
 
 	it("truncates injected context without exceeding the token budget", () => {
