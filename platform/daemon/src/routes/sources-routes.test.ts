@@ -20,6 +20,8 @@ import type {
 	NativeMemorySyncResult,
 } from "../native-memory-sources";
 import { indexSourceArtifactStructure } from "../source-artifact-graph";
+import type { importSourceSnapshot } from "../source-snapshots";
+import { beginSourceDeletion, beginSourceMutation, isSourceOperationInFlight } from "../source-deletion-lock";
 import {
 	beginSourceIndexJob,
 	clearSourceIndexProgressForTests,
@@ -85,6 +87,7 @@ describe("Sources routes", () => {
 			pausedSync?: boolean;
 			pausedBeforeScan?: boolean;
 			recordIndexOperation?: (input: SourceIndexTelemetryInput) => Promise<void>;
+			importSourceSnapshot?: typeof importSourceSnapshot;
 			onPurge?: () => void;
 			onSyncStart?: () => void;
 			pickerExecFile?: (
@@ -160,6 +163,7 @@ describe("Sources routes", () => {
 			pickerPlatform: options.pickerPlatform,
 			platform: options.platform,
 			recordIndexOperation: options.recordIndexOperation,
+			importSourceSnapshot: options.importSourceSnapshot,
 		});
 		return app;
 	}
@@ -936,15 +940,70 @@ describe("Sources routes", () => {
 		).not.toThrow();
 		expect(runtimePurges).toBe(1);
 
-		// The startup sequence runs the purge after DB init.
+		// Startup cleanup must defer while the route still owns the source
+		// deletion lease for its in-flight index finalizer.
 		await cleanupSourceDeletionTombstones(dir, () => {
 			startupPurges++;
 			return 1;
 		});
-		expect(startupPurges).toBe(1);
+		expect(startupPurges).toBe(0);
 
 		releaseScan();
 		await waitFor(() => runtimePurges === 2);
+	});
+
+	it("serializes startup tombstone cleanup against source reconnect", async () => {
+		const added = addObsidianSource({ root: vault, name: "Startup lock vault" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		const removed = removeSourceIfGeneration(added.source.id, added.source.generation, dir);
+		expect(removed.ok && removed.removed).toBe(true);
+		const tombstonePath = join(dir, ".daemon", "source-deletion-tombstones.json");
+		mkdirSync(join(dir, ".daemon"), { recursive: true });
+		writeFileSync(
+			tombstonePath,
+			`${JSON.stringify(
+				[
+					{
+						id: "tombstone-startup-lock",
+						source: added.source,
+						agentId: "default",
+						deletedAt: new Date().toISOString(),
+					},
+				],
+				null,
+				2,
+			)}\n`,
+		);
+
+		let releasePurge = () => {};
+		let resolvePurgeStarted!: () => void;
+		const purgeStarted = new Promise<void>((resolve) => {
+			resolvePurgeStarted = resolve;
+		});
+		const purgeGate = new Promise<void>((resolve) => {
+			releasePurge = resolve;
+		});
+		const cleanup = cleanupSourceDeletionTombstones(dir, async () => {
+			resolvePurgeStarted();
+			await purgeGate;
+			return 1;
+		});
+		try {
+			await purgeStarted;
+			const reconnect = await makeApp().request("/api/sources/obsidian", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ path: vault, name: "Startup lock vault" }),
+			});
+			expect(reconnect.status).toBe(409);
+			releasePurge();
+			await cleanup;
+			expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(0);
+		} finally {
+			releasePurge();
+			await cleanup;
+		}
 	});
 
 	it("defers a failed tombstone purge instead of crashing startup", async () => {
@@ -1231,6 +1290,97 @@ describe("Sources routes", () => {
 		);
 	});
 
+	it("serializes snapshot import against source deletion", async () => {
+		const added = addObsidianSource({ name: "Snapshot race", root: vault }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		let resolveStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			resolveStarted = resolve;
+		});
+		let releaseSnapshot!: () => void;
+		const snapshotGate = new Promise<void>((resolve) => {
+			releaseSnapshot = resolve;
+		});
+		const importSnapshot: typeof importSourceSnapshot = async () => {
+			resolveStarted();
+			await snapshotGate;
+			return { ok: true, imported: 0, skipped: { localDiscordArtifacts: 0 } };
+		};
+		const app = makeApp({ importSourceSnapshot: importSnapshot });
+		const importRequest = app.request(`/api/sources/${encodeURIComponent(added.source.id)}/snapshot/import`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: "{}",
+		});
+		await started;
+
+		const deleteWhileImporting = await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, {
+			method: "DELETE",
+		});
+		expect(deleteWhileImporting.status).toBe(409);
+
+		releaseSnapshot();
+		expect((await importRequest).status).toBe(200);
+		expect(
+			(await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, { method: "DELETE" })).status,
+		).toBe(200);
+	});
+
+	it("scopes source operation leases by source id", () => {
+		const releaseDeletion = beginSourceDeletion("source-a");
+		expect(releaseDeletion).toBeTypeOf("function");
+		expect(isSourceOperationInFlight("source-a")).toBe(true);
+		expect(isSourceOperationInFlight("source-b")).toBe(false);
+		expect(beginSourceMutation("source-a")).toBeUndefined();
+		const releaseOtherMutation = beginSourceMutation("source-b");
+		expect(releaseOtherMutation).toBeTypeOf("function");
+		releaseOtherMutation?.();
+		releaseDeletion?.();
+	});
+	it("canonicalizes Obsidian reconnect identity before locking", async () => {
+		const added = addObsidianSource({ name: "Canonical source", root: vault }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		const releaseDeletion = beginSourceDeletion(added.source.id);
+		expect(releaseDeletion).toBeTypeOf("function");
+		try {
+			const reconnect = await makeApp().request("/api/sources/obsidian", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ path: `  ${vault}  `, name: "Canonical source" }),
+			});
+			expect(reconnect.status).toBe(409);
+			expect(await reconnect.json()).toEqual({ error: "Source operation is in progress; retry after it completes" });
+		} finally {
+			releaseDeletion?.();
+		}
+	});
+	it("matches core's Obsidian identity for tilde-prefixed paths", async () => {
+		const previousCwd = process.cwd();
+		const tempCwd = mkdtempSync(join(tmpdir(), "signet-sources-cwd-"));
+		mkdirSync(join(tempCwd, "~", "vault"), { recursive: true });
+		let releaseDeletion: (() => void) | undefined;
+		try {
+			process.chdir(tempCwd);
+			const added = addObsidianSource({ name: "Tilde source", root: "~/vault" }, dir);
+			expect(added.ok).toBe(true);
+			if (added.ok === false) throw new Error(added.error);
+			releaseDeletion = beginSourceDeletion(added.source.id);
+			expect(releaseDeletion).toBeTypeOf("function");
+			const reconnect = await makeApp().request("/api/sources/obsidian", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ path: "~/vault", name: "Tilde source" }),
+			});
+			expect(reconnect.status).toBe(409);
+		} finally {
+			releaseDeletion?.();
+			process.chdir(previousCwd);
+			rmSync(tempCwd, { recursive: true, force: true });
+		}
+	});
 	it("imports source snapshots through existing source artifact provenance", async () => {
 		const added = addDiscordSource(
 			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", name: "Import Discord" },
@@ -1954,7 +2104,7 @@ describe("Sources routes", () => {
 			body: JSON.stringify({ path: vault, name: "Reconnected Vault" }),
 		});
 		expect(reconnect.status).toBe(409);
-		expect(await reconnect.json()).toEqual({ error: "Source deletion is in progress; retry after it completes" });
+		expect(await reconnect.json()).toEqual({ error: "Source operation is in progress; retry after it completes" });
 
 		releasePurge();
 		expect((await deletion).status).toBe(200);

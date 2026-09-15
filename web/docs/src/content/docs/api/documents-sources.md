@@ -639,9 +639,11 @@ from `GET /api/sources`, and the route returns `202` with `pending: true`:
 ```
 
 If a canceled source-index run is still finishing, a completed deletion returns
-`cleanupPending: true` while the finalizer completes in the background. A new
-source mutation is rejected with `409` until the active deletion phase ends; a
-reconnected source generation is not purged by the old canceled run.
+`cleanupPending: true` while the finalizer completes in the background. A source
+mutation targeting that same source, including snapshot import or reconnect, is
+rejected with `409` until the active deletion phase ends; unrelated sources can
+continue to mutate. A reconnected source generation is not purged by the old
+canceled run.
 
 Retry the same `DELETE` request after the failed dependency is available, or
 restart the daemon to run deferred tombstone cleanup. If the source config has
