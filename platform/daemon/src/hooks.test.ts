@@ -27,7 +27,7 @@ const transcriptAudit = await import("./transcript-audit");
 const { deriveSessionEndFallbackId } = await import("./session-end-recovery");
 const { upsertSessionTranscript } = await import("./session-transcripts");
 const { buildSignetSystemPrompt } = await import("./session-start-format");
-const { resetTokenizerStats, tokenizerStats } = await import("./pipeline/tokenizer");
+const { countTokens, resetTokenizerStats, tokenizerStats } = await import("./pipeline/tokenizer");
 const { resetSessionEndTelemetry } = await import("./session-end-state");
 const { createTelemetryCollector, setActiveTelemetry } = await import("./telemetry");
 const {
@@ -766,6 +766,41 @@ describe("handleSessionStart", () => {
 		expect(result.memories).toEqual([]);
 		expect(typeof result.inject).toBe("string");
 		expect(result.inject).not.toContain("Current Date & Time");
+	});
+
+	test.serial("enforces maxInjectTokens across the complete assembled aggregate", async () => {
+		writeAgentYaml(`
+ hooks:
+   sessionStart:
+     maxInjectTokens: 1
+`);
+		createMemoryDb([{ content: "This record must not bypass the aggregate budget.", importance: 0.9 }]);
+
+		const result = await handleSessionStart({ harness: "test" });
+
+		expect(result.inject).toBe("");
+		expect(result.dynamicContext).toBe("");
+		expect(result.memories).toEqual([]);
+	});
+
+	test.serial("keeps the final aggregate within a configured token budget", async () => {
+		writeAgentYaml(`
+ hooks:
+   sessionStart:
+     maxInjectTokens: 40
+`);
+		createMemoryDb([
+			{ content: "A continuity record that should be omitted when the aggregate is tight.", importance: 0.9 },
+		]);
+
+		const result = await handleSessionStart({ harness: "test" });
+		const rawAggregate = [result.stableSystemPrompt, result.dynamicContext]
+			.filter((part) => part.trim().length > 0)
+			.join("\n");
+
+		expect(countTokens(result.inject)).toBeGreaterThan(0);
+		expect(countTokens(rawAggregate)).toBeLessThanOrEqual(40);
+		expect(result.memories).toEqual([]);
 	});
 
 	test.serial("keeps session-start context free of wall-clock metadata", async () => {

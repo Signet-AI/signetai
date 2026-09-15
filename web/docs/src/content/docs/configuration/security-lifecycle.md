@@ -171,7 +171,7 @@ harness session:
 | `includeIdentity` | `true` | Include agent name and description |
 | `includeRecentContext` | `true` | Include `MEMORY.md` content |
 | `recencyBias` | `0.7` | Weight toward recent vs. important memories (0-1) |
-| `maxInjectTokens` | `12000` | Maximum session-start injection budget after context assembly |
+| `maxInjectTokens` | `12000` | Hard maximum for the complete session-start `inject` aggregate after assembly |
 
 Context profiles let a workspace set different session-start and
 prompt-submit budgets per harness. A profile can override

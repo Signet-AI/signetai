@@ -679,6 +679,17 @@ async function getRecentMemories(
 // Hook Handlers
 // ============================================================================
 
+function boundSessionStartAggregate(stableSystemPrompt: string, rawInject: string, maxTokens: number): string {
+	const boundedInject = applyTokenBudget(rawInject, maxTokens);
+	if (boundedInject === stableSystemPrompt || boundedInject.startsWith(`${stableSystemPrompt}\n`)) {
+		return boundedInject;
+	}
+	// Do not expose a partial capability declaration when the configured
+	// budget cannot carry the stable prefix. The split stable field remains
+	// available to clients that can negotiate it separately.
+	return "";
+}
+
 export async function handleSessionStart(req: SessionStartRequest): Promise<SessionStartResponse> {
 	const start = Date.now();
 	const agentId = resolveAgentId(req);
@@ -690,6 +701,22 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const managesIdentity = identityModeManagesFiles(identityMode);
 	const includeIdentity = identityModeReadsFiles(identityMode) && config.includeIdentity !== false;
 	const stableSystemPrompt = buildSignetSystemPrompt();
+	const rawTokenBudget =
+		config.maxInjectTokens ??
+		(config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : DEFAULT_SESSION_START_MAX_INJECT_TOKENS);
+	if (config.maxInjectChars !== undefined && config.maxInjectTokens === undefined) {
+		logger.warn(
+			"hooks",
+			"hooks.sessionStart.maxInjectChars is deprecated — migrating to maxInjectTokens automatically. Rename it in agent.yaml to silence this warning.",
+			{ maxInjectChars: config.maxInjectChars, derivedTokens: Math.round(config.maxInjectChars / 4) },
+		);
+	}
+	if (rawTokenBudget <= 0) {
+		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
+			configured: rawTokenBudget,
+		});
+	}
+	const tokenBudget = Math.max(1, rawTokenBudget);
 
 	logger.info("hooks", "Session start hook", {
 		harness: req.harness,
@@ -739,12 +766,19 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		const warnings = req.sessionKey
 			? [getExpiryWarning(req.sessionKey, agentId)].filter((w): w is string => w !== null)
 			: undefined;
+		const dedupInject = boundSessionStartAggregate(
+			stableSystemPrompt,
+			`${stableSystemPrompt}\n[memory active]`,
+			tokenBudget,
+		);
+		const stablePrefix = `${stableSystemPrompt}\n`;
+		const dedupDynamicContext = dedupInject.startsWith(stablePrefix) ? dedupInject.slice(stablePrefix.length) : "";
 		return attachPromptContext({
 			identity: { name: "Agent" },
 			memories: [],
 			stableSystemPrompt,
-			dynamicContext: "[memory active]",
-			inject: `${stableSystemPrompt}\n[memory active]`,
+			dynamicContext: dedupDynamicContext,
+			inject: dedupInject,
 			warnings: warnings?.length ? warnings : undefined,
 		});
 	}
@@ -1029,22 +1063,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	);
 
 	// Apply budget to select what we actually inject (on re-ranked order)
-	if (config.maxInjectChars !== undefined && config.maxInjectTokens === undefined) {
-		logger.warn(
-			"hooks",
-			"hooks.sessionStart.maxInjectChars is deprecated — migrating to maxInjectTokens automatically. Rename it in agent.yaml to silence this warning.",
-			{ maxInjectChars: config.maxInjectChars, derivedTokens: Math.round(config.maxInjectChars / 4) },
-		);
-	}
-	const rawTokenBudget =
-		config.maxInjectTokens ??
-		(config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : DEFAULT_SESSION_START_MAX_INJECT_TOKENS);
-	if (rawTokenBudget <= 0) {
-		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
-			configured: rawTokenBudget,
-		});
-	}
-	const tokenBudget = Math.max(1, rawTokenBudget);
 	let memories = selectWithEstimatedTokenBudget(sortedCandidates.slice(0, recallLimit), tokenBudget);
 
 	// Predicted context from recent session analysis is additive on top of main
@@ -1306,14 +1324,42 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		}
 		return context;
 	};
+	const buildBoundedContext = (
+		sessionContinuitySection: string,
+	): {
+		readonly dynamicContext: string;
+		readonly inject: string;
+	} => {
+		const rawDynamicContext = buildDynamicContext(sessionContinuitySection);
+		const rawInject = [stableSystemPrompt, rawDynamicContext].filter((part) => part.trim().length > 0).join("\n");
+		const boundedInject = boundSessionStartAggregate(stableSystemPrompt, rawInject, maxTokens);
+		if (boundedInject === stableSystemPrompt) {
+			return { dynamicContext: "", inject: boundedInject };
+		}
+		const stablePrefix = `${stableSystemPrompt}\n`;
+		if (boundedInject.startsWith(stablePrefix)) {
+			return {
+				dynamicContext: boundedInject.slice(stablePrefix.length),
+				inject: boundedInject,
+			};
+		}
+		return { dynamicContext: "", inject: boundedInject };
+	};
 	if (mainBudget === 0) {
 		logger.warn("hooks", "Session-start reserved sections exhaust token budget — main inject cleared", {
 			maxTokens,
 			reservedTokens,
 		});
 	}
-	let dynamicContext = buildDynamicContext(sessionContinuity.section);
-	let inject = [stableSystemPrompt, dynamicContext].filter((part) => part.trim().length > 0).join("\n");
+	let boundedContext = buildBoundedContext(sessionContinuity.section);
+	if (sessionContinuity.section && !boundedContext.inject.includes(sessionContinuity.section)) {
+		// Overall maxInjectTokens is a hard cap for the complete aggregate. A
+		// partially emitted continuity section cannot be claimed as delivered.
+		sessionContinuity = renderSessionContinuity([], sessionContinuityOptions);
+		boundedContext = buildBoundedContext("");
+	}
+	let dynamicContext = boundedContext.dynamicContext;
+	let inject = boundedContext.inject;
 
 	// Claim only after the final rendered section has been assembled. If a
 	// concurrent request claimed an item between the read and this point,
@@ -1328,8 +1374,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const memoryClaimSuppressedCount = Math.max(0, sessionContinuity.included.length - claimedMemories.items.length);
 	if (claimedMemories.items.length !== sessionContinuity.included.length) {
 		sessionContinuity = renderSessionContinuity(claimedMemories.items, sessionContinuityOptions);
-		dynamicContext = buildDynamicContext(sessionContinuity.section);
-		inject = [stableSystemPrompt, dynamicContext].filter((part) => part.trim().length > 0).join("\n");
+		boundedContext = buildBoundedContext(sessionContinuity.section);
+		dynamicContext = boundedContext.dynamicContext;
+		inject = boundedContext.inject;
 	}
 	memories = [...sessionContinuity.included];
 	const injectedSet = new Set(sessionContinuity.included.map((memory) => memory.id));
