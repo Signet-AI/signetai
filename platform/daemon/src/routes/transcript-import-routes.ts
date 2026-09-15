@@ -9,6 +9,7 @@ import { requirePermission, type AuthMode, type TokenClaims } from "../auth";
 import { resolveScopedAgent } from "../request-scope";
 import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
 import { withTranscriptImportOperationLock } from "../transcript-import-operation-lock";
+import { isSourceDeletionInFlight, SOURCE_DELETION_IN_PROGRESS_ERROR } from "../source-deletion-lock";
 import {
 	cleanupCancelledTranscriptImport,
 	bindTranscriptSource,
@@ -323,6 +324,7 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 				{ operation: "sources.import.finalize.file", lane: "read" },
 			);
 			if (!file) return c.json({ error: "import is no longer staging" }, 409);
+			if (isSourceDeletionInFlight()) return c.json({ error: SOURCE_DELETION_IN_PROGRESS_ERROR }, 409);
 			const added = addImportedSource(
 				{
 					fileName: file.name,

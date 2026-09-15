@@ -19,6 +19,7 @@ import {
 	readImportedSourceOutcome,
 } from "../imported-source-outcome";
 import { logger } from "../logger";
+import { isSourceDeletionInFlight, SOURCE_DELETION_IN_PROGRESS_ERROR } from "../source-deletion-lock";
 import { indexExternalMemoryArtifact } from "../memory-lineage";
 import { enqueueDreamingAttentionInTx } from "../pipeline/dreaming-attention";
 import { indexSourceArtifactStructureInTx } from "../source-artifact-graph";
@@ -146,6 +147,10 @@ export function registerImportRoutes(app: Hono): void {
 								source.providerSettings?.agentId === agentId,
 						)
 					: undefined;
+			if (isSourceDeletionInFlight()) {
+				statuses.push({ fileName: file.name, status: "failed", error: SOURCE_DELETION_IN_PROGRESS_ERROR });
+				continue;
+			}
 			const added = addImportedSource(
 				{
 					fileName: normalized.value.fileName,
