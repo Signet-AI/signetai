@@ -453,7 +453,7 @@ export async function checkFtsConsistency(
 				tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
 			};
 		},
-		{ siteToken: "repair-actions.ts:415" },
+		{ siteToken: "db:repair.fts-consistency.read" },
 	);
 
 	// If FTS table is missing entirely, report it (startup self-heal
@@ -748,7 +748,7 @@ export async function getEmbeddingGapStats(accessor: DbAccessor, agentId: string
 				repair,
 			};
 		},
-		{ siteToken: "repair-actions.ts:700" },
+		{ siteToken: "db:repair.embedding-gap.read" },
 	);
 }
 
@@ -760,10 +760,10 @@ export async function getEmbeddingRepairStats(
 	const gap = await getEmbeddingGapStats(accessor, agentId);
 	const migration = await accessor.withReadDbAsync(
 		async (db) => countEmbeddingMigrationRows(db, embeddingCfg.model, embeddingCfg.dimensions, false, agentId),
-		{ siteToken: "repair-actions.ts:742" },
+		{ siteToken: "db:repair.embedding-migration.read" },
 	);
 	const orphaned = await accessor.withReadDbAsync(async (db) => countOrphanedEmbeddings(db, agentId), {
-		siteToken: "repair-actions.ts:746",
+		siteToken: "db:repair.orphaned-embeddings.read",
 	});
 	return { gap, migration, orphaned };
 }
