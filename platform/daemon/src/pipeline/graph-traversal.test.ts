@@ -241,12 +241,13 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 		const owner = createTestOwner(db, []);
 		const originalSubmit = owner.submit.bind(owner);
 		owner.submit = (request, options) => {
-			const handle = originalSubmit(request, options);
-			if (options.operation !== "session-start.graph-traversal.table-check") return handle;
-			const error = Object.assign(new Error("owner traversal deadline exceeded"), {
-				code: "DB_OWNER_DEADLINE",
-			});
-			return { ...handle, result: Promise.reject(error) };
+			if (options.operation === "session-start.graph-traversal.table-check") {
+				const error = Object.assign(new Error("owner traversal deadline exceeded"), {
+					code: "DB_OWNER_DEADLINE",
+				});
+				throw error;
+			}
+			return originalSubmit(request, options);
 		};
 
 		const result = await traverseKnowledgeGraphViaOwner(["e1"], owner, "default", CONFIG);

@@ -368,6 +368,12 @@ Read-oriented graph endpoints live in `platform/daemon/src/routes/knowledge-rout
 | `/api/knowledge/expand` | POST | Entity expansion with related memory/session context |
 | `/api/knowledge/expand/session` | POST | Session-summary expansion |
 
+`/api/knowledge/expand` keeps graph traversal and the subsequent entity, aspect,
+attribute, dependency, and memory hydration on the database-owner boundary. A
+traversal timeout or traversal failure returns the available expansion with
+`partial: true` and a `degradation` marker; an owner failure before focal
+resolution returns HTTP 503 with `code: "knowledge_graph_unavailable"`.
+
 Ontology-control endpoints live in `platform/daemon/src/routes/ontology-routes.ts`.
 
 | Endpoint family | Purpose |

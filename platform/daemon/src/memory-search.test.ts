@@ -268,10 +268,11 @@ describe("hybridRecall", () => {
 		const originalSubmit = owner.submit.bind(owner);
 		let injected = false;
 		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
-			const handle = originalSubmit<Result>(request, options);
-			if (options.operation !== "memory-search.traversal.embedding-rescore") return handle;
-			injected = true;
-			return { ...handle, result: Promise.reject(new Error("injected owner embedding read failure")) };
+			if (options.operation === "memory-search.traversal.embedding-rescore") {
+				injected = true;
+				throw new Error("injected owner embedding read failure");
+			}
+			return originalSubmit<Result>(request, options);
 		};
 
 		try {
@@ -325,13 +326,14 @@ describe("hybridRecall", () => {
 		const originalSubmit = owner.submit.bind(owner);
 		let injected = false;
 		owner.submit = (request, options) => {
-			const handle = originalSubmit(request, options);
-			if (options.operation !== "session-start.graph-traversal.table-check") return handle;
-			injected = true;
-			const error = Object.assign(new Error("injected graph owner admission failure"), {
-				code: "DB_OWNER_QUEUE_FULL",
-			});
-			return { ...handle, result: Promise.reject(error) };
+			if (options.operation === "session-start.graph-traversal.table-check") {
+				injected = true;
+				const error = Object.assign(new Error("injected graph owner admission failure"), {
+					code: "DB_OWNER_QUEUE_FULL",
+				});
+				throw error;
+			}
+			return originalSubmit(request, options);
 		};
 
 		try {
