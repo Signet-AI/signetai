@@ -11,7 +11,7 @@ success_criteria:
   - "Users with pre-existing AGENTS.md files receive the system prompt without regenerating their file"
   - "AGENTS.md contains only user-authored agent instructions and identity; no Signet plumbing"
   - "The system prompt is a single, maintainable source of truth across all connectors"
-  - "Models use LCM expand / memory search as the primary retrieval interface without additional prompting in identity files"
+  - "Models can use the harness-provided memory tools as the primary retrieval interface without duplicating tool names in the Signet prompt"
 scope_boundary: "This spec covers the system prompt content, its injection mechanism, and the migration path for existing users. It does not cover changes to MEMORY.md rendering, session-end hooks, or the extraction pipeline."
 ---
 
@@ -92,53 +92,22 @@ Proposed structure:
 
 ```
 [signet active]
-
-You have persistent memory managed by Signet. Your primary tool for
-retrieving memory is:
-
-  mcp__signet__memory_search — hybrid vector + keyword search across
-  all stored memories. Returns scored results with content, type, tags,
-  and entity graph context.
-
-For deeper exploration:
-
-  mcp__signet__lcm_expand — drill into a session summary node.
-  Returns parent/child lineage, linked memories, and optionally the
-  cleaned transcript. Use this when memory_search returns a session
-  reference you want to expand.
-
-  mcp__signet__knowledge_expand — drill into an entity's aspects,
-  attributes, constraints, and dependencies.
-
-  mcp__signet__knowledge_expand_session — find session summaries
-  linked to a specific entity.
-
-Cross-session history is also available through linked summary and
-transcript artifacts in the Signet workspace. Inspect those artifacts
-directly when MEMORY.md or recall snippets are not enough.
-
-To store a memory explicitly:
-
-  mcp__signet__memory_store — write a memory with content, type,
-  and optional tags.
-
-Your identity files are in your Signet workspace:
-  AGENTS.md — how you operate (you maintain this)
-  SOUL.md — your personality and values (you maintain this)
-  IDENTITY.md — who you are (you maintain this)
-  USER.md — who the user is (you maintain this)
-  MEMORY.md — auto-generated working memory summary (system-managed)
-
-Secrets are available via mcp__signet__secret_list and
-mcp__signet__secret_exec. Secrets are injected as environment
-variables into subprocesses, never exposed as raw values.
+Signet provides persistent cross-session memory. Signet memory tools are available through this harness.
 ```
 
-This is ~1200 chars. It tells the model what tools exist, what they
-do, and how to use them. No architecture lectures, no philosophy
-about memory layers, no instructions about "durable substrate."
-Models are smart enough to figure out usage patterns from the tool
-descriptions themselves.
+The stable prompt is intentionally about capability, not implementation. The
+harness already exposes the current tool names and schemas, so Signet must not
+maintain a second inventory that can drift. The prompt also does not prescribe
+a recall ritual, list slash commands, enumerate identity files, or inject secret
+names. Those details belong to the harness and the user's actual workspace.
+
+Session-start output separately includes bounded Session Continuity previews.
+Each preview keeps a full memory ID, type, date, and available source metadata;
+long content is marked as an excerpt and can be retrieved through the current
+harness memory retrieval surface. The historical-reference disclaimer appears
+immediately above these records so recalled content is not mistaken for
+instructions. This layer remains distinct from the Dreaming-owned `MEMORY.md`
+summary of durable facts and preferences.
 
 ### What gets removed from AGENTS.md
 
@@ -228,10 +197,13 @@ Could be done as aliases first, deprecating the old names.
 
 ## Implementation Decisions (This Phase)
 
-1. **Character budget:** accepted for MVP. The injected system prompt is
-   compact and fits inside existing session-start budgets.
-2. **Per-harness variation:** deferred. This phase uses one shared
-   prompt across harnesses.
+1. **Character budget:** accepted for MVP. The stable capability prompt is
+   intentionally tiny and the rendered Session Continuity section has separate
+   entry, section, and overall injection bounds.
+2. **Per-harness variation:** deferred. This phase uses one shared stable
+   capability prompt across harnesses.
 3. **User override flag:** deferred. No suppression toggle in this phase.
-4. **Tool availability detection:** deferred. Prompt currently lists the
-   canonical Signet MCP tools unconditionally.
+4. **Tool availability detection:** deferred. The prompt does not enumerate
+   tools; the active harness remains the source of tool names and schemas.
+5. **Preview recovery:** every rendered memory keeps its full ID and truncated
+   previews point to the existing exact-record retrieval surface.

@@ -16,6 +16,8 @@ export interface ScoredMemory {
 	pinned: number;
 	project: string | null;
 	created_at: string;
+	source_type: string | null;
+	source_id: string | null;
 	access_count: number;
 	effScore: number;
 }
@@ -173,6 +175,8 @@ export async function fetchTraversalCandidates(
 					 m.pinned,
 					 m.project,
 					 m.created_at,
+					 m.source_type,
+					 m.source_id,
 					 COALESCE(m.access_count, 0) AS access_count,
 					 COALESCE(
 						 (SELECT MAX(ea.importance)
@@ -262,10 +266,13 @@ export async function getAllScoredCandidates(
 			pinned: number;
 			project: string | null;
 			created_at: string;
+			source_type: string | null;
+			source_id: string | null;
 			access_count: number;
 		}> = await ownerReadAll(
 			owner,
 			`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
+			        m.source_type, m.source_id,
 			        COALESCE(m.access_count, 0) AS access_count
 			 FROM memories m${safetyJoin}
 				 WHERE 1 = 1${currentMemorySql("m")}${scope.sql}${safetyPredicate}
@@ -398,13 +405,15 @@ export async function getPredictedContextMemories(
 			readonly pinned: number;
 			readonly project: string | null;
 			readonly created_at: string;
+			readonly source_type: string | null;
+			readonly source_id: string | null;
 			readonly access_count: number;
 			readonly safety_status: string | null;
 			readonly safety_context_eligible: number | null;
 		}>(
 			owner,
 			`SELECT m.id, m.content, m.type, m.importance, m.tags,
-			        m.pinned, m.project, m.created_at,
+			        m.pinned, m.project, m.created_at, m.source_type, m.source_id,
 			        COALESCE(m.access_count, 0) AS access_count,
 			        ${hasSafetyTable ? "safety.status" : "NULL"} AS safety_status,
 			        ${hasSafetyTable ? "safety.context_eligible" : "NULL"} AS safety_context_eligible

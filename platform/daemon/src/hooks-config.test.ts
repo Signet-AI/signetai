@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DEFAULT_SESSION_CONTINUITY_ENTRY_MAX_TOKENS,
+	DEFAULT_SESSION_CONTINUITY_MAX_ENTRIES,
+	DEFAULT_SESSION_CONTINUITY_MAX_TOKENS,
 	DEFAULT_SESSION_START_MAX_INJECT_TOKENS,
 	loadHooksConfig,
 	resolveHooksConfigForHarness,
@@ -36,6 +39,9 @@ describe("hooks config", () => {
 
 		expect(config.sessionStart?.recallLimit).toBe(50);
 		expect(config.sessionStart?.maxInjectTokens).toBe(DEFAULT_SESSION_START_MAX_INJECT_TOKENS);
+		expect(config.sessionStart?.sessionContinuityMaxEntries).toBe(DEFAULT_SESSION_CONTINUITY_MAX_ENTRIES);
+		expect(config.sessionStart?.sessionContinuityMaxTokens).toBe(DEFAULT_SESSION_CONTINUITY_MAX_TOKENS);
+		expect(config.sessionStart?.sessionContinuityEntryMaxTokens).toBe(DEFAULT_SESSION_CONTINUITY_ENTRY_MAX_TOKENS);
 		expect(config.userPromptSubmit?.enabled).toBe(true);
 		expect(config.preCompaction?.includeRecentMemories).toBe(true);
 	});
@@ -44,12 +50,15 @@ describe("hooks config", () => {
 		const dir = makeTempDir();
 		writeFileSync(
 			join(dir, "agent.yaml"),
-			"hooks:\n  sessionStart:\n    recallLimit: 7\n  userPromptSubmit:\n    enabled: false\n    minScore: 0.42\n  preCompaction:\n    memoryLimit: 3\n",
+			"hooks:\n  sessionStart:\n    recallLimit: 7\n    sessionContinuityMaxEntries: 4\n    sessionContinuityMaxTokens: 800\n    sessionContinuityEntryMaxTokens: 120\n  userPromptSubmit:\n    enabled: false\n    minScore: 0.42\n  preCompaction:\n    memoryLimit: 3\n",
 		);
 
 		const config = loadHooksConfig(dir);
 
 		expect(config.sessionStart?.recallLimit).toBe(7);
+		expect(config.sessionStart?.sessionContinuityMaxEntries).toBe(4);
+		expect(config.sessionStart?.sessionContinuityMaxTokens).toBe(800);
+		expect(config.sessionStart?.sessionContinuityEntryMaxTokens).toBe(120);
 		expect(config.userPromptSubmit?.enabled).toBe(false);
 		expect(config.userPromptSubmit?.minScore).toBe(0.42);
 		expect(config.preCompaction?.memoryLimit).toBe(3);

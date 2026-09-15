@@ -132,8 +132,14 @@ memory:
 hooks:
   # Called when a new session starts
   sessionStart:
-    # Number of memories to retrieve
+    # Number of candidate memories to consider
     recallLimit: 10
+    # Maximum rendered Session Continuity records
+    sessionContinuityMaxEntries: 15
+    # Maximum tokens in the complete Session Continuity section
+    sessionContinuityMaxTokens: 3000
+    # Maximum tokens in one Session Continuity preview
+    sessionContinuityEntryMaxTokens: 250
     # Include agent identity in context
     includeIdentity: true
     # Include recent context from MEMORY.md

@@ -905,10 +905,57 @@ creature: digital assistant
 
 		expect(result.memories.length).toBe(2);
 		expect(result.memories.some((m) => m.content === "User prefers dark mode")).toBe(true);
-		expect(result.inject).toContain("Relevant Memories");
+		expect(result.inject).toContain("Session Continuity");
+		expect(result.inject).toContain('type: "fact"');
 	});
 
-	// Regression for #971: session-start injects ~50 memories into the system
+	test.serial("renders bounded continuity previews and records only delivered candidates", async () => {
+		writeAgentYaml(`
+hooks:
+  sessionStart:
+    sessionContinuityMaxEntries: 1
+    sessionContinuityMaxTokens: 1000
+    sessionContinuityEntryMaxTokens: 400
+`);
+		const tailMarker = "TAIL_ONLY_AVAILABLE_FROM_FULL_MEMORY";
+		createMemoryDb([
+			{
+				content: `Important preview prefix. ${"filler ".repeat(300)} ${tailMarker}`,
+				importance: 0.95,
+				type: "decision",
+				tags: "continuity,verification",
+				project: "signetai",
+			},
+			{ content: "Second memory omitted by the entry cap.", importance: 0.8 },
+		]);
+
+		const metadataDb = openTestDb();
+		metadataDb
+			.prepare("UPDATE memories SET source_type = ?, source_id = ? WHERE content LIKE ?")
+			.run("session_transcript", "transcript-source-123", "Important preview prefix.%");
+		metadataDb.close();
+
+		const result = await handleSessionStart({ harness: "test", sessionKey: "bounded-continuity-session" });
+
+		expect(result.memories).toHaveLength(1);
+		const [memory] = result.memories;
+		expect(memory?.truncated).toBe(true);
+		expect(memory?.source_type).toBe("session_transcript");
+		expect(memory?.source_id).toBe("transcript-source-123");
+		expect(result.inject).toContain("## Session Continuity");
+		expect(result.inject).toContain(`- id: "${memory?.id}"`);
+		expect(result.inject).toContain("use memory_get with this id");
+		expect(result.inject).not.toContain(tailMarker);
+
+		const db = openTestDb();
+		const rows = db
+			.prepare("SELECT memory_id, was_injected FROM session_memories WHERE session_key = ? ORDER BY rank")
+			.all("bounded-continuity-session") as Array<{ memory_id: string; was_injected: number }>;
+		db.close();
+		expect(rows).toHaveLength(2);
+		expect(rows.filter((row) => row.was_injected === 1).map((row) => row.memory_id)).toEqual([memory?.id]);
+	});
+
 	// prompt for context, but the agent never recalled them. Bumping
 	// access_count/last_accessed here permanently inflates rehearsal boost for
 	// the injection set and resets last_accessed so the half-life never decays
@@ -1130,7 +1177,7 @@ agent:
 
 		expect(result.identity.name).toBe("Agent");
 		expect(result.inject).toContain("[signet active]");
-		expect(result.inject).toContain("Memory Check Loop");
+		expect(result.inject).not.toContain("Memory Check Loop");
 		expect(result.inject).toContain("[memory active");
 		expect(result.inject).not.toContain("Identity files in your Signet workspace");
 		expect(result.inject).not.toContain("Operator policy from AGENTS.");
@@ -3540,7 +3587,7 @@ agent:
 		expect(result.inject).toContain("[memory active");
 		expect(result.inject).toContain("IntegrationBot");
 		expect(result.inject).toContain("tests all the things");
-		expect(result.inject).toContain("## Relevant Memories");
+		expect(result.inject).toContain("## Session Continuity");
 		expect(result.inject).toContain("Remember to test");
 		expect(result.inject).toContain("## Working Memory");
 		expect(result.inject).toContain("Some context here");
@@ -3554,8 +3601,8 @@ agent:
 
 		const result = await handleSessionStart({ harness: "test" });
 
-		expect(result.inject).toContain("- First fact");
-		expect(result.inject).toContain("- Second fact");
+		expect(result.inject).toContain("content:\n    First fact");
+		expect(result.inject).toContain("content:\n    Second fact");
 	});
 });
 
@@ -3837,25 +3884,16 @@ describe("handleCheckpointExtract", () => {
 // ============================================================================
 
 describe("buildSignetSystemPrompt", () => {
-	it("lists primary signet retrieval tools with namespaced ids", () => {
+	it("keeps the stable prompt short and harness-neutral", () => {
 		const prompt = buildSignetSystemPrompt();
-		expect(prompt).toContain("[signet active]");
-		expect(prompt).toContain("mcp__signet__memory_search");
-		expect(prompt).toContain("mcp__signet__lcm_expand");
-		expect(prompt).toContain("mcp__signet__knowledge_expand");
-		expect(prompt).toContain("mcp__signet__knowledge_expand_session");
-		expect(prompt).toContain("mcp__signet__memory_store");
-		expect(prompt).toContain("mcp__signet__secret_list");
-		expect(prompt).toContain("mcp__signet__secret_exec");
-		expect(prompt).toContain("linked summary and transcript artifacts");
-		expect(prompt).toContain("Memory Check Loop");
-		expect(prompt).toContain("before commands, file edits, architectural choices");
-		expect(prompt).toContain("run 1-3 targeted recalls with mcp__signet__memory_search");
-		expect(prompt).toContain("shape recall queries as natural questions with an entity, event, and timeframe");
-		expect(prompt).toContain("avoid bag-of-keywords queries");
-		expect(prompt).toContain("treat graph expansion as supporting context, not proof");
-		expect(prompt).toContain("do not treat a missing automatic memory match as proof no prior context exists");
-		expect(prompt).toContain("before acting, know what context you found");
+		expect(prompt).toBe(
+			"[signet active]\nSignet provides persistent cross-session memory. Signet memory tools are available through this harness.",
+		);
+		expect(prompt).not.toContain("mcp__signet__");
+		expect(prompt).not.toContain("Memory Check Loop");
+		expect(prompt).not.toContain("/remember");
+		expect(prompt).not.toContain("AGENTS.md");
+		expect(prompt).not.toContain("secret");
 	});
 });
 

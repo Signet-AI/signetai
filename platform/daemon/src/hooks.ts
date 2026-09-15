@@ -42,6 +42,9 @@ import { getDbOwner } from "./db-owner-runtime";
 import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { fetchEmbedding } from "./embedding-fetch";
 import {
+	DEFAULT_SESSION_CONTINUITY_ENTRY_MAX_TOKENS,
+	DEFAULT_SESSION_CONTINUITY_MAX_ENTRIES,
+	DEFAULT_SESSION_CONTINUITY_MAX_TOKENS,
 	DEFAULT_SESSION_START_MAX_INJECT_TOKENS,
 	type HooksConfig,
 	getDefaultHooksConfig,
@@ -96,7 +99,7 @@ import {
 	stripUntrustedMetadata,
 } from "./prompt-text";
 import { recordRecallAttempt, recordRecallOutcome } from "./recall-telemetry";
-import { listSecrets } from "./secrets";
+
 import {
 	flushPendingCheckpoints,
 	formatPeriodicDigest,
@@ -124,12 +127,12 @@ import {
 	recordSessionCandidates,
 	trackFtsHits,
 } from "./session-memories";
-import { advanceRecallContextEpochAsync, claimRecallItemsAsync } from "./session-recall-dedupe";
+import { advanceRecallContextEpochAsync, applyRecallDedupeAsync, claimRecallItemsAsync } from "./session-recall-dedupe";
 import {
 	buildSignetSystemPrompt,
 	formatLastSeenShort,
-	formatMemoryDate,
 	harnessSupportsNamedCrossAgentTools,
+	renderSessionContinuity,
 	sanitizePeerPromptField,
 	serializeTraversalPath,
 } from "./session-start-format";
@@ -288,6 +291,11 @@ export interface SessionStartResponse {
 		type: string;
 		importance: number;
 		created_at: string;
+		tags: string | null;
+		project: string | null;
+		source_type: string | null;
+		source_id: string | null;
+		truncated: boolean;
 	}>;
 	recentContext?: string;
 	/** Deterministic prompt prefix. Harnesses should cache this separately. */
@@ -681,7 +689,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const identityMode = loadIdentityMode(getAgentsDir());
 	const managesIdentity = identityModeManagesFiles(identityMode);
 	const includeIdentity = identityModeReadsFiles(identityMode) && config.includeIdentity !== false;
-	const stableSystemPrompt = buildSignetSystemPrompt({ includeIdentityStewardship: managesIdentity });
+	const stableSystemPrompt = buildSignetSystemPrompt();
 
 	logger.info("hooks", "Session start hook", {
 		harness: req.harness,
@@ -735,8 +743,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			identity: { name: "Agent" },
 			memories: [],
 			stableSystemPrompt,
-			dynamicContext: "[memory active | /remember | /recall]",
-			inject: `${stableSystemPrompt}\n[memory active | /remember | /recall]`,
+			dynamicContext: "[memory active]",
+			inject: `${stableSystemPrompt}\n[memory active]`,
 			warnings: warnings?.length ? warnings : undefined,
 		});
 	}
@@ -1055,21 +1063,34 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		agentScope.policyGroup,
 	);
 	if (predictedMemories.length > 0) {
-		memories.push(...predictedMemories);
+		// Predicted context is deliberately first: the bounded continuity section
+		// must not silently discard the feature whenever the main pool fills it.
+		memories = [...predictedMemories, ...memories];
 	}
 
 	const sessionStartRecallSessionKey = sessionStartRecallKey(req);
-	if (sessionStartRecallSessionKey && memories.length > 0) {
-		memories = (
-			await claimRecallItemsAsync({
-				sessionKey: sessionStartRecallSessionKey,
-				agentId,
-				surface: "api.hooks.session-start",
-				mode: "automatic",
-				items: memories,
-			})
-		).items;
-	}
+	memories = (
+		await applyRecallDedupeAsync({
+			sessionKey: sessionStartRecallSessionKey,
+			agentId,
+			surface: "api.hooks.session-start",
+			mode: "automatic",
+			includeRecalled: false,
+			claim: false,
+			items: memories,
+		})
+	).items;
+	const memoryCandidateCount = memories.length;
+	const sessionContinuityOptions = {
+		maxEntries: Math.max(0, Math.trunc(config.sessionContinuityMaxEntries ?? DEFAULT_SESSION_CONTINUITY_MAX_ENTRIES)),
+		maxTokens: Math.max(1, Math.trunc(config.sessionContinuityMaxTokens ?? DEFAULT_SESSION_CONTINUITY_MAX_TOKENS)),
+		entryMaxTokens: Math.max(
+			1,
+			Math.trunc(config.sessionContinuityEntryMaxTokens ?? DEFAULT_SESSION_CONTINUITY_ENTRY_MAX_TOKENS),
+		),
+	} as const;
+	let sessionContinuity = renderSessionContinuity(memories, sessionContinuityOptions);
+	const memoryRenderOmittedCount = sessionContinuity.omittedCount;
 
 	const exploredId: string | null = null;
 
@@ -1082,8 +1103,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// Injected rows are still recorded for the predictive scorer below via
 	// session_memories, so no telemetry is lost. See #971.
 
-	// Record all candidates + which were injected for predictive scorer
-	const injectedSet = new Set(memories.map((m) => m.id));
+	// Record all candidates after the final rendered section determines which
+	// memories were actually delivered to the harness.
 	const allCandidateIdsForRecording = [
 		...mergedCandidates.map((c) => c.id),
 		...predictedMemories.filter((m) => !mergedCandidates.some((c) => c.id === m.id)).map((m) => m.id),
@@ -1129,7 +1150,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 				};
 			}),
 	];
-	await recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet, agentId);
 
 	// Format the dynamic context separately from the deterministic system
 	// prefix. The aggregate `inject` field below remains for legacy clients.
@@ -1140,7 +1160,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	if (systemPluginContext) {
 		dynamicParts.push(systemPluginContext);
 	}
-	dynamicParts.push("[memory active | /remember | /recall]");
+	dynamicParts.push("[memory active]");
 
 	// Inject session gap summary for temporal awareness
 	const gapSummary = await getSessionGapSummary();
@@ -1206,17 +1226,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		}
 	}
 
-	if (memories.length > 0) {
-		dynamicParts.push(
-			`\n## Relevant Memories (auto-loaded | scored by importance x recency | ${memories.length} results)\n`,
-		);
-		for (const mem of memories) {
-			const tagStr = mem.tags ? ` [${mem.tags}]` : "";
-			const dateStr = formatMemoryDate(mem.created_at);
-			dynamicParts.push(`- ${mem.content}${tagStr} (${dateStr})`);
-		}
-	}
-
 	const constraintsSection = buildActiveConstraintsSection(
 		constraintsForInject,
 		traversalRuntimeCfg.constraintBudgetChars,
@@ -1268,54 +1277,76 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		dynamicParts.push(sessionPluginContext);
 	}
 
-	// Surface available secrets so agents know what's available
-	try {
-		const secretNames = await listSecrets();
-		if (secretNames.length > 0) {
-			dynamicParts.push("\n## Available Secrets\n");
-			dynamicParts.push("Use the `secret_exec` MCP tool to run commands with these secrets injected as env vars.\n");
-			for (const name of secretNames) {
-				dynamicParts.push(`- ${name}`);
-			}
-		}
-	} catch {
-		// Secrets store may not exist yet — non-fatal
-	}
-
 	const duration = Date.now() - start;
 	const maxTokens = tokenBudget;
 	// Pre-reserve space for deterministic continuity sections so they are never
-	// truncated. The sections are character-budgeted upstream, so the cheap
-	// char-based estimate is sufficient — exact BPE encodes of these large
-	// sections block the event loop on every session start (#1114).
+	// truncated. Session Continuity reports the same conservative byte-based
+	// estimate used while admitting entries; the other existing sections retain
+	// their cheap character-based estimates to avoid blocking BPE encodes here.
 	const reservedTokens =
-		estimateTokens(recoverySection) + estimateTokens(constraintsSection) + estimateTokens(inheritedSection);
+		sessionContinuity.estimatedTokens +
+		estimateTokens(recoverySection) +
+		estimateTokens(constraintsSection) +
+		estimateTokens(inheritedSection);
 	const mainBudget = Math.max(0, maxTokens - reservedTokens);
 	const dynamicBudget = Math.max(0, mainBudget - estimateTokens(stableSystemPrompt));
-	let dynamicContext = dynamicParts.join("\n");
+	const buildDynamicContext = (sessionContinuitySection: string): string => {
+		let context = applyTokenBudget(dynamicParts.join("\n"), dynamicBudget);
+		if (sessionContinuitySection) {
+			context += sessionContinuitySection;
+		}
+		if (constraintsSection) {
+			context += constraintsSection;
+		}
+		if (inheritedSection) {
+			context += inheritedSection;
+		}
+		if (recoverySection) {
+			context += recoverySection;
+		}
+		return context;
+	};
 	if (mainBudget === 0) {
 		logger.warn("hooks", "Session-start reserved sections exhaust token budget — main inject cleared", {
 			maxTokens,
 			reservedTokens,
 		});
 	}
-	dynamicContext = applyTokenBudget(dynamicContext, dynamicBudget);
-	if (constraintsSection) {
-		dynamicContext += constraintsSection;
+	let dynamicContext = buildDynamicContext(sessionContinuity.section);
+	let inject = [stableSystemPrompt, dynamicContext].filter((part) => part.trim().length > 0).join("\n");
+
+	// Claim only after the final rendered section has been assembled. If a
+	// concurrent request claimed an item between the read and this point,
+	// rebuild the section so delivery and claim state remain aligned.
+	const claimedMemories = await claimRecallItemsAsync({
+		sessionKey: sessionStartRecallSessionKey,
+		agentId,
+		surface: "api.hooks.session-start",
+		mode: "automatic",
+		items: sessionContinuity.included,
+	});
+	const memoryClaimSuppressedCount = Math.max(0, sessionContinuity.included.length - claimedMemories.items.length);
+	if (claimedMemories.items.length !== sessionContinuity.included.length) {
+		sessionContinuity = renderSessionContinuity(claimedMemories.items, sessionContinuityOptions);
+		dynamicContext = buildDynamicContext(sessionContinuity.section);
+		inject = [stableSystemPrompt, dynamicContext].filter((part) => part.trim().length > 0).join("\n");
 	}
-	if (inheritedSection) {
-		dynamicContext += inheritedSection;
-	}
-	if (recoverySection) {
-		dynamicContext += recoverySection;
-	}
-	const inject = [stableSystemPrompt, dynamicContext].filter((part) => part.trim().length > 0).join("\n");
+	memories = [...sessionContinuity.included];
+	const injectedSet = new Set(sessionContinuity.included.map((memory) => memory.id));
+	await recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet, agentId);
+
 	logger.info("hooks", "Session start completed", {
 		harness: req.harness,
 		project: req.project,
 		sessionKey: req.sessionKey,
 		runtimePath: req.runtimePath,
-		memoryCount: memories.length,
+		memoryCandidateCount,
+		memoryCount: sessionContinuity.included.length,
+		memoryOmittedCount: memoryCandidateCount - sessionContinuity.included.length,
+		memoryRenderOmittedCount: memoryRenderOmittedCount,
+		memoryClaimSuppressedCount,
+		memoryTruncatedCount: sessionContinuity.truncatedCount,
+		memorySectionTokens: sessionContinuity.estimatedTokens,
 		traversalEntities,
 		traversalMemories,
 		traversalConstraints,
@@ -1337,12 +1368,17 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	return attachPromptContext({
 		identity,
-		memories: memories.map((m) => ({
-			id: m.id,
-			content: m.content,
-			type: m.type,
-			importance: m.importance,
-			created_at: m.created_at,
+		memories: sessionContinuity.entries.map((entry) => ({
+			id: entry.memory.id,
+			content: entry.content,
+			type: entry.memory.type,
+			importance: entry.memory.importance,
+			created_at: entry.memory.created_at,
+			tags: entry.memory.tags,
+			project: entry.memory.project,
+			source_type: entry.memory.source_type,
+			source_id: entry.memory.source_id,
+			truncated: entry.truncated,
 		})),
 		recentContext: memoryMdContent,
 		stableSystemPrompt,
