@@ -66,6 +66,7 @@ import { DEFAULT_SYNTHESIS_WORKER_CONFIG } from "../pipeline/synthesis-worker";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpochAsync } from "../session-recall-dedupe";
+import { sessionStartRecallKey } from "../session-start-state";
 import {
 	type RuntimePath,
 	claimSession,
@@ -1136,6 +1137,7 @@ function registerCompactionComplete(app: Hono): void {
 				summary: string;
 				sessionKey?: string;
 				project?: string;
+				cwd?: string;
 				agentId?: string;
 				runtimePath?: string;
 			};
@@ -1195,6 +1197,7 @@ function registerCompactionComplete(app: Hono): void {
 				return c.json({ error: scopedProject.error }, 403);
 			}
 			const project = scopedProject.project ?? null;
+			const cwd = parseOptionalString(body.cwd);
 
 			const sessionId = body.sessionKey ?? `compaction:${now}`;
 			const noise = isNoiseSession({
@@ -1310,8 +1313,14 @@ function registerCompactionComplete(app: Hono): void {
 				memoryId: summaryId ?? "skipped-temp-session",
 			});
 
-			const epoch = await advanceRecallContextEpochAsync({
+			const recallSessionKey = sessionStartRecallKey({
+				harness: body.harness,
+				project: project ?? undefined,
+				cwd: cwd ?? undefined,
 				sessionKey: body.sessionKey,
+			});
+			const epoch = await advanceRecallContextEpochAsync({
+				sessionKey: recallSessionKey,
 				agentId,
 				reason: "compaction-complete",
 				sourceRef: summaryId ?? body.sessionKey ?? undefined,
@@ -1320,6 +1329,7 @@ function registerCompactionComplete(app: Hono): void {
 				harness: body.harness,
 				agentId,
 				project: project ?? undefined,
+				cwd: cwd ?? undefined,
 				sessionKey: body.sessionKey,
 			});
 
@@ -1377,6 +1387,7 @@ function registerCompactionComplete(app: Hono): void {
 				success: true,
 				memoryId: summaryId,
 				contextEpoch: epoch.contextEpoch,
+				dedupeDegraded: epoch.failedOpen === true,
 			});
 		} catch (e) {
 			logger.error("hooks", "Compaction complete failed", e as Error);

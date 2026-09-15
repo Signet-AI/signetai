@@ -24,6 +24,7 @@ type EpochRow = {
 const events = new Map<string, EventRow>();
 const epochs = new Map<string, EpochRow>();
 let changes = 0;
+let writeTxError: Error | null = null;
 
 function eventKey(sessionKey: string, agentId: string, epoch: number, itemKind: string, itemId: string): string {
 	return [sessionKey, agentId, epoch, itemKind, itemId].join("\0");
@@ -120,11 +121,20 @@ const fakeDb = {
 const getDbAccessorSpy = spyOn(dbAccessor, "getDbAccessor").mockImplementation(
 	() =>
 		({
-			withWriteTx: <T>(fn: (db: typeof fakeDb) => T): T => fn(fakeDb),
+			withWriteTx: <T>(fn: (db: typeof fakeDb) => T): T => {
+				if (writeTxError) throw writeTxError;
+				return fn(fakeDb);
+			},
+			withWriteTxAsync: async <T>(fn: (db: typeof fakeDb) => T): Promise<T> => {
+				if (writeTxError) throw writeTxError;
+				return fn(fakeDb);
+			},
 		}) as ReturnType<typeof dbAccessor.getDbAccessor>,
 );
 
-const { advanceRecallContextEpoch, applyRecallDedupe, claimRecallItems } = await import("./session-recall-dedupe");
+const { advanceRecallContextEpoch, applyRecallDedupe, applyRecallDedupeAsync, claimRecallItems } = await import(
+	"./session-recall-dedupe"
+);
 
 afterAll(() => {
 	getDbAccessorSpy.mockRestore();
@@ -134,6 +144,7 @@ beforeEach(() => {
 	events.clear();
 	epochs.clear();
 	changes = 0;
+	writeTxError = null;
 });
 
 describe("session recall dedupe", () => {
@@ -190,6 +201,59 @@ describe("session recall dedupe", () => {
 			{ id: "mem-2", score: 0.8, source: "hybrid" },
 		]);
 		expect(result.meta.repeatedReturned).toBe(1);
+	});
+
+	it("deduplicates duplicate identities within one batch", () => {
+		const items = [{ id: "mem-duplicate" }, { id: "mem-duplicate" }];
+		const included = applyRecallDedupe({
+			sessionKey: "sess-include-duplicate",
+			agentId: "agent-a",
+			surface: "test",
+			mode: "direct",
+			claim: true,
+			includeRecalled: true,
+			items,
+		});
+		const filtered = applyRecallDedupe({
+			sessionKey: "sess-filter-duplicate",
+			agentId: "agent-a",
+			surface: "test",
+			mode: "automatic",
+			claim: false,
+			items,
+		});
+
+		expect(included.items).toEqual([{ id: "mem-duplicate" }]);
+		expect(included.meta.repeatedReturned).toBe(0);
+		expect(filtered.items).toEqual([{ id: "mem-duplicate" }]);
+		expect(filtered.meta.suppressed).toBe(1);
+	});
+
+	it("derives an omitted agent identity from an encoded session key", () => {
+		const sessionKey = "agent:agent-a:session-1";
+		const first = claimRecallItems({
+			sessionKey,
+			surface: "test",
+			mode: "direct",
+			items: [{ id: "mem-1" }],
+		});
+		const defaultAgent = claimRecallItems({
+			sessionKey,
+			agentId: "default",
+			surface: "test",
+			mode: "direct",
+			items: [{ id: "mem-1" }],
+		});
+		const second = claimRecallItems({
+			sessionKey,
+			surface: "test",
+			mode: "direct",
+			items: [{ id: "mem-1" }],
+		});
+
+		expect(first.items).toHaveLength(1);
+		expect(defaultAgent.items).toHaveLength(1);
+		expect(second.items).toHaveLength(0);
 	});
 
 	it("advances compaction epochs and isolates agents", () => {
@@ -256,5 +320,38 @@ describe("session recall dedupe", () => {
 		});
 		expect(result.items).toHaveLength(1);
 		expect(events.size).toBe(0);
+	});
+
+	it("reports when dedupe fails open", () => {
+		writeTxError = new Error("ledger unavailable");
+		const result = claimRecallItems({
+			sessionKey: "sess-failure",
+			agentId: "agent-a",
+			surface: "test",
+			mode: "direct",
+			items: [{ id: "mem-1" }],
+		});
+
+		expect(result.items).toEqual([{ id: "mem-1" }]);
+		expect(result.meta).toMatchObject({ enabled: false, failedOpen: true });
+		expect(advanceRecallContextEpoch({ sessionKey: "sess-failure", agentId: "agent-a", reason: "test" })).toEqual({
+			advanced: false,
+			failedOpen: true,
+		});
+	});
+
+	it("keeps the async path aligned with batch dedupe", async () => {
+		const result = await applyRecallDedupeAsync({
+			sessionKey: "sess-async-duplicate",
+			agentId: "agent-a",
+			surface: "test",
+			mode: "direct",
+			claim: true,
+			includeRecalled: true,
+			items: [{ id: "mem-1" }, { id: "mem-1" }],
+		});
+
+		expect(result.items).toEqual([{ id: "mem-1" }]);
+		expect(result.meta.failedOpen).toBeUndefined();
 	});
 });
