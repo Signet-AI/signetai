@@ -52,7 +52,6 @@ import { registerGitCommands } from "./commands/git.js";
 import { registerGraphiqCommands } from "./commands/graphiq.js";
 import { registerHookCommands } from "./commands/hook.js";
 import { registerKnowledgeCommands } from "./commands/knowledge.js";
-import { registerMcpCommands } from "./commands/mcp.js";
 import { registerMemoryCommands } from "./commands/memory.js";
 import { registerOntologyCommands } from "./commands/ontology.js";
 import { registerPortableCommands } from "./commands/portable.js";
@@ -1012,11 +1011,6 @@ registerSourcesCommands(program, {
 	secretApiCall,
 	fetchDaemonResult,
 	fetchDaemonRaw,
-});
-
-registerMcpCommands(program, {
-	fetchFromDaemon,
-	isDaemonRunning,
 });
 
 registerMemoryCommands(program, {

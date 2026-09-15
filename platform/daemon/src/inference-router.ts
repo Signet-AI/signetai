@@ -226,7 +226,6 @@ export interface InferenceStatusSummary {
 		readonly interactive?: string;
 		readonly memoryExtraction?: string;
 		readonly aggregateRecall?: string;
-		readonly widgetGeneration?: string;
 		readonly repair?: string;
 	};
 	readonly accounts: Readonly<Record<string, InferenceAccountSummary>>;
@@ -764,13 +763,6 @@ export class InferenceRouter {
 				return Boolean(config.workloads?.memoryExtraction ?? config.workloads?.default ?? config.defaultPolicy);
 			case "session_synthesis":
 				return Boolean(config.workloads?.memoryExtraction ?? config.workloads?.default ?? config.defaultPolicy);
-			case "widget_generation":
-				return Boolean(
-					config.workloads?.widgetGeneration ??
-						config.workloads?.memoryExtraction ??
-						config.workloads?.default ??
-						config.defaultPolicy,
-				);
 			case "repair":
 				return Boolean(
 					config.workloads?.repair ??
@@ -1635,9 +1627,6 @@ export class InferenceRouter {
 					aggregateRecall:
 						loaded.value.config.workloads?.aggregateRecall?.policy ??
 						loaded.value.config.workloads?.aggregateRecall?.target,
-					widgetGeneration:
-						loaded.value.config.workloads?.widgetGeneration?.policy ??
-						loaded.value.config.workloads?.widgetGeneration?.target,
 					repair: loaded.value.config.workloads?.repair?.policy ?? loaded.value.config.workloads?.repair?.target,
 				},
 				accounts,

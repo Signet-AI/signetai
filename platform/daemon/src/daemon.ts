@@ -270,7 +270,6 @@ import {
 	sweepStaleSessions,
 } from "./hooks";
 import { mountMcpRoute } from "./mcp";
-import { mountAppTrayRoutes } from "./routes/app-tray.js";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { mountChangelogRoutes } from "./routes/changelog.js";
 import { stopHarnessHealth } from "./harness-health";
@@ -278,7 +277,6 @@ import { registerHarnessInstallRoutes, stopHarnessInstall } from "./routes/harne
 import { registerConnectorRoutes } from "./routes/connectors-routes.js";
 import { setupDashboardRoutes } from "./routes/dashboard.js";
 import { registerDatabaseDiagnosticsRoutes } from "./routes/database-diagnostics.js";
-import { mountEventBusRoutes } from "./routes/event-bus.js";
 import {
 	ensureWorkspaceGitignore,
 	getGitStatus,
@@ -298,13 +296,9 @@ import { registerTranscriptImportRoutes } from "./routes/transcript-import-route
 import { mountInferenceRoutes } from "./routes/inference.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
 import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
-import { mountMarketplaceRoutes } from "./routes/marketplace.js";
-import { mountMcpAnalyticsRoutes } from "./routes/mcp-analytics.js";
 import { registerMemoryRoutes } from "./routes/memory-routes.js";
 import { registerMiscRoutes } from "./routes/misc-routes.js";
 import { registerOntologyRoutes } from "./routes/ontology-routes.js";
-import { mountOsAgentRoutes } from "./routes/os-agent.js";
-import { mountOsChatRoutes } from "./routes/os-chat.js";
 import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
 import { registerPluginRoutes } from "./routes/plugins-routes.js";
 import { registerQueueDiagnosticsRoutes } from "./routes/queue-diagnostics.js";
@@ -322,7 +316,6 @@ import {
 } from "./routes/sources-routes.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
 import { checkEmbeddingProvider } from "./routes/utils.js";
-import { mountWidgetRoutes } from "./routes/widget.js";
 import { isReadyResponse } from "./synthesis-worker-protocol";
 import { initUpdateSystem, startUpdateTimer, stopUpdateTimer } from "./update-system";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
@@ -556,15 +549,8 @@ mountInferenceRoutes(app, {
 setFetchEmbedding(fetchEmbedding);
 mountSkillAnalyticsRoutes(app);
 mountSkillsRoutes(app);
-mountMarketplaceRoutes(app);
-mountMcpAnalyticsRoutes(app);
-mountAppTrayRoutes(app);
-mountWidgetRoutes(app);
-mountEventBusRoutes(app);
 mountMarketplaceReviewsRoutes(app);
 mountChangelogRoutes(app);
-mountOsChatRoutes(app);
-mountOsAgentRoutes(app);
 setupDashboardRoutes(app);
 
 let watcher: ReturnType<typeof watch> | null = null;
@@ -1720,8 +1706,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				return router.createWorkloadProvider("session_synthesis", defaultAgentId);
 			case "aggregateRecall":
 				return router.createWorkloadProvider("aggregate_recall", defaultAgentId);
-			case "widgetGeneration":
-				return router.createWorkloadProvider("widget_generation", defaultAgentId);
 			case "repair":
 				return router.createWorkloadProvider("repair", defaultAgentId);
 			case "interactive":
