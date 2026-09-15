@@ -9,6 +9,7 @@ import { requirePermission, type AuthMode, type TokenClaims } from "../auth";
 import { resolveScopedAgent } from "../request-scope";
 import { dbOwnerQuery, dbOwnerTransaction } from "../db-owner-runtime";
 import { withTranscriptImportOperationLock } from "../transcript-import-operation-lock";
+import { beginSourceMutation, SOURCE_OPERATION_IN_PROGRESS_ERROR } from "../source-deletion-lock";
 import {
 	cleanupCancelledTranscriptImport,
 	bindTranscriptSource,
@@ -323,28 +324,40 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 				{ operation: "sources.import.finalize.file", lane: "read" },
 			);
 			if (!file) return c.json({ error: "import is no longer staging" }, 409);
-			const added = addImportedSource(
-				{
-					fileName: file.name,
-					contentHash: file.content_hash,
-					format: "jsonl",
-					agentId: upload.agentId,
-					duplicateMode: file.duplicate_mode,
-					importKey: `${upload.jobId}:${upload.fileId}:${upload.generation}`,
-				},
-				resolveDefaultBasePath(),
-			);
-			if (!added.ok) return c.json({ error: added.error }, 400);
-			await bindTranscriptSource(upload, added.source.id);
-			return c.json(
-				{
-					fileId: upload.fileId,
-					sourceId: added.source.id,
-					sizeBytes: file.size_bytes,
-					contentHash: file.content_hash,
-				},
-				201,
-			);
+			const releaseSourceMutation = beginSourceMutation(file.source_id);
+			if (releaseSourceMutation === undefined) return c.json({ error: SOURCE_OPERATION_IN_PROGRESS_ERROR }, 409);
+			let releaseAddedSourceMutation: (() => void) | undefined;
+			try {
+				const added = addImportedSource(
+					{
+						fileName: file.name,
+						contentHash: file.content_hash,
+						format: "jsonl",
+						agentId: upload.agentId,
+						duplicateMode: file.duplicate_mode,
+						importKey: `${upload.jobId}:${upload.fileId}:${upload.generation}`,
+					},
+					resolveDefaultBasePath(),
+				);
+				if (!added.ok) return c.json({ error: added.error }, 400);
+				if (added.source.id !== file.source_id) {
+					releaseAddedSourceMutation = beginSourceMutation(added.source.id);
+					if (releaseAddedSourceMutation === undefined) throw new Error(SOURCE_OPERATION_IN_PROGRESS_ERROR);
+				}
+				await bindTranscriptSource(upload, added.source.id);
+				return c.json(
+					{
+						fileId: upload.fileId,
+						sourceId: added.source.id,
+						sizeBytes: file.size_bytes,
+						contentHash: file.content_hash,
+					},
+					201,
+				);
+			} finally {
+				releaseAddedSourceMutation?.();
+				releaseSourceMutation();
+			}
 		});
 	};
 

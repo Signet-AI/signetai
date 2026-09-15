@@ -683,7 +683,18 @@ describe("sources-config", () => {
 		expect(reimported.created).toBe(true);
 		expect(reimported.duplicate).toBe(true);
 		expect(reimported.source.id).not.toBe(first.source.id);
-		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(2);
+
+		const reservedReimportId = "import:aaaaaaaaaaaaaaaa:reserved";
+		const reservedReimported = addImportedSource(
+			{ ...input, duplicateMode: "reimport", sourceId: reservedReimportId },
+			agentsDir,
+		);
+		expect(reservedReimported.ok).toBe(true);
+		if (reservedReimported.ok === false) throw new Error(reservedReimported.error);
+		expect(reservedReimported.created).toBe(true);
+		expect(reservedReimported.duplicate).toBe(true);
+		expect(reservedReimported.source.id).toBe(reservedReimportId);
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(3);
 	});
 
 	it("replays a finalized upload without creating a second reimport source", () => {
