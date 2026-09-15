@@ -69,6 +69,32 @@ describe("Dreaming live routes", () => {
 		recordDreamingEpisodicTokenBacklog("agent-a", 0);
 	});
 
+	it("awaits dreaming workload diagnostics in both diagnostics routes", async () => {
+		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
+		process.env.SIGNET_DB_OWNER_WORKER = "1";
+		try {
+			const app = new Hono();
+			registerPipelineRoutes(app);
+
+			const workloadsResponse = await app.request("/api/diagnostics/workloads");
+			expect(workloadsResponse.status).toBe(200);
+			const workloads = (await workloadsResponse.json()) as {
+				dreaming: { activePasses: number; pendingAttention: number };
+			};
+			expect(workloads.dreaming).toMatchObject({ activePasses: 1, pendingAttention: 0 });
+
+			const diagnosticsResponse = await app.request("/api/diagnostics");
+			expect(diagnosticsResponse.status).toBe(200);
+			const diagnostics = (await diagnosticsResponse.json()) as {
+				workloads: { dreaming: { activePasses: number; pendingAttention: number } };
+			};
+			expect(diagnostics.workloads.dreaming).toMatchObject({ activePasses: 1, pendingAttention: 0 });
+		} finally {
+			if (previousOwnerMode === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+			else process.env.SIGNET_DB_OWNER_WORKER = previousOwnerMode;
+		}
+	});
+
 	it("returns null when no fresh exact backlog measurement exists", async () => {
 		invalidateDreamingEpisodicTokenBacklog("agent-a");
 		const app = new Hono();

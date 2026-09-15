@@ -140,7 +140,7 @@ export function pipelineQueueBlock(options: { readonly allowSynchronousRead?: bo
 	}
 }
 
-function workloadDiagnosticsSnapshot(agentId: string): {
+async function workloadDiagnosticsSnapshot(agentId: string): Promise<{
 	readonly inference: BackgroundWorkloadDiagnostics;
 	readonly mcp: ReturnType<typeof getMcpWorkloadDiagnostics>;
 	readonly pi: {
@@ -148,8 +148,8 @@ function workloadDiagnosticsSnapshot(agentId: string): {
 		readonly oldestAgeMs: number | null;
 	};
 	readonly providerSemaphore: ReturnType<typeof getLlmConcurrencyStatus>;
-	readonly dreaming: ReturnType<typeof getDreamingWorkloadDiagnostics>;
-} {
+	readonly dreaming: Awaited<ReturnType<typeof getDreamingWorkloadDiagnostics>>;
+}> {
 	const inference: BackgroundWorkloadDiagnostics = getInferenceRouterOrNull()?.getBackgroundWorkloadDiagnostics(
 		agentId,
 	) ?? {
@@ -164,16 +164,16 @@ function workloadDiagnosticsSnapshot(agentId: string): {
 		mcp: getMcpWorkloadDiagnostics(agentId),
 		pi: { active: inference.agentSessions, oldestAgeMs: inference.oldestAgentSessionAgeMs },
 		providerSemaphore: getLlmConcurrencyStatus(),
-		dreaming: getDreamingWorkloadDiagnostics(getDbAccessor(), agentId),
+		dreaming: await getDreamingWorkloadDiagnostics(getDbAccessor(), agentId),
 	};
 }
 
-function workloadDiagnostics(c: Context): Response {
+async function workloadDiagnostics(c: Context): Promise<Response> {
 	const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
 	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
 	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 	const agentId = resolveAgentId({ agentId: scopedAgent.agentId });
-	return c.json({ agentId, ...workloadDiagnosticsSnapshot(agentId) });
+	return c.json({ agentId, ...(await workloadDiagnosticsSnapshot(agentId)) });
 }
 
 const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | undefined> => {
@@ -483,7 +483,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		return c.json({ greeting: greetingCache.greeting, cachedAt: greetingCache.cachedAt });
 	});
 
-	app.get("/api/diagnostics", (c) => {
+	app.get("/api/diagnostics", async (c) => {
 		const report = getCachedDiagnosticsReport();
 		const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
 		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
@@ -491,7 +491,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const agentId = resolveAgentId({ agentId: scopedAgent.agentId });
 		return c.json({
 			...report,
-			workloads: { agentId, ...workloadDiagnosticsSnapshot(agentId) },
+			workloads: { agentId, ...(await workloadDiagnosticsSnapshot(agentId)) },
 		});
 	});
 
