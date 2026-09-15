@@ -629,6 +629,8 @@ Known `mode` values: `controlled-write`, `shadow`, `frozen`, `paused`,
 
 Mode is one of: `disabled`, `frozen`, `shadow`, `paused`, `controlled-write`.
 
+When DB-owner maintenance is unavailable before startup completes, this endpoint returns 503 instead of reading SQLite from the request process. During owner shutdown, queue counts are intentionally returned as empty maps while the owner drains.
+
 `databaseMaintenance.vacuumConversion` reports the durable legacy SQLite
 conversion state. Existing databases enter `pending` after migrations and are
 converted by a single-flight worker after readiness. A restart changes an

@@ -855,6 +855,8 @@ let registeredMaintenanceLeases: {
 	readonly resolveIdle: () => void;
 } | null = null;
 
+export type DbOwnerMaintenanceState = "registered" | "closing" | "unavailable";
+
 export function registerDbOwnerMaintenance(maintenance: DbOwnerMaintenance): void {
 	if (registeredMaintenanceClose !== null) throw new Error("DB owner maintenance is closing");
 	if (registeredMaintenance !== null) {
@@ -867,8 +869,13 @@ export function getDbOwnerMaintenance(): DbOwnerMaintenance | null {
 	return registeredMaintenance;
 }
 
+export function getDbOwnerMaintenanceState(): DbOwnerMaintenanceState {
+	if (registeredMaintenanceClose !== null) return "closing";
+	return registeredMaintenance === null ? "unavailable" : "registered";
+}
+
 export function isDbOwnerMaintenanceClosing(): boolean {
-	return registeredMaintenanceClose !== null;
+	return getDbOwnerMaintenanceState() === "closing";
 }
 
 function acquireRegisteredDbOwnerMaintenance(): RegisteredDbOwnerMaintenanceLease | null {

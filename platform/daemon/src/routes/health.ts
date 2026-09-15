@@ -1,23 +1,16 @@
-import type { SQLQueryBindings } from "bun:sqlite";
-import { type MigrationDb, hasPendingMigrations, preflightWorkspace } from "@signet/core";
+import { preflightWorkspace } from "@signet/core";
 import type { Hono } from "hono";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
-import { type ReadDb, type ReadPressure, type WritePressure, getDbAccessor } from "../db-accessor";
+import { type ReadPressure, type WritePressure, getDbAccessor } from "../db-accessor";
 import type { DbOwnerHealth } from "../db-owner-client";
-import { isDbOwnerMaintenanceClosing, ownerQueryOne, withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
+import { getDbOwnerMaintenanceState, ownerQueryOne, withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
 import { getDbRuntimeMetrics, getEventLoopLiveness } from "../db-observability";
-import {
-	QUEUE_MAX_DEAD_RATE,
-	QUEUE_MAX_DEPTH,
-	QUEUE_MAX_OLDEST_AGE_SEC,
-	type QueueHealth,
-	getQueueHealth,
-} from "../diagnostics";
+import { QUEUE_MAX_DEAD_RATE, QUEUE_MAX_DEPTH, QUEUE_MAX_OLDEST_AGE_SEC, type QueueHealth } from "../diagnostics";
 import { getAllFeatureFlags } from "../feature-flags";
 import { loadMemoryConfig } from "../memory-config";
 import { getCachedResourceSnapshot } from "../resource-monitor";
 import { getUpdateState } from "../update-system";
-import { readEmbeddingIndexMigrationProgress } from "../embedding-index-state";
+import type { readEmbeddingIndexMigrationProgress } from "../embedding-index-state";
 import {
 	AGENTS_DIR,
 	CURRENT_VERSION,
@@ -34,42 +27,6 @@ import { checkEmbeddingProvider } from "./utils";
 // block the event loop on the /health path (see
 // .github/workflows/embedding-health-isolation.yml).
 const EMBEDDING_CHECK_TIMEOUT_MS = 2000;
-
-function toRecordOrUndefined(row: unknown): Record<string, unknown> | undefined {
-	return typeof row === "object" && row !== null ? (row as Record<string, unknown>) : undefined;
-}
-
-/**
- * Adapt the accessor's readonly db to the MigrationDb surface.
- * This is read-only: hasPendingMigrations only reads schema_migrations.
- * The exec/run methods exist to satisfy the MigrationDb interface but will
- * throw on the readonly accessor if ever used for writes. Do not add write
- * calls through this adapter.
- */
-function readDbAsMigrationDb(db: ReadDb): MigrationDb {
-	return {
-		exec(sql: string): void {
-			db.prepare(sql).run();
-		},
-		prepare(sql: string) {
-			const stmt = db.prepare(sql);
-			return {
-				run(...args: SQLQueryBindings[]): void {
-					stmt.run(...args);
-				},
-				get(...args: SQLQueryBindings[]): Record<string, unknown> | undefined {
-					return toRecordOrUndefined(stmt.get(...args));
-				},
-				all(...args: SQLQueryBindings[]): Record<string, unknown>[] {
-					return stmt
-						.all(...args)
-						.map((row) => toRecordOrUndefined(row))
-						.filter((row): row is Record<string, unknown> => row !== undefined);
-				},
-			};
-		},
-	};
-}
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: Error): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -109,17 +66,10 @@ async function checkEmbedding(): Promise<{ ok: boolean; detail: EmbeddingCheck; 
 	}
 	let migration: ReturnType<typeof readEmbeddingIndexMigrationProgress> = null;
 	try {
-		const ownerMigration = await withRegisteredDbOwnerMaintenance((ownerMaintenance) =>
-			ownerMaintenance.embeddingMigrationProgress(cfg.base_url),
-		);
 		migration =
-			ownerMigration !== undefined
-				? ownerMigration
-				: isDbOwnerMaintenanceClosing()
-					? null
-					: await getDbAccessor().withReadDbAsync((db: ReadDb) => readEmbeddingIndexMigrationProgress(db, cfg), {
-							siteToken: "routes/health.ts:115",
-						});
+			(await withRegisteredDbOwnerMaintenance((ownerMaintenance) =>
+				ownerMaintenance.embeddingMigrationProgress(cfg.base_url),
+			)) ?? null;
 	} catch {
 		// The provider probe remains useful while the database is initializing.
 	}
@@ -231,17 +181,6 @@ export function mountHealthRoutes(app: Hono): void {
 				});
 				if (ownerHealth !== undefined) {
 					dbOwner = ownerHealth;
-				} else if (!isDbOwnerMaintenanceClosing()) {
-					await accessor.withReadDbAsync(
-						(db: ReadDb) => {
-							db.prepare("SELECT 1").get();
-							dbOk = true;
-						},
-						// /health is a liveness-adjacent probe. Do not let a queued
-						// database-owner/read lease turn a transient DB stall into an
-						// HTTP stall. The structured response below reports db: false.
-						{ siteToken: "routes/health.ts:223", operation: "health", timeoutMs: 500 },
-					);
 				}
 			} catch {}
 			dbWriter = accessor.getWritePressure?.() ?? null;
@@ -251,18 +190,21 @@ export function mountHealthRoutes(app: Hono): void {
 
 		const databaseIntegrity = getDatabaseIntegrityStatus(dbOwner);
 		const eventLoop = getEventLoopLiveness();
+		const ownerState = getDbOwnerMaintenanceState();
 		return c.json({
 			status: shuttingDown
 				? "shutting_down"
-				: isDbOwnerMaintenanceClosing()
+				: ownerState === "closing"
 					? "degraded"
-					: workspace.status === "missing" || workspace.status === "incomplete"
+					: !dbOk
 						? "degraded"
-						: databaseIntegrity.state === "corrupt" ||
-								databaseIntegrity.state === "unavailable" ||
-								databaseIntegrity.state === "degraded"
+						: workspace.status === "missing" || workspace.status === "incomplete"
 							? "degraded"
-							: "healthy",
+							: databaseIntegrity.state === "corrupt" ||
+									databaseIntegrity.state === "unavailable" ||
+									databaseIntegrity.state === "degraded"
+								? "degraded"
+								: "healthy",
 			uptime: process.uptime(),
 			pid: process.pid,
 			version: CURRENT_VERSION,
@@ -311,7 +253,7 @@ export function mountHealthRoutes(app: Hono): void {
 			reasons.push(...workspace.reasons);
 		}
 
-		// db, migrations, and queue share one readonly connection.
+		// db, migrations, and queue share one owner-health snapshot.
 		let dbResult: { readonly migrationsOk: boolean; readonly queueHealth: QueueHealth } | null = null;
 		let dbReader: ReadPressure | null = null;
 		let dbRuntime = getDbRuntimeMetrics();
@@ -325,18 +267,11 @@ export function mountHealthRoutes(app: Hono): void {
 			if (ownerResult !== undefined) {
 				dbResult = ownerResult.result;
 				dbOwner = ownerResult.health;
-			} else if (isDbOwnerMaintenanceClosing()) {
-				reasons.push("database owner maintenance is closing");
 			} else {
-				dbResult = await accessor.withReadDbAsync(
-					(db: ReadDb) => {
-						db.prepare("SELECT 1").get();
-						return {
-							migrationsOk: !hasPendingMigrations(readDbAsMigrationDb(db)),
-							queueHealth: getQueueHealth(db),
-						};
-					},
-					{ siteToken: "routes/health.ts:312", operation: "health.ready" },
+				reasons.push(
+					getDbOwnerMaintenanceState() === "closing"
+						? "database owner maintenance is closing"
+						: "database owner maintenance is unavailable",
 				);
 			}
 			dbReader = accessor.getReadPressure?.() ?? null;

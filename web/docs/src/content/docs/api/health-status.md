@@ -201,7 +201,8 @@ with a human-readable `reasons` list. Gates:
 
 - `workspace` — the selected workspace is `ready`; `missing` and `incomplete`
   states include recovery reasons and return 503.
-- `db` — a readonly database connection answers `SELECT 1`.
+- `db` — the registered DB-owner maintenance authority answers a bounded readonly
+  `SELECT 1` probe. An unavailable or closing owner returns 503.
 - `migrations` — no pending database migrations.
 - `embedding` — the configured embedding provider is reachable. Passes with
   `note: "disabled"` when the provider is intentionally `"none"`.

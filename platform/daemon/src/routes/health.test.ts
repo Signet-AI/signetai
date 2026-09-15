@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { MAX_READ_CONNECTIONS, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import type { DbOwnerClient, DbOwnerHealth } from "../db-owner-client";
+import type { QueueHealth } from "../diagnostics";
+import { EMPTY_QUEUE_COUNTS } from "../diagnostics-queue";
 import { publishDatabaseIntegrityStatus, resetGlobalIntegrityLatch } from "../database-integrity";
 import {
 	closeRegisteredDbOwnerMaintenance,
@@ -19,14 +21,6 @@ import { mountHealthRoutes } from "./health";
  * Regression tests for GitHub issue #905:
  * `/health` reports "healthy" based on process liveness alone, even when
  * db/migrations/embedding/inference/queue subsystems are down.
- *
- * Planned API (implementation follows in phase 2):
- * - `GET /health/live`  — cheap liveness: status, uptime, pid, version,
- *   shuttingDown. Never degrades on subsystem failure.
- * - `GET /health/ready` — readiness across db, migrations, embedding,
- *   inference, queue. 200 `{ status: "ready" }` or
- *   503 `{ status: "not_ready", reasons: string[] }`.
- * - `GET /health` stays unchanged for back-compat.
  */
 
 let dir = "";
@@ -60,12 +54,33 @@ function makeOwnerHealth(generation: number): DbOwnerHealth {
 	};
 }
 
-function makeOwner(getHealth: () => DbOwnerHealth): DbOwnerClient {
+function makeQueueHealth(): QueueHealth {
+	return {
+		score: 1,
+		status: "healthy",
+		depth: 0,
+		oldestAgeSec: 0,
+		deadRate: 0,
+		leaseAnomalies: 0,
+		memory: EMPTY_QUEUE_COUNTS,
+		summary: EMPTY_QUEUE_COUNTS,
+		oldestDeadSummaryJob: null,
+		oldestDeadMemoryJob: null,
+	};
+}
+
+function makeOwner(getHealth: () => DbOwnerHealth, migrationsOk = true): DbOwnerClient {
 	return {
 		health: getHealth,
-		submit: () => ({
+		submit: (request: { readonly kind?: string }) => ({
 			job: { enqueuedAt: Date.now() },
-			result: Promise.resolve({ value: 1 }),
+			result: Promise.resolve(
+				request.kind === "health_ready"
+					? { migrationsOk, queueHealth: makeQueueHealth() }
+					: request.kind === "embedding_migration_progress"
+						? null
+						: { value: 1 },
+			),
 			cancel: () => {},
 		}),
 	} as unknown as DbOwnerClient;
@@ -184,9 +199,11 @@ describe("GET /health owner diagnostics", () => {
 
 		const response = await makeApp().request("http://localhost/health");
 		const body = (await response.json()) as {
+			status: string;
 			dbOwner: DbOwnerHealth | null;
 			databaseIntegrity: { ownerState: string | null; ownerGeneration: number | null };
 		};
+		expect(body.status).toBe("degraded");
 		expect(body.dbOwner).toBeNull();
 		expect(body.databaseIntegrity.ownerState).toBeNull();
 		expect(body.databaseIntegrity.ownerGeneration).toBeNull();
@@ -341,6 +358,8 @@ describe("GET /health/live", () => {
 
 describe("GET /health/ready", () => {
 	test("returns 200 ready when the db is migrated and healthy", async () => {
+		const owner = makeOwner(() => makeOwnerHealth(1));
+		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
 		const app = makeApp();
 		const res = await app.request("http://localhost/health/ready");
 
@@ -376,12 +395,8 @@ describe("GET /health/ready", () => {
 	});
 
 	test("returns 503 with a migrations reason when migrations are pending", async () => {
-		// Simulate pending migrations: initDbAccessor ran the full migration
-		// set, so wipe schema_migrations to make hasPendingMigrations() true.
-		getDbAccessor().withWriteTx((db) => {
-			db.exec("DELETE FROM schema_migrations");
-		});
-
+		const owner = makeOwner(() => makeOwnerHealth(1), false);
+		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
 		const app = makeApp();
 		const res = await app.request("http://localhost/health/ready");
 

@@ -6,7 +6,7 @@ import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import {
-	isDbOwnerMaintenanceClosing,
+	getDbOwnerMaintenanceState,
 	ownerQueryAll,
 	ownerQueryOne,
 	withRegisteredDbOwnerMaintenance,
@@ -14,7 +14,6 @@ import {
 import { getVacuumConversionStatusAsync } from "../db-vacuum.js";
 import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-queue.js";
 import { readEmbeddingUsageSummary } from "../embedding-usage";
-import { readEmbeddingIndexMigrationProgress } from "../embedding-index-state";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { BackgroundWorkloadDiagnostics } from "../inference-router.js";
 import { getLlmProvider } from "../llm.js";
@@ -131,7 +130,7 @@ export function pipelineQueueBlock(options: { readonly allowSynchronousRead?: bo
 				summary: snapshot.summary,
 				oldestDeadSummaryJob: snapshot.oldestDeadSummaryJob,
 			};
-		}, "routes/pipeline-routes.ts:122");
+		}, "routes/pipeline-routes.ts:126");
 	} catch {
 		return {
 			memory: { ...UNKNOWN_QUEUE_COUNTS_SHAPE },
@@ -346,19 +345,10 @@ export function registerPipelineRoutes(app: Hono): void {
 		const us = getUpdateState();
 		let embeddingMigration = null;
 		try {
-			const ownerMigration = await withRegisteredDbOwnerMaintenance((maintenance) =>
-				maintenance.embeddingMigrationProgress(config.embedding.base_url),
-			);
-			if (ownerMigration !== undefined) {
-				embeddingMigration = ownerMigration;
-			} else if (!isDbOwnerMaintenanceClosing()) {
-				embeddingMigration = await getDbAccessor().withReadDbAsync(
-					(db) => readEmbeddingIndexMigrationProgress(db, config.embedding),
-					{
-						siteToken: "routes/pipeline-routes.ts:347",
-					},
-				);
-			}
+			embeddingMigration =
+				(await withRegisteredDbOwnerMaintenance((maintenance) =>
+					maintenance.embeddingMigrationProgress(config.embedding.base_url),
+				)) ?? null;
 		} catch {
 			// Database may still be initializing; omit migration visibility.
 		}
@@ -540,7 +530,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					limit,
 					offset,
 				}),
-			"routes/pipeline-routes.ts:522",
+			"routes/pipeline-routes.ts:524",
 		);
 		return c.json({
 			agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
@@ -647,21 +637,11 @@ export function registerPipelineRoutes(app: Hono): void {
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
-		let memoryRows: readonly { status: string; count: number }[];
-		if (ownerRows !== undefined) {
-			memoryRows = ownerRows;
-		} else if (isDbOwnerMaintenanceClosing()) {
-			memoryRows = [];
-		} else {
-			memoryRows = await accessor.withReadDbAsync(
-				(db) =>
-					db.prepare("SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status").all() as Array<{
-						status: string;
-						count: number;
-					}>,
-				{ siteToken: "routes/pipeline-routes.ts:638", operation: "pipeline.status" },
-			);
+		const ownerState = getDbOwnerMaintenanceState();
+		if (ownerRows === undefined && ownerState !== "closing") {
+			return c.json({ error: "DB owner maintenance is unavailable" }, 503);
 		}
+		const memoryRows = ownerRows ?? [];
 		const dbData = {
 			queues: {
 				memory: toCountMap(memoryRows),
@@ -1003,22 +983,18 @@ export function registerPipelineRoutes(app: Hono): void {
 						[agentId, sourceId],
 					)) != null,
 			);
-			if (ownerPresent === undefined && isDbOwnerMaintenanceClosing()) {
-				return c.json({ error: "DB owner maintenance is closing" }, 503);
+			if (ownerPresent === undefined) {
+				return c.json(
+					{
+						error:
+							getDbOwnerMaintenanceState() === "closing"
+								? "DB owner maintenance is closing"
+								: "DB owner maintenance is unavailable",
+					},
+					503,
+				);
 			}
-			const hasTransientSummaryExclusion =
-				ownerPresent !== undefined
-					? ownerPresent
-					: await accessor.withReadDbAsync(
-							(db) =>
-								db
-									.prepare(
-										"SELECT 1 FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
-									)
-									.get(agentId, sourceId) != null,
-							{ siteToken: "routes/pipeline-routes.ts:986" },
-						);
-			if (hasTransientSummaryExclusion) {
+			if (ownerPresent) {
 				return c.json({ error: "Summary evidence requeue is retired; requeue the completed transcript instead" }, 410);
 			}
 			const reviewedSummaryRequeued = await requestDreamingReviewedEvidenceRequeue(
