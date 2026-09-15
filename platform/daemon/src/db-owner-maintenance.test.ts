@@ -557,6 +557,7 @@ describe("registered DB owner maintenance", () => {
 		expect(proxy.health().state).toBe("ready");
 		await closeRegisteredDbOwnerMaintenance();
 		expect(() => proxy.health()).toThrow("DB owner maintenance is no longer registered");
+		await expect(proxy.close()).rejects.toThrow("DB owner maintenance is no longer registered");
 	});
 
 	test("rejects stale owner proxies after replacement", async () => {

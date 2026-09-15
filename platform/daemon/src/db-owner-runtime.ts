@@ -386,7 +386,7 @@ function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
 		health: (): ReturnType<DbOwnerClient["health"]> => currentOwner().health(),
 		close: async (): Promise<void> => {
 			const maintenance = getDbOwnerMaintenance();
-			if (maintenance !== null && maintenance.owner !== owner) throw registeredOwnerError();
+			if (maintenance === null || maintenance.owner !== owner) throw registeredOwnerError();
 			await closeRegisteredDbOwnerMaintenance();
 		},
 	};
