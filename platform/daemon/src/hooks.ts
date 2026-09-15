@@ -1378,7 +1378,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		dynamicContext = boundedContext.dynamicContext;
 		inject = boundedContext.inject;
 	}
-	memories = [...sessionContinuity.included];
 	const injectedSet = new Set(sessionContinuity.included.map((memory) => memory.id));
 	await recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet, agentId);
 

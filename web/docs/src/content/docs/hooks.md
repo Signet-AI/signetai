@@ -241,12 +241,11 @@ context.
 ```
 
 `stableSystemPrompt` is a short, harness-neutral capability declaration. It
-contains no tool catalogue, slash-command list, identity-file catalogue, secret
-names, or memory workflow. The harness supplies the actual tool schemas.
-`dynamicContext` is state-dependent context for the provider-bound or hidden
-harness channel. The `inject` field remains the versioned, ready-to-use
-aggregate for legacy clients and includes both fields in order; `contextHash`
-covers the exact serialized `inject` bytes.
+provides the stable Signet context prefix, and each harness combines it with
+its runtime tool schemas. `dynamicContext` is state-dependent context for the
+provider-bound or hidden harness channel. The `inject` field remains the
+versioned, ready-to-use aggregate for legacy clients and includes both fields
+in order; `contextHash` covers the exact serialized `inject` bytes.
 
 `memories` and the `## Session Continuity` section are bounded previews. Every
 preview keeps the full memory `id`; `type`, `date`, and available source metadata
