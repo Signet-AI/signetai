@@ -1,0 +1,16 @@
+---
+// biome-ignore lint/correctness/noUnusedImports: Astro resolves this component in the template below.
+import DefaultSearch from "@astrojs/starlight/components/Search.astro";
+---
+
+<!-- Starlight initializes Pagefind on DOMContentLoaded. Keep that initialized
+search element alive when ClientRouter swaps the current documentation page. -->
+<div class="search-persist" transition:persist="search">
+	<DefaultSearch />
+</div>
+
+<style>
+	.search-persist {
+		display: contents;
+	}
+</style>
