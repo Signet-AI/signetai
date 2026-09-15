@@ -8,6 +8,7 @@ Integrates Signet's memory system into Hermes Agent as a native plugin.
 
 - Installs the Signet memory plugin into the Hermes plugin directory
 - Registers memory tools: `memory_search`, `memory_store`, `memory_get`, `memory_list`, `memory_modify`, `memory_forget`, `signet_session_search`, `recall`, and `remember`
+- Supplies bounded, metadata-bearing Session Continuity previews plus identity and working memory at session start
 - Backs up existing provider configuration for safe uninstallation
 - Uses content hashing to detect when the plugin needs updating
 - Uses Signet's canonical recall request defaults and bounds (`10`, `1..100`); `score_min` is applied at the daemon response boundary and checked defensively by the plugin

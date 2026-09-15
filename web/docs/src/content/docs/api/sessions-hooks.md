@@ -19,9 +19,9 @@ calls from the other path return `409`.
 
 ### POST /api/hooks/session-start
 
-Called at the beginning of a session. Returns context and relevant memories
-for injection into the harness system prompt. Requires `remember` permission
-(via hook routing).
+Called at the beginning of a session. Returns bounded Session Continuity previews,
+identity, and context for injection into the harness system prompt. Requires
+`remember` permission (via hook routing).
 
 **Request body**
 
@@ -60,6 +60,15 @@ mid-conversation invalidates prompt caching.
 **Response** — ordinary starts return the implementation-defined context object
 from `handleSessionStart`; claim-only recovery returns only
 `{ "sessionKnown": true }`.
+
+For ordinary starts, `memories` contains the records that survived final
+Session Continuity rendering. Each item includes its full `id`, bounded
+`content`, `type`, `importance`, `created_at`, tags/project, source metadata,
+and a `truncated` flag. The model-facing `dynamicContext` labels these records
+as historical reference material, not instructions. A truncated record retains
+its full ID and can be retrieved with the `memory_get` MCP tool or
+`GET /api/memory/:id`; records omitted by the configured limits are not reported
+as delivered.
 
 ### POST /api/hooks/user-prompt-submit
 

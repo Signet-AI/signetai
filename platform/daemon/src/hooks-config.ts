@@ -2,6 +2,9 @@ import { readRuntimeConfig } from "./memory-config";
 import { logger } from "./logger";
 
 export const DEFAULT_SESSION_START_MAX_INJECT_TOKENS = 12_000;
+export const DEFAULT_SESSION_CONTINUITY_MAX_ENTRIES = 15;
+export const DEFAULT_SESSION_CONTINUITY_MAX_TOKENS = 3_000;
+export const DEFAULT_SESSION_CONTINUITY_ENTRY_MAX_TOKENS = 250;
 
 export interface HooksConfig {
 	sessionStart?: SessionStartHooksConfig;
@@ -23,6 +26,9 @@ export interface SessionStartHooksConfig {
 	recencyBias?: number;
 	query?: string;
 	maxInjectTokens?: number;
+	sessionContinuityMaxEntries?: number;
+	sessionContinuityMaxTokens?: number;
+	sessionContinuityEntryMaxTokens?: number;
 	/**
 	 * @deprecated Renamed to `maxInjectTokens`. If set without `maxInjectTokens`,
 	 * the value is auto-migrated using `Math.round(maxInjectChars / 4)` (~4 chars/token
@@ -130,6 +136,9 @@ function readSessionStartConfig(value: unknown): SessionStartHooksConfig | undef
 		recencyBias: readNumber(record.recencyBias),
 		query: readString(record.query),
 		maxInjectTokens: readNumber(record.maxInjectTokens),
+		sessionContinuityMaxEntries: readNumber(record.sessionContinuityMaxEntries),
+		sessionContinuityMaxTokens: readNumber(record.sessionContinuityMaxTokens),
+		sessionContinuityEntryMaxTokens: readNumber(record.sessionContinuityEntryMaxTokens),
 		maxInjectChars: readNumber(record.maxInjectChars),
 	};
 }
@@ -320,6 +329,9 @@ export function getDefaultHooksConfig(): HooksConfig {
 			includeRecentContext: true,
 			recencyBias: 0.7,
 			maxInjectTokens: DEFAULT_SESSION_START_MAX_INJECT_TOKENS,
+			sessionContinuityMaxEntries: DEFAULT_SESSION_CONTINUITY_MAX_ENTRIES,
+			sessionContinuityMaxTokens: DEFAULT_SESSION_CONTINUITY_MAX_TOKENS,
+			sessionContinuityEntryMaxTokens: DEFAULT_SESSION_CONTINUITY_ENTRY_MAX_TOKENS,
 		},
 		userPromptSubmit: {
 			enabled: true,
