@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-15
-- Bug fixes: refresh event-loop baseline; address review feedback; avoid budget scan allocation; enforce session-start budget; fence health during owner close; fence retired owner operations; reject retired owner close; fence stale owner proxies; lease all owner operations; drain db owner health leases; unify db owner health authority; bound connector rows and clarify unverified health; handle invalid agent rosters; restore transcript agent imports.
+- Bug fixes: harden owner-routed graph recall; refresh event-loop baseline; address review feedback; avoid budget scan allocation; enforce session-start budget; fence health during owner close; fence retired owner operations; reject retired owner close; fence stale owner proxies; lease all owner operations; drain db owner health leases; unify db owner health authority; bound connector rows and clarify unverified health; handle invalid agent rosters; restore transcript agent imports.
 - Refactoring: remove stale render metric; bound session continuity context; remove owner route fallbacks.
 - Docs: warn against nightly production use.
 
@@ -36,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: trim contributor guide; document harness API boundary.
 
 ## Release Ledger
+
+## [0.226.5] - 2026-09-15
+
+Release summary: 1 bug fix.
+Tag range: `v0.226.4..v0.226.5`.
+
+### Bug Fixes
+
+- **daemon**: harden owner-routed graph recall (#1864)
 
 ## [0.226.4] - 2026-09-15
 
