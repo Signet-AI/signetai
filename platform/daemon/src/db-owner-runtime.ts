@@ -7,12 +7,19 @@ import { registerDbAccessorCloseParticipant } from "./db-accessor-lifecycle";
 import {
 	createDbOwnerClient,
 	DbOwnerAdmissionError,
+	DbOwnerDiedError,
 	type DbOwnerClient,
 	type DbOwnerClientOptions,
 	type DbOwnerJobHandle,
 	type DbOwnerSubmitOptions,
 } from "./db-owner-client";
-import { getDbOwnerMaintenance } from "./db-owner-maintenance";
+import {
+	closeRegisteredDbOwnerMaintenance,
+	getDbOwnerMaintenance,
+	isDbOwnerMaintenanceClosing,
+	submitRegisteredDbOwnerJob,
+	withRegisteredDbOwnerMaintenance,
+} from "./db-owner-maintenance";
 import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import type {
@@ -340,11 +347,55 @@ async function getCurrentProcessOwner(): Promise<DbOwnerClient> {
 	return inlineOwner(getDbAccessor());
 }
 
+function registeredOwnerError(): DbOwnerDiedError {
+	return new DbOwnerDiedError("DB owner maintenance is no longer registered");
+}
+
+function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
+	const currentOwner = (): DbOwnerClient => {
+		if (getDbOwnerMaintenance()?.owner !== owner) throw registeredOwnerError();
+		return owner;
+	};
+	return {
+		start: async (): Promise<void> => {
+			const started = await withRegisteredDbOwnerMaintenance(async (maintenance) => {
+				await maintenance.owner.start();
+			});
+			if (started === undefined) throw registeredOwnerError();
+		},
+		initialize: async (agentsDir?: string) => {
+			const initialized = await withRegisteredDbOwnerMaintenance((maintenance) =>
+				maintenance.owner.initialize(agentsDir),
+			);
+			if (initialized === undefined) throw registeredOwnerError();
+			return initialized;
+		},
+		submit: <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			const handle = submitRegisteredDbOwnerJob<Result>(owner, request, options);
+			if (handle === null) throw registeredOwnerError();
+			return handle;
+		},
+		setWriteBlocked: (blocked: boolean): void => {
+			currentOwner().setWriteBlocked(blocked);
+		},
+		awaitResult: async <Result>(handle: DbOwnerJobHandle<Result>, timeoutMs?: number): Promise<Result> =>
+			await owner.awaitResult(handle, timeoutMs),
+		cancel: (jobId: string): void => owner.cancel(jobId),
+		health: (): ReturnType<DbOwnerClient["health"]> => currentOwner().health(),
+		close: async (): Promise<void> => {
+			const maintenance = getDbOwnerMaintenance();
+			if (maintenance !== null && maintenance.owner !== owner) throw registeredOwnerError();
+			await closeRegisteredDbOwnerMaintenance();
+		},
+	};
+}
+
 /** Resolve the process owner, or the in-process adapter used inside an owner worker. */
 export async function getDbOwner(dbPath?: string): Promise<DbOwnerClient> {
 	if (process.env.SIGNET_DB_OWNER_WORKER === "1") return await getCurrentProcessOwner();
 	const registered = getDbOwnerMaintenance()?.owner;
-	if (registered !== undefined) return registered;
+	if (registered !== undefined) return registeredOwnerProxy(registered);
+	if (isDbOwnerMaintenanceClosing()) throw registeredOwnerError();
 	if (hasDbAccessor()) return await startDbOwner(getDbAccessorPath());
 	if (isolatedTestAccessor !== null) return inlineOwner(isolatedTestAccessor);
 	return await startDbOwner(dbPath);
