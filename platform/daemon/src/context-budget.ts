@@ -61,7 +61,7 @@ export function selectWithEstimatedTokenBudget<T extends { content: string }>(
 	return selected;
 }
 
-const utf8Encoder = new TextEncoder();
+const MAX_UTF8_BYTES_PER_UTF16_CODE_UNIT = 3;
 const TRUNCATED_MARKER = "\n[context truncated]";
 const TRUNCATED_MARKER_TOKENS = countTokens(TRUNCATED_MARKER);
 
@@ -73,9 +73,9 @@ const TRUNCATED_MARKER_TOKENS = countTokens(TRUNCATED_MARKER);
  */
 export function applyTokenBudget(inject: string, mainBudget: number): string {
 	if (mainBudget <= 0) return "";
-	// UTF-8 bytes are a conservative upper bound for BPE tokens and avoid
-	// undercounting CJK, emoji, and other multi-byte text in the cheap path.
-	if (utf8Encoder.encode(inject).length <= mainBudget) return inject;
+	// Three bytes per UTF-16 code unit bounds every UTF-8 encoding without
+	// scanning or allocating the complete payload on the hot path.
+	if (inject.length <= Math.floor(mainBudget / MAX_UTF8_BYTES_PER_UTF16_CODE_UNIT)) return inject;
 	if (countTokens(inject) <= mainBudget) return inject;
 	// Budget too tight to fit content + marker — truncate without marker.
 	if (mainBudget <= TRUNCATED_MARKER_TOKENS) return truncateToTokens(inject, mainBudget);
