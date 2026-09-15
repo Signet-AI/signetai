@@ -352,6 +352,7 @@ function registeredOwnerError(): DbOwnerDiedError {
 }
 
 function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
+	const activeJobs = new Set<string>();
 	const currentOwner = (): DbOwnerClient => {
 		if (getDbOwnerMaintenance()?.owner !== owner) throw registeredOwnerError();
 		return owner;
@@ -375,14 +376,25 @@ function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
 		submit: <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
 			const handle = submitRegisteredDbOwnerJob<Result>(owner, request, options);
 			if (handle === null) throw registeredOwnerError();
+			activeJobs.add(handle.job.id);
+			const completion = handle.metrics ?? handle.result;
+			const release = (): void => {
+				activeJobs.delete(handle.job.id);
+			};
+			void completion.then(release, release);
 			return handle;
 		},
 		setWriteBlocked: (blocked: boolean): void => {
 			currentOwner().setWriteBlocked(blocked);
 		},
-		awaitResult: async <Result>(handle: DbOwnerJobHandle<Result>, timeoutMs?: number): Promise<Result> =>
-			await owner.awaitResult(handle, timeoutMs),
-		cancel: (jobId: string): void => owner.cancel(jobId),
+		awaitResult: async <Result>(handle: DbOwnerJobHandle<Result>, timeoutMs?: number): Promise<Result> => {
+			if (!activeJobs.has(handle.job.id)) currentOwner();
+			return await owner.awaitResult(handle, timeoutMs);
+		},
+		cancel: (jobId: string): void => {
+			if (!activeJobs.has(jobId)) currentOwner();
+			owner.cancel(jobId);
+		},
 		health: (): ReturnType<DbOwnerClient["health"]> => currentOwner().health(),
 		close: async (): Promise<void> => {
 			const maintenance = getDbOwnerMaintenance();
