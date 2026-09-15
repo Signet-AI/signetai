@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createServer } from "node:net";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,21 +26,32 @@ function record(value: unknown): JsonRecord {
 	return Object.fromEntries(Object.entries(value));
 }
 
-async function freePort(): Promise<number> {
-	return await new Promise((resolve, reject) => {
-		const server = createServer();
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", () => {
-			const address = server.address();
-			if (typeof address !== "object" || address === null) {
-				server.close();
-				reject(new Error("Port reservation returned no address"));
-				return;
-			}
-			const port = address.port;
-			server.close((error) => (error ? reject(error) : resolve(port)));
-		});
-	});
+async function waitForPreviewPort(child: ChildProcess): Promise<number> {
+	const output: string[] = [];
+	child.stdout?.setEncoding("utf8");
+	child.stdout?.on("data", (chunk: string) => output.push(chunk));
+	for (let attempt = 0; attempt < 120; attempt += 1) {
+		if (child.exitCode !== null) throw new Error(`Docs preview exited with code ${child.exitCode}`);
+		const match = output.join("").match(/127\.0\.0\.1:(\d+)/);
+		if (match?.[1]) return Number.parseInt(match[1], 10);
+		await Bun.sleep(100);
+	}
+	throw new Error("Docs preview did not report a listening port");
+}
+
+async function waitForChromePort(profilePath: string, child: ChildProcess): Promise<number> {
+	const marker = join(profilePath, "DevToolsActivePort");
+	for (let attempt = 0; attempt < 120; attempt += 1) {
+		if (child.exitCode !== null) throw new Error(`Chrome exited with code ${child.exitCode}`);
+		try {
+			const port = Number.parseInt(readFileSync(marker, "utf8").split("\\n", 1)[0] ?? "", 10);
+			if (Number.isInteger(port) && port > 0) return port;
+		} catch {
+			// Chrome has not written its DevTools marker yet.
+		}
+		await Bun.sleep(100);
+	}
+	throw new Error("Chrome did not publish its DevTools port");
 }
 
 function findChrome(): string {
@@ -258,15 +268,15 @@ describe("docs search lifecycle", () => {
 			throw new Error("Build web/docs before running the browser regression");
 		}
 
-		const previewPort = await freePort();
-		preview = spawn(process.execPath, ["run", "preview", "--", "--host", "127.0.0.1", "--port", String(previewPort)], {
+		const previewProcess = spawn(process.execPath, ["run", "preview", "--", "--host", "127.0.0.1", "--port", "0"], {
 			cwd: DOCS_ROOT,
-			stdio: "ignore",
+			stdio: ["ignore", "pipe", "ignore"],
 		});
+		preview = previewProcess;
+		const previewPort = await waitForPreviewPort(previewProcess);
 		const baseUrl = `${PREVIEW_URL}:${previewPort}`;
-		await waitForHttp(`${baseUrl}/quickstart/`, preview, "Docs preview");
+		await waitForHttp(`${baseUrl}/quickstart/`, previewProcess, "Docs preview");
 
-		const chromePort = await freePort();
 		profile = mkdtempSync(join(tmpdir(), "signet-docs-search-"));
 		chrome = spawn(
 			chromePath,
@@ -278,12 +288,13 @@ describe("docs search lifecycle", () => {
 				"--no-first-run",
 				"--no-default-browser-check",
 				"--remote-debugging-address=127.0.0.1",
-				`--remote-debugging-port=${chromePort}`,
+				"--remote-debugging-port=0",
 				`--user-data-dir=${profile}`,
 				"about:blank",
 			],
 			{ stdio: "ignore" },
 		);
+		const chromePort = await waitForChromePort(profile, chrome);
 		client = new DevToolsClient(await waitForChrome(chromePort));
 		await client.connect();
 		await client.call("Page.enable");
@@ -322,6 +333,7 @@ describe("docs search lifecycle", () => {
 		);
 		await clickFirstResult();
 		await waitForTrue("location.pathname === '/cli/profiling/'", "result navigation");
+		await waitForTrue("document.querySelector('dialog')?.open !== true", "result modal teardown");
 		expect(await evaluate("document.querySelector('dialog')?.open !== true")).toBe(true);
 	});
 });
